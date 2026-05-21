@@ -4538,19 +4538,15 @@ unsafe extern "C" fn host_gpu_full_create_compute_kernel(
                 return 1;
             }
             let repr: &ComputeKernelDescriptorRepr = unsafe { &*desc };
-            let (rust_desc, _keep) = match unsafe {
-                crate::core::rhi::plugin_abi_bridge::compute_kernel_descriptor_from_repr(repr)
-            } {
-                Ok(pair) => pair,
-                Err(e) => {
-                    write_err(&format!("{e}"), err_buf, err_buf_cap, err_len);
-                    return 1;
-                }
+            let result = unsafe {
+                crate::core::rhi::plugin_abi_bridge::with_decoded_compute_kernel_descriptor(
+                    repr,
+                    |rust_desc| gpu.create_compute_kernel(rust_desc),
+                )
             };
-            match gpu.create_compute_kernel(&rust_desc) {
+            match result {
                 Ok(arc) => {
-                    let raw =
-                        Arc::into_raw(arc) as *const c_void;
+                    let raw = Arc::into_raw(arc) as *const c_void;
                     unsafe { std::ptr::write(out_kernel, raw) };
                     0
                 }
@@ -4595,16 +4591,13 @@ unsafe extern "C" fn host_gpu_full_create_graphics_kernel(
                 return 1;
             }
             let repr: &GraphicsKernelDescriptorRepr = unsafe { &*desc };
-            let (rust_desc, _keep) = match unsafe {
-                crate::core::rhi::plugin_abi_bridge::graphics_kernel_descriptor_from_repr(repr)
-            } {
-                Ok(pair) => pair,
-                Err(e) => {
-                    write_err(&format!("{e}"), err_buf, err_buf_cap, err_len);
-                    return 1;
-                }
+            let result = unsafe {
+                crate::core::rhi::plugin_abi_bridge::with_decoded_graphics_kernel_descriptor(
+                    repr,
+                    |rust_desc| gpu.create_graphics_kernel(rust_desc),
+                )
             };
-            match gpu.create_graphics_kernel(&rust_desc) {
+            match result {
                 Ok(arc) => {
                     let raw = Arc::into_raw(arc) as *const c_void;
                     unsafe { std::ptr::write(out_kernel, raw) };
@@ -4651,16 +4644,13 @@ unsafe extern "C" fn host_gpu_full_create_ray_tracing_kernel(
                 return 1;
             }
             let repr: &RayTracingKernelDescriptorRepr = unsafe { &*desc };
-            let (rust_desc, _keep) = match unsafe {
-                crate::core::rhi::plugin_abi_bridge::ray_tracing_kernel_descriptor_from_repr(repr)
-            } {
-                Ok(pair) => pair,
-                Err(e) => {
-                    write_err(&format!("{e}"), err_buf, err_buf_cap, err_len);
-                    return 1;
-                }
+            let result = unsafe {
+                crate::core::rhi::plugin_abi_bridge::with_decoded_ray_tracing_kernel_descriptor(
+                    repr,
+                    |rust_desc| gpu.create_ray_tracing_kernel(rust_desc),
+                )
             };
-            match gpu.create_ray_tracing_kernel(&rust_desc) {
+            match result {
                 Ok(arc) => {
                     let raw = Arc::into_raw(arc) as *const c_void;
                     unsafe { std::ptr::write(out_kernel, raw) };
@@ -5007,5 +4997,185 @@ pub mod runtime_facing {
             surface_store_vtable: &HOST_SURFACE_STORE_VTABLE,
             gpu_context_full_access_vtable: &HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE,
         }
+    }
+}
+
+// =============================================================================
+// FullAccess vtable callback-body tests (tier-1 — no GPU required)
+// =============================================================================
+//
+// Tier-1 host-side wire-format tests for `HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE`.
+// Each test invokes a vtable callback directly with a null `gpu_handle`
+// (the path that runs before any `gpu.create_*_kernel` call), asserting
+// the callback returns error code 1 + writes the expected message into
+// the caller's error buffer + leaves the out-handle slot untouched.
+//
+// The success-path tests (real Arc<GpuContext>, valid descriptor, kernel
+// handle minting) require a real Vulkan device and live in
+// `tests/` under the `streamlib/hardware-tests` feature. The dlopen
+// integration test that exercises the full cdylib → vtable → host chain
+// arrives with C3.
+#[cfg(test)]
+mod gpu_full_access_vtable_tests {
+    use super::*;
+    use streamlib_plugin_abi::{
+        ComputeKernelDescriptorRepr, GraphicsKernelDescriptorRepr,
+        RayTracingKernelDescriptorRepr,
+    };
+
+    fn make_err_buf() -> ([u8; 256], usize) {
+        ([0u8; 256], 0usize)
+    }
+
+    fn err_buf_as_str(buf: &[u8], len: usize) -> &str {
+        std::str::from_utf8(&buf[..len]).expect("UTF-8")
+    }
+
+    #[test]
+    fn drop_handle_handles_null_no_crash() {
+        // Null handle is documented as a no-op; this just exercises
+        // the early-return guard.
+        unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.drop_handle)(std::ptr::null());
+        }
+    }
+
+    #[test]
+    fn create_compute_kernel_returns_error_on_null_gpu_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut out: *const c_void = std::ptr::null();
+        // Build a syntactically-valid repr — the null gpu_handle
+        // check runs first, so the repr contents don't matter for
+        // this test.
+        let bindings_buf: [streamlib_plugin_abi::ComputeBindingSpecRepr; 0] = [];
+        let repr = ComputeKernelDescriptorRepr {
+            label_ptr: "test".as_ptr(),
+            label_len: 4,
+            spv_ptr: std::ptr::null(),
+            spv_len: 0,
+            bindings_ptr: bindings_buf.as_ptr(),
+            bindings_len: 0,
+            push_constant_size: 0,
+            _reserved_padding: 0,
+        };
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.create_compute_kernel)(
+                std::ptr::null(),
+                &repr,
+                &mut out,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(
+            msg.contains("create_compute_kernel: null gpu handle"),
+            "got: {msg}"
+        );
+        assert!(out.is_null(), "out_kernel must not be written on error");
+    }
+
+    #[test]
+    fn create_graphics_kernel_returns_error_on_null_gpu_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut out: *const c_void = std::ptr::null();
+        let repr: GraphicsKernelDescriptorRepr = unsafe { std::mem::zeroed() };
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.create_graphics_kernel)(
+                std::ptr::null(),
+                &repr,
+                &mut out,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(
+            msg.contains("create_graphics_kernel: null gpu handle"),
+            "got: {msg}"
+        );
+        assert!(out.is_null());
+    }
+
+    #[test]
+    fn create_ray_tracing_kernel_returns_error_on_null_gpu_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut out: *const c_void = std::ptr::null();
+        let repr: RayTracingKernelDescriptorRepr = unsafe { std::mem::zeroed() };
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.create_ray_tracing_kernel)(
+                std::ptr::null(),
+                &repr,
+                &mut out,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(
+            msg.contains("create_ray_tracing_kernel: null gpu handle"),
+            "got: {msg}"
+        );
+        assert!(out.is_null());
+    }
+
+    #[test]
+    fn create_texture_ring_returns_error_on_null_gpu_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut out: *const c_void = std::ptr::null();
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.create_texture_ring)(
+                std::ptr::null(),
+                64,
+                64,
+                0, // Rgba8Unorm
+                0, // no usage bits
+                2,
+                &mut out,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(
+            msg.contains("create_texture_ring: null gpu handle"),
+            "got: {msg}"
+        );
+        assert!(out.is_null());
+    }
+
+    #[test]
+    fn vtable_layout_version_matches_constant() {
+        assert_eq!(
+            HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.layout_version,
+            streamlib_plugin_abi::GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION
+        );
+    }
+
+    #[test]
+    fn host_services_for_self_wires_full_access_vtable() {
+        let node = match crate::iceoryx2::Iceoryx2Node::new() {
+            Ok(n) => n,
+            Err(_) => return, // Iceoryx2 not available in this env — skip.
+        };
+        let services = runtime_facing::host_services_for_self(&node);
+        assert!(
+            !services.gpu_context_full_access_vtable.is_null(),
+            "host should wire the FullAccess vtable pointer"
+        );
+        let installed_version =
+            unsafe { (*services.gpu_context_full_access_vtable).layout_version };
+        assert_eq!(
+            installed_version,
+            streamlib_plugin_abi::GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION
+        );
     }
 }

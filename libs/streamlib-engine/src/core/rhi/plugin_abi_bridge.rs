@@ -146,18 +146,29 @@ pub fn stage_compute_kernel_descriptor(
     (repr, bindings_buf)
 }
 
-/// Decode a `ComputeKernelDescriptorRepr` back into a Rust descriptor.
+/// Decode a `ComputeKernelDescriptorRepr` and invoke `f` with a
+/// borrowed Rust descriptor whose slices point at the repr's source
+/// memory plus a stack-local binding-spec Vec.
+///
+/// Callback shape (not return-pair) is deliberate: the decoded
+/// descriptor's `bindings` slice points into a Vec built inside this
+/// function, and a `(Descriptor<'a>, Vec)` return would let a caller
+/// drop the Vec while keeping the descriptor — a use-after-free with
+/// no compile-time guard. Anchoring the borrow scope to `f`'s
+/// invocation eliminates the footgun.
 ///
 /// # Safety
 ///
 /// All pointer/length pairs in `repr` must be valid for reads (i.e.
 /// pointing at properly-aligned arrays of the right element type with
-/// the declared lengths). The returned descriptor borrows into the
-/// underlying memory; that memory must remain valid for the returned
-/// lifetime.
-pub unsafe fn compute_kernel_descriptor_from_repr<'a>(
-    repr: &'a ComputeKernelDescriptorRepr,
-) -> Result<(ComputeKernelDescriptor<'a>, Vec<ComputeBindingSpec>)> {
+/// the declared lengths) for the duration of the call.
+pub unsafe fn with_decoded_compute_kernel_descriptor<F, R>(
+    repr: &ComputeKernelDescriptorRepr,
+    f: F,
+) -> Result<R>
+where
+    F: FnOnce(&ComputeKernelDescriptor<'_>) -> Result<R>,
+{
     let label = unsafe { str_from_ptr_len(repr.label_ptr, repr.label_len, "label")? };
     let spv = unsafe { slice_from_ptr_len(repr.spv_ptr, repr.spv_len) };
     let bindings_repr = unsafe { slice_from_ptr_len(repr.bindings_ptr, repr.bindings_len) };
@@ -165,24 +176,13 @@ pub unsafe fn compute_kernel_descriptor_from_repr<'a>(
         .iter()
         .map(compute_binding_spec_from_repr)
         .collect::<Result<_>>()?;
-    // We return both the descriptor (which borrows from `bindings`)
-    // and the `Vec` so the caller can keep it alive. Materialize the
-    // descriptor with a borrow into the just-built Vec.
-    let bindings_slice: &'a [ComputeBindingSpec] = unsafe {
-        // SAFETY: the Vec lives as long as the caller holds the tuple
-        // we're about to return. We hand back the Vec alongside the
-        // descriptor so it can't be dropped early.
-        std::slice::from_raw_parts(bindings.as_ptr(), bindings.len())
+    let desc = ComputeKernelDescriptor {
+        label,
+        spv,
+        bindings: &bindings,
+        push_constant_size: repr.push_constant_size,
     };
-    Ok((
-        ComputeKernelDescriptor {
-            label,
-            spv,
-            bindings: bindings_slice,
-            push_constant_size: repr.push_constant_size,
-        },
-        bindings,
-    ))
+    f(&desc)
 }
 
 // =============================================================================
@@ -1159,34 +1159,32 @@ pub fn stage_graphics_kernel_descriptor(
     (repr, stage)
 }
 
-/// Owned backing buffers behind a decoded `GraphicsKernelDescriptor`.
-#[allow(dead_code)]
-pub struct GraphicsKernelDescriptorDecoded<'a> {
-    pub stages: Vec<GraphicsStage<'a>>,
-    pub bindings: Vec<GraphicsBindingSpec>,
-    pub vertex_input: VertexInputState,
-    pub color_formats: Vec<TextureFormat>,
-}
-
-/// Decode a `GraphicsKernelDescriptorRepr` back into a Rust descriptor.
+/// Decode a `GraphicsKernelDescriptorRepr` and invoke `f` with a
+/// borrowed Rust descriptor.
+///
+/// Same callback-shape rationale as
+/// [`with_decoded_compute_kernel_descriptor`].
 ///
 /// # Safety
 ///
 /// All pointer/length pairs in `repr` (and inside its nested
-/// `vertex_input` and `attachment_formats`) must be valid for reads.
-/// The returned descriptor borrows from caller-managed memory.
-#[allow(clippy::type_complexity)]
-pub unsafe fn graphics_kernel_descriptor_from_repr<'a>(
-    repr: &'a GraphicsKernelDescriptorRepr,
-) -> Result<(GraphicsKernelDescriptor<'a>, GraphicsKernelDescriptorDecoded<'a>)> {
+/// `vertex_input` and `attachment_formats`) must be valid for reads
+/// for the duration of the call.
+pub unsafe fn with_decoded_graphics_kernel_descriptor<F, R>(
+    repr: &GraphicsKernelDescriptorRepr,
+    f: F,
+) -> Result<R>
+where
+    F: FnOnce(&GraphicsKernelDescriptor<'_>) -> Result<R>,
+{
     let label = unsafe { str_from_ptr_len(repr.label_ptr, repr.label_len, "label")? };
     let stages_repr =
         unsafe { slice_from_ptr_len::<GraphicsStageRepr>(repr.stages_ptr, repr.stages_len) };
-    let stages: Vec<GraphicsStage<'a>> = stages_repr
+    let stages: Vec<GraphicsStage<'_>> = stages_repr
         .iter()
         .map(|s| {
             let stage = graphics_shader_stage_from_repr(s.stage)?;
-            let spv: &'a [u8] = unsafe { slice_from_ptr_len(s.spv_ptr, s.spv_len) };
+            let spv: &[u8] = unsafe { slice_from_ptr_len(s.spv_ptr, s.spv_len) };
             let entry_point =
                 unsafe { str_from_ptr_len(s.entry_point_ptr, s.entry_point_len, "entry_point")? };
             Ok::<_, Error>(GraphicsStage {
@@ -1260,43 +1258,27 @@ pub unsafe fn graphics_kernel_descriptor_from_repr<'a>(
 
     let pipeline_state = GraphicsPipelineState {
         topology: primitive_topology_from_repr(repr.pipeline_state.topology)?,
-        vertex_input: vertex_input.clone(),
+        vertex_input,
         rasterization: rasterization_state_from_repr(&repr.pipeline_state.rasterization)?,
         multisample: multisample_state_from_repr(&repr.pipeline_state.multisample),
         depth_stencil: depth_stencil_state_from_repr(&repr.pipeline_state.depth_stencil)?,
         color_blend: color_blend_state_from_repr(&repr.pipeline_state.color_blend)?,
         attachment_formats: AttachmentFormats {
-            color: color_formats.clone(),
+            color: color_formats,
             depth,
         },
         dynamic_state: graphics_dynamic_state_from_repr(repr.pipeline_state.dynamic_state)?,
     };
 
-    let decoded = GraphicsKernelDescriptorDecoded {
-        stages: stages.clone(),
-        bindings: bindings.clone(),
-        vertex_input,
-        color_formats,
+    let desc = GraphicsKernelDescriptor {
+        label,
+        stages: &stages,
+        bindings: &bindings,
+        push_constants,
+        pipeline_state,
+        descriptor_sets_in_flight: repr.descriptor_sets_in_flight,
     };
-
-    let stages_slice: &'a [GraphicsStage<'a>] = unsafe {
-        std::slice::from_raw_parts(decoded.stages.as_ptr(), decoded.stages.len())
-    };
-    let bindings_slice: &'a [GraphicsBindingSpec] = unsafe {
-        std::slice::from_raw_parts(decoded.bindings.as_ptr(), decoded.bindings.len())
-    };
-
-    Ok((
-        GraphicsKernelDescriptor {
-            label,
-            stages: stages_slice,
-            bindings: bindings_slice,
-            push_constants,
-            pipeline_state,
-            descriptor_sets_in_flight: repr.descriptor_sets_in_flight,
-        },
-        decoded,
-    ))
+    f(&desc)
 }
 
 /// Owned backing buffers behind a `RayTracingKernelDescriptorRepr`.
@@ -1357,32 +1339,32 @@ pub fn stage_ray_tracing_kernel_descriptor(
     (repr, stage)
 }
 
-/// Owned backing buffers behind a decoded `RayTracingKernelDescriptor`.
-#[allow(dead_code)]
-pub struct RayTracingKernelDescriptorDecoded<'a> {
-    pub stages: Vec<RayTracingStage<'a>>,
-    pub groups: Vec<RayTracingShaderGroup>,
-    pub bindings: Vec<RayTracingBindingSpec>,
-}
-
-/// Decode a `RayTracingKernelDescriptorRepr` back into a Rust descriptor.
+/// Decode a `RayTracingKernelDescriptorRepr` and invoke `f` with a
+/// borrowed Rust descriptor.
+///
+/// Same callback-shape rationale as
+/// [`with_decoded_compute_kernel_descriptor`].
 ///
 /// # Safety
 ///
-/// All pointer/length pairs in `repr` must be valid for reads.
-#[allow(clippy::type_complexity)]
-pub unsafe fn ray_tracing_kernel_descriptor_from_repr<'a>(
-    repr: &'a RayTracingKernelDescriptorRepr,
-) -> Result<(RayTracingKernelDescriptor<'a>, RayTracingKernelDescriptorDecoded<'a>)> {
+/// All pointer/length pairs in `repr` must be valid for reads for the
+/// duration of the call.
+pub unsafe fn with_decoded_ray_tracing_kernel_descriptor<F, R>(
+    repr: &RayTracingKernelDescriptorRepr,
+    f: F,
+) -> Result<R>
+where
+    F: FnOnce(&RayTracingKernelDescriptor<'_>) -> Result<R>,
+{
     let label = unsafe { str_from_ptr_len(repr.label_ptr, repr.label_len, "label")? };
     let stages_repr = unsafe {
         slice_from_ptr_len::<RayTracingStageRepr>(repr.stages_ptr, repr.stages_len)
     };
-    let stages: Vec<RayTracingStage<'a>> = stages_repr
+    let stages: Vec<RayTracingStage<'_>> = stages_repr
         .iter()
         .map(|s| {
             let stage = ray_tracing_shader_stage_from_repr(s.stage)?;
-            let spv: &'a [u8] = unsafe { slice_from_ptr_len(s.spv_ptr, s.spv_len) };
+            let spv: &[u8] = unsafe { slice_from_ptr_len(s.spv_ptr, s.spv_len) };
             let entry_point =
                 unsafe { str_from_ptr_len(s.entry_point_ptr, s.entry_point_len, "entry_point")? };
             Ok::<_, Error>(RayTracingStage {
@@ -1411,32 +1393,15 @@ pub unsafe fn ray_tracing_kernel_descriptor_from_repr<'a>(
 
     let push_constants = ray_tracing_push_constants_from_repr(&repr.push_constants);
 
-    let decoded = RayTracingKernelDescriptorDecoded {
-        stages: stages.clone(),
-        groups: groups.clone(),
-        bindings: bindings.clone(),
+    let desc = RayTracingKernelDescriptor {
+        label,
+        stages: &stages,
+        groups: &groups,
+        bindings: &bindings,
+        push_constants,
+        max_recursion_depth: repr.max_recursion_depth,
     };
-    let stages_slice: &'a [RayTracingStage<'a>] = unsafe {
-        std::slice::from_raw_parts(decoded.stages.as_ptr(), decoded.stages.len())
-    };
-    let groups_slice: &'a [RayTracingShaderGroup] = unsafe {
-        std::slice::from_raw_parts(decoded.groups.as_ptr(), decoded.groups.len())
-    };
-    let bindings_slice: &'a [RayTracingBindingSpec] = unsafe {
-        std::slice::from_raw_parts(decoded.bindings.as_ptr(), decoded.bindings.len())
-    };
-
-    Ok((
-        RayTracingKernelDescriptor {
-            label,
-            stages: stages_slice,
-            groups: groups_slice,
-            bindings: bindings_slice,
-            push_constants,
-            max_recursion_depth: repr.max_recursion_depth,
-        },
-        decoded,
-    ))
+    f(&desc)
 }
 
 #[cfg(test)]
@@ -1459,28 +1424,32 @@ mod tests {
             push_constant_size: 16,
         };
         let (repr, _buf) = stage_compute_kernel_descriptor(&desc);
-        let (decoded, _bindings_keepalive) =
-            unsafe { compute_kernel_descriptor_from_repr(&repr).expect("decode") };
-        assert_eq!(decoded.label, "test_compute");
-        assert_eq!(decoded.spv, spv);
-        assert_eq!(decoded.bindings.len(), 4);
-        assert_eq!(
-            decoded.bindings[0].kind,
-            ComputeBindingKind::StorageBuffer
-        );
-        assert_eq!(
-            decoded.bindings[1].kind,
-            ComputeBindingKind::UniformBuffer
-        );
-        assert_eq!(
-            decoded.bindings[2].kind,
-            ComputeBindingKind::SampledTexture
-        );
-        assert_eq!(
-            decoded.bindings[3].kind,
-            ComputeBindingKind::StorageImage
-        );
-        assert_eq!(decoded.push_constant_size, 16);
+        unsafe {
+            with_decoded_compute_kernel_descriptor(&repr, |decoded| {
+                assert_eq!(decoded.label, "test_compute");
+                assert_eq!(decoded.spv, spv);
+                assert_eq!(decoded.bindings.len(), 4);
+                assert_eq!(
+                    decoded.bindings[0].kind,
+                    ComputeBindingKind::StorageBuffer
+                );
+                assert_eq!(
+                    decoded.bindings[1].kind,
+                    ComputeBindingKind::UniformBuffer
+                );
+                assert_eq!(
+                    decoded.bindings[2].kind,
+                    ComputeBindingKind::SampledTexture
+                );
+                assert_eq!(
+                    decoded.bindings[3].kind,
+                    ComputeBindingKind::StorageImage
+                );
+                assert_eq!(decoded.push_constant_size, 16);
+                Ok(())
+            })
+            .expect("decode");
+        }
     }
 
     #[test]
@@ -1501,7 +1470,12 @@ mod tests {
             push_constant_size: 0,
             _reserved_padding: 0,
         };
-        let err = unsafe { compute_kernel_descriptor_from_repr(&repr).unwrap_err() };
+        let err = unsafe {
+            with_decoded_compute_kernel_descriptor(&repr, |_| {
+                Ok::<_, Error>(())
+            })
+            .unwrap_err()
+        };
         assert!(format!("{err}").contains("invalid discriminant 99"));
     }
 
@@ -1535,27 +1509,31 @@ mod tests {
             descriptor_sets_in_flight: 2,
         };
         let (repr, _stage) = stage_graphics_kernel_descriptor(&desc);
-        let (decoded, _keep) =
-            unsafe { graphics_kernel_descriptor_from_repr(&repr).expect("decode") };
-        assert_eq!(decoded.label, "test_graphics");
-        assert_eq!(decoded.stages.len(), 2);
-        assert_eq!(decoded.stages[0].stage, GraphicsShaderStage::Vertex);
-        assert_eq!(decoded.stages[1].stage, GraphicsShaderStage::Fragment);
-        assert_eq!(decoded.bindings.len(), 2);
-        assert_eq!(decoded.push_constants.size, 12);
-        assert_eq!(
-            decoded.pipeline_state.topology,
-            PrimitiveTopology::TriangleStrip
-        );
-        assert!(matches!(
-            decoded.pipeline_state.vertex_input,
-            VertexInputState::None
-        ));
-        assert!(matches!(
-            decoded.pipeline_state.color_blend,
-            ColorBlendState::Enabled(_)
-        ));
-        assert_eq!(decoded.descriptor_sets_in_flight, 2);
+        unsafe {
+            with_decoded_graphics_kernel_descriptor(&repr, |decoded| {
+                assert_eq!(decoded.label, "test_graphics");
+                assert_eq!(decoded.stages.len(), 2);
+                assert_eq!(decoded.stages[0].stage, GraphicsShaderStage::Vertex);
+                assert_eq!(decoded.stages[1].stage, GraphicsShaderStage::Fragment);
+                assert_eq!(decoded.bindings.len(), 2);
+                assert_eq!(decoded.push_constants.size, 12);
+                assert_eq!(
+                    decoded.pipeline_state.topology,
+                    PrimitiveTopology::TriangleStrip
+                );
+                assert!(matches!(
+                    decoded.pipeline_state.vertex_input,
+                    VertexInputState::None
+                ));
+                assert!(matches!(
+                    decoded.pipeline_state.color_blend,
+                    ColorBlendState::Enabled(_)
+                ));
+                assert_eq!(decoded.descriptor_sets_in_flight, 2);
+                Ok(())
+            })
+            .expect("decode");
+        }
     }
 
     #[test]
@@ -1609,35 +1587,39 @@ mod tests {
             descriptor_sets_in_flight: 3,
         };
         let (repr, _stage) = stage_graphics_kernel_descriptor(&desc);
-        let (decoded, _keep) =
-            unsafe { graphics_kernel_descriptor_from_repr(&repr).expect("decode") };
-        match decoded.pipeline_state.vertex_input {
-            VertexInputState::Buffers {
-                bindings,
-                attributes,
-            } => {
-                assert_eq!(bindings.len(), 1);
-                assert_eq!(bindings[0].stride, 32);
-                assert_eq!(attributes.len(), 2);
-                assert_eq!(attributes[1].offset, 12);
+        unsafe {
+            with_decoded_graphics_kernel_descriptor(&repr, |decoded| {
+                match &decoded.pipeline_state.vertex_input {
+                    VertexInputState::Buffers {
+                        bindings,
+                        attributes,
+                    } => {
+                        assert_eq!(bindings.len(), 1);
+                        assert_eq!(bindings[0].stride, 32);
+                        assert_eq!(attributes.len(), 2);
+                        assert_eq!(attributes[1].offset, 12);
+                        assert_eq!(
+                            attributes[1].format,
+                            VertexAttributeFormat::Rgba32Float
+                        );
+                    }
+                    _ => panic!("expected Buffers"),
+                }
+                assert!(matches!(
+                    decoded.pipeline_state.depth_stencil,
+                    DepthStencilState::Enabled {
+                        depth_test: DepthCompareOp::LessOrEqual,
+                        depth_write: true,
+                    }
+                ));
                 assert_eq!(
-                    attributes[1].format,
-                    VertexAttributeFormat::Rgba32Float
+                    decoded.pipeline_state.attachment_formats.depth,
+                    Some(DepthFormat::D32Sfloat)
                 );
-            }
-            _ => panic!("expected Buffers"),
+                Ok(())
+            })
+            .expect("decode");
         }
-        assert!(matches!(
-            decoded.pipeline_state.depth_stencil,
-            DepthStencilState::Enabled {
-                depth_test: DepthCompareOp::LessOrEqual,
-                depth_write: true,
-            }
-        ));
-        assert_eq!(
-            decoded.pipeline_state.attachment_formats.depth,
-            Some(DepthFormat::D32Sfloat)
-        );
     }
 
     #[test]
@@ -1677,28 +1659,32 @@ mod tests {
             max_recursion_depth: 4,
         };
         let (repr, _stage) = stage_ray_tracing_kernel_descriptor(&desc);
-        let (decoded, _keep) =
-            unsafe { ray_tracing_kernel_descriptor_from_repr(&repr).expect("decode") };
-        assert_eq!(decoded.label, "test_rt");
-        assert_eq!(decoded.stages.len(), 3);
-        assert_eq!(decoded.groups.len(), 3);
-        match decoded.groups[2] {
-            RayTracingShaderGroup::TrianglesHit {
-                closest_hit,
-                any_hit,
-            } => {
-                assert_eq!(closest_hit, Some(2));
-                assert_eq!(any_hit, None);
-            }
-            _ => panic!("expected TrianglesHit"),
+        unsafe {
+            with_decoded_ray_tracing_kernel_descriptor(&repr, |decoded| {
+                assert_eq!(decoded.label, "test_rt");
+                assert_eq!(decoded.stages.len(), 3);
+                assert_eq!(decoded.groups.len(), 3);
+                match decoded.groups[2] {
+                    RayTracingShaderGroup::TrianglesHit {
+                        closest_hit,
+                        any_hit,
+                    } => {
+                        assert_eq!(closest_hit, Some(2));
+                        assert_eq!(any_hit, None);
+                    }
+                    _ => panic!("expected TrianglesHit"),
+                }
+                assert_eq!(decoded.bindings.len(), 2);
+                assert_eq!(
+                    decoded.bindings[1].kind,
+                    RayTracingBindingKind::AccelerationStructure
+                );
+                assert_eq!(decoded.push_constants.size, 8);
+                assert_eq!(decoded.max_recursion_depth, 4);
+                Ok(())
+            })
+            .expect("decode");
         }
-        assert_eq!(decoded.bindings.len(), 2);
-        assert_eq!(
-            decoded.bindings[1].kind,
-            RayTracingBindingKind::AccelerationStructure
-        );
-        assert_eq!(decoded.push_constants.size, 8);
-        assert_eq!(decoded.max_recursion_depth, 4);
     }
 
     #[test]

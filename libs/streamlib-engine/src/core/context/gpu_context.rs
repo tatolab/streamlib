@@ -1439,7 +1439,7 @@ impl GpuContext {
     /// after enforcing the privileged-scope invariants.
     #[cfg(target_os = "linux")]
     pub fn create_texture_ring(
-        self: &Arc<Self>,
+        &self,
         width: u32,
         height: u32,
         format: TextureFormat,
@@ -1488,7 +1488,7 @@ impl GpuContext {
             width,
             height,
             format,
-            (**self).clone(),
+            self.clone(),
         ))
     }
 
@@ -3282,11 +3282,8 @@ impl GpuContextFullAccess {
         usages: TextureUsages,
         count: usize,
     ) -> Result<Arc<crate::core::context::TextureRing>> {
-        // Wrap the cloned `GpuContext` in a fresh `Arc` so the inner
-        // method (which takes `self: &Arc<Self>`) can clone it into
-        // the returned `TextureRing` for its per-slot upload routes.
-        let arc = Arc::new(self.host_inner().clone());
-        arc.create_texture_ring(width, height, format, usages, count)
+        self.host_inner()
+            .create_texture_ring(width, height, format, usages, count)
     }
 
     /// See [`GpuContext::unregister_texture`].
