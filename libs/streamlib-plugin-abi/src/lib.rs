@@ -94,7 +94,14 @@ pub const STREAMLIB_ABI_VERSION: u32 = 4;
 ///   not exposed to plugins. Lifecycle methods are synchronous at
 ///   the trait surface; the host's lifecycle wrappers no longer
 ///   `block_on`.
-pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 3;
+/// - v4: [`GpuContextLimitedAccessVTable`] reference appended.
+///   The cdylib-side `GpuContextLimitedAccess` shim's
+///   `(handle, vtable)` pair sources its vtable pointer from this
+///   field. Phase C1 (#901) populates the static; for hosts that
+///   ship a GpuContext, the pointer is non-null. Hosts without GPU
+///   support set it to `null` and cdylib code must check before
+///   dispatching.
+pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 4;
 
 /// Layout version of the [`ProcessorVTable`] struct. Read by the
 /// host's `processor_register` impl before dereferencing any vtable
@@ -121,6 +128,13 @@ pub const AUDIO_CLOCK_VTABLE_LAYOUT_VERSION: u32 = 1;
 ///   keeping the host's `Arc<dyn RuntimeOperations>` alive for the
 ///   shim's lifetime independently of `RuntimeContext`'s lifetime.
 pub const RUNTIME_OPS_VTABLE_LAYOUT_VERSION: u32 = 2;
+
+/// Layout version of [`GpuContextLimitedAccessVTable`]. Phase C1 (#901)
+/// scaffold: layout-version + `clone_handle` / `drop_handle` only.
+/// Per-method GPU callbacks (`acquire_pixel_buffer`,
+/// `release_pixel_buffer`, etc.) are appended in later C1 commits
+/// and bump this constant when they land.
+pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 1;
 
 // =============================================================================
 // Primitive enums
@@ -651,6 +665,63 @@ unsafe impl Send for RuntimeOpsVTable {}
 unsafe impl Sync for RuntimeOpsVTable {}
 
 // =============================================================================
+// GpuContextLimitedAccessVTable — extern "C" dispatch for GpuContextLimitedAccess
+// =============================================================================
+
+/// Dispatch table for the host's `GpuContextLimitedAccess`. The
+/// cdylib obtains a handle via
+/// [`RuntimeContextVTable::gpu_limited_access`] and reads the static
+/// vtable from [`HostServices::gpu_context_limited_access_vtable`].
+///
+/// # Handle lifetime
+///
+/// `clone_handle` / `drop_handle` mirror [`RuntimeOpsVTable`] v2:
+/// `clone_handle(borrowed) -> owned` bumps the host's
+/// `Arc<GpuContext>` refcount; `drop_handle(owned)` releases. The
+/// owned handle remains valid even after the originating
+/// `RuntimeContext` is dropped, which matches the existing
+/// `GpuContextLimitedAccess: Clone` contract that lets plugins
+/// stash a clone in `setup()` and hand it to a worker thread that
+/// outlives the lifecycle call.
+///
+/// # Layout discipline
+///
+/// `layout_version` is pinned at offset 0 forever. New methods append
+/// to the end and bump
+/// [`GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION`].
+#[repr(C)]
+pub struct GpuContextLimitedAccessVTable {
+    /// Vtable layout version. Must equal
+    /// [`GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION`].
+    pub layout_version: u32,
+
+    /// Reserved padding (keeps the following pointer naturally
+    /// aligned on 32-bit hosts; zero today, never read).
+    pub _reserved_padding: u32,
+
+    // -------------------------------------------------------------------------
+    // Handle lifetime (mirrors RuntimeOpsVTable v2)
+    // -------------------------------------------------------------------------
+
+    /// Take a borrowed handle returned from
+    /// [`RuntimeContextVTable::gpu_limited_access`] and return a new
+    /// owned handle with an Arc refcount bump on the underlying
+    /// `Arc<GpuContext>`. The owned handle remains valid even after
+    /// the originating `RuntimeContext` is dropped, and MUST be
+    /// released exactly once via [`Self::drop_handle`].
+    pub clone_handle: unsafe extern "C" fn(borrowed_handle: *const c_void) -> *const c_void,
+
+    /// Release an owned handle previously obtained from
+    /// [`Self::clone_handle`]. Calling on a null pointer is a no-op.
+    /// Calling on the same owned handle twice is undefined behaviour
+    /// (it would double-free the Arc refcount).
+    pub drop_handle: unsafe extern "C" fn(owned_handle: *const c_void),
+}
+
+unsafe impl Send for GpuContextLimitedAccessVTable {}
+unsafe impl Sync for GpuContextLimitedAccessVTable {}
+
+// =============================================================================
 // HostServices — the callback table
 // =============================================================================
 
@@ -845,6 +916,17 @@ pub struct HostServices {
     /// [`RuntimeContextVTable::runtime_ops_handle`]. Set once at
     /// install time; never null for v3+ HostServices payloads.
     pub runtime_ops_vtable: *const RuntimeOpsVTable,
+
+    // -------------------------------------------------------------------------
+    // GpuContext vtable surface (v4 — Phase C1, #901)
+    // -------------------------------------------------------------------------
+
+    /// Static dispatch table for the host's `GpuContextLimitedAccess`.
+    /// Paired with the per-instance handle returned by
+    /// [`RuntimeContextVTable::gpu_limited_access`]. Set once at
+    /// install time; non-null for hosts that ship a GpuContext,
+    /// null otherwise (cdylib must check before dispatching).
+    pub gpu_context_limited_access_vtable: *const GpuContextLimitedAccessVTable,
 }
 
 // Note: under v3 the ABI eliminates the tokio shared-type crossing
@@ -962,39 +1044,64 @@ mod layout_tests {
     }
 
     #[test]
-    fn host_services_v3_layout_version_is_bumped() {
-        assert_eq!(HOST_SERVICES_LAYOUT_VERSION, 3);
+    fn host_services_layout_versions_pinned() {
+        assert_eq!(HOST_SERVICES_LAYOUT_VERSION, 4);
         assert_eq!(STREAMLIB_ABI_VERSION, 4);
         assert_eq!(RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(AUDIO_CLOCK_VTABLE_LAYOUT_VERSION, 1);
         // v2: added owning-Arc handle lifetime callbacks
         // (`clone_handle` / `drop_handle`).
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
+        // v1 scaffold: layout_version + clone_handle + drop_handle
+        // only. Per-method GPU callbacks land in subsequent C1
+        // commits and bump this constant.
+        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 1);
     }
 
     #[test]
-    fn host_services_v3_tail_carries_three_vtable_pointers() {
-        // The v3 additions live at the tail of HostServices. We don't
+    fn host_services_tail_carries_four_vtable_pointers() {
+        // The v3/v4 additions live at the tail of HostServices. We don't
         // pin the absolute offsets (earlier fields are subject to
         // their own pre-v3 layout audit), but we do pin:
         //   1. Each vtable is a single 8-byte pointer.
-        //   2. They appear in the order RuntimeContext → AudioClock → RuntimeOps.
+        //   2. They appear in the order RuntimeContext → AudioClock →
+        //      RuntimeOps → GpuContextLimitedAccess (v4 tail).
         //   3. They are contiguous (no padding inserted between them).
         assert_eq!(size_of::<*const RuntimeContextVTable>(), 8);
         assert_eq!(size_of::<*const AudioClockVTable>(), 8);
         assert_eq!(size_of::<*const RuntimeOpsVTable>(), 8);
+        assert_eq!(size_of::<*const GpuContextLimitedAccessVTable>(), 8);
 
         let runtime_ctx_off = offset_of!(HostServices, runtime_context_vtable);
         let audio_clock_off = offset_of!(HostServices, audio_clock_vtable);
         let runtime_ops_off = offset_of!(HostServices, runtime_ops_vtable);
+        let gpu_lim_off = offset_of!(HostServices, gpu_context_limited_access_vtable);
         assert!(runtime_ctx_off < audio_clock_off);
         assert!(audio_clock_off < runtime_ops_off);
+        assert!(runtime_ops_off < gpu_lim_off);
         assert_eq!(audio_clock_off - runtime_ctx_off, 8);
         assert_eq!(runtime_ops_off - audio_clock_off, 8);
+        assert_eq!(gpu_lim_off - runtime_ops_off, 8);
 
-        // The runtime-ops pointer must end at the end of the struct
-        // (it is the last field added in v3).
-        assert_eq!(runtime_ops_off + 8, size_of::<HostServices>());
+        // The gpu-context pointer must end at the end of the struct
+        // (it is the last field added in v4).
+        assert_eq!(gpu_lim_off + 8, size_of::<HostServices>());
+    }
+
+    #[test]
+    fn gpu_context_limited_access_vtable_layout() {
+        // v1 scaffold: layout_version (u32) + _reserved_padding (u32)
+        // + 2 fn pointers (clone_handle, drop_handle, 8 bytes each)
+        // = 4 + 4 + 16 = 24 bytes.
+        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 24);
+        assert_eq!(align_of::<GpuContextLimitedAccessVTable>(), 8);
+        assert_eq!(offset_of!(GpuContextLimitedAccessVTable, layout_version), 0);
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, _reserved_padding),
+            4
+        );
+        assert_eq!(offset_of!(GpuContextLimitedAccessVTable, clone_handle), 8);
+        assert_eq!(offset_of!(GpuContextLimitedAccessVTable, drop_handle), 16);
     }
 
     /// Compile-time witnesses that the vtable types are Send + Sync.
@@ -1006,6 +1113,7 @@ mod layout_tests {
         assert_send_sync::<RuntimeContextVTable>();
         assert_send_sync::<AudioClockVTable>();
         assert_send_sync::<RuntimeOpsVTable>();
+        assert_send_sync::<GpuContextLimitedAccessVTable>();
         assert_send_sync::<HostServices>();
         assert_send_sync::<ProcessorVTable>();
     }

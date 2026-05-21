@@ -60,8 +60,9 @@ use std::ffi::c_void;
 use std::sync::{Arc, OnceLock};
 
 use streamlib_plugin_abi::{
-    AudioClockVTable, HostHandle, HostInterest, HostLogLevel, HostServices, ProcessorVTable,
-    RuntimeContextVTable, RuntimeOpsVTable, AUDIO_CLOCK_VTABLE_LAYOUT_VERSION,
+    AudioClockVTable, GpuContextLimitedAccessVTable, HostHandle, HostInterest, HostLogLevel,
+    HostServices, ProcessorVTable, RuntimeContextVTable, RuntimeOpsVTable,
+    AUDIO_CLOCK_VTABLE_LAYOUT_VERSION, GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION,
     HOST_SERVICES_LAYOUT_VERSION, PROCESSOR_VTABLE_LAYOUT_VERSION,
     RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION, RUNTIME_OPS_VTABLE_LAYOUT_VERSION,
 };
@@ -162,6 +163,11 @@ pub struct HostCallbacks {
     pub audio_clock_vtable: *const AudioClockVTable,
     /// v3: host-installed [`RuntimeOpsVTable`] pointer.
     pub runtime_ops_vtable: *const RuntimeOpsVTable,
+    /// v4 (Phase C1, #901): host-installed
+    /// [`GpuContextLimitedAccessVTable`] pointer. May be null on
+    /// hosts that don't ship a GpuContext; cdylib must check before
+    /// dispatching.
+    pub gpu_context_limited_access_vtable: *const GpuContextLimitedAccessVTable,
 }
 
 // Safety: every field is a fn pointer or a raw pointer the host
@@ -244,6 +250,7 @@ pub unsafe fn install_host_services(
         runtime_context_vtable: services.runtime_context_vtable,
         audio_clock_vtable: services.audio_clock_vtable,
         runtime_ops_vtable: services.runtime_ops_vtable,
+        gpu_context_limited_access_vtable: services.gpu_context_limited_access_vtable,
     };
 
     // Cache the callbacks BEFORE installing tracing — the
@@ -1245,6 +1252,53 @@ pub fn host_runtime_ops_vtable() -> *const RuntimeOpsVTable {
     }
 }
 
+// ---------------- GpuContextLimitedAccess vtable ----------------
+//
+// Phase C1 (#901) scaffold: layout-versioned vtable plus passthrough
+// `clone_handle` / `drop_handle` stubs. Per-method GPU callbacks
+// (`acquire_pixel_buffer`, `release_pixel_buffer`, etc.) append to
+// this static in subsequent C1 commits and bump
+// [`GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION`].
+
+unsafe extern "C" fn host_gpu_lim_clone_handle(borrowed_handle: *const c_void) -> *const c_void {
+    // Phase C1 scaffold: the cdylib-side shim does not yet stash an
+    // owned handle distinct from the borrowed one (no per-method
+    // wiring exists to read through the table). Returning the
+    // borrowed pointer as-is keeps the shim self-consistent until
+    // the real Arc<GpuContext> refcount-bump path lands in the next
+    // C1 commit alongside the first GPU vtable method.
+    borrowed_handle
+}
+
+unsafe extern "C" fn host_gpu_lim_drop_handle(_owned_handle: *const c_void) {
+    // Phase C1 scaffold: no-op until `clone_handle` does a real
+    // Arc refcount bump. Dropping a passthrough pointer is by
+    // design a no-op.
+}
+
+/// Static [`GpuContextLimitedAccessVTable`] installed once per process.
+/// Paired with the per-RuntimeContext gpu-limited handle returned by
+/// [`HOST_RUNTIME_CONTEXT_VTABLE`]`::gpu_limited_access`.
+pub static HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE: GpuContextLimitedAccessVTable =
+    GpuContextLimitedAccessVTable {
+        layout_version: GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION,
+        _reserved_padding: 0,
+        clone_handle: host_gpu_lim_clone_handle,
+        drop_handle: host_gpu_lim_drop_handle,
+    };
+
+/// Pointer to the [`GpuContextLimitedAccessVTable`] this DSO should
+/// dispatch through. Same DSO-routing rule as
+/// [`host_runtime_context_vtable`].
+pub fn host_gpu_context_limited_access_vtable() -> *const GpuContextLimitedAccessVTable {
+    match host_callbacks() {
+        Some(c) if !c.gpu_context_limited_access_vtable.is_null() => {
+            c.gpu_context_limited_access_vtable
+        }
+        _ => &HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE,
+    }
+}
+
 // ---------------- Shared scratch-buffer helper ----------------
 
 fn write_id_bytes(
@@ -1280,7 +1334,8 @@ pub mod runtime_facing {
         host_iceoryx_log_emit, host_processor_register, host_pubsub_publish, host_schema_lookup,
         host_schema_register, host_tracing_emit, host_tracing_enabled,
         host_tracing_register_callsite, HostServiceImpls, HOST_AUDIO_CLOCK_VTABLE,
-        HOST_RUNTIME_CONTEXT_VTABLE, HOST_RUNTIME_OPS_VTABLE,
+        HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE, HOST_RUNTIME_CONTEXT_VTABLE,
+        HOST_RUNTIME_OPS_VTABLE,
     };
     use std::ffi::c_void;
     use std::sync::OnceLock;
@@ -1324,6 +1379,7 @@ pub mod runtime_facing {
             runtime_context_vtable: &HOST_RUNTIME_CONTEXT_VTABLE,
             audio_clock_vtable: &HOST_AUDIO_CLOCK_VTABLE,
             runtime_ops_vtable: &HOST_RUNTIME_OPS_VTABLE,
+            gpu_context_limited_access_vtable: &HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE,
         }
     }
 }
