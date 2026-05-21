@@ -46,7 +46,7 @@ pub struct H265DecoderProcessor {
 }
 
 impl streamlib::sdk::processors::ReactiveProcessor for H265DecoderProcessor::Processor {
-    async fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
 
         // Decoder dimensions come from H.265 SPS — leaving `max_width` /
@@ -100,7 +100,7 @@ impl streamlib::sdk::processors::ReactiveProcessor for H265DecoderProcessor::Pro
         Ok(())
     }
 
-    async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!(
             frames_decoded = self.frames_decoded,
             "[H265Decoder] Shutting down"

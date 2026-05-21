@@ -14,25 +14,19 @@ pub struct BufferRechunkerProcessor {
 }
 
 impl streamlib::sdk::processors::ReactiveProcessor for BufferRechunkerProcessor::Processor {
-    fn setup(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let target_size = self.config.target_buffer_size as usize;
         self.buffer = Vec::with_capacity(target_size * 16);
         tracing::info!(
             "[BufferRechunker] Initialized with target buffer size: {} samples per channel",
             target_size
         );
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!("[BufferRechunker] Stopped");
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {

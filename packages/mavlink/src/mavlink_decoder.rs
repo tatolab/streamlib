@@ -29,15 +29,12 @@ pub struct MavlinkDecoderProcessor {
 }
 
 impl ReactiveProcessor for MavlinkDecoderProcessor::Processor {
-    fn setup(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!(
             warn_on_parse_error = ?self.config.warn_on_parse_error,
             "MavlinkDecoder: setup",
         );
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
@@ -74,16 +71,13 @@ impl ReactiveProcessor for MavlinkDecoderProcessor::Processor {
         }
     }
 
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!(
             messages_decoded = self.messages_decoded.load(Ordering::Relaxed),
             parse_errors = self.parse_errors.load(Ordering::Relaxed),
             "MavlinkDecoder: teardown",
         );
-        std::future::ready(Ok(()))
+        Ok(())
     }
 }
 

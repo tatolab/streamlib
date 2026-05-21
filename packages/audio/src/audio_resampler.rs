@@ -24,10 +24,7 @@ pub struct AudioResamplerProcessor {
 }
 
 impl streamlib::sdk::processors::ReactiveProcessor for AudioResamplerProcessor::Processor {
-    fn setup(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.output_sample_rate = self.config.target_sample_rate;
 
         tracing::info!(
@@ -36,18 +33,15 @@ impl streamlib::sdk::processors::ReactiveProcessor for AudioResamplerProcessor::
             self.config.quality
         );
 
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!(
             "[AudioResampler] Stopped (processed {} output frames)",
             self.frame_counter
         );
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {

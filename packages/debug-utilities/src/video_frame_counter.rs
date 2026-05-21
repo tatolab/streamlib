@@ -66,11 +66,11 @@ impl streamlib::sdk::processors::ReactiveProcessor for VideoFrameCounterProcesso
         Ok(())
     }
 
-    async fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
 
-    async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
 }

@@ -7,7 +7,6 @@
 //! deserialization. Reconnects on connection loss with exponential backoff.
 
 use crate::moq_session::{sessions_for_runtime, MoqTrackReader};
-use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
@@ -22,17 +21,28 @@ const MAX_RETRY_DELAY_MS: u64 = 10_000;
 #[streamlib::sdk::processor("MoqSubscribeTrack")]
 pub struct MoqSubscribeTrackProcessor {
     runtime_id: Option<String>,
+    /// Plugin-owned tokio runtime. Constructed in `setup()`; the host's
+    /// runtime is not reachable across the plugin ABI per #885.
+    /// MoQ uses QUIC transport whose futures require this runtime's TLS.
+    tokio_runtime: Option<tokio::runtime::Runtime>,
     tokio_handle: Option<tokio::runtime::Handle>,
     shutdown_signal_sender: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl streamlib::sdk::processors::ManualProcessor for MoqSubscribeTrackProcessor::Processor {
-    fn setup(
-        &mut self,
-        ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl Future<Output = Result<()>> + Send {
+    fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                Error::Runtime(format!(
+                    "MoqSubscribeTrack: failed to build tokio runtime: {e}"
+                ))
+            })?;
+        self.tokio_handle = Some(runtime.handle().clone());
+        self.tokio_runtime = Some(runtime);
         self.runtime_id = Some(ctx.runtime_id().to_string());
-        self.tokio_handle = Some(ctx.tokio_handle().clone());
 
         let sessions = sessions_for_runtime(self.runtime_id.as_ref().unwrap());
         tracing::info!(
@@ -40,13 +50,10 @@ impl streamlib::sdk::processors::ManualProcessor for MoqSubscribeTrackProcessor:
             track = %self.config.track_name,
             "[MoqSubscribeTrack] Configured (will connect on start)"
         );
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl Future<Output = Result<()>> + Send {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!("[MoqSubscribeTrack] Shutting down");
 
         if let Some(tx) = self.shutdown_signal_sender.take() {
@@ -55,22 +62,17 @@ impl streamlib::sdk::processors::ManualProcessor for MoqSubscribeTrackProcessor:
 
         self.runtime_id.take();
         self.tokio_handle.take();
+        self.tokio_runtime.take();
         tracing::info!("[MoqSubscribeTrack] Shutdown complete");
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
-    fn on_pause(
-        &mut self,
-        _ctx: &RuntimeContextLimitedAccess<'_>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        std::future::ready(Ok(()))
+    fn on_pause(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        Ok(())
     }
 
-    fn on_resume(
-        &mut self,
-        _ctx: &RuntimeContextLimitedAccess<'_>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        std::future::ready(Ok(()))
+    fn on_resume(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        Ok(())
     }
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {

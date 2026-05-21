@@ -33,16 +33,13 @@ pub struct MavlinkEncoderProcessor {
 }
 
 impl ReactiveProcessor for MavlinkEncoderProcessor::Processor {
-    fn setup(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!(
             default_system_id = self.config.default_system_id,
             default_component_id = self.config.default_component_id,
             "MavlinkEncoder: setup",
         );
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
@@ -116,16 +113,13 @@ impl ReactiveProcessor for MavlinkEncoderProcessor::Processor {
         Ok(())
     }
 
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!(
             messages_encoded = self.messages_encoded.load(Ordering::Relaxed),
             encode_errors = self.encode_errors.load(Ordering::Relaxed),
             "MavlinkEncoder: teardown",
         );
-        std::future::ready(Ok(()))
+        Ok(())
     }
 }
 

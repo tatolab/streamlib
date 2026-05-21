@@ -282,25 +282,19 @@ pub struct AppleScreenCaptureProcessor {
 }
 
 impl streamlib::sdk::processors::ManualProcessor for AppleScreenCaptureProcessor::Processor {
-    fn setup(
-        &mut self,
-        ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
         tracing::info!("ScreenCapture: setup() complete");
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let frame_count = SCREEN_CAPTURE_CALLBACK_CONTEXT
             .get()
             .map(|ctx| ctx.frame_count.load(Ordering::Relaxed))
             .unwrap_or(0);
         tracing::info!("ScreenCapture: teardown() ({} frames)", frame_count);
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {

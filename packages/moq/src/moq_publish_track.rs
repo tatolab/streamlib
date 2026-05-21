@@ -16,10 +16,24 @@ pub struct MoqPublishTrackProcessor {
     sessions: Option<SharedMoqSessions>,
     track_name: String,
     frames_published: u64,
+    /// Plugin-owned tokio runtime. Constructed in `setup()`; the host's
+    /// runtime is not reachable across the plugin ABI per #885.
+    /// Used to drive `get_publish_session().await` from sync `setup()`.
+    tokio_runtime: Option<tokio::runtime::Runtime>,
 }
 
 impl streamlib::sdk::processors::ReactiveProcessor for MoqPublishTrackProcessor::Processor {
-    async fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                Error::Runtime(format!(
+                    "MoqPublishTrack: failed to build tokio runtime: {e}"
+                ))
+            })?;
+
         // Track name: explicit config, or auto-generate from processor id.
         self.track_name = self.config.track_name.clone().unwrap_or_else(|| {
             ctx.processor_id()
@@ -28,7 +42,7 @@ impl streamlib::sdk::processors::ReactiveProcessor for MoqPublishTrackProcessor:
         });
 
         let sessions = sessions_for_runtime(&ctx.runtime_id().to_string());
-        let session = sessions.get_publish_session().await?;
+        let session = runtime.block_on(sessions.get_publish_session())?;
         sessions.register_published_track(&self.track_name);
 
         tracing::info!(
@@ -39,16 +53,18 @@ impl streamlib::sdk::processors::ReactiveProcessor for MoqPublishTrackProcessor:
 
         self.shared_publish_session = Some(session);
         self.sessions = Some(sessions);
+        self.tokio_runtime = Some(runtime);
         Ok(())
     }
 
-    async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!(
             frames_published = self.frames_published,
             "[MoqPublishTrack] Shutting down"
         );
         self.shared_publish_session.take();
         self.sessions.take();
+        self.tokio_runtime.take();
         Ok(())
     }
 

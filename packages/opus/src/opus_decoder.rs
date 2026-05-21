@@ -190,7 +190,7 @@ pub struct OpusDecoderProcessor {
 }
 
 impl streamlib::sdk::processors::ReactiveProcessor for OpusDecoderProcessor::Processor {
-    async fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let sample_rate = self.config.sample_rate.unwrap_or(48000);
         let channels = self.config.channels.unwrap_or(2) as usize;
 
@@ -206,7 +206,7 @@ impl streamlib::sdk::processors::ReactiveProcessor for OpusDecoderProcessor::Pro
         Ok(())
     }
 
-    async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!(
             frames_decoded = self.frames_decoded,
             "[OpusDecoder] Shutting down"

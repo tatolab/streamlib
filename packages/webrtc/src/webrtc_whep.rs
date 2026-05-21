@@ -9,7 +9,6 @@
 
 use crate::_generated_::{EncodedAudioFrame, EncodedVideoFrame};
 use crate::streaming::{H264RtpDepacketizer, RtpSample, WhepClient, WhepConfig};
-use std::future::Future;
 use std::sync::Arc;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
@@ -32,67 +31,77 @@ pub struct WebRtcWhepProcessor {
 
     // Shutdown signaling
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+
+    // Plugin-owned tokio runtime. Constructed in `setup()`; the host's
+    // runtime is not reachable across the plugin ABI per #885.
+    tokio_runtime: Option<tokio::runtime::Runtime>,
+    tokio_handle: Option<tokio::runtime::Handle>,
 }
 
 impl ManualProcessor for WebRtcWhepProcessor::Processor {
-    fn setup(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        async move {
-            // Convert generated config to WhepConfig
-            let whep_config = WhepConfig {
-                endpoint_url: self.config.whep.endpoint_url.clone(),
-                auth_token: self.config.whep.auth_token.clone(),
-                timeout_ms: self.config.whep.timeout_ms as u64,
-            };
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                Error::Runtime(format!("WebRtcWhep: failed to build tokio runtime: {e}"))
+            })?;
+        let tokio_handle = runtime.handle().clone();
+        self.tokio_runtime = Some(runtime);
+        self.tokio_handle = Some(tokio_handle.clone());
 
-            // Create and connect WHEP client
-            let mut whep_client = WhepClient::new(whep_config)?;
-            whep_client.connect().await?;
+        // Convert generated config to WhepConfig
+        let whep_config = WhepConfig {
+            endpoint_url: self.config.whep.endpoint_url.clone(),
+            auth_token: self.config.whep.auth_token.clone(),
+            timeout_ms: self.config.whep.timeout_ms as u64,
+        };
 
-            // Get audio configuration from SDP negotiation
-            let (sample_rate, _channels) = whep_client.audio_config();
-            self.audio_sample_rate = sample_rate;
+        // Create and connect WHEP client on the plugin's own runtime.
+        let mut whep_client = WhepClient::new(whep_config)?;
+        tokio_handle.block_on(whep_client.connect())?;
 
-            self.whep_client = Some(whep_client);
+        // Get audio configuration from SDP negotiation
+        let (sample_rate, _channels) = whep_client.audio_config();
+        self.audio_sample_rate = sample_rate;
 
-            tracing::info!(
-                "[WebRtcWhep] Connected to {}",
-                self.config.whep.endpoint_url
-            );
-            Ok(())
-        }
+        self.whep_client = Some(whep_client);
+
+        tracing::info!(
+            "[WebRtcWhep] Connected to {}",
+            self.config.whep.endpoint_url
+        );
+        Ok(())
     }
 
-    async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!("[WebRtcWhep] Shutting down");
 
         if let Some(mut client) = self.whep_client.take() {
-            if let Err(e) = client.terminate().await {
-                tracing::warn!("[WebRtcWhep] Error terminating WHEP session: {}", e);
+            if let Some(handle) = self.tokio_handle.as_ref() {
+                if let Err(e) = handle.block_on(client.terminate()) {
+                    tracing::warn!("[WebRtcWhep] Error terminating WHEP session: {}", e);
+                }
             }
         }
+
+        self.tokio_handle.take();
+        self.tokio_runtime.take();
 
         tracing::info!("[WebRtcWhep] Shutdown complete");
         Ok(())
     }
 
-    fn on_pause(
-        &mut self,
-        _ctx: &RuntimeContextLimitedAccess<'_>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        std::future::ready(Ok(()))
+    fn on_pause(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        Ok(())
     }
 
-    fn on_resume(
-        &mut self,
-        _ctx: &RuntimeContextLimitedAccess<'_>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        std::future::ready(Ok(()))
+    fn on_resume(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        Ok(())
     }
 
-    fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         // Take ownership of receivers from WHEP client
         let client = self
             .whep_client
@@ -112,7 +121,12 @@ impl ManualProcessor for WebRtcWhepProcessor::Processor {
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         self.shutdown_tx = Some(shutdown_tx);
 
-        ctx.tokio_handle().spawn(async move {
+        let tokio_handle = self
+            .tokio_handle
+            .as_ref()
+            .ok_or_else(|| Error::Runtime("tokio runtime not initialized in setup()".into()))?;
+
+        tokio_handle.spawn(async move {
             run_whep_receive_loop(video_rx, audio_rx, outputs, audio_sample_rate, shutdown_rx).await;
         });
 

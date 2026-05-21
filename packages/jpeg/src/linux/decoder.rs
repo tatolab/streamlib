@@ -38,7 +38,7 @@ pub struct JpegDecoderProcessor {
 }
 
 impl streamlib::sdk::processors::ReactiveProcessor for JpegDecoderProcessor::Processor {
-    async fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let max_width = self.config.max_width.unwrap_or(DEFAULT_MAX_WIDTH);
         let max_height = self.config.max_height.unwrap_or(DEFAULT_MAX_HEIGHT);
 
@@ -60,7 +60,7 @@ impl streamlib::sdk::processors::ReactiveProcessor for JpegDecoderProcessor::Pro
         Ok(())
     }
 
-    async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!(
             frames_decoded = self.frames_decoded,
             "[JpegDecoder] Shutting down"

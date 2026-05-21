@@ -135,48 +135,39 @@ impl ClapEffectProcessor::Processor {
 }
 
 impl ManualProcessor for ClapEffectProcessor::Processor {
-    fn setup(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
-        let result = (|| {
-            self.buffer_size = self.config.buffer_size as usize;
-            self.audio = Some(ProcessorAudioConverter::new());
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        self.buffer_size = self.config.buffer_size as usize;
+        self.audio = Some(ProcessorAudioConverter::new());
 
-            // Load CLAP plugin with placeholder sample_rate — activate() will set the real rate
-            // when the first input frame arrives in the polling thread
-            let host = if let Some(name) = self.config.plugin_name.as_deref() {
-                ClapPluginHost::load_by_name(
-                    &self.config.plugin_path,
-                    name,
-                    48000,
-                    self.buffer_size,
-                )?
-            } else if let Some(index) = self.config.plugin_index {
-                ClapPluginHost::load_by_index(
-                    &self.config.plugin_path,
-                    index as usize,
-                    48000,
-                    self.buffer_size,
-                )?
-            } else {
-                ClapPluginHost::load(&self.config.plugin_path, 48000, self.buffer_size)?
-            };
+        // Load CLAP plugin with placeholder sample_rate — activate() will set the real rate
+        // when the first input frame arrives in the polling thread
+        let host = if let Some(name) = self.config.plugin_name.as_deref() {
+            ClapPluginHost::load_by_name(
+                &self.config.plugin_path,
+                name,
+                48000,
+                self.buffer_size,
+            )?
+        } else if let Some(index) = self.config.plugin_index {
+            ClapPluginHost::load_by_index(
+                &self.config.plugin_path,
+                index as usize,
+                48000,
+                self.buffer_size,
+            )?
+        } else {
+            ClapPluginHost::load(&self.config.plugin_path, 48000, self.buffer_size)?
+        };
 
-            tracing::info!(
-                "[ClapEffect] Loaded plugin '{}' (activation deferred to first input frame)",
-                host.plugin_info().name,
-            );
-            self.host = Some(host);
-            Ok(())
-        })();
-        std::future::ready(result)
+        tracing::info!(
+            "[ClapEffect] Loaded plugin '{}' (activation deferred to first input frame)",
+            host.plugin_info().name,
+        );
+        self.host = Some(host);
+        Ok(())
     }
 
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.stop_polling.store(true, Ordering::SeqCst);
 
         if let Some(handle) = self.polling_thread.take() {
@@ -184,7 +175,7 @@ impl ManualProcessor for ClapEffectProcessor::Processor {
         }
 
         // Safe to access self.host now — polling thread is joined
-        let result = if let Some(ref mut host) = self.host {
+        if let Some(ref mut host) = self.host {
             let name = host.plugin_info().name.clone();
             match host.deactivate() {
                 Ok(()) => {
@@ -195,9 +186,7 @@ impl ManualProcessor for ClapEffectProcessor::Processor {
             }
         } else {
             Ok(())
-        };
-
-        std::future::ready(result)
+        }
     }
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {

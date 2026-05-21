@@ -1,0 +1,19 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# Test-only config schema for the dlopen-owns-tokio integration test.
+# The processor binds a `tokio::net::TcpListener` on its own runtime and
+# writes the bound port (or an error string) to `output_path`, so the
+# integration test can verify the bind succeeded even when the
+# processor's tokio crate is statically linked into a dlopen'd cdylib
+# (the locked design from #885).
+
+metadata:
+  type: TcpBindTestProcessorConfig
+  description: "Test config schema for the dlopen-owns-tokio integration test."
+
+properties:
+  output_path:
+    metadata:
+      description: "Filesystem path where the processor writes its result. Format: '<port>' on success, 'ERR:<message>' on failure."
+    type: string

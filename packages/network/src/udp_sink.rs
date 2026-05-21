@@ -29,6 +29,9 @@ struct OutboundDatagram {
 
 #[streamlib::sdk::processor("UdpSink")]
 pub struct UdpSinkProcessor {
+    /// Plugin-owned tokio runtime. Constructed in `setup()`; the host's
+    /// runtime is not reachable across the plugin ABI per #885.
+    tokio_runtime: Option<tokio::runtime::Runtime>,
     tokio_handle: Option<tokio::runtime::Handle>,
     /// Resolved at setup time so we don't re-parse on every send.
     default_destination: Option<SocketAddr>,
@@ -42,12 +45,19 @@ pub struct UdpSinkProcessor {
 }
 
 impl ReactiveProcessor for UdpSinkProcessor::Processor {
-    fn setup(
-        &mut self,
-        ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
-        let tokio_handle = ctx.tokio_handle().clone();
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                Error::Configuration(format!(
+                    "UdpSink: failed to build tokio runtime: {e}"
+                ))
+            })?;
+        let tokio_handle = runtime.handle().clone();
         self.tokio_handle = Some(tokio_handle.clone());
+        self.tokio_runtime = Some(runtime);
 
         let bind_str = self
             .config
@@ -57,7 +67,7 @@ impl ReactiveProcessor for UdpSinkProcessor::Processor {
 
         // Parse default_destination eagerly so a misconfig surfaces at
         // setup rather than on first packet.
-        let default_destination_result = self
+        let default_destination = self
             .config
             .default_destination
             .as_deref()
@@ -68,40 +78,33 @@ impl ReactiveProcessor for UdpSinkProcessor::Processor {
                     ))
                 })
             })
-            .transpose();
+            .transpose()?;
+        self.default_destination = default_destination;
+
+        let bind_addr: SocketAddr = bind_str.parse().map_err(|e| {
+            Error::Configuration(format!("UdpSink: invalid bind_addr {bind_str:?}: {e}"))
+        })?;
 
         let send_buffer_bytes = self.config.send_buffer_bytes;
         let packets_sent = Arc::clone(&self.packets_sent);
-        let outbound_tx_slot = &mut self.outbound_tx;
-        let send_task_slot = &mut self.send_task_handle;
-        let default_destination_slot = &mut self.default_destination;
 
-        std::future::ready((|| -> Result<()> {
-            let default_destination = default_destination_result?;
-            *default_destination_slot = default_destination;
+        let socket = build_udp_socket(bind_addr, send_buffer_bytes, &tokio_handle)?;
 
-            let bind_addr: SocketAddr = bind_str.parse().map_err(|e| {
-                Error::Configuration(format!("UdpSink: invalid bind_addr {bind_str:?}: {e}"))
-            })?;
+        let (tx, rx) = mpsc::channel::<OutboundDatagram>(OUTBOUND_MPSC_CAPACITY);
+        self.outbound_tx = Some(tx);
 
-            let socket = build_udp_socket(bind_addr, send_buffer_bytes, &tokio_handle)?;
+        let handle = tokio_handle.spawn(async move {
+            send_loop(socket, rx, packets_sent).await;
+        });
+        self.send_task_handle = Some(handle);
 
-            let (tx, rx) = mpsc::channel::<OutboundDatagram>(OUTBOUND_MPSC_CAPACITY);
-            *outbound_tx_slot = Some(tx);
-
-            let handle = tokio_handle.spawn(async move {
-                send_loop(socket, rx, packets_sent).await;
-            });
-            *send_task_slot = Some(handle);
-
-            tracing::info!(
-                bind_addr = %bind_addr,
-                default_destination = ?default_destination_slot.as_ref().map(|d| d.to_string()),
-                send_buffer_bytes = ?send_buffer_bytes,
-                "UdpSink: bound + send task spawned",
-            );
-            Ok(())
-        })())
+        tracing::info!(
+            bind_addr = %bind_addr,
+            default_destination = ?self.default_destination.as_ref().map(|d| d.to_string()),
+            send_buffer_bytes = ?send_buffer_bytes,
+            "UdpSink: bound + send task spawned",
+        );
+        Ok(())
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
@@ -156,10 +159,7 @@ impl ReactiveProcessor for UdpSinkProcessor::Processor {
         }
     }
 
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         // Drop the sender so the send loop sees `Closed` and exits.
         self.outbound_tx.take();
         if let Some(handle) = self.send_task_handle.take() {
@@ -174,7 +174,10 @@ impl ReactiveProcessor for UdpSinkProcessor::Processor {
             packets_dropped_no_destination = dropped_nodst,
             "UdpSink: teardown",
         );
-        std::future::ready(Ok(()))
+        // Drop the plugin-owned tokio runtime — joins worker threads.
+        self.tokio_handle.take();
+        self.tokio_runtime.take();
+        Ok(())
     }
 }
 

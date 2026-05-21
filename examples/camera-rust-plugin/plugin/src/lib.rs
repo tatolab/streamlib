@@ -39,14 +39,11 @@ pub struct GrayscaleProcessor {
 }
 
 impl ManualProcessor for GrayscaleProcessor::Processor {
-    fn setup(
-        &mut self,
-        ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
         self.running = Arc::new(AtomicBool::new(false));
         tracing::info!("GrayscaleProcessor: setup complete");
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {

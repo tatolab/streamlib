@@ -40,5 +40,11 @@ streamlib-plugin-abi = { path = "../../libs/streamlib-plugin-abi" }
 # Serialization (config dataclass ships as serde-derived).
 serde.workspace = true
 
+# `TcpBindTestProcessor` uses the plugin's own tokio runtime to verify
+# the dlopen-owns-tokio claim from #885 — the cdylib statically links
+# its own tokio crate so `tokio::net::*` has working TLS slots inside
+# the plugin's runtime even when the host has its own separate tokio.
+tokio = { workspace = true, features = ["rt", "net", "macros"] }
+
 [lints]
 workspace = true

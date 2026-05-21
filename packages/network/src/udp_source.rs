@@ -54,6 +54,11 @@ fn monotonic_ns() -> i64 {
 
 #[streamlib::sdk::processor("UdpSource")]
 pub struct UdpSourceProcessor {
+    /// Plugin-owned tokio runtime. Constructed in `setup()`; the host's
+    /// runtime is not reachable across the plugin ABI per #885.
+    /// `tokio::net::UdpSocket` requires this runtime's TLS to be set
+    /// while polling its futures.
+    tokio_runtime: Option<tokio::runtime::Runtime>,
     tokio_handle: Option<tokio::runtime::Handle>,
     shutdown: Arc<Notify>,
     packets_received: Arc<AtomicU64>,
@@ -61,11 +66,18 @@ pub struct UdpSourceProcessor {
 }
 
 impl ManualProcessor for UdpSourceProcessor::Processor {
-    fn setup(
-        &mut self,
-        ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
-        self.tokio_handle = Some(ctx.tokio_handle().clone());
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                Error::Configuration(format!(
+                    "UdpSource: failed to build tokio runtime: {e}"
+                ))
+            })?;
+        self.tokio_handle = Some(runtime.handle().clone());
+        self.tokio_runtime = Some(runtime);
         // Touch the lazy anchor so the first packet's timestamp is
         // genuinely relative to setup-time, not to first-recv-time.
         let _ = monotonic_ns();
@@ -75,7 +87,7 @@ impl ManualProcessor for UdpSourceProcessor::Processor {
             batch_size = ?self.config.batch_size,
             "UdpSource: setup",
         );
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
@@ -126,6 +138,14 @@ impl ManualProcessor for UdpSourceProcessor::Processor {
         }
         let n = self.packets_received.load(Ordering::Relaxed);
         tracing::info!(packets_received = n, "UdpSource: stopped");
+        Ok(())
+    }
+
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        // Drop the plugin-owned tokio runtime — joins worker threads
+        // and finalizes any aborted task cleanup.
+        self.tokio_handle.take();
+        self.tokio_runtime.take();
         Ok(())
     }
 }

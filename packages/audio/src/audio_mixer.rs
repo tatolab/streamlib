@@ -14,10 +14,7 @@ pub struct AudioMixerProcessor {
 }
 
 impl streamlib::sdk::processors::ReactiveProcessor for AudioMixerProcessor::Processor {
-    fn setup(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.sample_rate = 0;
         self.buffer_size = 0;
         self.frame_counter = 0;
@@ -26,15 +23,12 @@ impl streamlib::sdk::processors::ReactiveProcessor for AudioMixerProcessor::Proc
             "AudioMixer: Starting (sample_rate and buffer_size will be inferred from first input, strategy: {:?})",
             self.config.strategy
         );
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!("AudioMixer: Stopped");
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {

@@ -40,10 +40,7 @@ pub struct PolyglotManualSourceCountingSink {
 }
 
 impl streamlib::sdk::processors::ReactiveProcessor for PolyglotManualSourceCountingSink::Processor {
-    fn setup(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let output = std::env::var(OUTPUT_ENV_VAR)
             .ok()
             .filter(|s| !s.is_empty())
@@ -54,7 +51,7 @@ impl streamlib::sdk::processors::ReactiveProcessor for PolyglotManualSourceCount
             );
         }
         self.output_file = output;
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
@@ -78,10 +75,7 @@ impl streamlib::sdk::processors::ReactiveProcessor for PolyglotManualSourceCount
         Ok(())
     }
 
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let result = match &self.output_file {
             Some(path) => {
                 // JSON has no native u64 — emit timestamps as decimal
@@ -107,7 +101,7 @@ impl streamlib::sdk::processors::ReactiveProcessor for PolyglotManualSourceCount
             "[CountingSink] teardown — frames_received={}",
             self.frame_counter,
         );
-        std::future::ready(result)
+        result
     }
 }
 

@@ -45,12 +45,30 @@ pub struct WebRtcWhipProcessor {
     // Peer connection reference for stats (cloned before client moves to async task)
     peer_connection_for_stats: Option<Arc<webrtc::peer_connection::RTCPeerConnection>>,
 
+    // Plugin-owned tokio runtime. Constructed in `setup()` (the host's
+    // runtime is not reachable across the plugin ABI per #885).
+    // `webrtc-rs` requires tokio TLS to be set while polling its futures;
+    // running them on this runtime works because the cdylib statically
+    // links its own tokio crate.
+    tokio_runtime: Option<tokio::runtime::Runtime>,
+    tokio_handle: Option<tokio::runtime::Handle>,
+
     // Stats tracking
     last_stats_time_ns: i64,
 }
 
 impl ReactiveProcessor for WebRtcWhipProcessor::Processor {
-    async fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                Error::Runtime(format!("WebRtcWhip: failed to build tokio runtime: {e}"))
+            })?;
+        self.tokio_handle = Some(runtime.handle().clone());
+        self.tokio_runtime = Some(runtime);
+
         // Convert generated config to WhipConfig
         let whip_config = WhipConfig {
             endpoint_url: self.config.whip.endpoint_url.clone(),
@@ -64,19 +82,28 @@ impl ReactiveProcessor for WebRtcWhipProcessor::Processor {
         Ok(())
     }
 
-    async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!("[WebRtcWhip] Shutting down");
 
         // Drop the channel sender to signal the async task to terminate.
         self.whip_client_message_sender.take();
         self.peer_connection_for_stats.take();
 
-        // If the client was never moved to the async task, terminate directly.
+        // If the client was never moved to the async task, terminate
+        // directly on the plugin's own runtime.
         if let Some(mut client) = self.whip_client.take() {
-            if let Err(e) = client.terminate().await {
-                tracing::warn!("[WebRtcWhip] Error terminating WHIP session: {}", e);
+            if let Some(handle) = self.tokio_handle.as_ref() {
+                if let Err(e) = handle.block_on(client.terminate()) {
+                    tracing::warn!("[WebRtcWhip] Error terminating WHIP session: {}", e);
+                }
             }
         }
+
+        // Drop the runtime — gives spawned tasks a chance to drain
+        // their channel and shut down their `terminate()` future before
+        // worker threads are joined.
+        self.tokio_handle.take();
+        self.tokio_runtime.take();
 
         tracing::info!("[WebRtcWhip] Shutdown complete");
         Ok(())
@@ -130,8 +157,11 @@ impl ReactiveProcessor for WebRtcWhipProcessor::Processor {
 
 impl WebRtcWhipProcessor::Processor {
     /// Starts the WebRTC WHIP session.
-    fn start_session(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        let tokio_handle = ctx.tokio_handle().clone();
+    fn start_session(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        let tokio_handle = self
+            .tokio_handle
+            .clone()
+            .ok_or_else(|| Error::Runtime("tokio runtime not initialized in setup()".into()))?;
         let client = self
             .whip_client
             .as_mut()
@@ -234,9 +264,12 @@ impl WebRtcWhipProcessor::Processor {
         Ok(())
     }
 
-    fn log_stats(&self, ctx: &RuntimeContextLimitedAccess<'_>) {
+    fn log_stats(&self, _ctx: &RuntimeContextLimitedAccess<'_>) {
         if let Some(pc) = &self.peer_connection_for_stats {
-            let tokio_handle = ctx.tokio_handle();
+            let Some(tokio_handle) = self.tokio_handle.as_ref() else {
+                tracing::debug!("[WebRtcWhip] tokio runtime gone, skipping stats");
+                return;
+            };
             let stats = tokio_handle.block_on(pc.get_stats());
             let mut video_bytes_sent = 0u64;
             let mut audio_bytes_sent = 0u64;

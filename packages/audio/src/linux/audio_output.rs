@@ -66,10 +66,7 @@ pub struct LinuxAudioOutputProcessor {
 }
 
 impl streamlib::sdk::processors::ManualProcessor for LinuxAudioOutputProcessor::Processor {
-    fn setup(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.device_id = self
             .config
             .device_id
@@ -79,13 +76,10 @@ impl streamlib::sdk::processors::ManualProcessor for LinuxAudioOutputProcessor::
         tracing::info!(
             "AudioOutput: start() called (Pull mode - will query device for native config)"
         );
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.stop_polling.store(true, Ordering::SeqCst);
 
         if let Some(handle) = self.polling_thread.take() {
@@ -94,7 +88,7 @@ impl streamlib::sdk::processors::ManualProcessor for LinuxAudioOutputProcessor::
 
         self.stream = None;
         tracing::info!("AudioOutput {}: Stopped", self.device_name);
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {

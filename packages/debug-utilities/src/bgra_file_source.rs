@@ -34,10 +34,7 @@ pub struct BgraFileSourceProcessor {
 }
 
 impl ManualProcessor for BgraFileSourceProcessor::Processor {
-    fn setup(
-        &mut self,
-        ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
         tracing::info!(
             "[BgraFileSource] Setup (file: {}, {}x{}@{}fps, {} frames)",
@@ -47,20 +44,17 @@ impl ManualProcessor for BgraFileSourceProcessor::Processor {
             self.config.fps,
             self.config.frame_count
         );
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let frames = self.frame_counter.load(Ordering::Relaxed);
         tracing::info!("[BgraFileSource] Teardown ({frames} frames streamed)");
         self.is_running.store(false, Ordering::Release);
         if let Some(handle) = self.source_thread_handle.take() {
             let _ = handle.join();
         }
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
     fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
