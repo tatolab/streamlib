@@ -223,7 +223,15 @@ pub const SURFACE_STORE_VTABLE_LAYOUT_VERSION: u32 = 1;
 ///   surface). The bulk of the `SurfaceStore` ABI lives on its own
 ///   [`SurfaceStoreVTable`], reached via
 ///   [`HostServices::surface_store_vtable`].
-pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 8;
+/// - v9: three remaining PixelBuffer method-dispatch callbacks
+///   (`acquire_pixel_buffer` returning a `(PixelBufferPoolId,
+///   PixelBuffer)` tuple via paired out-params; `get_pixel_buffer`
+///   keyed by `PixelBufferPoolId`-as-bytes;
+///   `resolve_pixel_buffer_by_surface_id`). Closes the cross-DSO
+///   loop for the PixelBuffer surface — every public method on
+///   `GpuContextLimitedAccess` that touches a PixelBuffer is now
+///   layout-stable.
+pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 9;
 
 // =============================================================================
 // Primitive enums
@@ -1329,6 +1337,63 @@ pub struct GpuContextLimitedAccessVTable {
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // Remaining PixelBuffer methods (v9 — Phase C1 Phase 2F)
+    // -------------------------------------------------------------------------
+    //
+    // Last three methods on `GpuContextLimitedAccess` that touch
+    // `PixelBuffer`. Closes the cross-DSO loop for the PixelBuffer
+    // surface (Phase 0 already β-reshaped the type; Phase 2F wires
+    // the remaining acquire / lookup methods through the vtable).
+
+    /// Acquire a pixel buffer from a pre-reserved pool. The tuple
+    /// return `(PixelBufferPoolId, PixelBuffer)` is encoded via
+    /// paired out-params: `out_pool_id_buf` receives the
+    /// `PixelBufferPoolId`'s string bytes (capped at
+    /// `out_pool_id_cap`; `*out_pool_id_len` receives the actual
+    /// length, truncated to fit). `*out_pixel_buffer` receives a
+    /// fresh `PixelBuffer` β-shape on success.
+    ///
+    /// `format_raw` is the `#[repr(u32)]` discriminant of
+    /// [`streamlib_consumer_rhi::PixelFormat`].
+    pub acquire_pixel_buffer: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        width: u32,
+        height: u32,
+        format_raw: u32,
+        out_pool_id_buf: *mut u8,
+        out_pool_id_cap: usize,
+        out_pool_id_len: *mut usize,
+        out_pixel_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Get a pixel buffer by its pool id (local-cache fast path).
+    /// `pool_id_ptr` / `pool_id_len` is the UTF-8 byte
+    /// representation of the `PixelBufferPoolId`'s inner string.
+    pub get_pixel_buffer: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        pool_id_ptr: *const u8,
+        pool_id_len: usize,
+        out_pixel_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Resolve a VideoFrame's buffer from its `surface_id`.
+    pub resolve_pixel_buffer_by_surface_id: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        surface_id_ptr: *const u8,
+        surface_id_len: usize,
+        out_pixel_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
 }
 
 unsafe impl Send for GpuContextLimitedAccessVTable {}
@@ -1886,11 +1951,11 @@ mod layout_tests {
         // v2: added owning-Arc handle lifetime callbacks
         // (`clone_handle` / `drop_handle`).
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
-        // v8 (Phase C1 Phase 2E): added the 2 SurfaceStore accessor
-        // callbacks (surface_store / check_out_surface) on the
-        // GpuContextLimitedAccessVTable; the bulk of the SurfaceStore
-        // ABI lives on its own SurfaceStoreVTable.
-        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 8);
+        // v9 (Phase C1 Phase 2F): added the 3 remaining PixelBuffer
+        // method-dispatch callbacks (acquire_pixel_buffer,
+        // get_pixel_buffer, resolve_pixel_buffer_by_surface_id) —
+        // closes the cross-DSO loop for the PixelBuffer surface.
+        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 9);
         // v1: scaffold for the SurfaceStore subsystem.
         assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
     }
@@ -1960,9 +2025,11 @@ mod layout_tests {
         //           command_queue, create_command_buffer,
         //           copy_pixel_buffer_to_texture, blit_copy,
         //           blit_copy_iosurface,
-        //   v8 (2): surface_store, check_out_surface.
-        // = 4 + 4 + 376 = 384 bytes.
-        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 384);
+        //   v8 (2): surface_store, check_out_surface,
+        //   v9 (3): acquire_pixel_buffer, get_pixel_buffer,
+        //           resolve_pixel_buffer_by_surface_id.
+        // = 4 + 4 + 400 = 408 bytes.
+        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 408);
         assert_eq!(align_of::<GpuContextLimitedAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextLimitedAccessVTable, layout_version), 0);
         assert_eq!(
@@ -2168,6 +2235,19 @@ mod layout_tests {
         assert_eq!(
             offset_of!(GpuContextLimitedAccessVTable, check_out_surface),
             376
+        );
+        // v9 entries (Phase 2F): 3 fn pointers appended.
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, acquire_pixel_buffer),
+            384
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, get_pixel_buffer),
+            392
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, resolve_pixel_buffer_by_surface_id),
+            400
         );
     }
 

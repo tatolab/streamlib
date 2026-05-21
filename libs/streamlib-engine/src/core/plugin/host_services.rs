@@ -4014,6 +4014,229 @@ unsafe extern "C" fn host_ss_update_image_layout(
     1
 }
 
+// -------------------------------------------------------------------------
+// Remaining PixelBuffer method dispatch (v9 — Phase 2F)
+// -------------------------------------------------------------------------
+
+#[inline]
+fn pixel_format_from_raw(raw: u32) -> Option<streamlib_consumer_rhi::PixelFormat> {
+    // Mirror of `PixelBuffer::format`'s reverse mapping. Each
+    // `#[repr(u32)]` discriminant maps back to its variant; unknown
+    // values return None (caller surfaces an error).
+    use streamlib_consumer_rhi::PixelFormat;
+    match raw {
+        0x42475241 => Some(PixelFormat::Bgra32),
+        0x52474241 => Some(PixelFormat::Rgba32),
+        0x00000020 => Some(PixelFormat::Argb32),
+        0x52476841 => Some(PixelFormat::Rgba64),
+        0x34323076 => Some(PixelFormat::Nv12VideoRange),
+        0x34323066 => Some(PixelFormat::Nv12FullRange),
+        0x32767579 => Some(PixelFormat::Uyvy422),
+        0x79757673 => Some(PixelFormat::Yuyv422),
+        0x4C303038 => Some(PixelFormat::Gray8),
+        0x00000000 => Some(PixelFormat::Unknown),
+        _ => None,
+    }
+}
+
+unsafe extern "C" fn host_gpu_lim_acquire_pixel_buffer(
+    gpu_handle: *const c_void,
+    width: u32,
+    height: u32,
+    format_raw: u32,
+    out_pool_id_buf: *mut u8,
+    out_pool_id_cap: usize,
+    out_pool_id_len: *mut usize,
+    out_pixel_buffer: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_acquire_pixel_buffer",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(gpu_handle) }) else {
+                write_err(
+                    "acquire_pixel_buffer: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if out_pixel_buffer.is_null() {
+                write_err(
+                    "acquire_pixel_buffer: null out_pixel_buffer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let format = match pixel_format_from_raw(format_raw) {
+                Some(f) => f,
+                None => {
+                    let msg = format!(
+                        "acquire_pixel_buffer: invalid format_raw 0x{:08x}",
+                        format_raw
+                    );
+                    write_err(&msg, err_buf, err_buf_cap, err_len);
+                    return 1;
+                }
+            };
+            match gpu.acquire_pixel_buffer(width, height, format) {
+                Ok((pool_id, pb)) => {
+                    write_id_bytes(
+                        pool_id.as_str().as_bytes(),
+                        out_pool_id_buf,
+                        out_pool_id_cap,
+                        out_pool_id_len,
+                    );
+                    unsafe {
+                        std::ptr::write(
+                            out_pixel_buffer as *mut crate::core::rhi::PixelBuffer,
+                            pb,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_get_pixel_buffer(
+    gpu_handle: *const c_void,
+    pool_id_ptr: *const u8,
+    pool_id_len: usize,
+    out_pixel_buffer: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_get_pixel_buffer",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(gpu_handle) }) else {
+                write_err(
+                    "get_pixel_buffer: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if out_pixel_buffer.is_null() {
+                write_err(
+                    "get_pixel_buffer: null out_pixel_buffer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let id_bytes = unsafe { slice_from_raw(pool_id_ptr, pool_id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "get_pixel_buffer: pool_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            let pool_id = crate::core::rhi::PixelBufferPoolId::from_str(id_str);
+            match gpu.get_pixel_buffer(&pool_id) {
+                Ok(pb) => {
+                    unsafe {
+                        std::ptr::write(
+                            out_pixel_buffer as *mut crate::core::rhi::PixelBuffer,
+                            pb,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_resolve_pixel_buffer_by_surface_id(
+    gpu_handle: *const c_void,
+    surface_id_ptr: *const u8,
+    surface_id_len: usize,
+    out_pixel_buffer: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_resolve_pixel_buffer_by_surface_id",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(gpu_handle) }) else {
+                write_err(
+                    "resolve_pixel_buffer_by_surface_id: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if out_pixel_buffer.is_null() {
+                write_err(
+                    "resolve_pixel_buffer_by_surface_id: null out_pixel_buffer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let id_bytes = unsafe { slice_from_raw(surface_id_ptr, surface_id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "resolve_pixel_buffer_by_surface_id: surface_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            match gpu.resolve_pixel_buffer_by_surface_id(id_str) {
+                Ok(pb) => {
+                    unsafe {
+                        std::ptr::write(
+                            out_pixel_buffer as *mut crate::core::rhi::PixelBuffer,
+                            pb,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
 /// Static [`SurfaceStoreVTable`] installed once per process. Paired
 /// with the per-SurfaceStore handle returned by
 /// [`HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE`]`::surface_store`.
@@ -4100,6 +4323,9 @@ pub static HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE: GpuContextLimitedAccessVTable
         blit_copy_iosurface: host_gpu_lim_blit_copy_iosurface,
         surface_store: host_gpu_lim_surface_store,
         check_out_surface: host_gpu_lim_check_out_surface,
+        acquire_pixel_buffer: host_gpu_lim_acquire_pixel_buffer,
+        get_pixel_buffer: host_gpu_lim_get_pixel_buffer,
+        resolve_pixel_buffer_by_surface_id: host_gpu_lim_resolve_pixel_buffer_by_surface_id,
     };
 
 /// Pointer to the [`GpuContextLimitedAccessVTable`] this DSO should

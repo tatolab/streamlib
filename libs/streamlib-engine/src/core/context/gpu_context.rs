@@ -2216,13 +2216,57 @@ impl GpuContextLimitedAccess {
     /// If the pool has to grow to serve this call, the growth path internally
     /// allocates — nonzero sustained rates will fire the escalation-rate
     /// warning, indicating a pre-reservation gap.
+    ///
+    /// Dispatches through the cross-DSO vtable's
+    /// `acquire_pixel_buffer` callback. The tuple return is encoded
+    /// via paired out-params: the pool id's string bytes land in a
+    /// fixed-size stack buffer (1 KiB; UUID strings are well under
+    /// 128 bytes), and the β-shape PixelBuffer goes into a
+    /// MaybeUninit slot.
     pub fn acquire_pixel_buffer(
         &self,
         width: u32,
         height: u32,
         format: PixelFormat,
     ) -> Result<(PixelBufferPoolId, PixelBuffer)> {
-        self.inner.acquire_pixel_buffer(width, height, format)
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "acquire_pixel_buffer: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut pool_id_buf = [0u8; 1024];
+        let mut pool_id_len: usize = 0;
+        let mut out_pb: std::mem::MaybeUninit<PixelBuffer> = std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.vtable).acquire_pixel_buffer)(
+                self.handle,
+                width,
+                height,
+                format as u32,
+                pool_id_buf.as_mut_ptr(),
+                pool_id_buf.len(),
+                &mut pool_id_len as *mut usize,
+                out_pb.as_mut_ptr() as *mut std::ffi::c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            let id_str = String::from_utf8_lossy(
+                &pool_id_buf[..pool_id_len.min(pool_id_buf.len())],
+            )
+            .into_owned();
+            let pool_id = PixelBufferPoolId::from_string(id_str);
+            let pb = unsafe { out_pb.assume_init() };
+            Ok((pool_id, pb))
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     /// Acquire a HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
@@ -2298,13 +2342,70 @@ impl GpuContextLimitedAccess {
     }
 
     /// Get a pixel buffer by its pool id (Split: local cache).
+    ///
+    /// Dispatches through the cross-DSO vtable's `get_pixel_buffer`
+    /// callback.
     pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<PixelBuffer> {
-        self.inner.get_pixel_buffer(pool_id)
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "get_pixel_buffer: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let id_str = pool_id.as_str();
+        let mut out_pb: std::mem::MaybeUninit<PixelBuffer> = std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.vtable).get_pixel_buffer)(
+                self.handle,
+                id_str.as_ptr(),
+                id_str.len(),
+                out_pb.as_mut_ptr() as *mut std::ffi::c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(unsafe { out_pb.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     /// Resolve a VideoFrame's buffer from its surface_id.
+    ///
+    /// Dispatches through the cross-DSO vtable's
+    /// `resolve_pixel_buffer_by_surface_id` callback.
     pub fn resolve_pixel_buffer_by_surface_id(&self, surface_id: &str) -> Result<PixelBuffer> {
-        self.inner.resolve_pixel_buffer_by_surface_id(surface_id)
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "resolve_pixel_buffer_by_surface_id: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut out_pb: std::mem::MaybeUninit<PixelBuffer> = std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.vtable).resolve_pixel_buffer_by_surface_id)(
+                self.handle,
+                surface_id.as_ptr(),
+                surface_id.len(),
+                out_pb.as_mut_ptr() as *mut std::ffi::c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(unsafe { out_pb.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     /// Register a texture in the same-process texture cache.
