@@ -60,12 +60,14 @@ use std::ffi::c_void;
 use std::sync::{Arc, OnceLock};
 
 use streamlib_plugin_abi::{
-    AudioClockVTable, GpuContextLimitedAccessVTable, HostHandle, HostInterest, HostLogLevel,
-    HostServices, ProcessorVTable, RuntimeContextVTable, RuntimeOpsVTable, SurfaceStoreVTable,
-    AUDIO_CLOCK_VTABLE_LAYOUT_VERSION, GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION,
-    HOST_SERVICES_LAYOUT_VERSION, PROCESSOR_VTABLE_LAYOUT_VERSION,
-    RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION, RUNTIME_OPS_VTABLE_LAYOUT_VERSION,
-    SURFACE_STORE_VTABLE_LAYOUT_VERSION,
+    AudioClockVTable, ComputeKernelDescriptorRepr, GpuContextFullAccessVTable,
+    GpuContextLimitedAccessVTable, GraphicsKernelDescriptorRepr, HostHandle, HostInterest,
+    HostLogLevel, HostServices, ProcessorVTable, RayTracingKernelDescriptorRepr,
+    RuntimeContextVTable, RuntimeOpsVTable, SurfaceStoreVTable,
+    AUDIO_CLOCK_VTABLE_LAYOUT_VERSION, GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION,
+    GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, HOST_SERVICES_LAYOUT_VERSION,
+    PROCESSOR_VTABLE_LAYOUT_VERSION, RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION,
+    RUNTIME_OPS_VTABLE_LAYOUT_VERSION, SURFACE_STORE_VTABLE_LAYOUT_VERSION,
 };
 
 // tokio is not exposed across the ABI. Lifecycle methods are
@@ -172,6 +174,14 @@ pub struct HostCallbacks {
     /// before dispatching. Sourced from
     /// [`HostServices::surface_store_vtable`] at install time.
     pub surface_store_vtable: *const SurfaceStoreVTable,
+    /// Host-installed [`GpuContextFullAccessVTable`] pointer. May be
+    /// null on hosts that don't ship a GpuContext; cdylib must check
+    /// before dispatching. Reachable from cdylib code only inside an
+    /// `escalate(|full| ...)` scope (C3 wires the scope-token
+    /// machinery). Sourced from
+    /// [`HostServices::gpu_context_full_access_vtable`] at install
+    /// time.
+    pub gpu_context_full_access_vtable: *const GpuContextFullAccessVTable,
 }
 
 // Safety: every field is a fn pointer or a raw pointer the host
@@ -297,6 +307,15 @@ pub unsafe fn install_host_services(
             return None;
         }
     }
+    if !services.gpu_context_full_access_vtable.is_null() {
+        // SAFETY: same shape as the other vtable validations. Null
+        // is allowed (host has no GpuContext); only non-null pointers
+        // are version-validated.
+        let v = unsafe { (*services.gpu_context_full_access_vtable).layout_version };
+        if v != GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION {
+            return None;
+        }
+    }
 
     let callbacks = HostCallbacks {
         host: services.host,
@@ -313,6 +332,7 @@ pub unsafe fn install_host_services(
         runtime_ops_vtable: services.runtime_ops_vtable,
         gpu_context_limited_access_vtable: services.gpu_context_limited_access_vtable,
         surface_store_vtable: services.surface_store_vtable,
+        gpu_context_full_access_vtable: services.gpu_context_full_access_vtable,
     };
 
     // Cache the callbacks BEFORE installing tracing — the
@@ -4268,6 +4288,562 @@ pub fn host_surface_store_vtable() -> *const SurfaceStoreVTable {
 /// Static [`GpuContextLimitedAccessVTable`] installed once per process.
 /// Paired with the per-RuntimeContext gpu-limited handle returned by
 /// [`HOST_RUNTIME_CONTEXT_VTABLE`]`::gpu_limited_access`.
+// =============================================================================
+// HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE — Phase C2
+// =============================================================================
+//
+// FullAccess vtable bodies. Reachable from cdylib code only inside an
+// `escalate(|full| ...)` scope (C3 wires the scope-token machinery);
+// host-mode call sites reach the same bodies via the
+// `host_gpu_context_full_access_vtable()` resolver.
+//
+// Handle interpretation:
+// - `gpu_handle`: `*const Arc<GpuContext>` (matches the LimitedAccess
+//   convention). The host's `GpuContextFullAccess::new` produces
+//   `Box::into_raw(Box::new(Arc::new(GpuContext)))`; the matching
+//   `host_gpu_full_drop_handle` runs `Box::from_raw + drop`.
+// - Kernel return handles: `*const VulkanComputeKernel` / etc., shaped
+//   as `Arc::into_raw(arc)`. Cdylib's `clone_*` / `drop_*` callbacks
+//   route refcount accounting through host-compiled code.
+
+unsafe extern "C" fn host_gpu_full_drop_handle(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_full_drop_handle",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            // SAFETY: handle was produced by either the host's
+            // `GpuContextFullAccess::new` or a future C3 escalate-begin
+            // callback; both produce `Box::into_raw(Box::new(Arc::new(GpuContext)))`.
+            let _ = unsafe {
+                Box::from_raw(
+                    handle as *mut Arc<crate::core::context::GpuContext>,
+                )
+            };
+        },
+        (),
+    )
+}
+
+// ---------------- Kernel Arc-handle lifecycle (Linux-only) ----------------
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_clone_compute_kernel(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_full_clone_compute_kernel",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            // SAFETY: handle is `Arc::into_raw(Arc<VulkanComputeKernel>)`-shaped.
+            unsafe {
+                Arc::increment_strong_count(
+                    handle as *const crate::vulkan::rhi::VulkanComputeKernel,
+                );
+            }
+        },
+        (),
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_drop_compute_kernel(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_full_drop_compute_kernel",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            // SAFETY: handle is `Arc::into_raw(Arc<VulkanComputeKernel>)`-shaped.
+            unsafe {
+                Arc::decrement_strong_count(
+                    handle as *const crate::vulkan::rhi::VulkanComputeKernel,
+                );
+            }
+        },
+        (),
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_clone_graphics_kernel(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_full_clone_graphics_kernel",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            unsafe {
+                Arc::increment_strong_count(
+                    handle as *const crate::vulkan::rhi::VulkanGraphicsKernel,
+                );
+            }
+        },
+        (),
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_drop_graphics_kernel(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_full_drop_graphics_kernel",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            unsafe {
+                Arc::decrement_strong_count(
+                    handle as *const crate::vulkan::rhi::VulkanGraphicsKernel,
+                );
+            }
+        },
+        (),
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_clone_ray_tracing_kernel(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_full_clone_ray_tracing_kernel",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            unsafe {
+                Arc::increment_strong_count(
+                    handle as *const crate::vulkan::rhi::VulkanRayTracingKernel,
+                );
+            }
+        },
+        (),
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_drop_ray_tracing_kernel(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_full_drop_ray_tracing_kernel",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            unsafe {
+                Arc::decrement_strong_count(
+                    handle as *const crate::vulkan::rhi::VulkanRayTracingKernel,
+                );
+            }
+        },
+        (),
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_clone_texture_ring(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_full_clone_texture_ring",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            unsafe {
+                Arc::increment_strong_count(
+                    handle as *const crate::core::context::TextureRing,
+                );
+            }
+        },
+        (),
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_drop_texture_ring(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_full_drop_texture_ring",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            unsafe {
+                Arc::decrement_strong_count(
+                    handle as *const crate::core::context::TextureRing,
+                );
+            }
+        },
+        (),
+    )
+}
+
+// Non-Linux stubs (callbacks must exist for the static layout, but
+// the kernel types only ship on Linux).
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_clone_compute_kernel(_handle: *const c_void) {}
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_drop_compute_kernel(_handle: *const c_void) {}
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_clone_graphics_kernel(_handle: *const c_void) {}
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_drop_graphics_kernel(_handle: *const c_void) {}
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_clone_ray_tracing_kernel(_handle: *const c_void) {}
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_drop_ray_tracing_kernel(_handle: *const c_void) {}
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_clone_texture_ring(_handle: *const c_void) {}
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_drop_texture_ring(_handle: *const c_void) {}
+
+// ---------------- Kernel construction (Linux-only) ----------------
+
+#[cfg(target_os = "linux")]
+unsafe fn handle_as_gpu_context_full(
+    handle: *const c_void,
+) -> Option<&'static Arc<crate::core::context::GpuContext>> {
+    if handle.is_null() {
+        return None;
+    }
+    // SAFETY: caller-supplied contract; matches `handle_as_gpu_context`'s
+    // shape (`*const Arc<GpuContext>`).
+    unsafe { Some(&*(handle as *const Arc<crate::core::context::GpuContext>)) }
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_create_compute_kernel(
+    gpu_handle: *const c_void,
+    desc: *const ComputeKernelDescriptorRepr,
+    out_kernel: *mut *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_full_create_compute_kernel",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context_full(gpu_handle) }) else {
+                write_err(
+                    "create_compute_kernel: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if desc.is_null() || out_kernel.is_null() {
+                write_err(
+                    "create_compute_kernel: null desc or out pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let repr: &ComputeKernelDescriptorRepr = unsafe { &*desc };
+            let result = unsafe {
+                crate::core::rhi::plugin_abi_bridge::with_decoded_compute_kernel_descriptor(
+                    repr,
+                    |rust_desc| gpu.create_compute_kernel(rust_desc),
+                )
+            };
+            match result {
+                Ok(arc) => {
+                    let raw = Arc::into_raw(arc) as *const c_void;
+                    unsafe { std::ptr::write(out_kernel, raw) };
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{e}"), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_create_graphics_kernel(
+    gpu_handle: *const c_void,
+    desc: *const GraphicsKernelDescriptorRepr,
+    out_kernel: *mut *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_full_create_graphics_kernel",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context_full(gpu_handle) }) else {
+                write_err(
+                    "create_graphics_kernel: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if desc.is_null() || out_kernel.is_null() {
+                write_err(
+                    "create_graphics_kernel: null desc or out pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let repr: &GraphicsKernelDescriptorRepr = unsafe { &*desc };
+            let result = unsafe {
+                crate::core::rhi::plugin_abi_bridge::with_decoded_graphics_kernel_descriptor(
+                    repr,
+                    |rust_desc| gpu.create_graphics_kernel(rust_desc),
+                )
+            };
+            match result {
+                Ok(arc) => {
+                    let raw = Arc::into_raw(arc) as *const c_void;
+                    unsafe { std::ptr::write(out_kernel, raw) };
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{e}"), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_create_ray_tracing_kernel(
+    gpu_handle: *const c_void,
+    desc: *const RayTracingKernelDescriptorRepr,
+    out_kernel: *mut *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_full_create_ray_tracing_kernel",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context_full(gpu_handle) }) else {
+                write_err(
+                    "create_ray_tracing_kernel: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if desc.is_null() || out_kernel.is_null() {
+                write_err(
+                    "create_ray_tracing_kernel: null desc or out pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let repr: &RayTracingKernelDescriptorRepr = unsafe { &*desc };
+            let result = unsafe {
+                crate::core::rhi::plugin_abi_bridge::with_decoded_ray_tracing_kernel_descriptor(
+                    repr,
+                    |rust_desc| gpu.create_ray_tracing_kernel(rust_desc),
+                )
+            };
+            match result {
+                Ok(arc) => {
+                    let raw = Arc::into_raw(arc) as *const c_void;
+                    unsafe { std::ptr::write(out_kernel, raw) };
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{e}"), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_create_texture_ring(
+    gpu_handle: *const c_void,
+    width: u32,
+    height: u32,
+    format_raw: u32,
+    usage_bits: u32,
+    count: usize,
+    out_ring: *mut *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_full_create_texture_ring",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context_full(gpu_handle) }) else {
+                write_err(
+                    "create_texture_ring: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if out_ring.is_null() {
+                write_err(
+                    "create_texture_ring: null out_ring pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let format = match format_raw {
+                0 => streamlib_consumer_rhi::TextureFormat::Rgba8Unorm,
+                1 => streamlib_consumer_rhi::TextureFormat::Rgba8UnormSrgb,
+                2 => streamlib_consumer_rhi::TextureFormat::Bgra8Unorm,
+                3 => streamlib_consumer_rhi::TextureFormat::Bgra8UnormSrgb,
+                4 => streamlib_consumer_rhi::TextureFormat::Rgba16Float,
+                5 => streamlib_consumer_rhi::TextureFormat::Rgba32Float,
+                6 => streamlib_consumer_rhi::TextureFormat::Nv12,
+                _ => {
+                    write_err(
+                        &format!("create_texture_ring: invalid format_raw {format_raw}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            let usages =
+                streamlib_consumer_rhi::TextureUsages::from_bits_truncate(usage_bits);
+            match gpu.create_texture_ring(width, height, format, usages, count) {
+                Ok(arc) => {
+                    let raw = Arc::into_raw(arc) as *const c_void;
+                    unsafe { std::ptr::write(out_ring, raw) };
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{e}"), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+// Non-Linux stubs for the create_* callbacks.
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_create_compute_kernel(
+    _gpu_handle: *const c_void,
+    _desc: *const ComputeKernelDescriptorRepr,
+    _out_kernel: *mut *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "create_compute_kernel: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_create_graphics_kernel(
+    _gpu_handle: *const c_void,
+    _desc: *const GraphicsKernelDescriptorRepr,
+    _out_kernel: *mut *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "create_graphics_kernel: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_create_ray_tracing_kernel(
+    _gpu_handle: *const c_void,
+    _desc: *const RayTracingKernelDescriptorRepr,
+    _out_kernel: *mut *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "create_ray_tracing_kernel: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_create_texture_ring(
+    _gpu_handle: *const c_void,
+    _width: u32,
+    _height: u32,
+    _format_raw: u32,
+    _usage_bits: u32,
+    _count: usize,
+    _out_ring: *mut *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "create_texture_ring: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+pub static HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE: GpuContextFullAccessVTable =
+    GpuContextFullAccessVTable {
+        layout_version: GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION,
+        _reserved_padding: 0,
+        drop_handle: host_gpu_full_drop_handle,
+        clone_compute_kernel: host_gpu_full_clone_compute_kernel,
+        drop_compute_kernel: host_gpu_full_drop_compute_kernel,
+        clone_graphics_kernel: host_gpu_full_clone_graphics_kernel,
+        drop_graphics_kernel: host_gpu_full_drop_graphics_kernel,
+        clone_ray_tracing_kernel: host_gpu_full_clone_ray_tracing_kernel,
+        drop_ray_tracing_kernel: host_gpu_full_drop_ray_tracing_kernel,
+        clone_texture_ring: host_gpu_full_clone_texture_ring,
+        drop_texture_ring: host_gpu_full_drop_texture_ring,
+        create_compute_kernel: host_gpu_full_create_compute_kernel,
+        create_graphics_kernel: host_gpu_full_create_graphics_kernel,
+        create_ray_tracing_kernel: host_gpu_full_create_ray_tracing_kernel,
+        create_texture_ring: host_gpu_full_create_texture_ring,
+    };
+
+/// Pointer to the [`GpuContextFullAccessVTable`] this DSO should
+/// dispatch through. Same DSO-routing rule as
+/// [`host_gpu_context_limited_access_vtable`]: host mode resolves to
+/// the local `&HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE` static, cdylib
+/// mode resolves to the host-installed pointer cached on
+/// [`HostServices::gpu_context_full_access_vtable`].
+pub fn host_gpu_context_full_access_vtable() -> *const GpuContextFullAccessVTable {
+    match host_callbacks() {
+        Some(c) if !c.gpu_context_full_access_vtable.is_null() => {
+            c.gpu_context_full_access_vtable
+        }
+        _ => &HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE,
+    }
+}
+
 pub static HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE: GpuContextLimitedAccessVTable =
     GpuContextLimitedAccessVTable {
         layout_version: GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION,
@@ -4372,8 +4948,8 @@ pub mod runtime_facing {
         host_iceoryx_log_emit, host_processor_register, host_pubsub_publish, host_schema_lookup,
         host_schema_register, host_tracing_emit, host_tracing_enabled,
         host_tracing_register_callsite, HostServiceImpls, HOST_AUDIO_CLOCK_VTABLE,
-        HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE, HOST_RUNTIME_CONTEXT_VTABLE,
-        HOST_RUNTIME_OPS_VTABLE, HOST_SURFACE_STORE_VTABLE,
+        HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE, HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE,
+        HOST_RUNTIME_CONTEXT_VTABLE, HOST_RUNTIME_OPS_VTABLE, HOST_SURFACE_STORE_VTABLE,
     };
     use std::ffi::c_void;
     use std::sync::OnceLock;
@@ -4419,6 +4995,194 @@ pub mod runtime_facing {
             runtime_ops_vtable: &HOST_RUNTIME_OPS_VTABLE,
             gpu_context_limited_access_vtable: &HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE,
             surface_store_vtable: &HOST_SURFACE_STORE_VTABLE,
+            gpu_context_full_access_vtable: &HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE,
         }
+    }
+}
+
+// =============================================================================
+// FullAccess vtable callback-body tests (tier-1 — no GPU required)
+// =============================================================================
+//
+// Tier-1 host-side wire-format tests for `HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE`.
+// Each test invokes a vtable callback directly with a null `gpu_handle`
+// (the path that runs before any `gpu.create_*_kernel` call), asserting
+// the callback returns error code 1 + writes the expected message into
+// the caller's error buffer + leaves the out-handle slot untouched.
+//
+// The success-path tests (real Arc<GpuContext>, valid descriptor, kernel
+// handle minting) require a real Vulkan device and live in
+// `tests/` under the `streamlib/hardware-tests` feature. The dlopen
+// integration test that exercises the full cdylib → vtable → host chain
+// arrives with C3.
+#[cfg(test)]
+mod gpu_full_access_vtable_tests {
+    use super::*;
+    use streamlib_plugin_abi::{
+        ComputeKernelDescriptorRepr, GraphicsKernelDescriptorRepr,
+        RayTracingKernelDescriptorRepr,
+    };
+
+    fn make_err_buf() -> ([u8; 256], usize) {
+        ([0u8; 256], 0usize)
+    }
+
+    fn err_buf_as_str(buf: &[u8], len: usize) -> &str {
+        std::str::from_utf8(&buf[..len]).expect("UTF-8")
+    }
+
+    #[test]
+    fn drop_handle_handles_null_no_crash() {
+        // Null handle is documented as a no-op; this just exercises
+        // the early-return guard.
+        unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.drop_handle)(std::ptr::null());
+        }
+    }
+
+    #[test]
+    fn create_compute_kernel_returns_error_on_null_gpu_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut out: *const c_void = std::ptr::null();
+        // Build a syntactically-valid repr — the null gpu_handle
+        // check runs first, so the repr contents don't matter for
+        // this test.
+        let bindings_buf: [streamlib_plugin_abi::ComputeBindingSpecRepr; 0] = [];
+        let repr = ComputeKernelDescriptorRepr {
+            label_ptr: "test".as_ptr(),
+            label_len: 4,
+            spv_ptr: std::ptr::null(),
+            spv_len: 0,
+            bindings_ptr: bindings_buf.as_ptr(),
+            bindings_len: 0,
+            push_constant_size: 0,
+            _reserved_padding: 0,
+        };
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.create_compute_kernel)(
+                std::ptr::null(),
+                &repr,
+                &mut out,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(
+            msg.contains("create_compute_kernel: null gpu handle"),
+            "got: {msg}"
+        );
+        assert!(out.is_null(), "out_kernel must not be written on error");
+    }
+
+    #[test]
+    fn create_graphics_kernel_returns_error_on_null_gpu_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut out: *const c_void = std::ptr::null();
+        let repr: GraphicsKernelDescriptorRepr = unsafe { std::mem::zeroed() };
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.create_graphics_kernel)(
+                std::ptr::null(),
+                &repr,
+                &mut out,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(
+            msg.contains("create_graphics_kernel: null gpu handle"),
+            "got: {msg}"
+        );
+        assert!(out.is_null());
+    }
+
+    #[test]
+    fn create_ray_tracing_kernel_returns_error_on_null_gpu_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut out: *const c_void = std::ptr::null();
+        let repr: RayTracingKernelDescriptorRepr = unsafe { std::mem::zeroed() };
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.create_ray_tracing_kernel)(
+                std::ptr::null(),
+                &repr,
+                &mut out,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(
+            msg.contains("create_ray_tracing_kernel: null gpu handle"),
+            "got: {msg}"
+        );
+        assert!(out.is_null());
+    }
+
+    #[test]
+    fn create_texture_ring_returns_error_on_null_gpu_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut out: *const c_void = std::ptr::null();
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.create_texture_ring)(
+                std::ptr::null(),
+                64,
+                64,
+                0, // Rgba8Unorm
+                0, // no usage bits
+                2,
+                &mut out,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(
+            msg.contains("create_texture_ring: null gpu handle"),
+            "got: {msg}"
+        );
+        assert!(out.is_null());
+    }
+
+    #[test]
+    fn vtable_layout_version_matches_constant() {
+        assert_eq!(
+            HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.layout_version,
+            streamlib_plugin_abi::GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION
+        );
+    }
+
+    #[test]
+    fn host_services_for_self_wires_full_access_vtable() {
+        let node = match crate::iceoryx2::Iceoryx2Node::new() {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(
+                    target: "streamlib::tests::gpu_full_access_vtable",
+                    error = %e,
+                    "skipping host_services_for_self wiring assertion: iceoryx2 init unavailable in this env"
+                );
+                return;
+            }
+        };
+        let services = runtime_facing::host_services_for_self(&node);
+        assert!(
+            !services.gpu_context_full_access_vtable.is_null(),
+            "host should wire the FullAccess vtable pointer"
+        );
+        let installed_version =
+            unsafe { (*services.gpu_context_full_access_vtable).layout_version };
+        assert_eq!(
+            installed_version,
+            streamlib_plugin_abi::GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION
+        );
     }
 }

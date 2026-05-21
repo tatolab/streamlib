@@ -104,7 +104,16 @@ pub const STREAMLIB_ABI_VERSION: u32 = 4;
 ///   vtable pointer from this field. Non-null for hosts that ship
 ///   a `SurfaceStore`; null otherwise (cdylib code must check
 ///   before dispatching).
-pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 5;
+/// - v6: [`GpuContextFullAccessVTable`] reference appended. The
+///   cdylib-side `GpuContextFullAccess` shim's `(handle, vtable)`
+///   pair sources its vtable pointer from this field. Non-null for
+///   hosts that ship a GpuContext; null otherwise (cdylib code must
+///   check before dispatching). Reachable from cdylib code only
+///   inside an `escalate(|full| ...)` scope (the scope-token
+///   machinery lands in C3 — Phase C2 ships the vtable layout +
+///   host wiring + cdylib β-shape, locking the wire format before
+///   the scope machinery turns it on).
+pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 6;
 
 /// Layout version of the [`ProcessorVTable`] struct. Read by the
 /// host's `processor_register` impl before dereferencing any vtable
@@ -154,6 +163,23 @@ pub const SURFACE_STORE_VTABLE_LAYOUT_VERSION: u32 = 1;
 /// pool slot. Linux-only callbacks ship platform stubs on other
 /// triples so the vtable layout stays unconditional.
 pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 9;
+
+/// Layout version of [`GpuContextFullAccessVTable`].
+///
+/// The FullAccess vtable carries the privileged kernel-construction
+/// surface (compute / graphics / ray-tracing) plus `create_texture_ring`.
+/// Each kernel-construction callback consumes a `#[repr(C)]` descriptor
+/// mirror ([`ComputeKernelDescriptorRepr`], [`GraphicsKernelDescriptorRepr`],
+/// [`RayTracingKernelDescriptorRepr`]) and returns an Arc-handle β-shape
+/// for the resulting kernel; the matching Arc-lifecycle pairs
+/// (`clone_*` / `drop_*`) live on this vtable.
+///
+/// Reachable from cdylib code only inside an `escalate(|full| ...)`
+/// scope; the `escalate_begin` / `escalate_end` scope-token machinery
+/// is wired by C3. C2 lands the descriptor wire format + host-side
+/// dispatch + cdylib-side β-shape, locking the layout before the
+/// scope-token machinery turns it on.
+pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 1;
 
 // =============================================================================
 // Primitive enums
@@ -1320,6 +1346,739 @@ unsafe impl Send for GpuContextLimitedAccessVTable {}
 unsafe impl Sync for GpuContextLimitedAccessVTable {}
 
 // =============================================================================
+// GPU kernel descriptor mirrors — Phase C2
+// =============================================================================
+//
+// Wire-protocol `#[repr(C)]` mirrors of the Rust descriptor types in
+// `streamlib::core::rhi::{compute,graphics,ray_tracing}_kernel`. Built by
+// the cdylib at the FullAccess vtable call site; decoded by the host
+// into the canonical Rust `*Descriptor` and dispatched to
+// `GpuContextFullAccess::create_*_kernel`.
+//
+// **Enum discriminant convention.** Variant enums are mirrored as
+// `#[repr(u32)]` so the FFI value is the discriminant only. The
+// payload-carrying enums (`VertexInputState`, `DepthStencilState`,
+// `ColorBlendState`, `RayTracingShaderGroup`) are flattened into
+// `(kind: u32, ...flat payload fields)` structs — every payload field
+// is always present in the wire format, irrelevant fields are zero or
+// `u32::MAX` (the canonical "absent" sentinel for `Option<u32>`
+// stage-index references) and ignored on the host side. This matches
+// the C1 vtable pattern (`acquire_texture` decodes `format_raw: u32`
+// into the appropriate enum on the host) and avoids relying on
+// `#[repr(C, u32)]` data-carrying-enum semantics.
+//
+// **Pointer-shaped slices.** Every `&[T]` in the Rust descriptor is
+// mirrored as `(ptr: *const TRepr, len: usize)`. The pointed-at array
+// must live for the duration of the vtable call; the host
+// `slice::from_raw_parts` lift is bounded by the call. Borrow-shaped
+// reprs match the C1 method-dispatch pattern (`id_ptr` / `id_len`
+// pairs throughout).
+//
+// **`Option<u32>` sentinel.** Ray-tracing shader-group references use
+// `u32::MAX` to encode `None` (no shader index). `u32::MAX` is
+// reserved at the spec level (`VK_SHADER_UNUSED_KHR == ~0u`).
+
+// -----------------------------------------------------------------------------
+// Compute kernel mirrors
+// -----------------------------------------------------------------------------
+
+/// `#[repr(u32)]` mirror of `streamlib::core::rhi::ComputeBindingKind`.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComputeBindingKindRepr {
+    StorageBuffer = 0,
+    UniformBuffer = 1,
+    SampledTexture = 2,
+    StorageImage = 3,
+}
+
+/// `#[repr(C)]` mirror of `streamlib::core::rhi::ComputeBindingSpec`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ComputeBindingSpecRepr {
+    pub binding: u32,
+    /// `ComputeBindingKindRepr` discriminant. Held as `u32` to keep the
+    /// in-FFI value layout-stable across rustc versions (matches the
+    /// pattern used by `acquire_texture`'s `format_raw` parameter).
+    pub kind: u32,
+}
+
+/// `#[repr(C)]` mirror of `streamlib::core::rhi::ComputeKernelDescriptor`.
+///
+/// All pointer fields borrow into caller-owned memory and must
+/// remain valid for the duration of the vtable call.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ComputeKernelDescriptorRepr {
+    pub label_ptr: *const u8,
+    pub label_len: usize,
+    pub spv_ptr: *const u8,
+    pub spv_len: usize,
+    pub bindings_ptr: *const ComputeBindingSpecRepr,
+    pub bindings_len: usize,
+    pub push_constant_size: u32,
+    pub _reserved_padding: u32,
+}
+
+// -----------------------------------------------------------------------------
+// Graphics kernel mirrors
+// -----------------------------------------------------------------------------
+
+/// `#[repr(u32)]` mirror of `streamlib::core::rhi::GraphicsShaderStage`.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphicsShaderStageRepr {
+    Vertex = 0,
+    Fragment = 1,
+}
+
+/// `#[repr(C)]` mirror of `streamlib::core::rhi::GraphicsStage`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct GraphicsStageRepr {
+    /// `GraphicsShaderStageRepr` discriminant.
+    pub stage: u32,
+    pub _reserved_padding: u32,
+    pub spv_ptr: *const u8,
+    pub spv_len: usize,
+    pub entry_point_ptr: *const u8,
+    pub entry_point_len: usize,
+}
+
+/// `#[repr(u32)]` mirror of `streamlib::core::rhi::GraphicsBindingKind`.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphicsBindingKindRepr {
+    SampledTexture = 0,
+    StorageBuffer = 1,
+    UniformBuffer = 2,
+    StorageImage = 3,
+}
+
+/// `#[repr(C)]` mirror of `streamlib::core::rhi::GraphicsBindingSpec`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct GraphicsBindingSpecRepr {
+    pub binding: u32,
+    /// `GraphicsBindingKindRepr` discriminant.
+    pub kind: u32,
+    /// `GraphicsShaderStageFlags::bits()` — already a u32 bitflag set,
+    /// crosses as `u32` directly.
+    pub stages: u32,
+    pub _reserved_padding: u32,
+}
+
+/// `#[repr(C)]` mirror of `streamlib::core::rhi::GraphicsPushConstants`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct GraphicsPushConstantsRepr {
+    pub size: u32,
+    /// `GraphicsShaderStageFlags::bits()`.
+    pub stages: u32,
+}
+
+/// `#[repr(u32)]` mirror of `streamlib::core::rhi::PrimitiveTopology`.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrimitiveTopologyRepr {
+    PointList = 0,
+    LineList = 1,
+    LineStrip = 2,
+    TriangleList = 3,
+    TriangleStrip = 4,
+    TriangleFan = 5,
+}
+
+/// `#[repr(u32)]` mirror of `streamlib::core::rhi::VertexAttributeFormat`.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VertexAttributeFormatRepr {
+    R32Float = 0,
+    Rg32Float = 1,
+    Rgb32Float = 2,
+    Rgba32Float = 3,
+    R32Uint = 4,
+    Rg32Uint = 5,
+    Rgb32Uint = 6,
+    Rgba32Uint = 7,
+    R32Sint = 8,
+    Rg32Sint = 9,
+    Rgb32Sint = 10,
+    Rgba32Sint = 11,
+    Rgba8Unorm = 12,
+    Rgba8Snorm = 13,
+}
+
+/// `#[repr(u32)]` mirror of `streamlib::core::rhi::VertexInputRate`.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VertexInputRateRepr {
+    Vertex = 0,
+    Instance = 1,
+}
+
+/// `#[repr(C)]` mirror of `streamlib::core::rhi::VertexInputBinding`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct VertexInputBindingRepr {
+    pub binding: u32,
+    pub stride: u32,
+    /// `VertexInputRateRepr` discriminant.
+    pub input_rate: u32,
+    pub _reserved_padding: u32,
+}
+
+/// `#[repr(C)]` mirror of `streamlib::core::rhi::VertexInputAttribute`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct VertexInputAttributeRepr {
+    pub location: u32,
+    pub binding: u32,
+    /// `VertexAttributeFormatRepr` discriminant.
+    pub format: u32,
+    pub offset: u32,
+}
+
+/// Discriminant for the [`VertexInputStateRepr::kind`] tagged union.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VertexInputStateKindRepr {
+    None = 0,
+    Buffers = 1,
+}
+
+/// Tagged-union mirror of `streamlib::core::rhi::VertexInputState`.
+///
+/// When `kind == None`, the slice pointers are null and lengths are 0.
+/// When `kind == Buffers`, the slices borrow into caller-owned arrays.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct VertexInputStateRepr {
+    /// `VertexInputStateKindRepr` discriminant.
+    pub kind: u32,
+    pub _reserved_padding: u32,
+    pub bindings_ptr: *const VertexInputBindingRepr,
+    pub bindings_len: usize,
+    pub attributes_ptr: *const VertexInputAttributeRepr,
+    pub attributes_len: usize,
+}
+
+/// `#[repr(u32)]` mirror of `streamlib::core::rhi::PolygonMode`.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolygonModeRepr {
+    Fill = 0,
+    Line = 1,
+    Point = 2,
+}
+
+/// `#[repr(u32)]` mirror of `streamlib::core::rhi::CullMode`.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CullModeRepr {
+    None = 0,
+    Front = 1,
+    Back = 2,
+    FrontAndBack = 3,
+}
+
+/// `#[repr(u32)]` mirror of `streamlib::core::rhi::FrontFace`.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrontFaceRepr {
+    CounterClockwise = 0,
+    Clockwise = 1,
+}
+
+/// `#[repr(C)]` mirror of `streamlib::core::rhi::RasterizationState`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct RasterizationStateRepr {
+    /// `PolygonModeRepr` discriminant.
+    pub polygon_mode: u32,
+    /// `CullModeRepr` discriminant.
+    pub cull_mode: u32,
+    /// `FrontFaceRepr` discriminant.
+    pub front_face: u32,
+    pub line_width: f32,
+}
+
+/// `#[repr(C)]` mirror of `streamlib::core::rhi::MultisampleState`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct MultisampleStateRepr {
+    pub samples: u32,
+    pub _reserved_padding: u32,
+}
+
+/// `#[repr(u32)]` mirror of `streamlib::core::rhi::DepthCompareOp`.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DepthCompareOpRepr {
+    Never = 0,
+    Less = 1,
+    Equal = 2,
+    LessOrEqual = 3,
+    Greater = 4,
+    NotEqual = 5,
+    GreaterOrEqual = 6,
+    Always = 7,
+}
+
+/// Discriminant for the [`DepthStencilStateRepr::kind`] tagged union.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DepthStencilStateKindRepr {
+    Disabled = 0,
+    Enabled = 1,
+}
+
+/// Tagged-union mirror of `streamlib::core::rhi::DepthStencilState`.
+///
+/// `depth_test` and `depth_write` are ignored when `kind == Disabled`
+/// (writer sets them to 0 / 0 by convention).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct DepthStencilStateRepr {
+    /// `DepthStencilStateKindRepr` discriminant.
+    pub kind: u32,
+    /// `DepthCompareOpRepr` discriminant. Ignored when `kind == Disabled`.
+    pub depth_test: u32,
+    /// Boolean as `u32` (0 = false, 1 = true). Ignored when `kind == Disabled`.
+    pub depth_write: u32,
+    pub _reserved_padding: u32,
+}
+
+/// `#[repr(u32)]` mirror of `streamlib::core::rhi::BlendFactor`.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlendFactorRepr {
+    Zero = 0,
+    One = 1,
+    SrcColor = 2,
+    OneMinusSrcColor = 3,
+    DstColor = 4,
+    OneMinusDstColor = 5,
+    SrcAlpha = 6,
+    OneMinusSrcAlpha = 7,
+    DstAlpha = 8,
+    OneMinusDstAlpha = 9,
+    ConstantColor = 10,
+    OneMinusConstantColor = 11,
+    ConstantAlpha = 12,
+    OneMinusConstantAlpha = 13,
+    SrcAlphaSaturate = 14,
+}
+
+/// `#[repr(u32)]` mirror of `streamlib::core::rhi::BlendOp`.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlendOpRepr {
+    Add = 0,
+    Subtract = 1,
+    ReverseSubtract = 2,
+    Min = 3,
+    Max = 4,
+}
+
+/// `#[repr(C)]` mirror of `streamlib::core::rhi::ColorBlendAttachment`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ColorBlendAttachmentRepr {
+    /// `BlendFactorRepr` discriminant.
+    pub src_color_blend_factor: u32,
+    /// `BlendFactorRepr` discriminant.
+    pub dst_color_blend_factor: u32,
+    /// `BlendOpRepr` discriminant.
+    pub color_blend_op: u32,
+    /// `BlendFactorRepr` discriminant.
+    pub src_alpha_blend_factor: u32,
+    /// `BlendFactorRepr` discriminant.
+    pub dst_alpha_blend_factor: u32,
+    /// `BlendOpRepr` discriminant.
+    pub alpha_blend_op: u32,
+    /// `ColorWriteMask::bits()`.
+    pub color_write_mask: u32,
+    pub _reserved_padding: u32,
+}
+
+/// Discriminant for the [`ColorBlendStateRepr::kind`] tagged union.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorBlendStateKindRepr {
+    Disabled = 0,
+    Enabled = 1,
+}
+
+/// Tagged-union mirror of `streamlib::core::rhi::ColorBlendState`.
+///
+/// When `kind == Disabled`, `color_write_mask` carries the disabled
+/// state's mask and `attachment` fields are zero (ignored on the host
+/// side). When `kind == Enabled`, `color_write_mask` is zero and
+/// `attachment` carries the full attachment description.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ColorBlendStateRepr {
+    /// `ColorBlendStateKindRepr` discriminant.
+    pub kind: u32,
+    /// `ColorWriteMask::bits()` for the Disabled case; ignored when
+    /// `kind == Enabled`.
+    pub color_write_mask: u32,
+    pub attachment: ColorBlendAttachmentRepr,
+}
+
+/// `#[repr(u32)]` mirror of `streamlib::core::rhi::DepthFormat`.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DepthFormatRepr {
+    D16Unorm = 0,
+    D32Sfloat = 1,
+    D24UnormS8Uint = 2,
+}
+
+/// `#[repr(C)]` mirror of `streamlib::core::rhi::AttachmentFormats`.
+///
+/// `color` is a slice of `TextureFormat::repr(u32)` discriminants
+/// (from `streamlib_consumer_rhi::TextureFormat`'s `#[repr(u32)]`).
+/// `has_depth` is a boolean encoded as `u32`; when `has_depth == 0`,
+/// `depth` is ignored.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct AttachmentFormatsRepr {
+    /// Pointer to an array of `streamlib_consumer_rhi::TextureFormat`
+    /// discriminants.
+    pub color_ptr: *const u32,
+    pub color_len: usize,
+    /// 0 = `None`, 1 = `Some(depth)`.
+    pub has_depth: u32,
+    /// `DepthFormatRepr` discriminant. Ignored when `has_depth == 0`.
+    pub depth: u32,
+}
+
+/// `#[repr(u32)]` mirror of `streamlib::core::rhi::GraphicsDynamicState`.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphicsDynamicStateRepr {
+    None = 0,
+    ViewportScissor = 1,
+}
+
+/// `#[repr(C)]` mirror of `streamlib::core::rhi::GraphicsPipelineState`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct GraphicsPipelineStateRepr {
+    /// `PrimitiveTopologyRepr` discriminant.
+    pub topology: u32,
+    pub _reserved_padding1: u32,
+    pub vertex_input: VertexInputStateRepr,
+    pub rasterization: RasterizationStateRepr,
+    pub multisample: MultisampleStateRepr,
+    pub depth_stencil: DepthStencilStateRepr,
+    pub color_blend: ColorBlendStateRepr,
+    pub attachment_formats: AttachmentFormatsRepr,
+    /// `GraphicsDynamicStateRepr` discriminant.
+    pub dynamic_state: u32,
+    pub _reserved_padding2: u32,
+}
+
+/// `#[repr(C)]` mirror of `streamlib::core::rhi::GraphicsKernelDescriptor`.
+///
+/// All pointer fields borrow into caller-owned memory and must
+/// remain valid for the duration of the vtable call.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct GraphicsKernelDescriptorRepr {
+    pub label_ptr: *const u8,
+    pub label_len: usize,
+    pub stages_ptr: *const GraphicsStageRepr,
+    pub stages_len: usize,
+    pub bindings_ptr: *const GraphicsBindingSpecRepr,
+    pub bindings_len: usize,
+    pub push_constants: GraphicsPushConstantsRepr,
+    pub pipeline_state: GraphicsPipelineStateRepr,
+    pub descriptor_sets_in_flight: u32,
+    pub _reserved_padding: u32,
+}
+
+// -----------------------------------------------------------------------------
+// Ray-tracing kernel mirrors
+// -----------------------------------------------------------------------------
+
+/// `#[repr(u32)]` mirror of `streamlib::core::rhi::RayTracingShaderStage`.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RayTracingShaderStageRepr {
+    RayGen = 0,
+    Miss = 1,
+    ClosestHit = 2,
+    AnyHit = 3,
+    Intersection = 4,
+    Callable = 5,
+}
+
+/// `#[repr(C)]` mirror of `streamlib::core::rhi::RayTracingStage`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct RayTracingStageRepr {
+    /// `RayTracingShaderStageRepr` discriminant.
+    pub stage: u32,
+    pub _reserved_padding: u32,
+    pub spv_ptr: *const u8,
+    pub spv_len: usize,
+    pub entry_point_ptr: *const u8,
+    pub entry_point_len: usize,
+}
+
+/// `#[repr(u32)]` mirror of `streamlib::core::rhi::RayTracingBindingKind`.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RayTracingBindingKindRepr {
+    StorageBuffer = 0,
+    UniformBuffer = 1,
+    SampledTexture = 2,
+    StorageImage = 3,
+    AccelerationStructure = 4,
+}
+
+/// `#[repr(C)]` mirror of `streamlib::core::rhi::RayTracingBindingSpec`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct RayTracingBindingSpecRepr {
+    pub binding: u32,
+    /// `RayTracingBindingKindRepr` discriminant.
+    pub kind: u32,
+    /// `RayTracingShaderStageFlags::bits()`.
+    pub stages: u32,
+    pub _reserved_padding: u32,
+}
+
+/// `#[repr(C)]` mirror of `streamlib::core::rhi::RayTracingPushConstants`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct RayTracingPushConstantsRepr {
+    pub size: u32,
+    /// `RayTracingShaderStageFlags::bits()`.
+    pub stages: u32,
+}
+
+/// Discriminant for the [`RayTracingShaderGroupRepr::kind`] tagged union.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RayTracingShaderGroupKindRepr {
+    General = 0,
+    TrianglesHit = 1,
+    ProceduralHit = 2,
+}
+
+/// Sentinel value for `Option<u32>` stage references; matches
+/// `VK_SHADER_UNUSED_KHR == ~0u`. Reserved by the Vulkan spec and
+/// never a valid in-range stage index.
+pub const RAY_TRACING_SHADER_UNUSED: u32 = u32::MAX;
+
+/// Tagged-union mirror of `streamlib::core::rhi::RayTracingShaderGroup`.
+///
+/// Field interpretation per `kind`:
+/// - `General`: `general_or_intersection` carries the general stage
+///   index; `closest_hit` / `any_hit` are [`RAY_TRACING_SHADER_UNUSED`].
+/// - `TrianglesHit`: `general_or_intersection` is
+///   [`RAY_TRACING_SHADER_UNUSED`]; `closest_hit` / `any_hit` carry the
+///   shader indices ([`RAY_TRACING_SHADER_UNUSED`] = `None`).
+/// - `ProceduralHit`: `general_or_intersection` carries the
+///   intersection stage index; `closest_hit` / `any_hit` carry the
+///   optional shader indices.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct RayTracingShaderGroupRepr {
+    /// `RayTracingShaderGroupKindRepr` discriminant.
+    pub kind: u32,
+    /// General stage (General) / intersection stage (ProceduralHit).
+    pub general_or_intersection: u32,
+    /// Closest-hit stage. [`RAY_TRACING_SHADER_UNUSED`] = absent.
+    pub closest_hit: u32,
+    /// Any-hit stage. [`RAY_TRACING_SHADER_UNUSED`] = absent.
+    pub any_hit: u32,
+}
+
+/// `#[repr(C)]` mirror of `streamlib::core::rhi::RayTracingKernelDescriptor`.
+///
+/// All pointer fields borrow into caller-owned memory and must
+/// remain valid for the duration of the vtable call.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct RayTracingKernelDescriptorRepr {
+    pub label_ptr: *const u8,
+    pub label_len: usize,
+    pub stages_ptr: *const RayTracingStageRepr,
+    pub stages_len: usize,
+    pub groups_ptr: *const RayTracingShaderGroupRepr,
+    pub groups_len: usize,
+    pub bindings_ptr: *const RayTracingBindingSpecRepr,
+    pub bindings_len: usize,
+    pub push_constants: RayTracingPushConstantsRepr,
+    pub max_recursion_depth: u32,
+    pub _reserved_padding: u32,
+}
+
+// =============================================================================
+// GpuContextFullAccessVTable — extern "C" dispatch for privileged GPU work
+// =============================================================================
+
+/// Dispatch table for the host's `GpuContextFullAccess`. The cdylib
+/// obtains a handle inside an `escalate(|full| ...)` scope (via the
+/// `escalate_begin` / `escalate_end` callbacks landing in C3) and
+/// reads the static vtable from
+/// [`HostServices::gpu_context_full_access_vtable`].
+///
+/// C2 lands the descriptor wire format + host-side dispatch + cdylib-
+/// side β-shape. C3 wires the `escalate_begin` / `escalate_end` scope-
+/// token machinery that makes the methods reachable from cdylib
+/// `escalate(|full| { ... })` call sites.
+///
+/// # Layout discipline
+///
+/// `layout_version` is pinned at offset 0 forever. New methods append
+/// to the end and bump
+/// [`GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION`].
+///
+/// # `!Clone` invariant
+///
+/// `GpuContextFullAccess` is deliberately **not** `Clone` — the
+/// privilege scope ends when the `escalate(...)` closure returns. The
+/// vtable carries `drop_handle` (host releases the Arc-handle's
+/// refcount) but no `clone_handle`, matching the type-level
+/// `!Clone` invariant.
+#[repr(C)]
+pub struct GpuContextFullAccessVTable {
+    /// Vtable layout version. Must equal
+    /// [`GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION`].
+    pub layout_version: u32,
+
+    /// Reserved padding (keeps the following pointer naturally
+    /// aligned on 32-bit hosts; zero today, never read).
+    pub _reserved_padding: u32,
+
+    // -------------------------------------------------------------------------
+    // Handle lifetime (drop-only — !Clone invariant)
+    // -------------------------------------------------------------------------
+
+    /// Release an owned `GpuContextFullAccess` handle. Host runs
+    /// `Box::from_raw + drop` on the `Box<Arc<GpuContext>>`-shaped
+    /// handle (host mode) or invalidates the C3 scope token. Calling
+    /// on a null pointer is a no-op.
+    pub drop_handle: unsafe extern "C" fn(owned_handle: *const c_void),
+
+    // -------------------------------------------------------------------------
+    // VulkanComputeKernel return-type lifetime
+    // -------------------------------------------------------------------------
+
+    /// Bump the refcount on a `VulkanComputeKernel` handle. Called by
+    /// the cdylib's `Clone for ComputeKernel`. Host runs
+    /// `Arc::increment_strong_count(handle as *const VulkanComputeKernel)`.
+    pub clone_compute_kernel: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on a `VulkanComputeKernel` handle.
+    pub drop_compute_kernel: unsafe extern "C" fn(handle: *const c_void),
+
+    // -------------------------------------------------------------------------
+    // VulkanGraphicsKernel return-type lifetime
+    // -------------------------------------------------------------------------
+
+    /// Bump the refcount on a `VulkanGraphicsKernel` handle.
+    pub clone_graphics_kernel: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on a `VulkanGraphicsKernel` handle.
+    pub drop_graphics_kernel: unsafe extern "C" fn(handle: *const c_void),
+
+    // -------------------------------------------------------------------------
+    // VulkanRayTracingKernel return-type lifetime
+    // -------------------------------------------------------------------------
+
+    /// Bump the refcount on a `VulkanRayTracingKernel` handle.
+    pub clone_ray_tracing_kernel: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on a `VulkanRayTracingKernel` handle.
+    pub drop_ray_tracing_kernel: unsafe extern "C" fn(handle: *const c_void),
+
+    // -------------------------------------------------------------------------
+    // TextureRing return-type lifetime
+    // -------------------------------------------------------------------------
+
+    /// Bump the refcount on a `TextureRing` handle.
+    pub clone_texture_ring: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on a `TextureRing` handle.
+    pub drop_texture_ring: unsafe extern "C" fn(handle: *const c_void),
+
+    // -------------------------------------------------------------------------
+    // Kernel construction
+    // -------------------------------------------------------------------------
+
+    /// Create a compute kernel from a SPIR-V shader and binding
+    /// declaration. On success writes a fresh
+    /// `Arc<VulkanComputeKernel>`-shaped opaque handle into
+    /// `*out_kernel` and returns 0; on failure writes a UTF-8 error
+    /// message into `err_buf` and returns non-zero.
+    ///
+    /// The `desc` pointer must be valid for the duration of the call.
+    /// All inner slice pointers (label, spv, bindings) must likewise
+    /// be valid for the duration of the call.
+    ///
+    /// Linux-only on the host side; non-Linux stubs return non-zero
+    /// with a "not available on this platform" message.
+    pub create_compute_kernel: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        desc: *const ComputeKernelDescriptorRepr,
+        out_kernel: *mut *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Create a graphics kernel from a multi-stage SPIR-V set,
+    /// binding declaration, and fixed-function pipeline state.
+    pub create_graphics_kernel: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        desc: *const GraphicsKernelDescriptorRepr,
+        out_kernel: *mut *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Create a ray-tracing kernel from shader stages, shader-group
+    /// layout, binding declaration, and push-constant range.
+    pub create_ray_tracing_kernel: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        desc: *const RayTracingKernelDescriptorRepr,
+        out_kernel: *mut *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Pre-allocate a ring of `count` non-exportable DEVICE_LOCAL
+    /// textures and register each in the same-process texture cache.
+    /// `format_raw` is the `#[repr(u32)]` discriminant of
+    /// `streamlib_consumer_rhi::TextureFormat`; `usage_bits` is
+    /// `TextureUsages::bits()`.
+    pub create_texture_ring: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        width: u32,
+        height: u32,
+        format_raw: u32,
+        usage_bits: u32,
+        count: usize,
+        out_ring: *mut *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+}
+
+unsafe impl Send for GpuContextFullAccessVTable {}
+unsafe impl Sync for GpuContextFullAccessVTable {}
+
+// =============================================================================
 // SurfaceStoreVTable — extern "C" dispatch for cross-process surface sharing
 // =============================================================================
 
@@ -1747,6 +2506,20 @@ pub struct HostServices {
     /// install time; non-null for hosts that ship a `SurfaceStore`,
     /// null otherwise (cdylib must check before dispatching).
     pub surface_store_vtable: *const SurfaceStoreVTable,
+
+    // -------------------------------------------------------------------------
+    // GpuContextFullAccess vtable surface (v6 — Phase C2)
+    // -------------------------------------------------------------------------
+
+    /// Static dispatch table for the host's `GpuContextFullAccess`.
+    /// Paired with the per-scope opaque handle the C3 `escalate_begin`
+    /// callback returns. Set once at install time; non-null for hosts
+    /// that ship a GpuContext, null otherwise (cdylib must check
+    /// before dispatching). Phase C2 lands the layout + host wiring +
+    /// cdylib β-shape; Phase C3 wires the scope-token machinery that
+    /// makes the methods reachable from `escalate(|full| ...)` call
+    /// sites.
+    pub gpu_context_full_access_vtable: *const GpuContextFullAccessVTable,
 }
 
 // Note: under v3 the ABI eliminates the tokio shared-type crossing
@@ -1865,7 +2638,7 @@ mod layout_tests {
 
     #[test]
     fn host_services_layout_versions_pinned() {
-        assert_eq!(HOST_SERVICES_LAYOUT_VERSION, 5);
+        assert_eq!(HOST_SERVICES_LAYOUT_VERSION, 6);
         assert_eq!(STREAMLIB_ABI_VERSION, 4);
         assert_eq!(RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(AUDIO_CLOCK_VTABLE_LAYOUT_VERSION, 1);
@@ -1874,40 +2647,46 @@ mod layout_tests {
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 9);
         assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
+        assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 1);
     }
 
     #[test]
-    fn host_services_tail_carries_five_vtable_pointers() {
+    fn host_services_tail_carries_six_vtable_pointers() {
         // Trailing vtable pointers on HostServices. We don't pin the
         // absolute offsets (earlier fields carry their own layout
         // audit), but we do pin:
         //   1. Each vtable is a single 8-byte pointer.
         //   2. They appear in the order RuntimeContext → AudioClock →
-        //      RuntimeOps → GpuContextLimitedAccess → SurfaceStore.
+        //      RuntimeOps → GpuContextLimitedAccess → SurfaceStore →
+        //      GpuContextFullAccess.
         //   3. They are contiguous (no padding inserted between them).
         assert_eq!(size_of::<*const RuntimeContextVTable>(), 8);
         assert_eq!(size_of::<*const AudioClockVTable>(), 8);
         assert_eq!(size_of::<*const RuntimeOpsVTable>(), 8);
         assert_eq!(size_of::<*const GpuContextLimitedAccessVTable>(), 8);
         assert_eq!(size_of::<*const SurfaceStoreVTable>(), 8);
+        assert_eq!(size_of::<*const GpuContextFullAccessVTable>(), 8);
 
         let runtime_ctx_off = offset_of!(HostServices, runtime_context_vtable);
         let audio_clock_off = offset_of!(HostServices, audio_clock_vtable);
         let runtime_ops_off = offset_of!(HostServices, runtime_ops_vtable);
         let gpu_lim_off = offset_of!(HostServices, gpu_context_limited_access_vtable);
         let surface_store_off = offset_of!(HostServices, surface_store_vtable);
+        let gpu_full_off = offset_of!(HostServices, gpu_context_full_access_vtable);
         assert!(runtime_ctx_off < audio_clock_off);
         assert!(audio_clock_off < runtime_ops_off);
         assert!(runtime_ops_off < gpu_lim_off);
         assert!(gpu_lim_off < surface_store_off);
+        assert!(surface_store_off < gpu_full_off);
         assert_eq!(audio_clock_off - runtime_ctx_off, 8);
         assert_eq!(runtime_ops_off - audio_clock_off, 8);
         assert_eq!(gpu_lim_off - runtime_ops_off, 8);
         assert_eq!(surface_store_off - gpu_lim_off, 8);
+        assert_eq!(gpu_full_off - surface_store_off, 8);
 
-        // The surface-store pointer must end at the end of the
-        // struct (it is the last field added in v5).
-        assert_eq!(surface_store_off + 8, size_of::<HostServices>());
+        // The full-access pointer must end at the end of the struct
+        // (it is the last field added in v6).
+        assert_eq!(gpu_full_off + 8, size_of::<HostServices>());
     }
 
     #[test]
@@ -2124,6 +2903,414 @@ mod layout_tests {
     }
 
     #[test]
+    fn gpu_context_full_access_vtable_layout() {
+        // layout_version (u32) + _reserved_padding (u32) + 13 fn
+        // pointers (8 bytes each) = 4 + 4 + 104 = 112 bytes.
+        //
+        // 13 entries = 1 drop_handle + 4 clone/drop pairs (8 fn
+        // pointers for the 4 kernel return types) + 4 create_* method
+        // callbacks (compute / graphics / ray-tracing / texture_ring).
+        assert_eq!(size_of::<GpuContextFullAccessVTable>(), 112);
+        assert_eq!(align_of::<GpuContextFullAccessVTable>(), 8);
+        assert_eq!(offset_of!(GpuContextFullAccessVTable, layout_version), 0);
+        assert_eq!(offset_of!(GpuContextFullAccessVTable, _reserved_padding), 4);
+        assert_eq!(offset_of!(GpuContextFullAccessVTable, drop_handle), 8);
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, clone_compute_kernel),
+            16
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, drop_compute_kernel),
+            24
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, clone_graphics_kernel),
+            32
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, drop_graphics_kernel),
+            40
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, clone_ray_tracing_kernel),
+            48
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, drop_ray_tracing_kernel),
+            56
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, clone_texture_ring),
+            64
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, drop_texture_ring),
+            72
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, create_compute_kernel),
+            80
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, create_graphics_kernel),
+            88
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, create_ray_tracing_kernel),
+            96
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, create_texture_ring),
+            104
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase C2 descriptor mirror layouts
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn compute_binding_spec_repr_layout() {
+        assert_eq!(size_of::<ComputeBindingSpecRepr>(), 8);
+        assert_eq!(align_of::<ComputeBindingSpecRepr>(), 4);
+        assert_eq!(offset_of!(ComputeBindingSpecRepr, binding), 0);
+        assert_eq!(offset_of!(ComputeBindingSpecRepr, kind), 4);
+    }
+
+    #[test]
+    fn compute_kernel_descriptor_repr_layout() {
+        // 3 (ptr, len) pairs (3 * 16 = 48) + u32 + u32 = 56 bytes on
+        // 64-bit hosts.
+        assert_eq!(size_of::<ComputeKernelDescriptorRepr>(), 56);
+        assert_eq!(align_of::<ComputeKernelDescriptorRepr>(), 8);
+        assert_eq!(offset_of!(ComputeKernelDescriptorRepr, label_ptr), 0);
+        assert_eq!(offset_of!(ComputeKernelDescriptorRepr, label_len), 8);
+        assert_eq!(offset_of!(ComputeKernelDescriptorRepr, spv_ptr), 16);
+        assert_eq!(offset_of!(ComputeKernelDescriptorRepr, spv_len), 24);
+        assert_eq!(offset_of!(ComputeKernelDescriptorRepr, bindings_ptr), 32);
+        assert_eq!(offset_of!(ComputeKernelDescriptorRepr, bindings_len), 40);
+        assert_eq!(
+            offset_of!(ComputeKernelDescriptorRepr, push_constant_size),
+            48
+        );
+        assert_eq!(
+            offset_of!(ComputeKernelDescriptorRepr, _reserved_padding),
+            52
+        );
+    }
+
+    #[test]
+    fn graphics_stage_repr_layout() {
+        // u32 + u32 + 2 (ptr,len) pairs = 8 + 32 = 40 bytes.
+        assert_eq!(size_of::<GraphicsStageRepr>(), 40);
+        assert_eq!(align_of::<GraphicsStageRepr>(), 8);
+        assert_eq!(offset_of!(GraphicsStageRepr, stage), 0);
+        assert_eq!(offset_of!(GraphicsStageRepr, _reserved_padding), 4);
+        assert_eq!(offset_of!(GraphicsStageRepr, spv_ptr), 8);
+        assert_eq!(offset_of!(GraphicsStageRepr, spv_len), 16);
+        assert_eq!(offset_of!(GraphicsStageRepr, entry_point_ptr), 24);
+        assert_eq!(offset_of!(GraphicsStageRepr, entry_point_len), 32);
+    }
+
+    #[test]
+    fn graphics_binding_spec_repr_layout() {
+        assert_eq!(size_of::<GraphicsBindingSpecRepr>(), 16);
+        assert_eq!(align_of::<GraphicsBindingSpecRepr>(), 4);
+        assert_eq!(offset_of!(GraphicsBindingSpecRepr, binding), 0);
+        assert_eq!(offset_of!(GraphicsBindingSpecRepr, kind), 4);
+        assert_eq!(offset_of!(GraphicsBindingSpecRepr, stages), 8);
+        assert_eq!(offset_of!(GraphicsBindingSpecRepr, _reserved_padding), 12);
+    }
+
+    #[test]
+    fn graphics_push_constants_repr_layout() {
+        assert_eq!(size_of::<GraphicsPushConstantsRepr>(), 8);
+        assert_eq!(align_of::<GraphicsPushConstantsRepr>(), 4);
+        assert_eq!(offset_of!(GraphicsPushConstantsRepr, size), 0);
+        assert_eq!(offset_of!(GraphicsPushConstantsRepr, stages), 4);
+    }
+
+    #[test]
+    fn vertex_input_binding_repr_layout() {
+        assert_eq!(size_of::<VertexInputBindingRepr>(), 16);
+        assert_eq!(align_of::<VertexInputBindingRepr>(), 4);
+        assert_eq!(offset_of!(VertexInputBindingRepr, binding), 0);
+        assert_eq!(offset_of!(VertexInputBindingRepr, stride), 4);
+        assert_eq!(offset_of!(VertexInputBindingRepr, input_rate), 8);
+        assert_eq!(offset_of!(VertexInputBindingRepr, _reserved_padding), 12);
+    }
+
+    #[test]
+    fn vertex_input_attribute_repr_layout() {
+        assert_eq!(size_of::<VertexInputAttributeRepr>(), 16);
+        assert_eq!(align_of::<VertexInputAttributeRepr>(), 4);
+        assert_eq!(offset_of!(VertexInputAttributeRepr, location), 0);
+        assert_eq!(offset_of!(VertexInputAttributeRepr, binding), 4);
+        assert_eq!(offset_of!(VertexInputAttributeRepr, format), 8);
+        assert_eq!(offset_of!(VertexInputAttributeRepr, offset), 12);
+    }
+
+    #[test]
+    fn vertex_input_state_repr_layout() {
+        // u32 + u32 + 2 (ptr,len) pairs = 8 + 32 = 40 bytes.
+        assert_eq!(size_of::<VertexInputStateRepr>(), 40);
+        assert_eq!(align_of::<VertexInputStateRepr>(), 8);
+        assert_eq!(offset_of!(VertexInputStateRepr, kind), 0);
+        assert_eq!(offset_of!(VertexInputStateRepr, _reserved_padding), 4);
+        assert_eq!(offset_of!(VertexInputStateRepr, bindings_ptr), 8);
+        assert_eq!(offset_of!(VertexInputStateRepr, bindings_len), 16);
+        assert_eq!(offset_of!(VertexInputStateRepr, attributes_ptr), 24);
+        assert_eq!(offset_of!(VertexInputStateRepr, attributes_len), 32);
+    }
+
+    #[test]
+    fn rasterization_state_repr_layout() {
+        assert_eq!(size_of::<RasterizationStateRepr>(), 16);
+        assert_eq!(align_of::<RasterizationStateRepr>(), 4);
+        assert_eq!(offset_of!(RasterizationStateRepr, polygon_mode), 0);
+        assert_eq!(offset_of!(RasterizationStateRepr, cull_mode), 4);
+        assert_eq!(offset_of!(RasterizationStateRepr, front_face), 8);
+        assert_eq!(offset_of!(RasterizationStateRepr, line_width), 12);
+    }
+
+    #[test]
+    fn multisample_state_repr_layout() {
+        assert_eq!(size_of::<MultisampleStateRepr>(), 8);
+        assert_eq!(align_of::<MultisampleStateRepr>(), 4);
+        assert_eq!(offset_of!(MultisampleStateRepr, samples), 0);
+        assert_eq!(offset_of!(MultisampleStateRepr, _reserved_padding), 4);
+    }
+
+    #[test]
+    fn depth_stencil_state_repr_layout() {
+        assert_eq!(size_of::<DepthStencilStateRepr>(), 16);
+        assert_eq!(align_of::<DepthStencilStateRepr>(), 4);
+        assert_eq!(offset_of!(DepthStencilStateRepr, kind), 0);
+        assert_eq!(offset_of!(DepthStencilStateRepr, depth_test), 4);
+        assert_eq!(offset_of!(DepthStencilStateRepr, depth_write), 8);
+        assert_eq!(offset_of!(DepthStencilStateRepr, _reserved_padding), 12);
+    }
+
+    #[test]
+    fn color_blend_attachment_repr_layout() {
+        assert_eq!(size_of::<ColorBlendAttachmentRepr>(), 32);
+        assert_eq!(align_of::<ColorBlendAttachmentRepr>(), 4);
+        assert_eq!(
+            offset_of!(ColorBlendAttachmentRepr, src_color_blend_factor),
+            0
+        );
+        assert_eq!(
+            offset_of!(ColorBlendAttachmentRepr, dst_color_blend_factor),
+            4
+        );
+        assert_eq!(offset_of!(ColorBlendAttachmentRepr, color_blend_op), 8);
+        assert_eq!(
+            offset_of!(ColorBlendAttachmentRepr, src_alpha_blend_factor),
+            12
+        );
+        assert_eq!(
+            offset_of!(ColorBlendAttachmentRepr, dst_alpha_blend_factor),
+            16
+        );
+        assert_eq!(offset_of!(ColorBlendAttachmentRepr, alpha_blend_op), 20);
+        assert_eq!(offset_of!(ColorBlendAttachmentRepr, color_write_mask), 24);
+        assert_eq!(
+            offset_of!(ColorBlendAttachmentRepr, _reserved_padding),
+            28
+        );
+    }
+
+    #[test]
+    fn color_blend_state_repr_layout() {
+        // u32 + u32 + ColorBlendAttachmentRepr(32) = 40 bytes.
+        assert_eq!(size_of::<ColorBlendStateRepr>(), 40);
+        assert_eq!(align_of::<ColorBlendStateRepr>(), 4);
+        assert_eq!(offset_of!(ColorBlendStateRepr, kind), 0);
+        assert_eq!(offset_of!(ColorBlendStateRepr, color_write_mask), 4);
+        assert_eq!(offset_of!(ColorBlendStateRepr, attachment), 8);
+    }
+
+    #[test]
+    fn attachment_formats_repr_layout() {
+        // (ptr,len) pair + u32 + u32 = 16 + 8 = 24 bytes.
+        assert_eq!(size_of::<AttachmentFormatsRepr>(), 24);
+        assert_eq!(align_of::<AttachmentFormatsRepr>(), 8);
+        assert_eq!(offset_of!(AttachmentFormatsRepr, color_ptr), 0);
+        assert_eq!(offset_of!(AttachmentFormatsRepr, color_len), 8);
+        assert_eq!(offset_of!(AttachmentFormatsRepr, has_depth), 16);
+        assert_eq!(offset_of!(AttachmentFormatsRepr, depth), 20);
+    }
+
+    #[test]
+    fn graphics_pipeline_state_repr_layout() {
+        // topology(4) + pad(4) + vertex_input(40) + raster(16) +
+        // multisample(8) + depth_stencil(16) + color_blend(40) +
+        // attachment_formats(24) + dynamic_state(4) + pad(4) = 160 bytes.
+        assert_eq!(size_of::<GraphicsPipelineStateRepr>(), 160);
+        assert_eq!(align_of::<GraphicsPipelineStateRepr>(), 8);
+        assert_eq!(offset_of!(GraphicsPipelineStateRepr, topology), 0);
+        assert_eq!(
+            offset_of!(GraphicsPipelineStateRepr, _reserved_padding1),
+            4
+        );
+        assert_eq!(offset_of!(GraphicsPipelineStateRepr, vertex_input), 8);
+        assert_eq!(offset_of!(GraphicsPipelineStateRepr, rasterization), 48);
+        assert_eq!(offset_of!(GraphicsPipelineStateRepr, multisample), 64);
+        assert_eq!(offset_of!(GraphicsPipelineStateRepr, depth_stencil), 72);
+        assert_eq!(offset_of!(GraphicsPipelineStateRepr, color_blend), 88);
+        assert_eq!(
+            offset_of!(GraphicsPipelineStateRepr, attachment_formats),
+            128
+        );
+        assert_eq!(offset_of!(GraphicsPipelineStateRepr, dynamic_state), 152);
+        assert_eq!(
+            offset_of!(GraphicsPipelineStateRepr, _reserved_padding2),
+            156
+        );
+    }
+
+    #[test]
+    fn graphics_kernel_descriptor_repr_layout() {
+        // label(ptr,len)=16 + stages(ptr,len)=16 + bindings(ptr,len)=16
+        // + push_constants(8) + pipeline_state(160) +
+        // descriptor_sets_in_flight(4) + pad(4) = 224 bytes.
+        assert_eq!(size_of::<GraphicsKernelDescriptorRepr>(), 224);
+        assert_eq!(align_of::<GraphicsKernelDescriptorRepr>(), 8);
+        assert_eq!(offset_of!(GraphicsKernelDescriptorRepr, label_ptr), 0);
+        assert_eq!(offset_of!(GraphicsKernelDescriptorRepr, label_len), 8);
+        assert_eq!(offset_of!(GraphicsKernelDescriptorRepr, stages_ptr), 16);
+        assert_eq!(offset_of!(GraphicsKernelDescriptorRepr, stages_len), 24);
+        assert_eq!(
+            offset_of!(GraphicsKernelDescriptorRepr, bindings_ptr),
+            32
+        );
+        assert_eq!(
+            offset_of!(GraphicsKernelDescriptorRepr, bindings_len),
+            40
+        );
+        assert_eq!(
+            offset_of!(GraphicsKernelDescriptorRepr, push_constants),
+            48
+        );
+        assert_eq!(
+            offset_of!(GraphicsKernelDescriptorRepr, pipeline_state),
+            56
+        );
+        assert_eq!(
+            offset_of!(
+                GraphicsKernelDescriptorRepr,
+                descriptor_sets_in_flight
+            ),
+            216
+        );
+        assert_eq!(
+            offset_of!(GraphicsKernelDescriptorRepr, _reserved_padding),
+            220
+        );
+    }
+
+    #[test]
+    fn ray_tracing_stage_repr_layout() {
+        assert_eq!(size_of::<RayTracingStageRepr>(), 40);
+        assert_eq!(align_of::<RayTracingStageRepr>(), 8);
+        assert_eq!(offset_of!(RayTracingStageRepr, stage), 0);
+        assert_eq!(offset_of!(RayTracingStageRepr, _reserved_padding), 4);
+        assert_eq!(offset_of!(RayTracingStageRepr, spv_ptr), 8);
+        assert_eq!(offset_of!(RayTracingStageRepr, spv_len), 16);
+        assert_eq!(offset_of!(RayTracingStageRepr, entry_point_ptr), 24);
+        assert_eq!(offset_of!(RayTracingStageRepr, entry_point_len), 32);
+    }
+
+    #[test]
+    fn ray_tracing_binding_spec_repr_layout() {
+        assert_eq!(size_of::<RayTracingBindingSpecRepr>(), 16);
+        assert_eq!(align_of::<RayTracingBindingSpecRepr>(), 4);
+        assert_eq!(offset_of!(RayTracingBindingSpecRepr, binding), 0);
+        assert_eq!(offset_of!(RayTracingBindingSpecRepr, kind), 4);
+        assert_eq!(offset_of!(RayTracingBindingSpecRepr, stages), 8);
+        assert_eq!(
+            offset_of!(RayTracingBindingSpecRepr, _reserved_padding),
+            12
+        );
+    }
+
+    #[test]
+    fn ray_tracing_push_constants_repr_layout() {
+        assert_eq!(size_of::<RayTracingPushConstantsRepr>(), 8);
+        assert_eq!(align_of::<RayTracingPushConstantsRepr>(), 4);
+        assert_eq!(offset_of!(RayTracingPushConstantsRepr, size), 0);
+        assert_eq!(offset_of!(RayTracingPushConstantsRepr, stages), 4);
+    }
+
+    #[test]
+    fn ray_tracing_shader_group_repr_layout() {
+        assert_eq!(size_of::<RayTracingShaderGroupRepr>(), 16);
+        assert_eq!(align_of::<RayTracingShaderGroupRepr>(), 4);
+        assert_eq!(offset_of!(RayTracingShaderGroupRepr, kind), 0);
+        assert_eq!(
+            offset_of!(RayTracingShaderGroupRepr, general_or_intersection),
+            4
+        );
+        assert_eq!(offset_of!(RayTracingShaderGroupRepr, closest_hit), 8);
+        assert_eq!(offset_of!(RayTracingShaderGroupRepr, any_hit), 12);
+    }
+
+    #[test]
+    fn ray_tracing_kernel_descriptor_repr_layout() {
+        // 4 (ptr,len) pairs (64) + push_constants(8) +
+        // max_recursion_depth(4) + pad(4) = 80 bytes.
+        assert_eq!(size_of::<RayTracingKernelDescriptorRepr>(), 80);
+        assert_eq!(align_of::<RayTracingKernelDescriptorRepr>(), 8);
+        assert_eq!(offset_of!(RayTracingKernelDescriptorRepr, label_ptr), 0);
+        assert_eq!(offset_of!(RayTracingKernelDescriptorRepr, label_len), 8);
+        assert_eq!(
+            offset_of!(RayTracingKernelDescriptorRepr, stages_ptr),
+            16
+        );
+        assert_eq!(
+            offset_of!(RayTracingKernelDescriptorRepr, stages_len),
+            24
+        );
+        assert_eq!(
+            offset_of!(RayTracingKernelDescriptorRepr, groups_ptr),
+            32
+        );
+        assert_eq!(
+            offset_of!(RayTracingKernelDescriptorRepr, groups_len),
+            40
+        );
+        assert_eq!(
+            offset_of!(RayTracingKernelDescriptorRepr, bindings_ptr),
+            48
+        );
+        assert_eq!(
+            offset_of!(RayTracingKernelDescriptorRepr, bindings_len),
+            56
+        );
+        assert_eq!(
+            offset_of!(RayTracingKernelDescriptorRepr, push_constants),
+            64
+        );
+        assert_eq!(
+            offset_of!(
+                RayTracingKernelDescriptorRepr,
+                max_recursion_depth
+            ),
+            72
+        );
+        assert_eq!(
+            offset_of!(RayTracingKernelDescriptorRepr, _reserved_padding),
+            76
+        );
+    }
+
+    #[test]
+    fn ray_tracing_shader_unused_sentinel() {
+        // The "absent stage" sentinel matches VK_SHADER_UNUSED_KHR.
+        assert_eq!(RAY_TRACING_SHADER_UNUSED, u32::MAX);
+    }
+
+    #[test]
     fn surface_store_vtable_layout() {
         // layout_version (u32) + _reserved_padding (u32) + 13 fn
         // pointers (8 bytes each) = 4 + 4 + 104 = 112 bytes.
@@ -2160,6 +3347,7 @@ mod layout_tests {
         assert_send_sync::<RuntimeOpsVTable>();
         assert_send_sync::<GpuContextLimitedAccessVTable>();
         assert_send_sync::<SurfaceStoreVTable>();
+        assert_send_sync::<GpuContextFullAccessVTable>();
         assert_send_sync::<HostServices>();
         assert_send_sync::<ProcessorVTable>();
     }

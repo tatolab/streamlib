@@ -1432,6 +1432,66 @@ impl GpuContext {
         Ok(Arc::new(kernel))
     }
 
+    /// Pre-allocate a ring of `count` non-exportable DEVICE_LOCAL
+    /// textures and register each in the same-process texture cache.
+    /// Mirror of [`GpuContextFullAccess::create_texture_ring`] at the
+    /// inner-`GpuContext` level — the FullAccess wrapper delegates here
+    /// after enforcing the privileged-scope invariants.
+    #[cfg(target_os = "linux")]
+    pub fn create_texture_ring(
+        &self,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+        usages: TextureUsages,
+        count: usize,
+    ) -> Result<Arc<crate::core::context::TextureRing>> {
+        use crate::core::context::{TextureRing, TextureRingSlot};
+
+        if count == 0 {
+            return Err(Error::GpuError(
+                "create_texture_ring: count must be > 0".into(),
+            ));
+        }
+
+        let mut slots = Vec::with_capacity(count);
+        let mut upload_resources = Vec::with_capacity(count);
+        for slot_index in 0..count {
+            let desc = TextureDescriptor::new(width, height, format).with_usage(usages);
+            let texture = self.device.create_texture_local(&desc)?;
+            let surface_id = uuid::Uuid::new_v4().to_string();
+            // Spec-correct initial layout for a freshly-allocated
+            // VkImage that no one has touched yet (per
+            // docs/architecture/texture-registration.md Producer
+            // Rule 2). The per-frame
+            // `TextureRing::copy_pixel_buffer_to_slot` runs the
+            // amortized upload that transitions UNDEFINED →
+            // SHADER_READ_ONLY_OPTIMAL and updates the registration
+            // to match, so after the first per-frame copy the claim
+            // and reality agree.
+            self.register_texture_with_layout(
+                &surface_id,
+                texture.clone(),
+                VulkanLayout::UNDEFINED,
+            );
+            slots.push(TextureRingSlot {
+                surface_id,
+                texture,
+                slot_index,
+            });
+            let res = crate::vulkan::rhi::HostVulkanUploadResources::new(&self.device.inner)?;
+            upload_resources.push(res);
+        }
+        Ok(TextureRing::from_slots(
+            slots,
+            upload_resources,
+            width,
+            height,
+            format,
+            self.clone(),
+        ))
+    }
+
     /// Build a triangle-geometry bottom-level acceleration structure
     /// from CPU-side vertex + index data. Backs [`Self::create_ray_tracing_kernel`]
     /// — every TLAS instance references one of these BLAS handles.
@@ -1894,23 +1954,61 @@ impl Drop for GpuContextLimitedAccess {
 /// Privileged GPU capability handed to `setup()` and inside
 /// [`GpuContextLimitedAccess::escalate`] closures.
 ///
-/// Exposes the full GPU API, including resource creation and device-wide
-/// operations. In #321 this is the same surface as [`GpuContextLimitedAccess`];
-/// the split lands in #324.
+/// Exposes the full GPU API, including resource creation and
+/// device-wide operations.
 ///
-/// Deliberately **not** `Clone`. Processors only ever see a `&GpuContextFullAccess`
-/// borrowed from a `RuntimeContextFullAccess` wrapper for the duration of a
-/// single lifecycle call (setup / teardown / start / stop / escalate closure).
-/// Removing `Clone` makes "stash a FullAccess in a field" a compile error:
-/// nothing can produce an owned value outside the runtime's construction
-/// path, so the capability can never escape its call.
+/// Deliberately **not** `Clone`. Processors only ever see a
+/// `&GpuContextFullAccess` borrowed from a `RuntimeContextFullAccess`
+/// wrapper for the duration of a single lifecycle call (setup /
+/// teardown / start / stop / escalate closure). Removing `Clone` makes
+/// "stash a FullAccess in a field" a compile error: nothing can
+/// produce an owned value outside the runtime's construction path, so
+/// the capability can never escape its call.
 ///
 /// ```compile_fail
 /// fn assert_not_clone<T: Clone>() {}
 /// assert_not_clone::<streamlib::sdk::context::GpuContextFullAccess>();
 /// ```
+///
+/// # Layout (Phase C2)
+///
+/// `#[repr(C)] { handle, vtable }`, mirroring
+/// [`GpuContextLimitedAccess`]. `handle` is a host-owned
+/// `Box<Arc<GpuContext>>` in host mode; in cdylib mode (post-C3) it
+/// is the opaque scope token from
+/// [`GpuContextFullAccessVTable::escalate_begin`]. Methods route
+/// through [`Self::host_inner`] for host-only fast paths (panicking
+/// when reached from cdylib code, same shape as Limited) and
+/// through the vtable when called from cdylib code.
+#[repr(C)]
 pub struct GpuContextFullAccess {
-    inner: GpuContext,
+    pub(crate) handle: *const std::ffi::c_void,
+    pub(crate) vtable:
+        *const streamlib_plugin_abi::GpuContextFullAccessVTable,
+}
+
+// SAFETY: same shape as `GpuContextLimitedAccess`. The handle points
+// at a host-owned `Box<Arc<GpuContext>>` (host mode) or an opaque
+// scope token (cdylib mode, post-C3); both are `Send + Sync`. The
+// vtable pointer is `&'static`.
+unsafe impl Send for GpuContextFullAccess {}
+unsafe impl Sync for GpuContextFullAccess {}
+
+impl Drop for GpuContextFullAccess {
+    /// Releases the host-owned handle via
+    /// [`GpuContextFullAccessVTable::drop_handle`]. In host mode this
+    /// drops the `Box<Arc<GpuContext>>` (releasing the cloned
+    /// `GpuContext`); in cdylib mode (post-C3) it invalidates the
+    /// escalate scope token.
+    fn drop(&mut self) {
+        if !self.handle.is_null() && !self.vtable.is_null() {
+            // SAFETY: handle was produced by `Self::new` (host mode —
+            // `Box::into_raw(Box::new(Arc::new(GpuContext)))`) or a
+            // future C3 `escalate_begin` callback. The vtable's
+            // `drop_handle` callback runs the matching release.
+            unsafe { ((*self.vtable).drop_handle)(self.handle) };
+        }
+    }
 }
 
 impl GpuContextLimitedAccess {
@@ -1986,9 +2084,7 @@ impl GpuContextLimitedAccess {
     /// processor setup paths can still reach the full surface without a
     /// compile-time barrier.
     pub(crate) fn to_full_access(&self) -> GpuContextFullAccess {
-        GpuContextFullAccess {
-            inner: self.host_inner().clone(),
-        }
+        GpuContextFullAccess::new(self.host_inner().clone())
     }
 
     /// Serialized escalation to full GPU capability. Acquires the
@@ -2097,19 +2193,60 @@ fn escalation_monotonic_ns() -> u64 {
 
 impl GpuContextFullAccess {
     /// Wrap a [`GpuContext`] as a full-access capability.
+    ///
+    /// Boxes a fresh `Arc<GpuContext>` as the opaque handle (matching
+    /// the [`GpuContextLimitedAccess::new`] shape), then resolves the
+    /// vtable through
+    /// [`crate::core::plugin::host_services::host_gpu_context_full_access_vtable`].
+    /// The Arc refcount is 1 at construction; `Drop` calls
+    /// `drop_handle` which runs `Box::from_raw + drop`.
     pub(crate) fn new(inner: GpuContext) -> Self {
-        Self { inner }
+        let arc: std::sync::Arc<GpuContext> = std::sync::Arc::new(inner);
+        let boxed: Box<std::sync::Arc<GpuContext>> = Box::new(arc);
+        let handle = Box::into_raw(boxed) as *const std::ffi::c_void;
+        let vtable =
+            crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
+        Self { handle, vtable }
     }
 
-    /// Borrow the inner [`GpuContext`]. Crate-internal — call sites migrate
-    /// to capability-typed methods as #322 lands.
+    /// Engine-internal borrow of the host's [`GpuContext`] (read
+    /// through the handle's `Box<Arc<GpuContext>>`).
+    ///
+    /// **Panics if called from cdylib code.** Mirrors
+    /// [`GpuContextLimitedAccess::host_inner`]'s contract: cdylib code
+    /// must dispatch through the
+    /// [`GpuContextFullAccessVTable`](streamlib_plugin_abi::GpuContextFullAccessVTable)
+    /// instead. The panic is caught by `run_host_extern_c` at the FFI
+    /// boundary.
+    pub(crate) fn host_inner(&self) -> &GpuContext {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextFullAccess::host_inner() reached from cdylib code; \
+                 this method must dispatch through the GpuContextFullAccessVTable. \
+                 The panic is caught by run_host_extern_c at the FFI boundary."
+            );
+        }
+        // SAFETY: `self.handle` was produced by `Self::new`, which
+        // calls `Box::into_raw(Box::new(Arc::new(GpuContext)))`. The
+        // matching `host_gpu_full_drop_handle` runs on Drop, so the
+        // `Arc<GpuContext>` is alive for the duration of `&self`.
+        unsafe {
+            let arc = &*(self.handle as *const std::sync::Arc<GpuContext>);
+            &**arc
+        }
+    }
+
+    /// Borrow the inner [`GpuContext`]. Crate-internal — call sites
+    /// migrate to capability-typed methods as the privilege split
+    /// lands.
     pub(crate) fn inner(&self) -> &GpuContext {
-        &self.inner
+        self.host_inner()
     }
 
-    /// Produce a [`GpuContextLimitedAccess`] view of the same underlying context.
+    /// Produce a [`GpuContextLimitedAccess`] view of the same
+    /// underlying context.
     pub(crate) fn to_limited_access(&self) -> GpuContextLimitedAccess {
-        GpuContextLimitedAccess::new(self.inner.clone())
+        GpuContextLimitedAccess::new(self.host_inner().clone())
     }
 }
 
@@ -2944,12 +3081,12 @@ impl GpuContextLimitedAccess {
 impl GpuContextFullAccess {
     /// Acquire the processor-setup mutex.
     pub fn lock_processor_setup(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.inner.lock_processor_setup()
+        self.host_inner().lock_processor_setup()
     }
 
     /// Wait for the GPU device to become idle.
     pub fn wait_device_idle(&self) -> Result<()> {
-        self.inner.wait_device_idle()
+        self.host_inner().wait_device_idle()
     }
 
     /// Acquire a pixel buffer from the shared pool.
@@ -2959,7 +3096,7 @@ impl GpuContextFullAccess {
         height: u32,
         format: PixelFormat,
     ) -> Result<(PixelBufferPoolId, PixelBuffer)> {
-        self.inner.acquire_pixel_buffer(width, height, format)
+        self.host_inner().acquire_pixel_buffer(width, height, format)
     }
 
     /// Acquire a HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
@@ -2969,7 +3106,7 @@ impl GpuContextFullAccess {
         &self,
         byte_size: u64,
     ) -> Result<crate::core::rhi::StorageBuffer> {
-        self.inner.acquire_storage_buffer(byte_size)
+        self.host_inner().acquire_storage_buffer(byte_size)
     }
 
     /// Acquire a HOST_VISIBLE uniform buffer.
@@ -2978,7 +3115,7 @@ impl GpuContextFullAccess {
         &self,
         byte_size: u64,
     ) -> Result<crate::core::rhi::UniformBuffer> {
-        self.inner.acquire_uniform_buffer(byte_size)
+        self.host_inner().acquire_uniform_buffer(byte_size)
     }
 
     /// Acquire a HOST_VISIBLE vertex buffer.
@@ -2987,7 +3124,7 @@ impl GpuContextFullAccess {
         &self,
         byte_size: u64,
     ) -> Result<crate::core::rhi::VertexBuffer> {
-        self.inner.acquire_vertex_buffer(byte_size)
+        self.host_inner().acquire_vertex_buffer(byte_size)
     }
 
     /// Acquire a HOST_VISIBLE index buffer.
@@ -2996,7 +3133,7 @@ impl GpuContextFullAccess {
         &self,
         byte_size: u64,
     ) -> Result<crate::core::rhi::IndexBuffer> {
-        self.inner.acquire_index_buffer(byte_size)
+        self.host_inner().acquire_index_buffer(byte_size)
     }
 
     /// Allocate a render-target-capable DMA-BUF VkImage (privileged path —
@@ -3009,23 +3146,23 @@ impl GpuContextFullAccess {
         height: u32,
         format: TextureFormat,
     ) -> Result<Texture> {
-        self.inner
+        self.host_inner()
             .acquire_render_target_dma_buf_image(width, height, format)
     }
 
     /// Get a pixel buffer by its pool id.
     pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<PixelBuffer> {
-        self.inner.get_pixel_buffer(pool_id)
+        self.host_inner().get_pixel_buffer(pool_id)
     }
 
     /// Resolve a VideoFrame's buffer from its surface_id.
     pub fn resolve_pixel_buffer_by_surface_id(&self, surface_id: &str) -> Result<PixelBuffer> {
-        self.inner.resolve_pixel_buffer_by_surface_id(surface_id)
+        self.host_inner().resolve_pixel_buffer_by_surface_id(surface_id)
     }
 
     /// Register a texture in the same-process texture cache.
     pub fn register_texture(&self, id: &str, texture: Texture) {
-        self.inner.register_texture(id, texture);
+        self.host_inner().register_texture(id, texture);
     }
 
     /// Register a texture with a declared initial Vulkan image layout.
@@ -3037,7 +3174,7 @@ impl GpuContextFullAccess {
         texture: Texture,
         initial_layout: VulkanLayout,
     ) {
-        self.inner
+        self.host_inner()
             .register_texture_with_layout(id, texture, initial_layout);
     }
 
@@ -3045,7 +3182,7 @@ impl GpuContextFullAccess {
     /// See [`GpuContext::update_texture_registration_layout`].
     #[cfg(target_os = "linux")]
     pub fn update_texture_registration_layout(&self, id: &str, layout: VulkanLayout) {
-        self.inner.update_texture_registration_layout(id, layout);
+        self.host_inner().update_texture_registration_layout(id, layout);
     }
 
     /// Resolve a VideoFrame's full registration record (texture + layout).
@@ -3056,7 +3193,7 @@ impl GpuContextFullAccess {
         width: u32,
         height: u32,
     ) -> Result<TextureRegistration> {
-        self.inner
+        self.host_inner()
             .resolve_texture_registration_by_surface_id(surface_id, texture_layout, width, height)
     }
 
@@ -3068,7 +3205,7 @@ impl GpuContextFullAccess {
         width: u32,
         height: u32,
     ) -> Result<Texture> {
-        self.inner
+        self.host_inner()
             .resolve_texture_by_surface_id(surface_id, texture_layout, width, height)
     }
 
@@ -3079,7 +3216,7 @@ impl GpuContextFullAccess {
         height: u32,
         format: TextureFormat,
     ) -> Result<(String, Texture)> {
-        self.inner.acquire_output_texture(width, height, format)
+        self.host_inner().acquire_output_texture(width, height, format)
     }
 
     /// Upload a pixel buffer's contents to a GPU texture and register it.
@@ -3091,7 +3228,7 @@ impl GpuContextFullAccess {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        self.inner
+        self.host_inner()
             .upload_pixel_buffer_as_texture(surface_id, pixel_buffer, width, height)
     }
 
@@ -3112,7 +3249,7 @@ impl GpuContextFullAccess {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        self.inner.copy_pixel_buffer_to_texture(
+        self.host_inner().copy_pixel_buffer_to_texture(
             pixel_buffer,
             texture,
             surface_id,
@@ -3145,62 +3282,13 @@ impl GpuContextFullAccess {
         usages: TextureUsages,
         count: usize,
     ) -> Result<Arc<crate::core::context::TextureRing>> {
-        use crate::core::context::{TextureRing, TextureRingSlot};
-
-        if count == 0 {
-            return Err(Error::GpuError(
-                "create_texture_ring: count must be > 0".into(),
-            ));
-        }
-
-        let mut slots = Vec::with_capacity(count);
-        let mut upload_resources = Vec::with_capacity(count);
-        for slot_index in 0..count {
-            let desc = TextureDescriptor::new(width, height, format).with_usage(usages);
-            let texture = self.inner.device.create_texture_local(&desc)?;
-            let surface_id = uuid::Uuid::new_v4().to_string();
-            // Spec-correct initial layout for a freshly-allocated VkImage
-            // that no one has touched yet (per docs/architecture/texture-registration.md
-            // Producer Rule 2). The per-frame
-            // `TextureRing::copy_pixel_buffer_to_slot` runs
-            // upload_buffer_to_image_amortized which transitions UNDEFINED →
-            // SHADER_READ_ONLY_OPTIMAL and updates the registration to
-            // match — so after the first per-frame copy on a slot, the
-            // claim and reality both read SHADER_READ_ONLY_OPTIMAL for
-            // downstream consumers' barriers.
-            self.inner.register_texture_with_layout(
-                &surface_id,
-                texture.clone(),
-                VulkanLayout::UNDEFINED,
-            );
-            slots.push(TextureRingSlot {
-                surface_id,
-                texture,
-                slot_index,
-            });
-            // Pre-allocate per-slot upload resources (private command
-            // pool + cb + fence) so the per-frame hot path never calls
-            // vkCreateCommandPool / vkAllocateCommandBuffers /
-            // vkCreateFence — just reset + record + submit + wait via
-            // upload_buffer_to_image_amortized.
-            let res = crate::vulkan::rhi::HostVulkanUploadResources::new(
-                &self.inner.device.inner,
-            )?;
-            upload_resources.push(res);
-        }
-        Ok(TextureRing::from_slots(
-            slots,
-            upload_resources,
-            width,
-            height,
-            format,
-            self.inner.clone(),
-        ))
+        self.host_inner()
+            .create_texture_ring(width, height, format, usages, count)
     }
 
     /// See [`GpuContext::unregister_texture`].
     pub fn unregister_texture(&self, id: &str) {
-        self.inner.unregister_texture(id);
+        self.host_inner().unregister_texture(id);
     }
 
     /// See [`GpuContext::set_video_source_timeline_semaphore`].
@@ -3209,13 +3297,13 @@ impl GpuContextFullAccess {
         &self,
         timeline: &Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
     ) {
-        self.inner.set_video_source_timeline_semaphore(timeline);
+        self.host_inner().set_video_source_timeline_semaphore(timeline);
     }
 
     /// See [`GpuContext::clear_video_source_timeline_semaphore`].
     #[cfg(target_os = "linux")]
     pub fn clear_video_source_timeline_semaphore(&self) {
-        self.inner.clear_video_source_timeline_semaphore();
+        self.host_inner().clear_video_source_timeline_semaphore();
     }
 
     /// See [`GpuContext::video_source_timeline_semaphore`].
@@ -3223,17 +3311,17 @@ impl GpuContextFullAccess {
     pub fn video_source_timeline_semaphore(
         &self,
     ) -> Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
-        self.inner.video_source_timeline_semaphore()
+        self.host_inner().video_source_timeline_semaphore()
     }
 
     /// Get a reference to the RHI GPU device.
     pub fn device(&self) -> &Arc<GpuDevice> {
-        self.inner.device()
+        self.host_inner().device()
     }
 
     /// Get the texture pool for acquiring pooled textures.
     pub fn texture_pool(&self) -> &TexturePool {
-        self.inner.texture_pool()
+        self.host_inner().texture_pool()
     }
 
     /// Acquire a pooled texture for in-process GPU work
@@ -3241,17 +3329,17 @@ impl GpuContextFullAccess {
     /// host adapter layer wants on Linux, see
     /// [`Self::acquire_render_target_dma_buf_image`].
     pub fn acquire_texture(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
-        self.inner.acquire_texture(desc)
+        self.host_inner().acquire_texture(desc)
     }
 
     /// Get the shared command queue.
     pub fn command_queue(&self) -> &RhiCommandQueue {
-        self.inner.command_queue()
+        self.host_inner().command_queue()
     }
 
     /// Create a command buffer from the shared queue.
     pub fn create_command_buffer(&self) -> Result<CommandBuffer> {
-        self.inner.create_command_buffer()
+        self.host_inner().create_command_buffer()
     }
 
     /// Acquire a cached `(src, dst)`-keyed color converter. See
@@ -3263,7 +3351,7 @@ impl GpuContextFullAccess {
         src: PixelFormat,
         dst: PixelFormat,
     ) -> Result<Arc<RhiColorConverter>> {
-        self.inner.color_converter(src, dst)
+        self.host_inner().color_converter(src, dst)
     }
 
     /// Create a compute kernel from a SPIR-V shader and a binding declaration.
@@ -3272,7 +3360,7 @@ impl GpuContextFullAccess {
         &self,
         descriptor: &crate::core::rhi::ComputeKernelDescriptor<'_>,
     ) -> Result<Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
-        self.inner.create_compute_kernel(descriptor)
+        self.host_inner().create_compute_kernel(descriptor)
     }
 
     /// Build an engine-owned multi-step command-buffer recorder. See
@@ -3290,7 +3378,7 @@ impl GpuContextFullAccess {
         &self,
         label: &str,
     ) -> Result<crate::vulkan::rhi::RhiCommandRecorder> {
-        self.inner.create_command_recorder(label)
+        self.host_inner().create_command_recorder(label)
     }
 
     /// Create a graphics kernel from a multi-stage SPIR-V set, binding
@@ -3300,7 +3388,7 @@ impl GpuContextFullAccess {
         &self,
         descriptor: &crate::core::rhi::GraphicsKernelDescriptor<'_>,
     ) -> Result<Arc<crate::vulkan::rhi::VulkanGraphicsKernel>> {
-        self.inner.create_graphics_kernel(descriptor)
+        self.host_inner().create_graphics_kernel(descriptor)
     }
 
     /// Create a ray-tracing kernel from shader stages, shader-group
@@ -3310,7 +3398,7 @@ impl GpuContextFullAccess {
         &self,
         descriptor: &crate::core::rhi::RayTracingKernelDescriptor<'_>,
     ) -> Result<Arc<crate::vulkan::rhi::VulkanRayTracingKernel>> {
-        self.inner.create_ray_tracing_kernel(descriptor)
+        self.host_inner().create_ray_tracing_kernel(descriptor)
     }
 
     /// Build a triangle-geometry bottom-level acceleration structure
@@ -3322,7 +3410,7 @@ impl GpuContextFullAccess {
         vertices: &[f32],
         indices: &[u32],
     ) -> Result<Arc<crate::vulkan::rhi::VulkanAccelerationStructure>> {
-        self.inner.build_triangles_blas(label, vertices, indices)
+        self.host_inner().build_triangles_blas(label, vertices, indices)
     }
 
     /// Build a top-level acceleration structure from BLAS instances.
@@ -3332,31 +3420,31 @@ impl GpuContextFullAccess {
         label: &str,
         instances: &[crate::vulkan::rhi::TlasInstanceDesc],
     ) -> Result<Arc<crate::vulkan::rhi::VulkanAccelerationStructure>> {
-        self.inner.build_tlas(label, instances)
+        self.host_inner().build_tlas(label, instances)
     }
 
     /// Whether the underlying GPU exposes the
     /// `VK_KHR_ray_tracing_pipeline` extension chain.
     #[cfg(target_os = "linux")]
     pub fn supports_ray_tracing_pipeline(&self) -> bool {
-        self.inner.supports_ray_tracing_pipeline()
+        self.host_inner().supports_ray_tracing_pipeline()
     }
 
     /// Get the underlying Metal device (macOS only).
     #[cfg(target_os = "macos")]
     pub fn metal_device(&self) -> &crate::metal::rhi::MetalDevice {
-        self.inner.metal_device()
+        self.host_inner().metal_device()
     }
 
     /// Create a texture cache for converting pixel buffers to texture views.
     #[cfg(target_os = "macos")]
     pub fn create_texture_cache(&self) -> Result<crate::core::rhi::RhiTextureCache> {
-        self.inner.create_texture_cache()
+        self.host_inner().create_texture_cache()
     }
 
     /// Copy pixels between same-format, same-size buffers.
     pub fn blit_copy(&self, src: &PixelBuffer, dest: &PixelBuffer) -> Result<()> {
-        self.inner.blit_copy(src, dest)
+        self.host_inner().blit_copy(src, dest)
     }
 
     /// Copy from raw IOSurface to a pixel buffer.
@@ -3372,55 +3460,55 @@ impl GpuContextFullAccess {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        unsafe { self.inner.blit_copy_iosurface(src, dest, width, height) }
+        unsafe { self.host_inner().blit_copy_iosurface(src, dest, width, height) }
     }
 
     /// Clear the blitter's texture cache to free GPU memory.
     pub fn clear_blitter_cache(&self) {
-        self.inner.clear_blitter_cache();
+        self.host_inner().clear_blitter_cache();
     }
 
     /// Get the surface store, if initialized.
     pub fn surface_store(&self) -> Option<SurfaceStore> {
-        self.inner.surface_store()
+        self.host_inner().surface_store()
     }
 
     /// Check in a pixel buffer to the surface-share service.
     pub fn check_in_surface(&self, pixel_buffer: &PixelBuffer) -> Result<String> {
-        self.inner.check_in_surface(pixel_buffer)
+        self.host_inner().check_in_surface(pixel_buffer)
     }
 
     /// Check out a surface by ID.
     pub fn check_out_surface(&self, surface_id: &str) -> Result<PixelBuffer> {
-        self.inner.check_out_surface(surface_id)
+        self.host_inner().check_out_surface(surface_id)
     }
 
     /// Get the registered cpu-readback bridge, if any. Reachable only inside
     /// `escalate(|full| ...)` since it requires `FullAccess`.
     #[cfg(target_os = "linux")]
     pub fn cpu_readback_bridge(&self) -> Option<Arc<dyn CpuReadbackBridge>> {
-        self.inner.cpu_readback_bridge()
+        self.host_inner().cpu_readback_bridge()
     }
 
     /// Get the registered compute-kernel bridge, if any. Reachable only inside
     /// `escalate(|full| ...)` since it requires `FullAccess`.
     #[cfg(target_os = "linux")]
     pub fn compute_kernel_bridge(&self) -> Option<Arc<dyn ComputeKernelBridge>> {
-        self.inner.compute_kernel_bridge()
+        self.host_inner().compute_kernel_bridge()
     }
 
     /// Get the registered graphics-kernel bridge, if any. Reachable only inside
     /// `escalate(|full| ...)` since it requires `FullAccess`.
     #[cfg(target_os = "linux")]
     pub fn graphics_kernel_bridge(&self) -> Option<Arc<dyn GraphicsKernelBridge>> {
-        self.inner.graphics_kernel_bridge()
+        self.host_inner().graphics_kernel_bridge()
     }
 
     /// Get the registered ray-tracing-kernel bridge, if any. Reachable only
     /// inside `escalate(|full| ...)` since it requires `FullAccess`.
     #[cfg(target_os = "linux")]
     pub fn ray_tracing_kernel_bridge(&self) -> Option<Arc<dyn RayTracingKernelBridge>> {
-        self.inner.ray_tracing_kernel_bridge()
+        self.host_inner().ray_tracing_kernel_bridge()
     }
 }
 
@@ -3439,7 +3527,8 @@ impl std::fmt::Debug for GpuContextLimitedAccess {
 impl std::fmt::Debug for GpuContextFullAccess {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GpuContextFullAccess")
-            .field("inner", &self.inner)
+            .field("handle", &self.handle)
+            .field("vtable", &self.vtable)
             .finish()
     }
 }
