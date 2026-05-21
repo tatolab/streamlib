@@ -1820,9 +1820,98 @@ impl std::fmt::Debug for GpuContext {
 /// operations; heavier work must go through [`GpuContextLimitedAccess::escalate`].
 /// In #321 it delegates every method to the inner [`GpuContext`] — no surface
 /// is hidden yet.
-#[derive(Clone)]
+/// Restricted GPU capability shim with ABI-stable `(handle, vtable)`
+/// prefix.
+///
+/// Phase C1 of #886 reshapes this struct to a `#[repr(C)]` layout
+/// whose first two fields cross the cdylib DSO boundary unchanged:
+///
+/// - `handle`: an opaque `*const c_void` pointing at a host-leaked
+///   `Box<Arc<GpuContext>>`. Cdylib code passes this pointer to
+///   [`GpuContextLimitedAccessVTable`] callbacks; the host's
+///   callbacks (running in host-compiled code) cast it back to
+///   `*const Arc<GpuContext>` and invoke real methods.
+/// - `vtable`: pointer to the `&'static GpuContextLimitedAccessVTable`
+///   installed by the host (resolved via
+///   [`crate::core::plugin::host_services::host_gpu_context_limited_access_vtable`]).
+/// - `inner`: the host's `GpuContext`. **Engine-internal only** —
+///   reachable through [`Self::host_inner`], which panics if reached
+///   from cdylib code (the panic is caught by `run_host_extern_c` at
+///   the FFI boundary). Cdylib code never reads this field;
+///   per-method vtable callbacks land progressively in Phase C1 follow-on
+///   commits to migrate every inherent method from `host_inner()`
+///   dispatch to vtable dispatch.
+#[repr(C)]
 pub struct GpuContextLimitedAccess {
+    /// Opaque host handle. Points at a `Box<Arc<GpuContext>>` allocated
+    /// by host-compiled code; cdylib code treats it as opaque and
+    /// passes it through to vtable callbacks unchanged.
+    pub(crate) handle: *const std::ffi::c_void,
+    /// Dispatch table. Set at construction from
+    /// [`crate::core::plugin::host_services::host_gpu_context_limited_access_vtable`];
+    /// host mode resolves to the `&HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE`
+    /// static, cdylib mode resolves to the host-installed pointer
+    /// cached on [`HostServices::gpu_context_limited_access_vtable`].
+    pub(crate) vtable:
+        *const streamlib_plugin_abi::GpuContextLimitedAccessVTable,
+    /// Engine-internal host-side rich data. Reachable only through
+    /// [`Self::host_inner`] which gates on the DSO mode. Cdylib code
+    /// reading this field would deref bytes under cdylib's view of
+    /// `GpuContext`'s layout — UB if host and cdylib disagree (which
+    /// they may under the deployment model the plugin ABI supports).
     inner: GpuContext,
+}
+
+// SAFETY: `handle` points at a host-owned `Box<Arc<GpuContext>>` that
+// is `Send + Sync` (Arc carries atomic refcounts, GpuContext's
+// fields are themselves Send + Sync via their Arc wrappers). The
+// vtable pointer is `&'static` and pinned for the host's lifetime;
+// `inner: GpuContext` is itself `Send + Sync` via the same Arc
+// chain.
+unsafe impl Send for GpuContextLimitedAccess {}
+unsafe impl Sync for GpuContextLimitedAccess {}
+
+impl Clone for GpuContextLimitedAccess {
+    /// Cross-DSO-safe Clone. Dispatches through
+    /// [`GpuContextLimitedAccessVTable::clone_handle`] to bump the
+    /// host's `Arc<GpuContext>` refcount; the `inner: GpuContext`
+    /// field is cloned alongside so engine-internal access via
+    /// [`Self::host_inner`] (host mode only) continues to see live
+    /// data after a clone. Matches the
+    /// [`RuntimeOpsShim`](crate::core::context::runtime_ops_shim::RuntimeOpsShim)
+    /// owning-handle pattern from Phase B.
+    fn clone(&self) -> Self {
+        let new_handle = if !self.handle.is_null() && !self.vtable.is_null() {
+            // SAFETY: handle + vtable were paired at construction
+            // and the host's `clone_handle` callback contractually
+            // returns a fresh `Box::into_raw(Box::new(Arc::clone(...)))`-
+            // shaped pointer the matching `drop_handle` releases.
+            unsafe { ((*self.vtable).clone_handle)(self.handle) }
+        } else {
+            std::ptr::null()
+        };
+        Self {
+            handle: new_handle,
+            vtable: self.vtable,
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl Drop for GpuContextLimitedAccess {
+    /// Releases the host-owned handle via
+    /// [`GpuContextLimitedAccessVTable::drop_handle`]. The `inner`
+    /// field drops normally via its `GpuContext` Drop chain.
+    fn drop(&mut self) {
+        if !self.handle.is_null() && !self.vtable.is_null() {
+            // SAFETY: handle was produced by either `new()` (which
+            // calls `Box::into_raw(Box::new(Arc::new(...)))`) or by
+            // `clone_handle` (which produces the same shape). The
+            // matching `drop_handle` callback runs
+            // `Box::from_raw + drop` on the host side.
+            unsafe { ((*self.vtable).drop_handle)(self.handle) };
+        }
+    }
 }
 
 /// Privileged GPU capability handed to `setup()` and inside
@@ -1849,13 +1938,68 @@ pub struct GpuContextFullAccess {
 
 impl GpuContextLimitedAccess {
     /// Wrap a [`GpuContext`] as a limited-access capability.
+    ///
+    /// Allocates a host-side `Box<Arc<GpuContext>>` as the opaque
+    /// handle (matches the
+    /// [`crate::core::plugin::host_services::host_rov_clone_handle`]
+    /// pattern from Phase B), then resolves the vtable through
+    /// [`crate::core::plugin::host_services::host_gpu_context_limited_access_vtable`]
+    /// (DSO-routed: host static in host mode, cdylib-installed
+    /// pointer in cdylib mode). The `inner` field is kept alongside
+    /// the handle so engine-internal callers can short-circuit
+    /// through [`Self::host_inner`] without a vtable hop, while
+    /// per-method vtable callbacks land progressively in C1 follow-on
+    /// commits to make cdylib code safe under deployment-model
+    /// rustc/dep drift.
     pub(crate) fn new(inner: GpuContext) -> Self {
-        Self { inner }
+        // Leak a fresh `Arc<GpuContext>` to back the opaque handle.
+        // The Arc wraps a CLONE of the inner so handle and `inner`
+        // hold independent references to the same underlying Arcs;
+        // releasing one (via vtable drop_handle) does not invalidate
+        // the other.
+        let arc: std::sync::Arc<GpuContext> = std::sync::Arc::new(inner.clone());
+        let boxed: Box<std::sync::Arc<GpuContext>> = Box::new(arc);
+        let handle = Box::into_raw(boxed) as *const std::ffi::c_void;
+        let vtable =
+            crate::core::plugin::host_services::host_gpu_context_limited_access_vtable();
+        Self {
+            handle,
+            vtable,
+            inner,
+        }
     }
 
-    /// Borrow the inner [`GpuContext`]. Crate-internal — call sites migrate
-    /// to capability-typed methods as #322 lands.
-    pub(crate) fn inner(&self) -> &GpuContext {
+    /// Engine-internal borrow of the host's [`GpuContext`].
+    ///
+    /// **Panics if called from cdylib code.** The `inner: GpuContext`
+    /// field's in-memory layout is not guaranteed stable across the
+    /// cdylib DSO boundary; cdylib code that reads it would deref
+    /// host-written bytes under cdylib's view of `GpuContext`'s
+    /// layout, which is undefined behaviour under the deployment
+    /// model the plugin ABI supports (different rustc minor versions
+    /// + different dep graphs between host and cdylib). Cdylib code
+    /// must instead dispatch through the
+    /// [`GpuContextLimitedAccessVTable`](streamlib_plugin_abi::GpuContextLimitedAccessVTable)
+    /// — per-method callbacks land progressively in C1 follow-on
+    /// commits.
+    ///
+    /// The panic is caught by `run_host_extern_c` at the FFI
+    /// boundary (host extern "C" callbacks all route through
+    /// `catch_unwind`), so a misconfigured cdylib that calls a not-
+    /// yet-wired inherent method gets a clean "callback panicked"
+    /// log entry instead of UB.
+    pub(crate) fn host_inner(&self) -> &GpuContext {
+        // `host_callbacks()` is `Some` in cdylib mode (set by
+        // `install_host_services`) and `None` in host mode.
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextLimitedAccess::host_inner() reached from cdylib code; \
+                 this method must dispatch through the GpuContextLimitedAccessVTable. \
+                 Until per-method vtable callbacks are wired (#886 Phase C1 follow-on commits), \
+                 the cdylib cannot safely access this method. \
+                 The panic is caught by run_host_extern_c at the FFI boundary."
+            );
+        }
         &self.inner
     }
 
@@ -1867,7 +2011,7 @@ impl GpuContextLimitedAccess {
     /// compile-time barrier.
     pub(crate) fn to_full_access(&self) -> GpuContextFullAccess {
         GpuContextFullAccess {
-            inner: self.inner.clone(),
+            inner: self.host_inner().clone(),
         }
     }
 
@@ -1985,9 +2129,7 @@ impl GpuContextFullAccess {
 
     /// Produce a [`GpuContextLimitedAccess`] view of the same underlying context.
     pub(crate) fn to_limited_access(&self) -> GpuContextLimitedAccess {
-        GpuContextLimitedAccess {
-            inner: self.inner.clone(),
-        }
+        GpuContextLimitedAccess::new(self.inner.clone())
     }
 }
 

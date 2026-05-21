@@ -1583,26 +1583,44 @@ unsafe extern "C" fn host_gpu_lim_clone_handle(borrowed_handle: *const c_void) -
     run_host_extern_c(
         "host_gpu_lim_clone_handle",
         || {
-            // Phase C1 scaffold: the cdylib-side shim does not yet
-            // stash an owned handle distinct from the borrowed one
-            // (no per-method wiring exists to read through the
-            // table). Returning the borrowed pointer as-is keeps the
-            // shim self-consistent until the real Arc<GpuContext>
-            // refcount-bump path lands alongside the first
-            // LimitedAccess method.
-            borrowed_handle
+            if borrowed_handle.is_null() {
+                return std::ptr::null();
+            }
+            // SAFETY: `borrowed_handle` was produced by
+            // `GpuContextLimitedAccess::new` (or a prior
+            // `clone_handle`) as
+            // `Box::into_raw(Box::new(Arc::new(GpuContext)))`.
+            // Reading through `&*` and cloning the Arc bumps the
+            // underlying refcount; we re-leak via
+            // `Box::into_raw(Box::new(...))` so the caller gets a
+            // fresh owned handle that matches `drop_handle`'s
+            // expected shape.
+            let original =
+                unsafe { &*(borrowed_handle as *const std::sync::Arc<crate::core::context::GpuContext>) };
+            Box::into_raw(Box::new(original.clone())) as *const c_void
         },
         std::ptr::null(),
     )
 }
 
-unsafe extern "C" fn host_gpu_lim_drop_handle(_owned_handle: *const c_void) {
+unsafe extern "C" fn host_gpu_lim_drop_handle(owned_handle: *const c_void) {
     run_host_extern_c(
         "host_gpu_lim_drop_handle",
         || {
-            // Phase C1 scaffold: no-op until `clone_handle` does a
-            // real Arc refcount bump. Dropping a passthrough pointer
-            // is by design a no-op.
+            if owned_handle.is_null() {
+                return;
+            }
+            // SAFETY: paired with `GpuContextLimitedAccess::new` and
+            // `host_gpu_lim_clone_handle` — both produce
+            // `Box::into_raw(Box::new(Arc<GpuContext>))`. Reclaiming
+            // via `Box::from_raw` drops the Arc, which decrements
+            // the host's `Arc<GpuContext>` refcount and frees the
+            // underlying `GpuContext` when the count reaches zero.
+            unsafe {
+                let _ = Box::from_raw(
+                    owned_handle as *mut std::sync::Arc<crate::core::context::GpuContext>,
+                );
+            }
         },
         (),
     )
