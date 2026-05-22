@@ -376,6 +376,29 @@ impl PixelBufferPoolManager {
     }
 }
 
+/// Read-once GPU capability snapshot returned by
+/// [`GpuContext::gpu_capabilities`] /
+/// [`GpuContextFullAccess::gpu_capabilities`].
+///
+/// Plain owned data — the cdylib bridge populates this from the
+/// [`streamlib_plugin_abi::GpuCapabilitiesRepr`] FFI struct (decoding
+/// the fixed-size device_name byte buffer into an owned `String`).
+/// In-process callers get it directly from the host-side getters.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone)]
+pub struct GpuCapabilitiesSnapshot {
+    /// UTF-8 device name (vendor + model).
+    pub device_name: String,
+    /// Whether the GPU exposes `VK_KHR_external_memory_fd` +
+    /// `VK_EXT_external_memory_dma_buf`.
+    pub supports_external_memory: bool,
+    /// Whether cross-device DMA-BUF probe is supported (false on
+    /// NVIDIA Linux per the engine capability guard).
+    pub supports_cross_device_dma_buf_probe: bool,
+    /// Whether the GPU exposes `VK_KHR_ray_tracing_pipeline`.
+    pub supports_ray_tracing_pipeline: bool,
+}
+
 #[derive(Clone)]
 pub struct GpuContext {
     device: Arc<GpuDevice>,
@@ -1564,6 +1587,56 @@ impl GpuContext {
     #[cfg(target_os = "linux")]
     pub fn supports_ray_tracing_pipeline(&self) -> bool {
         self.device.inner.supports_ray_tracing_pipeline()
+    }
+
+    /// Read-once GPU capability snapshot. Mirrors the underlying
+    /// `HostVulkanDevice`'s capability getters into one struct so
+    /// cdylib callers (camera processor, future plugins) can decide
+    /// vendor-specific branching + DMA-BUF / external-memory paths
+    /// at setup time without per-method vtable round-trips.
+    #[cfg(target_os = "linux")]
+    pub fn gpu_capabilities(&self) -> GpuCapabilitiesSnapshot {
+        let dev = &self.device.inner;
+        GpuCapabilitiesSnapshot {
+            device_name: dev.name(),
+            supports_external_memory: dev.supports_external_memory(),
+            supports_cross_device_dma_buf_probe: dev.supports_cross_device_dma_buf_probe(),
+            supports_ray_tracing_pipeline: dev.supports_ray_tracing_pipeline(),
+        }
+    }
+
+    /// Construct a timeline semaphore against the host's vulkan device.
+    /// Backs [`GpuContextFullAccess::create_timeline_semaphore`] which
+    /// is the FullAccess-callable entry point.
+    #[cfg(target_os = "linux")]
+    pub fn create_timeline_semaphore(
+        &self,
+        initial_value: u64,
+    ) -> Result<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
+        let device = self.device.inner.device();
+        let sem = crate::vulkan::rhi::HostVulkanTimelineSemaphore::new(
+            device,
+            initial_value,
+        )?;
+        Ok(Arc::new(sem))
+    }
+
+    /// Import a DMA-BUF FD as a `StorageBuffer`. Camera V4L2 zero-copy
+    /// path. **Consumes `fd` on success** (`vkImportMemoryFdInfoKHR`
+    /// takes ownership); on failure caller retains fd and must close.
+    #[cfg(target_os = "linux")]
+    pub fn import_dma_buf_storage_buffer(
+        &self,
+        fd: std::os::unix::io::RawFd,
+        byte_size: u64,
+    ) -> Result<crate::core::rhi::StorageBuffer> {
+        let vulkan_device = &self.device.inner;
+        let buf = crate::vulkan::rhi::HostVulkanBuffer::from_dma_buf_fd_as_storage_buffer(
+            vulkan_device,
+            fd,
+            byte_size,
+        )?;
+        Ok(crate::core::rhi::StorageBuffer::from_host_vulkan_buffer(Arc::new(buf)))
     }
 
     /// Transition `texture` into `VK_IMAGE_LAYOUT_GENERAL` via a
@@ -4507,6 +4580,188 @@ impl GpuContextFullAccess {
                 };
                 // 1 = true, 0 = false, -1 = error (treat as false).
                 rc == 1
+            }
+        }
+    }
+
+    /// Import a DMA-BUF FD as a `StorageBuffer` (β-shape). Camera
+    /// V4L2 zero-copy path. **Consumes `fd` on success** — on success
+    /// the host's `vkImportMemoryFdInfoKHR` takes ownership of the
+    /// kernel-side fd transfer; on failure the caller retains the fd
+    /// and must close it.
+    #[cfg(target_os = "linux")]
+    pub fn import_dma_buf_storage_buffer(
+        &self,
+        fd: std::os::unix::io::RawFd,
+        byte_size: u64,
+    ) -> Result<crate::core::rhi::StorageBuffer> {
+        match self.handle_kind {
+            HandleKind::Boxed => {
+                self.host_inner().import_dma_buf_storage_buffer(fd, byte_size)
+            }
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "import_dma_buf_storage_buffer: GpuContextFullAccess has null vtable".into(),
+                    ));
+                }
+                let mut out_buffer: std::mem::MaybeUninit<
+                    crate::core::rhi::StorageBuffer,
+                > = std::mem::MaybeUninit::uninit();
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                let status = unsafe {
+                    ((*self.vtable).import_dma_buf_storage_buffer)(
+                        self.handle,
+                        fd,
+                        byte_size,
+                        out_buffer.as_mut_ptr() as *mut std::ffi::c_void,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status == 0 {
+                    // SAFETY: host signaled success and wrote the
+                    // StorageBuffer β-shape struct into the slot.
+                    Ok(unsafe { out_buffer.assume_init() })
+                } else {
+                    let msg = String::from_utf8_lossy(
+                        &err_buf[..err_len.min(err_buf.len())],
+                    )
+                    .into_owned();
+                    Err(Error::GpuError(msg))
+                }
+            }
+        }
+    }
+
+    /// Construct a timeline semaphore. Backs the camera processor's
+    /// per-frame timeline that signals into downstream consumers
+    /// (display, encoders). Mode-routed: host-mode dispatches through
+    /// `host_inner()`; cdylib-mode dispatches through the vtable's
+    /// `create_timeline_semaphore` slot and reconstructs the Arc via
+    /// `Arc::from_raw`.
+    ///
+    /// **Note**: this slot transits `Arc<HostVulkanTimelineSemaphore>`
+    /// via Arc-raw-pointer pattern — same hazard as the kernel paths
+    /// pre-#917 Phase 8. Arc internals leak across DSO for now.
+    /// In-tree consumers (camera, display) are built in the same
+    /// workspace as engine; the layout matches by construction.
+    /// Cross-repo plugin distribution will need a β-shape lift for
+    /// `HostVulkanTimelineSemaphore` — tracked as a future follow-up.
+    #[cfg(target_os = "linux")]
+    pub fn create_timeline_semaphore(
+        &self,
+        initial_value: u64,
+    ) -> Result<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().create_timeline_semaphore(initial_value),
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "create_timeline_semaphore: GpuContextFullAccess has null vtable".into(),
+                    ));
+                }
+                let mut out_handle: *const std::ffi::c_void = std::ptr::null();
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                let status = unsafe {
+                    ((*self.vtable).create_timeline_semaphore)(
+                        self.handle,
+                        initial_value,
+                        &mut out_handle,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status == 0 {
+                    if out_handle.is_null() {
+                        return Err(Error::GpuError(
+                            "create_timeline_semaphore: host signaled success but out_handle is null".into(),
+                        ));
+                    }
+                    // SAFETY: host wrote
+                    // `Arc::into_raw(Arc<HostVulkanTimelineSemaphore>)`.
+                    let arc = unsafe {
+                        Arc::from_raw(
+                            out_handle
+                                as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore,
+                        )
+                    };
+                    Ok(arc)
+                } else {
+                    let msg = String::from_utf8_lossy(
+                        &err_buf[..err_len.min(err_buf.len())],
+                    )
+                    .into_owned();
+                    Err(Error::GpuError(msg))
+                }
+            }
+        }
+    }
+
+    /// Read-once GPU capability snapshot. Backs the camera processor's
+    /// vendor-name / external-memory / cross-device-DMA-BUF-probe
+    /// branching without exposing host-internal `HostVulkanDevice`
+    /// across the FFI. Mode-routed: host-mode dispatches through
+    /// `host_inner()`; cdylib-mode reads a `#[repr(C)]`
+    /// [`GpuCapabilitiesRepr`](streamlib_plugin_abi::GpuCapabilitiesRepr)
+    /// via the vtable's `gpu_capabilities` slot and decodes the
+    /// fixed-size device-name buffer into an owned `String`.
+    #[cfg(target_os = "linux")]
+    pub fn gpu_capabilities(&self) -> Result<GpuCapabilitiesSnapshot> {
+        match self.handle_kind {
+            HandleKind::Boxed => Ok(self.host_inner().gpu_capabilities()),
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "gpu_capabilities: GpuContextFullAccess has null vtable".into(),
+                    ));
+                }
+                // Stack-allocate the FFI repr; the host populates it
+                // via *out_caps. We then decode into an owned snapshot.
+                let mut out: std::mem::MaybeUninit<
+                    streamlib_plugin_abi::GpuCapabilitiesRepr,
+                > = std::mem::MaybeUninit::uninit();
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                let status = unsafe {
+                    ((*self.vtable).gpu_capabilities)(
+                        self.handle,
+                        out.as_mut_ptr(),
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status == 0 {
+                    // SAFETY: host signaled success; the repr is now
+                    // initialized.
+                    let repr = unsafe { out.assume_init() };
+                    let name_len = (repr.device_name_len as usize)
+                        .min(repr.device_name.len());
+                    let device_name =
+                        String::from_utf8_lossy(&repr.device_name[..name_len])
+                            .into_owned();
+                    Ok(GpuCapabilitiesSnapshot {
+                        device_name,
+                        supports_external_memory: repr.supports_external_memory != 0,
+                        supports_cross_device_dma_buf_probe: repr
+                            .supports_cross_device_dma_buf_probe
+                            != 0,
+                        supports_ray_tracing_pipeline: repr
+                            .supports_ray_tracing_pipeline
+                            != 0,
+                    })
+                } else {
+                    let msg = String::from_utf8_lossy(
+                        &err_buf[..err_len.min(err_buf.len())],
+                    )
+                    .into_owned();
+                    Err(Error::GpuError(msg))
+                }
             }
         }
     }

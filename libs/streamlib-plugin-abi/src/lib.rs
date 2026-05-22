@@ -217,7 +217,23 @@ pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 10;
 ///   texture-ring pairs. The slots activate the layout-stable
 ///   `(handle, vtable)` β-shape pattern so cdylibs can hold +
 ///   refcount + drop these handles without rustc-version coupling.
-pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 4;
+/// - v5: `gpu_capabilities` slot returning a `#[repr(C)]`
+///   `GpuCapabilitiesRepr` struct (vendor name + capability bools
+///   the camera processor needs to drop `full.device().vulkan_device()`
+///   reach-through). Per the AI agent notes on #914: capability
+///   queries are read-once-at-setup, so one struct-returning slot
+///   amortizes better than per-method slots.
+/// - v6: `create_timeline_semaphore(initial_value)` slot returning
+///   an `Arc::into_raw(Arc<HostVulkanTimelineSemaphore>)` opaque
+///   handle (Arc-raw-pointer transit, NOT β-shape — the timeline
+///   semaphore's β-shape is its own future lift). Camera processor
+///   needs this to drop the `full.device().vulkan_device().device()`
+///   reach-through for `HostVulkanTimelineSemaphore::new(...)`.
+/// - v7: `import_dma_buf_storage_buffer(fd, byte_size)` slot writing
+///   a `StorageBuffer` β-shape (already layout-stable from C1)
+///   into `*out_buffer`. Camera processor's V4L2 zero-copy path
+///   uses this; the host consumes the fd on success.
+pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 7;
 
 // =============================================================================
 // Primitive enums
@@ -1484,6 +1500,37 @@ pub enum ComputeBindingKindRepr {
     StorageImage = 3,
 }
 
+/// GPU capability snapshot returned by
+/// [`GpuContextFullAccessVTable::gpu_capabilities`]. Layout-stable
+/// `#[repr(C)]` so cdylibs can read the fields cross-rustc-version
+/// without dep-graph coupling.
+///
+/// `device_name` is a fixed-size UTF-8 buffer; bytes past `device_name_len`
+/// are unspecified. The 256-byte buffer matches Vulkan's
+/// `VK_MAX_PHYSICAL_DEVICE_NAME_SIZE` (the source string for vendor
+/// names). `_reserved_padding` brings the struct to 8-byte alignment.
+#[repr(C)]
+pub struct GpuCapabilitiesRepr {
+    /// UTF-8 device name; valid for `device_name_len` bytes. Trailing
+    /// bytes are unspecified.
+    pub device_name: [u8; 256],
+    /// Number of valid UTF-8 bytes in `device_name`.
+    pub device_name_len: u32,
+    /// Whether the GPU exposes `VK_KHR_external_memory_fd` +
+    /// `VK_EXT_external_memory_dma_buf` (DMA-BUF FD import path
+    /// available).
+    pub supports_external_memory: u8,
+    /// Whether cross-device DMA-BUF probe is supported. NVIDIA Linux
+    /// reports `false` per the engine-layer capability guard
+    /// (`docs/learnings/nvidia-opaque-fd-after-swapchain.md`).
+    pub supports_cross_device_dma_buf_probe: u8,
+    /// Whether the GPU exposes `VK_KHR_ray_tracing_pipeline`.
+    pub supports_ray_tracing_pipeline: u8,
+    /// Reserved — zero today, brings struct to 264-byte natural
+    /// alignment with room for future capability bools.
+    pub _reserved_padding: u8,
+}
+
 /// `#[repr(C)]` mirror of `streamlib::core::rhi::ComputeBindingSpec`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -2371,6 +2418,73 @@ pub struct GpuContextFullAccessVTable {
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // v5 (#914): GPU capability query — read-once-at-setup struct
+    // -------------------------------------------------------------------------
+
+    /// Populate a [`GpuCapabilitiesRepr`] with vendor name + capability
+    /// bools. Read-once-at-setup pattern: cdylibs (camera, future
+    /// plugins) need device-vendor branching and external-memory /
+    /// cross-device-DMA-BUF probe checks at processor setup time;
+    /// returning a struct amortizes better than per-method bool slots.
+    /// Returns 0 on success, non-zero on failure (with message in
+    /// `err_buf`).
+    pub gpu_capabilities: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        out_caps: *mut GpuCapabilitiesRepr,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // v6 (#914 / #920): Timeline-semaphore construction primitive
+    // -------------------------------------------------------------------------
+
+    /// Construct a timeline semaphore with the given `initial_value`.
+    /// On success writes
+    /// `Arc::into_raw(Arc<HostVulkanTimelineSemaphore>)` into
+    /// `*out_handle` and returns 0.
+    ///
+    /// **Arc-raw-pointer transit** — not a layout-stable β-shape.
+    /// In-tree consumers (camera, display) ride this freely because
+    /// they're built in the same workspace as the engine. Cross-repo
+    /// plugin distribution will need a β-shape lift for
+    /// `HostVulkanTimelineSemaphore`; tracked as a future follow-up.
+    /// Linux-only on the host side; non-Linux stubs return non-zero.
+    pub create_timeline_semaphore: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        initial_value: u64,
+        out_handle: *mut *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // v7 (#914 / #921): V4L2 DMA-BUF FD import as SSBO
+    // -------------------------------------------------------------------------
+
+    /// Import a V4L2 (or otherwise externally-allocated) DMA-BUF FD
+    /// as a `StorageBuffer` (SSBO-shaped). On success writes the
+    /// `StorageBuffer` β-shape struct (32 bytes, layout-stable from
+    /// C1) into `*out_buffer` and returns 0.
+    ///
+    /// **The host consumes `fd` on success** (`vkImportMemoryFdInfoKHR`
+    /// takes ownership). On failure the caller retains ownership and
+    /// must close it.
+    ///
+    /// Linux-only; non-Linux stubs return non-zero.
+    pub import_dma_buf_storage_buffer: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        fd: i32,
+        byte_size: u64,
+        out_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
 }
 
 unsafe impl Send for GpuContextFullAccessVTable {}
@@ -2945,7 +3059,7 @@ mod layout_tests {
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 10);
         assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
-        assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 4);
+        assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 7);
     }
 
     #[test]
@@ -3213,10 +3327,10 @@ mod layout_tests {
 
     #[test]
     fn gpu_context_full_access_vtable_layout() {
-        // layout_version (u32) + _reserved_padding (u32) + 29 fn
-        // pointers (8 bytes each) = 4 + 4 + 232 = 240 bytes.
+        // layout_version (u32) + _reserved_padding (u32) + 30 fn
+        // pointers (8 bytes each) = 4 + 4 + 240 = 248 bytes.
         //
-        // 29 entries = 1 drop_handle + 7 clone/drop pairs (14 fn
+        // 32 entries = 1 drop_handle + 7 clone/drop pairs (14 fn
         // pointers for the 7 β-shape return types: compute / graphics /
         // ray-tracing kernels, texture ring, color converter,
         // acceleration structure, command recorder) + 4 create_* method
@@ -3225,8 +3339,11 @@ mod layout_tests {
         // privileged methods (wait_device_idle, acquire_output_texture,
         // upload_pixel_buffer_as_texture, color_converter,
         // create_command_recorder, build_triangles_blas, build_tlas,
-        // supports_ray_tracing_pipeline, check_in_surface).
-        assert_eq!(size_of::<GpuContextFullAccessVTable>(), 240);
+        // supports_ray_tracing_pipeline, check_in_surface)
+        // + 1 v5-added gpu_capabilities (#914)
+        // + 1 v6-added create_timeline_semaphore (#914 / #920)
+        // + 1 v7-added import_dma_buf_storage_buffer (#914 / #921).
+        assert_eq!(size_of::<GpuContextFullAccessVTable>(), 264);
         assert_eq!(align_of::<GpuContextFullAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextFullAccessVTable, layout_version), 0);
         assert_eq!(offset_of!(GpuContextFullAccessVTable, _reserved_padding), 4);
@@ -3358,6 +3475,46 @@ mod layout_tests {
             offset_of!(GpuContextFullAccessVTable, check_in_surface),
             232
         );
+        // v5 (#914): gpu_capabilities.
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, gpu_capabilities),
+            240
+        );
+        // v6 (#914 / #920): create_timeline_semaphore.
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, create_timeline_semaphore),
+            248
+        );
+        // v7 (#914 / #921): import_dma_buf_storage_buffer.
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, import_dma_buf_storage_buffer),
+            256
+        );
+    }
+
+    #[test]
+    fn gpu_capabilities_repr_layout() {
+        // 256-byte device_name + u32 len + 4 u8 fields = 264 bytes.
+        // 1-byte alignment (the byte array has 1-byte alignment, u32 has
+        // 4-byte but follows the byte array directly; the trailing bools
+        // are u8). Total stable across rustc.
+        assert_eq!(size_of::<GpuCapabilitiesRepr>(), 264);
+        assert_eq!(align_of::<GpuCapabilitiesRepr>(), 4);
+        assert_eq!(offset_of!(GpuCapabilitiesRepr, device_name), 0);
+        assert_eq!(offset_of!(GpuCapabilitiesRepr, device_name_len), 256);
+        assert_eq!(
+            offset_of!(GpuCapabilitiesRepr, supports_external_memory),
+            260
+        );
+        assert_eq!(
+            offset_of!(GpuCapabilitiesRepr, supports_cross_device_dma_buf_probe),
+            261
+        );
+        assert_eq!(
+            offset_of!(GpuCapabilitiesRepr, supports_ray_tracing_pipeline),
+            262
+        );
+        assert_eq!(offset_of!(GpuCapabilitiesRepr, _reserved_padding), 263);
     }
 
     // -------------------------------------------------------------------------

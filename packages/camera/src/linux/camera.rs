@@ -12,16 +12,11 @@ use streamlib::sdk::color::{
 };
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib::sdk::engine::host_rhi::{
-    HostVulkanBuffer, HostVulkanTexture, HostVulkanTimelineSemaphore, ImageCopyRegion,
-    RhiCommandRecorder, VulkanAccess, VulkanStage,
+    HostVulkanTimelineSemaphore, ImageCopyRegion, RhiCommandRecorder, VulkanAccess, VulkanStage,
 };
-use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::OutputWriter;
-use streamlib::sdk::rhi::{
-    PixelFormat, RhiColorConverter, StorageBuffer, Texture, TextureDescriptor, TextureFormat,
-    TextureUsages,
-};
+use streamlib::sdk::rhi::{PixelFormat, RhiColorConverter, StorageBuffer, Texture, TextureFormat};
 use streamlib_consumer_rhi::VulkanLayout;
 
 use v4l::buffer::Type;
@@ -599,14 +594,26 @@ fn capture_thread_loop(
     };
 
     let setup_result = gpu_context.escalate(|full| {
-        let vulkan_device = full.device().vulkan_device();
-        let vulkan_device_name = vulkan_device.name().to_string();
+        // Read-once capability snapshot. Replaces the host-internal
+        // `full.device().vulkan_device().{name, supports_*}()`
+        // reach-throughs (#914) so the camera processor can run as a
+        // cdylib without leaking `HostVulkanDevice` across the FFI.
+        let caps = full.gpu_capabilities()?;
+        let vulkan_device_name = caps.device_name.clone();
 
         let color_converter = full.color_converter(src_pixel_format, PixelFormat::Rgba32)?;
 
         let recorder = full.create_command_recorder("camera_capture")?;
 
-        let timeline = Arc::new(HostVulkanTimelineSemaphore::new(vulkan_device.device(), 0)?);
+        // Timeline now constructed through the FullAccess primitive
+        // (#920) — the camera no longer reaches through
+        // `full.device().vulkan_device().device()`.
+        let timeline = full.create_timeline_semaphore(0)?;
+
+        // After #920 (timeline) + #921 (DMA-BUF import + ring texture
+        // migration), the camera no longer holds a `vulkan_device`
+        // handle inside setup — every host-RHI call goes through
+        // FullAccess. Camera is cdylib-loadable.
 
         // Double-buffered HOST_VISIBLE input SSBOs (MMAP+memcpy fallback path).
         let mut input_storage_buffers: Vec<StorageBuffer> = Vec::with_capacity(2);
@@ -617,26 +624,27 @@ fn capture_thread_loop(
             input_storage_buffers.push(buf);
         }
 
-        // 2-texture DEVICE_LOCAL ring — DMA-BUF exportable. The engine's
-        // host RHI texture constructor rides the pre-warmed VMA pool from
-        // `HostVulkanDevice::new()`, so the NVIDIA post-swapchain export
-        // cap doesn't bite (see
+        // 2-texture DEVICE_LOCAL ring via the FullAccess render-target
+        // DMA-BUF allocation slot (#914 / #921). Picks an EGL-probe
+        // tiled DRM modifier; the resulting Texture carries
+        // STORAGE_BINDING | TEXTURE_BINDING | COPY_SRC | COPY_DST |
+        // RENDER_ATTACHMENT — a superset of the camera's
+        // STORAGE_BINDING|TEXTURE_BINDING|COPY_SRC needs. The extra
+        // RENDER_ATTACHMENT|COPY_DST bits are additive and harmless
+        // (the camera writes via storage-image, never as a render
+        // target). The engine's host RHI texture constructor rides the
+        // pre-warmed VMA pool from `HostVulkanDevice::new()`, so the
+        // NVIDIA post-swapchain export cap doesn't bite (see
         // `docs/learnings/nvidia-dma-buf-after-swapchain.md`).
-        let ring_texture_desc =
-            TextureDescriptor::new(width, height, TextureFormat::Rgba8Unorm).with_usage(
-                TextureUsages::STORAGE_BINDING
-                    | TextureUsages::TEXTURE_BINDING
-                    | TextureUsages::COPY_SRC,
-            );
         let mut ring_textures: Vec<Texture> = Vec::with_capacity(RING_TEXTURE_COUNT);
         let mut ring_texture_ids: Vec<String> = Vec::with_capacity(RING_TEXTURE_COUNT);
         for _ in 0..RING_TEXTURE_COUNT {
-            let vk_texture = HostVulkanTexture::new(vulkan_device, &ring_texture_desc)?;
-            // Eagerly create the image view so we fail fast inside the
-            // escalation rather than at first dispatch.
-            vk_texture.image_view()?;
+            let stream_texture = full.acquire_render_target_dma_buf_image(
+                width,
+                height,
+                TextureFormat::Rgba8Unorm,
+            )?;
             let texture_id = uuid::Uuid::new_v4().to_string();
-            let stream_texture = Texture::from_vulkan(vk_texture);
             ring_texture_ids.push(texture_id);
             ring_textures.push(stream_texture);
         }
@@ -646,13 +654,13 @@ fn capture_thread_loop(
         // + binds), so it stays inside the escalation. Failure falls
         // through to the HOST_VISIBLE MMAP path above.
         let supports_cross_device_dma_buf_probe =
-            vulkan_device.supports_cross_device_dma_buf_probe();
+            caps.supports_cross_device_dma_buf_probe;
         let probe_skipped = !supports_cross_device_dma_buf_probe;
         let mut use_dmabuf = false;
         let mut dmabuf_fds: [i32; V4L2_BUFFER_COUNT as usize] =
             [-1; V4L2_BUFFER_COUNT as usize];
         let mut dmabuf_imported_buffers: Vec<StorageBuffer> = Vec::new();
-        if vulkan_device.supports_external_memory()
+        if caps.supports_external_memory
             && !is_virtual_device
             && supports_cross_device_dma_buf_probe
         {
@@ -686,15 +694,10 @@ fn capture_thread_loop(
                     all_imported = false;
                     break;
                 }
-                match HostVulkanBuffer::from_dma_buf_fd_as_storage_buffer(
-                    vulkan_device,
-                    fd,
-                    input_alloc_size,
-                ) {
+                match full.import_dma_buf_storage_buffer(fd, input_alloc_size) {
                     Ok(buf) => {
                         dmabuf_fds[i] = fd;
-                        imported[i] =
-                            Some(StorageBuffer::from_host_vulkan_buffer(Arc::new(buf)));
+                        imported[i] = Some(buf);
                     }
                     Err(e) => {
                         if i == 0 {
