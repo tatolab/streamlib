@@ -2032,6 +2032,28 @@ pub struct GpuContextFullAccess {
     /// Set by the constructor ([`Self::new`] vs
     /// [`Self::from_scope_token`]).
     pub(crate) handle_kind: HandleKind,
+    /// Inherited LimitedAccess handle (scope-token mode only).
+    ///
+    /// Phase D — Option B (Limited-handle inheritance): the
+    /// FullAccess wrappers for the LimitedAccess-mirror methods
+    /// (`acquire_pixel_buffer`, `register_texture_with_layout`,
+    /// `surface_store`, etc.) dispatch through the **inherited**
+    /// LimitedAccess vtable using this handle, rather than through a
+    /// parallel FullAccess vtable slot. Reuses the C1-proven
+    /// LimitedAccess dispatch surface instead of mirroring it on
+    /// FullAccess. The LimitedAccess that originated the escalate
+    /// scope outlives the FullAccess (closure scope), so borrowing
+    /// the handle without bumping its refcount is sound.
+    ///
+    /// `null` in [`HandleKind::Boxed`] (in-process) mode — engine
+    /// callers use `host_inner()` directly and don't need this.
+    pub(crate) inherited_lim_handle: *const std::ffi::c_void,
+    /// Inherited LimitedAccess vtable pointer paired with
+    /// [`Self::inherited_lim_handle`]. See its doc for the role.
+    ///
+    /// `null` in [`HandleKind::Boxed`] (in-process) mode.
+    pub(crate) inherited_lim_vtable:
+        *const streamlib_plugin_abi::GpuContextLimitedAccessVTable,
 }
 
 /// Discriminator for [`GpuContextFullAccess`]'s `handle` field. The
@@ -2060,7 +2082,11 @@ pub(crate) enum HandleKind {
 // or an opaque scope token (vtable-dispatched shape); both are
 // `Send + Sync` (the scope token is a u64 reinterpreted as
 // `*const c_void`; the boxed Arc<GpuContext> is Send + Sync). The
-// vtable pointer is `&'static`.
+// vtable pointer is `&'static`. The inherited LimitedAccess fields
+// either point at the same host-owned `Box<Arc<GpuContext>>` the
+// originating LimitedAccess holds (scope-token mode) — borrowed for
+// the closure's lifetime, no refcount bump — or are null (Boxed
+// mode); both are `Send + Sync` for the same reason as `handle`.
 unsafe impl Send for GpuContextFullAccess {}
 unsafe impl Sync for GpuContextFullAccess {}
 
@@ -2304,7 +2330,18 @@ impl GpuContextLimitedAccess {
         }
 
         let closure_start = std::time::Instant::now();
-        let full = GpuContextFullAccess::from_scope_token(scope_token);
+        // Pass through the originating LimitedAccess (handle, vtable)
+        // so the FullAccess wrappers for the LimitedAccess-mirror
+        // methods (Phase D Option B) can dispatch through the C1-
+        // proven LimitedAccess vtable. The originating LimitedAccess
+        // owns the handle for the lifetime of this scope (we hold
+        // `&self` across the closure), so borrowing without bumping
+        // the refcount is sound.
+        let full = GpuContextFullAccess::from_scope_token(
+            scope_token,
+            self.handle,
+            self.vtable,
+        );
         // catch_unwind so a closure panic still fires escalate_end —
         // otherwise the host's escalate gate would leak. We lean on
         // AssertUnwindSafe because `escalate`'s public signature
@@ -2435,6 +2472,11 @@ impl GpuContextFullAccess {
             handle,
             vtable,
             handle_kind: HandleKind::Boxed,
+            // In-process Boxed mode never consults the inherited
+            // LimitedAccess vtable — `host_inner()` is the direct path.
+            // Null sentinels match the field doc on the struct.
+            inherited_lim_handle: std::ptr::null(),
+            inherited_lim_vtable: std::ptr::null(),
         }
     }
 
@@ -2451,8 +2493,20 @@ impl GpuContextFullAccess {
     /// (release the escalate gate + `wait_device_idle`) runs inside
     /// `escalate_end` rather than [`Drop`], so the FullAccess's
     /// [`Drop`] short-circuits.
+    ///
+    /// `inherited_lim_handle` / `inherited_lim_vtable` are the
+    /// originating `GpuContextLimitedAccess`'s handle + vtable. Phase
+    /// D's Option-B dispatch shape for the LimitedAccess-mirror
+    /// methods (e.g. [`Self::acquire_pixel_buffer`],
+    /// [`Self::register_texture_with_layout`], [`Self::surface_store`])
+    /// borrows these to dispatch through the C1-proven LimitedAccess
+    /// vtable, avoiding ~20 duplicate slot entries on the FullAccess
+    /// vtable. See the struct doc for the inheritance rationale.
     pub(in crate::core::context) fn from_scope_token(
         scope_token: *const std::ffi::c_void,
+        inherited_lim_handle: *const std::ffi::c_void,
+        inherited_lim_vtable:
+            *const streamlib_plugin_abi::GpuContextLimitedAccessVTable,
     ) -> Self {
         let vtable =
             crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
@@ -2460,6 +2514,8 @@ impl GpuContextFullAccess {
             handle: scope_token,
             vtable,
             handle_kind: HandleKind::ScopeToken,
+            inherited_lim_handle,
+            inherited_lim_vtable,
         }
     }
 
@@ -2495,6 +2551,28 @@ impl GpuContextFullAccess {
     /// lands.
     pub(crate) fn inner(&self) -> &GpuContext {
         self.host_inner()
+    }
+
+    /// Phase D Option B helper — construct a non-dropping view of
+    /// the originating [`GpuContextLimitedAccess`] for cdylib
+    /// dispatch through the inherited vtable.
+    ///
+    /// Used by the FullAccess mirror methods (`acquire_pixel_buffer`,
+    /// `register_texture_with_layout`, `surface_store`, etc.) to
+    /// dispatch through the C1-proven LimitedAccess vtable instead
+    /// of mirroring those slots on the FullAccess vtable.
+    ///
+    /// **Must be wrapped in [`std::mem::ManuallyDrop`] at the call
+    /// site** so the borrowed handle isn't double-released — the
+    /// originating LimitedAccess outlives the FullAccess scope and
+    /// owns the only Drop responsibility for the handle.
+    pub(crate) fn inherited_limited_unchecked(
+        &self,
+    ) -> std::mem::ManuallyDrop<GpuContextLimitedAccess> {
+        std::mem::ManuallyDrop::new(GpuContextLimitedAccess {
+            handle: self.inherited_lim_handle,
+            vtable: self.inherited_lim_vtable,
+        })
     }
 
     /// Produce a [`GpuContextLimitedAccess`] view of the same
@@ -3334,18 +3412,59 @@ impl GpuContextLimitedAccess {
 
 impl GpuContextFullAccess {
     /// Wait for the GPU device to become idle.
+    ///
+    /// Mode-routed; see [`Self::create_compute_kernel`] for the
+    /// dispatch contract.
     pub fn wait_device_idle(&self) -> Result<()> {
-        self.host_inner().wait_device_idle()
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().wait_device_idle(),
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "wait_device_idle: GpuContextFullAccess has null vtable".into(),
+                    ));
+                }
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                let status = unsafe {
+                    ((*self.vtable).wait_device_idle)(
+                        self.handle,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status == 0 {
+                    Ok(())
+                } else {
+                    let msg = String::from_utf8_lossy(
+                        &err_buf[..err_len.min(err_buf.len())],
+                    )
+                    .into_owned();
+                    Err(Error::GpuError(msg))
+                }
+            }
+        }
     }
 
     /// Acquire a pixel buffer from the shared pool.
+    ///
+    /// LimitedAccess mirror — cdylib dispatch inherits the C1-proven
+    /// `acquire_pixel_buffer` slot via [`Self::inherited_limited_unchecked`].
     pub fn acquire_pixel_buffer(
         &self,
         width: u32,
         height: u32,
         format: PixelFormat,
     ) -> Result<(PixelBufferPoolId, PixelBuffer)> {
-        self.host_inner().acquire_pixel_buffer(width, height, format)
+        match self.handle_kind {
+            HandleKind::Boxed => {
+                self.host_inner().acquire_pixel_buffer(width, height, format)
+            }
+            HandleKind::ScopeToken => self
+                .inherited_limited_unchecked()
+                .acquire_pixel_buffer(width, height, format),
+        }
     }
 
     /// Acquire a HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
@@ -3355,7 +3474,12 @@ impl GpuContextFullAccess {
         &self,
         byte_size: u64,
     ) -> Result<crate::core::rhi::StorageBuffer> {
-        self.host_inner().acquire_storage_buffer(byte_size)
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().acquire_storage_buffer(byte_size),
+            HandleKind::ScopeToken => self
+                .inherited_limited_unchecked()
+                .acquire_storage_buffer(byte_size),
+        }
     }
 
     /// Acquire a HOST_VISIBLE uniform buffer.
@@ -3364,7 +3488,12 @@ impl GpuContextFullAccess {
         &self,
         byte_size: u64,
     ) -> Result<crate::core::rhi::UniformBuffer> {
-        self.host_inner().acquire_uniform_buffer(byte_size)
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().acquire_uniform_buffer(byte_size),
+            HandleKind::ScopeToken => self
+                .inherited_limited_unchecked()
+                .acquire_uniform_buffer(byte_size),
+        }
     }
 
     /// Acquire a HOST_VISIBLE vertex buffer.
@@ -3373,7 +3502,12 @@ impl GpuContextFullAccess {
         &self,
         byte_size: u64,
     ) -> Result<crate::core::rhi::VertexBuffer> {
-        self.host_inner().acquire_vertex_buffer(byte_size)
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().acquire_vertex_buffer(byte_size),
+            HandleKind::ScopeToken => self
+                .inherited_limited_unchecked()
+                .acquire_vertex_buffer(byte_size),
+        }
     }
 
     /// Acquire a HOST_VISIBLE index buffer.
@@ -3382,12 +3516,26 @@ impl GpuContextFullAccess {
         &self,
         byte_size: u64,
     ) -> Result<crate::core::rhi::IndexBuffer> {
-        self.host_inner().acquire_index_buffer(byte_size)
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().acquire_index_buffer(byte_size),
+            HandleKind::ScopeToken => self
+                .inherited_limited_unchecked()
+                .acquire_index_buffer(byte_size),
+        }
     }
 
     /// Allocate a render-target-capable DMA-BUF VkImage (privileged path —
     /// host-only adapter primitive, customers never see this directly).
     /// See [`GpuContext::acquire_render_target_dma_buf_image`].
+    ///
+    /// Mode-routed:
+    /// - [`HandleKind::Boxed`] (in-process): direct dispatch via
+    ///   [`Self::host_inner`].
+    /// - [`HandleKind::ScopeToken`] (cdylib): dispatch through the
+    ///   [`GpuContextFullAccessVTable`](streamlib_plugin_abi::GpuContextFullAccessVTable)'s
+    ///   `acquire_render_target_dma_buf_image` slot, which validates the
+    ///   scope token via [`super::escalate_scope_registry::with_scope`]
+    ///   before calling the host's privileged surface path.
     #[cfg(target_os = "linux")]
     pub fn acquire_render_target_dma_buf_image(
         &self,
@@ -3395,23 +3543,79 @@ impl GpuContextFullAccess {
         height: u32,
         format: TextureFormat,
     ) -> Result<Texture> {
-        self.host_inner()
-            .acquire_render_target_dma_buf_image(width, height, format)
+        match self.handle_kind {
+            HandleKind::Boxed => self
+                .host_inner()
+                .acquire_render_target_dma_buf_image(width, height, format),
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "acquire_render_target_dma_buf_image: GpuContextFullAccess has null vtable".into(),
+                    ));
+                }
+                let mut out_texture: std::mem::MaybeUninit<Texture> =
+                    std::mem::MaybeUninit::uninit();
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                // SAFETY: vtable + handle (scope_token) were paired at
+                // construction; the host writes a valid Texture into
+                // `out_texture` on success.
+                let status = unsafe {
+                    ((*self.vtable).acquire_render_target_dma_buf_image)(
+                        self.handle,
+                        width,
+                        height,
+                        format as u32,
+                        out_texture.as_mut_ptr() as *mut std::ffi::c_void,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status == 0 {
+                    // SAFETY: host signaled success and wrote a valid value.
+                    Ok(unsafe { out_texture.assume_init() })
+                } else {
+                    let msg = String::from_utf8_lossy(
+                        &err_buf[..err_len.min(err_buf.len())],
+                    )
+                    .into_owned();
+                    Err(Error::GpuError(msg))
+                }
+            }
+        }
     }
 
     /// Get a pixel buffer by its pool id.
     pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<PixelBuffer> {
-        self.host_inner().get_pixel_buffer(pool_id)
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().get_pixel_buffer(pool_id),
+            HandleKind::ScopeToken => {
+                self.inherited_limited_unchecked().get_pixel_buffer(pool_id)
+            }
+        }
     }
 
     /// Resolve a VideoFrame's buffer from its surface_id.
     pub fn resolve_pixel_buffer_by_surface_id(&self, surface_id: &str) -> Result<PixelBuffer> {
-        self.host_inner().resolve_pixel_buffer_by_surface_id(surface_id)
+        match self.handle_kind {
+            HandleKind::Boxed => self
+                .host_inner()
+                .resolve_pixel_buffer_by_surface_id(surface_id),
+            HandleKind::ScopeToken => self
+                .inherited_limited_unchecked()
+                .resolve_pixel_buffer_by_surface_id(surface_id),
+        }
     }
 
     /// Register a texture in the same-process texture cache.
     pub fn register_texture(&self, id: &str, texture: Texture) {
-        self.host_inner().register_texture(id, texture);
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().register_texture(id, texture),
+            HandleKind::ScopeToken => self
+                .inherited_limited_unchecked()
+                .register_texture(id, texture),
+        }
     }
 
     /// Register a texture with a declared initial Vulkan image layout.
@@ -3423,15 +3627,28 @@ impl GpuContextFullAccess {
         texture: Texture,
         initial_layout: VulkanLayout,
     ) {
-        self.host_inner()
-            .register_texture_with_layout(id, texture, initial_layout);
+        match self.handle_kind {
+            HandleKind::Boxed => self
+                .host_inner()
+                .register_texture_with_layout(id, texture, initial_layout),
+            HandleKind::ScopeToken => self
+                .inherited_limited_unchecked()
+                .register_texture_with_layout(id, texture, initial_layout),
+        }
     }
 
     /// Update a registered texture's tracked layout after a transition.
     /// See [`GpuContext::update_texture_registration_layout`].
     #[cfg(target_os = "linux")]
     pub fn update_texture_registration_layout(&self, id: &str, layout: VulkanLayout) {
-        self.host_inner().update_texture_registration_layout(id, layout);
+        match self.handle_kind {
+            HandleKind::Boxed => self
+                .host_inner()
+                .update_texture_registration_layout(id, layout),
+            HandleKind::ScopeToken => self
+                .inherited_limited_unchecked()
+                .update_texture_registration_layout(id, layout),
+        }
     }
 
     /// Resolve a VideoFrame's full registration record (texture + layout).
@@ -3442,8 +3659,22 @@ impl GpuContextFullAccess {
         width: u32,
         height: u32,
     ) -> Result<TextureRegistration> {
-        self.host_inner()
-            .resolve_texture_registration_by_surface_id(surface_id, texture_layout, width, height)
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().resolve_texture_registration_by_surface_id(
+                surface_id,
+                texture_layout,
+                width,
+                height,
+            ),
+            HandleKind::ScopeToken => self
+                .inherited_limited_unchecked()
+                .resolve_texture_registration_by_surface_id(
+                    surface_id,
+                    texture_layout,
+                    width,
+                    height,
+                ),
+        }
     }
 
     /// Resolve a VideoFrame's texture.
@@ -3454,8 +3685,22 @@ impl GpuContextFullAccess {
         width: u32,
         height: u32,
     ) -> Result<Texture> {
-        self.host_inner()
-            .resolve_texture_by_surface_id(surface_id, texture_layout, width, height)
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().resolve_texture_by_surface_id(
+                surface_id,
+                texture_layout,
+                width,
+                height,
+            ),
+            HandleKind::ScopeToken => self
+                .inherited_limited_unchecked()
+                .resolve_texture_by_surface_id(
+                    surface_id,
+                    texture_layout,
+                    width,
+                    height,
+                ),
+        }
     }
 
     /// Acquire a new output texture with a UUID and register it in the cache.
@@ -3465,7 +3710,58 @@ impl GpuContextFullAccess {
         height: u32,
         format: TextureFormat,
     ) -> Result<(String, Texture)> {
-        self.host_inner().acquire_output_texture(width, height, format)
+        match self.handle_kind {
+            HandleKind::Boxed => {
+                self.host_inner().acquire_output_texture(width, height, format)
+            }
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "acquire_output_texture: GpuContextFullAccess has null vtable".into(),
+                    ));
+                }
+                let mut id_buf = [0u8; 1024];
+                let mut id_len: usize = 0;
+                let mut out_texture: std::mem::MaybeUninit<Texture> =
+                    std::mem::MaybeUninit::uninit();
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                let status = unsafe {
+                    ((*self.vtable).acquire_output_texture)(
+                        self.handle,
+                        width,
+                        height,
+                        format as u32,
+                        id_buf.as_mut_ptr(),
+                        id_buf.len(),
+                        &mut id_len as *mut usize,
+                        out_texture.as_mut_ptr() as *mut std::ffi::c_void,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status == 0 {
+                    let id = match std::str::from_utf8(&id_buf[..id_len]) {
+                        Ok(s) => s.to_string(),
+                        Err(e) => {
+                            return Err(Error::GpuError(format!(
+                                "acquire_output_texture: surface id not UTF-8: {e}"
+                            )));
+                        }
+                    };
+                    // SAFETY: host signaled success and wrote a Texture.
+                    let texture = unsafe { out_texture.assume_init() };
+                    Ok((id, texture))
+                } else {
+                    let msg = String::from_utf8_lossy(
+                        &err_buf[..err_len.min(err_buf.len())],
+                    )
+                    .into_owned();
+                    Err(Error::GpuError(msg))
+                }
+            }
+        }
     }
 
     /// Upload a pixel buffer's contents to a GPU texture and register it.
@@ -3477,8 +3773,42 @@ impl GpuContextFullAccess {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        self.host_inner()
-            .upload_pixel_buffer_as_texture(surface_id, pixel_buffer, width, height)
+        match self.handle_kind {
+            HandleKind::Boxed => self
+                .host_inner()
+                .upload_pixel_buffer_as_texture(surface_id, pixel_buffer, width, height),
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "upload_pixel_buffer_as_texture: GpuContextFullAccess has null vtable".into(),
+                    ));
+                }
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                let status = unsafe {
+                    ((*self.vtable).upload_pixel_buffer_as_texture)(
+                        self.handle,
+                        surface_id.as_ptr(),
+                        surface_id.len(),
+                        pixel_buffer as *const PixelBuffer as *const std::ffi::c_void,
+                        width,
+                        height,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status == 0 {
+                    Ok(())
+                } else {
+                    let msg = String::from_utf8_lossy(
+                        &err_buf[..err_len.min(err_buf.len())],
+                    )
+                    .into_owned();
+                    Err(Error::GpuError(msg))
+                }
+            }
+        }
     }
 
     /// Copy a host-visible pixel buffer's contents into an *already-allocated*
@@ -3498,13 +3828,24 @@ impl GpuContextFullAccess {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        self.host_inner().copy_pixel_buffer_to_texture(
-            pixel_buffer,
-            texture,
-            surface_id,
-            width,
-            height,
-        )
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().copy_pixel_buffer_to_texture(
+                pixel_buffer,
+                texture,
+                surface_id,
+                width,
+                height,
+            ),
+            HandleKind::ScopeToken => self
+                .inherited_limited_unchecked()
+                .copy_pixel_buffer_to_texture(
+                    pixel_buffer,
+                    texture,
+                    surface_id,
+                    width,
+                    height,
+                ),
+        }
     }
 
     /// Pre-allocate a ring of `count` non-exportable DEVICE_LOCAL
@@ -3531,45 +3872,177 @@ impl GpuContextFullAccess {
         usages: TextureUsages,
         count: usize,
     ) -> Result<Arc<crate::core::context::TextureRing>> {
-        self.host_inner()
-            .create_texture_ring(width, height, format, usages, count)
+        match self.handle_kind {
+            HandleKind::Boxed => self
+                .host_inner()
+                .create_texture_ring(width, height, format, usages, count),
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "create_texture_ring: GpuContextFullAccess has null vtable".into(),
+                    ));
+                }
+                let mut out_ring: *const std::ffi::c_void = std::ptr::null();
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                let status = unsafe {
+                    ((*self.vtable).create_texture_ring)(
+                        self.handle,
+                        width,
+                        height,
+                        format as u32,
+                        usages.bits(),
+                        count,
+                        &mut out_ring,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status == 0 {
+                    if out_ring.is_null() {
+                        return Err(Error::GpuError(
+                            "create_texture_ring: host signaled success but out_ring is null"
+                                .into(),
+                        ));
+                    }
+                    // SAFETY: host returned
+                    // `Arc::into_raw(Arc<TextureRing>)`. Rebuilding via
+                    // `Arc::from_raw` is sound under the rustc-version
+                    // coupling contract documented in CLAUDE.md (host
+                    // and cdylib share the toolchain + dep graph, so
+                    // `TextureRing`'s layout is byte-identical and the
+                    // host's `Arc` strong-count machinery survives the
+                    // cross-DSO transit). The host transferred its
+                    // strong reference to us; `Arc<TextureRing>::drop`
+                    // running in cdylib code releases that reference.
+                    let arc = unsafe {
+                        Arc::from_raw(
+                            out_ring as *const crate::core::context::TextureRing,
+                        )
+                    };
+                    Ok(arc)
+                } else {
+                    let msg = String::from_utf8_lossy(
+                        &err_buf[..err_len.min(err_buf.len())],
+                    )
+                    .into_owned();
+                    Err(Error::GpuError(msg))
+                }
+            }
+        }
     }
 
     /// See [`GpuContext::unregister_texture`].
     pub fn unregister_texture(&self, id: &str) {
-        self.host_inner().unregister_texture(id);
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().unregister_texture(id),
+            HandleKind::ScopeToken => {
+                self.inherited_limited_unchecked().unregister_texture(id);
+            }
+        }
     }
 
     /// See [`GpuContext::set_video_source_timeline_semaphore`].
+    ///
+    /// **Engine-only** — parameter is `&Arc<HostVulkanTimelineSemaphore>`
+    /// (host-internal type from `crate::vulkan::rhi`). Calling from a
+    /// cdylib panics inside [`Self::host_inner`]; the panic is caught by
+    /// `run_host_extern_c` at the FFI boundary, so it surfaces as a
+    /// clean "callback panicked" log rather than UB.
     #[cfg(target_os = "linux")]
     pub fn set_video_source_timeline_semaphore(
         &self,
         timeline: &Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
     ) {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextFullAccess::set_video_source_timeline_semaphore(): \
+                 parameter `&Arc<HostVulkanTimelineSemaphore>` is host-internal \
+                 (crate::vulkan::rhi) and cannot cross the FFI boundary; this \
+                 method is engine-only and cdylib code must not call it."
+            );
+        }
         self.host_inner().set_video_source_timeline_semaphore(timeline);
     }
 
     /// See [`GpuContext::clear_video_source_timeline_semaphore`].
+    ///
+    /// **Engine-only** — pairs with
+    /// [`Self::set_video_source_timeline_semaphore`]; that method is
+    /// engine-only, so this one is too. Calling from a cdylib panics
+    /// at the explicit guard below.
     #[cfg(target_os = "linux")]
     pub fn clear_video_source_timeline_semaphore(&self) {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextFullAccess::clear_video_source_timeline_semaphore(): \
+                 pairs with set_video_source_timeline_semaphore which takes a \
+                 host-internal `&Arc<HostVulkanTimelineSemaphore>`; engine-only \
+                 by inheritance — cdylib code must not call it."
+            );
+        }
         self.host_inner().clear_video_source_timeline_semaphore();
     }
 
     /// See [`GpuContext::video_source_timeline_semaphore`].
+    ///
+    /// **Engine-only** — return type is
+    /// `Option<Arc<HostVulkanTimelineSemaphore>>` (host-internal type).
+    /// Calling from a cdylib panics at the explicit guard below.
     #[cfg(target_os = "linux")]
     pub fn video_source_timeline_semaphore(
         &self,
     ) -> Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextFullAccess::video_source_timeline_semaphore(): \
+                 return type `Option<Arc<HostVulkanTimelineSemaphore>>` is \
+                 host-internal (crate::vulkan::rhi) and cannot cross the FFI \
+                 boundary; engine-only — cdylib code must not call it."
+            );
+        }
         self.host_inner().video_source_timeline_semaphore()
     }
 
     /// Get a reference to the RHI GPU device.
+    ///
+    /// **Engine-only** — returns `&Arc<GpuDevice>` which borrows into
+    /// host-private state (the `Box<Arc<GpuContext>>` behind the
+    /// handle). The borrow can't cross the FFI boundary; cdylib code
+    /// that needs GPU device capabilities should use the higher-level
+    /// FullAccess methods (kernel construction, buffer/texture
+    /// allocation, etc.) which dispatch through the vtable. Calling
+    /// from a cdylib panics at the explicit guard below.
     pub fn device(&self) -> &Arc<GpuDevice> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextFullAccess::device(): return type `&Arc<GpuDevice>` \
+                 borrows into host-private state and cannot cross the FFI \
+                 boundary; engine-only. Cdylib code that needs GPU device \
+                 capabilities must use higher-level FullAccess methods (kernel \
+                 construction, buffer/texture allocation) which dispatch \
+                 through the FullAccess vtable."
+            );
+        }
         self.host_inner().device()
     }
 
     /// Get the texture pool for acquiring pooled textures.
+    ///
+    /// **Engine-only** — returns `&TexturePool` which borrows into
+    /// host-private state. Cdylib code uses [`Self::acquire_texture`]
+    /// instead. Calling from a cdylib panics at the explicit guard below.
     pub fn texture_pool(&self) -> &TexturePool {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextFullAccess::texture_pool(): return type \
+                 `&TexturePool` borrows into host-private state and cannot \
+                 cross the FFI boundary; engine-only. Cdylib code uses \
+                 acquire_texture() which dispatches through the FullAccess \
+                 vtable."
+            );
+        }
         self.host_inner().texture_pool()
     }
 
@@ -3578,17 +4051,40 @@ impl GpuContextFullAccess {
     /// host adapter layer wants on Linux, see
     /// [`Self::acquire_render_target_dma_buf_image`].
     pub fn acquire_texture(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
-        self.host_inner().acquire_texture(desc)
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().acquire_texture(desc),
+            HandleKind::ScopeToken => {
+                self.inherited_limited_unchecked().acquire_texture(desc)
+            }
+        }
     }
 
     /// Get the shared command queue.
-    pub fn command_queue(&self) -> &RhiCommandQueue {
-        self.host_inner().command_queue()
+    ///
+    /// Phase D adopts the owned β-shape return that matches
+    /// [`GpuContextLimitedAccess::command_queue`] — borrowed
+    /// references can't cross the FFI boundary, so a cdylib-callable
+    /// `command_queue` must hand out a refcount-bumped owned
+    /// [`RhiCommandQueue`] regardless of mode. The β-shape's Drop
+    /// dispatches through the LimitedAccess vtable's
+    /// `drop_rhi_command_queue` callback.
+    pub fn command_queue(&self) -> RhiCommandQueue {
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().command_queue().clone(),
+            HandleKind::ScopeToken => {
+                self.inherited_limited_unchecked().command_queue()
+            }
+        }
     }
 
     /// Create a command buffer from the shared queue.
     pub fn create_command_buffer(&self) -> Result<CommandBuffer> {
-        self.host_inner().create_command_buffer()
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().create_command_buffer(),
+            HandleKind::ScopeToken => {
+                self.inherited_limited_unchecked().create_command_buffer()
+            }
+        }
     }
 
     /// Acquire a cached `(src, dst)`-keyed color converter. See
@@ -3600,16 +4096,118 @@ impl GpuContextFullAccess {
         src: PixelFormat,
         dst: PixelFormat,
     ) -> Result<Arc<RhiColorConverter>> {
-        self.host_inner().color_converter(src, dst)
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().color_converter(src, dst),
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "color_converter: GpuContextFullAccess has null vtable".into(),
+                    ));
+                }
+                let mut out_converter: *const std::ffi::c_void = std::ptr::null();
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                let status = unsafe {
+                    ((*self.vtable).color_converter)(
+                        self.handle,
+                        src as u32,
+                        dst as u32,
+                        &mut out_converter,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status == 0 {
+                    if out_converter.is_null() {
+                        return Err(Error::GpuError(
+                            "color_converter: host signaled success but out_converter is null".into(),
+                        ));
+                    }
+                    // SAFETY: host wrote `Arc::into_raw(Arc<RhiColorConverter>)`.
+                    let arc =
+                        unsafe { Arc::from_raw(out_converter as *const RhiColorConverter) };
+                    Ok(arc)
+                } else {
+                    let msg = String::from_utf8_lossy(
+                        &err_buf[..err_len.min(err_buf.len())],
+                    )
+                    .into_owned();
+                    Err(Error::GpuError(msg))
+                }
+            }
+        }
     }
 
     /// Create a compute kernel from a SPIR-V shader and a binding declaration.
+    ///
+    /// Mode-routed: in-process callers use [`Self::host_inner`]; cdylib
+    /// callers dispatch through the FullAccess vtable's
+    /// `create_compute_kernel` slot, which validates the scope token and
+    /// runs the host's [`GpuContext::create_compute_kernel`]. The host
+    /// returns the kernel as `Arc::into_raw`; this wrapper reconstructs
+    /// it via `Arc::from_raw` under the rustc-version coupling contract
+    /// (CLAUDE.md "Cross-cutting decisions") that keeps layouts byte-
+    /// identical between host and cdylib.
     #[cfg(target_os = "linux")]
     pub fn create_compute_kernel(
         &self,
         descriptor: &crate::core::rhi::ComputeKernelDescriptor<'_>,
     ) -> Result<Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
-        self.host_inner().create_compute_kernel(descriptor)
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().create_compute_kernel(descriptor),
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "create_compute_kernel: GpuContextFullAccess has null vtable".into(),
+                    ));
+                }
+                // Stage the descriptor into its repr + backing
+                // bindings_buf; the backing Vec must stay alive for the
+                // vtable call because the repr's bindings_ptr borrows
+                // into it.
+                let (repr, _bindings_buf) =
+                    crate::core::rhi::plugin_abi_bridge::stage_compute_kernel_descriptor(
+                        descriptor,
+                    );
+                let mut out_kernel: *const std::ffi::c_void = std::ptr::null();
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                let status = unsafe {
+                    ((*self.vtable).create_compute_kernel)(
+                        self.handle,
+                        &repr,
+                        &mut out_kernel,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status == 0 {
+                    if out_kernel.is_null() {
+                        return Err(Error::GpuError(
+                            "create_compute_kernel: host signaled success but out_kernel is null".into(),
+                        ));
+                    }
+                    // SAFETY: host wrote
+                    // `Arc::into_raw(Arc<VulkanComputeKernel>)`. The
+                    // strong reference transfers ownership to the
+                    // cdylib via this reconstruction.
+                    let arc = unsafe {
+                        Arc::from_raw(
+                            out_kernel as *const crate::vulkan::rhi::VulkanComputeKernel,
+                        )
+                    };
+                    Ok(arc)
+                } else {
+                    let msg = String::from_utf8_lossy(
+                        &err_buf[..err_len.min(err_buf.len())],
+                    )
+                    .into_owned();
+                    Err(Error::GpuError(msg))
+                }
+            }
+        }
     }
 
     /// Build an engine-owned multi-step command-buffer recorder. See
@@ -3627,27 +4225,165 @@ impl GpuContextFullAccess {
         &self,
         label: &str,
     ) -> Result<crate::vulkan::rhi::RhiCommandRecorder> {
-        self.host_inner().create_command_recorder(label)
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().create_command_recorder(label),
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "create_command_recorder: GpuContextFullAccess has null vtable".into(),
+                    ));
+                }
+                let mut out_recorder: std::mem::MaybeUninit<
+                    crate::vulkan::rhi::RhiCommandRecorder,
+                > = std::mem::MaybeUninit::uninit();
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                let status = unsafe {
+                    ((*self.vtable).create_command_recorder)(
+                        self.handle,
+                        label.as_ptr(),
+                        label.len(),
+                        out_recorder.as_mut_ptr() as *mut std::ffi::c_void,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status == 0 {
+                    // SAFETY: host signaled success and wrote the
+                    // RhiCommandRecorder by value via std::ptr::write.
+                    // Layout is byte-identical under rustc-version
+                    // coupling (CLAUDE.md).
+                    Ok(unsafe { out_recorder.assume_init() })
+                } else {
+                    let msg = String::from_utf8_lossy(
+                        &err_buf[..err_len.min(err_buf.len())],
+                    )
+                    .into_owned();
+                    Err(Error::GpuError(msg))
+                }
+            }
+        }
     }
 
     /// Create a graphics kernel from a multi-stage SPIR-V set, binding
     /// declaration, and fixed-function pipeline state.
+    ///
+    /// Mode-routed; see [`Self::create_compute_kernel`] for the
+    /// dispatch contract.
     #[cfg(target_os = "linux")]
     pub fn create_graphics_kernel(
         &self,
         descriptor: &crate::core::rhi::GraphicsKernelDescriptor<'_>,
     ) -> Result<Arc<crate::vulkan::rhi::VulkanGraphicsKernel>> {
-        self.host_inner().create_graphics_kernel(descriptor)
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().create_graphics_kernel(descriptor),
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "create_graphics_kernel: GpuContextFullAccess has null vtable".into(),
+                    ));
+                }
+                let (repr, _stage) =
+                    crate::core::rhi::plugin_abi_bridge::stage_graphics_kernel_descriptor(
+                        descriptor,
+                    );
+                let mut out_kernel: *const std::ffi::c_void = std::ptr::null();
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                let status = unsafe {
+                    ((*self.vtable).create_graphics_kernel)(
+                        self.handle,
+                        &repr,
+                        &mut out_kernel,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status == 0 {
+                    if out_kernel.is_null() {
+                        return Err(Error::GpuError(
+                            "create_graphics_kernel: host signaled success but out_kernel is null".into(),
+                        ));
+                    }
+                    // SAFETY: host wrote
+                    // `Arc::into_raw(Arc<VulkanGraphicsKernel>)`.
+                    let arc = unsafe {
+                        Arc::from_raw(
+                            out_kernel as *const crate::vulkan::rhi::VulkanGraphicsKernel,
+                        )
+                    };
+                    Ok(arc)
+                } else {
+                    let msg = String::from_utf8_lossy(
+                        &err_buf[..err_len.min(err_buf.len())],
+                    )
+                    .into_owned();
+                    Err(Error::GpuError(msg))
+                }
+            }
+        }
     }
 
     /// Create a ray-tracing kernel from shader stages, shader-group
     /// layout, binding declaration, and push-constant range.
+    ///
+    /// Mode-routed; see [`Self::create_compute_kernel`] for the
+    /// dispatch contract.
     #[cfg(target_os = "linux")]
     pub fn create_ray_tracing_kernel(
         &self,
         descriptor: &crate::core::rhi::RayTracingKernelDescriptor<'_>,
     ) -> Result<Arc<crate::vulkan::rhi::VulkanRayTracingKernel>> {
-        self.host_inner().create_ray_tracing_kernel(descriptor)
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().create_ray_tracing_kernel(descriptor),
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "create_ray_tracing_kernel: GpuContextFullAccess has null vtable".into(),
+                    ));
+                }
+                let (repr, _stage) =
+                    crate::core::rhi::plugin_abi_bridge::stage_ray_tracing_kernel_descriptor(
+                        descriptor,
+                    );
+                let mut out_kernel: *const std::ffi::c_void = std::ptr::null();
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                let status = unsafe {
+                    ((*self.vtable).create_ray_tracing_kernel)(
+                        self.handle,
+                        &repr,
+                        &mut out_kernel,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status == 0 {
+                    if out_kernel.is_null() {
+                        return Err(Error::GpuError(
+                            "create_ray_tracing_kernel: host signaled success but out_kernel is null".into(),
+                        ));
+                    }
+                    // SAFETY: host wrote
+                    // `Arc::into_raw(Arc<VulkanRayTracingKernel>)`.
+                    let arc = unsafe {
+                        Arc::from_raw(
+                            out_kernel as *const crate::vulkan::rhi::VulkanRayTracingKernel,
+                        )
+                    };
+                    Ok(arc)
+                } else {
+                    let msg = String::from_utf8_lossy(
+                        &err_buf[..err_len.min(err_buf.len())],
+                    )
+                    .into_owned();
+                    Err(Error::GpuError(msg))
+                }
+            }
+        }
     }
 
     /// Build a triangle-geometry bottom-level acceleration structure
@@ -3659,7 +4395,56 @@ impl GpuContextFullAccess {
         vertices: &[f32],
         indices: &[u32],
     ) -> Result<Arc<crate::vulkan::rhi::VulkanAccelerationStructure>> {
-        self.host_inner().build_triangles_blas(label, vertices, indices)
+        match self.handle_kind {
+            HandleKind::Boxed => {
+                self.host_inner().build_triangles_blas(label, vertices, indices)
+            }
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "build_triangles_blas: GpuContextFullAccess has null vtable".into(),
+                    ));
+                }
+                let mut out_blas: *const std::ffi::c_void = std::ptr::null();
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                let status = unsafe {
+                    ((*self.vtable).build_triangles_blas)(
+                        self.handle,
+                        label.as_ptr(),
+                        label.len(),
+                        vertices.as_ptr(),
+                        vertices.len(),
+                        indices.as_ptr(),
+                        indices.len(),
+                        &mut out_blas,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status == 0 {
+                    if out_blas.is_null() {
+                        return Err(Error::GpuError(
+                            "build_triangles_blas: host signaled success but out_blas is null".into(),
+                        ));
+                    }
+                    let arc = unsafe {
+                        Arc::from_raw(
+                            out_blas
+                                as *const crate::vulkan::rhi::VulkanAccelerationStructure,
+                        )
+                    };
+                    Ok(arc)
+                } else {
+                    let msg = String::from_utf8_lossy(
+                        &err_buf[..err_len.min(err_buf.len())],
+                    )
+                    .into_owned();
+                    Err(Error::GpuError(msg))
+                }
+            }
+        }
     }
 
     /// Build a top-level acceleration structure from BLAS instances.
@@ -3669,14 +4454,78 @@ impl GpuContextFullAccess {
         label: &str,
         instances: &[crate::vulkan::rhi::TlasInstanceDesc],
     ) -> Result<Arc<crate::vulkan::rhi::VulkanAccelerationStructure>> {
-        self.host_inner().build_tlas(label, instances)
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().build_tlas(label, instances),
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "build_tlas: GpuContextFullAccess has null vtable".into(),
+                    ));
+                }
+                let mut out_tlas: *const std::ffi::c_void = std::ptr::null();
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                let status = unsafe {
+                    ((*self.vtable).build_tlas)(
+                        self.handle,
+                        label.as_ptr(),
+                        label.len(),
+                        instances.as_ptr() as *const std::ffi::c_void,
+                        instances.len(),
+                        &mut out_tlas,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status == 0 {
+                    if out_tlas.is_null() {
+                        return Err(Error::GpuError(
+                            "build_tlas: host signaled success but out_tlas is null".into(),
+                        ));
+                    }
+                    let arc = unsafe {
+                        Arc::from_raw(
+                            out_tlas
+                                as *const crate::vulkan::rhi::VulkanAccelerationStructure,
+                        )
+                    };
+                    Ok(arc)
+                } else {
+                    let msg = String::from_utf8_lossy(
+                        &err_buf[..err_len.min(err_buf.len())],
+                    )
+                    .into_owned();
+                    Err(Error::GpuError(msg))
+                }
+            }
+        }
     }
 
     /// Whether the underlying GPU exposes the
     /// `VK_KHR_ray_tracing_pipeline` extension chain.
     #[cfg(target_os = "linux")]
     pub fn supports_ray_tracing_pipeline(&self) -> bool {
-        self.host_inner().supports_ray_tracing_pipeline()
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().supports_ray_tracing_pipeline(),
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return false;
+                }
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                let rc = unsafe {
+                    ((*self.vtable).supports_ray_tracing_pipeline)(
+                        self.handle,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                // 1 = true, 0 = false, -1 = error (treat as false).
+                rc == 1
+            }
+        }
     }
 
     /// Get the underlying Metal device (macOS only).
@@ -3693,7 +4542,12 @@ impl GpuContextFullAccess {
 
     /// Copy pixels between same-format, same-size buffers.
     pub fn blit_copy(&self, src: &PixelBuffer, dest: &PixelBuffer) -> Result<()> {
-        self.host_inner().blit_copy(src, dest)
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().blit_copy(src, dest),
+            HandleKind::ScopeToken => {
+                self.inherited_limited_unchecked().blit_copy(src, dest)
+            }
+        }
     }
 
     /// Copy from raw IOSurface to a pixel buffer.
@@ -3713,50 +4567,158 @@ impl GpuContextFullAccess {
     }
 
     /// Clear the blitter's texture cache to free GPU memory.
+    ///
+    /// **Engine-only** — engine setup-time housekeeping; no cdylib
+    /// path needs to invoke it. Calling from a cdylib panics at the
+    /// explicit guard below.
     pub fn clear_blitter_cache(&self) {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextFullAccess::clear_blitter_cache(): engine setup-time \
+                 housekeeping that operates on host-internal blitter cache; \
+                 engine-only — cdylib code must not call it."
+            );
+        }
         self.host_inner().clear_blitter_cache();
     }
 
     /// Get the surface store, if initialized.
     pub fn surface_store(&self) -> Option<SurfaceStore> {
-        self.host_inner().surface_store()
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().surface_store(),
+            HandleKind::ScopeToken => {
+                self.inherited_limited_unchecked().surface_store()
+            }
+        }
     }
 
     /// Check in a pixel buffer to the surface-share service.
     pub fn check_in_surface(&self, pixel_buffer: &PixelBuffer) -> Result<String> {
-        self.host_inner().check_in_surface(pixel_buffer)
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().check_in_surface(pixel_buffer),
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "check_in_surface: GpuContextFullAccess has null vtable".into(),
+                    ));
+                }
+                let mut id_buf = [0u8; 1024];
+                let mut id_len: usize = 0;
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                let status = unsafe {
+                    ((*self.vtable).check_in_surface)(
+                        self.handle,
+                        pixel_buffer as *const PixelBuffer as *const std::ffi::c_void,
+                        id_buf.as_mut_ptr(),
+                        id_buf.len(),
+                        &mut id_len as *mut usize,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status == 0 {
+                    match std::str::from_utf8(&id_buf[..id_len]) {
+                        Ok(s) => Ok(s.to_string()),
+                        Err(e) => Err(Error::GpuError(format!(
+                            "check_in_surface: surface id not UTF-8: {e}"
+                        ))),
+                    }
+                } else {
+                    let msg = String::from_utf8_lossy(
+                        &err_buf[..err_len.min(err_buf.len())],
+                    )
+                    .into_owned();
+                    Err(Error::GpuError(msg))
+                }
+            }
+        }
     }
 
     /// Check out a surface by ID.
     pub fn check_out_surface(&self, surface_id: &str) -> Result<PixelBuffer> {
-        self.host_inner().check_out_surface(surface_id)
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().check_out_surface(surface_id),
+            HandleKind::ScopeToken => self
+                .inherited_limited_unchecked()
+                .check_out_surface(surface_id),
+        }
     }
 
     /// Get the registered cpu-readback bridge, if any. Reachable only inside
     /// `escalate(|full| ...)` since it requires `FullAccess`.
+    ///
+    /// **Engine-only** — return type is `Option<Arc<dyn CpuReadbackBridge>>`,
+    /// a trait object whose vtable layout is rustc-private (no `#[repr(C)]`
+    /// shape that crosses the FFI boundary). The bridge is registered by
+    /// host code via `set_cpu_readback_bridge` and read by host adapter
+    /// machinery; cdylib code doesn't need to read it. Calling from a
+    /// cdylib panics at the explicit guard below.
     #[cfg(target_os = "linux")]
     pub fn cpu_readback_bridge(&self) -> Option<Arc<dyn CpuReadbackBridge>> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextFullAccess::cpu_readback_bridge(): return type \
+                 `Option<Arc<dyn CpuReadbackBridge>>` is a trait object whose \
+                 vtable layout is rustc-private and cannot cross the FFI \
+                 boundary; engine-only — cdylib code must not call it."
+            );
+        }
         self.host_inner().cpu_readback_bridge()
     }
 
     /// Get the registered compute-kernel bridge, if any. Reachable only inside
     /// `escalate(|full| ...)` since it requires `FullAccess`.
+    ///
+    /// **Engine-only** — trait-object return; same rationale as
+    /// [`Self::cpu_readback_bridge`].
     #[cfg(target_os = "linux")]
     pub fn compute_kernel_bridge(&self) -> Option<Arc<dyn ComputeKernelBridge>> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextFullAccess::compute_kernel_bridge(): return type \
+                 `Option<Arc<dyn ComputeKernelBridge>>` is a trait object whose \
+                 vtable layout is rustc-private and cannot cross the FFI \
+                 boundary; engine-only — cdylib code must not call it."
+            );
+        }
         self.host_inner().compute_kernel_bridge()
     }
 
     /// Get the registered graphics-kernel bridge, if any. Reachable only inside
     /// `escalate(|full| ...)` since it requires `FullAccess`.
+    ///
+    /// **Engine-only** — trait-object return; same rationale as
+    /// [`Self::cpu_readback_bridge`].
     #[cfg(target_os = "linux")]
     pub fn graphics_kernel_bridge(&self) -> Option<Arc<dyn GraphicsKernelBridge>> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextFullAccess::graphics_kernel_bridge(): return type \
+                 `Option<Arc<dyn GraphicsKernelBridge>>` is a trait object \
+                 whose vtable layout is rustc-private and cannot cross the FFI \
+                 boundary; engine-only — cdylib code must not call it."
+            );
+        }
         self.host_inner().graphics_kernel_bridge()
     }
 
     /// Get the registered ray-tracing-kernel bridge, if any. Reachable only
     /// inside `escalate(|full| ...)` since it requires `FullAccess`.
+    ///
+    /// **Engine-only** — trait-object return; same rationale as
+    /// [`Self::cpu_readback_bridge`].
     #[cfg(target_os = "linux")]
     pub fn ray_tracing_kernel_bridge(&self) -> Option<Arc<dyn RayTracingKernelBridge>> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextFullAccess::ray_tracing_kernel_bridge(): return type \
+                 `Option<Arc<dyn RayTracingKernelBridge>>` is a trait object \
+                 whose vtable layout is rustc-private and cannot cross the FFI \
+                 boundary; engine-only — cdylib code must not call it."
+            );
+        }
         self.host_inner().ray_tracing_kernel_bridge()
     }
 }

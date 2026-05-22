@@ -5032,6 +5032,708 @@ unsafe extern "C" fn host_gpu_full_acquire_render_target_dma_buf_image(
     1
 }
 
+// ============================================================================
+// Phase D (#906) — privileged-only FullAccess host callbacks.
+// Each callback validates the `scope_token` via `with_full_scope_or_err`
+// (resolving the bound `Arc<GpuContext>` from the escalate-scope registry)
+// before dispatching to the resolved context.
+// ============================================================================
+
+unsafe extern "C" fn host_gpu_full_wait_device_idle(
+    scope_token: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_full_wait_device_idle",
+        || -> i32 {
+            let result = with_full_scope_or_err(
+                scope_token,
+                "wait_device_idle",
+                err_buf,
+                err_buf_cap,
+                err_len,
+                |gpu| gpu.wait_device_idle(),
+            );
+            match result {
+                Some(Ok(())) => 0,
+                Some(Err(e)) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+                None => 1,
+            }
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_gpu_full_acquire_output_texture(
+    scope_token: *const c_void,
+    width: u32,
+    height: u32,
+    format_raw: u32,
+    out_id_buf: *mut u8,
+    out_id_cap: usize,
+    out_id_len: *mut usize,
+    out_texture: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_full_acquire_output_texture",
+        || -> i32 {
+            if out_texture.is_null() || out_id_buf.is_null() || out_id_len.is_null() {
+                write_err(
+                    "acquire_output_texture: null out_texture / out_id_buf / out_id_len",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let format = match format_raw {
+                0 => streamlib_consumer_rhi::TextureFormat::Rgba8Unorm,
+                1 => streamlib_consumer_rhi::TextureFormat::Rgba8UnormSrgb,
+                2 => streamlib_consumer_rhi::TextureFormat::Bgra8Unorm,
+                3 => streamlib_consumer_rhi::TextureFormat::Bgra8UnormSrgb,
+                4 => streamlib_consumer_rhi::TextureFormat::Rgba16Float,
+                5 => streamlib_consumer_rhi::TextureFormat::Rgba32Float,
+                6 => streamlib_consumer_rhi::TextureFormat::Nv12,
+                _ => {
+                    write_err(
+                        &format!(
+                            "acquire_output_texture: invalid format_raw {}",
+                            format_raw
+                        ),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            let result = with_full_scope_or_err(
+                scope_token,
+                "acquire_output_texture",
+                err_buf,
+                err_buf_cap,
+                err_len,
+                |gpu| gpu.acquire_output_texture(width, height, format),
+            );
+            match result {
+                Some(Ok((id, texture))) => {
+                    let id_bytes = id.as_bytes();
+                    if id_bytes.len() > out_id_cap {
+                        write_err(
+                            "acquire_output_texture: surface id buffer too small",
+                            err_buf,
+                            err_buf_cap,
+                            err_len,
+                        );
+                        return 1;
+                    }
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            id_bytes.as_ptr(),
+                            out_id_buf,
+                            id_bytes.len(),
+                        );
+                        std::ptr::write(out_id_len, id_bytes.len());
+                        std::ptr::write(
+                            out_texture as *mut crate::core::rhi::Texture,
+                            texture,
+                        );
+                    }
+                    0
+                }
+                Some(Err(e)) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+                None => 1,
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_upload_pixel_buffer_as_texture(
+    scope_token: *const c_void,
+    surface_id_ptr: *const u8,
+    surface_id_len: usize,
+    pixel_buffer: *const c_void,
+    width: u32,
+    height: u32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_full_upload_pixel_buffer_as_texture",
+        || -> i32 {
+            if surface_id_ptr.is_null() || pixel_buffer.is_null() {
+                write_err(
+                    "upload_pixel_buffer_as_texture: null surface_id / pixel_buffer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let id_slice =
+                unsafe { std::slice::from_raw_parts(surface_id_ptr, surface_id_len) };
+            let surface_id = match std::str::from_utf8(id_slice) {
+                Ok(s) => s,
+                Err(e) => {
+                    write_err(
+                        &format!(
+                            "upload_pixel_buffer_as_texture: surface_id not UTF-8: {e}"
+                        ),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            // SAFETY: pixel_buffer is a borrowed `*const PixelBuffer`
+            // pointer from the cdylib; valid for the duration of the call.
+            let pb = unsafe { &*(pixel_buffer as *const crate::core::rhi::PixelBuffer) };
+            let result = with_full_scope_or_err(
+                scope_token,
+                "upload_pixel_buffer_as_texture",
+                err_buf,
+                err_buf_cap,
+                err_len,
+                |gpu| gpu.upload_pixel_buffer_as_texture(surface_id, pb, width, height),
+            );
+            match result {
+                Some(Ok(())) => 0,
+                Some(Err(e)) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+                None => 1,
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_upload_pixel_buffer_as_texture(
+    _scope_token: *const c_void,
+    _surface_id_ptr: *const u8,
+    _surface_id_len: usize,
+    _pixel_buffer: *const c_void,
+    _width: u32,
+    _height: u32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "upload_pixel_buffer_as_texture: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_color_converter(
+    scope_token: *const c_void,
+    src_format_raw: u32,
+    dst_format_raw: u32,
+    out_converter: *mut *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_full_color_converter",
+        || -> i32 {
+            if out_converter.is_null() {
+                write_err(
+                    "color_converter: null out_converter",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let src = match pixel_format_from_raw(src_format_raw) {
+                Some(f) => f,
+                None => {
+                    write_err(
+                        &format!(
+                            "color_converter: invalid src_format_raw {}",
+                            src_format_raw
+                        ),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            let dst = match pixel_format_from_raw(dst_format_raw) {
+                Some(f) => f,
+                None => {
+                    write_err(
+                        &format!(
+                            "color_converter: invalid dst_format_raw {}",
+                            dst_format_raw
+                        ),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            let result = with_full_scope_or_err(
+                scope_token,
+                "color_converter",
+                err_buf,
+                err_buf_cap,
+                err_len,
+                |gpu| gpu.color_converter(src, dst),
+            );
+            match result {
+                Some(Ok(arc)) => {
+                    let raw = Arc::into_raw(arc) as *const c_void;
+                    unsafe { std::ptr::write(out_converter, raw) };
+                    0
+                }
+                Some(Err(e)) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+                None => 1,
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_color_converter(
+    _scope_token: *const c_void,
+    _src_format_raw: u32,
+    _dst_format_raw: u32,
+    _out_converter: *mut *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "color_converter: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_create_command_recorder(
+    scope_token: *const c_void,
+    label_ptr: *const u8,
+    label_len: usize,
+    out_recorder: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_full_create_command_recorder",
+        || -> i32 {
+            if out_recorder.is_null() || label_ptr.is_null() {
+                write_err(
+                    "create_command_recorder: null label_ptr / out_recorder",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let label_slice =
+                unsafe { std::slice::from_raw_parts(label_ptr, label_len) };
+            let label = match std::str::from_utf8(label_slice) {
+                Ok(s) => s,
+                Err(e) => {
+                    write_err(
+                        &format!("create_command_recorder: label not UTF-8: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            let result = with_full_scope_or_err(
+                scope_token,
+                "create_command_recorder",
+                err_buf,
+                err_buf_cap,
+                err_len,
+                |gpu| gpu.create_command_recorder(label),
+            );
+            match result {
+                Some(Ok(recorder)) => {
+                    // SAFETY: host writes the RhiCommandRecorder struct
+                    // by value into the cdylib's MaybeUninit slot;
+                    // layout is byte-identical under the rustc-version
+                    // coupling contract (CLAUDE.md). The cdylib's
+                    // Drop will run when the value falls out of scope
+                    // (in cdylib code), accessing host-loader Vulkan
+                    // handles which are globally addressable.
+                    unsafe {
+                        std::ptr::write(
+                            out_recorder as *mut crate::vulkan::rhi::RhiCommandRecorder,
+                            recorder,
+                        );
+                    }
+                    0
+                }
+                Some(Err(e)) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+                None => 1,
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_create_command_recorder(
+    _scope_token: *const c_void,
+    _label_ptr: *const u8,
+    _label_len: usize,
+    _out_recorder: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "create_command_recorder: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_build_triangles_blas(
+    scope_token: *const c_void,
+    label_ptr: *const u8,
+    label_len: usize,
+    vertices_ptr: *const f32,
+    vertices_len: usize,
+    indices_ptr: *const u32,
+    indices_len: usize,
+    out_blas: *mut *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_full_build_triangles_blas",
+        || -> i32 {
+            if out_blas.is_null() || label_ptr.is_null() {
+                write_err(
+                    "build_triangles_blas: null label_ptr / out_blas",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let label_slice =
+                unsafe { std::slice::from_raw_parts(label_ptr, label_len) };
+            let label = match std::str::from_utf8(label_slice) {
+                Ok(s) => s,
+                Err(e) => {
+                    write_err(
+                        &format!("build_triangles_blas: label not UTF-8: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            let vertices: &[f32] = if vertices_len == 0 {
+                &[]
+            } else {
+                unsafe { std::slice::from_raw_parts(vertices_ptr, vertices_len) }
+            };
+            let indices: &[u32] = if indices_len == 0 {
+                &[]
+            } else {
+                unsafe { std::slice::from_raw_parts(indices_ptr, indices_len) }
+            };
+            let result = with_full_scope_or_err(
+                scope_token,
+                "build_triangles_blas",
+                err_buf,
+                err_buf_cap,
+                err_len,
+                |gpu| gpu.build_triangles_blas(label, vertices, indices),
+            );
+            match result {
+                Some(Ok(arc)) => {
+                    let raw = Arc::into_raw(arc) as *const c_void;
+                    unsafe { std::ptr::write(out_blas, raw) };
+                    0
+                }
+                Some(Err(e)) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+                None => 1,
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_build_triangles_blas(
+    _scope_token: *const c_void,
+    _label_ptr: *const u8,
+    _label_len: usize,
+    _vertices_ptr: *const f32,
+    _vertices_len: usize,
+    _indices_ptr: *const u32,
+    _indices_len: usize,
+    _out_blas: *mut *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "build_triangles_blas: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_build_tlas(
+    scope_token: *const c_void,
+    label_ptr: *const u8,
+    label_len: usize,
+    instances_ptr: *const c_void,
+    instances_len: usize,
+    out_tlas: *mut *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_full_build_tlas",
+        || -> i32 {
+            if out_tlas.is_null() || label_ptr.is_null() {
+                write_err(
+                    "build_tlas: null label_ptr / out_tlas",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let label_slice =
+                unsafe { std::slice::from_raw_parts(label_ptr, label_len) };
+            let label = match std::str::from_utf8(label_slice) {
+                Ok(s) => s,
+                Err(e) => {
+                    write_err(
+                        &format!("build_tlas: label not UTF-8: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            let instances: &[crate::vulkan::rhi::TlasInstanceDesc] = if instances_len
+                == 0
+            {
+                &[]
+            } else {
+                // SAFETY: `instances_ptr` is `*const TlasInstanceDesc`
+                // from the cdylib; layout is byte-identical under
+                // rustc-version coupling. The slice is borrowed for
+                // the call's duration.
+                unsafe {
+                    std::slice::from_raw_parts(
+                        instances_ptr as *const crate::vulkan::rhi::TlasInstanceDesc,
+                        instances_len,
+                    )
+                }
+            };
+            let result = with_full_scope_or_err(
+                scope_token,
+                "build_tlas",
+                err_buf,
+                err_buf_cap,
+                err_len,
+                |gpu| gpu.build_tlas(label, instances),
+            );
+            match result {
+                Some(Ok(arc)) => {
+                    let raw = Arc::into_raw(arc) as *const c_void;
+                    unsafe { std::ptr::write(out_tlas, raw) };
+                    0
+                }
+                Some(Err(e)) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+                None => 1,
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_build_tlas(
+    _scope_token: *const c_void,
+    _label_ptr: *const u8,
+    _label_len: usize,
+    _instances_ptr: *const c_void,
+    _instances_len: usize,
+    _out_tlas: *mut *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "build_tlas: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_supports_ray_tracing_pipeline(
+    scope_token: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_full_supports_ray_tracing_pipeline",
+        || -> i32 {
+            let result = with_full_scope_or_err(
+                scope_token,
+                "supports_ray_tracing_pipeline",
+                err_buf,
+                err_buf_cap,
+                err_len,
+                |gpu| Ok::<bool, crate::core::Error>(gpu.supports_ray_tracing_pipeline()),
+            );
+            match result {
+                Some(Ok(true)) => 1,
+                Some(Ok(false)) => 0,
+                Some(Err(_)) | None => -1,
+            }
+        },
+        -1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_supports_ray_tracing_pipeline(
+    _scope_token: *const c_void,
+    _err_buf: *mut u8,
+    _err_buf_cap: usize,
+    _err_len: *mut usize,
+) -> i32 {
+    0
+}
+
+unsafe extern "C" fn host_gpu_full_check_in_surface(
+    scope_token: *const c_void,
+    pixel_buffer: *const c_void,
+    out_id_buf: *mut u8,
+    out_id_cap: usize,
+    out_id_len: *mut usize,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_full_check_in_surface",
+        || -> i32 {
+            if pixel_buffer.is_null() || out_id_buf.is_null() || out_id_len.is_null() {
+                write_err(
+                    "check_in_surface: null pixel_buffer / out_id_buf / out_id_len",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            // SAFETY: pixel_buffer is borrowed from the cdylib for the
+            // duration of the call.
+            let pb = unsafe { &*(pixel_buffer as *const crate::core::rhi::PixelBuffer) };
+            let result = with_full_scope_or_err(
+                scope_token,
+                "check_in_surface",
+                err_buf,
+                err_buf_cap,
+                err_len,
+                |gpu| gpu.check_in_surface(pb),
+            );
+            match result {
+                Some(Ok(id)) => {
+                    let id_bytes = id.as_bytes();
+                    if id_bytes.len() > out_id_cap {
+                        write_err(
+                            "check_in_surface: surface id buffer too small",
+                            err_buf,
+                            err_buf_cap,
+                            err_len,
+                        );
+                        return 1;
+                    }
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            id_bytes.as_ptr(),
+                            out_id_buf,
+                            id_bytes.len(),
+                        );
+                        std::ptr::write(out_id_len, id_bytes.len());
+                    }
+                    0
+                }
+                Some(Err(e)) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+                None => 1,
+            }
+        },
+        1,
+    )
+}
+
 pub static HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE: GpuContextFullAccessVTable =
     GpuContextFullAccessVTable {
         layout_version: GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION,
@@ -5051,6 +5753,16 @@ pub static HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE: GpuContextFullAccessVTable =
         create_texture_ring: host_gpu_full_create_texture_ring,
         acquire_render_target_dma_buf_image:
             host_gpu_full_acquire_render_target_dma_buf_image,
+        // Phase D (#906) entries.
+        wait_device_idle: host_gpu_full_wait_device_idle,
+        acquire_output_texture: host_gpu_full_acquire_output_texture,
+        upload_pixel_buffer_as_texture: host_gpu_full_upload_pixel_buffer_as_texture,
+        color_converter: host_gpu_full_color_converter,
+        create_command_recorder: host_gpu_full_create_command_recorder,
+        build_triangles_blas: host_gpu_full_build_triangles_blas,
+        build_tlas: host_gpu_full_build_tlas,
+        supports_ray_tracing_pipeline: host_gpu_full_supports_ray_tracing_pipeline,
+        check_in_surface: host_gpu_full_check_in_surface,
     };
 
 /// Pointer to the [`GpuContextFullAccessVTable`] this DSO should
@@ -5435,6 +6147,279 @@ mod gpu_full_access_vtable_tests {
             msg.contains(
                 "acquire_render_target_dma_buf_image: invalid format_raw"
             ),
+            "got: {msg}"
+        );
+    }
+
+    // ============================================================================
+    // Phase D (#906) — tier-1 wire-format tests for the 9 new FullAccess slots
+    // ============================================================================
+
+    #[test]
+    fn wait_device_idle_returns_error_on_null_scope_token() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.wait_device_idle)(
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(
+            msg.contains("wait_device_idle: invalid escalate scope"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn acquire_output_texture_returns_error_on_null_scope_token() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut id_buf = [0u8; 256];
+        let mut id_len: usize = 0;
+        let mut out: crate::core::rhi::texture::Texture =
+            unsafe { std::mem::zeroed() };
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.acquire_output_texture)(
+                std::ptr::null(),
+                64,
+                64,
+                0,
+                id_buf.as_mut_ptr(),
+                id_buf.len(),
+                &mut id_len,
+                &mut out as *mut _ as *mut c_void,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(
+            msg.contains("acquire_output_texture: invalid escalate scope"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn acquire_output_texture_returns_error_on_invalid_format() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut id_buf = [0u8; 256];
+        let mut id_len: usize = 0;
+        let mut out: crate::core::rhi::texture::Texture =
+            unsafe { std::mem::zeroed() };
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.acquire_output_texture)(
+                std::ptr::null(),
+                64,
+                64,
+                99,
+                id_buf.as_mut_ptr(),
+                id_buf.len(),
+                &mut id_len,
+                &mut out as *mut _ as *mut c_void,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(
+            msg.contains("acquire_output_texture: invalid format_raw"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn upload_pixel_buffer_as_texture_returns_error_on_null_scope_token() {
+        let (mut buf, mut len) = make_err_buf();
+        // We pass non-null surface_id + a "borrowed" PixelBuffer placeholder
+        // through the null-pointer guard; the scope-token check then fires
+        // because the token is null/zero.
+        let sid = b"abc";
+        let pb: crate::core::rhi::PixelBuffer = unsafe { std::mem::zeroed() };
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.upload_pixel_buffer_as_texture)(
+                std::ptr::null(),
+                sid.as_ptr(),
+                sid.len(),
+                &pb as *const _ as *const c_void,
+                64,
+                64,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        // Leak the zeroed PixelBuffer to avoid running its (cdylib-mode)
+        // Drop on a null handle — that would dispatch through a null
+        // vtable. The null-handle Drop guard short-circuits, but
+        // mem::forget makes the intent explicit.
+        std::mem::forget(pb);
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(
+            msg.contains("upload_pixel_buffer_as_texture: invalid escalate scope"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn color_converter_returns_error_on_null_scope_token() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut out: *const c_void = std::ptr::null();
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.color_converter)(
+                std::ptr::null(),
+                0, // src
+                0, // dst
+                &mut out,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(
+            msg.contains("color_converter: invalid escalate scope"),
+            "got: {msg}"
+        );
+        assert!(out.is_null());
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn create_command_recorder_returns_error_on_null_scope_token() {
+        let (mut buf, mut len) = make_err_buf();
+        let label = b"test_recorder";
+        let mut out: std::mem::MaybeUninit<crate::vulkan::rhi::RhiCommandRecorder> =
+            std::mem::MaybeUninit::uninit();
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.create_command_recorder)(
+                std::ptr::null(),
+                label.as_ptr(),
+                label.len(),
+                out.as_mut_ptr() as *mut c_void,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(
+            msg.contains("create_command_recorder: invalid escalate scope"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn build_triangles_blas_returns_error_on_null_scope_token() {
+        let (mut buf, mut len) = make_err_buf();
+        let label = b"test_blas";
+        let vertices = [0.0f32, 0.0, 0.0];
+        let indices = [0u32, 1, 2];
+        let mut out: *const c_void = std::ptr::null();
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.build_triangles_blas)(
+                std::ptr::null(),
+                label.as_ptr(),
+                label.len(),
+                vertices.as_ptr(),
+                vertices.len(),
+                indices.as_ptr(),
+                indices.len(),
+                &mut out,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(
+            msg.contains("build_triangles_blas: invalid escalate scope"),
+            "got: {msg}"
+        );
+        assert!(out.is_null());
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn build_tlas_returns_error_on_null_scope_token() {
+        let (mut buf, mut len) = make_err_buf();
+        let label = b"test_tlas";
+        let mut out: *const c_void = std::ptr::null();
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.build_tlas)(
+                std::ptr::null(),
+                label.as_ptr(),
+                label.len(),
+                std::ptr::null(),
+                0,
+                &mut out,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(
+            msg.contains("build_tlas: invalid escalate scope"),
+            "got: {msg}"
+        );
+        assert!(out.is_null());
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn supports_ray_tracing_pipeline_returns_negative_one_on_null_scope_token() {
+        // Returns -1 for "invalid scope token" (since 1/0 are valid yes/no
+        // bool returns). The error message goes to err_buf.
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.supports_ray_tracing_pipeline)(
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, -1, "null scope token must return -1, got {rc}");
+    }
+
+    #[test]
+    fn check_in_surface_returns_error_on_null_scope_token() {
+        let (mut buf, mut len) = make_err_buf();
+        let pb: crate::core::rhi::PixelBuffer = unsafe { std::mem::zeroed() };
+        let mut id_buf = [0u8; 256];
+        let mut id_len: usize = 0;
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.check_in_surface)(
+                std::ptr::null(),
+                &pb as *const _ as *const c_void,
+                id_buf.as_mut_ptr(),
+                id_buf.len(),
+                &mut id_len,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        std::mem::forget(pb);
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(
+            msg.contains("check_in_surface: invalid escalate scope"),
             "got: {msg}"
         );
     }

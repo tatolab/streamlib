@@ -1,12 +1,14 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Phase C3 (#903) cdylib-resident escalate vtable smoke test.
+//! Phase C3 (#903) + Phase D (#906) cdylib-resident escalate vtable
+//! smoke test.
 //!
 //! Loads a dlopen'd `EscalateSmokeTestProcessor` from test-fixtures
 //! and drives it through `start()`. The processor's `start()` body
-//! runs `gpu.escalate(|_full| Ok(()))` once, which exercises the
-//! full scope-token machinery end-to-end across the FFI:
+//! runs `gpu.escalate(|full| full.wait_device_idle())` once, which
+//! exercises the full scope-token machinery AND a real FullAccess
+//! vtable slot end-to-end across the FFI:
 //!
 //!   1. Cdylib's `GpuContextLimitedAccess::escalate` detects cdylib
 //!      mode (`host_callbacks().is_some()`) and routes through
@@ -18,7 +20,14 @@
 //!   3. `escalate_via_vtable` constructs a cdylib-side
 //!      `GpuContextFullAccess` via `from_scope_token` (HandleKind::
 //!      ScopeToken).
-//!   4. The closure runs (empty body — just exits cleanly).
+//!   4. The closure runs — `full.wait_device_idle()` dispatches
+//!      through the FullAccess vtable's `wait_device_idle` slot,
+//!      which on the host side validates the scope token via
+//!      `with_full_scope_or_err` and runs
+//!      `gpu.wait_device_idle()` on the bound `Arc<GpuContext>`.
+//!      **This is the load-bearing Phase D end-to-end assertion** —
+//!      if Phase D's wrapper rewrite or vtable slot wiring
+//!      regresses, this step fails.
 //!   5. The cdylib drops the FullAccess. Drop dispatches on the
 //!      `handle_kind` discriminator: for ScopeToken it's a no-op
 //!      (cleanup happens in `escalate_end`, not here).
@@ -33,12 +42,11 @@
 //!     error — typically "invalid escalate scope" if a scope-token
 //!     check failed).
 //!
-//! What this test does NOT cover: cdylib-side dispatch on
-//! `GpuContextFullAccess` methods (`create_compute_kernel`, etc.) —
-//! those still call `host_inner()` and panic from cdylib code. That
-//! gap is the scope of Phase D (#906); the richer "create kernel +
-//! dispatch + compare CPU reference" test originally specced for
-//! #903 lives in Phase E (#907).
+//! What this test does NOT cover: per-method dispatch on the kernel
+//! / acceleration-structure / command-recorder handles returned by
+//! Phase D's `create_*` and `build_*` methods (Phase E #907 wires
+//! that). Phase D itself ensures the handles can be obtained from
+//! cdylib; using them is Phase E's scope.
 //!
 //! Requires a working Vulkan device (Runner::start() initializes
 //! GpuContext::init_for_platform_sync()). On GPU-less hardware the

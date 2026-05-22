@@ -32,6 +32,31 @@ StreamLib is built like a game engine: a small set of **core systems** are reuse
 
 Past models repeatedly created parallel abstractions without reading existing code, producing module and crate sprawl where the same concern was solved N different ways. **Do not do this.** Before introducing any new abstraction, you must prove no existing core system already covers the concern — and if one does, extend it rather than build a parallel.
 
+### Plugin Distribution Model — the cross-repo dream
+
+The engine is a pure substrate. It ships with **no processors, no schemas, no `streamlib.yaml` of its own** — `Runner::new()` starts with an empty registry, and every processor / schema / link is contributed by `.slpkg` packages loaded at runtime via `runtime.load_project(...)` or `runtime.load_package(...)`.
+
+**The target distribution shape**: a plugin author in a completely separate GitHub repo, building on a completely different machine with a different rustc version and different transitive Cargo dep graph, can publish a `.slpkg` file. A streamlib host (e.g. tatolab/drone-racer, or any third-party host that Cargo-deps `streamlib`) loads that `.slpkg` at runtime via `dlopen` and the plugin's processors register cleanly into the host's runtime graph. The plugin author and the host author **never coordinate toolchains**.
+
+What makes this work: every type that crosses the plugin / engine FFI boundary is `#[repr(C)]`, with its byte layout pinned by a layout regression test in `streamlib-plugin-abi`. The plugin and the host must agree on:
+
+- Target triple (`x86_64-unknown-linux-gnu`, etc.) — for the obvious reasons
+- `streamlib-plugin-abi` version — the C-ABI vtable contract
+- `streamlib-consumer-rhi` version — the consumer-side carve-out (β-shape texture / buffer / device types)
+
+They do NOT need to agree on:
+
+- rustc version
+- Cargo dep graph resolution
+- Feature flags on shared transitive deps
+- Optimization profile
+
+**Where the dream currently leaks**: Phase D (#906) and Phase C2 (#905) shipped some FullAccess methods that return `Arc<HostInternalType>` via `Arc::into_raw` / `Arc::from_raw` raw-pointer transit. Those code paths DO require rustc-version coupling because the host-internal types aren't `#[repr(C)]`. Issue #917 closes that gap by β-shape-refactoring the affected return types into `#[repr(C)] { handle, vtable }` pairs (mirroring `RhiCommandQueue` / `CommandBuffer`). After #917 lands, no FFI return type leaks host layout, and the cross-repo dream is fully real.
+
+**What's NOT in scope** (deferred to its own milestone): a hosted marketplace / registry / index. Today's distribution model is "package author hands you an `.slpkg` directly, or you clone the repo and run `streamlib pack` yourself". A managed registry where you'd run `streamlib install @tatolab/camera` is a separate future deliverable.
+
+**Implication for new architectural work**: any cross-FFI surface added in this codebase MUST be `#[repr(C)]` end-to-end. If you're tempted to return `Arc<SomeHostInternalType>` from a cdylib-callable method, stop — the answer is to β-shape the type. The dormant `clone_*` / `drop_*` slots already present on the FullAccess vtable are infrastructure for this. The "rustc-version coupling stays" framing that previously appeared in the All-Dynamic Package Loading milestone body was a permissive fallback while β-shape coverage was incomplete; it's superseded as of 2026-05-22.
+
 ### Before Creating Any New Abstraction
 
 "Abstraction" here means: a new trait, struct, helper method, utility function, or module intended to be reused across more than one call site.
