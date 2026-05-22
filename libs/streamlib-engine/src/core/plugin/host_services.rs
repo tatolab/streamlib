@@ -4654,18 +4654,19 @@ unsafe extern "C" fn host_gpu_full_drop_acceleration_structure(handle: *const c_
 }
 
 #[cfg(target_os = "linux")]
-unsafe extern "C" fn host_gpu_full_clone_command_recorder(handle: *const c_void) {
+unsafe extern "C" fn host_gpu_full_clone_command_recorder(_handle: *const c_void) {
+    // RhiCommandRecorder is Box-shaped (single-owner) — deliberately
+    // NOT Clone per CommandBuffer precedent. This slot is reserved
+    // infrastructure; the type-level absence of `Clone` for
+    // `RhiCommandRecorder` ensures the host callback is never invoked
+    // from typesafe code. If reached, it's a bug somewhere.
     run_host_extern_c(
         "host_gpu_full_clone_command_recorder",
         || {
-            if handle.is_null() {
-                return;
-            }
-            unsafe {
-                Arc::increment_strong_count(
-                    handle as *const crate::vulkan::rhi::RhiCommandRecorder,
-                );
-            }
+            tracing::error!(
+                "host_gpu_full_clone_command_recorder invoked — RhiCommandRecorder is \
+                 not Clone-able (Box-shaped, single-owner). This is a bug."
+            );
         },
         (),
     )
@@ -4679,9 +4680,11 @@ unsafe extern "C" fn host_gpu_full_drop_command_recorder(handle: *const c_void) 
             if handle.is_null() {
                 return;
             }
+            // SAFETY: handle is `Box::into_raw(Box<RhiCommandRecorderInner>)`-shaped.
+            // Reconstruct the Box and let Drop run.
             unsafe {
-                Arc::decrement_strong_count(
-                    handle as *const crate::vulkan::rhi::RhiCommandRecorder,
+                let _ = Box::from_raw(
+                    handle as *mut crate::vulkan::rhi::RhiCommandRecorderInner,
                 );
             }
         },

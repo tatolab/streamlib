@@ -3,9 +3,11 @@
 
 //! Engine-owned multi-step command-buffer recorder.
 
+use std::ffi::c_void;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+use streamlib_plugin_abi::GpuContextFullAccessVTable;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
@@ -101,7 +103,10 @@ enum RecorderState {
 /// Recording is serial (one recording in flight at a time per
 /// recorder handle). For parallel recording, hold one recorder per
 /// in-flight slot.
-pub struct RhiCommandRecorder {
+/// Host-only rich data backing a [`RhiCommandRecorder`]. Cdylib code
+/// never sees this type; it reaches the public surface through the
+/// `(handle, vtable)` β-shape.
+pub struct RhiCommandRecorderInner {
     label: String,
     vulkan_device: Arc<HostVulkanDevice>,
     device: vulkanalia::Device,
@@ -127,13 +132,13 @@ pub struct RhiCommandRecorder {
     state: Mutex<RecorderState>,
 }
 
-impl RhiCommandRecorder {
+impl RhiCommandRecorderInner {
     /// Build a recorder against the device's default queue.
     ///
     /// `label` flows into `tracing` spans on every public method —
     /// pick something processor-scoped (e.g. `"camera"`, `"display"`).
     #[tracing::instrument(level = "trace", skip(vulkan_device), fields(label))]
-    pub fn new(vulkan_device: &Arc<HostVulkanDevice>, label: &str) -> Result<Self> {
+    pub(crate) fn new(vulkan_device: &Arc<HostVulkanDevice>, label: &str) -> Result<Self> {
         let queue = vulkan_device.queue();
         let queue_family_index = vulkan_device.queue_family_index();
         let device = vulkan_device.device().clone();
@@ -670,7 +675,7 @@ impl RhiCommandRecorder {
     }
 }
 
-impl Drop for RhiCommandRecorder {
+impl Drop for RhiCommandRecorderInner {
     fn drop(&mut self) {
         unsafe {
             // Wait for any in-flight submission to drain so command-buffer
@@ -688,15 +693,278 @@ impl Drop for RhiCommandRecorder {
 // fence + state machine; the `Mutex<RecorderState>` serializes state
 // transitions across threads. `&mut self` on every public method
 // further enforces single-thread use.
-unsafe impl Send for RhiCommandRecorder {}
-unsafe impl Sync for RhiCommandRecorder {}
+unsafe impl Send for RhiCommandRecorderInner {}
+unsafe impl Sync for RhiCommandRecorderInner {}
 
-impl std::fmt::Debug for RhiCommandRecorder {
+impl std::fmt::Debug for RhiCommandRecorderInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RhiCommandRecorder")
+        f.debug_struct("RhiCommandRecorderInner")
             .field("label", &self.label)
             .field("state", &*self.state.lock())
             .finish()
+    }
+}
+
+// =============================================================================
+// β-shape implementation
+// =============================================================================
+
+/// Multi-step command-buffer recorder.
+///
+/// Layout-stable `#[repr(C)] (handle, vtable)` β-shape. The opaque
+/// handle points at a `Box<RhiCommandRecorderInner>`; lifecycle
+/// dispatches through the host-installed FullAccess vtable's
+/// `drop_command_recorder` callback (Box::from_raw + drop host-side).
+///
+/// **Single-owner; deliberately NOT `Clone`.** Recording carries
+/// mutable state (`begin()` → `record_*(&mut self)` → `submit_*(&mut
+/// self)`) that doesn't survive duplication. The
+/// `clone_command_recorder` vtable slot is reserved but never invoked
+/// — calling `.clone()` on the public β-shape is a compile error.
+///
+/// Method dispatch is host-only via [`Self::host_inner_mut`] until
+/// Phase E (#907) lifts to per-method vtable slots.
+#[repr(C)]
+pub struct RhiCommandRecorder {
+    /// Opaque handle to the host's `Box<RhiCommandRecorderInner>`.
+    pub(crate) handle: *const c_void,
+    /// Vtable for cross-DSO Drop dispatch.
+    pub(crate) vtable: *const GpuContextFullAccessVTable,
+}
+
+// SAFETY: handle points at a `Box<RhiCommandRecorderInner>`; Inner
+// is Send+Sync (Mutex-guarded state, &mut self method dispatch
+// further restricts mutation to one thread at a time).
+unsafe impl Send for RhiCommandRecorder {}
+unsafe impl Sync for RhiCommandRecorder {}
+
+impl RhiCommandRecorder {
+    /// Build a recorder against the device's default queue.
+    pub fn new(vulkan_device: &Arc<HostVulkanDevice>, label: &str) -> Result<Self> {
+        let inner = RhiCommandRecorderInner::new(vulkan_device, label)?;
+        Ok(Self::from_inner(inner))
+    }
+
+    /// Internal helper: leak a `Box<RhiCommandRecorderInner>` as the
+    /// opaque handle and resolve the host-mode FullAccess vtable.
+    pub(crate) fn from_inner(inner: RhiCommandRecorderInner) -> Self {
+        let handle = Box::into_raw(Box::new(inner)) as *const c_void;
+        let vtable =
+            crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
+        Self { handle, vtable }
+    }
+
+    /// Engine-internal mutable borrow of the host-owned
+    /// `RhiCommandRecorderInner`. **Panics if called from cdylib code.**
+    pub(crate) fn host_inner_mut(&mut self) -> &mut RhiCommandRecorderInner {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "RhiCommandRecorder::host_inner_mut() reached from cdylib code; \
+                 this method must dispatch through the GpuContextFullAccessVTable."
+            );
+        }
+        // SAFETY: `self.handle` is `Box::into_raw(Box<RhiCommandRecorderInner>)`
+        // and `&mut self` guarantees no other reference exists.
+        unsafe { &mut *(self.handle as *mut RhiCommandRecorderInner) }
+    }
+
+    /// Engine-internal shared borrow of the host-owned
+    /// `RhiCommandRecorderInner`. **Panics if called from cdylib code.**
+    pub(crate) fn host_inner(&self) -> &RhiCommandRecorderInner {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "RhiCommandRecorder::host_inner() reached from cdylib code; \
+                 this method must dispatch through the GpuContextFullAccessVTable."
+            );
+        }
+        // SAFETY: `self.handle` is `Box::into_raw(Box<RhiCommandRecorderInner>)`.
+        unsafe { &*(self.handle as *const RhiCommandRecorderInner) }
+    }
+
+    // -------------------------------------------------------------------------
+    // Method mirrors — route via host_inner_mut() with cdylib panic-guard.
+    // Phase E (#907) lifts these to per-method vtable slots; until then,
+    // method dispatch on the β-shape is host-only.
+    // -------------------------------------------------------------------------
+
+    /// Begin a new recording. See [`RhiCommandRecorderInner::begin`].
+    pub fn begin(&mut self) -> Result<()> {
+        self.host_inner_mut().begin()
+    }
+
+    /// Record an image layout transition. See
+    /// [`RhiCommandRecorderInner::record_image_barrier`].
+    pub fn record_image_barrier(
+        &mut self,
+        texture: &Texture,
+        from_layout: VulkanLayout,
+        to_layout: VulkanLayout,
+        from_stage: VulkanStage,
+        to_stage: VulkanStage,
+        from_access: VulkanAccess,
+        to_access: VulkanAccess,
+    ) -> Result<()> {
+        self.host_inner_mut().record_image_barrier(
+            texture, from_layout, to_layout, from_stage, to_stage, from_access, to_access,
+        )
+    }
+
+    /// Buffer memory barrier covering the whole buffer.
+    pub fn record_buffer_barrier(
+        &mut self,
+        buffer: &(impl VulkanBufferLike + ?Sized),
+        from_stage: VulkanStage,
+        to_stage: VulkanStage,
+        from_access: VulkanAccess,
+        to_access: VulkanAccess,
+    ) -> Result<()> {
+        self.host_inner_mut().record_buffer_barrier(
+            buffer, from_stage, to_stage, from_access, to_access,
+        )
+    }
+
+    /// Copy image → buffer. See [`RhiCommandRecorderInner::record_copy_image_to_buffer`].
+    pub fn record_copy_image_to_buffer(
+        &mut self,
+        src: &Texture,
+        src_layout: VulkanLayout,
+        dst: &(impl VulkanBufferLike + ?Sized),
+        region: ImageCopyRegion,
+    ) -> Result<()> {
+        self.host_inner_mut()
+            .record_copy_image_to_buffer(src, src_layout, dst, region)
+    }
+
+    /// Copy buffer → image.
+    pub fn record_copy_buffer_to_image(
+        &mut self,
+        src: &(impl VulkanBufferLike + ?Sized),
+        dst: &Texture,
+        dst_layout: VulkanLayout,
+        region: ImageCopyRegion,
+    ) -> Result<()> {
+        self.host_inner_mut()
+            .record_copy_buffer_to_image(src, dst, dst_layout, region)
+    }
+
+    /// Compute dispatch.
+    pub fn record_dispatch(
+        &mut self,
+        kernel: &VulkanComputeKernel,
+        group_x: u32,
+        group_y: u32,
+        group_z: u32,
+    ) -> Result<()> {
+        self.host_inner_mut()
+            .record_dispatch(kernel, group_x, group_y, group_z)
+    }
+
+    /// Draw call.
+    pub fn record_draw(
+        &mut self,
+        kernel: &VulkanGraphicsKernel,
+        frame_index: u32,
+        draw: &DrawCall,
+    ) -> Result<()> {
+        self.host_inner_mut().record_draw(kernel, frame_index, draw)
+    }
+
+    /// Indexed-draw variant.
+    pub fn record_draw_indexed(
+        &mut self,
+        kernel: &VulkanGraphicsKernel,
+        frame_index: u32,
+        draw: &DrawIndexedCall,
+    ) -> Result<()> {
+        self.host_inner_mut()
+            .record_draw_indexed(kernel, frame_index, draw)
+    }
+
+    /// Submit signaling a timeline semaphore.
+    pub fn submit_signaling_timeline(
+        &mut self,
+        timeline: &HostVulkanTimelineSemaphore,
+        signal_value: u64,
+    ) -> Result<()> {
+        self.host_inner_mut()
+            .submit_signaling_timeline(timeline, signal_value)
+    }
+
+    /// Submit without semaphore signaling.
+    pub fn submit(&mut self) -> Result<()> {
+        self.host_inner_mut().submit()
+    }
+
+    /// Submit and block until the GPU completes.
+    pub fn submit_and_wait(&mut self) -> Result<()> {
+        self.host_inner_mut().submit_and_wait()
+    }
+
+    /// Engine-internal accessor for the underlying command buffer.
+    /// **Engine-only** — for `VulkanPresentTarget`.
+    pub(crate) fn command_buffer_raw(&self) -> vk::CommandBuffer {
+        self.host_inner().command_buffer_raw()
+    }
+
+    /// Engine-internal accessor for the recorder's `HostVulkanDevice`.
+    /// **Engine-only** — for `VulkanPresentTarget::begin_rendering` etc.
+    pub(crate) fn vulkan_device_ref(&self) -> &Arc<HostVulkanDevice> {
+        self.host_inner().vulkan_device_ref()
+    }
+
+    /// Engine-internal submit path supporting binary + timeline waits.
+    /// **Engine-only** — for `VulkanPresentTarget`'s render submit.
+    pub(crate) fn submit_with_semaphores(
+        &mut self,
+        waits: &[vk::SemaphoreSubmitInfo],
+        signals: &[vk::SemaphoreSubmitInfo],
+    ) -> Result<()> {
+        self.host_inner_mut().submit_with_semaphores(waits, signals)
+    }
+}
+
+impl Drop for RhiCommandRecorder {
+    fn drop(&mut self) {
+        if !self.handle.is_null() && !self.vtable.is_null() {
+            // SAFETY: matched with `Box::into_raw` in `from_inner`.
+            unsafe {
+                ((*self.vtable).drop_command_recorder)(self.handle);
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for RhiCommandRecorder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RhiCommandRecorder").finish()
+    }
+}
+
+#[cfg(all(test, target_pointer_width = "64"))]
+mod layout_tests {
+    use super::*;
+    use core::mem::{align_of, offset_of, size_of};
+
+    #[test]
+    fn rhi_command_recorder_layout() {
+        assert_eq!(size_of::<RhiCommandRecorder>(), 16);
+        assert_eq!(align_of::<RhiCommandRecorder>(), 8);
+        assert_eq!(offset_of!(RhiCommandRecorder, handle), 0);
+        assert_eq!(offset_of!(RhiCommandRecorder, vtable), 8);
+    }
+
+    #[test]
+    fn rhi_command_recorder_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<RhiCommandRecorder>();
+    }
+
+    /// `RhiCommandRecorder` is intentionally NOT `Clone` — recording
+    /// state doesn't survive duplication. Marker test for `cargo test`
+    /// discoverability; the type-level absence-of-Clone enforces it.
+    #[test]
+    fn rhi_command_recorder_is_not_clone_marker() {
+        // No-op; the type has no Clone impl.
     }
 }
 
