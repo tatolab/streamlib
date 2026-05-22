@@ -24,6 +24,10 @@ use vulkanalia::vk;
 
 use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 
+use std::ffi::c_void;
+
+use streamlib_plugin_abi::GpuContextFullAccessVTable;
+
 use crate::core::rhi::{
     ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, Texture,
 };
@@ -42,7 +46,10 @@ use super::HostVulkanDevice;
 /// holds a single descriptor set, so dispatches against it are serial — that's
 /// fine for the format-converter / compositor / codec-pre-process workloads
 /// this abstraction targets.
-pub struct VulkanComputeKernel {
+/// Host-only rich data backing a [`VulkanComputeKernel`]. Cdylib code
+/// never sees this type; it reaches the public surface through the
+/// `(handle, vtable)` β-shape.
+pub struct VulkanComputeKernelInner {
     label: String,
     vulkan_device: Arc<HostVulkanDevice>,
     device: vulkanalia::Device,
@@ -84,7 +91,7 @@ enum BindingResource {
     },
 }
 
-impl VulkanComputeKernel {
+impl VulkanComputeKernelInner {
     /// Create a new compute kernel from a SPIR-V shader and a binding declaration.
     ///
     /// Reflects the SPIR-V via `rspirv-reflect`, validates that the declared
@@ -703,7 +710,7 @@ impl VulkanComputeKernel {
     }
 }
 
-impl Drop for VulkanComputeKernel {
+impl Drop for VulkanComputeKernelInner {
     fn drop(&mut self) {
         unsafe {
             let _ = self.device.device_wait_idle();
@@ -728,16 +735,170 @@ impl Drop for VulkanComputeKernel {
 // only one dispatch is in-flight at a time, and `dispatch()` blocks until
 // the GPU completes. The `Mutex` around `pending` serializes setter writes
 // across threads.
-unsafe impl Send for VulkanComputeKernel {}
-unsafe impl Sync for VulkanComputeKernel {}
+unsafe impl Send for VulkanComputeKernelInner {}
+unsafe impl Sync for VulkanComputeKernelInner {}
 
-impl std::fmt::Debug for VulkanComputeKernel {
+impl std::fmt::Debug for VulkanComputeKernelInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("VulkanComputeKernel")
+        f.debug_struct("VulkanComputeKernelInner")
             .field("label", &self.label)
             .field("bindings", &self.bindings)
             .field("push_constant_size", &self.push_constant_size)
             .finish()
+    }
+}
+
+// =============================================================================
+// β-shape implementation (#917)
+// =============================================================================
+
+/// Compute kernel — layout-stable `#[repr(C)] (handle, vtable)` β-shape
+/// so cdylibs can hold, refcount, and drop without sharing rustc-version
+/// or dep-graph with the host. Method dispatch is host-only via
+/// [`Self::host_inner`] until Phase E (#907) lifts to vtable slots.
+#[repr(C)]
+pub struct VulkanComputeKernel {
+    pub(crate) handle: *const c_void,
+    pub(crate) vtable: *const GpuContextFullAccessVTable,
+}
+
+unsafe impl Send for VulkanComputeKernel {}
+unsafe impl Sync for VulkanComputeKernel {}
+
+impl VulkanComputeKernel {
+    /// Create from a SPIR-V descriptor. Engine-side entry; mirrors
+    /// `VulkanComputeKernelInner::new`.
+    pub fn new(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        descriptor: &ComputeKernelDescriptor<'_>,
+    ) -> Result<Self> {
+        let inner = VulkanComputeKernelInner::new(vulkan_device, descriptor)?;
+        Ok(Self::from_arc_into_raw(Arc::new(inner)))
+    }
+
+    pub(crate) fn from_arc_into_raw(arc: Arc<VulkanComputeKernelInner>) -> Self {
+        let handle = Arc::into_raw(arc) as *const c_void;
+        let vtable =
+            crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
+        Self { handle, vtable }
+    }
+
+    pub(crate) fn host_inner(&self) -> &VulkanComputeKernelInner {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "VulkanComputeKernel::host_inner() reached from cdylib code; \
+                 this method must dispatch through the GpuContextFullAccessVTable."
+            );
+        }
+        unsafe { &*(self.handle as *const VulkanComputeKernelInner) }
+    }
+
+    pub fn set_storage_buffer<B>(&self, binding: u32, buffer: &B) -> Result<()>
+    where
+        B: super::VulkanStorageBindable + ?Sized,
+    {
+        self.host_inner().set_storage_buffer(binding, buffer)
+    }
+
+    pub fn set_uniform_buffer<B>(&self, binding: u32, buffer: &B) -> Result<()>
+    where
+        B: super::VulkanUniformBindable + ?Sized,
+    {
+        self.host_inner().set_uniform_buffer(binding, buffer)
+    }
+
+    pub fn set_sampled_texture(&self, binding: u32, texture: &Texture) -> Result<()> {
+        self.host_inner().set_sampled_texture(binding, texture)
+    }
+
+    pub fn set_storage_image(&self, binding: u32, texture: &Texture) -> Result<()> {
+        self.host_inner().set_storage_image(binding, texture)
+    }
+
+    pub fn set_push_constants(&self, bytes: &[u8]) -> Result<()> {
+        self.host_inner().set_push_constants(bytes)
+    }
+
+    pub fn set_push_constants_value<T: Copy>(&self, value: &T) -> Result<()> {
+        self.host_inner().set_push_constants_value(value)
+    }
+
+    pub fn dispatch(
+        &self,
+        group_count_x: u32,
+        group_count_y: u32,
+        group_count_z: u32,
+    ) -> Result<()> {
+        self.host_inner()
+            .dispatch(group_count_x, group_count_y, group_count_z)
+    }
+
+    pub(crate) fn record(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        group_x: u32,
+        group_y: u32,
+        group_z: u32,
+    ) -> Result<()> {
+        self.host_inner().record(command_buffer, group_x, group_y, group_z)
+    }
+
+    pub fn bindings(&self) -> Vec<ComputeBindingSpec> {
+        self.host_inner().bindings().to_vec()
+    }
+
+    pub fn push_constant_size(&self) -> u32 {
+        self.host_inner().push_constant_size()
+    }
+}
+
+impl Clone for VulkanComputeKernel {
+    fn clone(&self) -> Self {
+        if !self.handle.is_null() && !self.vtable.is_null() {
+            unsafe {
+                ((*self.vtable).clone_compute_kernel)(self.handle);
+            }
+        }
+        Self {
+            handle: self.handle,
+            vtable: self.vtable,
+        }
+    }
+}
+
+impl Drop for VulkanComputeKernel {
+    fn drop(&mut self) {
+        if !self.handle.is_null() && !self.vtable.is_null() {
+            unsafe {
+                ((*self.vtable).drop_compute_kernel)(self.handle);
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for VulkanComputeKernel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VulkanComputeKernel").finish()
+    }
+}
+
+#[cfg(all(test, target_pointer_width = "64"))]
+mod beta_shape_layout_tests {
+    use super::*;
+    use core::mem::{align_of, offset_of, size_of};
+
+    #[test]
+    fn vulkan_compute_kernel_layout() {
+        assert_eq!(size_of::<VulkanComputeKernel>(), 16);
+        assert_eq!(align_of::<VulkanComputeKernel>(), 8);
+        assert_eq!(offset_of!(VulkanComputeKernel, handle), 0);
+        assert_eq!(offset_of!(VulkanComputeKernel, vtable), 8);
+    }
+
+    #[test]
+    fn vulkan_compute_kernel_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<VulkanComputeKernel>();
     }
 }
 

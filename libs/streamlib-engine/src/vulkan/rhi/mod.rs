@@ -75,6 +75,9 @@ pub use vulkan_pipeline_flags::{VulkanAccess, VulkanStage};
 mod vulkan_command_recorder;
 #[cfg(target_os = "linux")]
 pub use vulkan_command_recorder::{ImageCopyRegion, RhiCommandRecorder};
+pub(crate) use vulkan_compute_kernel::VulkanComputeKernelInner;
+pub(crate) use vulkan_graphics_kernel::VulkanGraphicsKernelInner;
+pub(crate) use vulkan_ray_tracing_kernel::VulkanRayTracingKernelInner;
 // `RhiCommandRecorderInner` is needed by `core::plugin::host_services`
 // for `Box::from_raw` in `drop_command_recorder`. Crate-scope export.
 pub(crate) use vulkan_command_recorder::RhiCommandRecorderInner;

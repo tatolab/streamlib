@@ -4438,7 +4438,7 @@ unsafe extern "C" fn host_gpu_full_clone_compute_kernel(handle: *const c_void) {
             // SAFETY: handle is `Arc::into_raw(Arc<VulkanComputeKernel>)`-shaped.
             unsafe {
                 Arc::increment_strong_count(
-                    handle as *const crate::vulkan::rhi::VulkanComputeKernel,
+                    handle as *const crate::vulkan::rhi::VulkanComputeKernelInner,
                 );
             }
         },
@@ -4457,7 +4457,7 @@ unsafe extern "C" fn host_gpu_full_drop_compute_kernel(handle: *const c_void) {
             // SAFETY: handle is `Arc::into_raw(Arc<VulkanComputeKernel>)`-shaped.
             unsafe {
                 Arc::decrement_strong_count(
-                    handle as *const crate::vulkan::rhi::VulkanComputeKernel,
+                    handle as *const crate::vulkan::rhi::VulkanComputeKernelInner,
                 );
             }
         },
@@ -4475,7 +4475,7 @@ unsafe extern "C" fn host_gpu_full_clone_graphics_kernel(handle: *const c_void) 
             }
             unsafe {
                 Arc::increment_strong_count(
-                    handle as *const crate::vulkan::rhi::VulkanGraphicsKernel,
+                    handle as *const crate::vulkan::rhi::VulkanGraphicsKernelInner,
                 );
             }
         },
@@ -4493,7 +4493,7 @@ unsafe extern "C" fn host_gpu_full_drop_graphics_kernel(handle: *const c_void) {
             }
             unsafe {
                 Arc::decrement_strong_count(
-                    handle as *const crate::vulkan::rhi::VulkanGraphicsKernel,
+                    handle as *const crate::vulkan::rhi::VulkanGraphicsKernelInner,
                 );
             }
         },
@@ -4511,7 +4511,7 @@ unsafe extern "C" fn host_gpu_full_clone_ray_tracing_kernel(handle: *const c_voi
             }
             unsafe {
                 Arc::increment_strong_count(
-                    handle as *const crate::vulkan::rhi::VulkanRayTracingKernel,
+                    handle as *const crate::vulkan::rhi::VulkanRayTracingKernelInner,
                 );
             }
         },
@@ -4529,7 +4529,7 @@ unsafe extern "C" fn host_gpu_full_drop_ray_tracing_kernel(handle: *const c_void
             }
             unsafe {
                 Arc::decrement_strong_count(
-                    handle as *const crate::vulkan::rhi::VulkanRayTracingKernel,
+                    handle as *const crate::vulkan::rhi::VulkanRayTracingKernelInner,
                 );
             }
         },
