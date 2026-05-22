@@ -476,20 +476,33 @@ impl RhiCommandRecorderInner {
         kernel.cmd_bind_and_draw_indexed(self.command_buffer, frame_index, draw)
     }
 
-    /// Engine-internal accessor for the underlying command buffer.
-    /// Used by [`VulkanPresentTarget`](super::vulkan_present_target::VulkanPresentTarget)
-    /// to record swapchain-image transitions + `cmd_begin/end_rendering`
-    /// alongside the user's recorded draws.
-    pub(crate) fn command_buffer_raw(&self) -> vk::CommandBuffer {
+    /// Raw `VkCommandBuffer` accessor — **escape hatch for power
+    /// users** who need to record commands the RHI doesn't expose
+    /// directly (e.g. `vkCmd*VideoCodingKHR` / `vkCmdEncodeVideoKHR`
+    /// / `vkCmdDecodeVideoKHR` from `libs/vulkan-video/`) alongside
+    /// the recorder's RHI-shaped records.
+    ///
+    /// Used by:
+    /// - [`VulkanPresentTarget`](super::vulkan_present_target::VulkanPresentTarget)
+    ///   for swapchain image transitions + `cmd_begin/end_rendering`.
+    /// - `libs/vulkan-video/` for video-codec cmds the RHI doesn't
+    ///   expose (#922 — RhiCommandRecorder migration of vulkan-video
+    ///   interior).
+    ///
+    /// **Contract**: caller must NOT call `begin_command_buffer` /
+    /// `end_command_buffer` / `vkQueueSubmit*` against this buffer
+    /// directly — the recorder owns those lifecycle calls. Caller may
+    /// only record commands between the recorder's `begin()` and
+    /// `submit*()`.
+    pub fn command_buffer_raw(&self) -> vk::CommandBuffer {
         self.command_buffer
     }
 
-    /// Engine-internal accessor for the underlying [`HostVulkanDevice`].
-    /// Used by [`VulkanPresentTarget`](super::vulkan_present_target::VulkanPresentTarget)'s
-    /// `PresentFrame::begin_rendering` / `end_rendering` to issue
-    /// `cmd_begin_rendering` / `cmd_end_rendering` on the same command
-    /// buffer this recorder owns.
-    pub(crate) fn vulkan_device_ref(&self) -> &Arc<HostVulkanDevice> {
+    /// Raw `HostVulkanDevice` accessor — **engine-internal + in-tree
+    /// codec power-user escape hatch.** Same constraints as
+    /// [`Self::command_buffer_raw`]; used by VulkanPresentTarget
+    /// (begin/end_rendering) and vulkan-video (video-codec cmds).
+    pub fn vulkan_device_ref(&self) -> &Arc<HostVulkanDevice> {
         &self.vulkan_device
     }
 
