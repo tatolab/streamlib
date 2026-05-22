@@ -491,75 +491,72 @@ impl VulkanSemaphoreSet {
 // VulkanQueryPoolSet (inline helper)
 // ---------------------------------------------------------------------------
 
-/// Manages a single `VkQueryPool`.
-/// Mirrors C++ `VulkanQueryPoolSet`.
+/// Manages a single `VkQueryPool`. Thin adapter around the engine RHI
+/// primitive [`crate::vulkan::rhi::HostVulkanQueryPool`] — preserves
+/// the codec_utils wrapping pattern while routing creation +
+/// destruction through the RHI's `lock_device`-protected paths.
 struct VulkanQueryPoolSet {
-    device: Option<vulkanalia::Device>,
-    query_pool: vk::QueryPool,
+    query_pool: Option<crate::vulkan::rhi::HostVulkanQueryPool>,
     query_count: u32,
 }
 
 impl VulkanQueryPoolSet {
     fn new() -> Self {
         Self {
-            device: None,
-            query_pool: vk::QueryPool::null(),
+            query_pool: None,
             query_count: 0,
         }
     }
 
-    /// # Safety
-    /// `device` must be valid and not destroyed for the lifetime of this set.
-    unsafe fn create_set(
+    /// Construct the underlying query pool through the engine RHI
+    /// primitive. The previous `flags: vk::QueryPoolCreateFlags`
+    /// parameter is dropped — Vulkan reserves the field as 0 (unused)
+    /// and the RHI descriptor doesn't carry it.
+    ///
+    /// `video_profile` is required when `query_type ==
+    /// VIDEO_ENCODE_FEEDBACK_KHR` and ignored otherwise; the RHI
+    /// constructor checks the combination.
+    fn create_set(
         &mut self,
-        device: &vulkanalia::Device,
+        vulkan_device: &std::sync::Arc<crate::vulkan::rhi::HostVulkanDevice>,
         count: u32,
         query_type: vk::QueryType,
-        flags: vk::QueryPoolCreateFlags,
-        next: *const std::ffi::c_void,
-    ) -> vk::Result { unsafe {
+        video_encode_feedback_flags: vk::VideoEncodeFeedbackFlagsKHR,
+        video_profile: Option<&vk::VideoProfileInfoKHR>,
+    ) -> crate::core::Result<()> {
         self.destroy();
 
-        let _ = flags; // C++ passes flags as VkQueryPoolCreateFlags (reserved, must be 0).
-        let mut create_info = vk::QueryPoolCreateInfo::builder()
-            .query_type(query_type)
-            .query_count(count);
-
-        if !next.is_null() {
-            create_info.next = next;
-        }
-
-        match device.create_query_pool(&create_info, None) {
-            Ok(pool) => {
-                self.query_pool = pool;
-                self.query_count = count;
-                self.device = Some(device.clone());
-                vk::Result::SUCCESS
-            }
-            Err(e) => e.into(),
-        }
-    }}
+        let descriptor = crate::vulkan::rhi::QueryPoolDescriptor {
+            label: "codec_utils/query_pool_set",
+            query_type,
+            query_count: count,
+            pipeline_statistics: vk::QueryPipelineStatisticFlags::empty(),
+            video_encode_feedback_flags,
+            video_profile,
+        };
+        let pool = crate::vulkan::rhi::HostVulkanQueryPool::new(vulkan_device, &descriptor)?;
+        self.query_pool = Some(pool);
+        self.query_count = count;
+        Ok(())
+    }
 
     fn get_query_pool(&self, query_idx: u32) -> vk::QueryPool {
         if query_idx < self.query_count {
             self.query_pool
+                .as_ref()
+                .map(|p| p.handle())
+                .unwrap_or(vk::QueryPool::null())
         } else {
             vk::QueryPool::null()
         }
     }
 
-    /// # Safety
-    /// The query pool must not be in use on the GPU.
-    unsafe fn destroy(&mut self) { unsafe {
-        if let Some(ref device) = self.device {
-            if self.query_pool != vk::QueryPool::null() {
-                device.destroy_query_pool(self.query_pool, None);
-                self.query_pool = vk::QueryPool::null();
-                self.query_count = 0;
-            }
-        }
-        self.device = None;
-    }}
+    /// Drop the underlying RHI primitive — `HostVulkanQueryPool::Drop`
+    /// runs `vkDestroyQueryPool` under the device resource lock.
+    fn destroy(&mut self) {
+        self.query_pool = None;
+        self.query_count = 0;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -702,15 +699,18 @@ impl VulkanCommandBufferPool {
     /// Mirrors C++ `VulkanCommandBufferPool::Configure`.
     ///
     /// # Safety
-    /// The `device` must be valid. If `create_query_pool` is true, `p_next`
-    /// must point to a valid Vulkan structure chain (e.g., video profile).
+    /// The `device` must be valid. If `create_query_pool` is true,
+    /// `video_profile` must be `Some(...)` carrying the codec profile the
+    /// query pool will serve (Vulkan spec requires the profile chained on
+    /// the pool's `pNext` for `VIDEO_ENCODE_FEEDBACK_KHR`).
     pub unsafe fn configure(
         self: &mut Arc<Self>,
+        vulkan_device: &Arc<crate::vulkan::rhi::HostVulkanDevice>,
         device: &vulkanalia::Device,
         num_pool_nodes: u32,
         queue_family_index: u32,
         create_query_pool: bool,
-        next: *const std::ffi::c_void,
+        video_profile: Option<&vk::VideoProfileInfoKHR>,
         create_semaphores: bool,
         create_fences: bool,
     ) -> vk::Result { unsafe {
@@ -748,13 +748,20 @@ impl VulkanCommandBufferPool {
         }
 
         if create_query_pool {
-            let _result = pool.query_pool_set.create_set(
-                device,
-                num_pool_nodes,
-                vk::QueryType::VIDEO_ENCODE_FEEDBACK_KHR,
-                vk::QueryPoolCreateFlags::empty(),
-                next,
-            );
+            if pool
+                .query_pool_set
+                .create_set(
+                    vulkan_device,
+                    num_pool_nodes,
+                    vk::QueryType::VIDEO_ENCODE_FEEDBACK_KHR,
+                    vk::VideoEncodeFeedbackFlagsKHR::BITSTREAM_BUFFER_OFFSET
+                        | vk::VideoEncodeFeedbackFlagsKHR::BITSTREAM_BYTES_WRITTEN,
+                    video_profile,
+                )
+                .is_err()
+            {
+                return vk::Result::ERROR_INITIALIZATION_FAILED;
+            }
         }
 
         for i in 0..num_pool_nodes {

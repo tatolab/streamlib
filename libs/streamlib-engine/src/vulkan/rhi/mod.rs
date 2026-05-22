@@ -147,6 +147,13 @@ pub use vulkan_video_session::{
 };
 
 #[cfg(target_os = "linux")]
+mod vulkan_query_pool;
+#[cfg(target_os = "linux")]
+pub use vulkan_query_pool::{
+    HostVulkanQueryPool, QueryPoolDescriptor, VideoEncodeFeedbackResult,
+};
+
+#[cfg(target_os = "linux")]
 pub mod drm_modifier_probe;
 
 #[cfg(all(test, target_os = "linux"))]
