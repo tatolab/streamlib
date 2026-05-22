@@ -9,13 +9,25 @@
 //! from streamlib processors and codec encode/decode threads race on the
 //! same `VkQueue` and crash the NVIDIA driver.
 
-use std::sync::Arc;
-
-use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia::VkResult;
 
-/// Host-side gateway for `vkQueueSubmit2` calls.
+/// Host-side gateway between the codec layer and the engine RHI's
+/// per-queue mutex + device-resource lock. Sole implementor is
+/// [`crate::vulkan::rhi::HostVulkanDevice`]; the trait abstraction
+/// scopes the codec layer to two operations (serialized `vkQueueSubmit2`
+/// and device-level resource-creation lock) instead of letting it reach
+/// into the broader host RHI surface.
+///
+/// Stays `pub` because several codec types (`VulkanVideoSession`,
+/// `VkVideoDecoder`, `RgbToNv12Converter`, etc.) hold
+/// `Arc<dyn RhiQueueSubmitter>` fields — Rust's privacy rules require
+/// the trait to be at least as visible as those items. The trait itself
+/// is not part of any consumer-facing API; the codec's public surface
+/// is `SimpleEncoder::from_full_access` / `SimpleDecoder::from_full_access`,
+/// which wire the submitter internally. Eventual removal of this trait
+/// (call `HostVulkanDevice` methods directly) is interior re-plumbing
+/// work tracked under the Vulkan Video RHI Coupling milestone.
 pub trait RhiQueueSubmitter: Send + Sync {
     /// Submit command buffers using the Vulkan 1.4 sync2 submit API under
     /// host synchronization.
@@ -36,35 +48,4 @@ pub trait RhiQueueSubmitter: Send + Sync {
     /// allocation, and `vkBindVideoSessionMemoryKHR` so they cannot race with
     /// concurrent submissions from other processors on NVIDIA Linux.
     fn with_device_resource_lock(&self, f: &mut dyn FnMut());
-}
-
-/// Unsynchronized submitter used when the codec layer owns its own Vulkan device
-/// (the `SimpleEncoder::new` / `SimpleDecoder::new` paths and standalone
-/// binaries). No concurrent submissions happen in those cases, so we submit
-/// directly without taking any lock.
-pub struct RawQueueSubmitter {
-    device: vulkanalia::Device,
-}
-
-impl RawQueueSubmitter {
-    pub fn new(device: vulkanalia::Device) -> Arc<dyn RhiQueueSubmitter> {
-        Arc::new(Self { device })
-    }
-}
-
-impl RhiQueueSubmitter for RawQueueSubmitter {
-    unsafe fn submit_to_queue(
-        &self,
-        queue: vk::Queue,
-        submits: &[vk::SubmitInfo2],
-        fence: vk::Fence,
-    ) -> VkResult<()> { unsafe {
-        self.device.queue_submit2(queue, submits, fence).map(|_| ())
-    }}
-
-    fn with_device_resource_lock(&self, f: &mut dyn FnMut()) {
-        // Standalone mode owns the Vulkan device exclusively; no concurrent
-        // submissions exist, so no locking is required.
-        f();
-    }
 }

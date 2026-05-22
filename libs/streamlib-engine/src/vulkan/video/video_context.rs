@@ -8,7 +8,6 @@
 //! and [`Encoder`](crate::vulkan::video::Encoder) so callers can use their own vulkanalia
 //! application's device.
 
-use std::ffi::CStr;
 use std::sync::Arc;
 
 use vulkanalia::prelude::v1_4::*;
@@ -20,45 +19,6 @@ use vulkanalia_vma as vma;
 /// All instance/device creation in this crate must use this version.
 /// Vulkan 1.4 is required for video encode/decode extensions and
 /// `VK_KHR_video_maintenance1`.
-pub const REQUIRED_VULKAN_API_VERSION: u32 = vk::make_version(1, 4, 0);
-
-/// Reject software renderers (llvmpipe, lavapipe, swiftshader, etc.).
-///
-/// Video encode/decode requires dedicated hardware queue families that
-/// software renderers do not provide. Returns `Err` with a descriptive
-/// message if the device is a software renderer.
-pub fn reject_software_renderer(
-    instance: &vulkanalia::Instance,
-    physical_device: vk::PhysicalDevice,
-) -> Result<(), VideoError> {
-    let props = unsafe { instance.get_physical_device_properties(physical_device) };
-
-    if props.device_type == vk::PhysicalDeviceType::CPU {
-        let name = unsafe { CStr::from_ptr(props.device_name.as_ptr()) }
-            .to_string_lossy();
-        return Err(VideoError::BitstreamError(format!(
-            "Software renderer detected: {:?}. \
-             Video encode/decode requires a discrete or integrated GPU.",
-            name
-        )));
-    }
-
-    let name_lower = unsafe { CStr::from_ptr(props.device_name.as_ptr()) }
-        .to_string_lossy()
-        .to_ascii_lowercase();
-    for sw in &["llvmpipe", "lavapipe", "swiftshader", "softpipe"] {
-        if name_lower.contains(sw) {
-            return Err(VideoError::BitstreamError(format!(
-                "Software renderer detected: {:?}. \
-                 Video encode/decode requires a discrete or integrated GPU.",
-                name_lower
-            )));
-        }
-    }
-
-    Ok(()
-    )
-}
 
 fn create_nv12_ycbcr_conversion(
     device: &vulkanalia::Device,
@@ -83,20 +43,11 @@ fn create_nv12_ycbcr_conversion(
 
 /// Shared Vulkan device context for video operations.
 ///
-/// Wraps the caller's [`vulkanalia::Device`] and [`vulkanalia::Instance`] along
-/// with the loaded Vulkan Video extension function pointers. In vulkanalia,
-/// extension commands are available directly on Device/Instance via traits
-/// (e.g. `KhrVideoQueueExtension`), so no separate function table is needed.
-///
-/// # Example
-///
-/// ```ignore
-/// let ctx = VideoContext::new(
-///     instance.clone(),
-///     device.clone(),
-///     physical_device,
-/// )?;
-/// ```
+/// Wraps the host RHI's [`vulkanalia::Device`] and [`vulkanalia::Instance`]
+/// for the codec layer. In vulkanalia, extension commands are available
+/// directly on Device/Instance via traits (e.g. `KhrVideoQueueExtension`),
+/// so no separate function table is needed. Constructed exclusively via
+/// [`VideoContext::from_external`] from the host RHI's allocator + queues.
 pub struct VideoContext {
     instance: vulkanalia::Instance,
     device: vulkanalia::Device,
@@ -163,41 +114,6 @@ impl VideoContext {
     /// - `VK_KHR_video_decode_queue` (for decoding)
     /// - `VK_KHR_video_encode_queue` (for encoding)
     /// - Codec-specific extensions (e.g. `VK_KHR_video_decode_h264`)
-    /// Create a new video context from the caller's vulkanalia types.
-    ///
-    /// Creates a VMA allocator internally for all memory management.
-    pub fn new(
-        instance: vulkanalia::Instance,
-        device: vulkanalia::Device,
-        physical_device: vk::PhysicalDevice,
-    ) -> VideoResult<Self> {
-        let memory_properties =
-            unsafe { instance.get_physical_device_memory_properties(physical_device) };
-
-        let mut alloc_options = vma::AllocatorOptions::new(&instance, &device, physical_device);
-        alloc_options.version = vulkanalia::Version::new(
-            vk::version_major(REQUIRED_VULKAN_API_VERSION) as u32,
-            vk::version_minor(REQUIRED_VULKAN_API_VERSION) as u32,
-            0,
-        );
-
-        let allocator = Arc::new(unsafe {
-            vma::Allocator::new(&alloc_options)
-                .map_err(|e| VideoError::Vulkan(vk::Result::from(e)))?
-        });
-
-        let nv12_ycbcr_conversion = create_nv12_ycbcr_conversion(&device)?;
-
-        Ok(Self {
-            instance,
-            device,
-            physical_device,
-            memory_properties,
-            allocator,
-            nv12_ycbcr_conversion,
-        })
-    }
-
     /// Create a video context from an externally-owned device and allocator.
     ///
     /// Use this when integrating with a host application (e.g., streamlib)

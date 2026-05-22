@@ -17,14 +17,13 @@
 // The camera's GPU-resident textures are on the same device, so encode_image()
 // accepts them directly (zero-copy).
 
-use std::sync::Arc;
 
 use crate::_generated_::{EncodedVideoFrame, VideoFrame};
 use crate::linux::color_vui_translate::color_info_to_h273;
 use streamlib::sdk::context::{
     GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 };
-use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
+use streamlib::sdk::engine::HostTextureExt;
 use streamlib::sdk::error::{Error, Result};
 
 use streamlib::sdk::engine::video::{Codec, Preset, SimpleEncoder, SimpleEncoderConfig};
@@ -206,36 +205,8 @@ fn build_encoder_lazily(
     };
 
     let encoder = gpu_ctx.escalate(|full| {
-        let vulkan_device = Arc::clone(full.device().vulkan_device());
-
-        let encode_queue = vulkan_device.video_encode_queue().ok_or_else(|| {
-            Error::Runtime("GPU does not support Vulkan Video encode".into())
-        })?;
-        let encode_queue_family = vulkan_device
-            .video_encode_queue_family_index()
-            .ok_or_else(|| Error::Runtime("No video encode queue family".into()))?;
-
-        let submitter: Arc<dyn streamlib::sdk::engine::video::RhiQueueSubmitter> = vulkan_device.clone();
-
-        let mut encoder = SimpleEncoder::from_device(
-            encoder_config,
-            vulkan_device.instance().clone(),
-            vulkan_device.device().clone(),
-            vulkan_device.physical_device(),
-            vulkan_device.allocator().clone(),
-            submitter,
-            encode_queue,
-            encode_queue_family,
-            vulkan_device.transfer_queue(),
-            vulkan_device.transfer_queue_family_index(),
-            vulkan_device
-                .compute_queue()
-                .unwrap_or_else(|| vulkan_device.queue()),
-            vulkan_device
-                .compute_queue_family_index()
-                .unwrap_or_else(|| vulkan_device.queue_family_index()),
-        )
-        .map_err(|e| Error::Runtime(format!("Failed to create H.264 encoder: {e}")))?;
+        let mut encoder = SimpleEncoder::from_full_access(full, encoder_config)
+            .map_err(|e| Error::Runtime(format!("Failed to create H.264 encoder: {e}")))?;
 
         encoder
             .prepare_gpu_encode_resources()
