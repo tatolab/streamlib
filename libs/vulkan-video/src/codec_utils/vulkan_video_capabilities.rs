@@ -86,7 +86,7 @@ pub unsafe fn get_video_decode_capabilities(
     video_queue_instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
     video_profile: &vk::VideoProfileInfoKHR,
-) -> Result<VideoDecodeCapabilitiesResult, vk::ErrorCode> {
+) -> Result<VideoDecodeCapabilitiesResult, vk::ErrorCode> { unsafe {
     let video_codec = video_profile.video_codec_operation;
 
     let mut h264_capabilities = vk::VideoDecodeH264CapabilitiesKHR::default();
@@ -138,7 +138,7 @@ pub unsafe fn get_video_decode_capabilities(
         video_decode_capabilities,
         codec_capabilities,
     })
-}
+}}
 
 // ---------------------------------------------------------------------------
 // GetVideoEncodeCapabilities
@@ -172,7 +172,7 @@ pub unsafe fn get_video_encode_capabilities(
     video_queue_instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
     video_profile: &vk::VideoProfileInfoKHR,
-) -> Result<VideoEncodeCapabilitiesResult, vk::ErrorCode> {
+) -> Result<VideoEncodeCapabilitiesResult, vk::ErrorCode> { unsafe {
     let video_codec = video_profile.video_codec_operation;
 
     let mut h264_capabilities = vk::VideoEncodeH264CapabilitiesKHR::default();
@@ -218,7 +218,7 @@ pub unsafe fn get_video_encode_capabilities(
         video_encode_capabilities,
         codec_capabilities,
     })
-}
+}}
 
 // ---------------------------------------------------------------------------
 // GetPhysicalDeviceVideoEncodeQualityLevelProperties
@@ -246,7 +246,7 @@ pub unsafe fn get_physical_device_video_encode_quality_level_properties(
     video_profile: &vk::VideoProfileInfoKHR,
     quality_level: u32,
     codec_quality_level_properties_ptr: *mut core::ffi::c_void,
-) -> Result<EncodeQualityLevelResult, vk::ErrorCode> {
+) -> Result<EncodeQualityLevelResult, vk::ErrorCode> { unsafe {
     let quality_level_info = vk::PhysicalDeviceVideoEncodeQualityLevelInfoKHR {
         s_type: vk::StructureType::PHYSICAL_DEVICE_VIDEO_ENCODE_QUALITY_LEVEL_INFO_KHR,
         next: core::ptr::null(),
@@ -278,7 +278,7 @@ pub unsafe fn get_physical_device_video_encode_quality_level_properties(
     Ok(EncodeQualityLevelResult {
         quality_level_properties,
     })
-}
+}}
 
 // ---------------------------------------------------------------------------
 // GetSupportedVideoFormats
@@ -303,7 +303,7 @@ pub unsafe fn get_supported_video_formats(
     physical_device: vk::PhysicalDevice,
     video_profile: &vk::VideoProfileInfoKHR,
     capability_flags: vk::VideoDecodeCapabilityFlagsKHR,
-) -> Result<SupportedVideoFormatsResult, vk::ErrorCode> {
+) -> Result<SupportedVideoFormatsResult, vk::ErrorCode> { unsafe {
     if capability_flags.contains(vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_COINCIDE) {
         // NV, Intel: DPB and output share the same images.
         let formats = get_video_formats(
@@ -363,7 +363,7 @@ pub unsafe fn get_supported_video_formats(
         );
         Err(vk::ErrorCode::VIDEO_PROFILE_FORMAT_NOT_SUPPORTED_KHR)
     }
-}
+}}
 
 /// Log warnings when queried formats are undefined or mismatched.
 fn validate_formats(reference_pictures_format: vk::Format, picture_format: vk::Format) {
@@ -403,7 +403,7 @@ pub unsafe fn get_video_capabilities(
     video_profile: &vk::VideoProfileInfoKHR,
     video_capabilities: &mut vk::VideoCapabilitiesKHR,
     dump_data: bool,
-) -> vk::Result {
+) -> vk::Result { unsafe {
     assert_eq!(
         video_capabilities.s_type,
         vk::StructureType::VIDEO_CAPABILITIES_KHR
@@ -484,7 +484,7 @@ pub unsafe fn get_video_capabilities(
     }
 
     vk::Result::SUCCESS
-}
+}}
 
 /// Dump capability data via tracing.
 ///
@@ -562,7 +562,7 @@ pub unsafe fn get_video_formats(
     physical_device: vk::PhysicalDevice,
     video_profile: &vk::VideoProfileInfoKHR,
     image_usage: vk::ImageUsageFlags,
-) -> Result<Vec<vk::VideoFormatPropertiesKHR>, vk::ErrorCode> {
+) -> Result<Vec<vk::VideoFormatPropertiesKHR>, vk::ErrorCode> { unsafe {
     let video_profiles = vk::VideoProfileListInfoKHR {
         s_type: vk::StructureType::VIDEO_PROFILE_LIST_INFO_KHR,
         next: core::ptr::null(),
@@ -593,7 +593,7 @@ pub unsafe fn get_video_formats(
     }
 
     Ok(supported_formats)
-}
+}}
 
 // ---------------------------------------------------------------------------
 // GetSupportedCodecs
@@ -634,7 +634,7 @@ pub unsafe fn get_supported_codecs(
     video_queue_family: Option<u32>,
     queue_flags_required: vk::QueueFlags,
     video_codec_operations: vk::VideoCodecOperationFlagsKHR,
-) -> (vk::VideoCodecOperationFlagsKHR, Option<u32>) {
+) -> (vk::VideoCodecOperationFlagsKHR, Option<u32>) { unsafe {
     let (queues, video_queues, _query_result_status) =
         get_queue_family_video_properties(instance, physical_device);
 
@@ -656,7 +656,7 @@ pub unsafe fn get_supported_codecs(
     }
 
     (vk::VideoCodecOperationFlagsKHR::NONE, None)
-}
+}}
 
 /// Convenience overload: check codecs supported on a known queue family.
 ///
@@ -669,7 +669,7 @@ pub unsafe fn get_supported_codecs_for_queue(
     instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
     video_queue_family: u32,
-) -> vk::VideoCodecOperationFlagsKHR {
+) -> vk::VideoCodecOperationFlagsKHR { unsafe {
     let (codecs, _) = get_supported_codecs(
         instance,
         physical_device,
@@ -678,7 +678,7 @@ pub unsafe fn get_supported_codecs_for_queue(
         ALL_CODEC_OPERATIONS,
     );
     codecs
-}
+}}
 
 /// Check whether a specific codec is supported on the given queue family.
 ///
@@ -692,10 +692,10 @@ pub unsafe fn is_codec_type_supported(
     physical_device: vk::PhysicalDevice,
     video_queue_family: u32,
     video_codec: vk::VideoCodecOperationFlagsKHR,
-) -> bool {
+) -> bool { unsafe {
     let codecs = get_supported_codecs_for_queue(instance, physical_device, video_queue_family);
     codecs.intersects(video_codec)
-}
+}}
 
 // ---------------------------------------------------------------------------
 // GetDecodeH264Capabilities / GetDecodeH265Capabilities / etc.
@@ -712,7 +712,7 @@ pub unsafe fn get_decode_capabilities_simple(
     video_queue_instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
     video_profile: &vk::VideoProfileInfoKHR,
-) -> Result<vk::VideoCapabilitiesKHR, vk::ErrorCode> {
+) -> Result<vk::VideoCapabilitiesKHR, vk::ErrorCode> { unsafe {
     let mut video_capabilities = vk::VideoCapabilitiesKHR::default();
 
     video_queue_instance.get_physical_device_video_capabilities_khr(
@@ -722,7 +722,7 @@ pub unsafe fn get_decode_capabilities_simple(
     )?;
 
     Ok(video_capabilities)
-}
+}}
 
 /// Query encode H.264 capabilities with codec-specific output.
 ///
@@ -741,7 +741,7 @@ pub unsafe fn get_encode_h264_capabilities(
         vk::VideoEncodeH264CapabilitiesKHR,
     ),
     vk::ErrorCode,
-> {
+> { unsafe {
     let mut encode_264_capabilities = vk::VideoEncodeH264CapabilitiesKHR::default();
     let mut video_capabilities = vk::VideoCapabilitiesKHR {
         next: &mut encode_264_capabilities as *mut _ as *mut core::ffi::c_void,
@@ -755,7 +755,7 @@ pub unsafe fn get_encode_h264_capabilities(
     )?;
 
     Ok((video_capabilities, encode_264_capabilities))
-}
+}}
 
 // ---------------------------------------------------------------------------
 // GetVideoMaintenance1FeatureSupported
@@ -771,7 +771,7 @@ pub unsafe fn get_encode_h264_capabilities(
 pub unsafe fn get_video_maintenance1_feature_supported(
     instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
-) -> bool {
+) -> bool { unsafe {
     let mut video_maintenance1_features =
         vk::PhysicalDeviceVideoMaintenance1FeaturesKHR::default();
     let mut device_features = vk::PhysicalDeviceFeatures2 {
@@ -782,7 +782,7 @@ pub unsafe fn get_video_maintenance1_feature_supported(
     instance.get_physical_device_features2(physical_device, &mut device_features);
 
     video_maintenance1_features.video_maintenance1 == vk::TRUE
-}
+}}
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -802,7 +802,7 @@ unsafe fn get_queue_family_video_properties(
     Vec<vk::QueueFamilyProperties2>,
     Vec<vk::QueueFamilyVideoPropertiesKHR>,
     Vec<vk::QueueFamilyQueryResultStatusPropertiesKHR>,
-) {
+) { unsafe {
     // Use raw function pointer because vulkanalia's wrapper doesn't support
     // pNext chains on the output structures.
     let get_props_fn = instance.commands().get_physical_device_queue_family_properties2;
@@ -832,7 +832,7 @@ unsafe fn get_queue_family_video_properties(
     query_result_status.truncate(count as usize);
 
     (queues, video_queues, query_result_status)
-}
+}}
 
 // ---------------------------------------------------------------------------
 // Tests

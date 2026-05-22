@@ -94,7 +94,7 @@ impl Nv12ToRgbConverter {
         compute_queue: vk::Queue,
         decode_queue_family: u32,
         submitter: Arc<dyn crate::rhi::RhiQueueSubmitter>,
-    ) -> Result<Self, VideoError> {
+    ) -> Result<Self, VideoError> { unsafe {
         let device = ctx.device().clone();
         let allocator = ctx.allocator().clone();
 
@@ -293,7 +293,7 @@ impl Nv12ToRgbConverter {
             width,
             height,
         })
-    }
+    }}
 
     /// Convert an NV12 DPB image layer to RGBA.
     ///
@@ -311,7 +311,7 @@ impl Nv12ToRgbConverter {
         nv12_image: vk::Image,
         array_layer: u32,
         src_layout: vk::ImageLayout,
-    ) -> Result<(vk::Image, vk::ImageView), VideoError> {
+    ) -> Result<(vk::Image, vk::ImageView), VideoError> { unsafe {
         // Create a sampled view for this layer with YCbCr conversion info
         let mut ycbcr_info = vk::SamplerYcbcrConversionInfo::builder()
             .conversion(self.ycbcr_conversion);
@@ -487,7 +487,7 @@ impl Nv12ToRgbConverter {
             .destroy_image_view(nv12_sampled_view, None);
 
         Ok((self.rgba_image, self.rgba_view))
-    }
+    }}
 
     /// Returns the RGBA output image handle.
     pub fn rgba_image(&self) -> vk::Image {

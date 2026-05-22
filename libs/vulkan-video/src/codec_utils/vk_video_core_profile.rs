@@ -312,11 +312,11 @@ impl VkVideoCoreProfile {
     /// # Safety
     /// `p_next` chain of `video_profile` must point to a valid codec-specific
     /// profile struct if non-null.
-    pub unsafe fn from_profile_info(video_profile: &vk::VideoProfileInfoKHR) -> Self {
+    pub unsafe fn from_profile_info(video_profile: &vk::VideoProfileInfoKHR) -> Self { unsafe {
         let mut this = Self::new_default();
         this.init_from_profile(video_profile);
         this
-    }
+    }}
 
     // -- Static helpers -----------------------------------------------------
 
@@ -344,15 +344,15 @@ impl VkVideoCoreProfile {
         // We intentionally clear the codec ext's own p_next except where
         // encode usage info is chained.
         match &mut self.codec_ext {
-            CodecProfileExt::DecodeH264(ref mut p) => {
+            CodecProfileExt::DecodeH264(p) => {
                 p.next = std::ptr::null();
                 self.profile.next = p as *const _ as *const _;
             }
-            CodecProfileExt::DecodeH265(ref mut p) => {
+            CodecProfileExt::DecodeH265(p) => {
                 p.next = std::ptr::null();
                 self.profile.next = p as *const _ as *const _;
             }
-            CodecProfileExt::DecodeAv1(ref mut p) => {
+            CodecProfileExt::DecodeAv1(p) => {
                 p.next = std::ptr::null();
                 self.profile.next = p as *const _ as *const _;
             }
@@ -360,12 +360,12 @@ impl VkVideoCoreProfile {
                 // VP9 not in ash — cannot chain. Profile remains without p_next.
                 self.profile.next = std::ptr::null();
             }
-            CodecProfileExt::EncodeH264(ref mut p) => {
+            CodecProfileExt::EncodeH264(p) => {
                 // Chain encode usage info behind the codec ext.
                 p.next = &self.encode_usage_info as *const _ as *const _;
                 self.profile.next = p as *const _ as *const _;
             }
-            CodecProfileExt::EncodeH265(ref mut p) => {
+            CodecProfileExt::EncodeH265(p) => {
                 p.next = &self.encode_usage_info as *const _ as *const _;
                 self.profile.next = p as *const _ as *const _;
             }
@@ -392,7 +392,7 @@ impl VkVideoCoreProfile {
     pub unsafe fn populate_profile_ext(
         &mut self,
         video_profile_ext: *const vk::BaseInStructure,
-    ) -> bool {
+    ) -> bool { unsafe {
         let op = self.profile.video_codec_operation;
 
         let ext = if op == vk::VideoCodecOperationFlagsKHR::DECODE_H264 {
@@ -505,7 +505,7 @@ impl VkVideoCoreProfile {
 
         self.populate_profile_ext_inner(ext);
         true
-    }
+    }}
 
     /// Mirrors C++ `InitFromProfile`.
     ///
@@ -514,12 +514,12 @@ impl VkVideoCoreProfile {
     pub unsafe fn init_from_profile(
         &mut self,
         video_profile: &vk::VideoProfileInfoKHR,
-    ) -> bool {
+    ) -> bool { unsafe {
         self.profile = std::ptr::read(video_profile as *const _ as *const _);
         let next = video_profile.next;
         self.profile.next = std::ptr::null();
         self.populate_profile_ext(next as *const vk::BaseInStructure)
-    }
+    }}
 
     // -- Build a CodecProfileExt from constructor parameters -----------------
 

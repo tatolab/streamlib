@@ -18,7 +18,7 @@ use super::SimpleEncoder;
 
 impl SimpleEncoder {
     /// Create the encoder (all Vulkan setup, unsafe due to raw Vulkan calls).
-    pub(crate) unsafe fn create_internal(config: SimpleEncoderConfig) -> Result<SimpleEncoder, VideoError> {
+    pub(crate) unsafe fn create_internal(config: SimpleEncoderConfig) -> Result<SimpleEncoder, VideoError> { unsafe {
         // 1. Load Vulkan
         let entry = vulkanalia::Entry::new(
             vulkanalia::loader::LibloadingLoader::new(vulkanalia::loader::LIBRARY)
@@ -108,7 +108,7 @@ impl SimpleEncoder {
         };
 
         let video_maint1_name =
-            unsafe { CStr::from_bytes_with_nul_unchecked(b"VK_KHR_video_maintenance1\0") };
+            CStr::from_bytes_with_nul_unchecked(b"VK_KHR_video_maintenance1\0");
 
         let required_extensions: Vec<&CStr> = vec![
             vk::KHR_VIDEO_QUEUE_EXTENSION.name.as_cstr(),
@@ -125,7 +125,7 @@ impl SimpleEncoder {
             .map_err(VideoError::from)?;
         for req in &required_extensions {
             let found = available.iter().any(|ext| {
-                let name = unsafe { CStr::from_ptr(ext.extension_name.as_ptr()) };
+                let name = CStr::from_ptr(ext.extension_name.as_ptr());
                 name == *req
             });
             if !found {
@@ -201,12 +201,12 @@ impl SimpleEncoder {
             session_memory: Vec::new(),
             session_params: vk::VideoSessionParametersKHR::null(),
             dpb_image: vk::Image::null(),
-            dpb_allocation: unsafe { std::mem::zeroed() },
+            dpb_allocation: std::mem::zeroed(),
             dpb_separate_images: Vec::new(),
             dpb_separate_allocations: Vec::new(),
             dpb_slots: Vec::new(),
             bitstream_buffer: vk::Buffer::null(),
-            bitstream_allocation: unsafe { std::mem::zeroed() },
+            bitstream_allocation: std::mem::zeroed(),
             bitstream_buffer_size: 0,
             bitstream_mapped_ptr: ptr::null_mut(),
             command_pool: vk::CommandPool::null(),
@@ -228,9 +228,9 @@ impl SimpleEncoder {
             // SimpleEncoder's own fields
             source_image: vk::Image::null(),
             source_view: vk::ImageView::null(),
-            source_allocation: unsafe { std::mem::zeroed() },
+            source_allocation: std::mem::zeroed(),
             staging_buffer: vk::Buffer::null(),
-            staging_allocation: unsafe { std::mem::zeroed() },
+            staging_allocation: std::mem::zeroed(),
             staging_mapped_ptr: ptr::null_mut(),
             staging_size: 0,
             transfer_pool: vk::CommandPool::null(),
@@ -429,7 +429,7 @@ impl SimpleEncoder {
         this.transfer_fence = transfer_fence;
 
         Ok(this)
-    }
+    }}
 
     /// Create the encoder from an externally-owned Vulkan device (skips device creation).
     pub(crate) unsafe fn create_from_external(
@@ -445,7 +445,7 @@ impl SimpleEncoder {
         transfer_queue_family: u32,
         compute_queue: vk::Queue,
         compute_queue_family: u32,
-    ) -> Result<SimpleEncoder, VideoError> {
+    ) -> Result<SimpleEncoder, VideoError> { unsafe {
         let codec_flag = match config.codec {
             Codec::H264 => vk::VideoCodecOperationFlagsKHR::ENCODE_H264,
             Codec::H265 => vk::VideoCodecOperationFlagsKHR::ENCODE_H265,
@@ -481,12 +481,12 @@ impl SimpleEncoder {
             session_memory: Vec::new(),
             session_params: vk::VideoSessionParametersKHR::null(),
             dpb_image: vk::Image::null(),
-            dpb_allocation: unsafe { std::mem::zeroed() },
+            dpb_allocation: std::mem::zeroed(),
             dpb_separate_images: Vec::new(),
             dpb_separate_allocations: Vec::new(),
             dpb_slots: Vec::new(),
             bitstream_buffer: vk::Buffer::null(),
-            bitstream_allocation: unsafe { std::mem::zeroed() },
+            bitstream_allocation: std::mem::zeroed(),
             bitstream_buffer_size: 0,
             bitstream_mapped_ptr: ptr::null_mut(),
             command_pool: vk::CommandPool::null(),
@@ -507,9 +507,9 @@ impl SimpleEncoder {
             h264_config: None,
             source_image: vk::Image::null(),
             source_view: vk::ImageView::null(),
-            source_allocation: unsafe { std::mem::zeroed() },
+            source_allocation: std::mem::zeroed(),
             staging_buffer: vk::Buffer::null(),
-            staging_allocation: unsafe { std::mem::zeroed() },
+            staging_allocation: std::mem::zeroed(),
             staging_mapped_ptr: ptr::null_mut(),
             staging_size: 0,
             transfer_pool: vk::CommandPool::null(),
@@ -679,7 +679,7 @@ impl SimpleEncoder {
         this.transfer_fence = transfer_fence;
 
         Ok(this)
-    }
+    }}
 
     /// Upload NV12 data, encode one frame, return the packet.
     pub(crate) unsafe fn upload_and_encode(
@@ -688,7 +688,7 @@ impl SimpleEncoder {
         frame_type: FrameType,
         display_pts: u64,
         timestamp_ns: Option<i64>,
-    ) -> Result<EncodePacket, VideoError> {
+    ) -> Result<EncodePacket, VideoError> { unsafe {
         let width = self.config.width;
         let height = self.config.height;
         let enc_cfg = self.encode_config().unwrap();
@@ -846,14 +846,14 @@ impl SimpleEncoder {
             is_keyframe,
             timestamp_ns,
         })
-    }
+    }}
 
     /// Internal implementation of encode_image (GPU-resident RGBA path).
     pub(crate) unsafe fn encode_image_internal(
         &mut self,
         rgba_image_view: vk::ImageView,
         timestamp_ns: Option<i64>,
-    ) -> Result<Vec<EncodePacket>, VideoError> {
+    ) -> Result<Vec<EncodePacket>, VideoError> { unsafe {
         // Lazily create the RGB→NV12 converter on first call, unless the caller
         // pre-allocated it via `prepare_gpu_encode_resources()`.
         if self.rgb_to_nv12.is_none() {
@@ -893,5 +893,5 @@ impl SimpleEncoder {
             is_keyframe,
             timestamp_ns,
         }])
-    }
+    }}
 }

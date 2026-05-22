@@ -560,7 +560,7 @@ impl VkBufferResource {
         new_size: vk::DeviceSize,
         copy_size: vk::DeviceSize,
         copy_offset: vk::DeviceSize,
-    ) -> vk::DeviceSize {
+    ) -> vk::DeviceSize { unsafe {
         if self.buffer_size >= new_size {
             return self.buffer_size;
         }
@@ -601,7 +601,7 @@ impl VkBufferResource {
         self.buffer_size = aligned_size;
 
         aligned_size
-    }
+    }}
 
     /// Clone this buffer's configuration into a new `VkBufferResource`,
     /// optionally copying data.

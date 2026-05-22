@@ -99,7 +99,7 @@ impl RgbToNv12Converter {
         encode_queue_family: u32,
         codec_flag: vk::VideoCodecOperationFlagsKHR,
         submitter: Arc<dyn crate::rhi::RhiQueueSubmitter>,
-    ) -> Result<Self, VideoError> {
+    ) -> Result<Self, VideoError> { unsafe {
         let device = ctx.device().clone();
         let allocator = ctx.allocator().clone();
         // --- 1. Create shader module ---
@@ -360,7 +360,7 @@ impl RgbToNv12Converter {
             width,
             height,
         })
-    }
+    }}
 
     /// Convert an RGBA VkImage to NV12.
     ///
@@ -373,7 +373,7 @@ impl RgbToNv12Converter {
     pub unsafe fn convert(
         &mut self,
         rgba_image_view: vk::ImageView,
-    ) -> Result<(vk::Image, vk::ImageView), VideoError> {
+    ) -> Result<(vk::Image, vk::ImageView), VideoError> { unsafe {
         let cb = self.command_buffer;
 
         self.device
@@ -603,7 +603,7 @@ impl RgbToNv12Converter {
             .wait_for_fences(&[self.fence], true, u64::MAX)?;
 
         Ok((self.encode_nv12_image, self.encode_nv12_color_view))
-    }
+    }}
 
     /// Returns the encode-src NV12 image handle (the one bound to the encoder).
     pub fn nv12_image(&self) -> vk::Image {

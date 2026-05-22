@@ -38,7 +38,7 @@ impl SimpleEncoder {
         _source_image: vk::Image,
         source_view: vk::ImageView,
         frame_type: FrameType,
-    ) -> VideoResult<EncodedOutput> {
+    ) -> VideoResult<EncodedOutput> { unsafe {
         if !self.configured {
             return Err(VideoError::BitstreamError(
                 "Encoder not configured -- call configure() first".to_string(),
@@ -1255,5 +1255,5 @@ impl SimpleEncoder {
             bitstream_offset: feedback.bitstream_offset,
             bitstream_size: feedback.bitstream_bytes_written,
         })
-    }
+    }}
 }

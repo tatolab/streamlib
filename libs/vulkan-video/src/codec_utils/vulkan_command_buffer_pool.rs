@@ -144,7 +144,7 @@ impl PoolNode {
         &mut self,
         cmd_buf: vk::CommandBuffer,
         begin_info: &vk::CommandBufferBeginInfo,
-    ) -> Result<vk::CommandBuffer, vk::Result> {
+    ) -> Result<vk::CommandBuffer, vk::Result> { unsafe {
         if !self.is_valid() {
             return Err(vk::Result::ERROR_INITIALIZATION_FAILED);
         }
@@ -156,7 +156,7 @@ impl PoolNode {
         device.begin_command_buffer(cmd_buf, begin_info)?;
         self.cmd_buf_state = CmdBufState::Recording;
         Ok(cmd_buf)
-    }
+    }}
 
     /// End command buffer recording.
     /// Mirrors C++ `PoolNode::EndCommandBufferRecording`.
@@ -166,7 +166,7 @@ impl PoolNode {
     pub unsafe fn end_command_buffer_recording(
         &mut self,
         cmd_buf: vk::CommandBuffer,
-    ) -> vk::Result {
+    ) -> vk::Result { unsafe {
         if !self.is_valid() {
             return vk::Result::ERROR_INITIALIZATION_FAILED;
         }
@@ -182,7 +182,7 @@ impl PoolNode {
             }
             Err(e) => vk::Result::from(e),
         }
-    }
+    }}
 
     /// Mark the command buffer as submitted.
     /// Mirrors C++ `PoolNode::SetCommandBufferSubmitted`.
@@ -210,7 +210,7 @@ impl PoolNode {
         fence_name: &str,
         fence_wait_timeout_nsec: u64,
         fence_total_wait_timeout_nsec: u64,
-    ) -> vk::Result {
+    ) -> vk::Result { unsafe {
         if self.cmd_buf_state != CmdBufState::Submitted {
             return vk::Result::ERROR_INITIALIZATION_FAILED;
         }
@@ -241,7 +241,7 @@ impl PoolNode {
         }
 
         result
-    }
+    }}
 
     /// Reset the command buffer state, optionally waiting for GPU completion.
     /// Mirrors C++ `PoolNode::ResetCommandBuffer`.
@@ -253,7 +253,7 @@ impl PoolNode {
         fence: vk::Fence,
         sync_with_host: bool,
         fence_name: &str,
-    ) -> bool {
+    ) -> bool { unsafe {
         if self.cmd_buf_state == CmdBufState::Reset {
             return false;
         }
@@ -270,7 +270,7 @@ impl PoolNode {
 
         self.cmd_buf_state = CmdBufState::Reset;
         true
-    }
+    }}
 }
 
 impl Default for PoolNode {
@@ -309,7 +309,7 @@ impl VulkanCommandBuffersSet {
         device: &vulkanalia::Device,
         queue_family_index: u32,
         count: u32,
-    ) -> vk::Result {
+    ) -> vk::Result { unsafe {
         let pool_info = vk::CommandPoolCreateInfo::builder()
             .queue_family_index(queue_family_index)
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
@@ -335,7 +335,7 @@ impl VulkanCommandBuffersSet {
 
         self.device = Some(device.clone());
         vk::Result::SUCCESS
-    }
+    }}
 
     fn get_command_buffer(&self, index: u32) -> Option<vk::CommandBuffer> {
         self.cmd_buffers.get(index as usize).copied()
@@ -343,7 +343,7 @@ impl VulkanCommandBuffersSet {
 
     /// # Safety
     /// Must only be called when no command buffers are in use.
-    unsafe fn destroy(&mut self) {
+    unsafe fn destroy(&mut self) { unsafe {
         if let Some(ref device) = self.device {
             if !self.cmd_buffers.is_empty() {
                 device.free_command_buffers(self.cmd_pool, &self.cmd_buffers);
@@ -355,7 +355,7 @@ impl VulkanCommandBuffersSet {
             }
         }
         self.device = None;
-    }
+    }}
 }
 
 // ---------------------------------------------------------------------------
@@ -379,7 +379,7 @@ impl VulkanFenceSet {
 
     /// # Safety
     /// `device` must be valid and not destroyed for the lifetime of this set.
-    unsafe fn create_set(&mut self, device: &vulkanalia::Device, count: u32) -> vk::Result {
+    unsafe fn create_set(&mut self, device: &vulkanalia::Device, count: u32) -> vk::Result { unsafe {
         self.destroy();
 
         let fence_info = vk::FenceCreateInfo::default();
@@ -399,7 +399,7 @@ impl VulkanFenceSet {
         self.fences = fences;
         self.device = Some(device.clone());
         vk::Result::SUCCESS
-    }
+    }}
 
     fn get_fence(&self, index: u32) -> vk::Fence {
         self.fences
@@ -410,7 +410,7 @@ impl VulkanFenceSet {
 
     /// # Safety
     /// No fences may be in use on the GPU.
-    unsafe fn destroy(&mut self) {
+    unsafe fn destroy(&mut self) { unsafe {
         if let Some(ref device) = self.device {
             for f in &self.fences {
                 if *f != vk::Fence::null() {
@@ -420,7 +420,7 @@ impl VulkanFenceSet {
         }
         self.fences.clear();
         self.device = None;
-    }
+    }}
 }
 
 // ---------------------------------------------------------------------------
@@ -444,7 +444,7 @@ impl VulkanSemaphoreSet {
 
     /// # Safety
     /// `device` must be valid and not destroyed for the lifetime of this set.
-    unsafe fn create_set(&mut self, device: &vulkanalia::Device, count: u32) -> vk::Result {
+    unsafe fn create_set(&mut self, device: &vulkanalia::Device, count: u32) -> vk::Result { unsafe {
         self.destroy();
 
         let sem_info = vk::SemaphoreCreateInfo::default();
@@ -463,7 +463,7 @@ impl VulkanSemaphoreSet {
         self.semaphores = sems;
         self.device = Some(device.clone());
         vk::Result::SUCCESS
-    }
+    }}
 
     fn get_semaphore(&self, index: u32) -> vk::Semaphore {
         self.semaphores
@@ -474,7 +474,7 @@ impl VulkanSemaphoreSet {
 
     /// # Safety
     /// No semaphores may be in use on the GPU.
-    unsafe fn destroy(&mut self) {
+    unsafe fn destroy(&mut self) { unsafe {
         if let Some(ref device) = self.device {
             for s in &self.semaphores {
                 if *s != vk::Semaphore::null() {
@@ -484,7 +484,7 @@ impl VulkanSemaphoreSet {
         }
         self.semaphores.clear();
         self.device = None;
-    }
+    }}
 }
 
 // ---------------------------------------------------------------------------
@@ -517,7 +517,7 @@ impl VulkanQueryPoolSet {
         query_type: vk::QueryType,
         flags: vk::QueryPoolCreateFlags,
         next: *const std::ffi::c_void,
-    ) -> vk::Result {
+    ) -> vk::Result { unsafe {
         self.destroy();
 
         let _ = flags; // C++ passes flags as VkQueryPoolCreateFlags (reserved, must be 0).
@@ -538,7 +538,7 @@ impl VulkanQueryPoolSet {
             }
             Err(e) => e.into(),
         }
-    }
+    }}
 
     fn get_query_pool(&self, query_idx: u32) -> vk::QueryPool {
         if query_idx < self.query_count {
@@ -550,7 +550,7 @@ impl VulkanQueryPoolSet {
 
     /// # Safety
     /// The query pool must not be in use on the GPU.
-    unsafe fn destroy(&mut self) {
+    unsafe fn destroy(&mut self) { unsafe {
         if let Some(ref device) = self.device {
             if self.query_pool != vk::QueryPool::null() {
                 device.destroy_query_pool(self.query_pool, None);
@@ -559,7 +559,7 @@ impl VulkanQueryPoolSet {
             }
         }
         self.device = None;
-    }
+    }}
 }
 
 // ---------------------------------------------------------------------------
@@ -579,7 +579,7 @@ pub unsafe fn wait_and_reset_fence(
     fence_name: &str,
     fence_wait_timeout: u64,
     fence_total_wait_timeout: u64,
-) -> vk::Result {
+) -> vk::Result { unsafe {
     debug_assert!(fence != vk::Fence::null());
 
     let mut current_wait: u64 = 0;
@@ -631,7 +631,7 @@ pub unsafe fn wait_and_reset_fence(
     }
 
     vk::Result::SUCCESS
-}
+}}
 
 // ---------------------------------------------------------------------------
 // VulkanCommandBufferPool
@@ -713,7 +713,7 @@ impl VulkanCommandBufferPool {
         next: *const std::ffi::c_void,
         create_semaphores: bool,
         create_fences: bool,
-    ) -> vk::Result {
+    ) -> vk::Result { unsafe {
         let pool = Arc::get_mut(self)
             .expect("Cannot configure pool while other references exist");
 
@@ -766,7 +766,7 @@ impl VulkanCommandBufferPool {
         inner.pool_size = num_pool_nodes;
         inner.queue_family_index = queue_family_index;
         vk::Result::SUCCESS
-    }
+    }}
 
     /// Acquire an available pool node.
     /// Mirrors C++ `VulkanCommandBufferPool::GetAvailablePoolNode`.
@@ -878,7 +878,7 @@ impl VulkanCommandBufferPool {
     ///
     /// # Safety
     /// All GPU work using pool resources must be complete.
-    pub unsafe fn deinit(self: &mut Arc<Self>) {
+    pub unsafe fn deinit(self: &mut Arc<Self>) { unsafe {
         let pool = Arc::get_mut(self)
             .expect("Cannot deinit pool while other references exist");
         let inner = pool.mutex.lock().unwrap();
@@ -894,7 +894,7 @@ impl VulkanCommandBufferPool {
         pool.semaphore_set.destroy();
         pool.fence_set.destroy();
         pool.query_pool_set.destroy();
-    }
+    }}
 }
 
 // ---------------------------------------------------------------------------
@@ -942,10 +942,10 @@ impl PoolNodeHandle {
     /// This is safe in practice because `PoolNodeHandle` has exclusive ownership
     /// of the node index (guaranteed by the bitmask).
     #[allow(clippy::mut_from_ref)] // interior mutability via UnsafeCell; caller-guaranteed exclusivity
-    pub unsafe fn node_mut(&self) -> &mut PoolNode {
+    pub unsafe fn node_mut(&self) -> &mut PoolNode { unsafe {
         let nodes = &mut *self.pool.pool_nodes.get();
         &mut nodes[self.index as usize]
-    }
+    }}
 
     /// Begin command buffer recording.
     ///
@@ -954,21 +954,21 @@ impl PoolNodeHandle {
     pub unsafe fn begin_command_buffer_recording(
         &self,
         begin_info: &vk::CommandBufferBeginInfo,
-    ) -> Result<vk::CommandBuffer, vk::Result> {
+    ) -> Result<vk::CommandBuffer, vk::Result> { unsafe {
         let cmd_buf = self
             .get_command_buffer()
             .ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
         self.node_mut()
             .begin_command_buffer_recording(cmd_buf, begin_info)
-    }
+    }}
 
     /// End command buffer recording.
     ///
     /// # Safety
     /// The command buffer must be in recording state.
-    pub unsafe fn end_command_buffer_recording(&self, cmd_buf: vk::CommandBuffer) -> vk::Result {
+    pub unsafe fn end_command_buffer_recording(&self, cmd_buf: vk::CommandBuffer) -> vk::Result { unsafe {
         self.node_mut().end_command_buffer_recording(cmd_buf)
-    }
+    }}
 
     /// Mark the command buffer as submitted.
     pub fn set_command_buffer_submitted(&self) -> bool {
@@ -984,7 +984,7 @@ impl PoolNodeHandle {
         &self,
         reset_after_wait: bool,
         fence_name: &str,
-    ) -> vk::Result {
+    ) -> vk::Result { unsafe {
         let fence = self.get_fence();
         self.node_mut().sync_host_on_cmd_buff_complete(
             fence,
@@ -993,17 +993,17 @@ impl PoolNodeHandle {
             DEFAULT_FENCE_WAIT_TIMEOUT_NSEC,
             DEFAULT_FENCE_TOTAL_WAIT_TIMEOUT_NSEC,
         )
-    }
+    }}
 
     /// Reset the command buffer, optionally waiting for GPU completion first.
     ///
     /// # Safety
     /// If `sync_with_host` is true, the command buffer must have been submitted.
-    pub unsafe fn reset_command_buffer(&self, sync_with_host: bool, fence_name: &str) -> bool {
+    pub unsafe fn reset_command_buffer(&self, sync_with_host: bool, fence_name: &str) -> bool { unsafe {
         let fence = self.get_fence();
         self.node_mut()
             .reset_command_buffer(fence, sync_with_host, fence_name)
-    }
+    }}
 
     /// Get the command buffer state.
     pub fn cmd_buf_state(&self) -> CmdBufState {
@@ -1057,7 +1057,7 @@ impl PoolNodeHandler {
         pool: &Arc<VulkanCommandBufferPool>,
         operation_name: &str,
         wait_on_cpu_after_submit: bool,
-    ) -> Self {
+    ) -> Self { unsafe {
         let node_handle = pool.get_available_pool_node();
         let mut cmd_buf = vk::CommandBuffer::null();
 
@@ -1080,7 +1080,7 @@ impl PoolNodeHandler {
             wait_on_cpu_after_submit,
             command_ended: false,
         }
-    }
+    }}
 
     /// Create a handler with an existing pool node handle.
     ///
@@ -1091,7 +1091,7 @@ impl PoolNodeHandler {
         existing_node: Option<PoolNodeHandle>,
         operation_name: &str,
         wait_on_cpu_after_submit: bool,
-    ) -> Self {
+    ) -> Self { unsafe {
         let node_handle = existing_node.or_else(|| pool.get_available_pool_node());
         let mut cmd_buf = vk::CommandBuffer::null();
 
@@ -1114,14 +1114,14 @@ impl PoolNodeHandler {
             wait_on_cpu_after_submit,
             command_ended: false,
         }
-    }
+    }}
 
     /// End command buffer recording.
     /// Mirrors C++ `PoolNodeHandler::EndCmdBufferRecording`.
     ///
     /// # Safety
     /// The command buffer must be in recording state.
-    pub unsafe fn end_cmd_buffer_recording(&mut self) -> vk::Result {
+    pub unsafe fn end_cmd_buffer_recording(&mut self) -> vk::Result { unsafe {
         if let Some(ref handle) = self.node_handle {
             if self.cmd_buf == vk::CommandBuffer::null() {
                 return vk::Result::ERROR_INITIALIZATION_FAILED;
@@ -1134,7 +1134,7 @@ impl PoolNodeHandler {
         } else {
             vk::Result::ERROR_INITIALIZATION_FAILED
         }
-    }
+    }}
 
     /// Check if the handler is valid and has a command buffer ready for recording.
     pub fn is_valid(&self) -> bool {

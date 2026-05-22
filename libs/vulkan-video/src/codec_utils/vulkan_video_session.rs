@@ -97,7 +97,7 @@ impl VulkanVideoSession {
         allocator: &Arc<vma::Allocator>,
         submitter: &Arc<dyn crate::rhi::RhiQueueSubmitter>,
         params: &VideoSessionCreateParams,
-    ) -> Result<Arc<Self>, vk::Result> {
+    ) -> Result<Arc<Self>, vk::Result> { unsafe {
         // --- Build the std header version based on codec type ---------
         let std_header_version = std_header_version_for_codec(params.codec_operation)?;
 
@@ -124,7 +124,7 @@ impl VulkanVideoSession {
             *result_ref = Self::create_locked(device, allocator, params, &create_info);
         });
         result
-    }
+    }}
 
     /// Must be called while holding the host's device-level resource lock.
     unsafe fn create_locked(
@@ -132,7 +132,7 @@ impl VulkanVideoSession {
         allocator: &Arc<vma::Allocator>,
         params: &VideoSessionCreateParams,
         create_info: &vk::VideoSessionCreateInfoKHRBuilder,
-    ) -> Result<Arc<Self>, vk::Result> {
+    ) -> Result<Arc<Self>, vk::Result> { unsafe {
         // --- Create the VkVideoSessionKHR ----------------------------
         let video_session = device
             .create_video_session_khr(create_info, None)
@@ -219,7 +219,7 @@ impl VulkanVideoSession {
             video_session,
             allocations,
         }))
-    }
+    }}
 
     // ------------------------------------------------------------------
     // Accessors
@@ -328,14 +328,14 @@ unsafe fn cleanup_on_failure(
     video_session: vk::VideoSessionKHR,
     device: &vulkanalia::Device,
     allocations: &[vma::Allocation],
-) {
+) { unsafe {
     for &allocation in allocations {
         allocator.free_memory(allocation);
     }
     if video_session != vk::VideoSessionKHR::null() {
         device.destroy_video_session_khr(video_session, None);
     }
-}
+}}
 
 /// Return the `VkExtensionProperties` (std header version) for a given codec
 /// operation type, matching the C++ switch statement in `VulkanVideoSession::Create`.

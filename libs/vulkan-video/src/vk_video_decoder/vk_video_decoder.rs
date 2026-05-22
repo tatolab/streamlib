@@ -851,7 +851,7 @@ impl VkVideoDecoder {
     /// for actual decode operations.
     /// Wait for any in-flight decode to complete. Must be called before
     /// reading the staging buffer from the previous submission.
-    pub unsafe fn wait_for_decode(&mut self) -> VideoResult<()> {
+    pub unsafe fn wait_for_decode(&mut self) -> VideoResult<()> { unsafe {
         if self.decode_in_flight {
             let device = self.ctx.device();
             device.wait_for_fences(&[self.fence], true, LONG_TIMEOUT)
@@ -859,14 +859,14 @@ impl VkVideoDecoder {
             self.decode_in_flight = false;
         }
         Ok(())
-    }
+    }}
 
     #[allow(unused_assignments, unused_mut)]
     pub unsafe fn decode_frame(
         &mut self,
         submit: &DecodeSubmitInfo,
         output: &mut DecodedFrame,
-    ) -> VideoResult<()> {
+    ) -> VideoResult<()> { unsafe {
         // Wait for any previous in-flight decode before reusing the command buffer
         self.wait_for_decode()?;
 
@@ -900,9 +900,7 @@ impl VkVideoDecoder {
             let resize_result_ref = &mut resize_result;
             let resize_allocator = self.ctx.allocator();
             self.submitter.with_device_resource_lock(&mut || {
-                *resize_result_ref = unsafe {
-                    resize_allocator.create_buffer(bs_create, &bs_alloc)
-                };
+                *resize_result_ref = resize_allocator.create_buffer(bs_create, &bs_alloc);
             });
             let (buf, alloc) = resize_result.map_err(VideoError::from)?;
             let info = self.ctx.allocator().get_allocation_info(alloc);
@@ -1410,7 +1408,7 @@ impl VkVideoDecoder {
 
         self.decode_pic_count += 1;
         Ok(())
-    }
+    }}
 
     /// Get the session parameters handle.
     pub fn session_parameters(&self) -> vk::VideoSessionParametersKHR {

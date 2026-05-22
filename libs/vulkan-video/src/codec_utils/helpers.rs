@@ -206,13 +206,13 @@ impl Drop for NativeHandle {
 ///
 /// # Safety
 /// `fd` must be a valid open file descriptor that the caller owns.
-unsafe fn libc_close(fd: RawFd) {
+unsafe fn libc_close(fd: RawFd) { unsafe {
     // `close` is provided by libc which is always linked on Unix targets.
     unsafe extern "C" {
         fn close(fd: std::os::raw::c_int) -> std::os::raw::c_int;
     }
-    unsafe { let _ = close(fd); }
-}
+    let _ = close(fd);
+}}
 
 // ---------------------------------------------------------------------------
 // pNext chain helper
@@ -228,7 +228,7 @@ unsafe fn libc_close(fd: RawFd) {
 /// Both pointers must be valid and point to Vulkan structures whose first two
 /// fields are `s_type` and `next` (i.e. they extend `VkBaseInStructure`).
 /// `chained.next` must be null on entry.
-pub unsafe fn chain_next_vk_struct<N, C>(node: &mut N, chained: &mut C) {
+pub unsafe fn chain_next_vk_struct<N, C>(node: &mut N, chained: &mut C) { unsafe {
     let node_base = node as *mut N as *mut vk::BaseOutStructure;
     let chained_base = chained as *mut C as *mut vk::BaseOutStructure;
 
@@ -240,7 +240,7 @@ pub unsafe fn chain_next_vk_struct<N, C>(node: &mut N, chained: &mut C) {
     // Insert at the head: chained.next = node.next; node.next = chained
     (*chained_base).next = (*node_base).next;
     (*node_base).next = chained_base;
-}
+}}
 
 // ---------------------------------------------------------------------------
 // Vulkan enumeration / query helpers
@@ -302,7 +302,7 @@ pub struct QueueFamilyInfo {
 pub unsafe fn get_physical_device_queue_family_properties2(
     instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
-) -> Vec<QueueFamilyInfo> {
+) -> Vec<QueueFamilyInfo> { unsafe {
     // Use the raw function pointer because vulkanalia's high-level wrapper
     // doesn't support pNext chains on the output structures.
     let get_props_fn = instance.commands().get_physical_device_queue_family_properties2;
@@ -340,7 +340,7 @@ pub unsafe fn get_physical_device_queue_family_properties2(
     }
 
     infos
-}
+}}
 
 /// Get surface formats.
 ///
@@ -349,9 +349,9 @@ pub unsafe fn get_physical_device_surface_formats(
     instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
     surface: vk::SurfaceKHR,
-) -> Result<Vec<vk::SurfaceFormatKHR>, vk::ErrorCode> {
+) -> Result<Vec<vk::SurfaceFormatKHR>, vk::ErrorCode> { unsafe {
     instance.get_physical_device_surface_formats_khr(physical_device, surface)
-}
+}}
 
 /// Get present modes.
 ///
@@ -360,9 +360,9 @@ pub unsafe fn get_physical_device_surface_present_modes(
     instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
     surface: vk::SurfaceKHR,
-) -> Result<Vec<vk::PresentModeKHR>, vk::ErrorCode> {
+) -> Result<Vec<vk::PresentModeKHR>, vk::ErrorCode> { unsafe {
     instance.get_physical_device_surface_present_modes_khr(physical_device, surface)
-}
+}}
 
 /// Get swapchain images.
 ///
@@ -370,9 +370,9 @@ pub unsafe fn get_physical_device_surface_present_modes(
 pub unsafe fn get_swapchain_images(
     device: &vulkanalia::Device,
     swapchain: vk::SwapchainKHR,
-) -> Result<Vec<vk::Image>, vk::ErrorCode> {
+) -> Result<Vec<vk::Image>, vk::ErrorCode> { unsafe {
     device.get_swapchain_images_khr(swapchain)
-}
+}}
 
 // ---------------------------------------------------------------------------
 // Memory type mapping
@@ -387,7 +387,7 @@ pub unsafe fn map_memory_type_to_index(
     physical_device: vk::PhysicalDevice,
     type_bits: u32,
     requirements_mask: vk::MemoryPropertyFlags,
-) -> Result<u32, vk::ErrorCode> {
+) -> Result<u32, vk::ErrorCode> { unsafe {
     let memory_properties = instance.get_physical_device_memory_properties(physical_device);
     let mut bits = type_bits;
     for i in 0..32u32 {
@@ -401,7 +401,7 @@ pub unsafe fn map_memory_type_to_index(
         bits >>= 1;
     }
     Err(vk::ErrorCode::VALIDATION_FAILED)
-}
+}}
 
 // ---------------------------------------------------------------------------
 // Fence helpers
@@ -422,7 +422,7 @@ pub unsafe fn wait_and_reset_fence(
     fence_name: &str,
     fence_wait_timeout: u64,
     fence_total_wait_timeout: u64,
-) -> vk::Result {
+) -> vk::Result { unsafe {
     assert!(fence != vk::Fence::null());
 
     let mut current_wait: u64 = 0;
@@ -481,7 +481,7 @@ pub unsafe fn wait_and_reset_fence(
     }
 
     result
-}
+}}
 
 /// Wait for `fence`, check the video decode query-pool status, and retry on
 /// timeout.
@@ -498,7 +498,7 @@ pub unsafe fn wait_and_get_status(
     fence_wait_timeout: u64,
     fence_total_wait_timeout: u64,
     mut retry_count: u32,
-) -> vk::Result {
+) -> vk::Result { unsafe {
     let mut result;
 
     loop {
@@ -561,7 +561,7 @@ pub unsafe fn wait_and_get_status(
     }
 
     result
-}
+}}
 
 // ---------------------------------------------------------------------------
 // DeviceUuidUtils

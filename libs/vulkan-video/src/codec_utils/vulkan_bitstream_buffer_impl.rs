@@ -667,24 +667,24 @@ impl VulkanBitstreamBufferStream {
     ///
     /// # Safety
     /// Caller must ensure `index < max_size`.
-    pub unsafe fn read(&self, index: vk::DeviceSize) -> u8 {
+    pub unsafe fn read(&self, index: vk::DeviceSize) -> u8 { unsafe {
         debug_assert!(!self.data_ptr.is_null());
         debug_assert!(index < self.max_size);
         *self.data_ptr.add(index as usize)
-    }
+    }}
 
     /// Write a byte at the given index, updating the high-water mark.
     ///
     /// # Safety
     /// Caller must ensure `index < max_size`.
-    pub unsafe fn write(&mut self, index: vk::DeviceSize, value: u8) {
+    pub unsafe fn write(&mut self, index: vk::DeviceSize, value: u8) { unsafe {
         debug_assert!(!self.data_ptr.is_null());
         debug_assert!(index < self.max_size);
         if index > self.max_access_location {
             self.max_access_location = index;
         }
         *self.data_ptr.add(index as usize) = value;
-    }
+    }}
 
     pub fn is_valid(&self) -> bool {
         !self.data_ptr.is_null() && self.max_size != 0 && self.bitstream_buffer.is_some()

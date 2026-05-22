@@ -575,7 +575,7 @@ mod tests {
 
     #[test]
     fn test_compute_aspect_ratio_square() {
-        let (idc, sw, sh) = EncoderConfigH264::compute_aspect_ratio(1920, 1080, 16, 9);
+        let (idc, _sw, _sh) = EncoderConfigH264::compute_aspect_ratio(1920, 1080, 16, 9);
         // 16:9 at 1920x1080 => SAR 1:1
         assert_eq!(idc, 1); // SQUARE
     }
