@@ -5,7 +5,7 @@
 //!
 //! Based on pyroenc's `rgb_to_yuv.comp` shader (MIT, Arntzen Software AS).
 //! Uses BT.709 color matrix with TV range (16-235 luma, 16-240 chroma),
-//! 6-tap left-sited chroma filter, and push descriptors for zero allocation.
+//! 6-tap left-sited chroma filter.
 //!
 //! Two NV12 images are owned: a STORAGE compute-output image (no video
 //! profile chained) and a VIDEO_ENCODE_SRC_KHR image (profile chained). A
@@ -13,18 +13,34 @@
 //! frame. The split is required because no NVIDIA encode profile reports
 //! `STORAGE` as a supported usage via vkGetPhysicalDeviceVideoFormatPropertiesKHR
 //! (VUID-VkImageCreateInfo-pNext-06811).
+//!
+//! Compute dispatch is owned by [`VulkanComputeKernel`]; the converter
+//! holds the per-plane reinterpreted-format storage views the kernel
+//! writes through plus its own command-buffer / fence for recording the
+//! surrounding barriers + copy.
 
 use std::sync::Arc;
 
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
-use vulkanalia::vk::KhrPushDescriptorExtensionDeviceCommands;
 use vulkanalia_vma::{self as vma, Alloc};
 
+use crate::core::rhi::{ComputeBindingSpec, ComputeKernelDescriptor};
+use crate::vulkan::rhi::VulkanComputeKernel;
 use crate::vulkan::video::video_context::{VideoContext, VideoError};
 
 /// Pre-compiled SPIR-V bytecode for the RGB→NV12 compute shader.
 const SHADER_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rgb_to_nv12.spv"));
+
+/// Binding shape of `rgb_to_nv12.comp`:
+/// - 0: SAMPLED_IMAGE — input RGBA texture (texture2D, texelFetch).
+/// - 1: STORAGE_IMAGE — luma output plane (R8, reinterpreted view of NV12 plane 0).
+/// - 2: STORAGE_IMAGE — chroma output plane (RG8, reinterpreted view of NV12 plane 1).
+const BINDINGS: &[ComputeBindingSpec] = &[
+    ComputeBindingSpec::sampled_image(0),
+    ComputeBindingSpec::storage_image(1),
+    ComputeBindingSpec::storage_image(2),
+];
 
 /// Push constants passed to the compute shader.
 #[repr(C)]
@@ -35,7 +51,7 @@ struct PushConstants {
 
 /// GPU RGB(A) → NV12 converter.
 ///
-/// Owns a compute pipeline plus two NV12 images (compute-output + encode-src)
+/// Owns a compute kernel plus two NV12 images (compute-output + encode-src)
 /// joined by a per-plane vkCmdCopyImage. The encode-src image uses
 /// `CONCURRENT` sharing between the compute and encode queue families so it
 /// can be used as `VIDEO_ENCODE_SRC` without queue family ownership transfers.
@@ -43,11 +59,9 @@ pub struct RgbToNv12Converter {
     device: vulkanalia::Device,
     allocator: Arc<vma::Allocator>,
 
-    // Pipeline objects
-    descriptor_set_layout: vk::DescriptorSetLayout,
-    pipeline_layout: vk::PipelineLayout,
-    pipeline: vk::Pipeline,
-    shader_module: vk::ShaderModule,
+    // Engine-managed compute pipeline (descriptor set / pipeline layout /
+    // pipeline / pipeline cache / SPIR-V reflection all live inside).
+    kernel: VulkanComputeKernel,
 
     // Compute-output NV12 image — STORAGE + TRANSFER_SRC, no video profile.
     compute_nv12_image: vk::Image,
@@ -61,7 +75,9 @@ pub struct RgbToNv12Converter {
     encode_nv12_allocation: vma::Allocation,
     encode_nv12_color_view: vk::ImageView,
 
-    // Command recording
+    // Command recording (separate from the kernel's own internal command
+    // buffer so the converter can wrap `kernel.record(cb, ...)` with its
+    // own barriers + multi-plane copy).
     command_pool: vk::CommandPool,
     command_buffer: vk::CommandBuffer,
     fence: vk::Fence,
@@ -102,79 +118,24 @@ impl RgbToNv12Converter {
     ) -> Result<Self, VideoError> { unsafe {
         let device = ctx.device().clone();
         let allocator = ctx.allocator().clone();
-        // --- 1. Create shader module ---
-        let spirv_words = Self::spirv_to_words(SHADER_SPIRV);
-        let shader_module = device.create_shader_module(
-            &vk::ShaderModuleCreateInfo::builder()
-                .code_size(SHADER_SPIRV.len())
-                .code(&spirv_words),
-            None,
+
+        // --- 1. Compute kernel via the engine RHI ---
+        // Descriptor-set layout, pipeline layout, compute pipeline, descriptor
+        // pool, command buffer + fence (for `dispatch`) all live inside the
+        // kernel. The converter uses `kernel.record(...)` instead of
+        // `kernel.dispatch(...)` so the surrounding barriers + multi-plane
+        // copy land in the converter's own command buffer in one submit.
+        let kernel = VulkanComputeKernel::new(
+            ctx.host_device(),
+            &ComputeKernelDescriptor {
+                label: "rgb_to_nv12",
+                spv: SHADER_SPIRV,
+                bindings: BINDINGS,
+                push_constant_size: std::mem::size_of::<PushConstants>() as u32,
+            },
         )?;
 
-        // --- 2. Descriptor set layout (push descriptors) ---
-        let bindings = [
-            // binding 0: sampled input image (texture2D)
-            vk::DescriptorSetLayoutBinding::builder()
-                .binding(0)
-                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                .build(),
-            // binding 1: luma output (image2D, R8)
-            vk::DescriptorSetLayoutBinding::builder()
-                .binding(1)
-                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                .build(),
-            // binding 2: chroma output (image2D, RG8)
-            vk::DescriptorSetLayoutBinding::builder()
-                .binding(2)
-                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                .build(),
-        ];
-
-        let descriptor_set_layout = device.create_descriptor_set_layout(
-            &vk::DescriptorSetLayoutCreateInfo::builder()
-                .flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR)
-                .bindings(&bindings),
-            None,
-        )?;
-        // --- 3. Pipeline layout (push constants + push descriptors) ---
-        let push_range = vk::PushConstantRange::builder()
-            .stage_flags(vk::ShaderStageFlags::COMPUTE)
-            .offset(0)
-            .size(std::mem::size_of::<PushConstants>() as u32);
-
-        let pipeline_layout = device.create_pipeline_layout(
-            &vk::PipelineLayoutCreateInfo::builder()
-                .set_layouts(std::slice::from_ref(&descriptor_set_layout))
-                .push_constant_ranges(std::slice::from_ref(&push_range)),
-            None,
-        )?;
-
-        // --- 4. Compute pipeline ---
-        let stage = vk::PipelineShaderStageCreateInfo::builder()
-            .stage(vk::ShaderStageFlags::COMPUTE)
-            .module(shader_module)
-            .name(b"main\0");
-
-        let pipeline_info = vk::ComputePipelineCreateInfo::builder()
-            .stage(stage)
-            .layout(pipeline_layout);
-
-        let (pipelines, _) = device
-            .create_compute_pipelines(
-                vk::PipelineCache::null(),
-                std::slice::from_ref(&pipeline_info),
-                None,
-            )
-            .map_err(|e| VideoError::Vulkan(vk::Result::from(e)))?;
-        let pipeline = pipelines[0];
-
-        // --- 5a. Compute-output NV12 image (STORAGE | TRANSFER_SRC) ---
+        // --- 2a. Compute-output NV12 image (STORAGE | TRANSFER_SRC) ---
         // No video profile chained here — STORAGE on a VIDEO_ENCODE_SRC image is
         // not reported as a supported video format by NVIDIA encode profiles
         // (VUID-VkImageCreateInfo-pNext-06811). Compute writes go here, then a
@@ -206,7 +167,7 @@ impl RgbToNv12Converter {
         let (compute_nv12_image, compute_nv12_allocation) =
             allocator.create_image(compute_nv12_image_info, &alloc_options)?;
 
-        // --- 5b. Encode-src NV12 image (VIDEO_ENCODE_SRC | TRANSFER_DST | SAMPLED) ---
+        // --- 2b. Encode-src NV12 image (VIDEO_ENCODE_SRC | TRANSFER_DST | SAMPLED) ---
         // Profile list MUST match the video session profile exactly, including
         // the encode_usage pNext chain. Without this, the validation layer
         // reports VUID-vkCmdEncodeVideoKHR-pEncodeInfo-08206. Keep every field
@@ -262,7 +223,7 @@ impl RgbToNv12Converter {
         let (encode_nv12_image, encode_nv12_allocation) =
             allocator.create_image(encode_nv12_image_info, &alloc_options)?;
 
-        // --- 6. Image views ---
+        // --- 3. Image views ---
 
         // COLOR view of the encode-src image for vkCmdEncodeVideoKHR.
         let mut color_view_ycbcr_info = vk::SamplerYcbcrConversionInfo::builder()
@@ -320,7 +281,7 @@ impl RgbToNv12Converter {
             None,
         )?;
 
-        // --- 7. Command pool / buffer / fence ---
+        // --- 4. Command pool / buffer / fence ---
         let command_pool = device.create_command_pool(
             &vk::CommandPoolCreateInfo::builder()
                 .queue_family_index(compute_queue_family)
@@ -340,10 +301,7 @@ impl RgbToNv12Converter {
         Ok(Self {
             device,
             allocator,
-            descriptor_set_layout,
-            pipeline_layout,
-            pipeline,
-            shader_module,
+            kernel,
             compute_nv12_image,
             compute_nv12_allocation,
             luma_view,
@@ -375,6 +333,16 @@ impl RgbToNv12Converter {
         rgba_image_view: vk::ImageView,
     ) -> Result<(vk::Image, vk::ImageView), VideoError> { unsafe {
         let cb = self.command_buffer;
+
+        // --- Stage descriptor writes for this dispatch ---
+        // The kernel drains its pending state on `record(...)`; setting
+        // before recording is the contract.
+        self.kernel.set_sampled_image_view(0, rgba_image_view)?;
+        self.kernel.set_storage_image_view(1, self.luma_view)?;
+        self.kernel.set_storage_image_view(2, self.chroma_view)?;
+        self.kernel.set_push_constants_value(&PushConstants {
+            resolution: [self.width as i32, self.height as i32],
+        })?;
 
         self.device
             .reset_command_buffer(cb, vk::CommandBufferResetFlags::empty())?;
@@ -408,70 +376,16 @@ impl RgbToNv12Converter {
             .image_memory_barriers(&pre_barriers);
         self.device.cmd_pipeline_barrier2(cb, &pre_dep);
 
-        // --- Bind compute pipeline ---
-        self.device
-            .cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, self.pipeline);
-
-        // --- Push descriptors ---
-        let input_image_info = vk::DescriptorImageInfo::builder()
-            .image_view(rgba_image_view)
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-
-        let luma_image_info = vk::DescriptorImageInfo::builder()
-            .image_view(self.luma_view)
-            .image_layout(vk::ImageLayout::GENERAL);
-
-        let chroma_image_info = vk::DescriptorImageInfo::builder()
-            .image_view(self.chroma_view)
-            .image_layout(vk::ImageLayout::GENERAL);
-
-        let writes = [
-            vk::WriteDescriptorSet::builder()
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                .image_info(std::slice::from_ref(&input_image_info))
-                .build(),
-            vk::WriteDescriptorSet::builder()
-                .dst_binding(1)
-                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                .image_info(std::slice::from_ref(&luma_image_info))
-                .build(),
-            vk::WriteDescriptorSet::builder()
-                .dst_binding(2)
-                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                .image_info(std::slice::from_ref(&chroma_image_info))
-                .build(),
-        ];
-
-        self.device.cmd_push_descriptor_set_khr(
-            cb,
-            vk::PipelineBindPoint::COMPUTE,
-            self.pipeline_layout,
-            0,
-            &writes,
-        );
-
-        // --- Push constants ---
-        let push = PushConstants {
-            resolution: [self.width as i32, self.height as i32],
-        };
-        self.device.cmd_push_constants(
-            cb,
-            self.pipeline_layout,
-            vk::ShaderStageFlags::COMPUTE,
-            0,
-            std::slice::from_raw_parts(
-                &push as *const PushConstants as *const u8,
-                std::mem::size_of::<PushConstants>(),
-            ),
-        );
-
-        // --- Dispatch ---
+        // --- Bind compute pipeline + push descriptors + push constants + dispatch ---
         // Each thread handles a 2x2 luma block, so we need
         // (width/2 + 7) / 8 x (height/2 + 7) / 8 workgroups.
         let group_x = (self.width / 2 + 7) / 8;
         let group_y = (self.height / 2 + 7) / 8;
-        self.device.cmd_dispatch(cb, group_x, group_y, 1);
+        self.kernel
+            .record(cb, group_x, group_y, 1)
+            .map_err(|e| {
+                VideoError::Other(format!("rgb_to_nv12 kernel record failed: {e}"))
+            })?;
 
         // --- Barriers: compute_nv12 → TRANSFER_SRC, encode_nv12 → TRANSFER_DST ---
         let barrier_compute_to_transfer = vk::ImageMemoryBarrier2::builder()
@@ -614,15 +528,6 @@ impl RgbToNv12Converter {
     pub fn nv12_color_view(&self) -> vk::ImageView {
         self.encode_nv12_color_view
     }
-
-    /// Convert SPIR-V byte slice to u32 word slice.
-    fn spirv_to_words(bytes: &[u8]) -> Vec<u32> {
-        assert!(bytes.len() % 4 == 0, "SPIR-V size must be multiple of 4");
-        bytes
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect()
-    }
 }
 
 impl Drop for RgbToNv12Converter {
@@ -654,22 +559,10 @@ impl Drop for RgbToNv12Converter {
                 self.allocator
                     .destroy_image(self.compute_nv12_image, self.compute_nv12_allocation);
             }
-
-            if self.pipeline != vk::Pipeline::null() {
-                self.device.destroy_pipeline(self.pipeline, None);
-            }
-            if self.pipeline_layout != vk::PipelineLayout::null() {
-                self.device
-                    .destroy_pipeline_layout(self.pipeline_layout, None);
-            }
-            if self.descriptor_set_layout != vk::DescriptorSetLayout::null() {
-                self.device
-                    .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
-            }
-            if self.shader_module != vk::ShaderModule::null() {
-                self.device
-                    .destroy_shader_module(self.shader_module, None);
-            }
+            // The compute kernel (descriptor layout / pipeline / pipeline
+            // layout / shader module / descriptor pool / command pool /
+            // fence) is torn down by its own Drop when `self.kernel` is
+            // dropped after this function returns.
         }
     }
 }
@@ -680,14 +573,6 @@ unsafe impl Send for RgbToNv12Converter {}
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_spirv_to_words() {
-        let bytes = [0x03, 0x02, 0x23, 0x07, 0x00, 0x00, 0x01, 0x00];
-        let words = RgbToNv12Converter::spirv_to_words(&bytes);
-        assert_eq!(words.len(), 2);
-        assert_eq!(words[0], 0x07230203); // SPIR-V magic number
-    }
 
     #[test]
     fn test_push_constants_size() {
@@ -709,5 +594,22 @@ mod tests {
             SHADER_SPIRV[3],
         ]);
         assert_eq!(magic, 0x07230203, "Invalid SPIR-V magic number");
+    }
+
+    #[test]
+    fn bindings_match_shader_declaration() {
+        // Lock the binding shape against the shader: any drift between
+        // BINDINGS and rgb_to_nv12.comp will fail SPIR-V reflection at
+        // kernel construction time (rejecting silently-wrong dispatches),
+        // but locking it here at the data level catches regressions
+        // without needing a GPU.
+        use crate::core::rhi::ComputeBindingKind;
+        assert_eq!(BINDINGS.len(), 3);
+        assert_eq!(BINDINGS[0].binding, 0);
+        assert_eq!(BINDINGS[0].kind, ComputeBindingKind::SampledImage);
+        assert_eq!(BINDINGS[1].binding, 1);
+        assert_eq!(BINDINGS[1].kind, ComputeBindingKind::StorageImage);
+        assert_eq!(BINDINGS[2].binding, 2);
+        assert_eq!(BINDINGS[2].kind, ComputeBindingKind::StorageImage);
     }
 }

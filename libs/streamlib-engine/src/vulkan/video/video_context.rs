@@ -80,6 +80,9 @@ pub enum VideoError {
     BitstreamError(String),
     /// A required video format is not supported.
     FormatNotSupported(vk::Format),
+    /// An error surfaced from the engine RHI layer (compute-kernel
+    /// construction, descriptor management, etc.).
+    Other(String),
 }
 
 impl std::fmt::Display for VideoError {
@@ -91,6 +94,7 @@ impl std::fmt::Display for VideoError {
             Self::NoSuitableMemoryType => write!(f, "No suitable memory type found"),
             Self::BitstreamError(msg) => write!(f, "Bitstream error: {}", msg),
             Self::FormatNotSupported(fmt) => write!(f, "Format not supported: {:?}", fmt),
+            Self::Other(msg) => write!(f, "{}", msg),
         }
     }
 }
@@ -106,6 +110,12 @@ impl From<vk::Result> for VideoError {
 impl From<vk::ErrorCode> for VideoError {
     fn from(e: vk::ErrorCode) -> Self {
         Self::Vulkan(vk::Result::from(e))
+    }
+}
+
+impl From<crate::core::Error> for VideoError {
+    fn from(e: crate::core::Error) -> Self {
+        Self::Other(format!("{e}"))
     }
 }
 

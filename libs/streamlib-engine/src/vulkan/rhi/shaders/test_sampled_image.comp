@@ -1,0 +1,25 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+// Test shader for the SampledImage binding kind (Vulkan
+// `VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE` — GLSL `texture2D`, no combined
+// sampler). Exercises `VulkanComputeKernel::set_sampled_image_view` end-
+// to-end via descriptor-layout creation, descriptor write, bind, and
+// dispatch. The shader body is a no-op `texelFetch`; we only need the
+// declared binding to exist so the kernel sees a real SAMPLED_IMAGE
+// slot through SPIR-V reflection.
+
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+
+layout(local_size_x = 1, local_size_y = 1) in;
+
+layout(set = 0, binding = 0) uniform texture2D uImage;
+layout(set = 0, binding = 1, rgba8) writeonly uniform image2D uOut;
+
+void main() {
+    // texelFetch with explicit LOD — no sampler required. Result is
+    // immediately discarded; the dispatch is single-thread.
+    vec4 texel = texelFetch(uImage, ivec2(0, 0), 0);
+    imageStore(uOut, ivec2(0, 0), texel);
+}

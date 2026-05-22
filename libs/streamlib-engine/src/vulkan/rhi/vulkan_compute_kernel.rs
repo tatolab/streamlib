@@ -68,6 +68,13 @@ pub struct VulkanComputeKernelInner {
     /// Default sampler used for [`ComputeBindingKind::SampledTexture`] bindings.
     /// Created on-demand when the first sampled-texture binding is set.
     default_sampler: Mutex<Option<vk::Sampler>>,
+    /// Binding indices that were declared with `pImmutableSamplers` at
+    /// descriptor-set-layout creation time. Callers binding such a slot
+    /// must use [`Self::set_combined_image_sampler_view`] (view-only) —
+    /// the immutable sampler is baked into the layout and any sampler in
+    /// the descriptor write is ignored. Empty when the kernel was built
+    /// via [`Self::new`].
+    immutable_sampler_bindings: Vec<u32>,
     pending: Mutex<PendingState>,
 }
 
@@ -82,9 +89,18 @@ enum BindingResource {
         buffer: vk::Buffer,
         size: vk::DeviceSize,
     },
+    /// `COMBINED_IMAGE_SAMPLER` write — `sampler` may be `VK_NULL_HANDLE`
+    /// when the descriptor-set layout slot uses an immutable sampler
+    /// (per `pImmutableSamplers` at layout-creation time; the sampler
+    /// field in the write is then ignored by the implementation).
     SampledImage {
         view: vk::ImageView,
         sampler: vk::Sampler,
+    },
+    /// `SAMPLED_IMAGE` write — image view only, no sampler. GLSL
+    /// `texture2D` / `texelFetch` style.
+    SampledImageOnly {
+        view: vk::ImageView,
     },
     StorageImage {
         view: vk::ImageView,
@@ -100,6 +116,63 @@ impl VulkanComputeKernelInner {
     pub fn new(
         vulkan_device: &Arc<HostVulkanDevice>,
         descriptor: &ComputeKernelDescriptor<'_>,
+    ) -> Result<Self> {
+        Self::new_inner(vulkan_device, descriptor, &[])
+    }
+
+    /// Variant of [`Self::new`] that bakes one or more immutable
+    /// samplers into the descriptor-set layout, via `pImmutableSamplers`.
+    ///
+    /// Each `(binding, sampler)` pair attaches `sampler` to the matching
+    /// declared binding at layout-creation time; the binding must be
+    /// declared as [`ComputeBindingKind::SampledTexture`] (combined
+    /// image-sampler, the only shape Vulkan permits an immutable sampler
+    /// to bake into for compute today).
+    ///
+    /// **Lifetime contract.** The caller owns each `vk::Sampler` and is
+    /// responsible for keeping it alive for the kernel's lifetime —
+    /// the kernel records the handle in the layout but does not
+    /// duplicate or refcount it. Dropping a sampler before the kernel
+    /// is undefined behavior.
+    ///
+    /// Callers binding an immutable-sampler slot per-frame use
+    /// [`Self::set_combined_image_sampler_view`], which writes the
+    /// image view only — Vulkan ignores the sampler field in the write
+    /// whenever the layout slot has an immutable sampler.
+    pub fn new_with_immutable_samplers(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        descriptor: &ComputeKernelDescriptor<'_>,
+        immutable_samplers: &[(u32, vk::Sampler)],
+    ) -> Result<Self> {
+        // Pre-validate: every (binding, sampler) pair must refer to a
+        // declared SampledTexture binding. We catch this before going to
+        // Vulkan so the error names the offending binding directly.
+        for (binding, _) in immutable_samplers {
+            let spec = descriptor
+                .bindings
+                .iter()
+                .find(|b| b.binding == *binding)
+                .ok_or_else(|| {
+                    Error::GpuError(format!(
+                        "Compute kernel '{}': immutable sampler refers to undeclared binding {}",
+                        descriptor.label, binding
+                    ))
+                })?;
+            if spec.kind != ComputeBindingKind::SampledTexture {
+                return Err(Error::GpuError(format!(
+                    "Compute kernel '{}': immutable sampler attached to binding {} \
+                     declared as {:?}; only `SampledTexture` is supported",
+                    descriptor.label, binding, spec.kind
+                )));
+            }
+        }
+        Self::new_inner(vulkan_device, descriptor, immutable_samplers)
+    }
+
+    fn new_inner(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        descriptor: &ComputeKernelDescriptor<'_>,
+        immutable_samplers: &[(u32, vk::Sampler)],
     ) -> Result<Self> {
         let queue = vulkan_device.queue();
         let queue_family_index = vulkan_device.queue_family_index();
@@ -119,7 +192,11 @@ impl VulkanComputeKernelInner {
 
         let shader_module = create_shader_module(device, &spirv, descriptor.label)?;
 
-        let descriptor_set_layout = match create_descriptor_set_layout(device, descriptor.bindings)
+        let descriptor_set_layout = match create_descriptor_set_layout(
+            device,
+            descriptor.bindings,
+            immutable_samplers,
+        )
         {
             Ok(layout) => layout,
             Err(e) => {
@@ -259,6 +336,10 @@ impl VulkanComputeKernelInner {
             command_buffer,
             fence,
             default_sampler: Mutex::new(None),
+            immutable_sampler_bindings: immutable_samplers
+                .iter()
+                .map(|(b, _)| *b)
+                .collect(),
             pending: Mutex::new(PendingState {
                 bindings: HashMap::new(),
                 push_constants: Vec::new(),
@@ -332,6 +413,81 @@ impl VulkanComputeKernelInner {
     pub fn set_storage_image(&self, binding: u32, texture: &Texture) -> Result<()> {
         self.expect_kind(binding, ComputeBindingKind::StorageImage)?;
         let view = vk_image_view_for(texture)?;
+        self.pending
+            .lock()
+            .bindings
+            .insert(binding, BindingResource::StorageImage { view });
+        Ok(())
+    }
+
+    /// Bind a raw `vk::ImageView` to a [`ComputeBindingKind::SampledImage`]
+    /// slot (Vulkan `VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE` — GLSL `texture2D`).
+    ///
+    /// Escape hatch for callers (codec converters, video sessions) that
+    /// build per-plane reinterpreted-format views by hand against a
+    /// multi-planar image — those views can't be expressed through the
+    /// higher-level [`Self::set_sampled_texture`] / [`Self::set_storage_image`]
+    /// setters that take engine `Texture` handles. The view must be in
+    /// `SHADER_READ_ONLY_OPTIMAL` at dispatch time; caller is responsible
+    /// for the layout transition.
+    pub fn set_sampled_image_view(
+        &self,
+        binding: u32,
+        view: vk::ImageView,
+    ) -> Result<()> {
+        self.expect_kind(binding, ComputeBindingKind::SampledImage)?;
+        self.pending
+            .lock()
+            .bindings
+            .insert(binding, BindingResource::SampledImageOnly { view });
+        Ok(())
+    }
+
+    /// Bind a raw `vk::ImageView` to a [`ComputeBindingKind::SampledTexture`]
+    /// slot (`VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER`) whose sampler
+    /// is baked into the descriptor-set layout via `pImmutableSamplers`
+    /// (see [`Self::new_with_immutable_samplers`]).
+    ///
+    /// The descriptor write supplies the view; the sampler field in the
+    /// write is `VK_NULL_HANDLE` because Vulkan ignores it whenever the
+    /// layout slot has an immutable sampler. The view must be in
+    /// `SHADER_READ_ONLY_OPTIMAL` at dispatch time.
+    ///
+    /// Errors if the binding wasn't declared with an immutable sampler.
+    pub fn set_combined_image_sampler_view(
+        &self,
+        binding: u32,
+        view: vk::ImageView,
+    ) -> Result<()> {
+        self.expect_kind(binding, ComputeBindingKind::SampledTexture)?;
+        if !self.immutable_sampler_bindings.contains(&binding) {
+            return Err(Error::GpuError(format!(
+                "Compute kernel '{}': binding {} is SampledTexture but has no \
+                 immutable sampler; use set_sampled_texture (engine Texture) \
+                 or rebuild via new_with_immutable_samplers",
+                self.label, binding
+            )));
+        }
+        self.pending.lock().bindings.insert(
+            binding,
+            BindingResource::SampledImage {
+                view,
+                sampler: vk::Sampler::null(),
+            },
+        );
+        Ok(())
+    }
+
+    /// Bind a raw `vk::ImageView` to a [`ComputeBindingKind::StorageImage`]
+    /// slot. Escape hatch for callers that build per-plane reinterpreted-
+    /// format storage views by hand against a multi-planar image. The
+    /// view must be in `GENERAL` layout at dispatch time.
+    pub fn set_storage_image_view(
+        &self,
+        binding: u32,
+        view: vk::ImageView,
+    ) -> Result<()> {
+        self.expect_kind(binding, ComputeBindingKind::StorageImage)?;
         self.pending
             .lock()
             .bindings
@@ -664,6 +820,24 @@ impl VulkanComputeKernelInner {
                         image_idx: Some(idx),
                     });
                 }
+                (
+                    ComputeBindingKind::SampledImage,
+                    BindingResource::SampledImageOnly { view },
+                ) => {
+                    let idx = image_infos.len();
+                    image_infos.push(
+                        vk::DescriptorImageInfo::builder()
+                            .image_view(*view)
+                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                            .build(),
+                    );
+                    slots.push(Slot {
+                        binding: spec.binding,
+                        ty: vk::DescriptorType::SAMPLED_IMAGE,
+                        buffer_idx: None,
+                        image_idx: Some(idx),
+                    });
+                }
                 (ComputeBindingKind::StorageImage, BindingResource::StorageImage { view }) => {
                     let idx = image_infos.len();
                     image_infos.push(
@@ -776,6 +950,22 @@ impl VulkanComputeKernel {
         Ok(Self::from_arc_into_raw(Arc::new(inner)))
     }
 
+    /// Create from a SPIR-V descriptor and a list of immutable samplers
+    /// to bake into the descriptor-set layout. Mirrors
+    /// [`VulkanComputeKernelInner::new_with_immutable_samplers`].
+    pub fn new_with_immutable_samplers(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        descriptor: &ComputeKernelDescriptor<'_>,
+        immutable_samplers: &[(u32, vk::Sampler)],
+    ) -> Result<Self> {
+        let inner = VulkanComputeKernelInner::new_with_immutable_samplers(
+            vulkan_device,
+            descriptor,
+            immutable_samplers,
+        )?;
+        Ok(Self::from_arc_into_raw(Arc::new(inner)))
+    }
+
     pub(crate) fn from_arc_into_raw(arc: Arc<VulkanComputeKernelInner>) -> Self {
         let handle = Arc::into_raw(arc) as *const c_void;
         let vtable =
@@ -815,6 +1005,38 @@ impl VulkanComputeKernel {
         self.host_inner().set_storage_image(binding, texture)
     }
 
+    /// Bind a raw `vk::ImageView` to a [`ComputeBindingKind::SampledImage`]
+    /// slot. See [`VulkanComputeKernelInner::set_sampled_image_view`].
+    pub fn set_sampled_image_view(
+        &self,
+        binding: u32,
+        view: vk::ImageView,
+    ) -> Result<()> {
+        self.host_inner().set_sampled_image_view(binding, view)
+    }
+
+    /// Bind a raw `vk::ImageView` to a [`ComputeBindingKind::SampledTexture`]
+    /// slot that was created with an immutable sampler. See
+    /// [`VulkanComputeKernelInner::set_combined_image_sampler_view`].
+    pub fn set_combined_image_sampler_view(
+        &self,
+        binding: u32,
+        view: vk::ImageView,
+    ) -> Result<()> {
+        self.host_inner()
+            .set_combined_image_sampler_view(binding, view)
+    }
+
+    /// Bind a raw `vk::ImageView` to a [`ComputeBindingKind::StorageImage`]
+    /// slot. See [`VulkanComputeKernelInner::set_storage_image_view`].
+    pub fn set_storage_image_view(
+        &self,
+        binding: u32,
+        view: vk::ImageView,
+    ) -> Result<()> {
+        self.host_inner().set_storage_image_view(binding, view)
+    }
+
     pub fn set_push_constants(&self, bytes: &[u8]) -> Result<()> {
         self.host_inner().set_push_constants(bytes)
     }
@@ -833,7 +1055,7 @@ impl VulkanComputeKernel {
             .dispatch(group_count_x, group_count_y, group_count_z)
     }
 
-    pub(crate) fn record(
+    pub fn record(
         &self,
         command_buffer: vk::CommandBuffer,
         group_x: u32,
@@ -993,6 +1215,7 @@ fn expected_spirv_type(kind: ComputeBindingKind) -> RDescriptorType {
         ComputeBindingKind::StorageBuffer => RDescriptorType::STORAGE_BUFFER,
         ComputeBindingKind::UniformBuffer => RDescriptorType::UNIFORM_BUFFER,
         ComputeBindingKind::SampledTexture => RDescriptorType::COMBINED_IMAGE_SAMPLER,
+        ComputeBindingKind::SampledImage => RDescriptorType::SAMPLED_IMAGE,
         ComputeBindingKind::StorageImage => RDescriptorType::STORAGE_IMAGE,
     }
 }
@@ -1002,6 +1225,7 @@ fn descriptor_kind_to_vk(kind: ComputeBindingKind) -> vk::DescriptorType {
         ComputeBindingKind::StorageBuffer => vk::DescriptorType::STORAGE_BUFFER,
         ComputeBindingKind::UniformBuffer => vk::DescriptorType::UNIFORM_BUFFER,
         ComputeBindingKind::SampledTexture => vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+        ComputeBindingKind::SampledImage => vk::DescriptorType::SAMPLED_IMAGE,
         ComputeBindingKind::StorageImage => vk::DescriptorType::STORAGE_IMAGE,
     }
 }
@@ -1022,24 +1246,45 @@ fn create_shader_module(
 fn create_descriptor_set_layout(
     device: &vulkanalia::Device,
     bindings: &[ComputeBindingSpec],
+    immutable_samplers: &[(u32, vk::Sampler)],
 ) -> Result<vk::DescriptorSetLayout> {
+    // Builder borrows `pImmutableSamplers` from the slice provided to
+    // `.immutable_samplers(...)`. Hold each [vk::Sampler; 1] in a stable
+    // slot for the duration of the `info.build()` call so the pointers
+    // baked into `layout_bindings` are valid through layout creation.
+    let immutable_slots: Vec<[vk::Sampler; 1]> = immutable_samplers
+        .iter()
+        .map(|(_, sampler)| [*sampler])
+        .collect();
+
     let layout_bindings: Vec<vk::DescriptorSetLayoutBinding> = bindings
         .iter()
         .map(|spec| {
-            vk::DescriptorSetLayoutBinding::builder()
+            let mut b = vk::DescriptorSetLayoutBinding::builder()
                 .binding(spec.binding)
                 .descriptor_type(descriptor_kind_to_vk(spec.kind))
                 .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                .build()
+                .stage_flags(vk::ShaderStageFlags::COMPUTE);
+            if let Some(idx) = immutable_samplers
+                .iter()
+                .position(|(b, _)| *b == spec.binding)
+            {
+                b = b.immutable_samplers(&immutable_slots[idx]);
+            }
+            b.build()
         })
         .collect();
 
     let info = vk::DescriptorSetLayoutCreateInfo::builder()
         .bindings(&layout_bindings)
         .build();
-    unsafe { device.create_descriptor_set_layout(&info, None) }
-        .map_err(|e| Error::GpuError(format!("Failed to create descriptor set layout: {e}")))
+    let layout = unsafe { device.create_descriptor_set_layout(&info, None) }
+        .map_err(|e| Error::GpuError(format!("Failed to create descriptor set layout: {e}")))?;
+    // Keep `immutable_slots` alive until `create_descriptor_set_layout`
+    // has consumed the pointers. (The driver copies the samplers into
+    // its internal layout state; the slice can be freed afterward.)
+    drop(immutable_slots);
+    Ok(layout)
 }
 
 fn create_pipeline_layout(
@@ -1941,5 +2186,206 @@ mod tests {
             );
         });
     }
+
+    // ---- Sampled-image binding kind tests ------------------------------------
+
+    const SAMPLED_IMAGE_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/test_sampled_image.spv"));
+
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[test]
+    fn sampled_image_binding_dispatches_with_raw_view() {
+        let device = match try_vulkan_device() { Some(d) => d, None => return };
+
+        let bindings = [
+            ComputeBindingSpec::sampled_image(0),
+            ComputeBindingSpec::storage_image(1),
+        ];
+        let kernel = VulkanComputeKernel::new(
+            &device,
+            &ComputeKernelDescriptor {
+                label: "test-sampled-image",
+                spv: SAMPLED_IMAGE_SPV,
+                bindings: &bindings,
+                push_constant_size: 0,
+            },
+        )
+        .expect("kernel construction with SampledImage binding");
+
+        // Lock the reflected kind so the SPIR-V → ComputeBindingKind path
+        // continues to produce SampledImage. Reverts to SampledTexture
+        // would be silently wrong before this test ran.
+        assert!(
+            kernel
+                .bindings()
+                .iter()
+                .any(|s| s.binding == 0 && s.kind == ComputeBindingKind::SampledImage),
+            "expected binding 0 reflected as SampledImage, got {:?}",
+            kernel.bindings()
+        );
+
+        // Build a tiny 1x1 RGBA8 SAMPLED image (the input) and a 1x1
+        // RGBA8 STORAGE image (the output). Each gets its own VkImageView.
+        let device_handle = device.device().clone();
+        let allocator = device.allocator().clone();
+        let make_image = |usage: vk::ImageUsageFlags|
+            -> (vk::Image, vulkanalia_vma::Allocation, vk::ImageView) {
+                let info = vk::ImageCreateInfo::builder()
+                    .image_type(vk::ImageType::_2D)
+                    .format(vk::Format::R8G8B8A8_UNORM)
+                    .extent(vk::Extent3D { width: 1, height: 1, depth: 1 })
+                    .mip_levels(1)
+                    .array_layers(1)
+                    .samples(vk::SampleCountFlags::_1)
+                    .tiling(vk::ImageTiling::OPTIMAL)
+                    .usage(usage)
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                    .initial_layout(vk::ImageLayout::UNDEFINED)
+                    .build();
+                let alloc_opts = vulkanalia_vma::AllocationOptions {
+                    required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                    ..Default::default()
+                };
+                use vulkanalia_vma::Alloc;
+                let (image, alloc) = unsafe {
+                    allocator.create_image(info, &alloc_opts)
+                }
+                .expect("create_image");
+                let view_info = vk::ImageViewCreateInfo::builder()
+                    .image(image)
+                    .view_type(vk::ImageViewType::_2D)
+                    .format(vk::Format::R8G8B8A8_UNORM)
+                    .subresource_range(vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    })
+                    .build();
+                let view = unsafe {
+                    device_handle.create_image_view(&view_info, None)
+                }
+                .expect("create_image_view");
+                (image, alloc, view)
+            };
+
+        let (in_image, in_alloc, in_view) =
+            make_image(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST);
+        let (out_image, out_alloc, out_view) =
+            make_image(vk::ImageUsageFlags::STORAGE);
+
+        // Transition both images out of UNDEFINED so the shader can sample
+        // / write without producing undefined contents on debug drivers.
+        // One-shot command buffer.
+        use vulkanalia::vk::HasBuilder;
+        let queue_family_index = device.queue_family_index();
+        let pool_info = vk::CommandPoolCreateInfo::builder()
+            .queue_family_index(queue_family_index)
+            .flags(vk::CommandPoolCreateFlags::TRANSIENT)
+            .build();
+        let pool = unsafe { device_handle.create_command_pool(&pool_info, None) }
+            .expect("create_command_pool");
+        let alloc_info = vk::CommandBufferAllocateInfo::builder()
+            .command_pool(pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1)
+            .build();
+        let cb = unsafe { device_handle.allocate_command_buffers(&alloc_info) }
+            .expect("allocate_command_buffers")[0];
+        let begin = vk::CommandBufferBeginInfo::builder()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+            .build();
+        unsafe { device_handle.begin_command_buffer(cb, &begin) }
+            .expect("begin_command_buffer");
+
+        let barriers = [
+            vk::ImageMemoryBarrier2::builder()
+                .src_stage_mask(vk::PipelineStageFlags2::NONE)
+                .src_access_mask(vk::AccessFlags2::empty())
+                .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+                .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(in_image)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })
+                .build(),
+            vk::ImageMemoryBarrier2::builder()
+                .src_stage_mask(vk::PipelineStageFlags2::NONE)
+                .src_access_mask(vk::AccessFlags2::empty())
+                .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+                .dst_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::GENERAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(out_image)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })
+                .build(),
+        ];
+        let dep = vk::DependencyInfo::builder().image_memory_barriers(&barriers).build();
+        unsafe { device_handle.cmd_pipeline_barrier2(cb, &dep) };
+        unsafe { device_handle.end_command_buffer(cb) }
+            .expect("end_command_buffer");
+
+        let fence_info = vk::FenceCreateInfo::builder().build();
+        let fence = unsafe { device_handle.create_fence(&fence_info, None) }
+            .expect("create_fence");
+        let cb_submit = vk::CommandBufferSubmitInfo::builder()
+            .command_buffer(cb)
+            .build();
+        let cb_submits = [cb_submit];
+        let submit = vk::SubmitInfo2::builder()
+            .command_buffer_infos(&cb_submits)
+            .build();
+        unsafe {
+            device
+                .submit_to_queue(device.queue(), &[submit], fence)
+                .expect("submit_to_queue");
+        }
+        unsafe {
+            device_handle
+                .wait_for_fences(&[fence], true, u64::MAX)
+                .expect("wait_for_fences");
+            device_handle.destroy_fence(fence, None);
+            device_handle.destroy_command_pool(pool, None);
+        }
+
+        // Bind via the raw-view setters and dispatch. The shader is a
+        // single-thread no-op-ish texelFetch — what we lock is that
+        // descriptor-layout + descriptor write + bind + dispatch run
+        // end-to-end without validation errors.
+        kernel
+            .set_sampled_image_view(0, in_view)
+            .expect("set_sampled_image_view");
+        kernel
+            .set_storage_image_view(1, out_view)
+            .expect("set_storage_image_view");
+        kernel.dispatch(1, 1, 1).expect("dispatch");
+
+        // Cleanup the test resources we allocated outside the kernel.
+        unsafe {
+            device_handle.destroy_image_view(in_view, None);
+            device_handle.destroy_image_view(out_view, None);
+            use vulkanalia_vma::Alloc;
+            allocator.destroy_image(in_image, in_alloc);
+            allocator.destroy_image(out_image, out_alloc);
+        }
+    }
+
 }
 
