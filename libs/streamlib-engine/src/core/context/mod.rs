@@ -7,6 +7,8 @@ mod audio_clock_shim;
 mod compute_kernel_bridge;
 #[cfg(target_os = "linux")]
 mod cpu_readback_bridge;
+pub(crate) mod escalate_gate;
+pub(crate) mod escalate_scope_registry;
 mod gpu_context;
 #[cfg(target_os = "linux")]
 mod graphics_kernel_bridge;

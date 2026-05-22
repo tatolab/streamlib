@@ -1,0 +1,18 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# Test-only config schema for the Phase C3 dlopen-cdylib escalate
+# smoke test. The processor runs `gpu.escalate(|_full| Ok(()))` once
+# from cdylib code and writes "OK" or "ERR:<msg>" to `output_path`,
+# exercising the full escalate_begin → from_scope_token → FullAccess
+# Drop (no-op for ScopeToken) → escalate_end chain end-to-end.
+
+metadata:
+  type: EscalateSmokeTestProcessorConfig
+  description: "Test config schema for the cdylib escalate smoke test (Phase C3)."
+
+properties:
+  output_path:
+    metadata:
+      description: "Filesystem path where the processor writes its result. Format: 'OK' on success, 'ERR:<message>' on failure."
+    type: string
