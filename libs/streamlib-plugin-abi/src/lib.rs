@@ -217,7 +217,13 @@ pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 10;
 ///   texture-ring pairs. The slots activate the layout-stable
 ///   `(handle, vtable)` β-shape pattern so cdylibs can hold +
 ///   refcount + drop these handles without rustc-version coupling.
-pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 4;
+/// - v5: `gpu_capabilities` slot returning a `#[repr(C)]`
+///   `GpuCapabilitiesRepr` struct (vendor name + capability bools
+///   the camera processor needs to drop `full.device().vulkan_device()`
+///   reach-through). Per the AI agent notes on #914: capability
+///   queries are read-once-at-setup, so one struct-returning slot
+///   amortizes better than per-method slots.
+pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 5;
 
 // =============================================================================
 // Primitive enums
@@ -1484,6 +1490,37 @@ pub enum ComputeBindingKindRepr {
     StorageImage = 3,
 }
 
+/// GPU capability snapshot returned by
+/// [`GpuContextFullAccessVTable::gpu_capabilities`]. Layout-stable
+/// `#[repr(C)]` so cdylibs can read the fields cross-rustc-version
+/// without dep-graph coupling.
+///
+/// `device_name` is a fixed-size UTF-8 buffer; bytes past `device_name_len`
+/// are unspecified. The 256-byte buffer matches Vulkan's
+/// `VK_MAX_PHYSICAL_DEVICE_NAME_SIZE` (the source string for vendor
+/// names). `_reserved_padding` brings the struct to 8-byte alignment.
+#[repr(C)]
+pub struct GpuCapabilitiesRepr {
+    /// UTF-8 device name; valid for `device_name_len` bytes. Trailing
+    /// bytes are unspecified.
+    pub device_name: [u8; 256],
+    /// Number of valid UTF-8 bytes in `device_name`.
+    pub device_name_len: u32,
+    /// Whether the GPU exposes `VK_KHR_external_memory_fd` +
+    /// `VK_EXT_external_memory_dma_buf` (DMA-BUF FD import path
+    /// available).
+    pub supports_external_memory: u8,
+    /// Whether cross-device DMA-BUF probe is supported. NVIDIA Linux
+    /// reports `false` per the engine-layer capability guard
+    /// (`docs/learnings/nvidia-opaque-fd-after-swapchain.md`).
+    pub supports_cross_device_dma_buf_probe: u8,
+    /// Whether the GPU exposes `VK_KHR_ray_tracing_pipeline`.
+    pub supports_ray_tracing_pipeline: u8,
+    /// Reserved — zero today, brings struct to 264-byte natural
+    /// alignment with room for future capability bools.
+    pub _reserved_padding: u8,
+}
+
 /// `#[repr(C)]` mirror of `streamlib::core::rhi::ComputeBindingSpec`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -2371,6 +2408,25 @@ pub struct GpuContextFullAccessVTable {
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // v5 (#914): GPU capability query — read-once-at-setup struct
+    // -------------------------------------------------------------------------
+
+    /// Populate a [`GpuCapabilitiesRepr`] with vendor name + capability
+    /// bools. Read-once-at-setup pattern: cdylibs (camera, future
+    /// plugins) need device-vendor branching and external-memory /
+    /// cross-device-DMA-BUF probe checks at processor setup time;
+    /// returning a struct amortizes better than per-method bool slots.
+    /// Returns 0 on success, non-zero on failure (with message in
+    /// `err_buf`).
+    pub gpu_capabilities: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        out_caps: *mut GpuCapabilitiesRepr,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
 }
 
 unsafe impl Send for GpuContextFullAccessVTable {}
@@ -2945,7 +3001,7 @@ mod layout_tests {
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 10);
         assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
-        assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 4);
+        assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 5);
     }
 
     #[test]
@@ -3213,10 +3269,10 @@ mod layout_tests {
 
     #[test]
     fn gpu_context_full_access_vtable_layout() {
-        // layout_version (u32) + _reserved_padding (u32) + 29 fn
-        // pointers (8 bytes each) = 4 + 4 + 232 = 240 bytes.
+        // layout_version (u32) + _reserved_padding (u32) + 30 fn
+        // pointers (8 bytes each) = 4 + 4 + 240 = 248 bytes.
         //
-        // 29 entries = 1 drop_handle + 7 clone/drop pairs (14 fn
+        // 30 entries = 1 drop_handle + 7 clone/drop pairs (14 fn
         // pointers for the 7 β-shape return types: compute / graphics /
         // ray-tracing kernels, texture ring, color converter,
         // acceleration structure, command recorder) + 4 create_* method
@@ -3225,8 +3281,9 @@ mod layout_tests {
         // privileged methods (wait_device_idle, acquire_output_texture,
         // upload_pixel_buffer_as_texture, color_converter,
         // create_command_recorder, build_triangles_blas, build_tlas,
-        // supports_ray_tracing_pipeline, check_in_surface).
-        assert_eq!(size_of::<GpuContextFullAccessVTable>(), 240);
+        // supports_ray_tracing_pipeline, check_in_surface)
+        // + 1 v5-added gpu_capabilities (#914).
+        assert_eq!(size_of::<GpuContextFullAccessVTable>(), 248);
         assert_eq!(align_of::<GpuContextFullAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextFullAccessVTable, layout_version), 0);
         assert_eq!(offset_of!(GpuContextFullAccessVTable, _reserved_padding), 4);
@@ -3358,6 +3415,36 @@ mod layout_tests {
             offset_of!(GpuContextFullAccessVTable, check_in_surface),
             232
         );
+        // v5 (#914): gpu_capabilities.
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, gpu_capabilities),
+            240
+        );
+    }
+
+    #[test]
+    fn gpu_capabilities_repr_layout() {
+        // 256-byte device_name + u32 len + 4 u8 fields = 264 bytes.
+        // 1-byte alignment (the byte array has 1-byte alignment, u32 has
+        // 4-byte but follows the byte array directly; the trailing bools
+        // are u8). Total stable across rustc.
+        assert_eq!(size_of::<GpuCapabilitiesRepr>(), 264);
+        assert_eq!(align_of::<GpuCapabilitiesRepr>(), 4);
+        assert_eq!(offset_of!(GpuCapabilitiesRepr, device_name), 0);
+        assert_eq!(offset_of!(GpuCapabilitiesRepr, device_name_len), 256);
+        assert_eq!(
+            offset_of!(GpuCapabilitiesRepr, supports_external_memory),
+            260
+        );
+        assert_eq!(
+            offset_of!(GpuCapabilitiesRepr, supports_cross_device_dma_buf_probe),
+            261
+        );
+        assert_eq!(
+            offset_of!(GpuCapabilitiesRepr, supports_ray_tracing_pipeline),
+            262
+        );
+        assert_eq!(offset_of!(GpuCapabilitiesRepr, _reserved_padding), 263);
     }
 
     // -------------------------------------------------------------------------

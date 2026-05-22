@@ -5835,6 +5835,85 @@ unsafe extern "C" fn host_gpu_full_supports_ray_tracing_pipeline(
     0
 }
 
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_gpu_capabilities(
+    scope_token: *const c_void,
+    out_caps: *mut streamlib_plugin_abi::GpuCapabilitiesRepr,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_full_gpu_capabilities",
+        || -> i32 {
+            if out_caps.is_null() {
+                write_err(
+                    "gpu_capabilities: null out_caps pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let result = with_full_scope_or_err(
+                scope_token,
+                "gpu_capabilities",
+                err_buf,
+                err_buf_cap,
+                err_len,
+                |gpu| Ok::<_, crate::core::Error>(gpu.gpu_capabilities()),
+            );
+            match result {
+                Some(Ok(snapshot)) => {
+                    let mut repr = streamlib_plugin_abi::GpuCapabilitiesRepr {
+                        device_name: [0u8; 256],
+                        device_name_len: 0,
+                        supports_external_memory: u8::from(
+                            snapshot.supports_external_memory,
+                        ),
+                        supports_cross_device_dma_buf_probe: u8::from(
+                            snapshot.supports_cross_device_dma_buf_probe,
+                        ),
+                        supports_ray_tracing_pipeline: u8::from(
+                            snapshot.supports_ray_tracing_pipeline,
+                        ),
+                        _reserved_padding: 0,
+                    };
+                    let bytes = snapshot.device_name.as_bytes();
+                    let n = bytes.len().min(repr.device_name.len());
+                    repr.device_name[..n].copy_from_slice(&bytes[..n]);
+                    repr.device_name_len = n as u32;
+                    unsafe { std::ptr::write(out_caps, repr) };
+                    0
+                }
+                Some(Err(e)) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+                None => 1,
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_gpu_capabilities(
+    _scope_token: *const c_void,
+    _out_caps: *mut streamlib_plugin_abi::GpuCapabilitiesRepr,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "gpu_capabilities: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
 unsafe extern "C" fn host_gpu_full_check_in_surface(
     scope_token: *const c_void,
     pixel_buffer: *const c_void,
@@ -5937,6 +6016,7 @@ pub static HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE: GpuContextFullAccessVTable =
         build_tlas: host_gpu_full_build_tlas,
         supports_ray_tracing_pipeline: host_gpu_full_supports_ray_tracing_pipeline,
         check_in_surface: host_gpu_full_check_in_surface,
+        gpu_capabilities: host_gpu_full_gpu_capabilities,
     };
 
 /// Pointer to the [`GpuContextFullAccessVTable`] this DSO should

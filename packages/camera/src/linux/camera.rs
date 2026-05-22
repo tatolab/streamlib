@@ -599,8 +599,20 @@ fn capture_thread_loop(
     };
 
     let setup_result = gpu_context.escalate(|full| {
+        // Read-once capability snapshot. Replaces the host-internal
+        // `full.device().vulkan_device().{name, supports_*}()`
+        // reach-throughs (#914) so the camera processor can run as a
+        // cdylib without leaking `HostVulkanDevice` across the FFI.
+        let caps = full.gpu_capabilities()?;
+        let vulkan_device_name = caps.device_name.clone();
+
+        // Timeline construction still goes through the host-internal
+        // device today; lifting it to a FullAccess `create_timeline_semaphore`
+        // primitive is the next #914 sub-piece. For host-mode builds
+        // the `device().vulkan_device()` reach-through is benign; cdylib
+        // mode will continue to panic at host_inner() until that lift
+        // lands.
         let vulkan_device = full.device().vulkan_device();
-        let vulkan_device_name = vulkan_device.name().to_string();
 
         let color_converter = full.color_converter(src_pixel_format, PixelFormat::Rgba32)?;
 
@@ -646,13 +658,13 @@ fn capture_thread_loop(
         // + binds), so it stays inside the escalation. Failure falls
         // through to the HOST_VISIBLE MMAP path above.
         let supports_cross_device_dma_buf_probe =
-            vulkan_device.supports_cross_device_dma_buf_probe();
+            caps.supports_cross_device_dma_buf_probe;
         let probe_skipped = !supports_cross_device_dma_buf_probe;
         let mut use_dmabuf = false;
         let mut dmabuf_fds: [i32; V4L2_BUFFER_COUNT as usize] =
             [-1; V4L2_BUFFER_COUNT as usize];
         let mut dmabuf_imported_buffers: Vec<StorageBuffer> = Vec::new();
-        if vulkan_device.supports_external_memory()
+        if caps.supports_external_memory
             && !is_virtual_device
             && supports_cross_device_dma_buf_probe
         {

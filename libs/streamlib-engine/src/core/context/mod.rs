@@ -51,6 +51,8 @@ pub use ray_tracing_kernel_bridge::{
     RAY_TRACING_STAGE_INDEX_NONE,
 };
 pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};
+#[cfg(target_os = "linux")]
+pub use gpu_context::GpuCapabilitiesSnapshot;
 pub use runtime_context::{
     RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 };

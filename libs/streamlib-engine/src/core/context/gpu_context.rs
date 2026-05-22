@@ -376,6 +376,29 @@ impl PixelBufferPoolManager {
     }
 }
 
+/// Read-once GPU capability snapshot returned by
+/// [`GpuContext::gpu_capabilities`] /
+/// [`GpuContextFullAccess::gpu_capabilities`].
+///
+/// Plain owned data — the cdylib bridge populates this from the
+/// [`streamlib_plugin_abi::GpuCapabilitiesRepr`] FFI struct (decoding
+/// the fixed-size device_name byte buffer into an owned `String`).
+/// In-process callers get it directly from the host-side getters.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone)]
+pub struct GpuCapabilitiesSnapshot {
+    /// UTF-8 device name (vendor + model).
+    pub device_name: String,
+    /// Whether the GPU exposes `VK_KHR_external_memory_fd` +
+    /// `VK_EXT_external_memory_dma_buf`.
+    pub supports_external_memory: bool,
+    /// Whether cross-device DMA-BUF probe is supported (false on
+    /// NVIDIA Linux per the engine capability guard).
+    pub supports_cross_device_dma_buf_probe: bool,
+    /// Whether the GPU exposes `VK_KHR_ray_tracing_pipeline`.
+    pub supports_ray_tracing_pipeline: bool,
+}
+
 #[derive(Clone)]
 pub struct GpuContext {
     device: Arc<GpuDevice>,
@@ -1564,6 +1587,22 @@ impl GpuContext {
     #[cfg(target_os = "linux")]
     pub fn supports_ray_tracing_pipeline(&self) -> bool {
         self.device.inner.supports_ray_tracing_pipeline()
+    }
+
+    /// Read-once GPU capability snapshot. Mirrors the underlying
+    /// `HostVulkanDevice`'s capability getters into one struct so
+    /// cdylib callers (camera processor, future plugins) can decide
+    /// vendor-specific branching + DMA-BUF / external-memory paths
+    /// at setup time without per-method vtable round-trips.
+    #[cfg(target_os = "linux")]
+    pub fn gpu_capabilities(&self) -> GpuCapabilitiesSnapshot {
+        let dev = &self.device.inner;
+        GpuCapabilitiesSnapshot {
+            device_name: dev.name(),
+            supports_external_memory: dev.supports_external_memory(),
+            supports_cross_device_dma_buf_probe: dev.supports_cross_device_dma_buf_probe(),
+            supports_ray_tracing_pipeline: dev.supports_ray_tracing_pipeline(),
+        }
     }
 
     /// Transition `texture` into `VK_IMAGE_LAYOUT_GENERAL` via a
@@ -4507,6 +4546,70 @@ impl GpuContextFullAccess {
                 };
                 // 1 = true, 0 = false, -1 = error (treat as false).
                 rc == 1
+            }
+        }
+    }
+
+    /// Read-once GPU capability snapshot. Backs the camera processor's
+    /// vendor-name / external-memory / cross-device-DMA-BUF-probe
+    /// branching without exposing host-internal `HostVulkanDevice`
+    /// across the FFI. Mode-routed: host-mode dispatches through
+    /// `host_inner()`; cdylib-mode reads a `#[repr(C)]`
+    /// [`GpuCapabilitiesRepr`](streamlib_plugin_abi::GpuCapabilitiesRepr)
+    /// via the vtable's `gpu_capabilities` slot and decodes the
+    /// fixed-size device-name buffer into an owned `String`.
+    #[cfg(target_os = "linux")]
+    pub fn gpu_capabilities(&self) -> Result<GpuCapabilitiesSnapshot> {
+        match self.handle_kind {
+            HandleKind::Boxed => Ok(self.host_inner().gpu_capabilities()),
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "gpu_capabilities: GpuContextFullAccess has null vtable".into(),
+                    ));
+                }
+                // Stack-allocate the FFI repr; the host populates it
+                // via *out_caps. We then decode into an owned snapshot.
+                let mut out: std::mem::MaybeUninit<
+                    streamlib_plugin_abi::GpuCapabilitiesRepr,
+                > = std::mem::MaybeUninit::uninit();
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                let status = unsafe {
+                    ((*self.vtable).gpu_capabilities)(
+                        self.handle,
+                        out.as_mut_ptr(),
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status == 0 {
+                    // SAFETY: host signaled success; the repr is now
+                    // initialized.
+                    let repr = unsafe { out.assume_init() };
+                    let name_len = (repr.device_name_len as usize)
+                        .min(repr.device_name.len());
+                    let device_name =
+                        String::from_utf8_lossy(&repr.device_name[..name_len])
+                            .into_owned();
+                    Ok(GpuCapabilitiesSnapshot {
+                        device_name,
+                        supports_external_memory: repr.supports_external_memory != 0,
+                        supports_cross_device_dma_buf_probe: repr
+                            .supports_cross_device_dma_buf_probe
+                            != 0,
+                        supports_ray_tracing_pipeline: repr
+                            .supports_ray_tracing_pipeline
+                            != 0,
+                    })
+                } else {
+                    let msg = String::from_utf8_lossy(
+                        &err_buf[..err_len.min(err_buf.len())],
+                    )
+                    .into_owned();
+                    Err(Error::GpuError(msg))
+                }
             }
         }
     }
