@@ -4797,8 +4797,15 @@ unsafe extern "C" fn host_gpu_full_create_compute_kernel(
                 },
             );
             match result {
-                Some(Ok(arc)) => {
-                    let raw = Arc::into_raw(arc) as *const c_void;
+                Some(Ok(kernel)) => {
+                    // `kernel` is the β-shape; its `handle` is the
+                    // `Arc::into_raw(Arc<<Type>Inner>)` raw pointer
+                    // already. Forget the β-shape so the strong ref
+                    // transfers to cdylib; the cdylib reconstructs its
+                    // own β-shape from { handle: raw, vtable } and
+                    // never sees the `Arc<X>` internal layout.
+                    let raw = kernel.handle;
+                    std::mem::forget(kernel);
                     unsafe { std::ptr::write(out_kernel, raw) };
                     0
                 }
@@ -4849,8 +4856,15 @@ unsafe extern "C" fn host_gpu_full_create_graphics_kernel(
                 },
             );
             match result {
-                Some(Ok(arc)) => {
-                    let raw = Arc::into_raw(arc) as *const c_void;
+                Some(Ok(kernel)) => {
+                    // β-shape: extract the opaque handle (which is
+                    // already `Arc::into_raw(Arc<<Type>Inner>)`-shaped)
+                    // and `mem::forget` the wrapper so the strong ref
+                    // transfers to cdylib. The cdylib reconstructs a
+                    // fresh β-shape from { handle, vtable } and never
+                    // sees the host's `Arc<X>` allocation header.
+                    let raw = kernel.handle;
+                    std::mem::forget(kernel);
                     unsafe { std::ptr::write(out_kernel, raw) };
                     0
                 }
@@ -4901,8 +4915,15 @@ unsafe extern "C" fn host_gpu_full_create_ray_tracing_kernel(
                 },
             );
             match result {
-                Some(Ok(arc)) => {
-                    let raw = Arc::into_raw(arc) as *const c_void;
+                Some(Ok(kernel)) => {
+                    // β-shape: extract the opaque handle (which is
+                    // already `Arc::into_raw(Arc<<Type>Inner>)`-shaped)
+                    // and `mem::forget` the wrapper so the strong ref
+                    // transfers to cdylib. The cdylib reconstructs a
+                    // fresh β-shape from { handle, vtable } and never
+                    // sees the host's `Arc<X>` allocation header.
+                    let raw = kernel.handle;
+                    std::mem::forget(kernel);
                     unsafe { std::ptr::write(out_kernel, raw) };
                     0
                 }
@@ -5524,13 +5545,15 @@ unsafe extern "C" fn host_gpu_full_create_command_recorder(
             );
             match result {
                 Some(Ok(recorder)) => {
-                    // SAFETY: host writes the RhiCommandRecorder struct
-                    // by value into the cdylib's MaybeUninit slot;
-                    // layout is byte-identical under the rustc-version
-                    // coupling contract (CLAUDE.md). The cdylib's
-                    // Drop will run when the value falls out of scope
-                    // (in cdylib code), accessing host-loader Vulkan
-                    // handles which are globally addressable.
+                    // SAFETY: `recorder` is the β-shape — a
+                    // `#[repr(C)] { handle: *const c_void, vtable: *const VTable }`
+                    // 16-byte POD. Layout is byte-identical
+                    // by `#[repr(C)]` invariant, not by rustc-version
+                    // coupling. The cdylib reads the bits via
+                    // `MaybeUninit::assume_init`; its `Drop` later
+                    // dispatches through the vtable's
+                    // `drop_command_recorder` slot which runs
+                    // `Box::from_raw + drop` host-side.
                     unsafe {
                         std::ptr::write(
                             out_recorder as *mut crate::vulkan::rhi::RhiCommandRecorder,

@@ -2063,42 +2063,48 @@ pub struct GpuContextFullAccessVTable {
     // VulkanComputeKernel return-type lifetime
     // -------------------------------------------------------------------------
 
-    /// Bump the refcount on a `VulkanComputeKernel` handle. Called by
-    /// the cdylib's `Clone for ComputeKernel`. Host runs
-    /// `Arc::increment_strong_count(handle as *const VulkanComputeKernel)`.
+    /// Bump the refcount on a `VulkanComputeKernel` β-shape handle.
+    /// Called by the cdylib's `Clone for VulkanComputeKernel`. Host
+    /// runs `Arc::increment_strong_count(handle as *const VulkanComputeKernelInner)`
+    /// against the host-internal Inner type — cdylib never sees the
+    /// Inner layout.
     pub clone_compute_kernel: unsafe extern "C" fn(handle: *const c_void),
 
-    /// Decrement the refcount on a `VulkanComputeKernel` handle.
+    /// Decrement the refcount on a `VulkanComputeKernel` β-shape handle.
+    /// Host runs `Arc::decrement_strong_count` against the Inner type.
     pub drop_compute_kernel: unsafe extern "C" fn(handle: *const c_void),
 
     // -------------------------------------------------------------------------
     // VulkanGraphicsKernel return-type lifetime
     // -------------------------------------------------------------------------
 
-    /// Bump the refcount on a `VulkanGraphicsKernel` handle.
+    /// Bump the refcount on a `VulkanGraphicsKernel` β-shape handle.
+    /// Host runs `Arc::increment_strong_count(handle as *const VulkanGraphicsKernelInner)`.
     pub clone_graphics_kernel: unsafe extern "C" fn(handle: *const c_void),
 
-    /// Decrement the refcount on a `VulkanGraphicsKernel` handle.
+    /// Decrement the refcount on a `VulkanGraphicsKernel` β-shape handle.
     pub drop_graphics_kernel: unsafe extern "C" fn(handle: *const c_void),
 
     // -------------------------------------------------------------------------
     // VulkanRayTracingKernel return-type lifetime
     // -------------------------------------------------------------------------
 
-    /// Bump the refcount on a `VulkanRayTracingKernel` handle.
+    /// Bump the refcount on a `VulkanRayTracingKernel` β-shape handle.
+    /// Host runs `Arc::increment_strong_count(handle as *const VulkanRayTracingKernelInner)`.
     pub clone_ray_tracing_kernel: unsafe extern "C" fn(handle: *const c_void),
 
-    /// Decrement the refcount on a `VulkanRayTracingKernel` handle.
+    /// Decrement the refcount on a `VulkanRayTracingKernel` β-shape handle.
     pub drop_ray_tracing_kernel: unsafe extern "C" fn(handle: *const c_void),
 
     // -------------------------------------------------------------------------
     // TextureRing return-type lifetime
     // -------------------------------------------------------------------------
 
-    /// Bump the refcount on a `TextureRing` handle.
+    /// Bump the refcount on a `TextureRing` β-shape handle.
+    /// Host runs `Arc::increment_strong_count(handle as *const TextureRingInner)`.
     pub clone_texture_ring: unsafe extern "C" fn(handle: *const c_void),
 
-    /// Decrement the refcount on a `TextureRing` handle.
+    /// Decrement the refcount on a `TextureRing` β-shape handle.
     pub drop_texture_ring: unsafe extern "C" fn(handle: *const c_void),
 
     // -------------------------------------------------------------------------

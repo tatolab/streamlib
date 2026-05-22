@@ -720,7 +720,13 @@ impl std::fmt::Debug for RhiCommandRecorderInner {
 /// mutable state (`begin()` → `record_*(&mut self)` → `submit_*(&mut
 /// self)`) that doesn't survive duplication. The
 /// `clone_command_recorder` vtable slot is reserved but never invoked
-/// — calling `.clone()` on the public β-shape is a compile error.
+/// — calling `.clone()` on the public β-shape is a compile error,
+/// locked by the `compile_fail` doctest below:
+///
+/// ```compile_fail
+/// fn assert_clone<T: Clone>() {}
+/// assert_clone::<streamlib_engine::vulkan::rhi::RhiCommandRecorder>();
+/// ```
 ///
 /// Method dispatch is host-only via [`Self::host_inner_mut`] until
 /// Phase E (#907) lifts to per-method vtable slots.

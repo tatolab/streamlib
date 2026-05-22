@@ -1354,7 +1354,7 @@ impl GpuContext {
     pub fn create_compute_kernel(
         &self,
         descriptor: &crate::core::rhi::ComputeKernelDescriptor<'_>,
-    ) -> Result<Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+    ) -> Result<crate::vulkan::rhi::VulkanComputeKernel> {
         tracing::debug!(
             rhi_op = "create_compute_kernel",
             label = descriptor.label,
@@ -1363,8 +1363,7 @@ impl GpuContext {
             "GpuContext::create_compute_kernel"
         );
         let vulkan_device = &self.device.inner;
-        let kernel = crate::vulkan::rhi::VulkanComputeKernel::new(vulkan_device, descriptor)?;
-        Ok(Arc::new(kernel))
+        crate::vulkan::rhi::VulkanComputeKernel::new(vulkan_device, descriptor)
     }
 
     /// Build an engine-owned command-buffer recorder bound to the
@@ -1402,7 +1401,7 @@ impl GpuContext {
     pub fn create_graphics_kernel(
         &self,
         descriptor: &crate::core::rhi::GraphicsKernelDescriptor<'_>,
-    ) -> Result<Arc<crate::vulkan::rhi::VulkanGraphicsKernel>> {
+    ) -> Result<crate::vulkan::rhi::VulkanGraphicsKernel> {
         tracing::debug!(
             rhi_op = "create_graphics_kernel",
             label = descriptor.label,
@@ -1413,8 +1412,7 @@ impl GpuContext {
             "GpuContext::create_graphics_kernel"
         );
         let vulkan_device = &self.device.inner;
-        let kernel = crate::vulkan::rhi::VulkanGraphicsKernel::new(vulkan_device, descriptor)?;
-        Ok(Arc::new(kernel))
+        crate::vulkan::rhi::VulkanGraphicsKernel::new(vulkan_device, descriptor)
     }
 
     /// Create a ray-tracing kernel from shader stages, shader-group
@@ -1431,7 +1429,7 @@ impl GpuContext {
     pub fn create_ray_tracing_kernel(
         &self,
         descriptor: &crate::core::rhi::RayTracingKernelDescriptor<'_>,
-    ) -> Result<Arc<crate::vulkan::rhi::VulkanRayTracingKernel>> {
+    ) -> Result<crate::vulkan::rhi::VulkanRayTracingKernel> {
         tracing::debug!(
             rhi_op = "create_ray_tracing_kernel",
             label = descriptor.label,
@@ -1443,8 +1441,7 @@ impl GpuContext {
             "GpuContext::create_ray_tracing_kernel"
         );
         let vulkan_device = &self.device.inner;
-        let kernel = crate::vulkan::rhi::VulkanRayTracingKernel::new(vulkan_device, descriptor)?;
-        Ok(Arc::new(kernel))
+        crate::vulkan::rhi::VulkanRayTracingKernel::new(vulkan_device, descriptor)
     }
 
     /// Pre-allocate a ring of `count` non-exportable DEVICE_LOCAL
@@ -4148,7 +4145,7 @@ impl GpuContextFullAccess {
     pub fn create_compute_kernel(
         &self,
         descriptor: &crate::core::rhi::ComputeKernelDescriptor<'_>,
-    ) -> Result<Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+    ) -> Result<crate::vulkan::rhi::VulkanComputeKernel> {
         match self.handle_kind {
             HandleKind::Boxed => self.host_inner().create_compute_kernel(descriptor),
             HandleKind::ScopeToken => {
@@ -4184,16 +4181,16 @@ impl GpuContextFullAccess {
                             "create_compute_kernel: host signaled success but out_kernel is null".into(),
                         ));
                     }
-                    // SAFETY: host wrote
-                    // `Arc::into_raw(Arc<VulkanComputeKernel>)`. The
-                    // strong reference transfers ownership to the
-                    // cdylib via this reconstruction.
-                    let arc = unsafe {
-                        Arc::from_raw(
-                            out_kernel as *const crate::vulkan::rhi::VulkanComputeKernel,
-                        )
-                    };
-                    Ok(arc)
+                    // β-shape: bundle the raw handle (an
+                    // `Arc::into_raw(Arc<VulkanComputeKernelInner>)`
+                    // pointer host-side, opaque to the cdylib) with the
+                    // host vtable. Lifecycle dispatches through the
+                    // vtable's clone/drop slots without ever crossing
+                    // the host's `Arc<X>` allocation-header layout.
+                    Ok(crate::vulkan::rhi::VulkanComputeKernel {
+                        handle: out_kernel,
+                        vtable: self.vtable,
+                    })
                 } else {
                     let msg = String::from_utf8_lossy(
                         &err_buf[..err_len.min(err_buf.len())],
@@ -4270,7 +4267,7 @@ impl GpuContextFullAccess {
     pub fn create_graphics_kernel(
         &self,
         descriptor: &crate::core::rhi::GraphicsKernelDescriptor<'_>,
-    ) -> Result<Arc<crate::vulkan::rhi::VulkanGraphicsKernel>> {
+    ) -> Result<crate::vulkan::rhi::VulkanGraphicsKernel> {
         match self.handle_kind {
             HandleKind::Boxed => self.host_inner().create_graphics_kernel(descriptor),
             HandleKind::ScopeToken => {
@@ -4302,14 +4299,11 @@ impl GpuContextFullAccess {
                             "create_graphics_kernel: host signaled success but out_kernel is null".into(),
                         ));
                     }
-                    // SAFETY: host wrote
-                    // `Arc::into_raw(Arc<VulkanGraphicsKernel>)`.
-                    let arc = unsafe {
-                        Arc::from_raw(
-                            out_kernel as *const crate::vulkan::rhi::VulkanGraphicsKernel,
-                        )
-                    };
-                    Ok(arc)
+                    // β-shape: see compute_kernel above.
+                    Ok(crate::vulkan::rhi::VulkanGraphicsKernel {
+                        handle: out_kernel,
+                        vtable: self.vtable,
+                    })
                 } else {
                     let msg = String::from_utf8_lossy(
                         &err_buf[..err_len.min(err_buf.len())],
@@ -4330,7 +4324,7 @@ impl GpuContextFullAccess {
     pub fn create_ray_tracing_kernel(
         &self,
         descriptor: &crate::core::rhi::RayTracingKernelDescriptor<'_>,
-    ) -> Result<Arc<crate::vulkan::rhi::VulkanRayTracingKernel>> {
+    ) -> Result<crate::vulkan::rhi::VulkanRayTracingKernel> {
         match self.handle_kind {
             HandleKind::Boxed => self.host_inner().create_ray_tracing_kernel(descriptor),
             HandleKind::ScopeToken => {
@@ -4362,14 +4356,11 @@ impl GpuContextFullAccess {
                             "create_ray_tracing_kernel: host signaled success but out_kernel is null".into(),
                         ));
                     }
-                    // SAFETY: host wrote
-                    // `Arc::into_raw(Arc<VulkanRayTracingKernel>)`.
-                    let arc = unsafe {
-                        Arc::from_raw(
-                            out_kernel as *const crate::vulkan::rhi::VulkanRayTracingKernel,
-                        )
-                    };
-                    Ok(arc)
+                    // β-shape: see compute_kernel above.
+                    Ok(crate::vulkan::rhi::VulkanRayTracingKernel {
+                        handle: out_kernel,
+                        vtable: self.vtable,
+                    })
                 } else {
                     let msg = String::from_utf8_lossy(
                         &err_buf[..err_len.min(err_buf.len())],
