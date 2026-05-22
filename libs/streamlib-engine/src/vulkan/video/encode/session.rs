@@ -6,11 +6,11 @@
 
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
-use vulkanalia::vk::KhrVideoQueueExtensionDeviceCommands;
 use vulkanalia::vk::KhrVideoQueueExtensionInstanceCommands;
 use vulkanalia::vk::KhrVideoEncodeQueueExtensionDeviceCommands;
 use vulkanalia_vma::{self as vma, Alloc};
 use std::ptr;
+use std::sync::Arc;
 
 use crate::vulkan::video::video_context::{VideoError, VideoResult};
 use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{align_size, H264_MB_SIZE_ALIGNMENT};
@@ -216,75 +216,31 @@ impl SimpleEncoder {
         }
 
         // --- Create Video Session ---
-        let session_create_info = vk::VideoSessionCreateInfoKHR::builder()
-            .queue_family_index(self.encode_queue_family)
-            .video_profile(&profile_info)
-            .picture_format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
-            .max_coded_extent(vk::Extent2D {
+        // Through the engine RHI primitive: allocator + multi-binding
+        // dance + `lock_device` is owned by `HostVulkanVideoSession::new`.
+        let session_descriptor = crate::vulkan::rhi::VideoSessionDescriptor {
+            label: "encode/session",
+            session_create_flags: vk::VideoSessionCreateFlagsKHR::empty(),
+            video_queue_family: self.encode_queue_family,
+            video_profile: *profile_info,
+            codec_operation: self.codec_flag,
+            picture_format: vk::Format::G8_B8R8_2PLANE_420_UNORM,
+            max_coded_extent: vk::Extent2D {
                 width: aligned_w,
                 height: aligned_h,
-            })
-            .reference_picture_format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
-            .max_dpb_slots(max_dpb)
-            .max_active_reference_pictures(
-                caps.max_active_reference_pictures
-                    .min(max_dpb.saturating_sub(1)),
-            )
-            .std_header_version(&caps.std_header_version);
-
-        // Video session creation, memory allocation, and binding run under the
-        // host's device-level resource lock (fixes #278 — prevents NVIDIA
-        // driver crashes when concurrent processors submit during setup).
-        let allocator = self.ctx.allocator();
-        let mut session_result: VideoResult<(
-            vk::VideoSessionKHR,
-            Vec<vma::Allocation>,
-        )> = Err(VideoError::Vulkan(vk::Result::ERROR_INITIALIZATION_FAILED));
-        let session_result_ref = &mut session_result;
-        self.submitter.with_device_resource_lock(&mut || {
-            *session_result_ref = (|| {
-                let video_session = device
-                    .create_video_session_khr(&session_create_info, None)
-                    .map_err(VideoError::from)?;
-
-                let mem_requirements = device
-                    .get_video_session_memory_requirements_khr(video_session)
-                    .map_err(VideoError::from)?;
-
-                let mut session_memory = Vec::with_capacity(mem_requirements.len());
-                let mut bind_infos = Vec::with_capacity(mem_requirements.len());
-
-                for req in &mem_requirements {
-                    let alloc_options = vma::AllocationOptions {
-                        usage: vma::MemoryUsage::Unknown,
-                        memory_type_bits: req.memory_requirements.memory_type_bits,
-                        ..Default::default()
-                    };
-
-                    let allocation = allocator
-                        .allocate_memory(req.memory_requirements, &alloc_options)
-                        .map_err(VideoError::from)?;
-
-                    let alloc_info = allocator.get_allocation_info(allocation);
-                    session_memory.push(allocation);
-
-                    bind_infos.push(
-                        vk::BindVideoSessionMemoryInfoKHR::builder()
-                            .memory_bind_index(req.memory_bind_index)
-                            .memory(alloc_info.deviceMemory)
-                            .memory_offset(alloc_info.offset)
-                            .memory_size(req.memory_requirements.size),
-                    );
-                }
-
-                device
-                    .bind_video_session_memory_khr(video_session, &bind_infos)
-                    .map_err(VideoError::from)?;
-
-                Ok((video_session, session_memory))
-            })();
-        });
-        let (video_session, session_memory) = session_result?;
+            },
+            reference_pictures_format: vk::Format::G8_B8R8_2PLANE_420_UNORM,
+            max_dpb_slots: max_dpb,
+            max_active_reference_pictures: caps
+                .max_active_reference_pictures
+                .min(max_dpb.saturating_sub(1)),
+        };
+        let video_session_arc = crate::vulkan::rhi::HostVulkanVideoSession::new(
+            self.ctx.host_device(),
+            &session_descriptor,
+        )
+        .map_err(|e| VideoError::BitstreamError(format!("encoder session: {e}")))?;
+        let video_session = video_session_arc.handle();
 
         // --- Determine H.265 CTB size from capabilities ---
         // The driver reports supported CTB sizes; we pick the largest supported
@@ -303,8 +259,16 @@ impl SimpleEncoder {
         };
 
         // --- Create session parameters (SPS/PPS) ---
-        let session_params =
-            self.create_session_parameters(video_session, config, &profile_info, h265_ctb_log2_size, aligned_w, aligned_h, effective_quality_level)?;
+        let session_params_arc = self.create_session_parameters(
+            &video_session_arc,
+            config,
+            &profile_info,
+            h265_ctb_log2_size,
+            aligned_w,
+            aligned_h,
+            effective_quality_level,
+        )?;
+        let session_params = session_params_arc.handle();
 
         // --- Allocate DPB images ---
         // Use separate images when the driver supports it. Shared array-layer
@@ -357,8 +321,9 @@ impl SimpleEncoder {
         self.aligned_width = aligned_w;
         self.aligned_height = aligned_h;
         self.video_session = video_session;
-        self.session_memory = session_memory;
+        self.video_session_arc = Some(video_session_arc);
         self.session_params = session_params;
+        self.session_params_arc = Some(session_params_arc);
         self.dpb_image = dpb_image;
         self.dpb_allocation = dpb_allocation;
         self.dpb_separate_images = dpb_sep_images;
@@ -486,44 +451,47 @@ impl SimpleEncoder {
     }}
 
     /// Create codec-specific session parameters (SPS/PPS for H.264,
-    /// VPS/SPS/PPS for H.265).
+    /// VPS/SPS/PPS for H.265). Returns an `Arc` parented to the
+    /// given session — destruction is automatic when the Arc drops.
     ///
     /// # Safety
     ///
-    /// Caller must ensure `video_session` is valid and `profile_info` is live.
+    /// Caller must ensure `profile_info` is live.
     unsafe fn create_session_parameters(
         &self,
-        video_session: vk::VideoSessionKHR,
+        session: &Arc<crate::vulkan::rhi::HostVulkanVideoSession>,
         config: &EncodeConfig,
         _profile_info: &vk::VideoProfileInfoKHR,
         h265_ctb_log2_size: u32,
         aligned_w: u32,
         aligned_h: u32,
         quality_level: u32,
-    ) -> VideoResult<vk::VideoSessionParametersKHR> { unsafe {
-        let device = self.ctx.device();
-
-        let mut params_create = vk::VideoSessionParametersCreateInfoKHR::builder()
-            .video_session(video_session);
-
-        // H.264: add SPS + PPS parameter sets
+    ) -> VideoResult<Arc<crate::vulkan::rhi::HostVulkanVideoSessionParameters>> { unsafe {
+        // H.264: SPS + PPS parameter sets, plus the VUI the SPS points
+        // at via raw pointer. All declared in outer scope so the
+        // single-element arrays we wrap below stay valid through
+        // `HostVulkanVideoSessionParameters::new`.
         let h264_sps;
         let h264_pps;
         let h264_sps_vui;
-        let h264_add_info;
-        let mut h264_params;
+        let h264_sps_array: [vk::video::StdVideoH264SequenceParameterSet; 1];
+        let h264_pps_array: [vk::video::StdVideoH264PictureParameterSet; 1];
 
-        // H.265: add VPS + SPS + PPS parameter sets
-        // These must be in the outer scope so raw-pointer references from
-        // h265_vps and h265_sps remain valid until create_video_session_parameters_khr.
+        // H.265: VPS + SPS + PPS plus the auxiliary structs the VPS / SPS
+        // point at via raw pointer (DPB management, profile-tier-level,
+        // optional VUI).
         let h265_vps;
         let h265_sps;
         let h265_pps;
         let h265_sps_vui: Option<vk::video::StdVideoH265SequenceParameterSetVui>;
-        let h265_add_info;
-        let mut h265_params;
         let h265_dec_pic_buf_mgr;
         let h265_profile_tier_level;
+        let h265_vps_array: [vk::video::StdVideoH265VideoParameterSet; 1];
+        let h265_sps_array: [vk::video::StdVideoH265SequenceParameterSet; 1];
+        let h265_pps_array: [vk::video::StdVideoH265PictureParameterSet; 1];
+
+        // Active typed add-info selected below.
+        let add_info: crate::vulkan::rhi::VideoSessionParametersAddInfo;
 
         if self.codec_flag == vk::VideoCodecOperationFlagsKHR::ENCODE_H264 {
             // Build SPS/PPS from the ported EncoderConfigH264 state instead of
@@ -645,16 +613,14 @@ impl SimpleEncoder {
                 pScalingLists: ptr::null(),
             };
 
-            h264_add_info = vk::VideoEncodeH264SessionParametersAddInfoKHR::builder()
-                .std_sp_ss(std::slice::from_ref(&h264_sps))
-                .std_pp_ss(std::slice::from_ref(&h264_pps));
-
-            h264_params = vk::VideoEncodeH264SessionParametersCreateInfoKHR::builder()
-                .max_std_sps_count(1)
-                .max_std_pps_count(1)
-                .parameters_add_info(&h264_add_info);
-
-            params_create = params_create.push_next(&mut h264_params);
+            h264_sps_array = [h264_sps];
+            h264_pps_array = [h264_pps];
+            add_info = crate::vulkan::rhi::VideoSessionParametersAddInfo::EncodeH264 {
+                sps: &h264_sps_array,
+                pps: &h264_pps_array,
+                max_std_sps_count: 1,
+                max_std_pps_count: 1,
+            };
         } else if self.codec_flag == vk::VideoCodecOperationFlagsKHR::ENCODE_H265 {
             // --- VPS flags (matching C++ VkEncoderConfigH265.cpp lines 761-764) ---
             let mut vps_flags: vk::video::StdVideoH265VpsFlags = std::mem::zeroed();
@@ -879,33 +845,31 @@ impl SimpleEncoder {
                 pPredictorPaletteEntries: ptr::null(),
             };
 
-            h265_add_info = vk::VideoEncodeH265SessionParametersAddInfoKHR::builder()
-                .std_vp_ss(std::slice::from_ref(&h265_vps))
-                .std_sp_ss(std::slice::from_ref(&h265_sps))
-                .std_pp_ss(std::slice::from_ref(&h265_pps));
-
-            h265_params = vk::VideoEncodeH265SessionParametersCreateInfoKHR::builder()
-                .max_std_vps_count(1)
-                .max_std_sps_count(1)
-                .max_std_pps_count(1)
-                .parameters_add_info(&h265_add_info);
-
-            params_create = params_create.push_next(&mut h265_params);
+            h265_vps_array = [h265_vps];
+            h265_sps_array = [h265_sps];
+            h265_pps_array = [h265_pps];
+            add_info = crate::vulkan::rhi::VideoSessionParametersAddInfo::EncodeH265 {
+                vps: &h265_vps_array,
+                sps: &h265_sps_array,
+                pps: &h265_pps_array,
+                max_std_vps_count: 1,
+                max_std_sps_count: 1,
+                max_std_pps_count: 1,
+            };
+        } else {
+            return Err(VideoError::CodecNotSupported(self.codec_flag));
         }
 
-        // Chain quality level into session parameters creation.
-        // Required by VUID-vkCmdEncodeVideoKHR-None-08318: session params must
-        // be created with the currently set quality level.
-        let mut quality_level_sp;
-        if quality_level > 0 {
-            quality_level_sp = vk::VideoEncodeQualityLevelInfoKHR::builder()
-                .quality_level(quality_level);
-            params_create = params_create.push_next(&mut quality_level_sp);
-        }
-
-        let params = device.create_video_session_parameters_khr(&params_create, None)?;
-
-        Ok(params)
+        let descriptor = crate::vulkan::rhi::VideoSessionParametersDescriptor {
+            label: "encode/session-params",
+            add_info,
+            // VUID-vkCmdEncodeVideoKHR-None-08318: session params must be
+            // created with the currently set quality level.
+            quality_level: if quality_level > 0 { Some(quality_level) } else { None },
+            template: None,
+        };
+        crate::vulkan::rhi::HostVulkanVideoSessionParameters::new(session, &descriptor)
+            .map_err(|e| VideoError::BitstreamError(format!("encoder session params: {e}")))
     }}
 
     /// Create DPB images for the video session.

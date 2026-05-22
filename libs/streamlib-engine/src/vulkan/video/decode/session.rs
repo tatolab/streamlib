@@ -433,9 +433,12 @@ impl SimpleDecoder {
         let vk_dec = self.vk_decoder.as_mut().ok_or_else(|| {
             VideoError::BitstreamError("VkVideoDecoder not created for H.264".into())
         })?;
-        let session = vk_dec.video_session_handle().ok_or_else(|| {
-            VideoError::BitstreamError("VkVideoDecoder has no video session".into())
-        })?;
+        let session_arc = vk_dec
+            .video_session_arc()
+            .ok_or_else(|| {
+                VideoError::BitstreamError("VkVideoDecoder has no video session".into())
+            })?
+            .clone();
 
         let parser = self.h264_parser.as_ref().ok_or_else(|| {
             VideoError::BitstreamError("H.264 parser not initialized".into())
@@ -453,36 +456,37 @@ impl SimpleDecoder {
         } else {
             unsafe { Self::build_std_pps_default(sps.seq_parameter_set_id as u8) }
         };
+        let sps_array = [h264_sps];
+        let pps_array = [h264_pps];
 
-        let h264_add_info = vk::VideoDecodeH264SessionParametersAddInfoKHR::builder()
-            .std_sp_ss(std::slice::from_ref(&h264_sps))
-            .std_pp_ss(std::slice::from_ref(&h264_pps));
-
-        let mut h264_params = vk::VideoDecodeH264SessionParametersCreateInfoKHR::builder()
-            .max_std_sps_count(32)
-            .max_std_pps_count(256)
-            .parameters_add_info(&h264_add_info);
-
-        let params_create = vk::VideoSessionParametersCreateInfoKHR::builder()
-            .video_session(session)
-            .push_next(&mut h264_params);
-
-        // Wait for in-flight command buffers before destroying old params
-        // (VUID-vkDestroyVideoSessionParametersKHR-videoSessionParameters-07212)
-        let old = vk_dec.session_parameters();
-        if old != vk::VideoSessionParametersKHR::null() {
+        // VUID-vkDestroyVideoSessionParametersKHR-videoSessionParameters-07212:
+        // wait for in-flight command buffers to retire before dropping the
+        // previous Arc (which destroys the old VkVideoSessionParametersKHR).
+        // Set-on-decoder happens after the new one is built so the swap is
+        // atomic from the caller's perspective.
+        if vk_dec.session_parameters() != vk::VideoSessionParametersKHR::null() {
             unsafe {
                 self.ctx.device().device_wait_idle().map_err(VideoError::from)?;
-                self.ctx.device().destroy_video_session_parameters_khr(old, None);
             }
         }
 
-        let new_params = unsafe {
-            self.ctx.device()
-                .create_video_session_parameters_khr(&params_create, None)
-                .map_err(VideoError::from)?
+        let descriptor = crate::vulkan::rhi::VideoSessionParametersDescriptor {
+            label: "decode/h264/session-params",
+            add_info: crate::vulkan::rhi::VideoSessionParametersAddInfo::DecodeH264 {
+                sps: &sps_array,
+                pps: &pps_array,
+                max_std_sps_count: 32,
+                max_std_pps_count: 256,
+            },
+            quality_level: None,
+            template: None,
         };
-        vk_dec.set_session_parameters(new_params);
+        let new_params = crate::vulkan::rhi::HostVulkanVideoSessionParameters::new(
+            &session_arc,
+            &descriptor,
+        )
+        .map_err(|e| VideoError::BitstreamError(format!("H.264 session params: {e}")))?;
+        vk_dec.set_session_parameters_arc(new_params);
 
         debug!("H.264 session parameters created on VkVideoDecoder");
         Ok(())
@@ -875,45 +879,46 @@ impl SimpleDecoder {
             pPredictorPaletteEntries: ptr::null(),
         };
 
-        let h265_add_info = vk::VideoDecodeH265SessionParametersAddInfoKHR::builder()
-            .std_vp_ss(std::slice::from_ref(&h265_vps))
-            .std_sp_ss(std::slice::from_ref(&h265_sps))
-            .std_pp_ss(std::slice::from_ref(&h265_pps));
-
         // Create session params directly on VkVideoDecoder's session
         let vk_dec = self.vk_decoder.as_mut().ok_or_else(|| {
             VideoError::BitstreamError("VkVideoDecoder not created for H.265".into())
         })?;
-        let session = vk_dec.video_session_handle().ok_or_else(|| {
-            VideoError::BitstreamError("VkVideoDecoder has no video session".into())
-        })?;
+        let session_arc = vk_dec
+            .video_session_arc()
+            .ok_or_else(|| {
+                VideoError::BitstreamError("VkVideoDecoder has no video session".into())
+            })?
+            .clone();
 
-        // Wait for in-flight command buffers before destroying old params
-        // (VUID-vkDestroyVideoSessionParametersKHR-videoSessionParameters-07212)
-        let old = vk_dec.session_parameters();
-        if old != vk::VideoSessionParametersKHR::null() {
+        // VUID-vkDestroyVideoSessionParametersKHR-videoSessionParameters-07212.
+        if vk_dec.session_parameters() != vk::VideoSessionParametersKHR::null() {
             unsafe {
                 self.ctx.device().device_wait_idle().map_err(VideoError::from)?;
-                self.ctx.device().destroy_video_session_parameters_khr(old, None);
             }
         }
 
-        let mut h265_params = vk::VideoDecodeH265SessionParametersCreateInfoKHR::builder()
-            .max_std_vps_count(16)
-            .max_std_sps_count(32)
-            .max_std_pps_count(256)
-            .parameters_add_info(&h265_add_info);
-
-        let params_create = vk::VideoSessionParametersCreateInfoKHR::builder()
-            .video_session(session)
-            .push_next(&mut h265_params);
-
-        let vk_params = unsafe {
-            self.ctx.device()
-                .create_video_session_parameters_khr(&params_create, None)
-                .map_err(VideoError::from)?
+        let vps_array = [h265_vps];
+        let sps_array = [h265_sps];
+        let pps_array = [h265_pps];
+        let descriptor = crate::vulkan::rhi::VideoSessionParametersDescriptor {
+            label: "decode/h265/session-params",
+            add_info: crate::vulkan::rhi::VideoSessionParametersAddInfo::DecodeH265 {
+                vps: &vps_array,
+                sps: &sps_array,
+                pps: &pps_array,
+                max_std_vps_count: 16,
+                max_std_sps_count: 32,
+                max_std_pps_count: 256,
+            },
+            quality_level: None,
+            template: None,
         };
-        vk_dec.set_session_parameters(vk_params);
+        let new_params = crate::vulkan::rhi::HostVulkanVideoSessionParameters::new(
+            &session_arc,
+            &descriptor,
+        )
+        .map_err(|e| VideoError::BitstreamError(format!("H.265 session params: {e}")))?;
+        vk_dec.set_session_parameters_arc(new_params);
         debug!("H265 session parameters created on VkVideoDecoder (from parsed SPS/PPS)");
 
         Ok(())

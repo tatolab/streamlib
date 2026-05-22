@@ -94,10 +94,17 @@ pub struct SimpleEncoder {
     // Configuration (set during configure())
     pub(crate) encode_config: Option<EncodeConfig>,
 
-    // Vulkan Video session
+    // Vulkan Video session — Arc owns the `VkVideoSessionKHR` + its bound
+    // VMA allocations; the raw shadow handle is for hot-path codec
+    // command recording. The Arc is dropped in the Drop impl AFTER
+    // session_params_arc so the parameters destructor runs first
+    // (Vulkan spec requires parameters to outlive the session they
+    // parent under).
     pub(crate) video_session: vk::VideoSessionKHR,
-    pub(crate) session_memory: Vec<vma::Allocation>,
+    pub(crate) video_session_arc: Option<Arc<crate::vulkan::rhi::HostVulkanVideoSession>>,
     pub(crate) session_params: vk::VideoSessionParametersKHR,
+    pub(crate) session_params_arc:
+        Option<Arc<crate::vulkan::rhi::HostVulkanVideoSessionParameters>>,
 
     // DPB images (library-managed, device-local)
     pub(crate) dpb_image: vk::Image,
@@ -246,7 +253,8 @@ impl SimpleEncoder {
             .compute_queue_family_index()
             .unwrap_or_else(|| host_device.queue_family_index());
         let host_arc: Arc<crate::vulkan::rhi::HostVulkanDevice> = Arc::clone(host_device);
-        let submitter: Arc<dyn crate::vulkan::video::rhi::RhiQueueSubmitter> = host_arc;
+        let submitter: Arc<dyn crate::vulkan::video::rhi::RhiQueueSubmitter> =
+            Arc::clone(&host_arc) as _;
 
         unsafe {
             Self::create_from_external(
@@ -255,6 +263,7 @@ impl SimpleEncoder {
                 host_device.device().clone(),
                 host_device.physical_device(),
                 host_device.allocator().clone(),
+                host_arc,
                 submitter,
                 encode_queue,
                 encode_queue_family,
@@ -486,20 +495,18 @@ impl Drop for SimpleEncoder {
                     allocator.destroy_image(self.dpb_image, self.dpb_allocation);
                 }
 
-                // Destroy session parameters
-                if self.session_params != vk::VideoSessionParametersKHR::null() {
-                    self.device.destroy_video_session_parameters_khr(self.session_params, None);
-                }
-
-                // Destroy video session
-                if self.video_session != vk::VideoSessionKHR::null() {
-                    self.device.destroy_video_session_khr(self.video_session, None);
-                }
-
-                // Free session memory allocations
-                for alloc in &self.session_memory {
-                    allocator.free_memory(*alloc);
-                }
+                // Session parameters Arc dropped first → its destructor
+                // runs `vkDestroyVideoSessionParametersKHR` before the
+                // session Arc lets `HostVulkanVideoSession::drop` run
+                // `vkDestroyVideoSessionKHR` + free the bound memory.
+                // Vulkan spec requires parameters to outlive the session
+                // they parent under; the Arc back-ref on
+                // `HostVulkanVideoSessionParameters` makes that invariant
+                // unbreakable from Rust.
+                self.session_params_arc = None;
+                self.session_params = vk::VideoSessionParametersKHR::null();
+                self.video_session_arc = None;
+                self.video_session = vk::VideoSessionKHR::null();
             }
 
             // NOTE: device and instance are dropped via Drop impls on the

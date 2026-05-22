@@ -188,7 +188,7 @@ impl SimpleDecoder {
                 )
             })?;
         let host_arc: Arc<crate::vulkan::rhi::HostVulkanDevice> = Arc::clone(host_device);
-        let submitter: Arc<dyn crate::vulkan::video::rhi::RhiQueueSubmitter> = host_arc;
+        let submitter: Arc<dyn crate::vulkan::video::rhi::RhiQueueSubmitter> = Arc::clone(&host_arc) as _;
 
         Self::from_host_device(
             config,
@@ -196,6 +196,7 @@ impl SimpleDecoder {
             host_device.device().clone(),
             host_device.physical_device(),
             host_device.allocator().clone(),
+            host_arc,
             submitter,
             decode_queue,
             decode_queue_family,
@@ -213,6 +214,7 @@ impl SimpleDecoder {
         device: vulkanalia::Device,
         physical_device: vk::PhysicalDevice,
         allocator: Arc<vma::Allocator>,
+        host_device: Arc<crate::vulkan::rhi::HostVulkanDevice>,
         submitter: Arc<dyn crate::vulkan::video::rhi::RhiQueueSubmitter>,
         decode_queue: vk::Queue,
         decode_queue_family: u32,
@@ -224,6 +226,7 @@ impl SimpleDecoder {
             device.clone(),
             physical_device,
             allocator,
+            host_device,
         )?);
 
         // Load Vulkan for the Entry field (required by struct, not used for external path).

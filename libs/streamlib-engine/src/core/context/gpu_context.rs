@@ -1412,6 +1412,38 @@ impl GpuContext {
         crate::vulkan::rhi::RhiCommandRecorder::new(vulkan_device, label)
     }
 
+    /// Create a Vulkan video session — the privileged
+    /// `VkVideoSessionKHR` + bound device memory the codec layer
+    /// uses for `vkCmdDecodeVideoKHR` / `vkCmdEncodeVideoKHR`.
+    ///
+    /// FullAccess-only: the session creation path goes through
+    /// `vkCreateVideoSessionKHR` + `vkBindVideoSessionMemoryKHR`,
+    /// both excluded from the consumer-rhi carve-out. Subprocess
+    /// consumers that need codec output reach it through the normal
+    /// `surface_id` contract — they import the codec's render
+    /// target, not the session itself.
+    #[cfg(target_os = "linux")]
+    pub fn create_video_session(
+        &self,
+        descriptor: &crate::vulkan::rhi::VideoSessionDescriptor<'_>,
+    ) -> Result<Arc<crate::vulkan::rhi::HostVulkanVideoSession>> {
+        let vulkan_device = &self.device.inner;
+        crate::vulkan::rhi::HostVulkanVideoSession::new(vulkan_device, descriptor)
+    }
+
+    /// Create a Vulkan video session parameters object parented to
+    /// `session`. Companion to [`Self::create_video_session`]; covers
+    /// `vkCreateVideoSessionParametersKHR`'s codec-specific add-info
+    /// chain (H.264 / H.265 SPS / PPS / VPS plus encoder quality-level).
+    #[cfg(target_os = "linux")]
+    pub fn create_video_session_parameters(
+        &self,
+        session: &Arc<crate::vulkan::rhi::HostVulkanVideoSession>,
+        descriptor: &crate::vulkan::rhi::VideoSessionParametersDescriptor<'_>,
+    ) -> Result<Arc<crate::vulkan::rhi::HostVulkanVideoSessionParameters>> {
+        crate::vulkan::rhi::HostVulkanVideoSessionParameters::new(session, descriptor)
+    }
+
     /// Create a graphics kernel from a multi-stage SPIR-V set + binding
     /// declaration + pipeline state. Graphics counterpart to
     /// [`Self::create_compute_kernel`].
@@ -4272,6 +4304,52 @@ impl GpuContextFullAccess {
                     Err(Error::GpuError(msg))
                 }
             }
+        }
+    }
+
+    /// Create a Vulkan video session — the privileged
+    /// `VkVideoSessionKHR` + bound device memory the codec layer
+    /// uses for `vkCmdDecodeVideoKHR` / `vkCmdEncodeVideoKHR`.
+    ///
+    /// FullAccess-only and host-only: subprocess cdylibs do not
+    /// build their own codec layers — codec packages live inside
+    /// the host engine. The `ScopeToken` branch returns an explicit
+    /// error rather than silently falling through.
+    #[cfg(target_os = "linux")]
+    pub fn create_video_session(
+        &self,
+        descriptor: &crate::vulkan::rhi::VideoSessionDescriptor<'_>,
+    ) -> Result<std::sync::Arc<crate::vulkan::rhi::HostVulkanVideoSession>> {
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().create_video_session(descriptor),
+            HandleKind::ScopeToken => Err(Error::GpuError(
+                "create_video_session: video session creation is host-only; \
+                 subprocess customers consume codec output through the \
+                 surface-share registry, not by constructing sessions"
+                    .into(),
+            )),
+        }
+    }
+
+    /// Create Vulkan video session parameters parented to `session`.
+    /// Companion to [`Self::create_video_session`]; same FullAccess +
+    /// host-only privilege story.
+    #[cfg(target_os = "linux")]
+    pub fn create_video_session_parameters(
+        &self,
+        session: &std::sync::Arc<crate::vulkan::rhi::HostVulkanVideoSession>,
+        descriptor: &crate::vulkan::rhi::VideoSessionParametersDescriptor<'_>,
+    ) -> Result<std::sync::Arc<crate::vulkan::rhi::HostVulkanVideoSessionParameters>> {
+        match self.handle_kind {
+            HandleKind::Boxed => self
+                .host_inner()
+                .create_video_session_parameters(session, descriptor),
+            HandleKind::ScopeToken => Err(Error::GpuError(
+                "create_video_session_parameters: video session parameter \
+                 creation is host-only; subprocess customers consume codec \
+                 output through the surface-share registry"
+                    .into(),
+            )),
         }
     }
 

@@ -135,6 +135,14 @@ mod vulkan_color_converter;
 pub use vulkan_color_converter::VulkanColorConverter;
 
 #[cfg(target_os = "linux")]
+mod vulkan_video_session;
+#[cfg(target_os = "linux")]
+pub use vulkan_video_session::{
+    HostVulkanVideoSession, HostVulkanVideoSessionParameters, VideoSessionDescriptor,
+    VideoSessionParametersAddInfo, VideoSessionParametersDescriptor,
+};
+
+#[cfg(target_os = "linux")]
 pub mod drm_modifier_probe;
 
 #[cfg(all(test, target_os = "linux"))]
