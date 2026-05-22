@@ -3955,6 +3955,14 @@ impl GpuContextFullAccess {
         &self,
         timeline: &Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
     ) {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextFullAccess::set_video_source_timeline_semaphore(): \
+                 parameter `&Arc<HostVulkanTimelineSemaphore>` is host-internal \
+                 (crate::vulkan::rhi) and cannot cross the FFI boundary; this \
+                 method is engine-only and cdylib code must not call it."
+            );
+        }
         self.host_inner().set_video_source_timeline_semaphore(timeline);
     }
 
@@ -3963,9 +3971,17 @@ impl GpuContextFullAccess {
     /// **Engine-only** — pairs with
     /// [`Self::set_video_source_timeline_semaphore`]; that method is
     /// engine-only, so this one is too. Calling from a cdylib panics
-    /// inside [`Self::host_inner`].
+    /// at the explicit guard below.
     #[cfg(target_os = "linux")]
     pub fn clear_video_source_timeline_semaphore(&self) {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextFullAccess::clear_video_source_timeline_semaphore(): \
+                 pairs with set_video_source_timeline_semaphore which takes a \
+                 host-internal `&Arc<HostVulkanTimelineSemaphore>`; engine-only \
+                 by inheritance — cdylib code must not call it."
+            );
+        }
         self.host_inner().clear_video_source_timeline_semaphore();
     }
 
@@ -3973,11 +3989,19 @@ impl GpuContextFullAccess {
     ///
     /// **Engine-only** — return type is
     /// `Option<Arc<HostVulkanTimelineSemaphore>>` (host-internal type).
-    /// Calling from a cdylib panics inside [`Self::host_inner`].
+    /// Calling from a cdylib panics at the explicit guard below.
     #[cfg(target_os = "linux")]
     pub fn video_source_timeline_semaphore(
         &self,
     ) -> Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextFullAccess::video_source_timeline_semaphore(): \
+                 return type `Option<Arc<HostVulkanTimelineSemaphore>>` is \
+                 host-internal (crate::vulkan::rhi) and cannot cross the FFI \
+                 boundary; engine-only — cdylib code must not call it."
+            );
+        }
         self.host_inner().video_source_timeline_semaphore()
     }
 
@@ -3989,8 +4013,18 @@ impl GpuContextFullAccess {
     /// that needs GPU device capabilities should use the higher-level
     /// FullAccess methods (kernel construction, buffer/texture
     /// allocation, etc.) which dispatch through the vtable. Calling
-    /// from a cdylib panics inside [`Self::host_inner`].
+    /// from a cdylib panics at the explicit guard below.
     pub fn device(&self) -> &Arc<GpuDevice> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextFullAccess::device(): return type `&Arc<GpuDevice>` \
+                 borrows into host-private state and cannot cross the FFI \
+                 boundary; engine-only. Cdylib code that needs GPU device \
+                 capabilities must use higher-level FullAccess methods (kernel \
+                 construction, buffer/texture allocation) which dispatch \
+                 through the FullAccess vtable."
+            );
+        }
         self.host_inner().device()
     }
 
@@ -3998,8 +4032,17 @@ impl GpuContextFullAccess {
     ///
     /// **Engine-only** — returns `&TexturePool` which borrows into
     /// host-private state. Cdylib code uses [`Self::acquire_texture`]
-    /// instead. Calling from a cdylib panics inside [`Self::host_inner`].
+    /// instead. Calling from a cdylib panics at the explicit guard below.
     pub fn texture_pool(&self) -> &TexturePool {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextFullAccess::texture_pool(): return type \
+                 `&TexturePool` borrows into host-private state and cannot \
+                 cross the FFI boundary; engine-only. Cdylib code uses \
+                 acquire_texture() which dispatches through the FullAccess \
+                 vtable."
+            );
+        }
         self.host_inner().texture_pool()
     }
 
@@ -4526,9 +4569,16 @@ impl GpuContextFullAccess {
     /// Clear the blitter's texture cache to free GPU memory.
     ///
     /// **Engine-only** — engine setup-time housekeeping; no cdylib
-    /// path needs to invoke it. Calling from a cdylib panics inside
-    /// [`Self::host_inner`].
+    /// path needs to invoke it. Calling from a cdylib panics at the
+    /// explicit guard below.
     pub fn clear_blitter_cache(&self) {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextFullAccess::clear_blitter_cache(): engine setup-time \
+                 housekeeping that operates on host-internal blitter cache; \
+                 engine-only — cdylib code must not call it."
+            );
+        }
         self.host_inner().clear_blitter_cache();
     }
 
@@ -4604,9 +4654,17 @@ impl GpuContextFullAccess {
     /// shape that crosses the FFI boundary). The bridge is registered by
     /// host code via `set_cpu_readback_bridge` and read by host adapter
     /// machinery; cdylib code doesn't need to read it. Calling from a
-    /// cdylib panics inside [`Self::host_inner`].
+    /// cdylib panics at the explicit guard below.
     #[cfg(target_os = "linux")]
     pub fn cpu_readback_bridge(&self) -> Option<Arc<dyn CpuReadbackBridge>> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextFullAccess::cpu_readback_bridge(): return type \
+                 `Option<Arc<dyn CpuReadbackBridge>>` is a trait object whose \
+                 vtable layout is rustc-private and cannot cross the FFI \
+                 boundary; engine-only — cdylib code must not call it."
+            );
+        }
         self.host_inner().cpu_readback_bridge()
     }
 
@@ -4617,6 +4675,14 @@ impl GpuContextFullAccess {
     /// [`Self::cpu_readback_bridge`].
     #[cfg(target_os = "linux")]
     pub fn compute_kernel_bridge(&self) -> Option<Arc<dyn ComputeKernelBridge>> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextFullAccess::compute_kernel_bridge(): return type \
+                 `Option<Arc<dyn ComputeKernelBridge>>` is a trait object whose \
+                 vtable layout is rustc-private and cannot cross the FFI \
+                 boundary; engine-only — cdylib code must not call it."
+            );
+        }
         self.host_inner().compute_kernel_bridge()
     }
 
@@ -4627,6 +4693,14 @@ impl GpuContextFullAccess {
     /// [`Self::cpu_readback_bridge`].
     #[cfg(target_os = "linux")]
     pub fn graphics_kernel_bridge(&self) -> Option<Arc<dyn GraphicsKernelBridge>> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextFullAccess::graphics_kernel_bridge(): return type \
+                 `Option<Arc<dyn GraphicsKernelBridge>>` is a trait object \
+                 whose vtable layout is rustc-private and cannot cross the FFI \
+                 boundary; engine-only — cdylib code must not call it."
+            );
+        }
         self.host_inner().graphics_kernel_bridge()
     }
 
@@ -4637,6 +4711,14 @@ impl GpuContextFullAccess {
     /// [`Self::cpu_readback_bridge`].
     #[cfg(target_os = "linux")]
     pub fn ray_tracing_kernel_bridge(&self) -> Option<Arc<dyn RayTracingKernelBridge>> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextFullAccess::ray_tracing_kernel_bridge(): return type \
+                 `Option<Arc<dyn RayTracingKernelBridge>>` is a trait object \
+                 whose vtable layout is rustc-private and cannot cross the FFI \
+                 boundary; engine-only — cdylib code must not call it."
+            );
+        }
         self.host_inner().ray_tracing_kernel_bridge()
     }
 }
