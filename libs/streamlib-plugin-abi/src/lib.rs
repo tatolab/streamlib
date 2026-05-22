@@ -162,24 +162,45 @@ pub const SURFACE_STORE_VTABLE_LAYOUT_VERSION: u32 = 1;
 /// a no-op); `PooledTextureHandle::Drop` releases the underlying
 /// pool slot. Linux-only callbacks ship platform stubs on other
 /// triples so the vtable layout stays unconditional.
-pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 9;
+///
+/// - v10: Phase C3 adds `escalate_begin` / `escalate_end` so the
+///   cdylib-side `GpuContextLimitedAccess::escalate(|full| ...)` can
+///   acquire the host's escalate gate, mint an opaque scope token,
+///   and pair it with the FullAccess vtable for the
+///   vtable-dispatched transition into `GpuContextFullAccess`.
+///   Validation of the
+///   scope token on every FullAccess vtable call lives on the
+///   FullAccess vtable side (each callback short-circuits to
+///   `Error::InvalidEscalateScope` when the token is stale).
+pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 10;
 
 /// Layout version of [`GpuContextFullAccessVTable`].
 ///
 /// The FullAccess vtable carries the privileged kernel-construction
-/// surface (compute / graphics / ray-tracing) plus `create_texture_ring`.
-/// Each kernel-construction callback consumes a `#[repr(C)]` descriptor
-/// mirror ([`ComputeKernelDescriptorRepr`], [`GraphicsKernelDescriptorRepr`],
+/// surface (compute / graphics / ray-tracing) plus `create_texture_ring`
+/// and `acquire_render_target_dma_buf_image`. Each kernel-construction
+/// callback consumes a `#[repr(C)]` descriptor mirror
+/// ([`ComputeKernelDescriptorRepr`], [`GraphicsKernelDescriptorRepr`],
 /// [`RayTracingKernelDescriptorRepr`]) and returns an Arc-handle β-shape
 /// for the resulting kernel; the matching Arc-lifecycle pairs
 /// (`clone_*` / `drop_*`) live on this vtable.
 ///
 /// Reachable from cdylib code only inside an `escalate(|full| ...)`
-/// scope; the `escalate_begin` / `escalate_end` scope-token machinery
-/// is wired by C3. C2 lands the descriptor wire format + host-side
-/// dispatch + cdylib-side β-shape, locking the layout before the
-/// scope-token machinery turns it on.
-pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 1;
+/// scope established via the LimitedAccess vtable's `escalate_begin` /
+/// `escalate_end` pair. Each FullAccess callback's `gpu_handle`
+/// argument is the opaque scope token issued by `escalate_begin`; the
+/// host validates the token against
+/// `escalate_scope_registry::with_scope` before dispatch and returns
+/// `Error::InvalidEscalateScope` if it's stale or never-issued.
+///
+/// - v2: Phase C3 adds `acquire_render_target_dma_buf_image` (the
+///   one privileged DMA-BUF render-target allocator not yet on this
+///   vtable). The four existing `create_*` callbacks keep their wire
+///   signatures unchanged but switch from "`gpu_handle` is
+///   `*const Arc<GpuContext>`" to "`gpu_handle` is an opaque scope
+///   token" semantically — same `*const c_void`, different lookup
+///   path on the host side.
+pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 2;
 
 // =============================================================================
 // Primitive enums
@@ -1340,6 +1361,60 @@ pub struct GpuContextLimitedAccessVTable {
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // Escalate scope transition (Phase C3)
+    // -------------------------------------------------------------------------
+
+    /// Begin an escalate scope. Acquires the host's escalate gate on
+    /// the supplied `gpu_handle`, mints an opaque scope token, and
+    /// writes it into `*out_scope_token` on success. Returns 0 on
+    /// success, non-zero on failure (message in `err_buf`).
+    ///
+    /// The token is opaque to the caller; the cdylib's
+    /// [`GpuContextLimitedAccess::escalate`] wrapper passes it as the
+    /// `gpu_handle` slot when constructing a cdylib-side
+    /// [`GpuContextFullAccess`] and back to `escalate_end` when the
+    /// scope completes. Every FullAccess vtable callback validates
+    /// the token against the host's
+    /// `escalate_scope_registry` before dispatch; calls after
+    /// `escalate_end` (or against a never-issued token) return a
+    /// `Error::InvalidEscalateScope`-flavored error in the callback's
+    /// `err_buf`.
+    ///
+    /// Blocking: the gate's `enter` serializes against any other
+    /// escalate scope on the same `GpuContext` (host-mode or
+    /// cdylib-mode), so `escalate_begin` may block for the duration
+    /// of a prior scope.
+    ///
+    /// [`GpuContextLimitedAccess::escalate`]: streamlib_plugin_abi::GpuContextLimitedAccessVTable
+    /// [`GpuContextFullAccess`]: streamlib_plugin_abi::GpuContextFullAccessVTable
+    pub escalate_begin: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        out_scope_token: *mut *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// End an escalate scope. Releases the host's escalate gate and
+    /// invalidates the token, then waits for the GPU device to go
+    /// idle (matching the host-mode escalate path's
+    /// `wait_device_idle` at scope end). Returns 0 on success,
+    /// non-zero on failure (message in `err_buf`); a non-zero return
+    /// indicates `wait_device_idle` failed — the scope is still
+    /// invalidated and the gate is still released.
+    ///
+    /// Idempotent against a never-issued or already-ended token —
+    /// the call returns 0 cleanly without releasing another scope's
+    /// gate.
+    pub escalate_end: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        scope_token: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
 }
 
 unsafe impl Send for GpuContextLimitedAccessVTable {}
@@ -2073,6 +2148,34 @@ pub struct GpuContextFullAccessVTable {
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // Render-target surface allocation (Phase C3 — Linux-only privileged
+    // primitive)
+    // -------------------------------------------------------------------------
+
+    /// Allocate a render-target-capable DMA-BUF-backed `VkImage` from
+    /// the host's privileged surface path. The cdylib's
+    /// `GpuContextFullAccess::acquire_render_target_dma_buf_image`
+    /// dispatches through this slot inside an active escalate scope;
+    /// the host picks a tiled DRM modifier via the EGL probe, runs the
+    /// allocation through the RHI's render-target pool, and writes a
+    /// fresh `Texture` β-shape into `*out_texture` on success.
+    ///
+    /// `format_raw` is the `#[repr(u32)]` discriminant of
+    /// `streamlib_consumer_rhi::TextureFormat`. Linux-only; non-Linux
+    /// stubs return non-zero with a "not available on this platform"
+    /// message.
+    pub acquire_render_target_dma_buf_image: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        width: u32,
+        height: u32,
+        format_raw: u32,
+        out_texture: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
 }
 
 unsafe impl Send for GpuContextFullAccessVTable {}
@@ -2645,9 +2748,9 @@ mod layout_tests {
         // v2: added owning-Arc handle lifetime callbacks
         // (`clone_handle` / `drop_handle`).
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
-        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 9);
+        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 10);
         assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
-        assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 1);
+        assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 2);
     }
 
     #[test]
@@ -2691,9 +2794,11 @@ mod layout_tests {
 
     #[test]
     fn gpu_context_limited_access_vtable_layout() {
-        // layout_version (u32) + _reserved_padding (u32) + 50 fn
-        // pointers (8 bytes each) = 4 + 4 + 400 = 408 bytes.
-        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 408);
+        // layout_version (u32) + _reserved_padding (u32) + 52 fn
+        // pointers (8 bytes each) = 4 + 4 + 416 = 424 bytes.
+        // (C3 appended escalate_begin + escalate_end, taking the
+        // count from 50 → 52.)
+        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 424);
         assert_eq!(align_of::<GpuContextLimitedAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextLimitedAccessVTable, layout_version), 0);
         assert_eq!(
@@ -2900,17 +3005,27 @@ mod layout_tests {
             offset_of!(GpuContextLimitedAccessVTable, resolve_pixel_buffer_by_surface_id),
             400
         );
+        // C3-added entries (Phase C3, #903).
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, escalate_begin),
+            408
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, escalate_end),
+            416
+        );
     }
 
     #[test]
     fn gpu_context_full_access_vtable_layout() {
-        // layout_version (u32) + _reserved_padding (u32) + 13 fn
-        // pointers (8 bytes each) = 4 + 4 + 104 = 112 bytes.
+        // layout_version (u32) + _reserved_padding (u32) + 14 fn
+        // pointers (8 bytes each) = 4 + 4 + 112 = 120 bytes.
         //
-        // 13 entries = 1 drop_handle + 4 clone/drop pairs (8 fn
+        // 14 entries = 1 drop_handle + 4 clone/drop pairs (8 fn
         // pointers for the 4 kernel return types) + 4 create_* method
-        // callbacks (compute / graphics / ray-tracing / texture_ring).
-        assert_eq!(size_of::<GpuContextFullAccessVTable>(), 112);
+        // callbacks (compute / graphics / ray-tracing / texture_ring)
+        // + 1 acquire_render_target_dma_buf_image (C3-added, #903).
+        assert_eq!(size_of::<GpuContextFullAccessVTable>(), 120);
         assert_eq!(align_of::<GpuContextFullAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextFullAccessVTable, layout_version), 0);
         assert_eq!(offset_of!(GpuContextFullAccessVTable, _reserved_padding), 4);
@@ -2962,6 +3077,14 @@ mod layout_tests {
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, create_texture_ring),
             104
+        );
+        // C3-added entry (Phase C3, #903).
+        assert_eq!(
+            offset_of!(
+                GpuContextFullAccessVTable,
+                acquire_render_target_dma_buf_image
+            ),
+            112
         );
     }
 

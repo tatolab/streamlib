@@ -2142,6 +2142,106 @@ unsafe extern "C" fn host_gpu_lim_unregister_texture(
 }
 
 // -------------------------------------------------------------------------
+// Escalate scope transition (Phase C3)
+// -------------------------------------------------------------------------
+
+/// Begin an escalate scope on the supplied `gpu_handle`. Mints a
+/// unique opaque token via
+/// [`crate::core::context::escalate_scope_registry::begin_escalate_scope`]
+/// and writes it into `*out_scope_token`. Blocking on the gate is
+/// expected — the host's escalate gate serializes against any
+/// concurrent escalate scope on the same `GpuContext`.
+unsafe extern "C" fn host_gpu_lim_escalate_begin(
+    handle: *const c_void,
+    out_scope_token: *mut *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_escalate_begin",
+        || {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(handle) }) else {
+                write_err(
+                    "escalate_begin: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1i32;
+            };
+            if out_scope_token.is_null() {
+                write_err(
+                    "escalate_begin: null out_scope_token",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1i32;
+            }
+            // begin_escalate_scope clones the Arc into the registry
+            // and enters the gate; both operations succeed without
+            // returning a fallible value.
+            let token = crate::core::context::escalate_scope_registry::begin_escalate_scope(
+                Arc::clone(gpu),
+            );
+            // SAFETY: out_scope_token is non-null per the check above.
+            // Token encoding is just the u64 serial reinterpreted as
+            // pointer-shaped; cdylib treats it as opaque.
+            unsafe { *out_scope_token = token as *const c_void };
+            0
+        },
+        1,
+    )
+}
+
+/// End an escalate scope. Removes the bound `Arc<GpuContext>` from
+/// the registry (releasing the escalate gate), then runs
+/// [`GpuContext::wait_device_idle`] to match the host-mode escalate
+/// path's scope-end semantics. Idempotent for stale or never-issued
+/// tokens.
+unsafe extern "C" fn host_gpu_lim_escalate_end(
+    _handle: *const c_void,
+    scope_token: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_escalate_end",
+        || {
+            let token = scope_token as u64;
+            // Resolve the Arc BEFORE removing it from the registry so
+            // we can call wait_device_idle. If the token is stale or
+            // never-issued, this returns None — silently no-op (the
+            // gate was never acquired by this token, so there's
+            // nothing to release).
+            let arc_clone = crate::core::context::escalate_scope_registry::with_scope(
+                token,
+                Arc::clone,
+            );
+            let removed = crate::core::context::escalate_scope_registry::end_escalate_scope(token);
+            if !removed {
+                return 0i32;
+            }
+            match arc_clone.as_ref().map(|arc| arc.wait_device_idle()) {
+                Some(Ok(())) | None => 0,
+                Some(Err(e)) => {
+                    write_err(
+                        &format!("escalate_end: wait_device_idle failed: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+// -------------------------------------------------------------------------
 // Linux-only buffer Arc-handle lifecycle
 // -------------------------------------------------------------------------
 //
@@ -4292,35 +4392,34 @@ pub fn host_surface_store_vtable() -> *const SurfaceStoreVTable {
 // HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE — Phase C2
 // =============================================================================
 //
-// FullAccess vtable bodies. Reachable from cdylib code only inside an
-// `escalate(|full| ...)` scope (C3 wires the scope-token machinery);
-// host-mode call sites reach the same bodies via the
-// `host_gpu_context_full_access_vtable()` resolver.
+// FullAccess vtable bodies. Reached from cdylib code via the
+// vtable-dispatched path of `GpuContextLimitedAccess::escalate`; the
+// `gpu_handle` slot on every method is an opaque scope token issued
+// by the LimitedAccess vtable's `escalate_begin` callback (Phase C3).
+// Each body resolves the token to its bound `Arc<GpuContext>` via
+// `with_full_scope_or_err`; missing tokens return
+// `Error::InvalidEscalateScope`. The engine-internal in-process path
+// constructs `GpuContextFullAccess` via `Self::new(GpuContext)` and
+// reaches the same engine methods through `host_inner` rather than
+// the vtable, so these callback bodies don't ever see an
+// engine-internal `Box<Arc<GpuContext>>`-shaped handle.
 //
-// Handle interpretation:
-// - `gpu_handle`: `*const Arc<GpuContext>` (matches the LimitedAccess
-//   convention). The host's `GpuContextFullAccess::new` produces
-//   `Box::into_raw(Box::new(Arc::new(GpuContext)))`; the matching
-//   `host_gpu_full_drop_handle` runs `Box::from_raw + drop`.
-// - Kernel return handles: `*const VulkanComputeKernel` / etc., shaped
-//   as `Arc::into_raw(arc)`. Cdylib's `clone_*` / `drop_*` callbacks
-//   route refcount accounting through host-compiled code.
+// Kernel return handles: `*const VulkanComputeKernel` / etc., shaped
+// as `Arc::into_raw(arc)`. Cdylib's `clone_*` / `drop_*` callbacks
+// route refcount accounting through host-compiled code.
 
+/// Defensive no-op. `GpuContextFullAccess::Drop` dispatches on the
+/// struct's `handle_kind` discriminator directly without routing
+/// through this vtable slot — host-mode (Boxed) runs `Box::from_raw`
+/// in-process; cdylib-mode (ScopeToken) is a no-op (the cdylib's
+/// escalate wrapper releases the gate via the LimitedAccess vtable's
+/// `escalate_end` callback). The slot is preserved at the same vtable
+/// offset for layout-version stability; calling it has no effect.
 unsafe extern "C" fn host_gpu_full_drop_handle(handle: *const c_void) {
     run_host_extern_c(
         "host_gpu_full_drop_handle",
         || {
-            if handle.is_null() {
-                return;
-            }
-            // SAFETY: handle was produced by either the host's
-            // `GpuContextFullAccess::new` or a future C3 escalate-begin
-            // callback; both produce `Box::into_raw(Box::new(Arc::new(GpuContext)))`.
-            let _ = unsafe {
-                Box::from_raw(
-                    handle as *mut Arc<crate::core::context::GpuContext>,
-                )
-            };
+            let _ = handle;
         },
         (),
     )
@@ -4495,21 +4594,45 @@ unsafe extern "C" fn host_gpu_full_drop_texture_ring(_handle: *const c_void) {}
 
 // ---------------- Kernel construction (Linux-only) ----------------
 
-#[cfg(target_os = "linux")]
-unsafe fn handle_as_gpu_context_full(
-    handle: *const c_void,
-) -> Option<&'static Arc<crate::core::context::GpuContext>> {
-    if handle.is_null() {
-        return None;
+/// Resolve a scope token to its bound `Arc<GpuContext>` and run the
+/// closure. On miss (null token, stale token, never-issued token)
+/// writes an "invalid escalate scope" message into `err_buf` and
+/// returns `None`. FullAccess vtable callback bodies use this in
+/// place of [`handle_as_gpu_context_full`] (which derefs a host-mode
+/// `Box<Arc<GpuContext>>` directly — never reached from cdylib code
+/// post-C3, kept for tier-1 wire-format tests until they migrate).
+fn with_full_scope_or_err<F, R>(
+    scope_token: *const c_void,
+    op: &str,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+    f: F,
+) -> Option<R>
+where
+    F: FnOnce(&Arc<crate::core::context::GpuContext>) -> R,
+{
+    let token = scope_token as u64;
+    match crate::core::context::escalate_scope_registry::with_scope(token, f) {
+        Some(r) => Some(r),
+        None => {
+            write_err(
+                &format!(
+                    "{op}: invalid escalate scope (token stale, never-issued, \
+                     or null)"
+                ),
+                err_buf,
+                err_buf_cap,
+                err_len,
+            );
+            None
+        }
     }
-    // SAFETY: caller-supplied contract; matches `handle_as_gpu_context`'s
-    // shape (`*const Arc<GpuContext>`).
-    unsafe { Some(&*(handle as *const Arc<crate::core::context::GpuContext>)) }
 }
 
 #[cfg(target_os = "linux")]
 unsafe extern "C" fn host_gpu_full_create_compute_kernel(
-    gpu_handle: *const c_void,
+    scope_token: *const c_void,
     desc: *const ComputeKernelDescriptorRepr,
     out_kernel: *mut *const c_void,
     err_buf: *mut u8,
@@ -4519,15 +4642,6 @@ unsafe extern "C" fn host_gpu_full_create_compute_kernel(
     run_host_extern_c(
         "host_gpu_full_create_compute_kernel",
         || -> i32 {
-            let Some(gpu) = (unsafe { handle_as_gpu_context_full(gpu_handle) }) else {
-                write_err(
-                    "create_compute_kernel: null gpu handle",
-                    err_buf,
-                    err_buf_cap,
-                    err_len,
-                );
-                return 1;
-            };
             if desc.is_null() || out_kernel.is_null() {
                 write_err(
                     "create_compute_kernel: null desc or out pointer",
@@ -4538,22 +4652,30 @@ unsafe extern "C" fn host_gpu_full_create_compute_kernel(
                 return 1;
             }
             let repr: &ComputeKernelDescriptorRepr = unsafe { &*desc };
-            let result = unsafe {
-                crate::core::rhi::plugin_abi_bridge::with_decoded_compute_kernel_descriptor(
-                    repr,
-                    |rust_desc| gpu.create_compute_kernel(rust_desc),
-                )
-            };
+            let result = with_full_scope_or_err(
+                scope_token,
+                "create_compute_kernel",
+                err_buf,
+                err_buf_cap,
+                err_len,
+                |gpu| unsafe {
+                    crate::core::rhi::plugin_abi_bridge::with_decoded_compute_kernel_descriptor(
+                        repr,
+                        |rust_desc| gpu.create_compute_kernel(rust_desc),
+                    )
+                },
+            );
             match result {
-                Ok(arc) => {
+                Some(Ok(arc)) => {
                     let raw = Arc::into_raw(arc) as *const c_void;
                     unsafe { std::ptr::write(out_kernel, raw) };
                     0
                 }
-                Err(e) => {
+                Some(Err(e)) => {
                     write_err(&format!("{e}"), err_buf, err_buf_cap, err_len);
                     1
                 }
+                None => 1, // err_buf populated by helper
             }
         },
         1,
@@ -4562,7 +4684,7 @@ unsafe extern "C" fn host_gpu_full_create_compute_kernel(
 
 #[cfg(target_os = "linux")]
 unsafe extern "C" fn host_gpu_full_create_graphics_kernel(
-    gpu_handle: *const c_void,
+    scope_token: *const c_void,
     desc: *const GraphicsKernelDescriptorRepr,
     out_kernel: *mut *const c_void,
     err_buf: *mut u8,
@@ -4572,15 +4694,6 @@ unsafe extern "C" fn host_gpu_full_create_graphics_kernel(
     run_host_extern_c(
         "host_gpu_full_create_graphics_kernel",
         || -> i32 {
-            let Some(gpu) = (unsafe { handle_as_gpu_context_full(gpu_handle) }) else {
-                write_err(
-                    "create_graphics_kernel: null gpu handle",
-                    err_buf,
-                    err_buf_cap,
-                    err_len,
-                );
-                return 1;
-            };
             if desc.is_null() || out_kernel.is_null() {
                 write_err(
                     "create_graphics_kernel: null desc or out pointer",
@@ -4591,22 +4704,30 @@ unsafe extern "C" fn host_gpu_full_create_graphics_kernel(
                 return 1;
             }
             let repr: &GraphicsKernelDescriptorRepr = unsafe { &*desc };
-            let result = unsafe {
-                crate::core::rhi::plugin_abi_bridge::with_decoded_graphics_kernel_descriptor(
-                    repr,
-                    |rust_desc| gpu.create_graphics_kernel(rust_desc),
-                )
-            };
+            let result = with_full_scope_or_err(
+                scope_token,
+                "create_graphics_kernel",
+                err_buf,
+                err_buf_cap,
+                err_len,
+                |gpu| unsafe {
+                    crate::core::rhi::plugin_abi_bridge::with_decoded_graphics_kernel_descriptor(
+                        repr,
+                        |rust_desc| gpu.create_graphics_kernel(rust_desc),
+                    )
+                },
+            );
             match result {
-                Ok(arc) => {
+                Some(Ok(arc)) => {
                     let raw = Arc::into_raw(arc) as *const c_void;
                     unsafe { std::ptr::write(out_kernel, raw) };
                     0
                 }
-                Err(e) => {
+                Some(Err(e)) => {
                     write_err(&format!("{e}"), err_buf, err_buf_cap, err_len);
                     1
                 }
+                None => 1,
             }
         },
         1,
@@ -4625,15 +4746,6 @@ unsafe extern "C" fn host_gpu_full_create_ray_tracing_kernel(
     run_host_extern_c(
         "host_gpu_full_create_ray_tracing_kernel",
         || -> i32 {
-            let Some(gpu) = (unsafe { handle_as_gpu_context_full(gpu_handle) }) else {
-                write_err(
-                    "create_ray_tracing_kernel: null gpu handle",
-                    err_buf,
-                    err_buf_cap,
-                    err_len,
-                );
-                return 1;
-            };
             if desc.is_null() || out_kernel.is_null() {
                 write_err(
                     "create_ray_tracing_kernel: null desc or out pointer",
@@ -4644,22 +4756,30 @@ unsafe extern "C" fn host_gpu_full_create_ray_tracing_kernel(
                 return 1;
             }
             let repr: &RayTracingKernelDescriptorRepr = unsafe { &*desc };
-            let result = unsafe {
-                crate::core::rhi::plugin_abi_bridge::with_decoded_ray_tracing_kernel_descriptor(
-                    repr,
-                    |rust_desc| gpu.create_ray_tracing_kernel(rust_desc),
-                )
-            };
+            let result = with_full_scope_or_err(
+                gpu_handle,
+                "create_ray_tracing_kernel",
+                err_buf,
+                err_buf_cap,
+                err_len,
+                |gpu| unsafe {
+                    crate::core::rhi::plugin_abi_bridge::with_decoded_ray_tracing_kernel_descriptor(
+                        repr,
+                        |rust_desc| gpu.create_ray_tracing_kernel(rust_desc),
+                    )
+                },
+            );
             match result {
-                Ok(arc) => {
+                Some(Ok(arc)) => {
                     let raw = Arc::into_raw(arc) as *const c_void;
                     unsafe { std::ptr::write(out_kernel, raw) };
                     0
                 }
-                Err(e) => {
+                Some(Err(e)) => {
                     write_err(&format!("{e}"), err_buf, err_buf_cap, err_len);
                     1
                 }
+                None => 1,
             }
         },
         1,
@@ -4668,7 +4788,7 @@ unsafe extern "C" fn host_gpu_full_create_ray_tracing_kernel(
 
 #[cfg(target_os = "linux")]
 unsafe extern "C" fn host_gpu_full_create_texture_ring(
-    gpu_handle: *const c_void,
+    scope_token: *const c_void,
     width: u32,
     height: u32,
     format_raw: u32,
@@ -4682,15 +4802,6 @@ unsafe extern "C" fn host_gpu_full_create_texture_ring(
     run_host_extern_c(
         "host_gpu_full_create_texture_ring",
         || -> i32 {
-            let Some(gpu) = (unsafe { handle_as_gpu_context_full(gpu_handle) }) else {
-                write_err(
-                    "create_texture_ring: null gpu handle",
-                    err_buf,
-                    err_buf_cap,
-                    err_len,
-                );
-                return 1;
-            };
             if out_ring.is_null() {
                 write_err(
                     "create_texture_ring: null out_ring pointer",
@@ -4720,16 +4831,25 @@ unsafe extern "C" fn host_gpu_full_create_texture_ring(
             };
             let usages =
                 streamlib_consumer_rhi::TextureUsages::from_bits_truncate(usage_bits);
-            match gpu.create_texture_ring(width, height, format, usages, count) {
-                Ok(arc) => {
+            let result = with_full_scope_or_err(
+                scope_token,
+                "create_texture_ring",
+                err_buf,
+                err_buf_cap,
+                err_len,
+                |gpu| gpu.create_texture_ring(width, height, format, usages, count),
+            );
+            match result {
+                Some(Ok(arc)) => {
                     let raw = Arc::into_raw(arc) as *const c_void;
                     unsafe { std::ptr::write(out_ring, raw) };
                     0
                 }
-                Err(e) => {
+                Some(Err(e)) => {
                     write_err(&format!("{e}"), err_buf, err_buf_cap, err_len);
                     1
                 }
+                None => 1,
             }
         },
         1,
@@ -4810,6 +4930,108 @@ unsafe extern "C" fn host_gpu_full_create_texture_ring(
     1
 }
 
+// ---------------- Render-target allocation (Phase C3, Linux-only) ---------
+
+/// Allocate a render-target-capable DMA-BUF-backed `VkImage`. Looks
+/// up the bound `Arc<GpuContext>` via the scope_token; runs
+/// [`crate::core::context::GpuContext::acquire_render_target_dma_buf_image`]
+/// (which picks a tiled DRM modifier via the EGL probe and allocates
+/// through the privileged RHI path), and writes the resulting
+/// `Texture` β-shape into `*out_texture` on success.
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_acquire_render_target_dma_buf_image(
+    scope_token: *const c_void,
+    width: u32,
+    height: u32,
+    format_raw: u32,
+    out_texture: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_full_acquire_render_target_dma_buf_image",
+        || -> i32 {
+            if out_texture.is_null() {
+                write_err(
+                    "acquire_render_target_dma_buf_image: null out_texture",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let format = match format_raw {
+                0 => streamlib_consumer_rhi::TextureFormat::Rgba8Unorm,
+                1 => streamlib_consumer_rhi::TextureFormat::Rgba8UnormSrgb,
+                2 => streamlib_consumer_rhi::TextureFormat::Bgra8Unorm,
+                3 => streamlib_consumer_rhi::TextureFormat::Bgra8UnormSrgb,
+                4 => streamlib_consumer_rhi::TextureFormat::Rgba16Float,
+                5 => streamlib_consumer_rhi::TextureFormat::Rgba32Float,
+                6 => streamlib_consumer_rhi::TextureFormat::Nv12,
+                _ => {
+                    write_err(
+                        &format!(
+                            "acquire_render_target_dma_buf_image: invalid \
+                             format_raw {}",
+                            format_raw
+                        ),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            let result = with_full_scope_or_err(
+                scope_token,
+                "acquire_render_target_dma_buf_image",
+                err_buf,
+                err_buf_cap,
+                err_len,
+                |gpu| gpu.acquire_render_target_dma_buf_image(width, height, format),
+            );
+            match result {
+                Some(Ok(texture)) => {
+                    unsafe {
+                        std::ptr::write(
+                            out_texture as *mut crate::core::rhi::Texture,
+                            texture,
+                        );
+                    }
+                    0
+                }
+                Some(Err(e)) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+                None => 1, // err_buf already populated by helper
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_acquire_render_target_dma_buf_image(
+    _scope_token: *const c_void,
+    _width: u32,
+    _height: u32,
+    _format_raw: u32,
+    _out_texture: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "acquire_render_target_dma_buf_image: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
 pub static HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE: GpuContextFullAccessVTable =
     GpuContextFullAccessVTable {
         layout_version: GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION,
@@ -4827,6 +5049,8 @@ pub static HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE: GpuContextFullAccessVTable =
         create_graphics_kernel: host_gpu_full_create_graphics_kernel,
         create_ray_tracing_kernel: host_gpu_full_create_ray_tracing_kernel,
         create_texture_ring: host_gpu_full_create_texture_ring,
+        acquire_render_target_dma_buf_image:
+            host_gpu_full_acquire_render_target_dma_buf_image,
     };
 
 /// Pointer to the [`GpuContextFullAccessVTable`] this DSO should
@@ -4899,6 +5123,8 @@ pub static HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE: GpuContextLimitedAccessVTable
         acquire_pixel_buffer: host_gpu_lim_acquire_pixel_buffer,
         get_pixel_buffer: host_gpu_lim_get_pixel_buffer,
         resolve_pixel_buffer_by_surface_id: host_gpu_lim_resolve_pixel_buffer_by_surface_id,
+        escalate_begin: host_gpu_lim_escalate_begin,
+        escalate_end: host_gpu_lim_escalate_end,
     };
 
 /// Pointer to the [`GpuContextLimitedAccessVTable`] this DSO should
@@ -5041,12 +5267,13 @@ mod gpu_full_access_vtable_tests {
     }
 
     #[test]
-    fn create_compute_kernel_returns_error_on_null_gpu_handle() {
+    fn create_compute_kernel_returns_error_on_null_scope_token() {
+        // Post-C3: gpu_handle is interpreted as a scope_token; a null
+        // pointer corresponds to scope_token = 0, which is reserved as
+        // "never issued" — `with_scope` returns None and the callback
+        // returns an "invalid escalate scope" error.
         let (mut buf, mut len) = make_err_buf();
         let mut out: *const c_void = std::ptr::null();
-        // Build a syntactically-valid repr — the null gpu_handle
-        // check runs first, so the repr contents don't matter for
-        // this test.
         let bindings_buf: [streamlib_plugin_abi::ComputeBindingSpecRepr; 0] = [];
         let repr = ComputeKernelDescriptorRepr {
             label_ptr: "test".as_ptr(),
@@ -5071,14 +5298,14 @@ mod gpu_full_access_vtable_tests {
         assert_eq!(rc, 1);
         let msg = err_buf_as_str(&buf, len);
         assert!(
-            msg.contains("create_compute_kernel: null gpu handle"),
+            msg.contains("create_compute_kernel: invalid escalate scope"),
             "got: {msg}"
         );
         assert!(out.is_null(), "out_kernel must not be written on error");
     }
 
     #[test]
-    fn create_graphics_kernel_returns_error_on_null_gpu_handle() {
+    fn create_graphics_kernel_returns_error_on_null_scope_token() {
         let (mut buf, mut len) = make_err_buf();
         let mut out: *const c_void = std::ptr::null();
         let repr: GraphicsKernelDescriptorRepr = unsafe { std::mem::zeroed() };
@@ -5095,14 +5322,14 @@ mod gpu_full_access_vtable_tests {
         assert_eq!(rc, 1);
         let msg = err_buf_as_str(&buf, len);
         assert!(
-            msg.contains("create_graphics_kernel: null gpu handle"),
+            msg.contains("create_graphics_kernel: invalid escalate scope"),
             "got: {msg}"
         );
         assert!(out.is_null());
     }
 
     #[test]
-    fn create_ray_tracing_kernel_returns_error_on_null_gpu_handle() {
+    fn create_ray_tracing_kernel_returns_error_on_null_scope_token() {
         let (mut buf, mut len) = make_err_buf();
         let mut out: *const c_void = std::ptr::null();
         let repr: RayTracingKernelDescriptorRepr = unsafe { std::mem::zeroed() };
@@ -5119,14 +5346,14 @@ mod gpu_full_access_vtable_tests {
         assert_eq!(rc, 1);
         let msg = err_buf_as_str(&buf, len);
         assert!(
-            msg.contains("create_ray_tracing_kernel: null gpu handle"),
+            msg.contains("create_ray_tracing_kernel: invalid escalate scope"),
             "got: {msg}"
         );
         assert!(out.is_null());
     }
 
     #[test]
-    fn create_texture_ring_returns_error_on_null_gpu_handle() {
+    fn create_texture_ring_returns_error_on_null_scope_token() {
         let (mut buf, mut len) = make_err_buf();
         let mut out: *const c_void = std::ptr::null();
         let rc = unsafe {
@@ -5146,10 +5373,70 @@ mod gpu_full_access_vtable_tests {
         assert_eq!(rc, 1);
         let msg = err_buf_as_str(&buf, len);
         assert!(
-            msg.contains("create_texture_ring: null gpu handle"),
+            msg.contains("create_texture_ring: invalid escalate scope"),
             "got: {msg}"
         );
         assert!(out.is_null());
+    }
+
+    #[test]
+    fn acquire_render_target_dma_buf_image_returns_error_on_null_scope_token() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut out: crate::core::rhi::texture::Texture =
+            unsafe { std::mem::zeroed() };
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE
+                .acquire_render_target_dma_buf_image)(
+                std::ptr::null(),
+                64,
+                64,
+                0, // Rgba8Unorm
+                &mut out as *mut _ as *mut c_void,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(
+            msg.contains(
+                "acquire_render_target_dma_buf_image: invalid escalate scope"
+            ),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn acquire_render_target_dma_buf_image_returns_error_on_invalid_format() {
+        // Even with an invalid format, the null scope-token check would
+        // run after the format decode — so feeding a token of 0 (which
+        // would later fail scope lookup) but an invalid format ensures
+        // the format-validation path fires.
+        let (mut buf, mut len) = make_err_buf();
+        let mut out: crate::core::rhi::texture::Texture =
+            unsafe { std::mem::zeroed() };
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE
+                .acquire_render_target_dma_buf_image)(
+                std::ptr::null(),
+                64,
+                64,
+                99, // invalid format_raw
+                &mut out as *mut _ as *mut c_void,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(
+            msg.contains(
+                "acquire_render_target_dma_buf_image: invalid format_raw"
+            ),
+            "got: {msg}"
+        );
     }
 
     #[test]
@@ -5184,5 +5471,318 @@ mod gpu_full_access_vtable_tests {
             installed_version,
             streamlib_plugin_abi::GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION
         );
+    }
+}
+
+#[cfg(test)]
+mod gpu_lim_escalate_vtable_tests {
+    //! Tier-1 wire-format + round-trip tests for C3's escalate_begin
+    //! and escalate_end vtable entries.
+    //!
+    //! Tests that construct a real `GpuContext` carry `#[serial]` to
+    //! prevent the NVIDIA Linux dual-`VkDevice` SIGSEGV
+    //! (`docs/learnings/nvidia-dual-vulkan-device-crash.md`) when run
+    //! against other VkDevice-creating tests in the workspace lib
+    //! suite.
+
+    use super::*;
+    use serial_test::serial;
+
+    fn make_err_buf() -> ([u8; 256], usize) {
+        ([0u8; 256], 0usize)
+    }
+
+    fn err_buf_as_str(buf: &[u8], len: usize) -> &str {
+        std::str::from_utf8(&buf[..len]).expect("UTF-8")
+    }
+
+    /// Build a host-mode gpu_handle (the `Box<Arc<GpuContext>>`-shaped
+    /// pointer that `GpuContextLimitedAccess::new` produces) so the
+    /// `escalate_begin` callback can run end-to-end against a real
+    /// `Arc<GpuContext>`. Skips when no GPU device is available.
+    fn make_host_handle() -> Option<(*const c_void, Arc<crate::core::context::GpuContext>)> {
+        let gpu = crate::core::context::GpuContext::init_for_platform().ok()?;
+        let arc = Arc::new(gpu);
+        let boxed: Box<Arc<crate::core::context::GpuContext>> = Box::new(Arc::clone(&arc));
+        let handle = Box::into_raw(boxed) as *const c_void;
+        Some((handle, arc))
+    }
+
+    /// Free a host_handle minted by `make_host_handle` — pairs with
+    /// the `Box::into_raw`.
+    unsafe fn free_host_handle(handle: *const c_void) {
+        let _ = unsafe {
+            Box::from_raw(handle as *mut Arc<crate::core::context::GpuContext>)
+        };
+    }
+
+    #[test]
+    fn escalate_begin_returns_error_on_null_gpu_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut token: *const c_void = std::ptr::null();
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.escalate_begin)(
+                std::ptr::null(),
+                &mut token,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(msg.contains("escalate_begin: null gpu handle"), "got: {msg}");
+        assert!(token.is_null(), "scope token must not be written on error");
+    }
+
+    #[test]
+    #[serial]
+    fn escalate_begin_returns_error_on_null_out_param() {
+        let Some((handle, _arc)) = make_host_handle() else {
+            tracing::warn!(
+                target: "streamlib::tests::escalate_vtable",
+                "skipping escalate_begin null-out test: no GPU device"
+            );
+            return;
+        };
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.escalate_begin)(
+                handle,
+                std::ptr::null_mut(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(
+            msg.contains("escalate_begin: null out_scope_token"),
+            "got: {msg}"
+        );
+        unsafe { free_host_handle(handle) };
+    }
+
+    #[test]
+    fn escalate_end_is_idempotent_for_stale_token() {
+        // escalate_end with a never-issued token is a clean no-op
+        // (returns 0; doesn't release any gate). Documented as
+        // idempotent in the registry.
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.escalate_end)(
+                std::ptr::null(),
+                u64::MAX as *const c_void, // never-issued token
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 0);
+        assert_eq!(len, 0, "no error message expected for stale token");
+    }
+
+    #[test]
+    #[serial]
+    fn round_trip_begin_then_end_releases_gate() {
+        let Some((handle, _arc)) = make_host_handle() else {
+            tracing::warn!(
+                target: "streamlib::tests::escalate_vtable",
+                "skipping round-trip test: no GPU device"
+            );
+            return;
+        };
+
+        let (mut buf, mut len) = make_err_buf();
+        let mut token: *const c_void = std::ptr::null();
+        let begin_rc = unsafe {
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.escalate_begin)(
+                handle,
+                &mut token,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(begin_rc, 0);
+        assert!(!token.is_null(), "scope token must be written on success");
+
+        let end_rc = unsafe {
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.escalate_end)(
+                handle,
+                token,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(end_rc, 0);
+
+        // Begin again on the same handle — gate must have been
+        // released, so this succeeds without blocking. (If the gate
+        // hadn't released, this would deadlock.)
+        let mut token2: *const c_void = std::ptr::null();
+        let begin2_rc = unsafe {
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.escalate_begin)(
+                handle,
+                &mut token2,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(begin2_rc, 0);
+        assert!(!token2.is_null());
+        assert_ne!(token, token2, "tokens must be unique per begin call");
+
+        let _ = unsafe {
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.escalate_end)(
+                handle,
+                token2,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        unsafe { free_host_handle(handle) };
+    }
+
+    #[test]
+    #[serial]
+    fn full_access_callback_with_valid_token_resolves_scope() {
+        // End-to-end: begin a scope, get a valid token, invoke a
+        // FullAccess vtable callback with the token. The callback's
+        // scope lookup should succeed (no "invalid escalate scope"
+        // error). The actual create_compute_kernel will fail on the
+        // bogus descriptor — but the failure message proves the
+        // scope lookup passed (different error class).
+        let Some((handle, _arc)) = make_host_handle() else {
+            tracing::warn!(
+                target: "streamlib::tests::escalate_vtable",
+                "skipping valid-token test: no GPU device"
+            );
+            return;
+        };
+
+        let (mut buf, mut len) = make_err_buf();
+        let mut token: *const c_void = std::ptr::null();
+        unsafe {
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.escalate_begin)(
+                handle,
+                &mut token,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            );
+        }
+        assert!(!token.is_null());
+
+        // Use the token against the FullAccess vtable's
+        // acquire_render_target_dma_buf_image with an invalid format.
+        // The scope lookup should succeed; the format decode should
+        // fail. (We pick this path because it doesn't actually allocate
+        // a real DMA-BUF — easier to test without a full GPU
+        // pipeline.)
+        let mut out: crate::core::rhi::texture::Texture =
+            unsafe { std::mem::zeroed() };
+        let mut buf2 = [0u8; 256];
+        let mut len2 = 0usize;
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE
+                .acquire_render_target_dma_buf_image)(
+                token,
+                64,
+                64,
+                99, // invalid format_raw — fails after scope lookup succeeds
+                &mut out as *mut _ as *mut c_void,
+                buf2.as_mut_ptr(),
+                buf2.len(),
+                &mut len2,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf2, len2);
+        assert!(
+            msg.contains("invalid format_raw"),
+            "expected format-validation error (proving scope lookup passed); got: {msg}"
+        );
+
+        // Clean up the scope.
+        unsafe {
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.escalate_end)(
+                handle,
+                token,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            );
+        }
+        unsafe { free_host_handle(handle) };
+    }
+
+    #[test]
+    #[serial]
+    fn full_access_callback_fails_after_escalate_end() {
+        // Closes the scope-token validation loop: a token used after
+        // escalate_end fires returns the InvalidEscalateScope error
+        // (matches the "calls after escalate_end return
+        // InvalidEscalateScope" exit criterion).
+        let Some((handle, _arc)) = make_host_handle() else {
+            tracing::warn!(
+                target: "streamlib::tests::escalate_vtable",
+                "skipping post-end test: no GPU device"
+            );
+            return;
+        };
+
+        let (mut buf, mut len) = make_err_buf();
+        let mut token: *const c_void = std::ptr::null();
+        unsafe {
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.escalate_begin)(
+                handle,
+                &mut token,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            );
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.escalate_end)(
+                handle,
+                token,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            );
+        }
+
+        // Token is now stale — using it on any FullAccess callback
+        // returns "invalid escalate scope".
+        let mut out: crate::core::rhi::texture::Texture =
+            unsafe { std::mem::zeroed() };
+        let mut buf2 = [0u8; 256];
+        let mut len2 = 0usize;
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE
+                .acquire_render_target_dma_buf_image)(
+                token,
+                64,
+                64,
+                0, // valid format
+                &mut out as *mut _ as *mut c_void,
+                buf2.as_mut_ptr(),
+                buf2.len(),
+                &mut len2,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf2, len2);
+        assert!(
+            msg.contains(
+                "acquire_render_target_dma_buf_image: invalid escalate scope"
+            ),
+            "got: {msg}"
+        );
+
+        unsafe { free_host_handle(handle) };
     }
 }

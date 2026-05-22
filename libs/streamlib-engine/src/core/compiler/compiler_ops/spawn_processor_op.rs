@@ -408,12 +408,12 @@ where
         // Subprocess host setup does no host-side GPU work — it spawns
         // the child, constructs the bridge, sends a `setup` lifecycle,
         // then blocks on the subprocess's `ready` reply. Wrapping that
-        // IPC wait in escalate would hold `processor_setup_lock` against
+        // IPC wait in escalate would hold the escalate gate against
         // every FullAccess escalate the subprocess issues during its own
         // init: the bridge-reader thread dispatches each
         // `escalate_request` inline through `sandbox.escalate(|full|
-        // ...)` and deadlocks on the same mutex. Per-call bridge-handler
-        // escalates still acquire the lock + wait device idle on their
+        // ...)` and deadlocks on the same gate. Per-call bridge-handler
+        // escalates still acquire the gate + wait device idle on their
         // own, so GPU-resource serialization is preserved (#867).
         ProcessorRuntime::Python | ProcessorRuntime::TypeScript => setup_body(),
     }
@@ -464,8 +464,8 @@ mod tests {
         }
     }
 
-    /// Regression for #867 — subprocess host setup must not hold
-    /// `processor_setup_lock` against a concurrent escalate from the
+    /// Regression for #867 — subprocess host setup must not hold the
+    /// escalate gate against a concurrent escalate from the
     /// bridge-reader thread.
     ///
     /// Reproduces the deadlock the engine fix prevents: a setup body

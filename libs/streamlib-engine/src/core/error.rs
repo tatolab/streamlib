@@ -81,6 +81,9 @@ pub enum Error {
     #[error("Runtime error: {0}")]
     Runtime(String),
 
+    #[error("Invalid escalate scope: {0}")]
+    InvalidEscalateScope(String),
+
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }

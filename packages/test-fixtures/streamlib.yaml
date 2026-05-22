@@ -24,6 +24,8 @@ schemas:
     file: schemas/tcp_bind_test_processor_config.yaml
   GpuAcquireTestProcessorConfig:
     file: schemas/gpu_acquire_test_processor_config.yaml
+  EscalateSmokeTestProcessorConfig:
+    file: schemas/escalate_smoke_test_processor_config.yaml
 
 processors:
   - name: TestConfiguredProcessor
@@ -49,3 +51,11 @@ processors:
     config:
       name: config
       schema: GpuAcquireTestProcessorConfig
+
+  - name: EscalateSmokeTestProcessor
+    version: 1.0.0
+    description: "Phase C3 (#903) dlopen-cdylib escalate smoke test fixture — runs gpu.escalate(|_full| Ok(())) end-to-end through the escalate_begin/escalate_end vtable + cdylib-side FullAccess construction via from_scope_token"
+    execution: manual
+    config:
+      name: config
+      schema: EscalateSmokeTestProcessorConfig

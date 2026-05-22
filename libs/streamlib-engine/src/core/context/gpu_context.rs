@@ -418,11 +418,20 @@ pub struct GpuContext {
     #[cfg(target_os = "linux")]
     video_source_timeline_semaphore:
         Arc<Mutex<Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>>>>,
-    /// Serializes processor setup() across threads so concurrent GPU resource
-    /// creation (video sessions, DPB images, swapchain) can't race on the
-    /// device. The compiler acquires this during Phase 4 of spawn_processor
-    /// and releases it after waiting for the device to go idle.
-    processor_setup_lock: Arc<Mutex<()>>,
+    /// Serializes [`GpuContextLimitedAccess::escalate`] scopes across
+    /// threads (and across the in-process and vtable dispatch paths —
+    /// engine-internal callers using `host_inner` direct dispatch and
+    /// cdylib plugin callers using vtable FFI dispatch serialize
+    /// against each other) so concurrent GPU resource creation (video
+    /// sessions, DPB images, swapchain) can't race on the device. The
+    /// compiler acquires this during Phase 4 of spawn_processor and
+    /// releases it after waiting for the device to go idle. Replaces
+    /// the older `std::sync::Mutex<()>`-based `processor_setup_lock`
+    /// — a [`Mutex`] guard can't cross thread boundaries (the cdylib
+    /// FFI escalate_begin / escalate_end pair may run on different
+    /// threads), so this gate uses a flag + Condvar that enter and
+    /// exit can hit independently.
+    escalate_gate: Arc<super::escalate_gate::EscalateGate>,
     /// Host-side bridge for the cpu-readback escalate op. Set by application
     /// code that wires a `CpuReadbackSurfaceAdapter` into the runtime; left
     /// unset on hosts that don't expose cpu-readback to subprocess customers
@@ -476,7 +485,7 @@ impl GpuContext {
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(target_os = "linux")]
             video_source_timeline_semaphore: Arc::new(Mutex::new(None)),
-            processor_setup_lock: Arc::new(Mutex::new(())),
+            escalate_gate: Arc::new(super::escalate_gate::EscalateGate::new()),
             #[cfg(target_os = "linux")]
             cpu_readback_bridge: Arc::new(Mutex::new(None)),
             #[cfg(target_os = "linux")]
@@ -505,7 +514,7 @@ impl GpuContext {
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(target_os = "linux")]
             video_source_timeline_semaphore: Arc::new(Mutex::new(None)),
-            processor_setup_lock: Arc::new(Mutex::new(())),
+            escalate_gate: Arc::new(super::escalate_gate::EscalateGate::new()),
             #[cfg(target_os = "linux")]
             cpu_readback_bridge: Arc::new(Mutex::new(None)),
             #[cfg(target_os = "linux")]
@@ -517,13 +526,18 @@ impl GpuContext {
         }
     }
 
-    /// Acquire the processor-setup mutex. The compiler wraps each processor's
-    /// `setup()` call with this lock and a subsequent wait-for-idle so
-    /// concurrent setups can't race on GPU resource creation.
-    pub fn lock_processor_setup(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.processor_setup_lock
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+    /// Borrow this context's escalate gate. The gate serializes
+    /// [`GpuContextLimitedAccess::escalate`] scopes across both
+    /// dispatch paths — engine-internal in-process escalate (the
+    /// host-mode caller; uses
+    /// [`super::escalate_gate::EscalateGate::enter_scoped`] for RAII
+    /// release) and cdylib FFI-dispatched escalate (the plugin
+    /// caller; uses bare `enter` / `exit` through
+    /// [`super::escalate_scope_registry::begin_escalate_scope`] /
+    /// [`super::escalate_scope_registry::end_escalate_scope`] because
+    /// the FFI boundary precludes RAII across it).
+    pub(crate) fn escalate_gate(&self) -> &super::escalate_gate::EscalateGate {
+        &self.escalate_gate
     }
 
     /// Wrap this `GpuContext` in a [`GpuContextLimitedAccess`] view.
@@ -1970,43 +1984,118 @@ impl Drop for GpuContextLimitedAccess {
 /// assert_not_clone::<streamlib::sdk::context::GpuContextFullAccess>();
 /// ```
 ///
-/// # Layout (Phase C2)
+/// # In-process vs vtable dispatch (Phase C3)
 ///
-/// `#[repr(C)] { handle, vtable }`, mirroring
-/// [`GpuContextLimitedAccess`]. `handle` is a host-owned
-/// `Box<Arc<GpuContext>>` in host mode; in cdylib mode (post-C3) it
-/// is the opaque scope token from
-/// [`GpuContextFullAccessVTable::escalate_begin`]. Methods route
-/// through [`Self::host_inner`] for host-only fast paths (panicking
-/// when reached from cdylib code, same shape as Limited) and
-/// through the vtable when called from cdylib code.
+/// Two construction paths populate this struct depending on which
+/// side of the FFI boundary the caller lives on; the same surface
+/// methods work from either:
+///
+/// - **In-process dispatch** ([`Self::new`], `pub(in
+///   crate::core::context)` so only
+///   [`GpuContextLimitedAccess::escalate`]'s engine-internal body
+///   can construct it). `handle` is a host-allocated
+///   `Box<Arc<GpuContext>>` and `handle_kind` is
+///   [`HandleKind::Boxed`]. Every method routes through
+///   [`Self::host_inner`] for direct dispatch — no FFI hop, no
+///   scope-registry lookup. Drop runs
+///   [`std::boxed::Box::from_raw`] on the boxed Arc.
+/// - **Vtable dispatch** ([`Self::from_scope_token`], reached from
+///   the cdylib path of [`GpuContextLimitedAccess::escalate`]).
+///   `handle` is an opaque scope token issued by the host's
+///   [`GpuContextLimitedAccessVTable`]'s `escalate_begin` callback
+///   and `handle_kind` is [`HandleKind::ScopeToken`]. Every method
+///   routes through the vtable; the host validates the token against
+///   [`super::escalate_scope_registry::with_scope`] before dispatch.
+///   Drop is a no-op — cleanup runs in the matching `escalate_end`
+///   callback the cdylib's wrapper invokes after the closure returns.
+///
+/// New methods that any cdylib code can reach MUST add a matching
+/// vtable entry on [`GpuContextFullAccessVTable`] (otherwise the
+/// vtable-dispatched path silently can't reach them).
+/// Engine-internal methods that no cdylib path ever needs can be
+/// host_inner-only.
+///
+/// [`GpuContextFullAccessVTable`]: streamlib_plugin_abi::GpuContextFullAccessVTable
+/// [`GpuContextLimitedAccessVTable`]: streamlib_plugin_abi::GpuContextLimitedAccessVTable
 #[repr(C)]
 pub struct GpuContextFullAccess {
     pub(crate) handle: *const std::ffi::c_void,
     pub(crate) vtable:
         *const streamlib_plugin_abi::GpuContextFullAccessVTable,
+    /// Discriminator for [`Drop`]:
+    /// - [`HandleKind::Boxed`] (in-process dispatch shape): Drop
+    ///   runs `Box::from_raw` on the boxed `Arc<GpuContext>`.
+    /// - [`HandleKind::ScopeToken`] (vtable-dispatched shape): Drop
+    ///   is a no-op; the cdylib's escalate wrapper handles cleanup
+    ///   via the LimitedAccess vtable's `escalate_end` callback.
+    ///
+    /// Set by the constructor ([`Self::new`] vs
+    /// [`Self::from_scope_token`]).
+    pub(crate) handle_kind: HandleKind,
+}
+
+/// Discriminator for [`GpuContextFullAccess`]'s `handle` field. The
+/// engine-internal in-process constructor sets [`Self::Boxed`]; the
+/// cdylib vtable-dispatched constructor sets [`Self::ScopeToken`].
+/// [`GpuContextFullAccess::drop`] dispatches on this kind.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HandleKind {
+    /// Handle is a host-allocated `Box<Arc<GpuContext>>` from
+    /// [`GpuContextFullAccess::new`]. Methods on the cdylib-facing
+    /// `GpuContextFullAccess` surface dispatch through `host_inner`
+    /// directly (no FFI hop). Used by engine-internal escalate
+    /// scopes.
+    Boxed = 0,
+    /// Handle is an opaque scope token from the host's
+    /// `GpuContextLimitedAccessVTable::escalate_begin` callback.
+    /// Methods dispatch through the FullAccess vtable; the host
+    /// validates the token against the scope registry before
+    /// dispatch. Used by cdylib escalate scopes.
+    ScopeToken = 1,
 }
 
 // SAFETY: same shape as `GpuContextLimitedAccess`. The handle points
-// at a host-owned `Box<Arc<GpuContext>>` (host mode) or an opaque
-// scope token (cdylib mode, post-C3); both are `Send + Sync`. The
+// at a host-owned `Box<Arc<GpuContext>>` (in-process dispatch shape)
+// or an opaque scope token (vtable-dispatched shape); both are
+// `Send + Sync` (the scope token is a u64 reinterpreted as
+// `*const c_void`; the boxed Arc<GpuContext> is Send + Sync). The
 // vtable pointer is `&'static`.
 unsafe impl Send for GpuContextFullAccess {}
 unsafe impl Sync for GpuContextFullAccess {}
 
 impl Drop for GpuContextFullAccess {
-    /// Releases the host-owned handle via
-    /// [`GpuContextFullAccessVTable::drop_handle`]. In host mode this
-    /// drops the `Box<Arc<GpuContext>>` (releasing the cloned
-    /// `GpuContext`); in cdylib mode (post-C3) it invalidates the
-    /// escalate scope token.
+    /// Releases the handle.
+    ///
+    /// - [`HandleKind::Boxed`] (in-process dispatch shape): runs
+    ///   `Box::from_raw` on the boxed `Arc<GpuContext>` directly,
+    ///   without going through the vtable. No FFI hop;
+    ///   engine-internal cleanup.
+    /// - [`HandleKind::ScopeToken`] (vtable-dispatched shape):
+    ///   no-op. The cdylib's escalate wrapper that constructed this
+    ///   `GpuContextFullAccess` calls `escalate_end` on the
+    ///   LimitedAccess vtable after the closure returns, which
+    ///   removes the scope from the registry and releases the
+    ///   escalate gate. Doing it here too would double-release.
     fn drop(&mut self) {
-        if !self.handle.is_null() && !self.vtable.is_null() {
-            // SAFETY: handle was produced by `Self::new` (host mode —
-            // `Box::into_raw(Box::new(Arc::new(GpuContext)))`) or a
-            // future C3 `escalate_begin` callback. The vtable's
-            // `drop_handle` callback runs the matching release.
-            unsafe { ((*self.vtable).drop_handle)(self.handle) };
+        if self.handle.is_null() {
+            return;
+        }
+        match self.handle_kind {
+            HandleKind::Boxed => {
+                // SAFETY: handle was produced by `Self::new` via
+                // `Box::into_raw(Box::new(Arc::new(GpuContext)))`.
+                // `Box::from_raw` releases the box; the resulting
+                // Arc<GpuContext>'s Drop releases the per-scope clone.
+                let _ = unsafe {
+                    Box::from_raw(
+                        self.handle as *mut std::sync::Arc<GpuContext>,
+                    )
+                };
+            }
+            HandleKind::ScopeToken => {
+                // No-op — escalate_end is the authority. See doc.
+            }
         }
     }
 }
@@ -2087,30 +2176,61 @@ impl GpuContextLimitedAccess {
         GpuContextFullAccess::new(self.host_inner().clone())
     }
 
-    /// Serialized escalation to full GPU capability. Acquires the
-    /// processor-setup mutex, hands the closure a [`GpuContextFullAccess`]
-    /// scoped to its body, then waits for the device to go idle before
-    /// releasing the lock.
+    /// Serialized escalation to full GPU capability. Hands the
+    /// closure a [`GpuContextFullAccess`] scoped to its body, with
+    /// the host's escalate gate held for the duration; after the
+    /// closure returns the gate releases and the device waits idle.
     ///
-    /// This is the single primitive for GPU resource-creation work outside
-    /// `setup()` — used by the compiler to run each processor's setup()
-    /// and by running processors that need to reconfigure (acquire a new
-    /// video session, resize a swapchain, etc.).
+    /// This is the single primitive for GPU resource-creation work
+    /// outside `setup()` — used by the compiler to run each
+    /// processor's setup() and by running processors that need to
+    /// reconfigure (acquire a new video session, resize a swapchain,
+    /// etc.).
     ///
-    /// The `device_wait_idle` fires exactly once per escalation (after the
-    /// closure returns). On closure failure its error is returned; a
-    /// follow-up `wait_device_idle` failure is returned only when the
-    /// closure succeeded.
+    /// Mode-routed:
+    /// - **In-process dispatch** (engine-internal callers): acquires
+    ///   the gate directly, constructs [`GpuContextFullAccess::new`]
+    ///   (Boxed), runs the closure with method dispatch via
+    ///   [`GpuContextFullAccess::host_inner`] (no FFI hop), then
+    ///   waits device idle and releases the gate.
+    /// - **Vtable dispatch** (cdylib callers): dispatches through
+    ///   the [`GpuContextLimitedAccessVTable`]'s `escalate_begin` /
+    ///   `escalate_end` callback pair. Constructs
+    ///   [`GpuContextFullAccess::from_scope_token`] (ScopeToken) so
+    ///   method dispatch crosses through the FullAccess vtable; the
+    ///   host's `escalate_end` callback handles `wait_device_idle`
+    ///   and releases the gate. A closure panic still unwinds; the
+    ///   matching `escalate_end` fires through a guard so the gate
+    ///   never leaks.
+    ///
+    /// The runtime mode is selected by `host_callbacks().is_some()`:
+    /// true in cdylib code (callbacks installed by the host), false
+    /// in engine-internal code.
+    ///
+    /// Closure failure returns the closure's error; on closure
+    /// success a follow-up `wait_device_idle` error is propagated.
+    ///
+    /// [`GpuContextLimitedAccessVTable`]: streamlib_plugin_abi::GpuContextLimitedAccessVTable
     pub fn escalate<F, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce(&GpuContextFullAccess) -> Result<T>,
     {
-        // Engine-only call surface — cdylib code hitting this path
-        // panics via `host_inner()`'s `host_callbacks()` guard, which
-        // is caught by `run_host_extern_c`.
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            self.escalate_via_vtable(f)
+        } else {
+            self.escalate_in_process(f)
+        }
+    }
+
+    /// Engine-internal escalate path. Direct in-process dispatch —
+    /// no FFI hop. See [`Self::escalate`] for the mode router.
+    fn escalate_in_process<F, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&GpuContextFullAccess) -> Result<T>,
+    {
         let inner = self.host_inner();
         let lock_start = std::time::Instant::now();
-        let _setup_guard = inner.lock_processor_setup();
+        let _gate_guard = inner.escalate_gate().enter_scoped();
         let mutex_wait_ns = lock_start.elapsed().as_nanos() as u64;
 
         let closure_start = std::time::Instant::now();
@@ -2125,6 +2245,7 @@ impl GpuContextLimitedAccess {
 
         tracing::trace!(
             target: "streamlib::gpu_context::escalate",
+            dispatch = "in_process",
             mutex_wait_ns,
             closure_duration_ns,
             wait_idle_ns,
@@ -2138,6 +2259,109 @@ impl GpuContextLimitedAccess {
             (Ok(value), Ok(())) => Ok(value),
             (Err(e), _) => Err(e),
             (Ok(_), Err(e)) => Err(e),
+        }
+    }
+
+    /// Cdylib escalate path. Dispatches through the LimitedAccess
+    /// vtable's `escalate_begin` / `escalate_end` pair; constructs
+    /// `GpuContextFullAccess::from_scope_token` so the closure's
+    /// FullAccess method calls cross the FFI boundary through the
+    /// FullAccess vtable. See [`Self::escalate`] for the mode router.
+    fn escalate_via_vtable<F, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&GpuContextFullAccess) -> Result<T>,
+    {
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "escalate (vtable): GpuContextLimitedAccess has null handle/vtable"
+                    .into(),
+            ));
+        }
+        // SAFETY: vtable + handle were paired at construction; vtable
+        // is `&'static`.
+        let vt = unsafe { &*self.vtable };
+
+        let lock_start = std::time::Instant::now();
+        let mut scope_token: *const std::ffi::c_void = std::ptr::null();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let begin_rc = unsafe {
+            (vt.escalate_begin)(
+                self.handle,
+                &mut scope_token,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        let mutex_wait_ns = lock_start.elapsed().as_nanos() as u64;
+        if begin_rc != 0 {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            return Err(Error::GpuError(format!(
+                "escalate (vtable): escalate_begin failed: {msg}"
+            )));
+        }
+
+        let closure_start = std::time::Instant::now();
+        let full = GpuContextFullAccess::from_scope_token(scope_token);
+        // catch_unwind so a closure panic still fires escalate_end —
+        // otherwise the host's escalate gate would leak. We lean on
+        // AssertUnwindSafe because `escalate`'s public signature
+        // doesn't add an `UnwindSafe` bound on `F` (the in-process
+        // path doesn't need it; only this path catches the unwind to
+        // pair with `escalate_end`).
+        let closure_result = std::panic::catch_unwind(
+            std::panic::AssertUnwindSafe(|| f(&full)),
+        );
+        drop(full);
+        let closure_duration_ns = closure_start.elapsed().as_nanos() as u64;
+
+        let wait_start = std::time::Instant::now();
+        let mut end_err_buf = [0u8; 512];
+        let mut end_err_len: usize = 0;
+        let end_rc = unsafe {
+            (vt.escalate_end)(
+                self.handle,
+                scope_token,
+                end_err_buf.as_mut_ptr(),
+                end_err_buf.len(),
+                &mut end_err_len as *mut usize,
+            )
+        };
+        let wait_idle_ns = wait_start.elapsed().as_nanos() as u64;
+
+        tracing::trace!(
+            target: "streamlib::gpu_context::escalate",
+            dispatch = "vtable",
+            mutex_wait_ns,
+            closure_duration_ns,
+            wait_idle_ns,
+            closure_ok = closure_result.is_ok(),
+            "GpuContextLimitedAccess::escalate completed"
+        );
+
+        check_sustained_escalation_rate();
+
+        let wait_result: Result<()> = if end_rc != 0 {
+            let msg = String::from_utf8_lossy(
+                &end_err_buf[..end_err_len.min(end_err_buf.len())],
+            )
+            .into_owned();
+            Err(Error::GpuError(format!(
+                "escalate (vtable): escalate_end failed: {msg}"
+            )))
+        } else {
+            Ok(())
+        };
+
+        match closure_result {
+            Ok(Ok(value)) => match wait_result {
+                Ok(()) => Ok(value),
+                Err(e) => Err(e),
+            },
+            Ok(Err(e)) => Err(e),
+            Err(panic) => std::panic::resume_unwind(panic),
         }
     }
 }
@@ -2192,21 +2416,51 @@ fn escalation_monotonic_ns() -> u64 {
 }
 
 impl GpuContextFullAccess {
-    /// Wrap a [`GpuContext`] as a full-access capability.
+    /// Back-room constructor. Wraps an in-process [`GpuContext`] as a
+    /// full-access capability whose methods route through
+    /// [`Self::host_inner`] for direct dispatch.
     ///
-    /// Boxes a fresh `Arc<GpuContext>` as the opaque handle (matching
-    /// the [`GpuContextLimitedAccess::new`] shape), then resolves the
-    /// vtable through
-    /// [`crate::core::plugin::host_services::host_gpu_context_full_access_vtable`].
-    /// The Arc refcount is 1 at construction; `Drop` calls
-    /// `drop_handle` which runs `Box::from_raw + drop`.
-    pub(crate) fn new(inner: GpuContext) -> Self {
+    /// Scope tightened to `pub(in crate::core::context)` so only
+    /// [`GpuContextLimitedAccess::escalate`]'s host-mode body can
+    /// construct one. Other engine code that wants FullAccess goes
+    /// through `escalate(|full| ...)`; the privilege gate enforces
+    /// serialization + `wait_device_idle`.
+    pub(in crate::core::context) fn new(inner: GpuContext) -> Self {
         let arc: std::sync::Arc<GpuContext> = std::sync::Arc::new(inner);
         let boxed: Box<std::sync::Arc<GpuContext>> = Box::new(arc);
         let handle = Box::into_raw(boxed) as *const std::ffi::c_void;
         let vtable =
             crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
-        Self { handle, vtable }
+        Self {
+            handle,
+            vtable,
+            handle_kind: HandleKind::Boxed,
+        }
+    }
+
+    /// Lobby constructor. Wraps an opaque scope token (issued by the
+    /// host's
+    /// [`GpuContextLimitedAccessVTable`](streamlib_plugin_abi::GpuContextLimitedAccessVTable)'s
+    /// `escalate_begin` callback) as a full-access capability whose
+    /// methods route through the
+    /// [`GpuContextFullAccessVTable`](streamlib_plugin_abi::GpuContextFullAccessVTable)
+    /// for cross-DSO dispatch.
+    ///
+    /// Used by the cdylib-mode path of
+    /// [`GpuContextLimitedAccess::escalate`]; the matching cleanup
+    /// (release the escalate gate + `wait_device_idle`) runs inside
+    /// `escalate_end` rather than [`Drop`], so the FullAccess's
+    /// [`Drop`] short-circuits.
+    pub(in crate::core::context) fn from_scope_token(
+        scope_token: *const std::ffi::c_void,
+    ) -> Self {
+        let vtable =
+            crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
+        Self {
+            handle: scope_token,
+            vtable,
+            handle_kind: HandleKind::ScopeToken,
+        }
     }
 
     /// Engine-internal borrow of the host's [`GpuContext`] (read
@@ -3079,11 +3333,6 @@ impl GpuContextLimitedAccess {
 }
 
 impl GpuContextFullAccess {
-    /// Acquire the processor-setup mutex.
-    pub fn lock_processor_setup(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.host_inner().lock_processor_setup()
-    }
-
     /// Wait for the GPU device to become idle.
     pub fn wait_device_idle(&self) -> Result<()> {
         self.host_inner().wait_device_idle()
