@@ -71,7 +71,6 @@ impl SimpleDecoder {
                 self.compute_queue_family,
                 self.compute_queue,
                 self.decode_queue_family,
-                self.submitter.clone(),
             )?
         };
         self.nv12_converter = Some(converter);
@@ -113,7 +112,6 @@ impl SimpleDecoder {
             self.decode_queue_family,
             self.decode_queue,
             codec_flag,
-            self.submitter.clone(),
         )?;
 
         // Propagate sharing queue families for CONCURRENT DPB access.
@@ -197,7 +195,6 @@ impl SimpleDecoder {
                 self.decode_queue_family,
                 self.decode_queue,
                 codec_flag,
-                self.submitter.clone(),
             )?;
 
             {
@@ -256,7 +253,6 @@ impl SimpleDecoder {
                     self.compute_queue_family,
                     self.compute_queue,
                     self.decode_queue_family,
-                    self.submitter.clone(),
                 )?
             };
             self.nv12_converter = Some(converter);

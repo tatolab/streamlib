@@ -137,7 +137,7 @@ pub struct SimpleDecoder {
     compute_queue_family: u32,
 
     // Host-side queue submission gateway (per-queue mutex synchronization).
-    submitter: Arc<dyn crate::vulkan::video::rhi::RhiQueueSubmitter>,
+    host_device: Arc<crate::vulkan::rhi::HostVulkanDevice>,
 }
 
 /// Metadata for a frame whose GPU decode has been submitted but not yet read back.
@@ -158,8 +158,8 @@ impl SimpleDecoder {
     ///
     /// Borrows the FullAccess context to pull the host's Vulkan instance,
     /// device, allocator, queue mutex, and the video decode / transfer
-    /// queues — the codec submits through the host's per-queue serialization
-    /// (per [`crate::vulkan::video::rhi::RhiQueueSubmitter`]).
+    /// queues — the codec submits through the host's per-queue
+    /// serialization via [`crate::vulkan::rhi::HostVulkanDevice::submit_to_queue`].
     ///
     /// # Errors
     ///
@@ -188,7 +188,6 @@ impl SimpleDecoder {
                 )
             })?;
         let host_arc: Arc<crate::vulkan::rhi::HostVulkanDevice> = Arc::clone(host_device);
-        let submitter: Arc<dyn crate::vulkan::video::rhi::RhiQueueSubmitter> = Arc::clone(&host_arc) as _;
 
         Self::from_host_device(
             config,
@@ -197,7 +196,6 @@ impl SimpleDecoder {
             host_device.physical_device(),
             host_device.allocator().clone(),
             host_arc,
-            submitter,
             decode_queue,
             decode_queue_family,
             host_device.queue(),
@@ -215,7 +213,6 @@ impl SimpleDecoder {
         physical_device: vk::PhysicalDevice,
         allocator: Arc<vma::Allocator>,
         host_device: Arc<crate::vulkan::rhi::HostVulkanDevice>,
-        submitter: Arc<dyn crate::vulkan::video::rhi::RhiQueueSubmitter>,
         decode_queue: vk::Queue,
         decode_queue_family: u32,
         transfer_queue: vk::Queue,
@@ -226,7 +223,7 @@ impl SimpleDecoder {
             device.clone(),
             physical_device,
             allocator,
-            host_device,
+            host_device.clone(),
         )?);
 
         // Load Vulkan for the Entry field (required by struct, not used for external path).
@@ -299,7 +296,7 @@ impl SimpleDecoder {
             rgba_staging: None,
             compute_queue: transfer_queue,
             compute_queue_family: transfer_queue_family,
-            submitter,
+            host_device,
         })
     }
 
@@ -800,7 +797,7 @@ impl SimpleDecoder {
                 let submit_info = vk::SubmitInfo2::builder()
                     .command_buffer_infos(&cb_submits)
                     .build();
-                self.submitter.submit_to_queue(
+                self.host_device.submit_to_queue(
                     self.transfer_queue,
                     &[submit_info],
                     self.transfer_fence,

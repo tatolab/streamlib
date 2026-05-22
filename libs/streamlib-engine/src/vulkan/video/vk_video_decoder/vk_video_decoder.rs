@@ -313,7 +313,7 @@ pub struct VkVideoDecoder {
     queue_family_index: u32,
 
     // Host-side queue submission gateway (per-queue mutex synchronization).
-    submitter: Arc<dyn crate::vulkan::video::rhi::RhiQueueSubmitter>,
+    host_device: Arc<crate::vulkan::rhi::HostVulkanDevice>,
 
     current_video_queue_indx: i32,
     coded_extent: vk::Extent2D,
@@ -388,8 +388,8 @@ impl VkVideoDecoder {
         queue_family_index: u32,
         queue: vk::Queue,
         codec_operation: vk::VideoCodecOperationFlagsKHR,
-        submitter: Arc<dyn crate::vulkan::video::rhi::RhiQueueSubmitter>,
     ) -> VideoResult<Self> {
+        let host_device = ctx.host_device().clone();
         let device = ctx.device();
 
         // Create command pool for the decode queue family
@@ -455,7 +455,7 @@ impl VkVideoDecoder {
             ctx,
             queue,
             queue_family_index,
-            submitter,
+            host_device,
             current_video_queue_indx: 0,
             coded_extent: vk::Extent2D::default(),
             video_format: VkParserDetectedVideoFormat::default(),
@@ -1338,7 +1338,7 @@ impl VkVideoDecoder {
         let submit_info = vk::SubmitInfo2::builder()
             .command_buffer_infos(&cb_submits)
             .build();
-        self.submitter.submit_to_queue(self.queue, &[submit_info], self.fence)
+        self.host_device.submit_to_queue(self.queue, &[submit_info], self.fence)
             .map_err(VideoError::from)?;
         self.decode_in_flight = true;
 

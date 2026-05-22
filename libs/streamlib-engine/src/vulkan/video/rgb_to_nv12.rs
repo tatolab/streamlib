@@ -87,7 +87,7 @@ pub struct RgbToNv12Converter {
     _compute_queue_family: u32,
 
     // Host-side queue submission gateway.
-    submitter: Arc<dyn crate::vulkan::video::rhi::RhiQueueSubmitter>,
+    host_device: Arc<crate::vulkan::rhi::HostVulkanDevice>,
 
     // Dimensions
     width: u32,
@@ -114,10 +114,10 @@ impl RgbToNv12Converter {
         compute_queue: vk::Queue,
         encode_queue_family: u32,
         codec_flag: vk::VideoCodecOperationFlagsKHR,
-        submitter: Arc<dyn crate::vulkan::video::rhi::RhiQueueSubmitter>,
     ) -> Result<Self, VideoError> { unsafe {
         let device = ctx.device().clone();
         let allocator = ctx.allocator().clone();
+        let host_device = ctx.host_device().clone();
 
         // --- 1. Compute kernel via the engine RHI ---
         // Descriptor-set layout, pipeline layout, compute pipeline, descriptor
@@ -314,7 +314,7 @@ impl RgbToNv12Converter {
             fence,
             compute_queue,
             _compute_queue_family: compute_queue_family,
-            submitter,
+            host_device,
             width,
             height,
         })
@@ -511,8 +511,9 @@ impl RgbToNv12Converter {
             .build();
 
         self.device.reset_fences(&[self.fence])?;
-        self.submitter
-            .submit_to_queue(self.compute_queue, &[submit], self.fence)?;
+        self.host_device
+            .submit_to_queue(self.compute_queue, &[submit], self.fence)
+            .map_err(VideoError::from)?;
         self.device
             .wait_for_fences(&[self.fence], true, u64::MAX)?;
 

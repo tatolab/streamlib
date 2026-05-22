@@ -160,10 +160,7 @@ impl HostVulkanVideoSession {
     /// `vkGetVideoSessionMemoryRequirementsKHR`, VMA allocations for
     /// each requested binding, and `vkBindVideoSessionMemoryKHR` —
     /// all under the host's device-level resource lock so
-    /// concurrent processor submissions on NVIDIA Linux cannot race
-    /// (the failure mode that motivated the original
-    /// `RhiQueueSubmitter::with_device_resource_lock` shim — see
-    /// repo history for issue #278).
+    /// concurrent processor submissions on NVIDIA Linux cannot race.
     pub(crate) fn new(
         vulkan_device: &Arc<HostVulkanDevice>,
         descriptor: &VideoSessionDescriptor<'_>,
@@ -198,8 +195,8 @@ impl HostVulkanVideoSession {
         let allocator = vulkan_device.allocator();
 
         // Session creation + memory binding run under the device
-        // resource lock — same threading discipline the codec
-        // previously got via `RhiQueueSubmitter::with_device_resource_lock`.
+        // resource lock so concurrent processor submissions on NVIDIA
+        // Linux cannot race.
         let _device_lock = vulkan_device.lock_device();
 
         let raw_session = unsafe { device.create_video_session_khr(&create_info, None) }

@@ -56,11 +56,9 @@ pub struct VideoContext {
     allocator: Arc<vma::Allocator>,
     nv12_ycbcr_conversion: vk::SamplerYcbcrConversion,
     /// Host RHI handle the codec layer uses to reach the engine's
-    /// privileged primitives (video session, future query pool, ...).
-    /// Concretely the same `Arc` the `submitter: Arc<dyn RhiQueueSubmitter>`
-    /// fields on `SimpleEncoder` / `VkVideoDecoder` were holding pre-#936
-    /// (the trait's only implementor was `HostVulkanDevice`); stashed here
-    /// so the codec interior can call `HostVulkanVideoSession::new`
+    /// privileged primitives (video session, query pool, DPB textures,
+    /// bitstream buffers, queue submission, device-level resource lock).
+    /// Stashed here so the codec interior can call into the host RHI
     /// without re-routing the FullAccess context all the way down.
     host_device: Arc<crate::vulkan::rhi::HostVulkanDevice>,
 }

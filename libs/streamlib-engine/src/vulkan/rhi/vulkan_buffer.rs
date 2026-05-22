@@ -565,10 +565,7 @@ impl HostVulkanBuffer {
     /// The buffer is allocated with `MAPPED` + `HOST_ACCESS_SEQUENTIAL_WRITE`
     /// and is NOT DMA-BUF exportable (codec stays host-side). The call
     /// is wrapped in [`HostVulkanDevice::lock_device`] so concurrent
-    /// processor submissions can't race the allocation on NVIDIA Linux
-    /// (the original motivator for
-    /// `RhiQueueSubmitter::with_device_resource_lock` — see repo
-    /// history for issue #278).
+    /// processor submissions can't race the allocation on NVIDIA Linux.
     ///
     /// Growth is the codec layer's concern: when a frame doesn't fit
     /// the codec drops this buffer and constructs a fresh, larger one.
@@ -614,8 +611,8 @@ impl HostVulkanBuffer {
 
         let allocator = vulkan_device.allocator();
 
-        // Same threading discipline the codec previously got via
-        // `RhiQueueSubmitter::with_device_resource_lock` (see #278).
+        // Acquire the device-level resource lock so concurrent processor
+        // submissions can't race the allocation on NVIDIA Linux.
         let _device_lock = vulkan_device.lock_device();
 
         let (buffer, allocation) = unsafe { allocator.create_buffer(buffer_info, &alloc_opts) }
