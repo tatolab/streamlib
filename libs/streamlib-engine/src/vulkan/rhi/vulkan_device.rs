@@ -2563,24 +2563,6 @@ impl HostVulkanDevice {
     }
 }
 
-impl crate::vulkan::video::rhi::RhiQueueSubmitter for HostVulkanDevice {
-    unsafe fn submit_to_queue(
-        &self,
-        queue: vk::Queue,
-        submits: &[vk::SubmitInfo2],
-        fence: vk::Fence,
-    ) -> vulkanalia::VkResult<()> {
-        let _lock = self.mutex_for_queue(queue).lock()
-            .unwrap_or_else(|e| e.into_inner());
-        unsafe { self.device.queue_submit2(queue, submits, fence) }.map(|_| ())
-    }
-
-    fn with_device_resource_lock(&self, f: &mut dyn FnMut()) {
-        let _guard = self.lock_device();
-        f();
-    }
-}
-
 impl VulkanRhiDevice for HostVulkanDevice {
     type Privilege = HostMarker;
 
@@ -3406,6 +3388,20 @@ mod tests {
     fn third_party_gpu_capabilities_default_is_all_false() {
         let caps = ThirdPartyGpuCapabilities::default();
         assert!(!caps.nvjpeg, "Default::nvjpeg must be false");
+    }
+
+    /// Locks the canonical inherent `HostVulkanDevice::submit_to_queue`
+    /// signature the codec layer reaches directly. If a future refactor
+    /// reintroduces a wrapper trait method returning a different
+    /// `Result` type, this signature binding fails to compile.
+    #[test]
+    fn submit_to_queue_inherent_signature_is_streamlib_result() {
+        let _f: unsafe fn(
+            &HostVulkanDevice,
+            vk::Queue,
+            &[vk::SubmitInfo2],
+            vk::Fence,
+        ) -> Result<()> = HostVulkanDevice::submit_to_queue;
     }
 
     /// Issue #633 — `supports_qfot_acquire_unmodified` must equal the

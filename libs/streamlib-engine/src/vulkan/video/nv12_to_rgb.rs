@@ -85,7 +85,7 @@ pub struct Nv12ToRgbConverter {
     _compute_queue_family: u32,
 
     // Host-side queue submission gateway.
-    submitter: Arc<dyn crate::vulkan::video::rhi::RhiQueueSubmitter>,
+    host_device: Arc<crate::vulkan::rhi::HostVulkanDevice>,
 
     // Dimensions
     width: u32,
@@ -110,10 +110,10 @@ impl Nv12ToRgbConverter {
         compute_queue_family: u32,
         compute_queue: vk::Queue,
         decode_queue_family: u32,
-        submitter: Arc<dyn crate::vulkan::video::rhi::RhiQueueSubmitter>,
     ) -> Result<Self, VideoError> { unsafe {
         let device = ctx.device().clone();
         let allocator = ctx.allocator().clone();
+        let host_device = ctx.host_device().clone();
 
         // --- 1. YCbCr conversion (BT.709, ITU narrow range) ---
         let ycbcr_conversion = device.create_sampler_ycbcr_conversion(
@@ -255,7 +255,7 @@ impl Nv12ToRgbConverter {
             fence,
             compute_queue,
             _compute_queue_family: compute_queue_family,
-            submitter,
+            host_device,
             width,
             height,
         })
@@ -411,8 +411,9 @@ impl Nv12ToRgbConverter {
             .build();
 
         self.device.reset_fences(&[self.fence])?;
-        self.submitter
-            .submit_to_queue(self.compute_queue, &[submit], self.fence)?;
+        self.host_device
+            .submit_to_queue(self.compute_queue, &[submit], self.fence)
+            .map_err(VideoError::from)?;
         self.device
             .wait_for_fences(&[self.fence], true, u64::MAX)?;
 

@@ -209,7 +209,7 @@ pub struct SimpleEncoder {
     pub(crate) prepend_header: bool,
 
     // Host-side queue submission gateway (per-queue mutex synchronization).
-    pub(crate) submitter: Arc<dyn crate::vulkan::video::rhi::RhiQueueSubmitter>,
+    pub(crate) host_device: Arc<crate::vulkan::rhi::HostVulkanDevice>,
 }
 
 // SAFETY: Vulkan handles are only accessed through &mut self methods.
@@ -222,7 +222,8 @@ impl SimpleEncoder {
     /// Borrows the FullAccess context to pull the host's Vulkan instance,
     /// device, allocator, queue mutex, and the video encode / transfer /
     /// compute queues — the codec submits through the host's
-    /// per-queue serialization (per [`crate::vulkan::video::rhi::RhiQueueSubmitter`]).
+    /// per-queue serialization via
+    /// [`crate::vulkan::rhi::HostVulkanDevice::submit_to_queue`].
     ///
     /// # Errors
     ///
@@ -260,8 +261,6 @@ impl SimpleEncoder {
             .compute_queue_family_index()
             .unwrap_or_else(|| host_device.queue_family_index());
         let host_arc: Arc<crate::vulkan::rhi::HostVulkanDevice> = Arc::clone(host_device);
-        let submitter: Arc<dyn crate::vulkan::video::rhi::RhiQueueSubmitter> =
-            Arc::clone(&host_arc) as _;
 
         unsafe {
             Self::create_from_external(
@@ -271,7 +270,6 @@ impl SimpleEncoder {
                 host_device.physical_device(),
                 host_device.allocator().clone(),
                 host_arc,
-                submitter,
                 encode_queue,
                 encode_queue_family,
                 host_device.transfer_queue(),
@@ -419,7 +417,6 @@ impl SimpleEncoder {
                 self.compute_queue,
                 self.encode_queue_family,
                 codec_flag,
-                self.submitter.clone(),
             )?
         };
         self.rgb_to_nv12 = Some(converter);

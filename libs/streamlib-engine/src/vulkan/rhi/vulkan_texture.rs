@@ -669,10 +669,7 @@ impl HostVulkanTexture {
     /// **no** `DEDICATED_MEMORY` — codec DPBs share the default pool
     /// budget. The call is wrapped in
     /// [`HostVulkanDevice::lock_device`] so concurrent processor
-    /// submissions can't race the create + bind on NVIDIA Linux
-    /// (the original motivator for
-    /// `RhiQueueSubmitter::with_device_resource_lock` — see repo
-    /// history for issue #278).
+    /// submissions can't race the create + bind on NVIDIA Linux.
     ///
     /// `width` × `height` × `array_layers` must all be > 0; the
     /// caller is responsible for pre-aligning the extent against
@@ -736,8 +733,8 @@ impl HostVulkanTexture {
 
         let allocator = vulkan_device.allocator();
 
-        // Same threading discipline the codec previously got via
-        // `RhiQueueSubmitter::with_device_resource_lock` (see #278).
+        // Acquire the device-level resource lock so concurrent processor
+        // submissions can't race the create + bind on NVIDIA Linux.
         let _device_lock = vulkan_device.lock_device();
 
         let (image, allocation) = unsafe { allocator.create_image(image_info, &alloc_opts) }

@@ -1166,8 +1166,9 @@ impl SimpleEncoder {
             .build();
 
         device.reset_fences(&[self.fence])?;
-        self.submitter
-            .submit_to_queue(self.encode_queue, &[submit_info], self.fence)?;
+        self.host_device
+            .submit_to_queue(self.encode_queue, &[submit_info], self.fence)
+            .map_err(VideoError::from)?;
         device.wait_for_fences(&[self.fence], true, u64::MAX)?;
 
         // --- Query encode feedback ---

@@ -24,7 +24,6 @@ impl SimpleEncoder {
         physical_device: vk::PhysicalDevice,
         allocator: Arc<vma::Allocator>,
         host_device: Arc<crate::vulkan::rhi::HostVulkanDevice>,
-        submitter: Arc<dyn crate::vulkan::video::rhi::RhiQueueSubmitter>,
         encode_queue: vk::Queue,
         encode_queue_family: u32,
         transfer_queue: vk::Queue,
@@ -43,7 +42,7 @@ impl SimpleEncoder {
             device.clone(),
             physical_device,
             allocator,
-            host_device,
+            host_device.clone(),
         )?);
 
         let enc_config = config.to_encode_config();
@@ -114,7 +113,7 @@ impl SimpleEncoder {
             cached_header: Vec::new(),
             config,
             prepend_header,
-            submitter: submitter.clone(),
+            host_device: host_device.clone(),
         };
 
         // Configure encoder (creates video session, DPB, etc.).
@@ -184,14 +183,12 @@ impl SimpleEncoder {
             ..Default::default()
         };
         // Staging source image allocation runs under the host's device-level
-        // resource lock (fixes #278).
-        let mut img_result: vulkanalia::VkResult<(vk::Image, vma::Allocation)> =
-            Err(vk::ErrorCode::INITIALIZATION_FAILED);
-        let img_result_ref = &mut img_result;
-        submitter.with_device_resource_lock(&mut || {
-            *img_result_ref = allocator.create_image(src_image_info, &src_alloc_options);
-        });
-        let (source_image, source_allocation) = img_result.map_err(VideoError::from)?;
+        // resource lock so concurrent processor submissions cannot race the
+        // create + bind on NVIDIA Linux.
+        let (source_image, source_allocation) = {
+            let _device_lock = host_device.lock_device();
+            allocator.create_image(src_image_info, &src_alloc_options)
+        }.map_err(VideoError::from)?;
 
         let mut source_ycbcr_info = vk::SamplerYcbcrConversionInfo::builder()
             .conversion(ctx.nv12_ycbcr_conversion());
@@ -222,14 +219,12 @@ impl SimpleEncoder {
             ..Default::default()
         };
         // Staging buffer allocation runs under the host's device-level
-        // resource lock (fixes #278).
-        let mut buf_result: vulkanalia::VkResult<(vk::Buffer, vma::Allocation)> =
-            Err(vk::ErrorCode::INITIALIZATION_FAILED);
-        let buf_result_ref = &mut buf_result;
-        submitter.with_device_resource_lock(&mut || {
-            *buf_result_ref = allocator.create_buffer(stg_create_info, &stg_alloc_options);
-        });
-        let (staging_buffer, staging_allocation) = buf_result.map_err(VideoError::from)?;
+        // resource lock so concurrent processor submissions cannot race the
+        // create + bind on NVIDIA Linux.
+        let (staging_buffer, staging_allocation) = {
+            let _device_lock = host_device.lock_device();
+            allocator.create_buffer(stg_create_info, &stg_alloc_options)
+        }.map_err(VideoError::from)?;
         let stg_info = allocator.get_allocation_info(staging_allocation);
         let staging_mapped_ptr = stg_info.pMappedData as *mut u8;
         if staging_mapped_ptr.is_null() {
@@ -400,8 +395,9 @@ impl SimpleEncoder {
             .build();
 
         self.device.reset_fences(&[self.transfer_fence])?;
-        self.submitter
-            .submit_to_queue(self.transfer_queue, &[submit], self.transfer_fence)?;
+        self.host_device
+            .submit_to_queue(self.transfer_queue, &[submit], self.transfer_fence)
+            .map_err(VideoError::from)?;
         self.device
             .wait_for_fences(&[self.transfer_fence], true, u64::MAX)?;
 
