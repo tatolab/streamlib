@@ -1621,6 +1621,24 @@ impl GpuContext {
         Ok(Arc::new(sem))
     }
 
+    /// Import a DMA-BUF FD as a `StorageBuffer`. Camera V4L2 zero-copy
+    /// path. **Consumes `fd` on success** (`vkImportMemoryFdInfoKHR`
+    /// takes ownership); on failure caller retains fd and must close.
+    #[cfg(target_os = "linux")]
+    pub fn import_dma_buf_storage_buffer(
+        &self,
+        fd: std::os::unix::io::RawFd,
+        byte_size: u64,
+    ) -> Result<crate::core::rhi::StorageBuffer> {
+        let vulkan_device = &self.device.inner;
+        let buf = crate::vulkan::rhi::HostVulkanBuffer::from_dma_buf_fd_as_storage_buffer(
+            vulkan_device,
+            fd,
+            byte_size,
+        )?;
+        Ok(crate::core::rhi::StorageBuffer::from_host_vulkan_buffer(Arc::new(buf)))
+    }
+
     /// Transition `texture` into `VK_IMAGE_LAYOUT_GENERAL` via a
     /// one-shot command buffer + fence. Used as the prelude to binding
     /// a freshly-created storage image to a compute / RT kernel that
@@ -4562,6 +4580,58 @@ impl GpuContextFullAccess {
                 };
                 // 1 = true, 0 = false, -1 = error (treat as false).
                 rc == 1
+            }
+        }
+    }
+
+    /// Import a DMA-BUF FD as a `StorageBuffer` (β-shape). Camera
+    /// V4L2 zero-copy path. **Consumes `fd` on success** — on success
+    /// the host's `vkImportMemoryFdInfoKHR` takes ownership of the
+    /// kernel-side fd transfer; on failure the caller retains the fd
+    /// and must close it.
+    #[cfg(target_os = "linux")]
+    pub fn import_dma_buf_storage_buffer(
+        &self,
+        fd: std::os::unix::io::RawFd,
+        byte_size: u64,
+    ) -> Result<crate::core::rhi::StorageBuffer> {
+        match self.handle_kind {
+            HandleKind::Boxed => {
+                self.host_inner().import_dma_buf_storage_buffer(fd, byte_size)
+            }
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "import_dma_buf_storage_buffer: GpuContextFullAccess has null vtable".into(),
+                    ));
+                }
+                let mut out_buffer: std::mem::MaybeUninit<
+                    crate::core::rhi::StorageBuffer,
+                > = std::mem::MaybeUninit::uninit();
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                let status = unsafe {
+                    ((*self.vtable).import_dma_buf_storage_buffer)(
+                        self.handle,
+                        fd,
+                        byte_size,
+                        out_buffer.as_mut_ptr() as *mut std::ffi::c_void,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status == 0 {
+                    // SAFETY: host signaled success and wrote the
+                    // StorageBuffer β-shape struct into the slot.
+                    Ok(unsafe { out_buffer.assume_init() })
+                } else {
+                    let msg = String::from_utf8_lossy(
+                        &err_buf[..err_len.min(err_buf.len())],
+                    )
+                    .into_owned();
+                    Err(Error::GpuError(msg))
+                }
             }
         }
     }

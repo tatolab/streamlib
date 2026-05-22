@@ -229,7 +229,11 @@ pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 10;
 ///   semaphore's β-shape is its own future lift). Camera processor
 ///   needs this to drop the `full.device().vulkan_device().device()`
 ///   reach-through for `HostVulkanTimelineSemaphore::new(...)`.
-pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 6;
+/// - v7: `import_dma_buf_storage_buffer(fd, byte_size)` slot writing
+///   a `StorageBuffer` β-shape (already layout-stable from C1)
+///   into `*out_buffer`. Camera processor's V4L2 zero-copy path
+///   uses this; the host consumes the fd on success.
+pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 7;
 
 // =============================================================================
 // Primitive enums
@@ -2457,6 +2461,30 @@ pub struct GpuContextFullAccessVTable {
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // v7 (#914 / #921): V4L2 DMA-BUF FD import as SSBO
+    // -------------------------------------------------------------------------
+
+    /// Import a V4L2 (or otherwise externally-allocated) DMA-BUF FD
+    /// as a `StorageBuffer` (SSBO-shaped). On success writes the
+    /// `StorageBuffer` β-shape struct (32 bytes, layout-stable from
+    /// C1) into `*out_buffer` and returns 0.
+    ///
+    /// **The host consumes `fd` on success** (`vkImportMemoryFdInfoKHR`
+    /// takes ownership). On failure the caller retains ownership and
+    /// must close it.
+    ///
+    /// Linux-only; non-Linux stubs return non-zero.
+    pub import_dma_buf_storage_buffer: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        fd: i32,
+        byte_size: u64,
+        out_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
 }
 
 unsafe impl Send for GpuContextFullAccessVTable {}
@@ -3031,7 +3059,7 @@ mod layout_tests {
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 10);
         assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
-        assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 6);
+        assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 7);
     }
 
     #[test]
@@ -3302,7 +3330,7 @@ mod layout_tests {
         // layout_version (u32) + _reserved_padding (u32) + 30 fn
         // pointers (8 bytes each) = 4 + 4 + 240 = 248 bytes.
         //
-        // 31 entries = 1 drop_handle + 7 clone/drop pairs (14 fn
+        // 32 entries = 1 drop_handle + 7 clone/drop pairs (14 fn
         // pointers for the 7 β-shape return types: compute / graphics /
         // ray-tracing kernels, texture ring, color converter,
         // acceleration structure, command recorder) + 4 create_* method
@@ -3313,8 +3341,9 @@ mod layout_tests {
         // create_command_recorder, build_triangles_blas, build_tlas,
         // supports_ray_tracing_pipeline, check_in_surface)
         // + 1 v5-added gpu_capabilities (#914)
-        // + 1 v6-added create_timeline_semaphore (#914 / #920).
-        assert_eq!(size_of::<GpuContextFullAccessVTable>(), 256);
+        // + 1 v6-added create_timeline_semaphore (#914 / #920)
+        // + 1 v7-added import_dma_buf_storage_buffer (#914 / #921).
+        assert_eq!(size_of::<GpuContextFullAccessVTable>(), 264);
         assert_eq!(align_of::<GpuContextFullAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextFullAccessVTable, layout_version), 0);
         assert_eq!(offset_of!(GpuContextFullAccessVTable, _reserved_padding), 4);
@@ -3455,6 +3484,11 @@ mod layout_tests {
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, create_timeline_semaphore),
             248
+        );
+        // v7 (#914 / #921): import_dma_buf_storage_buffer.
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, import_dma_buf_storage_buffer),
+            256
         );
     }
 

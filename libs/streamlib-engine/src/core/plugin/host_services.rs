@@ -5978,6 +5978,76 @@ unsafe extern "C" fn host_gpu_full_create_timeline_semaphore(
     1
 }
 
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_import_dma_buf_storage_buffer(
+    scope_token: *const c_void,
+    fd: i32,
+    byte_size: u64,
+    out_buffer: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_full_import_dma_buf_storage_buffer",
+        || -> i32 {
+            if out_buffer.is_null() {
+                write_err(
+                    "import_dma_buf_storage_buffer: null out_buffer pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let result = with_full_scope_or_err(
+                scope_token,
+                "import_dma_buf_storage_buffer",
+                err_buf,
+                err_buf_cap,
+                err_len,
+                |gpu| gpu.import_dma_buf_storage_buffer(fd, byte_size),
+            );
+            match result {
+                Some(Ok(buf)) => {
+                    unsafe {
+                        std::ptr::write(
+                            out_buffer as *mut crate::core::rhi::StorageBuffer,
+                            buf,
+                        );
+                    }
+                    0
+                }
+                Some(Err(e)) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+                None => 1,
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_import_dma_buf_storage_buffer(
+    _scope_token: *const c_void,
+    _fd: i32,
+    _byte_size: u64,
+    _out_buffer: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "import_dma_buf_storage_buffer: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
 unsafe extern "C" fn host_gpu_full_check_in_surface(
     scope_token: *const c_void,
     pixel_buffer: *const c_void,
@@ -6082,6 +6152,7 @@ pub static HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE: GpuContextFullAccessVTable =
         check_in_surface: host_gpu_full_check_in_surface,
         gpu_capabilities: host_gpu_full_gpu_capabilities,
         create_timeline_semaphore: host_gpu_full_create_timeline_semaphore,
+        import_dma_buf_storage_buffer: host_gpu_full_import_dma_buf_storage_buffer,
     };
 
 /// Pointer to the [`GpuContextFullAccessVTable`] this DSO should
