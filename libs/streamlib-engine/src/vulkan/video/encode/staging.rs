@@ -75,7 +75,7 @@ impl SimpleEncoder {
             bitstream_buffer_size: 0,
             command_pool: vk::CommandPool::null(),
             command_buffer: vk::CommandBuffer::null(),
-            query_pool: vk::QueryPool::null(),
+            query_pool: None,
             fence: vk::Fence::null(),
             frame_count: 0,
             encode_order_count: 0,

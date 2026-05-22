@@ -281,22 +281,6 @@ impl Default for DpbSlot {
 }
 
 // ---------------------------------------------------------------------------
-// Encode feedback query result layout
-// ---------------------------------------------------------------------------
-
-/// Layout of the query pool result for `VK_QUERY_TYPE_VIDEO_ENCODE_FEEDBACK_KHR`.
-///
-/// When `VK_VIDEO_ENCODE_FEEDBACK_BITSTREAM_BUFFER_OFFSET_BIT_KHR` and
-/// `VK_VIDEO_ENCODE_FEEDBACK_BITSTREAM_BYTES_WRITTEN_BIT_KHR` are both
-/// requested, the result contains these two u32 fields in order.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct EncodeFeedback {
-    pub(crate) bitstream_offset: u32,
-    pub(crate) bitstream_bytes_written: u32,
-}
-
-// ---------------------------------------------------------------------------
 // Codec / Preset / EncodePacket
 // ---------------------------------------------------------------------------
 

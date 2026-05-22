@@ -127,8 +127,11 @@ pub struct SimpleEncoder {
     pub(crate) command_pool: vk::CommandPool,
     pub(crate) command_buffer: vk::CommandBuffer,
 
-    // Query pool for encode feedback (offset + size)
-    pub(crate) query_pool: vk::QueryPool,
+    // Query pool for encode feedback (offset + size). Owned via the
+    // engine RHI primitive — `HostVulkanQueryPool::Drop` runs
+    // `vkDestroyQueryPool` so the encoder's teardown path doesn't
+    // touch it directly. `None` before `configure()` populates it.
+    pub(crate) query_pool: Option<crate::vulkan::rhi::HostVulkanQueryPool>,
 
     // Synchronization
     pub(crate) fence: vk::Fence,
@@ -464,10 +467,9 @@ impl Drop for SimpleEncoder {
                     self.device.destroy_fence(self.fence, None);
                 }
 
-                // Destroy query pool
-                if self.query_pool != vk::QueryPool::null() {
-                    self.device.destroy_query_pool(self.query_pool, None);
-                }
+                // Query pool teardown is owned by HostVulkanQueryPool::Drop
+                // (runs vkDestroyQueryPool under the device resource lock).
+                self.query_pool = None;
 
                 // Destroy command pool (frees command buffers)
                 if self.command_pool != vk::CommandPool::null() {

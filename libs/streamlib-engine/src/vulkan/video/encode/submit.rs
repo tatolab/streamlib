@@ -17,7 +17,7 @@ use crate::vulkan::video::vk_video_encoder::vk_encoder_dpb_h265::{
     NO_REFERENCE_PICTURE_H265, MAX_NUM_LIST_REF_H265,
 };
 
-use super::config::{EncodedOutput, EncodeFeedback, FrameType, RateControlMode};
+use super::config::{EncodedOutput, FrameType, RateControlMode};
 use super::SimpleEncoder;
 
 impl SimpleEncoder {
@@ -378,7 +378,12 @@ impl SimpleEncoder {
         device.begin_command_buffer(self.command_buffer, &begin_info)?;
 
         // --- Reset query ---
-        device.cmd_reset_query_pool(self.command_buffer, self.query_pool, 0, 1);
+        let query_pool_handle = self
+            .query_pool
+            .as_ref()
+            .expect("query_pool must be configured")
+            .handle();
+        device.cmd_reset_query_pool(self.command_buffer, query_pool_handle, 0, 1);
 
         // --- Build reference slot info structures ---
         let mut dpb_resource_infos: Vec<vk::VideoPictureResourceInfoKHR> = Vec::new();
@@ -1133,7 +1138,7 @@ impl SimpleEncoder {
         // --- Begin query ---
         device.cmd_begin_query(
             self.command_buffer,
-            self.query_pool,
+            query_pool_handle,
             0,
             vk::QueryControlFlags::empty(),
         );
@@ -1142,7 +1147,7 @@ impl SimpleEncoder {
         device.cmd_encode_video_khr(self.command_buffer, &encode_info);
 
         // --- End query ---
-        device.cmd_end_query(self.command_buffer, self.query_pool, 0);
+        device.cmd_end_query(self.command_buffer, query_pool_handle, 0);
 
         // --- vkCmdEndVideoCodingKHR ---
         let end_coding_info = vk::VideoEndCodingInfoKHR::default();
@@ -1166,23 +1171,21 @@ impl SimpleEncoder {
         device.wait_for_fences(&[self.fence], true, u64::MAX)?;
 
         // --- Query encode feedback ---
-        let mut feedback = EncodeFeedback::default();
-        let feedback_bytes = std::slice::from_raw_parts_mut(
-            &mut feedback as *mut EncodeFeedback as *mut u8,
-            std::mem::size_of::<EncodeFeedback>(),
-        );
+        let feedback = self
+            .query_pool
+            .as_ref()
+            .expect("query_pool must be configured")
+            .fetch_video_encode_feedback(0)
+            .map_err(|e| VideoError::BitstreamError(format!("encoder feedback: {e}")))?;
 
-        device.get_query_pool_results(
-            self.query_pool,
-            0,
-            1,
-            feedback_bytes,
-            std::mem::size_of::<EncodeFeedback>() as u64,
-            vk::QueryResultFlags::WAIT,
-        )?;
-
-        let offset = feedback.bitstream_offset as usize;
-        let size = feedback.bitstream_bytes_written as usize;
+        let offset = feedback
+            .bitstream_buffer_offset
+            .expect("BITSTREAM_BUFFER_OFFSET flag was requested at construction")
+            as usize;
+        let size = feedback
+            .bitstream_bytes_written
+            .expect("BITSTREAM_BYTES_WRITTEN flag was requested at construction")
+            as usize;
 
         tracing::debug!(offset = offset, size = size, "Encode feedback");
         if is_h265 {
@@ -1262,8 +1265,8 @@ impl SimpleEncoder {
             frame_type,
             pts,
             encode_order,
-            bitstream_offset: feedback.bitstream_offset,
-            bitstream_size: feedback.bitstream_bytes_written,
+            bitstream_offset: offset as u32,
+            bitstream_size: size as u32,
         })
     }}
 }

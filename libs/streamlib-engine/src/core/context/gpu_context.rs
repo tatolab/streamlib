@@ -1470,6 +1470,19 @@ impl GpuContext {
         crate::vulkan::rhi::HostVulkanBuffer::new_video_bitstream(vulkan_device, descriptor)
     }
 
+    /// Allocate a Vulkan query pool. Backs
+    /// [`GpuContextFullAccess::create_query_pool`]. Generic over
+    /// `VkQueryType` — services timestamp, occlusion, pipeline-statistics,
+    /// and video-encode-feedback queries through one primitive.
+    #[cfg(target_os = "linux")]
+    pub fn create_query_pool(
+        &self,
+        descriptor: &crate::vulkan::rhi::QueryPoolDescriptor<'_>,
+    ) -> Result<crate::vulkan::rhi::HostVulkanQueryPool> {
+        let vulkan_device = &self.device.inner;
+        crate::vulkan::rhi::HostVulkanQueryPool::new(vulkan_device, descriptor)
+    }
+
     /// Create a graphics kernel from a multi-stage SPIR-V set + binding
     /// declaration + pipeline state. Graphics counterpart to
     /// [`Self::create_compute_kernel`].
@@ -4420,6 +4433,28 @@ impl GpuContextFullAccess {
                  is host-only; subprocess customers consume codec output \
                  through the surface-share registry, not by constructing \
                  bitstream buffers"
+                    .into(),
+            )),
+        }
+    }
+
+    /// Allocate a Vulkan query pool — the generic engine-RHI primitive
+    /// servicing every query class (timestamp, occlusion,
+    /// pipeline-statistics, video-encode-feedback). FullAccess-only;
+    /// subprocess cdylibs do not construct query pools — they consume
+    /// codec results (when applicable) through the surface-share /
+    /// escalate IPC channels, not by reaching into pool primitives.
+    #[cfg(target_os = "linux")]
+    pub fn create_query_pool(
+        &self,
+        descriptor: &crate::vulkan::rhi::QueryPoolDescriptor<'_>,
+    ) -> Result<crate::vulkan::rhi::HostVulkanQueryPool> {
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().create_query_pool(descriptor),
+            HandleKind::ScopeToken => Err(Error::GpuError(
+                "create_query_pool: query pool creation is host-only; \
+                 subprocess customers don't reach the GPU query API \
+                 surface directly"
                     .into(),
             )),
         }

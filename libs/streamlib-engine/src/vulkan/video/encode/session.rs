@@ -297,20 +297,24 @@ impl SimpleEncoder {
         let command_buffers = device.allocate_command_buffers(&alloc_info)?;
 
         // --- Query pool for encode feedback ---
-        // Build the create info with the video encode feedback flags and profile.
-        let mut query_pool_video = vk::QueryPoolVideoEncodeFeedbackCreateInfoKHR::builder()
-            .encode_feedback_flags(
-                vk::VideoEncodeFeedbackFlagsKHR::BITSTREAM_BUFFER_OFFSET
-                    | vk::VideoEncodeFeedbackFlagsKHR::BITSTREAM_BYTES_WRITTEN,
-            );
-
-        let query_pool_info = vk::QueryPoolCreateInfo::builder()
-            .query_type(vk::QueryType::VIDEO_ENCODE_FEEDBACK_KHR)
-            .query_count(1)
-            .push_next(&mut query_pool_video)
-            .push_next(&mut profile_info);
-
-        let query_pool = device.create_query_pool(&query_pool_info, None)?;
+        // Through the engine RHI primitive: it chains
+        // `VkQueryPoolVideoEncodeFeedbackCreateInfoKHR` + the profile
+        // onto `pNext` and runs `vkCreateQueryPool` under the device
+        // resource lock.
+        let query_pool = crate::vulkan::rhi::HostVulkanQueryPool::new(
+            self.ctx.host_device(),
+            &crate::vulkan::rhi::QueryPoolDescriptor {
+                label: "simple_encoder/feedback",
+                query_type: vk::QueryType::VIDEO_ENCODE_FEEDBACK_KHR,
+                query_count: 1,
+                pipeline_statistics: vk::QueryPipelineStatisticFlags::empty(),
+                video_encode_feedback_flags:
+                    vk::VideoEncodeFeedbackFlagsKHR::BITSTREAM_BUFFER_OFFSET
+                        | vk::VideoEncodeFeedbackFlagsKHR::BITSTREAM_BYTES_WRITTEN,
+                video_profile: Some(&profile_info),
+            },
+        )
+        .map_err(|e| VideoError::BitstreamError(format!("encoder query pool: {e}")))?;
 
         // --- Fence ---
         let fence_info = vk::FenceCreateInfo::default();
@@ -330,7 +334,7 @@ impl SimpleEncoder {
         self.bitstream_buffer_size = bs_size;
         self.command_pool = command_pool;
         self.command_buffer = command_buffers[0];
-        self.query_pool = query_pool;
+        self.query_pool = Some(query_pool);
         self.fence = fence;
         self.encode_config = Some(config.clone());
         self.configured = true;
