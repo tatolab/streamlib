@@ -200,7 +200,18 @@ pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 10;
 ///   `*const Arc<GpuContext>`" to "`gpu_handle` is an opaque scope
 ///   token" semantically — same `*const c_void`, different lookup
 ///   path on the host side.
-pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 2;
+/// - v3: Phase D appends the privileged-only FullAccess methods that
+///   previously stayed `host_inner`-only:
+///   `wait_device_idle`, `acquire_output_texture`,
+///   `upload_pixel_buffer_as_texture`, `color_converter`,
+///   `create_command_recorder`, `build_triangles_blas`, `build_tlas`,
+///   `supports_ray_tracing_pipeline`, `check_in_surface`. The
+///   LimitedAccess-mirror FullAccess methods
+///   (`acquire_pixel_buffer`, `register_texture_with_layout`, etc.)
+///   inherit through the originating LimitedAccess vtable per the
+///   `inherited_lim_*` fields on `GpuContextFullAccess` — they do
+///   not get parallel slots here.
+pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 3;
 
 // =============================================================================
 // Primitive enums
@@ -2176,6 +2187,147 @@ pub struct GpuContextFullAccessVTable {
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // Phase D (#906) — privileged-only FullAccess methods that don't appear on
+    // LimitedAccess. Each callback validates the `gpu_handle` scope token via
+    // the host's `escalate_scope_registry::with_scope` before dispatching to
+    // the resolved `Arc<GpuContext>`.
+    // -------------------------------------------------------------------------
+
+    /// Block until the GPU device drains every in-flight submission.
+    /// Returns 0 on success, non-zero with an error message on failure
+    /// (invalid scope token, `vkDeviceWaitIdle` failure, etc.).
+    pub wait_device_idle: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Acquire a new output texture with a freshly-minted surface id,
+    /// register the texture in the same-process texture cache, and
+    /// return both. `out_id_buf` receives the UTF-8 surface id (
+    /// `out_id_len` records the byte count; truncation is an error);
+    /// `out_texture` receives the [`crate::Texture`] β-shape.
+    pub acquire_output_texture: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        width: u32,
+        height: u32,
+        format_raw: u32,
+        out_id_buf: *mut u8,
+        out_id_cap: usize,
+        out_id_len: *mut usize,
+        out_texture: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Upload a HOST_VISIBLE pixel buffer's contents to a new GPU
+    /// texture and register it under the caller-provided surface id.
+    /// Linux-only on the host side; non-Linux stubs return non-zero
+    /// with a "not available on this platform" message.
+    pub upload_pixel_buffer_as_texture: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        surface_id_ptr: *const u8,
+        surface_id_len: usize,
+        pixel_buffer: *const c_void,
+        width: u32,
+        height: u32,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Acquire a cached `(src, dst)`-keyed color converter. Writes an
+    /// `Arc::into_raw(Arc<RhiColorConverter>)` raw pointer into
+    /// `*out_converter` on success. Linux-only.
+    pub color_converter: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        src_format_raw: u32,
+        dst_format_raw: u32,
+        out_converter: *mut *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Build an engine-owned multi-step command-buffer recorder.
+    /// Writes a [`crate::RhiCommandRecorder`]-shaped value (host's
+    /// `RhiCommandRecorder` struct, layout-stable under the rustc-
+    /// version coupling contract in CLAUDE.md) into the caller's
+    /// `*out_recorder` `MaybeUninit` slot on success. Linux-only.
+    pub create_command_recorder: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        label_ptr: *const u8,
+        label_len: usize,
+        out_recorder: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Build a triangle-geometry bottom-level acceleration structure
+    /// from CPU-side vertex + index data. Writes an
+    /// `Arc::into_raw(Arc<VulkanAccelerationStructure>)` raw pointer
+    /// into `*out_blas` on success. Linux-only.
+    pub build_triangles_blas: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        label_ptr: *const u8,
+        label_len: usize,
+        vertices_ptr: *const f32,
+        vertices_len: usize,
+        indices_ptr: *const u32,
+        indices_len: usize,
+        out_blas: *mut *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Build a top-level acceleration structure from BLAS instances.
+    /// `instances_ptr` is a `*const TlasInstanceDesc` carrying the
+    /// host's `TlasInstanceDesc` struct (layout-stable under the
+    /// rustc-version coupling contract). Writes an
+    /// `Arc::into_raw(Arc<VulkanAccelerationStructure>)` raw pointer
+    /// into `*out_tlas` on success. Linux-only.
+    pub build_tlas: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        label_ptr: *const u8,
+        label_len: usize,
+        instances_ptr: *const c_void,
+        instances_len: usize,
+        out_tlas: *mut *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Whether the underlying GPU exposes the
+    /// `VK_KHR_ray_tracing_pipeline` extension chain. Returns 1 = true,
+    /// 0 = false, -1 = invalid scope token or other error (with
+    /// message in `err_buf`).
+    pub supports_ray_tracing_pipeline: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Check in a pixel buffer to the surface-share service and return
+    /// the surface id. `out_id_buf` receives the UTF-8 id;
+    /// `out_id_len` records the byte count (truncation is an error).
+    pub check_in_surface: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        pixel_buffer: *const c_void,
+        out_id_buf: *mut u8,
+        out_id_cap: usize,
+        out_id_len: *mut usize,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
 }
 
 unsafe impl Send for GpuContextFullAccessVTable {}
@@ -2750,7 +2902,7 @@ mod layout_tests {
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 10);
         assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
-        assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 2);
+        assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 3);
     }
 
     #[test]
@@ -3018,14 +3170,18 @@ mod layout_tests {
 
     #[test]
     fn gpu_context_full_access_vtable_layout() {
-        // layout_version (u32) + _reserved_padding (u32) + 14 fn
-        // pointers (8 bytes each) = 4 + 4 + 112 = 120 bytes.
+        // layout_version (u32) + _reserved_padding (u32) + 23 fn
+        // pointers (8 bytes each) = 4 + 4 + 184 = 192 bytes.
         //
-        // 14 entries = 1 drop_handle + 4 clone/drop pairs (8 fn
+        // 23 entries = 1 drop_handle + 4 clone/drop pairs (8 fn
         // pointers for the 4 kernel return types) + 4 create_* method
         // callbacks (compute / graphics / ray-tracing / texture_ring)
-        // + 1 acquire_render_target_dma_buf_image (C3-added, #903).
-        assert_eq!(size_of::<GpuContextFullAccessVTable>(), 120);
+        // + 1 acquire_render_target_dma_buf_image (C3) + 9 Phase D
+        // privileged methods (wait_device_idle, acquire_output_texture,
+        // upload_pixel_buffer_as_texture, color_converter,
+        // create_command_recorder, build_triangles_blas, build_tlas,
+        // supports_ray_tracing_pipeline, check_in_surface).
+        assert_eq!(size_of::<GpuContextFullAccessVTable>(), 192);
         assert_eq!(align_of::<GpuContextFullAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextFullAccessVTable, layout_version), 0);
         assert_eq!(offset_of!(GpuContextFullAccessVTable, _reserved_padding), 4);
@@ -3085,6 +3241,46 @@ mod layout_tests {
                 acquire_render_target_dma_buf_image
             ),
             112
+        );
+        // Phase D entries (#906).
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, wait_device_idle),
+            120
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, acquire_output_texture),
+            128
+        );
+        assert_eq!(
+            offset_of!(
+                GpuContextFullAccessVTable,
+                upload_pixel_buffer_as_texture
+            ),
+            136
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, color_converter),
+            144
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, create_command_recorder),
+            152
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, build_triangles_blas),
+            160
+        );
+        assert_eq!(offset_of!(GpuContextFullAccessVTable, build_tlas), 168);
+        assert_eq!(
+            offset_of!(
+                GpuContextFullAccessVTable,
+                supports_ray_tracing_pipeline
+            ),
+            176
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, check_in_surface),
+            184
         );
     }
 
