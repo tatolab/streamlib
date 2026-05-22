@@ -102,7 +102,7 @@ fn main() -> Result<()> {
     )?;
 
     let tlas_instances = vec![{
-        let mut inst = TlasInstanceDesc::identity(Arc::clone(&blas));
+        let mut inst = TlasInstanceDesc::identity(blas.clone());
         inst.custom_index = 0;
         inst
     }];

@@ -94,8 +94,9 @@ enum BindingResource {
     },
     AccelerationStructure {
         handle: vk::AccelerationStructureKHR,
-        // The strong reference keeps the AS alive while bound.
-        _keep_alive: Arc<VulkanAccelerationStructure>,
+        // The β-shape clone keeps the AS alive while bound (β-shape's
+        // Clone bumps the underlying Arc strong count via vtable).
+        _keep_alive: VulkanAccelerationStructure,
     },
 }
 
@@ -396,7 +397,7 @@ impl VulkanRayTracingKernel {
     pub fn set_acceleration_structure(
         &self,
         binding: u32,
-        tlas: &Arc<VulkanAccelerationStructure>,
+        tlas: &VulkanAccelerationStructure,
     ) -> Result<()> {
         self.expect_kind(binding, RayTracingBindingKind::AccelerationStructure)?;
         if tlas.kind() != super::AccelerationStructureKind::TopLevel {
@@ -409,7 +410,7 @@ impl VulkanRayTracingKernel {
             binding,
             BindingResource::AccelerationStructure {
                 handle: tlas.vk_handle(),
-                _keep_alive: Arc::clone(tlas),
+                _keep_alive: tlas.clone(),
             },
         );
         Ok(())
@@ -1814,7 +1815,7 @@ mod tests {
             blas.device_address()
         );
 
-        let instance = TlasInstanceDesc::identity(Arc::clone(&blas));
+        let instance = TlasInstanceDesc::identity(blas.clone());
         let tlas = VulkanAccelerationStructure::build_tlas(
             &device,
             "rt-test-tlas",

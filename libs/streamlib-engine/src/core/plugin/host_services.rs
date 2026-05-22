@@ -4625,7 +4625,8 @@ unsafe extern "C" fn host_gpu_full_clone_acceleration_structure(handle: *const c
             }
             unsafe {
                 Arc::increment_strong_count(
-                    handle as *const crate::vulkan::rhi::VulkanAccelerationStructure,
+                    handle
+                        as *const crate::vulkan::rhi::VulkanAccelerationStructureInner,
                 );
             }
         },
@@ -4643,7 +4644,8 @@ unsafe extern "C" fn host_gpu_full_drop_acceleration_structure(handle: *const c_
             }
             unsafe {
                 Arc::decrement_strong_count(
-                    handle as *const crate::vulkan::rhi::VulkanAccelerationStructure,
+                    handle
+                        as *const crate::vulkan::rhi::VulkanAccelerationStructureInner,
                 );
             }
         },
@@ -5617,8 +5619,14 @@ unsafe extern "C" fn host_gpu_full_build_triangles_blas(
                 |gpu| gpu.build_triangles_blas(label, vertices, indices),
             );
             match result {
-                Some(Ok(arc)) => {
-                    let raw = Arc::into_raw(arc) as *const c_void;
+                Some(Ok(blas)) => {
+                    // `blas` is the β-shape — its `handle` is already
+                    // `Arc::into_raw(Arc<VulkanAccelerationStructureInner>)`-shaped.
+                    // Forget the β-shape to keep the Arc strong count
+                    // bumped; cdylib reconstructs its own β-shape from
+                    // the handle + vtable.
+                    let raw = blas.handle;
+                    std::mem::forget(blas);
                     unsafe { std::ptr::write(out_blas, raw) };
                     0
                 }
@@ -5719,8 +5727,9 @@ unsafe extern "C" fn host_gpu_full_build_tlas(
                 |gpu| gpu.build_tlas(label, instances),
             );
             match result {
-                Some(Ok(arc)) => {
-                    let raw = Arc::into_raw(arc) as *const c_void;
+                Some(Ok(tlas)) => {
+                    let raw = tlas.handle;
+                    std::mem::forget(tlas);
                     unsafe { std::ptr::write(out_tlas, raw) };
                     0
                 }

@@ -110,6 +110,12 @@ mod vulkan_acceleration_structure;
 pub use vulkan_acceleration_structure::{
     AccelerationStructureKind, TlasInstanceDesc, VulkanAccelerationStructure, IDENTITY_TRANSFORM,
 };
+// `VulkanAccelerationStructureInner` is `pub(crate)`-shaped — only
+// the host's clone/drop callbacks in `core::plugin::host_services`
+// need to reference it for `Arc::increment_strong_count` /
+// `Arc::decrement_strong_count`. Re-export at crate scope.
+#[cfg(target_os = "linux")]
+pub(crate) use vulkan_acceleration_structure::VulkanAccelerationStructureInner;
 
 #[cfg(target_os = "linux")]
 mod vulkan_ray_tracing_kernel;

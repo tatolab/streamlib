@@ -12,9 +12,11 @@
 
 #![cfg(target_os = "linux")]
 
+use std::ffi::c_void;
 use std::mem;
 use std::sync::Arc;
 
+use streamlib_plugin_abi::GpuContextFullAccessVTable;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia::vk::KhrAccelerationStructureExtensionDeviceCommands as _;
@@ -37,7 +39,7 @@ pub enum AccelerationStructureKind {
 /// the hit shader can read via `gl_InstanceCustomIndexEXT`, a visibility
 /// mask, an SBT record offset, and the BLAS this instance points to.
 ///
-/// The BLAS reference is by `&Arc<VulkanAccelerationStructure>` so the
+/// The BLAS reference is by `VulkanAccelerationStructure` β-shape so the
 /// lifetime contract is "the TLAS holds a strong reference to every
 /// referenced BLAS for as long as the TLAS lives."
 #[derive(Clone)]
@@ -57,13 +59,13 @@ pub struct TlasInstanceDesc {
     /// Default: opaque + counterclockwise front face.
     pub flags: vk::GeometryInstanceFlagsKHR,
     /// BLAS this instance references. Kept alive by the TLAS via a clone.
-    pub blas: Arc<VulkanAccelerationStructure>,
+    pub blas: VulkanAccelerationStructure,
 }
 
 impl TlasInstanceDesc {
     /// Identity transform, opaque + counterclockwise front face. The
     /// most common TLAS-instance shape.
-    pub fn identity(blas: Arc<VulkanAccelerationStructure>) -> Self {
+    pub fn identity(blas: VulkanAccelerationStructure) -> Self {
         Self {
             transform: IDENTITY_TRANSFORM,
             custom_index: 0,
@@ -83,9 +85,10 @@ pub const IDENTITY_TRANSFORM: [[f32; 4]; 3] = [
     [0.0, 0.0, 1.0, 0.0],
 ];
 
-/// One built `VkAccelerationStructureKHR` (BLAS or TLAS) with its owning
-/// storage buffer + allocation.
-pub struct VulkanAccelerationStructure {
+/// Host-only rich data backing a [`VulkanAccelerationStructure`].
+/// Cdylib code never sees this type; it reaches the public surface
+/// through the `(handle, vtable)` β-shape.
+pub(crate) struct VulkanAccelerationStructureInner {
     label: String,
     kind: AccelerationStructureKind,
     vulkan_device: Arc<HostVulkanDevice>,
@@ -99,10 +102,35 @@ pub struct VulkanAccelerationStructure {
     storage_allocation: Option<vma::Allocation>,
     storage_size: vk::DeviceSize,
     /// BLAS references this TLAS keeps alive. Empty for BLAS.
-    referenced_blases: Vec<Arc<VulkanAccelerationStructure>>,
+    referenced_blases: Vec<VulkanAccelerationStructure>,
 }
 
-impl VulkanAccelerationStructure {
+/// Acceleration-structure (BLAS or TLAS) RHI handle — layout-stable
+/// `#[repr(C)] (handle, vtable)` shape so cdylibs can hold, refcount,
+/// and drop without sharing rustc-version or dep-graph with the host.
+///
+/// The opaque handle points at an
+/// `Arc<VulkanAccelerationStructureInner>`; lifecycle dispatches
+/// through the host-installed
+/// [`GpuContextFullAccessVTable::clone_acceleration_structure`] /
+/// `drop_acceleration_structure` callbacks, which run
+/// `Arc::increment_strong_count` / `Arc::decrement_strong_count` in
+/// host-compiled code where the Inner layout is known.
+#[repr(C)]
+pub struct VulkanAccelerationStructure {
+    /// Opaque handle to the host's `Arc<VulkanAccelerationStructureInner>`.
+    pub(crate) handle: *const c_void,
+    /// Vtable for cross-DSO Clone/Drop dispatch.
+    pub(crate) vtable: *const GpuContextFullAccessVTable,
+}
+
+// SAFETY: `handle` points at an `Arc<VulkanAccelerationStructureInner>`
+// whose interior is Send+Sync (Vulkan handles + queue submissions are
+// guarded by the host queue mutex; BLAS refs are owned `Arc`s).
+unsafe impl Send for VulkanAccelerationStructure {}
+unsafe impl Sync for VulkanAccelerationStructure {}
+
+impl VulkanAccelerationStructureInner {
     /// Build a triangle-geometry bottom-level acceleration structure from
     /// CPU-side vertex + index data. Vertices are interleaved
     /// `[x, y, z, x, y, z, ...]` (R32G32B32_SFLOAT, stride 12 bytes);
@@ -112,7 +140,7 @@ impl VulkanAccelerationStructure {
     /// `vkCmdCopyBuffer`, then submits a `vkCmdBuildAccelerationStructuresKHR`
     /// build and waits before returning. The staging + scratch buffers
     /// are freed on success.
-    pub fn build_triangles_blas(
+    pub(crate) fn build_triangles_blas(
         vulkan_device: &Arc<HostVulkanDevice>,
         label: &str,
         vertices: &[f32],
@@ -268,7 +296,7 @@ impl VulkanAccelerationStructure {
     /// instances. Each instance references a `VulkanAccelerationStructure`
     /// of [`AccelerationStructureKind::BottomLevel`]; the TLAS keeps a
     /// strong reference to every BLAS for its lifetime.
-    pub fn build_tlas(
+    pub(crate) fn build_tlas(
         vulkan_device: &Arc<HostVulkanDevice>,
         label: &str,
         instances: &[TlasInstanceDesc],
@@ -284,7 +312,7 @@ impl VulkanAccelerationStructure {
             )));
         }
         for (i, inst) in instances.iter().enumerate() {
-            if inst.blas.kind != AccelerationStructureKind::BottomLevel {
+            if inst.blas.kind() != AccelerationStructureKind::BottomLevel {
                 return Err(Error::GpuError(format!(
                     "Acceleration structure '{label}': instance {i} references a TLAS as its BLAS"
                 )));
@@ -292,8 +320,8 @@ impl VulkanAccelerationStructure {
         }
 
         let device = vulkan_device.device();
-        let referenced_blases: Vec<Arc<VulkanAccelerationStructure>> =
-            instances.iter().map(|i| Arc::clone(&i.blas)).collect();
+        let referenced_blases: Vec<VulkanAccelerationStructure> =
+            instances.iter().map(|i| i.blas.clone()).collect();
 
         // Serialize each instance to its spec-defined 64-byte layout.
         // See `instance_bytes` doc comment for why we don't use
@@ -387,7 +415,7 @@ impl VulkanAccelerationStructure {
         mut build_geometry_info: vk::AccelerationStructureBuildGeometryInfoKHR,
         geometries: [vk::AccelerationStructureGeometryKHR; 1],
         range_info: vk::AccelerationStructureBuildRangeInfoKHR,
-        referenced_blases: Vec<Arc<VulkanAccelerationStructure>>,
+        referenced_blases: Vec<VulkanAccelerationStructure>,
         transient_inputs: Vec<AsBuffer>,
     ) -> Result<Arc<Self>> {
         let device = vulkan_device.device();
@@ -608,7 +636,7 @@ impl VulkanAccelerationStructure {
     }
 }
 
-impl Drop for VulkanAccelerationStructure {
+impl Drop for VulkanAccelerationStructureInner {
     fn drop(&mut self) {
         unsafe {
             let device = self.vulkan_device.device();
@@ -623,18 +651,155 @@ impl Drop for VulkanAccelerationStructure {
     }
 }
 
-unsafe impl Send for VulkanAccelerationStructure {}
-unsafe impl Sync for VulkanAccelerationStructure {}
-
-impl std::fmt::Debug for VulkanAccelerationStructure {
+impl std::fmt::Debug for VulkanAccelerationStructureInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("VulkanAccelerationStructure")
+        f.debug_struct("VulkanAccelerationStructureInner")
             .field("label", &self.label)
             .field("kind", &self.kind)
             .field("device_address", &format_args!("{:#x}", self.device_address))
             .field("storage_size", &self.storage_size)
             .field("instances", &self.referenced_blases.len())
             .finish()
+    }
+}
+
+// =============================================================================
+// β-shape implementation
+// =============================================================================
+
+impl VulkanAccelerationStructure {
+    /// Internal helper: leak an initial Arc strong count via
+    /// `Arc::into_raw`, resolve the host-mode FullAccess vtable, and
+    /// assemble the cross-DSO shape.
+    pub(crate) fn from_arc_into_raw(arc: Arc<VulkanAccelerationStructureInner>) -> Self {
+        let handle = Arc::into_raw(arc) as *const c_void;
+        let vtable =
+            crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
+        Self { handle, vtable }
+    }
+
+    /// Engine-internal borrow of the host-owned
+    /// `VulkanAccelerationStructureInner`. **Panics if called from
+    /// cdylib code.**
+    pub(crate) fn host_inner(&self) -> &VulkanAccelerationStructureInner {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "VulkanAccelerationStructure::host_inner() reached from cdylib code; \
+                 this method must dispatch through the GpuContextFullAccessVTable."
+            );
+        }
+        // SAFETY: `self.handle` is `Arc::into_raw(Arc<VulkanAccelerationStructureInner>)`.
+        unsafe { &*(self.handle as *const VulkanAccelerationStructureInner) }
+    }
+
+    /// Build a triangle-geometry BLAS. Engine-side entry — the
+    /// FullAccess vtable's `build_triangles_blas` slot dispatches
+    /// through this on host mode.
+    pub fn build_triangles_blas(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        label: &str,
+        vertices: &[f32],
+        indices: &[u32],
+    ) -> Result<Self> {
+        VulkanAccelerationStructureInner::build_triangles_blas(
+            vulkan_device,
+            label,
+            vertices,
+            indices,
+        )
+        .map(Self::from_arc_into_raw)
+    }
+
+    /// Build a TLAS from a list of TLAS instances. Engine-side entry.
+    pub fn build_tlas(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        label: &str,
+        instances: &[TlasInstanceDesc],
+    ) -> Result<Self> {
+        VulkanAccelerationStructureInner::build_tlas(vulkan_device, label, instances)
+            .map(Self::from_arc_into_raw)
+    }
+
+    /// `VkAccelerationStructureKHR` handle.
+    pub fn vk_handle(&self) -> vk::AccelerationStructureKHR {
+        self.host_inner().vk_handle()
+    }
+
+    /// Device address of the AS.
+    pub fn device_address(&self) -> u64 {
+        self.host_inner().device_address()
+    }
+
+    /// `BottomLevel` or `TopLevel`.
+    pub fn kind(&self) -> AccelerationStructureKind {
+        self.host_inner().kind()
+    }
+
+    /// Human-readable label used in diagnostics.
+    pub fn label(&self) -> String {
+        self.host_inner().label().to_string()
+    }
+
+    /// Storage size in bytes.
+    pub fn storage_size(&self) -> vk::DeviceSize {
+        self.host_inner().storage_size()
+    }
+}
+
+impl Clone for VulkanAccelerationStructure {
+    fn clone(&self) -> Self {
+        if !self.handle.is_null() && !self.vtable.is_null() {
+            // SAFETY: vtable + handle were paired at construction; the
+            // vtable's `clone_acceleration_structure` contract is
+            // `Arc::increment_strong_count(handle)` host-side.
+            unsafe {
+                ((*self.vtable).clone_acceleration_structure)(self.handle);
+            }
+        }
+        Self {
+            handle: self.handle,
+            vtable: self.vtable,
+        }
+    }
+}
+
+impl Drop for VulkanAccelerationStructure {
+    fn drop(&mut self) {
+        if !self.handle.is_null() && !self.vtable.is_null() {
+            // SAFETY: matched with the `Arc::into_raw` in
+            // `from_arc_into_raw` and any `clone_acceleration_structure`
+            // bumps.
+            unsafe {
+                ((*self.vtable).drop_acceleration_structure)(self.handle);
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for VulkanAccelerationStructure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VulkanAccelerationStructure").finish()
+    }
+}
+
+#[cfg(all(test, target_pointer_width = "64"))]
+mod layout_tests {
+    use super::*;
+    use core::mem::{align_of, offset_of, size_of};
+
+    #[test]
+    fn vulkan_acceleration_structure_layout() {
+        // β-shape: handle + vtable, 16 bytes, 8-byte alignment.
+        assert_eq!(size_of::<VulkanAccelerationStructure>(), 16);
+        assert_eq!(align_of::<VulkanAccelerationStructure>(), 8);
+        assert_eq!(offset_of!(VulkanAccelerationStructure, handle), 0);
+        assert_eq!(offset_of!(VulkanAccelerationStructure, vtable), 8);
+    }
+
+    #[test]
+    fn vulkan_acceleration_structure_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<VulkanAccelerationStructure>();
     }
 }
 
@@ -859,7 +1024,7 @@ fn instance_bytes(desc: &TlasInstanceDesc) -> [u8; INSTANCE_BYTES] {
     out[52..56].copy_from_slice(&(sbt | flags).to_ne_bytes());
 
     // bytes 56..64 — accelerationStructureReference (BLAS device address).
-    out[56..64].copy_from_slice(&desc.blas.device_address.to_ne_bytes());
+    out[56..64].copy_from_slice(&desc.blas.device_address().to_ne_bytes());
 
     out
 }

@@ -1516,7 +1516,7 @@ impl GpuContext {
         label: &str,
         vertices: &[f32],
         indices: &[u32],
-    ) -> Result<Arc<crate::vulkan::rhi::VulkanAccelerationStructure>> {
+    ) -> Result<crate::vulkan::rhi::VulkanAccelerationStructure> {
         tracing::debug!(
             rhi_op = "build_triangles_blas",
             label,
@@ -1542,7 +1542,7 @@ impl GpuContext {
         &self,
         label: &str,
         instances: &[crate::vulkan::rhi::TlasInstanceDesc],
-    ) -> Result<Arc<crate::vulkan::rhi::VulkanAccelerationStructure>> {
+    ) -> Result<crate::vulkan::rhi::VulkanAccelerationStructure> {
         tracing::debug!(
             rhi_op = "build_tlas",
             label,
@@ -4394,7 +4394,7 @@ impl GpuContextFullAccess {
         label: &str,
         vertices: &[f32],
         indices: &[u32],
-    ) -> Result<Arc<crate::vulkan::rhi::VulkanAccelerationStructure>> {
+    ) -> Result<crate::vulkan::rhi::VulkanAccelerationStructure> {
         match self.handle_kind {
             HandleKind::Boxed => {
                 self.host_inner().build_triangles_blas(label, vertices, indices)
@@ -4429,13 +4429,13 @@ impl GpuContextFullAccess {
                             "build_triangles_blas: host signaled success but out_blas is null".into(),
                         ));
                     }
-                    let arc = unsafe {
-                        Arc::from_raw(
-                            out_blas
-                                as *const crate::vulkan::rhi::VulkanAccelerationStructure,
-                        )
-                    };
-                    Ok(arc)
+                    // β-shape: bundle the raw handle (`Arc::into_raw(Arc<Inner>)`-shaped)
+                    // with the host vtable. Cross-rustc-version safe because no Inner
+                    // layout knowledge is required cdylib-side.
+                    Ok(crate::vulkan::rhi::VulkanAccelerationStructure {
+                        handle: out_blas,
+                        vtable: self.vtable,
+                    })
                 } else {
                     let msg = String::from_utf8_lossy(
                         &err_buf[..err_len.min(err_buf.len())],
@@ -4453,7 +4453,7 @@ impl GpuContextFullAccess {
         &self,
         label: &str,
         instances: &[crate::vulkan::rhi::TlasInstanceDesc],
-    ) -> Result<Arc<crate::vulkan::rhi::VulkanAccelerationStructure>> {
+    ) -> Result<crate::vulkan::rhi::VulkanAccelerationStructure> {
         match self.handle_kind {
             HandleKind::Boxed => self.host_inner().build_tlas(label, instances),
             HandleKind::ScopeToken => {
@@ -4484,13 +4484,10 @@ impl GpuContextFullAccess {
                             "build_tlas: host signaled success but out_tlas is null".into(),
                         ));
                     }
-                    let arc = unsafe {
-                        Arc::from_raw(
-                            out_tlas
-                                as *const crate::vulkan::rhi::VulkanAccelerationStructure,
-                        )
-                    };
-                    Ok(arc)
+                    Ok(crate::vulkan::rhi::VulkanAccelerationStructure {
+                        handle: out_tlas,
+                        vtable: self.vtable,
+                    })
                 } else {
                     let msg = String::from_utf8_lossy(
                         &err_buf[..err_len.min(err_buf.len())],
