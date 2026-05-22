@@ -55,6 +55,14 @@ pub struct VideoContext {
     memory_properties: vk::PhysicalDeviceMemoryProperties,
     allocator: Arc<vma::Allocator>,
     nv12_ycbcr_conversion: vk::SamplerYcbcrConversion,
+    /// Host RHI handle the codec layer uses to reach the engine's
+    /// privileged primitives (video session, future query pool, ...).
+    /// Concretely the same `Arc` the `submitter: Arc<dyn RhiQueueSubmitter>`
+    /// fields on `SimpleEncoder` / `VkVideoDecoder` were holding pre-#936
+    /// (the trait's only implementor was `HostVulkanDevice`); stashed here
+    /// so the codec interior can call `HostVulkanVideoSession::new`
+    /// without re-routing the FullAccess context all the way down.
+    host_device: Arc<crate::vulkan::rhi::HostVulkanDevice>,
 }
 
 /// Errors that can occur during video context or session creation.
@@ -127,6 +135,7 @@ impl VideoContext {
         device: vulkanalia::Device,
         physical_device: vk::PhysicalDevice,
         allocator: Arc<vma::Allocator>,
+        host_device: Arc<crate::vulkan::rhi::HostVulkanDevice>,
     ) -> VideoResult<Self> {
         let memory_properties =
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
@@ -140,6 +149,7 @@ impl VideoContext {
             memory_properties,
             allocator,
             nv12_ycbcr_conversion,
+            host_device,
         })
     }
 
@@ -162,6 +172,14 @@ impl VideoContext {
     /// Get a shared reference to the VMA allocator.
     pub fn allocator(&self) -> &Arc<vma::Allocator> {
         &self.allocator
+    }
+
+    /// Host RHI handle. Codec interior reaches engine RHI primitives
+    /// (video session, future query pool, future DPB-flavored texture)
+    /// through this accessor rather than routing the `FullAccess`
+    /// context all the way down.
+    pub fn host_device(&self) -> &Arc<crate::vulkan::rhi::HostVulkanDevice> {
+        &self.host_device
     }
 
     /// Shared NV12 sampler Y′CBCR conversion handle for attachment to

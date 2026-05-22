@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::ptr;
 
 use crate::vulkan::video::video_context::{VideoContext, VideoError, VideoResult};
-use crate::vulkan::video::codec_utils::vulkan_video_session::VulkanVideoSession;
+use crate::vulkan::rhi::{HostVulkanVideoSession, HostVulkanVideoSessionParameters};
 use crate::vulkan::video::decode::{DecodeSubmitInfo, DecodedFrame};
 use super::vk_parser_video_picture_parameters::VkParserVideoPictureParameters;
 
@@ -315,12 +315,18 @@ pub struct VkVideoDecoder {
 
     capability_flags: vk::VideoDecodeCapabilityFlagsKHR,
     video_session: Option<vk::VideoSessionKHR>,
-    video_session_arc: Option<Arc<crate::vulkan::video::codec_utils::vulkan_video_session::VulkanVideoSession>>,
+    video_session_arc: Option<Arc<HostVulkanVideoSession>>,
     decode_frames_data: NvVkDecodeFrameData,
 
     decode_pic_count: u64,
     current_picture_parameters: Option<Arc<VkParserVideoPictureParameters>>,
+    /// Hot-path raw handle reads (`vkCmdBeginVideoCodingKHR`,
+    /// validator submits). Always equals `session_parameters_arc.as_ref().map(|p| p.handle()).unwrap_or_null()`.
     session_parameters: vk::VideoSessionParametersKHR,
+    /// Owns the Vulkan parameter object's lifetime. `Drop` on the
+    /// `Arc` runs `vkDestroyVideoSessionParametersKHR`; the raw shadow
+    /// above goes to null only after the Arc is taken on replacement.
+    session_parameters_arc: Option<Arc<HostVulkanVideoSessionParameters>>,
 
     // DPB — array-layered image (VUID-07244 for decode)
     dpb_image: vk::Image,
@@ -455,6 +461,7 @@ impl VkVideoDecoder {
             decode_pic_count: 0,
             current_picture_parameters: None,
             session_parameters: vk::VideoSessionParametersKHR::null(),
+            session_parameters_arc: None,
             dpb_image: vk::Image::null(),
             dpb_allocation: unsafe { std::mem::zeroed() },
             dpb_image_views: Vec::new(),
@@ -592,7 +599,8 @@ impl VkVideoDecoder {
 
         // --- Create video session ---
         let max_dpb_slots = video_format.max_num_dpb_slots.max(4);
-        let session_params = crate::vulkan::video::codec_utils::vulkan_video_session::VideoSessionCreateParams {
+        let session_descriptor = crate::vulkan::rhi::VideoSessionDescriptor {
+            label: "vk_video_decoder/session",
             session_create_flags: vk::VideoSessionCreateFlagsKHR::empty(),
             video_queue_family: self.queue_family_index,
             video_profile: self.video_profile,
@@ -604,14 +612,10 @@ impl VkVideoDecoder {
             max_active_reference_pictures: max_dpb_slots.saturating_sub(1).min(16),
         };
 
-        let video_session = match unsafe { VulkanVideoSession::create(
-            self.ctx.device(),
-            self.ctx.instance(),
-            self.ctx.physical_device(),
-            self.ctx.allocator(),
-            &self.submitter,
-            &session_params,
-        ) } {
+        let video_session = match HostVulkanVideoSession::new(
+            self.ctx.host_device(),
+            &session_descriptor,
+        ) {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!("Failed to create video session: {:?}", e);
@@ -619,7 +623,7 @@ impl VkVideoDecoder {
             }
         };
 
-        self.video_session = Some(video_session.video_session());
+        self.video_session = Some(video_session.handle());
         self.video_session_arc = Some(video_session);
 
         // --- Allocate DPB images (array-layered, VUID-07244) ---
@@ -1415,9 +1419,21 @@ impl VkVideoDecoder {
         self.session_parameters
     }
 
-    /// Set the session parameters handle.
-    pub fn set_session_parameters(&mut self, params: vk::VideoSessionParametersKHR) {
-        self.session_parameters = params;
+    /// Adopt a new parameters object. The previous Arc (if any) is
+    /// dropped on return; its destructor runs
+    /// `vkDestroyVideoSessionParametersKHR`. Callers that replace
+    /// parameters while command buffers may still reference the old
+    /// handle MUST call `device.device_wait_idle()` first (see
+    /// `VUID-vkDestroyVideoSessionParametersKHR-videoSessionParameters-07212`)
+    /// — the decoder doesn't run wait_idle on the caller's behalf
+    /// because some replacements happen during initial setup before
+    /// any submit has been issued.
+    pub fn set_session_parameters_arc(
+        &mut self,
+        params: Arc<HostVulkanVideoSessionParameters>,
+    ) {
+        self.session_parameters = params.handle();
+        self.session_parameters_arc = Some(params);
     }
 
     /// Get image view for a DPB slot.
@@ -1452,7 +1468,7 @@ impl VkVideoDecoder {
     }
 
     /// Get the video session Arc.
-    pub fn video_session_arc(&self) -> Option<&Arc<VulkanVideoSession>> {
+    pub fn video_session_arc(&self) -> Option<&Arc<HostVulkanVideoSession>> {
         self.video_session_arc.as_ref()
     }
 

@@ -23,6 +23,7 @@ impl SimpleEncoder {
         device: vulkanalia::Device,
         physical_device: vk::PhysicalDevice,
         allocator: Arc<vma::Allocator>,
+        host_device: Arc<crate::vulkan::rhi::HostVulkanDevice>,
         submitter: Arc<dyn crate::vulkan::video::rhi::RhiQueueSubmitter>,
         encode_queue: vk::Queue,
         encode_queue_family: u32,
@@ -42,6 +43,7 @@ impl SimpleEncoder {
             device.clone(),
             physical_device,
             allocator,
+            host_device,
         )?);
 
         let enc_config = config.to_encode_config();
@@ -63,8 +65,9 @@ impl SimpleEncoder {
             codec_flag,
             encode_config: None,
             video_session: vk::VideoSessionKHR::null(),
-            session_memory: Vec::new(),
+            video_session_arc: None,
             session_params: vk::VideoSessionParametersKHR::null(),
+            session_params_arc: None,
             dpb_image: vk::Image::null(),
             dpb_allocation: std::mem::zeroed(),
             dpb_separate_images: Vec::new(),
