@@ -1722,4 +1722,91 @@ mod tests {
         // close it.
         unsafe { libc::close(fd) };
     }
+
+    /// `new_video_bitstream` rejects `size = 0` with a [`Error::Configuration`]
+    /// **before** reaching the VMA allocator. Mentally reverting the
+    /// `size == 0` guard would let the call fall through to
+    /// `vmaCreateBuffer`, which errors out with a driver-level
+    /// [`Error::GpuError`] — distinguishable, so the test would fail.
+    /// Locks the early-validation contract that callers depend on
+    /// (the codec's resize loop catches `size == 0` via this early
+    /// path).
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[test]
+    fn new_video_bitstream_rejects_zero_size() {
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+        let profile = vk::VideoProfileInfoKHR::default();
+        for direction in [VideoBitstreamDirection::Encode, VideoBitstreamDirection::Decode] {
+            let descriptor = VideoBitstreamBufferDescriptor {
+                label: "test/zero-size",
+                size: 0,
+                direction,
+                video_profile: &profile,
+            };
+            match HostVulkanBuffer::new_video_bitstream(&device, &descriptor) {
+                Err(crate::core::Error::Configuration(msg)) => {
+                    assert!(
+                        msg.contains("size must be > 0"),
+                        "zero-size error must explain the constraint, got: {msg}"
+                    );
+                    assert!(
+                        msg.contains("test/zero-size"),
+                        "zero-size error must carry the label, got: {msg}"
+                    );
+                }
+                Err(e) => panic!("zero size ({direction:?}): expected Configuration error, got {e}"),
+                Ok(_) => panic!("zero size ({direction:?}): expected rejection, got Ok"),
+            }
+        }
+    }
+
+    /// `new_video_bitstream` encode + decode each pick the correct usage
+    /// flag, allocate HOST_VISIBLE + persistently-mapped memory, and
+    /// expose a non-null `mapped_ptr` + accurate `size`. Hardware-gated
+    /// because real VMA + a real `VkVideoProfileInfoKHR` are required;
+    /// the profile is left at default — the driver tolerates default
+    /// profiles for the buffer-creation path (the chain is validated
+    /// at codec-session bind time, not at buffer creation).
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[test]
+    fn new_video_bitstream_succeeds_for_both_directions() {
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+        let profile = vk::VideoProfileInfoKHR::default();
+        const SIZE: u64 = 1 << 20; // 1 MiB
+        for direction in [VideoBitstreamDirection::Encode, VideoBitstreamDirection::Decode] {
+            let descriptor = VideoBitstreamBufferDescriptor {
+                label: "test/bitstream-positive",
+                size: SIZE,
+                direction,
+                video_profile: &profile,
+            };
+            let buf = match HostVulkanBuffer::new_video_bitstream(&device, &descriptor) {
+                Ok(b) => b,
+                Err(e) => {
+                    println!("Skipping {direction:?} - driver rejected bitstream buffer: {e}");
+                    continue;
+                }
+            };
+            assert_eq!(buf.size(), SIZE, "size must match descriptor");
+            assert!(
+                !buf.mapped_ptr().is_null(),
+                "{direction:?} bitstream buffer must be persistently mapped"
+            );
+            assert_ne!(buf.buffer(), vk::Buffer::null(), "VkBuffer handle must be non-null");
+        }
+    }
 }

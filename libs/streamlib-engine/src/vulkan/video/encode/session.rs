@@ -926,7 +926,9 @@ impl SimpleEncoder {
                         .map_err(|e| VideoError::BitstreamError(format!(
                             "encoder dpb separate: {e}"
                         )))?;
-                let image = texture.image().unwrap_or(vk::Image::null());
+                let image = texture
+                    .image()
+                    .expect("HostVulkanTexture::new_video_dpb returns a texture with vk::Image");
 
                 let mut ycbcr_info = vk::SamplerYcbcrConversionInfo::builder()
                     .conversion(self.ctx.nv12_ycbcr_conversion());
@@ -976,7 +978,9 @@ impl SimpleEncoder {
                     .map_err(|e| VideoError::BitstreamError(format!(
                         "encoder dpb shared: {e}"
                     )))?;
-            let image = texture.image().unwrap_or(vk::Image::null());
+            let image = texture
+                .image()
+                .expect("HostVulkanTexture::new_video_dpb returns a texture with vk::Image");
 
             let mut ycbcr_info = vk::SamplerYcbcrConversionInfo::builder()
                 .conversion(self.ctx.nv12_ycbcr_conversion());

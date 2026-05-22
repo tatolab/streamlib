@@ -656,7 +656,9 @@ impl VkVideoDecoder {
                 return -1;
             }
         };
-        let dpb_image_handle = dpb_texture.image().unwrap_or(vk::Image::null());
+        let dpb_image_handle = dpb_texture
+            .image()
+            .expect("HostVulkanTexture::new_video_dpb returns a texture with vk::Image");
         self.dpb_texture = Some(dpb_texture);
 
         // Create per-layer views

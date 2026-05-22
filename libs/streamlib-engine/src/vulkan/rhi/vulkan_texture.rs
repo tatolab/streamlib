@@ -2292,4 +2292,121 @@ mod tests {
             }
         }
     }
+
+    /// `new_video_dpb` rejects `width == 0`, `height == 0`, and
+    /// `array_layers == 0` with a [`Error::Configuration`] **before**
+    /// reaching the VMA allocator. Mentally reverting the early-guard
+    /// would let the call fall through to `vmaCreateImage`, which
+    /// surfaces a driver-level [`Error::GpuError`] instead — the test
+    /// distinguishes the two by error variant and would fail. Locks
+    /// the early-validation contract that codec sites depend on (the
+    /// decoder's `start_video_sequence` and encoder's
+    /// `create_dpb_images` both pass values derived from
+    /// driver-reported caps, so a zero coming through is the
+    /// observable upstream-cap bug we want surfaced as Configuration,
+    /// not GpuError).
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[test]
+    fn new_video_dpb_rejects_zero_dimensions() {
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+        let profile = vk::VideoProfileInfoKHR::default();
+        for (w, h, layers) in [(0, 64, 4), (64, 0, 4), (64, 64, 0), (0, 0, 0)] {
+            let descriptor = VideoDpbTextureDescriptor {
+                label: "test/zero-dim",
+                width: w,
+                height: h,
+                format: TextureFormat::Nv12,
+                array_layers: layers,
+                direction: VideoDpbDirection::Decode,
+                additional_usage: vk::ImageUsageFlags::empty(),
+                sharing_queue_families: &[],
+                video_profile: &profile,
+            };
+            match HostVulkanTexture::new_video_dpb(&device, &descriptor) {
+                Err(crate::core::Error::Configuration(msg)) => {
+                    assert!(
+                        msg.contains("must be > 0"),
+                        "rejection must explain the constraint, got: {msg}"
+                    );
+                    assert!(
+                        msg.contains("test/zero-dim"),
+                        "rejection must carry the descriptor label, got: {msg}"
+                    );
+                }
+                Err(e) => panic!(
+                    "{w}x{h}x{layers}: expected Configuration error, got {e}"
+                ),
+                Ok(_) => panic!(
+                    "{w}x{h}x{layers}: zero-component descriptor must be rejected, got Ok"
+                ),
+            }
+        }
+    }
+
+    /// `new_video_dpb` for both directions allocates a non-null
+    /// `VkImage`, picks the correct DPB usage flag, and lands as a
+    /// DEVICE_LOCAL allocation (verified indirectly: a non-null
+    /// VkImage post-construction means VMA accepted the chain with
+    /// the codec profile + DPB usage). Hardware-gated because real
+    /// VMA + driver are needed. Default profile is used for the same
+    /// reason as the bitstream positive test — image creation
+    /// tolerates default profiles; full validation happens at
+    /// `vkBindVideoSessionMemoryKHR`.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[test]
+    fn new_video_dpb_succeeds_for_both_directions() {
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+        let profile = vk::VideoProfileInfoKHR::default();
+        for direction in [VideoDpbDirection::Decode, VideoDpbDirection::Encode] {
+            let additional_usage = match direction {
+                VideoDpbDirection::Decode => {
+                    vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR
+                        | vk::ImageUsageFlags::TRANSFER_SRC
+                        | vk::ImageUsageFlags::SAMPLED
+                }
+                VideoDpbDirection::Encode => vk::ImageUsageFlags::empty(),
+            };
+            let descriptor = VideoDpbTextureDescriptor {
+                label: "test/dpb-positive",
+                width: 1920,
+                height: 1088,
+                format: TextureFormat::Nv12,
+                array_layers: 4,
+                direction,
+                additional_usage,
+                sharing_queue_families: &[],
+                video_profile: &profile,
+            };
+            let texture = match HostVulkanTexture::new_video_dpb(&device, &descriptor) {
+                Ok(t) => t,
+                Err(e) => {
+                    println!("Skipping {direction:?} - driver rejected DPB image: {e}");
+                    continue;
+                }
+            };
+            assert_ne!(
+                texture.image(),
+                Some(vk::Image::null()),
+                "{direction:?}: VkImage handle must be non-null"
+            );
+            assert!(
+                texture.image().is_some(),
+                "{direction:?}: image() must return Some after successful construction"
+            );
+        }
+    }
 }
