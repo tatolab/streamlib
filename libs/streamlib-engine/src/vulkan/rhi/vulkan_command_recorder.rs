@@ -141,6 +141,36 @@ impl RhiCommandRecorderInner {
     pub(crate) fn new(vulkan_device: &Arc<HostVulkanDevice>, label: &str) -> Result<Self> {
         let queue = vulkan_device.queue();
         let queue_family_index = vulkan_device.queue_family_index();
+        Self::new_with_queue_inner(vulkan_device, label, queue, queue_family_index)
+    }
+
+    /// Build a recorder against a specific queue + queue family.
+    /// Used by `libs/vulkan-video/` for encode / decode / transfer
+    /// queues that differ from the device's default queue.
+    ///
+    /// **The caller is responsible** for ensuring `queue` /
+    /// `queue_family_index` actually exist on the device. Typical
+    /// callers obtain these from `HostVulkanDevice::video_encode_queue()` /
+    /// `video_decode_queue()` / etc. The recorder will submit work
+    /// against the supplied queue; per-queue mutex serialization is
+    /// handled by the host queue mutex registry inside
+    /// `submit_to_queue`.
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(label, queue_family_index))]
+    pub(crate) fn new_with_queue(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        label: &str,
+        queue: vk::Queue,
+        queue_family_index: u32,
+    ) -> Result<Self> {
+        Self::new_with_queue_inner(vulkan_device, label, queue, queue_family_index)
+    }
+
+    fn new_with_queue_inner(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        label: &str,
+        queue: vk::Queue,
+        queue_family_index: u32,
+    ) -> Result<Self> {
         let device = vulkan_device.device().clone();
 
         let pool_info = vk::CommandPoolCreateInfo::builder()
@@ -761,6 +791,25 @@ impl RhiCommandRecorder {
     /// Build a recorder against the device's default queue.
     pub fn new(vulkan_device: &Arc<HostVulkanDevice>, label: &str) -> Result<Self> {
         let inner = RhiCommandRecorderInner::new(vulkan_device, label)?;
+        Ok(Self::from_inner(inner))
+    }
+
+    /// Build a recorder against a specific queue + queue family.
+    /// Used by `libs/vulkan-video/` for encode / decode / transfer
+    /// queues that differ from the device's default. See
+    /// [`RhiCommandRecorderInner::new_with_queue`] for the contract.
+    pub fn new_with_queue(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        label: &str,
+        queue: vk::Queue,
+        queue_family_index: u32,
+    ) -> Result<Self> {
+        let inner = RhiCommandRecorderInner::new_with_queue(
+            vulkan_device,
+            label,
+            queue,
+            queue_family_index,
+        )?;
         Ok(Self::from_inner(inner))
     }
 
