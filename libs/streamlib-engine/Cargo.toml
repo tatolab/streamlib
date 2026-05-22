@@ -29,6 +29,13 @@ strip_debug_logging = ["tracing/release_max_level_info"]
 # See `docs/testing-hardware.md`.
 hardware-tests = []
 
+# Codec-layer debug knob (`vulkan/video/codec_utils/vk_buffer_resource.rs`):
+# zero out bitstream buffers when (re)allocating, to make NAL-parser bugs
+# easier to spot in raw memory. Off by default; opt-in for nvpro-style
+# debugging only. Inherited from the former libs/vulkan-video crate's
+# feature set; intent kept identical post-fold.
+clear_bitstream_buffers_on_create = []
+
 [dependencies]
 # Processor schema types (shared with macros for code generation)
 streamlib-processor-schema = { path = "../streamlib-processor-schema" }
@@ -126,7 +133,6 @@ mach2 = "0.4"  # Mach kernel API for thread priorities and timing
 [target.'cfg(target_os = "linux")'.dependencies]
 vulkanalia = { workspace = true }
 vulkanalia-vma = { workspace = true }
-vulkan-video = { path = "../vulkan-video" }
 rspirv-reflect = { workspace = true }
 libc.workspace = true
 winit = "0.30"  # Window creation and event loop for display processor

@@ -957,7 +957,7 @@ impl HostVulkanDevice {
             }
 
             // Enable video_maintenance1 and push_descriptor if video encode is available
-            // (required by vulkan-video crate's encoder/decoder).
+            // (required by the vulkan/video codec layer's encoder/decoder).
             if all_present {
                 let video_maint1_ext = c"VK_KHR_video_maintenance1";
                 if available_device_ext_names.contains(&video_maint1_ext) {
@@ -1076,7 +1076,7 @@ impl HostVulkanDevice {
             vk::PhysicalDeviceVideoMaintenance1FeaturesKHR::builder().video_maintenance1(true).build();
 
         // samplerYcbcrConversion is required to create NV12 image views / samplers
-        // with VK_KHR_sampler_ycbcr_conversion (core in 1.1) on the vulkan-video path.
+        // with VK_KHR_sampler_ycbcr_conversion (core in 1.1) on the codec layer's path.
         // Without it, VUID-vkCreateSamplerYcbcrConversion-None-01648 fires every frame.
         #[cfg(target_os = "linux")]
         let mut vulkan_1_1_features = vk::PhysicalDeviceVulkan11Features::builder()
@@ -2563,7 +2563,7 @@ impl HostVulkanDevice {
     }
 }
 
-impl vulkan_video::RhiQueueSubmitter for HostVulkanDevice {
+impl crate::vulkan::video::rhi::RhiQueueSubmitter for HostVulkanDevice {
     unsafe fn submit_to_queue(
         &self,
         queue: vk::Queue,

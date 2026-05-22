@@ -77,9 +77,7 @@ members = [
     "examples/vulkan-video-psnr",         # Example: fixture-driven encode/decode PSNR rig (#305)
     "examples/jpeg-psnr",                 # Example: fixture-driven JPEG decode PSNR rig
     "tests/iceoryx2-cross-language",      # Test: Cross-language iceoryx2 validation (Rust ↔ Python)
-    "libs/vulkan-video",                  # Vulkan Video encoder/decoder (H.264/H.265 via Vulkan Video extensions)
-    "libs/vulkan-video/examples/h264-codec", # Example: H.264 encode/decode roundtrip
-    "libs/vulkan-video/examples/h265-codec", # Example: H.265 encode/decode roundtrip
+    # libs/vulkan-video folded into libs/streamlib-engine/src/vulkan/video/ — codec layer of the engine RHI (#915).
     "libs/vulkan-jpeg",                   # JPEG decoder: CPU parser + Huffman entropy decode + GPU compute kernel (compute kernel ships in a follow-up issue)
 ]
 

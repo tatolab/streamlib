@@ -5,6 +5,9 @@
 
 pub mod rhi;
 
+#[cfg(target_os = "linux")]
+pub mod video;
+
 // Re-exports for public API (intentionally exposed for external use)
 #[allow(unused_imports)]
 pub use rhi::{

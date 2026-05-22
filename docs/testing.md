@@ -40,8 +40,8 @@ content**.
 
 ### When to use
 
-- Changes to `libs/vulkan-video/` (RHI coupling, session/DPB, NV12 conversion,
-  rate control, etc.).
+- Changes to `libs/streamlib-engine/src/vulkan/video/` (RHI coupling,
+  session/DPB, NV12 conversion, rate control, etc.).
 - Changes to `packages/h264/src/linux/{encoder,decoder}.rs` or
   `packages/h265/src/linux/{encoder,decoder}.rs`.
 - Changes to any GPU code that the encoder or decoder reaches through

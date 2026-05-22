@@ -3,7 +3,7 @@
 
 // H.265 Decoder Processor
 //
-// Thin wrapper around vulkan_video::SimpleDecoder using the shared RHI
+// Thin wrapper around streamlib::sdk::engine::video::SimpleDecoder using the shared RHI
 // HostVulkanDevice. Decoded NV12 frames are written to pixel buffers for output.
 
 use std::sync::Arc;
@@ -17,7 +17,7 @@ use streamlib::sdk::engine::{HostGpuDeviceExt, HostPixelBufferRefExt};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::rhi::{PixelFormat, TextureFormat, TextureUsages};
 
-use vulkan_video::{Codec, SimpleDecoder, SimpleDecoderConfig};
+use streamlib::sdk::engine::video::{Codec, SimpleDecoder, SimpleDecoderConfig};
 
 /// Pre-allocated output texture ring depth. Matches `MAX_FRAMES_IN_FLIGHT`
 /// — one slot for the GPU's in-flight upload, one for the next decoded
@@ -70,7 +70,7 @@ impl streamlib::sdk::processors::ReactiveProcessor for H265DecoderProcessor::Pro
             Error::Runtime("No video decode queue family".into())
         })?;
 
-        let submitter: Arc<dyn vulkan_video::RhiQueueSubmitter> = vulkan_device.clone();
+        let submitter: Arc<dyn streamlib::sdk::engine::video::RhiQueueSubmitter> = vulkan_device.clone();
 
         let decoder = SimpleDecoder::from_device(
             decoder_config,
