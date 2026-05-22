@@ -4547,7 +4547,7 @@ unsafe extern "C" fn host_gpu_full_clone_texture_ring(handle: *const c_void) {
             }
             unsafe {
                 Arc::increment_strong_count(
-                    handle as *const crate::core::context::TextureRing,
+                    handle as *const crate::core::context::TextureRingInner,
                 );
             }
         },
@@ -4565,7 +4565,7 @@ unsafe extern "C" fn host_gpu_full_drop_texture_ring(handle: *const c_void) {
             }
             unsafe {
                 Arc::decrement_strong_count(
-                    handle as *const crate::core::context::TextureRing,
+                    handle as *const crate::core::context::TextureRingInner,
                 );
             }
         },
@@ -4968,8 +4968,11 @@ unsafe extern "C" fn host_gpu_full_create_texture_ring(
                 |gpu| gpu.create_texture_ring(width, height, format, usages, count),
             );
             match result {
-                Some(Ok(arc)) => {
-                    let raw = Arc::into_raw(arc) as *const c_void;
+                Some(Ok(ring)) => {
+                    // `ring` is the β-shape; its handle is
+                    // `Arc::into_raw(Arc<TextureRingInner>)`-shaped.
+                    let raw = ring.handle;
+                    std::mem::forget(ring);
                     unsafe { std::ptr::write(out_ring, raw) };
                     0
                 }

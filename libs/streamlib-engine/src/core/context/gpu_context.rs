@@ -1460,8 +1460,8 @@ impl GpuContext {
         format: TextureFormat,
         usages: TextureUsages,
         count: usize,
-    ) -> Result<Arc<crate::core::context::TextureRing>> {
-        use crate::core::context::{TextureRing, TextureRingSlot};
+    ) -> Result<crate::core::context::TextureRing> {
+        use crate::core::context::{TextureRing, TextureRingInner, TextureRingSlot};
 
         if count == 0 {
             return Err(Error::GpuError(
@@ -1497,14 +1497,15 @@ impl GpuContext {
             let res = crate::vulkan::rhi::HostVulkanUploadResources::new(&self.device.inner)?;
             upload_resources.push(res);
         }
-        Ok(TextureRing::from_slots(
+        let inner_arc = TextureRingInner::from_slots(
             slots,
             upload_resources,
             width,
             height,
             format,
             self.clone(),
-        ))
+        );
+        Ok(TextureRing::from_arc_into_raw(inner_arc))
     }
 
     /// Build a triangle-geometry bottom-level acceleration structure
@@ -3872,7 +3873,7 @@ impl GpuContextFullAccess {
         format: TextureFormat,
         usages: TextureUsages,
         count: usize,
-    ) -> Result<Arc<crate::core::context::TextureRing>> {
+    ) -> Result<crate::core::context::TextureRing> {
         match self.handle_kind {
             HandleKind::Boxed => self
                 .host_inner()
@@ -3907,22 +3908,14 @@ impl GpuContextFullAccess {
                                 .into(),
                         ));
                     }
-                    // SAFETY: host returned
-                    // `Arc::into_raw(Arc<TextureRing>)`. Rebuilding via
-                    // `Arc::from_raw` is sound under the rustc-version
-                    // coupling contract documented in CLAUDE.md (host
-                    // and cdylib share the toolchain + dep graph, so
-                    // `TextureRing`'s layout is byte-identical and the
-                    // host's `Arc` strong-count machinery survives the
-                    // cross-DSO transit). The host transferred its
-                    // strong reference to us; `Arc<TextureRing>::drop`
-                    // running in cdylib code releases that reference.
-                    let arc = unsafe {
-                        Arc::from_raw(
-                            out_ring as *const crate::core::context::TextureRing,
-                        )
-                    };
-                    Ok(arc)
+                    // β-shape: bundle the raw handle
+                    // (`Arc::into_raw(Arc<TextureRingInner>)`-shaped) with
+                    // the host vtable. Cross-rustc-version safe because
+                    // cdylib never derefs the Inner layout.
+                    Ok(crate::core::context::TextureRing {
+                        handle: out_ring,
+                        vtable: self.vtable,
+                    })
                 } else {
                     let msg = String::from_utf8_lossy(
                         &err_buf[..err_len.min(err_buf.len())],

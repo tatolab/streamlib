@@ -40,7 +40,7 @@ pub struct VulkanComputeBackend {
     kernel: JpegDecodeKernel,
     coef_buf: Arc<HostVulkanBuffer>,
     qt_buf: Arc<HostVulkanBuffer>,
-    ring: Arc<TextureRing>,
+    ring: TextureRing,
     max_width: u32,
     max_height: u32,
     /// Latch for the "non-sRGB declaration → JFIF fallback" warning.
@@ -148,7 +148,7 @@ impl VulkanComputeBackend {
     /// Borrow the underlying [`TextureRing`] — for tests and
     /// introspection.
     #[doc(hidden)]
-    pub fn ring(&self) -> &Arc<TextureRing> {
+    pub fn ring(&self) -> &TextureRing {
         &self.ring
     }
 

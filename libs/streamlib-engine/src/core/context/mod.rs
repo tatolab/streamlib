@@ -57,5 +57,5 @@ pub use runtime_context::{
 pub use surface_store::SurfaceStore;
 pub use texture_pool::*;
 pub use texture_registration::TextureRegistration;
-pub use texture_ring::{TextureRing, TextureRingSlot};
+pub use texture_ring::{TextureRing, TextureRingInner, TextureRingSlot};
 pub use time_context::TimeContext;
