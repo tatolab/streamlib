@@ -261,35 +261,7 @@ impl HostVulkanVideoSession {
     /// `VulkanVideoSession::IsCompatible` — the caller can skip
     /// session re-creation when this returns `true`.
     pub fn is_compatible(&self, descriptor: &VideoSessionDescriptor<'_>) -> bool {
-        if descriptor.session_create_flags != self.flags {
-            return false;
-        }
-        if descriptor.max_coded_extent.width > self.create_info_snapshot.max_coded_extent.width {
-            return false;
-        }
-        if descriptor.max_coded_extent.height > self.create_info_snapshot.max_coded_extent.height {
-            return false;
-        }
-        if descriptor.max_dpb_slots > self.create_info_snapshot.max_dpb_slots {
-            return false;
-        }
-        if descriptor.max_active_reference_pictures
-            > self.create_info_snapshot.max_active_reference_pictures
-        {
-            return false;
-        }
-        if descriptor.reference_pictures_format
-            != self.create_info_snapshot.reference_picture_format
-        {
-            return false;
-        }
-        if descriptor.picture_format != self.create_info_snapshot.picture_format {
-            return false;
-        }
-        if descriptor.video_queue_family != self.create_info_snapshot.queue_family_index {
-            return false;
-        }
-        true
+        snapshot_is_compatible(&self.create_info_snapshot, self.flags, descriptor)
     }
 
     /// # Safety
@@ -582,6 +554,41 @@ impl Drop for HostVulkanVideoSessionParameters {
     }
 }
 
+/// Pure compatibility predicate over the cached snapshot + descriptor.
+/// `HostVulkanVideoSession::is_compatible` delegates here so the rule
+/// table is unit-testable without a real Vulkan device.
+fn snapshot_is_compatible(
+    snapshot: &VideoSessionCreateInfoSnapshot,
+    flags: vk::VideoSessionCreateFlagsKHR,
+    descriptor: &VideoSessionDescriptor<'_>,
+) -> bool {
+    if descriptor.session_create_flags != flags {
+        return false;
+    }
+    if descriptor.max_coded_extent.width > snapshot.max_coded_extent.width {
+        return false;
+    }
+    if descriptor.max_coded_extent.height > snapshot.max_coded_extent.height {
+        return false;
+    }
+    if descriptor.max_dpb_slots > snapshot.max_dpb_slots {
+        return false;
+    }
+    if descriptor.max_active_reference_pictures > snapshot.max_active_reference_pictures {
+        return false;
+    }
+    if descriptor.reference_pictures_format != snapshot.reference_picture_format {
+        return false;
+    }
+    if descriptor.picture_format != snapshot.picture_format {
+        return false;
+    }
+    if descriptor.video_queue_family != snapshot.queue_family_index {
+        return false;
+    }
+    true
+}
+
 // ----------------------------------------------------------------------------
 // Helpers
 // ----------------------------------------------------------------------------
@@ -705,27 +712,228 @@ mod tests {
         assert_eq!(MAX_BOUND_MEMORY, 40);
     }
 
-    #[test]
-    fn snapshot_compatibility_rules() {
-        let snap = VideoSessionCreateInfoSnapshot {
+    fn baseline_snapshot() -> VideoSessionCreateInfoSnapshot {
+        VideoSessionCreateInfoSnapshot {
             queue_family_index: 0,
             picture_format: vk::Format::G8_B8R8_2PLANE_420_UNORM,
             max_coded_extent: vk::Extent2D { width: 1920, height: 1080 },
             reference_picture_format: vk::Format::G8_B8R8_2PLANE_420_UNORM,
             max_dpb_slots: 16,
             max_active_reference_pictures: 16,
+        }
+    }
+
+    fn baseline_descriptor() -> VideoSessionDescriptor<'static> {
+        VideoSessionDescriptor {
+            label: "test/baseline",
+            session_create_flags: vk::VideoSessionCreateFlagsKHR::empty(),
+            video_queue_family: 0,
+            video_profile: vk::VideoProfileInfoKHR::default(),
+            codec_operation: vk::VideoCodecOperationFlagsKHR::DECODE_H264,
+            picture_format: vk::Format::G8_B8R8_2PLANE_420_UNORM,
+            max_coded_extent: vk::Extent2D { width: 1920, height: 1080 },
+            reference_pictures_format: vk::Format::G8_B8R8_2PLANE_420_UNORM,
+            max_dpb_slots: 16,
+            max_active_reference_pictures: 16,
+        }
+    }
+
+    #[test]
+    fn snapshot_compatible_when_descriptor_matches_baseline() {
+        let snap = baseline_snapshot();
+        let desc = baseline_descriptor();
+        assert!(snapshot_is_compatible(
+            &snap,
+            vk::VideoSessionCreateFlagsKHR::empty(),
+            &desc
+        ));
+    }
+
+    #[test]
+    fn snapshot_compatible_when_descriptor_under_all_caps() {
+        let snap = baseline_snapshot();
+        let mut desc = baseline_descriptor();
+        desc.max_coded_extent = vk::Extent2D { width: 1280, height: 720 };
+        desc.max_dpb_slots = 8;
+        desc.max_active_reference_pictures = 4;
+        assert!(snapshot_is_compatible(
+            &snap,
+            vk::VideoSessionCreateFlagsKHR::empty(),
+            &desc
+        ));
+    }
+
+    #[test]
+    fn snapshot_incompatible_when_width_exceeds_cap() {
+        let snap = baseline_snapshot();
+        let mut desc = baseline_descriptor();
+        desc.max_coded_extent.width = 1921;
+        assert!(!snapshot_is_compatible(
+            &snap,
+            vk::VideoSessionCreateFlagsKHR::empty(),
+            &desc
+        ));
+    }
+
+    #[test]
+    fn snapshot_incompatible_when_height_exceeds_cap() {
+        let snap = baseline_snapshot();
+        let mut desc = baseline_descriptor();
+        desc.max_coded_extent.height = 1081;
+        assert!(!snapshot_is_compatible(
+            &snap,
+            vk::VideoSessionCreateFlagsKHR::empty(),
+            &desc
+        ));
+    }
+
+    #[test]
+    fn snapshot_incompatible_when_dpb_slots_exceed_cap() {
+        let snap = baseline_snapshot();
+        let mut desc = baseline_descriptor();
+        desc.max_dpb_slots = 17;
+        assert!(!snapshot_is_compatible(
+            &snap,
+            vk::VideoSessionCreateFlagsKHR::empty(),
+            &desc
+        ));
+    }
+
+    #[test]
+    fn snapshot_incompatible_when_active_refs_exceed_cap() {
+        let snap = baseline_snapshot();
+        let mut desc = baseline_descriptor();
+        desc.max_active_reference_pictures = 17;
+        assert!(!snapshot_is_compatible(
+            &snap,
+            vk::VideoSessionCreateFlagsKHR::empty(),
+            &desc
+        ));
+    }
+
+    #[test]
+    fn snapshot_incompatible_when_picture_format_differs() {
+        let snap = baseline_snapshot();
+        let mut desc = baseline_descriptor();
+        desc.picture_format = vk::Format::G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16;
+        assert!(!snapshot_is_compatible(
+            &snap,
+            vk::VideoSessionCreateFlagsKHR::empty(),
+            &desc
+        ));
+    }
+
+    #[test]
+    fn snapshot_incompatible_when_reference_format_differs() {
+        let snap = baseline_snapshot();
+        let mut desc = baseline_descriptor();
+        desc.reference_pictures_format = vk::Format::G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16;
+        assert!(!snapshot_is_compatible(
+            &snap,
+            vk::VideoSessionCreateFlagsKHR::empty(),
+            &desc
+        ));
+    }
+
+    #[test]
+    fn snapshot_incompatible_when_queue_family_differs() {
+        let snap = baseline_snapshot();
+        let mut desc = baseline_descriptor();
+        desc.video_queue_family = 1;
+        assert!(!snapshot_is_compatible(
+            &snap,
+            vk::VideoSessionCreateFlagsKHR::empty(),
+            &desc
+        ));
+    }
+
+    #[test]
+    fn snapshot_incompatible_when_session_flags_differ() {
+        let snap = baseline_snapshot();
+        let mut desc = baseline_descriptor();
+        desc.session_create_flags = vk::VideoSessionCreateFlagsKHR::PROTECTED_CONTENT;
+        assert!(!snapshot_is_compatible(
+            &snap,
+            vk::VideoSessionCreateFlagsKHR::empty(),
+            &desc
+        ));
+    }
+
+    // ----- Hardware-gated --------------------------------------------------
+    //
+    // Construct a real `HostVulkanVideoSession` against the host's
+    // Vulkan device when the device exposes an H.264 decode queue
+    // family. Gated by `--features streamlib/hardware-tests` so CI
+    // (which has no GPU per `project_ci_strategy_no_gpu` memory)
+    // doesn't try to run it.
+
+    use crate::vulkan::rhi::HostVulkanDevice;
+
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn hardware_construct_h264_decode_session() {
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("Skipping — no Vulkan device available: {e:?}");
+                return;
+            }
         };
+        let queue_family = match device.video_decode_queue_family_index() {
+            Some(idx) => idx,
+            None => {
+                eprintln!("Skipping — device exposes no video decode queue family");
+                return;
+            }
+        };
+        let mut h264_profile = vk::VideoDecodeH264ProfileInfoKHR::builder()
+            .std_profile_idc(vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH)
+            .picture_layout(vk::VideoDecodeH264PictureLayoutFlagsKHR::PROGRESSIVE);
+        let mut video_profile = vk::VideoProfileInfoKHR::default();
+        video_profile.video_codec_operation = vk::VideoCodecOperationFlagsKHR::DECODE_H264;
+        video_profile.chroma_subsampling = vk::VideoChromaSubsamplingFlagsKHR::_420;
+        video_profile.luma_bit_depth = vk::VideoComponentBitDepthFlagsKHR::_8;
+        video_profile.chroma_bit_depth = vk::VideoComponentBitDepthFlagsKHR::_8;
+        video_profile.next = &mut *h264_profile as *mut _ as *mut std::ffi::c_void;
 
-        // Equal or under all caps — compatible.
-        assert!(1920 <= snap.max_coded_extent.width);
-        assert!(1080 <= snap.max_coded_extent.height);
-        assert!(16 <= snap.max_dpb_slots);
-        assert!(16 <= snap.max_active_reference_pictures);
-
-        // Exceeding any cap — incompatible.
-        assert!(1921 > snap.max_coded_extent.width);
-        assert!(1081 > snap.max_coded_extent.height);
-        assert!(17 > snap.max_dpb_slots);
-        assert!(17 > snap.max_active_reference_pictures);
+        let descriptor = VideoSessionDescriptor {
+            label: "hardware/h264-decode-construct",
+            session_create_flags: vk::VideoSessionCreateFlagsKHR::empty(),
+            video_queue_family: queue_family,
+            video_profile,
+            codec_operation: vk::VideoCodecOperationFlagsKHR::DECODE_H264,
+            picture_format: vk::Format::G8_B8R8_2PLANE_420_UNORM,
+            max_coded_extent: vk::Extent2D { width: 1920, height: 1080 },
+            reference_pictures_format: vk::Format::G8_B8R8_2PLANE_420_UNORM,
+            max_dpb_slots: 17,
+            max_active_reference_pictures: 16,
+        };
+        match HostVulkanVideoSession::new(&device, &descriptor) {
+            Ok(session) => {
+                assert_ne!(
+                    session.handle(),
+                    vk::VideoSessionKHR::null(),
+                    "session handle must be non-null"
+                );
+                // is_compatible: same descriptor → compatible.
+                assert!(session.is_compatible(&descriptor));
+                // Shrunk DPB → still compatible.
+                let mut smaller = descriptor.clone();
+                smaller.max_dpb_slots = 5;
+                assert!(session.is_compatible(&smaller));
+                // Exceeded width → incompatible.
+                let mut larger = descriptor.clone();
+                larger.max_coded_extent.width = descriptor.max_coded_extent.width + 1;
+                assert!(!session.is_compatible(&larger));
+            }
+            Err(e) => {
+                eprintln!(
+                    "Skipping — driver rejected H.264 decode session at construction (likely insufficient caps on this device): {e:?}"
+                );
+            }
+        }
     }
 }

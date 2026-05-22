@@ -4307,6 +4307,52 @@ impl GpuContextFullAccess {
         }
     }
 
+    /// Create a Vulkan video session — the privileged
+    /// `VkVideoSessionKHR` + bound device memory the codec layer
+    /// uses for `vkCmdDecodeVideoKHR` / `vkCmdEncodeVideoKHR`.
+    ///
+    /// FullAccess-only and host-only: subprocess cdylibs do not
+    /// build their own codec layers — codec packages live inside
+    /// the host engine. The `ScopeToken` branch returns an explicit
+    /// error rather than silently falling through.
+    #[cfg(target_os = "linux")]
+    pub fn create_video_session(
+        &self,
+        descriptor: &crate::vulkan::rhi::VideoSessionDescriptor<'_>,
+    ) -> Result<std::sync::Arc<crate::vulkan::rhi::HostVulkanVideoSession>> {
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().create_video_session(descriptor),
+            HandleKind::ScopeToken => Err(Error::GpuError(
+                "create_video_session: video session creation is host-only; \
+                 subprocess customers consume codec output through the \
+                 surface-share registry, not by constructing sessions"
+                    .into(),
+            )),
+        }
+    }
+
+    /// Create Vulkan video session parameters parented to `session`.
+    /// Companion to [`Self::create_video_session`]; same FullAccess +
+    /// host-only privilege story.
+    #[cfg(target_os = "linux")]
+    pub fn create_video_session_parameters(
+        &self,
+        session: &std::sync::Arc<crate::vulkan::rhi::HostVulkanVideoSession>,
+        descriptor: &crate::vulkan::rhi::VideoSessionParametersDescriptor<'_>,
+    ) -> Result<std::sync::Arc<crate::vulkan::rhi::HostVulkanVideoSessionParameters>> {
+        match self.handle_kind {
+            HandleKind::Boxed => self
+                .host_inner()
+                .create_video_session_parameters(session, descriptor),
+            HandleKind::ScopeToken => Err(Error::GpuError(
+                "create_video_session_parameters: video session parameter \
+                 creation is host-only; subprocess customers consume codec \
+                 output through the surface-share registry"
+                    .into(),
+            )),
+        }
+    }
+
     /// Build an engine-owned multi-step command-buffer recorder. See
     /// [`GpuContext::create_command_recorder`](crate::core::context::GpuContext::create_command_recorder)
     /// for the per-frame usage protocol.
