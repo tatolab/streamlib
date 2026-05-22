@@ -151,10 +151,14 @@ impl Nv12ToRgbConverter {
 
         // --- 3. Compute kernel via the engine RHI, with the YCbCr
         // sampler baked into the descriptor-set layout as an immutable
-        // sampler. Lifetime contract: `sampler` is owned by Self and is
-        // not dropped until after `kernel` (Drop runs fields in
-        // declaration order, so `sampler` is declared AFTER `kernel` in
-        // the struct body for that reason).
+        // sampler. Lifetime contract: `sampler` is destroyed manually
+        // in `Self::drop` (after `device_wait_idle`, before
+        // `self.kernel` auto-drops). Vulkan spec permits this order —
+        // `vkDestroyDescriptorSetLayout` does not dereference the
+        // sampler handles a layout was created with via
+        // `pImmutableSamplers`; the handles are used at
+        // descriptor-write / dispatch time only, and `device_wait_idle`
+        // guarantees there is none of that in flight.
         let kernel = VulkanComputeKernel::new_with_immutable_samplers(
             ctx.host_device(),
             &ComputeKernelDescriptor {
@@ -368,7 +372,7 @@ impl Nv12ToRgbConverter {
         self.kernel
             .record(cb, group_x, group_y, 1)
             .map_err(|e| {
-                VideoError::Other(format!("nv12_to_rgb kernel record failed: {e}"))
+                VideoError::Engine(format!("nv12_to_rgb kernel record failed: {e}"))
             })?;
 
         // --- Barrier: RGBA GENERAL → TRANSFER_SRC_OPTIMAL (for readback) ---

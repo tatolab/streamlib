@@ -396,9 +396,24 @@ impl VulkanComputeKernelInner {
     }
 
     /// Bind a sampled texture at `binding`, using the kernel's default
-    /// linear-clamp sampler.
+    /// linear-clamp sampler. Errors if the binding was declared with
+    /// an immutable sampler at construction time (in that case use
+    /// [`Self::set_combined_image_sampler_view`] — Vulkan would
+    /// silently ignore the default sampler in favor of the
+    /// layout-baked one, and a caller passing a non-default sampler
+    /// in `texture` would not get it applied).
     pub fn set_sampled_texture(&self, binding: u32, texture: &Texture) -> Result<()> {
         self.expect_kind(binding, ComputeBindingKind::SampledTexture)?;
+        if self.immutable_sampler_bindings.contains(&binding) {
+            return Err(Error::GpuError(format!(
+                "Compute kernel '{}': binding {} has an immutable sampler from \
+                 the descriptor-set layout (`new_with_immutable_samplers`); \
+                 use set_combined_image_sampler_view instead — the default \
+                 sampler set_sampled_texture would supply is silently ignored \
+                 by Vulkan when an immutable sampler is present",
+                self.label, binding,
+            )));
+        }
         let view = vk_image_view_for(texture)?;
         let sampler = self.default_sampler()?;
         self.pending.lock().bindings.insert(

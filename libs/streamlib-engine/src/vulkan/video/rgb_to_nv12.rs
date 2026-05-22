@@ -384,7 +384,7 @@ impl RgbToNv12Converter {
         self.kernel
             .record(cb, group_x, group_y, 1)
             .map_err(|e| {
-                VideoError::Other(format!("rgb_to_nv12 kernel record failed: {e}"))
+                VideoError::Engine(format!("rgb_to_nv12 kernel record failed: {e}"))
             })?;
 
         // --- Barriers: compute_nv12 → TRANSFER_SRC, encode_nv12 → TRANSFER_DST ---
