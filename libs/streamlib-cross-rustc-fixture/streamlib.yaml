@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=../../schemas/streamlib.schema.json
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+package:
+  org: tatolab
+  name: cross-rustc-fixture
+  version: 1.0.0
+  description: "Cross-rustc / cross-dep-graph dlopen fixture for #927 (#917 β-shape gate)"
+
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
+# Dev-time path override; `streamlib pack` rejects this for shipped
+# packages but the fixture is build-time only.
+patch:
+  "@tatolab/core":
+    path: ../../packages/core
+
+schemas:
+  BetaShapeRoundTripProcessorConfig:
+    file: schemas/beta_shape_round_trip_processor_config.yaml
+
+processors:
+  - name: BetaShapeRoundTripProcessor
+    version: 1.0.0
+    description: "Cdylib processor that creates + clones + drops every #917 β-shape return type and writes a sentinel result file. Locks the cross-rustc-version FFI contract end-to-end."
+    execution: manual
+    config:
+      name: config
+      schema: BetaShapeRoundTripProcessorConfig

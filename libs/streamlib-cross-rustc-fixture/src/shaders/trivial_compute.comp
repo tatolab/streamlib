@@ -1,0 +1,22 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+// Minimal compute shader: one storage buffer binding, single-threaded
+// workgroup, no-op body. Just enough for SPIR-V reflection to discover
+// a real descriptor and validate the kernel binding declaration —
+// enough to round-trip a `VulkanComputeKernel` β-shape through Create
+// + Clone + Drop across the cdylib boundary.
+
+#version 450
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) buffer Buf {
+    uint data[];
+} buf;
+
+void main() {
+    // No-op — the binding existing is what matters for kernel
+    // construction. The dispatch never runs in this fixture.
+    buf.data[0] = buf.data[0];
+}
