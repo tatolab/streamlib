@@ -1444,6 +1444,32 @@ impl GpuContext {
         crate::vulkan::rhi::HostVulkanVideoSessionParameters::new(session, descriptor)
     }
 
+    /// Allocate a video DPB (Decoded Picture Buffer) image bound to a
+    /// codec profile. Backs
+    /// [`GpuContextFullAccess::create_video_dpb_texture`]; the
+    /// FullAccess wrapper enforces the privileged-scope invariants
+    /// and dispatches here for the Boxed mode (subprocess
+    /// `ScopeToken` mode errors out — codec packages live host-side).
+    #[cfg(target_os = "linux")]
+    pub fn create_video_dpb_texture(
+        &self,
+        descriptor: &crate::vulkan::rhi::VideoDpbTextureDescriptor<'_>,
+    ) -> Result<crate::vulkan::rhi::HostVulkanTexture> {
+        let vulkan_device = &self.device.inner;
+        crate::vulkan::rhi::HostVulkanTexture::new_video_dpb(vulkan_device, descriptor)
+    }
+
+    /// Allocate a video bitstream buffer bound to a codec profile.
+    /// Backs [`GpuContextFullAccess::create_video_bitstream_buffer`].
+    #[cfg(target_os = "linux")]
+    pub fn create_video_bitstream_buffer(
+        &self,
+        descriptor: &crate::vulkan::rhi::VideoBitstreamBufferDescriptor<'_>,
+    ) -> Result<crate::vulkan::rhi::HostVulkanBuffer> {
+        let vulkan_device = &self.device.inner;
+        crate::vulkan::rhi::HostVulkanBuffer::new_video_bitstream(vulkan_device, descriptor)
+    }
+
     /// Create a graphics kernel from a multi-stage SPIR-V set + binding
     /// declaration + pipeline state. Graphics counterpart to
     /// [`Self::create_compute_kernel`].
@@ -4348,6 +4374,52 @@ impl GpuContextFullAccess {
                 "create_video_session_parameters: video session parameter \
                  creation is host-only; subprocess customers consume codec \
                  output through the surface-share registry"
+                    .into(),
+            )),
+        }
+    }
+
+    /// Allocate a video DPB (Decoded Picture Buffer) image bound to a
+    /// codec profile — the engine-RHI primitive the codec layer uses
+    /// for reference-picture and decode-target images.
+    ///
+    /// FullAccess-only and host-only: codec packages live inside the
+    /// host engine, so subprocess cdylibs do not construct DPB images
+    /// directly — they consume codec output through the surface-share
+    /// registry. The `ScopeToken` branch returns an explicit error.
+    #[cfg(target_os = "linux")]
+    pub fn create_video_dpb_texture(
+        &self,
+        descriptor: &crate::vulkan::rhi::VideoDpbTextureDescriptor<'_>,
+    ) -> Result<crate::vulkan::rhi::HostVulkanTexture> {
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().create_video_dpb_texture(descriptor),
+            HandleKind::ScopeToken => Err(Error::GpuError(
+                "create_video_dpb_texture: DPB image creation is host-only; \
+                 subprocess customers consume codec output through the \
+                 surface-share registry, not by constructing DPB images"
+                    .into(),
+            )),
+        }
+    }
+
+    /// Allocate a video bitstream buffer bound to a codec profile —
+    /// the HOST_VISIBLE engine-RHI primitive the codec layer uses for
+    /// the encoder's output NAL bytes (and the decoder's input
+    /// bytes). Same FullAccess + host-only privilege story as
+    /// [`Self::create_video_dpb_texture`].
+    #[cfg(target_os = "linux")]
+    pub fn create_video_bitstream_buffer(
+        &self,
+        descriptor: &crate::vulkan::rhi::VideoBitstreamBufferDescriptor<'_>,
+    ) -> Result<crate::vulkan::rhi::HostVulkanBuffer> {
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().create_video_bitstream_buffer(descriptor),
+            HandleKind::ScopeToken => Err(Error::GpuError(
+                "create_video_bitstream_buffer: bitstream buffer creation \
+                 is host-only; subprocess customers consume codec output \
+                 through the surface-share registry, not by constructing \
+                 bitstream buffers"
                     .into(),
             )),
         }

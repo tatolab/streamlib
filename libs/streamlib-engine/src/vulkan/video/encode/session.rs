@@ -8,7 +8,6 @@ use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia::vk::KhrVideoQueueExtensionInstanceCommands;
 use vulkanalia::vk::KhrVideoEncodeQueueExtensionDeviceCommands;
-use vulkanalia_vma::{self as vma, Alloc};
 use std::ptr;
 use std::sync::Arc;
 
@@ -275,12 +274,12 @@ impl SimpleEncoder {
         // DPB images cause progressive quality degradation on NVIDIA drivers
         // (P→P reconstruction corrupts neighbouring layers).
         let use_separate = caps.flags.contains(vk::VideoCapabilityFlagsKHR::SEPARATE_REFERENCE_IMAGES);
-        let (dpb_image, dpb_allocation, dpb_sep_images, dpb_sep_allocs, dpb_slots) =
+        let (dpb_texture, dpb_separate_textures, dpb_slots) =
             self.create_dpb_images(max_dpb, aligned_w, aligned_h, &profile_info, use_separate)?;
 
         // --- Create bitstream output buffer ---
         let bs_size = config.effective_bitstream_buffer_size();
-        let (bs_buffer, bs_allocation, bs_ptr) =
+        let bitstream_buffer_owner =
             self.create_bitstream_buffer(bs_size, &profile_info)?;
 
         // --- Command pool and buffer ---
@@ -324,15 +323,11 @@ impl SimpleEncoder {
         self.video_session_arc = Some(video_session_arc);
         self.session_params = session_params;
         self.session_params_arc = Some(session_params_arc);
-        self.dpb_image = dpb_image;
-        self.dpb_allocation = dpb_allocation;
-        self.dpb_separate_images = dpb_sep_images;
-        self.dpb_separate_allocations = dpb_sep_allocs;
+        self.dpb_texture = dpb_texture;
+        self.dpb_separate_textures = dpb_separate_textures;
         self.dpb_slots = dpb_slots;
-        self.bitstream_buffer = bs_buffer;
-        self.bitstream_allocation = bs_allocation;
+        self.bitstream_buffer_owner = Some(bitstream_buffer_owner);
         self.bitstream_buffer_size = bs_size;
-        self.bitstream_mapped_ptr = bs_ptr;
         self.command_pool = command_pool;
         self.command_buffer = command_buffers[0];
         self.query_pool = query_pool;
@@ -874,7 +869,15 @@ impl SimpleEncoder {
 
     /// Create DPB images for the video session.
     ///
-    /// Returns `(shared_image, allocation, separate_images, separate_allocs, slots)`.
+    /// Returns `(shared_layered_texture, separate_textures, slots)`. Exactly
+    /// one of the two texture containers is populated:
+    /// - `shared_layered_texture = Some(...)`, `separate_textures = []` when
+    ///   `use_separate_images = false` (driver does NOT advertise
+    ///   `SEPARATE_REFERENCE_IMAGES`): one `VkImage` with `count` array
+    ///   layers, one image view per layer.
+    /// - `shared_layered_texture = None`, `separate_textures = [N]` when
+    ///   `use_separate_images = true`: `count` independent `VkImage`s, each
+    ///   with one layer + one image view.
     ///
     /// # Safety
     ///
@@ -886,52 +889,44 @@ impl SimpleEncoder {
         height: u32,
         profile_info: &vk::VideoProfileInfoKHR,
         use_separate_images: bool,
-    ) -> VideoResult<(vk::Image, vma::Allocation, Vec<vk::Image>, Vec<vma::Allocation>, Vec<DpbSlot>)> { unsafe {
-        let device = self.ctx.device();
-        let allocator = self.ctx.allocator();
-        let mut slots = Vec::with_capacity(count as usize);
-
-        let profile_list =
-            vk::VideoProfileListInfoKHR::builder().profiles(std::slice::from_ref(profile_info));
-
-        let alloc_options = vma::AllocationOptions {
-            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            ..Default::default()
+    ) -> VideoResult<(
+        Option<crate::vulkan::rhi::HostVulkanTexture>,
+        Vec<crate::vulkan::rhi::HostVulkanTexture>,
+        Vec<DpbSlot>,
+    )> { unsafe {
+        use crate::core::rhi::TextureFormat;
+        use crate::vulkan::rhi::{
+            HostVulkanTexture,
+            VideoDpbDirection,
+            VideoDpbTextureDescriptor,
         };
+
+        let device = self.ctx.device();
+        let mut slots = Vec::with_capacity(count as usize);
 
         if use_separate_images {
             // Create SEPARATE VkImage per DPB slot (matches ffmpeg vulkan encoder
             // pattern). Each image has 1 array layer.
-            let mut images = Vec::with_capacity(count as usize);
-            let mut allocations = Vec::with_capacity(count as usize);
+            let mut textures = Vec::with_capacity(count as usize);
 
             for i in 0..count {
-                let mut image_create_info = vk::ImageCreateInfo::builder()
-                    .image_type(vk::ImageType::_2D)
-                    .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
-                    .extent(vk::Extent3D { width, height, depth: 1 })
-                    .mip_levels(1)
-                    .array_layers(1)
-                    .samples(vk::SampleCountFlags::_1)
-                    .tiling(vk::ImageTiling::OPTIMAL)
-                    .usage(vk::ImageUsageFlags::VIDEO_ENCODE_DPB_KHR)
-                    .sharing_mode(vk::SharingMode::EXCLUSIVE)
-                    .initial_layout(vk::ImageLayout::UNDEFINED);
-
-                image_create_info.next =
-                    &*profile_list as *const vk::VideoProfileListInfoKHR as *const std::ffi::c_void;
-
-                // DPB image allocation runs under the host's device-level
-                // resource lock (fixes #278).
-                let mut alloc_result: VideoResult<(vk::Image, vma::Allocation)> =
-                    Err(VideoError::Vulkan(vk::Result::ERROR_INITIALIZATION_FAILED));
-                let alloc_result_ref = &mut alloc_result;
-                self.submitter.with_device_resource_lock(&mut || {
-                    *alloc_result_ref = allocator
-                        .create_image(image_create_info, &alloc_options)
-                        .map_err(VideoError::from);
-                });
-                let (image, allocation) = alloc_result?;
+                let descriptor = VideoDpbTextureDescriptor {
+                    label: "simple_encoder/dpb-separate",
+                    width,
+                    height,
+                    format: TextureFormat::Nv12,
+                    array_layers: 1,
+                    direction: VideoDpbDirection::Encode,
+                    additional_usage: vk::ImageUsageFlags::empty(),
+                    sharing_queue_families: &[],
+                    video_profile: profile_info,
+                };
+                let texture =
+                    HostVulkanTexture::new_video_dpb(self.ctx.host_device(), &descriptor)
+                        .map_err(|e| VideoError::BitstreamError(format!(
+                            "encoder dpb separate: {e}"
+                        )))?;
+                let image = texture.image().unwrap_or(vk::Image::null());
 
                 let mut ycbcr_info = vk::SamplerYcbcrConversionInfo::builder()
                     .conversion(self.ctx.nv12_ycbcr_conversion());
@@ -949,9 +944,7 @@ impl SimpleEncoder {
                     .push_next(&mut ycbcr_info);
 
                 let view = device.create_image_view(&view_info, None)?;
-
-                images.push(image);
-                allocations.push(allocation);
+                textures.push(texture);
 
                 slots.push(DpbSlot {
                     view,
@@ -964,35 +957,26 @@ impl SimpleEncoder {
                 });
             }
 
-            Ok((vk::Image::null(), std::mem::zeroed(), images, allocations, slots))
+            Ok((None, textures, slots))
         } else {
             // Create a SINGLE VkImage with `count` array layers.
-            let mut image_create_info = vk::ImageCreateInfo::builder()
-                .image_type(vk::ImageType::_2D)
-                .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
-                .extent(vk::Extent3D { width, height, depth: 1 })
-                .mip_levels(1)
-                .array_layers(count)
-                .samples(vk::SampleCountFlags::_1)
-                .tiling(vk::ImageTiling::OPTIMAL)
-                .usage(vk::ImageUsageFlags::VIDEO_ENCODE_DPB_KHR)
-                .sharing_mode(vk::SharingMode::EXCLUSIVE)
-                .initial_layout(vk::ImageLayout::UNDEFINED);
-
-            image_create_info.next =
-                &*profile_list as *const vk::VideoProfileListInfoKHR as *const std::ffi::c_void;
-
-            // DPB image allocation runs under the host's device-level
-            // resource lock (fixes #278).
-            let mut alloc_result: VideoResult<(vk::Image, vma::Allocation)> =
-                Err(VideoError::Vulkan(vk::Result::ERROR_INITIALIZATION_FAILED));
-            let alloc_result_ref = &mut alloc_result;
-            self.submitter.with_device_resource_lock(&mut || {
-                *alloc_result_ref = allocator
-                    .create_image(image_create_info, &alloc_options)
-                    .map_err(VideoError::from);
-            });
-            let (image, allocation) = alloc_result?;
+            let descriptor = VideoDpbTextureDescriptor {
+                label: "simple_encoder/dpb-shared-layered",
+                width,
+                height,
+                format: TextureFormat::Nv12,
+                array_layers: count,
+                direction: VideoDpbDirection::Encode,
+                additional_usage: vk::ImageUsageFlags::empty(),
+                sharing_queue_families: &[],
+                video_profile: profile_info,
+            };
+            let texture =
+                HostVulkanTexture::new_video_dpb(self.ctx.host_device(), &descriptor)
+                    .map_err(|e| VideoError::BitstreamError(format!(
+                        "encoder dpb shared: {e}"
+                    )))?;
+            let image = texture.image().unwrap_or(vk::Image::null());
 
             let mut ycbcr_info = vk::SamplerYcbcrConversionInfo::builder()
                 .conversion(self.ctx.nv12_ycbcr_conversion());
@@ -1024,7 +1008,7 @@ impl SimpleEncoder {
                 });
             }
 
-            Ok((image, allocation, Vec::new(), Vec::new(), slots))
+            Ok((Some(texture), Vec::new(), slots))
         }
     }}
 
@@ -1037,47 +1021,22 @@ impl SimpleEncoder {
         &self,
         size: usize,
         profile_info: &vk::VideoProfileInfoKHR,
-    ) -> VideoResult<(vk::Buffer, vma::Allocation, *mut u8)> { unsafe {
-        let allocator = self.ctx.allocator();
-
-        let profile_list =
-            vk::VideoProfileListInfoKHR::builder().profiles(std::slice::from_ref(profile_info));
-
-        let mut buffer_create_info = vk::BufferCreateInfo::builder()
-            .size(size as u64)
-            .usage(vk::BufferUsageFlags::VIDEO_ENCODE_DST_KHR)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-        buffer_create_info.next =
-            &*profile_list as *const vk::VideoProfileListInfoKHR as *const std::ffi::c_void;
-
-        let alloc_options = vma::AllocationOptions {
-            flags: vma::AllocationCreateFlags::MAPPED
-                | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
-            required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
-                | vk::MemoryPropertyFlags::HOST_COHERENT,
-            ..Default::default()
+    ) -> VideoResult<crate::vulkan::rhi::HostVulkanBuffer> {
+        use crate::vulkan::rhi::{
+            HostVulkanBuffer,
+            VideoBitstreamBufferDescriptor,
+            VideoBitstreamDirection,
         };
 
-        // Bitstream buffer allocation runs under the host's device-level
-        // resource lock (fixes #278).
-        let mut alloc_result: VideoResult<(vk::Buffer, vma::Allocation)> =
-            Err(VideoError::Vulkan(vk::Result::ERROR_INITIALIZATION_FAILED));
-        let alloc_result_ref = &mut alloc_result;
-        self.submitter.with_device_resource_lock(&mut || {
-            *alloc_result_ref = allocator
-                .create_buffer(buffer_create_info, &alloc_options)
-                .map_err(VideoError::from);
-        });
-        let (buffer, allocation) = alloc_result?;
-
-        let info = allocator.get_allocation_info(allocation);
-        let mapped = info.pMappedData as *mut u8;
-        if mapped.is_null() {
-            allocator.destroy_buffer(buffer, allocation);
-            return Err(VideoError::Vulkan(vk::Result::ERROR_MEMORY_MAP_FAILED));
-        }
-
-        Ok((buffer, allocation, mapped))
-    }}
+        let descriptor = VideoBitstreamBufferDescriptor {
+            label: "simple_encoder/bitstream",
+            size: size as u64,
+            direction: VideoBitstreamDirection::Encode,
+            video_profile: profile_info,
+        };
+        HostVulkanBuffer::new_video_bitstream(self.ctx.host_device(), &descriptor)
+            .map_err(|e| VideoError::BitstreamError(format!(
+                "encoder bitstream: {e}"
+            )))
+    }
 }

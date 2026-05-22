@@ -33,6 +33,8 @@ pub use vulkan_sync::{VulkanFence, VulkanSemaphore};
 pub use vulkan_sync::HostVulkanTimelineSemaphore;
 pub use vulkan_texture::HostVulkanTexture;
 #[cfg(target_os = "linux")]
+pub use vulkan_texture::{VideoDpbDirection, VideoDpbTextureDescriptor};
+#[cfg(target_os = "linux")]
 pub use vulkan_upload_resources::HostVulkanUploadResources;
 
 // Trait machinery + Consumer flavor — re-exported from the canonical
@@ -59,6 +61,8 @@ pub use vulkan_tone_mapper::{VulkanToneMapper, TONE_MAPPER_WORKGROUP_SIZE};
 
 pub(crate) mod vulkan_buffer;
 pub use vulkan_buffer::HostVulkanBuffer;
+#[cfg(target_os = "linux")]
+pub use vulkan_buffer::{VideoBitstreamBufferDescriptor, VideoBitstreamDirection};
 
 mod vulkan_storage_binding;
 pub use vulkan_storage_binding::{

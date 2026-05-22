@@ -95,6 +95,51 @@ struct HostVkImageMeta {
     vk_image_usage_flags: vk::ImageUsageFlags,
 }
 
+/// DPB direction selector for [`HostVulkanTexture::new_video_dpb`].
+/// Picks the `VIDEO_DECODE_DPB_BIT_KHR` vs `VIDEO_ENCODE_DPB_BIT_KHR`
+/// usage flag the driver requires on a Decoded Picture Buffer image.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoDpbDirection {
+    Decode,
+    Encode,
+}
+
+/// Inputs for [`HostVulkanTexture::new_video_dpb`].
+///
+/// DPB images are codec reference frames (and, for decode, the
+/// decode-target images themselves when the implementation supports
+/// in-place output). Each image is bound to a [`vk::VideoProfileInfoKHR`]
+/// via `VkVideoProfileListInfoKHR` chained on the image's `pNext` so
+/// the driver knows which codec profile the resource serves.
+///
+/// `array_layers` ≥ 1: pass `dpb_count` for the shared-layered-DPB
+/// shape (one `VkImage` with N layers, one per slot), or `1` for the
+/// separate-images-per-slot shape (N individual `VkImage`s — used
+/// when the driver advertises `VK_VIDEO_CAPABILITY_SEPARATE_REFERENCE_IMAGES_BIT_KHR`).
+///
+/// `sharing_queue_families`: when the slice has ≥ 2 entries the image
+/// is created with `VK_SHARING_MODE_CONCURRENT` and those families; an
+/// empty or single-entry slice uses `VK_SHARING_MODE_EXCLUSIVE`. The
+/// caller-side check `families.len() > 1` is encapsulated here.
+///
+/// `additional_usage`: any extra `VkImageUsageFlags` beyond the
+/// direction-specific DPB flag — decoder DPBs typically also take
+/// `VIDEO_DECODE_DST_KHR | TRANSFER_SRC | SAMPLED`; encoder DPBs
+/// usually take nothing extra.
+#[cfg(target_os = "linux")]
+pub struct VideoDpbTextureDescriptor<'a> {
+    pub label: &'a str,
+    pub width: u32,
+    pub height: u32,
+    pub format: TextureFormat,
+    pub array_layers: u32,
+    pub direction: VideoDpbDirection,
+    pub additional_usage: vk::ImageUsageFlags,
+    pub sharing_queue_families: &'a [u32],
+    pub video_profile: &'a vk::VideoProfileInfoKHR,
+}
+
 impl Default for HostVkImageMeta {
     fn default() -> Self {
         Self {
@@ -603,6 +648,121 @@ impl HostVulkanTexture {
             width: desc.width,
             height: desc.height,
             format: desc.format,
+            vk_image_meta: HostVkImageMeta {
+                vk_image_tiling: vk::ImageTiling::OPTIMAL,
+                vk_image_usage_flags: usage_flags,
+            },
+        })
+    }
+
+    /// Allocate a non-exportable DEVICE_LOCAL Vulkan video DPB image
+    /// bound to the codec profile in `descriptor.video_profile`.
+    ///
+    /// Direction (decode / encode) drives the required
+    /// `VkImageUsageFlags` DPB bit; `additional_usage` covers
+    /// decoder-side `VIDEO_DECODE_DST | TRANSFER_SRC | SAMPLED` or
+    /// any other flags the call site needs to keep on a DPB resource.
+    /// Sharing mode is `CONCURRENT` over the supplied queue families
+    /// when the slice carries ≥ 2 entries; `EXCLUSIVE` otherwise.
+    ///
+    /// VMA allocation runs with `required_flags = DEVICE_LOCAL` and
+    /// **no** `DEDICATED_MEMORY` — codec DPBs share the default pool
+    /// budget. The call is wrapped in
+    /// [`HostVulkanDevice::lock_device`] so concurrent processor
+    /// submissions can't race the create + bind on NVIDIA Linux
+    /// (the original motivator for
+    /// `RhiQueueSubmitter::with_device_resource_lock` — see repo
+    /// history for issue #278).
+    ///
+    /// `width` × `height` × `array_layers` must all be > 0; the
+    /// caller is responsible for pre-aligning the extent against
+    /// `VkVideoCapabilitiesKHR::pictureAccessGranularity`.
+    #[cfg(target_os = "linux")]
+    #[tracing::instrument(level = "trace", skip(vulkan_device, descriptor), fields(label = descriptor.label, width = descriptor.width, height = descriptor.height, layers = descriptor.array_layers, dir = ?descriptor.direction))]
+    pub fn new_video_dpb(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        descriptor: &VideoDpbTextureDescriptor<'_>,
+    ) -> Result<Self> {
+        if descriptor.width == 0 || descriptor.height == 0 || descriptor.array_layers == 0 {
+            return Err(Error::Configuration(format!(
+                "HostVulkanTexture::new_video_dpb ({}): width, height, array_layers must be > 0; \
+                 got {}x{}x{}",
+                descriptor.label,
+                descriptor.width,
+                descriptor.height,
+                descriptor.array_layers,
+            )));
+        }
+
+        let vk_format = texture_format_to_vk(descriptor.format);
+        let dpb_flag = match descriptor.direction {
+            VideoDpbDirection::Decode => vk::ImageUsageFlags::VIDEO_DECODE_DPB_KHR,
+            VideoDpbDirection::Encode => vk::ImageUsageFlags::VIDEO_ENCODE_DPB_KHR,
+        };
+        let usage_flags = dpb_flag | descriptor.additional_usage;
+
+        let mut profile_list = vk::VideoProfileListInfoKHR::builder()
+            .profiles(std::slice::from_ref(descriptor.video_profile));
+
+        let use_concurrent = descriptor.sharing_queue_families.len() > 1;
+        let mut image_info = vk::ImageCreateInfo::builder()
+            .image_type(vk::ImageType::_2D)
+            .format(vk_format)
+            .extent(vk::Extent3D {
+                width: descriptor.width,
+                height: descriptor.height,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(descriptor.array_layers)
+            .samples(vk::SampleCountFlags::_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(usage_flags)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .push_next(&mut profile_list);
+
+        if use_concurrent {
+            image_info = image_info
+                .sharing_mode(vk::SharingMode::CONCURRENT)
+                .queue_family_indices(descriptor.sharing_queue_families);
+        } else {
+            image_info = image_info.sharing_mode(vk::SharingMode::EXCLUSIVE);
+        }
+
+        let alloc_opts = vma::AllocationOptions {
+            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            ..Default::default()
+        };
+
+        let allocator = vulkan_device.allocator();
+
+        // Same threading discipline the codec previously got via
+        // `RhiQueueSubmitter::with_device_resource_lock` (see #278).
+        let _device_lock = vulkan_device.lock_device();
+
+        let (image, allocation) = unsafe { allocator.create_image(image_info, &alloc_opts) }
+            .map_err(|e| {
+                Error::GpuError(format!(
+                    "HostVulkanTexture::new_video_dpb ({}): vmaCreateImage failed: {e}",
+                    descriptor.label,
+                ))
+            })?;
+
+        Ok(Self {
+            vulkan_device: Some(Arc::clone(vulkan_device)),
+            image: Some(image),
+            allocation: Some(allocation),
+            imported_memory: None,
+            imported_memory_size: 0,
+            cached_dma_buf_fd: OnceLock::new(),
+            cached_image_view: OnceLock::new(),
+            imported_from_iosurface: false,
+            imported_from_dma_buf: false,
+            is_opaque_fd_export: false,
+            chosen_drm_format_modifier: 0,
+            width: descriptor.width,
+            height: descriptor.height,
+            format: descriptor.format,
             vk_image_meta: HostVkImageMeta {
                 vk_image_tiling: vk::ImageTiling::OPTIMAL,
                 vk_image_usage_flags: usage_flags,

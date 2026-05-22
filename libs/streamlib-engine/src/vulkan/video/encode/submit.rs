@@ -726,8 +726,13 @@ impl SimpleEncoder {
         let mut h265_pic_info;
         let h265_short_term_ref_pic_set;
 
+        let bitstream_buffer = self
+            .bitstream_buffer_owner
+            .as_ref()
+            .map(|b| b.buffer())
+            .unwrap_or(vk::Buffer::null());
         let mut encode_info = vk::VideoEncodeInfoKHR::builder()
-            .dst_buffer(self.bitstream_buffer)
+            .dst_buffer(bitstream_buffer)
             .dst_buffer_offset(0)
             .dst_buffer_range(self.bitstream_buffer_size as u64)
             .src_picture_resource(src_resource)
@@ -1194,9 +1199,14 @@ impl SimpleEncoder {
 
         // --- Read back bitstream data ---
         let mut data = vec![0u8; size];
-        if size > 0 && !self.bitstream_mapped_ptr.is_null() {
+        let bitstream_mapped_ptr = self
+            .bitstream_buffer_owner
+            .as_ref()
+            .map(|b| b.mapped_ptr())
+            .unwrap_or(ptr::null_mut());
+        if size > 0 && !bitstream_mapped_ptr.is_null() {
             ptr::copy_nonoverlapping(
-                self.bitstream_mapped_ptr.add(offset),
+                bitstream_mapped_ptr.add(offset),
                 data.as_mut_ptr(),
                 size,
             );

@@ -35,6 +35,40 @@ struct VulkanImportedPlane {
     size: vk::DeviceSize,
 }
 
+/// Bitstream direction selector for [`HostVulkanBuffer::new_video_bitstream`].
+/// Picks `VK_BUFFER_USAGE_VIDEO_ENCODE_DST_BIT_KHR` vs
+/// `VK_BUFFER_USAGE_VIDEO_DECODE_SRC_BIT_KHR` — the two roles a
+/// HOST_VISIBLE codec bitstream buffer can serve.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoBitstreamDirection {
+    /// Encoder output: driver writes compressed NAL bytes; CPU reads
+    /// the result via the persistently-mapped pointer for muxing.
+    Encode,
+    /// Decoder input: CPU writes compressed NAL bytes via the
+    /// persistently-mapped pointer; driver reads to drive decode.
+    Decode,
+}
+
+/// Inputs for [`HostVulkanBuffer::new_video_bitstream`].
+///
+/// Bitstream buffers are HOST_VISIBLE + HOST_COHERENT + persistently
+/// mapped + sequential-write-optimized. The buffer is bound to a
+/// codec profile via `VkVideoProfileListInfoKHR` chained on the
+/// buffer's `pNext` so the driver knows which codec the bytes serve.
+///
+/// `size` is the upfront allocation size in bytes. Growth (when a
+/// frame doesn't fit) is the codec layer's concern — the codec drops
+/// the existing buffer and constructs a fresh, larger one via this
+/// same constructor.
+#[cfg(target_os = "linux")]
+pub struct VideoBitstreamBufferDescriptor<'a> {
+    pub label: &'a str,
+    pub size: u64,
+    pub direction: VideoBitstreamDirection,
+    pub video_profile: &'a vk::VideoProfileInfoKHR,
+}
+
 /// Generic Vulkan `VkBuffer` allocation primitive — flat bytes with usage flags
 /// and (optionally) DMA-BUF / OPAQUE_FD export bookkeeping.
 ///
@@ -511,6 +545,106 @@ impl HostVulkanBuffer {
             imported_from_dma_buf: false,
             is_opaque_fd_export: true,
             mapped_ptr: std::ptr::null_mut(),
+            extra_imported_planes: Vec::new(),
+            size,
+        })
+    }
+
+    /// Allocate a HOST_VISIBLE + HOST_COHERENT video bitstream buffer
+    /// bound to the codec profile in `descriptor.video_profile`.
+    ///
+    /// Direction (encode / decode) drives the required
+    /// `VkBufferUsageFlags` bit:
+    /// - [`VideoBitstreamDirection::Encode`] →
+    ///   `VIDEO_ENCODE_DST_BIT_KHR` — driver writes encoded NAL bytes
+    ///   into the buffer; CPU reads via [`Self::mapped_ptr`] for muxing.
+    /// - [`VideoBitstreamDirection::Decode`] →
+    ///   `VIDEO_DECODE_SRC_BIT_KHR` — CPU writes input NAL bytes into
+    ///   the buffer; driver reads to drive decode.
+    ///
+    /// The buffer is allocated with `MAPPED` + `HOST_ACCESS_SEQUENTIAL_WRITE`
+    /// and is NOT DMA-BUF exportable (codec stays host-side). The call
+    /// is wrapped in [`HostVulkanDevice::lock_device`] so concurrent
+    /// processor submissions can't race the allocation on NVIDIA Linux
+    /// (the original motivator for
+    /// `RhiQueueSubmitter::with_device_resource_lock` — see repo
+    /// history for issue #278).
+    ///
+    /// Growth is the codec layer's concern: when a frame doesn't fit
+    /// the codec drops this buffer and constructs a fresh, larger one.
+    /// Engine-tier `resize()` is deliberately absent — every modern
+    /// explicit-API engine surveyed (wgpu, Bevy, Dawn, UE5, Granite)
+    /// and every Vulkan-Video reference codec (FFmpeg, NVIDIA
+    /// `vk_video_samples`) puts growth at the caller or in a pool
+    /// one layer above the primitive.
+    #[tracing::instrument(level = "trace", skip(vulkan_device, descriptor), fields(label = descriptor.label, size = descriptor.size, dir = ?descriptor.direction))]
+    pub fn new_video_bitstream(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        descriptor: &VideoBitstreamBufferDescriptor<'_>,
+    ) -> Result<Self> {
+        if descriptor.size == 0 {
+            return Err(Error::Configuration(format!(
+                "HostVulkanBuffer::new_video_bitstream ({}): size must be > 0",
+                descriptor.label,
+            )));
+        }
+        let size = descriptor.size as vk::DeviceSize;
+
+        let usage = match descriptor.direction {
+            VideoBitstreamDirection::Encode => vk::BufferUsageFlags::VIDEO_ENCODE_DST_KHR,
+            VideoBitstreamDirection::Decode => vk::BufferUsageFlags::VIDEO_DECODE_SRC_KHR,
+        };
+
+        let mut profile_list = vk::VideoProfileListInfoKHR::builder()
+            .profiles(std::slice::from_ref(descriptor.video_profile));
+
+        let buffer_info = vk::BufferCreateInfo::builder()
+            .size(size)
+            .usage(usage)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .push_next(&mut profile_list);
+
+        let alloc_opts = vma::AllocationOptions {
+            flags: vma::AllocationCreateFlags::MAPPED
+                | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+            required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
+                | vk::MemoryPropertyFlags::HOST_COHERENT,
+            ..Default::default()
+        };
+
+        let allocator = vulkan_device.allocator();
+
+        // Same threading discipline the codec previously got via
+        // `RhiQueueSubmitter::with_device_resource_lock` (see #278).
+        let _device_lock = vulkan_device.lock_device();
+
+        let (buffer, allocation) = unsafe { allocator.create_buffer(buffer_info, &alloc_opts) }
+            .map_err(|e| {
+                Error::GpuError(format!(
+                    "HostVulkanBuffer::new_video_bitstream ({}): vmaCreateBuffer failed: {e}",
+                    descriptor.label,
+                ))
+            })?;
+
+        let alloc_info = allocator.get_allocation_info(allocation);
+        let mapped_ptr = alloc_info.pMappedData.cast::<u8>();
+        if mapped_ptr.is_null() {
+            unsafe { allocator.destroy_buffer(buffer, allocation) };
+            return Err(Error::GpuError(format!(
+                "HostVulkanBuffer::new_video_bitstream ({}): VMA mapped pointer is null \
+                 — expected persistent mapping",
+                descriptor.label,
+            )));
+        }
+
+        Ok(Self {
+            vulkan_device: Arc::clone(vulkan_device),
+            buffer,
+            allocation: Some(allocation),
+            imported_memory: None,
+            imported_from_dma_buf: false,
+            is_opaque_fd_export: false,
+            mapped_ptr,
             extra_imported_planes: Vec::new(),
             size,
         })
