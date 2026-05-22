@@ -3,7 +3,7 @@
 
 // H.264 Encoder Processor
 //
-// Thin wrapper around vulkan_video::SimpleEncoder using the shared RHI
+// Thin wrapper around streamlib::sdk::engine::video::SimpleEncoder using the shared RHI
 // HostVulkanDevice. The encoder shares streamlib's Vulkan device, VMA allocator,
 // and queues — no separate device creation, no NVIDIA dual-device crash.
 //
@@ -27,7 +27,7 @@ use streamlib::sdk::context::{
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 use streamlib::sdk::error::{Error, Result};
 
-use vulkan_video::{Codec, Preset, SimpleEncoder, SimpleEncoderConfig};
+use streamlib::sdk::engine::video::{Codec, Preset, SimpleEncoder, SimpleEncoderConfig};
 
 // ============================================================================
 // PROCESSOR
@@ -215,7 +215,7 @@ fn build_encoder_lazily(
             .video_encode_queue_family_index()
             .ok_or_else(|| Error::Runtime("No video encode queue family".into()))?;
 
-        let submitter: Arc<dyn vulkan_video::RhiQueueSubmitter> = vulkan_device.clone();
+        let submitter: Arc<dyn streamlib::sdk::engine::video::RhiQueueSubmitter> = vulkan_device.clone();
 
         let mut encoder = SimpleEncoder::from_device(
             encoder_config,

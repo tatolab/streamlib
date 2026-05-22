@@ -2,20 +2,20 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Translation between the engine-side `ColorInfo` domain enums (from
-//! `@tatolab/core`'s JTD codegen) and `vulkan_video::H273ColorVui`, the
-//! codec-native byte representation that crosses into the leaf
-//! `libs/vulkan-video` crate.
+//! `@tatolab/core`'s JTD codegen) and
+//! `streamlib::sdk::engine::video::H273ColorVui`, the codec-native byte
+//! representation the codec layer in `streamlib-engine/src/vulkan/video/`
+//! uses on the bitstream side.
 //!
-//! The vulkan-video crate does not depend on `@tatolab/core` or the
-//! streamlib SDK; this seam is what keeps that boundary clean. Both H.264
-//! and H.265 packages carry an identical translator because each has its
-//! own codegen module (`crate::_generated_::*`); the duplication is ~70
-//! lines per codec and disappears if vulkan-video later adopts the SDK.
+//! The codec layer does not depend on `@tatolab/core` schemas; this seam
+//! is what keeps that boundary clean. Both H.264 and H.265 packages carry
+//! an identical translator because each has its own codegen module
+//! (`crate::_generated_::*`); the duplication is ~70 lines per codec.
 
 use crate::_generated_::tatolab__core::color_info::{
     ColorInfo, Matrix, Primaries, Range, Transfer,
 };
-use vulkan_video::{color_vui, H273ColorVui};
+use streamlib::sdk::engine::video::{color_vui, H273ColorVui};
 
 /// Translate `ColorInfo` → `H273ColorVui` for the encoder's SPS chain.
 ///

@@ -213,6 +213,14 @@ pub mod sdk {
         /// [`crate::sdk::runtime::Runner`].
         #[cfg(target_os = "linux")]
         pub use streamlib_engine::linux_surface_share;
+
+        /// Vulkan Video codec layer — engine-tier H.264/H.265
+        /// encode/decode (`SimpleEncoder`, `SimpleDecoder`, codec
+        /// configuration types, the `RhiQueueSubmitter` host-side
+        /// trait). Domain codec packages (`@tatolab/h264`,
+        /// `@tatolab/h265`) reach for the codec types here.
+        #[cfg(target_os = "linux")]
+        pub use streamlib_engine::video;
     }
 }
 

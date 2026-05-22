@@ -137,6 +137,15 @@ pub mod host_rhi;
 ))]
 pub use host_rhi::{HostGpuDeviceExt, HostPixelBufferRefExt, HostTextureExt};
 
+/// Vulkan Video codec layer — engine-tier H.264/H.265 encode/decode
+/// primitives. Public surface lives at `crate::vulkan::video::*`; this
+/// facade re-exports the codec types at engine root so the SDK's
+/// `sdk::engine::video::*` tier-2 surface can pass them through.
+#[cfg(target_os = "linux")]
+pub mod video {
+    pub use crate::vulkan::video::*;
+}
+
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::permissions::{
     request_audio_permission, request_camera_permission, request_display_permission,

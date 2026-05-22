@@ -9,7 +9,7 @@
 //! AST walk so that `#[cfg(test)]`, `#[allow(clippy::disallowed_macros)]`, and
 //! file-level `#![allow(...)]` are honored exactly as clippy would — without
 //! having to compile the workspace (which would pull in `glslc` via
-//! `libs/vulkan-video`'s build script).
+//! `libs/streamlib-engine`'s build script).
 
 use anyhow::{Context, Result};
 use std::fs;

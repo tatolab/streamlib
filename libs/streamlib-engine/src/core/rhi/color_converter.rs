@@ -7,7 +7,7 @@
 //! The converter unifies what used to be a constellation of hand-rolled
 //! YUV→RGB shaders (`packages/camera/src/linux/shaders/{nv12,yuyv}_to_rgba.comp`,
 //! `libs/streamlib-engine/src/vulkan/rhi/shaders/nv12_to_bgra.comp`) and
-//! a `VkSamplerYcbcrConversion`-based path (`libs/vulkan-video/src/nv12_to_rgb.rs`)
+//! a `VkSamplerYcbcrConversion`-based path (`vulkan/video/nv12_to_rgb.rs`)
 //! into one engine-owned primitive. Per-frame [`ResolvedColorInfo`]
 //! changes cost one [`set_push_constants_value`] call rather than a
 //! pipeline rebuild.

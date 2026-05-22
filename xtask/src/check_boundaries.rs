@@ -273,14 +273,12 @@ const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
         kind: AllowKind::PathPrefix,
         rationale: "adapter crates ride consumer-rhi for import + bind",
     },
-    // Vulkan video codec — sibling of the RHI; predates the boundary
-    // and implements vkVideo extensions directly. Refactor-to-RHI is
-    // tracked separately under the Vulkan Video RHI Coupling milestone.
-    AllowEntry {
-        path: "libs/vulkan-video/",
-        kind: AllowKind::PathPrefix,
-        rationale: "codec layer; refactor-to-RHI tracked under Vulkan Video RHI Coupling milestone",
-    },
+    // Vulkan video codec layer at `libs/streamlib-engine/src/vulkan/video/`
+    // is covered by the engine-vulkan PathPrefix entry above. The codec
+    // layer was folded from the former `libs/vulkan-video` sibling crate
+    // into the engine; it sits above `vulkan/rhi/` and migrates toward
+    // engine-RHI-only Vulkan access as the RHI grows codec primitives.
+    //
     // Display processor lives in `@tatolab/display` (#674) — the carve-out
     // rewrote it on `streamlib::sdk::engine::host_rhi::VulkanPresentTarget`,
     // retiring the prior CLAUDE.md exception for raw vulkanalia in the
@@ -420,11 +418,10 @@ const VULKANALIA_CARGO_DEP_ALLOWLIST: &[AllowEntry] = &[
         kind: AllowKind::PathPrefix,
         rationale: "adapter crates ride consumer-rhi",
     },
-    AllowEntry {
-        path: "libs/vulkan-video/",
-        kind: AllowKind::PathPrefix,
-        rationale: "codec layer; refactor-to-RHI tracked under Vulkan Video RHI Coupling milestone",
-    },
+    // Codec layer's Cargo deps are inherited from the engine — codec
+    // moved into `libs/streamlib-engine/src/vulkan/video/`, sharing the
+    // engine's `vulkanalia.workspace = true` line.
+    //
     // camera-python-display (#487) — TRANSITIONAL Cargo-dep exception
     // that mirrors the per-file allowlist entry above. Removed when
     // RDG (#631) absorbs the example's kernel wrappers.
@@ -534,13 +531,11 @@ const PRIVILEGED_VK_ALLOWLIST: &[AllowEntry] = &[
         kind: AllowKind::PathPrefix,
         rationale: "consumer-rhi import-side carve-out chains ImportMemoryFdInfoKHR",
     },
-    // Codec layer — predates the RHI boundary; refactor tracked under
-    // Vulkan Video RHI Coupling milestone.
-    AllowEntry {
-        path: "libs/vulkan-video/",
-        kind: AllowKind::PathPrefix,
-        rationale: "codec layer; refactor-to-RHI tracked under Vulkan Video RHI Coupling milestone",
-    },
+    // Codec layer at `libs/streamlib-engine/src/vulkan/video/` is
+    // covered by the engine-vulkan PathPrefix entry above. Interior
+    // re-plumbing onto engine RHI primitives is the Vulkan Video RHI
+    // Coupling milestone's ongoing work.
+    //
     // Subprocess cdylibs are NOT allowlisted post-#572 — their entire
     // privileged-vk surface lives in `streamlib-consumer-rhi`'s
     // import-side carve-out and `streamlib-adapter-*`. A privileged
@@ -1165,9 +1160,9 @@ vulkanalia = "0.35"
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/vulkan-video/Cargo.toml",
+            "libs/test-member/Cargo.toml",
             r#"[package]
-name = "vulkan-video"
+name = "test-member"
 version = "0.1.0"
 edition = "2021"
 

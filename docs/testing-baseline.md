@@ -14,9 +14,10 @@ ignore)]` on every test that constructs a real `HostVulkanDevice`,
 so a tier-2 test can never accidentally hang the tier-1 gate.
 
 **Do not use `cargo test -p streamlib` as the workspace baseline.** It
-covers only the top-level `streamlib` crate and misses the bulk of the
-suite — `vulkan-video` alone contributes more tests than every other
-crate combined.
+covers only the top-level `streamlib` SDK crate and misses the bulk of
+the suite — `streamlib-engine` (which carries the codec layer
+`vulkan/video/` plus the host RHI tests) is where most of the suite
+lives.
 
 ---
 

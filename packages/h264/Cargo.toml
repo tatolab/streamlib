@@ -47,12 +47,10 @@ serde_bytes.workspace = true
 # Logging.
 tracing.workspace = true
 
-[target.'cfg(target_os = "linux")'.dependencies]
-# Vulkan Video encoder/decoder primitives — H.264/H.265 via the
-# VK_KHR_video_{encode,decode}_h264 extensions. The crate exposes the
-# `RhiQueueSubmitter` trait the host's `HostVulkanDevice` implements,
-# so the encoder/decoder use the engine's queue mutex + allocator.
-vulkan-video = { path = "../../libs/vulkan-video" }
+# H.264 encode/decode primitives reach through the SDK's tier-2
+# `streamlib::sdk::engine::video::*` namespace — the codec layer lives
+# inside `streamlib-engine` (folded from the former `libs/vulkan-video`
+# crate). No Linux-specific Cargo dep needed beyond `streamlib`.
 
 [lints]
 workspace = true

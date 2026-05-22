@@ -62,6 +62,19 @@ fn compile_shaders() {
             "display_blit.frag.spv",
             "fragment",
         ),
+        // Vulkan Video codec layer (`vulkan/video/`) — RGB↔NV12
+        // compute conversion used by SimpleEncoder::encode_image and
+        // SimpleDecoder's RGBA output mode.
+        (
+            "src/vulkan/video/shaders/rgb_to_nv12.comp",
+            "rgb_to_nv12.spv",
+            "compute",
+        ),
+        (
+            "src/vulkan/video/shaders/nv12_to_rgb.comp",
+            "nv12_to_rgb.spv",
+            "compute",
+        ),
     ];
 
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
