@@ -4573,6 +4573,120 @@ unsafe extern "C" fn host_gpu_full_drop_texture_ring(handle: *const c_void) {
     )
 }
 
+// β-shape v4 (#917) lifecycle callbacks. The handle is
+// `Arc::into_raw(Arc<<Type>Inner>)`-shaped on the host side; cdylib
+// code never sees the Inner layout, only the opaque handle paired
+// with its β-shape vtable. Increment/decrement runs in host-compiled
+// code where the Inner layout is known statically.
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_clone_color_converter(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_full_clone_color_converter",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            unsafe {
+                Arc::increment_strong_count(
+                    handle as *const crate::core::rhi::RhiColorConverter,
+                );
+            }
+        },
+        (),
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_drop_color_converter(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_full_drop_color_converter",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            unsafe {
+                Arc::decrement_strong_count(
+                    handle as *const crate::core::rhi::RhiColorConverter,
+                );
+            }
+        },
+        (),
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_clone_acceleration_structure(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_full_clone_acceleration_structure",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            unsafe {
+                Arc::increment_strong_count(
+                    handle as *const crate::vulkan::rhi::VulkanAccelerationStructure,
+                );
+            }
+        },
+        (),
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_drop_acceleration_structure(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_full_drop_acceleration_structure",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            unsafe {
+                Arc::decrement_strong_count(
+                    handle as *const crate::vulkan::rhi::VulkanAccelerationStructure,
+                );
+            }
+        },
+        (),
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_clone_command_recorder(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_full_clone_command_recorder",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            unsafe {
+                Arc::increment_strong_count(
+                    handle as *const crate::vulkan::rhi::RhiCommandRecorder,
+                );
+            }
+        },
+        (),
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_drop_command_recorder(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_full_drop_command_recorder",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            unsafe {
+                Arc::decrement_strong_count(
+                    handle as *const crate::vulkan::rhi::RhiCommandRecorder,
+                );
+            }
+        },
+        (),
+    )
+}
+
 // Non-Linux stubs (callbacks must exist for the static layout, but
 // the kernel types only ship on Linux).
 #[cfg(not(target_os = "linux"))]
@@ -4591,6 +4705,18 @@ unsafe extern "C" fn host_gpu_full_drop_ray_tracing_kernel(_handle: *const c_voi
 unsafe extern "C" fn host_gpu_full_clone_texture_ring(_handle: *const c_void) {}
 #[cfg(not(target_os = "linux"))]
 unsafe extern "C" fn host_gpu_full_drop_texture_ring(_handle: *const c_void) {}
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_clone_color_converter(_handle: *const c_void) {}
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_drop_color_converter(_handle: *const c_void) {}
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_clone_acceleration_structure(_handle: *const c_void) {}
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_drop_acceleration_structure(_handle: *const c_void) {}
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_clone_command_recorder(_handle: *const c_void) {}
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_drop_command_recorder(_handle: *const c_void) {}
 
 // ---------------- Kernel construction (Linux-only) ----------------
 
@@ -5747,6 +5873,13 @@ pub static HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE: GpuContextFullAccessVTable =
         drop_ray_tracing_kernel: host_gpu_full_drop_ray_tracing_kernel,
         clone_texture_ring: host_gpu_full_clone_texture_ring,
         drop_texture_ring: host_gpu_full_drop_texture_ring,
+        // v4 β-shape lifecycle slots (#917).
+        clone_color_converter: host_gpu_full_clone_color_converter,
+        drop_color_converter: host_gpu_full_drop_color_converter,
+        clone_acceleration_structure: host_gpu_full_clone_acceleration_structure,
+        drop_acceleration_structure: host_gpu_full_drop_acceleration_structure,
+        clone_command_recorder: host_gpu_full_clone_command_recorder,
+        drop_command_recorder: host_gpu_full_drop_command_recorder,
         create_compute_kernel: host_gpu_full_create_compute_kernel,
         create_graphics_kernel: host_gpu_full_create_graphics_kernel,
         create_ray_tracing_kernel: host_gpu_full_create_ray_tracing_kernel,
