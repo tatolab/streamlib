@@ -1498,6 +1498,9 @@ pub enum ComputeBindingKindRepr {
     UniformBuffer = 1,
     SampledTexture = 2,
     StorageImage = 3,
+    /// `VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE` — sampled image without a
+    /// combined sampler. GLSL `texture2D` / `texelFetch` style.
+    SampledImage = 4,
 }
 
 /// GPU capability snapshot returned by

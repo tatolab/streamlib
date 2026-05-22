@@ -106,6 +106,26 @@ fn compile_shaders() {
         assert!(status.success(), "glslc failed to compile {}", src);
     }
 
+    // Standalone test shader for the SampledImage binding kind.
+    {
+        let test_sampled_image_src = "src/vulkan/rhi/shaders/test_sampled_image.comp";
+        println!("cargo:rerun-if-changed={}", test_sampled_image_src);
+        let dst_path: PathBuf =
+            Path::new(&out_dir).join("test_sampled_image.spv");
+        let status = Command::new("glslc")
+            .arg("-fshader-stage=compute")
+            .arg("-O")
+            .arg(Path::new(test_sampled_image_src))
+            .arg("-o")
+            .arg(&dst_path)
+            .status()
+            .expect("Failed to run glslc for test_sampled_image.comp");
+        assert!(
+            status.success(),
+            "glslc failed to compile test_sampled_image.comp"
+        );
+    }
+
     // Parameterized test shaders: one .comp source compiled multiple times with
     // different `-DINPUT_COUNT=N` defines, producing one SPIR-V variant per
     // value. Used by parameterized descriptor-management tests.

@@ -20,8 +20,14 @@ pub enum ComputeBindingKind {
     StorageBuffer,
     /// Uniform buffer (UBO) — read-only, fixed-size, fast-path.
     UniformBuffer,
-    /// Sampled image — read-only with a sampler (filtering, addressing).
+    /// Sampled image with a combined sampler — read-only with filtering /
+    /// addressing baked into the descriptor. GLSL `sampler2D` /
+    /// `samplerExternalOES` style.
     SampledTexture,
+    /// Sampled image without a combined sampler — read-only, addressed by
+    /// integer coordinates via GLSL `texture2D` + `texelFetch` (no
+    /// filtering). Backs Vulkan `VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE`.
+    SampledImage,
     /// Storage image — read/write, no filtering, exact pixel access.
     StorageImage,
 }
@@ -54,6 +60,13 @@ impl ComputeBindingSpec {
         Self {
             binding,
             kind: ComputeBindingKind::SampledTexture,
+        }
+    }
+
+    pub const fn sampled_image(binding: u32) -> Self {
+        Self {
+            binding,
+            kind: ComputeBindingKind::SampledImage,
         }
     }
 
@@ -150,6 +163,7 @@ fn spirv_type_to_kind(ty: RDescriptorType) -> Option<ComputeBindingKind> {
         RDescriptorType::COMBINED_IMAGE_SAMPLER => {
             Some(ComputeBindingKind::SampledTexture)
         }
+        RDescriptorType::SAMPLED_IMAGE => Some(ComputeBindingKind::SampledImage),
         RDescriptorType::STORAGE_IMAGE => Some(ComputeBindingKind::StorageImage),
         _ => None,
     }
@@ -186,6 +200,24 @@ mod tests {
             assert!(bindings.iter().any(|s| s.binding == 8));
             assert_eq!(push_size, 4);
         }
+    }
+
+    #[test]
+    fn sampled_image_spec_round_trips_kind() {
+        let spec = ComputeBindingSpec::sampled_image(7);
+        assert_eq!(spec.binding, 7);
+        assert_eq!(spec.kind, ComputeBindingKind::SampledImage);
+        // Lock the kind→SPIR-V descriptor type mapping: SAMPLED_IMAGE
+        // must reflect back to `ComputeBindingKind::SampledImage` and
+        // must NOT be conflated with COMBINED_IMAGE_SAMPLER / SampledTexture.
+        assert_eq!(
+            spirv_type_to_kind(RDescriptorType::SAMPLED_IMAGE),
+            Some(ComputeBindingKind::SampledImage)
+        );
+        assert_ne!(
+            spirv_type_to_kind(RDescriptorType::COMBINED_IMAGE_SAMPLER),
+            Some(ComputeBindingKind::SampledImage),
+        );
     }
 
     #[test]

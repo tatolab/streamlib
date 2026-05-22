@@ -61,6 +61,7 @@ impl From<ComputeBindingKind> for ComputeBindingKindRepr {
             ComputeBindingKind::UniformBuffer => Self::UniformBuffer,
             ComputeBindingKind::SampledTexture => Self::SampledTexture,
             ComputeBindingKind::StorageImage => Self::StorageImage,
+            ComputeBindingKind::SampledImage => Self::SampledImage,
         }
     }
 }
@@ -71,6 +72,7 @@ fn compute_binding_kind_from_repr(raw: u32) -> Result<ComputeBindingKind> {
         1 => Ok(ComputeBindingKind::UniformBuffer),
         2 => Ok(ComputeBindingKind::SampledTexture),
         3 => Ok(ComputeBindingKind::StorageImage),
+        4 => Ok(ComputeBindingKind::SampledImage),
         other => Err(Error::GpuError(format!(
             "ComputeBindingKind: invalid discriminant {other}"
         ))),
