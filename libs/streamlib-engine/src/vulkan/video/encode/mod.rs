@@ -203,56 +203,65 @@ pub struct SimpleEncoder {
 unsafe impl Send for SimpleEncoder {}
 
 impl SimpleEncoder {
-    /// Create a new `SimpleEncoder` from the given configuration.
+    /// Create a `SimpleEncoder` bound to the engine's host RHI.
     ///
-    /// This creates a Vulkan instance, selects a GPU with video encode
-    /// support, creates a device with the required extensions, configures the
-    /// video session and DPB, and allocates a staging buffer + source image.
+    /// Borrows the FullAccess context to pull the host's Vulkan instance,
+    /// device, allocator, queue mutex, and the video encode / transfer /
+    /// compute queues — the codec submits through the host's
+    /// per-queue serialization (per [`crate::vulkan::video::rhi::RhiQueueSubmitter`]).
     ///
     /// # Errors
     ///
     /// Returns an error if:
-    /// - The config is invalid
-    /// - Vulkan cannot be loaded
-    /// - No GPU supports video encode for the requested codec
-    /// - Any Vulkan resource creation fails
-    pub fn new(config: SimpleEncoderConfig) -> Result<Self, VideoError> {
-        config.validate().map_err(|e| VideoError::BitstreamError(e))?;
-
-        unsafe { Self::create_internal(config) }
-    }
-
-    /// Create an encoder using an externally-owned Vulkan device and allocator.
-    ///
-    /// Use this when integrating with a host application (e.g., streamlib RHI)
-    /// that already owns the Vulkan device. No new instance/device is created —
-    /// all GPU resources are allocated through the caller's VMA allocator.
-    ///
-    /// The caller must provide queue handles for encode, transfer, and compute
-    /// operations. The device must have been created with the required video
-    /// encode extensions enabled.
-    pub fn from_device(
+    /// - The config is invalid.
+    /// - The host device wasn't created with video encode support
+    ///   ([`vk::QueueFlags::VIDEO_ENCODE_KHR`] queue family missing).
+    /// - Any Vulkan resource creation fails.
+    pub fn from_full_access(
+        full: &crate::core::context::GpuContextFullAccess,
         config: SimpleEncoderConfig,
-        instance: vulkanalia::Instance,
-        device: vulkanalia::Device,
-        physical_device: vk::PhysicalDevice,
-        allocator: Arc<vma::Allocator>,
-        submitter: Arc<dyn crate::vulkan::video::rhi::RhiQueueSubmitter>,
-        encode_queue: vk::Queue,
-        encode_queue_family: u32,
-        transfer_queue: vk::Queue,
-        transfer_queue_family: u32,
-        compute_queue: vk::Queue,
-        compute_queue_family: u32,
     ) -> Result<Self, VideoError> {
-        config.validate().map_err(|e| VideoError::BitstreamError(e))?;
+        use crate::host_rhi::HostGpuDeviceExt;
+
+        config.validate().map_err(VideoError::BitstreamError)?;
+
+        let host_device = full.device().vulkan_device();
+        let encode_queue = host_device.video_encode_queue().ok_or_else(|| {
+            VideoError::BitstreamError(
+                "host device has no video encode queue family — \
+                 GPU does not support Vulkan Video encode".into(),
+            )
+        })?;
+        let encode_queue_family = host_device
+            .video_encode_queue_family_index()
+            .ok_or_else(|| {
+                VideoError::BitstreamError(
+                    "host device exposes encode queue but no queue family index".into(),
+                )
+            })?;
+        let compute_queue = host_device
+            .compute_queue()
+            .unwrap_or_else(|| host_device.queue());
+        let compute_queue_family = host_device
+            .compute_queue_family_index()
+            .unwrap_or_else(|| host_device.queue_family_index());
+        let host_arc: Arc<crate::vulkan::rhi::HostVulkanDevice> = Arc::clone(host_device);
+        let submitter: Arc<dyn crate::vulkan::video::rhi::RhiQueueSubmitter> = host_arc;
 
         unsafe {
             Self::create_from_external(
-                config, instance, device, physical_device, allocator, submitter,
-                encode_queue, encode_queue_family,
-                transfer_queue, transfer_queue_family,
-                compute_queue, compute_queue_family,
+                config,
+                host_device.instance().clone(),
+                host_device.device().clone(),
+                host_device.physical_device(),
+                host_device.allocator().clone(),
+                submitter,
+                encode_queue,
+                encode_queue_family,
+                host_device.transfer_queue(),
+                host_device.transfer_queue_family_index(),
+                compute_queue,
+                compute_queue_family,
             )
         }
     }

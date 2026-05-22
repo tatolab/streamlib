@@ -20,18 +20,23 @@ pub mod rgb_to_nv12;
 pub mod nv12_to_rgb;
 pub mod rhi;
 
-// Re-export key types at crate root for convenience
-pub use video_context::{
-    VideoContext, VideoError, VideoResult,
-    REQUIRED_VULKAN_API_VERSION, reject_software_renderer,
-};
+// Public codec types — re-exported at the engine `crate::vulkan::video::*`
+// surface and pulled through to `streamlib::sdk::engine::video::*`.
+// The `rhi` submodule (which holds `RhiQueueSubmitter`) stays `pub` because
+// several codec-interior `pub fn` items hold `Arc<dyn RhiQueueSubmitter>`
+// fields and Rust's privacy rules require the trait to be at least as
+// visible as those items. No consumer-facing API references the trait
+// directly: `from_full_access` constructs the submitter internally. The
+// trait's eventual removal — codec calling `HostVulkanDevice` methods
+// directly instead of going through the trait — is follow-up interior
+// re-plumbing under the Vulkan Video RHI Coupling milestone.
+pub use video_context::{VideoContext, VideoError, VideoResult};
 pub use decode::{DecodedFrame, SimpleDecoder, SimpleDecoderConfig, SimpleDecodedFrame};
 pub use encode::{EncodedOutput, FrameType};
 pub use encode::{SimpleEncoder, SimpleEncoderConfig, EncodePacket, Codec, Preset};
 pub use encode::{color_vui, H273ColorVui};
 pub use rgb_to_nv12::RgbToNv12Converter;
 pub use nv12_to_rgb::Nv12ToRgbConverter;
-pub use rhi::{RhiQueueSubmitter, RawQueueSubmitter};
 
 // --- Internal modules (ported 1-to-1 from nvpro C++) ---
 pub mod codec_utils;

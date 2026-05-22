@@ -154,26 +154,60 @@ struct PendingFrame {
 unsafe impl Send for SimpleDecoder {}
 
 impl SimpleDecoder {
-    /// Create a new `SimpleDecoder` from the given configuration.
+    /// Create a `SimpleDecoder` bound to the engine's host RHI.
     ///
-    /// This creates a Vulkan instance, selects a GPU with video decode
-    /// support, and creates a device with the required extensions.
+    /// Borrows the FullAccess context to pull the host's Vulkan instance,
+    /// device, allocator, queue mutex, and the video decode / transfer
+    /// queues — the codec submits through the host's per-queue serialization
+    /// (per [`crate::vulkan::video::rhi::RhiQueueSubmitter`]).
     ///
     /// # Errors
     ///
     /// Returns an error if:
-    /// - Vulkan cannot be loaded
-    /// - No GPU supports video decode for the requested codec
-    /// - Any Vulkan resource creation fails
-    pub fn new(config: SimpleDecoderConfig) -> Result<Self, VideoError> {
-        unsafe { Self::create_internal(config) }
+    /// - The host device wasn't created with video decode support
+    ///   ([`vk::QueueFlags::VIDEO_DECODE_KHR`] queue family missing).
+    /// - Any Vulkan resource creation fails.
+    pub fn from_full_access(
+        full: &crate::core::context::GpuContextFullAccess,
+        config: SimpleDecoderConfig,
+    ) -> Result<Self, VideoError> {
+        use crate::host_rhi::HostGpuDeviceExt;
+
+        let host_device = full.device().vulkan_device();
+        let decode_queue = host_device.video_decode_queue().ok_or_else(|| {
+            VideoError::BitstreamError(
+                "host device has no video decode queue family — \
+                 GPU does not support Vulkan Video decode".into(),
+            )
+        })?;
+        let decode_queue_family = host_device
+            .video_decode_queue_family_index()
+            .ok_or_else(|| {
+                VideoError::BitstreamError(
+                    "host device exposes decode queue but no queue family index".into(),
+                )
+            })?;
+        let host_arc: Arc<crate::vulkan::rhi::HostVulkanDevice> = Arc::clone(host_device);
+        let submitter: Arc<dyn crate::vulkan::video::rhi::RhiQueueSubmitter> = host_arc;
+
+        Self::from_host_device(
+            config,
+            host_device.instance().clone(),
+            host_device.device().clone(),
+            host_device.physical_device(),
+            host_device.allocator().clone(),
+            submitter,
+            decode_queue,
+            decode_queue_family,
+            host_device.queue(),
+            host_device.queue_family_index(),
+        )
     }
 
-    /// Create a decoder using an externally-owned Vulkan device and allocator.
-    ///
-    /// Use this when integrating with a host application (e.g., streamlib RHI)
-    /// that already owns the Vulkan device. No new instance/device is created.
-    pub fn from_device(
+    /// Internal helper — assemble a `SimpleDecoder` from the host RHI's
+    /// already-validated Vulkan handles. Only callable from
+    /// [`Self::from_full_access`]; not exposed to consumers.
+    fn from_host_device(
         config: SimpleDecoderConfig,
         instance: vulkanalia::Instance,
         device: vulkanalia::Device,
@@ -266,222 +300,6 @@ impl SimpleDecoder {
         })
     }
 
-    /// Create the decoder (all Vulkan setup, unsafe due to raw Vulkan calls).
-    unsafe fn create_internal(config: SimpleDecoderConfig) -> Result<Self, VideoError> { unsafe {
-        // 1. Load Vulkan
-        let loader = vulkanalia::loader::LibloadingLoader::new(vulkanalia::loader::LIBRARY)
-            .map_err(|e| VideoError::BitstreamError(format!("Failed to load Vulkan library: {}", e)))?;
-        let entry = vulkanalia::Entry::new(loader)
-            .map_err(|e| VideoError::BitstreamError(format!("Failed to create Vulkan entry: {}", e)))?;
-
-        // 2. Create instance (enable validation layers if available)
-        let app_info = vk::ApplicationInfo::builder()
-            .application_name(b"nvpro-simple-decoder\0")
-            .api_version(vk::make_version(1, 3, 0));
-
-        let validation_layer = b"VK_LAYER_KHRONOS_validation\0";
-        let layer_props = entry.enumerate_instance_layer_properties()
-            .unwrap_or_default();
-        let has_validation = layer_props.iter().any(|p| {
-            let name = std::ffi::CStr::from_ptr(p.layer_name.as_ptr());
-            name.to_bytes() == b"VK_LAYER_KHRONOS_validation"
-        });
-
-        let layers: Vec<*const i8> = if has_validation {
-            info!("Vulkan validation layer enabled");
-            vec![validation_layer.as_ptr() as *const i8]
-        } else {
-            Vec::new()
-        };
-
-        let instance = entry
-            .create_instance(
-                &vk::InstanceCreateInfo::builder()
-                    .application_info(&app_info)
-                    .enabled_layer_names(&layers),
-                None,
-            )
-            .map_err(VideoError::from)?;
-
-        // 3. Find physical device with decode support
-        let physical_devices = instance
-            .enumerate_physical_devices()
-            .map_err(VideoError::from)?;
-
-        if physical_devices.is_empty() {
-            instance.destroy_instance(None);
-            return Err(VideoError::BitstreamError(
-                "No Vulkan physical devices found".to_string(),
-            ));
-        }
-
-        let _codec_flag = match config.codec {
-            crate::vulkan::video::encode::Codec::H264 => vk::VideoCodecOperationFlagsKHR::DECODE_H264,
-            crate::vulkan::video::encode::Codec::H265 => vk::VideoCodecOperationFlagsKHR::DECODE_H265,
-        };
-
-        // Find a device with a decode queue family + compute-capable queue
-        let mut selected_device = None;
-        let mut decode_qf = 0u32;
-        let mut transfer_qf = 0u32;
-        let mut compute_qf = 0u32;
-
-        for &pd in &physical_devices {
-            let qf_props = instance.get_physical_device_queue_family_properties(pd);
-            let mut found_decode = false;
-            let mut found_transfer = false;
-            let mut found_compute = false;
-
-            for (i, p) in qf_props.iter().enumerate() {
-                if p.queue_flags.contains(vk::QueueFlags::VIDEO_DECODE_KHR) && !found_decode {
-                    decode_qf = i as u32;
-                    found_decode = true;
-                    if p.queue_flags.contains(vk::QueueFlags::TRANSFER) {
-                        transfer_qf = i as u32;
-                        found_transfer = true;
-                    }
-                }
-                // Find a compute-capable queue (GRAPHICS queues always support COMPUTE)
-                if (p.queue_flags.contains(vk::QueueFlags::COMPUTE)
-                    || p.queue_flags.contains(vk::QueueFlags::GRAPHICS))
-                    && !found_compute
-                {
-                    compute_qf = i as u32;
-                    found_compute = true;
-                    // Also use as transfer fallback if needed
-                    if !found_transfer {
-                        transfer_qf = i as u32;
-                        found_transfer = true;
-                    }
-                }
-            }
-
-            if found_decode && found_transfer && found_compute {
-                selected_device = Some(pd);
-                break;
-            }
-        }
-
-        let physical_device = match selected_device {
-            Some(pd) => pd,
-            None => {
-                instance.destroy_instance(None);
-                return Err(VideoError::NoVideoQueueFamily);
-            }
-        };
-
-        // 4. Create device with required extensions
-        let codec_ext = match config.codec {
-            crate::vulkan::video::encode::Codec::H264 => vk::KHR_VIDEO_DECODE_H264_EXTENSION.name.as_ptr(),
-            crate::vulkan::video::encode::Codec::H265 => vk::KHR_VIDEO_DECODE_H265_EXTENSION.name.as_ptr(),
-        };
-
-        let mut device_extensions = vec![
-            vk::KHR_VIDEO_QUEUE_EXTENSION.name.as_ptr(),
-            vk::KHR_VIDEO_DECODE_QUEUE_EXTENSION.name.as_ptr(),
-            codec_ext,
-            vk::KHR_SYNCHRONIZATION2_EXTENSION.name.as_ptr(),
-            vk::KHR_PUSH_DESCRIPTOR_EXTENSION.name.as_ptr(),
-        ];
-        device_extensions.sort();
-        device_extensions.dedup();
-
-        let queue_priorities = [1.0f32];
-        let mut queue_family_set = vec![decode_qf];
-        if transfer_qf != decode_qf { queue_family_set.push(transfer_qf); }
-        if !queue_family_set.contains(&compute_qf) { queue_family_set.push(compute_qf); }
-        let queue_create_infos: Vec<_> = queue_family_set.iter().map(|&qf| {
-            vk::DeviceQueueCreateInfo::builder()
-                .queue_family_index(qf)
-                .queue_priorities(&queue_priorities)
-        }).collect();
-
-        let mut sync2 =
-            vk::PhysicalDeviceSynchronization2Features::builder().synchronization2(true);
-
-        let device_info = vk::DeviceCreateInfo::builder()
-            .queue_create_infos(&queue_create_infos)
-            .enabled_extension_names(&device_extensions)
-            .push_next(&mut sync2);
-
-        let device = instance
-            .create_device(physical_device, &device_info, None)
-            .map_err(VideoError::from)?;
-
-        let decode_queue = device.get_device_queue(decode_qf, 0);
-        let transfer_queue = device.get_device_queue(transfer_qf, 0);
-        let compute_queue_obj = device.get_device_queue(compute_qf, 0);
-
-        // 5. Create VideoContext
-        let ctx = Arc::new(VideoContext::new(
-            instance.clone(),
-            device.clone(),
-            physical_device,
-        )?);
-
-        // 6. Create transfer command pool/buffer/fence for readback
-        let transfer_pool = device.create_command_pool(
-            &vk::CommandPoolCreateInfo::builder()
-                .queue_family_index(transfer_qf)
-                .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
-            None,
-        ).map_err(VideoError::from)?;
-
-        let transfer_cb = device.allocate_command_buffers(
-            &vk::CommandBufferAllocateInfo::builder()
-                .command_pool(transfer_pool)
-                .level(vk::CommandBufferLevel::PRIMARY)
-                .command_buffer_count(1),
-        ).map_err(VideoError::from)?[0];
-
-        let transfer_fence = device
-            .create_fence(&vk::FenceCreateInfo::default(), None)
-            .map_err(VideoError::from)?;
-
-        info!(codec = ?config.codec, "SimpleDecoder created");
-
-        let submitter = crate::vulkan::video::rhi::RawQueueSubmitter::new(device.clone());
-
-        Ok(Self {
-            _entry: entry,
-            _instance: instance,
-            device,
-            vk_decoder: None,
-            decode_queue,
-            decode_queue_family: decode_qf,
-            transfer_queue,
-            transfer_queue_family: transfer_qf,
-            transfer_pool,
-            transfer_cb,
-            transfer_fence,
-            nal_buffer: Vec::new(),
-            cached_vps_nalu: None,
-            cached_sps_nalu: None,
-            cached_pps_nalu: None,
-            sps_width: 0,
-            sps_height: 0,
-            session_configured: false,
-            frame_counter: 0,
-            frame_num: 0,
-            idr_pic_id: 0,
-            dpb_slot_in_use: Vec::new(),
-            dpb_slot_frame_num: Vec::new(),
-            dpb_slot_poc: Vec::new(),
-            config,
-            ctx,
-            h264_parser: None,
-            h264_dpb_to_slot: [-1i32; H264_MAX_DPB_SIZE + 1],
-            h265_parser: None,
-            h265_dpb_to_slot: [-1i32; HEVC_DPB_SIZE],
-            readback_staging: None,
-            pending_frame: None,
-            nv12_converter: None,
-            rgba_staging: None,
-            compute_queue: compute_queue_obj,
-            compute_queue_family: compute_qf,
-            submitter,
-        })
-    }}
 
     /// Feed arbitrary bytes of H.264 Annex B bitstream data.
     ///

@@ -6,14 +6,13 @@
 // Thin wrapper around streamlib::sdk::engine::video::SimpleDecoder using the shared RHI
 // HostVulkanDevice. Decoded NV12 frames are written to pixel buffers for output.
 
-use std::sync::Arc;
 
 use crate::_generated_::{EncodedVideoFrame, VideoFrame};
 use crate::linux::color_vui_translate::h273_to_color_info;
 use streamlib::sdk::context::{
     GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess, TextureRing,
 };
-use streamlib::sdk::engine::{HostGpuDeviceExt, HostPixelBufferRefExt};
+use streamlib::sdk::engine::HostPixelBufferRefExt;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::rhi::{PixelFormat, TextureFormat, TextureUsages};
 
@@ -61,31 +60,8 @@ impl streamlib::sdk::processors::ReactiveProcessor for H265DecoderProcessor::Pro
             ..Default::default()
         };
 
-        let vulkan_device = Arc::clone(ctx.gpu_full_access().device().vulkan_device());
-
-        let decode_queue = vulkan_device.video_decode_queue().ok_or_else(|| {
-            Error::Runtime("GPU does not support Vulkan Video decode".into())
-        })?;
-        let decode_queue_family = vulkan_device.video_decode_queue_family_index().ok_or_else(|| {
-            Error::Runtime("No video decode queue family".into())
-        })?;
-
-        let submitter: Arc<dyn streamlib::sdk::engine::video::RhiQueueSubmitter> = vulkan_device.clone();
-
-        let decoder = SimpleDecoder::from_device(
-            decoder_config,
-            vulkan_device.instance().clone(),
-            vulkan_device.device().clone(),
-            vulkan_device.physical_device(),
-            vulkan_device.allocator().clone(),
-            submitter,
-            decode_queue,
-            decode_queue_family,
-            vulkan_device.queue(),
-            vulkan_device.queue_family_index(),
-        ).map_err(|e| {
-            Error::Runtime(format!("Failed to create H.265 decoder: {e}"))
-        })?;
+        let decoder = SimpleDecoder::from_full_access(ctx.gpu_full_access(), decoder_config)
+            .map_err(|e| Error::Runtime(format!("Failed to create H.265 decoder: {e}")))?;
 
         // Session creation, DPB allocation, and the NV12→RGBA converter are
         // built lazily inside `SimpleDecoder::feed()` once the first SPS
