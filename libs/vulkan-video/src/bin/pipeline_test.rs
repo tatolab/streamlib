@@ -190,7 +190,7 @@ unsafe fn probe_encode_support(
     instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
     codec: vk::VideoCodecOperationFlagsKHR,
-) -> bool {
+) -> bool { unsafe {
     use vulkanalia::vk::KhrVideoQueueExtensionInstanceCommands;
 
     let mut profile_info = vk::VideoProfileInfoKHR::builder()
@@ -233,14 +233,14 @@ unsafe fn probe_encode_support(
     instance.get_physical_device_video_capabilities_khr(
         physical_device, &profile_info, &mut caps,
     ).is_ok()
-}
+}}
 
 /// Check if a specific decode codec is supported by querying video capabilities.
 unsafe fn probe_decode_support(
     instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
     codec: vk::VideoCodecOperationFlagsKHR,
-) -> bool {
+) -> bool { unsafe {
     use vulkanalia::vk::KhrVideoQueueExtensionInstanceCommands;
 
     let mut profile_info = vk::VideoProfileInfoKHR::builder()
@@ -293,7 +293,7 @@ unsafe fn probe_decode_support(
     instance.get_physical_device_video_capabilities_khr(
         physical_device, &profile_info, &mut caps,
     ).is_ok()
-}
+}}
 
 // ---------------------------------------------------------------------------
 // ffprobe metadata validation

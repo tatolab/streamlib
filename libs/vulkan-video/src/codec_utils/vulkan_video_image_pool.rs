@@ -191,7 +191,7 @@ impl VulkanVideoImagePoolNode {
         value: u64,
         stage_mask: vk::PipelineStageFlags2,
         device_index: u32,
-    ) -> vk::SemaphoreSubmitInfo {
+    ) -> vk::SemaphoreSubmitInfo { unsafe {
         if self.timeline_semaphore == vk::Semaphore::null() {
             let mut type_info = vk::SemaphoreTypeCreateInfo::builder()
                 .semaphore_type(vk::SemaphoreType::TIMELINE)
@@ -225,7 +225,7 @@ impl VulkanVideoImagePoolNode {
         self.semaphore_submit_info.device_index = device_index;
 
         self.semaphore_submit_info
-    }
+    }}
 
     /// Populate this node with an image.
     ///
@@ -304,7 +304,7 @@ impl VulkanVideoImagePoolNode {
     ///
     /// If a timeline semaphore was created, `device` must be the same device
     /// that was used to create it.
-    pub unsafe fn deinit(&mut self, device: Option<&vulkanalia::Device>) {
+    pub unsafe fn deinit(&mut self, device: Option<&vulkanalia::Device>) { unsafe {
         self.image_resource_view = None;
 
         if self.timeline_semaphore != vk::Semaphore::null() {
@@ -315,7 +315,7 @@ impl VulkanVideoImagePoolNode {
         }
 
         self.semaphore_submit_info = empty_semaphore_submit_info();
-    }
+    }}
 
     // -- private helpers --
 
@@ -720,13 +720,13 @@ impl VulkanVideoImagePool {
     ///
     /// `device` must be the device that was used to create any timeline
     /// semaphores in the pool nodes.
-    pub unsafe fn deinit(&self, device: Option<&vulkanalia::Device>) {
+    pub unsafe fn deinit(&self, device: Option<&vulkanalia::Device>) { unsafe {
         let mut inner = self.inner.lock().expect("pool lock poisoned");
         for ndx in 0..inner.pool_size as usize {
             inner.image_resources[ndx].deinit(device);
         }
         inner.pool_size = 0;
-    }
+    }}
 
     /// Number of images the pool is configured for.
     pub fn size(&self) -> u32 {

@@ -625,7 +625,7 @@ impl VkParserVideoPictureParameters {
         current: &mut Option<Arc<VkParserVideoPictureParameters>>,
     ) -> vk::Result {
         // Flush the current object's queue first.
-        if let Some(ref mut _cur) = current {
+        if let Some(_cur) = current {
             // NOTE: requires interior mutability in production code (Arc<Mutex<...>>).
             // Omitted here to keep the port faithful to C++ structure.
             let _ = video_session; // would call cur.flush_picture_parameters_queue(video_session)
@@ -872,7 +872,7 @@ mod tests {
         params.create_parameters_object(std::ptr::null(), vk::VideoSessionKHR::null(), &sps, None);
         params.session_parameters = {
             use vulkanalia::vk::Handle;
-            unsafe { vk::VideoSessionParametersKHR::from_raw(1) }
+            vk::VideoSessionParametersKHR::from_raw(1)
         };
 
         // Now update with PPS 10.

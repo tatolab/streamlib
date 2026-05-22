@@ -267,7 +267,7 @@ impl SimpleDecoder {
     }
 
     /// Create the decoder (all Vulkan setup, unsafe due to raw Vulkan calls).
-    unsafe fn create_internal(config: SimpleDecoderConfig) -> Result<Self, VideoError> {
+    unsafe fn create_internal(config: SimpleDecoderConfig) -> Result<Self, VideoError> { unsafe {
         // 1. Load Vulkan
         let loader = vulkanalia::loader::LibloadingLoader::new(vulkanalia::loader::LIBRARY)
             .map_err(|e| VideoError::BitstreamError(format!("Failed to load Vulkan library: {}", e)))?;
@@ -283,7 +283,7 @@ impl SimpleDecoder {
         let layer_props = entry.enumerate_instance_layer_properties()
             .unwrap_or_default();
         let has_validation = layer_props.iter().any(|p| {
-            let name = unsafe { std::ffi::CStr::from_ptr(p.layer_name.as_ptr()) };
+            let name = std::ffi::CStr::from_ptr(p.layer_name.as_ptr());
             name.to_bytes() == b"VK_LAYER_KHRONOS_validation"
         });
 
@@ -481,7 +481,7 @@ impl SimpleDecoder {
             compute_queue_family: compute_qf,
             submitter,
         })
-    }
+    }}
 
     /// Feed arbitrary bytes of H.264 Annex B bitstream data.
     ///

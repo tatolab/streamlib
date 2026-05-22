@@ -154,7 +154,7 @@ unsafe fn probe_encode_support(
     instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
     codec: vk::VideoCodecOperationFlagsKHR,
-) -> bool {
+) -> bool { unsafe {
     use vulkanalia::vk::KhrVideoQueueExtensionInstanceCommands;
 
     let mut h265_profile = vk::VideoEncodeH265ProfileInfoKHR::builder()
@@ -189,13 +189,13 @@ unsafe fn probe_encode_support(
     instance
         .get_physical_device_video_capabilities_khr(physical_device, &profile_info, &mut caps)
         .is_ok()
-}
+}}
 
 unsafe fn probe_decode_support(
     instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
     codec: vk::VideoCodecOperationFlagsKHR,
-) -> bool {
+) -> bool { unsafe {
     use vulkanalia::vk::KhrVideoQueueExtensionInstanceCommands;
 
     let mut h265_profile = vk::VideoDecodeH265ProfileInfoKHR::builder()
@@ -231,7 +231,7 @@ unsafe fn probe_decode_support(
     instance
         .get_physical_device_video_capabilities_khr(physical_device, &profile_info, &mut caps)
         .is_ok()
-}
+}}
 
 // ---------------------------------------------------------------------------
 // Check if a device extension is available
@@ -241,7 +241,7 @@ unsafe fn has_device_extension(
     instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
     name: &CStr,
-) -> bool {
+) -> bool { unsafe {
     let available = instance
         .enumerate_device_extension_properties(physical_device, None)
         .unwrap_or_default();
@@ -249,7 +249,7 @@ unsafe fn has_device_extension(
         let ext_name = CStr::from_ptr(ext.extension_name.as_ptr());
         ext_name == name
     })
-}
+}}
 
 // ===========================================================================
 // Test: H.265 encode -> ffprobe validate -> decode -> PSNR (shared device)

@@ -275,7 +275,7 @@ impl SimpleDecoder {
     /// Build StdVideoH264SequenceParameterSet from the ported parser's SPS.
     unsafe fn build_std_sps_from_parsed(
         sps: &H264Sps,
-    ) -> vk::video::StdVideoH264SequenceParameterSet {
+    ) -> vk::video::StdVideoH264SequenceParameterSet { unsafe {
         let mut flags: vk::video::StdVideoH264SpsFlags = std::mem::zeroed();
         flags.set_direct_8x8_inference_flag(sps.flags.direct_8x8_inference_flag as u32);
         flags.set_frame_mbs_only_flag(sps.flags.frame_mbs_only_flag as u32);
@@ -367,12 +367,12 @@ impl SimpleDecoder {
             pScalingLists: ptr::null(),
             pSequenceParameterSetVui: ptr::null(),
         }
-    }
+    }}
 
     /// Build StdVideoH264PictureParameterSet from the ported parser's PPS.
     unsafe fn build_std_pps_from_parsed(
         pps: &H264Pps,
-    ) -> vk::video::StdVideoH264PictureParameterSet {
+    ) -> vk::video::StdVideoH264PictureParameterSet { unsafe {
         let mut flags: vk::video::StdVideoH264PpsFlags = std::mem::zeroed();
         flags.set_entropy_coding_mode_flag(pps.flags.entropy_coding_mode_flag as u32);
         flags.set_deblocking_filter_control_present_flag(pps.flags.deblocking_filter_control_present_flag as u32);
@@ -403,12 +403,12 @@ impl SimpleDecoder {
             second_chroma_qp_index_offset: pps.second_chroma_qp_index_offset,
             pScalingLists: ptr::null(),
         }
-    }
+    }}
 
     /// Build a default PPS when no PPS NAL has been received yet.
     unsafe fn build_std_pps_default(
         sps_id: u8,
-    ) -> vk::video::StdVideoH264PictureParameterSet {
+    ) -> vk::video::StdVideoH264PictureParameterSet { unsafe {
         let mut flags: vk::video::StdVideoH264PpsFlags = std::mem::zeroed();
         flags.set_deblocking_filter_control_present_flag(1);
         flags.set_entropy_coding_mode_flag(1);
@@ -426,7 +426,7 @@ impl SimpleDecoder {
             second_chroma_qp_index_offset: 0,
             pScalingLists: ptr::null(),
         }
-    }
+    }}
 
     /// Create H.264 session parameters on VkVideoDecoder's video session.
     pub(crate) fn create_session_params_h264_vk(&mut self) -> Result<(), VideoError> {

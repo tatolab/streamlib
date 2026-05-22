@@ -1378,9 +1378,9 @@ mod tests {
     /// panic on function pointers.
     ///
     /// SAFETY: Caller must never call Vulkan methods on the returned device.
-    unsafe fn dummy_device() -> vulkanalia::Device {
+    unsafe fn dummy_device() -> vulkanalia::Device { unsafe {
         std::mem::MaybeUninit::uninit().assume_init()
-    }
+    }}
 
     #[test]
     fn test_ycbcr_vk_format_info_nv12() {

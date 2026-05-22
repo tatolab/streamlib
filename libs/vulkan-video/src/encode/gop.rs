@@ -32,7 +32,7 @@ impl SimpleEncoder {
         &mut self,
         nv12_data: &[u8],
         timestamp_ns: Option<i64>,
-    ) -> Result<Vec<EncodePacket>, VideoError> {
+    ) -> Result<Vec<EncodePacket>, VideoError> { unsafe {
         let display_pts = self.frame_counter;
         let frame_type = self.decide_frame_type();
 
@@ -70,7 +70,7 @@ impl SimpleEncoder {
         }
 
         Ok(packets)
-    }
+    }}
 
     /// Flush any remaining frames.
     ///

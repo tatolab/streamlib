@@ -58,9 +58,9 @@ impl RhiQueueSubmitter for RawQueueSubmitter {
         queue: vk::Queue,
         submits: &[vk::SubmitInfo2],
         fence: vk::Fence,
-    ) -> VkResult<()> {
+    ) -> VkResult<()> { unsafe {
         self.device.queue_submit2(queue, submits, fence).map(|_| ())
-    }
+    }}
 
     fn with_device_resource_lock(&self, f: &mut dyn FnMut()) {
         // Standalone mode owns the Vulkan device exclusively; no concurrent

@@ -34,7 +34,7 @@ impl SimpleEncoder {
     ///
     /// The caller must ensure the `VideoContext` device has the required video
     /// encode extensions enabled and that the queue family supports encode.
-    pub(crate) unsafe fn configure(&mut self, config: &EncodeConfig) -> VideoResult<()> {
+    pub(crate) unsafe fn configure(&mut self, config: &EncodeConfig) -> VideoResult<()> { unsafe {
         config.validate()?;
 
         tracing::info!(
@@ -398,7 +398,7 @@ impl SimpleEncoder {
         );
 
         Ok(())
-    }
+    }}
 
     /// Returns whether the encoder has been configured.
     #[allow(dead_code)] // Public API for callers that check state
@@ -436,7 +436,7 @@ impl SimpleEncoder {
     ///
     /// The encoder must be configured and the video session parameters
     /// must be valid.
-    pub(crate) unsafe fn extract_header(&self) -> VideoResult<Vec<u8>> {
+    pub(crate) unsafe fn extract_header(&self) -> VideoResult<Vec<u8>> { unsafe {
         if !self.configured {
             return Err(VideoError::BitstreamError(
                 "Encoder not configured".to_string(),
@@ -483,7 +483,7 @@ impl SimpleEncoder {
         );
 
         Ok(data)
-    }
+    }}
 
     /// Create codec-specific session parameters (SPS/PPS for H.264,
     /// VPS/SPS/PPS for H.265).
@@ -500,7 +500,7 @@ impl SimpleEncoder {
         aligned_w: u32,
         aligned_h: u32,
         quality_level: u32,
-    ) -> VideoResult<vk::VideoSessionParametersKHR> {
+    ) -> VideoResult<vk::VideoSessionParametersKHR> { unsafe {
         let device = self.ctx.device();
 
         let mut params_create = vk::VideoSessionParametersCreateInfoKHR::builder()
@@ -906,7 +906,7 @@ impl SimpleEncoder {
         let params = device.create_video_session_parameters_khr(&params_create, None)?;
 
         Ok(params)
-    }
+    }}
 
     /// Create DPB images for the video session.
     ///
@@ -922,7 +922,7 @@ impl SimpleEncoder {
         height: u32,
         profile_info: &vk::VideoProfileInfoKHR,
         use_separate_images: bool,
-    ) -> VideoResult<(vk::Image, vma::Allocation, Vec<vk::Image>, Vec<vma::Allocation>, Vec<DpbSlot>)> {
+    ) -> VideoResult<(vk::Image, vma::Allocation, Vec<vk::Image>, Vec<vma::Allocation>, Vec<DpbSlot>)> { unsafe {
         let device = self.ctx.device();
         let allocator = self.ctx.allocator();
         let mut slots = Vec::with_capacity(count as usize);
@@ -1000,7 +1000,7 @@ impl SimpleEncoder {
                 });
             }
 
-            Ok((vk::Image::null(), unsafe { std::mem::zeroed() }, images, allocations, slots))
+            Ok((vk::Image::null(), std::mem::zeroed(), images, allocations, slots))
         } else {
             // Create a SINGLE VkImage with `count` array layers.
             let mut image_create_info = vk::ImageCreateInfo::builder()
@@ -1062,7 +1062,7 @@ impl SimpleEncoder {
 
             Ok((image, allocation, Vec::new(), Vec::new(), slots))
         }
-    }
+    }}
 
     /// Create the host-visible bitstream output buffer.
     ///
@@ -1073,7 +1073,7 @@ impl SimpleEncoder {
         &self,
         size: usize,
         profile_info: &vk::VideoProfileInfoKHR,
-    ) -> VideoResult<(vk::Buffer, vma::Allocation, *mut u8)> {
+    ) -> VideoResult<(vk::Buffer, vma::Allocation, *mut u8)> { unsafe {
         let allocator = self.ctx.allocator();
 
         let profile_list =
@@ -1115,5 +1115,5 @@ impl SimpleEncoder {
         }
 
         Ok((buffer, allocation, mapped))
-    }
+    }}
 }
