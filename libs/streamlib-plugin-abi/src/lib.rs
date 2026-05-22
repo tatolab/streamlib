@@ -223,7 +223,13 @@ pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 10;
 ///   reach-through). Per the AI agent notes on #914: capability
 ///   queries are read-once-at-setup, so one struct-returning slot
 ///   amortizes better than per-method slots.
-pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 5;
+/// - v6: `create_timeline_semaphore(initial_value)` slot returning
+///   an `Arc::into_raw(Arc<HostVulkanTimelineSemaphore>)` opaque
+///   handle (Arc-raw-pointer transit, NOT β-shape — the timeline
+///   semaphore's β-shape is its own future lift). Camera processor
+///   needs this to drop the `full.device().vulkan_device().device()`
+///   reach-through for `HostVulkanTimelineSemaphore::new(...)`.
+pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 6;
 
 // =============================================================================
 // Primitive enums
@@ -2427,6 +2433,30 @@ pub struct GpuContextFullAccessVTable {
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // v6 (#914 / #920): Timeline-semaphore construction primitive
+    // -------------------------------------------------------------------------
+
+    /// Construct a timeline semaphore with the given `initial_value`.
+    /// On success writes
+    /// `Arc::into_raw(Arc<HostVulkanTimelineSemaphore>)` into
+    /// `*out_handle` and returns 0.
+    ///
+    /// **Arc-raw-pointer transit** — not a layout-stable β-shape.
+    /// In-tree consumers (camera, display) ride this freely because
+    /// they're built in the same workspace as the engine. Cross-repo
+    /// plugin distribution will need a β-shape lift for
+    /// `HostVulkanTimelineSemaphore`; tracked as a future follow-up.
+    /// Linux-only on the host side; non-Linux stubs return non-zero.
+    pub create_timeline_semaphore: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        initial_value: u64,
+        out_handle: *mut *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
 }
 
 unsafe impl Send for GpuContextFullAccessVTable {}
@@ -3001,7 +3031,7 @@ mod layout_tests {
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 10);
         assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
-        assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 5);
+        assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 6);
     }
 
     #[test]
@@ -3272,7 +3302,7 @@ mod layout_tests {
         // layout_version (u32) + _reserved_padding (u32) + 30 fn
         // pointers (8 bytes each) = 4 + 4 + 240 = 248 bytes.
         //
-        // 30 entries = 1 drop_handle + 7 clone/drop pairs (14 fn
+        // 31 entries = 1 drop_handle + 7 clone/drop pairs (14 fn
         // pointers for the 7 β-shape return types: compute / graphics /
         // ray-tracing kernels, texture ring, color converter,
         // acceleration structure, command recorder) + 4 create_* method
@@ -3282,8 +3312,9 @@ mod layout_tests {
         // upload_pixel_buffer_as_texture, color_converter,
         // create_command_recorder, build_triangles_blas, build_tlas,
         // supports_ray_tracing_pipeline, check_in_surface)
-        // + 1 v5-added gpu_capabilities (#914).
-        assert_eq!(size_of::<GpuContextFullAccessVTable>(), 248);
+        // + 1 v5-added gpu_capabilities (#914)
+        // + 1 v6-added create_timeline_semaphore (#914 / #920).
+        assert_eq!(size_of::<GpuContextFullAccessVTable>(), 256);
         assert_eq!(align_of::<GpuContextFullAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextFullAccessVTable, layout_version), 0);
         assert_eq!(offset_of!(GpuContextFullAccessVTable, _reserved_padding), 4);
@@ -3419,6 +3450,11 @@ mod layout_tests {
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, gpu_capabilities),
             240
+        );
+        // v6 (#914 / #920): create_timeline_semaphore.
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, create_timeline_semaphore),
+            248
         );
     }
 

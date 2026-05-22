@@ -1605,6 +1605,22 @@ impl GpuContext {
         }
     }
 
+    /// Construct a timeline semaphore against the host's vulkan device.
+    /// Backs [`GpuContextFullAccess::create_timeline_semaphore`] which
+    /// is the FullAccess-callable entry point.
+    #[cfg(target_os = "linux")]
+    pub fn create_timeline_semaphore(
+        &self,
+        initial_value: u64,
+    ) -> Result<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
+        let device = self.device.inner.device();
+        let sem = crate::vulkan::rhi::HostVulkanTimelineSemaphore::new(
+            device,
+            initial_value,
+        )?;
+        Ok(Arc::new(sem))
+    }
+
     /// Transition `texture` into `VK_IMAGE_LAYOUT_GENERAL` via a
     /// one-shot command buffer + fence. Used as the prelude to binding
     /// a freshly-created storage image to a compute / RT kernel that
@@ -4546,6 +4562,72 @@ impl GpuContextFullAccess {
                 };
                 // 1 = true, 0 = false, -1 = error (treat as false).
                 rc == 1
+            }
+        }
+    }
+
+    /// Construct a timeline semaphore. Backs the camera processor's
+    /// per-frame timeline that signals into downstream consumers
+    /// (display, encoders). Mode-routed: host-mode dispatches through
+    /// `host_inner()`; cdylib-mode dispatches through the vtable's
+    /// `create_timeline_semaphore` slot and reconstructs the Arc via
+    /// `Arc::from_raw`.
+    ///
+    /// **Note**: this slot transits `Arc<HostVulkanTimelineSemaphore>`
+    /// via Arc-raw-pointer pattern — same hazard as the kernel paths
+    /// pre-#917 Phase 8. Arc internals leak across DSO for now.
+    /// In-tree consumers (camera, display) are built in the same
+    /// workspace as engine; the layout matches by construction.
+    /// Cross-repo plugin distribution will need a β-shape lift for
+    /// `HostVulkanTimelineSemaphore` — tracked as a future follow-up.
+    #[cfg(target_os = "linux")]
+    pub fn create_timeline_semaphore(
+        &self,
+        initial_value: u64,
+    ) -> Result<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().create_timeline_semaphore(initial_value),
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "create_timeline_semaphore: GpuContextFullAccess has null vtable".into(),
+                    ));
+                }
+                let mut out_handle: *const std::ffi::c_void = std::ptr::null();
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                let status = unsafe {
+                    ((*self.vtable).create_timeline_semaphore)(
+                        self.handle,
+                        initial_value,
+                        &mut out_handle,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status == 0 {
+                    if out_handle.is_null() {
+                        return Err(Error::GpuError(
+                            "create_timeline_semaphore: host signaled success but out_handle is null".into(),
+                        ));
+                    }
+                    // SAFETY: host wrote
+                    // `Arc::into_raw(Arc<HostVulkanTimelineSemaphore>)`.
+                    let arc = unsafe {
+                        Arc::from_raw(
+                            out_handle
+                                as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore,
+                        )
+                    };
+                    Ok(arc)
+                } else {
+                    let msg = String::from_utf8_lossy(
+                        &err_buf[..err_len.min(err_buf.len())],
+                    )
+                    .into_owned();
+                    Err(Error::GpuError(msg))
+                }
             }
         }
     }

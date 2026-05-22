@@ -606,19 +606,20 @@ fn capture_thread_loop(
         let caps = full.gpu_capabilities()?;
         let vulkan_device_name = caps.device_name.clone();
 
-        // Timeline construction still goes through the host-internal
-        // device today; lifting it to a FullAccess `create_timeline_semaphore`
-        // primitive is the next #914 sub-piece. For host-mode builds
-        // the `device().vulkan_device()` reach-through is benign; cdylib
-        // mode will continue to panic at host_inner() until that lift
-        // lands.
-        let vulkan_device = full.device().vulkan_device();
-
         let color_converter = full.color_converter(src_pixel_format, PixelFormat::Rgba32)?;
 
         let recorder = full.create_command_recorder("camera_capture")?;
 
-        let timeline = Arc::new(HostVulkanTimelineSemaphore::new(vulkan_device.device(), 0)?);
+        // Timeline now constructed through the FullAccess primitive
+        // (#920) — the camera no longer reaches through
+        // `full.device().vulkan_device().device()`.
+        let timeline = full.create_timeline_semaphore(0)?;
+
+        // The DMA-BUF probe + ring texture allocation paths still need
+        // the host-internal device — that's #921's lift. Held here so
+        // those code paths compile; cdylib loading still panics at
+        // those call sites until #921 lands.
+        let vulkan_device = full.device().vulkan_device();
 
         // Double-buffered HOST_VISIBLE input SSBOs (MMAP+memcpy fallback path).
         let mut input_storage_buffers: Vec<StorageBuffer> = Vec::with_capacity(2);

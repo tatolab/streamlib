@@ -5914,6 +5914,70 @@ unsafe extern "C" fn host_gpu_full_gpu_capabilities(
     1
 }
 
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_create_timeline_semaphore(
+    scope_token: *const c_void,
+    initial_value: u64,
+    out_handle: *mut *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_full_create_timeline_semaphore",
+        || -> i32 {
+            if out_handle.is_null() {
+                write_err(
+                    "create_timeline_semaphore: null out_handle pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let result = with_full_scope_or_err(
+                scope_token,
+                "create_timeline_semaphore",
+                err_buf,
+                err_buf_cap,
+                err_len,
+                |gpu| gpu.create_timeline_semaphore(initial_value),
+            );
+            match result {
+                Some(Ok(arc)) => {
+                    let raw = Arc::into_raw(arc) as *const c_void;
+                    unsafe { std::ptr::write(out_handle, raw) };
+                    0
+                }
+                Some(Err(e)) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+                None => 1,
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_create_timeline_semaphore(
+    _scope_token: *const c_void,
+    _initial_value: u64,
+    _out_handle: *mut *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "create_timeline_semaphore: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
 unsafe extern "C" fn host_gpu_full_check_in_surface(
     scope_token: *const c_void,
     pixel_buffer: *const c_void,
@@ -6017,6 +6081,7 @@ pub static HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE: GpuContextFullAccessVTable =
         supports_ray_tracing_pipeline: host_gpu_full_supports_ray_tracing_pipeline,
         check_in_surface: host_gpu_full_check_in_surface,
         gpu_capabilities: host_gpu_full_gpu_capabilities,
+        create_timeline_semaphore: host_gpu_full_create_timeline_semaphore,
     };
 
 /// Pointer to the [`GpuContextFullAccessVTable`] this DSO should
