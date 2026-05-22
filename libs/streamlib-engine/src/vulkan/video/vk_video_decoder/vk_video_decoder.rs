@@ -12,13 +12,21 @@ use vulkanalia::vk::{
     KhrVideoQueueExtensionDeviceCommands,
     KhrVideoDecodeQueueExtensionDeviceCommands,
 };
-use vulkanalia_vma as vma;
-use vma::Alloc;
 use std::sync::Arc;
 use std::ptr;
 
+use crate::core::rhi::TextureFormat;
 use crate::vulkan::video::video_context::{VideoContext, VideoError, VideoResult};
-use crate::vulkan::rhi::{HostVulkanVideoSession, HostVulkanVideoSessionParameters};
+use crate::vulkan::rhi::{
+    HostVulkanBuffer,
+    HostVulkanTexture,
+    HostVulkanVideoSession,
+    HostVulkanVideoSessionParameters,
+    VideoBitstreamBufferDescriptor,
+    VideoBitstreamDirection,
+    VideoDpbDirection,
+    VideoDpbTextureDescriptor,
+};
 use crate::vulkan::video::decode::{DecodeSubmitInfo, DecodedFrame};
 use super::vk_parser_video_picture_parameters::VkParserVideoPictureParameters;
 
@@ -329,8 +337,7 @@ pub struct VkVideoDecoder {
     session_parameters_arc: Option<Arc<HostVulkanVideoSessionParameters>>,
 
     // DPB — array-layered image (VUID-07244 for decode)
-    dpb_image: vk::Image,
-    dpb_allocation: vma::Allocation,
+    dpb_texture: Option<HostVulkanTexture>,
     dpb_image_views: Vec<vk::ImageView>,
     dpb_slot_layouts: Vec<vk::ImageLayout>,
     dpb_slot_active: Vec<bool>,
@@ -342,11 +349,11 @@ pub struct VkVideoDecoder {
     /// True when a decode submission is in flight (fence not yet waited on).
     decode_in_flight: bool,
 
-    // Bitstream buffer
-    bitstream_buffer: vk::Buffer,
-    bitstream_allocation: vma::Allocation,
+    // Bitstream buffer (HostVulkanBuffer wraps the underlying vk::Buffer +
+    // VMA allocation + persistent map; `bitstream_size` is kept on Self
+    // for resize-trigger arithmetic against the next incoming bitstream).
+    bitstream_buffer_owner: Option<HostVulkanBuffer>,
     bitstream_size: u64,
-    bitstream_mapped_ptr: *mut u8,
 
     // Video profile (kept alive for DPB image creation)
     video_profile: vk::VideoProfileInfoKHR,
@@ -462,8 +469,7 @@ impl VkVideoDecoder {
             current_picture_parameters: None,
             session_parameters: vk::VideoSessionParametersKHR::null(),
             session_parameters_arc: None,
-            dpb_image: vk::Image::null(),
-            dpb_allocation: unsafe { std::mem::zeroed() },
+            dpb_texture: None,
             dpb_image_views: Vec::new(),
             dpb_slot_layouts: Vec::new(),
             dpb_slot_active: Vec::new(),
@@ -471,10 +477,8 @@ impl VkVideoDecoder {
             command_buffer,
             fence,
             decode_in_flight: false,
-            bitstream_buffer: vk::Buffer::null(),
-            bitstream_allocation: unsafe { std::mem::zeroed() },
+            bitstream_buffer_owner: None,
             bitstream_size: 0,
-            bitstream_mapped_ptr: ptr::null_mut(),
             video_profile,
             dpb_and_output_coincide: true,
             reset_decoder: true,
@@ -628,67 +632,34 @@ impl VkVideoDecoder {
 
         // --- Allocate DPB images (array-layered, VUID-07244) ---
         let dpb_count = max_dpb_slots as usize;
-        let image_usage = vk::ImageUsageFlags::VIDEO_DECODE_DPB_KHR
-            | vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR
-            | vk::ImageUsageFlags::TRANSFER_SRC
-            | vk::ImageUsageFlags::SAMPLED;
-
-        let mut profile_list = vk::VideoProfileListInfoKHR::builder()
-            .profiles(std::slice::from_ref(&self.video_profile));
-
-        let use_concurrent = self.sharing_queue_families.len() > 1;
-
-        let mut image_create = vk::ImageCreateInfo::builder()
-            .image_type(vk::ImageType::_2D)
-            .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
-            .extent(vk::Extent3D {
-                width: self.coded_extent.width,
-                height: self.coded_extent.height,
-                depth: 1,
-            })
-            .mip_levels(1)
-            .array_layers(dpb_count as u32)
-            .samples(vk::SampleCountFlags::_1)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(image_usage)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .push_next(&mut profile_list);
-
-        if use_concurrent {
-            image_create = image_create
-                .sharing_mode(vk::SharingMode::CONCURRENT)
-                .queue_family_indices(&self.sharing_queue_families);
-        } else {
-            image_create = image_create
-                .sharing_mode(vk::SharingMode::EXCLUSIVE);
-        }
-
-        let alloc_options = vma::AllocationOptions {
-            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            ..Default::default()
+        let dpb_descriptor = VideoDpbTextureDescriptor {
+            label: "vk_video_decoder/dpb-shared-layered",
+            width: self.coded_extent.width,
+            height: self.coded_extent.height,
+            format: TextureFormat::Nv12,
+            array_layers: dpb_count as u32,
+            direction: VideoDpbDirection::Decode,
+            additional_usage: vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR
+                | vk::ImageUsageFlags::TRANSFER_SRC
+                | vk::ImageUsageFlags::SAMPLED,
+            sharing_queue_families: &self.sharing_queue_families[..],
+            video_profile: &self.video_profile,
         };
 
-        // DPB image allocation runs under the host's device-level resource
-        // lock (fixes #278).
-        let mut dpb_result: vulkanalia::VkResult<(vk::Image, vma::Allocation)> =
-            Err(vk::ErrorCode::INITIALIZATION_FAILED);
-        let dpb_result_ref = &mut dpb_result;
-        let dpb_allocator = self.ctx.allocator();
-        self.submitter.with_device_resource_lock(&mut || {
-            *dpb_result_ref = unsafe {
-                dpb_allocator.create_image(image_create, &alloc_options)
-            };
-        });
-        match dpb_result {
-            Ok((image, allocation)) => {
-                self.dpb_image = image;
-                self.dpb_allocation = allocation;
-            }
+        let dpb_texture = match HostVulkanTexture::new_video_dpb(
+            self.ctx.host_device(),
+            &dpb_descriptor,
+        ) {
+            Ok(t) => t,
             Err(e) => {
                 tracing::error!("Failed to create DPB image: {:?}", e);
                 return -1;
             }
-        }
+        };
+        let dpb_image_handle = dpb_texture
+            .image()
+            .expect("HostVulkanTexture::new_video_dpb returns a texture with vk::Image");
+        self.dpb_texture = Some(dpb_texture);
 
         // Create per-layer views
         let device = self.ctx.device();
@@ -701,7 +672,7 @@ impl VkVideoDecoder {
 
         for i in 0..dpb_count {
             let view_info = vk::ImageViewCreateInfo::builder()
-                .image(self.dpb_image)
+                .image(dpb_image_handle)
                 .view_type(vk::ImageViewType::_2D)
                 .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
                 .subresource_range(vk::ImageSubresourceRange {
@@ -724,41 +695,20 @@ impl VkVideoDecoder {
 
         // --- Allocate bitstream buffer ---
         let bs_size = self.max_stream_buffer_size;
-        let mut bs_profile_list = vk::VideoProfileListInfoKHR::builder()
-            .profiles(std::slice::from_ref(&self.video_profile));
-
-        let bs_create = vk::BufferCreateInfo::builder()
-            .size(bs_size)
-            .usage(vk::BufferUsageFlags::VIDEO_DECODE_SRC_KHR)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .push_next(&mut bs_profile_list);
-
-        let bs_alloc_options = vma::AllocationOptions {
-            flags: vma::AllocationCreateFlags::MAPPED
-                | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
-            required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
-                | vk::MemoryPropertyFlags::HOST_COHERENT,
-            ..Default::default()
+        let bs_descriptor = VideoBitstreamBufferDescriptor {
+            label: "vk_video_decoder/bitstream",
+            size: bs_size,
+            direction: VideoBitstreamDirection::Decode,
+            video_profile: &self.video_profile,
         };
 
-        // Bitstream buffer allocation runs under the host's device-level
-        // resource lock (fixes #278).
-        let mut bs_result: vulkanalia::VkResult<(vk::Buffer, vma::Allocation)> =
-            Err(vk::ErrorCode::INITIALIZATION_FAILED);
-        let bs_result_ref = &mut bs_result;
-        let bs_allocator = self.ctx.allocator();
-        self.submitter.with_device_resource_lock(&mut || {
-            *bs_result_ref = unsafe {
-                bs_allocator.create_buffer(bs_create, &bs_alloc_options)
-            };
-        });
-        match bs_result {
-            Ok((buffer, allocation)) => {
-                let info = self.ctx.allocator().get_allocation_info(allocation);
-                self.bitstream_buffer = buffer;
-                self.bitstream_allocation = allocation;
+        match HostVulkanBuffer::new_video_bitstream(
+            self.ctx.host_device(),
+            &bs_descriptor,
+        ) {
+            Ok(buffer) => {
+                self.bitstream_buffer_owner = Some(buffer);
                 self.bitstream_size = bs_size;
-                self.bitstream_mapped_ptr = info.pMappedData as *mut u8;
             }
             Err(e) => {
                 tracing::error!("Failed to create bitstream buffer: {:?}", e);
@@ -881,52 +831,60 @@ impl VkVideoDecoder {
         // --- Upload bitstream ---
         let aligned_size = (submit.bitstream.len() as u64 + 0xFF) & !0xFF;
         if aligned_size > self.bitstream_size {
-            // Reallocate bitstream buffer if needed
-            self.ctx.allocator().destroy_buffer(self.bitstream_buffer, self.bitstream_allocation);
-            let mut profile_list = vk::VideoProfileListInfoKHR::builder()
-                .profiles(std::slice::from_ref(&self.video_profile));
-            let bs_create = vk::BufferCreateInfo::builder()
-                .size(aligned_size)
-                .usage(vk::BufferUsageFlags::VIDEO_DECODE_SRC_KHR)
-                .sharing_mode(vk::SharingMode::EXCLUSIVE)
-                .push_next(&mut profile_list);
-            let bs_alloc = vma::AllocationOptions {
-                flags: vma::AllocationCreateFlags::MAPPED
-                    | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
-                required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
-                    | vk::MemoryPropertyFlags::HOST_COHERENT,
-                ..Default::default()
+            // Drop the previous buffer first so its Drop impl runs
+            // `vmaDestroyBuffer` before we allocate the new (larger)
+            // one — keeps peak VMA footprint at one bitstream buffer
+            // rather than two.
+            self.bitstream_buffer_owner = None;
+            let resize_descriptor = VideoBitstreamBufferDescriptor {
+                label: "vk_video_decoder/bitstream",
+                size: aligned_size,
+                direction: VideoBitstreamDirection::Decode,
+                video_profile: &self.video_profile,
             };
-            // Bitstream resize runs under the host's device-level resource
-            // lock (fixes #278).
-            let mut resize_result: vulkanalia::VkResult<(vk::Buffer, vma::Allocation)> =
-                Err(vk::ErrorCode::INITIALIZATION_FAILED);
-            let resize_result_ref = &mut resize_result;
-            let resize_allocator = self.ctx.allocator();
-            self.submitter.with_device_resource_lock(&mut || {
-                *resize_result_ref = resize_allocator.create_buffer(bs_create, &bs_alloc);
-            });
-            let (buf, alloc) = resize_result.map_err(VideoError::from)?;
-            let info = self.ctx.allocator().get_allocation_info(alloc);
-            self.bitstream_buffer = buf;
-            self.bitstream_allocation = alloc;
+            let resized = HostVulkanBuffer::new_video_bitstream(
+                self.ctx.host_device(),
+                &resize_descriptor,
+            )
+            .map_err(|e| VideoError::BitstreamError(format!(
+                "bitstream resize: {e}"
+            )))?;
+            self.bitstream_buffer_owner = Some(resized);
             self.bitstream_size = aligned_size;
-            self.bitstream_mapped_ptr = info.pMappedData as *mut u8;
         }
+        let bitstream_mapped_ptr = self
+            .bitstream_buffer_owner
+            .as_ref()
+            .map(|b| b.mapped_ptr())
+            .unwrap_or(ptr::null_mut());
         ptr::copy_nonoverlapping(
             submit.bitstream.as_ptr(),
-            self.bitstream_mapped_ptr,
+            bitstream_mapped_ptr,
             submit.bitstream.len(),
         );
         // Zero-pad alignment
         let padding = aligned_size as usize - submit.bitstream.len();
         if padding > 0 {
             ptr::write_bytes(
-                self.bitstream_mapped_ptr.add(submit.bitstream.len()),
+                bitstream_mapped_ptr.add(submit.bitstream.len()),
                 0,
                 padding,
             );
         }
+
+        // Cache raw handles read by the barrier + decode-info builders below.
+        // Both must be live for the duration of `decode_frame` — they're
+        // owned by `self.dpb_texture` / `self.bitstream_buffer_owner`.
+        let dpb_image = self
+            .dpb_texture
+            .as_ref()
+            .and_then(|t| t.image())
+            .unwrap_or(vk::Image::null());
+        let bitstream_buffer = self
+            .bitstream_buffer_owner
+            .as_ref()
+            .map(|b| b.buffer())
+            .unwrap_or(vk::Buffer::null());
 
         // --- Begin command buffer ---
         device.reset_command_buffer(self.command_buffer, vk::CommandBufferResetFlags::empty())
@@ -1230,7 +1188,7 @@ impl VkVideoDecoder {
             .src_access_mask(vk::AccessFlags2::HOST_WRITE)
             .dst_stage_mask(vk::PipelineStageFlags2::VIDEO_DECODE_KHR)
             .dst_access_mask(vk::AccessFlags2::VIDEO_DECODE_READ_KHR)
-            .buffer(self.bitstream_buffer)
+            .buffer(bitstream_buffer)
             .offset(0)
             .size(aligned_size);
 
@@ -1248,7 +1206,7 @@ impl VkVideoDecoder {
             .dst_access_mask(vk::AccessFlags2::VIDEO_DECODE_WRITE_KHR)
             .old_layout(setup_old_layout)
             .new_layout(vk::ImageLayout::VIDEO_DECODE_DPB_KHR)
-            .image(self.dpb_image)
+            .image(dpb_image)
             .subresource_range(vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
                 base_mip_level: 0,
@@ -1273,7 +1231,7 @@ impl VkVideoDecoder {
                     .dst_access_mask(vk::AccessFlags2::VIDEO_DECODE_READ_KHR)
                     .old_layout(ref_old_layout)
                     .new_layout(vk::ImageLayout::VIDEO_DECODE_DPB_KHR)
-                    .image(self.dpb_image)
+                    .image(dpb_image)
                     .subresource_range(vk::ImageSubresourceRange {
                         aspect_mask: vk::ImageAspectFlags::COLOR,
                         base_mip_level: 0,
@@ -1291,7 +1249,7 @@ impl VkVideoDecoder {
 
         // --- Decode ---
         let mut decode_info = vk::VideoDecodeInfoKHR::builder()
-            .src_buffer(self.bitstream_buffer)
+            .src_buffer(bitstream_buffer)
             .src_buffer_offset(submit.bitstream_offset)
             .src_buffer_range(aligned_size)
             .dst_picture_resource(setup_resource)
@@ -1321,7 +1279,7 @@ impl VkVideoDecoder {
                 .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
                 .old_layout(vk::ImageLayout::VIDEO_DECODE_DPB_KHR)
                 .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-                .image(self.dpb_image)
+                .image(dpb_image)
                 .subresource_range(vk::ImageSubresourceRange {
                     aspect_mask: vk::ImageAspectFlags::COLOR,
                     base_mip_level: 0,
@@ -1363,7 +1321,7 @@ impl VkVideoDecoder {
             };
             device.cmd_copy_image_to_buffer(
                 self.command_buffer,
-                self.dpb_image,
+                dpb_image,
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                 staging.buffer,
                 &[y_region, uv_region],
@@ -1401,7 +1359,7 @@ impl VkVideoDecoder {
         }
 
         // --- Fill output ---
-        output.image = self.dpb_image;
+        output.image = dpb_image;
         if setup_idx < self.dpb_image_views.len() {
             output.image_view = self.dpb_image_views[setup_idx];
         }
@@ -1443,7 +1401,10 @@ impl VkVideoDecoder {
 
     /// Get the DPB image.
     pub fn dpb_image(&self) -> vk::Image {
-        self.dpb_image
+        self.dpb_texture
+            .as_ref()
+            .and_then(|t| t.image())
+            .unwrap_or(vk::Image::null())
     }
 
     /// Get the DPB slot count.
@@ -1541,25 +1502,12 @@ impl VkVideoDecoder {
         }
         self.dpb_image_views.clear();
 
-        // Destroy DPB image + free allocation.
-        if self.dpb_image != vk::Image::null() {
-            let allocator = self.ctx.allocator();
-            unsafe {
-                allocator.destroy_image(self.dpb_image, self.dpb_allocation);
-            }
-            self.dpb_image = vk::Image::null();
-        }
-
-        // Destroy bitstream buffer + free allocation.
-        if self.bitstream_buffer != vk::Buffer::null() {
-            let allocator = self.ctx.allocator();
-            unsafe {
-                allocator.destroy_buffer(self.bitstream_buffer, self.bitstream_allocation);
-            }
-            self.bitstream_buffer = vk::Buffer::null();
-            self.bitstream_mapped_ptr = ptr::null_mut();
-            self.bitstream_size = 0;
-        }
+        // Destroy DPB image + bitstream buffer by dropping their wrappers.
+        // The `HostVulkanTexture` / `HostVulkanBuffer` Drop impls run
+        // `vmaDestroyImage` / `vmaDestroyBuffer` and release VMA state.
+        self.dpb_texture = None;
+        self.bitstream_buffer_owner = None;
+        self.bitstream_size = 0;
 
         // Destroy command pool (implicitly frees command buffers).
         if self.command_pool != vk::CommandPool::null() {

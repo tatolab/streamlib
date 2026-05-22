@@ -43,9 +43,13 @@ pub trait RhiQueueSubmitter: Send + Sync {
         fence: vk::Fence,
     ) -> VkResult<()>;
 
-    /// Run `f` while holding the host's device-level resource-creation lock.
-    /// Wraps `vkCreateVideoSessionKHR`, DPB image allocation, bitstream buffer
-    /// allocation, and `vkBindVideoSessionMemoryKHR` so they cannot race with
-    /// concurrent submissions from other processors on NVIDIA Linux.
+    /// Run `f` while holding the host's device-level resource-creation lock,
+    /// the same lock the new RHI primitives
+    /// ([`HostVulkanVideoSession`](crate::vulkan::rhi::HostVulkanVideoSession),
+    /// [`HostVulkanTexture::new_video_dpb`](crate::vulkan::rhi::HostVulkanTexture),
+    /// [`HostVulkanBuffer::new_video_bitstream`](crate::vulkan::rhi::HostVulkanBuffer))
+    /// hold internally via `HostVulkanDevice::lock_device`. Remaining callers
+    /// of this shim are submit-side staging ops in `encode/staging.rs` —
+    /// scope of the milestone capstone that retires the trait entirely.
     fn with_device_resource_lock(&self, f: &mut dyn FnMut());
 }

@@ -106,18 +106,22 @@ pub struct SimpleEncoder {
     pub(crate) session_params_arc:
         Option<Arc<crate::vulkan::rhi::HostVulkanVideoSessionParameters>>,
 
-    // DPB images (library-managed, device-local)
-    pub(crate) dpb_image: vk::Image,
-    pub(crate) dpb_allocation: vma::Allocation,
-    pub(crate) dpb_separate_images: Vec<vk::Image>,
-    pub(crate) dpb_separate_allocations: Vec<vma::Allocation>,
+    // DPB images (library-managed, device-local).
+    //
+    // Exactly one of `dpb_texture` (shared-array-layered shape, one VkImage
+    // with N layers) or `dpb_separate_textures` (N separate VkImages, one
+    // per slot — used when the driver advertises SEPARATE_REFERENCE_IMAGES)
+    // is populated per session, depending on the driver capabilities.
+    pub(crate) dpb_texture: Option<crate::vulkan::rhi::HostVulkanTexture>,
+    pub(crate) dpb_separate_textures: Vec<crate::vulkan::rhi::HostVulkanTexture>,
     pub(crate) dpb_slots: Vec<DpbSlot>,
 
-    // Bitstream output buffer (host-visible for CPU readback)
-    pub(crate) bitstream_buffer: vk::Buffer,
-    pub(crate) bitstream_allocation: vma::Allocation,
+    // Bitstream output buffer (host-visible for CPU readback). The
+    // `HostVulkanBuffer` wraps the `VkBuffer`, VMA allocation, and
+    // persistently-mapped pointer; `bitstream_buffer_size` is the
+    // upfront allocation size kept on Self for query-pool sizing.
+    pub(crate) bitstream_buffer_owner: Option<crate::vulkan::rhi::HostVulkanBuffer>,
     pub(crate) bitstream_buffer_size: usize,
-    pub(crate) bitstream_mapped_ptr: *mut u8,
 
     // Command recording
     pub(crate) command_pool: vk::CommandPool,
@@ -470,30 +474,22 @@ impl Drop for SimpleEncoder {
                     self.device.destroy_command_pool(self.command_pool, None);
                 }
 
-                // Destroy bitstream buffer + allocation (VMA handles unmap)
-                if self.bitstream_buffer != vk::Buffer::null() {
-                    allocator.destroy_buffer(self.bitstream_buffer, self.bitstream_allocation);
-                    self.bitstream_mapped_ptr = ptr::null_mut();
-                }
+                // Destroy bitstream buffer by dropping the HostVulkanBuffer
+                // wrapper — its Drop impl runs `vmaDestroyBuffer`.
+                self.bitstream_buffer_owner = None;
 
-                // Destroy DPB image views (per-slot) and images
+                // Destroy DPB image views (per-slot) — the underlying
+                // `VkImage`s are owned by `dpb_texture` /
+                // `dpb_separate_textures`, dropped below.
                 for slot in &self.dpb_slots {
                     if slot.view != vk::ImageView::null() {
                         self.device.destroy_image_view(slot.view, None);
                     }
                 }
-                // Destroy separate per-slot DPB images (if used)
-                for (img, alloc) in self.dpb_separate_images.iter()
-                    .zip(self.dpb_separate_allocations.iter())
-                {
-                    if *img != vk::Image::null() {
-                        allocator.destroy_image(*img, *alloc);
-                    }
-                }
-                // Destroy shared DPB image (if used, non-null when array layers mode)
-                if self.dpb_image != vk::Image::null() {
-                    allocator.destroy_image(self.dpb_image, self.dpb_allocation);
-                }
+                // Destroy DPB textures (shared-layered or separate-per-slot).
+                // Each wrapper's Drop impl runs `vmaDestroyImage`.
+                self.dpb_texture = None;
+                self.dpb_separate_textures.clear();
 
                 // Session parameters Arc dropped first → its destructor
                 // runs `vkDestroyVideoSessionParametersKHR` before the
