@@ -125,7 +125,7 @@ pub(super) struct NvJpegResources {
 
     /// Held to back the slots' `texture` references and to drop after
     /// every per-slot CUDA handle is torn down. Unused after construction.
-    _ring: Arc<TextureRing>,
+    _ring: TextureRing,
 
     slots: Vec<NvJpegSlot>,
     current_slot: usize,

@@ -10,8 +10,11 @@
 //! is Limited-safe and never escalates. See
 //! `docs/architecture/texture-ring.md` for the recipe.
 
+use std::ffi::c_void;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use streamlib_plugin_abi::GpuContextFullAccessVTable;
 
 use crate::core::context::GpuContext;
 use crate::core::rhi::{Texture, TextureFormat};
@@ -72,7 +75,10 @@ pub struct TextureRingSlot {
 ///
 /// On drop, the ring unregisters its `surface_id`s from
 /// [`GpuContext`]'s texture cache.
-pub struct TextureRing {
+/// Host-only rich data backing a [`TextureRing`]. Cdylib code never
+/// sees this type; it reaches the public surface through the
+/// `(handle, vtable)` β-shape.
+pub struct TextureRingInner {
     slots: Vec<TextureRingSlot>,
     /// Per-slot pre-allocated upload resources (command pool + command
     /// buffer + fence), parallel to `slots`. `None` on non-Linux
@@ -87,7 +93,7 @@ pub struct TextureRing {
     gpu: GpuContext,
 }
 
-impl TextureRing {
+impl TextureRingInner {
     /// Construct a ring from pre-built slots. Crate-internal: public
     /// construction goes through
     /// [`crate::core::context::GpuContextFullAccess::create_texture_ring`].
@@ -236,13 +242,171 @@ impl TextureRing {
     }
 }
 
-impl Drop for TextureRing {
+impl Drop for TextureRingInner {
     fn drop(&mut self) {
         for slot in &self.slots {
             self.gpu.unregister_texture(&slot.surface_id);
         }
         // upload_resources drop themselves (each Drop waits on its fence
         // first, then destroys cb + pool + fence).
+    }
+}
+
+// =============================================================================
+// β-shape implementation
+// =============================================================================
+
+/// Pre-allocated ring of textures rotated per-frame on the decode hot
+/// path. Layout-stable `#[repr(C)] (handle, vtable)` β-shape so
+/// cdylibs can hold, refcount, and drop without sharing rustc-version
+/// or dep-graph with the host.
+///
+/// The opaque handle points at an `Arc<TextureRingInner>`; lifecycle
+/// dispatches through the host-installed FullAccess vtable's
+/// `clone_texture_ring` / `drop_texture_ring` callbacks. Method
+/// dispatch is host-only via [`Self::host_inner`] until Phase E
+/// (#907) lifts it to per-method vtable slots.
+#[repr(C)]
+pub struct TextureRing {
+    /// Opaque handle to the host's `Arc<TextureRingInner>`.
+    pub(crate) handle: *const c_void,
+    /// Vtable for cross-DSO Clone/Drop dispatch.
+    pub(crate) vtable: *const GpuContextFullAccessVTable,
+}
+
+// SAFETY: handle points at an `Arc<TextureRingInner>`; inner state is
+// Send+Sync (atomic counter + GPU resources guarded by host queue
+// mutex).
+unsafe impl Send for TextureRing {}
+unsafe impl Sync for TextureRing {}
+
+impl TextureRing {
+    /// Internal helper: leak an initial Arc strong count via
+    /// `Arc::into_raw`, resolve the host-mode FullAccess vtable, and
+    /// assemble the cross-DSO shape.
+    pub(crate) fn from_arc_into_raw(arc: Arc<TextureRingInner>) -> Self {
+        let handle = Arc::into_raw(arc) as *const c_void;
+        let vtable =
+            crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
+        Self { handle, vtable }
+    }
+
+    /// Engine-internal borrow of the host-owned `TextureRingInner`.
+    /// **Panics if called from cdylib code.**
+    pub(crate) fn host_inner(&self) -> &TextureRingInner {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "TextureRing::host_inner() reached from cdylib code; this method \
+                 must dispatch through the GpuContextFullAccessVTable."
+            );
+        }
+        // SAFETY: `self.handle` is `Arc::into_raw(Arc<TextureRingInner>)`.
+        unsafe { &*(self.handle as *const TextureRingInner) }
+    }
+
+    /// Rotate to the next slot. Thread-safe (atomic counter).
+    pub fn acquire_next(&self) -> TextureRingSlot {
+        self.host_inner().acquire_next()
+    }
+
+    /// Copy a host-visible pixel buffer's contents into a ring slot.
+    /// See [`TextureRingInner::copy_pixel_buffer_to_slot`] for details.
+    #[cfg(target_os = "linux")]
+    pub fn copy_pixel_buffer_to_slot(
+        &self,
+        slot: &TextureRingSlot,
+        pixel_buffer: &crate::core::rhi::PixelBuffer,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        self.host_inner()
+            .copy_pixel_buffer_to_slot(slot, pixel_buffer, width, height)
+    }
+
+    /// Number of slots in the ring.
+    pub fn len(&self) -> usize {
+        self.host_inner().len()
+    }
+
+    /// Ring is always non-empty in practice (construction rejects 0).
+    pub fn is_empty(&self) -> bool {
+        self.host_inner().is_empty()
+    }
+
+    /// Width of every slot's texture, in pixels.
+    pub fn width(&self) -> u32 {
+        self.host_inner().width()
+    }
+
+    /// Height of every slot's texture, in pixels.
+    pub fn height(&self) -> u32 {
+        self.host_inner().height()
+    }
+
+    /// Format every slot's texture was allocated with.
+    pub fn format(&self) -> TextureFormat {
+        self.host_inner().format()
+    }
+
+    /// Borrow a slot by index — engine-internal / debug only.
+    #[doc(hidden)]
+    pub fn slot(&self, index: usize) -> Option<TextureRingSlot> {
+        self.host_inner().slot(index).cloned()
+    }
+}
+
+impl Clone for TextureRing {
+    fn clone(&self) -> Self {
+        if !self.handle.is_null() && !self.vtable.is_null() {
+            // SAFETY: vtable + handle paired at construction; the
+            // vtable's `clone_texture_ring` contract is
+            // `Arc::increment_strong_count(handle)` host-side.
+            unsafe {
+                ((*self.vtable).clone_texture_ring)(self.handle);
+            }
+        }
+        Self {
+            handle: self.handle,
+            vtable: self.vtable,
+        }
+    }
+}
+
+impl Drop for TextureRing {
+    fn drop(&mut self) {
+        if !self.handle.is_null() && !self.vtable.is_null() {
+            // SAFETY: matched with the `Arc::into_raw` in
+            // `from_arc_into_raw` and any `clone_texture_ring` bumps.
+            unsafe {
+                ((*self.vtable).drop_texture_ring)(self.handle);
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for TextureRing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TextureRing").finish()
+    }
+}
+
+#[cfg(all(test, target_pointer_width = "64"))]
+mod layout_tests {
+    use super::*;
+    use core::mem::{align_of, offset_of, size_of};
+
+    #[test]
+    fn texture_ring_layout() {
+        assert_eq!(size_of::<TextureRing>(), 16);
+        assert_eq!(align_of::<TextureRing>(), 8);
+        assert_eq!(offset_of!(TextureRing, handle), 0);
+        assert_eq!(offset_of!(TextureRing, vtable), 8);
+    }
+
+    #[test]
+    fn texture_ring_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<TextureRing>();
     }
 }
 
@@ -587,10 +751,9 @@ mod tests {
             )
             .expect("create_texture_ring");
 
-        let ring_clone = Arc::clone(&ring);
         let handles: Vec<_> = (0..4)
             .map(|_| {
-                let ring = Arc::clone(&ring_clone);
+                let ring = ring.clone();
                 std::thread::spawn(move || {
                     for _ in 0..100 {
                         let _ = ring.acquire_next();

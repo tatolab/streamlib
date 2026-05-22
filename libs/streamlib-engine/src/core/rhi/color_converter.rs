@@ -199,18 +199,10 @@ pub fn pixel_format_color_kind(format: PixelFormat) -> ColorSpaceKind {
     }
 }
 
-/// Stateless color converter — a `(src, dst)`-keyed handle that knows
-/// how to convert pixel buffers / textures of the source format into
-/// the destination format, with per-frame [`ResolvedColorInfo`] driving
-/// the math via push constants.
-///
-/// Created on demand via [`crate::core::context::GpuContext::color_converter`]
-/// and cached for reuse. The cache key is `(src_format, dst_format)`;
-/// mid-stream `ResolvedColorInfo` changes do not invalidate the cache.
-///
-/// Thread-safe — internal compute kernels serialize their own submits
-/// via the host queue mutex.
-pub struct RhiColorConverter {
+/// Host-only rich data backing a [`RhiColorConverter`]. Cdylib code
+/// never sees this type; it reaches the public surface through the
+/// `(handle, vtable)` β-shape.
+pub struct RhiColorConverterInner {
     #[cfg(target_os = "linux")]
     pub(crate) inner: crate::vulkan::rhi::VulkanColorConverter,
 
@@ -223,13 +215,8 @@ pub struct RhiColorConverter {
     _marker: std::marker::PhantomData<()>,
 }
 
-impl RhiColorConverter {
+impl RhiColorConverterInner {
     /// Convert a YCbCr or RGB pixel buffer into an RGBA storage image.
-    ///
-    /// `src` must have the same dimensions as `dst`. `info` is the
-    /// fully-resolved color description for `src`; defaults are
-    /// applied by [`crate::core::color::resolve_color_defaults`] before
-    /// dispatch.
     #[cfg(target_os = "linux")]
     pub fn convert_buffer_to_image<B>(
         &self,
@@ -245,13 +232,7 @@ impl RhiColorConverter {
     }
 
     /// Bind source / destination / push-constants on the buffer→image
-    /// kernel and return it for recorder-driven dispatch. Use when the
-    /// caller already has an [`crate::vulkan::rhi::RhiCommandRecorder`]
-    /// and wants the compute step to nest inside its own barriers
-    /// rather than spawning a separate queue submit.
-    ///
-    /// `dst_transfer` is the destination output curve; matching it to
-    /// `info.transfer` bypasses the shader transfer path.
+    /// kernel and return it for recorder-driven dispatch.
     #[cfg(target_os = "linux")]
     pub fn prepare_buffer_to_image<B>(
         &self,
@@ -316,29 +297,193 @@ impl RhiColorConverter {
     }
 }
 
-impl std::fmt::Debug for RhiColorConverter {
+impl std::fmt::Debug for RhiColorConverterInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RhiColorConverter")
+        f.debug_struct("RhiColorConverterInner")
             .field("src", &self.src_format())
             .field("dst", &self.dst_format())
             .finish()
     }
 }
 
-// Compute-kernel submissions serialize through the host queue mutex.
+// =============================================================================
+// β-shape implementation
+// =============================================================================
+
+/// Stateless color converter — a `(src, dst)`-keyed handle that knows
+/// how to convert pixel buffers / textures of the source format into
+/// the destination format, with per-frame [`ResolvedColorInfo`] driving
+/// the math via push constants.
+///
+/// Layout-stable: `#[repr(C)] (handle, vtable)`. Cdylibs can hold,
+/// refcount, and drop without sharing rustc-version or dep-graph with
+/// the host. The opaque handle points at an `Arc<RhiColorConverterInner>`;
+/// lifecycle dispatches through the host-installed FullAccess vtable's
+/// `clone_color_converter` / `drop_color_converter` callbacks.
+#[repr(C)]
+pub struct RhiColorConverter {
+    /// Opaque handle to the host's `Arc<RhiColorConverterInner>`.
+    pub(crate) handle: *const std::ffi::c_void,
+    /// Vtable for cross-DSO Clone/Drop dispatch.
+    pub(crate) vtable: *const streamlib_plugin_abi::GpuContextFullAccessVTable,
+}
+
+// SAFETY: handle points at an Arc<RhiColorConverterInner>; the Inner's
+// internal VulkanColorConverter is Send+Sync (queue submits serialize
+// via host queue mutex).
 unsafe impl Send for RhiColorConverter {}
 unsafe impl Sync for RhiColorConverter {}
+
+impl RhiColorConverter {
+    /// Internal helper: leak an initial Arc strong count via
+    /// `Arc::into_raw`, resolve the host-mode FullAccess vtable, and
+    /// assemble the cross-DSO shape.
+    pub(crate) fn from_arc_into_raw(arc: std::sync::Arc<RhiColorConverterInner>) -> Self {
+        let handle = std::sync::Arc::into_raw(arc) as *const std::ffi::c_void;
+        let vtable =
+            crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
+        Self { handle, vtable }
+    }
+
+    /// Engine-internal borrow of the host-owned `RhiColorConverterInner`.
+    /// **Panics if called from cdylib code.**
+    pub(crate) fn host_inner(&self) -> &RhiColorConverterInner {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "RhiColorConverter::host_inner() reached from cdylib code; this method \
+                 must dispatch through the GpuContextFullAccessVTable."
+            );
+        }
+        // SAFETY: `self.handle` is `Arc::into_raw(Arc<RhiColorConverterInner>)`.
+        unsafe { &*(self.handle as *const RhiColorConverterInner) }
+    }
+
+    /// Convert a YCbCr or RGB pixel buffer into an RGBA storage image.
+    /// Mirrors `RhiColorConverterInner::convert_buffer_to_image` via
+    /// `host_inner()` — host-mode only until Phase E (#907) lifts
+    /// method dispatch to the vtable.
+    #[cfg(target_os = "linux")]
+    pub fn convert_buffer_to_image<B>(
+        &self,
+        src: &B,
+        src_layout: SourceLayoutInfo,
+        dst: &Texture,
+        info: &ResolvedColorInfo,
+    ) -> Result<()>
+    where
+        B: crate::vulkan::rhi::VulkanStorageBindable + ?Sized,
+    {
+        self.host_inner()
+            .convert_buffer_to_image(src, src_layout, dst, info)
+    }
+
+    /// Bind source / destination / push-constants on the buffer→image
+    /// kernel and return it for recorder-driven dispatch.
+    #[cfg(target_os = "linux")]
+    pub fn prepare_buffer_to_image<B>(
+        &self,
+        src: &B,
+        src_layout: SourceLayoutInfo,
+        dst: &Texture,
+        info: &ResolvedColorInfo,
+        dst_transfer: TransferId,
+    ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>>
+    where
+        B: crate::vulkan::rhi::VulkanStorageBindable + ?Sized,
+    {
+        self.host_inner()
+            .prepare_buffer_to_image(src, src_layout, dst, info, dst_transfer)
+    }
+
+    /// macOS stub.
+    #[cfg(target_os = "macos")]
+    pub fn convert_buffer_to_image<S, D>(
+        &self,
+        _src: &S,
+        _dst: &D,
+        _info: &ResolvedColorInfo,
+    ) -> crate::core::Result<()> {
+        Err(crate::core::Error::NotSupported(
+            "color conversion not implemented on macOS".into(),
+        ))
+    }
+
+    /// Source pixel format this converter accepts.
+    pub fn src_format(&self) -> PixelFormat {
+        self.host_inner().src_format()
+    }
+
+    /// Destination pixel format this converter produces.
+    pub fn dst_format(&self) -> PixelFormat {
+        self.host_inner().dst_format()
+    }
+}
+
+impl Clone for RhiColorConverter {
+    fn clone(&self) -> Self {
+        if !self.handle.is_null() && !self.vtable.is_null() {
+            // SAFETY: vtable + handle were paired at construction; the
+            // vtable's `clone_color_converter` contract is
+            // `Arc::increment_strong_count(handle)` host-side.
+            unsafe {
+                ((*self.vtable).clone_color_converter)(self.handle);
+            }
+        }
+        Self {
+            handle: self.handle,
+            vtable: self.vtable,
+        }
+    }
+}
+
+impl Drop for RhiColorConverter {
+    fn drop(&mut self) {
+        if !self.handle.is_null() && !self.vtable.is_null() {
+            // SAFETY: matched with the `Arc::into_raw` in
+            // `from_arc_into_raw` and any `clone_color_converter` bumps.
+            unsafe {
+                ((*self.vtable).drop_color_converter)(self.handle);
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for RhiColorConverter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RhiColorConverter").finish()
+    }
+}
 
 /// Unused on macOS today; kept here so the symbol stays referenced
 /// when the cdylib builds against `target_os = "macos"`.
 #[cfg(target_os = "macos")]
-impl RhiColorConverter {
+impl RhiColorConverterInner {
     #[allow(dead_code)]
     pub(crate) fn new_macos_stub(src: PixelFormat, dst: PixelFormat) -> Result<Self, crate::core::Error> {
         let _ = (src, dst);
         Err(crate::core::Error::NotSupported(
             "RhiColorConverter not yet implemented on macOS".into(),
         ))
+    }
+}
+
+#[cfg(all(test, target_pointer_width = "64"))]
+mod layout_tests {
+    use super::*;
+    use core::mem::{align_of, offset_of, size_of};
+
+    #[test]
+    fn rhi_color_converter_layout() {
+        assert_eq!(size_of::<RhiColorConverter>(), 16);
+        assert_eq!(align_of::<RhiColorConverter>(), 8);
+        assert_eq!(offset_of!(RhiColorConverter, handle), 0);
+        assert_eq!(offset_of!(RhiColorConverter, vtable), 8);
+    }
+
+    #[test]
+    fn rhi_color_converter_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<RhiColorConverter>();
     }
 }
 

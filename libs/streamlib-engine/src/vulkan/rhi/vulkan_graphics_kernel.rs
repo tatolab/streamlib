@@ -42,6 +42,10 @@ use vulkanalia::vk;
 
 use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 
+use std::ffi::c_void;
+
+use streamlib_plugin_abi::GpuContextFullAccessVTable;
+
 use crate::core::rhi::{
     BlendFactor, BlendOp, ColorBlendState, ColorWriteMask, CullMode, DepthCompareOp, DepthFormat,
     DepthStencilState, DrawCall, DrawIndexedCall, FrontFace, GraphicsBindingKind,
@@ -59,9 +63,10 @@ use super::HostVulkanDevice;
 /// kinds live under the same root.
 pub const PIPELINE_CACHE_DIR_ENV: &str = "STREAMLIB_PIPELINE_CACHE_DIR";
 
-/// One graphics kernel: multi-stage pipeline + descriptor-set ring + per-frame
-/// draw primitives.
-pub struct VulkanGraphicsKernel {
+/// Host-only rich data backing a [`VulkanGraphicsKernel`]. Cdylib code
+/// never sees this type; it reaches the public surface through the
+/// `(handle, vtable)` β-shape.
+pub struct VulkanGraphicsKernelInner {
     label: String,
     vulkan_device: Arc<HostVulkanDevice>,
     device: vulkanalia::Device,
@@ -154,7 +159,7 @@ pub enum OffscreenDraw {
     DrawIndexed(DrawIndexedCall),
 }
 
-impl VulkanGraphicsKernel {
+impl VulkanGraphicsKernelInner {
     /// Create a new graphics kernel from a multi-stage SPIR-V set + binding
     /// declaration + pipeline state.
     ///
@@ -1175,7 +1180,7 @@ enum DrawKind {
     DrawIndexed(DrawIndexedCall),
 }
 
-impl Drop for VulkanGraphicsKernel {
+impl Drop for VulkanGraphicsKernelInner {
     fn drop(&mut self) {
         unsafe {
             let _ = self.device.device_wait_idle();
@@ -1208,17 +1213,232 @@ impl Drop for VulkanGraphicsKernel {
 //   - `descriptor_sets[i]` is logically owned by frame slot `i`; serialized
 //     across threads by `pending` mutex.
 //   - `offscreen` scaffold is fence-protected for serial use.
-unsafe impl Send for VulkanGraphicsKernel {}
-unsafe impl Sync for VulkanGraphicsKernel {}
+unsafe impl Send for VulkanGraphicsKernelInner {}
+unsafe impl Sync for VulkanGraphicsKernelInner {}
 
-impl std::fmt::Debug for VulkanGraphicsKernel {
+impl std::fmt::Debug for VulkanGraphicsKernelInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("VulkanGraphicsKernel")
+        f.debug_struct("VulkanGraphicsKernelInner")
             .field("label", &self.label)
             .field("bindings", &self.bindings)
             .field("push_constant_size", &self.push_constant_size)
             .field("descriptor_sets_in_flight", &self.descriptor_sets_in_flight)
             .finish()
+    }
+}
+
+// =============================================================================
+// β-shape implementation (#917)
+// =============================================================================
+
+/// Graphics kernel — layout-stable `#[repr(C)] (handle, vtable)` β-shape.
+#[repr(C)]
+pub struct VulkanGraphicsKernel {
+    pub(crate) handle: *const c_void,
+    pub(crate) vtable: *const GpuContextFullAccessVTable,
+}
+
+unsafe impl Send for VulkanGraphicsKernel {}
+unsafe impl Sync for VulkanGraphicsKernel {}
+
+impl VulkanGraphicsKernel {
+    pub fn new(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        descriptor: &GraphicsKernelDescriptor<'_>,
+    ) -> Result<Self> {
+        let inner = VulkanGraphicsKernelInner::new(vulkan_device, descriptor)?;
+        Ok(Self::from_arc_into_raw(Arc::new(inner)))
+    }
+
+    pub(crate) fn from_arc_into_raw(arc: Arc<VulkanGraphicsKernelInner>) -> Self {
+        let handle = Arc::into_raw(arc) as *const c_void;
+        let vtable =
+            crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
+        Self { handle, vtable }
+    }
+
+    pub(crate) fn host_inner(&self) -> &VulkanGraphicsKernelInner {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "VulkanGraphicsKernel::host_inner() reached from cdylib code; \
+                 this method must dispatch through the GpuContextFullAccessVTable."
+            );
+        }
+        unsafe { &*(self.handle as *const VulkanGraphicsKernelInner) }
+    }
+
+    pub fn bindings(&self) -> Vec<GraphicsBindingSpec> {
+        self.host_inner().bindings().to_vec()
+    }
+
+    pub fn push_constant_size(&self) -> u32 {
+        self.host_inner().push_constant_size()
+    }
+
+    pub fn descriptor_sets_in_flight(&self) -> u32 {
+        self.host_inner().descriptor_sets_in_flight()
+    }
+
+    pub fn set_sampled_texture(
+        &self,
+        frame_index: u32,
+        binding: u32,
+        texture: &Texture,
+    ) -> Result<()> {
+        self.host_inner().set_sampled_texture(frame_index, binding, texture)
+    }
+
+    pub fn set_storage_buffer<B>(
+        &self,
+        frame_index: u32,
+        binding: u32,
+        buffer: &B,
+    ) -> Result<()>
+    where
+        B: super::VulkanStorageBindable + ?Sized,
+    {
+        self.host_inner().set_storage_buffer(frame_index, binding, buffer)
+    }
+
+    pub fn set_uniform_buffer<B>(
+        &self,
+        frame_index: u32,
+        binding: u32,
+        buffer: &B,
+    ) -> Result<()>
+    where
+        B: super::VulkanUniformBindable + ?Sized,
+    {
+        self.host_inner().set_uniform_buffer(frame_index, binding, buffer)
+    }
+
+    pub fn set_storage_image(
+        &self,
+        frame_index: u32,
+        binding: u32,
+        texture: &Texture,
+    ) -> Result<()> {
+        self.host_inner().set_storage_image(frame_index, binding, texture)
+    }
+
+    pub fn set_push_constants(&self, frame_index: u32, bytes: &[u8]) -> Result<()> {
+        self.host_inner().set_push_constants(frame_index, bytes)
+    }
+
+    pub fn set_push_constants_value<T: Copy>(
+        &self,
+        frame_index: u32,
+        value: &T,
+    ) -> Result<()> {
+        self.host_inner().set_push_constants_value(frame_index, value)
+    }
+
+    pub fn set_vertex_buffer<B>(
+        &self,
+        frame_index: u32,
+        binding: u32,
+        buffer: &B,
+        offset: u64,
+    ) -> Result<()>
+    where
+        B: super::VulkanVertexBindable + ?Sized,
+    {
+        self.host_inner()
+            .set_vertex_buffer(frame_index, binding, buffer, offset)
+    }
+
+    pub fn set_index_buffer<B>(
+        &self,
+        frame_index: u32,
+        buffer: &B,
+        offset: u64,
+        index_type: IndexType,
+    ) -> Result<()>
+    where
+        B: super::VulkanIndexBindable + ?Sized,
+    {
+        self.host_inner()
+            .set_index_buffer(frame_index, buffer, offset, index_type)
+    }
+
+    pub fn cmd_bind_and_draw(
+        &self,
+        cmd: vk::CommandBuffer,
+        frame_index: u32,
+        draw: &DrawCall,
+    ) -> Result<()> {
+        self.host_inner().cmd_bind_and_draw(cmd, frame_index, draw)
+    }
+
+    pub fn cmd_bind_and_draw_indexed(
+        &self,
+        cmd: vk::CommandBuffer,
+        frame_index: u32,
+        draw: &DrawIndexedCall,
+    ) -> Result<()> {
+        self.host_inner().cmd_bind_and_draw_indexed(cmd, frame_index, draw)
+    }
+
+    /// Offscreen render. See [`VulkanGraphicsKernelInner::offscreen_render`].
+    pub fn offscreen_render(
+        &self,
+        frame_index: u32,
+        color_targets: &[super::OffscreenColorTarget<'_>],
+        extent: (u32, u32),
+        draw: super::OffscreenDraw,
+    ) -> Result<()> {
+        self.host_inner()
+            .offscreen_render(frame_index, color_targets, extent, draw)
+    }
+}
+
+impl Clone for VulkanGraphicsKernel {
+    fn clone(&self) -> Self {
+        if !self.handle.is_null() && !self.vtable.is_null() {
+            unsafe {
+                ((*self.vtable).clone_graphics_kernel)(self.handle);
+            }
+        }
+        Self {
+            handle: self.handle,
+            vtable: self.vtable,
+        }
+    }
+}
+
+impl Drop for VulkanGraphicsKernel {
+    fn drop(&mut self) {
+        if !self.handle.is_null() && !self.vtable.is_null() {
+            unsafe {
+                ((*self.vtable).drop_graphics_kernel)(self.handle);
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for VulkanGraphicsKernel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VulkanGraphicsKernel").finish()
+    }
+}
+
+#[cfg(all(test, target_pointer_width = "64"))]
+mod beta_shape_layout_tests {
+    use super::*;
+    use core::mem::{align_of, offset_of, size_of};
+
+    #[test]
+    fn vulkan_graphics_kernel_layout() {
+        assert_eq!(size_of::<VulkanGraphicsKernel>(), 16);
+        assert_eq!(align_of::<VulkanGraphicsKernel>(), 8);
+        assert_eq!(offset_of!(VulkanGraphicsKernel, handle), 0);
+        assert_eq!(offset_of!(VulkanGraphicsKernel, vtable), 8);
+    }
+
+    #[test]
+    fn vulkan_graphics_kernel_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<VulkanGraphicsKernel>();
     }
 }
 

@@ -32,8 +32,8 @@ pub use blitter::RhiBlitter;
 pub use command_buffer::CommandBuffer;
 pub use command_queue::RhiCommandQueue;
 pub use color_converter::{
-    pixel_format_color_kind, ColorConverterPushConstants, RhiColorConverter, SourceLayoutInfo,
-    COLOR_CONVERTER_PUSH_CONSTANT_SIZE,
+    pixel_format_color_kind, ColorConverterPushConstants, RhiColorConverter,
+    RhiColorConverterInner, SourceLayoutInfo, COLOR_CONVERTER_PUSH_CONSTANT_SIZE,
 };
 pub use tone_mapper::{
     RhiToneMapper, ToneCurveId, ToneMapperPushConstants, TONE_MAPPER_PUSH_CONSTANT_SIZE,

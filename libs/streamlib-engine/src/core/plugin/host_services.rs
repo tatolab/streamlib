@@ -4438,7 +4438,7 @@ unsafe extern "C" fn host_gpu_full_clone_compute_kernel(handle: *const c_void) {
             // SAFETY: handle is `Arc::into_raw(Arc<VulkanComputeKernel>)`-shaped.
             unsafe {
                 Arc::increment_strong_count(
-                    handle as *const crate::vulkan::rhi::VulkanComputeKernel,
+                    handle as *const crate::vulkan::rhi::VulkanComputeKernelInner,
                 );
             }
         },
@@ -4457,7 +4457,7 @@ unsafe extern "C" fn host_gpu_full_drop_compute_kernel(handle: *const c_void) {
             // SAFETY: handle is `Arc::into_raw(Arc<VulkanComputeKernel>)`-shaped.
             unsafe {
                 Arc::decrement_strong_count(
-                    handle as *const crate::vulkan::rhi::VulkanComputeKernel,
+                    handle as *const crate::vulkan::rhi::VulkanComputeKernelInner,
                 );
             }
         },
@@ -4475,7 +4475,7 @@ unsafe extern "C" fn host_gpu_full_clone_graphics_kernel(handle: *const c_void) 
             }
             unsafe {
                 Arc::increment_strong_count(
-                    handle as *const crate::vulkan::rhi::VulkanGraphicsKernel,
+                    handle as *const crate::vulkan::rhi::VulkanGraphicsKernelInner,
                 );
             }
         },
@@ -4493,7 +4493,7 @@ unsafe extern "C" fn host_gpu_full_drop_graphics_kernel(handle: *const c_void) {
             }
             unsafe {
                 Arc::decrement_strong_count(
-                    handle as *const crate::vulkan::rhi::VulkanGraphicsKernel,
+                    handle as *const crate::vulkan::rhi::VulkanGraphicsKernelInner,
                 );
             }
         },
@@ -4511,7 +4511,7 @@ unsafe extern "C" fn host_gpu_full_clone_ray_tracing_kernel(handle: *const c_voi
             }
             unsafe {
                 Arc::increment_strong_count(
-                    handle as *const crate::vulkan::rhi::VulkanRayTracingKernel,
+                    handle as *const crate::vulkan::rhi::VulkanRayTracingKernelInner,
                 );
             }
         },
@@ -4529,7 +4529,7 @@ unsafe extern "C" fn host_gpu_full_drop_ray_tracing_kernel(handle: *const c_void
             }
             unsafe {
                 Arc::decrement_strong_count(
-                    handle as *const crate::vulkan::rhi::VulkanRayTracingKernel,
+                    handle as *const crate::vulkan::rhi::VulkanRayTracingKernelInner,
                 );
             }
         },
@@ -4547,7 +4547,7 @@ unsafe extern "C" fn host_gpu_full_clone_texture_ring(handle: *const c_void) {
             }
             unsafe {
                 Arc::increment_strong_count(
-                    handle as *const crate::core::context::TextureRing,
+                    handle as *const crate::core::context::TextureRingInner,
                 );
             }
         },
@@ -4565,7 +4565,126 @@ unsafe extern "C" fn host_gpu_full_drop_texture_ring(handle: *const c_void) {
             }
             unsafe {
                 Arc::decrement_strong_count(
-                    handle as *const crate::core::context::TextureRing,
+                    handle as *const crate::core::context::TextureRingInner,
+                );
+            }
+        },
+        (),
+    )
+}
+
+// β-shape v4 (#917) lifecycle callbacks. The handle is
+// `Arc::into_raw(Arc<<Type>Inner>)`-shaped on the host side; cdylib
+// code never sees the Inner layout, only the opaque handle paired
+// with its β-shape vtable. Increment/decrement runs in host-compiled
+// code where the Inner layout is known statically.
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_clone_color_converter(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_full_clone_color_converter",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            unsafe {
+                Arc::increment_strong_count(
+                    handle as *const crate::core::rhi::RhiColorConverterInner,
+                );
+            }
+        },
+        (),
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_drop_color_converter(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_full_drop_color_converter",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            unsafe {
+                Arc::decrement_strong_count(
+                    handle as *const crate::core::rhi::RhiColorConverterInner,
+                );
+            }
+        },
+        (),
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_clone_acceleration_structure(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_full_clone_acceleration_structure",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            unsafe {
+                Arc::increment_strong_count(
+                    handle
+                        as *const crate::vulkan::rhi::VulkanAccelerationStructureInner,
+                );
+            }
+        },
+        (),
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_drop_acceleration_structure(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_full_drop_acceleration_structure",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            unsafe {
+                Arc::decrement_strong_count(
+                    handle
+                        as *const crate::vulkan::rhi::VulkanAccelerationStructureInner,
+                );
+            }
+        },
+        (),
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_clone_command_recorder(_handle: *const c_void) {
+    // RhiCommandRecorder is Box-shaped (single-owner) — deliberately
+    // NOT Clone per CommandBuffer precedent. This slot is reserved
+    // infrastructure; the type-level absence of `Clone` for
+    // `RhiCommandRecorder` ensures the host callback is never invoked
+    // from typesafe code. If reached, it's a bug somewhere.
+    run_host_extern_c(
+        "host_gpu_full_clone_command_recorder",
+        || {
+            tracing::error!(
+                "host_gpu_full_clone_command_recorder invoked — RhiCommandRecorder is \
+                 not Clone-able (Box-shaped, single-owner). This is a bug."
+            );
+        },
+        (),
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_drop_command_recorder(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_full_drop_command_recorder",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            // SAFETY: handle is `Box::into_raw(Box<RhiCommandRecorderInner>)`-shaped.
+            // Reconstruct the Box and let Drop run.
+            unsafe {
+                let _ = Box::from_raw(
+                    handle as *mut crate::vulkan::rhi::RhiCommandRecorderInner,
                 );
             }
         },
@@ -4591,6 +4710,18 @@ unsafe extern "C" fn host_gpu_full_drop_ray_tracing_kernel(_handle: *const c_voi
 unsafe extern "C" fn host_gpu_full_clone_texture_ring(_handle: *const c_void) {}
 #[cfg(not(target_os = "linux"))]
 unsafe extern "C" fn host_gpu_full_drop_texture_ring(_handle: *const c_void) {}
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_clone_color_converter(_handle: *const c_void) {}
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_drop_color_converter(_handle: *const c_void) {}
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_clone_acceleration_structure(_handle: *const c_void) {}
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_drop_acceleration_structure(_handle: *const c_void) {}
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_clone_command_recorder(_handle: *const c_void) {}
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_drop_command_recorder(_handle: *const c_void) {}
 
 // ---------------- Kernel construction (Linux-only) ----------------
 
@@ -4666,8 +4797,15 @@ unsafe extern "C" fn host_gpu_full_create_compute_kernel(
                 },
             );
             match result {
-                Some(Ok(arc)) => {
-                    let raw = Arc::into_raw(arc) as *const c_void;
+                Some(Ok(kernel)) => {
+                    // `kernel` is the β-shape; its `handle` is the
+                    // `Arc::into_raw(Arc<<Type>Inner>)` raw pointer
+                    // already. Forget the β-shape so the strong ref
+                    // transfers to cdylib; the cdylib reconstructs its
+                    // own β-shape from { handle: raw, vtable } and
+                    // never sees the `Arc<X>` internal layout.
+                    let raw = kernel.handle;
+                    std::mem::forget(kernel);
                     unsafe { std::ptr::write(out_kernel, raw) };
                     0
                 }
@@ -4718,8 +4856,15 @@ unsafe extern "C" fn host_gpu_full_create_graphics_kernel(
                 },
             );
             match result {
-                Some(Ok(arc)) => {
-                    let raw = Arc::into_raw(arc) as *const c_void;
+                Some(Ok(kernel)) => {
+                    // β-shape: extract the opaque handle (which is
+                    // already `Arc::into_raw(Arc<<Type>Inner>)`-shaped)
+                    // and `mem::forget` the wrapper so the strong ref
+                    // transfers to cdylib. The cdylib reconstructs a
+                    // fresh β-shape from { handle, vtable } and never
+                    // sees the host's `Arc<X>` allocation header.
+                    let raw = kernel.handle;
+                    std::mem::forget(kernel);
                     unsafe { std::ptr::write(out_kernel, raw) };
                     0
                 }
@@ -4770,8 +4915,15 @@ unsafe extern "C" fn host_gpu_full_create_ray_tracing_kernel(
                 },
             );
             match result {
-                Some(Ok(arc)) => {
-                    let raw = Arc::into_raw(arc) as *const c_void;
+                Some(Ok(kernel)) => {
+                    // β-shape: extract the opaque handle (which is
+                    // already `Arc::into_raw(Arc<<Type>Inner>)`-shaped)
+                    // and `mem::forget` the wrapper so the strong ref
+                    // transfers to cdylib. The cdylib reconstructs a
+                    // fresh β-shape from { handle, vtable } and never
+                    // sees the host's `Arc<X>` allocation header.
+                    let raw = kernel.handle;
+                    std::mem::forget(kernel);
                     unsafe { std::ptr::write(out_kernel, raw) };
                     0
                 }
@@ -4840,8 +4992,11 @@ unsafe extern "C" fn host_gpu_full_create_texture_ring(
                 |gpu| gpu.create_texture_ring(width, height, format, usages, count),
             );
             match result {
-                Some(Ok(arc)) => {
-                    let raw = Arc::into_raw(arc) as *const c_void;
+                Some(Ok(ring)) => {
+                    // `ring` is the β-shape; its handle is
+                    // `Arc::into_raw(Arc<TextureRingInner>)`-shaped.
+                    let raw = ring.handle;
+                    std::mem::forget(ring);
                     unsafe { std::ptr::write(out_ring, raw) };
                     0
                 }
@@ -5306,8 +5461,11 @@ unsafe extern "C" fn host_gpu_full_color_converter(
                 |gpu| gpu.color_converter(src, dst),
             );
             match result {
-                Some(Ok(arc)) => {
-                    let raw = Arc::into_raw(arc) as *const c_void;
+                Some(Ok(converter)) => {
+                    // `converter` is the β-shape; its `handle` is the
+                    // `Arc::into_raw(Arc<RhiColorConverterInner>)` pointer.
+                    let raw = converter.handle;
+                    std::mem::forget(converter);
                     unsafe { std::ptr::write(out_converter, raw) };
                     0
                 }
@@ -5387,13 +5545,15 @@ unsafe extern "C" fn host_gpu_full_create_command_recorder(
             );
             match result {
                 Some(Ok(recorder)) => {
-                    // SAFETY: host writes the RhiCommandRecorder struct
-                    // by value into the cdylib's MaybeUninit slot;
-                    // layout is byte-identical under the rustc-version
-                    // coupling contract (CLAUDE.md). The cdylib's
-                    // Drop will run when the value falls out of scope
-                    // (in cdylib code), accessing host-loader Vulkan
-                    // handles which are globally addressable.
+                    // SAFETY: `recorder` is the β-shape — a
+                    // `#[repr(C)] { handle: *const c_void, vtable: *const VTable }`
+                    // 16-byte POD. Layout is byte-identical
+                    // by `#[repr(C)]` invariant, not by rustc-version
+                    // coupling. The cdylib reads the bits via
+                    // `MaybeUninit::assume_init`; its `Drop` later
+                    // dispatches through the vtable's
+                    // `drop_command_recorder` slot which runs
+                    // `Box::from_raw + drop` host-side.
                     unsafe {
                         std::ptr::write(
                             out_recorder as *mut crate::vulkan::rhi::RhiCommandRecorder,
@@ -5491,8 +5651,14 @@ unsafe extern "C" fn host_gpu_full_build_triangles_blas(
                 |gpu| gpu.build_triangles_blas(label, vertices, indices),
             );
             match result {
-                Some(Ok(arc)) => {
-                    let raw = Arc::into_raw(arc) as *const c_void;
+                Some(Ok(blas)) => {
+                    // `blas` is the β-shape — its `handle` is already
+                    // `Arc::into_raw(Arc<VulkanAccelerationStructureInner>)`-shaped.
+                    // Forget the β-shape to keep the Arc strong count
+                    // bumped; cdylib reconstructs its own β-shape from
+                    // the handle + vtable.
+                    let raw = blas.handle;
+                    std::mem::forget(blas);
                     unsafe { std::ptr::write(out_blas, raw) };
                     0
                 }
@@ -5593,8 +5759,9 @@ unsafe extern "C" fn host_gpu_full_build_tlas(
                 |gpu| gpu.build_tlas(label, instances),
             );
             match result {
-                Some(Ok(arc)) => {
-                    let raw = Arc::into_raw(arc) as *const c_void;
+                Some(Ok(tlas)) => {
+                    let raw = tlas.handle;
+                    std::mem::forget(tlas);
                     unsafe { std::ptr::write(out_tlas, raw) };
                     0
                 }
@@ -5747,6 +5914,13 @@ pub static HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE: GpuContextFullAccessVTable =
         drop_ray_tracing_kernel: host_gpu_full_drop_ray_tracing_kernel,
         clone_texture_ring: host_gpu_full_clone_texture_ring,
         drop_texture_ring: host_gpu_full_drop_texture_ring,
+        // v4 β-shape lifecycle slots (#917).
+        clone_color_converter: host_gpu_full_clone_color_converter,
+        drop_color_converter: host_gpu_full_drop_color_converter,
+        clone_acceleration_structure: host_gpu_full_clone_acceleration_structure,
+        drop_acceleration_structure: host_gpu_full_drop_acceleration_structure,
+        clone_command_recorder: host_gpu_full_clone_command_recorder,
+        drop_command_recorder: host_gpu_full_drop_command_recorder,
         create_compute_kernel: host_gpu_full_create_compute_kernel,
         create_graphics_kernel: host_gpu_full_create_graphics_kernel,
         create_ray_tracing_kernel: host_gpu_full_create_ray_tracing_kernel,

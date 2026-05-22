@@ -407,7 +407,7 @@ pub struct GpuContext {
     /// on miss matches that read/write skew.
     #[cfg(target_os = "linux")]
     color_converter_cache:
-        Arc<RwLock<HashMap<(PixelFormat, PixelFormat), Arc<RhiColorConverter>>>>,
+        Arc<RwLock<HashMap<(PixelFormat, PixelFormat), Arc<crate::core::rhi::RhiColorConverterInner>>>>,
     /// Engine-tier publication slot for an in-process producer's timeline
     /// semaphore. The producer (today: the camera; in principle any in-tree
     /// video source) publishes a typed handle here so an in-process consumer
@@ -1315,30 +1315,31 @@ impl GpuContext {
         &self,
         src: PixelFormat,
         dst: PixelFormat,
-    ) -> Result<Arc<RhiColorConverter>> {
-        // Fast path: read lock.
+    ) -> Result<RhiColorConverter> {
+        // Fast path: read lock; cache stores Arc<Inner> so we can build
+        // a fresh β-shape via from_arc_into_raw per request.
         {
             let cache = self.color_converter_cache.read().unwrap();
             if let Some(c) = cache.get(&(src, dst)) {
-                return Ok(Arc::clone(c));
+                return Ok(RhiColorConverter::from_arc_into_raw(Arc::clone(c)));
             }
         }
         // Slow path: build under write lock with double-check.
         let mut cache = self.color_converter_cache.write().unwrap();
         if let Some(c) = cache.get(&(src, dst)) {
-            return Ok(Arc::clone(c));
+            return Ok(RhiColorConverter::from_arc_into_raw(Arc::clone(c)));
         }
         let vulkan_device = &self.device.inner;
         let inner = crate::vulkan::rhi::VulkanColorConverter::new(vulkan_device, src, dst)?;
-        let converter = Arc::new(RhiColorConverter { inner });
-        cache.insert((src, dst), Arc::clone(&converter));
+        let inner_arc = Arc::new(crate::core::rhi::RhiColorConverterInner { inner });
+        cache.insert((src, dst), Arc::clone(&inner_arc));
         tracing::debug!(
             rhi_op = "color_converter",
             ?src,
             ?dst,
             "GpuContext::color_converter — converter constructed"
         );
-        Ok(converter)
+        Ok(RhiColorConverter::from_arc_into_raw(inner_arc))
     }
 
     /// Create a compute kernel from a SPIR-V shader and a binding declaration.
@@ -1353,7 +1354,7 @@ impl GpuContext {
     pub fn create_compute_kernel(
         &self,
         descriptor: &crate::core::rhi::ComputeKernelDescriptor<'_>,
-    ) -> Result<Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+    ) -> Result<crate::vulkan::rhi::VulkanComputeKernel> {
         tracing::debug!(
             rhi_op = "create_compute_kernel",
             label = descriptor.label,
@@ -1362,8 +1363,7 @@ impl GpuContext {
             "GpuContext::create_compute_kernel"
         );
         let vulkan_device = &self.device.inner;
-        let kernel = crate::vulkan::rhi::VulkanComputeKernel::new(vulkan_device, descriptor)?;
-        Ok(Arc::new(kernel))
+        crate::vulkan::rhi::VulkanComputeKernel::new(vulkan_device, descriptor)
     }
 
     /// Build an engine-owned command-buffer recorder bound to the
@@ -1401,7 +1401,7 @@ impl GpuContext {
     pub fn create_graphics_kernel(
         &self,
         descriptor: &crate::core::rhi::GraphicsKernelDescriptor<'_>,
-    ) -> Result<Arc<crate::vulkan::rhi::VulkanGraphicsKernel>> {
+    ) -> Result<crate::vulkan::rhi::VulkanGraphicsKernel> {
         tracing::debug!(
             rhi_op = "create_graphics_kernel",
             label = descriptor.label,
@@ -1412,8 +1412,7 @@ impl GpuContext {
             "GpuContext::create_graphics_kernel"
         );
         let vulkan_device = &self.device.inner;
-        let kernel = crate::vulkan::rhi::VulkanGraphicsKernel::new(vulkan_device, descriptor)?;
-        Ok(Arc::new(kernel))
+        crate::vulkan::rhi::VulkanGraphicsKernel::new(vulkan_device, descriptor)
     }
 
     /// Create a ray-tracing kernel from shader stages, shader-group
@@ -1430,7 +1429,7 @@ impl GpuContext {
     pub fn create_ray_tracing_kernel(
         &self,
         descriptor: &crate::core::rhi::RayTracingKernelDescriptor<'_>,
-    ) -> Result<Arc<crate::vulkan::rhi::VulkanRayTracingKernel>> {
+    ) -> Result<crate::vulkan::rhi::VulkanRayTracingKernel> {
         tracing::debug!(
             rhi_op = "create_ray_tracing_kernel",
             label = descriptor.label,
@@ -1442,8 +1441,7 @@ impl GpuContext {
             "GpuContext::create_ray_tracing_kernel"
         );
         let vulkan_device = &self.device.inner;
-        let kernel = crate::vulkan::rhi::VulkanRayTracingKernel::new(vulkan_device, descriptor)?;
-        Ok(Arc::new(kernel))
+        crate::vulkan::rhi::VulkanRayTracingKernel::new(vulkan_device, descriptor)
     }
 
     /// Pre-allocate a ring of `count` non-exportable DEVICE_LOCAL
@@ -1459,8 +1457,8 @@ impl GpuContext {
         format: TextureFormat,
         usages: TextureUsages,
         count: usize,
-    ) -> Result<Arc<crate::core::context::TextureRing>> {
-        use crate::core::context::{TextureRing, TextureRingSlot};
+    ) -> Result<crate::core::context::TextureRing> {
+        use crate::core::context::{TextureRing, TextureRingInner, TextureRingSlot};
 
         if count == 0 {
             return Err(Error::GpuError(
@@ -1496,14 +1494,15 @@ impl GpuContext {
             let res = crate::vulkan::rhi::HostVulkanUploadResources::new(&self.device.inner)?;
             upload_resources.push(res);
         }
-        Ok(TextureRing::from_slots(
+        let inner_arc = TextureRingInner::from_slots(
             slots,
             upload_resources,
             width,
             height,
             format,
             self.clone(),
-        ))
+        );
+        Ok(TextureRing::from_arc_into_raw(inner_arc))
     }
 
     /// Build a triangle-geometry bottom-level acceleration structure
@@ -1516,7 +1515,7 @@ impl GpuContext {
         label: &str,
         vertices: &[f32],
         indices: &[u32],
-    ) -> Result<Arc<crate::vulkan::rhi::VulkanAccelerationStructure>> {
+    ) -> Result<crate::vulkan::rhi::VulkanAccelerationStructure> {
         tracing::debug!(
             rhi_op = "build_triangles_blas",
             label,
@@ -1542,7 +1541,7 @@ impl GpuContext {
         &self,
         label: &str,
         instances: &[crate::vulkan::rhi::TlasInstanceDesc],
-    ) -> Result<Arc<crate::vulkan::rhi::VulkanAccelerationStructure>> {
+    ) -> Result<crate::vulkan::rhi::VulkanAccelerationStructure> {
         tracing::debug!(
             rhi_op = "build_tlas",
             label,
@@ -3871,7 +3870,7 @@ impl GpuContextFullAccess {
         format: TextureFormat,
         usages: TextureUsages,
         count: usize,
-    ) -> Result<Arc<crate::core::context::TextureRing>> {
+    ) -> Result<crate::core::context::TextureRing> {
         match self.handle_kind {
             HandleKind::Boxed => self
                 .host_inner()
@@ -3906,22 +3905,14 @@ impl GpuContextFullAccess {
                                 .into(),
                         ));
                     }
-                    // SAFETY: host returned
-                    // `Arc::into_raw(Arc<TextureRing>)`. Rebuilding via
-                    // `Arc::from_raw` is sound under the rustc-version
-                    // coupling contract documented in CLAUDE.md (host
-                    // and cdylib share the toolchain + dep graph, so
-                    // `TextureRing`'s layout is byte-identical and the
-                    // host's `Arc` strong-count machinery survives the
-                    // cross-DSO transit). The host transferred its
-                    // strong reference to us; `Arc<TextureRing>::drop`
-                    // running in cdylib code releases that reference.
-                    let arc = unsafe {
-                        Arc::from_raw(
-                            out_ring as *const crate::core::context::TextureRing,
-                        )
-                    };
-                    Ok(arc)
+                    // β-shape: bundle the raw handle
+                    // (`Arc::into_raw(Arc<TextureRingInner>)`-shaped) with
+                    // the host vtable. Cross-rustc-version safe because
+                    // cdylib never derefs the Inner layout.
+                    Ok(crate::core::context::TextureRing {
+                        handle: out_ring,
+                        vtable: self.vtable,
+                    })
                 } else {
                     let msg = String::from_utf8_lossy(
                         &err_buf[..err_len.min(err_buf.len())],
@@ -4095,7 +4086,7 @@ impl GpuContextFullAccess {
         &self,
         src: PixelFormat,
         dst: PixelFormat,
-    ) -> Result<Arc<RhiColorConverter>> {
+    ) -> Result<RhiColorConverter> {
         match self.handle_kind {
             HandleKind::Boxed => self.host_inner().color_converter(src, dst),
             HandleKind::ScopeToken => {
@@ -4124,10 +4115,11 @@ impl GpuContextFullAccess {
                             "color_converter: host signaled success but out_converter is null".into(),
                         ));
                     }
-                    // SAFETY: host wrote `Arc::into_raw(Arc<RhiColorConverter>)`.
-                    let arc =
-                        unsafe { Arc::from_raw(out_converter as *const RhiColorConverter) };
-                    Ok(arc)
+                    // β-shape: bundle the raw handle with the host vtable.
+                    Ok(RhiColorConverter {
+                        handle: out_converter,
+                        vtable: self.vtable,
+                    })
                 } else {
                     let msg = String::from_utf8_lossy(
                         &err_buf[..err_len.min(err_buf.len())],
@@ -4153,7 +4145,7 @@ impl GpuContextFullAccess {
     pub fn create_compute_kernel(
         &self,
         descriptor: &crate::core::rhi::ComputeKernelDescriptor<'_>,
-    ) -> Result<Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+    ) -> Result<crate::vulkan::rhi::VulkanComputeKernel> {
         match self.handle_kind {
             HandleKind::Boxed => self.host_inner().create_compute_kernel(descriptor),
             HandleKind::ScopeToken => {
@@ -4189,16 +4181,16 @@ impl GpuContextFullAccess {
                             "create_compute_kernel: host signaled success but out_kernel is null".into(),
                         ));
                     }
-                    // SAFETY: host wrote
-                    // `Arc::into_raw(Arc<VulkanComputeKernel>)`. The
-                    // strong reference transfers ownership to the
-                    // cdylib via this reconstruction.
-                    let arc = unsafe {
-                        Arc::from_raw(
-                            out_kernel as *const crate::vulkan::rhi::VulkanComputeKernel,
-                        )
-                    };
-                    Ok(arc)
+                    // β-shape: bundle the raw handle (an
+                    // `Arc::into_raw(Arc<VulkanComputeKernelInner>)`
+                    // pointer host-side, opaque to the cdylib) with the
+                    // host vtable. Lifecycle dispatches through the
+                    // vtable's clone/drop slots without ever crossing
+                    // the host's `Arc<X>` allocation-header layout.
+                    Ok(crate::vulkan::rhi::VulkanComputeKernel {
+                        handle: out_kernel,
+                        vtable: self.vtable,
+                    })
                 } else {
                     let msg = String::from_utf8_lossy(
                         &err_buf[..err_len.min(err_buf.len())],
@@ -4275,7 +4267,7 @@ impl GpuContextFullAccess {
     pub fn create_graphics_kernel(
         &self,
         descriptor: &crate::core::rhi::GraphicsKernelDescriptor<'_>,
-    ) -> Result<Arc<crate::vulkan::rhi::VulkanGraphicsKernel>> {
+    ) -> Result<crate::vulkan::rhi::VulkanGraphicsKernel> {
         match self.handle_kind {
             HandleKind::Boxed => self.host_inner().create_graphics_kernel(descriptor),
             HandleKind::ScopeToken => {
@@ -4307,14 +4299,11 @@ impl GpuContextFullAccess {
                             "create_graphics_kernel: host signaled success but out_kernel is null".into(),
                         ));
                     }
-                    // SAFETY: host wrote
-                    // `Arc::into_raw(Arc<VulkanGraphicsKernel>)`.
-                    let arc = unsafe {
-                        Arc::from_raw(
-                            out_kernel as *const crate::vulkan::rhi::VulkanGraphicsKernel,
-                        )
-                    };
-                    Ok(arc)
+                    // β-shape: see compute_kernel above.
+                    Ok(crate::vulkan::rhi::VulkanGraphicsKernel {
+                        handle: out_kernel,
+                        vtable: self.vtable,
+                    })
                 } else {
                     let msg = String::from_utf8_lossy(
                         &err_buf[..err_len.min(err_buf.len())],
@@ -4335,7 +4324,7 @@ impl GpuContextFullAccess {
     pub fn create_ray_tracing_kernel(
         &self,
         descriptor: &crate::core::rhi::RayTracingKernelDescriptor<'_>,
-    ) -> Result<Arc<crate::vulkan::rhi::VulkanRayTracingKernel>> {
+    ) -> Result<crate::vulkan::rhi::VulkanRayTracingKernel> {
         match self.handle_kind {
             HandleKind::Boxed => self.host_inner().create_ray_tracing_kernel(descriptor),
             HandleKind::ScopeToken => {
@@ -4367,14 +4356,11 @@ impl GpuContextFullAccess {
                             "create_ray_tracing_kernel: host signaled success but out_kernel is null".into(),
                         ));
                     }
-                    // SAFETY: host wrote
-                    // `Arc::into_raw(Arc<VulkanRayTracingKernel>)`.
-                    let arc = unsafe {
-                        Arc::from_raw(
-                            out_kernel as *const crate::vulkan::rhi::VulkanRayTracingKernel,
-                        )
-                    };
-                    Ok(arc)
+                    // β-shape: see compute_kernel above.
+                    Ok(crate::vulkan::rhi::VulkanRayTracingKernel {
+                        handle: out_kernel,
+                        vtable: self.vtable,
+                    })
                 } else {
                     let msg = String::from_utf8_lossy(
                         &err_buf[..err_len.min(err_buf.len())],
@@ -4394,7 +4380,7 @@ impl GpuContextFullAccess {
         label: &str,
         vertices: &[f32],
         indices: &[u32],
-    ) -> Result<Arc<crate::vulkan::rhi::VulkanAccelerationStructure>> {
+    ) -> Result<crate::vulkan::rhi::VulkanAccelerationStructure> {
         match self.handle_kind {
             HandleKind::Boxed => {
                 self.host_inner().build_triangles_blas(label, vertices, indices)
@@ -4429,13 +4415,13 @@ impl GpuContextFullAccess {
                             "build_triangles_blas: host signaled success but out_blas is null".into(),
                         ));
                     }
-                    let arc = unsafe {
-                        Arc::from_raw(
-                            out_blas
-                                as *const crate::vulkan::rhi::VulkanAccelerationStructure,
-                        )
-                    };
-                    Ok(arc)
+                    // β-shape: bundle the raw handle (`Arc::into_raw(Arc<Inner>)`-shaped)
+                    // with the host vtable. Cross-rustc-version safe because no Inner
+                    // layout knowledge is required cdylib-side.
+                    Ok(crate::vulkan::rhi::VulkanAccelerationStructure {
+                        handle: out_blas,
+                        vtable: self.vtable,
+                    })
                 } else {
                     let msg = String::from_utf8_lossy(
                         &err_buf[..err_len.min(err_buf.len())],
@@ -4453,7 +4439,7 @@ impl GpuContextFullAccess {
         &self,
         label: &str,
         instances: &[crate::vulkan::rhi::TlasInstanceDesc],
-    ) -> Result<Arc<crate::vulkan::rhi::VulkanAccelerationStructure>> {
+    ) -> Result<crate::vulkan::rhi::VulkanAccelerationStructure> {
         match self.handle_kind {
             HandleKind::Boxed => self.host_inner().build_tlas(label, instances),
             HandleKind::ScopeToken => {
@@ -4484,13 +4470,10 @@ impl GpuContextFullAccess {
                             "build_tlas: host signaled success but out_tlas is null".into(),
                         ));
                     }
-                    let arc = unsafe {
-                        Arc::from_raw(
-                            out_tlas
-                                as *const crate::vulkan::rhi::VulkanAccelerationStructure,
-                        )
-                    };
-                    Ok(arc)
+                    Ok(crate::vulkan::rhi::VulkanAccelerationStructure {
+                        handle: out_tlas,
+                        vtable: self.vtable,
+                    })
                 } else {
                     let msg = String::from_utf8_lossy(
                         &err_buf[..err_len.min(err_buf.len())],

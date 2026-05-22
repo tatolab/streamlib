@@ -39,7 +39,7 @@ pub struct H264DecoderProcessor {
     /// Pre-allocated output texture ring. Built lazily on the first
     /// decoded frame (dimensions come from the SPS), rebuilt only on
     /// mid-stream resolution change.
-    texture_ring: Option<Arc<TextureRing>>,
+    texture_ring: Option<TextureRing>,
 
     /// Frames decoded counter.
     frames_decoded: u64,

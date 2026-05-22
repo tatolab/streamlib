@@ -392,7 +392,7 @@ impl streamlib::sdk::processors::ManualProcessor for LinuxCameraProcessor::Proce
 }
 
 struct CameraGpuResources {
-    color_converter: Arc<RhiColorConverter>,
+    color_converter: RhiColorConverter,
     recorder: RhiCommandRecorder,
     timeline: Arc<HostVulkanTimelineSemaphore>,
     input_storage_buffers: Vec<StorageBuffer>,

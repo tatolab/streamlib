@@ -211,7 +211,13 @@ pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 10;
 ///   inherit through the originating LimitedAccess vtable per the
 ///   `inherited_lim_*` fields on `GpuContextFullAccess` — they do
 ///   not get parallel slots here.
-pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 3;
+/// - v4: β-shape Phase D return types (`RhiColorConverter`,
+///   `VulkanAccelerationStructure`, `RhiCommandRecorder`) gain
+///   `clone_*` / `drop_*` slot pairs alongside the existing kernel +
+///   texture-ring pairs. The slots activate the layout-stable
+///   `(handle, vtable)` β-shape pattern so cdylibs can hold +
+///   refcount + drop these handles without rustc-version coupling.
+pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 4;
 
 // =============================================================================
 // Primitive enums
@@ -2057,43 +2063,80 @@ pub struct GpuContextFullAccessVTable {
     // VulkanComputeKernel return-type lifetime
     // -------------------------------------------------------------------------
 
-    /// Bump the refcount on a `VulkanComputeKernel` handle. Called by
-    /// the cdylib's `Clone for ComputeKernel`. Host runs
-    /// `Arc::increment_strong_count(handle as *const VulkanComputeKernel)`.
+    /// Bump the refcount on a `VulkanComputeKernel` β-shape handle.
+    /// Called by the cdylib's `Clone for VulkanComputeKernel`. Host
+    /// runs `Arc::increment_strong_count(handle as *const VulkanComputeKernelInner)`
+    /// against the host-internal Inner type — cdylib never sees the
+    /// Inner layout.
     pub clone_compute_kernel: unsafe extern "C" fn(handle: *const c_void),
 
-    /// Decrement the refcount on a `VulkanComputeKernel` handle.
+    /// Decrement the refcount on a `VulkanComputeKernel` β-shape handle.
+    /// Host runs `Arc::decrement_strong_count` against the Inner type.
     pub drop_compute_kernel: unsafe extern "C" fn(handle: *const c_void),
 
     // -------------------------------------------------------------------------
     // VulkanGraphicsKernel return-type lifetime
     // -------------------------------------------------------------------------
 
-    /// Bump the refcount on a `VulkanGraphicsKernel` handle.
+    /// Bump the refcount on a `VulkanGraphicsKernel` β-shape handle.
+    /// Host runs `Arc::increment_strong_count(handle as *const VulkanGraphicsKernelInner)`.
     pub clone_graphics_kernel: unsafe extern "C" fn(handle: *const c_void),
 
-    /// Decrement the refcount on a `VulkanGraphicsKernel` handle.
+    /// Decrement the refcount on a `VulkanGraphicsKernel` β-shape handle.
     pub drop_graphics_kernel: unsafe extern "C" fn(handle: *const c_void),
 
     // -------------------------------------------------------------------------
     // VulkanRayTracingKernel return-type lifetime
     // -------------------------------------------------------------------------
 
-    /// Bump the refcount on a `VulkanRayTracingKernel` handle.
+    /// Bump the refcount on a `VulkanRayTracingKernel` β-shape handle.
+    /// Host runs `Arc::increment_strong_count(handle as *const VulkanRayTracingKernelInner)`.
     pub clone_ray_tracing_kernel: unsafe extern "C" fn(handle: *const c_void),
 
-    /// Decrement the refcount on a `VulkanRayTracingKernel` handle.
+    /// Decrement the refcount on a `VulkanRayTracingKernel` β-shape handle.
     pub drop_ray_tracing_kernel: unsafe extern "C" fn(handle: *const c_void),
 
     // -------------------------------------------------------------------------
     // TextureRing return-type lifetime
     // -------------------------------------------------------------------------
 
-    /// Bump the refcount on a `TextureRing` handle.
+    /// Bump the refcount on a `TextureRing` β-shape handle.
+    /// Host runs `Arc::increment_strong_count(handle as *const TextureRingInner)`.
     pub clone_texture_ring: unsafe extern "C" fn(handle: *const c_void),
 
-    /// Decrement the refcount on a `TextureRing` handle.
+    /// Decrement the refcount on a `TextureRing` β-shape handle.
     pub drop_texture_ring: unsafe extern "C" fn(handle: *const c_void),
+
+    // -------------------------------------------------------------------------
+    // RhiColorConverter return-type lifetime (v4)
+    // -------------------------------------------------------------------------
+
+    /// Bump the refcount on a `RhiColorConverter` handle. Host runs
+    /// `Arc::increment_strong_count(handle as *const RhiColorConverterInner)`.
+    pub clone_color_converter: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on a `RhiColorConverter` handle.
+    pub drop_color_converter: unsafe extern "C" fn(handle: *const c_void),
+
+    // -------------------------------------------------------------------------
+    // VulkanAccelerationStructure return-type lifetime (v4)
+    // -------------------------------------------------------------------------
+
+    /// Bump the refcount on a `VulkanAccelerationStructure` handle.
+    pub clone_acceleration_structure: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on a `VulkanAccelerationStructure` handle.
+    pub drop_acceleration_structure: unsafe extern "C" fn(handle: *const c_void),
+
+    // -------------------------------------------------------------------------
+    // RhiCommandRecorder return-type lifetime (v4)
+    // -------------------------------------------------------------------------
+
+    /// Bump the refcount on a `RhiCommandRecorder` handle.
+    pub clone_command_recorder: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on a `RhiCommandRecorder` handle.
+    pub drop_command_recorder: unsafe extern "C" fn(handle: *const c_void),
 
     // -------------------------------------------------------------------------
     // Kernel construction
@@ -2902,7 +2945,7 @@ mod layout_tests {
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 10);
         assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
-        assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 3);
+        assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 4);
     }
 
     #[test]
@@ -3170,18 +3213,20 @@ mod layout_tests {
 
     #[test]
     fn gpu_context_full_access_vtable_layout() {
-        // layout_version (u32) + _reserved_padding (u32) + 23 fn
-        // pointers (8 bytes each) = 4 + 4 + 184 = 192 bytes.
+        // layout_version (u32) + _reserved_padding (u32) + 29 fn
+        // pointers (8 bytes each) = 4 + 4 + 232 = 240 bytes.
         //
-        // 23 entries = 1 drop_handle + 4 clone/drop pairs (8 fn
-        // pointers for the 4 kernel return types) + 4 create_* method
+        // 29 entries = 1 drop_handle + 7 clone/drop pairs (14 fn
+        // pointers for the 7 β-shape return types: compute / graphics /
+        // ray-tracing kernels, texture ring, color converter,
+        // acceleration structure, command recorder) + 4 create_* method
         // callbacks (compute / graphics / ray-tracing / texture_ring)
         // + 1 acquire_render_target_dma_buf_image (C3) + 9 Phase D
         // privileged methods (wait_device_idle, acquire_output_texture,
         // upload_pixel_buffer_as_texture, color_converter,
         // create_command_recorder, build_triangles_blas, build_tlas,
         // supports_ray_tracing_pipeline, check_in_surface).
-        assert_eq!(size_of::<GpuContextFullAccessVTable>(), 192);
+        assert_eq!(size_of::<GpuContextFullAccessVTable>(), 240);
         assert_eq!(align_of::<GpuContextFullAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextFullAccessVTable, layout_version), 0);
         assert_eq!(offset_of!(GpuContextFullAccessVTable, _reserved_padding), 4);
@@ -3218,21 +3263,52 @@ mod layout_tests {
             offset_of!(GpuContextFullAccessVTable, drop_texture_ring),
             72
         );
+        // v4-added β-shape clone/drop pairs (#917).
         assert_eq!(
-            offset_of!(GpuContextFullAccessVTable, create_compute_kernel),
+            offset_of!(GpuContextFullAccessVTable, clone_color_converter),
             80
         );
         assert_eq!(
-            offset_of!(GpuContextFullAccessVTable, create_graphics_kernel),
+            offset_of!(GpuContextFullAccessVTable, drop_color_converter),
             88
         );
         assert_eq!(
-            offset_of!(GpuContextFullAccessVTable, create_ray_tracing_kernel),
+            offset_of!(
+                GpuContextFullAccessVTable,
+                clone_acceleration_structure
+            ),
             96
         );
         assert_eq!(
-            offset_of!(GpuContextFullAccessVTable, create_texture_ring),
+            offset_of!(
+                GpuContextFullAccessVTable,
+                drop_acceleration_structure
+            ),
             104
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, clone_command_recorder),
+            112
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, drop_command_recorder),
+            120
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, create_compute_kernel),
+            128
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, create_graphics_kernel),
+            136
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, create_ray_tracing_kernel),
+            144
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, create_texture_ring),
+            152
         );
         // C3-added entry (Phase C3, #903).
         assert_eq!(
@@ -3240,47 +3316,47 @@ mod layout_tests {
                 GpuContextFullAccessVTable,
                 acquire_render_target_dma_buf_image
             ),
-            112
+            160
         );
         // Phase D entries (#906).
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, wait_device_idle),
-            120
+            168
         );
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, acquire_output_texture),
-            128
+            176
         );
         assert_eq!(
             offset_of!(
                 GpuContextFullAccessVTable,
                 upload_pixel_buffer_as_texture
             ),
-            136
+            184
         );
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, color_converter),
-            144
+            192
         );
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, create_command_recorder),
-            152
+            200
         );
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, build_triangles_blas),
-            160
+            208
         );
-        assert_eq!(offset_of!(GpuContextFullAccessVTable, build_tlas), 168);
+        assert_eq!(offset_of!(GpuContextFullAccessVTable, build_tlas), 216);
         assert_eq!(
             offset_of!(
                 GpuContextFullAccessVTable,
                 supports_ray_tracing_pipeline
             ),
-            176
+            224
         );
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, check_in_surface),
-            184
+            232
         );
     }
 

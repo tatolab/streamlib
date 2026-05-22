@@ -75,6 +75,12 @@ pub use vulkan_pipeline_flags::{VulkanAccess, VulkanStage};
 mod vulkan_command_recorder;
 #[cfg(target_os = "linux")]
 pub use vulkan_command_recorder::{ImageCopyRegion, RhiCommandRecorder};
+pub(crate) use vulkan_compute_kernel::VulkanComputeKernelInner;
+pub(crate) use vulkan_graphics_kernel::VulkanGraphicsKernelInner;
+pub(crate) use vulkan_ray_tracing_kernel::VulkanRayTracingKernelInner;
+// `RhiCommandRecorderInner` is needed by `core::plugin::host_services`
+// for `Box::from_raw` in `drop_command_recorder`. Crate-scope export.
+pub(crate) use vulkan_command_recorder::RhiCommandRecorderInner;
 
 #[cfg(target_os = "linux")]
 mod vulkan_present_target;
@@ -110,6 +116,12 @@ mod vulkan_acceleration_structure;
 pub use vulkan_acceleration_structure::{
     AccelerationStructureKind, TlasInstanceDesc, VulkanAccelerationStructure, IDENTITY_TRANSFORM,
 };
+// `VulkanAccelerationStructureInner` is `pub(crate)`-shaped — only
+// the host's clone/drop callbacks in `core::plugin::host_services`
+// need to reference it for `Arc::increment_strong_count` /
+// `Arc::decrement_strong_count`. Re-export at crate scope.
+#[cfg(target_os = "linux")]
+pub(crate) use vulkan_acceleration_structure::VulkanAccelerationStructureInner;
 
 #[cfg(target_os = "linux")]
 mod vulkan_ray_tracing_kernel;

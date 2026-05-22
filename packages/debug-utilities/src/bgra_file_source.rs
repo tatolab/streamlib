@@ -132,7 +132,7 @@ fn source_thread_loop(
     frame_counter: Arc<AtomicU64>,
     outputs: Arc<OutputWriter>,
     gpu_context: GpuContextLimitedAccess,
-    texture_ring: Arc<TextureRing>,
+    texture_ring: TextureRing,
 ) {
     let frame_size = (width * height * 4) as usize;
 
