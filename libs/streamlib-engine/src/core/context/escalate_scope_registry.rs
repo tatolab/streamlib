@@ -84,6 +84,17 @@ pub(crate) fn begin_escalate_scope(arc_ctx: Arc<GpuContext>) -> ScopeToken {
 /// `false` if it was already removed (e.g. double `escalate_end` or a
 /// never-issued token). Idempotent on the registry — duplicate calls
 /// don't release another scope's gate.
+///
+/// **Caller contract.** The caller MUST ensure no FullAccess vtable
+/// call against this scope token is still in-flight on another
+/// thread when `end_escalate_scope` runs. Releasing the gate early
+/// while a FullAccess method is mid-execution would let a fresh
+/// `begin_escalate_scope` overlap with the tail of the prior scope's
+/// GPU work. The cdylib's `escalate_via_vtable` wrapper enforces
+/// this naturally — the closure runs synchronously and returns
+/// before `escalate_end` fires. Cdylib code that spawns a thread
+/// inside an escalate closure and lets it outlive the scope is a
+/// caller bug.
 pub(crate) fn end_escalate_scope(token: ScopeToken) -> bool {
     let removed = {
         let mut scopes = registry()

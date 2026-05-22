@@ -5652,11 +5652,19 @@ mod gpu_lim_escalate_vtable_tests {
     #[serial]
     fn full_access_callback_with_valid_token_resolves_scope() {
         // End-to-end: begin a scope, get a valid token, invoke a
-        // FullAccess vtable callback with the token. The callback's
-        // scope lookup should succeed (no "invalid escalate scope"
-        // error). The actual create_compute_kernel will fail on the
-        // bogus descriptor — but the failure message proves the
-        // scope lookup passed (different error class).
+        // FullAccess vtable callback with the token + a valid
+        // descriptor. The callback's scope-token lookup must succeed
+        // (no "invalid escalate scope" error). The actual allocation
+        // may succeed or fail depending on the Vulkan environment
+        // (render-target DMA-BUF availability, EGL DRM modifier
+        // probe), but EITHER outcome proves the scope lookup passed:
+        // a success returns rc=0 with `out_texture` populated; a
+        // failure returns rc=1 with an error message that does NOT
+        // contain "invalid escalate scope".
+        //
+        // (Mentally revert `with_full_scope_or_err` to always return
+        // None — this test fails because the error message would
+        // then contain "invalid escalate scope".)
         let Some((handle, _arc)) = make_host_handle() else {
             tracing::warn!(
                 target: "streamlib::tests::escalate_vtable",
@@ -5678,12 +5686,6 @@ mod gpu_lim_escalate_vtable_tests {
         }
         assert!(!token.is_null());
 
-        // Use the token against the FullAccess vtable's
-        // acquire_render_target_dma_buf_image with an invalid format.
-        // The scope lookup should succeed; the format decode should
-        // fail. (We pick this path because it doesn't actually allocate
-        // a real DMA-BUF — easier to test without a full GPU
-        // pipeline.)
         let mut out: crate::core::rhi::texture::Texture =
             unsafe { std::mem::zeroed() };
         let mut buf2 = [0u8; 256];
@@ -5694,19 +5696,33 @@ mod gpu_lim_escalate_vtable_tests {
                 token,
                 64,
                 64,
-                99, // invalid format_raw — fails after scope lookup succeeds
+                0, // Rgba8Unorm — valid format; forces scope lookup to run
                 &mut out as *mut _ as *mut c_void,
                 buf2.as_mut_ptr(),
                 buf2.len(),
                 &mut len2,
             )
         };
-        assert_eq!(rc, 1);
-        let msg = err_buf_as_str(&buf2, len2);
-        assert!(
-            msg.contains("invalid format_raw"),
-            "expected format-validation error (proving scope lookup passed); got: {msg}"
-        );
+
+        if rc != 0 {
+            // Allocation failed for an environment reason; assert the
+            // failure was NOT a scope-lookup miss.
+            let msg = err_buf_as_str(&buf2, len2);
+            assert!(
+                !msg.contains("invalid escalate scope"),
+                "scope-token lookup must succeed inside an active \
+                 scope; got: {msg}"
+            );
+        } else {
+            // Allocation succeeded — definitively proves scope lookup
+            // worked. The Texture in `out` owns a live handle; its
+            // Drop will fire the vtable's drop_texture as the test
+            // returns.
+            assert!(!out.handle.is_null(), "out_texture handle populated");
+            // SAFETY: `out` was overwritten by `ptr::write` from the
+            // callback with a valid Texture; let its normal Drop run
+            // to release the underlying handle via the vtable.
+        }
 
         // Clean up the scope.
         unsafe {
