@@ -4589,7 +4589,7 @@ unsafe extern "C" fn host_gpu_full_clone_color_converter(handle: *const c_void) 
             }
             unsafe {
                 Arc::increment_strong_count(
-                    handle as *const crate::core::rhi::RhiColorConverter,
+                    handle as *const crate::core::rhi::RhiColorConverterInner,
                 );
             }
         },
@@ -4607,7 +4607,7 @@ unsafe extern "C" fn host_gpu_full_drop_color_converter(handle: *const c_void) {
             }
             unsafe {
                 Arc::decrement_strong_count(
-                    handle as *const crate::core::rhi::RhiColorConverter,
+                    handle as *const crate::core::rhi::RhiColorConverterInner,
                 );
             }
         },
@@ -5434,8 +5434,11 @@ unsafe extern "C" fn host_gpu_full_color_converter(
                 |gpu| gpu.color_converter(src, dst),
             );
             match result {
-                Some(Ok(arc)) => {
-                    let raw = Arc::into_raw(arc) as *const c_void;
+                Some(Ok(converter)) => {
+                    // `converter` is the β-shape; its `handle` is the
+                    // `Arc::into_raw(Arc<RhiColorConverterInner>)` pointer.
+                    let raw = converter.handle;
+                    std::mem::forget(converter);
                     unsafe { std::ptr::write(out_converter, raw) };
                     0
                 }

@@ -407,7 +407,7 @@ pub struct GpuContext {
     /// on miss matches that read/write skew.
     #[cfg(target_os = "linux")]
     color_converter_cache:
-        Arc<RwLock<HashMap<(PixelFormat, PixelFormat), Arc<RhiColorConverter>>>>,
+        Arc<RwLock<HashMap<(PixelFormat, PixelFormat), Arc<crate::core::rhi::RhiColorConverterInner>>>>,
     /// Engine-tier publication slot for an in-process producer's timeline
     /// semaphore. The producer (today: the camera; in principle any in-tree
     /// video source) publishes a typed handle here so an in-process consumer
@@ -1315,30 +1315,31 @@ impl GpuContext {
         &self,
         src: PixelFormat,
         dst: PixelFormat,
-    ) -> Result<Arc<RhiColorConverter>> {
-        // Fast path: read lock.
+    ) -> Result<RhiColorConverter> {
+        // Fast path: read lock; cache stores Arc<Inner> so we can build
+        // a fresh β-shape via from_arc_into_raw per request.
         {
             let cache = self.color_converter_cache.read().unwrap();
             if let Some(c) = cache.get(&(src, dst)) {
-                return Ok(Arc::clone(c));
+                return Ok(RhiColorConverter::from_arc_into_raw(Arc::clone(c)));
             }
         }
         // Slow path: build under write lock with double-check.
         let mut cache = self.color_converter_cache.write().unwrap();
         if let Some(c) = cache.get(&(src, dst)) {
-            return Ok(Arc::clone(c));
+            return Ok(RhiColorConverter::from_arc_into_raw(Arc::clone(c)));
         }
         let vulkan_device = &self.device.inner;
         let inner = crate::vulkan::rhi::VulkanColorConverter::new(vulkan_device, src, dst)?;
-        let converter = Arc::new(RhiColorConverter { inner });
-        cache.insert((src, dst), Arc::clone(&converter));
+        let inner_arc = Arc::new(crate::core::rhi::RhiColorConverterInner { inner });
+        cache.insert((src, dst), Arc::clone(&inner_arc));
         tracing::debug!(
             rhi_op = "color_converter",
             ?src,
             ?dst,
             "GpuContext::color_converter — converter constructed"
         );
-        Ok(converter)
+        Ok(RhiColorConverter::from_arc_into_raw(inner_arc))
     }
 
     /// Create a compute kernel from a SPIR-V shader and a binding declaration.
@@ -4095,7 +4096,7 @@ impl GpuContextFullAccess {
         &self,
         src: PixelFormat,
         dst: PixelFormat,
-    ) -> Result<Arc<RhiColorConverter>> {
+    ) -> Result<RhiColorConverter> {
         match self.handle_kind {
             HandleKind::Boxed => self.host_inner().color_converter(src, dst),
             HandleKind::ScopeToken => {
@@ -4124,10 +4125,11 @@ impl GpuContextFullAccess {
                             "color_converter: host signaled success but out_converter is null".into(),
                         ));
                     }
-                    // SAFETY: host wrote `Arc::into_raw(Arc<RhiColorConverter>)`.
-                    let arc =
-                        unsafe { Arc::from_raw(out_converter as *const RhiColorConverter) };
-                    Ok(arc)
+                    // β-shape: bundle the raw handle with the host vtable.
+                    Ok(RhiColorConverter {
+                        handle: out_converter,
+                        vtable: self.vtable,
+                    })
                 } else {
                     let msg = String::from_utf8_lossy(
                         &err_buf[..err_len.min(err_buf.len())],
