@@ -6463,18 +6463,165 @@ pub fn host_texture_ring_methods_vtable() -> *const streamlib_plugin_abi::Textur
     &HOST_TEXTURE_RING_METHODS_VTABLE
 }
 
-/// Host-side empty-shell `VulkanComputeKernelMethodsVTable` (issue
-/// #907 PR 2/5).
-///
-/// PR 2 establishes the pointer plumbing only. Subsequent PRs fill
-/// in method slots for the kernel's `set_*` / `dispatch` / `record`
-/// / `bindings` surface plus the ambitious CPU-reference dlopen
-/// integration test together.
+// ---- VulkanComputeKernelMethodsVTable wrappers (#949) ----------------------
+//
+// Each wrapper reconstructs the kernel borrow from the raw `Arc`
+// handle the cdylib passes (`Arc::into_raw(Arc<VulkanComputeKernelInner>)`
+// per the β-shape's `from_arc_into_raw`), runs the inner method,
+// and converts the `Result<()>` into the FFI's `i32 + err_buf`
+// shape. All bodies are wrapped in `run_host_extern_c` so a panic
+// in the inner method becomes a non-zero return.
+//
+// First slice (this PR): `set_push_constants` + `dispatch`. The
+// buffer/texture-input variants need a small trait redesign (the
+// inner method's `B: VulkanStorageBindable` generic can't cross the
+// FFI as-is — concrete β-shape inputs need a separate accessor on
+// the trait) and land in a follow-up sub-issue.
+
+/// SAFETY: caller must hand a `handle` that came from
+/// `Arc::into_raw(Arc<VulkanComputeKernelInner>)`. The leaked
+/// strong count keeps the kernel alive for the call's duration.
+#[cfg(target_os = "linux")]
+unsafe fn handle_as_compute_kernel(
+    handle: *const c_void,
+) -> Option<&'static crate::vulkan::rhi::VulkanComputeKernelInner> {
+    if handle.is_null() {
+        return None;
+    }
+    Some(unsafe { &*(handle as *const crate::vulkan::rhi::VulkanComputeKernelInner) })
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_compute_kernel_set_push_constants(
+    kernel_handle: *const c_void,
+    bytes_ptr: *const u8,
+    bytes_len: usize,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_compute_kernel_set_push_constants",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_push_constants: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if bytes_ptr.is_null() && bytes_len != 0 {
+                write_err(
+                    "set_push_constants: null bytes_ptr with non-zero len",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let bytes = if bytes_len == 0 {
+                &[][..]
+            } else {
+                unsafe { std::slice::from_raw_parts(bytes_ptr, bytes_len) }
+            };
+            match kernel.set_push_constants(bytes) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(&format!("set_push_constants: {e}"), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_compute_kernel_dispatch(
+    kernel_handle: *const c_void,
+    group_x: u32,
+    group_y: u32,
+    group_z: u32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_compute_kernel_dispatch",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "dispatch: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            match kernel.dispatch(group_x, group_y, group_z) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(&format!("dispatch: {e}"), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+// ---- Non-Linux platform stubs (vtable layout stays unconditional) ----------
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_compute_kernel_set_push_constants(
+    _kernel_handle: *const c_void,
+    _bytes_ptr: *const u8,
+    _bytes_len: usize,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_push_constants: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_compute_kernel_dispatch(
+    _kernel_handle: *const c_void,
+    _group_x: u32,
+    _group_y: u32,
+    _group_z: u32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "dispatch: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+/// Host-side `VulkanComputeKernelMethodsVTable` populated with the
+/// v2 method slots (issue #949 first method-dispatch slice).
 pub static HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE:
     streamlib_plugin_abi::VulkanComputeKernelMethodsVTable =
     streamlib_plugin_abi::VulkanComputeKernelMethodsVTable {
         layout_version: streamlib_plugin_abi::VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION,
         _reserved_padding: 0,
+        set_push_constants: host_compute_kernel_set_push_constants,
+        dispatch: host_compute_kernel_dispatch,
     };
 
 /// Accessor for the host's static `VulkanComputeKernelMethodsVTable`

@@ -1089,22 +1089,114 @@ impl VulkanComputeKernel {
         self.host_inner().set_storage_image_view(binding, view)
     }
 
+    /// Upload push-constant bytes. In host mode dispatches directly
+    /// through `host_inner`; in cdylib mode routes through the per-
+    /// type methods vtable (#949 first slice).
     pub fn set_push_constants(&self, bytes: &[u8]) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_set_push_constants_via_vtable(bytes);
+        }
         self.host_inner().set_push_constants(bytes)
     }
 
+    /// Convenience: re-interprets `&T` as a byte slice and forwards
+    /// to [`Self::set_push_constants`]. Inherits its dispatch
+    /// contract — vtable in cdylib mode, host_inner otherwise.
     pub fn set_push_constants_value<T: Copy>(&self, value: &T) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            // SAFETY: T is Copy + Sized so its layout is stable; the
+            // byte view is read-only and consumed inside the FFI call.
+            let bytes = unsafe {
+                std::slice::from_raw_parts(
+                    value as *const T as *const u8,
+                    std::mem::size_of::<T>(),
+                )
+            };
+            return self.dispatch_set_push_constants_via_vtable(bytes);
+        }
         self.host_inner().set_push_constants_value(value)
     }
 
+    /// Dispatch the kernel with the given workgroup counts. In host
+    /// mode dispatches through `host_inner`; in cdylib mode routes
+    /// through the per-type methods vtable (#949 first slice).
     pub fn dispatch(
         &self,
         group_count_x: u32,
         group_count_y: u32,
         group_count_z: u32,
     ) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_dispatch_via_vtable(
+                group_count_x,
+                group_count_y,
+                group_count_z,
+            );
+        }
         self.host_inner()
             .dispatch(group_count_x, group_count_y, group_count_z)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn dispatch_set_push_constants_via_vtable(&self, bytes: &[u8]) -> Result<()> {
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "set_push_constants: kernel methods vtable is null".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).set_push_constants)(
+                self.handle,
+                bytes.as_ptr(),
+                bytes.len(),
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn dispatch_dispatch_via_vtable(
+        &self,
+        group_count_x: u32,
+        group_count_y: u32,
+        group_count_z: u32,
+    ) -> Result<()> {
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "dispatch: kernel methods vtable is null".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).dispatch)(
+                self.handle,
+                group_count_x,
+                group_count_y,
+                group_count_z,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     pub fn record(
