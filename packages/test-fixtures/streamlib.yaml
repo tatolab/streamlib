@@ -32,6 +32,8 @@ schemas:
     file: schemas/graphics_kernel_smoke_test_processor_config.yaml
   RayTracingKernelSmokeTestProcessorConfig:
     file: schemas/ray_tracing_kernel_smoke_test_processor_config.yaml
+  LifecycleProbeProcessorConfig:
+    file: schemas/lifecycle_probe_processor_config.yaml
 
 processors:
   - name: TestConfiguredProcessor
@@ -89,3 +91,11 @@ processors:
     config:
       name: config
       schema: RayTracingKernelSmokeTestProcessorConfig
+
+  - name: LifecycleProbeProcessor
+    version: 1.0.0
+    description: "Phase G (#961) dlopen-cdylib lifecycle-probe processor — appends marker lines for each ProcessorVTable lifecycle hook (setup / process / on_pause / on_resume / teardown) to a file so the integration test can confirm every hook dispatched through the cdylib boundary correctly."
+    execution: continuous
+    config:
+      name: config
+      schema: LifecycleProbeProcessorConfig
