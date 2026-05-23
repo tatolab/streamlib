@@ -12712,3 +12712,32 @@ mod runtime_context_vtable_tier1_wire_format_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod audio_clock_vtable_tier1_wire_format_tests {
+    //! Tier-1 wire-format tests for [`HOST_AUDIO_CLOCK_VTABLE`].
+    //!
+    //! Per-callback null-handle coverage lives in
+    //! [`audio_clock_vtable_null_handle_guards`] above (3 tests —
+    //! `sample_rate`, `buffer_size`, `on_tick`). The on_tick
+    //! single-fire invariant is locked twice over: once on the
+    //! null-handle path, once on the success path against a real
+    //! `SoftwareAudioClock`. This module adds the
+    //! `layout_version_matches_constant` lock.
+    //!
+    //! `sample_rate` / `buffer_size` are primitive-returning and
+    //! take no out-param; `on_tick` takes a callback trio whose
+    //! ownership semantics are covered by the null-handle and
+    //! success-path tests in the guards module. The "null
+    //! out-param" / "invalid input" tier-1 categories don't apply.
+
+    use super::*;
+
+    #[test]
+    fn layout_version_matches_constant() {
+        assert_eq!(
+            HOST_AUDIO_CLOCK_VTABLE.layout_version,
+            streamlib_plugin_abi::AUDIO_CLOCK_VTABLE_LAYOUT_VERSION,
+        );
+    }
+}
