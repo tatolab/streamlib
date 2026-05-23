@@ -12741,3 +12741,136 @@ mod audio_clock_vtable_tier1_wire_format_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod runtime_ops_vtable_tier1_wire_format_tests {
+    //! Tier-1 wire-format tests for [`HOST_RUNTIME_OPS_VTABLE`].
+    //!
+    //! Per-callback null-handle coverage for the 5
+    //! submit-with-completion ops (`add_processor`,
+    //! `remove_processor`, `connect`, `disconnect`, `to_json`)
+    //! lives in [`runtime_ops_vtable_null_handle_guards`] above.
+    //! This module adds:
+    //!
+    //! - `layout_version_matches_constant` — locks the v2 layout
+    //!   version against the cdylib-visible constant.
+    //! - `clone_handle` / `drop_handle` null-handle coverage — the
+    //!   v2 Arc-lifecycle pair already had explicit guards
+    //!   (`if owned_handle.is_null() { return; }`); we test that the
+    //!   contract holds.
+    //! - `CompletionGuard` fire-exactly-once contract — the host-
+    //!   side RAII guard around the cdylib's "completion fires
+    //!   exactly once" promise. Two cases:
+    //!     - Drop without fire → abort completion fires with
+    //!       `status = -1` and the documented aborted-task message.
+    //!     - `fire_err_msg` then drop → completion fires once, Drop
+    //!       does NOT fire a second time.
+
+    use super::*;
+    use std::sync::{Arc as StdArc, Mutex};
+
+    #[test]
+    fn layout_version_matches_constant() {
+        assert_eq!(
+            HOST_RUNTIME_OPS_VTABLE.layout_version,
+            streamlib_plugin_abi::RUNTIME_OPS_VTABLE_LAYOUT_VERSION,
+        );
+    }
+
+    #[test]
+    fn clone_handle_returns_null_on_null_borrowed() {
+        let out = unsafe {
+            (HOST_RUNTIME_OPS_VTABLE.clone_handle)(std::ptr::null())
+        };
+        assert!(out.is_null());
+    }
+
+    #[test]
+    fn drop_handle_handles_null_owned_no_crash() {
+        unsafe {
+            (HOST_RUNTIME_OPS_VTABLE.drop_handle)(std::ptr::null());
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // CompletionGuard fire-exactly-once contract
+    // ------------------------------------------------------------------
+
+    struct CompletionSink {
+        events: Mutex<Vec<(i32, Vec<u8>)>>,
+    }
+
+    impl CompletionSink {
+        fn new() -> StdArc<Self> {
+            StdArc::new(Self { events: Mutex::new(Vec::new()) })
+        }
+    }
+
+    unsafe extern "C" fn record_completion(
+        user_data: *mut c_void,
+        status: i32,
+        result_ptr: *const u8,
+        result_len: usize,
+    ) {
+        let sink_arc = unsafe { StdArc::from_raw(user_data as *const CompletionSink) };
+        let payload = if result_len == 0 {
+            Vec::new()
+        } else {
+            unsafe { std::slice::from_raw_parts(result_ptr, result_len) }.to_vec()
+        };
+        sink_arc.events.lock().expect("poisoned").push((status, payload));
+        let _ = StdArc::into_raw(sink_arc);
+    }
+
+    fn install_sink_user_data() -> (*mut c_void, StdArc<CompletionSink>) {
+        let sink = CompletionSink::new();
+        let user_data = StdArc::into_raw(StdArc::clone(&sink)) as *mut c_void;
+        (user_data, sink)
+    }
+
+    unsafe fn reclaim_sink(user_data: *mut c_void) {
+        let _ = unsafe { StdArc::from_raw(user_data as *const CompletionSink) };
+    }
+
+    #[test]
+    fn completion_guard_drop_without_fire_fires_aborted_completion() {
+        // Mental-revert: removing the `if !self.fired` branch in
+        // CompletionGuard::Drop reverts to silent drop on un-fired
+        // guards. The cdylib's `rx.await` then hangs forever instead
+        // of returning the aborted-task error. This test would fail
+        // because `events` would be empty.
+        let (user_data, sink) = install_sink_user_data();
+        {
+            let _guard = CompletionGuard::new(record_completion, user_data);
+            // Drop without firing.
+        }
+        let events = sink.events.lock().expect("poisoned");
+        assert_eq!(events.len(), 1, "Drop must fire exactly one completion");
+        let (status, payload) = &events[0];
+        assert_eq!(*status, -1, "aborted completion uses status -1");
+        let msg = std::str::from_utf8(payload).expect("UTF-8");
+        assert!(
+            msg.contains("runtime-ops host task aborted before completion"),
+            "got: {msg}"
+        );
+        drop(events);
+        unsafe { reclaim_sink(user_data) };
+    }
+
+    #[test]
+    fn completion_guard_fire_then_drop_does_not_double_fire() {
+        // Mental-revert: removing `self.fired = true;` from
+        // fire_err_msg reverts to Drop firing again, this test
+        // observes `events.len() == 2` and fails.
+        let (user_data, sink) = install_sink_user_data();
+        let guard = CompletionGuard::new(record_completion, user_data);
+        guard.fire_err_msg(b"deliberate-test-msg");
+        let events = sink.events.lock().expect("poisoned");
+        assert_eq!(events.len(), 1, "fire_err_msg must fire exactly once");
+        let (status, payload) = &events[0];
+        assert_eq!(*status, -1);
+        assert_eq!(payload, b"deliberate-test-msg");
+        drop(events);
+        unsafe { reclaim_sink(user_data) };
+    }
+}
