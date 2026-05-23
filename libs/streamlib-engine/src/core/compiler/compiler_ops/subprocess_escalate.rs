@@ -21,6 +21,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use uuid::Uuid;
 
+#[cfg(target_os = "linux")]
+use crate::host_rhi::HostSurfaceStoreExt;
+
 use crate::_generated_::tatolab__escalate::escalate_request::{
     EscalateRequestAcquireImage, EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture,
     EscalateRequestLog, EscalateRequestLogLevel, EscalateRequestLogSource,

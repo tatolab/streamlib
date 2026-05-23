@@ -47,6 +47,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use streamlib::sdk::engine::HostGpuDeviceExt;
+use streamlib::sdk::engine::HostSurfaceStoreExt;
 
 use streamlib::sdk::rhi::{
     TextureFormat,

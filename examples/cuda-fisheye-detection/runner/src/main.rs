@@ -42,7 +42,7 @@ use streamlib::sdk::engine::host_rhi::{
     HostMarker, HostVulkanBuffer, HostVulkanTexture, HostVulkanTimelineSemaphore,
     ImageCopyRegion, RhiCommandRecorder, VulkanAccess, VulkanStage,
 };
-use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
+use streamlib::sdk::engine::{HostGpuDeviceExt, HostSurfaceStoreExt, HostTextureExt};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::processors::ProcessorSpec;

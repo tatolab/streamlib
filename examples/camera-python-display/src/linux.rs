@@ -61,6 +61,7 @@
 use std::path::PathBuf;
 
 use streamlib::sdk::context::GpuContext;
+use streamlib::sdk::engine::HostSurfaceStoreExt;
 use streamlib::sdk::rhi::TextureFormat;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::error::Error;

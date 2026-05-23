@@ -14,6 +14,7 @@ use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess}
 use streamlib::sdk::engine::host_rhi::{
     HostVulkanTimelineSemaphore, ImageCopyRegion, RhiCommandRecorder, VulkanAccess, VulkanStage,
 };
+use streamlib::sdk::engine::HostSurfaceStoreExt;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::OutputWriter;
 use streamlib::sdk::rhi::{PixelFormat, RhiColorConverter, StorageBuffer, Texture, TextureFormat};

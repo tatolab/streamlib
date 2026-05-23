@@ -23,6 +23,8 @@ use streamlib::sdk::error::{Result, Error};
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::_generated_::VideoFrame;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
+#[cfg(target_os = "linux")]
+use streamlib::sdk::engine::HostSurfaceStoreExt;
 
 #[cfg(target_os = "linux")]
 use streamlib::sdk::rhi::{PixelFormat, PixelBuffer};

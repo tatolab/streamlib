@@ -2101,9 +2101,17 @@ impl SurfaceStore {
         }
     }
 
-    /// Register a texture for cross-process sharing (Linux).
+    /// **Engine-only** — public surface lives on the
+    /// [`crate::host_rhi::HostSurfaceStoreExt`] extension trait
+    /// (`register_texture`). The parameter type
+    /// `Option<&HostVulkanTimelineSemaphore>` is host-internal —
+    /// cdylib subprocess customers cannot construct it and so cannot
+    /// call this through typed Rust; the engine-only extension
+    /// trait makes that constraint explicit at the type-system
+    /// layer (mirrors [`crate::host_rhi::HostTextureExt`]
+    /// /[`crate::host_rhi::HostPixelBufferRefExt`]).
     #[cfg(target_os = "linux")]
-    pub fn register_texture(
+    pub(crate) fn host_register_texture(
         &self,
         surface_id: &str,
         texture: &crate::core::rhi::Texture,
@@ -2145,9 +2153,12 @@ impl SurfaceStore {
         }
     }
 
-    /// Register a pixel buffer with an optional timeline-semaphore (Linux).
+    /// **Engine-only** — public surface lives on the
+    /// [`crate::host_rhi::HostSurfaceStoreExt`] extension trait
+    /// (`register_pixel_buffer_with_timeline`). Same engine-only
+    /// rationale as [`Self::host_register_texture`].
     #[cfg(target_os = "linux")]
-    pub fn register_pixel_buffer_with_timeline(
+    pub(crate) fn host_register_pixel_buffer_with_timeline(
         &self,
         surface_id: &str,
         pixel_buffer: &PixelBuffer,

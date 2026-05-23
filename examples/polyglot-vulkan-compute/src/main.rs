@@ -35,6 +35,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use streamlib::sdk::engine::HostGpuDeviceExt;
+use streamlib::sdk::engine::HostSurfaceStoreExt;
 
 use streamlib::sdk::context::ComputeKernelBridge;
 use streamlib::sdk::descriptors::SchemaIdent;
