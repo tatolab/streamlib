@@ -216,37 +216,59 @@ pub struct RhiColorConverterInner {
 }
 
 impl RhiColorConverterInner {
-    /// Convert a YCbCr or RGB pixel buffer into an RGBA storage image.
+    /// Convert a [`crate::core::rhi::StorageBuffer`]-shape source into
+    /// an RGBA storage image.
     #[cfg(target_os = "linux")]
-    pub fn convert_buffer_to_image<B>(
+    pub fn convert_buffer_to_image_storage(
         &self,
-        src: &B,
+        src: &crate::core::rhi::StorageBuffer,
         src_layout: SourceLayoutInfo,
         dst: &Texture,
         info: &ResolvedColorInfo,
-    ) -> Result<()>
-    where
-        B: crate::vulkan::rhi::VulkanStorageBindable + ?Sized,
-    {
-        self.inner.convert_buffer_to_image(src, src_layout, dst, info)
+    ) -> Result<()> {
+        self.inner.convert_buffer_to_image_storage(src, src_layout, dst, info)
+    }
+
+    /// [`crate::core::rhi::PixelBuffer`]-shape source variant.
+    #[cfg(target_os = "linux")]
+    pub fn convert_buffer_to_image_pixel(
+        &self,
+        src: &crate::core::rhi::PixelBuffer,
+        src_layout: SourceLayoutInfo,
+        dst: &Texture,
+        info: &ResolvedColorInfo,
+    ) -> Result<()> {
+        self.inner.convert_buffer_to_image_pixel(src, src_layout, dst, info)
     }
 
     /// Bind source / destination / push-constants on the buffer→image
     /// kernel and return it for recorder-driven dispatch.
     #[cfg(target_os = "linux")]
-    pub fn prepare_buffer_to_image<B>(
+    pub fn prepare_buffer_to_image_storage(
         &self,
-        src: &B,
+        src: &crate::core::rhi::StorageBuffer,
         src_layout: SourceLayoutInfo,
         dst: &Texture,
         info: &ResolvedColorInfo,
         dst_transfer: TransferId,
-    ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>>
-    where
-        B: crate::vulkan::rhi::VulkanStorageBindable + ?Sized,
-    {
+    ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
         self.inner
-            .prepare_buffer_to_image(src, src_layout, dst, info, dst_transfer)
+            .prepare_buffer_to_image_storage(src, src_layout, dst, info, dst_transfer)
+    }
+
+    /// [`crate::core::rhi::PixelBuffer`]-shape source variant of
+    /// [`Self::prepare_buffer_to_image_storage`].
+    #[cfg(target_os = "linux")]
+    pub fn prepare_buffer_to_image_pixel(
+        &self,
+        src: &crate::core::rhi::PixelBuffer,
+        src_layout: SourceLayoutInfo,
+        dst: &Texture,
+        info: &ResolvedColorInfo,
+        dst_transfer: TransferId,
+    ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+        self.inner
+            .prepare_buffer_to_image_pixel(src, src_layout, dst, info, dst_transfer)
     }
 
     /// macOS stub — Apple-platform color conversion lives in the
@@ -358,41 +380,62 @@ impl RhiColorConverter {
         unsafe { &*(self.handle as *const RhiColorConverterInner) }
     }
 
-    /// Convert a YCbCr or RGB pixel buffer into an RGBA storage image.
-    /// Mirrors `RhiColorConverterInner::convert_buffer_to_image` via
-    /// `host_inner()` — host-mode only until Phase E (#907) lifts
+    /// Convert a [`crate::core::rhi::StorageBuffer`]-shape source into
+    /// an RGBA storage image. Host-mode only until Phase E (#907) lifts
     /// method dispatch to the vtable.
     #[cfg(target_os = "linux")]
-    pub fn convert_buffer_to_image<B>(
+    pub fn convert_buffer_to_image_storage(
         &self,
-        src: &B,
+        src: &crate::core::rhi::StorageBuffer,
         src_layout: SourceLayoutInfo,
         dst: &Texture,
         info: &ResolvedColorInfo,
-    ) -> Result<()>
-    where
-        B: crate::vulkan::rhi::VulkanStorageBindable + ?Sized,
-    {
+    ) -> Result<()> {
         self.host_inner()
-            .convert_buffer_to_image(src, src_layout, dst, info)
+            .convert_buffer_to_image_storage(src, src_layout, dst, info)
+    }
+
+    /// [`crate::core::rhi::PixelBuffer`]-shape source variant.
+    #[cfg(target_os = "linux")]
+    pub fn convert_buffer_to_image_pixel(
+        &self,
+        src: &crate::core::rhi::PixelBuffer,
+        src_layout: SourceLayoutInfo,
+        dst: &Texture,
+        info: &ResolvedColorInfo,
+    ) -> Result<()> {
+        self.host_inner()
+            .convert_buffer_to_image_pixel(src, src_layout, dst, info)
     }
 
     /// Bind source / destination / push-constants on the buffer→image
     /// kernel and return it for recorder-driven dispatch.
     #[cfg(target_os = "linux")]
-    pub fn prepare_buffer_to_image<B>(
+    pub fn prepare_buffer_to_image_storage(
         &self,
-        src: &B,
+        src: &crate::core::rhi::StorageBuffer,
         src_layout: SourceLayoutInfo,
         dst: &Texture,
         info: &ResolvedColorInfo,
         dst_transfer: TransferId,
-    ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>>
-    where
-        B: crate::vulkan::rhi::VulkanStorageBindable + ?Sized,
-    {
+    ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
         self.host_inner()
-            .prepare_buffer_to_image(src, src_layout, dst, info, dst_transfer)
+            .prepare_buffer_to_image_storage(src, src_layout, dst, info, dst_transfer)
+    }
+
+    /// [`crate::core::rhi::PixelBuffer`]-shape source variant of
+    /// [`Self::prepare_buffer_to_image_storage`].
+    #[cfg(target_os = "linux")]
+    pub fn prepare_buffer_to_image_pixel(
+        &self,
+        src: &crate::core::rhi::PixelBuffer,
+        src_layout: SourceLayoutInfo,
+        dst: &Texture,
+        info: &ResolvedColorInfo,
+        dst_transfer: TransferId,
+    ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+        self.host_inner()
+            .prepare_buffer_to_image_pixel(src, src_layout, dst, info, dst_transfer)
     }
 
     /// macOS stub.

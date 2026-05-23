@@ -249,14 +249,18 @@ pub const TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION: u32 = 1;
 
 /// Layout version of [`VulkanComputeKernelMethodsVTable`].
 ///
-/// - v1: empty shell (issue #907 Phase E PR 2/5 — pointer plumbing
-///   only).
-/// - v2: appends `set_storage_buffer` / `set_uniform_buffer` /
-///   `set_push_constants` / `dispatch` method slots (issue #949
-///   — first method-dispatch slice). Texture-input variants and the
-///   CPU-reference dlopen integration test land in a separate
-///   follow-up.
-pub const VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
+/// - v1: empty shell — pointer plumbing only.
+/// - v2: appended `set_push_constants` / `dispatch` slots (primitive
+///   arguments only).
+/// - v3: appended typed binding-method slots
+///   `set_storage_buffer_pixel` / `set_storage_buffer_storage` /
+///   `set_uniform_buffer` / `set_sampled_texture` /
+///   `set_storage_image`. Each carries the matching plugin-handle's
+///   raw `Arc::into_raw` pointer; the host wrapper reconstructs the
+///   borrow and forwards to the inner kernel. Buffer slots are typed
+///   by Rust wrapper to mirror streamlib's typed-wrapper binding-site
+///   contract.
+pub const VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 3;
 
 /// Layout version of [`VulkanGraphicsKernelMethodsVTable`].
 ///
@@ -2593,21 +2597,32 @@ unsafe impl Sync for TextureRingMethodsVTable {}
 ///
 /// `VulkanComputeKernel` keeps `clone_*` / `drop_*` dispatch on the
 /// parent [`GpuContextFullAccessVTable`] (PR #918's Phase D shape);
-/// this vtable carries per-method slots for everything the β-shape
-/// exposes that cdylib code needs to dispatch through.
+/// this vtable carries per-method slots for everything the plugin
+/// handle exposes that cdylib code needs to dispatch through.
 ///
-/// **Coverage today** (v2): `set_push_constants`, `dispatch`. The
-/// buffer/texture-input variants (`set_storage_buffer`,
-/// `set_uniform_buffer`, `set_sampled_texture`, `set_storage_image`)
-/// + the CPU-reference dlopen integration test are tracked in
-/// follow-up sub-issues — they need a small trait redesign so the
-/// cdylib path can accept concrete β-shape types while the
-/// engine path keeps its generic `VulkanStorageBindable` /
-/// `VulkanUniformBindable` flexibility. The engine-only methods
-/// (`record(cmd_buf)`, `set_*_image_view(vk::ImageView)`,
-/// `bindings() -> Vec<ComputeBindingSpec>`) stay `host_inner`-routed
-/// — their parameter / return types are host-internal vulkanalia or
-/// allocator-crossing.
+/// **Binding-method shape:** typed-by-input-wrapper (one slot per
+/// kernel-method × buffer-or-texture wrapper). This mirrors the
+/// production cross-DSO pattern used by Dawn / WebGPU (`WGPUBuffer`
+/// + per-binding-kind method) and Unreal RHI (typed
+/// `SetShaderResourceViewParameter` methods) while honoring
+/// streamlib's existing typed-wrapper allocation layer (separate
+/// `PixelBuffer` / `StorageBuffer` / `UniformBuffer` Rust types).
+/// The longer-term option of collapsing typed wrappers into one
+/// `Buffer` + flags primitive is tracked separately in the
+/// **RHI Buffer Model Alignment** milestone and would simplify this
+/// vtable further; until then, per-type slots are the right shape.
+///
+/// **Coverage today** (v3): `set_push_constants`, `dispatch`,
+/// `set_storage_buffer_pixel(&PixelBuffer)`,
+/// `set_storage_buffer_storage(&StorageBuffer)`,
+/// `set_uniform_buffer(&UniformBuffer)`,
+/// `set_sampled_texture(&Texture)`,
+/// `set_storage_image(&Texture)`.
+///
+/// The engine-only methods (`record(cmd_buf)`,
+/// `set_*_image_view(vk::ImageView)`, `bindings() -> Vec<ComputeBindingSpec>`)
+/// stay `host_inner`-routed — their parameter / return types are
+/// host-internal vulkanalia or allocator-crossing.
 #[repr(C)]
 pub struct VulkanComputeKernelMethodsVTable {
     /// Vtable layout version. Must equal
@@ -2620,7 +2635,7 @@ pub struct VulkanComputeKernelMethodsVTable {
 
     /// Upload push-constant bytes. `bytes_len` should match the
     /// kernel's declared `push_constant_size` (already cached on
-    /// the β-shape). Returns 0 on success; non-zero with UTF-8
+    /// the plugin handle). Returns 0 on success; non-zero with UTF-8
     /// message in `err_buf` on failure.
     pub set_push_constants: unsafe extern "C" fn(
         kernel_handle: *const c_void,
@@ -2639,6 +2654,73 @@ pub struct VulkanComputeKernelMethodsVTable {
         group_x: u32,
         group_y: u32,
         group_z: u32,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Bind a [`PixelBuffer`](struct@crate)-shaped storage buffer
+    /// (SSBO) at `binding`. `pixel_buffer_handle` is the raw
+    /// `Arc::into_raw(Arc<PixelBufferRef>)` pointer the plugin
+    /// handle carries; the host wrapper reconstructs the borrow and
+    /// forwards. Returns 0 on success; non-zero with UTF-8 message
+    /// in `err_buf` on declaration mismatch / unset binding / null
+    /// handle.
+    pub set_storage_buffer_pixel: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        binding: u32,
+        pixel_buffer_handle: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Bind a raw-bytes-shaped storage buffer (SSBO) at `binding`.
+    /// `storage_buffer_handle` is the raw
+    /// `Arc::into_raw(Arc<HostVulkanBuffer>)` pointer the plugin
+    /// handle carries.
+    pub set_storage_buffer_storage: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        binding: u32,
+        storage_buffer_handle: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Bind a uniform buffer (UBO) at `binding`.
+    /// `uniform_buffer_handle` is the raw
+    /// `Arc::into_raw(Arc<HostVulkanBuffer>)` pointer the plugin
+    /// handle carries.
+    pub set_uniform_buffer: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        binding: u32,
+        uniform_buffer_handle: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Bind a sampled texture at `binding` using the kernel's
+    /// default linear-clamp sampler. `texture_handle` is the raw
+    /// `Arc::into_raw(Arc<TextureInner>)` pointer the plugin
+    /// handle carries.
+    pub set_sampled_texture: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        binding: u32,
+        texture_handle: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Bind a storage image at `binding`. Caller guarantees the
+    /// underlying texture's `STORAGE_BINDING` usage was declared at
+    /// creation time.
+    pub set_storage_image: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        binding: u32,
+        texture_handle: *const c_void,
         err_buf: *mut u8,
         err_buf_cap: usize,
         err_len: *mut usize,
@@ -3415,7 +3497,7 @@ mod layout_tests {
         assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 7);
         assert_eq!(TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION, 1);
-        assert_eq!(VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 2);
+        assert_eq!(VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 3);
         assert_eq!(VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION, 1);
@@ -3508,13 +3590,18 @@ mod layout_tests {
 
     #[test]
     fn vulkan_compute_kernel_methods_vtable_layout() {
-        // v2 (#949 method-dispatch first slice):
-        //   layout_version       @ 0  (4 bytes, u32)
-        //   _reserved_padding    @ 4  (4 bytes, u32)
-        //   set_push_constants   @ 8  (8 bytes, fn pointer)
-        //   dispatch             @ 16
-        // Total = 24 bytes, align = 8.
-        assert_eq!(size_of::<VulkanComputeKernelMethodsVTable>(), 24);
+        // v3 (typed binding-method slots added):
+        //   layout_version              @ 0   (4 bytes, u32)
+        //   _reserved_padding           @ 4   (4 bytes, u32)
+        //   set_push_constants          @ 8   (8 bytes, fn pointer)
+        //   dispatch                    @ 16
+        //   set_storage_buffer_pixel    @ 24
+        //   set_storage_buffer_storage  @ 32
+        //   set_uniform_buffer          @ 40
+        //   set_sampled_texture         @ 48
+        //   set_storage_image           @ 56
+        // Total = 64 bytes, align = 8.
+        assert_eq!(size_of::<VulkanComputeKernelMethodsVTable>(), 64);
         assert_eq!(align_of::<VulkanComputeKernelMethodsVTable>(), 8);
         assert_eq!(
             offset_of!(VulkanComputeKernelMethodsVTable, layout_version),
@@ -3531,6 +3618,26 @@ mod layout_tests {
         assert_eq!(
             offset_of!(VulkanComputeKernelMethodsVTable, dispatch),
             16
+        );
+        assert_eq!(
+            offset_of!(VulkanComputeKernelMethodsVTable, set_storage_buffer_pixel),
+            24
+        );
+        assert_eq!(
+            offset_of!(VulkanComputeKernelMethodsVTable, set_storage_buffer_storage),
+            32
+        );
+        assert_eq!(
+            offset_of!(VulkanComputeKernelMethodsVTable, set_uniform_buffer),
+            40
+        );
+        assert_eq!(
+            offset_of!(VulkanComputeKernelMethodsVTable, set_sampled_texture),
+            48
+        );
+        assert_eq!(
+            offset_of!(VulkanComputeKernelMethodsVTable, set_storage_image),
+            56
         );
     }
 

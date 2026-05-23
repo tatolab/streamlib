@@ -1,0 +1,29 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# Test-only config schema for the cdylib compute-kernel CPU-reference
+# integration test. The processor:
+#   1. Creates a compute kernel via the FullAccess vtable.
+#   2. Allocates input + output storage buffers via the
+#      LimitedAccess vtable, populates input with synthetic data.
+#   3. Binds storage buffers via the per-type method dispatch
+#      vtable (`set_storage_buffer_storage`), pushes element-count
+#      constant, dispatches via `dispatch`.
+#   4. Reads output buffer back through the mapped pointer.
+#   5. Writes a CPU-reference comparison report (`OK\n<count>` or
+#      `ERR:<message>`) to the configured `output_path`.
+
+metadata:
+  type: ComputeKernelTestProcessorConfig
+  description: "Test config schema for the cdylib compute-kernel CPU-reference integration test."
+
+properties:
+  output_path:
+    metadata:
+      description: "Filesystem path where the processor writes its result. Format: 'OK\\n<element_count>' on success, 'ERR:<message>' on failure."
+    type: string
+
+  element_count:
+    metadata:
+      description: "Number of u32 elements in the input/output storage buffers. Driven from the integration test."
+    type: uint32

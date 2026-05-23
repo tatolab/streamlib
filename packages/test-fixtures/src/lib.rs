@@ -10,11 +10,13 @@ pub mod _generated_ {
     include!(concat!(env!("OUT_DIR"), "/_generated_shim.rs"));
 }
 
+pub mod compute_kernel_test_processor;
 pub mod escalate_smoke_test_processor;
 pub mod gpu_acquire_test_processor;
 pub mod tcp_bind_test_processor;
 pub mod test_configured_processor;
 
+pub use compute_kernel_test_processor::ComputeKernelTest;
 pub use escalate_smoke_test_processor::EscalateSmokeTest;
 pub use gpu_acquire_test_processor::GpuAcquireTest;
 pub use tcp_bind_test_processor::TcpBindTest;
@@ -26,4 +28,5 @@ streamlib_plugin_abi::export_plugin!(
     crate::TcpBindTest::Processor,
     crate::GpuAcquireTest::Processor,
     crate::EscalateSmokeTest::Processor,
+    crate::ComputeKernelTest::Processor,
 );
