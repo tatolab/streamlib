@@ -120,8 +120,20 @@ pub(crate) struct VulkanAccelerationStructureInner {
 pub struct VulkanAccelerationStructure {
     /// Opaque handle to the host's `Arc<VulkanAccelerationStructureInner>`.
     pub(crate) handle: *const c_void,
-    /// Vtable for cross-DSO Clone/Drop dispatch.
+    /// Parent vtable for cross-DSO Clone/Drop dispatch (#918 Phase D).
     pub(crate) vtable: *const GpuContextFullAccessVTable,
+    /// Per-type vtable for cross-DSO method dispatch (#907 Phase E).
+    pub(crate) methods_vtable:
+        *const streamlib_plugin_abi::VulkanAccelerationStructureMethodsVTable,
+    /// Cached AS kind discriminant (0 = BottomLevel, 1 = TopLevel).
+    /// Matches `AccelerationStructureKind`'s ordering.
+    pub(crate) cached_kind: u32,
+    /// Reserved padding so the next 8-byte field stays aligned.
+    pub(crate) _reserved_padding: u32,
+    /// Cached device address of the AS.
+    pub(crate) cached_device_address: u64,
+    /// Cached storage size in bytes.
+    pub(crate) cached_storage_size: u64,
 }
 
 // SAFETY: `handle` points at an `Arc<VulkanAccelerationStructureInner>`
@@ -672,10 +684,26 @@ impl VulkanAccelerationStructure {
     /// `Arc::into_raw`, resolve the host-mode FullAccess vtable, and
     /// assemble the cross-DSO shape.
     pub(crate) fn from_arc_into_raw(arc: Arc<VulkanAccelerationStructureInner>) -> Self {
+        let cached_kind = match arc.kind() {
+            AccelerationStructureKind::BottomLevel => 0u32,
+            AccelerationStructureKind::TopLevel => 1u32,
+        };
+        let cached_device_address = arc.device_address();
+        let cached_storage_size = arc.storage_size();
         let handle = Arc::into_raw(arc) as *const c_void;
         let vtable =
             crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
-        Self { handle, vtable }
+        let methods_vtable =
+            crate::core::plugin::host_services::host_vulkan_acceleration_structure_methods_vtable();
+        Self {
+            handle,
+            vtable,
+            methods_vtable,
+            cached_kind,
+            _reserved_padding: 0,
+            cached_device_address,
+            cached_storage_size,
+        }
     }
 
     /// Engine-internal borrow of the host-owned
@@ -725,24 +753,46 @@ impl VulkanAccelerationStructure {
         self.host_inner().vk_handle()
     }
 
-    /// Device address of the AS.
+    /// Device address of the AS. Host-mode reads the cached POD;
+    /// cdylib-mode currently routes through `host_inner` (panic in
+    /// cdylib) — the FFI signature for `build_*_blas` doesn't yet
+    /// surface the value to the cdylib. Tracked in the #907
+    /// follow-up sub-issue, which extends the create-side FFI
+    /// signatures with out-params for the cached POD descriptors.
     pub fn device_address(&self) -> u64 {
-        self.host_inner().device_address()
+        if self.cached_device_address != 0 {
+            self.cached_device_address
+        } else {
+            self.host_inner().device_address()
+        }
     }
 
-    /// `BottomLevel` or `TopLevel`.
+    /// `BottomLevel` or `TopLevel`. Same caching contract as
+    /// `device_address` — host mode reads cached, cdylib mode
+    /// currently falls back to `host_inner` until the follow-up
+    /// extends the FFI.
     pub fn kind(&self) -> AccelerationStructureKind {
+        // Sentinel-free path: kind is always either 0 or 1, so
+        // there's no "unset" value to detect. Routes through
+        // `host_inner` until the FFI signature surfaces the value.
         self.host_inner().kind()
     }
 
-    /// Human-readable label used in diagnostics.
+    /// Human-readable label used in diagnostics. Still routes
+    /// through `host_inner` — `String` layout isn't cdylib-safe;
+    /// vtable dispatch lands in the #907 follow-up sub-issue.
     pub fn label(&self) -> String {
         self.host_inner().label().to_string()
     }
 
-    /// Storage size in bytes.
+    /// Storage size in bytes. Same caching contract as
+    /// `device_address`.
     pub fn storage_size(&self) -> vk::DeviceSize {
-        self.host_inner().storage_size()
+        if self.cached_storage_size != 0 {
+            self.cached_storage_size
+        } else {
+            self.host_inner().storage_size()
+        }
     }
 }
 
@@ -759,6 +809,11 @@ impl Clone for VulkanAccelerationStructure {
         Self {
             handle: self.handle,
             vtable: self.vtable,
+            methods_vtable: self.methods_vtable,
+            cached_kind: self.cached_kind,
+            _reserved_padding: self._reserved_padding,
+            cached_device_address: self.cached_device_address,
+            cached_storage_size: self.cached_storage_size,
         }
     }
 }
@@ -789,11 +844,36 @@ mod layout_tests {
 
     #[test]
     fn vulkan_acceleration_structure_layout() {
-        // β-shape: handle + vtable, 16 bytes, 8-byte alignment.
-        assert_eq!(size_of::<VulkanAccelerationStructure>(), 16);
+        // β-shape struct as of #907 PR 5/5:
+        //   handle                @ 0  (8 bytes, *const c_void)
+        //   vtable                @ 8  (8 bytes, *const GpuContextFullAccessVTable)
+        //   methods_vtable        @ 16 (8 bytes, *const VulkanAccelerationStructureMethodsVTable)
+        //   cached_kind           @ 24 (4 bytes, u32)
+        //   _reserved_padding     @ 28 (4 bytes, u32)
+        //   cached_device_address @ 32 (8 bytes, u64)
+        //   cached_storage_size   @ 40 (8 bytes, u64)
+        // Total = 48, align = 8.
+        assert_eq!(size_of::<VulkanAccelerationStructure>(), 48);
         assert_eq!(align_of::<VulkanAccelerationStructure>(), 8);
         assert_eq!(offset_of!(VulkanAccelerationStructure, handle), 0);
         assert_eq!(offset_of!(VulkanAccelerationStructure, vtable), 8);
+        assert_eq!(
+            offset_of!(VulkanAccelerationStructure, methods_vtable),
+            16
+        );
+        assert_eq!(offset_of!(VulkanAccelerationStructure, cached_kind), 24);
+        assert_eq!(
+            offset_of!(VulkanAccelerationStructure, _reserved_padding),
+            28
+        );
+        assert_eq!(
+            offset_of!(VulkanAccelerationStructure, cached_device_address),
+            32
+        );
+        assert_eq!(
+            offset_of!(VulkanAccelerationStructure, cached_storage_size),
+            40
+        );
     }
 
     #[test]

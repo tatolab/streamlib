@@ -113,7 +113,7 @@ pub const STREAMLIB_ABI_VERSION: u32 = 4;
 ///   machinery lands in C3 — Phase C2 ships the vtable layout +
 ///   host wiring + cdylib β-shape, locking the wire format before
 ///   the scope machinery turns it on).
-pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 10;
+pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 11;
 
 /// Layout version of the [`ProcessorVTable`] struct. Read by the
 /// host's `processor_register` impl before dereferencing any vtable
@@ -279,6 +279,16 @@ pub const VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 1;
 /// β-shape's `set_*` / `trace_rays` / `bindings` surface through
 /// them.
 pub const VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 1;
+
+/// Layout version of [`VulkanAccelerationStructureMethodsVTable`].
+///
+/// `VulkanAccelerationStructure` β-shape gains a per-type vtable
+/// for method dispatch (issue #907 Phase E PR 5/5). Mirrors the
+/// kernel methods-vtable shape: empty shell today; follow-up PRs
+/// append method slots for `vk_handle` / `label` (the methods that
+/// can't be POD-cached cleanly because they return host-internal
+/// or String types) and route the β-shape methods through them.
+pub const VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION: u32 = 1;
 
 // =============================================================================
 // Primitive enums
@@ -2671,6 +2681,34 @@ unsafe impl Send for VulkanRayTracingKernelMethodsVTable {}
 unsafe impl Sync for VulkanRayTracingKernelMethodsVTable {}
 
 // =============================================================================
+// VulkanAccelerationStructureMethodsVTable — per-type vtable for AS method dispatch
+// =============================================================================
+
+/// Per-type method-dispatch vtable for the
+/// `VulkanAccelerationStructure` β-shape (issue #907 Phase E PR 5/5).
+///
+/// Mirrors the kernel methods-vtable shape. Empty shell today;
+/// follow-up PRs append slots for `vk_handle` / `label` (the
+/// methods returning host-internal `vk::AccelerationStructureKHR`
+/// and heap-allocated `String` that can't be POD-cached) and route
+/// the β-shape methods through them. POD getters (`device_address`,
+/// `kind`, `storage_size`) are cached on the β-shape struct and
+/// don't need vtable slots.
+#[repr(C)]
+pub struct VulkanAccelerationStructureMethodsVTable {
+    /// Vtable layout version. Must equal
+    /// [`VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION`].
+    pub layout_version: u32,
+
+    /// Reserved padding (keeps the following pointer naturally
+    /// aligned on 32-bit hosts; zero today, never read).
+    pub _reserved_padding: u32,
+}
+
+unsafe impl Send for VulkanAccelerationStructureMethodsVTable {}
+unsafe impl Sync for VulkanAccelerationStructureMethodsVTable {}
+
+// =============================================================================
 // SurfaceStoreVTable — extern "C" dispatch for cross-process surface sharing
 // =============================================================================
 
@@ -3169,6 +3207,18 @@ pub struct HostServices {
     /// the actual method slots.
     pub vulkan_ray_tracing_kernel_methods_vtable:
         *const VulkanRayTracingKernelMethodsVTable,
+
+    // -------------------------------------------------------------------------
+    // VulkanAccelerationStructureMethodsVTable surface (v11 — issue #907 Phase E PR 5/5)
+    // -------------------------------------------------------------------------
+
+    /// Static dispatch table for `VulkanAccelerationStructure`
+    /// β-shape method dispatch. Set once at install time; non-null
+    /// for hosts that ship a GpuContext, null otherwise. PR 5 of
+    /// issue #907 lands the empty-shell vtable + pointer plumbing;
+    /// follow-up PRs append the actual method slots.
+    pub vulkan_acceleration_structure_methods_vtable:
+        *const VulkanAccelerationStructureMethodsVTable,
 }
 
 // Note: under v3 the ABI eliminates the tokio shared-type crossing
@@ -3287,7 +3337,7 @@ mod layout_tests {
 
     #[test]
     fn host_services_layout_versions_pinned() {
-        assert_eq!(HOST_SERVICES_LAYOUT_VERSION, 10);
+        assert_eq!(HOST_SERVICES_LAYOUT_VERSION, 11);
         assert_eq!(STREAMLIB_ABI_VERSION, 4);
         assert_eq!(RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(AUDIO_CLOCK_VTABLE_LAYOUT_VERSION, 1);
@@ -3301,10 +3351,11 @@ mod layout_tests {
         assert_eq!(VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 1);
+        assert_eq!(VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION, 1);
     }
 
     #[test]
-    fn host_services_tail_carries_ten_vtable_pointers() {
+    fn host_services_tail_carries_eleven_vtable_pointers() {
         // Trailing vtable pointers on HostServices. We don't pin the
         // absolute offsets (earlier fields carry their own layout
         // audit), but we do pin:
@@ -3313,7 +3364,7 @@ mod layout_tests {
         //      RuntimeOps → GpuContextLimitedAccess → SurfaceStore →
         //      GpuContextFullAccess → TextureRingMethods →
         //      VulkanComputeKernelMethods → VulkanGraphicsKernelMethods →
-        //      VulkanRayTracingKernelMethods.
+        //      VulkanRayTracingKernelMethods → VulkanAccelerationStructureMethods.
         //   3. They are contiguous (no padding inserted between them).
         assert_eq!(size_of::<*const RuntimeContextVTable>(), 8);
         assert_eq!(size_of::<*const AudioClockVTable>(), 8);
@@ -3325,6 +3376,10 @@ mod layout_tests {
         assert_eq!(size_of::<*const VulkanComputeKernelMethodsVTable>(), 8);
         assert_eq!(size_of::<*const VulkanGraphicsKernelMethodsVTable>(), 8);
         assert_eq!(size_of::<*const VulkanRayTracingKernelMethodsVTable>(), 8);
+        assert_eq!(
+            size_of::<*const VulkanAccelerationStructureMethodsVTable>(),
+            8
+        );
 
         let runtime_ctx_off = offset_of!(HostServices, runtime_context_vtable);
         let audio_clock_off = offset_of!(HostServices, audio_clock_vtable);
@@ -3339,6 +3394,8 @@ mod layout_tests {
             offset_of!(HostServices, vulkan_graphics_kernel_methods_vtable);
         let rt_kernel_off =
             offset_of!(HostServices, vulkan_ray_tracing_kernel_methods_vtable);
+        let accel_struct_off =
+            offset_of!(HostServices, vulkan_acceleration_structure_methods_vtable);
         assert!(runtime_ctx_off < audio_clock_off);
         assert!(audio_clock_off < runtime_ops_off);
         assert!(runtime_ops_off < gpu_lim_off);
@@ -3348,6 +3405,7 @@ mod layout_tests {
         assert!(texture_ring_off < compute_kernel_off);
         assert!(compute_kernel_off < graphics_kernel_off);
         assert!(graphics_kernel_off < rt_kernel_off);
+        assert!(rt_kernel_off < accel_struct_off);
         assert_eq!(audio_clock_off - runtime_ctx_off, 8);
         assert_eq!(runtime_ops_off - audio_clock_off, 8);
         assert_eq!(gpu_lim_off - runtime_ops_off, 8);
@@ -3357,10 +3415,11 @@ mod layout_tests {
         assert_eq!(compute_kernel_off - texture_ring_off, 8);
         assert_eq!(graphics_kernel_off - compute_kernel_off, 8);
         assert_eq!(rt_kernel_off - graphics_kernel_off, 8);
+        assert_eq!(accel_struct_off - rt_kernel_off, 8);
 
-        // The VulkanRayTracingKernelMethods pointer must end at the
-        // end of the struct (it is the last field added in v10).
-        assert_eq!(rt_kernel_off + 8, size_of::<HostServices>());
+        // The VulkanAccelerationStructureMethods pointer must end at
+        // the end of the struct (it is the last field added in v11).
+        assert_eq!(accel_struct_off + 8, size_of::<HostServices>());
     }
 
     #[test]
@@ -3430,6 +3489,24 @@ mod layout_tests {
         );
         assert_eq!(
             offset_of!(VulkanRayTracingKernelMethodsVTable, _reserved_padding),
+            4
+        );
+    }
+
+    #[test]
+    fn vulkan_acceleration_structure_methods_vtable_layout() {
+        // Empty shell — layout_version + _reserved_padding only.
+        // Mirrors the kernel methods-vtable layouts. Subsequent
+        // #907 sub-PRs append method slots and bump
+        // VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION.
+        assert_eq!(size_of::<VulkanAccelerationStructureMethodsVTable>(), 8);
+        assert_eq!(align_of::<VulkanAccelerationStructureMethodsVTable>(), 4);
+        assert_eq!(
+            offset_of!(VulkanAccelerationStructureMethodsVTable, layout_version),
+            0
+        );
+        assert_eq!(
+            offset_of!(VulkanAccelerationStructureMethodsVTable, _reserved_padding),
             4
         );
     }
