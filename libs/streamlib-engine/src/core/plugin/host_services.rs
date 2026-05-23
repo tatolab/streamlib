@@ -1041,6 +1041,13 @@ unsafe extern "C" fn host_rcv_runtime_id_copy(
     run_host_extern_c(
         "host_rcv_runtime_id_copy",
         || {
+            if ctx.is_null() {
+                if !out_len.is_null() {
+                    // SAFETY: caller-provided `out_len` is writable.
+                    unsafe { *out_len = 0 };
+                }
+                return 0;
+            }
             // SAFETY: host-side construction passes &RuntimeContext as ctx.
             let rc = unsafe { &*(ctx as *const RuntimeContext) };
             let id_bytes = rc.runtime_id().as_str().as_bytes();
@@ -1059,6 +1066,17 @@ unsafe extern "C" fn host_rcv_processor_id_copy(
     run_host_extern_c(
         "host_rcv_processor_id_copy",
         || {
+            if ctx.is_null() {
+                // Mirror the panic-default — `-1` encodes "no processor
+                // id" (shared/global ctx), which is the closest defined
+                // value to "ctx unavailable". The cdylib treats `-1` as
+                // Option::None.
+                if !out_len.is_null() {
+                    // SAFETY: caller-provided `out_len` is writable.
+                    unsafe { *out_len = 0 };
+                }
+                return -1;
+            }
             let rc = unsafe { &*(ctx as *const RuntimeContext) };
             match rc.processor_id() {
                 Some(pid) => {
@@ -1076,6 +1094,12 @@ unsafe extern "C" fn host_rcv_is_paused(ctx: *const c_void) -> bool {
     run_host_extern_c(
         "host_rcv_is_paused",
         || {
+            if ctx.is_null() {
+                // Conservative default — a null ctx means the host's
+                // RuntimeContext is unreachable, so the processor
+                // should not keep running. Mirrors the panic-default.
+                return true;
+            }
             let rc = unsafe { &*(ctx as *const RuntimeContext) };
             rc.is_paused()
         },
@@ -1091,6 +1115,11 @@ unsafe extern "C" fn host_rcv_should_process(ctx: *const c_void) -> bool {
     run_host_extern_c(
         "host_rcv_should_process",
         || {
+            if ctx.is_null() {
+                // Same conservative default — null ctx halts further
+                // work until the host clears state.
+                return false;
+            }
             let rc = unsafe { &*(ctx as *const RuntimeContext) };
             rc.should_process()
         },
@@ -1127,6 +1156,9 @@ unsafe extern "C" fn host_rcv_audio_clock_handle(ctx: *const c_void) -> *const c
     run_host_extern_c(
         "host_rcv_audio_clock_handle",
         || {
+            if ctx.is_null() {
+                return std::ptr::null();
+            }
             let rc = unsafe { &*(ctx as *const RuntimeContext) };
             // The shim's audio-clock handle is a `&SharedAudioClock` —
             // the accompanying [`HOST_AUDIO_CLOCK_VTABLE`] callbacks
@@ -1142,6 +1174,9 @@ unsafe extern "C" fn host_rcv_runtime_ops_handle(ctx: *const c_void) -> *const c
     run_host_extern_c(
         "host_rcv_runtime_ops_handle",
         || {
+            if ctx.is_null() {
+                return std::ptr::null();
+            }
             let rc = unsafe { &*(ctx as *const RuntimeContext) };
             // `rc.runtime()` produces an owned `Arc<dyn
             // RuntimeOperations>` each call; the per-RuntimeContext
@@ -1198,6 +1233,9 @@ unsafe extern "C" fn host_acv_sample_rate(handle: *const c_void) -> u32 {
     run_host_extern_c(
         "host_acv_sample_rate",
         || {
+            if handle.is_null() {
+                return 0;
+            }
             let clock = unsafe { &*(handle as *const SharedAudioClock) };
             clock.sample_rate()
         },
@@ -1209,6 +1247,9 @@ unsafe extern "C" fn host_acv_buffer_size(handle: *const c_void) -> usize {
     run_host_extern_c(
         "host_acv_buffer_size",
         || {
+            if handle.is_null() {
+                return 0;
+            }
             let clock = unsafe { &*(handle as *const SharedAudioClock) };
             clock.buffer_size()
         },
@@ -1225,35 +1266,49 @@ unsafe extern "C" fn host_acv_on_tick(
     run_host_extern_c(
         "host_acv_on_tick",
         || {
-            let clock = unsafe { &*(handle as *const SharedAudioClock) };
-
-            // Wrap the (callback, user_data, drop_user_data) trio in a single
-            // Send + Sync struct that the host's AudioClock holds as its
-            // callback's owned state. The struct's `fire` method takes
-            // `&self`, which forces the dispatching closure to capture the
-            // whole struct (avoiding Rust 2021 disjoint-capture splitting,
-            // which would otherwise lift the inner `*mut c_void` out and
-            // break Send).
+            // [`OnTickBridge`] owns the (callback, user_data,
+            // drop_user_data) trio. Its `Drop` impl fires
+            // `drop_user_data` exactly once, no matter where the
+            // bridge ends up: stored on the clock (success path —
+            // drop fires at clock teardown), dropped immediately
+            // (null-handle path or panic before move), or dropped on
+            // the unwind path between move and `clock.on_tick`
+            // returning (panic-recovery path — the bridge moved into
+            // `cb` drops when `cb` unwinds).
+            //
+            // This shape is the sole owner of the cleanup: the
+            // wrapper's third argument to `run_host_extern_c` MUST
+            // stay `()` (no `drop_user_data` call) — Rust evaluates
+            // function arguments eagerly, so a third-arg side effect
+            // would fire `drop_user_data` unconditionally before the
+            // body even runs, double-firing it on every success path.
             let bridge = OnTickBridge {
                 callback,
                 user_data,
                 drop_user_data,
             };
+            if handle.is_null() {
+                // Bridge drops here → drop_user_data fires once. The
+                // explicit `drop(bridge)` is for clarity; lexical
+                // scope alone would fire it on the same line.
+                drop(bridge);
+                return;
+            }
+            let clock = unsafe { &*(handle as *const SharedAudioClock) };
+
+            // Bridge moves into the boxed closure. If
+            // `clock.on_tick(cb)` panics before storing `cb`, the
+            // unwind drops the Box → closure → bridge →
+            // drop_user_data fires exactly once. If `clock.on_tick`
+            // stores `cb` successfully, the bridge lives until the
+            // clock tears down; drop_user_data fires then.
             let cb: Box<dyn Fn(crate::core::context::AudioTickContext) + Send + Sync> =
                 Box::new(move |ctx_local| bridge.fire(ctx_local));
             clock.on_tick(cb);
         },
-        // If on_tick registration panics, the cdylib's `drop_user_data`
-        // callback must still fire to reclaim the cdylib-allocated
-        // user_data box. The bridge's `Drop` impl runs only when
-        // the bridge was actually constructed, so a panic before
-        // construction would leak. Mitigate by invoking
-        // `drop_user_data` directly when the protected body
-        // panicked. SAFETY: cdylib's ABI promises this fn is safe
-        // to invoke with the user_data pointer.
-        {
-            unsafe { (drop_user_data)(user_data) };
-        },
+        // Intentional `()`: the cleanup contract is held entirely by
+        // `OnTickBridge::Drop`. See body comment.
+        (),
     )
 }
 
@@ -1450,6 +1505,11 @@ unsafe extern "C" fn host_rov_add_processor(
     run_host_extern_c(
         "host_rov_add_processor",
         || {
+            if handle.is_null() {
+                CompletionGuard::new(completion, user_data)
+                    .fire_err_msg(b"add_processor: null handle");
+                return;
+            }
             let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
             let guard = CompletionGuard::new(completion, user_data);
             let Some(rt) = host_tokio_handle() else {
@@ -1492,6 +1552,11 @@ unsafe extern "C" fn host_rov_remove_processor(
     run_host_extern_c(
         "host_rov_remove_processor",
         || {
+            if handle.is_null() {
+                CompletionGuard::new(completion, user_data)
+                    .fire_err_msg(b"remove_processor: null handle");
+                return;
+            }
             let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
             let guard = CompletionGuard::new(completion, user_data);
             let Some(rt) = host_tokio_handle() else {
@@ -1534,6 +1599,11 @@ unsafe extern "C" fn host_rov_connect(
     run_host_extern_c(
         "host_rov_connect",
         || {
+            if handle.is_null() {
+                CompletionGuard::new(completion, user_data)
+                    .fire_err_msg(b"connect: null handle");
+                return;
+            }
             let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
             let guard = CompletionGuard::new(completion, user_data);
             let Some(rt) = host_tokio_handle() else {
@@ -1592,6 +1662,11 @@ unsafe extern "C" fn host_rov_disconnect(
     run_host_extern_c(
         "host_rov_disconnect",
         || {
+            if handle.is_null() {
+                CompletionGuard::new(completion, user_data)
+                    .fire_err_msg(b"disconnect: null handle");
+                return;
+            }
             let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
             let guard = CompletionGuard::new(completion, user_data);
             let Some(rt) = host_tokio_handle() else {
@@ -1627,6 +1702,11 @@ unsafe extern "C" fn host_rov_to_json(
     run_host_extern_c(
         "host_rov_to_json",
         || {
+            if handle.is_null() {
+                CompletionGuard::new(completion, user_data)
+                    .fire_err_msg(b"to_json: null handle");
+                return;
+            }
             let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
             let guard = CompletionGuard::new(completion, user_data);
             let Some(rt) = host_tokio_handle() else {
@@ -12205,5 +12285,401 @@ mod gpu_lim_tier1_wire_format_tests {
         let _ = unsafe {
             Box::from_raw(handle as *mut Arc<crate::core::context::GpuContext>)
         };
+    }
+}
+
+#[cfg(test)]
+mod runtime_context_vtable_null_handle_guards {
+    //! Regression locks for the null-handle guards added to the
+    //! `RuntimeContextVTable` callbacks. Each test calls the wrapper
+    //! with a null `ctx` and asserts the documented default return
+    //! value (matching `run_host_extern_c`'s panic-default). Without
+    //! the guard the wrapper would deref a null `*const RuntimeContext`
+    //! before returning, SIGSEGVing the test runner.
+    //!
+    //! Mental-revert check: removing any guard reverts the wrapper to
+    //! `unsafe { &*(null) }` then a field read on the resulting
+    //! reference — SIGSEGV, test failure (process abort) rather than
+    //! the documented default.
+    //!
+    //! Lives in this PR alongside the source change so the engine-
+    //! level fix and its test land together (the test backfill in
+    //! PR B / #960 then layers the broader tier-1 coverage on top of
+    //! these guards).
+
+    use super::*;
+
+    #[test]
+    fn runtime_id_copy_returns_zero_on_null_ctx() {
+        let mut out = [0u8; 16];
+        let mut len: usize = 999;
+        let n = unsafe {
+            (HOST_RUNTIME_CONTEXT_VTABLE.runtime_id_copy)(
+                std::ptr::null(),
+                out.as_mut_ptr(),
+                out.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(n, 0);
+        assert_eq!(len, 0, "out_len must be cleared on null ctx");
+    }
+
+    #[test]
+    fn processor_id_copy_returns_minus_one_on_null_ctx() {
+        let mut out = [0u8; 16];
+        let mut len: usize = 999;
+        let n = unsafe {
+            (HOST_RUNTIME_CONTEXT_VTABLE.processor_id_copy)(
+                std::ptr::null(),
+                out.as_mut_ptr(),
+                out.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(n, -1, "-1 encodes Option::None");
+        assert_eq!(len, 0, "out_len must be cleared on null ctx");
+    }
+
+    #[test]
+    fn is_paused_returns_true_on_null_ctx() {
+        let v = unsafe { (HOST_RUNTIME_CONTEXT_VTABLE.is_paused)(std::ptr::null()) };
+        assert!(v, "pause-on-failure is the conservative default");
+    }
+
+    #[test]
+    fn should_process_returns_false_on_null_ctx() {
+        let v = unsafe {
+            (HOST_RUNTIME_CONTEXT_VTABLE.should_process)(std::ptr::null())
+        };
+        assert!(!v, "halt-on-failure is the conservative default");
+    }
+
+    /// Locks the documented placeholder behaviour of
+    /// `gpu_full_access`: the wrapper ignores `ctx` and returns null
+    /// unconditionally because cross-DSO FullAccess wiring lives on
+    /// the inline-by-value shim today, not through this callback.
+    /// This is NOT a null-handle-guard lock (no guard to revert);
+    /// it's a placeholder-shape lock — if a future change wires
+    /// real FullAccess dispatch here, this test fails and forces
+    /// the implementor to revisit.
+    #[test]
+    fn gpu_full_access_returns_null_unconditionally_today() {
+        let p = unsafe {
+            (HOST_RUNTIME_CONTEXT_VTABLE.gpu_full_access)(std::ptr::null())
+        };
+        assert!(p.is_null());
+    }
+
+    /// Companion to [`gpu_full_access_returns_null_unconditionally_today`].
+    /// Same placeholder-shape lock; same caveat (not a null-handle
+    /// guard — the wrapper ignores `_ctx`).
+    #[test]
+    fn gpu_limited_access_returns_null_unconditionally_today() {
+        let p = unsafe {
+            (HOST_RUNTIME_CONTEXT_VTABLE.gpu_limited_access)(std::ptr::null())
+        };
+        assert!(p.is_null());
+    }
+
+    #[test]
+    fn audio_clock_handle_returns_null_on_null_ctx() {
+        let p = unsafe {
+            (HOST_RUNTIME_CONTEXT_VTABLE.audio_clock_handle)(std::ptr::null())
+        };
+        assert!(p.is_null());
+    }
+
+    #[test]
+    fn runtime_ops_handle_returns_null_on_null_ctx() {
+        let p = unsafe {
+            (HOST_RUNTIME_CONTEXT_VTABLE.runtime_ops_handle)(std::ptr::null())
+        };
+        assert!(p.is_null());
+    }
+}
+
+#[cfg(test)]
+mod audio_clock_vtable_null_handle_guards {
+    //! Regression locks for the null-handle guards added to the
+    //! `AudioClockVTable` callbacks. Same shape as the
+    //! `RuntimeContextVTable` guards module: mental-revert removes
+    //! the guard, the wrapper SIGSEGVs the test runner.
+    //!
+    //! `on_tick`'s guard additionally invokes `drop_user_data` so the
+    //! cdylib's boxed `user_data` doesn't leak — verified via a
+    //! `Drop`-counting fixture.
+
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn sample_rate_returns_zero_on_null_handle() {
+        let v = unsafe { (HOST_AUDIO_CLOCK_VTABLE.sample_rate)(std::ptr::null()) };
+        assert_eq!(v, 0);
+    }
+
+    #[test]
+    fn buffer_size_returns_zero_on_null_handle() {
+        let v = unsafe { (HOST_AUDIO_CLOCK_VTABLE.buffer_size)(std::ptr::null()) };
+        assert_eq!(v, 0);
+    }
+
+    /// Counter shared with the on_tick test's `drop_user_data` callback
+    /// so the test can assert the user_data reclamation actually fires.
+    static ON_TICK_DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C" fn dummy_tick_callback(
+        _user_data: *mut c_void,
+        _ctx: streamlib_plugin_abi::AudioTickContextRepr,
+    ) {
+        // Never fires in the null-handle test — the host short-circuits
+        // before registering.
+    }
+
+    unsafe extern "C" fn counting_drop_user_data(user_data: *mut c_void) {
+        ON_TICK_DROP_COUNT.fetch_add(1, Ordering::SeqCst);
+        // SAFETY: in this test we leaked a `Box<u8>` into user_data;
+        // reclaim it here.
+        if !user_data.is_null() {
+            unsafe {
+                let _ = Box::from_raw(user_data as *mut u8);
+            }
+        }
+    }
+
+    #[test]
+    fn on_tick_drops_user_data_on_null_handle() {
+        // Mental-revert: without the null-handle guard the wrapper
+        // would still construct the bridge (now hoisted above the
+        // null check), then deref a null `*const SharedAudioClock`
+        // to call `clock.on_tick(...)` and SIGSEGV before the bridge
+        // could move into `cb`. With the guard, the bridge drops
+        // before the deref → `drop_user_data` fires exactly once.
+        //
+        // Mental-revert for the bigger fix in the same commit
+        // (removing `drop_user_data` from the wrapper's third arg
+        // and hoisting bridge construction above the null check):
+        // restoring the old third-arg block-expression cleanup would
+        // re-introduce the eager-arg-eval double-fire on every
+        // call (success or null) — this test would observe
+        // `after == before + 2` and fail.
+        let before = ON_TICK_DROP_COUNT.load(Ordering::SeqCst);
+        // Leak a Box<u8> so counting_drop_user_data has something to
+        // reclaim (mirrors cdylib's Box<oneshot::Sender>-shaped pattern).
+        let user_data = Box::into_raw(Box::new(0u8)) as *mut c_void;
+        unsafe {
+            (HOST_AUDIO_CLOCK_VTABLE.on_tick)(
+                std::ptr::null(),
+                dummy_tick_callback,
+                user_data,
+                counting_drop_user_data,
+            );
+        }
+        let after = ON_TICK_DROP_COUNT.load(Ordering::SeqCst);
+        assert_eq!(
+            after,
+            before + 1,
+            "drop_user_data must fire exactly once on null-handle short-circuit"
+        );
+    }
+
+    /// Success-path companion to the null-handle test. Exercises the
+    /// real `clock.on_tick(...)` storage path with a tiny ad-hoc
+    /// `SharedAudioClock` and asserts `drop_user_data` fires exactly
+    /// once across the full lifecycle (registration → clock drop).
+    /// Locks the eager-arg-eval double-free fix: restoring the old
+    /// third-arg block-expression cleanup would observe `after ==
+    /// before + 2` and fail this test.
+    #[test]
+    fn on_tick_drops_user_data_exactly_once_on_success_path() {
+        use crate::core::context::{AudioClockConfig, SharedAudioClock, SoftwareAudioClock};
+        use std::sync::Arc as StdArc;
+        let before = ON_TICK_DROP_COUNT.load(Ordering::SeqCst);
+        let user_data = Box::into_raw(Box::new(0u8)) as *mut c_void;
+        // Build a tiny clock just for this test. Drops at the end
+        // of the function, firing the bridge's Drop (which fires
+        // drop_user_data exactly once if the fix holds).
+        let clock: SharedAudioClock = StdArc::new(SoftwareAudioClock::new(
+            AudioClockConfig::new(48_000, 512),
+        ));
+        let handle = &clock as *const SharedAudioClock as *const c_void;
+        unsafe {
+            (HOST_AUDIO_CLOCK_VTABLE.on_tick)(
+                handle,
+                dummy_tick_callback,
+                user_data,
+                counting_drop_user_data,
+            );
+        }
+        // Drop the clock before reading the counter so the bridge's
+        // Drop fires deterministically.
+        drop(clock);
+        let after = ON_TICK_DROP_COUNT.load(Ordering::SeqCst);
+        assert_eq!(
+            after,
+            before + 1,
+            "drop_user_data must fire exactly once across the full \
+             on_tick lifecycle (registration → clock drop); \
+             `before + 2` indicates the eager-arg-eval double-free \
+             regressed"
+        );
+    }
+}
+
+#[cfg(test)]
+mod runtime_ops_vtable_null_handle_guards {
+    //! Regression locks for the null-handle guards added to the
+    //! `RuntimeOpsVTable` callbacks. Each callback is
+    //! submit-with-completion (void return + completion callback):
+    //! the contract is that completion fires exactly once. Null
+    //! handle must fire the completion with `status = -1` and an
+    //! error message identifying the offending op — mental-revert
+    //! removes the guard, the wrapper SIGSEGVs through
+    //! `&*(null as *const Arc<dyn RuntimeOperations>)`.
+    //!
+    //! Each test installs a tiny completion that pushes
+    //! `(status, message)` into a shared queue; the assertion
+    //! confirms a single error completion fired with the expected
+    //! per-op marker.
+
+    use super::*;
+    use std::sync::{Arc as StdArc, Mutex};
+
+    struct CompletionSink {
+        events: Mutex<Vec<(i32, Vec<u8>)>>,
+    }
+
+    impl CompletionSink {
+        fn new() -> StdArc<Self> {
+            StdArc::new(Self { events: Mutex::new(Vec::new()) })
+        }
+    }
+
+    unsafe extern "C" fn record_completion(
+        user_data: *mut c_void,
+        status: i32,
+        result_ptr: *const u8,
+        result_len: usize,
+    ) {
+        let sink_arc = unsafe { StdArc::from_raw(user_data as *const CompletionSink) };
+        let payload = if result_len == 0 {
+            Vec::new()
+        } else {
+            unsafe { std::slice::from_raw_parts(result_ptr, result_len) }.to_vec()
+        };
+        sink_arc.events.lock().expect("poisoned").push((status, payload));
+        // Re-leak so the host's CompletionGuard's Drop (if it fires
+        // again — it shouldn't, but defensive) can still find it.
+        // In practice the guard's `fire_err_msg` consumes via `mut`,
+        // so this re-leak is just paranoia matching the cdylib's
+        // RAII-trampoline shape.
+        let _ = StdArc::into_raw(sink_arc);
+    }
+
+    fn install_sink_user_data() -> (*mut c_void, StdArc<CompletionSink>) {
+        let sink = CompletionSink::new();
+        let user_data = StdArc::into_raw(StdArc::clone(&sink)) as *mut c_void;
+        (user_data, sink)
+    }
+
+    fn assert_single_err_completion(sink: &CompletionSink, expected_marker: &str) {
+        let events = sink.events.lock().expect("poisoned");
+        assert_eq!(events.len(), 1, "expected exactly one completion fire");
+        let (status, payload) = &events[0];
+        assert_eq!(*status, -1, "null-handle must produce err status");
+        let msg = std::str::from_utf8(payload).expect("UTF-8");
+        assert!(
+            msg.contains(expected_marker),
+            "expected marker `{expected_marker}` in msg: {msg}"
+        );
+    }
+
+    /// After each test the test's CompletionSink Arc still holds one
+    /// extra refcount (the original `StdArc::into_raw` we passed as
+    /// user_data, never reclaimed by the host on the null-handle
+    /// path). Reclaim it explicitly so the sink doesn't leak.
+    unsafe fn reclaim_sink(user_data: *mut c_void) {
+        let _ = unsafe { StdArc::from_raw(user_data as *const CompletionSink) };
+    }
+
+    #[test]
+    fn add_processor_fires_error_completion_on_null_handle() {
+        let (user_data, sink) = install_sink_user_data();
+        unsafe {
+            (HOST_RUNTIME_OPS_VTABLE.add_processor)(
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                record_completion,
+                user_data,
+            );
+        }
+        assert_single_err_completion(&sink, "add_processor: null handle");
+        unsafe { reclaim_sink(user_data) };
+    }
+
+    #[test]
+    fn remove_processor_fires_error_completion_on_null_handle() {
+        let (user_data, sink) = install_sink_user_data();
+        unsafe {
+            (HOST_RUNTIME_OPS_VTABLE.remove_processor)(
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                record_completion,
+                user_data,
+            );
+        }
+        assert_single_err_completion(&sink, "remove_processor: null handle");
+        unsafe { reclaim_sink(user_data) };
+    }
+
+    #[test]
+    fn connect_fires_error_completion_on_null_handle() {
+        let (user_data, sink) = install_sink_user_data();
+        unsafe {
+            (HOST_RUNTIME_OPS_VTABLE.connect)(
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                record_completion,
+                user_data,
+            );
+        }
+        assert_single_err_completion(&sink, "connect: null handle");
+        unsafe { reclaim_sink(user_data) };
+    }
+
+    #[test]
+    fn disconnect_fires_error_completion_on_null_handle() {
+        let (user_data, sink) = install_sink_user_data();
+        unsafe {
+            (HOST_RUNTIME_OPS_VTABLE.disconnect)(
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                record_completion,
+                user_data,
+            );
+        }
+        assert_single_err_completion(&sink, "disconnect: null handle");
+        unsafe { reclaim_sink(user_data) };
+    }
+
+    #[test]
+    fn to_json_fires_error_completion_on_null_handle() {
+        let (user_data, sink) = install_sink_user_data();
+        unsafe {
+            (HOST_RUNTIME_OPS_VTABLE.to_json)(
+                std::ptr::null(),
+                record_completion,
+                user_data,
+            );
+        }
+        assert_single_err_completion(&sink, "to_json: null handle");
+        unsafe { reclaim_sink(user_data) };
     }
 }
