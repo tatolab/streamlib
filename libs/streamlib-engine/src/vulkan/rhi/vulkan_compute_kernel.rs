@@ -941,14 +941,42 @@ impl std::fmt::Debug for VulkanComputeKernelInner {
 // β-shape implementation (#917)
 // =============================================================================
 
-/// Compute kernel — layout-stable `#[repr(C)] (handle, vtable)` β-shape
-/// so cdylibs can hold, refcount, and drop without sharing rustc-version
-/// or dep-graph with the host. Method dispatch is host-only via
-/// [`Self::host_inner`] until Phase E (#907) lifts to vtable slots.
+/// Compute kernel — layout-stable `#[repr(C)]` β-shape so cdylibs
+/// can hold, refcount, drop, and read POD descriptors without
+/// sharing rustc-version or dep-graph with the host.
+///
+/// The opaque handle points at an `Arc<VulkanComputeKernelInner>`;
+/// lifecycle (Clone / Drop) dispatches through the host-installed
+/// parent [`GpuContextFullAccessVTable`]'s `clone_compute_kernel` /
+/// `drop_compute_kernel` callbacks (locked by PR #918's β-shape
+/// Phase D work). Per-method dispatch is reached through the
+/// dedicated
+/// [`streamlib_plugin_abi::VulkanComputeKernelMethodsVTable`] pointed
+/// at by `methods_vtable` — issue #907 PR 2/5 lands the pointer
+/// plumbing + cached POD fields; follow-up PRs append method slots
+/// and route `set_*` / `dispatch` / `record` / `bindings` through
+/// them, plus land the ambitious CPU-reference dlopen integration
+/// test.
+///
+/// The `push_constant_size()` POD getter reads from the cached
+/// field — no FFI hop. The value is captured by
+/// [`Self::from_arc_into_raw`] at construction and never mutates
+/// over the kernel's lifetime.
 #[repr(C)]
 pub struct VulkanComputeKernel {
+    /// Opaque handle to the host's `Arc<VulkanComputeKernelInner>`.
     pub(crate) handle: *const c_void,
+    /// Parent vtable for cross-DSO Clone/Drop dispatch (#918 Phase D).
     pub(crate) vtable: *const GpuContextFullAccessVTable,
+    /// Per-type vtable for cross-DSO method dispatch (#907 Phase E).
+    pub(crate) methods_vtable:
+        *const streamlib_plugin_abi::VulkanComputeKernelMethodsVTable,
+    /// Cached push-constant size in bytes. Set at construction; fixed
+    /// for the kernel's lifetime.
+    pub(crate) cached_push_constant_size: u32,
+    /// Reserved padding so the struct stays 8-byte aligned and the
+    /// trailing bytes of the last 4-byte field are deterministic.
+    pub(crate) _reserved_padding: u32,
 }
 
 unsafe impl Send for VulkanComputeKernel {}
@@ -982,10 +1010,19 @@ impl VulkanComputeKernel {
     }
 
     pub(crate) fn from_arc_into_raw(arc: Arc<VulkanComputeKernelInner>) -> Self {
+        let cached_push_constant_size = arc.push_constant_size();
         let handle = Arc::into_raw(arc) as *const c_void;
         let vtable =
             crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
-        Self { handle, vtable }
+        let methods_vtable =
+            crate::core::plugin::host_services::host_vulkan_compute_kernel_methods_vtable();
+        Self {
+            handle,
+            vtable,
+            methods_vtable,
+            cached_push_constant_size,
+            _reserved_padding: 0,
+        }
     }
 
     pub(crate) fn host_inner(&self) -> &VulkanComputeKernelInner {
@@ -1084,8 +1121,9 @@ impl VulkanComputeKernel {
         self.host_inner().bindings().to_vec()
     }
 
+    /// Push-constant range size in bytes. Cached POD — no FFI hop.
     pub fn push_constant_size(&self) -> u32 {
-        self.host_inner().push_constant_size()
+        self.cached_push_constant_size
     }
 }
 
@@ -1099,6 +1137,9 @@ impl Clone for VulkanComputeKernel {
         Self {
             handle: self.handle,
             vtable: self.vtable,
+            methods_vtable: self.methods_vtable,
+            cached_push_constant_size: self.cached_push_constant_size,
+            _reserved_padding: self._reserved_padding,
         }
     }
 }
@@ -1126,10 +1167,23 @@ mod beta_shape_layout_tests {
 
     #[test]
     fn vulkan_compute_kernel_layout() {
-        assert_eq!(size_of::<VulkanComputeKernel>(), 16);
+        // β-shape struct as of #907 PR 2/5:
+        //   handle                       @ 0  (8 bytes, *const c_void)
+        //   vtable                       @ 8  (8 bytes, *const GpuContextFullAccessVTable)
+        //   methods_vtable               @ 16 (8 bytes, *const VulkanComputeKernelMethodsVTable)
+        //   cached_push_constant_size    @ 24 (4 bytes, u32)
+        //   _reserved_padding            @ 28 (4 bytes, u32)
+        // Total = 32, align = 8.
+        assert_eq!(size_of::<VulkanComputeKernel>(), 32);
         assert_eq!(align_of::<VulkanComputeKernel>(), 8);
         assert_eq!(offset_of!(VulkanComputeKernel, handle), 0);
         assert_eq!(offset_of!(VulkanComputeKernel, vtable), 8);
+        assert_eq!(offset_of!(VulkanComputeKernel, methods_vtable), 16);
+        assert_eq!(
+            offset_of!(VulkanComputeKernel, cached_push_constant_size),
+            24
+        );
+        assert_eq!(offset_of!(VulkanComputeKernel, _reserved_padding), 28);
     }
 
     #[test]
