@@ -4716,11 +4716,26 @@ impl GpuContextFullAccess {
                         ));
                     }
                     // β-shape: bundle the raw handle (`Arc::into_raw(Arc<Inner>)`-shaped)
-                    // with the host vtable. Cross-rustc-version safe because no Inner
-                    // layout knowledge is required cdylib-side.
+                    // with the host vtables. Cached POD descriptors
+                    // (`device_address`, `storage_size`, `kind`) are
+                    // populated with placeholder zeros today — the
+                    // `build_*_blas` FFI signature doesn't yet surface
+                    // them to the cdylib. The β-shape getters fall
+                    // back to `host_inner` when cached values are 0
+                    // (panics in cdylib) — fixed in the #907 follow-up
+                    // sub-issue (FFI extension with out-params).
+                    let methods_vtable =
+                        crate::core::plugin::host_services::host_callbacks()
+                            .map(|c| c.vulkan_acceleration_structure_methods_vtable)
+                            .unwrap_or(std::ptr::null());
                     Ok(crate::vulkan::rhi::VulkanAccelerationStructure {
                         handle: out_blas,
                         vtable: self.vtable,
+                        methods_vtable,
+                        cached_kind: 0, // BottomLevel — placeholder; see comment above
+                        _reserved_padding: 0,
+                        cached_device_address: 0,
+                        cached_storage_size: 0,
                     })
                 } else {
                     let msg = String::from_utf8_lossy(
@@ -4770,9 +4785,20 @@ impl GpuContextFullAccess {
                             "build_tlas: host signaled success but out_tlas is null".into(),
                         ));
                     }
+                    // β-shape: see build_triangles_blas above. Same
+                    // placeholder-zeros caching story.
+                    let methods_vtable =
+                        crate::core::plugin::host_services::host_callbacks()
+                            .map(|c| c.vulkan_acceleration_structure_methods_vtable)
+                            .unwrap_or(std::ptr::null());
                     Ok(crate::vulkan::rhi::VulkanAccelerationStructure {
                         handle: out_tlas,
                         vtable: self.vtable,
+                        methods_vtable,
+                        cached_kind: 1, // TopLevel — placeholder; see comment above
+                        _reserved_padding: 0,
+                        cached_device_address: 0,
+                        cached_storage_size: 0,
                     })
                 } else {
                     let msg = String::from_utf8_lossy(
