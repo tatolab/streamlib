@@ -1,0 +1,33 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# Test-only config schema for the cdylib ray-tracing-kernel methods-vtable
+# smoke test. The processor:
+#   1. Builds a single-triangle BLAS + identity TLAS via the FullAccess
+#      vtable's build_triangles_blas / build_tlas slots.
+#   2. Creates a ray-tracing kernel via the FullAccess vtable's
+#      create_ray_tracing_kernel slot.
+#   3. Acquires a STORAGE_BINDING + COPY_SRC render-target Texture via
+#      the LimitedAccess vtable's acquire_texture slot.
+#   4. Exercises the methods-vtable binding slots
+#      (set_acceleration_structure, set_storage_image,
+#      set_push_constants) plus trace_rays() end-to-end.
+#   5. Writes "OK" (or "ERR:<message>") to the configured output_path.
+#
+# The smoke test asserts the vtable round-trips don't panic and the
+# processor's start() body completes without an error code — it does
+# NOT compare pixel output to a CPU reference. If the device doesn't
+# support ray-tracing pipelines (no VK_KHR_ray_tracing_pipeline), the
+# processor writes "OK" without exercising the kernel — the runtime
+# itself must succeed regardless, the per-platform RT capability is a
+# host concern not a vtable-shape concern.
+
+metadata:
+  type: RayTracingKernelSmokeTestProcessorConfig
+  description: "Test config schema for the cdylib ray-tracing-kernel methods-vtable smoke test."
+
+properties:
+  output_path:
+    metadata:
+      description: "Filesystem path where the processor writes its result. Format: 'OK' on success, 'ERR:<message>' on failure."
+    type: string

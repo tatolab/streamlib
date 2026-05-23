@@ -10,6 +10,7 @@ fn main() {
     {
         compile_cpu_ref_doubler();
         compile_graphics_kernel_smoke();
+        compile_ray_tracing_kernel_smoke();
     }
 }
 
@@ -58,6 +59,53 @@ fn compile_graphics_kernel_smoke() {
         let dst: PathBuf = Path::new(&out_dir).join(dst_name);
         let status = Command::new("glslc")
             .arg(stage_arg)
+            .arg("-O")
+            .arg(Path::new(src))
+            .arg("-o")
+            .arg(&dst)
+            .status()
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Failed to run glslc for {src} (install Vulkan SDK or ensure glslc is in PATH): {e}"
+                )
+            });
+        assert!(status.success(), "glslc failed to compile {src}");
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn compile_ray_tracing_kernel_smoke() {
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    // RT shaders need Vulkan 1.2 + SPIR-V 1.4 minimum for the
+    // SPV_KHR_ray_tracing opcodes — glslc's default target is
+    // Vulkan 1.0 / SPIR-V 1.0 which silently drops the GL_EXT_ray_tracing
+    // bindings.
+    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR set by cargo");
+    for (src, stage_arg, dst_name) in [
+        (
+            "shaders/ray_tracing_kernel_smoke.rgen",
+            "-fshader-stage=rgen",
+            "ray_tracing_kernel_smoke_rgen.spv",
+        ),
+        (
+            "shaders/ray_tracing_kernel_smoke.rmiss",
+            "-fshader-stage=rmiss",
+            "ray_tracing_kernel_smoke_rmiss.spv",
+        ),
+        (
+            "shaders/ray_tracing_kernel_smoke.rchit",
+            "-fshader-stage=rchit",
+            "ray_tracing_kernel_smoke_rchit.spv",
+        ),
+    ] {
+        println!("cargo:rerun-if-changed={}", src);
+        let dst: PathBuf = Path::new(&out_dir).join(dst_name);
+        let status = Command::new("glslc")
+            .arg(stage_arg)
+            .arg("--target-env=vulkan1.2")
+            .arg("--target-spv=spv1.4")
             .arg("-O")
             .arg(Path::new(src))
             .arg("-o")

@@ -7746,6 +7746,442 @@ unsafe extern "C" fn host_graphics_kernel_offscreen_render(
     )
 }
 
+// ---- VulkanRayTracingKernelMethodsVTable wrappers (#953) -------------------
+//
+// Each wrapper reconstructs the kernel borrow from the raw `Arc`
+// handle the cdylib passes (`Arc::into_raw(Arc<VulkanRayTracingKernelInner>)`
+// per the β-shape's `from_arc_into_raw`), runs the inner method,
+// and converts the `Result<()>` into the FFI's `i32 + err_buf`
+// shape. All bodies are wrapped in `run_host_extern_c` so a panic
+// in the inner method becomes a non-zero return.
+//
+// Buffer / texture borrow reconstruction reuses the
+// `make_*_buffer_borrow` / `make_texture_borrow` helpers from the
+// compute-kernel section above — same `ManuallyDrop`-wrapped
+// plugin-handle pattern, same "cached PODs are never read"
+// invariant. See the comment block above
+// `make_pixel_buffer_borrow` for the load-bearing details.
+//
+// The AS-binding wrapper reconstructs an AS borrow via
+// `make_acceleration_structure_borrow` — same `ManuallyDrop` shape
+// as the buffer/texture helpers; the inner kernel only reads
+// `vk_handle()` + `kind()` off the wrapper, both of which trampoline
+// through the methods vtable when the AS has its own vtable hooked
+// up. In the host-path this PR exercises, the borrow is constructed
+// against the host's static vtables so the dispatch goes straight to
+// `host_inner()` and reads the inner's cached `handle` + `kind` —
+// no recursive FFI call.
+
+/// SAFETY: caller must hand a `handle` that came from
+/// `Arc::into_raw(Arc<VulkanRayTracingKernelInner>)`. The leaked
+/// strong count keeps the kernel alive for the call's duration.
+#[cfg(target_os = "linux")]
+unsafe fn handle_as_ray_tracing_kernel(
+    handle: *const c_void,
+) -> Option<&'static crate::vulkan::rhi::VulkanRayTracingKernelInner> {
+    if handle.is_null() {
+        return None;
+    }
+    Some(unsafe { &*(handle as *const crate::vulkan::rhi::VulkanRayTracingKernelInner) })
+}
+
+#[cfg(target_os = "linux")]
+fn make_acceleration_structure_borrow(
+    handle: *const c_void,
+) -> std::mem::ManuallyDrop<crate::vulkan::rhi::VulkanAccelerationStructure> {
+    std::mem::ManuallyDrop::new(crate::vulkan::rhi::VulkanAccelerationStructure {
+        handle,
+        vtable: host_gpu_context_full_access_vtable(),
+        methods_vtable: host_vulkan_acceleration_structure_methods_vtable(),
+        cached_kind: 0,
+        _reserved_padding: 0,
+        cached_device_address: 0,
+        cached_storage_size: 0,
+    })
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_ray_tracing_kernel_set_acceleration_structure(
+    kernel_handle: *const c_void,
+    binding: u32,
+    acceleration_structure_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ray_tracing_kernel_set_acceleration_structure",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_acceleration_structure: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if acceleration_structure_handle.is_null() {
+                write_err(
+                    "set_acceleration_structure: null acceleration_structure handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let borrow = make_acceleration_structure_borrow(acceleration_structure_handle);
+            match kernel.set_acceleration_structure(binding, &*borrow) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("set_acceleration_structure: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_ray_tracing_kernel_set_storage_buffer_pixel(
+    kernel_handle: *const c_void,
+    binding: u32,
+    pixel_buffer_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ray_tracing_kernel_set_storage_buffer_pixel",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_storage_buffer_pixel: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if pixel_buffer_handle.is_null() {
+                write_err(
+                    "set_storage_buffer_pixel: null pixel_buffer handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let borrow = make_pixel_buffer_borrow(pixel_buffer_handle);
+            match kernel.set_storage_buffer(binding, &*borrow) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("set_storage_buffer_pixel: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_ray_tracing_kernel_set_storage_buffer_storage(
+    kernel_handle: *const c_void,
+    binding: u32,
+    storage_buffer_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ray_tracing_kernel_set_storage_buffer_storage",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_storage_buffer_storage: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if storage_buffer_handle.is_null() {
+                write_err(
+                    "set_storage_buffer_storage: null storage_buffer handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let borrow = make_storage_buffer_borrow(storage_buffer_handle);
+            match kernel.set_storage_buffer(binding, &*borrow) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("set_storage_buffer_storage: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_ray_tracing_kernel_set_uniform_buffer(
+    kernel_handle: *const c_void,
+    binding: u32,
+    uniform_buffer_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ray_tracing_kernel_set_uniform_buffer",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_uniform_buffer: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if uniform_buffer_handle.is_null() {
+                write_err(
+                    "set_uniform_buffer: null uniform_buffer handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let borrow = make_uniform_buffer_borrow(uniform_buffer_handle);
+            match kernel.set_uniform_buffer(binding, &*borrow) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("set_uniform_buffer: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_ray_tracing_kernel_set_sampled_texture(
+    kernel_handle: *const c_void,
+    binding: u32,
+    texture_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ray_tracing_kernel_set_sampled_texture",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_sampled_texture: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if texture_handle.is_null() {
+                write_err(
+                    "set_sampled_texture: null texture handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let borrow = make_texture_borrow(texture_handle);
+            match kernel.set_sampled_texture(binding, &*borrow) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("set_sampled_texture: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_ray_tracing_kernel_set_storage_image(
+    kernel_handle: *const c_void,
+    binding: u32,
+    texture_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ray_tracing_kernel_set_storage_image",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_storage_image: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if texture_handle.is_null() {
+                write_err(
+                    "set_storage_image: null texture handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let borrow = make_texture_borrow(texture_handle);
+            match kernel.set_storage_image(binding, &*borrow) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("set_storage_image: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_ray_tracing_kernel_set_push_constants(
+    kernel_handle: *const c_void,
+    bytes_ptr: *const u8,
+    bytes_len: usize,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ray_tracing_kernel_set_push_constants",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_push_constants: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if bytes_ptr.is_null() && bytes_len != 0 {
+                write_err(
+                    "set_push_constants: null bytes_ptr with non-zero len",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let bytes = if bytes_len == 0 {
+                &[][..]
+            } else {
+                unsafe { std::slice::from_raw_parts(bytes_ptr, bytes_len) }
+            };
+            match kernel.set_push_constants(bytes) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("set_push_constants: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_ray_tracing_kernel_trace_rays(
+    kernel_handle: *const c_void,
+    width: u32,
+    height: u32,
+    depth: u32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ray_tracing_kernel_trace_rays",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "trace_rays: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            match kernel.trace_rays(width, height, depth) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(&format!("trace_rays: {e}"), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
 // ---- Non-Linux platform stubs (vtable layout stays unconditional) ----------
 
 #[cfg(not(target_os = "linux"))]
@@ -7963,14 +8399,176 @@ pub fn host_vulkan_graphics_kernel_methods_vtable(
     &HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE
 }
 
-/// Host-side empty-shell `VulkanRayTracingKernelMethodsVTable`
-/// (issue #907 PR 4/5).
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_ray_tracing_kernel_set_acceleration_structure(
+    _kernel_handle: *const c_void,
+    _binding: u32,
+    _acceleration_structure_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_acceleration_structure: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_ray_tracing_kernel_set_storage_buffer_pixel(
+    _kernel_handle: *const c_void,
+    _binding: u32,
+    _pixel_buffer_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_storage_buffer_pixel: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_ray_tracing_kernel_set_storage_buffer_storage(
+    _kernel_handle: *const c_void,
+    _binding: u32,
+    _storage_buffer_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_storage_buffer_storage: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_ray_tracing_kernel_set_uniform_buffer(
+    _kernel_handle: *const c_void,
+    _binding: u32,
+    _uniform_buffer_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_uniform_buffer: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_ray_tracing_kernel_set_sampled_texture(
+    _kernel_handle: *const c_void,
+    _binding: u32,
+    _texture_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_sampled_texture: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_ray_tracing_kernel_set_storage_image(
+    _kernel_handle: *const c_void,
+    _binding: u32,
+    _texture_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_storage_image: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_ray_tracing_kernel_set_push_constants(
+    _kernel_handle: *const c_void,
+    _bytes_ptr: *const u8,
+    _bytes_len: usize,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_push_constants: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_ray_tracing_kernel_trace_rays(
+    _kernel_handle: *const c_void,
+    _width: u32,
+    _height: u32,
+    _depth: u32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "trace_rays: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+/// Host-side `VulkanRayTracingKernelMethodsVTable` populated with the
+/// v2 method slots (typed binding-method dispatch for the plugin
+/// handle's `set_acceleration_structure` / `set_storage_buffer_pixel`
+/// / `set_storage_buffer_storage` / `set_uniform_buffer` /
+/// `set_sampled_texture` / `set_storage_image` surface plus the
+/// primitive-argument slots `set_push_constants` / `trace_rays`).
+///
+/// The `bindings()` getter and the generic
+/// `set_push_constants_value::<T>` stay `host_inner`-routed —
+/// `Vec<RayTracingBindingSpec>` isn't `#[repr(C)]` and the generic
+/// reduces to `set_push_constants` for cdylib mode.
 pub static HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE:
     streamlib_plugin_abi::VulkanRayTracingKernelMethodsVTable =
     streamlib_plugin_abi::VulkanRayTracingKernelMethodsVTable {
         layout_version:
             streamlib_plugin_abi::VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION,
         _reserved_padding: 0,
+        set_acceleration_structure: host_ray_tracing_kernel_set_acceleration_structure,
+        set_storage_buffer_pixel: host_ray_tracing_kernel_set_storage_buffer_pixel,
+        set_storage_buffer_storage: host_ray_tracing_kernel_set_storage_buffer_storage,
+        set_uniform_buffer: host_ray_tracing_kernel_set_uniform_buffer,
+        set_sampled_texture: host_ray_tracing_kernel_set_sampled_texture,
+        set_storage_image: host_ray_tracing_kernel_set_storage_image,
+        set_push_constants: host_ray_tracing_kernel_set_push_constants,
+        trace_rays: host_ray_tracing_kernel_trace_rays,
     };
 
 /// Accessor for the host's static
@@ -9220,6 +9818,208 @@ mod graphics_kernel_methods_vtable_null_tests {
         assert!(
             err_buf_as_str(&buf, len)
                 .contains("offscreen_render: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod ray_tracing_kernel_methods_vtable_null_tests {
+    //! Tier-1 wire-format tests for the v2 method slots on
+    //! `VulkanRayTracingKernelMethodsVTable`. Each wrapper must
+    //! reject a null kernel handle before reaching any kernel-side
+    //! state (i.e. before any deref) so cdylib callers get a clean
+    //! error return on the wire-format path instead of UB.
+    //!
+    //! The null-AS-handle / null-buffer-handle / null-texture-handle
+    //! guards live in the same wrappers and fire when the kernel
+    //! handle is valid; they're exercised end-to-end by the
+    //! ray-tracing-kernel dlopen smoke test (which holds a real
+    //! kernel).
+
+    use super::*;
+
+    fn make_err_buf() -> ([u8; 256], usize) {
+        ([0u8; 256], 0usize)
+    }
+
+    fn err_buf_as_str(buf: &[u8], len: usize) -> &str {
+        std::str::from_utf8(&buf[..len]).expect("UTF-8")
+    }
+
+    #[test]
+    fn set_acceleration_structure_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE.set_acceleration_structure)(
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("set_acceleration_structure: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn set_storage_buffer_pixel_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE.set_storage_buffer_pixel)(
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("set_storage_buffer_pixel: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn set_storage_buffer_storage_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE.set_storage_buffer_storage)(
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("set_storage_buffer_storage: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn set_uniform_buffer_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE.set_uniform_buffer)(
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("set_uniform_buffer: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn set_sampled_texture_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE.set_sampled_texture)(
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("set_sampled_texture: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn set_storage_image_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE.set_storage_image)(
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("set_storage_image: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn set_push_constants_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE.set_push_constants)(
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("set_push_constants: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn trace_rays_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE.trace_rays)(
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("trace_rays: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
