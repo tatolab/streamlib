@@ -1919,6 +1919,48 @@ unsafe extern "C" fn host_gpu_lim_drop_texture(handle: *const c_void) {
 }
 
 // -------------------------------------------------------------------------
+// Texture::native_handle DMA-BUF FD export (Phase F, #957)
+// -------------------------------------------------------------------------
+
+unsafe extern "C" fn host_gpu_lim_texture_native_dma_buf_fd(
+    texture_handle: *const c_void,
+) -> i64 {
+    run_host_extern_c(
+        "host_gpu_lim_texture_native_dma_buf_fd",
+        || {
+            if texture_handle.is_null() {
+                return -1;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                // SAFETY: `texture_handle` is the
+                // `Arc::into_raw(Arc<TextureInner>)` pointer carried as the
+                // cdylib-side `Texture::handle` field. Borrowing as
+                // `&TextureInner` does not touch the refcount — the
+                // caller's `Texture` keeps the Arc alive for the duration
+                // of this dispatch.
+                let inner = unsafe {
+                    &*(texture_handle as *const crate::core::rhi::texture::TextureInner)
+                };
+                match inner.inner.export_dma_buf_fd() {
+                    Ok(fd) => i64::from(fd),
+                    Err(_) => -1,
+                }
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                // DMA-BUF is a Linux concept. macOS / Windows native
+                // handles are deferred until those cdylib adapter paths
+                // resume (see #908's AI Agent Notes).
+                let _ = texture_handle;
+                -1
+            }
+        },
+        -1,
+    )
+}
+
+// -------------------------------------------------------------------------
 // PooledTextureHandle lifecycle — drop-only (v4)
 // -------------------------------------------------------------------------
 
@@ -6379,6 +6421,7 @@ pub static HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE: GpuContextLimitedAccessVTable
         resolve_pixel_buffer_by_surface_id: host_gpu_lim_resolve_pixel_buffer_by_surface_id,
         escalate_begin: host_gpu_lim_escalate_begin,
         escalate_end: host_gpu_lim_escalate_end,
+        texture_native_dma_buf_fd: host_gpu_lim_texture_native_dma_buf_fd,
     };
 
 /// Pointer to the [`GpuContextLimitedAccessVTable`] this DSO should
@@ -10005,6 +10048,35 @@ mod gpu_lim_escalate_vtable_tests {
         );
 
         unsafe { free_host_handle(handle) };
+    }
+}
+
+#[cfg(test)]
+mod gpu_lim_texture_native_dma_buf_fd_tests {
+    //! Tier-1 wire-format test for the Phase F
+    //! `texture_native_dma_buf_fd` slot (#908 / #957). The slot is the
+    //! cross-DSO landing for `Texture::native_handle` on Linux and
+    //! returns the DMA-BUF FD widened to `i64`; sentinel `-1` encodes
+    //! the `Option::None` case. A null texture handle must be a clean
+    //! `-1` (no panic, no UB) — the wrapper short-circuits before any
+    //! cast through `*const TextureInner`.
+
+    use super::*;
+
+    #[test]
+    fn texture_native_dma_buf_fd_returns_minus_one_on_null_handle() {
+        // Null texture_handle is the cdylib-shaped "Texture wasn't
+        // minted yet / was already dropped" case. The slot returns
+        // `-1` (= `Option::None` in the Rust-side wrapper) without
+        // panicking and without touching the null pointer.
+        let fd = unsafe {
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE
+                .texture_native_dma_buf_fd)(std::ptr::null())
+        };
+        assert_eq!(
+            fd, -1,
+            "null texture_handle must produce -1 sentinel (None)"
+        );
     }
 }
 

@@ -41,6 +41,12 @@ pub enum NativeTextureHandle {
 
     /// Linux: DMA-BUF file descriptor for GPU memory sharing.
     /// Import via `EGL_EXT_image_dma_buf_import` or Vulkan external memory.
+    ///
+    /// **The FD is borrowed from the host-owning [`Texture`]**: it
+    /// stays valid only while that [`Texture`] keeps the underlying
+    /// allocation alive, and the host closes it on drop. Callers
+    /// handing the FD to an API that takes ownership on success
+    /// (e.g. `vkImportMemoryFdKHR`) MUST `dup(2)` it first.
     DmaBuf { fd: i32 },
 
     /// Windows: DXGI shared handle for cross-process GPU memory sharing.
@@ -351,13 +357,26 @@ impl Texture {
     ///
     /// Returns the appropriate handle type for the current platform:
     /// - macOS/iOS: `IOSurface { id }`
-    /// - Linux: `DmaBuf { fd }` (when implemented)
-    /// - Windows: `DxgiSharedHandle { handle }` (when implemented)
+    /// - Linux: `DmaBuf { fd }` (cross-DSO safe — dispatches through
+    ///   [`GpuContextLimitedAccessVTable::texture_native_dma_buf_fd`]
+    ///   so cdylib subprocess adapters can export DMA-BUF FDs to a
+    ///   different GPU API — CUDA, OpenGL, downstream IPC — without
+    ///   touching host-internal `TextureInner` layout).
+    /// - Windows: `DxgiSharedHandle { handle }` (when implemented).
     ///
-    /// Returns `None` if no sharing handle is available.
+    /// Returns `None` if no sharing handle is available (no Vulkan
+    /// backing, export failed, or the platform doesn't expose one).
     pub fn native_handle(&self) -> Option<NativeTextureHandle> {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
+            // macOS / iOS native-handle path stays host-only until
+            // macOS cdylib adapter work resumes (#908 deferred list).
+            // `host_inner()` panics in cdylib mode; the panic
+            // propagates through the cdylib's Rust stack until it
+            // crosses the next FFI boundary (the plugin entry point
+            // or any host vtable callback the cdylib calls), where
+            // `catch_unwind` converts it to a "callback panicked"
+            // log entry instead of UB.
             self.host_inner()
                 .metal_texture
                 .as_ref()
@@ -366,15 +385,42 @@ impl Texture {
         }
         #[cfg(target_os = "linux")]
         {
-            self.host_inner()
-                .inner
-                .export_dma_buf_fd()
-                .ok()
-                .map(|fd| NativeTextureHandle::DmaBuf { fd })
+            // Linux DMA-BUF export is cross-DSO safe: the slot returns
+            // the FD as a primitive `i64` (sentinel `-1` encodes
+            // `None`), which never crosses an Arc<TextureInner>
+            // layout boundary. Host mode resolves the slot pointer
+            // to `&HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE`'s callback
+            // (which in turn calls `HostVulkanTexture::export_dma_buf_fd`);
+            // cdylib mode resolves to the host-installed pointer
+            // routed through `HostServices::gpu_context_limited_access_vtable`.
+            if self.handle.is_null() || self.vtable.is_null() {
+                return None;
+            }
+            // SAFETY: `vtable` and `handle` were paired at construction
+            // by `from_arc_into_raw` / `from_raw_handle_for_cdylib`;
+            // the `texture_native_dma_buf_fd` slot accepts the texture
+            // handle directly and returns `-1` (no FD) or a non-
+            // negative `RawFd` widened to `i64`.
+            let fd_i64 = unsafe {
+                ((*self.vtable).texture_native_dma_buf_fd)(self.handle)
+            };
+            if fd_i64 < 0 {
+                None
+            } else {
+                // `get_memory_fd_khr` returns standard kernel FDs
+                // which always fit in i32; the i64 widening is purely
+                // forward-compat. A truncating cast here would
+                // silently corrupt the FD, so reject and treat as
+                // `None` rather than hand back garbage.
+                i32::try_from(fd_i64)
+                    .ok()
+                    .map(|fd| NativeTextureHandle::DmaBuf { fd })
+            }
         }
         #[cfg(target_os = "windows")]
         {
-            // TODO: Return DxgiSharedHandle when implemented
+            // Windows DXGI shared handle: deferred until Windows
+            // cdylib adapter work begins.
             None
         }
         #[cfg(not(any(

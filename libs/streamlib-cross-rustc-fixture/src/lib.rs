@@ -64,8 +64,8 @@ use streamlib::sdk::rhi::{
     AttachmentFormats, ColorBlendState, ColorWriteMask, ComputeBindingSpec,
     ComputeKernelDescriptor, DepthStencilState, GraphicsBindingSpec, GraphicsDynamicState,
     GraphicsKernelDescriptor, GraphicsPipelineState, GraphicsPushConstants,
-    GraphicsShaderStageFlags, GraphicsStage, MultisampleState, PixelFormat, PrimitiveTopology,
-    RasterizationState, RayTracingBindingSpec, RayTracingKernelDescriptor,
+    GraphicsShaderStageFlags, GraphicsStage, MultisampleState, NativeTextureHandle, PixelFormat,
+    PrimitiveTopology, RasterizationState, RayTracingBindingSpec, RayTracingKernelDescriptor,
     RayTracingPushConstants, RayTracingShaderGroup, RayTracingShaderStageFlags, RayTracingStage,
     TextureFormat, TextureUsages, VertexInputState,
 };
@@ -165,9 +165,59 @@ fn run_beta_shape_round_trip(ctx: &RuntimeContextFullAccess<'_>) -> Result<Strin
     let ring_clone = ring.clone();
     drop(ring_clone);
     drop(ring);
+
+    // -------- Texture::native_handle DMA-BUF FD export (#957) --------
+    //
+    // Acquire a render-target DMA-BUF texture inside an escalate scope
+    // (FullAccess-only allocation), then call `Texture::native_handle()`
+    // from cdylib code outside the scope. The cdylib-side method
+    // dispatches through the Phase F `texture_native_dma_buf_fd` vtable
+    // slot — host_inner() would panic in cdylib mode, so a successful
+    // Some(DmaBuf { fd }) with `fd >= 0` proves the slot is wired and
+    // the divergent-dep-graph build agreed on the i64 return signature.
+    //
+    // The acquire itself is feature-gated on EGL exposing a render-
+    // target-capable DRM modifier (see
+    // docs/learnings/nvidia-egl-dmabuf-render-target.md). On hosts
+    // without one, record SKIPPED_NO_DMA_BUF the same way RT-kernel
+    // construction records SKIPPED_NO_RT_SUPPORT.
+    let native_handle_summary =
+        match gpu_limited.escalate(|full| {
+            full.acquire_render_target_dma_buf_image(64, 64, TextureFormat::Bgra8Unorm)
+        }) {
+            Ok(dma_buf_texture) => {
+                match dma_buf_texture.native_handle() {
+                    Some(NativeTextureHandle::DmaBuf { fd }) if fd >= 0 => {
+                        drop(dma_buf_texture);
+                        "Texture::native_handle:OK\n"
+                    }
+                    Some(NativeTextureHandle::DmaBuf { fd }) => {
+                        return Err(Error::Runtime(format!(
+                            "Texture::native_handle returned DmaBuf with negative fd = {fd}",
+                        )));
+                    }
+                    Some(other) => {
+                        return Err(Error::Runtime(format!(
+                            "Texture::native_handle returned unexpected variant on Linux: \
+                             {other:?}",
+                        )));
+                    }
+                    None => {
+                        return Err(Error::Runtime(
+                            "Texture::native_handle returned None for an acquired \
+                             DMA-BUF render-target — slot dispatched but host export failed."
+                                .into(),
+                        ));
+                    }
+                }
+            }
+            Err(_) => "Texture::native_handle:SKIPPED_NO_DMA_BUF\n",
+        };
+
     gpu_limited.escalate(|full| {
         let mut summary = String::new();
         summary.push_str("TextureRing:OK\n");
+        summary.push_str(native_handle_summary);
 
         // -------- RhiColorConverter (Arc-handle + Clone) --------
         let cc = full.color_converter(PixelFormat::Bgra32, PixelFormat::Rgba32)?;

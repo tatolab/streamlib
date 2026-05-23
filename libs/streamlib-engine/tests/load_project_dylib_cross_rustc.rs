@@ -309,6 +309,21 @@ fn dlopen_cross_rustc_fixture_round_trips_every_beta_shape() {
         );
     }
 
+    // `Texture::native_handle` (#957, Phase F) is gated on EGL exposing
+    // a render-target-capable DRM modifier
+    // (`docs/learnings/nvidia-egl-dmabuf-render-target.md`). Accept
+    // either OK or SKIPPED_NO_DMA_BUF; anything else (no line at all,
+    // ERR, etc.) fails.
+    {
+        let ok = "Texture::native_handle:OK";
+        let skipped = "Texture::native_handle:SKIPPED_NO_DMA_BUF";
+        assert!(
+            contents.contains(ok) || contents.contains(skipped),
+            "missing β-shape round-trip line for Texture::native_handle: \
+             expected one of {ok:?} or {skipped:?} — full body:\n{contents}"
+        );
+    }
+
     // VulkanAccelerationStructure + VulkanRayTracingKernel are
     // RT-feature-gated. Accept either OK or SKIPPED_NO_RT_SUPPORT;
     // anything else (no line at all, ERR, etc.) fails.

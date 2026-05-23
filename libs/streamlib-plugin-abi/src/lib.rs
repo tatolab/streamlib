@@ -172,7 +172,17 @@ pub const SURFACE_STORE_VTABLE_LAYOUT_VERSION: u32 = 1;
 ///   scope token on every FullAccess vtable call lives on the
 ///   FullAccess vtable side (each callback short-circuits to
 ///   `Error::InvalidEscalateScope` when the token is stale).
-pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 10;
+/// - v11: Phase F (#908 / #957) adds `texture_native_dma_buf_fd`
+///   for the cdylib-facing
+///   [`crate::core::rhi::Texture::native_handle`] DMA-BUF FD export
+///   path. Real cdylib use case: subprocess adapters that need to
+///   hand a `Texture`'s DMA-BUF FD to a different GPU API (CUDA,
+///   OpenGL, downstream IPC) without falling through `host_inner()`
+///   and panicking. Returns the FD widened to `i64`; `-1` encodes
+///   `Option::None`. Non-Linux hosts return `-1` unconditionally;
+///   the macOS / Windows native-handle variants are deferred per
+///   #908's AI Agent Notes.
+pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 11;
 
 /// Layout version of [`GpuContextFullAccessVTable`].
 ///
@@ -1538,6 +1548,49 @@ pub struct GpuContextLimitedAccessVTable {
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // Texture method dispatch — DMA-BUF FD export (Phase F)
+    // -------------------------------------------------------------------------
+
+    /// Export the texture's GPU memory as a Linux DMA-BUF file
+    /// descriptor for cross-framework / cross-process sharing.
+    ///
+    /// **The returned FD is borrowed — owned by the host-side
+    /// texture for as long as the cdylib-side [`Texture`] keeps its
+    /// `Arc<TextureInner>` strong count > 0.** The host caches the
+    /// FD on the first call and closes it in `HostVulkanTexture`'s
+    /// `Drop`; callers that need to hand the FD to a different
+    /// process or to an API that consumes it (e.g.
+    /// `vkImportMemoryFdKHR` takes ownership on success) MUST
+    /// `dup(2)` the returned FD first.
+    ///
+    /// `texture_handle` is the `*const Arc<TextureInner>`-shaped
+    /// `handle` field on a cdylib-side [`Texture`] (the same handle
+    /// the cdylib already passes to `clone_texture` / `drop_texture`
+    /// — see [`crate::core::rhi::Texture`]). The host derefs it as a
+    /// borrow without touching the refcount, calls the platform-
+    /// specific Vulkan export path, and returns the FD via the i64
+    /// return value.
+    ///
+    /// Encoding:
+    ///   - `>= 0` — valid DMA-BUF FD (always fits in `i32` on Linux,
+    ///     widened to `i64` for forward-compat with any future
+    ///     platform that exposes wider FD-like identifiers via the
+    ///     same slot).
+    ///   - `-1` — texture has no DMA-BUF FD (not Linux, or no Vulkan
+    ///     backing, or export failed). Equivalent to `Option::None`
+    ///     on the cdylib-facing
+    ///     [`crate::core::rhi::Texture::native_handle`].
+    ///
+    /// Non-Linux hosts return `-1` unconditionally — DMA-BUF is a
+    /// Linux concept; macOS IOSurface and Windows DXGI shared handles
+    /// are deferred to future slots when their respective cdylib
+    /// adapter work resumes (see #908's deferred macOS list).
+    ///
+    /// Calling with a null `texture_handle` returns `-1` (no panic).
+    pub texture_native_dma_buf_fd:
+        unsafe extern "C" fn(texture_handle: *const c_void) -> i64,
 }
 
 unsafe impl Send for GpuContextLimitedAccessVTable {}
@@ -4014,7 +4067,7 @@ mod layout_tests {
         // v2: added owning-Arc handle lifetime callbacks
         // (`clone_handle` / `drop_handle`).
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
-        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 10);
+        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 11);
         assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 8);
         assert_eq!(TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION, 2);
@@ -4392,11 +4445,11 @@ mod layout_tests {
 
     #[test]
     fn gpu_context_limited_access_vtable_layout() {
-        // layout_version (u32) + _reserved_padding (u32) + 52 fn
-        // pointers (8 bytes each) = 4 + 4 + 416 = 424 bytes.
-        // (C3 appended escalate_begin + escalate_end, taking the
-        // count from 50 → 52.)
-        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 424);
+        // layout_version (u32) + _reserved_padding (u32) + 53 fn
+        // pointers (8 bytes each) = 4 + 4 + 424 = 432 bytes.
+        // (Phase F #957 appended texture_native_dma_buf_fd, taking the
+        // count from 52 → 53.)
+        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 432);
         assert_eq!(align_of::<GpuContextLimitedAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextLimitedAccessVTable, layout_version), 0);
         assert_eq!(
@@ -4611,6 +4664,11 @@ mod layout_tests {
         assert_eq!(
             offset_of!(GpuContextLimitedAccessVTable, escalate_end),
             416
+        );
+        // Phase F entry (#908 / #957).
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, texture_native_dma_buf_fd),
+            424
         );
     }
 
