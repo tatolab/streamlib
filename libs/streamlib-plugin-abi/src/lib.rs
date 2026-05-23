@@ -233,7 +233,18 @@ pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 10;
 ///   a `StorageBuffer` β-shape (already layout-stable from C1)
 ///   into `*out_buffer`. Camera processor's V4L2 zero-copy path
 ///   uses this; the host consumes the fd on success.
-pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 7;
+/// - v8: `build_triangles_blas` and `build_tlas` signatures extended
+///   with three new out-params each (`out_device_address: *mut u64`,
+///   `out_storage_size: *mut u64`, `out_kind: *mut u32`). Prior to
+///   v8 cdylib mint paths populated the `VulkanAccelerationStructure`
+///   β-shape's cached POD fields with placeholder zeros; the β-shape
+///   getters (`device_address()`, `storage_size()`, `kind()`) then
+///   fell back to `host_inner()` which panics in cdylib mode. v8
+///   surfaces the real values across the FFI so the cached fields
+///   are populated correctly at mint time. **ABI-breaking** — plugins
+///   built against v7 are not load-compatible with a v8 host (the fn
+///   pointer signatures differ).
+pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 8;
 
 /// Layout version of [`TextureRingMethodsVTable`].
 ///
@@ -299,13 +310,20 @@ pub const VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 
 /// Layout version of [`VulkanAccelerationStructureMethodsVTable`].
 ///
-/// `VulkanAccelerationStructure` β-shape gains a per-type vtable
-/// for method dispatch (issue #907 Phase E PR 5/5). Mirrors the
-/// kernel methods-vtable shape: empty shell today; follow-up PRs
-/// append method slots for `vk_handle` / `label` (the methods that
-/// can't be POD-cached cleanly because they return host-internal
-/// or String types) and route the β-shape methods through them.
-pub const VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION: u32 = 1;
+/// - v1: empty shell — pointer plumbing only (issue #907 Phase E
+///   PR 5/5).
+/// - v2: appended `label` slot returning the AS's human-readable
+///   label via a caller-provided byte buffer (same shape as
+///   `TextureRingSlot.surface_id` from #947 — `String` layout
+///   isn't cdylib-safe). `vk_handle` stays host-only — the
+///   `vk::AccelerationStructureKHR` is a vulkanalia handle that
+///   can't safely cross a DSO boundary without vulkanalia
+///   version coupling, and no in-tree cdylib consumer reads it.
+///   The POD getters (`device_address`, `storage_size`, `kind`)
+///   are populated at mint time via the v8
+///   [`GpuContextFullAccessVTable::build_triangles_blas`] /
+///   `build_tlas` out-params and don't need vtable slots.
+pub const VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 
 // =============================================================================
 // Primitive enums
@@ -2436,7 +2454,13 @@ pub struct GpuContextFullAccessVTable {
     /// Build a triangle-geometry bottom-level acceleration structure
     /// from CPU-side vertex + index data. Writes an
     /// `Arc::into_raw(Arc<VulkanAccelerationStructure>)` raw pointer
-    /// into `*out_blas` on success. Linux-only.
+    /// into `*out_blas` on success, plus the cached POD descriptors
+    /// the cdylib's `VulkanAccelerationStructure` β-shape carries:
+    /// `*out_device_address` (BLAS device address — used as the
+    /// `accelerationStructureReference` when wiring into a TLAS),
+    /// `*out_storage_size` (build-time storage allocation), and
+    /// `*out_kind` (0 = `BottomLevel`, 1 = `TopLevel`; always 0 for
+    /// `build_triangles_blas`). Linux-only.
     pub build_triangles_blas: unsafe extern "C" fn(
         gpu_handle: *const c_void,
         label_ptr: *const u8,
@@ -2446,6 +2470,9 @@ pub struct GpuContextFullAccessVTable {
         indices_ptr: *const u32,
         indices_len: usize,
         out_blas: *mut *const c_void,
+        out_device_address: *mut u64,
+        out_storage_size: *mut u64,
+        out_kind: *mut u32,
         err_buf: *mut u8,
         err_buf_cap: usize,
         err_len: *mut usize,
@@ -2456,7 +2483,11 @@ pub struct GpuContextFullAccessVTable {
     /// host's `TlasInstanceDesc` struct (layout-stable under the
     /// rustc-version coupling contract). Writes an
     /// `Arc::into_raw(Arc<VulkanAccelerationStructure>)` raw pointer
-    /// into `*out_tlas` on success. Linux-only.
+    /// into `*out_tlas` on success, plus the cached POD descriptors
+    /// (`*out_device_address`, `*out_storage_size`, `*out_kind`) the
+    /// cdylib's β-shape carries — same shape as
+    /// `build_triangles_blas`; `*out_kind` is always 1 (`TopLevel`)
+    /// for `build_tlas`. Linux-only.
     pub build_tlas: unsafe extern "C" fn(
         gpu_handle: *const c_void,
         label_ptr: *const u8,
@@ -2464,6 +2495,9 @@ pub struct GpuContextFullAccessVTable {
         instances_ptr: *const c_void,
         instances_len: usize,
         out_tlas: *mut *const c_void,
+        out_device_address: *mut u64,
+        out_storage_size: *mut u64,
+        out_kind: *mut u32,
         err_buf: *mut u8,
         err_buf_cap: usize,
         err_len: *mut usize,
@@ -3252,15 +3286,25 @@ unsafe impl Sync for VulkanRayTracingKernelMethodsVTable {}
 // =============================================================================
 
 /// Per-type method-dispatch vtable for the
-/// `VulkanAccelerationStructure` β-shape (issue #907 Phase E PR 5/5).
+/// `VulkanAccelerationStructure` β-shape (issue #907 Phase E PR 5/5
+/// + #955 method dispatch).
 ///
-/// Mirrors the kernel methods-vtable shape. Empty shell today;
-/// follow-up PRs append slots for `vk_handle` / `label` (the
-/// methods returning host-internal `vk::AccelerationStructureKHR`
-/// and heap-allocated `String` that can't be POD-cached) and route
-/// the β-shape methods through them. POD getters (`device_address`,
-/// `kind`, `storage_size`) are cached on the β-shape struct and
-/// don't need vtable slots.
+/// Mirrors the kernel methods-vtable shape. POD getters
+/// (`device_address`, `kind`, `storage_size`) are populated at mint
+/// time via the v8 [`GpuContextFullAccessVTable::build_triangles_blas`]
+/// / `build_tlas` out-params and don't need vtable slots — the
+/// cached values on the β-shape struct are always real, never
+/// placeholder zeros.
+///
+/// The single vtable slot is `label`, which uses the same byte-
+/// buffer out-param shape as `TextureRingSlot.surface_id` from #947.
+/// `vk_handle` stays host-only — the
+/// `vk::AccelerationStructureKHR` is a vulkanalia handle whose
+/// layout couples to the vulkanalia minor version, and there is no
+/// in-tree cdylib consumer that reads it (every binding into a
+/// ray-tracing kernel goes through the host-side
+/// `set_acceleration_structure` slot, which dereferences the AS on
+/// the host side and reads `vk_handle` there).
 #[repr(C)]
 pub struct VulkanAccelerationStructureMethodsVTable {
     /// Vtable layout version. Must equal
@@ -3270,6 +3314,23 @@ pub struct VulkanAccelerationStructureMethodsVTable {
     /// Reserved padding (keeps the following pointer naturally
     /// aligned on 32-bit hosts; zero today, never read).
     pub _reserved_padding: u32,
+
+    /// Read the AS's human-readable label into a caller-provided
+    /// byte buffer. `out_buf` / `out_buf_cap` describe the buffer;
+    /// `*out_len` receives the number of bytes written (≤ `out_buf_cap`
+    /// — labels longer than the buffer are silently truncated, which
+    /// is fine for diagnostic strings). Returns 0 on success;
+    /// non-zero with UTF-8 message in `err_buf` on failure (null AS
+    /// handle, null out-buffer pointer, etc.).
+    pub label: unsafe extern "C" fn(
+        as_handle: *const c_void,
+        out_buf: *mut u8,
+        out_buf_cap: usize,
+        out_len: *mut usize,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
 }
 
 unsafe impl Send for VulkanAccelerationStructureMethodsVTable {}
@@ -3955,12 +4016,12 @@ mod layout_tests {
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 10);
         assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
-        assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 7);
+        assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 8);
         assert_eq!(TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 3);
         assert_eq!(VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 2);
-        assert_eq!(VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION, 1);
+        assert_eq!(VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION, 2);
     }
 
     #[test]
@@ -4308,12 +4369,13 @@ mod layout_tests {
 
     #[test]
     fn vulkan_acceleration_structure_methods_vtable_layout() {
-        // Empty shell — layout_version + _reserved_padding only.
-        // Mirrors the kernel methods-vtable layouts. Subsequent
-        // #907 sub-PRs append method slots and bump
-        // VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION.
-        assert_eq!(size_of::<VulkanAccelerationStructureMethodsVTable>(), 8);
-        assert_eq!(align_of::<VulkanAccelerationStructureMethodsVTable>(), 4);
+        // v2 (`label` slot added — #955):
+        //   layout_version       @ 0 (4 bytes, u32)
+        //   _reserved_padding    @ 4 (4 bytes, u32)
+        //   label                @ 8 (8 bytes, fn pointer)
+        // Total = 16 bytes, align = 8.
+        assert_eq!(size_of::<VulkanAccelerationStructureMethodsVTable>(), 16);
+        assert_eq!(align_of::<VulkanAccelerationStructureMethodsVTable>(), 8);
         assert_eq!(
             offset_of!(VulkanAccelerationStructureMethodsVTable, layout_version),
             0
@@ -4321,6 +4383,10 @@ mod layout_tests {
         assert_eq!(
             offset_of!(VulkanAccelerationStructureMethodsVTable, _reserved_padding),
             4
+        );
+        assert_eq!(
+            offset_of!(VulkanAccelerationStructureMethodsVTable, label),
+            8
         );
     }
 

@@ -4692,6 +4692,9 @@ impl GpuContextFullAccess {
                     ));
                 }
                 let mut out_blas: *const std::ffi::c_void = std::ptr::null();
+                let mut out_device_address: u64 = 0;
+                let mut out_storage_size: u64 = 0;
+                let mut out_kind: u32 = 0;
                 let mut err_buf = [0u8; 512];
                 let mut err_len: usize = 0;
                 let status = unsafe {
@@ -4704,6 +4707,9 @@ impl GpuContextFullAccess {
                         indices.as_ptr(),
                         indices.len(),
                         &mut out_blas,
+                        &mut out_device_address as *mut u64,
+                        &mut out_storage_size as *mut u64,
+                        &mut out_kind as *mut u32,
                         err_buf.as_mut_ptr(),
                         err_buf.len(),
                         &mut err_len as *mut usize,
@@ -4716,14 +4722,11 @@ impl GpuContextFullAccess {
                         ));
                     }
                     // β-shape: bundle the raw handle (`Arc::into_raw(Arc<Inner>)`-shaped)
-                    // with the host vtables. Cached POD descriptors
-                    // (`device_address`, `storage_size`, `kind`) are
-                    // populated with placeholder zeros today — the
-                    // `build_*_blas` FFI signature doesn't yet surface
-                    // them to the cdylib. The β-shape getters fall
-                    // back to `host_inner` when cached values are 0
-                    // (panics in cdylib) — fixed in the #907 follow-up
-                    // sub-issue (FFI extension with out-params).
+                    // with the host vtables. The cached POD descriptors
+                    // (`device_address`, `storage_size`, `kind`) come
+                    // from the host's β-shape post-mint (see
+                    // `host_gpu_full_build_triangles_blas`); they are
+                    // always real values, never placeholder zeros.
                     let methods_vtable =
                         crate::core::plugin::host_services::host_callbacks()
                             .map(|c| c.vulkan_acceleration_structure_methods_vtable)
@@ -4732,10 +4735,10 @@ impl GpuContextFullAccess {
                         handle: out_blas,
                         vtable: self.vtable,
                         methods_vtable,
-                        cached_kind: 0, // BottomLevel — placeholder; see comment above
+                        cached_kind: out_kind,
                         _reserved_padding: 0,
-                        cached_device_address: 0,
-                        cached_storage_size: 0,
+                        cached_device_address: out_device_address,
+                        cached_storage_size: out_storage_size,
                     })
                 } else {
                     let msg = String::from_utf8_lossy(
@@ -4764,6 +4767,9 @@ impl GpuContextFullAccess {
                     ));
                 }
                 let mut out_tlas: *const std::ffi::c_void = std::ptr::null();
+                let mut out_device_address: u64 = 0;
+                let mut out_storage_size: u64 = 0;
+                let mut out_kind: u32 = 0;
                 let mut err_buf = [0u8; 512];
                 let mut err_len: usize = 0;
                 let status = unsafe {
@@ -4774,6 +4780,9 @@ impl GpuContextFullAccess {
                         instances.as_ptr() as *const std::ffi::c_void,
                         instances.len(),
                         &mut out_tlas,
+                        &mut out_device_address as *mut u64,
+                        &mut out_storage_size as *mut u64,
+                        &mut out_kind as *mut u32,
                         err_buf.as_mut_ptr(),
                         err_buf.len(),
                         &mut err_len as *mut usize,
@@ -4785,8 +4794,9 @@ impl GpuContextFullAccess {
                             "build_tlas: host signaled success but out_tlas is null".into(),
                         ));
                     }
-                    // β-shape: see build_triangles_blas above. Same
-                    // placeholder-zeros caching story.
+                    // β-shape: see build_triangles_blas above. Cached
+                    // PODs come from the host's β-shape post-mint via
+                    // the v8 out-params; always real values.
                     let methods_vtable =
                         crate::core::plugin::host_services::host_callbacks()
                             .map(|c| c.vulkan_acceleration_structure_methods_vtable)
@@ -4795,10 +4805,10 @@ impl GpuContextFullAccess {
                         handle: out_tlas,
                         vtable: self.vtable,
                         methods_vtable,
-                        cached_kind: 1, // TopLevel — placeholder; see comment above
+                        cached_kind: out_kind,
                         _reserved_padding: 0,
-                        cached_device_address: 0,
-                        cached_storage_size: 0,
+                        cached_device_address: out_device_address,
+                        cached_storage_size: out_storage_size,
                     })
                 } else {
                     let msg = String::from_utf8_lossy(

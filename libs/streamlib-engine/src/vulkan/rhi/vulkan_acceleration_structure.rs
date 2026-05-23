@@ -748,51 +748,89 @@ impl VulkanAccelerationStructure {
             .map(Self::from_arc_into_raw)
     }
 
-    /// `VkAccelerationStructureKHR` handle.
+    /// `VkAccelerationStructureKHR` handle. **Host-only** — the
+    /// vulkanalia handle layout couples to the vulkanalia minor
+    /// version and isn't safe to surface across a DSO boundary.
+    /// There is no in-tree cdylib consumer that reads this; every
+    /// binding flows through the ray-tracing kernel's
+    /// `set_acceleration_structure` slot, which dereferences the AS
+    /// on the host side. Panics if called from cdylib code.
     pub fn vk_handle(&self) -> vk::AccelerationStructureKHR {
         self.host_inner().vk_handle()
     }
 
-    /// Device address of the AS. Host-mode reads the cached POD;
-    /// cdylib-mode currently routes through `host_inner` (panic in
-    /// cdylib) — the FFI signature for `build_*_blas` doesn't yet
-    /// surface the value to the cdylib. Tracked in the #907
-    /// follow-up sub-issue, which extends the create-side FFI
-    /// signatures with out-params for the cached POD descriptors.
+    /// Device address of the AS. Reads the cached POD value
+    /// populated at mint time (host-mode via `from_arc_into_raw`;
+    /// cdylib-mode via the v8 `build_*_blas` out-params).
     pub fn device_address(&self) -> u64 {
-        if self.cached_device_address != 0 {
-            self.cached_device_address
-        } else {
-            self.host_inner().device_address()
-        }
+        self.cached_device_address
     }
 
-    /// `BottomLevel` or `TopLevel`. Same caching contract as
-    /// `device_address` — host mode reads cached, cdylib mode
-    /// currently falls back to `host_inner` until the follow-up
-    /// extends the FFI.
+    /// `BottomLevel` or `TopLevel`. Reads the cached POD value
+    /// populated at mint time. The discriminant is 0 = `BottomLevel`,
+    /// 1 = `TopLevel`; any other value is a corruption bug we
+    /// surface as `BottomLevel` rather than panic (host-side mint
+    /// paths are the source of truth and only ever write 0 or 1).
     pub fn kind(&self) -> AccelerationStructureKind {
-        // Sentinel-free path: kind is always either 0 or 1, so
-        // there's no "unset" value to detect. Routes through
-        // `host_inner` until the FFI signature surfaces the value.
-        self.host_inner().kind()
-    }
-
-    /// Human-readable label used in diagnostics. Still routes
-    /// through `host_inner` — `String` layout isn't cdylib-safe;
-    /// vtable dispatch lands in the #907 follow-up sub-issue.
-    pub fn label(&self) -> String {
-        self.host_inner().label().to_string()
-    }
-
-    /// Storage size in bytes. Same caching contract as
-    /// `device_address`.
-    pub fn storage_size(&self) -> vk::DeviceSize {
-        if self.cached_storage_size != 0 {
-            self.cached_storage_size
-        } else {
-            self.host_inner().storage_size()
+        match self.cached_kind {
+            0 => AccelerationStructureKind::BottomLevel,
+            1 => AccelerationStructureKind::TopLevel,
+            _ => AccelerationStructureKind::BottomLevel,
         }
+    }
+
+    /// Human-readable label used in diagnostics. Host-mode reads
+    /// from the host-internal Inner; cdylib-mode dispatches through
+    /// the per-type `VulkanAccelerationStructureMethodsVTable::label`
+    /// slot using a fixed-cap caller-allocated byte buffer (same
+    /// shape as `TextureRingSlot.surface_id`). Labels longer than
+    /// the buffer are silently truncated (diagnostic strings, not
+    /// load-bearing).
+    pub fn label(&self) -> String {
+        if crate::core::plugin::host_services::host_callbacks().is_some()
+            && !self.methods_vtable.is_null()
+            && !self.handle.is_null()
+        {
+            // Cdylib mode — dispatch through the methods vtable.
+            // 256 bytes covers every realistic AS label (callers in
+            // tree use names like "rt-smoke-blas", "drone-racer-tlas").
+            let mut out_buf = [0u8; 256];
+            let mut out_len: usize = 0;
+            let mut err_buf = [0u8; 256];
+            let mut err_len: usize = 0;
+            let status = unsafe {
+                ((*self.methods_vtable).label)(
+                    self.handle,
+                    out_buf.as_mut_ptr(),
+                    out_buf.len(),
+                    &mut out_len as *mut usize,
+                    err_buf.as_mut_ptr(),
+                    err_buf.len(),
+                    &mut err_len as *mut usize,
+                )
+            };
+            if status == 0 {
+                let bytes = &out_buf[..out_len.min(out_buf.len())];
+                String::from_utf8_lossy(bytes).into_owned()
+            } else {
+                // Best-effort: surface the error string as the
+                // label so log lines reading `.label()` still make
+                // sense, rather than panic. Labels are diagnostic.
+                let msg = String::from_utf8_lossy(
+                    &err_buf[..err_len.min(err_buf.len())],
+                )
+                .into_owned();
+                format!("<label dispatch failed: {msg}>")
+            }
+        } else {
+            self.host_inner().label().to_string()
+        }
+    }
+
+    /// Storage size in bytes. Reads the cached POD value populated
+    /// at mint time.
+    pub fn storage_size(&self) -> vk::DeviceSize {
+        self.cached_storage_size
     }
 }
 
