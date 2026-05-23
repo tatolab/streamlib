@@ -1,0 +1,79 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# Standalone Cargo workspace. By declaring `[workspace]` here we
+# detach this crate from the streamlib workspace's lockfile and
+# dependency resolution. `cargo build --manifest-path
+# libs/streamlib-cross-rustc-fixture/Cargo.toml` builds against this
+# crate's own `Cargo.lock`, producing a `.so` whose transitive crate
+# graph diverges from the host's by construction.
+#
+# This is the empirical fixture for issue #927: the load_project
+# dlopen integration test exercises that the layout-stable β-shape
+# FFI established in #917 is sufficient for cross-rustc-version /
+# cross-dep-graph plugin distribution. Plugin authors building in a
+# separate repo with a different Cargo dep graph should produce a
+# .slpkg that loads cleanly into any streamlib host depending on the
+# same `streamlib-plugin-abi` + `streamlib-consumer-rhi` versions.
+
+[workspace]
+members = ["."]
+resolver = "2"
+
+[package]
+name = "streamlib-cross-rustc-fixture"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Cross-rustc-version / cross-dep-graph dlopen fixture for issue #927 (#917 β-shape gate)"
+
+[lib]
+name = "streamlib_cross_rustc_fixture"
+crate-type = ["cdylib"]
+
+[build-dependencies]
+streamlib-jtd-codegen = { path = "../streamlib-jtd-codegen" }
+
+[dependencies]
+# Engine substrate — runtime context, processor traits, β-shape
+# return types under `streamlib::sdk::*`. Path-dep so the fixture
+# rebuilds the SDK against THIS workspace's resolver pass, not the
+# host workspace's. Same source, different transitive resolution.
+streamlib = { path = "../streamlib-sdk" }
+
+# Procedural macros — `#[streamlib::sdk::processor("...")]`.
+streamlib-macros = { path = "../streamlib-macros" }
+
+# Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol
+# the runtime dlopens at load time.
+streamlib-plugin-abi = { path = "../streamlib-plugin-abi" }
+
+# Serialization for the config dataclass + diagnostic tracing. Pinned
+# to specific OLDER patches than what the host workspace resolves
+# (host currently has serde 1.0.228, tracing 0.1.44 per top-level
+# Cargo.lock). The pin forces this sibling workspace to compile
+# streamlib-sdk against demonstrably-different transitive versions —
+# net effect is at least two divergent crates between this fixture's
+# Cargo.lock and the host's. The β-shape FFI never traffics serde or
+# tracing types across the DSO boundary, so the test proves
+# layout-stable interop survives divergent transitive resolutions.
+#
+# 1.0.225 is the minimum compatible with iceoryx2 0.8.1's transitive
+# `serde_core ^1.0.225`; older pins fail resolution.
+serde = { version = "=1.0.225", features = ["derive"] }
+tracing = "=0.1.41"
+
+[lints]
+# No workspace-level lint inheritance — this is a standalone
+# workspace and inheriting the host workspace's lints would defeat
+# the dep-graph-divergence point of the fixture.
+
+# Mirror the host workspace's tatolab/vulkanalia fork override. This
+# is NOT divergence — it's the same patch the host carries, replicated
+# because separate workspaces don't share `[patch.crates-io]`. Without
+# this, the fixture's resolver picks up `vulkanalia-sys` 0.35.0 from
+# crates.io and streamlib-engine fails to compile against two
+# incompatible versions of the same crate in its dep graph.
+[patch.crates-io]
+vulkanalia = { git = "https://github.com/tatolab/vulkanalia.git", rev = "982d32d293e5425753d595978776ee4fa4ded3a1" }
+vulkanalia-sys = { git = "https://github.com/tatolab/vulkanalia.git", rev = "982d32d293e5425753d595978776ee4fa4ded3a1" }
