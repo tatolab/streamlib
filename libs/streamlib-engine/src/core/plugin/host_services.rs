@@ -202,6 +202,13 @@ pub struct HostCallbacks {
     /// install time (issue #907 Phase E PR 3/5).
     pub vulkan_graphics_kernel_methods_vtable:
         *const streamlib_plugin_abi::VulkanGraphicsKernelMethodsVTable,
+    /// Host-installed [`VulkanRayTracingKernelMethodsVTable`] pointer.
+    /// May be null on hosts that don't ship a GpuContext; cdylib
+    /// must check before dispatching. Sourced from
+    /// [`HostServices::vulkan_ray_tracing_kernel_methods_vtable`] at
+    /// install time (issue #907 Phase E PR 4/5).
+    pub vulkan_ray_tracing_kernel_methods_vtable:
+        *const streamlib_plugin_abi::VulkanRayTracingKernelMethodsVTable,
 }
 
 // Safety: every field is a fn pointer or a raw pointer the host
@@ -369,6 +376,18 @@ pub unsafe fn install_host_services(
             return None;
         }
     }
+    if !services.vulkan_ray_tracing_kernel_methods_vtable.is_null() {
+        // SAFETY: same shape as the other vtable validations. Null
+        // is allowed (host has no GpuContext); only non-null pointers
+        // are version-validated.
+        let v = unsafe {
+            (*services.vulkan_ray_tracing_kernel_methods_vtable).layout_version
+        };
+        if v != streamlib_plugin_abi::VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION
+        {
+            return None;
+        }
+    }
 
     let callbacks = HostCallbacks {
         host: services.host,
@@ -391,6 +410,8 @@ pub unsafe fn install_host_services(
             .vulkan_compute_kernel_methods_vtable,
         vulkan_graphics_kernel_methods_vtable: services
             .vulkan_graphics_kernel_methods_vtable,
+        vulkan_ray_tracing_kernel_methods_vtable: services
+            .vulkan_ray_tracing_kernel_methods_vtable,
     };
 
     // Cache the callbacks BEFORE installing tracing — the
@@ -6338,6 +6359,7 @@ pub mod runtime_facing {
         HOST_RUNTIME_CONTEXT_VTABLE, HOST_RUNTIME_OPS_VTABLE, HOST_SURFACE_STORE_VTABLE,
         HOST_TEXTURE_RING_METHODS_VTABLE, HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE,
         HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE,
+        HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE,
     };
     use std::ffi::c_void;
     use std::sync::OnceLock;
@@ -6389,6 +6411,8 @@ pub mod runtime_facing {
                 &HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE,
             vulkan_graphics_kernel_methods_vtable:
                 &HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE,
+            vulkan_ray_tracing_kernel_methods_vtable:
+                &HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE,
         }
     }
 }
@@ -6453,6 +6477,25 @@ pub static HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE:
 pub fn host_vulkan_graphics_kernel_methods_vtable(
 ) -> *const streamlib_plugin_abi::VulkanGraphicsKernelMethodsVTable {
     &HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE
+}
+
+/// Host-side empty-shell `VulkanRayTracingKernelMethodsVTable`
+/// (issue #907 PR 4/5).
+pub static HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE:
+    streamlib_plugin_abi::VulkanRayTracingKernelMethodsVTable =
+    streamlib_plugin_abi::VulkanRayTracingKernelMethodsVTable {
+        layout_version:
+            streamlib_plugin_abi::VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION,
+        _reserved_padding: 0,
+    };
+
+/// Accessor for the host's static
+/// `VulkanRayTracingKernelMethodsVTable` — used by
+/// `VulkanRayTracingKernel::from_arc_into_raw` to populate the
+/// β-shape's `methods_vtable` field.
+pub fn host_vulkan_ray_tracing_kernel_methods_vtable(
+) -> *const streamlib_plugin_abi::VulkanRayTracingKernelMethodsVTable {
+    &HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE
 }
 
 // =============================================================================
