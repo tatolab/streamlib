@@ -3185,36 +3185,69 @@ impl GpuContextLimitedAccess {
 
     /// See [`GpuContext::set_video_source_timeline_semaphore`].
     ///
-    /// Engine-only call surface (the
-    /// `&Arc<HostVulkanTimelineSemaphore>` parameter is host-internal
-    /// — cdylib code cannot legitimately construct one), so this
-    /// method reaches the inner GpuContext through `host_inner()`
-    /// rather than the vtable. The `host_inner()` cdylib-mode panic
-    /// guard short-circuits any misconfigured cdylib path.
+    /// **Engine-only** — parameter is
+    /// `&Arc<HostVulkanTimelineSemaphore>` (host-internal type from
+    /// `crate::vulkan::rhi`). Cdylib subprocess code cannot
+    /// construct this type through typed Rust, so the method is
+    /// engine-only by parameter construction; the explicit guard
+    /// below converts the foot-gun case (a cdylib that smuggled in
+    /// a same-shaped pointer through unsafe transmute) into a
+    /// clean abort instead of UB on the Arc-inner deref.
     #[cfg(target_os = "linux")]
     pub fn set_video_source_timeline_semaphore(
         &self,
         timeline: &Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
     ) {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextLimitedAccess::set_video_source_timeline_semaphore() \
+                 reached from cdylib code; parameter `&Arc<HostVulkanTimelineSemaphore>` \
+                 is host-internal (crate::vulkan::rhi) and cannot cross the FFI \
+                 boundary. Engine-only — cdylib code must not call it."
+            );
+        }
         self.host_inner()
             .set_video_source_timeline_semaphore(timeline);
     }
 
     /// See [`GpuContext::clear_video_source_timeline_semaphore`].
-    /// Engine-only call surface — see
-    /// [`Self::set_video_source_timeline_semaphore`].
+    ///
+    /// **Engine-only** — pairs with
+    /// [`Self::set_video_source_timeline_semaphore`]; that method is
+    /// engine-only by parameter type, so this one is too. Explicit
+    /// guard below.
     #[cfg(target_os = "linux")]
     pub fn clear_video_source_timeline_semaphore(&self) {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextLimitedAccess::clear_video_source_timeline_semaphore() \
+                 reached from cdylib code; pairs with \
+                 set_video_source_timeline_semaphore which takes a host-internal \
+                 `&Arc<HostVulkanTimelineSemaphore>`. Engine-only by inheritance \
+                 — cdylib code must not call it."
+            );
+        }
         self.host_inner().clear_video_source_timeline_semaphore();
     }
 
     /// See [`GpuContext::video_source_timeline_semaphore`].
-    /// Engine-only call surface — see
-    /// [`Self::set_video_source_timeline_semaphore`].
+    ///
+    /// **Engine-only** — return type is
+    /// `Option<Arc<HostVulkanTimelineSemaphore>>` (host-internal
+    /// type). Explicit guard below.
     #[cfg(target_os = "linux")]
     pub fn video_source_timeline_semaphore(
         &self,
     ) -> Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextLimitedAccess::video_source_timeline_semaphore() \
+                 reached from cdylib code; return type \
+                 `Option<Arc<HostVulkanTimelineSemaphore>>` is host-internal \
+                 (crate::vulkan::rhi) and cannot cross the FFI boundary. \
+                 Engine-only — cdylib code must not call it."
+            );
+        }
         self.host_inner().video_source_timeline_semaphore()
     }
 
