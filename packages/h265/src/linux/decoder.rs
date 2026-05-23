@@ -152,7 +152,7 @@ impl streamlib::sdk::processors::ReactiveProcessor for H265DecoderProcessor::Pro
                 std::ptr::copy_nonoverlapping(src.as_ptr(), dst_ptr, src.len());
             }
             ring.copy_pixel_buffer_to_slot(&slot, &pixel_buffer, width, height)?;
-            let surface_id = slot.surface_id;
+            let surface_id = slot.surface_id().to_string();
 
             let timestamp_ns = encoded.timestamp_ns.clone();
 
