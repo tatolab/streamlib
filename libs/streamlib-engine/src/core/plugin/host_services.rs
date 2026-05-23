@@ -12683,3 +12683,32 @@ mod runtime_ops_vtable_null_handle_guards {
         unsafe { reclaim_sink(user_data) };
     }
 }
+
+#[cfg(test)]
+mod runtime_context_vtable_tier1_wire_format_tests {
+    //! Tier-1 wire-format tests for [`HOST_RUNTIME_CONTEXT_VTABLE`].
+    //!
+    //! Per-callback null-handle coverage lives in
+    //! [`runtime_context_vtable_null_handle_guards`] above — that
+    //! module landed alongside the engine PR that added the
+    //! null-handle guards each test relies on (mental-revert removes
+    //! the guard, the wrapper SIGSEGVs the test runner). This module
+    //! completes the tier-1 set with the wire-format invariant the
+    //! null-handle suite doesn't cover: the static vtable's
+    //! `layout_version` field must match the constant cdylibs read
+    //! against.
+    //!
+    //! No callback on `RuntimeContextVTable` takes an out-param or
+    //! a variant-typed input, so the "null out-param" and
+    //! "invalid input" tier-1 categories don't apply here.
+
+    use super::*;
+
+    #[test]
+    fn layout_version_matches_constant() {
+        assert_eq!(
+            HOST_RUNTIME_CONTEXT_VTABLE.layout_version,
+            streamlib_plugin_abi::RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION,
+        );
+    }
+}
