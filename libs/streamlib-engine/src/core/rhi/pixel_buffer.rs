@@ -171,14 +171,33 @@ impl PixelBuffer {
         }
     }
 
-    /// Borrow the underlying [`PixelBufferRef`]. Engine-internal —
-    /// cdylib code reaches platform-specific data through
+    /// Borrow the underlying [`PixelBufferRef`]. **Engine-only.**
+    /// Cdylib code reaches platform-specific data through
     /// [`crate::host_rhi::HostPixelBufferRefExt`] which itself is
     /// engine-only.
+    ///
+    /// Panics if reached from cdylib code (#908). `PixelBufferRef`
+    /// is a host-internal type whose layout is rustc-version-
+    /// dependent — dereffing the handle as `*const PixelBufferRef`
+    /// from a cdylib compiled with a different rustc would be
+    /// undefined behavior. The panic guard turns the UB into a
+    /// clean abort.
     pub fn buffer_ref(&self) -> &PixelBufferRef {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "PixelBuffer::buffer_ref() reached from cdylib code; \
+                 PixelBufferRef is a host-internal type and its layout \
+                 is not cross-DSO safe. Cdylibs reach platform-specific \
+                 data through vtable callbacks (plane_base_address, \
+                 plane_size, plane_count, format)."
+            );
+        }
         // SAFETY: `self.handle` is `Arc::into_raw(Arc<PixelBufferRef>)`
         // (see `from_arc_into_raw`). The leaked strong count keeps
-        // the `PixelBufferRef` alive at least until `Drop` runs.
+        // the `PixelBufferRef` alive at least until `Drop` runs. The
+        // panic guard above rejects cdylib callers so the deref runs
+        // only in host-compiled code where `PixelBufferRef`'s layout
+        // is known.
         unsafe { &*(self.handle as *const PixelBufferRef) }
     }
 
