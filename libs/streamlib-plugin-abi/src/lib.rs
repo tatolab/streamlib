@@ -3290,6 +3290,48 @@ mod layout_tests {
     }
 
     #[test]
+    fn processor_vtable_layout() {
+        // header (u32 + u32) + 17 fn pointers @ 8 bytes each.
+        // 4 + 4 + 17 * 8 = 144 bytes.
+        assert_eq!(size_of::<ProcessorVTable>(), 144);
+        assert_eq!(align_of::<ProcessorVTable>(), 8);
+        assert_eq!(offset_of!(ProcessorVTable, layout_version), 0);
+        assert_eq!(offset_of!(ProcessorVTable, _reserved_padding), 4);
+        assert_eq!(offset_of!(ProcessorVTable, construct), 8);
+        assert_eq!(offset_of!(ProcessorVTable, destroy), 16);
+        assert_eq!(offset_of!(ProcessorVTable, setup), 24);
+        assert_eq!(offset_of!(ProcessorVTable, teardown), 32);
+        assert_eq!(offset_of!(ProcessorVTable, on_pause), 40);
+        assert_eq!(offset_of!(ProcessorVTable, on_resume), 48);
+        assert_eq!(offset_of!(ProcessorVTable, process), 56);
+        assert_eq!(offset_of!(ProcessorVTable, start), 64);
+        assert_eq!(offset_of!(ProcessorVTable, stop), 72);
+        assert_eq!(offset_of!(ProcessorVTable, execution_config_msgpack), 80);
+        assert_eq!(offset_of!(ProcessorVTable, has_iceoryx2_outputs), 88);
+        assert_eq!(offset_of!(ProcessorVTable, has_iceoryx2_inputs), 96);
+        assert_eq!(
+            offset_of!(ProcessorVTable, get_iceoryx2_output_writer_arc),
+            104
+        );
+        assert_eq!(
+            offset_of!(ProcessorVTable, get_iceoryx2_input_mailboxes_mut),
+            112
+        );
+        assert_eq!(offset_of!(ProcessorVTable, apply_config_msgpack), 120);
+        assert_eq!(offset_of!(ProcessorVTable, to_runtime_msgpack), 128);
+        assert_eq!(offset_of!(ProcessorVTable, config_msgpack), 136);
+    }
+
+    #[test]
+    fn plugin_declaration_layout() {
+        // u32 + 4-byte padding + 8-byte fn pointer = 16 bytes.
+        assert_eq!(size_of::<PluginDeclaration>(), 16);
+        assert_eq!(align_of::<PluginDeclaration>(), 8);
+        assert_eq!(offset_of!(PluginDeclaration, abi_version), 0);
+        assert_eq!(offset_of!(PluginDeclaration, register), 8);
+    }
+
+    #[test]
     fn runtime_context_vtable_layout() {
         // layout_version (u32) + _reserved_padding (u32) + 8 fn pointers (8 bytes each)
         // = 4 + 4 + 8*8 = 72 bytes
