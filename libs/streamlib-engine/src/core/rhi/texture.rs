@@ -41,6 +41,12 @@ pub enum NativeTextureHandle {
 
     /// Linux: DMA-BUF file descriptor for GPU memory sharing.
     /// Import via `EGL_EXT_image_dma_buf_import` or Vulkan external memory.
+    ///
+    /// **The FD is borrowed from the host-owning [`Texture`]**: it
+    /// stays valid only while that [`Texture`] keeps the underlying
+    /// allocation alive, and the host closes it on drop. Callers
+    /// handing the FD to an API that takes ownership on success
+    /// (e.g. `vkImportMemoryFdKHR`) MUST `dup(2)` it first.
     DmaBuf { fd: i32 },
 
     /// Windows: DXGI shared handle for cross-process GPU memory sharing.
@@ -365,8 +371,12 @@ impl Texture {
         {
             // macOS / iOS native-handle path stays host-only until
             // macOS cdylib adapter work resumes (#908 deferred list).
-            // The `host_inner()` panic guard catches the cdylib case
-            // at the FFI boundary.
+            // `host_inner()` panics in cdylib mode; the panic
+            // propagates through the cdylib's Rust stack until it
+            // crosses the next FFI boundary (the plugin entry point
+            // or any host vtable callback the cdylib calls), where
+            // `catch_unwind` converts it to a "callback panicked"
+            // log entry instead of UB.
             self.host_inner()
                 .metal_texture
                 .as_ref()
@@ -397,7 +407,14 @@ impl Texture {
             if fd_i64 < 0 {
                 None
             } else {
-                Some(NativeTextureHandle::DmaBuf { fd: fd_i64 as i32 })
+                // `get_memory_fd_khr` returns standard kernel FDs
+                // which always fit in i32; the i64 widening is purely
+                // forward-compat. A truncating cast here would
+                // silently corrupt the FD, so reject and treat as
+                // `None` rather than hand back garbage.
+                i32::try_from(fd_i64)
+                    .ok()
+                    .map(|fd| NativeTextureHandle::DmaBuf { fd })
             }
         }
         #[cfg(target_os = "windows")]
