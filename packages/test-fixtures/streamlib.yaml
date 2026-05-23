@@ -30,6 +30,8 @@ schemas:
     file: schemas/compute_kernel_test_processor_config.yaml
   GraphicsKernelSmokeTestProcessorConfig:
     file: schemas/graphics_kernel_smoke_test_processor_config.yaml
+  RayTracingKernelSmokeTestProcessorConfig:
+    file: schemas/ray_tracing_kernel_smoke_test_processor_config.yaml
 
 processors:
   - name: TestConfiguredProcessor
@@ -79,3 +81,11 @@ processors:
     config:
       name: config
       schema: GraphicsKernelSmokeTestProcessorConfig
+
+  - name: RayTracingKernelSmokeTestProcessor
+    version: 1.0.0
+    description: "Phase E (#953) dlopen-cdylib ray-tracing-kernel methods-vtable smoke test fixture — builds a single-triangle BLAS + identity TLAS via FullAccess, creates an RT kernel, acquires a STORAGE_BINDING Texture, runs a single trace_rays() through the per-type binding-method vtable to assert the vtable round-trips (set_acceleration_structure / set_storage_image / set_push_constants / trace_rays) don't panic. Smoke-only; pixel correctness not asserted."
+    execution: manual
+    config:
+      name: config
+      schema: RayTracingKernelSmokeTestProcessorConfig
