@@ -1266,53 +1266,49 @@ unsafe extern "C" fn host_acv_on_tick(
     run_host_extern_c(
         "host_acv_on_tick",
         || {
-            if handle.is_null() {
-                // Early-return: nothing to register. The third
-                // argument to `run_host_extern_c` (the
-                // `default_on_panic` slot) is evaluated eagerly per
-                // Rust argument-evaluation semantics and already
-                // fires `drop_user_data` once unconditionally —
-                // calling it here too would be a double-free. The
-                // wrapper's third-arg comment is misleading; the
-                // side effect runs regardless of whether the body
-                // panics, which also means the success path
-                // currently double-fires `drop_user_data` (once at
-                // arg-eval, once via the bridge's `Drop` when the
-                // audio clock tears down). The latent double-free
-                // is out of scope for the null-handle guard but
-                // worth lifting into its own fix when the
-                // `run_host_extern_c` signature next moves.
-                return;
-            }
-            let clock = unsafe { &*(handle as *const SharedAudioClock) };
-
-            // Wrap the (callback, user_data, drop_user_data) trio in a single
-            // Send + Sync struct that the host's AudioClock holds as its
-            // callback's owned state. The struct's `fire` method takes
-            // `&self`, which forces the dispatching closure to capture the
-            // whole struct (avoiding Rust 2021 disjoint-capture splitting,
-            // which would otherwise lift the inner `*mut c_void` out and
-            // break Send).
+            // [`OnTickBridge`] owns the (callback, user_data,
+            // drop_user_data) trio. Its `Drop` impl fires
+            // `drop_user_data` exactly once, no matter where the
+            // bridge ends up: stored on the clock (success path —
+            // drop fires at clock teardown), dropped immediately
+            // (null-handle path or panic before move), or dropped on
+            // the unwind path between move and `clock.on_tick`
+            // returning (panic-recovery path — the bridge moved into
+            // `cb` drops when `cb` unwinds).
+            //
+            // This shape is the sole owner of the cleanup: the
+            // wrapper's third argument to `run_host_extern_c` MUST
+            // stay `()` (no `drop_user_data` call) — Rust evaluates
+            // function arguments eagerly, so a third-arg side effect
+            // would fire `drop_user_data` unconditionally before the
+            // body even runs, double-firing it on every success path.
             let bridge = OnTickBridge {
                 callback,
                 user_data,
                 drop_user_data,
             };
+            if handle.is_null() {
+                // Bridge drops here → drop_user_data fires once. The
+                // explicit `drop(bridge)` is for clarity; lexical
+                // scope alone would fire it on the same line.
+                drop(bridge);
+                return;
+            }
+            let clock = unsafe { &*(handle as *const SharedAudioClock) };
+
+            // Bridge moves into the boxed closure. If
+            // `clock.on_tick(cb)` panics before storing `cb`, the
+            // unwind drops the Box → closure → bridge →
+            // drop_user_data fires exactly once. If `clock.on_tick`
+            // stores `cb` successfully, the bridge lives until the
+            // clock tears down; drop_user_data fires then.
             let cb: Box<dyn Fn(crate::core::context::AudioTickContext) + Send + Sync> =
                 Box::new(move |ctx_local| bridge.fire(ctx_local));
             clock.on_tick(cb);
         },
-        // If on_tick registration panics, the cdylib's `drop_user_data`
-        // callback must still fire to reclaim the cdylib-allocated
-        // user_data box. The bridge's `Drop` impl runs only when
-        // the bridge was actually constructed, so a panic before
-        // construction would leak. Mitigate by invoking
-        // `drop_user_data` directly when the protected body
-        // panicked. SAFETY: cdylib's ABI promises this fn is safe
-        // to invoke with the user_data pointer.
-        {
-            unsafe { (drop_user_data)(user_data) };
-        },
+        // Intentional `()`: the cleanup contract is held entirely by
+        // `OnTickBridge::Drop`. See body comment.
+        (),
     )
 }
 
@@ -12359,16 +12355,27 @@ mod runtime_context_vtable_null_handle_guards {
         assert!(!v, "halt-on-failure is the conservative default");
     }
 
+    /// Locks the documented placeholder behaviour of
+    /// `gpu_full_access`: the wrapper ignores `ctx` and returns null
+    /// unconditionally because cross-DSO FullAccess wiring lives on
+    /// the inline-by-value shim today, not through this callback.
+    /// This is NOT a null-handle-guard lock (no guard to revert);
+    /// it's a placeholder-shape lock — if a future change wires
+    /// real FullAccess dispatch here, this test fails and forces
+    /// the implementor to revisit.
     #[test]
-    fn gpu_full_access_returns_null_on_null_ctx() {
+    fn gpu_full_access_returns_null_unconditionally_today() {
         let p = unsafe {
             (HOST_RUNTIME_CONTEXT_VTABLE.gpu_full_access)(std::ptr::null())
         };
         assert!(p.is_null());
     }
 
+    /// Companion to [`gpu_full_access_returns_null_unconditionally_today`].
+    /// Same placeholder-shape lock; same caveat (not a null-handle
+    /// guard — the wrapper ignores `_ctx`).
     #[test]
-    fn gpu_limited_access_returns_null_on_null_ctx() {
+    fn gpu_limited_access_returns_null_unconditionally_today() {
         let p = unsafe {
             (HOST_RUNTIME_CONTEXT_VTABLE.gpu_limited_access)(std::ptr::null())
         };
@@ -12443,11 +12450,20 @@ mod audio_clock_vtable_null_handle_guards {
 
     #[test]
     fn on_tick_drops_user_data_on_null_handle() {
-        // Mental-revert: without the guard the wrapper would deref a
-        // null `*const SharedAudioClock` to call `clock.on_tick(...)`
-        // and SIGSEGV, never reaching the drop_user_data invocation.
-        // With the guard, drop_user_data fires immediately so the
-        // cdylib's box is reclaimed.
+        // Mental-revert: without the null-handle guard the wrapper
+        // would still construct the bridge (now hoisted above the
+        // null check), then deref a null `*const SharedAudioClock`
+        // to call `clock.on_tick(...)` and SIGSEGV before the bridge
+        // could move into `cb`. With the guard, the bridge drops
+        // before the deref → `drop_user_data` fires exactly once.
+        //
+        // Mental-revert for the bigger fix in the same commit
+        // (removing `drop_user_data` from the wrapper's third arg
+        // and hoisting bridge construction above the null check):
+        // restoring the old third-arg block-expression cleanup would
+        // re-introduce the eager-arg-eval double-fire on every
+        // call (success or null) — this test would observe
+        // `after == before + 2` and fail.
         let before = ON_TICK_DROP_COUNT.load(Ordering::SeqCst);
         // Leak a Box<u8> so counting_drop_user_data has something to
         // reclaim (mirrors cdylib's Box<oneshot::Sender>-shaped pattern).
@@ -12465,6 +12481,48 @@ mod audio_clock_vtable_null_handle_guards {
             after,
             before + 1,
             "drop_user_data must fire exactly once on null-handle short-circuit"
+        );
+    }
+
+    /// Success-path companion to the null-handle test. Exercises the
+    /// real `clock.on_tick(...)` storage path with a tiny ad-hoc
+    /// `SharedAudioClock` and asserts `drop_user_data` fires exactly
+    /// once across the full lifecycle (registration → clock drop).
+    /// Locks the eager-arg-eval double-free fix: restoring the old
+    /// third-arg block-expression cleanup would observe `after ==
+    /// before + 2` and fail this test.
+    #[test]
+    fn on_tick_drops_user_data_exactly_once_on_success_path() {
+        use crate::core::context::{AudioClockConfig, SharedAudioClock, SoftwareAudioClock};
+        use std::sync::Arc as StdArc;
+        let before = ON_TICK_DROP_COUNT.load(Ordering::SeqCst);
+        let user_data = Box::into_raw(Box::new(0u8)) as *mut c_void;
+        // Build a tiny clock just for this test. Drops at the end
+        // of the function, firing the bridge's Drop (which fires
+        // drop_user_data exactly once if the fix holds).
+        let clock: SharedAudioClock = StdArc::new(SoftwareAudioClock::new(
+            AudioClockConfig::new(48_000, 512),
+        ));
+        let handle = &clock as *const SharedAudioClock as *const c_void;
+        unsafe {
+            (HOST_AUDIO_CLOCK_VTABLE.on_tick)(
+                handle,
+                dummy_tick_callback,
+                user_data,
+                counting_drop_user_data,
+            );
+        }
+        // Drop the clock before reading the counter so the bridge's
+        // Drop fires deterministically.
+        drop(clock);
+        let after = ON_TICK_DROP_COUNT.load(Ordering::SeqCst);
+        assert_eq!(
+            after,
+            before + 1,
+            "drop_user_data must fire exactly once across the full \
+             on_tick lifecycle (registration → clock drop); \
+             `before + 2` indicates the eager-arg-eval double-free \
+             regressed"
         );
     }
 }
