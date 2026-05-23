@@ -235,17 +235,58 @@ fn run_beta_shape_round_trip(ctx: &RuntimeContextFullAccess<'_>) -> Result<Strin
         // VulkanComputeKernel which IS exercised on every host.
         if full.supports_ray_tracing_pipeline() {
             // VulkanAccelerationStructure: trivial single-triangle BLAS.
+            // Exercises the #955 v8 build_triangles_blas out-params:
+            // the cdylib-minted β-shape must carry real device_address,
+            // storage_size, and kind (no placeholder zeros), and its
+            // label() method must round-trip through the new
+            // VulkanAccelerationStructureMethodsVTable::label slot.
             let vertices = [
                 0.0f32, 0.0, 0.0, //
                 1.0, 0.0, 0.0, //
                 0.0, 1.0, 0.0, //
             ];
             let indices = [0u32, 1, 2];
+            let blas_label = "cross-rustc-fixture-blas";
             let blas = full.build_triangles_blas(
-                "cross-rustc-fixture-blas",
+                blas_label,
                 &vertices,
                 &indices,
             )?;
+            // Real device address from the v8 out-param (not the
+            // placeholder zero the pre-v8 cdylib path produced).
+            if blas.device_address() == 0 {
+                return Err(Error::Runtime(
+                    "VulkanAccelerationStructure: build_triangles_blas                      produced cached_device_address=0 (v8 out-param                      not surfaced or BLAS truly has no device address)"
+                        .into(),
+                ));
+            }
+            if blas.storage_size() == 0 {
+                return Err(Error::Runtime(
+                    "VulkanAccelerationStructure: build_triangles_blas                      produced cached_storage_size=0 (v8 out-param not                      surfaced or BLAS build skipped storage allocation)"
+                        .into(),
+                ));
+            }
+            // kind() reads cached_kind; build_triangles_blas always
+            // mints BottomLevel (the host's from_arc_into_raw writes
+            // out_kind = 0 for BLAS, 1 for TLAS).
+            if blas.kind()
+                != streamlib::sdk::engine::host_rhi::AccelerationStructureKind::BottomLevel
+            {
+                return Err(Error::Runtime(format!(
+                    "VulkanAccelerationStructure: build_triangles_blas                      produced kind = {:?}, expected BottomLevel",
+                    blas.kind()
+                )));
+            }
+            // label() routes through the v2 methods vtable slot in
+            // cdylib mode (host_inner panics if reached). Round-trip
+            // must match what we passed at build time exactly.
+            let round_tripped = blas.label();
+            if round_tripped != blas_label {
+                return Err(Error::Runtime(format!(
+                    "VulkanAccelerationStructure: label round-trip                      mismatch — passed {blas_label:?} but got {:?}",
+                    round_tripped
+                )));
+            }
             let blas_clone = blas.clone();
             drop(blas_clone);
             drop(blas);

@@ -5706,6 +5706,9 @@ unsafe extern "C" fn host_gpu_full_build_triangles_blas(
     indices_ptr: *const u32,
     indices_len: usize,
     out_blas: *mut *const c_void,
+    out_device_address: *mut u64,
+    out_storage_size: *mut u64,
+    out_kind: *mut u32,
     err_buf: *mut u8,
     err_buf_cap: usize,
     err_len: *mut usize,
@@ -5713,9 +5716,14 @@ unsafe extern "C" fn host_gpu_full_build_triangles_blas(
     run_host_extern_c(
         "host_gpu_full_build_triangles_blas",
         || -> i32 {
-            if out_blas.is_null() || label_ptr.is_null() {
+            if out_blas.is_null()
+                || label_ptr.is_null()
+                || out_device_address.is_null()
+                || out_storage_size.is_null()
+                || out_kind.is_null()
+            {
                 write_err(
-                    "build_triangles_blas: null label_ptr / out_blas",
+                    "build_triangles_blas: null label_ptr / out-parameter pointer",
                     err_buf,
                     err_buf_cap,
                     err_len,
@@ -5757,13 +5765,26 @@ unsafe extern "C" fn host_gpu_full_build_triangles_blas(
             match result {
                 Some(Ok(blas)) => {
                     // `blas` is the β-shape — its `handle` is already
-                    // `Arc::into_raw(Arc<VulkanAccelerationStructureInner>)`-shaped.
-                    // Forget the β-shape to keep the Arc strong count
-                    // bumped; cdylib reconstructs its own β-shape from
-                    // the handle + vtable.
+                    // `Arc::into_raw(Arc<VulkanAccelerationStructureInner>)`-shaped
+                    // and its cached POD fields were populated by
+                    // `VulkanAccelerationStructure::from_arc_into_raw`
+                    // (host-mode mint path). Write them through the
+                    // out-params so the cdylib's β-shape carries the
+                    // real values instead of placeholder zeros. Forget
+                    // the β-shape to keep the Arc strong count bumped;
+                    // cdylib reconstructs its own β-shape from the
+                    // handle + vtable + cached PODs.
                     let raw = blas.handle;
+                    let device_address = blas.cached_device_address;
+                    let storage_size = blas.cached_storage_size;
+                    let kind = blas.cached_kind;
                     std::mem::forget(blas);
-                    unsafe { std::ptr::write(out_blas, raw) };
+                    unsafe {
+                        std::ptr::write(out_blas, raw);
+                        std::ptr::write(out_device_address, device_address);
+                        std::ptr::write(out_storage_size, storage_size);
+                        std::ptr::write(out_kind, kind);
+                    }
                     0
                 }
                 Some(Err(e)) => {
@@ -5787,6 +5808,9 @@ unsafe extern "C" fn host_gpu_full_build_triangles_blas(
     _indices_ptr: *const u32,
     _indices_len: usize,
     _out_blas: *mut *const c_void,
+    _out_device_address: *mut u64,
+    _out_storage_size: *mut u64,
+    _out_kind: *mut u32,
     err_buf: *mut u8,
     err_buf_cap: usize,
     err_len: *mut usize,
@@ -5808,6 +5832,9 @@ unsafe extern "C" fn host_gpu_full_build_tlas(
     instances_ptr: *const c_void,
     instances_len: usize,
     out_tlas: *mut *const c_void,
+    out_device_address: *mut u64,
+    out_storage_size: *mut u64,
+    out_kind: *mut u32,
     err_buf: *mut u8,
     err_buf_cap: usize,
     err_len: *mut usize,
@@ -5815,9 +5842,14 @@ unsafe extern "C" fn host_gpu_full_build_tlas(
     run_host_extern_c(
         "host_gpu_full_build_tlas",
         || -> i32 {
-            if out_tlas.is_null() || label_ptr.is_null() {
+            if out_tlas.is_null()
+                || label_ptr.is_null()
+                || out_device_address.is_null()
+                || out_storage_size.is_null()
+                || out_kind.is_null()
+            {
                 write_err(
-                    "build_tlas: null label_ptr / out_tlas",
+                    "build_tlas: null label_ptr / out-parameter pointer",
                     err_buf,
                     err_buf_cap,
                     err_len,
@@ -5864,9 +5896,22 @@ unsafe extern "C" fn host_gpu_full_build_tlas(
             );
             match result {
                 Some(Ok(tlas)) => {
+                    // Same shape as `host_gpu_full_build_triangles_blas`:
+                    // the β-shape's cached PODs are real (populated by
+                    // `from_arc_into_raw` host-side); write them
+                    // through the out-params so the cdylib's reassembled
+                    // β-shape carries real values.
                     let raw = tlas.handle;
+                    let device_address = tlas.cached_device_address;
+                    let storage_size = tlas.cached_storage_size;
+                    let kind = tlas.cached_kind;
                     std::mem::forget(tlas);
-                    unsafe { std::ptr::write(out_tlas, raw) };
+                    unsafe {
+                        std::ptr::write(out_tlas, raw);
+                        std::ptr::write(out_device_address, device_address);
+                        std::ptr::write(out_storage_size, storage_size);
+                        std::ptr::write(out_kind, kind);
+                    }
                     0
                 }
                 Some(Err(e)) => {
@@ -5888,6 +5933,9 @@ unsafe extern "C" fn host_gpu_full_build_tlas(
     _instances_ptr: *const c_void,
     _instances_len: usize,
     _out_tlas: *mut *const c_void,
+    _out_device_address: *mut u64,
+    _out_storage_size: *mut u64,
+    _out_kind: *mut u32,
     err_buf: *mut u8,
     err_buf_cap: usize,
     err_len: *mut usize,
@@ -8120,13 +8168,15 @@ unsafe extern "C" fn host_graphics_kernel_offscreen_render(
 //
 // The AS-binding wrapper reconstructs an AS borrow via
 // `make_acceleration_structure_borrow` — same `ManuallyDrop` shape
-// as the buffer/texture helpers; the inner kernel only reads
-// `vk_handle()` + `kind()` off the wrapper, both of which trampoline
-// through the methods vtable when the AS has its own vtable hooked
-// up. In the host-path this PR exercises, the borrow is constructed
-// against the host's static vtables so the dispatch goes straight to
-// `host_inner()` and reads the inner's cached `handle` + `kind` —
-// no recursive FFI call.
+// as the buffer/texture helpers. The β-shape's `kind()` /
+// `device_address()` / `storage_size()` getters read the cached
+// fields on the borrow directly (no vtable dispatch); the helper
+// populates those fields at construction time from the host-internal
+// `Inner`, so the inner kernel's `set_acceleration_structure` reads
+// the real values rather than the placeholder zeros that would
+// trip the kernel's `TopLevel` check. `vk_handle()` stays host-only
+// (vulkanalia handle, no cdylib path) and is only called from the
+// host wrapper here, after the kind check passes.
 
 /// SAFETY: caller must hand a `handle` that came from
 /// `Arc::into_raw(Arc<VulkanRayTracingKernelInner>)`. The leaked
@@ -8145,14 +8195,39 @@ unsafe fn handle_as_ray_tracing_kernel(
 fn make_acceleration_structure_borrow(
     handle: *const c_void,
 ) -> std::mem::ManuallyDrop<crate::vulkan::rhi::VulkanAccelerationStructure> {
+    // Read the cached POD descriptors directly from the host-internal
+    // Inner. With #955 the β-shape's `kind()` / `device_address()` /
+    // `storage_size()` getters read the cached fields (no host_inner()
+    // fallback), so the borrow MUST carry real values — the
+    // ray-tracing kernel's `set_acceleration_structure` check reads
+    // `tlas.kind()` and would see BottomLevel for every borrow if the
+    // cached field stayed 0.
+    let (cached_kind, cached_device_address, cached_storage_size) =
+        if handle.is_null() {
+            (0u32, 0u64, 0u64)
+        } else {
+            // SAFETY: caller hands us a `handle` minted by
+            // `Arc::into_raw(Arc<VulkanAccelerationStructureInner>)`,
+            // so dereferencing through the host-internal Inner is
+            // sound on the host side (this helper is host-only;
+            // cdylib borrows would never reach this code path).
+            let as_inner = unsafe {
+                &*(handle as *const crate::vulkan::rhi::VulkanAccelerationStructureInner)
+            };
+            let kind = match as_inner.kind() {
+                crate::vulkan::rhi::AccelerationStructureKind::BottomLevel => 0u32,
+                crate::vulkan::rhi::AccelerationStructureKind::TopLevel => 1u32,
+            };
+            (kind, as_inner.device_address(), as_inner.storage_size())
+        };
     std::mem::ManuallyDrop::new(crate::vulkan::rhi::VulkanAccelerationStructure {
         handle,
         vtable: host_gpu_context_full_access_vtable(),
         methods_vtable: host_vulkan_acceleration_structure_methods_vtable(),
-        cached_kind: 0,
+        cached_kind,
         _reserved_padding: 0,
-        cached_device_address: 0,
-        cached_storage_size: 0,
+        cached_device_address,
+        cached_storage_size,
     })
 }
 
@@ -8936,14 +9011,122 @@ pub fn host_vulkan_ray_tracing_kernel_methods_vtable(
     &HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE
 }
 
-/// Host-side empty-shell
-/// `VulkanAccelerationStructureMethodsVTable` (issue #907 PR 5/5).
+// ---------------------------------------------------------------------------
+// VulkanAccelerationStructureMethodsVTable wrappers (issue #955)
+//
+// The per-type vtable currently carries one method slot — `label` —
+// because:
+//   * POD getters (`device_address`, `storage_size`, `kind`) are
+//     populated at mint time via the v8 build_triangles_blas /
+//     build_tlas out-params; the β-shape's cached fields are always
+//     real values, no vtable dispatch needed.
+//   * `vk_handle` stays host-only (vulkanalia handle layout couples
+//     to vulkanalia minor version; no in-tree cdylib consumer reads
+//     it — every binding goes through the ray-tracing kernel's
+//     host-side `set_acceleration_structure` slot which dereferences
+//     the AS host-side).
+//
+// `label` uses the same caller-provided byte-buffer out-param shape
+// as `TextureRingSlot.surface_id` from #947 — labels longer than
+// `out_buf_cap` are silently truncated (fine for diagnostic strings).
+// ---------------------------------------------------------------------------
+
+/// SAFETY: caller must hand a `handle` that came from
+/// `Arc::into_raw(Arc<VulkanAccelerationStructureInner>)`. The
+/// leaked strong count keeps the AS alive for the call's duration.
+#[cfg(target_os = "linux")]
+unsafe fn handle_as_acceleration_structure(
+    handle: *const c_void,
+) -> Option<&'static crate::vulkan::rhi::VulkanAccelerationStructureInner> {
+    if handle.is_null() {
+        return None;
+    }
+    Some(unsafe {
+        &*(handle as *const crate::vulkan::rhi::VulkanAccelerationStructureInner)
+    })
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_vulkan_acceleration_structure_label(
+    as_handle: *const c_void,
+    out_buf: *mut u8,
+    out_buf_cap: usize,
+    out_len: *mut usize,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_vulkan_acceleration_structure_label",
+        || -> i32 {
+            let Some(as_inner) =
+                (unsafe { handle_as_acceleration_structure(as_handle) })
+            else {
+                write_err(
+                    "label: null acceleration_structure handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if out_buf.is_null() || out_len.is_null() {
+                write_err(
+                    "label: null out-parameter pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let label_bytes = as_inner.label().as_bytes();
+            // Silent truncation at buffer cap — labels are diagnostic
+            // strings, not load-bearing data; an over-large label
+            // just shows the prefix in logs.
+            let copy_len = label_bytes.len().min(out_buf_cap);
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    label_bytes.as_ptr(),
+                    out_buf,
+                    copy_len,
+                );
+                std::ptr::write(out_len, copy_len);
+            }
+            0
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_vulkan_acceleration_structure_label(
+    _as_handle: *const c_void,
+    _out_buf: *mut u8,
+    _out_buf_cap: usize,
+    _out_len: *mut usize,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "label: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+/// Host-side `VulkanAccelerationStructureMethodsVTable` wired to the
+/// per-method wrappers above (issue #907 PR 5/5 shell + #955 method
+/// dispatch).
 pub static HOST_VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE:
     streamlib_plugin_abi::VulkanAccelerationStructureMethodsVTable =
     streamlib_plugin_abi::VulkanAccelerationStructureMethodsVTable {
         layout_version:
             streamlib_plugin_abi::VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION,
         _reserved_padding: 0,
+        label: host_vulkan_acceleration_structure_label,
     };
 
 /// Accessor for the host's static
@@ -9345,6 +9528,9 @@ mod gpu_full_access_vtable_tests {
         let vertices = [0.0f32, 0.0, 0.0];
         let indices = [0u32, 1, 2];
         let mut out: *const c_void = std::ptr::null();
+        let mut out_device_address: u64 = 0;
+        let mut out_storage_size: u64 = 0;
+        let mut out_kind: u32 = 0;
         let rc = unsafe {
             (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.build_triangles_blas)(
                 std::ptr::null(),
@@ -9355,6 +9541,9 @@ mod gpu_full_access_vtable_tests {
                 indices.as_ptr(),
                 indices.len(),
                 &mut out,
+                &mut out_device_address as *mut u64,
+                &mut out_storage_size as *mut u64,
+                &mut out_kind as *mut u32,
                 buf.as_mut_ptr(),
                 buf.len(),
                 &mut len,
@@ -9367,6 +9556,10 @@ mod gpu_full_access_vtable_tests {
             "got: {msg}"
         );
         assert!(out.is_null());
+        // Out-params untouched on failure.
+        assert_eq!(out_device_address, 0);
+        assert_eq!(out_storage_size, 0);
+        assert_eq!(out_kind, 0);
     }
 
     #[test]
@@ -9375,6 +9568,9 @@ mod gpu_full_access_vtable_tests {
         let (mut buf, mut len) = make_err_buf();
         let label = b"test_tlas";
         let mut out: *const c_void = std::ptr::null();
+        let mut out_device_address: u64 = 0;
+        let mut out_storage_size: u64 = 0;
+        let mut out_kind: u32 = 0;
         let rc = unsafe {
             (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.build_tlas)(
                 std::ptr::null(),
@@ -9383,6 +9579,9 @@ mod gpu_full_access_vtable_tests {
                 std::ptr::null(),
                 0,
                 &mut out,
+                &mut out_device_address as *mut u64,
+                &mut out_storage_size as *mut u64,
+                &mut out_kind as *mut u32,
                 buf.as_mut_ptr(),
                 buf.len(),
                 &mut len,
@@ -9395,6 +9594,10 @@ mod gpu_full_access_vtable_tests {
             "got: {msg}"
         );
         assert!(out.is_null());
+        // Out-params untouched on failure.
+        assert_eq!(out_device_address, 0);
+        assert_eq!(out_storage_size, 0);
+        assert_eq!(out_kind, 0);
     }
 
     #[test]
@@ -10495,6 +10698,55 @@ mod texture_ring_methods_vtable_null_tests {
         assert_eq!(rc, 1);
         assert!(
             err_buf_as_str(&buf, len).contains("slot: null ring handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod acceleration_structure_methods_vtable_null_tests {
+    //! Tier-1 wire-format tests for the v2 `label` method slot on
+    //! `VulkanAccelerationStructureMethodsVTable` (issue #955). The
+    //! wrapper must reject a null AS handle before reaching any
+    //! Inner state so cdylib callers get a clean error return
+    //! instead of UB.
+    //!
+    //! End-to-end coverage (real AS + label round-trip) is locked
+    //! by the dlopen integration test for the cross-rustc fixture,
+    //! which builds a real BLAS and asserts the round-tripped label
+    //! matches the one passed at build time.
+
+    use super::*;
+
+    fn make_err_buf() -> ([u8; 256], usize) {
+        ([0u8; 256], 0usize)
+    }
+
+    fn err_buf_as_str(buf: &[u8], len: usize) -> &str {
+        std::str::from_utf8(&buf[..len]).expect("UTF-8")
+    }
+
+    #[test]
+    fn label_rejects_null_acceleration_structure_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut out_buf = [0u8; 64];
+        let mut out_len: usize = 0;
+        let rc = unsafe {
+            (HOST_VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE.label)(
+                std::ptr::null(),
+                out_buf.as_mut_ptr(),
+                out_buf.len(),
+                &mut out_len as *mut usize,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("label: null acceleration_structure handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
