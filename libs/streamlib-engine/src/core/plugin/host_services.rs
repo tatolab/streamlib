@@ -7060,18 +7060,899 @@ pub fn host_vulkan_compute_kernel_methods_vtable(
     &HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE
 }
 
-/// Host-side empty-shell `VulkanGraphicsKernelMethodsVTable` (issue
-/// #907 PR 3/5).
+// ---- VulkanGraphicsKernelMethodsVTable wrappers (#951) ---------------------
+//
+// Each wrapper reconstructs the kernel borrow from the raw `Arc`
+// handle the cdylib passes (`Arc::into_raw(Arc<VulkanGraphicsKernelInner>)`
+// per the β-shape's `from_arc_into_raw`), runs the inner method,
+// and converts the `Result<()>` into the FFI's `i32 + err_buf`
+// shape. All bodies are wrapped in `run_host_extern_c` so a panic
+// in the inner method becomes a non-zero return.
+//
+// Buffer / texture borrow reconstruction reuses the
+// `make_*_buffer_borrow` / `make_texture_borrow` helpers from the
+// compute-kernel section above — same `ManuallyDrop`-wrapped
+// plugin-handle pattern, same "cached PODs are never read"
+// invariant. See the comment block above
+// `make_pixel_buffer_borrow` for the load-bearing details.
+
+/// SAFETY: caller must hand a `handle` that came from
+/// `Arc::into_raw(Arc<VulkanGraphicsKernelInner>)`. The leaked
+/// strong count keeps the kernel alive for the call's duration.
+#[cfg(target_os = "linux")]
+unsafe fn handle_as_graphics_kernel(
+    handle: *const c_void,
+) -> Option<&'static crate::vulkan::rhi::VulkanGraphicsKernelInner> {
+    if handle.is_null() {
+        return None;
+    }
+    Some(unsafe { &*(handle as *const crate::vulkan::rhi::VulkanGraphicsKernelInner) })
+}
+
+#[cfg(target_os = "linux")]
+fn make_vertex_buffer_borrow(
+    handle: *const c_void,
+) -> std::mem::ManuallyDrop<crate::core::rhi::VertexBuffer> {
+    std::mem::ManuallyDrop::new(crate::core::rhi::VertexBuffer {
+        handle,
+        vtable: host_gpu_context_limited_access_vtable(),
+        byte_size_cached: 0,
+        mapped_ptr_cached: std::ptr::null_mut(),
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn make_index_buffer_borrow(
+    handle: *const c_void,
+) -> std::mem::ManuallyDrop<crate::core::rhi::IndexBuffer> {
+    std::mem::ManuallyDrop::new(crate::core::rhi::IndexBuffer {
+        handle,
+        vtable: host_gpu_context_limited_access_vtable(),
+        byte_size_cached: 0,
+        mapped_ptr_cached: std::ptr::null_mut(),
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn index_type_from_repr(raw: u32) -> Option<crate::core::rhi::IndexType> {
+    match raw {
+        0 => Some(crate::core::rhi::IndexType::Uint16),
+        1 => Some(crate::core::rhi::IndexType::Uint32),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_graphics_kernel_set_storage_buffer_pixel(
+    kernel_handle: *const c_void,
+    frame_index: u32,
+    binding: u32,
+    pixel_buffer_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_graphics_kernel_set_storage_buffer_pixel",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_storage_buffer_pixel: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if pixel_buffer_handle.is_null() {
+                write_err(
+                    "set_storage_buffer_pixel: null pixel_buffer handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let borrow = make_pixel_buffer_borrow(pixel_buffer_handle);
+            match kernel.set_storage_buffer(frame_index, binding, &*borrow) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("set_storage_buffer_pixel: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_graphics_kernel_set_storage_buffer_storage(
+    kernel_handle: *const c_void,
+    frame_index: u32,
+    binding: u32,
+    storage_buffer_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_graphics_kernel_set_storage_buffer_storage",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_storage_buffer_storage: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if storage_buffer_handle.is_null() {
+                write_err(
+                    "set_storage_buffer_storage: null storage_buffer handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let borrow = make_storage_buffer_borrow(storage_buffer_handle);
+            match kernel.set_storage_buffer(frame_index, binding, &*borrow) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("set_storage_buffer_storage: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_graphics_kernel_set_uniform_buffer(
+    kernel_handle: *const c_void,
+    frame_index: u32,
+    binding: u32,
+    uniform_buffer_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_graphics_kernel_set_uniform_buffer",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_uniform_buffer: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if uniform_buffer_handle.is_null() {
+                write_err(
+                    "set_uniform_buffer: null uniform_buffer handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let borrow = make_uniform_buffer_borrow(uniform_buffer_handle);
+            match kernel.set_uniform_buffer(frame_index, binding, &*borrow) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("set_uniform_buffer: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_graphics_kernel_set_sampled_texture(
+    kernel_handle: *const c_void,
+    frame_index: u32,
+    binding: u32,
+    texture_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_graphics_kernel_set_sampled_texture",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_sampled_texture: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if texture_handle.is_null() {
+                write_err(
+                    "set_sampled_texture: null texture handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let borrow = make_texture_borrow(texture_handle);
+            match kernel.set_sampled_texture(frame_index, binding, &*borrow) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("set_sampled_texture: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_graphics_kernel_set_storage_image(
+    kernel_handle: *const c_void,
+    frame_index: u32,
+    binding: u32,
+    texture_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_graphics_kernel_set_storage_image",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_storage_image: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if texture_handle.is_null() {
+                write_err(
+                    "set_storage_image: null texture handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let borrow = make_texture_borrow(texture_handle);
+            match kernel.set_storage_image(frame_index, binding, &*borrow) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("set_storage_image: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_graphics_kernel_set_vertex_buffer(
+    kernel_handle: *const c_void,
+    frame_index: u32,
+    binding: u32,
+    vertex_buffer_handle: *const c_void,
+    offset: u64,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_graphics_kernel_set_vertex_buffer",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_vertex_buffer: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if vertex_buffer_handle.is_null() {
+                write_err(
+                    "set_vertex_buffer: null vertex_buffer handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let borrow = make_vertex_buffer_borrow(vertex_buffer_handle);
+            match kernel.set_vertex_buffer(frame_index, binding, &*borrow, offset) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("set_vertex_buffer: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_graphics_kernel_set_index_buffer(
+    kernel_handle: *const c_void,
+    frame_index: u32,
+    index_buffer_handle: *const c_void,
+    offset: u64,
+    index_type_raw: u32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_graphics_kernel_set_index_buffer",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_index_buffer: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if index_buffer_handle.is_null() {
+                write_err(
+                    "set_index_buffer: null index_buffer handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let Some(index_type) = index_type_from_repr(index_type_raw) else {
+                write_err(
+                    &format!("set_index_buffer: unknown index_type discriminant {index_type_raw}"),
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            let borrow = make_index_buffer_borrow(index_buffer_handle);
+            match kernel.set_index_buffer(frame_index, &*borrow, offset, index_type) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("set_index_buffer: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_graphics_kernel_set_push_constants(
+    kernel_handle: *const c_void,
+    frame_index: u32,
+    bytes_ptr: *const u8,
+    bytes_len: usize,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_graphics_kernel_set_push_constants",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_push_constants: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if bytes_ptr.is_null() && bytes_len != 0 {
+                write_err(
+                    "set_push_constants: null bytes_ptr with non-zero len",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let bytes = if bytes_len == 0 {
+                &[][..]
+            } else {
+                unsafe { std::slice::from_raw_parts(bytes_ptr, bytes_len) }
+            };
+            match kernel.set_push_constants(frame_index, bytes) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("set_push_constants: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn draw_call_from_repr(repr: &streamlib_plugin_abi::DrawCallRepr) -> crate::core::rhi::DrawCall {
+    crate::core::rhi::DrawCall {
+        vertex_count: repr.vertex_count,
+        instance_count: repr.instance_count,
+        first_vertex: repr.first_vertex,
+        first_instance: repr.first_instance,
+        viewport: if repr.viewport_present != 0 {
+            Some(crate::core::rhi::Viewport {
+                x: repr.viewport.x,
+                y: repr.viewport.y,
+                width: repr.viewport.width,
+                height: repr.viewport.height,
+                min_depth: repr.viewport.min_depth,
+                max_depth: repr.viewport.max_depth,
+            })
+        } else {
+            None
+        },
+        scissor: if repr.scissor_present != 0 {
+            Some(crate::core::rhi::ScissorRect {
+                x: repr.scissor.x,
+                y: repr.scissor.y,
+                width: repr.scissor.width,
+                height: repr.scissor.height,
+            })
+        } else {
+            None
+        },
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn draw_indexed_call_from_repr(
+    repr: &streamlib_plugin_abi::DrawIndexedCallRepr,
+) -> crate::core::rhi::DrawIndexedCall {
+    crate::core::rhi::DrawIndexedCall {
+        index_count: repr.index_count,
+        instance_count: repr.instance_count,
+        first_index: repr.first_index,
+        vertex_offset: repr.vertex_offset,
+        first_instance: repr.first_instance,
+        viewport: if repr.viewport_present != 0 {
+            Some(crate::core::rhi::Viewport {
+                x: repr.viewport.x,
+                y: repr.viewport.y,
+                width: repr.viewport.width,
+                height: repr.viewport.height,
+                min_depth: repr.viewport.min_depth,
+                max_depth: repr.viewport.max_depth,
+            })
+        } else {
+            None
+        },
+        scissor: if repr.scissor_present != 0 {
+            Some(crate::core::rhi::ScissorRect {
+                x: repr.scissor.x,
+                y: repr.scissor.y,
+                width: repr.scissor.width,
+                height: repr.scissor.height,
+            })
+        } else {
+            None
+        },
+    }
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_graphics_kernel_offscreen_render(
+    kernel_handle: *const c_void,
+    frame_index: u32,
+    color_texture_handles: *const *const c_void,
+    color_clear_present: *const u32,
+    color_clear_values: *const [f32; 4],
+    target_count: usize,
+    extent_width: u32,
+    extent_height: u32,
+    draw: *const streamlib_plugin_abi::OffscreenDrawRepr,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_graphics_kernel_offscreen_render",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "offscreen_render: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if draw.is_null() {
+                write_err(
+                    "offscreen_render: null draw pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            if target_count != 0
+                && (color_texture_handles.is_null()
+                    || color_clear_present.is_null()
+                    || color_clear_values.is_null())
+            {
+                write_err(
+                    "offscreen_render: null parallel-array pointer with non-zero target_count",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let handles = if target_count == 0 {
+                &[][..]
+            } else {
+                unsafe { std::slice::from_raw_parts(color_texture_handles, target_count) }
+            };
+            let present_flags = if target_count == 0 {
+                &[][..]
+            } else {
+                unsafe { std::slice::from_raw_parts(color_clear_present, target_count) }
+            };
+            let clear_values = if target_count == 0 {
+                &[][..]
+            } else {
+                unsafe { std::slice::from_raw_parts(color_clear_values, target_count) }
+            };
+            // Reconstruct ManuallyDrop-wrapped Texture borrows for each
+            // attachment. The Vec keeps the wrappers alive for the
+            // duration of the inner call; OffscreenColorTarget then
+            // borrows into those wrappers.
+            let mut texture_borrows: Vec<std::mem::ManuallyDrop<crate::core::rhi::Texture>> =
+                Vec::with_capacity(target_count);
+            for (i, &handle) in handles.iter().enumerate() {
+                if handle.is_null() {
+                    write_err(
+                        &format!("offscreen_render: null texture handle at color target {i}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+                texture_borrows.push(make_texture_borrow(handle));
+            }
+            let targets: Vec<crate::vulkan::rhi::OffscreenColorTarget<'_>> = texture_borrows
+                .iter()
+                .enumerate()
+                .map(|(i, borrow)| {
+                    let clear_color = if present_flags[i] != 0 {
+                        Some(clear_values[i])
+                    } else {
+                        None
+                    };
+                    crate::vulkan::rhi::OffscreenColorTarget {
+                        texture: &**borrow,
+                        clear_color,
+                    }
+                })
+                .collect();
+            let draw_repr = unsafe { &*draw };
+            let inner_draw = match draw_repr.kind {
+                k if k == streamlib_plugin_abi::OffscreenDrawKindRepr::Draw as u32 => {
+                    crate::vulkan::rhi::OffscreenDraw::Draw(draw_call_from_repr(
+                        &draw_repr.draw_call,
+                    ))
+                }
+                k if k == streamlib_plugin_abi::OffscreenDrawKindRepr::DrawIndexed as u32 => {
+                    crate::vulkan::rhi::OffscreenDraw::DrawIndexed(draw_indexed_call_from_repr(
+                        &draw_repr.draw_indexed_call,
+                    ))
+                }
+                other => {
+                    write_err(
+                        &format!("offscreen_render: unknown draw kind discriminant {other}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            match kernel.offscreen_render(
+                frame_index,
+                &targets,
+                (extent_width, extent_height),
+                inner_draw,
+            ) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("offscreen_render: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+// ---- Non-Linux platform stubs (vtable layout stays unconditional) ----------
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_graphics_kernel_set_storage_buffer_pixel(
+    _kernel_handle: *const c_void,
+    _frame_index: u32,
+    _binding: u32,
+    _pixel_buffer_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_storage_buffer_pixel: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_graphics_kernel_set_storage_buffer_storage(
+    _kernel_handle: *const c_void,
+    _frame_index: u32,
+    _binding: u32,
+    _storage_buffer_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_storage_buffer_storage: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_graphics_kernel_set_uniform_buffer(
+    _kernel_handle: *const c_void,
+    _frame_index: u32,
+    _binding: u32,
+    _uniform_buffer_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_uniform_buffer: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_graphics_kernel_set_sampled_texture(
+    _kernel_handle: *const c_void,
+    _frame_index: u32,
+    _binding: u32,
+    _texture_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_sampled_texture: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_graphics_kernel_set_storage_image(
+    _kernel_handle: *const c_void,
+    _frame_index: u32,
+    _binding: u32,
+    _texture_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_storage_image: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_graphics_kernel_set_vertex_buffer(
+    _kernel_handle: *const c_void,
+    _frame_index: u32,
+    _binding: u32,
+    _vertex_buffer_handle: *const c_void,
+    _offset: u64,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_vertex_buffer: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_graphics_kernel_set_index_buffer(
+    _kernel_handle: *const c_void,
+    _frame_index: u32,
+    _index_buffer_handle: *const c_void,
+    _offset: u64,
+    _index_type_raw: u32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_index_buffer: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_graphics_kernel_set_push_constants(
+    _kernel_handle: *const c_void,
+    _frame_index: u32,
+    _bytes_ptr: *const u8,
+    _bytes_len: usize,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_push_constants: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_graphics_kernel_offscreen_render(
+    _kernel_handle: *const c_void,
+    _frame_index: u32,
+    _color_texture_handles: *const *const c_void,
+    _color_clear_present: *const u32,
+    _color_clear_values: *const [f32; 4],
+    _target_count: usize,
+    _extent_width: u32,
+    _extent_height: u32,
+    _draw: *const streamlib_plugin_abi::OffscreenDrawRepr,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "offscreen_render: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+/// Host-side `VulkanGraphicsKernelMethodsVTable` populated with the
+/// v2 method slots (typed binding-method dispatch for the plugin
+/// handle's `set_storage_buffer_pixel` / `set_storage_buffer_storage`
+/// / `set_uniform_buffer` / `set_sampled_texture` /
+/// `set_storage_image` / `set_vertex_buffer` / `set_index_buffer` /
+/// `set_push_constants` / `offscreen_render` surface).
 ///
-/// PR 3 establishes the pointer plumbing only. Subsequent PRs fill
-/// in method slots for the kernel's graphics-pipeline `set_*` /
-/// `cmd_bind_and_draw` / `offscreen_render` / `bindings` surface.
+/// Engine-only methods that take a raw `vk::CommandBuffer`
+/// (`cmd_bind_and_draw` / `cmd_bind_and_draw_indexed`) stay
+/// `host_inner`-routed and are NOT on this vtable — minting a
+/// `vk::CommandBuffer` from cdylib code requires an
+/// `RhiCommandRecorder` β-shape, which is a separate concern.
 pub static HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE:
     streamlib_plugin_abi::VulkanGraphicsKernelMethodsVTable =
     streamlib_plugin_abi::VulkanGraphicsKernelMethodsVTable {
         layout_version:
             streamlib_plugin_abi::VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION,
         _reserved_padding: 0,
+        set_storage_buffer_pixel: host_graphics_kernel_set_storage_buffer_pixel,
+        set_storage_buffer_storage: host_graphics_kernel_set_storage_buffer_storage,
+        set_uniform_buffer: host_graphics_kernel_set_uniform_buffer,
+        set_sampled_texture: host_graphics_kernel_set_sampled_texture,
+        set_storage_image: host_graphics_kernel_set_storage_image,
+        set_vertex_buffer: host_graphics_kernel_set_vertex_buffer,
+        set_index_buffer: host_graphics_kernel_set_index_buffer,
+        set_push_constants: host_graphics_kernel_set_push_constants,
+        offscreen_render: host_graphics_kernel_offscreen_render,
     };
 
 /// Accessor for the host's static `VulkanGraphicsKernelMethodsVTable`
@@ -8100,6 +8981,245 @@ mod compute_kernel_methods_vtable_null_tests {
         assert!(
             err_buf_as_str(&buf, len)
                 .contains("set_storage_image: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod graphics_kernel_methods_vtable_null_tests {
+    //! Tier-1 wire-format tests for the v2 method slots on
+    //! `VulkanGraphicsKernelMethodsVTable`. Each wrapper must
+    //! reject a null kernel handle before reaching any kernel-side
+    //! state (i.e. before any deref) so cdylib callers get a clean
+    //! error return on the wire-format path instead of UB.
+    //!
+    //! The null-buffer-handle / null-texture-handle guards live in
+    //! the same wrappers and fire when the kernel handle is valid;
+    //! they're exercised end-to-end by the graphics-kernel dlopen
+    //! smoke test (which holds a real kernel).
+
+    use super::*;
+
+    fn make_err_buf() -> ([u8; 256], usize) {
+        ([0u8; 256], 0usize)
+    }
+
+    fn err_buf_as_str(buf: &[u8], len: usize) -> &str {
+        std::str::from_utf8(&buf[..len]).expect("UTF-8")
+    }
+
+    #[test]
+    fn set_storage_buffer_pixel_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE.set_storage_buffer_pixel)(
+                std::ptr::null(),
+                0,
+                0,
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("set_storage_buffer_pixel: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn set_storage_buffer_storage_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE.set_storage_buffer_storage)(
+                std::ptr::null(),
+                0,
+                0,
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("set_storage_buffer_storage: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn set_uniform_buffer_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE.set_uniform_buffer)(
+                std::ptr::null(),
+                0,
+                0,
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("set_uniform_buffer: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn set_sampled_texture_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE.set_sampled_texture)(
+                std::ptr::null(),
+                0,
+                0,
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("set_sampled_texture: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn set_storage_image_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE.set_storage_image)(
+                std::ptr::null(),
+                0,
+                0,
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("set_storage_image: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn set_vertex_buffer_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE.set_vertex_buffer)(
+                std::ptr::null(),
+                0,
+                0,
+                std::ptr::null(),
+                0,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("set_vertex_buffer: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn set_index_buffer_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE.set_index_buffer)(
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                0,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("set_index_buffer: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn set_push_constants_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE.set_push_constants)(
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("set_push_constants: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn offscreen_render_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let draw: streamlib_plugin_abi::OffscreenDrawRepr = unsafe { std::mem::zeroed() };
+        let rc = unsafe {
+            (HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE.offscreen_render)(
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                &draw,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("offscreen_render: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
