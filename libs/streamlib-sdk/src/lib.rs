@@ -202,10 +202,16 @@ pub mod sdk {
         /// Privileged extension traits surfacing raw `Host*` handles
         /// on SDK-bucket types. Importing one unlocks `vulkan_inner()`
         /// / `from_vulkan()` / `vulkan_device()` on
-        /// `Texture` / `PixelBufferRef` / `GpuDevice`.
+        /// `Texture` / `PixelBufferRef` / `GpuDevice`, or the
+        /// engine-only timeline-semaphore registration paths on
+        /// `SurfaceStore` (`register_texture` /
+        /// `register_pixel_buffer_with_timeline`).
         pub use streamlib_engine::{
             HostGpuDeviceExt, HostPixelBufferRefExt, HostTextureExt,
         };
+
+        #[cfg(target_os = "linux")]
+        pub use streamlib_engine::HostSurfaceStoreExt;
 
         /// Per-runtime surface-share service primitives. For adapter
         /// integration tests and 3rd-party tooling that needs to drive

@@ -138,3 +138,93 @@ impl HostGpuDeviceExt for GpuDevice {
         &self.inner
     }
 }
+
+/// Privileged engine-side accessors for [`SurfaceStore`] surface
+/// registration paths whose parameter types are host-internal.
+///
+/// `register_texture` and `register_pixel_buffer_with_timeline` both
+/// take `Option<&HostVulkanTimelineSemaphore>` — timeline-semaphore
+/// construction is FullAccess-privileged and the type is host-
+/// internal by construction, so these methods are unreachable from
+/// cdylib code through typed Rust. The extension-trait pattern
+/// mirrors [`HostTextureExt`] / [`HostPixelBufferRefExt`] /
+/// [`HostGpuDeviceExt`] to lock the engine-only contract at the
+/// type-system layer rather than by convention.
+///
+/// Cdylib subprocess customers reach surfaces by `surface_id`
+/// lookup (`lookup_texture` / `check_out`), not by re-registering;
+/// the dual-registration shape documented in
+/// `docs/architecture/adapter-runtime-integration.md` is host-side
+/// `install_setup_hook` plumbing only.
+///
+/// # Boundary lock
+///
+/// Without the trait in scope, the privileged accessors are
+/// unreachable from the [`SurfaceStore`] β-shape's inherent impl:
+///
+/// ```compile_fail
+/// # #[cfg(target_os = "linux")]
+/// # fn _check(
+/// #     store: &streamlib::sdk::context::SurfaceStore,
+/// #     texture: &streamlib::sdk::rhi::Texture,
+/// # ) -> Result<(), Box<dyn std::error::Error>> {
+/// // Without `use streamlib::sdk::engine::HostSurfaceStoreExt;`
+/// // `register_texture` is not visible — boundary held.
+/// store.register_texture(
+///     "id",
+///     texture,
+///     None,
+///     streamlib::sdk::rhi::VulkanLayout::UNDEFINED,
+/// )?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// [`SurfaceStore`]: crate::core::context::SurfaceStore
+#[cfg(target_os = "linux")]
+pub trait HostSurfaceStoreExt {
+    /// Register a texture for cross-process sharing with an optional
+    /// timeline-semaphore (host-side adapter `install_setup_hook`
+    /// path). See
+    /// [`crate::core::context::SurfaceStore`]'s former inherent
+    /// impl for the wire shape; the method body is unchanged, only
+    /// the visibility surface moved here.
+    fn register_texture(
+        &self,
+        surface_id: &str,
+        texture: &Texture,
+        timeline: Option<&HostVulkanTimelineSemaphore>,
+        current_image_layout: streamlib_consumer_rhi::VulkanLayout,
+    ) -> crate::core::error::Result<()>;
+
+    /// Register a pixel buffer with an optional timeline-semaphore
+    /// (host-side adapter `install_setup_hook` path).
+    fn register_pixel_buffer_with_timeline(
+        &self,
+        surface_id: &str,
+        pixel_buffer: &crate::core::rhi::PixelBuffer,
+        timeline: Option<&HostVulkanTimelineSemaphore>,
+    ) -> crate::core::error::Result<()>;
+}
+
+#[cfg(target_os = "linux")]
+impl HostSurfaceStoreExt for crate::core::context::SurfaceStore {
+    fn register_texture(
+        &self,
+        surface_id: &str,
+        texture: &Texture,
+        timeline: Option<&HostVulkanTimelineSemaphore>,
+        current_image_layout: streamlib_consumer_rhi::VulkanLayout,
+    ) -> crate::core::error::Result<()> {
+        self.host_register_texture(surface_id, texture, timeline, current_image_layout)
+    }
+
+    fn register_pixel_buffer_with_timeline(
+        &self,
+        surface_id: &str,
+        pixel_buffer: &crate::core::rhi::PixelBuffer,
+        timeline: Option<&HostVulkanTimelineSemaphore>,
+    ) -> crate::core::error::Result<()> {
+        self.host_register_pixel_buffer_with_timeline(surface_id, pixel_buffer, timeline)
+    }
+}

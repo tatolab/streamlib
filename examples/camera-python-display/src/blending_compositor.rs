@@ -35,7 +35,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use streamlib::sdk::engine::host_rhi::HostVulkanTexture;
-use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
+use streamlib::sdk::engine::{HostGpuDeviceExt, HostSurfaceStoreExt, HostTextureExt};
 
 use streamlib::sdk::color::TransferId;
 use streamlib::sdk::display_info;

@@ -27,6 +27,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use streamlib::sdk::engine::HostGpuDeviceExt;
+use streamlib::sdk::engine::HostSurfaceStoreExt;
 
 use streamlib::sdk::rhi::{Texture, TextureFormat, VulkanLayout};
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
