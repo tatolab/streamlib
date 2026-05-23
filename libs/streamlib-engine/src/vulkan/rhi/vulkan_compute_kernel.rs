@@ -1035,25 +1035,66 @@ impl VulkanComputeKernel {
         unsafe { &*(self.handle as *const VulkanComputeKernelInner) }
     }
 
-    pub fn set_storage_buffer<B>(&self, binding: u32, buffer: &B) -> Result<()>
-    where
-        B: super::VulkanStorageBindable + ?Sized,
-    {
+    /// Bind a [`crate::core::rhi::PixelBuffer`]-shaped storage buffer
+    /// (SSBO) at `binding`. Pixel-shape SSBO is legitimate — pixel
+    /// buffer allocations carry `STORAGE_BUFFER` usage from birth.
+    ///
+    /// Per-input-type concrete shape (no generic) so the cdylib path
+    /// can dispatch via the matching typed FFI slot
+    /// (`set_storage_buffer_pixel`) without a kind discriminator.
+    /// Mirrors the production cross-DSO pattern in Dawn / WebGPU
+    /// (`wgpuComputePassEncoderSetBindGroup` family) and Unreal RHI
+    /// (typed `SetShaderResourceViewParameter`).
+    pub fn set_storage_buffer_pixel(
+        &self,
+        binding: u32,
+        buffer: &crate::core::rhi::PixelBuffer,
+    ) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_set_storage_buffer_pixel_via_vtable(binding, buffer);
+        }
         self.host_inner().set_storage_buffer(binding, buffer)
     }
 
-    pub fn set_uniform_buffer<B>(&self, binding: u32, buffer: &B) -> Result<()>
-    where
-        B: super::VulkanUniformBindable + ?Sized,
-    {
+    /// Bind a raw-bytes [`crate::core::rhi::StorageBuffer`] at
+    /// `binding` — the canonical shape from
+    /// [`crate::core::context::GpuContext::acquire_storage_buffer`].
+    #[cfg(target_os = "linux")]
+    pub fn set_storage_buffer_storage(
+        &self,
+        binding: u32,
+        buffer: &crate::core::rhi::StorageBuffer,
+    ) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_set_storage_buffer_storage_via_vtable(binding, buffer);
+        }
+        self.host_inner().set_storage_buffer(binding, buffer)
+    }
+
+    /// Bind a [`crate::core::rhi::UniformBuffer`] (UBO) at `binding`.
+    #[cfg(target_os = "linux")]
+    pub fn set_uniform_buffer(
+        &self,
+        binding: u32,
+        buffer: &crate::core::rhi::UniformBuffer,
+    ) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_set_uniform_buffer_via_vtable(binding, buffer);
+        }
         self.host_inner().set_uniform_buffer(binding, buffer)
     }
 
     pub fn set_sampled_texture(&self, binding: u32, texture: &Texture) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_set_sampled_texture_via_vtable(binding, texture);
+        }
         self.host_inner().set_sampled_texture(binding, texture)
     }
 
     pub fn set_storage_image(&self, binding: u32, texture: &Texture) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_set_storage_image_via_vtable(binding, texture);
+        }
         self.host_inner().set_storage_image(binding, texture)
     }
 
@@ -1185,6 +1226,166 @@ impl VulkanComputeKernel {
                 group_count_x,
                 group_count_y,
                 group_count_z,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn dispatch_set_storage_buffer_pixel_via_vtable(
+        &self,
+        binding: u32,
+        buffer: &crate::core::rhi::PixelBuffer,
+    ) -> Result<()> {
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "set_storage_buffer_pixel: kernel methods vtable is null".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).set_storage_buffer_pixel)(
+                self.handle,
+                binding,
+                buffer.handle,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn dispatch_set_storage_buffer_storage_via_vtable(
+        &self,
+        binding: u32,
+        buffer: &crate::core::rhi::StorageBuffer,
+    ) -> Result<()> {
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "set_storage_buffer_storage: kernel methods vtable is null".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).set_storage_buffer_storage)(
+                self.handle,
+                binding,
+                buffer.handle,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn dispatch_set_uniform_buffer_via_vtable(
+        &self,
+        binding: u32,
+        buffer: &crate::core::rhi::UniformBuffer,
+    ) -> Result<()> {
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "set_uniform_buffer: kernel methods vtable is null".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).set_uniform_buffer)(
+                self.handle,
+                binding,
+                buffer.handle,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn dispatch_set_sampled_texture_via_vtable(
+        &self,
+        binding: u32,
+        texture: &Texture,
+    ) -> Result<()> {
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "set_sampled_texture: kernel methods vtable is null".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).set_sampled_texture)(
+                self.handle,
+                binding,
+                texture.handle,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn dispatch_set_storage_image_via_vtable(
+        &self,
+        binding: u32,
+        texture: &Texture,
+    ) -> Result<()> {
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "set_storage_image: kernel methods vtable is null".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).set_storage_image)(
+                self.handle,
+                binding,
+                texture.handle,
                 err_buf.as_mut_ptr(),
                 err_buf.len(),
                 &mut err_len as *mut usize,
@@ -1831,12 +2032,12 @@ mod tests {
 
         for (i, buf) in inputs.iter().enumerate() {
             kernel
-                .set_storage_buffer(i as u32, buf)
-                .expect("set_storage_buffer for input");
+                .set_storage_buffer_pixel(i as u32, buf)
+                .expect("set_storage_buffer_pixel for input");
         }
         kernel
-            .set_storage_buffer(8, &output)
-            .expect("set_storage_buffer for output");
+            .set_storage_buffer_pixel(8, &output)
+            .expect("set_storage_buffer_pixel for output");
 
         let push: [u32; 1] = [element_count];
         kernel.set_push_constants_value(&push).expect("push constants");

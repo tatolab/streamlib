@@ -1183,9 +1183,9 @@ mod tests {
         write_buffer_u32(&input_a, &pattern_a);
         write_buffer_u32(&input_b, &pattern_b);
 
-        kernel.set_storage_buffer(0, &input_a).expect("set 0");
-        kernel.set_storage_buffer(1, &input_b).expect("set 1");
-        kernel.set_storage_buffer(8, &output).expect("set 8");
+        kernel.set_storage_buffer_pixel(0, &input_a).expect("set 0");
+        kernel.set_storage_buffer_pixel(1, &input_b).expect("set 1");
+        kernel.set_storage_buffer_pixel(8, &output).expect("set 8");
         let push: [u32; 1] = [element_count];
         kernel
             .set_push_constants_value(&push)
@@ -1252,8 +1252,8 @@ mod tests {
             RhiCommandRecorder::new(&device, "recorder-back-to-back").expect("recorder");
 
         for frame in 1..=3u64 {
-            kernel.set_storage_buffer(0, &input).expect("set 0");
-            kernel.set_storage_buffer(8, &output).expect("set 8");
+            kernel.set_storage_buffer_pixel(0, &input).expect("set 0");
+            kernel.set_storage_buffer_pixel(8, &output).expect("set 8");
             let push: [u32; 1] = [element_count];
             kernel.set_push_constants_value(&push).expect("push");
 

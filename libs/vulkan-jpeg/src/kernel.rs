@@ -261,8 +261,8 @@ impl JpegDecodeKernel {
         let coef_storage = StorageBuffer::from_host_vulkan_buffer(Arc::clone(coef_buf));
         let qt_storage = StorageBuffer::from_host_vulkan_buffer(Arc::clone(qt_buf));
 
-        self.kernel.set_storage_buffer(0, &coef_storage)?;
-        self.kernel.set_storage_buffer(1, &qt_storage)?;
+        self.kernel.set_storage_buffer_storage(0, &coef_storage)?;
+        self.kernel.set_storage_buffer_storage(1, &qt_storage)?;
         self.kernel.set_storage_image(2, output_texture)?;
 
         // Build the color-side push constants via the engine helper so

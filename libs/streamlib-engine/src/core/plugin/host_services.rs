@@ -6574,6 +6574,335 @@ unsafe extern "C" fn host_compute_kernel_dispatch(
     )
 }
 
+// ---- Binding-method wrappers (typed by input wrapper) ---------------------
+//
+// Each wrapper reconstructs a stack-allocated plugin-handle borrow
+// from the raw `Arc::into_raw` handle the cdylib passes, then
+// forwards to the inner kernel's binding method.
+//
+// `ManuallyDrop` is **load-bearing**, not defensive: removing it
+// would let the borrow's Drop run on scope exit, which calls the
+// vtable's `drop_*` slot and decrements the host's Arc refcount —
+// while the cdylib still holds an outstanding plugin handle that
+// expects to own a strong reference. The result is an under-counted
+// Arc and a use-after-free on the cdylib's eventual Drop. The
+// cdylib owns ownership for the call's duration; the host wrapper
+// only borrows.
+//
+// **Invariant the helpers depend on:** the inner kernel's binding
+// methods (`set_storage_buffer`, `set_uniform_buffer`,
+// `set_sampled_texture`, `set_storage_image`) only deref
+// `self.handle` to reach the host-internal allocation; they do NOT
+// read the cached POD fields (`width`, `height`, `format_raw`,
+// `byte_size_cached`, `mapped_ptr_cached`, etc.). The reconstructed
+// borrow zeros every POD field for that reason. If a future
+// engine-side binding method starts reading `buffer.width` /
+// `texture.format()` / similar through the wrapper, the zeroed POD
+// silently produces wrong results — the helper site is the place to
+// add a populated-field stage if that invariant ever shifts.
+//
+// The vtable pointer is filled with the host's limited-access vtable
+// (matching what `from_arc_into_raw` would have written) so the
+// borrow is well-formed for any field-only read, even though no
+// vtable callback is supposed to fire while the borrow is alive.
+
+#[cfg(target_os = "linux")]
+fn make_pixel_buffer_borrow(
+    handle: *const c_void,
+) -> std::mem::ManuallyDrop<crate::core::rhi::PixelBuffer> {
+    std::mem::ManuallyDrop::new(crate::core::rhi::PixelBuffer {
+        handle,
+        vtable: host_gpu_context_limited_access_vtable(),
+        width: 0,
+        height: 0,
+        format_raw: 0,
+        plane_count_cached: 0,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn make_storage_buffer_borrow(
+    handle: *const c_void,
+) -> std::mem::ManuallyDrop<crate::core::rhi::StorageBuffer> {
+    std::mem::ManuallyDrop::new(crate::core::rhi::StorageBuffer {
+        handle,
+        vtable: host_gpu_context_limited_access_vtable(),
+        byte_size_cached: 0,
+        mapped_ptr_cached: std::ptr::null_mut(),
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn make_uniform_buffer_borrow(
+    handle: *const c_void,
+) -> std::mem::ManuallyDrop<crate::core::rhi::UniformBuffer> {
+    std::mem::ManuallyDrop::new(crate::core::rhi::UniformBuffer {
+        handle,
+        vtable: host_gpu_context_limited_access_vtable(),
+        byte_size_cached: 0,
+        mapped_ptr_cached: std::ptr::null_mut(),
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn make_texture_borrow(
+    handle: *const c_void,
+) -> std::mem::ManuallyDrop<crate::core::rhi::Texture> {
+    std::mem::ManuallyDrop::new(crate::core::rhi::Texture {
+        handle,
+        vtable: host_gpu_context_limited_access_vtable(),
+        width_cached: 0,
+        height_cached: 0,
+        format_raw: 0,
+        _padding: 0,
+    })
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_compute_kernel_set_storage_buffer_pixel(
+    kernel_handle: *const c_void,
+    binding: u32,
+    pixel_buffer_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_compute_kernel_set_storage_buffer_pixel",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_storage_buffer_pixel: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if pixel_buffer_handle.is_null() {
+                write_err(
+                    "set_storage_buffer_pixel: null pixel_buffer handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let borrow = make_pixel_buffer_borrow(pixel_buffer_handle);
+            match kernel.set_storage_buffer(binding, &*borrow) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("set_storage_buffer_pixel: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_compute_kernel_set_storage_buffer_storage(
+    kernel_handle: *const c_void,
+    binding: u32,
+    storage_buffer_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_compute_kernel_set_storage_buffer_storage",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_storage_buffer_storage: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if storage_buffer_handle.is_null() {
+                write_err(
+                    "set_storage_buffer_storage: null storage_buffer handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let borrow = make_storage_buffer_borrow(storage_buffer_handle);
+            match kernel.set_storage_buffer(binding, &*borrow) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("set_storage_buffer_storage: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_compute_kernel_set_uniform_buffer(
+    kernel_handle: *const c_void,
+    binding: u32,
+    uniform_buffer_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_compute_kernel_set_uniform_buffer",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_uniform_buffer: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if uniform_buffer_handle.is_null() {
+                write_err(
+                    "set_uniform_buffer: null uniform_buffer handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let borrow = make_uniform_buffer_borrow(uniform_buffer_handle);
+            match kernel.set_uniform_buffer(binding, &*borrow) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("set_uniform_buffer: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_compute_kernel_set_sampled_texture(
+    kernel_handle: *const c_void,
+    binding: u32,
+    texture_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_compute_kernel_set_sampled_texture",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_sampled_texture: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if texture_handle.is_null() {
+                write_err(
+                    "set_sampled_texture: null texture handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let borrow = make_texture_borrow(texture_handle);
+            match kernel.set_sampled_texture(binding, &*borrow) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("set_sampled_texture: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_compute_kernel_set_storage_image(
+    kernel_handle: *const c_void,
+    binding: u32,
+    texture_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_compute_kernel_set_storage_image",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_storage_image: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if texture_handle.is_null() {
+                write_err(
+                    "set_storage_image: null texture handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let borrow = make_texture_borrow(texture_handle);
+            match kernel.set_storage_image(binding, &*borrow) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("set_storage_image: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
 // ---- Non-Linux platform stubs (vtable layout stays unconditional) ----------
 
 #[cfg(not(target_os = "linux"))]
@@ -6613,8 +6942,102 @@ unsafe extern "C" fn host_compute_kernel_dispatch(
     1
 }
 
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_compute_kernel_set_storage_buffer_pixel(
+    _kernel_handle: *const c_void,
+    _binding: u32,
+    _pixel_buffer_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_storage_buffer_pixel: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_compute_kernel_set_storage_buffer_storage(
+    _kernel_handle: *const c_void,
+    _binding: u32,
+    _storage_buffer_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_storage_buffer_storage: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_compute_kernel_set_uniform_buffer(
+    _kernel_handle: *const c_void,
+    _binding: u32,
+    _uniform_buffer_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_uniform_buffer: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_compute_kernel_set_sampled_texture(
+    _kernel_handle: *const c_void,
+    _binding: u32,
+    _texture_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_sampled_texture: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_compute_kernel_set_storage_image(
+    _kernel_handle: *const c_void,
+    _binding: u32,
+    _texture_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_storage_image: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
 /// Host-side `VulkanComputeKernelMethodsVTable` populated with the
-/// v2 method slots (issue #949 first method-dispatch slice).
+/// v3 method slots (typed binding-method dispatch for the plugin
+/// handle's `set_storage_buffer_pixel` / `set_storage_buffer_storage`
+/// / `set_uniform_buffer` / `set_sampled_texture` /
+/// `set_storage_image` surface plus the previously-shipped
+/// `set_push_constants` / `dispatch` primitive-only slots).
 pub static HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE:
     streamlib_plugin_abi::VulkanComputeKernelMethodsVTable =
     streamlib_plugin_abi::VulkanComputeKernelMethodsVTable {
@@ -6622,6 +7045,11 @@ pub static HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE:
         _reserved_padding: 0,
         set_push_constants: host_compute_kernel_set_push_constants,
         dispatch: host_compute_kernel_dispatch,
+        set_storage_buffer_pixel: host_compute_kernel_set_storage_buffer_pixel,
+        set_storage_buffer_storage: host_compute_kernel_set_storage_buffer_storage,
+        set_uniform_buffer: host_compute_kernel_set_uniform_buffer,
+        set_sampled_texture: host_compute_kernel_set_sampled_texture,
+        set_storage_image: host_compute_kernel_set_storage_image,
     };
 
 /// Accessor for the host's static `VulkanComputeKernelMethodsVTable`
@@ -7539,5 +7967,141 @@ mod gpu_lim_escalate_vtable_tests {
         );
 
         unsafe { free_host_handle(handle) };
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod compute_kernel_methods_vtable_null_tests {
+    //! Tier-1 wire-format tests for the v3 typed binding-method
+    //! slots on `VulkanComputeKernelMethodsVTable`. Each wrapper must
+    //! reject a null kernel handle before reaching any kernel-side
+    //! state (i.e. before any deref) so cdylib callers get a clean
+    //! error return on the wire-format path instead of UB.
+    //!
+    //! The null-buffer-handle / null-texture-handle guards live in
+    //! the same wrappers and fire when the kernel handle is valid;
+    //! they're exercised end-to-end by the CPU-reference dlopen
+    //! integration test (which holds a real kernel and is the only
+    //! place a Tier-1 null-input test can reach without panicking on
+    //! the kernel-handle deref).
+
+    use super::*;
+
+    fn make_err_buf() -> ([u8; 256], usize) {
+        ([0u8; 256], 0usize)
+    }
+
+    fn err_buf_as_str(buf: &[u8], len: usize) -> &str {
+        std::str::from_utf8(&buf[..len]).expect("UTF-8")
+    }
+
+    #[test]
+    fn set_storage_buffer_pixel_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE.set_storage_buffer_pixel)(
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("set_storage_buffer_pixel: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn set_storage_buffer_storage_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE.set_storage_buffer_storage)(
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("set_storage_buffer_storage: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn set_uniform_buffer_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE.set_uniform_buffer)(
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("set_uniform_buffer: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn set_sampled_texture_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE.set_sampled_texture)(
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("set_sampled_texture: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn set_storage_image_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE.set_storage_image)(
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("set_storage_image: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
     }
 }

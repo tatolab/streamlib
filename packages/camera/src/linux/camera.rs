@@ -1018,7 +1018,7 @@ fn capture_thread_loop(
         } else {
             &input_storage_buffers[input_ssbo_index]
         };
-        let kernel = match color_converter.prepare_buffer_to_image(
+        let kernel = match color_converter.prepare_buffer_to_image_storage(
             input_buffer,
             src_layout,
             &ring_textures[ring_index],

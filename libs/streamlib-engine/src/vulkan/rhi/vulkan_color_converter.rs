@@ -21,7 +21,6 @@ use crate::core::rhi::{
 };
 use crate::core::{Error, Result};
 
-use super::vulkan_storage_binding::VulkanStorageBindable;
 use super::{HostVulkanDevice, VulkanComputeKernel};
 
 /// Compute-shader workgroup tile size (one pixel per thread, 16×16
@@ -80,19 +79,78 @@ impl VulkanColorConverter {
     /// `Srgb` is the right default for the RGBA8_UNORM displays we
     /// ship today; once display color-space negotiation (#817) lands,
     /// consumers thread the negotiated curve through here.
-    pub fn prepare_buffer_to_image<B: VulkanStorageBindable + ?Sized>(
+    pub fn prepare_buffer_to_image_storage(
         &self,
-        src: &B,
+        src: &crate::core::rhi::StorageBuffer,
         src_layout: SourceLayoutInfo,
         dst: &Texture,
         info: &ResolvedColorInfo,
         dst_transfer: TransferId,
     ) -> Result<Arc<VulkanComputeKernel>> {
+        let kernel = self.get_or_build_buffer_to_image_kernel()?;
+        kernel.set_storage_buffer_storage(0, src)?;
+        self.finish_buffer_to_image(&kernel, dst, info, dst_transfer, src_layout)?;
+        Ok(kernel)
+    }
+
+    /// [`PixelBuffer`](crate::core::rhi::PixelBuffer)-shape source
+    /// variant — bind a pixel-shaped buffer as the SSBO. Used by
+    /// camera processors that already hold a [`PixelBuffer`] wrapper
+    /// (e.g. V4L2-imported DMA-BUF surfaces wrapped as
+    /// [`PixelBuffer`]).
+    pub fn prepare_buffer_to_image_pixel(
+        &self,
+        src: &crate::core::rhi::PixelBuffer,
+        src_layout: SourceLayoutInfo,
+        dst: &Texture,
+        info: &ResolvedColorInfo,
+        dst_transfer: TransferId,
+    ) -> Result<Arc<VulkanComputeKernel>> {
+        let kernel = self.get_or_build_buffer_to_image_kernel()?;
+        kernel.set_storage_buffer_pixel(0, src)?;
+        self.finish_buffer_to_image(&kernel, dst, info, dst_transfer, src_layout)?;
+        Ok(kernel)
+    }
+
+    /// Convert `src` into `dst` end-to-end. Builds (if needed),
+    /// binds, and dispatches the buffer→image kernel via its own
+    /// command buffer + fence + queue submit. Use this when there's
+    /// no surrounding [`crate::vulkan::rhi::RhiCommandRecorder`];
+    /// otherwise prefer [`Self::prepare_buffer_to_image_storage`].
+    pub fn convert_buffer_to_image_storage(
+        &self,
+        src: &crate::core::rhi::StorageBuffer,
+        src_layout: SourceLayoutInfo,
+        dst: &Texture,
+        info: &ResolvedColorInfo,
+    ) -> Result<()> {
+        let kernel = self.prepare_buffer_to_image_storage(src, src_layout, dst, info, TransferId::Srgb)?;
+        Self::dispatch_buffer_to_image(&kernel, dst)
+    }
+
+    /// [`PixelBuffer`](crate::core::rhi::PixelBuffer) variant of
+    /// [`Self::convert_buffer_to_image_storage`].
+    pub fn convert_buffer_to_image_pixel(
+        &self,
+        src: &crate::core::rhi::PixelBuffer,
+        src_layout: SourceLayoutInfo,
+        dst: &Texture,
+        info: &ResolvedColorInfo,
+    ) -> Result<()> {
+        let kernel = self.prepare_buffer_to_image_pixel(src, src_layout, dst, info, TransferId::Srgb)?;
+        Self::dispatch_buffer_to_image(&kernel, dst)
+    }
+
+    fn finish_buffer_to_image(
+        &self,
+        kernel: &VulkanComputeKernel,
+        dst: &Texture,
+        info: &ResolvedColorInfo,
+        dst_transfer: TransferId,
+        src_layout: SourceLayoutInfo,
+    ) -> Result<()> {
         let width = dst.width();
         let height = dst.height();
-
-        let kernel = self.get_or_build_buffer_to_image_kernel()?;
-        kernel.set_storage_buffer(0, src)?;
         kernel.set_storage_image(1, dst)?;
         let push = ColorConverterPushConstants::from_resolved(
             info,
@@ -102,22 +160,10 @@ impl VulkanColorConverter {
             src_layout,
         );
         kernel.set_push_constants_value(&push)?;
-        Ok(kernel)
+        Ok(())
     }
 
-    /// Convert `src` into `dst` end-to-end. Builds (if needed),
-    /// binds, and dispatches the buffer→image kernel via its own
-    /// command buffer + fence + queue submit. Use this when there's
-    /// no surrounding [`crate::vulkan::rhi::RhiCommandRecorder`];
-    /// otherwise prefer [`Self::prepare_buffer_to_image`].
-    pub fn convert_buffer_to_image<B: VulkanStorageBindable + ?Sized>(
-        &self,
-        src: &B,
-        src_layout: SourceLayoutInfo,
-        dst: &Texture,
-        info: &ResolvedColorInfo,
-    ) -> Result<()> {
-        let kernel = self.prepare_buffer_to_image(src, src_layout, dst, info, TransferId::Srgb)?;
+    fn dispatch_buffer_to_image(kernel: &VulkanComputeKernel, dst: &Texture) -> Result<()> {
         let dispatch_x = dst.width().div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE);
         let dispatch_y = dst.height().div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE);
         kernel.dispatch(dispatch_x, dispatch_y, 1)
@@ -537,7 +583,7 @@ mod tests {
 
         let src_layout = SourceLayoutInfo::nv12_tight(width, height);
         let kernel = converter
-            .prepare_buffer_to_image(&pixel_buf, src_layout, &output_texture, info, dst_transfer)
+            .prepare_buffer_to_image_pixel(&pixel_buf, src_layout, &output_texture, info, dst_transfer)
             .expect("prepare");
         let dispatch_x = width.div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE);
         let dispatch_y = height.div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE);
