@@ -7,7 +7,10 @@ fn main() {
     streamlib_jtd_codegen::build_rs::run_for_rust_crate();
 
     #[cfg(target_os = "linux")]
-    compile_cpu_ref_doubler();
+    {
+        compile_cpu_ref_doubler();
+        compile_graphics_kernel_smoke();
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -31,4 +34,40 @@ fn compile_cpu_ref_doubler() {
         status.success(),
         "glslc failed to compile cpu_ref_doubler.comp"
     );
+}
+
+#[cfg(target_os = "linux")]
+fn compile_graphics_kernel_smoke() {
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR set by cargo");
+    for (src, stage_arg, dst_name) in [
+        (
+            "shaders/graphics_kernel_smoke.vert",
+            "-fshader-stage=vertex",
+            "graphics_kernel_smoke_vert.spv",
+        ),
+        (
+            "shaders/graphics_kernel_smoke.frag",
+            "-fshader-stage=fragment",
+            "graphics_kernel_smoke_frag.spv",
+        ),
+    ] {
+        println!("cargo:rerun-if-changed={}", src);
+        let dst: PathBuf = Path::new(&out_dir).join(dst_name);
+        let status = Command::new("glslc")
+            .arg(stage_arg)
+            .arg("-O")
+            .arg(Path::new(src))
+            .arg("-o")
+            .arg(&dst)
+            .status()
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Failed to run glslc for {src} (install Vulkan SDK or ensure glslc is in PATH): {e}"
+                )
+            });
+        assert!(status.success(), "glslc failed to compile {src}");
+    }
 }

@@ -1,0 +1,26 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# Test-only config schema for the cdylib graphics-kernel methods-vtable
+# smoke test. The processor:
+#   1. Creates a graphics kernel via the FullAccess vtable.
+#   2. Acquires a render-target Texture via the LimitedAccess vtable.
+#   3. Exercises a handful of binding-method vtable slots
+#      (set_storage_buffer_storage, set_sampled_texture,
+#      set_push_constants).
+#   4. Runs a single offscreen_render() through the vtable slot.
+#   5. Writes "OK" (or "ERR:<message>") to the configured output_path.
+#
+# The smoke test asserts the vtable round-trips don't panic and the
+# processor's start() body completes without an error code — it does
+# NOT compare pixel output to a CPU reference.
+
+metadata:
+  type: GraphicsKernelSmokeTestProcessorConfig
+  description: "Test config schema for the cdylib graphics-kernel methods-vtable smoke test."
+
+properties:
+  output_path:
+    metadata:
+      description: "Filesystem path where the processor writes its result. Format: 'OK' on success, 'ERR:<message>' on failure."
+    type: string

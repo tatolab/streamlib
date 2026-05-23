@@ -264,14 +264,19 @@ pub const VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 3;
 
 /// Layout version of [`VulkanGraphicsKernelMethodsVTable`].
 ///
-/// `VulkanGraphicsKernel` β-shape gains a per-type vtable for
-/// method dispatch (issue #907 Phase E PR 3/5). Mirrors the
-/// `VulkanComputeKernelMethodsVTable` shape: this PR lands the
-/// empty shell so the pointer + struct layout are pinned; follow-up
-/// PRs append method slots and route the β-shape's
-/// `set_*` / `cmd_bind_and_draw` / `offscreen_render` / `bindings`
-/// surface through them.
-pub const VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 1;
+/// - v1: empty shell — pointer plumbing only.
+/// - v2: appended typed binding-method slots
+///   `set_storage_buffer_pixel` / `set_storage_buffer_storage` /
+///   `set_uniform_buffer` / `set_sampled_texture` /
+///   `set_storage_image` / `set_vertex_buffer` / `set_index_buffer`
+///   plus the primitive-argument slots `set_push_constants` /
+///   `offscreen_render`. Each binding slot carries the matching
+///   plugin-handle's raw `Arc::into_raw` pointer; the host wrapper
+///   reconstructs the borrow and forwards to the inner kernel.
+///   Buffer slots are typed by Rust wrapper to mirror streamlib's
+///   typed-wrapper binding-site contract (same shape as the
+///   compute-kernel methods vtable v3).
+pub const VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 
 /// Layout version of [`VulkanRayTracingKernelMethodsVTable`].
 ///
@@ -2734,18 +2739,135 @@ unsafe impl Sync for VulkanComputeKernelMethodsVTable {}
 // VulkanGraphicsKernelMethodsVTable — per-type vtable for graphics-kernel method dispatch
 // =============================================================================
 
-/// Per-type method-dispatch vtable for the `VulkanGraphicsKernel`
-/// β-shape (issue #907 Phase E PR 3/5).
+/// `#[repr(u32)]` mirror of `streamlib::core::rhi::IndexType`.
 ///
-/// Mirrors `VulkanComputeKernelMethodsVTable`: this PR ships the
-/// empty shell so the pointer + struct layout are pinned. Follow-up
-/// PRs append slots for the graphics-pipeline surface
-/// (`set_storage_buffer` / `set_uniform_buffer` /
-/// `set_sampled_texture` / `set_storage_image` /
-/// `set_vertex_buffer` / `set_index_buffer` / `set_push_constants` /
-/// `cmd_bind_and_draw` / `cmd_bind_and_draw_indexed` /
-/// `offscreen_render` / `bindings` / `pipeline_state`) and route the
-/// β-shape methods through them.
+/// Discriminant carried on [`DrawIndexedCallRepr`]'s sibling index-buffer
+/// binding slot ([`VulkanGraphicsKernelMethodsVTable::set_index_buffer`]).
+#[repr(u32)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum IndexTypeRepr {
+    Uint16 = 0,
+    Uint32 = 1,
+}
+
+/// `#[repr(C)]` mirror of `streamlib::core::rhi::Viewport`.
+///
+/// Field order matches the host-side struct; layout-locked by the
+/// regression test in `layout_tests`.
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct ViewportRepr {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub min_depth: f32,
+    pub max_depth: f32,
+}
+
+/// `#[repr(C)]` mirror of `streamlib::core::rhi::ScissorRect`.
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct ScissorRectRepr {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// `#[repr(C)]` mirror of `streamlib::core::rhi::DrawCall`.
+///
+/// `Option<Viewport>` / `Option<ScissorRect>` are encoded as
+/// `<field>_present: u32` discriminator + a zero-initialized payload
+/// when absent — `Option<T>` has no stable `#[repr(C)]` shape.
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct DrawCallRepr {
+    pub vertex_count: u32,
+    pub instance_count: u32,
+    pub first_vertex: u32,
+    pub first_instance: u32,
+    /// `1` when [`Self::viewport`] carries a value; `0` for `None`.
+    pub viewport_present: u32,
+    /// `1` when [`Self::scissor`] carries a value; `0` for `None`.
+    pub scissor_present: u32,
+    pub viewport: ViewportRepr,
+    pub scissor: ScissorRectRepr,
+}
+
+/// `#[repr(C)]` mirror of `streamlib::core::rhi::DrawIndexedCall`.
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct DrawIndexedCallRepr {
+    pub index_count: u32,
+    pub instance_count: u32,
+    pub first_index: u32,
+    pub vertex_offset: i32,
+    pub first_instance: u32,
+    /// `1` when [`Self::viewport`] carries a value; `0` for `None`.
+    pub viewport_present: u32,
+    /// `1` when [`Self::scissor`] carries a value; `0` for `None`.
+    pub scissor_present: u32,
+    pub _reserved_padding: u32,
+    pub viewport: ViewportRepr,
+    pub scissor: ScissorRectRepr,
+}
+
+/// Discriminant for the [`OffscreenDrawRepr::kind`] tagged union.
+#[repr(u32)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum OffscreenDrawKindRepr {
+    Draw = 0,
+    DrawIndexed = 1,
+}
+
+/// `#[repr(C)]` tagged-union mirror of
+/// `streamlib::vulkan::rhi::OffscreenDraw`.
+///
+/// Only the slot whose tag matches [`Self::kind`] is read:
+/// - `Draw` → [`Self::draw_call`]
+/// - `DrawIndexed` → [`Self::draw_indexed_call`]
+///
+/// The unused slot is zero-initialized; the host wrapper only
+/// inspects the kind-matched payload.
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct OffscreenDrawRepr {
+    /// [`OffscreenDrawKindRepr`] discriminant.
+    pub kind: u32,
+    pub _reserved_padding: u32,
+    pub draw_call: DrawCallRepr,
+    pub draw_indexed_call: DrawIndexedCallRepr,
+}
+
+/// Per-type method-dispatch vtable for the `VulkanGraphicsKernel`
+/// β-shape (issue #907 Phase E PR 3/5 + #951 method-dispatch slice).
+///
+/// `VulkanGraphicsKernel` keeps `clone_*` / `drop_*` dispatch on the
+/// parent [`GpuContextFullAccessVTable`] (PR #918's Phase D shape);
+/// this vtable carries per-method slots for the plugin handle's
+/// binding + draw surface that cdylib code needs to dispatch through.
+///
+/// **Binding-method shape:** typed-by-input-wrapper (one slot per
+/// kernel-method × buffer-or-texture wrapper). Mirrors the
+/// `VulkanComputeKernelMethodsVTable` v3 shape and the production
+/// cross-DSO patterns in Dawn / WebGPU + Unreal RHI.
+///
+/// **Coverage today** (v2):
+/// - Binding slots: `set_storage_buffer_pixel`,
+///   `set_storage_buffer_storage`, `set_uniform_buffer`,
+///   `set_sampled_texture`, `set_storage_image`,
+///   `set_vertex_buffer`, `set_index_buffer`.
+/// - Primitive-argument slots: `set_push_constants`,
+///   `offscreen_render`.
+///
+/// **Engine-only methods** (NOT on this vtable): `cmd_bind_and_draw`
+/// and `cmd_bind_and_draw_indexed` accept a raw `vk::CommandBuffer`
+/// from a caller-managed render-pass scope. They stay
+/// `host_inner`-routed; cdylib code cannot mint a `vk::CommandBuffer`
+/// without an `RhiCommandRecorder` β-shape (a separate concern). The
+/// `bindings()` / `pipeline_state()` accessors return host-internal
+/// types and stay `host_inner`-routed for the same reason.
 #[repr(C)]
 pub struct VulkanGraphicsKernelMethodsVTable {
     /// Vtable layout version. Must equal
@@ -2755,6 +2877,145 @@ pub struct VulkanGraphicsKernelMethodsVTable {
     /// Reserved padding (keeps the following pointer naturally
     /// aligned on 32-bit hosts; zero today, never read).
     pub _reserved_padding: u32,
+
+    /// Bind a [`PixelBuffer`](struct@crate)-shaped storage buffer
+    /// (SSBO) at `(frame_index, binding)`. `pixel_buffer_handle` is
+    /// the raw `Arc::into_raw(Arc<PixelBufferRef>)` pointer the
+    /// plugin handle carries. Returns 0 on success; non-zero with
+    /// UTF-8 message in `err_buf` on failure.
+    pub set_storage_buffer_pixel: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        frame_index: u32,
+        binding: u32,
+        pixel_buffer_handle: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Bind a raw-bytes storage buffer at `(frame_index, binding)`.
+    /// `storage_buffer_handle` is the raw
+    /// `Arc::into_raw(Arc<HostVulkanBuffer>)` pointer.
+    pub set_storage_buffer_storage: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        frame_index: u32,
+        binding: u32,
+        storage_buffer_handle: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Bind a uniform buffer (UBO) at `(frame_index, binding)`.
+    /// `uniform_buffer_handle` is the raw
+    /// `Arc::into_raw(Arc<HostVulkanBuffer>)` pointer.
+    pub set_uniform_buffer: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        frame_index: u32,
+        binding: u32,
+        uniform_buffer_handle: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Bind a sampled texture at `(frame_index, binding)` using the
+    /// kernel's default linear-clamp sampler.
+    pub set_sampled_texture: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        frame_index: u32,
+        binding: u32,
+        texture_handle: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Bind a storage image at `(frame_index, binding)`. Caller
+    /// guarantees the underlying texture's `STORAGE_BINDING` usage
+    /// was declared at creation time.
+    pub set_storage_image: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        frame_index: u32,
+        binding: u32,
+        texture_handle: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Bind a vertex buffer at `(frame_index, binding)`. `binding`
+    /// must match a `VertexInputBinding` declared in the pipeline's
+    /// vertex input state. `vertex_buffer_handle` is the raw
+    /// `Arc::into_raw(Arc<HostVulkanBuffer>)` pointer.
+    pub set_vertex_buffer: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        frame_index: u32,
+        binding: u32,
+        vertex_buffer_handle: *const c_void,
+        offset: u64,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Bind an index buffer at `frame_index`. `index_buffer_handle`
+    /// is the raw `Arc::into_raw(Arc<HostVulkanBuffer>)` pointer.
+    /// `index_type` is the [`IndexTypeRepr`] discriminant.
+    pub set_index_buffer: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        frame_index: u32,
+        index_buffer_handle: *const c_void,
+        offset: u64,
+        index_type: u32,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Stage push-constant bytes for `frame_index`. `bytes_len`
+    /// should match the kernel's declared `push_constants.size`
+    /// (already cached on the plugin handle). Returns 0 on success;
+    /// non-zero with UTF-8 message in `err_buf` on failure.
+    pub set_push_constants: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        frame_index: u32,
+        bytes_ptr: *const u8,
+        bytes_len: usize,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Render into one or more offscreen color attachments using the
+    /// kernel's owned command buffer + fence. Convenience for
+    /// one-shot renderers (tests, smoke harnesses).
+    ///
+    /// Color targets travel as parallel arrays of the same length
+    /// `target_count`:
+    /// - `color_texture_handles`: `Arc::into_raw(Arc<TextureInner>)`
+    ///   pointers, one per attachment.
+    /// - `color_clear_present`: `1` per attachment that wants a
+    ///   CLEAR load_op; `0` for LOAD.
+    /// - `color_clear_values`: RGBA float clear color per
+    ///   attachment; read only when the matching present flag is `1`.
+    ///
+    /// `draw` is the [`OffscreenDrawRepr`] tagged union (only the
+    /// `kind`-matched payload is read on the host side).
+    pub offscreen_render: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        frame_index: u32,
+        color_texture_handles: *const *const c_void,
+        color_clear_present: *const u32,
+        color_clear_values: *const [f32; 4],
+        target_count: usize,
+        extent_width: u32,
+        extent_height: u32,
+        draw: *const OffscreenDrawRepr,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
 }
 
 unsafe impl Send for VulkanGraphicsKernelMethodsVTable {}
@@ -3498,7 +3759,7 @@ mod layout_tests {
         assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 7);
         assert_eq!(TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 3);
-        assert_eq!(VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 1);
+        assert_eq!(VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION, 1);
     }
@@ -3643,12 +3904,21 @@ mod layout_tests {
 
     #[test]
     fn vulkan_graphics_kernel_methods_vtable_layout() {
-        // Empty shell — layout_version + _reserved_padding only.
-        // Mirrors the compute-kernel layout. Subsequent #907 sub-PRs
-        // append method slots and bump
-        // VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION.
-        assert_eq!(size_of::<VulkanGraphicsKernelMethodsVTable>(), 8);
-        assert_eq!(align_of::<VulkanGraphicsKernelMethodsVTable>(), 4);
+        // v2 (typed binding-method slots + offscreen_render added):
+        //   layout_version              @ 0   (4 bytes, u32)
+        //   _reserved_padding           @ 4   (4 bytes, u32)
+        //   set_storage_buffer_pixel    @ 8   (8 bytes, fn pointer)
+        //   set_storage_buffer_storage  @ 16
+        //   set_uniform_buffer          @ 24
+        //   set_sampled_texture         @ 32
+        //   set_storage_image           @ 40
+        //   set_vertex_buffer           @ 48
+        //   set_index_buffer            @ 56
+        //   set_push_constants          @ 64
+        //   offscreen_render            @ 72
+        // Total = 80 bytes, align = 8.
+        assert_eq!(size_of::<VulkanGraphicsKernelMethodsVTable>(), 80);
+        assert_eq!(align_of::<VulkanGraphicsKernelMethodsVTable>(), 8);
         assert_eq!(
             offset_of!(VulkanGraphicsKernelMethodsVTable, layout_version),
             0
@@ -3657,6 +3927,115 @@ mod layout_tests {
             offset_of!(VulkanGraphicsKernelMethodsVTable, _reserved_padding),
             4
         );
+        assert_eq!(
+            offset_of!(VulkanGraphicsKernelMethodsVTable, set_storage_buffer_pixel),
+            8
+        );
+        assert_eq!(
+            offset_of!(VulkanGraphicsKernelMethodsVTable, set_storage_buffer_storage),
+            16
+        );
+        assert_eq!(
+            offset_of!(VulkanGraphicsKernelMethodsVTable, set_uniform_buffer),
+            24
+        );
+        assert_eq!(
+            offset_of!(VulkanGraphicsKernelMethodsVTable, set_sampled_texture),
+            32
+        );
+        assert_eq!(
+            offset_of!(VulkanGraphicsKernelMethodsVTable, set_storage_image),
+            40
+        );
+        assert_eq!(
+            offset_of!(VulkanGraphicsKernelMethodsVTable, set_vertex_buffer),
+            48
+        );
+        assert_eq!(
+            offset_of!(VulkanGraphicsKernelMethodsVTable, set_index_buffer),
+            56
+        );
+        assert_eq!(
+            offset_of!(VulkanGraphicsKernelMethodsVTable, set_push_constants),
+            64
+        );
+        assert_eq!(
+            offset_of!(VulkanGraphicsKernelMethodsVTable, offscreen_render),
+            72
+        );
+    }
+
+    #[test]
+    fn viewport_repr_layout() {
+        // 6 f32 fields, tightly packed, align 4.
+        assert_eq!(size_of::<ViewportRepr>(), 24);
+        assert_eq!(align_of::<ViewportRepr>(), 4);
+        assert_eq!(offset_of!(ViewportRepr, x), 0);
+        assert_eq!(offset_of!(ViewportRepr, y), 4);
+        assert_eq!(offset_of!(ViewportRepr, width), 8);
+        assert_eq!(offset_of!(ViewportRepr, height), 12);
+        assert_eq!(offset_of!(ViewportRepr, min_depth), 16);
+        assert_eq!(offset_of!(ViewportRepr, max_depth), 20);
+    }
+
+    #[test]
+    fn scissor_rect_repr_layout() {
+        // i32 + i32 + u32 + u32 = 16 bytes, align 4.
+        assert_eq!(size_of::<ScissorRectRepr>(), 16);
+        assert_eq!(align_of::<ScissorRectRepr>(), 4);
+        assert_eq!(offset_of!(ScissorRectRepr, x), 0);
+        assert_eq!(offset_of!(ScissorRectRepr, y), 4);
+        assert_eq!(offset_of!(ScissorRectRepr, width), 8);
+        assert_eq!(offset_of!(ScissorRectRepr, height), 12);
+    }
+
+    #[test]
+    fn draw_call_repr_layout() {
+        // 4 u32 + 2 u32 (present flags) = 24 bytes header,
+        // ViewportRepr (24) + ScissorRectRepr (16) = 40 bytes payload,
+        // total = 64 bytes, align 4 (all sub-fields ≤4-byte aligned).
+        assert_eq!(size_of::<DrawCallRepr>(), 64);
+        assert_eq!(align_of::<DrawCallRepr>(), 4);
+        assert_eq!(offset_of!(DrawCallRepr, vertex_count), 0);
+        assert_eq!(offset_of!(DrawCallRepr, instance_count), 4);
+        assert_eq!(offset_of!(DrawCallRepr, first_vertex), 8);
+        assert_eq!(offset_of!(DrawCallRepr, first_instance), 12);
+        assert_eq!(offset_of!(DrawCallRepr, viewport_present), 16);
+        assert_eq!(offset_of!(DrawCallRepr, scissor_present), 20);
+        assert_eq!(offset_of!(DrawCallRepr, viewport), 24);
+        assert_eq!(offset_of!(DrawCallRepr, scissor), 48);
+    }
+
+    #[test]
+    fn draw_indexed_call_repr_layout() {
+        // 5 u32 + 2 u32 (present) + 1 u32 (padding) = 32 bytes header,
+        // ViewportRepr (24) + ScissorRectRepr (16) = 40 bytes payload,
+        // total = 72 bytes, align 4.
+        assert_eq!(size_of::<DrawIndexedCallRepr>(), 72);
+        assert_eq!(align_of::<DrawIndexedCallRepr>(), 4);
+        assert_eq!(offset_of!(DrawIndexedCallRepr, index_count), 0);
+        assert_eq!(offset_of!(DrawIndexedCallRepr, instance_count), 4);
+        assert_eq!(offset_of!(DrawIndexedCallRepr, first_index), 8);
+        assert_eq!(offset_of!(DrawIndexedCallRepr, vertex_offset), 12);
+        assert_eq!(offset_of!(DrawIndexedCallRepr, first_instance), 16);
+        assert_eq!(offset_of!(DrawIndexedCallRepr, viewport_present), 20);
+        assert_eq!(offset_of!(DrawIndexedCallRepr, scissor_present), 24);
+        assert_eq!(offset_of!(DrawIndexedCallRepr, _reserved_padding), 28);
+        assert_eq!(offset_of!(DrawIndexedCallRepr, viewport), 32);
+        assert_eq!(offset_of!(DrawIndexedCallRepr, scissor), 56);
+    }
+
+    #[test]
+    fn offscreen_draw_repr_layout() {
+        // kind (u32) + _reserved_padding (u32) = 8 bytes header,
+        // DrawCallRepr (64) + DrawIndexedCallRepr (72) = 136 bytes
+        // payload, total = 144 bytes, align 4.
+        assert_eq!(size_of::<OffscreenDrawRepr>(), 144);
+        assert_eq!(align_of::<OffscreenDrawRepr>(), 4);
+        assert_eq!(offset_of!(OffscreenDrawRepr, kind), 0);
+        assert_eq!(offset_of!(OffscreenDrawRepr, _reserved_padding), 4);
+        assert_eq!(offset_of!(OffscreenDrawRepr, draw_call), 8);
+        assert_eq!(offset_of!(OffscreenDrawRepr, draw_indexed_call), 72);
     }
 
     #[test]

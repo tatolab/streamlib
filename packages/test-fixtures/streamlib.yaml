@@ -28,6 +28,8 @@ schemas:
     file: schemas/escalate_smoke_test_processor_config.yaml
   ComputeKernelTestProcessorConfig:
     file: schemas/compute_kernel_test_processor_config.yaml
+  GraphicsKernelSmokeTestProcessorConfig:
+    file: schemas/graphics_kernel_smoke_test_processor_config.yaml
 
 processors:
   - name: TestConfiguredProcessor
@@ -69,3 +71,11 @@ processors:
     config:
       name: config
       schema: ComputeKernelTestProcessorConfig
+
+  - name: GraphicsKernelSmokeTestProcessor
+    version: 1.0.0
+    description: "Phase E (#951) dlopen-cdylib graphics-kernel methods-vtable smoke test fixture — creates a graphics kernel via FullAccess, acquires a render-target Texture, runs a single offscreen_render() through the per-type binding-method vtable to assert the vtable round-trips don't panic. Smoke-only; pixel correctness not asserted."
+    execution: manual
+    config:
+      name: config
+      schema: GraphicsKernelSmokeTestProcessorConfig

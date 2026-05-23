@@ -13,12 +13,14 @@ pub mod _generated_ {
 pub mod compute_kernel_test_processor;
 pub mod escalate_smoke_test_processor;
 pub mod gpu_acquire_test_processor;
+pub mod graphics_kernel_smoke_test_processor;
 pub mod tcp_bind_test_processor;
 pub mod test_configured_processor;
 
 pub use compute_kernel_test_processor::ComputeKernelTest;
 pub use escalate_smoke_test_processor::EscalateSmokeTest;
 pub use gpu_acquire_test_processor::GpuAcquireTest;
+pub use graphics_kernel_smoke_test_processor::GraphicsKernelSmokeTest;
 pub use tcp_bind_test_processor::TcpBindTest;
 pub use test_configured_processor::ConfiguredProcessor;
 
@@ -29,4 +31,5 @@ streamlib_plugin_abi::export_plugin!(
     crate::GpuAcquireTest::Processor,
     crate::EscalateSmokeTest::Processor,
     crate::ComputeKernelTest::Processor,
+    crate::GraphicsKernelSmokeTest::Processor,
 );
