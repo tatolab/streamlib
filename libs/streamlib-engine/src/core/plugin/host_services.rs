@@ -12685,6 +12685,400 @@ mod runtime_ops_vtable_null_handle_guards {
 }
 
 #[cfg(test)]
+mod surface_store_vtable_tier1_wire_format_tests {
+    //! Tier-1 wire-format tests for [`HOST_SURFACE_STORE_VTABLE`].
+    //!
+    //! Every callback on the vtable goes through `ss_inner`, which
+    //! already short-circuits on a null handle. This module covers
+    //! the full tier-1 contract:
+    //!
+    //! - `layout_version_matches_constant` — locks the wire-format
+    //!   layout version against the cdylib-visible constant.
+    //! - `clone_handle` / `drop_handle` null-handle locks — the
+    //!   Arc-lifecycle pair.
+    //! - For each result-returning callback (10 of them): null-
+    //!   handle → rc=1 with per-callback err marker.
+    //! - For the 4 Linux-only callbacks (`register_texture`,
+    //!   `register_pixel_buffer_with_timeline`, `lookup_texture`,
+    //!   `update_image_layout`): same Linux contract; non-Linux
+    //!   stubs return rc=1 with "not available on this platform".
+    //!
+    //! Mental-revert: removing the null-handle guard from
+    //! `ss_inner` makes every result-returning test SIGSEGV (the
+    //! wrapper would deref a null `*const SurfaceStoreInner`). The
+    //! per-callback inner null checks (`if pixel_buffer.is_null()`,
+    //! `if texture.is_null()`, `if out_pixel_buffer.is_null()`,
+    //! `if out_texture.is_null() || out_layout_raw.is_null()`) are
+    //! NOT individually locked by this module — tier-1 scope is the
+    //! `ss_inner` null-handle guard plus the layout-version match
+    //! plus the per-callback err-marker text. The per-arg inner
+    //! checks belong to a deeper coverage tier.
+
+    use super::*;
+
+    fn make_err_buf() -> ([u8; 256], usize) {
+        ([0u8; 256], 0usize)
+    }
+
+    fn err_buf_as_str(buf: &[u8], len: usize) -> &str {
+        std::str::from_utf8(&buf[..len]).expect("UTF-8")
+    }
+
+    // ------------------------------------------------------------------
+    // Layout-version match
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn layout_version_matches_constant() {
+        assert_eq!(
+            HOST_SURFACE_STORE_VTABLE.layout_version,
+            streamlib_plugin_abi::SURFACE_STORE_VTABLE_LAYOUT_VERSION,
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Handle-lifecycle (clone_handle / drop_handle)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn clone_handle_handles_null_no_crash() {
+        unsafe {
+            (HOST_SURFACE_STORE_VTABLE.clone_handle)(std::ptr::null());
+        }
+    }
+
+    #[test]
+    fn drop_handle_handles_null_no_crash() {
+        unsafe {
+            (HOST_SURFACE_STORE_VTABLE.drop_handle)(std::ptr::null());
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Result-returning callbacks: null-handle returns rc=1 with err msg
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn connect_returns_error_on_null_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_SURFACE_STORE_VTABLE.connect)(
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(err_buf_as_str(&buf, len).contains("connect: null handle"));
+    }
+
+    #[test]
+    fn disconnect_returns_error_on_null_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_SURFACE_STORE_VTABLE.disconnect)(
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(err_buf_as_str(&buf, len).contains("disconnect: null handle"));
+    }
+
+    #[test]
+    fn check_in_returns_error_on_null_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut id_buf = [0u8; 64];
+        let mut id_len: usize = 0;
+        let rc = unsafe {
+            (HOST_SURFACE_STORE_VTABLE.check_in)(
+                std::ptr::null(),
+                std::ptr::null(),
+                id_buf.as_mut_ptr(),
+                id_buf.len(),
+                &mut id_len,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(err_buf_as_str(&buf, len).contains("check_in: null handle"));
+    }
+
+    #[test]
+    fn check_out_returns_error_on_null_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let id = b"abc";
+        let mut out = [0u8; 256];
+        let rc = unsafe {
+            (HOST_SURFACE_STORE_VTABLE.check_out)(
+                std::ptr::null(),
+                id.as_ptr(),
+                id.len(),
+                out.as_mut_ptr() as *mut c_void,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(err_buf_as_str(&buf, len).contains("check_out: null handle"));
+    }
+
+    #[test]
+    fn register_buffer_returns_error_on_null_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let pool_id = b"pool-x";
+        let rc = unsafe {
+            (HOST_SURFACE_STORE_VTABLE.register_buffer)(
+                std::ptr::null(),
+                pool_id.as_ptr(),
+                pool_id.len(),
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len).contains("register_buffer: null handle"),
+        );
+    }
+
+    #[test]
+    fn lookup_buffer_returns_error_on_null_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let pool_id = b"pool-x";
+        let mut out = [0u8; 256];
+        let rc = unsafe {
+            (HOST_SURFACE_STORE_VTABLE.lookup_buffer)(
+                std::ptr::null(),
+                pool_id.as_ptr(),
+                pool_id.len(),
+                out.as_mut_ptr() as *mut c_void,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len).contains("lookup_buffer: null handle"),
+        );
+    }
+
+    #[test]
+    fn release_returns_error_on_null_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let id = b"abc";
+        let rc = unsafe {
+            (HOST_SURFACE_STORE_VTABLE.release)(
+                std::ptr::null(),
+                id.as_ptr(),
+                id.len(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(err_buf_as_str(&buf, len).contains("release: null handle"));
+    }
+
+    // ------------------------------------------------------------------
+    // Linux-only callbacks
+    // ------------------------------------------------------------------
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn register_texture_returns_error_on_null_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let id = b"abc";
+        let rc = unsafe {
+            (HOST_SURFACE_STORE_VTABLE.register_texture)(
+                std::ptr::null(),
+                id.as_ptr(),
+                id.len(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len).contains("register_texture: null handle"),
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn register_pixel_buffer_with_timeline_returns_error_on_null_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let id = b"abc";
+        let rc = unsafe {
+            (HOST_SURFACE_STORE_VTABLE.register_pixel_buffer_with_timeline)(
+                std::ptr::null(),
+                id.as_ptr(),
+                id.len(),
+                std::ptr::null(),
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(err_buf_as_str(&buf, len)
+            .contains("register_pixel_buffer_with_timeline: null handle"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn lookup_texture_returns_error_on_null_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let id = b"abc";
+        let mut out_tex = [0u8; 256];
+        let mut out_layout: i32 = 0;
+        let rc = unsafe {
+            (HOST_SURFACE_STORE_VTABLE.lookup_texture)(
+                std::ptr::null(),
+                id.as_ptr(),
+                id.len(),
+                out_tex.as_mut_ptr() as *mut c_void,
+                &mut out_layout,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len).contains("lookup_texture: null handle"),
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn update_image_layout_returns_error_on_null_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let id = b"abc";
+        let rc = unsafe {
+            (HOST_SURFACE_STORE_VTABLE.update_image_layout)(
+                std::ptr::null(),
+                id.as_ptr(),
+                id.len(),
+                0,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(err_buf_as_str(&buf, len)
+            .contains("update_image_layout: null handle"));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn register_texture_reports_not_available_on_non_linux() {
+        let (mut buf, mut len) = make_err_buf();
+        let id = b"abc";
+        let rc = unsafe {
+            (HOST_SURFACE_STORE_VTABLE.register_texture)(
+                std::ptr::null(),
+                id.as_ptr(),
+                id.len(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(err_buf_as_str(&buf, len)
+            .contains("register_texture: not available on this platform"));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn register_pixel_buffer_with_timeline_reports_not_available_on_non_linux() {
+        let (mut buf, mut len) = make_err_buf();
+        let id = b"abc";
+        let rc = unsafe {
+            (HOST_SURFACE_STORE_VTABLE.register_pixel_buffer_with_timeline)(
+                std::ptr::null(),
+                id.as_ptr(),
+                id.len(),
+                std::ptr::null(),
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(err_buf_as_str(&buf, len).contains(
+            "register_pixel_buffer_with_timeline: not available on this platform"
+        ));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn lookup_texture_reports_not_available_on_non_linux() {
+        let (mut buf, mut len) = make_err_buf();
+        let id = b"abc";
+        let mut out_tex = [0u8; 256];
+        let mut out_layout: i32 = 0;
+        let rc = unsafe {
+            (HOST_SURFACE_STORE_VTABLE.lookup_texture)(
+                std::ptr::null(),
+                id.as_ptr(),
+                id.len(),
+                out_tex.as_mut_ptr() as *mut c_void,
+                &mut out_layout,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(err_buf_as_str(&buf, len)
+            .contains("lookup_texture: not available on this platform"));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn update_image_layout_reports_not_available_on_non_linux() {
+        let (mut buf, mut len) = make_err_buf();
+        let id = b"abc";
+        let rc = unsafe {
+            (HOST_SURFACE_STORE_VTABLE.update_image_layout)(
+                std::ptr::null(),
+                id.as_ptr(),
+                id.len(),
+                0,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(err_buf_as_str(&buf, len)
+            .contains("update_image_layout: not available on this platform"));
+    }
+}
+
+#[cfg(test)]
 mod runtime_context_vtable_tier1_wire_format_tests {
     //! Tier-1 wire-format tests for [`HOST_RUNTIME_CONTEXT_VTABLE`].
     //!
