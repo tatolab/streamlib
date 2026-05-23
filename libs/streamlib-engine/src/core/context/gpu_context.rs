@@ -4648,10 +4648,18 @@ impl GpuContextFullAccess {
                             "create_ray_tracing_kernel: host signaled success but out_kernel is null".into(),
                         ));
                     }
-                    // β-shape: see compute_kernel above.
+                    // β-shape: see compute_kernel above. Cached PODs
+                    // come from the caller's descriptor (#907 PR 4/5).
+                    let methods_vtable =
+                        crate::core::plugin::host_services::host_callbacks()
+                            .map(|c| c.vulkan_ray_tracing_kernel_methods_vtable)
+                            .unwrap_or(std::ptr::null());
                     Ok(crate::vulkan::rhi::VulkanRayTracingKernel {
                         handle: out_kernel,
                         vtable: self.vtable,
+                        methods_vtable,
+                        cached_push_constant_size: descriptor.push_constants.size,
+                        _reserved_padding: 0,
                     })
                 } else {
                     let msg = String::from_utf8_lossy(

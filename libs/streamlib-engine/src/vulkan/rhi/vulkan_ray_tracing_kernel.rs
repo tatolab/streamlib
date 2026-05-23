@@ -912,11 +912,22 @@ impl std::fmt::Debug for VulkanRayTracingKernelInner {
 // β-shape implementation (#917)
 // =============================================================================
 
-/// Ray-tracing kernel — layout-stable `#[repr(C)] (handle, vtable)` β-shape.
+/// Ray-tracing kernel — layout-stable `#[repr(C)]` β-shape (#907
+/// Phase E PR 4/5). Mirrors the compute kernel shape.
 #[repr(C)]
 pub struct VulkanRayTracingKernel {
+    /// Opaque handle to the host's `Arc<VulkanRayTracingKernelInner>`.
     pub(crate) handle: *const c_void,
+    /// Parent vtable for cross-DSO Clone/Drop dispatch (#918 Phase D).
     pub(crate) vtable: *const GpuContextFullAccessVTable,
+    /// Per-type vtable for cross-DSO method dispatch (#907 Phase E).
+    pub(crate) methods_vtable:
+        *const streamlib_plugin_abi::VulkanRayTracingKernelMethodsVTable,
+    /// Cached push-constant size in bytes. Set at construction.
+    pub(crate) cached_push_constant_size: u32,
+    /// Reserved padding so the struct stays 8-byte aligned and the
+    /// trailing 4 bytes are deterministic.
+    pub(crate) _reserved_padding: u32,
 }
 
 unsafe impl Send for VulkanRayTracingKernel {}
@@ -932,10 +943,19 @@ impl VulkanRayTracingKernel {
     }
 
     pub(crate) fn from_arc_into_raw(arc: Arc<VulkanRayTracingKernelInner>) -> Self {
+        let cached_push_constant_size = arc.push_constant_size();
         let handle = Arc::into_raw(arc) as *const c_void;
         let vtable =
             crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
-        Self { handle, vtable }
+        let methods_vtable =
+            crate::core::plugin::host_services::host_vulkan_ray_tracing_kernel_methods_vtable();
+        Self {
+            handle,
+            vtable,
+            methods_vtable,
+            cached_push_constant_size,
+            _reserved_padding: 0,
+        }
     }
 
     pub(crate) fn host_inner(&self) -> &VulkanRayTracingKernelInner {
@@ -994,8 +1014,9 @@ impl VulkanRayTracingKernel {
         self.host_inner().bindings().to_vec()
     }
 
+    /// Push-constant range size in bytes. Cached POD — no FFI hop.
     pub fn push_constant_size(&self) -> u32 {
-        self.host_inner().push_constant_size()
+        self.cached_push_constant_size
     }
 }
 
@@ -1009,6 +1030,9 @@ impl Clone for VulkanRayTracingKernel {
         Self {
             handle: self.handle,
             vtable: self.vtable,
+            methods_vtable: self.methods_vtable,
+            cached_push_constant_size: self.cached_push_constant_size,
+            _reserved_padding: self._reserved_padding,
         }
     }
 }
@@ -1036,10 +1060,23 @@ mod beta_shape_layout_tests {
 
     #[test]
     fn vulkan_ray_tracing_kernel_layout() {
-        assert_eq!(size_of::<VulkanRayTracingKernel>(), 16);
+        // β-shape struct as of #907 PR 4/5:
+        //   handle                       @ 0  (8 bytes, *const c_void)
+        //   vtable                       @ 8  (8 bytes, *const GpuContextFullAccessVTable)
+        //   methods_vtable               @ 16 (8 bytes, *const VulkanRayTracingKernelMethodsVTable)
+        //   cached_push_constant_size    @ 24 (4 bytes, u32)
+        //   _reserved_padding            @ 28 (4 bytes, u32)
+        // Total = 32, align = 8.
+        assert_eq!(size_of::<VulkanRayTracingKernel>(), 32);
         assert_eq!(align_of::<VulkanRayTracingKernel>(), 8);
         assert_eq!(offset_of!(VulkanRayTracingKernel, handle), 0);
         assert_eq!(offset_of!(VulkanRayTracingKernel, vtable), 8);
+        assert_eq!(offset_of!(VulkanRayTracingKernel, methods_vtable), 16);
+        assert_eq!(
+            offset_of!(VulkanRayTracingKernel, cached_push_constant_size),
+            24
+        );
+        assert_eq!(offset_of!(VulkanRayTracingKernel, _reserved_padding), 28);
     }
 
     #[test]
