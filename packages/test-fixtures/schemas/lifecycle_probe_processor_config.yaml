@@ -1,0 +1,23 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# Test-only config schema for the Phase G (#961) dlopen-cdylib
+# lifecycle-probe processor. The processor is a ContinuousProcessor
+# whose process / on_pause / on_resume / setup / teardown hooks
+# append a marker line to `output_path`. The integration test parses
+# the file to confirm each ProcessorVTable lifecycle slot dispatched
+# correctly from cdylib code.
+
+metadata:
+  type: LifecycleProbeProcessorConfig
+  description: "Test config schema for the Phase G dlopen-cdylib lifecycle-probe processor (#961)."
+
+properties:
+  output_path:
+    metadata:
+      description: "Filesystem path the probe appends marker lines to. Each lifecycle hook (SETUP, PROCESS:n, PAUSE, RESUME, TEARDOWN) writes one line."
+    type: string
+  max_iterations:
+    metadata:
+      description: "Hard cap on process() iterations after which the probe stops appending PROCESS lines. Lets the test deterministically observe a bounded count rather than racing the runtime stop."
+    type: uint32

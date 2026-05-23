@@ -13268,3 +13268,128 @@ mod runtime_ops_vtable_tier1_wire_format_tests {
         unsafe { reclaim_sink(user_data) };
     }
 }
+
+#[cfg(test)]
+mod run_host_extern_c_panic_safety_net_tests {
+    //! Phase G (#961) panic-injection coverage.
+    //!
+    //! Every `host_*` extern "C" callback wraps its body in
+    //! [`run_host_extern_c`], whose `catch_unwind` safety net is
+    //! the only thing standing between a panic in cdylib-author
+    //! code path and an `extern "C"` unwind across the FFI
+    //! boundary (UB). This module locks the safety-net contract:
+    //!
+    //!   - A body that panics with a `&'static str` payload is
+    //!     caught and the documented default is returned.
+    //!   - A body that panics with a `String` payload is caught
+    //!     and the default is returned.
+    //!   - A body that panics with an arbitrary non-string
+    //!     payload (e.g. a custom Debug type) is caught and the
+    //!     default is returned.
+    //!   - Successful (non-panicking) bodies still return their
+    //!     value as expected — proves the safety net isn't
+    //!     intercepting normal control flow.
+    //!
+    //! Mental-revert: removing the `catch_unwind` wrap (i.e.
+    //! calling `body()` directly inside `run_host_extern_c`)
+    //! reverts every test below to a `panic!()` that aborts the
+    //! test process. The harness reports each as a hard process
+    //! abort rather than a fail.
+    //!
+    //! Why this module instead of a per-vtable-callback test:
+    //! every host_* callback delegates to the same
+    //! `run_host_extern_c` helper. Locking the helper's contract
+    //! once covers every callback that rides it. Per-callback
+    //! panic-injection would require deliberately corrupting
+    //! handle state in production-shaped ways (UB) and would
+    //! re-test the same `catch_unwind` machinery a hundred times.
+    //! This is the engine-tier fix per CLAUDE.md ("Engine-wide
+    //! bugs get fixed at the engine layer").
+
+    use super::*;
+
+    #[test]
+    fn panic_with_static_str_returns_default_i32() {
+        let rc = run_host_extern_c::<_, i32>(
+            "test_static_str_panic",
+            || panic!("deliberate test panic with &'static str"),
+            42i32,
+        );
+        assert_eq!(rc, 42, "catch_unwind must return the default on panic");
+    }
+
+    #[test]
+    fn panic_with_string_returns_default_i32() {
+        let rc = run_host_extern_c::<_, i32>(
+            "test_string_panic",
+            || panic!("{}", String::from("deliberate dynamic panic")),
+            7i32,
+        );
+        assert_eq!(rc, 7);
+    }
+
+    #[test]
+    fn panic_with_non_string_payload_returns_default_i32() {
+        // The wrapper's downcast chain handles `&'static str` and
+        // `String` explicitly and falls through to a generic
+        // "<non-string panic payload>" tracing message for anything
+        // else. The catch_unwind contract is the load-bearing part:
+        // even with an exotic payload the default must come back.
+        #[derive(Debug)]
+        struct CustomPayload;
+        let rc = run_host_extern_c::<_, i32>(
+            "test_custom_payload_panic",
+            || std::panic::panic_any(CustomPayload),
+            -1i32,
+        );
+        assert_eq!(rc, -1);
+    }
+
+    #[test]
+    fn non_panicking_body_returns_its_value() {
+        // Locks the "safety net doesn't intercept normal control
+        // flow" invariant. Mental-revert: making `run_host_extern_c`
+        // always return `default_on_panic` (no Ok branch) would
+        // fail this test.
+        let rc = run_host_extern_c::<_, i32>(
+            "test_ok_path",
+            || 99i32,
+            -1i32,
+        );
+        assert_eq!(rc, 99);
+    }
+
+    #[test]
+    fn panic_with_unit_default_returns_unit() {
+        // Locks the panic-default for `()`-returning callbacks
+        // (the entire RuntimeOps / clone/drop / null-handle-no-op
+        // shape). The () default is trivially "the same value as
+        // before"; what matters is that the body's panic doesn't
+        // propagate past the FFI boundary.
+        let mut hit = false;
+        run_host_extern_c::<_, ()>(
+            "test_unit_default_panic",
+            || {
+                hit = true;
+                panic!("unit-default panic");
+            },
+            (),
+        );
+        assert!(hit, "body must have run before panicking");
+    }
+
+    #[test]
+    fn panic_with_null_ptr_default_returns_null() {
+        // Locks the panic-default for `*const c_void`-returning
+        // callbacks (e.g. `host_gpu_lim_clone_handle`,
+        // `host_rcv_audio_clock_handle`). The default is a null
+        // pointer; the assertion confirms a panicking body returns
+        // null rather than dangling memory.
+        let p = run_host_extern_c::<_, *const c_void>(
+            "test_null_ptr_default_panic",
+            || panic!("null-ptr-default panic"),
+            std::ptr::null(),
+        );
+        assert!(p.is_null());
+    }
+}
