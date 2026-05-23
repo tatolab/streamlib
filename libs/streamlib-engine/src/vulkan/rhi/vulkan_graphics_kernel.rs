@@ -1231,11 +1231,22 @@ impl std::fmt::Debug for VulkanGraphicsKernelInner {
 // β-shape implementation (#917)
 // =============================================================================
 
-/// Graphics kernel — layout-stable `#[repr(C)] (handle, vtable)` β-shape.
+/// Graphics kernel — layout-stable `#[repr(C)]` β-shape (#907 Phase
+/// E PR 3/5). Mirrors `VulkanComputeKernel`'s shape: handle + parent
+/// vtable + per-type methods vtable + cached PODs.
 #[repr(C)]
 pub struct VulkanGraphicsKernel {
+    /// Opaque handle to the host's `Arc<VulkanGraphicsKernelInner>`.
     pub(crate) handle: *const c_void,
+    /// Parent vtable for cross-DSO Clone/Drop dispatch (#918 Phase D).
     pub(crate) vtable: *const GpuContextFullAccessVTable,
+    /// Per-type vtable for cross-DSO method dispatch (#907 Phase E).
+    pub(crate) methods_vtable:
+        *const streamlib_plugin_abi::VulkanGraphicsKernelMethodsVTable,
+    /// Cached push-constant size in bytes. Set at construction.
+    pub(crate) cached_push_constant_size: u32,
+    /// Cached descriptor-set ring depth. Set at construction.
+    pub(crate) cached_descriptor_sets_in_flight: u32,
 }
 
 unsafe impl Send for VulkanGraphicsKernel {}
@@ -1251,10 +1262,20 @@ impl VulkanGraphicsKernel {
     }
 
     pub(crate) fn from_arc_into_raw(arc: Arc<VulkanGraphicsKernelInner>) -> Self {
+        let cached_push_constant_size = arc.push_constant_size();
+        let cached_descriptor_sets_in_flight = arc.descriptor_sets_in_flight();
         let handle = Arc::into_raw(arc) as *const c_void;
         let vtable =
             crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
-        Self { handle, vtable }
+        let methods_vtable =
+            crate::core::plugin::host_services::host_vulkan_graphics_kernel_methods_vtable();
+        Self {
+            handle,
+            vtable,
+            methods_vtable,
+            cached_push_constant_size,
+            cached_descriptor_sets_in_flight,
+        }
     }
 
     pub(crate) fn host_inner(&self) -> &VulkanGraphicsKernelInner {
@@ -1271,12 +1292,14 @@ impl VulkanGraphicsKernel {
         self.host_inner().bindings().to_vec()
     }
 
+    /// Push-constant range size in bytes. Cached POD — no FFI hop.
     pub fn push_constant_size(&self) -> u32 {
-        self.host_inner().push_constant_size()
+        self.cached_push_constant_size
     }
 
+    /// Descriptor-set ring depth. Cached POD — no FFI hop.
     pub fn descriptor_sets_in_flight(&self) -> u32 {
-        self.host_inner().descriptor_sets_in_flight()
+        self.cached_descriptor_sets_in_flight
     }
 
     pub fn set_sampled_texture(
@@ -1402,6 +1425,9 @@ impl Clone for VulkanGraphicsKernel {
         Self {
             handle: self.handle,
             vtable: self.vtable,
+            methods_vtable: self.methods_vtable,
+            cached_push_constant_size: self.cached_push_constant_size,
+            cached_descriptor_sets_in_flight: self.cached_descriptor_sets_in_flight,
         }
     }
 }
@@ -1429,10 +1455,26 @@ mod beta_shape_layout_tests {
 
     #[test]
     fn vulkan_graphics_kernel_layout() {
-        assert_eq!(size_of::<VulkanGraphicsKernel>(), 16);
+        // β-shape struct as of #907 PR 3/5:
+        //   handle                              @ 0  (8 bytes, *const c_void)
+        //   vtable                              @ 8  (8 bytes, *const GpuContextFullAccessVTable)
+        //   methods_vtable                      @ 16 (8 bytes, *const VulkanGraphicsKernelMethodsVTable)
+        //   cached_push_constant_size           @ 24 (4 bytes, u32)
+        //   cached_descriptor_sets_in_flight    @ 28 (4 bytes, u32)
+        // Total = 32, align = 8.
+        assert_eq!(size_of::<VulkanGraphicsKernel>(), 32);
         assert_eq!(align_of::<VulkanGraphicsKernel>(), 8);
         assert_eq!(offset_of!(VulkanGraphicsKernel, handle), 0);
         assert_eq!(offset_of!(VulkanGraphicsKernel, vtable), 8);
+        assert_eq!(offset_of!(VulkanGraphicsKernel, methods_vtable), 16);
+        assert_eq!(
+            offset_of!(VulkanGraphicsKernel, cached_push_constant_size),
+            24
+        );
+        assert_eq!(
+            offset_of!(VulkanGraphicsKernel, cached_descriptor_sets_in_flight),
+            28
+        );
     }
 
     #[test]
