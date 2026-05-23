@@ -222,6 +222,49 @@ impl Texture {
         }
     }
 
+    /// Assemble a [`Texture`] β-shape from a raw `Arc::into_raw`-
+    /// shaped handle plus cached POD bytes. Used by cdylib-side
+    /// dispatch paths that receive a freshly-cloned handle through
+    /// an FFI out-parameter (e.g.
+    /// [`crate::core::context::TextureRing::acquire_next`] in cdylib
+    /// mode) — the host wrapper bumped the texture's Arc through
+    /// the limited-access vtable's `clone_texture` slot, and the
+    /// returned [`Texture`] owns the matching `Drop`-side decrement
+    /// when it falls out of scope.
+    ///
+    /// The vtable pointer is resolved through the DSO-routed
+    /// accessor [`crate::core::plugin::host_services::host_gpu_context_limited_access_vtable`]
+    /// so cdylib code reaches the host's pointer (matching the
+    /// `clone_texture` slot used to mint the handle) and host code
+    /// reaches its own static.
+    ///
+    /// # Safety
+    ///
+    /// `handle` must come from a host-side
+    /// `Arc::into_raw(Arc<TextureInner>)` whose Arc strong count
+    /// the caller is responsible for (one strong count per
+    /// returned [`Texture`]). `format_raw` must match
+    /// [`TextureFormat`]'s `#[repr(u32)]` discriminant for the
+    /// texture's actual format; out-of-range values fall back to
+    /// `Rgba8Unorm` via [`Self::format`].
+    pub(crate) unsafe fn from_raw_handle_for_cdylib(
+        handle: *const c_void,
+        width: u32,
+        height: u32,
+        format_raw: u32,
+    ) -> Self {
+        let vtable =
+            crate::core::plugin::host_services::host_gpu_context_limited_access_vtable();
+        Self {
+            handle,
+            vtable,
+            width_cached: width,
+            height_cached: height,
+            format_raw,
+            _padding: 0,
+        }
+    }
+
     /// Engine-internal borrow of the host-owned [`TextureInner`].
     ///
     /// **Panics if called from cdylib code.** The `TextureInner` type's

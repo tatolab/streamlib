@@ -182,7 +182,7 @@ fn source_thread_loop(
             tracing::error!("[BgraFileSource] Failed to upload frame texture: {e}");
             break;
         }
-        let surface_id = slot.surface_id;
+        let surface_id = slot.surface_id().to_string();
 
         let timestamp_ns =
             clock_start.elapsed().as_nanos() as i64 + frame_idx as i64 * frame_interval_ns;

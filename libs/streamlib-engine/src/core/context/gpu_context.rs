@@ -1580,11 +1580,11 @@ impl GpuContext {
                 texture.clone(),
                 VulkanLayout::UNDEFINED,
             );
-            slots.push(TextureRingSlot {
-                surface_id,
+            slots.push(TextureRingSlot::new(
                 texture,
-                slot_index,
-            });
+                &surface_id,
+                slot_index as u32,
+            ));
             let res = crate::vulkan::rhi::HostVulkanUploadResources::new(&self.device.inner)?;
             upload_resources.push(res);
         }

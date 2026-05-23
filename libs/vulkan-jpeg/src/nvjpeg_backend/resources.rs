@@ -241,7 +241,7 @@ impl NvJpegResources {
             )?;
             recorder.submit_and_wait()?;
             full_access
-                .update_texture_registration_layout(&slot.surface_id, VulkanLayout::GENERAL);
+                .update_texture_registration_layout(slot.surface_id(), VulkanLayout::GENERAL);
         }
 
         // ── Per-slot OPAQUE_FD staging + CUDA imports ──────────────────
@@ -280,7 +280,7 @@ impl NvJpegResources {
             let result = build_slot(
                 &device,
                 &ring_slot.texture,
-                &ring_slot.surface_id,
+                ring_slot.surface_id(),
                 shared_size_bytes,
                 rgbi_size_bytes,
                 stream,

@@ -100,20 +100,73 @@ pub struct BetaShapeRoundTrip {}
 /// adding distinct vtable-surface coverage.
 #[cfg(target_os = "linux")]
 fn run_beta_shape_round_trip(ctx: &RuntimeContextFullAccess<'_>) -> Result<String> {
-    ctx.gpu_limited_access().escalate(|full| {
-        let mut summary = String::new();
-
-        // -------- TextureRing (Arc-handle + Clone) --------
-        let ring = full.create_texture_ring(
+    let gpu_limited = ctx.gpu_limited_access();
+    let ring = gpu_limited.escalate(|full| {
+        full.create_texture_ring(
             64,
             64,
             TextureFormat::Rgba8Unorm,
-            TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
+            TextureUsages::COPY_DST
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::STORAGE_BINDING,
             2,
-        )?;
-        let ring_clone = ring.clone();
-        drop(ring_clone);
-        drop(ring);
+        )
+    })?;
+
+    // -------- TextureRing slot β-shape end-to-end (#947) --------
+    //
+    // The slot β-shape's per-method dispatch (acquire_next /
+    // copy_pixel_buffer_to_slot / slot) routes through the per-type
+    // TextureRingMethodsVTable in cdylib mode. This block exercises
+    // every slot from cdylib code, asserts cached POD fields round-
+    // trip, then runs the per-frame copy_pixel_buffer_to_slot
+    // primitive against a Limited-safe pixel buffer — proving every
+    // v2 vtable slot survives the divergent-dep-graph build.
+    {
+        if ring.len() != 2 {
+            return Err(Error::Runtime(format!(
+                "TextureRing: expected len=2, got {}",
+                ring.len()
+            )));
+        }
+        let slot0 = ring.acquire_next();
+        let slot1 = ring.acquire_next();
+        if slot0.surface_id() == slot1.surface_id() {
+            return Err(Error::Runtime(
+                "TextureRing: acquire_next returned the same slot twice in a row".into(),
+            ));
+        }
+        if slot0.texture.width() != 64 || slot0.texture.height() != 64 {
+            return Err(Error::Runtime(format!(
+                "TextureRing: slot texture dims ({}, {}) don't match ring construction (64, 64)",
+                slot0.texture.width(),
+                slot0.texture.height()
+            )));
+        }
+        let direct_slot0 = ring
+            .slot(0)
+            .ok_or_else(|| Error::Runtime("TextureRing: ring.slot(0) returned None".into()))?;
+        if direct_slot0.slot_index() != 0 {
+            return Err(Error::Runtime(format!(
+                "TextureRing: ring.slot(0) returned slot with slot_index = {}",
+                direct_slot0.slot_index()
+            )));
+        }
+        // copy_pixel_buffer_to_slot: stage a pixel buffer, then write
+        // it into the slot's pre-allocated texture via the v2
+        // copy_pixel_buffer_to_slot vtable slot.
+        let (_pool_id, pixel_buffer) = gpu_limited
+            .acquire_pixel_buffer(64, 64, PixelFormat::Rgba32)
+            .map_err(|e| Error::Runtime(format!("acquire_pixel_buffer: {e}")))?;
+        ring.copy_pixel_buffer_to_slot(&slot0, &pixel_buffer, 64, 64)
+            .map_err(|e| Error::Runtime(format!("copy_pixel_buffer_to_slot: {e}")))?;
+    }
+
+    let ring_clone = ring.clone();
+    drop(ring_clone);
+    drop(ring);
+    gpu_limited.escalate(|full| {
+        let mut summary = String::new();
         summary.push_str("TextureRing:OK\n");
 
         // -------- RhiColorConverter (Arc-handle + Clone) --------

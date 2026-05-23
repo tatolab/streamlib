@@ -131,7 +131,7 @@ impl VulkanComputeBackend {
             )?;
             recorder.submit_and_wait()?;
             full_access
-                .update_texture_registration_layout(&slot.surface_id, VulkanLayout::GENERAL);
+                .update_texture_registration_layout(slot.surface_id(), VulkanLayout::GENERAL);
         }
 
         Ok(Self {
@@ -218,9 +218,10 @@ impl JpegDecodeBackend for VulkanComputeBackend {
             &resolved.info,
         )?;
 
+        let surface_id = slot.surface_id().to_string();
         Ok(JpegDecodeOutput {
             texture: slot.texture,
-            surface_id: slot.surface_id,
+            surface_id,
             width,
             height,
             color_source: resolved.source,
