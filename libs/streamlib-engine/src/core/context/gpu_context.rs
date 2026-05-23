@@ -4341,13 +4341,23 @@ impl GpuContextFullAccess {
                     }
                     // β-shape: bundle the raw handle (an
                     // `Arc::into_raw(Arc<VulkanComputeKernelInner>)`
-                    // pointer host-side, opaque to the cdylib) with the
-                    // host vtable. Lifecycle dispatches through the
-                    // vtable's clone/drop slots without ever crossing
-                    // the host's `Arc<X>` allocation-header layout.
+                    // pointer host-side, opaque to the cdylib) with
+                    // the host's parent vtable + per-type methods
+                    // vtable + cached `push_constant_size` POD
+                    // (#907 PR 2/5). The cached value comes from the
+                    // descriptor input the cdylib just handed across
+                    // — we know it without needing an FFI round-trip
+                    // to read it back.
+                    let methods_vtable =
+                        crate::core::plugin::host_services::host_callbacks()
+                            .map(|c| c.vulkan_compute_kernel_methods_vtable)
+                            .unwrap_or(std::ptr::null());
                     Ok(crate::vulkan::rhi::VulkanComputeKernel {
                         handle: out_kernel,
                         vtable: self.vtable,
+                        methods_vtable,
+                        cached_push_constant_size: descriptor.push_constant_size,
+                        _reserved_padding: 0,
                     })
                 } else {
                     let msg = String::from_utf8_lossy(
