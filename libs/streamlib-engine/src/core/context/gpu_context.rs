@@ -4581,10 +4581,20 @@ impl GpuContextFullAccess {
                             "create_graphics_kernel: host signaled success but out_kernel is null".into(),
                         ));
                     }
-                    // β-shape: see compute_kernel above.
+                    // β-shape: see compute_kernel above. Cached PODs
+                    // come from the caller's descriptor — we know
+                    // them without an FFI round-trip (#907 PR 3/5).
+                    let methods_vtable =
+                        crate::core::plugin::host_services::host_callbacks()
+                            .map(|c| c.vulkan_graphics_kernel_methods_vtable)
+                            .unwrap_or(std::ptr::null());
                     Ok(crate::vulkan::rhi::VulkanGraphicsKernel {
                         handle: out_kernel,
                         vtable: self.vtable,
+                        methods_vtable,
+                        cached_push_constant_size: descriptor.push_constants.size,
+                        cached_descriptor_sets_in_flight: descriptor
+                            .descriptor_sets_in_flight,
                     })
                 } else {
                     let msg = String::from_utf8_lossy(
