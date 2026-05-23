@@ -257,21 +257,43 @@ impl Drop for TextureRingInner {
 // =============================================================================
 
 /// Pre-allocated ring of textures rotated per-frame on the decode hot
-/// path. Layout-stable `#[repr(C)] (handle, vtable)` β-shape so
-/// cdylibs can hold, refcount, and drop without sharing rustc-version
-/// or dep-graph with the host.
+/// path. Layout-stable `#[repr(C)]` β-shape so cdylibs can hold,
+/// refcount, drop, and read POD descriptors without sharing
+/// rustc-version or dep-graph with the host.
 ///
 /// The opaque handle points at an `Arc<TextureRingInner>`; lifecycle
-/// dispatches through the host-installed FullAccess vtable's
-/// `clone_texture_ring` / `drop_texture_ring` callbacks. Method
-/// dispatch is host-only via [`Self::host_inner`] until Phase E
-/// (#907) lifts it to per-method vtable slots.
+/// (Clone / Drop) dispatches through the host-installed parent
+/// [`GpuContextFullAccessVTable`]'s `clone_texture_ring` /
+/// `drop_texture_ring` callbacks (locked by PR #918's β-shape Phase D
+/// work). Per-method dispatch is reached through the dedicated
+/// [`streamlib_plugin_abi::TextureRingMethodsVTable`] pointed at by
+/// `methods_vtable` — issue #907 PR 1/5 lands the pointer plumbing
+/// + cached POD fields; follow-up PRs append method slots and route
+/// `acquire_next` / `copy_pixel_buffer_to_slot` / `slot` through
+/// them.
+///
+/// The four POD getters (`len`, `width`, `height`, `format`) read
+/// directly from cached fields on this struct — no FFI hop. The
+/// values are captured by [`Self::from_arc_into_raw`] at construction
+/// and never mutate over the ring's lifetime.
 #[repr(C)]
 pub struct TextureRing {
     /// Opaque handle to the host's `Arc<TextureRingInner>`.
     pub(crate) handle: *const c_void,
-    /// Vtable for cross-DSO Clone/Drop dispatch.
+    /// Parent vtable for cross-DSO Clone/Drop dispatch (#918 Phase D).
     pub(crate) vtable: *const GpuContextFullAccessVTable,
+    /// Per-type vtable for cross-DSO method dispatch (#907 Phase E).
+    pub(crate) methods_vtable: *const streamlib_plugin_abi::TextureRingMethodsVTable,
+    /// Cached slot count. Set at construction; ring depth is fixed.
+    pub(crate) cached_len: u32,
+    /// Cached pixel width every slot's texture was allocated with.
+    pub(crate) cached_width: u32,
+    /// Cached pixel height every slot's texture was allocated with.
+    pub(crate) cached_height: u32,
+    /// Cached pixel format every slot's texture was allocated with.
+    /// Stored as the FFI-stable `u32` discriminant (matches
+    /// `TextureFormat`'s `#[repr(u32)]`).
+    pub(crate) cached_format: u32,
 }
 
 // SAFETY: handle points at an `Arc<TextureRingInner>`; inner state is
@@ -282,13 +304,29 @@ unsafe impl Sync for TextureRing {}
 
 impl TextureRing {
     /// Internal helper: leak an initial Arc strong count via
-    /// `Arc::into_raw`, resolve the host-mode FullAccess vtable, and
-    /// assemble the cross-DSO shape.
+    /// `Arc::into_raw`, resolve the host-mode FullAccess vtable +
+    /// per-type methods vtable, snapshot the ring's POD descriptors
+    /// (len / width / height / format — fixed across the ring's
+    /// lifetime), and assemble the cross-DSO shape.
     pub(crate) fn from_arc_into_raw(arc: Arc<TextureRingInner>) -> Self {
+        let cached_len = arc.len() as u32;
+        let cached_width = arc.width();
+        let cached_height = arc.height();
+        let cached_format = arc.format() as u32;
         let handle = Arc::into_raw(arc) as *const c_void;
         let vtable =
             crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
-        Self { handle, vtable }
+        let methods_vtable =
+            crate::core::plugin::host_services::host_texture_ring_methods_vtable();
+        Self {
+            handle,
+            vtable,
+            methods_vtable,
+            cached_len,
+            cached_width,
+            cached_height,
+            cached_format,
+        }
     }
 
     /// Engine-internal borrow of the host-owned `TextureRingInner`.
@@ -323,29 +361,46 @@ impl TextureRing {
             .copy_pixel_buffer_to_slot(slot, pixel_buffer, width, height)
     }
 
-    /// Number of slots in the ring.
+    /// Number of slots in the ring. Cached POD — no FFI hop.
     pub fn len(&self) -> usize {
-        self.host_inner().len()
+        self.cached_len as usize
     }
 
     /// Ring is always non-empty in practice (construction rejects 0).
+    /// Cached POD — no FFI hop.
     pub fn is_empty(&self) -> bool {
-        self.host_inner().is_empty()
+        self.cached_len == 0
     }
 
-    /// Width of every slot's texture, in pixels.
+    /// Width of every slot's texture, in pixels. Cached POD — no FFI
+    /// hop.
     pub fn width(&self) -> u32 {
-        self.host_inner().width()
+        self.cached_width
     }
 
-    /// Height of every slot's texture, in pixels.
+    /// Height of every slot's texture, in pixels. Cached POD — no
+    /// FFI hop.
     pub fn height(&self) -> u32 {
-        self.host_inner().height()
+        self.cached_height
     }
 
-    /// Format every slot's texture was allocated with.
+    /// Format every slot's texture was allocated with. Cached POD —
+    /// no FFI hop. Decoded from the FFI-stable `u32` discriminant via
+    /// `match` (matches `TextureFormat`'s `#[repr(u32)]` layout).
     pub fn format(&self) -> TextureFormat {
-        self.host_inner().format()
+        match self.cached_format {
+            0 => TextureFormat::Rgba8Unorm,
+            1 => TextureFormat::Rgba8UnormSrgb,
+            2 => TextureFormat::Bgra8Unorm,
+            3 => TextureFormat::Bgra8UnormSrgb,
+            4 => TextureFormat::Rgba16Float,
+            5 => TextureFormat::Rgba32Float,
+            6 => TextureFormat::Nv12,
+            // Unknown discriminant — should be unreachable because
+            // `from_arc_into_raw` captures from a typed
+            // `TextureFormat`. Default to `Rgba8Unorm` defensively.
+            _ => TextureFormat::Rgba8Unorm,
+        }
     }
 
     /// Borrow a slot by index — engine-internal / debug only.
@@ -368,6 +423,11 @@ impl Clone for TextureRing {
         Self {
             handle: self.handle,
             vtable: self.vtable,
+            methods_vtable: self.methods_vtable,
+            cached_len: self.cached_len,
+            cached_width: self.cached_width,
+            cached_height: self.cached_height,
+            cached_format: self.cached_format,
         }
     }
 }
@@ -397,10 +457,24 @@ mod layout_tests {
 
     #[test]
     fn texture_ring_layout() {
-        assert_eq!(size_of::<TextureRing>(), 16);
+        // β-shape struct as of #907 PR 1/5:
+        //   handle              @ 0  (8 bytes, *const c_void)
+        //   vtable              @ 8  (8 bytes, *const GpuContextFullAccessVTable)
+        //   methods_vtable      @ 16 (8 bytes, *const TextureRingMethodsVTable)
+        //   cached_len          @ 24 (4 bytes, u32)
+        //   cached_width        @ 28 (4 bytes, u32)
+        //   cached_height       @ 32 (4 bytes, u32)
+        //   cached_format       @ 36 (4 bytes, u32)
+        // Total = 40, align = 8.
+        assert_eq!(size_of::<TextureRing>(), 40);
         assert_eq!(align_of::<TextureRing>(), 8);
         assert_eq!(offset_of!(TextureRing, handle), 0);
         assert_eq!(offset_of!(TextureRing, vtable), 8);
+        assert_eq!(offset_of!(TextureRing, methods_vtable), 16);
+        assert_eq!(offset_of!(TextureRing, cached_len), 24);
+        assert_eq!(offset_of!(TextureRing, cached_width), 28);
+        assert_eq!(offset_of!(TextureRing, cached_height), 32);
+        assert_eq!(offset_of!(TextureRing, cached_format), 36);
     }
 
     #[test]
