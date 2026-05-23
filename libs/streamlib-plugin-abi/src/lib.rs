@@ -249,15 +249,14 @@ pub const TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION: u32 = 1;
 
 /// Layout version of [`VulkanComputeKernelMethodsVTable`].
 ///
-/// `VulkanComputeKernel` β-shape gains a per-type vtable for method
-/// dispatch (issue #907 Phase E PR 2/5). Mirrors the
-/// `TextureRingMethodsVTable` shape: this PR lands the empty shell
-/// so the pointer + struct layout are pinned; follow-up PRs append
-/// `set_storage_buffer` / `set_uniform_buffer` /
-/// `set_sampled_texture` / `set_storage_image` /
-/// `set_push_constants` / `dispatch` / `record` / `bindings` method
-/// slots and route the β-shape methods through them.
-pub const VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 1;
+/// - v1: empty shell (issue #907 Phase E PR 2/5 — pointer plumbing
+///   only).
+/// - v2: appends `set_storage_buffer` / `set_uniform_buffer` /
+///   `set_push_constants` / `dispatch` method slots (issue #949
+///   — first method-dispatch slice). Texture-input variants and the
+///   CPU-reference dlopen integration test land in a separate
+///   follow-up.
+pub const VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 
 /// Layout version of [`VulkanGraphicsKernelMethodsVTable`].
 ///
@@ -2590,25 +2589,25 @@ unsafe impl Sync for TextureRingMethodsVTable {}
 // =============================================================================
 
 /// Per-type method-dispatch vtable for the `VulkanComputeKernel`
-/// β-shape (issue #907 Phase E PR 2/5).
+/// β-shape (issue #907 Phase E + #949 method-dispatch first slice).
 ///
 /// `VulkanComputeKernel` keeps `clone_*` / `drop_*` dispatch on the
 /// parent [`GpuContextFullAccessVTable`] (PR #918's Phase D shape);
-/// this vtable adds per-method slots for `set_storage_buffer` /
-/// `set_uniform_buffer` / `set_sampled_texture` / `set_storage_image`
-/// / `set_push_constants` / `dispatch` / `record` / `bindings`. POD
-/// getters (`push_constant_size`) are cached on the β-shape struct
-/// and don't need vtable slots.
+/// this vtable carries per-method slots for everything the β-shape
+/// exposes that cdylib code needs to dispatch through.
 ///
-/// **PR 2/5 ships the shell.** This vtable carries only the
-/// `layout_version` + `_reserved_padding` header today. Method slots
-/// arrive in follow-up sub-issues filed against #907 once the
-/// vtable-routed `set_*` / `dispatch` / `record` paths plus the
-/// ambitious CPU-reference dlopen integration test land together.
-/// Pinning the shell now lets the β-shape struct grow the
-/// `methods_vtable` pointer + cached `push_constant_size` field with
-/// locked offsets, so downstream PRs only append to this vtable +
-/// bump [`VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION`].
+/// **Coverage today** (v2): `set_push_constants`, `dispatch`. The
+/// buffer/texture-input variants (`set_storage_buffer`,
+/// `set_uniform_buffer`, `set_sampled_texture`, `set_storage_image`)
+/// + the CPU-reference dlopen integration test are tracked in
+/// follow-up sub-issues — they need a small trait redesign so the
+/// cdylib path can accept concrete β-shape types while the
+/// engine path keeps its generic `VulkanStorageBindable` /
+/// `VulkanUniformBindable` flexibility. The engine-only methods
+/// (`record(cmd_buf)`, `set_*_image_view(vk::ImageView)`,
+/// `bindings() -> Vec<ComputeBindingSpec>`) stay `host_inner`-routed
+/// — their parameter / return types are host-internal vulkanalia or
+/// allocator-crossing.
 #[repr(C)]
 pub struct VulkanComputeKernelMethodsVTable {
     /// Vtable layout version. Must equal
@@ -2618,6 +2617,32 @@ pub struct VulkanComputeKernelMethodsVTable {
     /// Reserved padding (keeps the following pointer naturally
     /// aligned on 32-bit hosts; zero today, never read).
     pub _reserved_padding: u32,
+
+    /// Upload push-constant bytes. `bytes_len` should match the
+    /// kernel's declared `push_constant_size` (already cached on
+    /// the β-shape). Returns 0 on success; non-zero with UTF-8
+    /// message in `err_buf` on failure.
+    pub set_push_constants: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        bytes_ptr: *const u8,
+        bytes_len: usize,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Dispatch the kernel with the given workgroup counts. Returns
+    /// 0 on success; non-zero with UTF-8 message in `err_buf` on
+    /// failure (GPU submission error, fence wait timeout, etc.).
+    pub dispatch: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        group_x: u32,
+        group_y: u32,
+        group_z: u32,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
 }
 
 unsafe impl Send for VulkanComputeKernelMethodsVTable {}
@@ -3390,7 +3415,7 @@ mod layout_tests {
         assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 7);
         assert_eq!(TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION, 1);
-        assert_eq!(VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 1);
+        assert_eq!(VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION, 1);
@@ -3483,12 +3508,14 @@ mod layout_tests {
 
     #[test]
     fn vulkan_compute_kernel_methods_vtable_layout() {
-        // Empty shell — layout_version + _reserved_padding only.
-        // Mirrors `texture_ring_methods_vtable_layout`. Subsequent
-        // #907 sub-PRs append method slots and bump
-        // VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION.
-        assert_eq!(size_of::<VulkanComputeKernelMethodsVTable>(), 8);
-        assert_eq!(align_of::<VulkanComputeKernelMethodsVTable>(), 4);
+        // v2 (#949 method-dispatch first slice):
+        //   layout_version       @ 0  (4 bytes, u32)
+        //   _reserved_padding    @ 4  (4 bytes, u32)
+        //   set_push_constants   @ 8  (8 bytes, fn pointer)
+        //   dispatch             @ 16
+        // Total = 24 bytes, align = 8.
+        assert_eq!(size_of::<VulkanComputeKernelMethodsVTable>(), 24);
+        assert_eq!(align_of::<VulkanComputeKernelMethodsVTable>(), 8);
         assert_eq!(
             offset_of!(VulkanComputeKernelMethodsVTable, layout_version),
             0
@@ -3496,6 +3523,14 @@ mod layout_tests {
         assert_eq!(
             offset_of!(VulkanComputeKernelMethodsVTable, _reserved_padding),
             4
+        );
+        assert_eq!(
+            offset_of!(VulkanComputeKernelMethodsVTable, set_push_constants),
+            8
+        );
+        assert_eq!(
+            offset_of!(VulkanComputeKernelMethodsVTable, dispatch),
+            16
         );
     }
 
