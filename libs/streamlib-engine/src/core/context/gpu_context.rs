@@ -4050,12 +4050,26 @@ impl GpuContextFullAccess {
                         ));
                     }
                     // β-shape: bundle the raw handle
-                    // (`Arc::into_raw(Arc<TextureRingInner>)`-shaped) with
-                    // the host vtable. Cross-rustc-version safe because
+                    // (`Arc::into_raw(Arc<TextureRingInner>)`-shaped)
+                    // with the host vtables + cached POD descriptors.
+                    // The cached values come from the caller's own
+                    // inputs (we know `width` / `height` / `format` /
+                    // `count` — these are the args we just passed
+                    // through the FFI), avoiding an extra round-trip
+                    // for the getters. Cross-rustc-version safe because
                     // cdylib never derefs the Inner layout.
+                    let methods_vtable =
+                        crate::core::plugin::host_services::host_callbacks()
+                            .map(|c| c.texture_ring_methods_vtable)
+                            .unwrap_or(std::ptr::null());
                     Ok(crate::core::context::TextureRing {
                         handle: out_ring,
                         vtable: self.vtable,
+                        methods_vtable,
+                        cached_len: count as u32,
+                        cached_width: width,
+                        cached_height: height,
+                        cached_format: format as u32,
                     })
                 } else {
                     let msg = String::from_utf8_lossy(

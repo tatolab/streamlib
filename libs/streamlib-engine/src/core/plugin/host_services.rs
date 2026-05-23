@@ -182,6 +182,12 @@ pub struct HostCallbacks {
     /// [`HostServices::gpu_context_full_access_vtable`] at install
     /// time.
     pub gpu_context_full_access_vtable: *const GpuContextFullAccessVTable,
+    /// Host-installed [`TextureRingMethodsVTable`] pointer. May be
+    /// null on hosts that don't ship a GpuContext; cdylib must check
+    /// before dispatching. Sourced from
+    /// [`HostServices::texture_ring_methods_vtable`] at install time
+    /// (issue #907 Phase E PR 1/5).
+    pub texture_ring_methods_vtable: *const streamlib_plugin_abi::TextureRingMethodsVTable,
 }
 
 // Safety: every field is a fn pointer or a raw pointer the host
@@ -316,6 +322,15 @@ pub unsafe fn install_host_services(
             return None;
         }
     }
+    if !services.texture_ring_methods_vtable.is_null() {
+        // SAFETY: same shape as the other vtable validations. Null
+        // is allowed (host has no GpuContext); only non-null pointers
+        // are version-validated.
+        let v = unsafe { (*services.texture_ring_methods_vtable).layout_version };
+        if v != streamlib_plugin_abi::TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION {
+            return None;
+        }
+    }
 
     let callbacks = HostCallbacks {
         host: services.host,
@@ -333,6 +348,7 @@ pub unsafe fn install_host_services(
         gpu_context_limited_access_vtable: services.gpu_context_limited_access_vtable,
         surface_store_vtable: services.surface_store_vtable,
         gpu_context_full_access_vtable: services.gpu_context_full_access_vtable,
+        texture_ring_methods_vtable: services.texture_ring_methods_vtable,
     };
 
     // Cache the callbacks BEFORE installing tracing — the
@@ -6278,6 +6294,7 @@ pub mod runtime_facing {
         host_tracing_register_callsite, HostServiceImpls, HOST_AUDIO_CLOCK_VTABLE,
         HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE, HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE,
         HOST_RUNTIME_CONTEXT_VTABLE, HOST_RUNTIME_OPS_VTABLE, HOST_SURFACE_STORE_VTABLE,
+        HOST_TEXTURE_RING_METHODS_VTABLE,
     };
     use std::ffi::c_void;
     use std::sync::OnceLock;
@@ -6324,8 +6341,27 @@ pub mod runtime_facing {
             gpu_context_limited_access_vtable: &HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE,
             surface_store_vtable: &HOST_SURFACE_STORE_VTABLE,
             gpu_context_full_access_vtable: &HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE,
+            texture_ring_methods_vtable: &HOST_TEXTURE_RING_METHODS_VTABLE,
         }
     }
+}
+
+/// Host-side empty-shell `TextureRingMethodsVTable` (issue #907 PR 1/5).
+///
+/// PR 1 establishes the pointer plumbing only. Subsequent PRs fill in
+/// method slots for `acquire_next` / `copy_pixel_buffer_to_slot` /
+/// `slot` once the cross-DSO `TextureRingSlot` representation lands.
+pub static HOST_TEXTURE_RING_METHODS_VTABLE: streamlib_plugin_abi::TextureRingMethodsVTable =
+    streamlib_plugin_abi::TextureRingMethodsVTable {
+        layout_version: streamlib_plugin_abi::TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION,
+        _reserved_padding: 0,
+    };
+
+/// Accessor for the host's static `TextureRingMethodsVTable` — used
+/// by `TextureRing::from_arc_into_raw` to populate the β-shape's
+/// `methods_vtable` field.
+pub fn host_texture_ring_methods_vtable() -> *const streamlib_plugin_abi::TextureRingMethodsVTable {
+    &HOST_TEXTURE_RING_METHODS_VTABLE
 }
 
 // =============================================================================
