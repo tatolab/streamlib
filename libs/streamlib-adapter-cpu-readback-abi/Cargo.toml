@@ -1,0 +1,24 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-adapter-cpu-readback-abi"
+description = "Cross-DSO callback table for streamlib-adapter-cpu-readback. Sibling of streamlib-adapter-vulkan-abi: pure extern \"C\" vtable + #[repr(C)] payloads consumed by host wiring (delegating to CpuReadbackSurfaceAdapter) and cdylib shims. No runtime Rust types cross the DSO boundary on the cdylib-callable surface."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[lib]
+name = "streamlib_adapter_cpu_readback_abi"
+path = "src/lib.rs"
+
+# Pure ABI crate — same dep posture as streamlib-adapter-vulkan-abi:
+# no streamlib-engine, no vulkanalia, no streamlib-adapter-cpu-readback,
+# no tokio. Keeps layout regression tests trivially runnable on any
+# host and the crate cross-DSO-safe.
+[dependencies]
+
+[lints]
+workspace = true
