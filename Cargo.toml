@@ -23,6 +23,7 @@ members = [
     "libs/streamlib-adapter-cuda", # CUDA surface adapter — Vulkan↔CUDA OPAQUE_FD interop foundation for GPU-resident AI inference (Linux, #587)
     "libs/streamlib-adapter-cuda-helpers", # Test-helper crate for streamlib-adapter-cuda — held in a dedicated crate so streamlib (and the optional CUDA SDK) don't leak into adapter-cuda's runtime dep graph (Linux)
     "libs/streamlib-adapter-skia", # Skia surface adapter — composes on streamlib-adapter-vulkan; customer sees skia::Surface directly, never GrVkImageInfo / VkImageLayout (Linux)
+    "libs/streamlib-adapter-skia-abi", # Cross-DSO callback table for streamlib-adapter-skia — extern "C" vtable consumed by host wiring + cdylib shim (#889)
     "libs/streamlib-deno-native", # FFI cdylib for Deno subprocess iceoryx2 access
     "libs/streamlib-python-native", # FFI cdylib for Python subprocess iceoryx2 access
     "libs/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC

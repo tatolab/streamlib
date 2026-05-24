@@ -1,0 +1,25 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-adapter-skia-abi"
+description = "Cross-DSO callback table for streamlib-adapter-skia. Sibling of streamlib-plugin-abi / streamlib-adapter-vulkan-abi: pure extern \"C\" vtable + #[repr(C)] payloads consumed by host wiring (delegating to SkiaSurfaceAdapter / SkiaGlSurfaceAdapter) and cdylib shims. Skia is host-side-only — its view types (skia_safe::Surface / Image) cannot cross DSO, so the vtable surface covers only the SurfaceAdapter trait scoping contract."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[lib]
+name = "streamlib_adapter_skia_abi"
+path = "src/lib.rs"
+
+# Pure ABI crate — same dep posture as streamlib-plugin-abi /
+# streamlib-adapter-vulkan-abi: no streamlib-engine, no vulkanalia,
+# no skia-safe, no streamlib-adapter-skia, no tokio. Keeps layout
+# regression tests trivially runnable on any host and the crate
+# cross-DSO-safe.
+[dependencies]
+
+[lints]
+workspace = true
