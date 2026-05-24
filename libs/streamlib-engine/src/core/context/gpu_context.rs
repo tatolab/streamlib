@@ -4214,10 +4214,66 @@ impl GpuContextFullAccess {
                  boundary; engine-only. Cdylib code that needs GPU device \
                  capabilities must use higher-level FullAccess methods (kernel \
                  construction, buffer/texture allocation) which dispatch \
-                 through the FullAccess vtable."
+                 through the FullAccess vtable. To construct a host-flavor \
+                 surface adapter from an in-process workspace plugin cdylib \
+                 use `host_vulkan_device_arc()` instead."
             );
         }
         self.host_inner().device()
+    }
+
+    /// Clone the host's `Arc<HostVulkanDevice>` for in-process workspace
+    /// plugin cdylibs that need to construct a host-flavor
+    /// `XxxSurfaceAdapter<HostVulkanDevice>` (e.g. #1004 dlopen smoke
+    /// fixtures for the surface adapters). Dispatches through the v9
+    /// `host_vulkan_device_arc` FullAccess vtable slot in cdylib mode;
+    /// in host mode reaches `host_inner().device().vulkan_device()`
+    /// directly. The returned Arc's strong count is incremented; the
+    /// caller's `Drop` decrements the host's count.
+    ///
+    /// **Rustc-version coupling.** `HostVulkanDevice` is not
+    /// `#[repr(C)]` — the cross-DSO Arc transit is safe only when the
+    /// cdylib shares the host's rustc version and the engine's dep
+    /// graph (workspace plugin cdylibs do; subprocess cdylibs
+    /// — `streamlib-python-native`, `streamlib-deno-native` — don't dep
+    /// on `streamlib-engine` and can't import `HostVulkanDevice`, so
+    /// they can't reach this method at all).
+    #[cfg(target_os = "linux")]
+    pub fn host_vulkan_device_arc(
+        &self,
+    ) -> Result<Arc<crate::vulkan::rhi::HostVulkanDevice>> {
+        match self.handle_kind {
+            HandleKind::Boxed => Ok(Arc::clone(
+                crate::host_rhi::HostGpuDeviceExt::vulkan_device(
+                    self.host_inner().device().as_ref(),
+                ),
+            )),
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "host_vulkan_device_arc: GpuContextFullAccess has null vtable"
+                            .into(),
+                    ));
+                }
+                let raw =
+                    unsafe { ((*self.vtable).host_vulkan_device_arc)(self.handle) };
+                if raw.is_null() {
+                    return Err(Error::GpuError(
+                        "host_vulkan_device_arc: host returned null pointer (likely \
+                         null/stale scope token or host-side panic)"
+                            .into(),
+                    ));
+                }
+                // SAFETY: host's wrapper called `Arc::into_raw` on a freshly
+                // cloned `Arc<HostVulkanDevice>` and the cdylib shares the
+                // host's rustc version + dep graph (workspace plugin cdylib
+                // contract documented on the method).
+                let arc = unsafe {
+                    Arc::from_raw(raw as *const crate::vulkan::rhi::HostVulkanDevice)
+                };
+                Ok(arc)
+            }
+        }
     }
 
     /// Get the texture pool for acquiring pooled textures.
