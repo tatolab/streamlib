@@ -10712,23 +10712,13 @@ mod gpu_lim_video_source_timeline_semaphore_tests {
         }
     }
 
-    #[test]
-    fn set_video_source_timeline_is_noop_on_null_timeline_handle() {
-        // Synthesize a non-null but garbage gpu_handle to exercise
-        // the second guard (`timeline_handle.is_null()` short-
-        // circuit). The host wrapper's first `handle_as_gpu_context`
-        // returns `None` for a garbage handle, so the call returns
-        // without reaching the deref. Either way the test is locked
-        // against UB on null timeline_handle.
-        let fake_gpu_handle: *const c_void = std::ptr::null();
-        unsafe {
-            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE
-                .set_video_source_timeline_semaphore)(
-                fake_gpu_handle,
-                std::ptr::null(),
-            );
-        }
-    }
+    // Note: the timeline_handle null guard at host_gpu_lim_set_video_source_timeline_semaphore
+    // line 2078 isn't reachable at tier-1: the first guard
+    // (handle_as_gpu_context) short-circuits on null gpu_handle, and
+    // a non-null garbage gpu_handle would UB-deref before reaching
+    // the timeline check. The guard is exercised end-to-end by
+    // load_project_dylib_camera_smoke (the cdylib camera passes a
+    // valid gpu_handle and a real Arc-borrow timeline_handle).
 
     #[test]
     fn clear_video_source_timeline_is_noop_on_null_gpu_handle() {

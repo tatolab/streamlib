@@ -1698,11 +1698,13 @@ pub struct GpuContextLimitedAccessVTable {
     /// `vulkanalia::Device` to avoid running Vulkan dispatch from a
     /// statically-linked cdylib copy of the loader.
     ///
-    /// `timeline_handle` is `Arc::as_ptr(timeline) as *const c_void`
-    /// (borrowed, same Arc-borrow pattern as
-    /// [`Self::set_video_source_timeline_semaphore`]); the host
-    /// short-circuits the deref but does NOT bump the refcount —
-    /// `wait` takes `&self`, not an Arc.
+    /// `timeline_handle` is a borrowed `*const HostVulkanTimelineSemaphore`
+    /// — the cdylib-side `wait` method takes `&self` and passes
+    /// `self as *const Self as *const c_void`; when the caller
+    /// instead holds an `Arc<HostVulkanTimelineSemaphore>` directly
+    /// (rare for `wait`), `Arc::as_ptr(&arc)` resolves to the same
+    /// borrow pointer. The host does NOT bump the refcount on the
+    /// borrow.
     ///
     /// `timeout_ns` is the per-call timeout; pass `u64::MAX` for
     /// no timeout. Returns 0 on success, non-zero (`err_buf`
