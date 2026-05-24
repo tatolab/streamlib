@@ -1424,10 +1424,20 @@ impl VulkanComputeKernel {
 
     /// Kernel's declared binding shape. Mode-routed: host-mode reads
     /// directly from `host_inner`; cdylib-mode dispatches through the
-    /// v4 `bindings` slot on the per-type methods vtable.
+    /// v4 `bindings` slot on the per-type methods vtable. On cdylib-
+    /// side FFI errors (null vtable, malformed err_buf, host panic) the
+    /// method emits a `tracing::warn` and returns an empty Vec — the
+    /// public signature predates the introspection vtable and isn't
+    /// fallible at the type level.
     pub fn bindings(&self) -> Vec<ComputeBindingSpec> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_bindings_via_vtable().unwrap_or_default();
+            return self.dispatch_bindings_via_vtable().unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = %e,
+                    "VulkanComputeKernel::bindings cdylib dispatch failed; returning empty",
+                );
+                Vec::new()
+            });
         }
         self.host_inner().bindings().to_vec()
     }
@@ -1440,10 +1450,11 @@ impl VulkanComputeKernel {
                 "bindings: compute kernel methods vtable is null".into(),
             ));
         }
-        // Probe-then-fill: first call with cap=0 gets the actual count;
-        // second call with the right-sized buffer fills it. Kernels
-        // declare ~8 bindings in practice, so a single in-place call
-        // with cap=16 covers the common case without re-allocation.
+        // Inline-then-heap: one call with a stack buffer of cap=16
+        // covers ~all real kernels (~8 bindings in practice) without
+        // allocation. If the host signals status=2 (buffer-too-small),
+        // fall back to a heap buffer sized to the host-reported
+        // required count and call again.
         let mut buf = [streamlib_plugin_abi::ComputeBindingSpecRepr {
             binding: 0,
             kind: 0,

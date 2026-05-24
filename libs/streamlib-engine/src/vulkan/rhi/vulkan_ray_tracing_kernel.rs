@@ -1069,10 +1069,18 @@ impl VulkanRayTracingKernel {
 
     /// Kernel's declared binding shape. Mode-routed: host-mode reads
     /// directly from `host_inner`; cdylib-mode dispatches through the
-    /// v3 `bindings` slot on the per-type methods vtable.
+    /// v3 `bindings` slot on the per-type methods vtable. On cdylib-
+    /// side FFI errors the method emits a `tracing::warn` and returns
+    /// an empty Vec.
     pub fn bindings(&self) -> Vec<RayTracingBindingSpec> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_bindings_via_vtable().unwrap_or_default();
+            return self.dispatch_bindings_via_vtable().unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = %e,
+                    "VulkanRayTracingKernel::bindings cdylib dispatch failed; returning empty",
+                );
+                Vec::new()
+            });
         }
         self.host_inner().bindings().to_vec()
     }
