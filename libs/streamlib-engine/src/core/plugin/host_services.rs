@@ -7325,17 +7325,42 @@ unsafe extern "C" fn host_compute_kernel_dispatch(
 // borrow is well-formed for any field-only read, even though no
 // vtable callback is supposed to fire while the borrow is alive.
 
+// Each `make_*_borrow` populates the cached POD fields on the
+// reconstructed β-shape from the host-side inner we hold via
+// `handle`. Cdylib β-shapes carry these cached for free-on-deref
+// POD getters (`width()`, `height()`, `mapped_ptr()`, etc.); when
+// the host reconstructs a borrow inside a vtable callback for code
+// that reads those getters host-side, the borrow's cached fields
+// MUST hold the real values — not zero. Reading zero from a "borrow"
+// of an otherwise-valid resource was the bug behind issue #988
+// (camera-as-cdylib color converter received width=0/height=0 in
+// push constants → kernel produced zero-filled output).
 #[cfg(target_os = "linux")]
 fn make_pixel_buffer_borrow(
     handle: *const c_void,
 ) -> std::mem::ManuallyDrop<crate::core::rhi::PixelBuffer> {
-    std::mem::ManuallyDrop::new(crate::core::rhi::PixelBuffer {
+    use crate::host_rhi::HostPixelBufferRefExt;
+    // Reconstruct a minimal Pixel-buffer borrow whose `buffer_ref()`
+    // can read the host-side `PixelBufferRef` we already hold via
+    // `handle`.
+    let pb_for_inner = std::mem::ManuallyDrop::new(crate::core::rhi::PixelBuffer {
         handle,
         vtable: host_gpu_context_limited_access_vtable(),
         width: 0,
         height: 0,
         format_raw: 0,
         plane_count_cached: 0,
+    });
+    let pb_ref = pb_for_inner.buffer_ref();
+    let hvb = pb_ref.vulkan_inner();
+    let format = pb_ref.format();
+    std::mem::ManuallyDrop::new(crate::core::rhi::PixelBuffer {
+        handle,
+        vtable: host_gpu_context_limited_access_vtable(),
+        width: pb_ref.width(),
+        height: pb_ref.height(),
+        format_raw: format as u32,
+        plane_count_cached: hvb.plane_count() as u32,
     })
 }
 
@@ -7343,11 +7368,18 @@ fn make_pixel_buffer_borrow(
 fn make_storage_buffer_borrow(
     handle: *const c_void,
 ) -> std::mem::ManuallyDrop<crate::core::rhi::StorageBuffer> {
-    std::mem::ManuallyDrop::new(crate::core::rhi::StorageBuffer {
+    let sb_for_inner = std::mem::ManuallyDrop::new(crate::core::rhi::StorageBuffer {
         handle,
         vtable: host_gpu_context_limited_access_vtable(),
         byte_size_cached: 0,
         mapped_ptr_cached: std::ptr::null_mut(),
+    });
+    let hvb = sb_for_inner.host_inner();
+    std::mem::ManuallyDrop::new(crate::core::rhi::StorageBuffer {
+        handle,
+        vtable: host_gpu_context_limited_access_vtable(),
+        byte_size_cached: hvb.size() as u64,
+        mapped_ptr_cached: hvb.mapped_ptr(),
     })
 }
 
@@ -7355,11 +7387,18 @@ fn make_storage_buffer_borrow(
 fn make_uniform_buffer_borrow(
     handle: *const c_void,
 ) -> std::mem::ManuallyDrop<crate::core::rhi::UniformBuffer> {
-    std::mem::ManuallyDrop::new(crate::core::rhi::UniformBuffer {
+    let ub_for_inner = std::mem::ManuallyDrop::new(crate::core::rhi::UniformBuffer {
         handle,
         vtable: host_gpu_context_limited_access_vtable(),
         byte_size_cached: 0,
         mapped_ptr_cached: std::ptr::null_mut(),
+    });
+    let hvb = ub_for_inner.host_inner();
+    std::mem::ManuallyDrop::new(crate::core::rhi::UniformBuffer {
+        handle,
+        vtable: host_gpu_context_limited_access_vtable(),
+        byte_size_cached: hvb.size() as u64,
+        mapped_ptr_cached: hvb.mapped_ptr(),
     })
 }
 
@@ -7367,12 +7406,36 @@ fn make_uniform_buffer_borrow(
 fn make_texture_borrow(
     handle: *const c_void,
 ) -> std::mem::ManuallyDrop<crate::core::rhi::Texture> {
-    std::mem::ManuallyDrop::new(crate::core::rhi::Texture {
+    // Populate the cached POD fields from the host-side TextureInner
+    // we already have via `handle`. Cdylib β-shapes carry these cached
+    // for free-on-deref POD getters (`Texture::width()`, etc.); when
+    // the host reconstructs a borrow inside a vtable callback for
+    // host-side code that reads `Texture::width()` / `height()`, the
+    // borrow's cached fields MUST hold the real values — not zero —
+    // because that's what those POD getters return. Reading zero from
+    // a "borrow" of an otherwise-valid texture caused the camera-as-
+    // cdylib color-converter push constants to encode width=0/height=0
+    // and the compute kernel produced zero-filled output (issue #988
+    // debug).
+    use crate::host_rhi::HostTextureExt;
+    let tex_for_inner = std::mem::ManuallyDrop::new(crate::core::rhi::Texture {
         handle,
         vtable: host_gpu_context_limited_access_vtable(),
         width_cached: 0,
         height_cached: 0,
         format_raw: 0,
+        _padding: 0,
+    });
+    let hvt = tex_for_inner.vulkan_inner();
+    let width = hvt.width();
+    let height = hvt.height();
+    let format = hvt.format();
+    std::mem::ManuallyDrop::new(crate::core::rhi::Texture {
+        handle,
+        vtable: host_gpu_context_limited_access_vtable(),
+        width_cached: width,
+        height_cached: height,
+        format_raw: format as u32,
         _padding: 0,
     })
 }
