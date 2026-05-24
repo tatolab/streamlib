@@ -1,0 +1,29 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# Test-only config schema for the Phase H (#1006 scenario 1)
+# dlopen-cdylib concurrent-escalate test processor. The processor
+# spawns `thread_count` threads from inside its `start()` callback;
+# each thread clones `gpu_limited_access()` and calls
+# `escalate(|_full| sleep(hold_ms))`. The integration test parses the
+# output file to assert `overlaps=0` — proves the escalate gate
+# serializes concurrent callers reaching the cdylib path through
+# `escalate_via_vtable`.
+
+metadata:
+  type: ConcurrentEscalateTestProcessorConfig
+  description: "Test config schema for the Phase H dlopen-cdylib concurrent-escalate test processor (#1006 scenario 1)."
+
+properties:
+  output_path:
+    metadata:
+      description: "Filesystem path where the processor writes its result. Format: 'OK\\n<thread_count>\\noverlaps=<N>' on success."
+    type: string
+  thread_count:
+    metadata:
+      description: "Number of threads spawned from start(); each independently calls escalate."
+    type: uint32
+  hold_ms:
+    metadata:
+      description: "Milliseconds each thread sleeps inside its escalate closure — widens the overlap window so a regression has a real chance to race in."
+    type: uint32
