@@ -15223,4 +15223,46 @@ mod make_borrow_cached_field_regression_tests {
             "mapped_ptr_cached must mirror the inner HOST_VISIBLE pointer"
         );
     }
+
+    #[test]
+    fn make_pixel_buffer_borrow_populates_cached_pod_fields() {
+        let Some(device) = try_vulkan_device() else {
+            return;
+        };
+        // Bgra8 = 4 bytes/pixel, 320x240 = 307_200 bytes
+        let host_buffer =
+            crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible(
+                &device, 320 * 240 * 4,
+            )
+            .expect("backing buffer allocate");
+        let pb = crate::core::rhi::PixelBuffer::from_host_vulkan_buffer(
+            Arc::new(host_buffer),
+            320,
+            240,
+            4,
+            crate::core::rhi::PixelFormat::Bgra32,
+        );
+        let borrow = make_pixel_buffer_borrow(pb.handle);
+        assert_eq!(borrow.width, 320, "width must mirror the inner");
+        assert_eq!(borrow.height, 240, "height must mirror the inner");
+        assert!(
+            matches!(borrow.format(), crate::core::rhi::PixelFormat::Bgra32),
+            "format_raw must mirror the inner"
+        );
+    }
+
+    #[test]
+    fn make_uniform_buffer_borrow_populates_cached_pod_fields() {
+        let Some(device) = try_vulkan_device() else {
+            return;
+        };
+        let buffer = crate::core::rhi::UniformBuffer::new_host_visible(&device, 4_096)
+            .expect("uniform buffer allocate");
+        let borrow = make_uniform_buffer_borrow(buffer.handle);
+        assert_eq!(borrow.byte_size(), 4_096, "byte_size_cached must mirror the inner");
+        assert!(
+            !borrow.mapped_ptr().is_null(),
+            "mapped_ptr_cached must mirror the inner HOST_VISIBLE pointer"
+        );
+    }
 }

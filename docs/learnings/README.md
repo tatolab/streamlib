@@ -62,6 +62,10 @@ Avoid the two failure modes:
   Cryptic `Cast` trait error when passing `&[]` to vulkanalia Vulkan methods
 - [@docs/learnings/pubsub-lazy-init-silent-noop.md](pubsub-lazy-init-silent-noop.md) —
   Test hangs indefinitely because PUBSUB silently no-ops without `init()`
+- [@docs/learnings/cdylib-make-borrow-cached-fields.md](cdylib-make-borrow-cached-fields.md) —
+  Cdylib pipeline runs end-to-end clean but produces zero/black output
+  when host-side `make_*_borrow` helpers leave the β-shape's cached
+  POD fields zeroed instead of mirroring the inner
 - [@docs/learnings/nvidia-dual-vulkan-device-crash.md](nvidia-dual-vulkan-device-crash.md) —
   SIGSEGV when two Vulkan devices have concurrent GPU work on NVIDIA Linux
 - [@docs/learnings/cross-process-vkimage-layout.md](cross-process-vkimage-layout.md) —

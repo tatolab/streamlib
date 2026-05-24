@@ -636,6 +636,14 @@ make sense if the surrounding files were renamed or restructured.
   buffers, publish drops) without `init()`. Read before writing any test
   that uses PUBSUB events (shutdown, reconfigure) outside a full
   `StreamRuntime`.
+- @docs/learnings/cdylib-make-borrow-cached-fields.md — Cdylib
+  pipeline runs end-to-end with zero errors / zero panics / zero
+  validation complaints but produces all-zero / black output. Trigger:
+  a host-side `make_*_borrow` helper constructed a `ManuallyDrop`'d
+  β-shape borrow with the cached POD fields zeroed; host-side code
+  then read a cached field off the borrow (`.width()` / `.byte_size()`
+  / etc.) and got zero. Read before adding a new host wrapper that
+  reconstructs a borrowed β-shape from a `*const c_void` handle.
 - @docs/learnings/cross-process-vkimage-layout.md — Cross-process
   `VkImage` layout coordination. `VkImageLayout` is independent state
   per `VkDevice` by Vulkan spec — no shared mutable tracker. The
