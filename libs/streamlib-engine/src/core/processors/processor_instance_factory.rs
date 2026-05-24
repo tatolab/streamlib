@@ -266,7 +266,16 @@ impl ProcessorInstance {
                     // back to default.
                     return ExecutionConfig::default();
                 }
-                rmp_serde::from_slice(&buf[..out_len]).unwrap_or_default()
+                match rmp_serde::from_slice(&buf[..out_len]) {
+                    Ok(cfg) => cfg,
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "ProcessorInstance::execution_config: failed to decode msgpack payload; falling back to default",
+                        );
+                        ExecutionConfig::default()
+                    }
+                }
             }
             Self::LegacyDyn(inner) => inner.execution_config(),
         }
@@ -508,7 +517,16 @@ impl ProcessorInstance {
                         )
                     };
                 }
-                rmp_serde::from_slice(&buf[..out_len]).unwrap_or(serde_json::Value::Null)
+                match rmp_serde::from_slice(&buf[..out_len]) {
+                    Ok(value) => value,
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "ProcessorInstance::to_runtime_json: failed to decode msgpack payload; returning Null",
+                        );
+                        serde_json::Value::Null
+                    }
+                }
             }
             Self::LegacyDyn(inner) => inner.to_runtime_json(),
         }
@@ -545,7 +563,16 @@ impl ProcessorInstance {
                         )
                     };
                 }
-                rmp_serde::from_slice(&buf[..out_len]).unwrap_or(serde_json::Value::Null)
+                match rmp_serde::from_slice(&buf[..out_len]) {
+                    Ok(value) => value,
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "ProcessorInstance::config_json: failed to decode msgpack payload; returning Null",
+                        );
+                        serde_json::Value::Null
+                    }
+                }
             }
             Self::LegacyDyn(inner) => inner.config_json(),
         }

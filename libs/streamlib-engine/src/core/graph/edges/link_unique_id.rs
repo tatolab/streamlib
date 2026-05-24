@@ -123,3 +123,26 @@ impl PartialEq<LinkUniqueId> for String {
         *self == other.0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// msgpack round-trip preserves the bare-string transparent wire
+    /// shape — the same regression class `ProcessorUniqueId`'s test guards.
+    #[test]
+    fn msgpack_round_trip_preserves_transparent_shape() {
+        let id = LinkUniqueId::from("L-test-link");
+        let bytes = rmp_serde::to_vec_named(&id).expect("encode");
+        let back: LinkUniqueId = rmp_serde::from_slice(&bytes).expect("decode");
+        assert_eq!(id, back);
+    }
+
+    /// Wire format is a bare msgpack string.
+    #[test]
+    fn msgpack_wire_is_bare_string_not_map() {
+        let id = LinkUniqueId::from("Labc");
+        let bytes = rmp_serde::to_vec_named(&id).expect("encode");
+        assert_eq!(bytes, vec![0xa4, b'L', b'a', b'b', b'c']);
+    }
+}
