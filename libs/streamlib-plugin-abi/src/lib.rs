@@ -4952,19 +4952,30 @@ mod layout_tests {
     }
 
     #[test]
-    fn host_services_tail_carries_fifteen_vtable_pointers() {
-        // Trailing vtable pointers on HostServices. We don't pin the
-        // absolute offsets (earlier fields carry their own layout
-        // audit), but we do pin:
-        //   1. Each vtable is a single 8-byte pointer.
-        //   2. They appear in the order RuntimeContext → AudioClock →
-        //      RuntimeOps → GpuContextLimitedAccess → SurfaceStore →
-        //      GpuContextFullAccess → TextureRingMethods →
-        //      VulkanComputeKernelMethods → VulkanGraphicsKernelMethods →
-        //      VulkanRayTracingKernelMethods → VulkanAccelerationStructureMethods →
-        //      RhiColorConverterMethods → RhiCommandRecorderMethods →
-        //      OutputWriterMethods → InputMailboxesMethods.
-        //   3. They are contiguous (no padding inserted between them).
+    fn host_services_repr_layout() {
+        // 26 fields total: 2 u32 header + 1 host handle + 8 leading
+        // extern "C" fn callbacks + 15 trailing vtable pointers.
+        // Total = 4 + 4 + 8 + 8*8 + 15*8 = 200 bytes, align = 8.
+        assert_eq!(size_of::<HostServices>(), 200);
+        assert_eq!(align_of::<HostServices>(), 8);
+
+        // Header.
+        assert_eq!(offset_of!(HostServices, abi_layout_version), 0);
+        assert_eq!(offset_of!(HostServices, _reserved_padding), 4);
+        assert_eq!(offset_of!(HostServices, host), 8);
+
+        // Leading extern "C" fn callbacks.
+        assert_eq!(offset_of!(HostServices, tracing_register_callsite), 16);
+        assert_eq!(offset_of!(HostServices, tracing_enabled), 24);
+        assert_eq!(offset_of!(HostServices, tracing_emit), 32);
+        assert_eq!(offset_of!(HostServices, pubsub_publish), 40);
+        assert_eq!(offset_of!(HostServices, schema_register), 48);
+        assert_eq!(offset_of!(HostServices, schema_lookup), 56);
+        assert_eq!(offset_of!(HostServices, iceoryx_log_emit), 64);
+        assert_eq!(offset_of!(HostServices, processor_register), 72);
+
+        // Trailing vtable pointers. Each is a single 8-byte pointer,
+        // contiguous, terminating exactly at the end of the struct.
         assert_eq!(size_of::<*const RuntimeContextVTable>(), 8);
         assert_eq!(size_of::<*const AudioClockVTable>(), 8);
         assert_eq!(size_of::<*const RuntimeOpsVTable>(), 8);
@@ -4984,59 +4995,51 @@ mod layout_tests {
         assert_eq!(size_of::<*const OutputWriterVTable>(), 8);
         assert_eq!(size_of::<*const InputMailboxesVTable>(), 8);
 
-        let runtime_ctx_off = offset_of!(HostServices, runtime_context_vtable);
-        let audio_clock_off = offset_of!(HostServices, audio_clock_vtable);
-        let runtime_ops_off = offset_of!(HostServices, runtime_ops_vtable);
-        let gpu_lim_off = offset_of!(HostServices, gpu_context_limited_access_vtable);
-        let surface_store_off = offset_of!(HostServices, surface_store_vtable);
-        let gpu_full_off = offset_of!(HostServices, gpu_context_full_access_vtable);
-        let texture_ring_off = offset_of!(HostServices, texture_ring_methods_vtable);
-        let compute_kernel_off =
-            offset_of!(HostServices, vulkan_compute_kernel_methods_vtable);
-        let graphics_kernel_off =
-            offset_of!(HostServices, vulkan_graphics_kernel_methods_vtable);
-        let rt_kernel_off =
-            offset_of!(HostServices, vulkan_ray_tracing_kernel_methods_vtable);
-        let accel_struct_off =
-            offset_of!(HostServices, vulkan_acceleration_structure_methods_vtable);
-        let color_converter_off =
-            offset_of!(HostServices, rhi_color_converter_methods_vtable);
-        let command_recorder_off =
-            offset_of!(HostServices, rhi_command_recorder_methods_vtable);
-        let output_writer_off = offset_of!(HostServices, output_writer_vtable);
-        let input_mailboxes_off = offset_of!(HostServices, input_mailboxes_vtable);
-        assert!(runtime_ctx_off < audio_clock_off);
-        assert!(audio_clock_off < runtime_ops_off);
-        assert!(runtime_ops_off < gpu_lim_off);
-        assert!(gpu_lim_off < surface_store_off);
-        assert!(surface_store_off < gpu_full_off);
-        assert!(gpu_full_off < texture_ring_off);
-        assert!(texture_ring_off < compute_kernel_off);
-        assert!(compute_kernel_off < graphics_kernel_off);
-        assert!(graphics_kernel_off < rt_kernel_off);
-        assert!(rt_kernel_off < accel_struct_off);
-        assert!(accel_struct_off < color_converter_off);
-        assert!(color_converter_off < command_recorder_off);
-        assert!(command_recorder_off < output_writer_off);
-        assert!(output_writer_off < input_mailboxes_off);
-        assert_eq!(audio_clock_off - runtime_ctx_off, 8);
-        assert_eq!(runtime_ops_off - audio_clock_off, 8);
-        assert_eq!(gpu_lim_off - runtime_ops_off, 8);
-        assert_eq!(surface_store_off - gpu_lim_off, 8);
-        assert_eq!(gpu_full_off - surface_store_off, 8);
-        assert_eq!(texture_ring_off - gpu_full_off, 8);
-        assert_eq!(compute_kernel_off - texture_ring_off, 8);
-        assert_eq!(graphics_kernel_off - compute_kernel_off, 8);
-        assert_eq!(rt_kernel_off - graphics_kernel_off, 8);
-        assert_eq!(accel_struct_off - rt_kernel_off, 8);
-        assert_eq!(color_converter_off - accel_struct_off, 8);
-        assert_eq!(command_recorder_off - color_converter_off, 8);
-        assert_eq!(output_writer_off - command_recorder_off, 8);
-        assert_eq!(input_mailboxes_off - output_writer_off, 8);
-
-        // The InputMailboxes pointer must end at the end of the
-        // struct (it is the last field added in v14, issue #894).
-        assert_eq!(input_mailboxes_off + 8, size_of::<HostServices>());
+        assert_eq!(offset_of!(HostServices, runtime_context_vtable), 80);
+        assert_eq!(offset_of!(HostServices, audio_clock_vtable), 88);
+        assert_eq!(offset_of!(HostServices, runtime_ops_vtable), 96);
+        assert_eq!(
+            offset_of!(HostServices, gpu_context_limited_access_vtable),
+            104
+        );
+        assert_eq!(offset_of!(HostServices, surface_store_vtable), 112);
+        assert_eq!(
+            offset_of!(HostServices, gpu_context_full_access_vtable),
+            120
+        );
+        assert_eq!(
+            offset_of!(HostServices, texture_ring_methods_vtable),
+            128
+        );
+        assert_eq!(
+            offset_of!(HostServices, vulkan_compute_kernel_methods_vtable),
+            136
+        );
+        assert_eq!(
+            offset_of!(HostServices, vulkan_graphics_kernel_methods_vtable),
+            144
+        );
+        assert_eq!(
+            offset_of!(HostServices, vulkan_ray_tracing_kernel_methods_vtable),
+            152
+        );
+        assert_eq!(
+            offset_of!(
+                HostServices,
+                vulkan_acceleration_structure_methods_vtable
+            ),
+            160
+        );
+        assert_eq!(
+            offset_of!(HostServices, rhi_color_converter_methods_vtable),
+            168
+        );
+        assert_eq!(
+            offset_of!(HostServices, rhi_command_recorder_methods_vtable),
+            176
+        );
+        assert_eq!(offset_of!(HostServices, output_writer_vtable), 184);
+        assert_eq!(offset_of!(HostServices, input_mailboxes_vtable), 192);
     }
 
     #[test]
@@ -5483,14 +5486,8 @@ mod layout_tests {
 
     #[test]
     fn gpu_context_limited_access_vtable_layout() {
-        // layout_version (u32) + _reserved_padding (u32) + 53 fn
-        // pointers (8 bytes each) = 4 + 4 + 424 = 432 bytes.
-        // (Phase F #957 appended texture_native_dma_buf_fd, taking the
-        // count from 52 → 53. v12 / #958 appended
-        // set_video_source_timeline_semaphore +
-        // clear_video_source_timeline_semaphore, taking it 53 → 55.
-        // v13 / #958 Phase E sub appended wait_timeline_semaphore,
-        // taking it 55 → 56.)
+        // layout_version (u32) + _reserved_padding (u32) + 56 fn
+        // pointers (8 bytes each) = 4 + 4 + 448 = 456 bytes, align = 8.
         assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 456);
         assert_eq!(align_of::<GpuContextLimitedAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextLimitedAccessVTable, layout_version), 0);
@@ -5736,22 +5733,21 @@ mod layout_tests {
 
     #[test]
     fn gpu_context_full_access_vtable_layout() {
-        // layout_version (u32) + _reserved_padding (u32) + 30 fn
-        // pointers (8 bytes each) = 4 + 4 + 240 = 248 bytes.
+        // layout_version (u32) + _reserved_padding (u32) + 32 fn
+        // pointers (8 bytes each) = 4 + 4 + 256 = 264 bytes, align = 8.
         //
         // 32 entries = 1 drop_handle + 7 clone/drop pairs (14 fn
         // pointers for the 7 β-shape return types: compute / graphics /
         // ray-tracing kernels, texture ring, color converter,
         // acceleration structure, command recorder) + 4 create_* method
         // callbacks (compute / graphics / ray-tracing / texture_ring)
-        // + 1 acquire_render_target_dma_buf_image (C3) + 9 Phase D
-        // privileged methods (wait_device_idle, acquire_output_texture,
+        // + 1 acquire_render_target_dma_buf_image + 9 privileged methods
+        // (wait_device_idle, acquire_output_texture,
         // upload_pixel_buffer_as_texture, color_converter,
         // create_command_recorder, build_triangles_blas, build_tlas,
         // supports_ray_tracing_pipeline, check_in_surface)
-        // + 1 v5-added gpu_capabilities (#914)
-        // + 1 v6-added create_timeline_semaphore (#914 / #920)
-        // + 1 v7-added import_dma_buf_storage_buffer (#914 / #921).
+        // + 1 gpu_capabilities + 1 create_timeline_semaphore
+        // + 1 import_dma_buf_storage_buffer.
         assert_eq!(size_of::<GpuContextFullAccessVTable>(), 264);
         assert_eq!(align_of::<GpuContextFullAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextFullAccessVTable, layout_version), 0);
