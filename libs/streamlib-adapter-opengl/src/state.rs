@@ -23,6 +23,14 @@ type EglImage = egl::Image;
 /// for the `VkImage` — per the NVIDIA EGL DMA-BUF render-target
 /// learning, the host MUST pick a tiled, render-target-capable
 /// modifier or the resulting GL texture is sampler-only.
+///
+/// `#[repr(C)]` so the layout matches
+/// [`streamlib_adapter_opengl_abi::HostSurfaceRegistrationRepr`]
+/// byte-for-byte — the host's cdylib-facing `register_host_surface`
+/// vtable slot reads the repr type and projects it to this struct
+/// without a per-field copy. Locked by
+/// `host_vtable::tier1_null_handle_tests::host_surface_registration_repr_matches_source_layout`.
+#[repr(C)]
 pub struct HostSurfaceRegistration {
     pub dma_buf_fd: i32,
     pub width: u32,
