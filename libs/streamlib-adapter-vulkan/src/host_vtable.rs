@@ -95,36 +95,9 @@ impl<D: VulkanRhiDevice + 'static> MonoVTable<D> {
 // FFI helpers — error buffer writer + panic guard
 // =============================================================================
 
-/// Catch panics at the extern "C" boundary so a host-side panic
-/// doesn't unwind into cdylib code. On panic the body returns
-/// `default_on_panic`; the panic message is logged via `tracing`
-/// for post-mortem visibility.
-#[inline]
-fn run_host_extern_c<F, T>(callback_name: &'static str, body: F, default_on_panic: T) -> T
-where
-    F: FnOnce() -> T,
-{
-    use std::panic::{catch_unwind, AssertUnwindSafe};
-    match catch_unwind(AssertUnwindSafe(body)) {
-        Ok(value) => value,
-        Err(payload) => {
-            let msg = if let Some(s) = payload.downcast_ref::<&'static str>() {
-                (*s).to_string()
-            } else if let Some(s) = payload.downcast_ref::<String>() {
-                s.clone()
-            } else {
-                "<non-string panic payload>".to_string()
-            };
-            tracing::error!(
-                target: "streamlib_adapter_vulkan::ffi",
-                callback = callback_name,
-                panic = %msg,
-                "host extern \"C\" callback panicked; FFI boundary converted panic to default return"
-            );
-            default_on_panic
-        }
-    }
-}
+// Panic-safety net wrapping every `host_*` extern "C" callback is the
+// shared [`streamlib_adapter_abi::ffi::run_host_extern_c`].
+use streamlib_adapter_abi::ffi::run_host_extern_c;
 
 /// Write a UTF-8 error message into a caller-provided buffer.
 /// Truncates to `cap`; sets `*err_len` to the bytes actually

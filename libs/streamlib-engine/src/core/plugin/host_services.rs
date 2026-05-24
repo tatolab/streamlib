@@ -671,42 +671,12 @@ unsafe impl Sync for HostServiceImpls {}
 /// `UnwindSafe` by default — the pointer dereferences are sound under
 /// the FFI contract regardless of unwinding.
 ///
-/// `pub(crate)` so the cdylib-side trampolines in
-/// [`crate::core::context::audio_clock_shim`],
-/// [`crate::core::context::runtime_ops_shim`], and the per-processor
-/// vtable wrappers in [`crate::core::plugin::processor_vtable`] can
-/// route through the same helper. Every extern "C" boundary crossing
-/// in the engine — host-side and cdylib-side — must be wrapped.
-#[inline]
-pub(crate) fn run_host_extern_c<F, T>(
-    callback_name: &'static str,
-    body: F,
-    default_on_panic: T,
-) -> T
-where
-    F: FnOnce() -> T,
-{
-    use std::panic::{catch_unwind, AssertUnwindSafe};
-    match catch_unwind(AssertUnwindSafe(body)) {
-        Ok(value) => value,
-        Err(payload) => {
-            let msg = if let Some(s) = payload.downcast_ref::<&'static str>() {
-                (*s).to_string()
-            } else if let Some(s) = payload.downcast_ref::<String>() {
-                s.clone()
-            } else {
-                "<non-string panic payload>".to_string()
-            };
-            tracing::error!(
-                target: "streamlib::ffi",
-                callback = callback_name,
-                panic = %msg,
-                "host extern \"C\" callback panicked; FFI boundary converted panic to default return"
-            );
-            default_on_panic
-        }
-    }
-}
+/// Re-export of the canonical panic-safety helper in
+/// [`streamlib_adapter_abi::ffi`]. Every extern "C" boundary
+/// crossing in the engine — host-side and cdylib-side — must route
+/// through this wrapper so all six consumers (engine + five surface
+/// adapters) share a single implementation.
+pub(crate) use streamlib_adapter_abi::ffi::run_host_extern_c;
 
 unsafe extern "C" fn host_tracing_register_callsite(
     _host: HostHandle,
@@ -6605,6 +6575,40 @@ unsafe extern "C" fn host_gpu_full_check_in_surface(
     )
 }
 
+/// Clone the host's `Arc<HostVulkanDevice>` and return the raw
+/// `Arc::into_raw` pointer. Used by in-process workspace plugin cdylibs
+/// (#1004 dlopen smoke fixtures for the surface adapters) that need to
+/// construct a host-flavor `XxxSurfaceAdapter<HostVulkanDevice>` to
+/// exercise `acquire_write` → `view_mut` → release through the cdylib
+/// boundary. On null/stale token returns a null pointer.
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_host_vulkan_device_arc(
+    scope_token: *const c_void,
+) -> *const c_void {
+    run_host_extern_c(
+        "host_gpu_full_host_vulkan_device_arc",
+        || -> *const c_void {
+            let token = scope_token as u64;
+            crate::core::context::escalate_scope_registry::with_scope(token, |gpu| {
+                let device = gpu.device();
+                let host_device =
+                    crate::host_rhi::HostGpuDeviceExt::vulkan_device(device.as_ref());
+                let arc = Arc::clone(host_device);
+                Arc::into_raw(arc) as *const c_void
+            })
+            .unwrap_or(std::ptr::null())
+        },
+        std::ptr::null(),
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_host_vulkan_device_arc(
+    _scope_token: *const c_void,
+) -> *const c_void {
+    std::ptr::null()
+}
+
 pub static HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE: GpuContextFullAccessVTable =
     GpuContextFullAccessVTable {
         layout_version: GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION,
@@ -6644,6 +6648,7 @@ pub static HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE: GpuContextFullAccessVTable =
         gpu_capabilities: host_gpu_full_gpu_capabilities,
         create_timeline_semaphore: host_gpu_full_create_timeline_semaphore,
         import_dma_buf_storage_buffer: host_gpu_full_import_dma_buf_storage_buffer,
+        host_vulkan_device_arc: host_gpu_full_host_vulkan_device_arc,
     };
 
 /// Pointer to the [`GpuContextFullAccessVTable`] this DSO should
