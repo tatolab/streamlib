@@ -619,8 +619,9 @@ impl VulkanAccelerationStructureInner {
     }
 
     /// `VkAccelerationStructureKHR` handle. Used for descriptor writes and
-    /// for queries; never destroy this directly.
-    pub fn vk_handle(&self) -> vk::AccelerationStructureKHR {
+    /// for queries; never destroy this directly. Engine-internal: returns
+    /// a raw `vulkanalia` handle cdylibs cannot import.
+    pub(crate) fn vk_handle(&self) -> vk::AccelerationStructureKHR {
         self.handle
     }
 
@@ -748,14 +749,14 @@ impl VulkanAccelerationStructure {
             .map(Self::from_arc_into_raw)
     }
 
-    /// `VkAccelerationStructureKHR` handle. **Host-only** — the
+    /// `VkAccelerationStructureKHR` handle. **Engine-internal** — the
     /// vulkanalia handle layout couples to the vulkanalia minor
     /// version and isn't safe to surface across a DSO boundary.
     /// There is no in-tree cdylib consumer that reads this; every
     /// binding flows through the ray-tracing kernel's
     /// `set_acceleration_structure` slot, which dereferences the AS
     /// on the host side. Panics if called from cdylib code.
-    pub fn vk_handle(&self) -> vk::AccelerationStructureKHR {
+    pub(crate) fn vk_handle(&self) -> vk::AccelerationStructureKHR {
         self.host_inner().vk_handle()
     }
 

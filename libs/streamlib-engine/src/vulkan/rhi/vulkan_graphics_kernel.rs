@@ -546,7 +546,12 @@ impl VulkanGraphicsKernelInner {
     /// Indexed variant of [`Self::cmd_bind_and_draw`] (same drain-on-draw
     /// contract). Caller must have set an index buffer for `frame_index`
     /// via [`Self::set_index_buffer`].
-    pub fn cmd_bind_and_draw_indexed(
+    ///
+    /// Crate-private: takes a raw `vk::CommandBuffer` which cdylibs cannot
+    /// construct (no `vulkanalia` dep). No out-of-engine consumers today;
+    /// host examples drive indexed draws through
+    /// [`RhiCommandRecorder::record_dispatch`]-style helpers instead.
+    pub(crate) fn cmd_bind_and_draw_indexed(
         &self,
         command_buffer: vk::CommandBuffer,
         frame_index: u32,
@@ -1288,8 +1293,95 @@ impl VulkanGraphicsKernel {
         unsafe { &*(self.handle as *const VulkanGraphicsKernelInner) }
     }
 
+    /// Kernel's declared binding shape. Mode-routed: host-mode reads
+    /// directly from `host_inner`; cdylib-mode dispatches through the
+    /// v3 `bindings` slot on the per-type methods vtable. On cdylib-
+    /// side FFI errors the method emits a `tracing::warn` and returns
+    /// an empty Vec.
     pub fn bindings(&self) -> Vec<GraphicsBindingSpec> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_bindings_via_vtable().unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = %e,
+                    "VulkanGraphicsKernel::bindings cdylib dispatch failed; returning empty",
+                );
+                Vec::new()
+            });
+        }
         self.host_inner().bindings().to_vec()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn dispatch_bindings_via_vtable(&self) -> Result<Vec<GraphicsBindingSpec>> {
+        use crate::core::Error;
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "bindings: graphics kernel methods vtable is null".into(),
+            ));
+        }
+        let mut buf = [streamlib_plugin_abi::GraphicsBindingSpecRepr {
+            binding: 0,
+            kind: 0,
+            stages: 0,
+            _reserved_padding: 0,
+        }; 16];
+        let mut out_len: usize = 0;
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).bindings)(
+                self.handle,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut out_len as *mut usize,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 2 {
+            let mut heap: Vec<streamlib_plugin_abi::GraphicsBindingSpecRepr> = vec![
+                streamlib_plugin_abi::GraphicsBindingSpecRepr {
+                    binding: 0,
+                    kind: 0,
+                    stages: 0,
+                    _reserved_padding: 0,
+                };
+                out_len
+            ];
+            let mut out_len2: usize = 0;
+            let status2 = unsafe {
+                ((*self.methods_vtable).bindings)(
+                    self.handle,
+                    heap.as_mut_ptr(),
+                    heap.len(),
+                    &mut out_len2 as *mut usize,
+                    err_buf.as_mut_ptr(),
+                    err_buf.len(),
+                    &mut err_len as *mut usize,
+                )
+            };
+            if status2 != 0 {
+                let msg =
+                    String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                        .into_owned();
+                return Err(Error::GpuError(msg));
+            }
+            return heap
+                .iter()
+                .take(out_len2)
+                .map(crate::core::rhi::plugin_abi_bridge::graphics_binding_spec_from_repr)
+                .collect();
+        }
+        if status != 0 {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            return Err(Error::GpuError(msg));
+        }
+        buf.iter()
+            .take(out_len)
+            .map(crate::core::rhi::plugin_abi_bridge::graphics_binding_spec_from_repr)
+            .collect()
     }
 
     /// Push-constant range size in bytes. Cached POD — no FFI hop.
@@ -1485,7 +1577,7 @@ impl VulkanGraphicsKernel {
 
     /// Indexed variant of [`Self::cmd_bind_and_draw`]. Engine-only;
     /// same `host_inner`-only contract.
-    pub fn cmd_bind_and_draw_indexed(
+    pub(crate) fn cmd_bind_and_draw_indexed(
         &self,
         cmd: vk::CommandBuffer,
         frame_index: u32,

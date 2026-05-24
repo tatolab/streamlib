@@ -88,7 +88,7 @@ impl From<&ComputeBindingSpec> for ComputeBindingSpecRepr {
     }
 }
 
-fn compute_binding_spec_from_repr(repr: &ComputeBindingSpecRepr) -> Result<ComputeBindingSpec> {
+pub(crate) fn compute_binding_spec_from_repr(repr: &ComputeBindingSpecRepr) -> Result<ComputeBindingSpec> {
     Ok(ComputeBindingSpec {
         binding: repr.binding,
         kind: compute_binding_kind_from_repr(repr.kind)?,
@@ -593,7 +593,7 @@ impl From<&GraphicsBindingSpec> for GraphicsBindingSpecRepr {
     }
 }
 
-fn graphics_binding_spec_from_repr(repr: &GraphicsBindingSpecRepr) -> Result<GraphicsBindingSpec> {
+pub(crate) fn graphics_binding_spec_from_repr(repr: &GraphicsBindingSpecRepr) -> Result<GraphicsBindingSpec> {
     Ok(GraphicsBindingSpec {
         binding: repr.binding,
         kind: graphics_binding_kind_from_repr(repr.kind)?,
@@ -873,7 +873,7 @@ impl From<&RayTracingBindingSpec> for RayTracingBindingSpecRepr {
     }
 }
 
-fn ray_tracing_binding_spec_from_repr(
+pub(crate) fn ray_tracing_binding_spec_from_repr(
     repr: &RayTracingBindingSpecRepr,
 ) -> Result<RayTracingBindingSpec> {
     Ok(RayTracingBindingSpec {

@@ -350,7 +350,15 @@ pub const TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 ///   borrow and forwards to the inner kernel. Buffer slots are typed
 ///   by Rust wrapper to mirror streamlib's typed-wrapper binding-site
 ///   contract.
-pub const VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 3;
+///
+/// - v4: appended the `bindings` introspection slot. Writes the
+///   kernel's binding declarations into a caller-provided
+///   `[ComputeBindingSpecRepr]` buffer and reports the actual count.
+///   Status code 2 signals "buffer too small" with the required count
+///   in `out_specs_len`; callers reallocate and retry. Replaces the
+///   β-shape's bare `host_inner().bindings()` call which panicked
+///   from cdylib code.
+pub const VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 4;
 
 /// Layout version of [`VulkanGraphicsKernelMethodsVTable`].
 ///
@@ -366,7 +374,10 @@ pub const VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 3;
 ///   Buffer slots are typed by Rust wrapper to mirror streamlib's
 ///   typed-wrapper binding-site contract (same shape as the
 ///   compute-kernel methods vtable v3).
-pub const VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
+///
+/// - v3: appended the `bindings` introspection slot — same shape as
+///   the compute-kernel v4 slot but writes `GraphicsBindingSpecRepr`.
+pub const VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 3;
 
 /// Layout version of [`VulkanRayTracingKernelMethodsVTable`].
 ///
@@ -384,7 +395,10 @@ pub const VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 ///   methods vtable v3). Ray-tracing kernels are serial — like
 ///   compute, they own a single command buffer + fence and have no
 ///   `frame_index` argument on any slot.
-pub const VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
+///
+/// - v3: appended the `bindings` introspection slot — same shape as
+///   the compute-kernel v4 slot but writes `RayTracingBindingSpecRepr`.
+pub const VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 3;
 
 /// Layout version of [`VulkanAccelerationStructureMethodsVTable`].
 ///
@@ -414,7 +428,14 @@ pub const VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 ///   `push_constant_size` POD so the cdylib can reconstruct a
 ///   `VulkanComputeKernel` β-shape via the parent FullAccess vtable's
 ///   per-type methods vtable lookup.
-pub const RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 1;
+///
+/// - v2: appends three sibling slots completing the Phase E sub-lift —
+///   `prepare_buffer_to_image_pixel` for the `PixelBuffer`-shape
+///   source variant, plus `convert_buffer_to_image_storage` and
+///   `convert_buffer_to_image_pixel` for callers that don't drive
+///   dispatch through a recorder. Before v2 these methods bare-
+///   called `host_inner()` and panicked from cdylib code.
+pub const RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 
 /// Layout version of [`RhiCommandRecorderMethodsVTable`].
 ///
@@ -3146,6 +3167,24 @@ pub struct VulkanComputeKernelMethodsVTable {
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32,
+
+    /// Read the kernel's binding declarations into `out_specs_buf`.
+    /// On success, writes the actual count into `out_specs_len` and
+    /// returns 0. If `out_specs_cap` is smaller than the actual count,
+    /// writes nothing into `out_specs_buf`, still writes the actual
+    /// count into `out_specs_len`, and returns 2 — the caller
+    /// reallocates with the now-known size and calls again. Returns 1
+    /// with UTF-8 message in `err_buf` for null-handle / null-out-ptr
+    /// / panic; v4 (introspection). (Available since v4.)
+    pub bindings: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        out_specs_buf: *mut ComputeBindingSpecRepr,
+        out_specs_cap: usize,
+        out_specs_len: *mut usize,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
 }
 
 unsafe impl Send for VulkanComputeKernelMethodsVTable {}
@@ -3389,6 +3428,60 @@ pub struct RhiColorConverterMethodsVTable {
         dst_transfer_raw: u32,
         out_kernel: *mut *const c_void,
         out_cached_push_constant_size: *mut u32,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// `PixelBuffer`-shape source variant of
+    /// [`Self::prepare_buffer_to_image_storage`]. Identical contract;
+    /// `src_buffer_handle` is `Arc::into_raw(Arc<HostVulkanBufferInner>)`-
+    /// shaped from a `PixelBuffer` β-shape's `handle` field (borrowed;
+    /// the cdylib retains ownership). v2 (Phase E sub-lift completion).
+    pub prepare_buffer_to_image_pixel: unsafe extern "C" fn(
+        converter_handle: *const c_void,
+        src_buffer_handle: *const c_void,
+        src_layout: *const SourceLayoutInfoRepr,
+        dst_texture_handle: *const c_void,
+        info: *const ResolvedColorInfoRepr,
+        dst_transfer_raw: u32,
+        out_kernel: *mut *const c_void,
+        out_cached_push_constant_size: *mut u32,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// End-to-end `StorageBuffer`→texture conversion: prepare the
+    /// kernel and dispatch via the converter's own command buffer +
+    /// fence + queue submit. Use when there's no surrounding
+    /// `RhiCommandRecorder` scope. Same handle and enum-decoding
+    /// contracts as
+    /// [`Self::prepare_buffer_to_image_storage`]; no kernel handle is
+    /// returned (the converter retains the cached kernel host-side).
+    /// Returns 0 on success; non-zero with UTF-8 message in `err_buf`
+    /// on failure. Linux-only; non-Linux stubs return non-zero.
+    /// v2 (Phase E sub-lift completion).
+    pub convert_buffer_to_image_storage: unsafe extern "C" fn(
+        converter_handle: *const c_void,
+        src_buffer_handle: *const c_void,
+        src_layout: *const SourceLayoutInfoRepr,
+        dst_texture_handle: *const c_void,
+        info: *const ResolvedColorInfoRepr,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// `PixelBuffer`-shape source variant of
+    /// [`Self::convert_buffer_to_image_storage`]. Identical contract.
+    /// v2 (Phase E sub-lift completion).
+    pub convert_buffer_to_image_pixel: unsafe extern "C" fn(
+        converter_handle: *const c_void,
+        src_buffer_handle: *const c_void,
+        src_layout: *const SourceLayoutInfoRepr,
+        dst_texture_handle: *const c_void,
+        info: *const ResolvedColorInfoRepr,
         err_buf: *mut u8,
         err_buf_cap: usize,
         err_len: *mut usize,
@@ -3965,6 +4058,19 @@ pub struct VulkanGraphicsKernelMethodsVTable {
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32,
+
+    /// Read the kernel's binding declarations into `out_specs_buf`.
+    /// Same shape as [`VulkanComputeKernelMethodsVTable::bindings`];
+    /// writes [`GraphicsBindingSpecRepr`] entries. (Available since v3.)
+    pub bindings: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        out_specs_buf: *mut GraphicsBindingSpecRepr,
+        out_specs_cap: usize,
+        out_specs_len: *mut usize,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
 }
 
 unsafe impl Send for VulkanGraphicsKernelMethodsVTable {}
@@ -4100,6 +4206,19 @@ pub struct VulkanRayTracingKernelMethodsVTable {
         width: u32,
         height: u32,
         depth: u32,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Read the kernel's binding declarations into `out_specs_buf`.
+    /// Same shape as [`VulkanComputeKernelMethodsVTable::bindings`];
+    /// writes [`RayTracingBindingSpecRepr`] entries. (Available since v3.)
+    pub bindings: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        out_specs_buf: *mut RayTracingBindingSpecRepr,
+        out_specs_cap: usize,
+        out_specs_len: *mut usize,
         err_buf: *mut u8,
         err_buf_cap: usize,
         err_len: *mut usize,
@@ -4934,11 +5053,11 @@ mod layout_tests {
         assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 8);
         assert_eq!(TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION, 2);
-        assert_eq!(VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 3);
-        assert_eq!(VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 2);
-        assert_eq!(VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 2);
+        assert_eq!(VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 4);
+        assert_eq!(VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 3);
+        assert_eq!(VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 3);
         assert_eq!(VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION, 2);
-        assert_eq!(RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION, 1);
+        assert_eq!(RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION, 2);
         // v2: appended PixelBuffer-flavored sibling slots
         // (`record_pixel_buffer_barrier`,
         // `record_copy_image_to_pixel_buffer`) for cdylib camera
@@ -5071,7 +5190,7 @@ mod layout_tests {
 
     #[test]
     fn vulkan_compute_kernel_methods_vtable_layout() {
-        // v3 (typed binding-method slots added):
+        // v4 (bindings introspection slot added):
         //   layout_version              @ 0   (4 bytes, u32)
         //   _reserved_padding           @ 4   (4 bytes, u32)
         //   set_push_constants          @ 8   (8 bytes, fn pointer)
@@ -5081,8 +5200,9 @@ mod layout_tests {
         //   set_uniform_buffer          @ 40
         //   set_sampled_texture         @ 48
         //   set_storage_image           @ 56
-        // Total = 64 bytes, align = 8.
-        assert_eq!(size_of::<VulkanComputeKernelMethodsVTable>(), 64);
+        //   bindings                    @ 64
+        // Total = 72 bytes, align = 8.
+        assert_eq!(size_of::<VulkanComputeKernelMethodsVTable>(), 72);
         assert_eq!(align_of::<VulkanComputeKernelMethodsVTable>(), 8);
         assert_eq!(
             offset_of!(VulkanComputeKernelMethodsVTable, layout_version),
@@ -5120,11 +5240,15 @@ mod layout_tests {
             offset_of!(VulkanComputeKernelMethodsVTable, set_storage_image),
             56
         );
+        assert_eq!(
+            offset_of!(VulkanComputeKernelMethodsVTable, bindings),
+            64
+        );
     }
 
     #[test]
     fn vulkan_graphics_kernel_methods_vtable_layout() {
-        // v2 (typed binding-method slots + offscreen_render added):
+        // v3 (bindings introspection slot added):
         //   layout_version              @ 0   (4 bytes, u32)
         //   _reserved_padding           @ 4   (4 bytes, u32)
         //   set_storage_buffer_pixel    @ 8   (8 bytes, fn pointer)
@@ -5136,8 +5260,8 @@ mod layout_tests {
         //   set_index_buffer            @ 56
         //   set_push_constants          @ 64
         //   offscreen_render            @ 72
-        // Total = 80 bytes, align = 8.
-        assert_eq!(size_of::<VulkanGraphicsKernelMethodsVTable>(), 80);
+        //   bindings                    @ 80
+        // Total = 88 bytes, align = 8.
         assert_eq!(align_of::<VulkanGraphicsKernelMethodsVTable>(), 8);
         assert_eq!(
             offset_of!(VulkanGraphicsKernelMethodsVTable, layout_version),
@@ -5183,6 +5307,12 @@ mod layout_tests {
             offset_of!(VulkanGraphicsKernelMethodsVTable, offscreen_render),
             72
         );
+        assert_eq!(
+            offset_of!(VulkanGraphicsKernelMethodsVTable, bindings),
+            80
+        );
+        // v3: 10 fn pointers @ 8 bytes each + 2 u32 = 88 bytes.
+        assert_eq!(size_of::<VulkanGraphicsKernelMethodsVTable>(), 88);
     }
 
     #[test]
@@ -5260,8 +5390,7 @@ mod layout_tests {
 
     #[test]
     fn vulkan_ray_tracing_kernel_methods_vtable_layout() {
-        // v2 (typed binding-method slots + set_push_constants +
-        // trace_rays added):
+        // v3 (bindings introspection slot added):
         //   layout_version              @ 0   (4 bytes, u32)
         //   _reserved_padding           @ 4   (4 bytes, u32)
         //   set_acceleration_structure  @ 8   (8 bytes, fn pointer)
@@ -5272,8 +5401,9 @@ mod layout_tests {
         //   set_storage_image           @ 48
         //   set_push_constants          @ 56
         //   trace_rays                  @ 64
-        // Total = 72 bytes, align = 8.
-        assert_eq!(size_of::<VulkanRayTracingKernelMethodsVTable>(), 72);
+        //   bindings                    @ 72
+        // Total = 80 bytes, align = 8.
+        assert_eq!(size_of::<VulkanRayTracingKernelMethodsVTable>(), 80);
         assert_eq!(align_of::<VulkanRayTracingKernelMethodsVTable>(), 8);
         assert_eq!(
             offset_of!(VulkanRayTracingKernelMethodsVTable, layout_version),
@@ -5314,6 +5444,10 @@ mod layout_tests {
         assert_eq!(
             offset_of!(VulkanRayTracingKernelMethodsVTable, trace_rays),
             64
+        );
+        assert_eq!(
+            offset_of!(VulkanRayTracingKernelMethodsVTable, bindings),
+            72
         );
     }
 
@@ -5364,12 +5498,15 @@ mod layout_tests {
 
     #[test]
     fn rhi_color_converter_methods_vtable_layout() {
-        // v1:
-        //   layout_version                    @ 0  (4 bytes, u32)
-        //   _reserved_padding                 @ 4  (4 bytes, u32)
-        //   prepare_buffer_to_image_storage   @ 8  (8 bytes, fn pointer)
-        // Total = 16 bytes, align = 8.
-        assert_eq!(size_of::<RhiColorConverterMethodsVTable>(), 16);
+        // v2:
+        //   layout_version                    @ 0   (4 bytes, u32)
+        //   _reserved_padding                 @ 4   (4 bytes, u32)
+        //   prepare_buffer_to_image_storage   @ 8   (8 bytes, fn pointer)
+        //   prepare_buffer_to_image_pixel     @ 16
+        //   convert_buffer_to_image_storage   @ 24
+        //   convert_buffer_to_image_pixel     @ 32
+        // Total = 40 bytes, align = 8.
+        assert_eq!(size_of::<RhiColorConverterMethodsVTable>(), 40);
         assert_eq!(align_of::<RhiColorConverterMethodsVTable>(), 8);
         assert_eq!(
             offset_of!(RhiColorConverterMethodsVTable, layout_version),
@@ -5385,6 +5522,27 @@ mod layout_tests {
                 prepare_buffer_to_image_storage
             ),
             8
+        );
+        assert_eq!(
+            offset_of!(
+                RhiColorConverterMethodsVTable,
+                prepare_buffer_to_image_pixel
+            ),
+            16
+        );
+        assert_eq!(
+            offset_of!(
+                RhiColorConverterMethodsVTable,
+                convert_buffer_to_image_storage
+            ),
+            24
+        );
+        assert_eq!(
+            offset_of!(
+                RhiColorConverterMethodsVTable,
+                convert_buffer_to_image_pixel
+            ),
+            32
         );
     }
 
