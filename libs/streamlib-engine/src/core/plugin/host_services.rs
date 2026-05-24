@@ -217,6 +217,13 @@ pub struct HostCallbacks {
     /// at install time (issue #907 Phase E PR 5/5).
     pub vulkan_acceleration_structure_methods_vtable:
         *const streamlib_plugin_abi::VulkanAccelerationStructureMethodsVTable,
+    /// Host-installed [`RhiColorConverterMethodsVTable`] pointer.
+    /// May be null on hosts that don't ship a GpuContext; cdylib
+    /// must check before dispatching. Sourced from
+    /// [`HostServices::rhi_color_converter_methods_vtable`] at
+    /// install time (Phase E sub-lift slice A).
+    pub rhi_color_converter_methods_vtable:
+        *const streamlib_plugin_abi::RhiColorConverterMethodsVTable,
 }
 
 // Safety: every field is a fn pointer or a raw pointer the host
@@ -411,6 +418,18 @@ pub unsafe fn install_host_services(
             return None;
         }
     }
+    if !services.rhi_color_converter_methods_vtable.is_null() {
+        // SAFETY: same shape as the other vtable validations. Null
+        // is allowed (host has no GpuContext); only non-null pointers
+        // are version-validated.
+        let v = unsafe {
+            (*services.rhi_color_converter_methods_vtable).layout_version
+        };
+        if v != streamlib_plugin_abi::RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION
+        {
+            return None;
+        }
+    }
 
     let callbacks = HostCallbacks {
         host: services.host,
@@ -437,6 +456,8 @@ pub unsafe fn install_host_services(
             .vulkan_ray_tracing_kernel_methods_vtable,
         vulkan_acceleration_structure_methods_vtable: services
             .vulkan_acceleration_structure_methods_vtable,
+        rhi_color_converter_methods_vtable: services
+            .rhi_color_converter_methods_vtable,
     };
 
     // Cache the callbacks BEFORE installing tracing — the
@@ -2037,6 +2058,145 @@ unsafe extern "C" fn host_gpu_lim_texture_native_dma_buf_fd(
             }
         },
         -1,
+    )
+}
+
+// -------------------------------------------------------------------------
+// Video-source timeline semaphore publish/clear (v12 — #958)
+// -------------------------------------------------------------------------
+
+unsafe extern "C" fn host_gpu_lim_set_video_source_timeline_semaphore(
+    handle: *const c_void,
+    timeline_handle: *const c_void,
+) {
+    run_host_extern_c(
+        "host_gpu_lim_set_video_source_timeline_semaphore",
+        || {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(handle) }) else {
+                return;
+            };
+            if timeline_handle.is_null() {
+                return;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                // SAFETY: `timeline_handle` is a borrowed
+                // `Arc::as_ptr(&Arc<HostVulkanTimelineSemaphore>)`
+                // produced by the cdylib caller. Bump the refcount so
+                // we can take a temporary owned Arc via `Arc::from_raw`;
+                // the caller's Arc strong-count is unchanged.
+                // Mirrors the `host_gpu_lim_register_texture` pattern
+                // for borrowed `Arc<TextureInner>`-shaped handles.
+                let ptr = timeline_handle
+                    as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore;
+                unsafe {
+                    Arc::increment_strong_count(ptr);
+                }
+                let arc = unsafe { Arc::from_raw(ptr) };
+                gpu.set_video_source_timeline_semaphore(&arc);
+                // `arc` drops here, balancing the `increment_strong_count`
+                // above. The slot holds its own `Arc::clone` (taken by
+                // `set_video_source_timeline_semaphore` from the
+                // borrow).
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = timeline_handle;
+            }
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_clear_video_source_timeline_semaphore(
+    handle: *const c_void,
+) {
+    run_host_extern_c(
+        "host_gpu_lim_clear_video_source_timeline_semaphore",
+        || {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(handle) }) else {
+                return;
+            };
+            #[cfg(target_os = "linux")]
+            {
+                gpu.clear_video_source_timeline_semaphore();
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = gpu;
+            }
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_wait_timeline_semaphore(
+    _handle: *const c_void,
+    timeline_handle: *const c_void,
+    value: u64,
+    timeout_ns: u64,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_wait_timeline_semaphore",
+        || {
+            // `gpu_handle` is intentionally ignored — the timeline
+            // borrow carries its own `vulkanalia::Device`, so the
+            // wait runs against the timeline directly without
+            // dereferencing any `GpuContext` instance. The handle
+            // stays in the wire format for cross-slot consistency.
+            if timeline_handle.is_null() {
+                write_err(
+                    "wait_timeline_semaphore: null timeline_handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                // SAFETY: `timeline_handle` is a borrowed pointer
+                // from the cdylib's
+                // `HostVulkanTimelineSemaphore::wait_via_vtable`
+                // (which gets it via `self as *const Self`). The
+                // host borrow lasts only for the duration of the
+                // wait call. We call `wait_direct` to bypass the
+                // `host_callbacks().is_some()` check on `wait()`
+                // itself — otherwise the host would re-dispatch
+                // through the vtable into infinite recursion.
+                let timeline = unsafe {
+                    &*(timeline_handle
+                        as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore)
+                };
+                match timeline.wait_direct(value, timeout_ns) {
+                    Ok(()) => 0,
+                    Err(e) => {
+                        write_err(
+                            &format!("wait_timeline_semaphore: {e}"),
+                            err_buf,
+                            err_buf_cap,
+                            err_len,
+                        );
+                        1
+                    }
+                }
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = (timeline_handle, value, timeout_ns);
+                write_err(
+                    "wait_timeline_semaphore: Linux-only",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                1
+            }
+        },
+        1,
     )
 }
 
@@ -6502,6 +6662,11 @@ pub static HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE: GpuContextLimitedAccessVTable
         escalate_begin: host_gpu_lim_escalate_begin,
         escalate_end: host_gpu_lim_escalate_end,
         texture_native_dma_buf_fd: host_gpu_lim_texture_native_dma_buf_fd,
+        set_video_source_timeline_semaphore:
+            host_gpu_lim_set_video_source_timeline_semaphore,
+        clear_video_source_timeline_semaphore:
+            host_gpu_lim_clear_video_source_timeline_semaphore,
+        wait_timeline_semaphore: host_gpu_lim_wait_timeline_semaphore,
     };
 
 /// Pointer to the [`GpuContextLimitedAccessVTable`] this DSO should
@@ -6552,7 +6717,8 @@ pub mod runtime_facing {
         host_schema_register, host_tracing_emit, host_tracing_enabled,
         host_tracing_register_callsite, HostServiceImpls, HOST_AUDIO_CLOCK_VTABLE,
         HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE, HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE,
-        HOST_RUNTIME_CONTEXT_VTABLE, HOST_RUNTIME_OPS_VTABLE, HOST_SURFACE_STORE_VTABLE,
+        HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE, HOST_RUNTIME_CONTEXT_VTABLE,
+        HOST_RUNTIME_OPS_VTABLE, HOST_SURFACE_STORE_VTABLE,
         HOST_TEXTURE_RING_METHODS_VTABLE, HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE,
         HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE,
         HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE,
@@ -6612,6 +6778,8 @@ pub mod runtime_facing {
                 &HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE,
             vulkan_acceleration_structure_methods_vtable:
                 &HOST_VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE,
+            rhi_color_converter_methods_vtable:
+                &HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE,
         }
     }
 }
@@ -9262,6 +9430,359 @@ pub fn host_vulkan_acceleration_structure_methods_vtable(
 }
 
 // =============================================================================
+// RhiColorConverterMethodsVTable wrappers (Phase E sub-lift slice A).
+// Each wrapper reconstructs the converter borrow from the raw
+// `Arc::as_ptr(Arc<RhiColorConverterInner>)` handle the cdylib passes,
+// reconstructs the buffer + texture borrows via the same
+// `make_*_borrow` ManuallyDrop pattern the compute / graphics kernel
+// wrappers use, runs the inner method, and converts the
+// `Result<Arc<VulkanComputeKernel>>` into the FFI's `i32 + out
+// param + err_buf` shape. All bodies are wrapped in
+// `run_host_extern_c` so a panic in the inner method becomes a
+// non-zero return.
+// =============================================================================
+
+/// SAFETY: caller must hand a `handle` that came from
+/// `Arc::as_ptr(Arc<RhiColorConverterInner>)`. The host borrows
+/// only — no refcount bump — for the call's duration; the cdylib
+/// retains ownership.
+#[cfg(target_os = "linux")]
+unsafe fn handle_as_color_converter(
+    handle: *const c_void,
+) -> Option<&'static crate::core::rhi::RhiColorConverterInner> {
+    if handle.is_null() {
+        return None;
+    }
+    Some(unsafe {
+        &*(handle as *const crate::core::rhi::RhiColorConverterInner)
+    })
+}
+
+/// Convert a `#[repr(u32)]` `PrimariesId` discriminant to the typed
+/// enum. Returns `None` for out-of-range values so the wrapper can
+/// report a clean error rather than transmuting a garbage tag.
+#[cfg(target_os = "linux")]
+fn primaries_from_raw(
+    raw: u32,
+) -> Option<crate::core::color::PrimariesId> {
+    use crate::core::color::PrimariesId;
+    match raw {
+        0 => Some(PrimariesId::Bt709),
+        1 => Some(PrimariesId::Bt470M),
+        2 => Some(PrimariesId::Bt470Bg),
+        3 => Some(PrimariesId::Smpte170m),
+        4 => Some(PrimariesId::Smpte240m),
+        5 => Some(PrimariesId::Film),
+        6 => Some(PrimariesId::Bt2020),
+        7 => Some(PrimariesId::Smpte428),
+        8 => Some(PrimariesId::Smpte431),
+        9 => Some(PrimariesId::Smpte432),
+        10 => Some(PrimariesId::Ebu3213),
+        _ => None,
+    }
+}
+
+/// Convert a `#[repr(u32)]` `TransferId` discriminant to the typed enum.
+#[cfg(target_os = "linux")]
+fn transfer_from_raw(raw: u32) -> Option<crate::core::color::TransferId> {
+    use crate::core::color::TransferId;
+    match raw {
+        0 => Some(TransferId::Linear),
+        1 => Some(TransferId::Srgb),
+        2 => Some(TransferId::Bt709),
+        3 => Some(TransferId::Pq),
+        4 => Some(TransferId::Hlg),
+        _ => None,
+    }
+}
+
+/// Convert a `#[repr(u32)]` `MatrixId` discriminant to the typed enum.
+#[cfg(target_os = "linux")]
+fn matrix_from_raw(raw: u32) -> Option<crate::core::color::MatrixId> {
+    use crate::core::color::MatrixId;
+    match raw {
+        0 => Some(MatrixId::Identity),
+        1 => Some(MatrixId::Bt709),
+        2 => Some(MatrixId::Fcc),
+        3 => Some(MatrixId::Bt470Bg),
+        4 => Some(MatrixId::Smpte170m),
+        5 => Some(MatrixId::Smpte240m),
+        6 => Some(MatrixId::Ycgco),
+        7 => Some(MatrixId::Bt2020Ncl),
+        8 => Some(MatrixId::Bt2020Cl),
+        9 => Some(MatrixId::Smpte2085),
+        10 => Some(MatrixId::ChromaNcl),
+        11 => Some(MatrixId::ChromaCl),
+        12 => Some(MatrixId::Ictcp),
+        _ => None,
+    }
+}
+
+/// Convert a `#[repr(u32)]` `RangeId` discriminant to the typed enum.
+#[cfg(target_os = "linux")]
+fn range_from_raw(raw: u32) -> Option<crate::core::color::RangeId> {
+    use crate::core::color::RangeId;
+    match raw {
+        0 => Some(RangeId::Limited),
+        1 => Some(RangeId::Full),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_color_converter_prepare_buffer_to_image_storage(
+    converter_handle: *const c_void,
+    src_buffer_handle: *const c_void,
+    src_layout: *const streamlib_plugin_abi::SourceLayoutInfoRepr,
+    dst_texture_handle: *const c_void,
+    info: *const streamlib_plugin_abi::ResolvedColorInfoRepr,
+    dst_transfer_raw: u32,
+    out_kernel: *mut *const c_void,
+    out_cached_push_constant_size: *mut u32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_color_converter_prepare_buffer_to_image_storage",
+        || -> i32 {
+            let Some(converter) =
+                (unsafe { handle_as_color_converter(converter_handle) })
+            else {
+                write_err(
+                    "prepare_buffer_to_image_storage: null converter handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if src_buffer_handle.is_null() {
+                write_err(
+                    "prepare_buffer_to_image_storage: null src_buffer handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            if dst_texture_handle.is_null() {
+                write_err(
+                    "prepare_buffer_to_image_storage: null dst_texture handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            if src_layout.is_null() {
+                write_err(
+                    "prepare_buffer_to_image_storage: null src_layout pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            if info.is_null() {
+                write_err(
+                    "prepare_buffer_to_image_storage: null info pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            if out_kernel.is_null() || out_cached_push_constant_size.is_null() {
+                write_err(
+                    "prepare_buffer_to_image_storage: null out pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+
+            let layout_repr = unsafe { &*src_layout };
+            let info_repr = unsafe { &*info };
+
+            let rust_layout = crate::core::rhi::SourceLayoutInfo {
+                plane0_stride_bytes: layout_repr.plane0_stride_bytes,
+                plane1_stride_bytes: layout_repr.plane1_stride_bytes,
+                plane1_offset_bytes: layout_repr.plane1_offset_bytes,
+            };
+
+            let Some(primaries) = primaries_from_raw(info_repr.primaries_raw) else {
+                write_err(
+                    &format!(
+                        "prepare_buffer_to_image_storage: invalid primaries discriminant {}",
+                        info_repr.primaries_raw
+                    ),
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            let Some(transfer_in) = transfer_from_raw(info_repr.transfer_raw) else {
+                write_err(
+                    &format!(
+                        "prepare_buffer_to_image_storage: invalid transfer discriminant {}",
+                        info_repr.transfer_raw
+                    ),
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            let Some(matrix) = matrix_from_raw(info_repr.matrix_raw) else {
+                write_err(
+                    &format!(
+                        "prepare_buffer_to_image_storage: invalid matrix discriminant {}",
+                        info_repr.matrix_raw
+                    ),
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            let Some(range) = range_from_raw(info_repr.range_raw) else {
+                write_err(
+                    &format!(
+                        "prepare_buffer_to_image_storage: invalid range discriminant {}",
+                        info_repr.range_raw
+                    ),
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            let resolved = crate::core::color::ResolvedColorInfo {
+                primaries,
+                transfer: transfer_in,
+                matrix,
+                range,
+            };
+
+            let Some(dst_transfer) = transfer_from_raw(dst_transfer_raw) else {
+                write_err(
+                    &format!(
+                        "prepare_buffer_to_image_storage: invalid dst_transfer discriminant {}",
+                        dst_transfer_raw
+                    ),
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+
+            let src_borrow = make_storage_buffer_borrow(src_buffer_handle);
+            let dst_borrow = make_texture_borrow(dst_texture_handle);
+
+            match converter.prepare_buffer_to_image_storage(
+                &*src_borrow,
+                rust_layout,
+                &*dst_borrow,
+                &resolved,
+                dst_transfer,
+            ) {
+                Ok(arc_kernel) => {
+                    // `arc_kernel.handle` is the inner Arc-into-raw'd
+                    // pointer baked into the β-shape at construction.
+                    // The cdylib needs its own strong count on the
+                    // inner Arc so its β-shape can outlive our return
+                    // (the converter's kernel cache + the inner Arc
+                    // chain it sits behind keep their own strong
+                    // counts). Bump the inner refcount by 1; the
+                    // returned `Arc<VulkanComputeKernel>` drops
+                    // naturally at end-of-block — its β-shape's Drop
+                    // decrements the inner by 1, but only if this Arc
+                    // was the last strong ref, which it isn't because
+                    // the converter cache still holds one. Net effect:
+                    // cdylib walks away with +1 inner-Arc strong count
+                    // dedicated to it.
+                    let raw_inner = arc_kernel.handle;
+                    unsafe {
+                        std::sync::Arc::increment_strong_count(
+                            raw_inner
+                                as *const crate::vulkan::rhi::VulkanComputeKernelInner,
+                        );
+                    }
+                    let push_constant_size = arc_kernel.cached_push_constant_size;
+                    unsafe {
+                        std::ptr::write(out_kernel, raw_inner);
+                        std::ptr::write(
+                            out_cached_push_constant_size,
+                            push_constant_size,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    write_err(
+                        &format!("prepare_buffer_to_image_storage: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_color_converter_prepare_buffer_to_image_storage(
+    _converter_handle: *const c_void,
+    _src_buffer_handle: *const c_void,
+    _src_layout: *const streamlib_plugin_abi::SourceLayoutInfoRepr,
+    _dst_texture_handle: *const c_void,
+    _info: *const streamlib_plugin_abi::ResolvedColorInfoRepr,
+    _dst_transfer_raw: u32,
+    _out_kernel: *mut *const c_void,
+    _out_cached_push_constant_size: *mut u32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "prepare_buffer_to_image_storage: Linux-only",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+/// Host-side `RhiColorConverterMethodsVTable` wired to the per-method
+/// wrappers above (Phase E sub-lift slice A).
+pub static HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE:
+    streamlib_plugin_abi::RhiColorConverterMethodsVTable =
+    streamlib_plugin_abi::RhiColorConverterMethodsVTable {
+        layout_version:
+            streamlib_plugin_abi::RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION,
+        _reserved_padding: 0,
+        prepare_buffer_to_image_storage:
+            host_color_converter_prepare_buffer_to_image_storage,
+    };
+
+/// Accessor for the host's static `RhiColorConverterMethodsVTable` —
+/// used by `RhiColorConverter::from_arc_into_raw` to populate the
+/// β-shape's `methods_vtable` field.
+pub fn host_rhi_color_converter_methods_vtable(
+) -> *const streamlib_plugin_abi::RhiColorConverterMethodsVTable {
+    &HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE
+}
+
+// =============================================================================
 // FullAccess vtable callback-body tests (tier-1 — no GPU required)
 // =============================================================================
 //
@@ -10160,6 +10681,54 @@ mod gpu_lim_texture_native_dma_buf_fd_tests {
     }
 }
 
+#[cfg(test)]
+mod gpu_lim_video_source_timeline_semaphore_tests {
+    //! Tier-1 wire-format tests for the v12 (#958)
+    //! `set_video_source_timeline_semaphore` /
+    //! `clear_video_source_timeline_semaphore` slots. Each wrapper
+    //! must short-circuit on null gpu_handle (and `set` on null
+    //! timeline_handle) without panicking and without dereferencing
+    //! the null pointers.
+    //!
+    //! The non-null-handle path is exercised end-to-end by the
+    //! `load_project_dylib_camera_smoke` integration test (which
+    //! holds a real `Arc<HostVulkanTimelineSemaphore>` and is the
+    //! only place a Tier-1 with-handle test could reach without
+    //! constructing a real `GpuContext` here).
+    //!
+    //! Mental-revert: stub the wrapper bodies to
+    //! `unimplemented!()` and these tests trip the underlying
+    //! deref / panic — the wire-format claim regresses.
+    use super::*;
+
+    #[test]
+    fn set_video_source_timeline_is_noop_on_null_gpu_handle() {
+        unsafe {
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE
+                .set_video_source_timeline_semaphore)(
+                std::ptr::null(),
+                std::ptr::null(),
+            );
+        }
+    }
+
+    // Note: the timeline_handle null guard at host_gpu_lim_set_video_source_timeline_semaphore
+    // line 2078 isn't reachable at tier-1: the first guard
+    // (handle_as_gpu_context) short-circuits on null gpu_handle, and
+    // a non-null garbage gpu_handle would UB-deref before reaching
+    // the timeline check. The guard is exercised end-to-end by
+    // load_project_dylib_camera_smoke (the cdylib camera passes a
+    // valid gpu_handle and a real Arc-borrow timeline_handle).
+
+    #[test]
+    fn clear_video_source_timeline_is_noop_on_null_gpu_handle() {
+        unsafe {
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE
+                .clear_video_source_timeline_semaphore)(std::ptr::null());
+        }
+    }
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod compute_kernel_methods_vtable_null_tests {
     //! Tier-1 wire-format tests for the v3 typed binding-method
@@ -10290,6 +10859,92 @@ mod compute_kernel_methods_vtable_null_tests {
         assert!(
             err_buf_as_str(&buf, len)
                 .contains("set_storage_image: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod gpu_rhi_color_converter_methods_vtable_null_tests {
+    //! Tier-1 wire-format tests for the v1 method slot on
+    //! `RhiColorConverterMethodsVTable`. The wrapper must reject a
+    //! null converter handle before reaching any converter-side
+    //! state (i.e. before any deref) so cdylib callers get a clean
+    //! error return on the wire-format path instead of UB.
+    //!
+    //! The null-src-buffer / null-dst-texture / null-src-layout /
+    //! null-info / null-out-pointer guards live in the same wrapper
+    //! and fire when the converter handle is valid; they're
+    //! exercised end-to-end by the camera-package dlopen smoke test
+    //! (which holds a real converter). Tier-1 cannot reach them
+    //! without first passing the converter-handle deref — passing a
+    //! non-null garbage handle for the converter trips a misaligned-
+    //! pointer-deref panic before any subsequent guard runs. This
+    //! mirrors the precedent set by
+    //! `compute_kernel_methods_vtable_null_tests` (only the null-
+    //! kernel-handle case is tier-1; the rest ride dlopen).
+    //!
+    //! Success-path coverage (real Arc<RhiColorConverterInner>, a
+    //! cached buffer→image kernel that mints a fresh
+    //! Arc<VulkanComputeKernelInner>-shaped out-handle, refcount
+    //! transfer to the cdylib) requires a real Vulkan device and
+    //! arrives in the camera-package dlopen smoke test.
+
+    use super::*;
+
+    fn make_err_buf() -> ([u8; 256], usize) {
+        ([0u8; 256], 0usize)
+    }
+
+    fn err_buf_as_str(buf: &[u8], len: usize) -> &str {
+        std::str::from_utf8(&buf[..len]).expect("UTF-8")
+    }
+
+    fn dummy_layout() -> streamlib_plugin_abi::SourceLayoutInfoRepr {
+        streamlib_plugin_abi::SourceLayoutInfoRepr {
+            plane0_stride_bytes: 0,
+            plane1_stride_bytes: 0,
+            plane1_offset_bytes: 0,
+            _reserved_padding: 0,
+        }
+    }
+
+    fn dummy_info() -> streamlib_plugin_abi::ResolvedColorInfoRepr {
+        streamlib_plugin_abi::ResolvedColorInfoRepr {
+            primaries_raw: 0,
+            transfer_raw: 0,
+            matrix_raw: 0,
+            range_raw: 0,
+        }
+    }
+
+    #[test]
+    fn prepare_buffer_to_image_storage_rejects_null_converter_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let layout = dummy_layout();
+        let info = dummy_info();
+        let mut out_kernel: *const std::ffi::c_void = std::ptr::null();
+        let mut out_pc_size: u32 = 0;
+        let rc = unsafe {
+            (HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE.prepare_buffer_to_image_storage)(
+                std::ptr::null(),
+                std::ptr::null(),
+                &layout,
+                std::ptr::null(),
+                &info,
+                0,
+                &mut out_kernel,
+                &mut out_pc_size,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("prepare_buffer_to_image_storage: null converter handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );

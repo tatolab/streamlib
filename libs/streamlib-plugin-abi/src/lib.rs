@@ -113,7 +113,15 @@ pub const STREAMLIB_ABI_VERSION: u32 = 4;
 ///   machinery lands in C3 — Phase C2 ships the vtable layout +
 ///   host wiring + cdylib β-shape, locking the wire format before
 ///   the scope machinery turns it on).
-pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 11;
+/// - v12: [`RhiColorConverterMethodsVTable`] reference appended.
+///   The cdylib-side `RhiColorConverter` β-shape's `methods_vtable`
+///   field sources its pointer from this field. Non-null for hosts
+///   that ship a GpuContext; null otherwise (cdylib code must check
+///   before dispatching). Phase E sub-lift slice A wires the
+///   `prepare_buffer_to_image_storage` method through it so cdylib
+///   camera processors can prepare a color-conversion kernel without
+///   tripping the host-mode-only `host_inner()` panic.
+pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 12;
 
 /// Layout version of the [`ProcessorVTable`] struct. Read by the
 /// host's `processor_register` impl before dereferencing any vtable
@@ -182,7 +190,32 @@ pub const SURFACE_STORE_VTABLE_LAYOUT_VERSION: u32 = 1;
 ///   `Option::None`. Non-Linux hosts return `-1` unconditionally;
 ///   the macOS / Windows native-handle variants are deferred per
 ///   #908's AI Agent Notes.
-pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 11;
+/// - v12: #958 follow-up to #914 — adds
+///   `set_video_source_timeline_semaphore` /
+///   `clear_video_source_timeline_semaphore` slots. The camera
+///   processor (loaded as a cdylib via `runtime.load_project`)
+///   publishes its `Arc<HostVulkanTimelineSemaphore>` for in-process
+///   display consumers to wait on; #971 originally panic-guarded
+///   these methods on the premise no cdylib reaches them, but the
+///   camera-as-cdylib lifecycle established by #914 does in fact
+///   call them. Wire format mirrors the LimitedAccess Arc-borrow
+///   pattern from `register_texture`: the cdylib passes
+///   `Arc::as_ptr(&timeline) as *const c_void`; the host
+///   `Arc::increment_strong_count` + `Arc::from_raw`s a temporary
+///   borrow, calls `set_video_source_timeline_semaphore(&arc)`
+///   (which itself clones into the slot), then lets the temporary
+///   drop. The clear variant is a void no-arg callback. Linux-only
+///   on the host side; non-Linux stubs are no-ops.
+/// - v13: #958 Phase E sub — adds `wait_timeline_semaphore` slot.
+///   Lets the cdylib-side `HostVulkanTimelineSemaphore::wait` —
+///   used per-frame by the camera processor on its capture
+///   timeline — dispatch through the host instead of touching the
+///   host's `vulkanalia::Device` from cdylib code directly.
+///   `timeline_handle` is `Arc::as_ptr(timeline) as *const c_void`
+///   (borrowed, same shape as `set_video_source_timeline_semaphore`).
+///   Returns 0 on success, non-zero (`err_buf` populated) on driver
+///   failure / timeout. Linux-only on the host side.
+pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 13;
 
 /// Layout version of [`GpuContextFullAccessVTable`].
 ///
@@ -334,6 +367,19 @@ pub const VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 ///   [`GpuContextFullAccessVTable::build_triangles_blas`] /
 ///   `build_tlas` out-params and don't need vtable slots.
 pub const VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
+
+/// Layout version of [`RhiColorConverterMethodsVTable`].
+///
+/// - v1: ships the `prepare_buffer_to_image_storage` slot — the
+///   minimum surface a cdylib camera processor needs to dispatch
+///   YCbCr→RGBA conversion through the host's cached buffer→image
+///   kernel without panicking at the β-shape's host-mode-only
+///   `host_inner()` access. Out-params return an opaque
+///   `Arc<VulkanComputeKernelInner>`-shaped handle plus the kernel's
+///   `push_constant_size` POD so the cdylib can reconstruct a
+///   `VulkanComputeKernel` β-shape via the parent FullAccess vtable's
+///   per-type methods vtable lookup.
+pub const RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 1;
 
 // =============================================================================
 // Primitive enums
@@ -1591,6 +1637,91 @@ pub struct GpuContextLimitedAccessVTable {
     /// Calling with a null `texture_handle` returns `-1` (no panic).
     pub texture_native_dma_buf_fd:
         unsafe extern "C" fn(texture_handle: *const c_void) -> i64,
+
+    // -------------------------------------------------------------------------
+    // Video-source timeline semaphore publish/clear (v12 — #958)
+    // -------------------------------------------------------------------------
+
+    /// Publish a producer's `Arc<HostVulkanTimelineSemaphore>` for
+    /// in-process GPU-GPU sync (the in-tree consumer is
+    /// `LinuxDisplayProcessor::render_frame`, which waits on the
+    /// camera's published timeline before binding the captured
+    /// texture).
+    ///
+    /// `timeline_handle` is `Arc::as_ptr(timeline) as *const c_void`
+    /// — a **borrowed** pointer; the cdylib retains its own Arc and
+    /// the host does NOT consume the caller's reference. The host
+    /// callback `Arc::increment_strong_count`s the pointer,
+    /// reconstitutes a temporary owned Arc via `Arc::from_raw`,
+    /// calls `gpu.set_video_source_timeline_semaphore(&arc)` (which
+    /// itself clones into the slot), and lets the temporary Arc
+    /// drop — net effect: one fresh strong count moves into the
+    /// slot; the cdylib's Arc is unchanged.
+    ///
+    /// Mirrors the Arc-borrow-+-strong-count-bump pattern
+    /// [`Self::register_texture`] uses for `Arc<TextureInner>`.
+    ///
+    /// **Arc-raw-pointer transit** — not a layout-stable β-shape.
+    /// In-tree consumers (camera) ride this freely because they're
+    /// built in the same workspace as the engine. Cross-repo plugin
+    /// distribution will need a β-shape lift for
+    /// `HostVulkanTimelineSemaphore`; tracked as a future follow-up
+    /// alongside `create_timeline_semaphore`'s identical caveat.
+    ///
+    /// Linux-only on the host side; non-Linux stubs are no-ops.
+    /// Calling with a null `gpu_handle` or null `timeline_handle` is
+    /// a no-op.
+    pub set_video_source_timeline_semaphore: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        timeline_handle: *const c_void,
+    ),
+
+    /// Drop the published producer timeline so consumers observe the
+    /// absence and skip the wait. Idempotent against a never-set or
+    /// already-cleared slot. Pairs with
+    /// [`Self::set_video_source_timeline_semaphore`].
+    ///
+    /// Linux-only on the host side; non-Linux stubs are no-ops.
+    /// Calling with a null `gpu_handle` is a no-op.
+    pub clear_video_source_timeline_semaphore: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+    ),
+
+    // -------------------------------------------------------------------------
+    // HostVulkanTimelineSemaphore::wait (v13 — #958 Phase E sub)
+    // -------------------------------------------------------------------------
+
+    /// Block until the host's `HostVulkanTimelineSemaphore` counter
+    /// has reached or surpassed `value`. Called per-frame from
+    /// `HostVulkanTimelineSemaphore::wait` on the cdylib side; the
+    /// host calls `vkWaitSemaphores` against its own loaded
+    /// `vulkanalia::Device` to avoid running Vulkan dispatch from a
+    /// statically-linked cdylib copy of the loader.
+    ///
+    /// `timeline_handle` is a borrowed `*const HostVulkanTimelineSemaphore`
+    /// — the cdylib-side `wait` method takes `&self` and passes
+    /// `self as *const Self as *const c_void`; when the caller
+    /// instead holds an `Arc<HostVulkanTimelineSemaphore>` directly
+    /// (rare for `wait`), `Arc::as_ptr(&arc)` resolves to the same
+    /// borrow pointer. The host does NOT bump the refcount on the
+    /// borrow.
+    ///
+    /// `timeout_ns` is the per-call timeout; pass `u64::MAX` for
+    /// no timeout. Returns 0 on success, non-zero (`err_buf`
+    /// populated) on driver failure / timeout. Null `gpu_handle` or
+    /// null `timeline_handle` writes a "null handle" error and
+    /// returns non-zero.
+    ///
+    /// Linux-only on the host side; non-Linux stubs return non-zero.
+    pub wait_timeline_semaphore: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        timeline_handle: *const c_void,
+        value: u64,
+        timeout_ns: u64,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
 }
 
 unsafe impl Send for GpuContextLimitedAccessVTable {}
@@ -3014,6 +3145,114 @@ pub struct OffscreenDrawRepr {
     pub draw_indexed_call: DrawIndexedCallRepr,
 }
 
+/// `#[repr(C)]` mirror of `streamlib::core::rhi::color_converter::SourceLayoutInfo`.
+///
+/// Plane strides + UV-plane offset for the buffer→image kernel's
+/// SSBO walk. Layout-locked by the regression test in `layout_tests`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SourceLayoutInfoRepr {
+    /// Y plane (NV12) or packed plane (YUYV) row stride in bytes.
+    pub plane0_stride_bytes: u32,
+    /// UV plane row stride in bytes for NV12; zero for YUYV.
+    pub plane1_stride_bytes: u32,
+    /// Offset of the UV plane from the start of the source SSBO,
+    /// in bytes. Zero for YUYV (single plane).
+    pub plane1_offset_bytes: u32,
+    /// Reserved padding so the struct stays 4-byte-multiple sized
+    /// and naturally aligned; zero today, never read.
+    pub _reserved_padding: u32,
+}
+
+/// `#[repr(C)]` mirror of `streamlib::core::color::ResolvedColorInfo`.
+///
+/// Each field is the matching engine-side `#[repr(u32)]` enum's
+/// discriminant: `primaries_raw` mirrors `PrimariesId`, `transfer_raw`
+/// mirrors `TransferId`, `matrix_raw` mirrors `MatrixId`, `range_raw`
+/// mirrors `RangeId`. Layout-locked by the regression test in
+/// `layout_tests`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ResolvedColorInfoRepr {
+    /// `PrimariesId` discriminant.
+    pub primaries_raw: u32,
+    /// `TransferId` discriminant.
+    pub transfer_raw: u32,
+    /// `MatrixId` discriminant.
+    pub matrix_raw: u32,
+    /// `RangeId` discriminant.
+    pub range_raw: u32,
+}
+
+/// Per-type method-dispatch vtable for the `RhiColorConverter`
+/// β-shape (Phase E sub-lift slice A).
+///
+/// `RhiColorConverter` keeps `clone_color_converter` /
+/// `drop_color_converter` dispatch on the parent
+/// [`GpuContextFullAccessVTable`]; this vtable carries the
+/// `prepare_buffer_to_image_storage` slot so cdylib camera processors
+/// can prepare the host's cached buffer→image kernel without tripping
+/// the β-shape's host-mode-only `host_inner()` access. The slot
+/// returns an opaque `Arc<VulkanComputeKernelInner>`-shaped handle
+/// plus the kernel's `push_constant_size`; the cdylib reconstructs a
+/// `VulkanComputeKernel` β-shape via the host_callbacks() per-type
+/// methods vtable lookup.
+#[repr(C)]
+pub struct RhiColorConverterMethodsVTable {
+    /// Vtable layout version. Must equal
+    /// [`RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION`].
+    pub layout_version: u32,
+
+    /// Reserved padding (keeps the following pointer naturally
+    /// aligned on 32-bit hosts; zero today, never read).
+    pub _reserved_padding: u32,
+
+    /// Bind source / destination / push-constants on the converter's
+    /// buffer→image kernel and return a fresh
+    /// `Arc<VulkanComputeKernelInner>`-shaped opaque handle the cdylib
+    /// wraps into its `VulkanComputeKernel` β-shape via the
+    /// `host_callbacks().vulkan_compute_kernel_methods_vtable` lookup.
+    ///
+    /// - `converter_handle` is
+    ///   `Arc::as_ptr(Arc<RhiColorConverterInner>)`-shaped (borrowed;
+    ///   the host does not bump the converter's refcount).
+    /// - `src_buffer_handle` is
+    ///   `Arc::into_raw(Arc<HostVulkanBufferInner>)`-shaped from the
+    ///   `StorageBuffer` β-shape's `handle` field (borrowed; the
+    ///   cdylib retains ownership).
+    /// - `dst_texture_handle` is
+    ///   `Arc::into_raw(Arc<TextureInner>)`-shaped from the `Texture`
+    ///   β-shape's `handle` field (borrowed; the cdylib retains
+    ///   ownership).
+    /// - `dst_transfer_raw` is the `#[repr(u32)]` discriminant of
+    ///   `streamlib::core::color::TransferId`.
+    ///
+    /// On success writes a bumped
+    /// `Arc::into_raw(Arc<VulkanComputeKernelInner>)`-shaped pointer
+    /// into `*out_kernel` (the cdylib owns the bumped strong count
+    /// and releases it via the parent vtable's
+    /// `drop_compute_kernel`) and the kernel's `push_constant_size`
+    /// into `*out_cached_push_constant_size`. Returns 0 on success;
+    /// non-zero with UTF-8 message in `err_buf` on failure. Linux-only
+    /// on the host side; non-Linux stubs return non-zero.
+    pub prepare_buffer_to_image_storage: unsafe extern "C" fn(
+        converter_handle: *const c_void,
+        src_buffer_handle: *const c_void,
+        src_layout: *const SourceLayoutInfoRepr,
+        dst_texture_handle: *const c_void,
+        info: *const ResolvedColorInfoRepr,
+        dst_transfer_raw: u32,
+        out_kernel: *mut *const c_void,
+        out_cached_push_constant_size: *mut u32,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+}
+
+unsafe impl Send for RhiColorConverterMethodsVTable {}
+unsafe impl Sync for RhiColorConverterMethodsVTable {}
+
 /// Per-type method-dispatch vtable for the `VulkanGraphicsKernel`
 /// β-shape (issue #907 Phase E PR 3/5 + #951 method-dispatch slice).
 ///
@@ -3900,6 +4139,22 @@ pub struct HostServices {
     /// follow-up PRs append the actual method slots.
     pub vulkan_acceleration_structure_methods_vtable:
         *const VulkanAccelerationStructureMethodsVTable,
+
+    // -------------------------------------------------------------------------
+    // RhiColorConverterMethodsVTable surface (v12 — Phase E sub-lift slice A)
+    // -------------------------------------------------------------------------
+
+    /// Static dispatch table for `RhiColorConverter` β-shape method
+    /// dispatch. Paired with the per-`RhiColorConverter` handle the
+    /// cdylib carries on its β-shape struct (`methods_vtable` field).
+    /// Set once at install time; non-null for hosts that ship a
+    /// GpuContext, null otherwise (cdylib must check before
+    /// dispatching). Phase E sub-lift slice A lands the
+    /// `prepare_buffer_to_image_storage` slot so cdylib camera
+    /// processors can prepare color-conversion kernels without
+    /// tripping the β-shape's host-mode-only `host_inner()` panic.
+    pub rhi_color_converter_methods_vtable:
+        *const RhiColorConverterMethodsVTable,
 }
 
 // Note: under v3 the ABI eliminates the tokio shared-type crossing
@@ -4060,14 +4315,14 @@ mod layout_tests {
 
     #[test]
     fn host_services_layout_versions_pinned() {
-        assert_eq!(HOST_SERVICES_LAYOUT_VERSION, 11);
+        assert_eq!(HOST_SERVICES_LAYOUT_VERSION, 12);
         assert_eq!(STREAMLIB_ABI_VERSION, 4);
         assert_eq!(RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(AUDIO_CLOCK_VTABLE_LAYOUT_VERSION, 1);
         // v2: added owning-Arc handle lifetime callbacks
         // (`clone_handle` / `drop_handle`).
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
-        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 11);
+        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 13);
         assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 8);
         assert_eq!(TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION, 2);
@@ -4075,10 +4330,11 @@ mod layout_tests {
         assert_eq!(VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION, 2);
+        assert_eq!(RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION, 1);
     }
 
     #[test]
-    fn host_services_tail_carries_eleven_vtable_pointers() {
+    fn host_services_tail_carries_twelve_vtable_pointers() {
         // Trailing vtable pointers on HostServices. We don't pin the
         // absolute offsets (earlier fields carry their own layout
         // audit), but we do pin:
@@ -4087,7 +4343,8 @@ mod layout_tests {
         //      RuntimeOps → GpuContextLimitedAccess → SurfaceStore →
         //      GpuContextFullAccess → TextureRingMethods →
         //      VulkanComputeKernelMethods → VulkanGraphicsKernelMethods →
-        //      VulkanRayTracingKernelMethods → VulkanAccelerationStructureMethods.
+        //      VulkanRayTracingKernelMethods → VulkanAccelerationStructureMethods →
+        //      RhiColorConverterMethods.
         //   3. They are contiguous (no padding inserted between them).
         assert_eq!(size_of::<*const RuntimeContextVTable>(), 8);
         assert_eq!(size_of::<*const AudioClockVTable>(), 8);
@@ -4103,6 +4360,7 @@ mod layout_tests {
             size_of::<*const VulkanAccelerationStructureMethodsVTable>(),
             8
         );
+        assert_eq!(size_of::<*const RhiColorConverterMethodsVTable>(), 8);
 
         let runtime_ctx_off = offset_of!(HostServices, runtime_context_vtable);
         let audio_clock_off = offset_of!(HostServices, audio_clock_vtable);
@@ -4119,6 +4377,8 @@ mod layout_tests {
             offset_of!(HostServices, vulkan_ray_tracing_kernel_methods_vtable);
         let accel_struct_off =
             offset_of!(HostServices, vulkan_acceleration_structure_methods_vtable);
+        let color_converter_off =
+            offset_of!(HostServices, rhi_color_converter_methods_vtable);
         assert!(runtime_ctx_off < audio_clock_off);
         assert!(audio_clock_off < runtime_ops_off);
         assert!(runtime_ops_off < gpu_lim_off);
@@ -4129,6 +4389,7 @@ mod layout_tests {
         assert!(compute_kernel_off < graphics_kernel_off);
         assert!(graphics_kernel_off < rt_kernel_off);
         assert!(rt_kernel_off < accel_struct_off);
+        assert!(accel_struct_off < color_converter_off);
         assert_eq!(audio_clock_off - runtime_ctx_off, 8);
         assert_eq!(runtime_ops_off - audio_clock_off, 8);
         assert_eq!(gpu_lim_off - runtime_ops_off, 8);
@@ -4139,10 +4400,11 @@ mod layout_tests {
         assert_eq!(graphics_kernel_off - compute_kernel_off, 8);
         assert_eq!(rt_kernel_off - graphics_kernel_off, 8);
         assert_eq!(accel_struct_off - rt_kernel_off, 8);
+        assert_eq!(color_converter_off - accel_struct_off, 8);
 
-        // The VulkanAccelerationStructureMethods pointer must end at
-        // the end of the struct (it is the last field added in v11).
-        assert_eq!(accel_struct_off + 8, size_of::<HostServices>());
+        // The RhiColorConverterMethods pointer must end at the end of
+        // the struct (it is the last field added in v12).
+        assert_eq!(color_converter_off + 8, size_of::<HostServices>());
     }
 
     #[test]
@@ -4444,12 +4706,64 @@ mod layout_tests {
     }
 
     #[test]
+    fn source_layout_info_repr_layout() {
+        // Four u32 fields = 16 bytes, align 4.
+        assert_eq!(size_of::<SourceLayoutInfoRepr>(), 16);
+        assert_eq!(align_of::<SourceLayoutInfoRepr>(), 4);
+        assert_eq!(offset_of!(SourceLayoutInfoRepr, plane0_stride_bytes), 0);
+        assert_eq!(offset_of!(SourceLayoutInfoRepr, plane1_stride_bytes), 4);
+        assert_eq!(offset_of!(SourceLayoutInfoRepr, plane1_offset_bytes), 8);
+        assert_eq!(offset_of!(SourceLayoutInfoRepr, _reserved_padding), 12);
+    }
+
+    #[test]
+    fn resolved_color_info_repr_layout() {
+        // Four u32 discriminants = 16 bytes, align 4.
+        assert_eq!(size_of::<ResolvedColorInfoRepr>(), 16);
+        assert_eq!(align_of::<ResolvedColorInfoRepr>(), 4);
+        assert_eq!(offset_of!(ResolvedColorInfoRepr, primaries_raw), 0);
+        assert_eq!(offset_of!(ResolvedColorInfoRepr, transfer_raw), 4);
+        assert_eq!(offset_of!(ResolvedColorInfoRepr, matrix_raw), 8);
+        assert_eq!(offset_of!(ResolvedColorInfoRepr, range_raw), 12);
+    }
+
+    #[test]
+    fn rhi_color_converter_methods_vtable_layout() {
+        // v1:
+        //   layout_version                    @ 0  (4 bytes, u32)
+        //   _reserved_padding                 @ 4  (4 bytes, u32)
+        //   prepare_buffer_to_image_storage   @ 8  (8 bytes, fn pointer)
+        // Total = 16 bytes, align = 8.
+        assert_eq!(size_of::<RhiColorConverterMethodsVTable>(), 16);
+        assert_eq!(align_of::<RhiColorConverterMethodsVTable>(), 8);
+        assert_eq!(
+            offset_of!(RhiColorConverterMethodsVTable, layout_version),
+            0
+        );
+        assert_eq!(
+            offset_of!(RhiColorConverterMethodsVTable, _reserved_padding),
+            4
+        );
+        assert_eq!(
+            offset_of!(
+                RhiColorConverterMethodsVTable,
+                prepare_buffer_to_image_storage
+            ),
+            8
+        );
+    }
+
+    #[test]
     fn gpu_context_limited_access_vtable_layout() {
         // layout_version (u32) + _reserved_padding (u32) + 53 fn
         // pointers (8 bytes each) = 4 + 4 + 424 = 432 bytes.
         // (Phase F #957 appended texture_native_dma_buf_fd, taking the
-        // count from 52 → 53.)
-        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 432);
+        // count from 52 → 53. v12 / #958 appended
+        // set_video_source_timeline_semaphore +
+        // clear_video_source_timeline_semaphore, taking it 53 → 55.
+        // v13 / #958 Phase E sub appended wait_timeline_semaphore,
+        // taking it 55 → 56.)
+        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 456);
         assert_eq!(align_of::<GpuContextLimitedAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextLimitedAccessVTable, layout_version), 0);
         assert_eq!(
@@ -4669,6 +4983,26 @@ mod layout_tests {
         assert_eq!(
             offset_of!(GpuContextLimitedAccessVTable, texture_native_dma_buf_fd),
             424
+        );
+        // v12 entries (#958).
+        assert_eq!(
+            offset_of!(
+                GpuContextLimitedAccessVTable,
+                set_video_source_timeline_semaphore
+            ),
+            432
+        );
+        assert_eq!(
+            offset_of!(
+                GpuContextLimitedAccessVTable,
+                clear_video_source_timeline_semaphore
+            ),
+            440
+        );
+        // v13 entry (#958 Phase E sub).
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, wait_timeline_semaphore),
+            448
         );
     }
 
@@ -5247,6 +5581,7 @@ mod layout_tests {
         assert_send_sync::<GpuContextLimitedAccessVTable>();
         assert_send_sync::<SurfaceStoreVTable>();
         assert_send_sync::<GpuContextFullAccessVTable>();
+        assert_send_sync::<RhiColorConverterMethodsVTable>();
         assert_send_sync::<HostServices>();
         assert_send_sync::<ProcessorVTable>();
     }

@@ -337,17 +337,24 @@ impl std::fmt::Debug for RhiColorConverterInner {
 /// the destination format, with per-frame [`ResolvedColorInfo`] driving
 /// the math via push constants.
 ///
-/// Layout-stable: `#[repr(C)] (handle, vtable)`. Cdylibs can hold,
-/// refcount, and drop without sharing rustc-version or dep-graph with
-/// the host. The opaque handle points at an `Arc<RhiColorConverterInner>`;
-/// lifecycle dispatches through the host-installed FullAccess vtable's
-/// `clone_color_converter` / `drop_color_converter` callbacks.
+/// Layout-stable: `#[repr(C)] (handle, vtable, methods_vtable)`. Cdylibs
+/// can hold, refcount, and drop without sharing rustc-version or dep-
+/// graph with the host. The opaque handle points at an
+/// `Arc<RhiColorConverterInner>`; lifecycle dispatches through the
+/// host-installed FullAccess vtable's `clone_color_converter` /
+/// `drop_color_converter` callbacks, and method calls
+/// (`prepare_buffer_to_image_storage`) dispatch through the per-type
+/// `methods_vtable` (Phase E sub-lift slice A).
 #[repr(C)]
 pub struct RhiColorConverter {
     /// Opaque handle to the host's `Arc<RhiColorConverterInner>`.
     pub(crate) handle: *const std::ffi::c_void,
-    /// Vtable for cross-DSO Clone/Drop dispatch.
+    /// Parent vtable for cross-DSO Clone/Drop dispatch.
     pub(crate) vtable: *const streamlib_plugin_abi::GpuContextFullAccessVTable,
+    /// Per-type vtable for cross-DSO method dispatch (Phase E sub-lift
+    /// slice A — `prepare_buffer_to_image_storage`).
+    pub(crate) methods_vtable:
+        *const streamlib_plugin_abi::RhiColorConverterMethodsVTable,
 }
 
 // SAFETY: handle points at an Arc<RhiColorConverterInner>; the Inner's
@@ -358,13 +365,19 @@ unsafe impl Sync for RhiColorConverter {}
 
 impl RhiColorConverter {
     /// Internal helper: leak an initial Arc strong count via
-    /// `Arc::into_raw`, resolve the host-mode FullAccess vtable, and
-    /// assemble the cross-DSO shape.
+    /// `Arc::into_raw`, resolve the host-mode FullAccess vtable +
+    /// per-type methods vtable, and assemble the cross-DSO shape.
     pub(crate) fn from_arc_into_raw(arc: std::sync::Arc<RhiColorConverterInner>) -> Self {
         let handle = std::sync::Arc::into_raw(arc) as *const std::ffi::c_void;
         let vtable =
             crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
-        Self { handle, vtable }
+        let methods_vtable =
+            crate::core::plugin::host_services::host_rhi_color_converter_methods_vtable();
+        Self {
+            handle,
+            vtable,
+            methods_vtable,
+        }
     }
 
     /// Engine-internal borrow of the host-owned `RhiColorConverterInner`.
@@ -410,6 +423,14 @@ impl RhiColorConverter {
 
     /// Bind source / destination / push-constants on the buffer→image
     /// kernel and return it for recorder-driven dispatch.
+    ///
+    /// Mode-routed: in-process callers dispatch through `host_inner`;
+    /// cdylib callers dispatch through the per-type methods vtable
+    /// (Phase E sub-lift slice A). The cdylib-side return reconstructs
+    /// a `VulkanComputeKernel` β-shape from the host-handed-out
+    /// `Arc<VulkanComputeKernelInner>`-shaped opaque handle + cached
+    /// `push_constant_size`, sourcing the parent / per-type vtables
+    /// from `host_callbacks()`.
     #[cfg(target_os = "linux")]
     pub fn prepare_buffer_to_image_storage(
         &self,
@@ -419,8 +440,116 @@ impl RhiColorConverter {
         info: &ResolvedColorInfo,
         dst_transfer: TransferId,
     ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_prepare_buffer_to_image_storage_via_vtable(
+                src,
+                src_layout,
+                dst,
+                info,
+                dst_transfer,
+            );
+        }
         self.host_inner()
             .prepare_buffer_to_image_storage(src, src_layout, dst, info, dst_transfer)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn dispatch_prepare_buffer_to_image_storage_via_vtable(
+        &self,
+        src: &crate::core::rhi::StorageBuffer,
+        src_layout: SourceLayoutInfo,
+        dst: &Texture,
+        info: &ResolvedColorInfo,
+        dst_transfer: TransferId,
+    ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+        use crate::core::Error;
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "prepare_buffer_to_image_storage: color converter methods vtable is null"
+                    .into(),
+            ));
+        }
+        // The cdylib needs the parent FullAccess vtable and the per-
+        // type VulkanComputeKernel methods vtable to assemble its own
+        // β-shape from the host-returned inner handle. Both come from
+        // `host_callbacks()` — populated at plugin install time.
+        let callbacks =
+            crate::core::plugin::host_services::host_callbacks().ok_or_else(|| {
+                Error::GpuError(
+                    "prepare_buffer_to_image_storage: host callbacks not installed"
+                        .into(),
+                )
+            })?;
+        let parent_vtable = callbacks.gpu_context_full_access_vtable;
+        let kernel_methods_vtable = callbacks.vulkan_compute_kernel_methods_vtable;
+        if parent_vtable.is_null() {
+            return Err(Error::GpuError(
+                "prepare_buffer_to_image_storage: GpuContextFullAccess vtable is null"
+                    .into(),
+            ));
+        }
+
+        let layout_repr = streamlib_plugin_abi::SourceLayoutInfoRepr {
+            plane0_stride_bytes: src_layout.plane0_stride_bytes,
+            plane1_stride_bytes: src_layout.plane1_stride_bytes,
+            plane1_offset_bytes: src_layout.plane1_offset_bytes,
+            _reserved_padding: 0,
+        };
+        let info_repr = streamlib_plugin_abi::ResolvedColorInfoRepr {
+            primaries_raw: info.primaries as u32,
+            transfer_raw: info.transfer as u32,
+            matrix_raw: info.matrix as u32,
+            range_raw: info.range as u32,
+        };
+
+        let mut out_kernel: *const std::ffi::c_void = std::ptr::null();
+        let mut out_cached_push_constant_size: u32 = 0;
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).prepare_buffer_to_image_storage)(
+                self.handle,
+                src.handle,
+                &layout_repr,
+                dst.handle,
+                &info_repr,
+                dst_transfer as u32,
+                &mut out_kernel,
+                &mut out_cached_push_constant_size,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status != 0 {
+            let msg = String::from_utf8_lossy(
+                &err_buf[..err_len.min(err_buf.len())],
+            )
+            .into_owned();
+            return Err(Error::GpuError(msg));
+        }
+        if out_kernel.is_null() {
+            return Err(Error::GpuError(
+                "prepare_buffer_to_image_storage: host signaled success but \
+                 out_kernel is null"
+                    .into(),
+            ));
+        }
+        // β-shape: bundle the raw handle (an
+        // `Arc::into_raw(Arc<VulkanComputeKernelInner>)` pointer host-
+        // side, opaque to the cdylib) with the parent vtable + per-
+        // type methods vtable + cached `push_constant_size` POD. The
+        // cdylib owns the inner Arc strong count the host bumped
+        // before returning; the β-shape's Drop releases it via
+        // `drop_compute_kernel`.
+        let kernel = crate::vulkan::rhi::VulkanComputeKernel {
+            handle: out_kernel,
+            vtable: parent_vtable,
+            methods_vtable: kernel_methods_vtable,
+            cached_push_constant_size: out_cached_push_constant_size,
+            _reserved_padding: 0,
+        };
+        Ok(std::sync::Arc::new(kernel))
     }
 
     /// [`crate::core::rhi::PixelBuffer`]-shape source variant of
@@ -475,6 +604,7 @@ impl Clone for RhiColorConverter {
         Self {
             handle: self.handle,
             vtable: self.vtable,
+            methods_vtable: self.methods_vtable,
         }
     }
 }
@@ -517,10 +647,15 @@ mod layout_tests {
 
     #[test]
     fn rhi_color_converter_layout() {
-        assert_eq!(size_of::<RhiColorConverter>(), 16);
+        // Phase E sub-lift slice A appended `methods_vtable` (16 → 24
+        // bytes); the β-shape now mirrors the
+        // `(handle, vtable, methods_vtable)` triple used by every
+        // per-type kernel β-shape.
+        assert_eq!(size_of::<RhiColorConverter>(), 24);
         assert_eq!(align_of::<RhiColorConverter>(), 8);
         assert_eq!(offset_of!(RhiColorConverter, handle), 0);
         assert_eq!(offset_of!(RhiColorConverter, vtable), 8);
+        assert_eq!(offset_of!(RhiColorConverter, methods_vtable), 16);
     }
 
     #[test]
