@@ -4316,10 +4316,19 @@ impl GpuContextFullAccess {
                             "color_converter: host signaled success but out_converter is null".into(),
                         ));
                     }
-                    // β-shape: bundle the raw handle with the host vtable.
+                    // β-shape: bundle the raw handle with the parent
+                    // vtable + per-type methods vtable (Phase E sub-
+                    // lift slice A). The methods vtable comes from
+                    // `host_callbacks()` — populated at plugin
+                    // install time alongside the parent vtable.
+                    let methods_vtable =
+                        crate::core::plugin::host_services::host_callbacks()
+                            .map(|c| c.rhi_color_converter_methods_vtable)
+                            .unwrap_or(std::ptr::null());
                     Ok(RhiColorConverter {
                         handle: out_converter,
                         vtable: self.vtable,
+                        methods_vtable,
                     })
                 } else {
                     let msg = String::from_utf8_lossy(

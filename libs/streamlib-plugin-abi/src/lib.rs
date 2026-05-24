@@ -113,7 +113,15 @@ pub const STREAMLIB_ABI_VERSION: u32 = 4;
 ///   machinery lands in C3 — Phase C2 ships the vtable layout +
 ///   host wiring + cdylib β-shape, locking the wire format before
 ///   the scope machinery turns it on).
-pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 11;
+/// - v12: [`RhiColorConverterMethodsVTable`] reference appended.
+///   The cdylib-side `RhiColorConverter` β-shape's `methods_vtable`
+///   field sources its pointer from this field. Non-null for hosts
+///   that ship a GpuContext; null otherwise (cdylib code must check
+///   before dispatching). Phase E sub-lift slice A wires the
+///   `prepare_buffer_to_image_storage` method through it so cdylib
+///   camera processors can prepare a color-conversion kernel without
+///   tripping the host-mode-only `host_inner()` panic.
+pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 12;
 
 /// Layout version of the [`ProcessorVTable`] struct. Read by the
 /// host's `processor_register` impl before dereferencing any vtable
@@ -359,6 +367,19 @@ pub const VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 ///   [`GpuContextFullAccessVTable::build_triangles_blas`] /
 ///   `build_tlas` out-params and don't need vtable slots.
 pub const VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
+
+/// Layout version of [`RhiColorConverterMethodsVTable`].
+///
+/// - v1: ships the `prepare_buffer_to_image_storage` slot — the
+///   minimum surface a cdylib camera processor needs to dispatch
+///   YCbCr→RGBA conversion through the host's cached buffer→image
+///   kernel without panicking at the β-shape's host-mode-only
+///   `host_inner()` access. Out-params return an opaque
+///   `Arc<VulkanComputeKernelInner>`-shaped handle plus the kernel's
+///   `push_constant_size` POD so the cdylib can reconstruct a
+///   `VulkanComputeKernel` β-shape via the parent FullAccess vtable's
+///   per-type methods vtable lookup.
+pub const RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 1;
 
 // =============================================================================
 // Primitive enums
@@ -3122,6 +3143,114 @@ pub struct OffscreenDrawRepr {
     pub draw_indexed_call: DrawIndexedCallRepr,
 }
 
+/// `#[repr(C)]` mirror of `streamlib::core::rhi::color_converter::SourceLayoutInfo`.
+///
+/// Plane strides + UV-plane offset for the buffer→image kernel's
+/// SSBO walk. Layout-locked by the regression test in `layout_tests`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SourceLayoutInfoRepr {
+    /// Y plane (NV12) or packed plane (YUYV) row stride in bytes.
+    pub plane0_stride_bytes: u32,
+    /// UV plane row stride in bytes for NV12; zero for YUYV.
+    pub plane1_stride_bytes: u32,
+    /// Offset of the UV plane from the start of the source SSBO,
+    /// in bytes. Zero for YUYV (single plane).
+    pub plane1_offset_bytes: u32,
+    /// Reserved padding so the struct stays 4-byte-multiple sized
+    /// and naturally aligned; zero today, never read.
+    pub _reserved_padding: u32,
+}
+
+/// `#[repr(C)]` mirror of `streamlib::core::color::ResolvedColorInfo`.
+///
+/// Each field is the matching engine-side `#[repr(u32)]` enum's
+/// discriminant: `primaries_raw` mirrors `PrimariesId`, `transfer_raw`
+/// mirrors `TransferId`, `matrix_raw` mirrors `MatrixId`, `range_raw`
+/// mirrors `RangeId`. Layout-locked by the regression test in
+/// `layout_tests`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ResolvedColorInfoRepr {
+    /// `PrimariesId` discriminant.
+    pub primaries_raw: u32,
+    /// `TransferId` discriminant.
+    pub transfer_raw: u32,
+    /// `MatrixId` discriminant.
+    pub matrix_raw: u32,
+    /// `RangeId` discriminant.
+    pub range_raw: u32,
+}
+
+/// Per-type method-dispatch vtable for the `RhiColorConverter`
+/// β-shape (Phase E sub-lift slice A).
+///
+/// `RhiColorConverter` keeps `clone_color_converter` /
+/// `drop_color_converter` dispatch on the parent
+/// [`GpuContextFullAccessVTable`]; this vtable carries the
+/// `prepare_buffer_to_image_storage` slot so cdylib camera processors
+/// can prepare the host's cached buffer→image kernel without tripping
+/// the β-shape's host-mode-only `host_inner()` access. The slot
+/// returns an opaque `Arc<VulkanComputeKernelInner>`-shaped handle
+/// plus the kernel's `push_constant_size`; the cdylib reconstructs a
+/// `VulkanComputeKernel` β-shape via the host_callbacks() per-type
+/// methods vtable lookup.
+#[repr(C)]
+pub struct RhiColorConverterMethodsVTable {
+    /// Vtable layout version. Must equal
+    /// [`RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION`].
+    pub layout_version: u32,
+
+    /// Reserved padding (keeps the following pointer naturally
+    /// aligned on 32-bit hosts; zero today, never read).
+    pub _reserved_padding: u32,
+
+    /// Bind source / destination / push-constants on the converter's
+    /// buffer→image kernel and return a fresh
+    /// `Arc<VulkanComputeKernelInner>`-shaped opaque handle the cdylib
+    /// wraps into its `VulkanComputeKernel` β-shape via the
+    /// `host_callbacks().vulkan_compute_kernel_methods_vtable` lookup.
+    ///
+    /// - `converter_handle` is
+    ///   `Arc::as_ptr(Arc<RhiColorConverterInner>)`-shaped (borrowed;
+    ///   the host does not bump the converter's refcount).
+    /// - `src_buffer_handle` is
+    ///   `Arc::into_raw(Arc<HostVulkanBufferInner>)`-shaped from the
+    ///   `StorageBuffer` β-shape's `handle` field (borrowed; the
+    ///   cdylib retains ownership).
+    /// - `dst_texture_handle` is
+    ///   `Arc::into_raw(Arc<TextureInner>)`-shaped from the `Texture`
+    ///   β-shape's `handle` field (borrowed; the cdylib retains
+    ///   ownership).
+    /// - `dst_transfer_raw` is the `#[repr(u32)]` discriminant of
+    ///   `streamlib::core::color::TransferId`.
+    ///
+    /// On success writes a bumped
+    /// `Arc::into_raw(Arc<VulkanComputeKernelInner>)`-shaped pointer
+    /// into `*out_kernel` (the cdylib owns the bumped strong count
+    /// and releases it via the parent vtable's
+    /// `drop_compute_kernel`) and the kernel's `push_constant_size`
+    /// into `*out_cached_push_constant_size`. Returns 0 on success;
+    /// non-zero with UTF-8 message in `err_buf` on failure. Linux-only
+    /// on the host side; non-Linux stubs return non-zero.
+    pub prepare_buffer_to_image_storage: unsafe extern "C" fn(
+        converter_handle: *const c_void,
+        src_buffer_handle: *const c_void,
+        src_layout: *const SourceLayoutInfoRepr,
+        dst_texture_handle: *const c_void,
+        info: *const ResolvedColorInfoRepr,
+        dst_transfer_raw: u32,
+        out_kernel: *mut *const c_void,
+        out_cached_push_constant_size: *mut u32,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+}
+
+unsafe impl Send for RhiColorConverterMethodsVTable {}
+unsafe impl Sync for RhiColorConverterMethodsVTable {}
+
 /// Per-type method-dispatch vtable for the `VulkanGraphicsKernel`
 /// β-shape (issue #907 Phase E PR 3/5 + #951 method-dispatch slice).
 ///
@@ -4008,6 +4137,22 @@ pub struct HostServices {
     /// follow-up PRs append the actual method slots.
     pub vulkan_acceleration_structure_methods_vtable:
         *const VulkanAccelerationStructureMethodsVTable,
+
+    // -------------------------------------------------------------------------
+    // RhiColorConverterMethodsVTable surface (v12 — Phase E sub-lift slice A)
+    // -------------------------------------------------------------------------
+
+    /// Static dispatch table for `RhiColorConverter` β-shape method
+    /// dispatch. Paired with the per-`RhiColorConverter` handle the
+    /// cdylib carries on its β-shape struct (`methods_vtable` field).
+    /// Set once at install time; non-null for hosts that ship a
+    /// GpuContext, null otherwise (cdylib must check before
+    /// dispatching). Phase E sub-lift slice A lands the
+    /// `prepare_buffer_to_image_storage` slot so cdylib camera
+    /// processors can prepare color-conversion kernels without
+    /// tripping the β-shape's host-mode-only `host_inner()` panic.
+    pub rhi_color_converter_methods_vtable:
+        *const RhiColorConverterMethodsVTable,
 }
 
 // Note: under v3 the ABI eliminates the tokio shared-type crossing
@@ -4168,7 +4313,7 @@ mod layout_tests {
 
     #[test]
     fn host_services_layout_versions_pinned() {
-        assert_eq!(HOST_SERVICES_LAYOUT_VERSION, 11);
+        assert_eq!(HOST_SERVICES_LAYOUT_VERSION, 12);
         assert_eq!(STREAMLIB_ABI_VERSION, 4);
         assert_eq!(RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(AUDIO_CLOCK_VTABLE_LAYOUT_VERSION, 1);
@@ -4183,10 +4328,11 @@ mod layout_tests {
         assert_eq!(VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION, 2);
+        assert_eq!(RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION, 1);
     }
 
     #[test]
-    fn host_services_tail_carries_eleven_vtable_pointers() {
+    fn host_services_tail_carries_twelve_vtable_pointers() {
         // Trailing vtable pointers on HostServices. We don't pin the
         // absolute offsets (earlier fields carry their own layout
         // audit), but we do pin:
@@ -4195,7 +4341,8 @@ mod layout_tests {
         //      RuntimeOps → GpuContextLimitedAccess → SurfaceStore →
         //      GpuContextFullAccess → TextureRingMethods →
         //      VulkanComputeKernelMethods → VulkanGraphicsKernelMethods →
-        //      VulkanRayTracingKernelMethods → VulkanAccelerationStructureMethods.
+        //      VulkanRayTracingKernelMethods → VulkanAccelerationStructureMethods →
+        //      RhiColorConverterMethods.
         //   3. They are contiguous (no padding inserted between them).
         assert_eq!(size_of::<*const RuntimeContextVTable>(), 8);
         assert_eq!(size_of::<*const AudioClockVTable>(), 8);
@@ -4211,6 +4358,7 @@ mod layout_tests {
             size_of::<*const VulkanAccelerationStructureMethodsVTable>(),
             8
         );
+        assert_eq!(size_of::<*const RhiColorConverterMethodsVTable>(), 8);
 
         let runtime_ctx_off = offset_of!(HostServices, runtime_context_vtable);
         let audio_clock_off = offset_of!(HostServices, audio_clock_vtable);
@@ -4227,6 +4375,8 @@ mod layout_tests {
             offset_of!(HostServices, vulkan_ray_tracing_kernel_methods_vtable);
         let accel_struct_off =
             offset_of!(HostServices, vulkan_acceleration_structure_methods_vtable);
+        let color_converter_off =
+            offset_of!(HostServices, rhi_color_converter_methods_vtable);
         assert!(runtime_ctx_off < audio_clock_off);
         assert!(audio_clock_off < runtime_ops_off);
         assert!(runtime_ops_off < gpu_lim_off);
@@ -4237,6 +4387,7 @@ mod layout_tests {
         assert!(compute_kernel_off < graphics_kernel_off);
         assert!(graphics_kernel_off < rt_kernel_off);
         assert!(rt_kernel_off < accel_struct_off);
+        assert!(accel_struct_off < color_converter_off);
         assert_eq!(audio_clock_off - runtime_ctx_off, 8);
         assert_eq!(runtime_ops_off - audio_clock_off, 8);
         assert_eq!(gpu_lim_off - runtime_ops_off, 8);
@@ -4247,10 +4398,11 @@ mod layout_tests {
         assert_eq!(graphics_kernel_off - compute_kernel_off, 8);
         assert_eq!(rt_kernel_off - graphics_kernel_off, 8);
         assert_eq!(accel_struct_off - rt_kernel_off, 8);
+        assert_eq!(color_converter_off - accel_struct_off, 8);
 
-        // The VulkanAccelerationStructureMethods pointer must end at
-        // the end of the struct (it is the last field added in v11).
-        assert_eq!(accel_struct_off + 8, size_of::<HostServices>());
+        // The RhiColorConverterMethods pointer must end at the end of
+        // the struct (it is the last field added in v12).
+        assert_eq!(color_converter_off + 8, size_of::<HostServices>());
     }
 
     #[test]
@@ -4547,6 +4699,54 @@ mod layout_tests {
         );
         assert_eq!(
             offset_of!(VulkanAccelerationStructureMethodsVTable, label),
+            8
+        );
+    }
+
+    #[test]
+    fn source_layout_info_repr_layout() {
+        // Four u32 fields = 16 bytes, align 4.
+        assert_eq!(size_of::<SourceLayoutInfoRepr>(), 16);
+        assert_eq!(align_of::<SourceLayoutInfoRepr>(), 4);
+        assert_eq!(offset_of!(SourceLayoutInfoRepr, plane0_stride_bytes), 0);
+        assert_eq!(offset_of!(SourceLayoutInfoRepr, plane1_stride_bytes), 4);
+        assert_eq!(offset_of!(SourceLayoutInfoRepr, plane1_offset_bytes), 8);
+        assert_eq!(offset_of!(SourceLayoutInfoRepr, _reserved_padding), 12);
+    }
+
+    #[test]
+    fn resolved_color_info_repr_layout() {
+        // Four u32 discriminants = 16 bytes, align 4.
+        assert_eq!(size_of::<ResolvedColorInfoRepr>(), 16);
+        assert_eq!(align_of::<ResolvedColorInfoRepr>(), 4);
+        assert_eq!(offset_of!(ResolvedColorInfoRepr, primaries_raw), 0);
+        assert_eq!(offset_of!(ResolvedColorInfoRepr, transfer_raw), 4);
+        assert_eq!(offset_of!(ResolvedColorInfoRepr, matrix_raw), 8);
+        assert_eq!(offset_of!(ResolvedColorInfoRepr, range_raw), 12);
+    }
+
+    #[test]
+    fn rhi_color_converter_methods_vtable_layout() {
+        // v1:
+        //   layout_version                    @ 0  (4 bytes, u32)
+        //   _reserved_padding                 @ 4  (4 bytes, u32)
+        //   prepare_buffer_to_image_storage   @ 8  (8 bytes, fn pointer)
+        // Total = 16 bytes, align = 8.
+        assert_eq!(size_of::<RhiColorConverterMethodsVTable>(), 16);
+        assert_eq!(align_of::<RhiColorConverterMethodsVTable>(), 8);
+        assert_eq!(
+            offset_of!(RhiColorConverterMethodsVTable, layout_version),
+            0
+        );
+        assert_eq!(
+            offset_of!(RhiColorConverterMethodsVTable, _reserved_padding),
+            4
+        );
+        assert_eq!(
+            offset_of!(
+                RhiColorConverterMethodsVTable,
+                prepare_buffer_to_image_storage
+            ),
             8
         );
     }
@@ -5379,6 +5579,7 @@ mod layout_tests {
         assert_send_sync::<GpuContextLimitedAccessVTable>();
         assert_send_sync::<SurfaceStoreVTable>();
         assert_send_sync::<GpuContextFullAccessVTable>();
+        assert_send_sync::<RhiColorConverterMethodsVTable>();
         assert_send_sync::<HostServices>();
         assert_send_sync::<ProcessorVTable>();
     }
