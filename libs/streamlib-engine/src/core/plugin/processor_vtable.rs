@@ -402,21 +402,9 @@ where
                 {
                     None
                 } else {
-                    // SAFETY: the host's set_iceoryx2_resources
-                    // call uses the same DSO's host_services
-                    // accessor functions for the clone/drop
-                    // refcount fn pointers; those are statically
-                    // linked into the host so we can resolve them
-                    // here at the call site.
-                    let clone_fn = crate::core::plugin::host_services::host_input_mailboxes_clone_arc
-                        as unsafe extern "C" fn(*const c_void) -> *const c_void;
-                    let drop_fn = crate::core::plugin::host_services::host_input_mailboxes_drop_arc
-                        as unsafe extern "C" fn(*const c_void);
                     Some(crate::iceoryx2::InputMailboxes::from_raw_parts(
                         input_mailboxes_handle,
                         input_mailboxes_vtable,
-                        clone_fn,
-                        drop_fn,
                     ))
                 };
                 match <P as GeneratedProcessor>::set_iceoryx2_resources(

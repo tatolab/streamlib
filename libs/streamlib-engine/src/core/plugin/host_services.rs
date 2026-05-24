@@ -7148,6 +7148,8 @@ static HOST_INPUT_MAILBOXES_VTABLE: streamlib_plugin_abi::InputMailboxesVTable =
         _reserved_padding: 0,
         read_raw: host_input_mailboxes_read_raw,
         has_data: host_input_mailboxes_has_data,
+        clone_arc: host_input_mailboxes_clone_arc,
+        drop_arc: host_input_mailboxes_drop_arc,
     };
 
 /// Pointer to the [`streamlib_plugin_abi::InputMailboxesVTable`] this
@@ -16002,13 +16004,13 @@ mod input_mailboxes_vtable_tier1_wire_format_tests {
 
     #[test]
     fn clone_arc_returns_null_on_null_handle() {
-        let result = unsafe { host_input_mailboxes_clone_arc(std::ptr::null()) };
+        let result = unsafe { (HOST_INPUT_MAILBOXES_VTABLE.clone_arc)(std::ptr::null()) };
         assert!(result.is_null());
     }
 
     #[test]
     fn drop_arc_is_noop_on_null_handle() {
-        unsafe { host_input_mailboxes_drop_arc(std::ptr::null()) };
+        unsafe { (HOST_INPUT_MAILBOXES_VTABLE.drop_arc)(std::ptr::null()) };
     }
 
     /// End-to-end refcount accounting: clone_arc bumps strong count
@@ -16021,12 +16023,12 @@ mod input_mailboxes_vtable_tier1_wire_format_tests {
         let raw =
             std::sync::Arc::into_raw(inner) as *const std::ffi::c_void;
         assert_eq!(std::sync::Arc::strong_count(&inner_for_test), 2);
-        let cloned = unsafe { host_input_mailboxes_clone_arc(raw) };
+        let cloned = unsafe { (HOST_INPUT_MAILBOXES_VTABLE.clone_arc)(raw) };
         assert_eq!(cloned, raw);
         assert_eq!(std::sync::Arc::strong_count(&inner_for_test), 3);
-        unsafe { host_input_mailboxes_drop_arc(cloned) };
+        unsafe { (HOST_INPUT_MAILBOXES_VTABLE.drop_arc)(cloned) };
         assert_eq!(std::sync::Arc::strong_count(&inner_for_test), 2);
-        unsafe { host_input_mailboxes_drop_arc(raw) };
+        unsafe { (HOST_INPUT_MAILBOXES_VTABLE.drop_arc)(raw) };
         assert_eq!(std::sync::Arc::strong_count(&inner_for_test), 1);
     }
 }

@@ -364,9 +364,9 @@ impl Default for InputMailboxesInner {
 /// the host's [`InputMailboxesInner`] source layout.
 ///
 /// `Clone` bumps the host-side `Arc<InputMailboxesInner>` strong
-/// count via the parent vtable's clone-arc mechanism; `Drop`
-/// decrements. Both run in host-compiled code regardless of which
-/// DSO holds this β-shape.
+/// count via [`InputMailboxesVTable::clone_arc`]; `Drop` decrements
+/// via [`InputMailboxesVTable::drop_arc`]. Both run in host-
+/// compiled code regardless of which DSO holds this β-shape.
 #[repr(C)]
 pub struct InputMailboxes {
     /// Opaque handle. In host mode: `Arc::into_raw(Arc<InputMailboxesInner>)`.
@@ -382,15 +382,6 @@ pub struct InputMailboxes {
     /// freshly-constructed pre-wiring instances; methods short-
     /// circuit cleanly when the vtable is null.
     pub(crate) vtable: *const InputMailboxesVTable,
-    /// Clone-arc / drop-arc dispatch lives on the OutputWriter
-    /// vtable today (the two β-shapes share the same Arc handle
-    /// model). When the input vtable grows refcount slots we'll
-    /// move the responsibility there; for v1 the Drop impl uses
-    /// the inline shape below.
-    pub(crate) refcount_drop:
-        Option<unsafe extern "C" fn(*const c_void)>,
-    pub(crate) refcount_clone:
-        Option<unsafe extern "C" fn(*const c_void) -> *const c_void>,
 }
 
 // SAFETY: `handle` points at an `Arc<InputMailboxesInner>` whose
@@ -409,18 +400,7 @@ impl InputMailboxes {
     pub fn from_inner_arc(inner: Arc<InputMailboxesInner>) -> Self {
         let handle = Arc::into_raw(inner) as *const c_void;
         let vtable = crate::core::plugin::host_services::host_input_mailboxes_vtable();
-        let refcount_clone =
-            Some(crate::core::plugin::host_services::host_input_mailboxes_clone_arc
-                as unsafe extern "C" fn(*const c_void) -> *const c_void);
-        let refcount_drop =
-            Some(crate::core::plugin::host_services::host_input_mailboxes_drop_arc
-                as unsafe extern "C" fn(*const c_void));
-        Self {
-            handle,
-            vtable,
-            refcount_drop,
-            refcount_clone,
-        }
+        Self { handle, vtable }
     }
 
     /// Build an empty pre-wiring β-shape with null handle and
@@ -430,8 +410,6 @@ impl InputMailboxes {
         Self {
             handle: std::ptr::null(),
             vtable: std::ptr::null(),
-            refcount_drop: None,
-            refcount_clone: None,
         }
     }
 
@@ -440,15 +418,8 @@ impl InputMailboxes {
     pub(crate) fn from_raw_parts(
         handle: *const c_void,
         vtable: *const InputMailboxesVTable,
-        refcount_clone: unsafe extern "C" fn(*const c_void) -> *const c_void,
-        refcount_drop: unsafe extern "C" fn(*const c_void),
     ) -> Self {
-        Self {
-            handle,
-            vtable,
-            refcount_drop: Some(refcount_drop),
-            refcount_clone: Some(refcount_clone),
-        }
+        Self { handle, vtable }
     }
 
     /// Returns true iff this β-shape has been wired to a real
@@ -459,18 +430,17 @@ impl InputMailboxes {
 
     /// Borrow the host-side `Arc<InputMailboxesInner>` this
     /// β-shape points at. Returns `None` for unwired β-shapes.
-    /// Bumps the strong count via the host-installed clone_arc fn;
-    /// the returned Arc balances with one Drop on the inner.
+    /// Bumps the strong count via the vtable's `clone_arc`; the
+    /// returned Arc balances with one Drop on the inner.
     pub fn inner_arc(&self) -> Option<Arc<InputMailboxesInner>> {
         if !self.is_configured() {
             return None;
         }
-        let clone_fn = self.refcount_clone?;
         // SAFETY: handle came from Arc::into_raw; bumping the
-        // strong count via the host's clone_arc gives us a fresh
+        // strong count via the vtable's clone_arc gives us a fresh
         // owning reference we can reconstruct as Arc::from_raw.
         unsafe {
-            let cloned_handle = clone_fn(self.handle);
+            let cloned_handle = ((*self.vtable).clone_arc)(self.handle);
             if cloned_handle.is_null() {
                 return None;
             }
@@ -574,18 +544,11 @@ impl Clone for InputMailboxes {
         if !self.is_configured() {
             return Self::empty();
         }
-        let Some(clone_fn) = self.refcount_clone else {
-            return Self::empty();
-        };
-        // SAFETY: handle is non-null per is_configured(); clone_fn
-        // is sourced from the host-side static and outlives the
-        // process.
-        let cloned_handle = unsafe { clone_fn(self.handle) };
+        // SAFETY: vtable + handle are non-null per is_configured().
+        let cloned_handle = unsafe { ((*self.vtable).clone_arc)(self.handle) };
         Self {
             handle: cloned_handle,
             vtable: self.vtable,
-            refcount_clone: self.refcount_clone,
-            refcount_drop: self.refcount_drop,
         }
     }
 }
@@ -595,17 +558,12 @@ impl Drop for InputMailboxes {
         if !self.is_configured() {
             return;
         }
-        if let Some(drop_fn) = self.refcount_drop {
-            // SAFETY: handle is non-null per is_configured(); drop_fn
-            // is sourced from the host-side static.
-            unsafe {
-                drop_fn(self.handle);
-            }
+        // SAFETY: vtable + handle are non-null per is_configured().
+        unsafe {
+            ((*self.vtable).drop_arc)(self.handle);
         }
         self.handle = std::ptr::null();
         self.vtable = std::ptr::null();
-        self.refcount_clone = None;
-        self.refcount_drop = None;
     }
 }
 

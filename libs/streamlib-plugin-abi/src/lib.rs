@@ -451,15 +451,18 @@ pub const OUTPUT_WRITER_VTABLE_LAYOUT_VERSION: u32 = 1;
 
 /// Layout version of [`InputMailboxesVTable`].
 ///
-/// - v1: ships the two slots a cdylib processor's `InputMailboxes`
-///   β-shape needs from inside `process()`: `read_raw` (returns
-///   the next raw frame for a port, with `has_data` out-param
-///   distinguishing "no data" from "deserialization-style errors")
-///   and `has_data` (query without consuming). All other
-///   `InputMailboxes` methods (`add_port`, `set_subscriber`,
-///   `set_listener`, `listener_fd`, `drain_listener`,
-///   `receive_pending`, `route`, `any_port_has_data`) are
-///   host-side only and don't need vtable slots.
+/// - v1: ships four slots — the two cdylib processor's
+///   `InputMailboxes` β-shape needs from inside `process()`
+///   (`read_raw` returns the next raw frame for a port with
+///   `has_data` distinguishing "no data" from "error"; `has_data`
+///   queries without consuming), plus the Arc lifecycle pair
+///   (`clone_arc` / `drop_arc`) every Arc-handle β-shape on this
+///   ABI carries for refcount accounting in host-compiled code.
+///   All other `InputMailboxesInner` methods (`add_port`,
+///   `set_subscriber`, `set_listener`, `listener_fd`,
+///   `drain_listener`, `receive_pending`, `route`,
+///   `any_port_has_data`) are host-side only and don't need
+///   vtable slots.
 pub const INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION: u32 = 1;
 
 // =============================================================================
@@ -3769,6 +3772,15 @@ pub struct InputMailboxesVTable {
         port_ptr: *const u8,
         port_len: usize,
     ) -> bool,
+
+    /// Bump the host-side `Arc<InputMailboxesInner>` strong count.
+    /// Returns the same opaque handle (the underlying inner is the
+    /// same object). Pairs 1:1 with `drop_arc`.
+    pub clone_arc: unsafe extern "C" fn(handle: *const c_void) -> *const c_void,
+
+    /// Decrement the host-side `Arc<InputMailboxesInner>` strong
+    /// count. Releases the inner when the count reaches zero.
+    pub drop_arc: unsafe extern "C" fn(handle: *const c_void),
 }
 
 // Safety: every field is a primitive or an `extern "C" fn` pointer.
@@ -4836,14 +4848,16 @@ mod layout_tests {
 
     #[test]
     fn input_mailboxes_vtable_layout() {
-        // header (u32 + u32) + 2 fn pointers @ 8 bytes each =
-        // 4 + 4 + 2 * 8 = 24 bytes.
-        assert_eq!(size_of::<InputMailboxesVTable>(), 24);
+        // header (u32 + u32) + 4 fn pointers @ 8 bytes each =
+        // 4 + 4 + 4 * 8 = 40 bytes.
+        assert_eq!(size_of::<InputMailboxesVTable>(), 40);
         assert_eq!(align_of::<InputMailboxesVTable>(), 8);
         assert_eq!(offset_of!(InputMailboxesVTable, layout_version), 0);
         assert_eq!(offset_of!(InputMailboxesVTable, _reserved_padding), 4);
         assert_eq!(offset_of!(InputMailboxesVTable, read_raw), 8);
         assert_eq!(offset_of!(InputMailboxesVTable, has_data), 16);
+        assert_eq!(offset_of!(InputMailboxesVTable, clone_arc), 24);
+        assert_eq!(offset_of!(InputMailboxesVTable, drop_arc), 32);
     }
 
     #[test]
