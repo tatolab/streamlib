@@ -10,6 +10,7 @@
 mod adapter;
 mod conformance;
 mod error;
+pub mod ffi;
 mod guard;
 mod mock;
 mod registry;

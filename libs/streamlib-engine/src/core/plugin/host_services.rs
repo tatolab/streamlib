@@ -671,42 +671,12 @@ unsafe impl Sync for HostServiceImpls {}
 /// `UnwindSafe` by default — the pointer dereferences are sound under
 /// the FFI contract regardless of unwinding.
 ///
-/// `pub(crate)` so the cdylib-side trampolines in
-/// [`crate::core::context::audio_clock_shim`],
-/// [`crate::core::context::runtime_ops_shim`], and the per-processor
-/// vtable wrappers in [`crate::core::plugin::processor_vtable`] can
-/// route through the same helper. Every extern "C" boundary crossing
-/// in the engine — host-side and cdylib-side — must be wrapped.
-#[inline]
-pub(crate) fn run_host_extern_c<F, T>(
-    callback_name: &'static str,
-    body: F,
-    default_on_panic: T,
-) -> T
-where
-    F: FnOnce() -> T,
-{
-    use std::panic::{catch_unwind, AssertUnwindSafe};
-    match catch_unwind(AssertUnwindSafe(body)) {
-        Ok(value) => value,
-        Err(payload) => {
-            let msg = if let Some(s) = payload.downcast_ref::<&'static str>() {
-                (*s).to_string()
-            } else if let Some(s) = payload.downcast_ref::<String>() {
-                s.clone()
-            } else {
-                "<non-string panic payload>".to_string()
-            };
-            tracing::error!(
-                target: "streamlib::ffi",
-                callback = callback_name,
-                panic = %msg,
-                "host extern \"C\" callback panicked; FFI boundary converted panic to default return"
-            );
-            default_on_panic
-        }
-    }
-}
+/// Re-export of the canonical panic-safety helper in
+/// [`streamlib_adapter_abi::ffi`]. Every extern "C" boundary
+/// crossing in the engine — host-side and cdylib-side — must route
+/// through this wrapper so all six consumers (engine + five surface
+/// adapters) share a single implementation.
+pub(crate) use streamlib_adapter_abi::ffi::run_host_extern_c;
 
 unsafe extern "C" fn host_tracing_register_callsite(
     _host: HostHandle,
