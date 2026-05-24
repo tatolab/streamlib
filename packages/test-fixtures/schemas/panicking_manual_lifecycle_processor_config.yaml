@@ -1,0 +1,21 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# Test-only config schema for the Phase H (#1005) dlopen-cdylib
+# panic-injection lifecycle Manual processor. `panic_at_hook` names
+# which hook the processor panics in (`setup`, `start`, `stop`,
+# `teardown`, `on_pause`, `on_resume`, or `"none"` for the no-panic
+# baseline). All other hooks no-op. The companion integration test
+# loads this fixture, runs the runtime, and asserts the host's
+# `run_host_extern_c` panic-safety net caught the panic at the FFI
+# boundary instead of letting it crash the runtime.
+
+metadata:
+  type: PanickingManualLifecycleProcessorConfig
+  description: "Test config schema for the Phase H dlopen-cdylib panic-injection Manual lifecycle processor (#1005)."
+
+properties:
+  panic_at_hook:
+    metadata:
+      description: "Name of the hook to inject a panic in. One of: setup, start, stop, teardown, on_pause, on_resume, or 'none' for the no-panic baseline."
+    type: string
