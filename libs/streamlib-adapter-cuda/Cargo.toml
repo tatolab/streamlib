@@ -30,6 +30,7 @@ cuda = []
 
 [dependencies]
 streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
+streamlib-adapter-cuda-abi = { path = "../streamlib-adapter-cuda-abi" }
 thiserror.workspace = true
 tracing.workspace = true
 

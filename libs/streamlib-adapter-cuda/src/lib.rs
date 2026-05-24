@@ -51,11 +51,13 @@
 mod adapter;
 mod context;
 pub mod dlpack;
+mod host_vtable;
 mod state;
 mod view;
 
 pub use adapter::CudaSurfaceAdapter;
 pub use context::CudaContext;
+pub use host_vtable::host_cuda_surface_adapter_vtable;
 pub use state::{HostImageSurfaceRegistration, HostSurfaceRegistration};
 pub use streamlib_consumer_rhi::VulkanLayout;
 pub use view::{
