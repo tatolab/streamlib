@@ -16,6 +16,7 @@ path = "src/lib.rs"
 
 [dependencies]
 streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
+streamlib-adapter-opengl-abi = { path = "../streamlib-adapter-opengl-abi" }
 parking_lot = "0.12"
 thiserror.workspace = true
 tracing.workspace = true
