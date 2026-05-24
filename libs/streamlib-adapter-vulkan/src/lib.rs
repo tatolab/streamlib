@@ -18,12 +18,14 @@
 
 mod adapter;
 mod context;
+mod host_vtable;
 mod raw_handles;
 mod state;
 mod view;
 
 pub use adapter::VulkanSurfaceAdapter;
 pub use context::VulkanContext;
+pub use host_vtable::host_vulkan_surface_adapter_vtable;
 pub use raw_handles::{raw_handles, RawVulkanHandles};
 pub use state::HostSurfaceRegistration;
 pub use streamlib_consumer_rhi::VulkanLayout;

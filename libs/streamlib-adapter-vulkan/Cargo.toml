@@ -16,6 +16,7 @@ path = "src/lib.rs"
 
 [dependencies]
 streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
+streamlib-adapter-vulkan-abi = { path = "../streamlib-adapter-vulkan-abi" }
 thiserror.workspace = true
 tracing.workspace = true
 
