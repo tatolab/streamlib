@@ -43,11 +43,31 @@ pub trait VulkanBufferLike {
     /// #984). Default is `None`; only [`crate::core::rhi::StorageBuffer`]
     /// overrides today. The cdylib-side
     /// [`crate::vulkan::rhi::RhiCommandRecorder::record_buffer_barrier`]
-    /// / `record_copy_image_to_buffer` paths surface a typed
-    /// "unsupported buffer flavor" error when this returns `None`,
-    /// matching the slot coverage of
-    /// [`streamlib_plugin_abi::RhiCommandRecorderMethodsVTable`].
+    /// / `record_copy_image_to_buffer` paths route to the
+    /// StorageBuffer-flavored vtable slot when this returns `Some`.
     fn cdylib_storage_buffer_handle(&self) -> Option<*const std::ffi::c_void> {
+        None
+    }
+
+    /// Cdylib-mode handle accessor for the [`PixelBuffer`] β-shape
+    /// (issue #988 sibling-slot extension of Phase E sub-lift slice
+    /// B). Returns the underlying
+    /// `Arc::into_raw(Arc<PixelBufferRef>)` pointer when this buffer
+    /// flavor is a [`PixelBuffer`]. The cdylib-side
+    /// `record_buffer_barrier` / `record_copy_image_to_buffer` paths
+    /// route to the PixelBuffer-flavored vtable slot
+    /// (`record_pixel_buffer_barrier`,
+    /// `record_copy_image_to_pixel_buffer`) when this returns `Some`.
+    ///
+    /// At most one of [`Self::cdylib_storage_buffer_handle`] /
+    /// [`Self::cdylib_pixel_buffer_handle`] returns `Some` for any
+    /// given implementor; the recorder's dispatch logic checks both
+    /// in order and errors with a typed "unsupported buffer flavor"
+    /// message when neither matches, matching the slot coverage of
+    /// [`streamlib_plugin_abi::RhiCommandRecorderMethodsVTable`].
+    ///
+    /// [`PixelBuffer`]: crate::core::rhi::PixelBuffer
+    fn cdylib_pixel_buffer_handle(&self) -> Option<*const std::ffi::c_void> {
         None
     }
 }
@@ -73,6 +93,10 @@ impl VulkanBufferLike for PixelBuffer {
         {
             0
         }
+    }
+
+    fn cdylib_pixel_buffer_handle(&self) -> Option<*const std::ffi::c_void> {
+        Some(self.handle)
     }
 }
 

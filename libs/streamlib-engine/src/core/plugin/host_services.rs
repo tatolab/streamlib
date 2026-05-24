@@ -10294,6 +10294,207 @@ unsafe extern "C" fn host_command_recorder_record_copy_image_to_buffer(
 
 #[cfg(target_os = "linux")]
 #[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_command_recorder_record_pixel_buffer_barrier(
+    recorder_handle: *const c_void,
+    pixel_buffer_handle: *const c_void,
+    from_stage_raw: i64,
+    to_stage_raw: i64,
+    from_access_raw: i64,
+    to_access_raw: i64,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_command_recorder_record_pixel_buffer_barrier",
+        || -> i32 {
+            let Some(recorder) =
+                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            else {
+                write_err(
+                    "record_pixel_buffer_barrier: null recorder handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if pixel_buffer_handle.is_null() {
+                write_err(
+                    "record_pixel_buffer_barrier: null pixel_buffer handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let buffer_borrow =
+                make_pixel_buffer_borrow(pixel_buffer_handle);
+            let from_stage =
+                crate::vulkan::rhi::VulkanStage(from_stage_raw as u64);
+            let to_stage = crate::vulkan::rhi::VulkanStage(to_stage_raw as u64);
+            let from_access =
+                crate::vulkan::rhi::VulkanAccess(from_access_raw as u64);
+            let to_access =
+                crate::vulkan::rhi::VulkanAccess(to_access_raw as u64);
+            match recorder.record_buffer_barrier(
+                &*buffer_borrow,
+                from_stage,
+                to_stage,
+                from_access,
+                to_access,
+            ) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("record_pixel_buffer_barrier: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_command_recorder_record_pixel_buffer_barrier(
+    _recorder_handle: *const c_void,
+    _pixel_buffer_handle: *const c_void,
+    _from_stage_raw: i64,
+    _to_stage_raw: i64,
+    _from_access_raw: i64,
+    _to_access_raw: i64,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "record_pixel_buffer_barrier: Linux-only",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_command_recorder_record_copy_image_to_pixel_buffer(
+    recorder_handle: *const c_void,
+    src_texture_handle: *const c_void,
+    src_layout_raw: i32,
+    dst_pixel_buffer_handle: *const c_void,
+    region: *const streamlib_plugin_abi::ImageCopyRegionRepr,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_command_recorder_record_copy_image_to_pixel_buffer",
+        || -> i32 {
+            let Some(recorder) =
+                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            else {
+                write_err(
+                    "record_copy_image_to_pixel_buffer: null recorder handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if src_texture_handle.is_null() {
+                write_err(
+                    "record_copy_image_to_pixel_buffer: null src texture handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            if dst_pixel_buffer_handle.is_null() {
+                write_err(
+                    "record_copy_image_to_pixel_buffer: null dst pixel_buffer handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            if region.is_null() {
+                write_err(
+                    "record_copy_image_to_pixel_buffer: null region pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let region_ref = unsafe { &*region };
+            let src_borrow = make_texture_borrow(src_texture_handle);
+            let dst_borrow =
+                make_pixel_buffer_borrow(dst_pixel_buffer_handle);
+            let src_layout =
+                streamlib_consumer_rhi::VulkanLayout(src_layout_raw);
+            let region_rust = crate::vulkan::rhi::ImageCopyRegion {
+                width: region_ref.width,
+                height: region_ref.height,
+                buffer_offset: region_ref.buffer_offset,
+                buffer_row_length: region_ref.buffer_row_length,
+                buffer_image_height: region_ref.buffer_image_height,
+                mip_level: region_ref.mip_level,
+                array_layer: region_ref.array_layer,
+            };
+            match recorder.record_copy_image_to_buffer(
+                &*src_borrow,
+                src_layout,
+                &*dst_borrow,
+                region_rust,
+            ) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("record_copy_image_to_pixel_buffer: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_command_recorder_record_copy_image_to_pixel_buffer(
+    _recorder_handle: *const c_void,
+    _src_texture_handle: *const c_void,
+    _src_layout_raw: i32,
+    _dst_pixel_buffer_handle: *const c_void,
+    _region: *const streamlib_plugin_abi::ImageCopyRegionRepr,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "record_copy_image_to_pixel_buffer: Linux-only",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
 unsafe extern "C" fn host_command_recorder_submit_signaling_timeline(
     recorder_handle: *const c_void,
     timeline_handle: *const c_void,
@@ -10389,6 +10590,10 @@ pub static HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE:
             host_command_recorder_record_copy_image_to_buffer,
         submit_signaling_timeline:
             host_command_recorder_submit_signaling_timeline,
+        record_pixel_buffer_barrier:
+            host_command_recorder_record_pixel_buffer_barrier,
+        record_copy_image_to_pixel_buffer:
+            host_command_recorder_record_copy_image_to_pixel_buffer,
     };
 
 /// Accessor for the host's static `RhiCommandRecorderMethodsVTable`
@@ -11742,6 +11947,57 @@ mod gpu_rhi_command_recorder_methods_vtable_null_tests {
         assert!(
             err_buf_as_str(&buf, len)
                 .contains("submit_signaling_timeline: null recorder handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn record_pixel_buffer_barrier_rejects_null_recorder_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE.record_pixel_buffer_barrier)(
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                0,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("record_pixel_buffer_barrier: null recorder handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn record_copy_image_to_pixel_buffer_rejects_null_recorder_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let region = dummy_region();
+        let rc = unsafe {
+            (HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE
+                .record_copy_image_to_pixel_buffer)(
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                &region,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("record_copy_image_to_pixel_buffer: null recorder handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
