@@ -728,14 +728,36 @@ impl std::fmt::Debug for RhiCommandRecorderInner {
 /// assert_clone::<streamlib_engine::vulkan::rhi::RhiCommandRecorder>();
 /// ```
 ///
-/// Method dispatch is host-only via [`Self::host_inner_mut`] until
-/// Phase E (#907) lifts to per-method vtable slots.
+/// Method dispatch routes through three different vtables depending
+/// on the method and call site:
+///
+/// - Drop runs through [`GpuContextFullAccessVTable::drop_command_recorder`]
+///   (the parent vtable).
+/// - The six camera-hot-path methods (`begin`, `record_image_barrier`,
+///   `record_buffer_barrier`, `record_dispatch`,
+///   `record_copy_image_to_buffer`, `submit_signaling_timeline`)
+///   route through the per-type
+///   [`streamlib_plugin_abi::RhiCommandRecorderMethodsVTable`] when
+///   called from cdylib code (Phase E sub-lift slice B — #984).
+/// - The remaining host-only methods (`record_draw`,
+///   `record_draw_indexed`, `record_copy_buffer_to_image`, `submit`,
+///   `submit_and_wait`, the engine-internal `submit_with_semaphores`
+///   / `command_buffer_raw` / `vulkan_device_ref` accessors) keep
+///   their cdylib-mode panic via [`Self::host_inner_mut`] /
+///   [`Self::host_inner`]; a follow-up slice lifts each as a
+///   consumer arrives.
 #[repr(C)]
 pub struct RhiCommandRecorder {
     /// Opaque handle to the host's `Box<RhiCommandRecorderInner>`.
     pub(crate) handle: *const c_void,
-    /// Vtable for cross-DSO Drop dispatch.
+    /// Parent vtable for cross-DSO Drop dispatch.
     pub(crate) vtable: *const GpuContextFullAccessVTable,
+    /// Per-type vtable for cross-DSO method dispatch (Phase E
+    /// sub-lift slice B — #984). Null in host mode; populated by
+    /// [`Self::from_inner`] via
+    /// [`crate::core::plugin::host_services::host_rhi_command_recorder_methods_vtable`].
+    pub(crate) methods_vtable:
+        *const streamlib_plugin_abi::RhiCommandRecorderMethodsVTable,
 }
 
 // SAFETY: handle points at a `Box<RhiCommandRecorderInner>`; Inner
@@ -752,12 +774,19 @@ impl RhiCommandRecorder {
     }
 
     /// Internal helper: leak a `Box<RhiCommandRecorderInner>` as the
-    /// opaque handle and resolve the host-mode FullAccess vtable.
+    /// opaque handle and resolve the host-mode FullAccess + per-type
+    /// methods vtables.
     pub(crate) fn from_inner(inner: RhiCommandRecorderInner) -> Self {
         let handle = Box::into_raw(Box::new(inner)) as *const c_void;
         let vtable =
             crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
-        Self { handle, vtable }
+        let methods_vtable =
+            crate::core::plugin::host_services::host_rhi_command_recorder_methods_vtable();
+        Self {
+            handle,
+            vtable,
+            methods_vtable,
+        }
     }
 
     /// Engine-internal mutable borrow of the host-owned
@@ -788,18 +817,32 @@ impl RhiCommandRecorder {
     }
 
     // -------------------------------------------------------------------------
-    // Method mirrors — route via host_inner_mut() with cdylib panic-guard.
-    // Phase E (#907) lifts these to per-method vtable slots; until then,
-    // method dispatch on the β-shape is host-only.
+    // Method mirrors. The six camera-hot-path methods (`begin`,
+    // `record_image_barrier`, `record_buffer_barrier`,
+    // `record_dispatch`, `record_copy_image_to_buffer`,
+    // `submit_signaling_timeline`) route through the per-type
+    // methods vtable when called from cdylib code (Phase E sub-lift
+    // slice B — #984). The remaining methods route via host_inner_mut()
+    // with cdylib panic-guard until a future slice lifts them as
+    // consumers arrive.
     // -------------------------------------------------------------------------
 
     /// Begin a new recording. See [`RhiCommandRecorderInner::begin`].
+    ///
+    /// Mode-routed: in-process callers dispatch through
+    /// `host_inner_mut`; cdylib callers dispatch through the per-type
+    /// methods vtable (Phase E sub-lift slice B).
     pub fn begin(&mut self) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_begin_via_vtable();
+        }
         self.host_inner_mut().begin()
     }
 
     /// Record an image layout transition. See
     /// [`RhiCommandRecorderInner::record_image_barrier`].
+    ///
+    /// Mode-routed; see [`Self::begin`] for the dispatch contract.
     pub fn record_image_barrier(
         &mut self,
         texture: &Texture,
@@ -810,12 +853,31 @@ impl RhiCommandRecorder {
         from_access: VulkanAccess,
         to_access: VulkanAccess,
     ) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_record_image_barrier_via_vtable(
+                texture,
+                from_layout,
+                to_layout,
+                from_stage,
+                to_stage,
+                from_access,
+                to_access,
+            );
+        }
         self.host_inner_mut().record_image_barrier(
             texture, from_layout, to_layout, from_stage, to_stage, from_access, to_access,
         )
     }
 
     /// Buffer memory barrier covering the whole buffer.
+    ///
+    /// Mode-routed; see [`Self::begin`] for the dispatch contract.
+    /// **Cdylib path only supports
+    /// [`crate::core::rhi::StorageBuffer`]-flavored buffers today**
+    /// — the buffer must report a non-`None`
+    /// [`VulkanBufferLike::cdylib_storage_buffer_handle`] or the
+    /// dispatch returns a typed error. Future buffer flavors add
+    /// sibling vtable slots; the host path is unchanged.
     pub fn record_buffer_barrier(
         &mut self,
         buffer: &(impl VulkanBufferLike + ?Sized),
@@ -824,12 +886,27 @@ impl RhiCommandRecorder {
         from_access: VulkanAccess,
         to_access: VulkanAccess,
     ) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_record_buffer_barrier_via_vtable(
+                buffer,
+                from_stage,
+                to_stage,
+                from_access,
+                to_access,
+            );
+        }
         self.host_inner_mut().record_buffer_barrier(
             buffer, from_stage, to_stage, from_access, to_access,
         )
     }
 
     /// Copy image → buffer. See [`RhiCommandRecorderInner::record_copy_image_to_buffer`].
+    ///
+    /// Mode-routed; see [`Self::begin`] for the dispatch contract.
+    /// **Cdylib path only supports
+    /// [`crate::core::rhi::StorageBuffer`]-flavored destinations
+    /// today** — the same buffer-flavor constraint as
+    /// [`Self::record_buffer_barrier`].
     pub fn record_copy_image_to_buffer(
         &mut self,
         src: &Texture,
@@ -837,11 +914,17 @@ impl RhiCommandRecorder {
         dst: &(impl VulkanBufferLike + ?Sized),
         region: ImageCopyRegion,
     ) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_record_copy_image_to_buffer_via_vtable(
+                src, src_layout, dst, region,
+            );
+        }
         self.host_inner_mut()
             .record_copy_image_to_buffer(src, src_layout, dst, region)
     }
 
-    /// Copy buffer → image.
+    /// Copy buffer → image. Host-only until a cdylib consumer
+    /// arrives; cdylib callers panic at [`Self::host_inner_mut`].
     pub fn record_copy_buffer_to_image(
         &mut self,
         src: &(impl VulkanBufferLike + ?Sized),
@@ -854,6 +937,8 @@ impl RhiCommandRecorder {
     }
 
     /// Compute dispatch.
+    ///
+    /// Mode-routed; see [`Self::begin`] for the dispatch contract.
     pub fn record_dispatch(
         &mut self,
         kernel: &VulkanComputeKernel,
@@ -861,11 +946,17 @@ impl RhiCommandRecorder {
         group_y: u32,
         group_z: u32,
     ) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_record_dispatch_via_vtable(
+                kernel, group_x, group_y, group_z,
+            );
+        }
         self.host_inner_mut()
             .record_dispatch(kernel, group_x, group_y, group_z)
     }
 
-    /// Draw call.
+    /// Draw call. Host-only until a cdylib consumer arrives;
+    /// cdylib callers panic at [`Self::host_inner_mut`].
     pub fn record_draw(
         &mut self,
         kernel: &VulkanGraphicsKernel,
@@ -875,7 +966,8 @@ impl RhiCommandRecorder {
         self.host_inner_mut().record_draw(kernel, frame_index, draw)
     }
 
-    /// Indexed-draw variant.
+    /// Indexed-draw variant. Host-only until a cdylib consumer
+    /// arrives; cdylib callers panic at [`Self::host_inner_mut`].
     pub fn record_draw_indexed(
         &mut self,
         kernel: &VulkanGraphicsKernel,
@@ -887,13 +979,266 @@ impl RhiCommandRecorder {
     }
 
     /// Submit signaling a timeline semaphore.
+    ///
+    /// Mode-routed; see [`Self::begin`] for the dispatch contract.
     pub fn submit_signaling_timeline(
         &mut self,
         timeline: &HostVulkanTimelineSemaphore,
         signal_value: u64,
     ) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_submit_signaling_timeline_via_vtable(
+                timeline,
+                signal_value,
+            );
+        }
         self.host_inner_mut()
             .submit_signaling_timeline(timeline, signal_value)
+    }
+
+    // -------------------------------------------------------------------------
+    // Cdylib-mode dispatch helpers (Phase E sub-lift slice B — #984).
+    // Each helper validates the methods vtable pointer, marshals
+    // arguments into the wire-format integer types, dispatches
+    // through the vtable, and converts the host's `i32 + err_buf`
+    // return into `Result<()>`.
+    // -------------------------------------------------------------------------
+
+    fn dispatch_begin_via_vtable(&self) -> Result<()> {
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "begin: command recorder methods vtable is null".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).begin)(
+                self.handle,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_record_image_barrier_via_vtable(
+        &self,
+        texture: &Texture,
+        from_layout: VulkanLayout,
+        to_layout: VulkanLayout,
+        from_stage: VulkanStage,
+        to_stage: VulkanStage,
+        from_access: VulkanAccess,
+        to_access: VulkanAccess,
+    ) -> Result<()> {
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "record_image_barrier: command recorder methods vtable is null"
+                    .into(),
+            ));
+        }
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).record_image_barrier)(
+                self.handle,
+                texture.handle,
+                from_layout.0,
+                to_layout.0,
+                from_stage.0 as i64,
+                to_stage.0 as i64,
+                from_access.0 as i64,
+                to_access.0 as i64,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    fn dispatch_record_buffer_barrier_via_vtable(
+        &self,
+        buffer: &(impl VulkanBufferLike + ?Sized),
+        from_stage: VulkanStage,
+        to_stage: VulkanStage,
+        from_access: VulkanAccess,
+        to_access: VulkanAccess,
+    ) -> Result<()> {
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "record_buffer_barrier: command recorder methods vtable is null"
+                    .into(),
+            ));
+        }
+        let Some(storage_handle) = buffer.cdylib_storage_buffer_handle() else {
+            return Err(Error::GpuError(
+                "record_buffer_barrier: cdylib path only supports StorageBuffer-flavored \
+                 buffers today (extend the methods vtable with a sibling slot for other \
+                 flavors)"
+                    .into(),
+            ));
+        };
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).record_buffer_barrier)(
+                self.handle,
+                storage_handle,
+                from_stage.0 as i64,
+                to_stage.0 as i64,
+                from_access.0 as i64,
+                to_access.0 as i64,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    fn dispatch_record_dispatch_via_vtable(
+        &self,
+        kernel: &VulkanComputeKernel,
+        group_x: u32,
+        group_y: u32,
+        group_z: u32,
+    ) -> Result<()> {
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "record_dispatch: command recorder methods vtable is null".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).record_dispatch)(
+                self.handle,
+                kernel.handle,
+                group_x,
+                group_y,
+                group_z,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    fn dispatch_record_copy_image_to_buffer_via_vtable(
+        &self,
+        src: &Texture,
+        src_layout: VulkanLayout,
+        dst: &(impl VulkanBufferLike + ?Sized),
+        region: ImageCopyRegion,
+    ) -> Result<()> {
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "record_copy_image_to_buffer: command recorder methods vtable is null"
+                    .into(),
+            ));
+        }
+        let Some(dst_storage_handle) = dst.cdylib_storage_buffer_handle() else {
+            return Err(Error::GpuError(
+                "record_copy_image_to_buffer: cdylib path only supports \
+                 StorageBuffer-flavored destinations today (extend the methods vtable \
+                 with a sibling slot for other flavors)"
+                    .into(),
+            ));
+        };
+        let region_repr = streamlib_plugin_abi::ImageCopyRegionRepr {
+            width: region.width,
+            height: region.height,
+            buffer_offset: region.buffer_offset,
+            buffer_row_length: region.buffer_row_length,
+            buffer_image_height: region.buffer_image_height,
+            mip_level: region.mip_level,
+            array_layer: region.array_layer,
+            _reserved_padding: 0,
+        };
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).record_copy_image_to_buffer)(
+                self.handle,
+                src.handle,
+                src_layout.0,
+                dst_storage_handle,
+                &region_repr,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    fn dispatch_submit_signaling_timeline_via_vtable(
+        &self,
+        timeline: &HostVulkanTimelineSemaphore,
+        signal_value: u64,
+    ) -> Result<()> {
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "submit_signaling_timeline: command recorder methods vtable is null"
+                    .into(),
+            ));
+        }
+        let timeline_handle = timeline as *const HostVulkanTimelineSemaphore
+            as *const c_void;
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).submit_signaling_timeline)(
+                self.handle,
+                timeline_handle,
+                signal_value,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     /// Submit without semaphore signaling.
@@ -953,10 +1298,15 @@ mod layout_tests {
 
     #[test]
     fn rhi_command_recorder_layout() {
-        assert_eq!(size_of::<RhiCommandRecorder>(), 16);
+        // Phase E sub-lift slice B (#984) appended `methods_vtable`
+        // (16 → 24 bytes); the β-shape now mirrors the
+        // `(handle, vtable, methods_vtable)` triple used by every
+        // per-type kernel β-shape and `RhiColorConverter`.
+        assert_eq!(size_of::<RhiCommandRecorder>(), 24);
         assert_eq!(align_of::<RhiCommandRecorder>(), 8);
         assert_eq!(offset_of!(RhiCommandRecorder, handle), 0);
         assert_eq!(offset_of!(RhiCommandRecorder, vtable), 8);
+        assert_eq!(offset_of!(RhiCommandRecorder, methods_vtable), 16);
     }
 
     #[test]

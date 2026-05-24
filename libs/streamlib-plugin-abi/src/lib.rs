@@ -121,7 +121,18 @@ pub const STREAMLIB_ABI_VERSION: u32 = 4;
 ///   `prepare_buffer_to_image_storage` method through it so cdylib
 ///   camera processors can prepare a color-conversion kernel without
 ///   tripping the host-mode-only `host_inner()` panic.
-pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 12;
+/// - v13: [`RhiCommandRecorderMethodsVTable`] reference appended.
+///   The cdylib-side `RhiCommandRecorder` β-shape's `methods_vtable`
+///   field sources its pointer from this field. Non-null for hosts
+///   that ship a GpuContext; null otherwise (cdylib code must check
+///   before dispatching). Phase E sub-lift slice B wires the six
+///   camera-hot-path methods (`begin`, `record_image_barrier`,
+///   `record_buffer_barrier`, `record_dispatch`,
+///   `record_copy_image_to_buffer`, `submit_signaling_timeline`)
+///   through it so cdylib camera processors can drive the
+///   host-owned recorder per frame without tripping the
+///   host-mode-only `host_inner_mut()` panic.
+pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 13;
 
 /// Layout version of the [`ProcessorVTable`] struct. Read by the
 /// host's `processor_register` impl before dereferencing any vtable
@@ -380,6 +391,17 @@ pub const VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 ///   `VulkanComputeKernel` β-shape via the parent FullAccess vtable's
 ///   per-type methods vtable lookup.
 pub const RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 1;
+
+/// Layout version of [`RhiCommandRecorderMethodsVTable`].
+///
+/// - v1: ships six method slots a cdylib camera processor needs
+///   to drive the host-owned `RhiCommandRecorder` per frame —
+///   `begin`, `record_image_barrier`, `record_buffer_barrier`,
+///   `record_dispatch`, `record_copy_image_to_buffer`,
+///   `submit_signaling_timeline`. Without these the β-shape's
+///   `host_inner()` / `host_inner_mut()` panic-guards fire from
+///   cdylib code on every per-frame call.
+pub const RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 1;
 
 // =============================================================================
 // Primitive enums
@@ -3164,6 +3186,40 @@ pub struct SourceLayoutInfoRepr {
     pub _reserved_padding: u32,
 }
 
+/// `#[repr(C)]` mirror of
+/// `streamlib::vulkan::rhi::vulkan_command_recorder::ImageCopyRegion`.
+///
+/// Buffer↔image copy region — single mip level, single array layer,
+/// color aspect, full image. Used by
+/// [`RhiCommandRecorderMethodsVTable::record_copy_image_to_buffer`]
+/// to cross the cdylib boundary without dragging callers through
+/// `vulkanalia` imports. Layout-locked by the regression test in
+/// `layout_tests`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ImageCopyRegionRepr {
+    /// Image extent width in pixels.
+    pub width: u32,
+    /// Image extent height in pixels.
+    pub height: u32,
+    /// Byte offset within the buffer where the copy begins.
+    pub buffer_offset: u64,
+    /// Buffer row length in pixels (matches image width for tightly
+    /// packed copies).
+    pub buffer_row_length: u32,
+    /// Buffer image height in pixels (matches image height for
+    /// tightly packed copies).
+    pub buffer_image_height: u32,
+    /// Mip level to copy into / out of.
+    pub mip_level: u32,
+    /// Array layer to copy into / out of.
+    pub array_layer: u32,
+    /// Reserved padding so the struct stays 8-byte-aligned and the
+    /// trailing bytes of the last 4-byte field are deterministic;
+    /// zero today, never read.
+    pub _reserved_padding: u32,
+}
+
 /// `#[repr(C)]` mirror of `streamlib::core::color::ResolvedColorInfo`.
 ///
 /// Each field is the matching engine-side `#[repr(u32)]` enum's
@@ -3252,6 +3308,161 @@ pub struct RhiColorConverterMethodsVTable {
 
 unsafe impl Send for RhiColorConverterMethodsVTable {}
 unsafe impl Sync for RhiColorConverterMethodsVTable {}
+
+/// Per-type method-dispatch vtable for the `RhiCommandRecorder`
+/// β-shape (Phase E sub-lift slice B — #984).
+///
+/// `RhiCommandRecorder` keeps `clone_command_recorder` /
+/// `drop_command_recorder` dispatch on the parent
+/// [`GpuContextFullAccessVTable`]; this vtable carries per-method
+/// slots for the six camera-hot-path methods cdylib code needs to
+/// dispatch through (`begin`, `record_image_barrier`,
+/// `record_buffer_barrier`, `record_dispatch`,
+/// `record_copy_image_to_buffer`, `submit_signaling_timeline`).
+/// Without these the β-shape's `host_inner_mut()` / `host_inner()`
+/// panic-guards fire from cdylib code on every per-frame call.
+///
+/// The remaining `RhiCommandRecorder` methods (`record_draw`,
+/// `record_draw_indexed`, `record_copy_buffer_to_image`, `submit`,
+/// `submit_and_wait`, `submit_with_semaphores`, `command_buffer_raw`,
+/// `vulkan_device_ref`) keep their cdylib-mode panic in place — they
+/// don't sit on the camera hot path and a follow-up slice lifts
+/// them when a consumer arrives.
+///
+/// **Buffer-flavor coverage today:** `record_buffer_barrier` and
+/// `record_copy_image_to_buffer` accept a `StorageBuffer`-shaped
+/// handle. Today's camera per-frame call site copies into a
+/// `StorageBuffer`; future consumers needing uniform / vertex /
+/// index buffer barriers add sibling slots rather than discriminating
+/// on these.
+#[repr(C)]
+pub struct RhiCommandRecorderMethodsVTable {
+    /// Vtable layout version. Must equal
+    /// [`RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION`].
+    pub layout_version: u32,
+
+    /// Reserved padding (keeps the following pointer naturally
+    /// aligned on 32-bit hosts; zero today, never read).
+    pub _reserved_padding: u32,
+
+    /// Begin a new recording. `recorder_handle` is the
+    /// `Box::into_raw(Box<RhiCommandRecorderInner>)` pointer from
+    /// the β-shape's `handle` field. Returns 0 on success; non-zero
+    /// with UTF-8 message in `err_buf` on failure. Linux-only on the
+    /// host side; non-Linux stubs return non-zero.
+    pub begin: unsafe extern "C" fn(
+        recorder_handle: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Record an image layout transition. Layout / stage / access
+    /// enumerants travel as their raw integer types: `VulkanLayout`
+    /// is `i32` (matches the `VkImageLayout` enumerant);
+    /// `VulkanStage` and `VulkanAccess` are `i64` (the
+    /// `VK_PIPELINE_STAGE_2_*` and `VK_ACCESS_2_*` bitmasks are
+    /// 64-bit).
+    ///
+    /// - `recorder_handle` is the
+    ///   `Box::into_raw(Box<RhiCommandRecorderInner>)` pointer.
+    /// - `texture_handle` is
+    ///   `Arc::into_raw(Arc<TextureInner>)`-shaped from the
+    ///   `Texture` β-shape's `handle` field (borrowed).
+    pub record_image_barrier: unsafe extern "C" fn(
+        recorder_handle: *const c_void,
+        texture_handle: *const c_void,
+        from_layout_raw: i32,
+        to_layout_raw: i32,
+        from_stage_raw: i64,
+        to_stage_raw: i64,
+        from_access_raw: i64,
+        to_access_raw: i64,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Record a buffer memory barrier covering the whole buffer.
+    /// Today the camera only uses storage-buffer barriers; this
+    /// slot accepts a `StorageBuffer`-shaped handle. The host
+    /// reconstructs the typed borrow via
+    /// `make_storage_buffer_borrow`. Future consumers needing
+    /// uniform / vertex / index buffer barriers add sibling slots,
+    /// not a discriminator on this one.
+    ///
+    /// - `storage_buffer_handle` is
+    ///   `Arc::into_raw(Arc<HostVulkanBufferInner>)`-shaped from
+    ///   the `StorageBuffer` β-shape's `handle` field (borrowed).
+    pub record_buffer_barrier: unsafe extern "C" fn(
+        recorder_handle: *const c_void,
+        storage_buffer_handle: *const c_void,
+        from_stage_raw: i64,
+        to_stage_raw: i64,
+        from_access_raw: i64,
+        to_access_raw: i64,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Record a compute dispatch via
+    /// `VulkanComputeKernel::record`. `kernel_handle` is the
+    /// `Arc::into_raw(Arc<VulkanComputeKernelInner>)` pointer from
+    /// the kernel β-shape's `handle` field (borrowed).
+    pub record_dispatch: unsafe extern "C" fn(
+        recorder_handle: *const c_void,
+        kernel_handle: *const c_void,
+        group_x: u32,
+        group_y: u32,
+        group_z: u32,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Record `vkCmdCopyImageToBuffer`. Storage-buffer-shape
+    /// destination only today; mirrors the
+    /// `record_buffer_barrier` constraint.
+    ///
+    /// - `src_texture_handle` is
+    ///   `Arc::into_raw(Arc<TextureInner>)`-shaped from the source
+    ///   `Texture` β-shape's `handle` field (borrowed).
+    /// - `dst_storage_buffer_handle` is
+    ///   `Arc::into_raw(Arc<HostVulkanBufferInner>)`-shaped from the
+    ///   destination `StorageBuffer` β-shape's `handle` field
+    ///   (borrowed).
+    /// - `region` points at an [`ImageCopyRegionRepr`] the host
+    ///   reads once at call time.
+    pub record_copy_image_to_buffer: unsafe extern "C" fn(
+        recorder_handle: *const c_void,
+        src_texture_handle: *const c_void,
+        src_layout_raw: i32,
+        dst_storage_buffer_handle: *const c_void,
+        region: *const ImageCopyRegionRepr,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// End recording and submit, signaling `timeline` at
+    /// `signal_value` on completion. `timeline_handle` is a borrow
+    /// of `&HostVulkanTimelineSemaphore` (`self as *const Self`
+    /// shape — same pattern as the v13 `wait_timeline_semaphore`
+    /// slot on `GpuContextLimitedAccessVTable`). The host does not
+    /// bump the timeline's refcount.
+    pub submit_signaling_timeline: unsafe extern "C" fn(
+        recorder_handle: *const c_void,
+        timeline_handle: *const c_void,
+        signal_value: u64,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+}
+
+unsafe impl Send for RhiCommandRecorderMethodsVTable {}
+unsafe impl Sync for RhiCommandRecorderMethodsVTable {}
 
 /// Per-type method-dispatch vtable for the `VulkanGraphicsKernel`
 /// β-shape (issue #907 Phase E PR 3/5 + #951 method-dispatch slice).
@@ -4155,6 +4366,26 @@ pub struct HostServices {
     /// tripping the β-shape's host-mode-only `host_inner()` panic.
     pub rhi_color_converter_methods_vtable:
         *const RhiColorConverterMethodsVTable,
+
+    // -------------------------------------------------------------------------
+    // RhiCommandRecorderMethodsVTable surface (v13 — Phase E sub-lift slice B)
+    // -------------------------------------------------------------------------
+
+    /// Static dispatch table for `RhiCommandRecorder` β-shape
+    /// method dispatch. Paired with the per-`RhiCommandRecorder`
+    /// handle the cdylib carries on its β-shape struct
+    /// (`methods_vtable` field). Set once at install time; non-null
+    /// for hosts that ship a GpuContext, null otherwise (cdylib
+    /// must check before dispatching). Phase E sub-lift slice B
+    /// lands six camera-hot-path slots (`begin`,
+    /// `record_image_barrier`, `record_buffer_barrier`,
+    /// `record_dispatch`, `record_copy_image_to_buffer`,
+    /// `submit_signaling_timeline`) so cdylib camera processors
+    /// can drive the host-owned recorder per frame without
+    /// tripping the β-shape's host-mode-only `host_inner_mut()`
+    /// panic.
+    pub rhi_command_recorder_methods_vtable:
+        *const RhiCommandRecorderMethodsVTable,
 }
 
 // Note: under v3 the ABI eliminates the tokio shared-type crossing
@@ -4315,7 +4546,7 @@ mod layout_tests {
 
     #[test]
     fn host_services_layout_versions_pinned() {
-        assert_eq!(HOST_SERVICES_LAYOUT_VERSION, 12);
+        assert_eq!(HOST_SERVICES_LAYOUT_VERSION, 13);
         assert_eq!(STREAMLIB_ABI_VERSION, 4);
         assert_eq!(RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(AUDIO_CLOCK_VTABLE_LAYOUT_VERSION, 1);
@@ -4331,10 +4562,11 @@ mod layout_tests {
         assert_eq!(VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION, 1);
+        assert_eq!(RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION, 1);
     }
 
     #[test]
-    fn host_services_tail_carries_twelve_vtable_pointers() {
+    fn host_services_tail_carries_thirteen_vtable_pointers() {
         // Trailing vtable pointers on HostServices. We don't pin the
         // absolute offsets (earlier fields carry their own layout
         // audit), but we do pin:
@@ -4344,7 +4576,7 @@ mod layout_tests {
         //      GpuContextFullAccess → TextureRingMethods →
         //      VulkanComputeKernelMethods → VulkanGraphicsKernelMethods →
         //      VulkanRayTracingKernelMethods → VulkanAccelerationStructureMethods →
-        //      RhiColorConverterMethods.
+        //      RhiColorConverterMethods → RhiCommandRecorderMethods.
         //   3. They are contiguous (no padding inserted between them).
         assert_eq!(size_of::<*const RuntimeContextVTable>(), 8);
         assert_eq!(size_of::<*const AudioClockVTable>(), 8);
@@ -4361,6 +4593,7 @@ mod layout_tests {
             8
         );
         assert_eq!(size_of::<*const RhiColorConverterMethodsVTable>(), 8);
+        assert_eq!(size_of::<*const RhiCommandRecorderMethodsVTable>(), 8);
 
         let runtime_ctx_off = offset_of!(HostServices, runtime_context_vtable);
         let audio_clock_off = offset_of!(HostServices, audio_clock_vtable);
@@ -4379,6 +4612,8 @@ mod layout_tests {
             offset_of!(HostServices, vulkan_acceleration_structure_methods_vtable);
         let color_converter_off =
             offset_of!(HostServices, rhi_color_converter_methods_vtable);
+        let command_recorder_off =
+            offset_of!(HostServices, rhi_command_recorder_methods_vtable);
         assert!(runtime_ctx_off < audio_clock_off);
         assert!(audio_clock_off < runtime_ops_off);
         assert!(runtime_ops_off < gpu_lim_off);
@@ -4390,6 +4625,7 @@ mod layout_tests {
         assert!(graphics_kernel_off < rt_kernel_off);
         assert!(rt_kernel_off < accel_struct_off);
         assert!(accel_struct_off < color_converter_off);
+        assert!(color_converter_off < command_recorder_off);
         assert_eq!(audio_clock_off - runtime_ctx_off, 8);
         assert_eq!(runtime_ops_off - audio_clock_off, 8);
         assert_eq!(gpu_lim_off - runtime_ops_off, 8);
@@ -4401,10 +4637,11 @@ mod layout_tests {
         assert_eq!(rt_kernel_off - graphics_kernel_off, 8);
         assert_eq!(accel_struct_off - rt_kernel_off, 8);
         assert_eq!(color_converter_off - accel_struct_off, 8);
+        assert_eq!(command_recorder_off - color_converter_off, 8);
 
-        // The RhiColorConverterMethods pointer must end at the end of
-        // the struct (it is the last field added in v12).
-        assert_eq!(color_converter_off + 8, size_of::<HostServices>());
+        // The RhiCommandRecorderMethods pointer must end at the end of
+        // the struct (it is the last field added in v13).
+        assert_eq!(command_recorder_off + 8, size_of::<HostServices>());
     }
 
     #[test]
@@ -4750,6 +4987,86 @@ mod layout_tests {
                 prepare_buffer_to_image_storage
             ),
             8
+        );
+    }
+
+    #[test]
+    fn image_copy_region_repr_layout() {
+        // Field layout:
+        //   width                @ 0   (4 bytes, u32)
+        //   height               @ 4   (4 bytes, u32)
+        //   buffer_offset        @ 8   (8 bytes, u64)
+        //   buffer_row_length    @ 16  (4 bytes, u32)
+        //   buffer_image_height  @ 20  (4 bytes, u32)
+        //   mip_level            @ 24  (4 bytes, u32)
+        //   array_layer          @ 28  (4 bytes, u32)
+        //   _reserved_padding    @ 32  (4 bytes, u32)
+        // Total = 40 bytes with 4-byte tail padding rounded up to
+        // align(8) = 40 bytes. The struct's alignment is 8 because
+        // of the `u64` field.
+        assert_eq!(size_of::<ImageCopyRegionRepr>(), 40);
+        assert_eq!(align_of::<ImageCopyRegionRepr>(), 8);
+        assert_eq!(offset_of!(ImageCopyRegionRepr, width), 0);
+        assert_eq!(offset_of!(ImageCopyRegionRepr, height), 4);
+        assert_eq!(offset_of!(ImageCopyRegionRepr, buffer_offset), 8);
+        assert_eq!(offset_of!(ImageCopyRegionRepr, buffer_row_length), 16);
+        assert_eq!(offset_of!(ImageCopyRegionRepr, buffer_image_height), 20);
+        assert_eq!(offset_of!(ImageCopyRegionRepr, mip_level), 24);
+        assert_eq!(offset_of!(ImageCopyRegionRepr, array_layer), 28);
+        assert_eq!(offset_of!(ImageCopyRegionRepr, _reserved_padding), 32);
+    }
+
+    #[test]
+    fn rhi_command_recorder_methods_vtable_layout() {
+        // v1:
+        //   layout_version                @ 0   (4 bytes, u32)
+        //   _reserved_padding             @ 4   (4 bytes, u32)
+        //   begin                         @ 8   (8 bytes, fn pointer)
+        //   record_image_barrier          @ 16  (8 bytes, fn pointer)
+        //   record_buffer_barrier         @ 24  (8 bytes, fn pointer)
+        //   record_dispatch               @ 32  (8 bytes, fn pointer)
+        //   record_copy_image_to_buffer   @ 40  (8 bytes, fn pointer)
+        //   submit_signaling_timeline     @ 48  (8 bytes, fn pointer)
+        // Total = 56 bytes, align = 8.
+        assert_eq!(size_of::<RhiCommandRecorderMethodsVTable>(), 56);
+        assert_eq!(align_of::<RhiCommandRecorderMethodsVTable>(), 8);
+        assert_eq!(
+            offset_of!(RhiCommandRecorderMethodsVTable, layout_version),
+            0
+        );
+        assert_eq!(
+            offset_of!(RhiCommandRecorderMethodsVTable, _reserved_padding),
+            4
+        );
+        assert_eq!(
+            offset_of!(RhiCommandRecorderMethodsVTable, begin),
+            8
+        );
+        assert_eq!(
+            offset_of!(RhiCommandRecorderMethodsVTable, record_image_barrier),
+            16
+        );
+        assert_eq!(
+            offset_of!(RhiCommandRecorderMethodsVTable, record_buffer_barrier),
+            24
+        );
+        assert_eq!(
+            offset_of!(RhiCommandRecorderMethodsVTable, record_dispatch),
+            32
+        );
+        assert_eq!(
+            offset_of!(
+                RhiCommandRecorderMethodsVTable,
+                record_copy_image_to_buffer
+            ),
+            40
+        );
+        assert_eq!(
+            offset_of!(
+                RhiCommandRecorderMethodsVTable,
+                submit_signaling_timeline
+            ),
+            48
         );
     }
 
@@ -5582,6 +5899,7 @@ mod layout_tests {
         assert_send_sync::<SurfaceStoreVTable>();
         assert_send_sync::<GpuContextFullAccessVTable>();
         assert_send_sync::<RhiColorConverterMethodsVTable>();
+        assert_send_sync::<RhiCommandRecorderMethodsVTable>();
         assert_send_sync::<HostServices>();
         assert_send_sync::<ProcessorVTable>();
     }

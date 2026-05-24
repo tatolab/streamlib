@@ -4578,8 +4578,13 @@ impl GpuContextFullAccess {
                 if status == 0 {
                     // SAFETY: host signaled success and wrote the
                     // RhiCommandRecorder by value via std::ptr::write.
-                    // Layout is byte-identical under rustc-version
-                    // coupling (CLAUDE.md).
+                    // Layout is byte-identical by `#[repr(C)]`
+                    // invariant. The host's `from_inner` populated
+                    // both `vtable` and `methods_vtable` (Phase E
+                    // sub-lift slice B — #984) with host-static
+                    // addresses; cdylib dispatch through those
+                    // pointers resolves to host-resident functions
+                    // in the shared process address space.
                     Ok(unsafe { out_recorder.assume_init() })
                 } else {
                     let msg = String::from_utf8_lossy(
