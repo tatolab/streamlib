@@ -315,7 +315,7 @@ impl streamlib::sdk::processors::ManualProcessor for LinuxCameraProcessor::Proce
 
         let is_capturing = Arc::clone(&self.is_capturing);
         let frame_counter = Arc::clone(&self.frame_counter);
-        let outputs: Arc<OutputWriter> = self.outputs.clone();
+        let outputs: OutputWriter = self.outputs.clone();
         let camera_name = self.camera_name.clone();
 
         let handle = std::thread::Builder::new()
@@ -407,7 +407,7 @@ fn capture_thread_loop(
     mut stream: v4l::io::mmap::Stream,
     is_capturing: Arc<AtomicBool>,
     frame_counter: Arc<AtomicU64>,
-    outputs: Arc<OutputWriter>,
+    outputs: OutputWriter,
     gpu_context: GpuContextLimitedAccess,
     camera_name: String,
     width: u32,

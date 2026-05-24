@@ -81,10 +81,7 @@ where
         execution_config_msgpack: ProcessorWrappers::<P>::execution_config_msgpack,
         has_iceoryx2_outputs: ProcessorWrappers::<P>::has_iceoryx2_outputs,
         has_iceoryx2_inputs: ProcessorWrappers::<P>::has_iceoryx2_inputs,
-        get_iceoryx2_output_writer_arc:
-            ProcessorWrappers::<P>::get_iceoryx2_output_writer_arc,
-        get_iceoryx2_input_mailboxes_mut:
-            ProcessorWrappers::<P>::get_iceoryx2_input_mailboxes_mut,
+        set_iceoryx2_resources: ProcessorWrappers::<P>::set_iceoryx2_resources,
         apply_config_msgpack: ProcessorWrappers::<P>::apply_config_msgpack,
         to_runtime_msgpack: ProcessorWrappers::<P>::to_runtime_msgpack,
         config_msgpack: ProcessorWrappers::<P>::config_msgpack,
@@ -372,37 +369,69 @@ where
         )
     }
 
-    unsafe extern "C" fn get_iceoryx2_output_writer_arc(
-        instance: *const c_void,
-    ) -> *const c_void {
-        run_host_extern_c(
-            "ProcessorWrappers::get_iceoryx2_output_writer_arc",
-            || {
-                let processor = unsafe { &*(instance as *const P) };
-                match <P as GeneratedProcessor>::get_iceoryx2_output_writer(processor) {
-                    // SAFETY: into_raw transfers one strong reference to the
-                    // caller. Caller must `Arc::from_raw` exactly once.
-                    Some(arc) => std::sync::Arc::into_raw(arc) as *const c_void,
-                    None => std::ptr::null(),
-                }
-            },
-            std::ptr::null(),
-        )
-    }
-
-    unsafe extern "C" fn get_iceoryx2_input_mailboxes_mut(
+    unsafe extern "C" fn set_iceoryx2_resources(
         instance: *mut c_void,
-    ) -> *mut c_void {
+        output_writer_handle: *const c_void,
+        output_writer_vtable: *const streamlib_plugin_abi::OutputWriterVTable,
+        input_mailboxes_handle: *const c_void,
+        input_mailboxes_vtable: *const streamlib_plugin_abi::InputMailboxesVTable,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32 {
         run_host_extern_c(
-            "ProcessorWrappers::get_iceoryx2_input_mailboxes_mut",
+            "ProcessorWrappers::set_iceoryx2_resources",
             || {
                 let processor = unsafe { &mut *(instance as *mut P) };
-                match <P as GeneratedProcessor>::get_iceoryx2_input_mailboxes(processor) {
-                    Some(mailboxes) => mailboxes as *mut _ as *mut c_void,
-                    None => std::ptr::null_mut(),
+                // Reconstruct β-shapes from the (handle, vtable)
+                // pairs the host hands us. Null handle/vtable =
+                // "this processor has no outputs/inputs" — pass
+                // None to the trait method.
+                let output_writer = if output_writer_handle.is_null()
+                    || output_writer_vtable.is_null()
+                {
+                    None
+                } else {
+                    Some(crate::iceoryx2::OutputWriter::from_raw_parts(
+                        output_writer_handle,
+                        output_writer_vtable,
+                    ))
+                };
+                let input_mailboxes = if input_mailboxes_handle.is_null()
+                    || input_mailboxes_vtable.is_null()
+                {
+                    None
+                } else {
+                    // SAFETY: the host's set_iceoryx2_resources
+                    // call uses the same DSO's host_services
+                    // accessor functions for the clone/drop
+                    // refcount fn pointers; those are statically
+                    // linked into the host so we can resolve them
+                    // here at the call site.
+                    let clone_fn = crate::core::plugin::host_services::host_input_mailboxes_clone_arc
+                        as unsafe extern "C" fn(*const c_void) -> *const c_void;
+                    let drop_fn = crate::core::plugin::host_services::host_input_mailboxes_drop_arc
+                        as unsafe extern "C" fn(*const c_void);
+                    Some(crate::iceoryx2::InputMailboxes::from_raw_parts(
+                        input_mailboxes_handle,
+                        input_mailboxes_vtable,
+                        clone_fn,
+                        drop_fn,
+                    ))
+                };
+                match <P as GeneratedProcessor>::set_iceoryx2_resources(
+                    processor,
+                    output_writer,
+                    input_mailboxes,
+                ) {
+                    Ok(()) => 0,
+                    Err(e) => {
+                        write_err(err_buf, err_buf_cap, err_len, &e.to_string());
+                        -1
+                    }
                 }
             },
-            std::ptr::null_mut(),
+            -2,
         )
     }
 

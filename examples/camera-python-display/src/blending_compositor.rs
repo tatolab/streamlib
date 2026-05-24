@@ -244,7 +244,7 @@ impl streamlib::sdk::processors::ManualProcessor for BlendingCompositorProcessor
         );
 
         let inputs = std::mem::take(&mut self.inputs);
-        let outputs = Arc::clone(&self.outputs);
+        let outputs = self.outputs.clone();
         let running = Arc::clone(&self.running);
         let frame_count = Arc::clone(&self.frame_count);
         let gpu_context = self.gpu_context.clone().ok_or_else(|| {
@@ -572,7 +572,7 @@ fn compose_one_frame(
     state: &mut LoopState,
     gpu_ctx: &GpuContextLimitedAccess,
     inputs: &InputMailboxes,
-    outputs: &Arc<OutputWriter>,
+    outputs: &OutputWriter,
     frame_count: &Arc<AtomicU64>,
     backend: &GpuBackend,
 ) -> Result<()> {

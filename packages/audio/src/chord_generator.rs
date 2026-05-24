@@ -105,7 +105,7 @@ impl streamlib::sdk::processors::ManualProcessor for ChordGeneratorProcessor::Pr
         let oscillators = Arc::clone(&self.oscillators);
         let frame_counter = Arc::clone(&self.frame_counter);
         let is_active = Arc::clone(&self.is_active);
-        let outputs = Arc::clone(&self.outputs);
+        let outputs = self.outputs.clone();
 
         audio_clock.on_tick(Box::new(move |tick: AudioTickContext| {
             if !is_active.load(Ordering::SeqCst) {

@@ -31,6 +31,17 @@ const VTABLE_ERR_BUF_CAP: usize = 512;
 /// (subprocess host wrappers via [`ProcessorInstanceFactory::register_dynamic`])
 /// land in [`Self::LegacyDyn`] (dispatch via Rust trait-object
 /// methods, host-DSO-only).
+///
+/// # Iceoryx2 resource ownership (issue #894)
+///
+/// The host allocates the inner `OutputWriterInner` and
+/// `InputMailboxesInner` Arcs at instance-construction time and
+/// retains them on the `VTable` variant via the
+/// `iceoryx2_output_writer_inner` / `iceoryx2_input_mailboxes_inner`
+/// fields. The cdylib's `outputs` / `inputs` β-shape fields receive
+/// `Arc::into_raw`-cloned handles via `set_iceoryx2_resources`.
+/// Connection-wiring code on the host operates on the inner Arc
+/// directly (no FFI hop).
 pub enum ProcessorInstance {
     /// Cdylib- or inventory-registered processor. `instance_ptr` is
     /// a `Box::into_raw(Box::<P>::new(...))` allocation on the
@@ -42,10 +53,18 @@ pub enum ProcessorInstance {
     /// touching the cdylib-side processor. Downcasts to host-only
     /// subprocess-host types fall through to `None` as expected
     /// (cdylib processors are never subprocess hosts).
+    ///
+    /// `iceoryx2_output_writer_inner` / `iceoryx2_input_mailboxes_inner`
+    /// hold the host's per-instance allocation (issue #894). `None`
+    /// for processors without outputs / inputs.
     VTable {
         instance_ptr: *mut c_void,
         vtable: &'static ProcessorVTable,
         any_placeholder: (),
+        iceoryx2_output_writer_inner:
+            Option<Arc<crate::iceoryx2::OutputWriterInner>>,
+        iceoryx2_input_mailboxes_inner:
+            Option<Arc<crate::iceoryx2::InputMailboxesInner>>,
     },
     /// Host-static dyn-trait registration. Used by subprocess host
     /// wrappers (Python / Deno) that register a `Box<dyn Fn>`
@@ -275,51 +294,148 @@ impl ProcessorInstance {
         }
     }
 
-    pub fn get_iceoryx2_output_writer(
+    /// Borrow the host-side `OutputWriterInner` Arc this processor
+    /// instance is wired to. Returns `None` if the processor has no
+    /// output ports.
+    ///
+    /// Used by the host's connection-wiring path (compiler ops) to
+    /// mutate the inner directly via
+    /// [`crate::iceoryx2::OutputWriterInner::add_connection`] —
+    /// no FFI hop to the cdylib.
+    pub fn iceoryx2_output_writer_inner(
         &self,
-    ) -> Option<Arc<crate::iceoryx2::OutputWriter>> {
+    ) -> Option<Arc<crate::iceoryx2::OutputWriterInner>> {
         match self {
             Self::VTable {
-                instance_ptr,
-                vtable,
+                iceoryx2_output_writer_inner,
                 ..
-            } => {
-                let raw = unsafe { (vtable.get_iceoryx2_output_writer_arc)(*instance_ptr) };
-                if raw.is_null() {
-                    None
-                } else {
-                    // SAFETY: the vtable wrapper called Arc::into_raw on a
-                    // clone of the processor's OutputWriter Arc, transferring
-                    // one strong reference. We take ownership here.
-                    Some(unsafe {
-                        Arc::from_raw(raw as *const crate::iceoryx2::OutputWriter)
-                    })
-                }
-            }
-            Self::LegacyDyn(inner) => inner.get_iceoryx2_output_writer(),
+            } => iceoryx2_output_writer_inner.clone(),
+            Self::LegacyDyn(inner) => inner.iceoryx2_output_writer_inner(),
         }
     }
 
-    pub fn get_iceoryx2_input_mailboxes(
-        &mut self,
-    ) -> Option<&mut crate::iceoryx2::InputMailboxes> {
+    /// Borrow the host-side `InputMailboxesInner` Arc this
+    /// processor instance is wired to. Returns `None` if the
+    /// processor has no input ports.
+    ///
+    /// Used by the host's wiring + scheduler paths to call
+    /// `add_port`, `set_subscriber`, `set_listener`, `listener_fd`,
+    /// `drain_listener`, `any_port_has_data`, etc. directly — all
+    /// host-side, no FFI hop to the cdylib.
+    pub fn iceoryx2_input_mailboxes_inner(
+        &self,
+    ) -> Option<Arc<crate::iceoryx2::InputMailboxesInner>> {
+        match self {
+            Self::VTable {
+                iceoryx2_input_mailboxes_inner,
+                ..
+            } => iceoryx2_input_mailboxes_inner.clone(),
+            Self::LegacyDyn(inner) => inner.iceoryx2_input_mailboxes_inner(),
+        }
+    }
+
+    /// Install host-allocated iceoryx2 inner Arcs into this
+    /// processor instance. Called once by the factory after
+    /// `construct` returns; the host owns the Arcs and clones them
+    /// into the cdylib via `set_iceoryx2_resources`.
+    ///
+    /// Returns the resulting error (if any) from the cdylib's
+    /// `set_iceoryx2_resources` vtable slot, plus stashes the Arcs
+    /// on `self` so subsequent
+    /// `iceoryx2_output_writer_inner` / `iceoryx2_input_mailboxes_inner`
+    /// calls see them.
+    pub fn install_iceoryx2_resources(&mut self) -> Result<()> {
+        let needs_outputs = self.has_iceoryx2_outputs();
+        let needs_inputs = self.has_iceoryx2_inputs();
+        let output_inner = needs_outputs
+            .then(|| Arc::new(crate::iceoryx2::OutputWriterInner::new()));
+        let input_inner = needs_inputs
+            .then(|| Arc::new(crate::iceoryx2::InputMailboxesInner::new()));
+
         match self {
             Self::VTable {
                 instance_ptr,
                 vtable,
+                iceoryx2_output_writer_inner,
+                iceoryx2_input_mailboxes_inner,
                 ..
             } => {
-                let raw = unsafe { (vtable.get_iceoryx2_input_mailboxes_mut)(*instance_ptr) };
-                if raw.is_null() {
-                    None
+                // Stash host-side Arcs first so the connection-
+                // wiring path can see them even if the vtable hop
+                // returns an error.
+                *iceoryx2_output_writer_inner = output_inner.clone();
+                *iceoryx2_input_mailboxes_inner = input_inner.clone();
+
+                // Build the (handle, vtable) pairs for the cdylib.
+                let output_writer_handle = output_inner
+                    .as_ref()
+                    .map(|arc| Arc::into_raw(arc.clone()) as *const c_void)
+                    .unwrap_or(std::ptr::null());
+                let output_writer_vtable = if output_inner.is_some() {
+                    crate::core::plugin::host_services::host_output_writer_vtable()
                 } else {
-                    // SAFETY: the vtable wrapper returned &mut self.inputs
-                    // on the same instance; we hold a &mut to the processor
-                    // through `instance_ptr`, so the borrow is exclusive.
-                    Some(unsafe { &mut *(raw as *mut crate::iceoryx2::InputMailboxes) })
+                    std::ptr::null()
+                };
+                let input_mailboxes_handle = input_inner
+                    .as_ref()
+                    .map(|arc| Arc::into_raw(arc.clone()) as *const c_void)
+                    .unwrap_or(std::ptr::null());
+                let input_mailboxes_vtable = if input_inner.is_some() {
+                    crate::core::plugin::host_services::host_input_mailboxes_vtable()
+                } else {
+                    std::ptr::null()
+                };
+
+                let mut err_buf = [0u8; VTABLE_ERR_BUF_CAP];
+                let mut err_len = 0usize;
+                let rc = unsafe {
+                    (vtable.set_iceoryx2_resources)(
+                        *instance_ptr,
+                        output_writer_handle,
+                        output_writer_vtable,
+                        input_mailboxes_handle,
+                        input_mailboxes_vtable,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if rc == 0 {
+                    Ok(())
+                } else {
+                    // The cdylib refused the install; balance the
+                    // leaked Arc handles so we don't leak refs.
+                    if !output_writer_handle.is_null() {
+                        unsafe {
+                            Arc::<crate::iceoryx2::OutputWriterInner>::decrement_strong_count(
+                                output_writer_handle as *const _,
+                            );
+                        }
+                    }
+                    if !input_mailboxes_handle.is_null() {
+                        unsafe {
+                            Arc::<crate::iceoryx2::InputMailboxesInner>::decrement_strong_count(
+                                input_mailboxes_handle as *const _,
+                            );
+                        }
+                    }
+                    let msg = std::str::from_utf8(&err_buf[..err_len])
+                        .unwrap_or("<non-utf8 error>")
+                        .to_string();
+                    Err(Error::Runtime(format!(
+                        "set_iceoryx2_resources: {msg}"
+                    )))
                 }
             }
-            Self::LegacyDyn(inner) => inner.get_iceoryx2_input_mailboxes(),
+            Self::LegacyDyn(inner) => {
+                let ow = output_inner
+                    .clone()
+                    .map(crate::iceoryx2::OutputWriter::from_inner_arc);
+                let im = input_inner
+                    .clone()
+                    .map(crate::iceoryx2::InputMailboxes::from_inner_arc);
+                inner.set_iceoryx2_resources(ow, im)
+            }
         }
     }
 
@@ -847,15 +963,23 @@ impl ProcessorInstanceFactory {
                         node.processor_type, msg
                     )));
                 }
-                Ok(ProcessorInstance::VTable {
+                let mut instance = ProcessorInstance::VTable {
                     instance_ptr: ptr,
                     vtable: *vtable,
                     any_placeholder: (),
-                })
+                    iceoryx2_output_writer_inner: None,
+                    iceoryx2_input_mailboxes_inner: None,
+                };
+                // Issue #894: host-allocates iceoryx2 inner Arcs +
+                // hands the cdylib opaque (handle, vtable) β-shapes
+                // via the new `set_iceoryx2_resources` slot.
+                instance.install_iceoryx2_resources()?;
+                Ok(instance)
             }
             RegistrationKind::LegacyDyn { constructor } => {
-                let inner = constructor(node)?;
-                Ok(ProcessorInstance::LegacyDyn(inner))
+                let mut instance = ProcessorInstance::LegacyDyn(constructor(node)?);
+                instance.install_iceoryx2_resources()?;
+                Ok(instance)
             }
         }
     }

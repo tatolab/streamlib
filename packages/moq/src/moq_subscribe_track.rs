@@ -118,7 +118,7 @@ impl streamlib::sdk::processors::ManualProcessor for MoqSubscribeTrackProcessor:
 async fn run_moq_subscribe_track_receive_loop_with_retry(
     track_name: String,
     runtime_id: String,
-    outputs: Arc<OutputWriter>,
+    outputs: OutputWriter,
     mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
     let has_output_port = outputs.has_port("data_out");
@@ -254,7 +254,7 @@ enum ReceiveLoopResult {
 async fn run_receive_loop(
     track_name: &str,
     mut track_reader: MoqTrackReader,
-    outputs: &Arc<OutputWriter>,
+    outputs: &OutputWriter,
     has_output_port: bool,
     total_frames: &mut u64,
     shutdown_rx: &mut tokio::sync::oneshot::Receiver<()>,

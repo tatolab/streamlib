@@ -110,7 +110,7 @@ struct ScreenCaptureCallbackContext {
     output_writer: *const OutputWriter,
     gpu_context: GpuContextLimitedAccess,
     frame_count: AtomicU64,
-    _outputs_arc: Arc<OutputWriter>,
+    _outputs_arc: OutputWriter,
 }
 
 // SAFETY: OutputWriter is Sync, and the pointer is only dereferenced while valid
@@ -308,7 +308,7 @@ impl streamlib::sdk::processors::ManualProcessor for AppleScreenCaptureProcessor
         })?;
 
         // Create callback context
-        let outputs_arc: Arc<OutputWriter> = self.outputs.clone();
+        let outputs_arc: OutputWriter = self.outputs.clone();
         let output_writer_ptr = Arc::as_ptr(&outputs_arc);
         let callback_context = Arc::new(ScreenCaptureCallbackContext {
             output_writer: output_writer_ptr,
