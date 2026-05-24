@@ -15798,6 +15798,45 @@ mod make_borrow_cached_field_regression_tests {
             "cached_push_constant_size must mirror the inner",
         );
     }
+
+    #[test]
+    fn make_acceleration_structure_borrow_populates_cached_pod_fields() {
+        let Some(device) = try_vulkan_device() else {
+            return;
+        };
+        if !device.supports_ray_tracing_pipeline() {
+            return;
+        }
+        // Single triangle BLAS, smallest payload that exercises the
+        // build path. Mirrors the rt-smoke fixture's vertex layout.
+        let vertices: Vec<f32> = vec![
+            0.0, -0.5, 0.0, -0.5, 0.5, 0.0, 0.5, 0.5, 0.0,
+        ];
+        let indices: Vec<u32> = vec![0, 1, 2];
+        let blas = crate::vulkan::rhi::VulkanAccelerationStructure::build_triangles_blas(
+            &device,
+            "make_borrow_test_blas",
+            &vertices,
+            &indices,
+        )
+        .expect("blas construct");
+        let borrow = make_acceleration_structure_borrow(blas.handle);
+        assert!(
+            matches!(
+                borrow.kind(),
+                crate::vulkan::rhi::AccelerationStructureKind::BottomLevel,
+            ),
+            "cached_kind must mirror the inner",
+        );
+        assert!(
+            borrow.device_address() > 0,
+            "cached_device_address must mirror the inner",
+        );
+        assert!(
+            borrow.storage_size() > 0,
+            "cached_storage_size must mirror the inner",
+        );
+    }
 }
 
 // =============================================================================

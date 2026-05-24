@@ -148,7 +148,15 @@ for the runtime integration shape.
 ## β-shape pattern
 
 Every Arc-holding type that crosses the cdylib boundary has the same
-`#[repr(C)]` layout, applied uniformly:
+shape: a fixed `(handle, vtable)` prefix for clone/drop dispatch
+plus cached POD fields read by `&self` getters with no FFI hop.
+Types that expose methods beyond POD getters (the kernel +
+recorder + color converter β-shapes) carry an additional
+`methods_vtable` pointer between the parent vtable and the cached
+POD; pure resource-handle β-shapes (`Texture`, `PixelBuffer`,
+buffer types, `TextureRegistration`) skip it.
+
+Reference layout for a POD-only β-shape (no methods_vtable):
 
 ```rust
 #[repr(C)]
@@ -157,13 +165,28 @@ pub struct Texture {
     handle: *const c_void,
     /// Vtable for cross-DSO clone/drop dispatch.
     vtable: *const GpuContextLimitedAccessVTable,
-    /// Per-type vtable for method dispatch (when applicable).
-    methods_vtable: *const TextureMethodsVTable,
     /// Cached POD fields read by `&self` getters with no FFI hop.
     width_cached: u32,
     height_cached: u32,
     format_raw: u32,
     _padding: u32,
+}
+```
+
+Reference layout for a method-bearing β-shape (has methods_vtable):
+
+```rust
+#[repr(C)]
+pub struct VulkanComputeKernel {
+    /// Opaque handle to host's `Arc<VulkanComputeKernelInner>`.
+    handle: *const c_void,
+    /// Parent vtable for cross-DSO clone/drop dispatch.
+    vtable: *const GpuContextFullAccessVTable,
+    /// Per-type vtable for method dispatch.
+    methods_vtable: *const VulkanComputeKernelMethodsVTable,
+    /// Cached POD fields read by `&self` getters with no FFI hop.
+    cached_push_constant_size: u32,
+    _reserved_padding: u32,
 }
 ```
 
@@ -278,8 +301,8 @@ that reads `.width()` returns zero — silently, with no error.
 A real bug class: the cdylib pipeline runs end-to-end with zero
 errors and produces all-zero output because the host-side
 `color_converter::finish_buffer_to_image` read `dst.width()` from
-a make_texture_borrow that had `width_cached: 0` (issue
-@docs/learnings/cdylib-make-borrow-cached-fields.md).
+a `make_texture_borrow` that had `width_cached: 0` (see
+[@docs/learnings/cdylib-make-borrow-cached-fields.md](../learnings/cdylib-make-borrow-cached-fields.md)).
 
 The canonical pattern is the two-step dance:
 
@@ -369,8 +392,8 @@ The wrapper itself is locked by the
 `host_services.rs`. The mirror principle holds for the cdylib-side
 `ProcessorVTable` callbacks (the generic wrapper around the user
 processor) and for every adapter crate's local `run_host_extern_c`
-copy — though these last two have weaker direct test coverage as
-of this writing (see the punch list in `audit(plugin-abi)`).
+copy — each of those carries its own panic-catch path with
+weaker direct test coverage than the engine's central wrapper.
 
 ## Test discipline
 
