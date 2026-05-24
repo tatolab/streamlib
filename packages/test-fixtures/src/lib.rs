@@ -15,6 +15,7 @@ pub mod escalate_smoke_test_processor;
 pub mod gpu_acquire_test_processor;
 pub mod graphics_kernel_smoke_test_processor;
 pub mod lifecycle_probe_processor;
+pub mod panicking_lifecycle_processor;
 pub mod ray_tracing_kernel_smoke_test_processor;
 pub mod tcp_bind_test_processor;
 pub mod test_configured_processor;
@@ -24,6 +25,9 @@ pub use escalate_smoke_test_processor::EscalateSmokeTest;
 pub use gpu_acquire_test_processor::GpuAcquireTest;
 pub use graphics_kernel_smoke_test_processor::GraphicsKernelSmokeTest;
 pub use lifecycle_probe_processor::LifecycleProbe;
+pub use panicking_lifecycle_processor::{
+    PanickingContinuousLifecycle, PanickingManualLifecycle,
+};
 pub use ray_tracing_kernel_smoke_test_processor::RayTracingKernelSmokeTest;
 pub use tcp_bind_test_processor::TcpBindTest;
 pub use test_configured_processor::ConfiguredProcessor;
@@ -38,4 +42,6 @@ streamlib_plugin_abi::export_plugin!(
     crate::GraphicsKernelSmokeTest::Processor,
     crate::RayTracingKernelSmokeTest::Processor,
     crate::LifecycleProbe::Processor,
+    crate::PanickingManualLifecycle::Processor,
+    crate::PanickingContinuousLifecycle::Processor,
 );
