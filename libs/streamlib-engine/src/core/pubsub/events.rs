@@ -34,7 +34,7 @@ pub trait EventListener: Send {
     fn on_event(&mut self, event: &Event) -> Result<()>;
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Event {
     RuntimeGlobal(RuntimeEvent),
     ProcessorEvent {
@@ -131,7 +131,7 @@ impl Event {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum RuntimeEvent {
     // ===== Runtime Lifecycle =====
     /// Emitted when runtime is about to start
@@ -327,7 +327,7 @@ pub enum LinkPortDirection {
     Output,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ProcessorEvent {
     // ===== State Control Commands =====
     Start,
@@ -484,7 +484,7 @@ pub enum KeyCode {
 /// 2. KeyboardInput { key: KeyCode::A, modifiers: { shift: true }, state: Pressed }
 ///
 /// This matches web behavior where modifiers are both keys AND state.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Modifiers {
     pub shift: bool,
     pub ctrl: bool,
@@ -540,7 +540,7 @@ pub enum MouseState {
     Released,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WindowEventType {
     Resized { width: u32, height: u32 },
     Closed,
@@ -658,21 +658,38 @@ mod tests {
     #[test]
     fn test_event_serialization_roundtrip() {
         // Verify events can be serialized/deserialized via MessagePack
-        // (critical for iceoryx2 transport)
+        // (critical for iceoryx2 transport). Locks **full** value
+        // equality, not just topic/log_name — a regression where a
+        // discriminator is lost on the wire but topic()/log_name() are
+        // computed from a fallback variant would slip past the older
+        // assertion.
         let events = vec![
             Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted),
             Event::RuntimeGlobal(RuntimeEvent::GraphDidChange),
             Event::processor("test-proc", ProcessorEvent::Started),
             Event::custom("my-topic", serde_json::json!({"key": "value"})),
             Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed),
+            Event::mouse(
+                MouseButton::Left,
+                (100.5, 200.25),
+                MouseState::Pressed,
+            ),
+            Event::window(WindowEventType::Resized {
+                width: 1920,
+                height: 1080,
+            }),
+            Event::RuntimeGlobal(RuntimeEvent::RuntimeWillConnect {
+                from_processor: ProcessorUniqueId::from("Pcam"),
+                from_port: "video_out".into(),
+                to_processor: ProcessorUniqueId::from("Pdisplay"),
+                to_port: "video_in".into(),
+            }),
         ];
 
         for event in events {
             let bytes = rmp_serde::to_vec_named(&event).unwrap();
             let deserialized: Event = rmp_serde::from_slice(&bytes).unwrap();
-            // Verify round-trip preserves the event type
-            assert_eq!(event.topic(), deserialized.topic());
-            assert_eq!(event.log_name(), deserialized.log_name());
+            assert_eq!(event, deserialized, "round-trip mismatch");
         }
     }
 }

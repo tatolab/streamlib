@@ -43,3 +43,28 @@ impl ExecutionConfig {
         Self::new(ProcessExecution::manual())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// msgpack round-trip preserves the full value for every standard
+    /// execution flavor. Mirrors the plugin-ABI encode path that
+    /// forwards `ProcessorInstance::execution_config()` queries from
+    /// the host to cdylib-registered processors.
+    #[test]
+    fn msgpack_round_trip_preserves_full_value() {
+        for cfg in [
+            ExecutionConfig::default(),
+            ExecutionConfig::continuous(),
+            ExecutionConfig::continuous_with_interval(33),
+            ExecutionConfig::reactive(),
+            ExecutionConfig::manual(),
+        ] {
+            let bytes = rmp_serde::to_vec_named(&cfg).expect("encode");
+            let back: ExecutionConfig =
+                rmp_serde::from_slice(&bytes).expect("decode");
+            assert_eq!(cfg, back, "round-trip mismatch for {:?}", cfg);
+        }
+    }
+}

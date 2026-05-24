@@ -34,3 +34,30 @@ impl fmt::Display for OutputLinkPortRef {
         write!(f, "{}.{}", self.processor_id, self.port_name)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// msgpack round-trip preserves both fields. Covers the
+    /// runtime-ops-shim encode path the plugin ABI takes when
+    /// forwarding `Runtime::connect` calls from cdylib code.
+    #[test]
+    fn msgpack_round_trip_preserves_full_value() {
+        let port_ref =
+            OutputLinkPortRef::new(ProcessorUniqueId::from("Pcam"), "video_out");
+        let bytes = rmp_serde::to_vec_named(&port_ref).expect("encode");
+        let back: OutputLinkPortRef = rmp_serde::from_slice(&bytes).expect("decode");
+        assert_eq!(port_ref, back);
+    }
+
+    /// Empty port_name round-trips (no field-skipping shenanigans).
+    #[test]
+    fn msgpack_round_trip_empty_port_name() {
+        let port_ref =
+            OutputLinkPortRef::new(ProcessorUniqueId::from("P0"), "");
+        let bytes = rmp_serde::to_vec_named(&port_ref).expect("encode");
+        let back: OutputLinkPortRef = rmp_serde::from_slice(&bytes).expect("decode");
+        assert_eq!(port_ref, back);
+    }
+}
