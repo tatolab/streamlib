@@ -8,6 +8,111 @@ pub use streamlib_processor_schema::{
     Org, Package, PortSchemaSpec, ProcessorScheduling, SchemaIdent, SemVer, TypeName,
 };
 
+/// Lossless wire-format mirror of [`PortSchemaSpec`] used at the cdylib
+/// FFI msgpack boundary.
+///
+/// `PortSchemaSpec`'s default serde impl
+/// (`streamlib_processor_schema::PortSchemaSpec`) is intentionally
+/// YAML-shaped — `Specific(SchemaIdent)` serializes to just the bare
+/// type-name string, and the matching `Deserialize` impl only ever
+/// produces `Any | Named`. That contract holds for `streamlib.yaml`
+/// authoring, where the bare PascalCase form is canonical and the
+/// downstream resolver (`ProjectConfig::resolve_bare_schema_refs` /
+/// the `#[streamlib::sdk::processor]` proc-macro) rewrites
+/// `Named → Specific` against the enclosing manifest's `schemas:` map.
+///
+/// It does NOT hold when [`ProcessorDescriptor`] crosses the cdylib
+/// dlopen FFI seam via `rmp_serde`. The proc-macro pre-resolves
+/// `Named → Specific` at the cdylib's compile time and embeds the
+/// fully-qualified [`SchemaIdent`] in the cdylib's `descriptor()`
+/// constant. When `host_processor_register` deserializes the msgpack
+/// envelope on the host side, the default YAML-shaped impl downcasts
+/// the carried `Specific` to `Named(bare type-name)` — the cdylib's
+/// resolution work is silently lost, the host stores `Named` in
+/// `PROCESSOR_REGISTRY.port_info`, and the WIRE phase panics at
+/// `open_iceoryx2_service_op.rs::schema_ident_wire_for_producer`.
+///
+/// The wire-only mirror below restores the structured-everywhere
+/// contract from `docs/architecture/schema-identity-and-packaging.md`
+/// Decision 2: every reference to a schema identifier is a structured
+/// record on every wire surface. Used via
+/// `#[serde(with = "port_schema_spec_wire")]` on
+/// [`PortDescriptor::schema`] — every `ProcessorDescriptor` that
+/// crosses a serializer boundary now round-trips losslessly.
+///
+/// YAML authoring (`streamlib.yaml`) continues to use
+/// `PortSchemaSpec`'s default impl — `schema: VideoFrame` parses as
+/// `Named(VideoFrame)`, then the manifest-side resolver rewrites it
+/// to `Specific(SchemaIdent)` before the descriptor is built. The
+/// wire mirror only governs the `ProcessorDescriptor` msgpack/JSON
+/// hop downstream of that resolution.
+pub(crate) mod port_schema_spec_wire {
+    use super::{Org, Package, PortSchemaSpec, SchemaIdent, SemVer, TypeName};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(Serialize, Deserialize)]
+    #[serde(tag = "kind", rename_all = "snake_case")]
+    enum Wire {
+        Any,
+        Named {
+            name: String,
+        },
+        Specific {
+            org: String,
+            package: String,
+            #[serde(rename = "type")]
+            type_name: String,
+            version_major: u32,
+            version_minor: u32,
+            version_patch: u32,
+        },
+    }
+
+    pub fn serialize<S: Serializer>(value: &PortSchemaSpec, s: S) -> Result<S::Ok, S::Error> {
+        let wire = match value {
+            PortSchemaSpec::Any => Wire::Any,
+            PortSchemaSpec::Named(name) => Wire::Named {
+                name: name.as_str().to_string(),
+            },
+            PortSchemaSpec::Specific(ident) => Wire::Specific {
+                org: ident.org.as_str().to_string(),
+                package: ident.package.as_str().to_string(),
+                type_name: ident.r#type.as_str().to_string(),
+                version_major: ident.version.major,
+                version_minor: ident.version.minor,
+                version_patch: ident.version.patch,
+            },
+        };
+        wire.serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<PortSchemaSpec, D::Error> {
+        use serde::de::Error;
+        let wire = Wire::deserialize(d)?;
+        Ok(match wire {
+            Wire::Any => PortSchemaSpec::Any,
+            Wire::Named { name } => {
+                let typed = TypeName::new(name).map_err(D::Error::custom)?;
+                PortSchemaSpec::Named(typed)
+            }
+            Wire::Specific {
+                org,
+                package,
+                type_name,
+                version_major,
+                version_minor,
+                version_patch,
+            } => {
+                let org = Org::new(org).map_err(D::Error::custom)?;
+                let package = Package::new(package).map_err(D::Error::custom)?;
+                let type_name = TypeName::new(type_name).map_err(D::Error::custom)?;
+                let version = SemVer::new(version_major, version_minor, version_patch);
+                PortSchemaSpec::Specific(SchemaIdent::new(org, package, type_name, version))
+            }
+        })
+    }
+}
+
 /// Runtime environment for a processor.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -26,6 +131,13 @@ pub struct PortDescriptor {
     pub description: String,
     /// Structured schema spec — `Any` (wildcard for MoQ-style ports) or a
     /// fully-qualified [`SchemaIdent`].
+    ///
+    /// Serialized via [`port_schema_spec_wire`] so the cdylib FFI msgpack
+    /// boundary preserves `Specific(SchemaIdent)` round-trip. The default
+    /// `PortSchemaSpec` serde impl is YAML-shaped (lossy on `Specific`)
+    /// and stays in place for `streamlib.yaml` manifest parsing where
+    /// bare-name authoring is canonical.
+    #[serde(with = "port_schema_spec_wire")]
     pub schema: PortSchemaSpec,
     pub required: bool,
     /// Whether this port uses iceoryx2 IPC.
@@ -217,5 +329,127 @@ impl ProcessorDescriptor {
 
     pub fn to_yaml(&self) -> Result<String, serde_yaml::Error> {
         serde_yaml::to_string(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `PortDescriptor::schema` must round-trip every `PortSchemaSpec`
+    /// variant losslessly through `rmp_serde` — that's the cdylib FFI
+    /// wire format. A regression here would silently degrade
+    /// `Specific(SchemaIdent)` to `Named(bare_type)` at the host /
+    /// plugin boundary; the WIRE phase would then panic at
+    /// `open_iceoryx2_service_op::schema_ident_wire_for_producer`.
+    /// Mentally revert the `#[serde(with = "port_schema_spec_wire")]`
+    /// attribute on `PortDescriptor::schema` and this test fails on
+    /// the Specific case.
+    #[test]
+    fn port_descriptor_schema_msgpack_round_trip_preserves_specific() {
+        let ident = SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("core").unwrap(),
+            TypeName::new("VideoFrame").unwrap(),
+            SemVer::new(1, 0, 0),
+        );
+        let pd = PortDescriptor::new(
+            "video",
+            "Live video frames",
+            PortSchemaSpec::Specific(ident.clone()),
+            true,
+        );
+        let bytes = rmp_serde::to_vec_named(&pd).expect("encode");
+        let pd2: PortDescriptor = rmp_serde::from_slice(&bytes).expect("decode");
+        match &pd2.schema {
+            PortSchemaSpec::Specific(round_tripped) => {
+                assert_eq!(
+                    round_tripped, &ident,
+                    "Specific(SchemaIdent) must round-trip byte-for-byte; got {:?}",
+                    round_tripped
+                );
+            }
+            other => panic!(
+                "Specific(SchemaIdent) downgraded to {:?} on msgpack round-trip — the \
+                 cdylib FFI is silently destroying schema identity",
+                other
+            ),
+        }
+    }
+
+    /// `Named` variant must also round-trip — exercised by the YAML
+    /// parser path that produces unresolved `Named` for in-process
+    /// `ProjectConfig::load` consumers; if the cdylib FFI hop ever
+    /// hands a `Named` across, it stays `Named`.
+    #[test]
+    fn port_descriptor_schema_msgpack_round_trip_preserves_named() {
+        let pd = PortDescriptor::new(
+            "video",
+            "Live video frames",
+            PortSchemaSpec::Named(TypeName::new("VideoFrame").unwrap()),
+            true,
+        );
+        let bytes = rmp_serde::to_vec_named(&pd).expect("encode");
+        let pd2: PortDescriptor = rmp_serde::from_slice(&bytes).expect("decode");
+        match &pd2.schema {
+            PortSchemaSpec::Named(name) => {
+                assert_eq!(name.as_str(), "VideoFrame");
+            }
+            other => panic!("Named round-tripped to {:?}", other),
+        }
+    }
+
+    /// `Any` must round-trip too — it's the wildcard wire identity.
+    #[test]
+    fn port_descriptor_schema_msgpack_round_trip_preserves_any() {
+        let pd = PortDescriptor::new(
+            "frames",
+            "Wildcard frames",
+            PortSchemaSpec::Any,
+            false,
+        );
+        let bytes = rmp_serde::to_vec_named(&pd).expect("encode");
+        let pd2: PortDescriptor = rmp_serde::from_slice(&bytes).expect("decode");
+        assert!(matches!(pd2.schema, PortSchemaSpec::Any));
+    }
+
+    /// End-to-end through `ProcessorDescriptor` — the actual envelope
+    /// that crosses the cdylib FFI boundary at
+    /// `register_via_callback` / `host_processor_register`. Locks the
+    /// invariant at the type the FFI actually serializes, not just
+    /// the inner port descriptor.
+    #[test]
+    fn processor_descriptor_msgpack_round_trip_preserves_port_specific() {
+        let ident = SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("core").unwrap(),
+            TypeName::new("VideoFrame").unwrap(),
+            SemVer::new(1, 0, 0),
+        );
+        let proc_ident = SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("camera").unwrap(),
+            TypeName::new("Camera").unwrap(),
+            SemVer::new(1, 0, 0),
+        );
+        let mut pd = ProcessorDescriptor::new(proc_ident, "Camera");
+        pd.outputs.push(PortDescriptor::new(
+            "video",
+            "Live video frames",
+            PortSchemaSpec::Specific(ident.clone()),
+            true,
+        ));
+        let bytes = rmp_serde::to_vec_named(&pd).expect("encode");
+        let pd2: ProcessorDescriptor = rmp_serde::from_slice(&bytes).expect("decode");
+        match &pd2.outputs[0].schema {
+            PortSchemaSpec::Specific(round_tripped) => {
+                assert_eq!(round_tripped, &ident);
+            }
+            other => panic!(
+                "ProcessorDescriptor.outputs[0].schema downgraded to {:?} on FFI \
+                 msgpack round-trip — cdylib registration silently destroying identity",
+                other
+            ),
+        }
     }
 }
