@@ -8268,12 +8268,88 @@ unsafe extern "C" fn host_compute_kernel_set_storage_image(
     1
 }
 
-/// Host-side `VulkanComputeKernelMethodsVTable` populated with the
-/// v3 method slots (typed binding-method dispatch for the plugin
-/// handle's `set_storage_buffer_pixel` / `set_storage_buffer_storage`
-/// / `set_uniform_buffer` / `set_sampled_texture` /
-/// `set_storage_image` surface plus the previously-shipped
-/// `set_push_constants` / `dispatch` primitive-only slots).
+/// Read the compute kernel's declared bindings into a caller-provided
+/// `[ComputeBindingSpecRepr]` buffer. v4 (introspection).
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_compute_kernel_bindings(
+    kernel_handle: *const c_void,
+    out_specs_buf: *mut streamlib_plugin_abi::ComputeBindingSpecRepr,
+    out_specs_cap: usize,
+    out_specs_len: *mut usize,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_compute_kernel_bindings",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "bindings: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if out_specs_len.is_null() {
+                write_err(
+                    "bindings: null out_specs_len pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let bindings = kernel.bindings();
+            let actual = bindings.len();
+            unsafe { std::ptr::write(out_specs_len, actual) };
+            if out_specs_cap < actual {
+                return 2;
+            }
+            if !out_specs_buf.is_null() {
+                for (i, spec) in bindings.iter().enumerate() {
+                    let repr = streamlib_plugin_abi::ComputeBindingSpecRepr::from(spec);
+                    unsafe { std::ptr::write(out_specs_buf.add(i), repr) };
+                }
+            } else if actual > 0 {
+                write_err(
+                    "bindings: out_specs_buf is null but kernel has bindings",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            0
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_compute_kernel_bindings(
+    _kernel_handle: *const c_void,
+    _out_specs_buf: *mut streamlib_plugin_abi::ComputeBindingSpecRepr,
+    _out_specs_cap: usize,
+    _out_specs_len: *mut usize,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "bindings: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+/// Host-side `VulkanComputeKernelMethodsVTable` populated with v4
+/// method slots — v3's binding-method dispatch surface plus the v4
+/// `bindings` introspection slot.
 pub static HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE:
     streamlib_plugin_abi::VulkanComputeKernelMethodsVTable =
     streamlib_plugin_abi::VulkanComputeKernelMethodsVTable {
@@ -8286,6 +8362,7 @@ pub static HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE:
         set_uniform_buffer: host_compute_kernel_set_uniform_buffer,
         set_sampled_texture: host_compute_kernel_set_sampled_texture,
         set_storage_image: host_compute_kernel_set_storage_image,
+        bindings: host_compute_kernel_bindings,
     };
 
 /// Accessor for the host's static `VulkanComputeKernelMethodsVTable`
@@ -9651,6 +9728,86 @@ unsafe extern "C" fn host_graphics_kernel_offscreen_render(
 /// `host_inner`-routed and are NOT on this vtable — minting a
 /// `vk::CommandBuffer` from cdylib code requires an
 /// `RhiCommandRecorder` β-shape, which is a separate concern.
+/// Read the graphics kernel's declared bindings into a caller-provided
+/// `[GraphicsBindingSpecRepr]` buffer. v3 (introspection).
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_graphics_kernel_bindings(
+    kernel_handle: *const c_void,
+    out_specs_buf: *mut streamlib_plugin_abi::GraphicsBindingSpecRepr,
+    out_specs_cap: usize,
+    out_specs_len: *mut usize,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_graphics_kernel_bindings",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "bindings: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if out_specs_len.is_null() {
+                write_err(
+                    "bindings: null out_specs_len pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let bindings = kernel.bindings();
+            let actual = bindings.len();
+            unsafe { std::ptr::write(out_specs_len, actual) };
+            if out_specs_cap < actual {
+                return 2;
+            }
+            if !out_specs_buf.is_null() {
+                for (i, spec) in bindings.iter().enumerate() {
+                    let repr =
+                        streamlib_plugin_abi::GraphicsBindingSpecRepr::from(spec);
+                    unsafe { std::ptr::write(out_specs_buf.add(i), repr) };
+                }
+            } else if actual > 0 {
+                write_err(
+                    "bindings: out_specs_buf is null but kernel has bindings",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            0
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_graphics_kernel_bindings(
+    _kernel_handle: *const c_void,
+    _out_specs_buf: *mut streamlib_plugin_abi::GraphicsBindingSpecRepr,
+    _out_specs_cap: usize,
+    _out_specs_len: *mut usize,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "bindings: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
 pub static HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE:
     streamlib_plugin_abi::VulkanGraphicsKernelMethodsVTable =
     streamlib_plugin_abi::VulkanGraphicsKernelMethodsVTable {
@@ -9666,6 +9823,7 @@ pub static HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE:
         set_index_buffer: host_graphics_kernel_set_index_buffer,
         set_push_constants: host_graphics_kernel_set_push_constants,
         offscreen_render: host_graphics_kernel_offscreen_render,
+        bindings: host_graphics_kernel_bindings,
     };
 
 /// Accessor for the host's static `VulkanGraphicsKernelMethodsVTable`
@@ -9832,6 +9990,86 @@ unsafe extern "C" fn host_ray_tracing_kernel_trace_rays(
 /// `set_push_constants_value::<T>` stay `host_inner`-routed —
 /// `Vec<RayTracingBindingSpec>` isn't `#[repr(C)]` and the generic
 /// reduces to `set_push_constants` for cdylib mode.
+/// Read the ray-tracing kernel's declared bindings into a caller-
+/// provided `[RayTracingBindingSpecRepr]` buffer. v3 (introspection).
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_ray_tracing_kernel_bindings(
+    kernel_handle: *const c_void,
+    out_specs_buf: *mut streamlib_plugin_abi::RayTracingBindingSpecRepr,
+    out_specs_cap: usize,
+    out_specs_len: *mut usize,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ray_tracing_kernel_bindings",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "bindings: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if out_specs_len.is_null() {
+                write_err(
+                    "bindings: null out_specs_len pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let bindings = kernel.bindings();
+            let actual = bindings.len();
+            unsafe { std::ptr::write(out_specs_len, actual) };
+            if out_specs_cap < actual {
+                return 2;
+            }
+            if !out_specs_buf.is_null() {
+                for (i, spec) in bindings.iter().enumerate() {
+                    let repr =
+                        streamlib_plugin_abi::RayTracingBindingSpecRepr::from(spec);
+                    unsafe { std::ptr::write(out_specs_buf.add(i), repr) };
+                }
+            } else if actual > 0 {
+                write_err(
+                    "bindings: out_specs_buf is null but kernel has bindings",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            0
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_ray_tracing_kernel_bindings(
+    _kernel_handle: *const c_void,
+    _out_specs_buf: *mut streamlib_plugin_abi::RayTracingBindingSpecRepr,
+    _out_specs_cap: usize,
+    _out_specs_len: *mut usize,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "bindings: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
 pub static HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE:
     streamlib_plugin_abi::VulkanRayTracingKernelMethodsVTable =
     streamlib_plugin_abi::VulkanRayTracingKernelMethodsVTable {
@@ -9846,6 +10084,7 @@ pub static HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE:
         set_storage_image: host_ray_tracing_kernel_set_storage_image,
         set_push_constants: host_ray_tracing_kernel_set_push_constants,
         trace_rays: host_ray_tracing_kernel_trace_rays,
+        bindings: host_ray_tracing_kernel_bindings,
     };
 
 /// Accessor for the host's static
@@ -10317,8 +10556,590 @@ unsafe extern "C" fn host_color_converter_prepare_buffer_to_image_storage(
     1
 }
 
+/// `PixelBuffer`-shape source variant of
+/// [`host_color_converter_prepare_buffer_to_image_storage`]. Decodes
+/// the `ResolvedColorInfoRepr` + `SourceLayoutInfoRepr`, reconstructs
+/// the `PixelBuffer` borrow, calls
+/// `RhiColorConverterInner::prepare_buffer_to_image_pixel`, and bumps
+/// the returned kernel's inner Arc strong count for the cdylib to
+/// own. v2 (Phase E sub-lift completion).
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_color_converter_prepare_buffer_to_image_pixel(
+    converter_handle: *const c_void,
+    src_buffer_handle: *const c_void,
+    src_layout: *const streamlib_plugin_abi::SourceLayoutInfoRepr,
+    dst_texture_handle: *const c_void,
+    info: *const streamlib_plugin_abi::ResolvedColorInfoRepr,
+    dst_transfer_raw: u32,
+    out_kernel: *mut *const c_void,
+    out_cached_push_constant_size: *mut u32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_color_converter_prepare_buffer_to_image_pixel",
+        || -> i32 {
+            let Some(converter) =
+                (unsafe { handle_as_color_converter(converter_handle) })
+            else {
+                write_err(
+                    "prepare_buffer_to_image_pixel: null converter handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if src_buffer_handle.is_null() {
+                write_err(
+                    "prepare_buffer_to_image_pixel: null src_buffer handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            if dst_texture_handle.is_null() {
+                write_err(
+                    "prepare_buffer_to_image_pixel: null dst_texture handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            if src_layout.is_null() {
+                write_err(
+                    "prepare_buffer_to_image_pixel: null src_layout pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            if info.is_null() {
+                write_err(
+                    "prepare_buffer_to_image_pixel: null info pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            if out_kernel.is_null() || out_cached_push_constant_size.is_null() {
+                write_err(
+                    "prepare_buffer_to_image_pixel: null out pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+
+            let layout_repr = unsafe { &*src_layout };
+            let info_repr = unsafe { &*info };
+
+            let rust_layout = crate::core::rhi::SourceLayoutInfo {
+                plane0_stride_bytes: layout_repr.plane0_stride_bytes,
+                plane1_stride_bytes: layout_repr.plane1_stride_bytes,
+                plane1_offset_bytes: layout_repr.plane1_offset_bytes,
+            };
+
+            let Some(primaries) = primaries_from_raw(info_repr.primaries_raw) else {
+                write_err(
+                    &format!(
+                        "prepare_buffer_to_image_pixel: invalid primaries discriminant {}",
+                        info_repr.primaries_raw
+                    ),
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            let Some(transfer_in) = transfer_from_raw(info_repr.transfer_raw) else {
+                write_err(
+                    &format!(
+                        "prepare_buffer_to_image_pixel: invalid transfer discriminant {}",
+                        info_repr.transfer_raw
+                    ),
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            let Some(matrix) = matrix_from_raw(info_repr.matrix_raw) else {
+                write_err(
+                    &format!(
+                        "prepare_buffer_to_image_pixel: invalid matrix discriminant {}",
+                        info_repr.matrix_raw
+                    ),
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            let Some(range) = range_from_raw(info_repr.range_raw) else {
+                write_err(
+                    &format!(
+                        "prepare_buffer_to_image_pixel: invalid range discriminant {}",
+                        info_repr.range_raw
+                    ),
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            let resolved = crate::core::color::ResolvedColorInfo {
+                primaries,
+                transfer: transfer_in,
+                matrix,
+                range,
+            };
+
+            let Some(dst_transfer) = transfer_from_raw(dst_transfer_raw) else {
+                write_err(
+                    &format!(
+                        "prepare_buffer_to_image_pixel: invalid dst_transfer discriminant {}",
+                        dst_transfer_raw
+                    ),
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+
+            let src_borrow = make_pixel_buffer_borrow(src_buffer_handle);
+            let dst_borrow = make_texture_borrow(dst_texture_handle);
+
+            match converter.prepare_buffer_to_image_pixel(
+                &*src_borrow,
+                rust_layout,
+                &*dst_borrow,
+                &resolved,
+                dst_transfer,
+            ) {
+                Ok(arc_kernel) => {
+                    let raw_inner = arc_kernel.handle;
+                    unsafe {
+                        std::sync::Arc::increment_strong_count(
+                            raw_inner
+                                as *const crate::vulkan::rhi::VulkanComputeKernelInner,
+                        );
+                    }
+                    let push_constant_size = arc_kernel.cached_push_constant_size;
+                    unsafe {
+                        std::ptr::write(out_kernel, raw_inner);
+                        std::ptr::write(
+                            out_cached_push_constant_size,
+                            push_constant_size,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    write_err(
+                        &format!("prepare_buffer_to_image_pixel: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_color_converter_prepare_buffer_to_image_pixel(
+    _converter_handle: *const c_void,
+    _src_buffer_handle: *const c_void,
+    _src_layout: *const streamlib_plugin_abi::SourceLayoutInfoRepr,
+    _dst_texture_handle: *const c_void,
+    _info: *const streamlib_plugin_abi::ResolvedColorInfoRepr,
+    _dst_transfer_raw: u32,
+    _out_kernel: *mut *const c_void,
+    _out_cached_push_constant_size: *mut u32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "prepare_buffer_to_image_pixel: Linux-only",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+/// `StorageBuffer`-shape end-to-end conversion. Same handle and enum-
+/// decoding contracts as
+/// [`host_color_converter_prepare_buffer_to_image_storage`]; returns
+/// no kernel handle (the host's converter retains the kernel cache).
+/// v2 (Phase E sub-lift completion).
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_color_converter_convert_buffer_to_image_storage(
+    converter_handle: *const c_void,
+    src_buffer_handle: *const c_void,
+    src_layout: *const streamlib_plugin_abi::SourceLayoutInfoRepr,
+    dst_texture_handle: *const c_void,
+    info: *const streamlib_plugin_abi::ResolvedColorInfoRepr,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_color_converter_convert_buffer_to_image_storage",
+        || -> i32 {
+            let Some(converter) =
+                (unsafe { handle_as_color_converter(converter_handle) })
+            else {
+                write_err(
+                    "convert_buffer_to_image_storage: null converter handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if src_buffer_handle.is_null() {
+                write_err(
+                    "convert_buffer_to_image_storage: null src_buffer handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            if dst_texture_handle.is_null() {
+                write_err(
+                    "convert_buffer_to_image_storage: null dst_texture handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            if src_layout.is_null() {
+                write_err(
+                    "convert_buffer_to_image_storage: null src_layout pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            if info.is_null() {
+                write_err(
+                    "convert_buffer_to_image_storage: null info pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+
+            let layout_repr = unsafe { &*src_layout };
+            let info_repr = unsafe { &*info };
+
+            let rust_layout = crate::core::rhi::SourceLayoutInfo {
+                plane0_stride_bytes: layout_repr.plane0_stride_bytes,
+                plane1_stride_bytes: layout_repr.plane1_stride_bytes,
+                plane1_offset_bytes: layout_repr.plane1_offset_bytes,
+            };
+
+            let Some(primaries) = primaries_from_raw(info_repr.primaries_raw) else {
+                write_err(
+                    &format!(
+                        "convert_buffer_to_image_storage: invalid primaries discriminant {}",
+                        info_repr.primaries_raw
+                    ),
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            let Some(transfer_in) = transfer_from_raw(info_repr.transfer_raw) else {
+                write_err(
+                    &format!(
+                        "convert_buffer_to_image_storage: invalid transfer discriminant {}",
+                        info_repr.transfer_raw
+                    ),
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            let Some(matrix) = matrix_from_raw(info_repr.matrix_raw) else {
+                write_err(
+                    &format!(
+                        "convert_buffer_to_image_storage: invalid matrix discriminant {}",
+                        info_repr.matrix_raw
+                    ),
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            let Some(range) = range_from_raw(info_repr.range_raw) else {
+                write_err(
+                    &format!(
+                        "convert_buffer_to_image_storage: invalid range discriminant {}",
+                        info_repr.range_raw
+                    ),
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            let resolved = crate::core::color::ResolvedColorInfo {
+                primaries,
+                transfer: transfer_in,
+                matrix,
+                range,
+            };
+
+            let src_borrow = make_storage_buffer_borrow(src_buffer_handle);
+            let dst_borrow = make_texture_borrow(dst_texture_handle);
+
+            match converter.convert_buffer_to_image_storage(
+                &*src_borrow,
+                rust_layout,
+                &*dst_borrow,
+                &resolved,
+            ) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("convert_buffer_to_image_storage: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_color_converter_convert_buffer_to_image_storage(
+    _converter_handle: *const c_void,
+    _src_buffer_handle: *const c_void,
+    _src_layout: *const streamlib_plugin_abi::SourceLayoutInfoRepr,
+    _dst_texture_handle: *const c_void,
+    _info: *const streamlib_plugin_abi::ResolvedColorInfoRepr,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "convert_buffer_to_image_storage: Linux-only",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+/// `PixelBuffer`-shape end-to-end conversion. Identical to
+/// [`host_color_converter_convert_buffer_to_image_storage`] except for
+/// the source buffer flavor. v2 (Phase E sub-lift completion).
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_color_converter_convert_buffer_to_image_pixel(
+    converter_handle: *const c_void,
+    src_buffer_handle: *const c_void,
+    src_layout: *const streamlib_plugin_abi::SourceLayoutInfoRepr,
+    dst_texture_handle: *const c_void,
+    info: *const streamlib_plugin_abi::ResolvedColorInfoRepr,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_color_converter_convert_buffer_to_image_pixel",
+        || -> i32 {
+            let Some(converter) =
+                (unsafe { handle_as_color_converter(converter_handle) })
+            else {
+                write_err(
+                    "convert_buffer_to_image_pixel: null converter handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if src_buffer_handle.is_null() {
+                write_err(
+                    "convert_buffer_to_image_pixel: null src_buffer handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            if dst_texture_handle.is_null() {
+                write_err(
+                    "convert_buffer_to_image_pixel: null dst_texture handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            if src_layout.is_null() {
+                write_err(
+                    "convert_buffer_to_image_pixel: null src_layout pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            if info.is_null() {
+                write_err(
+                    "convert_buffer_to_image_pixel: null info pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+
+            let layout_repr = unsafe { &*src_layout };
+            let info_repr = unsafe { &*info };
+
+            let rust_layout = crate::core::rhi::SourceLayoutInfo {
+                plane0_stride_bytes: layout_repr.plane0_stride_bytes,
+                plane1_stride_bytes: layout_repr.plane1_stride_bytes,
+                plane1_offset_bytes: layout_repr.plane1_offset_bytes,
+            };
+
+            let Some(primaries) = primaries_from_raw(info_repr.primaries_raw) else {
+                write_err(
+                    &format!(
+                        "convert_buffer_to_image_pixel: invalid primaries discriminant {}",
+                        info_repr.primaries_raw
+                    ),
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            let Some(transfer_in) = transfer_from_raw(info_repr.transfer_raw) else {
+                write_err(
+                    &format!(
+                        "convert_buffer_to_image_pixel: invalid transfer discriminant {}",
+                        info_repr.transfer_raw
+                    ),
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            let Some(matrix) = matrix_from_raw(info_repr.matrix_raw) else {
+                write_err(
+                    &format!(
+                        "convert_buffer_to_image_pixel: invalid matrix discriminant {}",
+                        info_repr.matrix_raw
+                    ),
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            let Some(range) = range_from_raw(info_repr.range_raw) else {
+                write_err(
+                    &format!(
+                        "convert_buffer_to_image_pixel: invalid range discriminant {}",
+                        info_repr.range_raw
+                    ),
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            let resolved = crate::core::color::ResolvedColorInfo {
+                primaries,
+                transfer: transfer_in,
+                matrix,
+                range,
+            };
+
+            let src_borrow = make_pixel_buffer_borrow(src_buffer_handle);
+            let dst_borrow = make_texture_borrow(dst_texture_handle);
+
+            match converter.convert_buffer_to_image_pixel(
+                &*src_borrow,
+                rust_layout,
+                &*dst_borrow,
+                &resolved,
+            ) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("convert_buffer_to_image_pixel: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_color_converter_convert_buffer_to_image_pixel(
+    _converter_handle: *const c_void,
+    _src_buffer_handle: *const c_void,
+    _src_layout: *const streamlib_plugin_abi::SourceLayoutInfoRepr,
+    _dst_texture_handle: *const c_void,
+    _info: *const streamlib_plugin_abi::ResolvedColorInfoRepr,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "convert_buffer_to_image_pixel: Linux-only",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
 /// Host-side `RhiColorConverterMethodsVTable` wired to the per-method
-/// wrappers above (Phase E sub-lift slice A).
+/// wrappers above. v2 ships the Phase E sub-lift completion —
+/// `prepare_buffer_to_image_pixel`, `convert_buffer_to_image_storage`,
+/// `convert_buffer_to_image_pixel`.
 pub static HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE:
     streamlib_plugin_abi::RhiColorConverterMethodsVTable =
     streamlib_plugin_abi::RhiColorConverterMethodsVTable {
@@ -10327,6 +11148,12 @@ pub static HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE:
         _reserved_padding: 0,
         prepare_buffer_to_image_storage:
             host_color_converter_prepare_buffer_to_image_storage,
+        prepare_buffer_to_image_pixel:
+            host_color_converter_prepare_buffer_to_image_pixel,
+        convert_buffer_to_image_storage:
+            host_color_converter_convert_buffer_to_image_storage,
+        convert_buffer_to_image_pixel:
+            host_color_converter_convert_buffer_to_image_pixel,
     };
 
 /// Accessor for the host's static `RhiColorConverterMethodsVTable` —
@@ -16148,5 +16975,210 @@ mod input_mailboxes_vtable_tier1_wire_format_tests {
         assert_eq!(std::sync::Arc::strong_count(&inner_for_test), 2);
         unsafe { (HOST_INPUT_MAILBOXES_VTABLE.drop_arc)(raw) };
         assert_eq!(std::sync::Arc::strong_count(&inner_for_test), 1);
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod rhi_color_converter_methods_vtable_tier1_wire_format_tests {
+    //! Tier-1 wire-format tests for the v2 sibling slots added to
+    //! `RhiColorConverterMethodsVTable`: `prepare_buffer_to_image_pixel`,
+    //! `convert_buffer_to_image_storage`, `convert_buffer_to_image_pixel`.
+    //!
+    //! Each slot's null-handle / null out-ptr / err-buf contract is
+    //! exercised against the static `HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE`.
+
+    use super::*;
+
+    fn make_err_buf() -> ([u8; 256], usize) {
+        ([0u8; 256], 0usize)
+    }
+
+    fn err_buf_as_str(buf: &[u8], len: usize) -> &str {
+        std::str::from_utf8(&buf[..len]).expect("UTF-8")
+    }
+
+    fn dummy_layout() -> streamlib_plugin_abi::SourceLayoutInfoRepr {
+        streamlib_plugin_abi::SourceLayoutInfoRepr {
+            plane0_stride_bytes: 0,
+            plane1_stride_bytes: 0,
+            plane1_offset_bytes: 0,
+            _reserved_padding: 0,
+        }
+    }
+
+    fn dummy_info() -> streamlib_plugin_abi::ResolvedColorInfoRepr {
+        streamlib_plugin_abi::ResolvedColorInfoRepr {
+            primaries_raw: 0,
+            transfer_raw: 1,
+            matrix_raw: 1,
+            range_raw: 1,
+        }
+    }
+
+    #[test]
+    fn layout_version_matches_constant() {
+        assert_eq!(
+            HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE.layout_version,
+            streamlib_plugin_abi::RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION,
+        );
+    }
+
+    #[test]
+    fn prepare_buffer_to_image_pixel_returns_error_on_null_converter() {
+        let (mut buf, mut len) = make_err_buf();
+        let layout = dummy_layout();
+        let info = dummy_info();
+        let mut out_kernel: *const c_void = std::ptr::null();
+        let mut out_size: u32 = 0;
+        let rc = unsafe {
+            (HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE.prepare_buffer_to_image_pixel)(
+                std::ptr::null(),
+                std::ptr::null(),
+                &layout,
+                std::ptr::null(),
+                &info,
+                1,
+                &mut out_kernel as *mut *const c_void,
+                &mut out_size as *mut u32,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(
+            msg.contains("prepare_buffer_to_image_pixel: null converter handle"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn convert_buffer_to_image_storage_returns_error_on_null_converter() {
+        let (mut buf, mut len) = make_err_buf();
+        let layout = dummy_layout();
+        let info = dummy_info();
+        let rc = unsafe {
+            (HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE
+                .convert_buffer_to_image_storage)(
+                std::ptr::null(),
+                std::ptr::null(),
+                &layout,
+                std::ptr::null(),
+                &info,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(
+            msg.contains("convert_buffer_to_image_storage: null converter handle"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn convert_buffer_to_image_pixel_returns_error_on_null_converter() {
+        let (mut buf, mut len) = make_err_buf();
+        let layout = dummy_layout();
+        let info = dummy_info();
+        let rc = unsafe {
+            (HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE
+                .convert_buffer_to_image_pixel)(
+                std::ptr::null(),
+                std::ptr::null(),
+                &layout,
+                std::ptr::null(),
+                &info,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(
+            msg.contains("convert_buffer_to_image_pixel: null converter handle"),
+            "got: {msg}"
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod kernel_bindings_vtable_tier1_wire_format_tests {
+    //! Tier-1 wire-format tests for the `bindings` introspection slot
+    //! on each kernel methods vtable (compute v4, graphics v3, ray-
+    //! tracing v3).
+
+    use super::*;
+
+    fn make_err_buf() -> ([u8; 256], usize) {
+        ([0u8; 256], 0usize)
+    }
+
+    fn err_buf_as_str(buf: &[u8], len: usize) -> &str {
+        std::str::from_utf8(&buf[..len]).expect("UTF-8")
+    }
+
+    #[test]
+    fn compute_bindings_returns_error_on_null_kernel() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut out_len: usize = 0;
+        let rc = unsafe {
+            (HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE.bindings)(
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                0,
+                &mut out_len as *mut usize,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(msg.contains("bindings: null kernel handle"), "got: {msg}");
+    }
+
+    #[test]
+    fn graphics_bindings_returns_error_on_null_kernel() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut out_len: usize = 0;
+        let rc = unsafe {
+            (HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE.bindings)(
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                0,
+                &mut out_len as *mut usize,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(msg.contains("bindings: null kernel handle"), "got: {msg}");
+    }
+
+    #[test]
+    fn ray_tracing_bindings_returns_error_on_null_kernel() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut out_len: usize = 0;
+        let rc = unsafe {
+            (HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE.bindings)(
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                0,
+                &mut out_len as *mut usize,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = err_buf_as_str(&buf, len);
+        assert!(msg.contains("bindings: null kernel handle"), "got: {msg}");
     }
 }

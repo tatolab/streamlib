@@ -4329,6 +4329,8 @@ impl GpuContextFullAccess {
                         handle: out_converter,
                         vtable: self.vtable,
                         methods_vtable,
+                        cached_src_format_raw: src as u32,
+                        cached_dst_format_raw: dst as u32,
                     })
                 } else {
                     let msg = String::from_utf8_lossy(

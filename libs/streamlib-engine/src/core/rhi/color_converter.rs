@@ -351,10 +351,17 @@ pub struct RhiColorConverter {
     pub(crate) handle: *const std::ffi::c_void,
     /// Parent vtable for cross-DSO Clone/Drop dispatch.
     pub(crate) vtable: *const streamlib_plugin_abi::GpuContextFullAccessVTable,
-    /// Per-type vtable for cross-DSO method dispatch (Phase E sub-lift
-    /// slice A — `prepare_buffer_to_image_storage`).
+    /// Per-type vtable for cross-DSO method dispatch.
     pub(crate) methods_vtable:
         *const streamlib_plugin_abi::RhiColorConverterMethodsVTable,
+    /// Cached `#[repr(u32)]` `PixelFormat` discriminant for the source
+    /// format. Set at construction; fixed for the converter's lifetime.
+    /// Mirrors `Texture::format_raw` so the cdylib's `src_format()`
+    /// getter is a pure field read with no FFI hop.
+    pub(crate) cached_src_format_raw: u32,
+    /// Cached `#[repr(u32)]` `PixelFormat` discriminant for the
+    /// destination format. Same shape as `cached_src_format_raw`.
+    pub(crate) cached_dst_format_raw: u32,
 }
 
 // SAFETY: handle points at an Arc<RhiColorConverterInner>; the Inner's
@@ -368,6 +375,8 @@ impl RhiColorConverter {
     /// `Arc::into_raw`, resolve the host-mode FullAccess vtable +
     /// per-type methods vtable, and assemble the cross-DSO shape.
     pub(crate) fn from_arc_into_raw(arc: std::sync::Arc<RhiColorConverterInner>) -> Self {
+        let cached_src_format_raw = arc.src_format() as u32;
+        let cached_dst_format_raw = arc.dst_format() as u32;
         let handle = std::sync::Arc::into_raw(arc) as *const std::ffi::c_void;
         let vtable =
             crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
@@ -377,6 +386,8 @@ impl RhiColorConverter {
             handle,
             vtable,
             methods_vtable,
+            cached_src_format_raw,
+            cached_dst_format_raw,
         }
     }
 
@@ -394,8 +405,9 @@ impl RhiColorConverter {
     }
 
     /// Convert a [`crate::core::rhi::StorageBuffer`]-shape source into
-    /// an RGBA storage image. Host-mode only until Phase E (#907) lifts
-    /// method dispatch to the vtable.
+    /// an RGBA storage image. Mode-routed: host-mode dispatches through
+    /// `host_inner`; cdylib-mode dispatches through the per-type methods
+    /// vtable (Phase E sub-lift v2).
     #[cfg(target_os = "linux")]
     pub fn convert_buffer_to_image_storage(
         &self,
@@ -404,11 +416,18 @@ impl RhiColorConverter {
         dst: &Texture,
         info: &ResolvedColorInfo,
     ) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_convert_buffer_to_image_storage_via_vtable(
+                src, src_layout, dst, info,
+            );
+        }
         self.host_inner()
             .convert_buffer_to_image_storage(src, src_layout, dst, info)
     }
 
-    /// [`crate::core::rhi::PixelBuffer`]-shape source variant.
+    /// [`crate::core::rhi::PixelBuffer`]-shape source variant of
+    /// [`Self::convert_buffer_to_image_storage`]. Same mode-routed
+    /// dispatch (Phase E sub-lift v2).
     #[cfg(target_os = "linux")]
     pub fn convert_buffer_to_image_pixel(
         &self,
@@ -417,6 +436,11 @@ impl RhiColorConverter {
         dst: &Texture,
         info: &ResolvedColorInfo,
     ) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_convert_buffer_to_image_pixel_via_vtable(
+                src, src_layout, dst, info,
+            );
+        }
         self.host_inner()
             .convert_buffer_to_image_pixel(src, src_layout, dst, info)
     }
@@ -552,8 +576,195 @@ impl RhiColorConverter {
         Ok(std::sync::Arc::new(kernel))
     }
 
+    #[cfg(target_os = "linux")]
+    fn dispatch_prepare_buffer_to_image_pixel_via_vtable(
+        &self,
+        src: &crate::core::rhi::PixelBuffer,
+        src_layout: SourceLayoutInfo,
+        dst: &Texture,
+        info: &ResolvedColorInfo,
+        dst_transfer: TransferId,
+    ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+        use crate::core::Error;
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "prepare_buffer_to_image_pixel: color converter methods vtable is null"
+                    .into(),
+            ));
+        }
+        let callbacks =
+            crate::core::plugin::host_services::host_callbacks().ok_or_else(|| {
+                Error::GpuError(
+                    "prepare_buffer_to_image_pixel: host callbacks not installed".into(),
+                )
+            })?;
+        let parent_vtable = callbacks.gpu_context_full_access_vtable;
+        let kernel_methods_vtable = callbacks.vulkan_compute_kernel_methods_vtable;
+        if parent_vtable.is_null() {
+            return Err(Error::GpuError(
+                "prepare_buffer_to_image_pixel: GpuContextFullAccess vtable is null"
+                    .into(),
+            ));
+        }
+
+        let layout_repr = streamlib_plugin_abi::SourceLayoutInfoRepr {
+            plane0_stride_bytes: src_layout.plane0_stride_bytes,
+            plane1_stride_bytes: src_layout.plane1_stride_bytes,
+            plane1_offset_bytes: src_layout.plane1_offset_bytes,
+            _reserved_padding: 0,
+        };
+        let info_repr = streamlib_plugin_abi::ResolvedColorInfoRepr {
+            primaries_raw: info.primaries as u32,
+            transfer_raw: info.transfer as u32,
+            matrix_raw: info.matrix as u32,
+            range_raw: info.range as u32,
+        };
+
+        let mut out_kernel: *const std::ffi::c_void = std::ptr::null();
+        let mut out_cached_push_constant_size: u32 = 0;
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).prepare_buffer_to_image_pixel)(
+                self.handle,
+                src.handle,
+                &layout_repr,
+                dst.handle,
+                &info_repr,
+                dst_transfer as u32,
+                &mut out_kernel,
+                &mut out_cached_push_constant_size,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status != 0 {
+            let msg =
+                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                    .into_owned();
+            return Err(Error::GpuError(msg));
+        }
+        if out_kernel.is_null() {
+            return Err(Error::GpuError(
+                "prepare_buffer_to_image_pixel: host signaled success but \
+                 out_kernel is null"
+                    .into(),
+            ));
+        }
+        let kernel = crate::vulkan::rhi::VulkanComputeKernel {
+            handle: out_kernel,
+            vtable: parent_vtable,
+            methods_vtable: kernel_methods_vtable,
+            cached_push_constant_size: out_cached_push_constant_size,
+            _reserved_padding: 0,
+        };
+        Ok(std::sync::Arc::new(kernel))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn dispatch_convert_buffer_to_image_storage_via_vtable(
+        &self,
+        src: &crate::core::rhi::StorageBuffer,
+        src_layout: SourceLayoutInfo,
+        dst: &Texture,
+        info: &ResolvedColorInfo,
+    ) -> Result<()> {
+        use crate::core::Error;
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "convert_buffer_to_image_storage: color converter methods vtable is null"
+                    .into(),
+            ));
+        }
+        let layout_repr = streamlib_plugin_abi::SourceLayoutInfoRepr {
+            plane0_stride_bytes: src_layout.plane0_stride_bytes,
+            plane1_stride_bytes: src_layout.plane1_stride_bytes,
+            plane1_offset_bytes: src_layout.plane1_offset_bytes,
+            _reserved_padding: 0,
+        };
+        let info_repr = streamlib_plugin_abi::ResolvedColorInfoRepr {
+            primaries_raw: info.primaries as u32,
+            transfer_raw: info.transfer as u32,
+            matrix_raw: info.matrix as u32,
+            range_raw: info.range as u32,
+        };
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).convert_buffer_to_image_storage)(
+                self.handle,
+                src.handle,
+                &layout_repr,
+                dst.handle,
+                &info_repr,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn dispatch_convert_buffer_to_image_pixel_via_vtable(
+        &self,
+        src: &crate::core::rhi::PixelBuffer,
+        src_layout: SourceLayoutInfo,
+        dst: &Texture,
+        info: &ResolvedColorInfo,
+    ) -> Result<()> {
+        use crate::core::Error;
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "convert_buffer_to_image_pixel: color converter methods vtable is null"
+                    .into(),
+            ));
+        }
+        let layout_repr = streamlib_plugin_abi::SourceLayoutInfoRepr {
+            plane0_stride_bytes: src_layout.plane0_stride_bytes,
+            plane1_stride_bytes: src_layout.plane1_stride_bytes,
+            plane1_offset_bytes: src_layout.plane1_offset_bytes,
+            _reserved_padding: 0,
+        };
+        let info_repr = streamlib_plugin_abi::ResolvedColorInfoRepr {
+            primaries_raw: info.primaries as u32,
+            transfer_raw: info.transfer as u32,
+            matrix_raw: info.matrix as u32,
+            range_raw: info.range as u32,
+        };
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).convert_buffer_to_image_pixel)(
+                self.handle,
+                src.handle,
+                &layout_repr,
+                dst.handle,
+                &info_repr,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
     /// [`crate::core::rhi::PixelBuffer`]-shape source variant of
-    /// [`Self::prepare_buffer_to_image_storage`].
+    /// [`Self::prepare_buffer_to_image_storage`]. Same mode-routed
+    /// dispatch (Phase E sub-lift v2).
     #[cfg(target_os = "linux")]
     pub fn prepare_buffer_to_image_pixel(
         &self,
@@ -563,6 +774,15 @@ impl RhiColorConverter {
         info: &ResolvedColorInfo,
         dst_transfer: TransferId,
     ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_prepare_buffer_to_image_pixel_via_vtable(
+                src,
+                src_layout,
+                dst,
+                info,
+                dst_transfer,
+            );
+        }
         self.host_inner()
             .prepare_buffer_to_image_pixel(src, src_layout, dst, info, dst_transfer)
     }
@@ -580,14 +800,40 @@ impl RhiColorConverter {
         ))
     }
 
-    /// Source pixel format this converter accepts.
+    /// Source pixel format this converter accepts. Cached POD —
+    /// no FFI hop. The value is captured by [`Self::from_arc_into_raw`]
+    /// (host-mode) or the FullAccess `color_converter` slot (cdylib-
+    /// mode) at construction and never mutates.
     pub fn src_format(&self) -> PixelFormat {
-        self.host_inner().src_format()
+        pixel_format_from_raw(self.cached_src_format_raw)
     }
 
-    /// Destination pixel format this converter produces.
+    /// Destination pixel format this converter produces. Cached POD;
+    /// see [`Self::src_format`].
     pub fn dst_format(&self) -> PixelFormat {
-        self.host_inner().dst_format()
+        pixel_format_from_raw(self.cached_dst_format_raw)
+    }
+}
+
+/// Decode a `#[repr(u32)]` `PixelFormat` discriminant. Unknown values
+/// map to [`PixelFormat::Unknown`] so a corrupted cached field surfaces
+/// as "unknown format" rather than transmuting into a garbage variant.
+fn pixel_format_from_raw(raw: u32) -> PixelFormat {
+    match raw {
+        x if x == PixelFormat::Bgra32 as u32 => PixelFormat::Bgra32,
+        x if x == PixelFormat::Rgba32 as u32 => PixelFormat::Rgba32,
+        x if x == PixelFormat::Argb32 as u32 => PixelFormat::Argb32,
+        x if x == PixelFormat::Rgba64 as u32 => PixelFormat::Rgba64,
+        x if x == PixelFormat::Nv12VideoRange as u32 => {
+            PixelFormat::Nv12VideoRange
+        }
+        x if x == PixelFormat::Nv12FullRange as u32 => {
+            PixelFormat::Nv12FullRange
+        }
+        x if x == PixelFormat::Uyvy422 as u32 => PixelFormat::Uyvy422,
+        x if x == PixelFormat::Yuyv422 as u32 => PixelFormat::Yuyv422,
+        x if x == PixelFormat::Gray8 as u32 => PixelFormat::Gray8,
+        _ => PixelFormat::Unknown,
     }
 }
 
@@ -605,6 +851,8 @@ impl Clone for RhiColorConverter {
             handle: self.handle,
             vtable: self.vtable,
             methods_vtable: self.methods_vtable,
+            cached_src_format_raw: self.cached_src_format_raw,
+            cached_dst_format_raw: self.cached_dst_format_raw,
         }
     }
 }
@@ -647,15 +895,18 @@ mod layout_tests {
 
     #[test]
     fn rhi_color_converter_layout() {
-        // Phase E sub-lift slice A appended `methods_vtable` (16 → 24
-        // bytes); the β-shape now mirrors the
-        // `(handle, vtable, methods_vtable)` triple used by every
-        // per-type kernel β-shape.
-        assert_eq!(size_of::<RhiColorConverter>(), 24);
+        // 3 pointers (24 bytes) + 2 u32 (8 bytes) = 32 bytes; align = 8.
+        // The cached `cached_*_format_raw` fields mirror the
+        // `Texture::format_raw` cached POD pattern so the cdylib's
+        // `src_format()` / `dst_format()` getters are pure field reads
+        // with no FFI hop.
+        assert_eq!(size_of::<RhiColorConverter>(), 32);
         assert_eq!(align_of::<RhiColorConverter>(), 8);
         assert_eq!(offset_of!(RhiColorConverter, handle), 0);
         assert_eq!(offset_of!(RhiColorConverter, vtable), 8);
         assert_eq!(offset_of!(RhiColorConverter, methods_vtable), 16);
+        assert_eq!(offset_of!(RhiColorConverter, cached_src_format_raw), 24);
+        assert_eq!(offset_of!(RhiColorConverter, cached_dst_format_raw), 28);
     }
 
     #[test]

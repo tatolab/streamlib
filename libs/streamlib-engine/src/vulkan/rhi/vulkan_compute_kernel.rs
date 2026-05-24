@@ -445,7 +445,7 @@ impl VulkanComputeKernelInner {
     /// setters that take engine `Texture` handles. The view must be in
     /// `SHADER_READ_ONLY_OPTIMAL` at dispatch time; caller is responsible
     /// for the layout transition.
-    pub fn set_sampled_image_view(
+    pub(crate) fn set_sampled_image_view(
         &self,
         binding: u32,
         view: vk::ImageView,
@@ -469,7 +469,7 @@ impl VulkanComputeKernelInner {
     /// `SHADER_READ_ONLY_OPTIMAL` at dispatch time.
     ///
     /// Errors if the binding wasn't declared with an immutable sampler.
-    pub fn set_combined_image_sampler_view(
+    pub(crate) fn set_combined_image_sampler_view(
         &self,
         binding: u32,
         view: vk::ImageView,
@@ -497,7 +497,7 @@ impl VulkanComputeKernelInner {
     /// slot. Escape hatch for callers that build per-plane reinterpreted-
     /// format storage views by hand against a multi-planar image. The
     /// view must be in `GENERAL` layout at dispatch time.
-    pub fn set_storage_image_view(
+    pub(crate) fn set_storage_image_view(
         &self,
         binding: u32,
         view: vk::ImageView,
@@ -626,7 +626,7 @@ impl VulkanComputeKernelInner {
     /// shared across calls and Vulkan disallows updating an in-use
     /// descriptor set. For per-frame use, the recorder's own
     /// timeline-semaphore wait between frames satisfies this.
-    pub fn record(
+    pub(crate) fn record(
         &self,
         command_buffer: vk::CommandBuffer,
         group_count_x: u32,
@@ -1100,7 +1100,11 @@ impl VulkanComputeKernel {
 
     /// Bind a raw `vk::ImageView` to a [`ComputeBindingKind::SampledImage`]
     /// slot. See [`VulkanComputeKernelInner::set_sampled_image_view`].
-    pub fn set_sampled_image_view(
+    ///
+    /// Host-only: takes a raw `vk::ImageView` which cdylibs cannot construct
+    /// (no `vulkanalia` dep). Crate-private surface; engine-internal callers
+    /// only.
+    pub(crate) fn set_sampled_image_view(
         &self,
         binding: u32,
         view: vk::ImageView,
@@ -1111,7 +1115,9 @@ impl VulkanComputeKernel {
     /// Bind a raw `vk::ImageView` to a [`ComputeBindingKind::SampledTexture`]
     /// slot that was created with an immutable sampler. See
     /// [`VulkanComputeKernelInner::set_combined_image_sampler_view`].
-    pub fn set_combined_image_sampler_view(
+    ///
+    /// Host-only; see [`Self::set_sampled_image_view`] for the rationale.
+    pub(crate) fn set_combined_image_sampler_view(
         &self,
         binding: u32,
         view: vk::ImageView,
@@ -1122,7 +1128,9 @@ impl VulkanComputeKernel {
 
     /// Bind a raw `vk::ImageView` to a [`ComputeBindingKind::StorageImage`]
     /// slot. See [`VulkanComputeKernelInner::set_storage_image_view`].
-    pub fn set_storage_image_view(
+    ///
+    /// Host-only; see [`Self::set_sampled_image_view`] for the rationale.
+    pub(crate) fn set_storage_image_view(
         &self,
         binding: u32,
         view: vk::ImageView,
@@ -1400,7 +1408,11 @@ impl VulkanComputeKernel {
         }
     }
 
-    pub fn record(
+    /// Record bind + push-constants + dispatch into a caller-owned
+    /// command buffer. Host-only: takes a raw `vk::CommandBuffer`
+    /// which cdylibs cannot construct (no `vulkanalia` dep). Crate-
+    /// private surface; engine-internal callers only.
+    pub(crate) fn record(
         &self,
         command_buffer: vk::CommandBuffer,
         group_x: u32,
@@ -1410,8 +1422,89 @@ impl VulkanComputeKernel {
         self.host_inner().record(command_buffer, group_x, group_y, group_z)
     }
 
+    /// Kernel's declared binding shape. Mode-routed: host-mode reads
+    /// directly from `host_inner`; cdylib-mode dispatches through the
+    /// v4 `bindings` slot on the per-type methods vtable.
     pub fn bindings(&self) -> Vec<ComputeBindingSpec> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_bindings_via_vtable().unwrap_or_default();
+        }
         self.host_inner().bindings().to_vec()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn dispatch_bindings_via_vtable(&self) -> Result<Vec<ComputeBindingSpec>> {
+        use crate::core::Error;
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "bindings: compute kernel methods vtable is null".into(),
+            ));
+        }
+        // Probe-then-fill: first call with cap=0 gets the actual count;
+        // second call with the right-sized buffer fills it. Kernels
+        // declare ~8 bindings in practice, so a single in-place call
+        // with cap=16 covers the common case without re-allocation.
+        let mut buf = [streamlib_plugin_abi::ComputeBindingSpecRepr {
+            binding: 0,
+            kind: 0,
+        }; 16];
+        let mut out_len: usize = 0;
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).bindings)(
+                self.handle,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut out_len as *mut usize,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 2 {
+            // Inline buffer too small — fall back to heap with the
+            // host-reported required size.
+            let mut heap: Vec<streamlib_plugin_abi::ComputeBindingSpecRepr> = vec![
+                streamlib_plugin_abi::ComputeBindingSpecRepr {
+                    binding: 0,
+                    kind: 0,
+                };
+                out_len
+            ];
+            let mut out_len2: usize = 0;
+            let status2 = unsafe {
+                ((*self.methods_vtable).bindings)(
+                    self.handle,
+                    heap.as_mut_ptr(),
+                    heap.len(),
+                    &mut out_len2 as *mut usize,
+                    err_buf.as_mut_ptr(),
+                    err_buf.len(),
+                    &mut err_len as *mut usize,
+                )
+            };
+            if status2 != 0 {
+                let msg =
+                    String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                        .into_owned();
+                return Err(Error::GpuError(msg));
+            }
+            return heap
+                .iter()
+                .take(out_len2)
+                .map(crate::core::rhi::plugin_abi_bridge::compute_binding_spec_from_repr)
+                .collect();
+        }
+        if status != 0 {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            return Err(Error::GpuError(msg));
+        }
+        buf.iter()
+            .take(out_len)
+            .map(crate::core::rhi::plugin_abi_bridge::compute_binding_spec_from_repr)
+            .collect()
     }
 
     /// Push-constant range size in bytes. Cached POD — no FFI hop.
