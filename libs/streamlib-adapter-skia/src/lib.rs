@@ -34,6 +34,7 @@ mod error;
 mod gl_adapter;
 mod gl_context;
 mod gl_view;
+mod host_vtable;
 mod skia_internal;
 mod view;
 
@@ -43,4 +44,5 @@ pub use error::SkiaAdapterError;
 pub use gl_adapter::SkiaGlSurfaceAdapter;
 pub use gl_context::SkiaGlContext;
 pub use gl_view::{SkiaGlReadView, SkiaGlWriteView};
+pub use host_vtable::{host_skia_gl_surface_adapter_vtable, host_skia_surface_adapter_vtable};
 pub use view::{SkiaReadView, SkiaWriteView};
