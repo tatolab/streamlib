@@ -339,7 +339,26 @@ impl HostVulkanTimelineSemaphore {
     /// timeout". Returns `Ok(())` on success and
     /// [`Error::GpuError`] (containing the underlying VkResult) on
     /// timeout or driver failure.
+    ///
+    /// In cdylib mode (host_callbacks installed), dispatches through
+    /// the v13 `GpuContextLimitedAccessVTable::wait_timeline_semaphore`
+    /// slot so the call runs against the host's loaded
+    /// `vulkanalia::Device` instead of the statically-linked cdylib
+    /// copy. Host mode falls through to the direct `vkWaitSemaphores`
+    /// path via [`Self::wait_direct`].
     pub fn wait(&self, value: u64, timeout_ns: u64) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.wait_via_vtable(value, timeout_ns);
+        }
+        self.wait_direct(value, timeout_ns)
+    }
+
+    /// Direct `vkWaitSemaphores` path. Bypasses the
+    /// `host_callbacks().is_some()` check so the host-side wrapper
+    /// (`host_gpu_lim_wait_timeline_semaphore`) can call into the
+    /// real Vulkan path without recursing back through the vtable.
+    /// Engine-internal helper.
+    pub(crate) fn wait_direct(&self, value: u64, timeout_ns: u64) -> Result<()> {
         let semaphores = [self.semaphore];
         let values = [value];
         let info = vk::SemaphoreWaitInfo::builder()
@@ -354,6 +373,50 @@ impl HostVulkanTimelineSemaphore {
                     "vkWaitSemaphores(value={value}, timeout_ns={timeout_ns}): {e}"
                 ))
             })
+    }
+
+    /// Cdylib-side dispatch for [`Self::wait`]. Resolves the host's
+    /// `GpuContextLimitedAccessVTable` via
+    /// [`crate::core::plugin::host_services::host_gpu_context_limited_access_vtable`]
+    /// and hands the call back to host code, passing `self` as a
+    /// borrowed pointer.
+    ///
+    /// `gpu_handle` is intentionally null — the host wrapper for the
+    /// `wait_timeline_semaphore` slot does not deref it; the
+    /// timeline borrow alone carries the `vulkanalia::Device` the
+    /// wait needs. The handle stays in the wire format for
+    /// cross-slot consistency.
+    fn wait_via_vtable(&self, value: u64, timeout_ns: u64) -> Result<()> {
+        let vtable =
+            crate::core::plugin::host_services::host_gpu_context_limited_access_vtable();
+        if vtable.is_null() {
+            return Err(Error::GpuError(
+                "HostVulkanTimelineSemaphore::wait: cdylib mode but \
+                 host gpu_context_limited_access_vtable is null"
+                    .into(),
+            ));
+        }
+        let timeline_handle = self as *const Self as *const std::ffi::c_void;
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*vtable).wait_timeline_semaphore)(
+                std::ptr::null(),
+                timeline_handle,
+                value,
+                timeout_ns,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     /// Host-side signal: advance the counter to `value` directly from

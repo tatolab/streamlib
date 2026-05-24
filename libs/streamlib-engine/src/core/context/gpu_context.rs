@@ -3185,49 +3185,59 @@ impl GpuContextLimitedAccess {
 
     /// See [`GpuContext::set_video_source_timeline_semaphore`].
     ///
-    /// **Engine-only** — parameter is
-    /// `&Arc<HostVulkanTimelineSemaphore>` (host-internal type from
-    /// `crate::vulkan::rhi`). Cdylib subprocess code cannot
-    /// construct this type through typed Rust, so the method is
-    /// engine-only by parameter construction; the explicit guard
-    /// below converts the foot-gun case (a cdylib that smuggled in
-    /// a same-shaped pointer through unsafe transmute) into a
-    /// clean abort instead of UB on the Arc-inner deref.
+    /// Dispatches through the cross-DSO
+    /// [`GpuContextLimitedAccessVTable::set_video_source_timeline_semaphore`](streamlib_plugin_abi::GpuContextLimitedAccessVTable::set_video_source_timeline_semaphore)
+    /// callback. The cdylib passes
+    /// `Arc::as_ptr(timeline) as *const c_void` — a **borrowed**
+    /// pointer; the host's callback `Arc::increment_strong_count`s
+    /// it, reconstitutes a temporary owned Arc via `Arc::from_raw`,
+    /// calls the underlying `GpuContext::set_video_source_timeline_semaphore`
+    /// (which itself clones into the published slot), and lets the
+    /// temporary drop. Net effect: one fresh strong count moves into
+    /// the slot; the caller's Arc is unchanged.
+    ///
+    /// **Arc-raw-pointer transit** — see
+    /// [`GpuContextFullAccess::create_timeline_semaphore`]'s docs on
+    /// the same rustc-version-coupling caveat. In-tree consumers
+    /// (camera, display) ride this freely; cross-repo distribution
+    /// awaits a β-shape lift of `HostVulkanTimelineSemaphore`.
     #[cfg(target_os = "linux")]
     pub fn set_video_source_timeline_semaphore(
         &self,
         timeline: &Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
     ) {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "GpuContextLimitedAccess::set_video_source_timeline_semaphore() \
-                 reached from cdylib code; parameter `&Arc<HostVulkanTimelineSemaphore>` \
-                 is host-internal (crate::vulkan::rhi) and cannot cross the FFI \
-                 boundary. Engine-only — cdylib code must not call it."
+        if self.handle.is_null() || self.vtable.is_null() {
+            return;
+        }
+        let timeline_ptr =
+            Arc::as_ptr(timeline) as *const std::ffi::c_void;
+        // SAFETY: handle + vtable were paired at construction; the
+        // host's callback contractually does the
+        // increment-+-from_raw-+-clone-+-drop dance for the borrowed
+        // Arc pointer.
+        unsafe {
+            ((*self.vtable).set_video_source_timeline_semaphore)(
+                self.handle,
+                timeline_ptr,
             );
         }
-        self.host_inner()
-            .set_video_source_timeline_semaphore(timeline);
     }
 
     /// See [`GpuContext::clear_video_source_timeline_semaphore`].
     ///
-    /// **Engine-only** — pairs with
-    /// [`Self::set_video_source_timeline_semaphore`]; that method is
-    /// engine-only by parameter type, so this one is too. Explicit
-    /// guard below.
+    /// Dispatches through the cross-DSO
+    /// [`GpuContextLimitedAccessVTable::clear_video_source_timeline_semaphore`](streamlib_plugin_abi::GpuContextLimitedAccessVTable::clear_video_source_timeline_semaphore)
+    /// callback. Pairs with
+    /// [`Self::set_video_source_timeline_semaphore`].
     #[cfg(target_os = "linux")]
     pub fn clear_video_source_timeline_semaphore(&self) {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "GpuContextLimitedAccess::clear_video_source_timeline_semaphore() \
-                 reached from cdylib code; pairs with \
-                 set_video_source_timeline_semaphore which takes a host-internal \
-                 `&Arc<HostVulkanTimelineSemaphore>`. Engine-only by inheritance \
-                 — cdylib code must not call it."
-            );
+        if self.handle.is_null() || self.vtable.is_null() {
+            return;
         }
-        self.host_inner().clear_video_source_timeline_semaphore();
+        // SAFETY: handle + vtable were paired at construction.
+        unsafe {
+            ((*self.vtable).clear_video_source_timeline_semaphore)(self.handle);
+        }
     }
 
     /// See [`GpuContext::video_source_timeline_semaphore`].

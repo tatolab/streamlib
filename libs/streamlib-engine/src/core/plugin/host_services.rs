@@ -2041,6 +2041,145 @@ unsafe extern "C" fn host_gpu_lim_texture_native_dma_buf_fd(
 }
 
 // -------------------------------------------------------------------------
+// Video-source timeline semaphore publish/clear (v12 — #958)
+// -------------------------------------------------------------------------
+
+unsafe extern "C" fn host_gpu_lim_set_video_source_timeline_semaphore(
+    handle: *const c_void,
+    timeline_handle: *const c_void,
+) {
+    run_host_extern_c(
+        "host_gpu_lim_set_video_source_timeline_semaphore",
+        || {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(handle) }) else {
+                return;
+            };
+            if timeline_handle.is_null() {
+                return;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                // SAFETY: `timeline_handle` is a borrowed
+                // `Arc::as_ptr(&Arc<HostVulkanTimelineSemaphore>)`
+                // produced by the cdylib caller. Bump the refcount so
+                // we can take a temporary owned Arc via `Arc::from_raw`;
+                // the caller's Arc strong-count is unchanged.
+                // Mirrors the `host_gpu_lim_register_texture` pattern
+                // for borrowed `Arc<TextureInner>`-shaped handles.
+                let ptr = timeline_handle
+                    as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore;
+                unsafe {
+                    Arc::increment_strong_count(ptr);
+                }
+                let arc = unsafe { Arc::from_raw(ptr) };
+                gpu.set_video_source_timeline_semaphore(&arc);
+                // `arc` drops here, balancing the `increment_strong_count`
+                // above. The slot holds its own `Arc::clone` (taken by
+                // `set_video_source_timeline_semaphore` from the
+                // borrow).
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = timeline_handle;
+            }
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_clear_video_source_timeline_semaphore(
+    handle: *const c_void,
+) {
+    run_host_extern_c(
+        "host_gpu_lim_clear_video_source_timeline_semaphore",
+        || {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(handle) }) else {
+                return;
+            };
+            #[cfg(target_os = "linux")]
+            {
+                gpu.clear_video_source_timeline_semaphore();
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = gpu;
+            }
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_wait_timeline_semaphore(
+    _handle: *const c_void,
+    timeline_handle: *const c_void,
+    value: u64,
+    timeout_ns: u64,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_wait_timeline_semaphore",
+        || {
+            // `gpu_handle` is intentionally ignored — the timeline
+            // borrow carries its own `vulkanalia::Device`, so the
+            // wait runs against the timeline directly without
+            // dereferencing any `GpuContext` instance. The handle
+            // stays in the wire format for cross-slot consistency.
+            if timeline_handle.is_null() {
+                write_err(
+                    "wait_timeline_semaphore: null timeline_handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                // SAFETY: `timeline_handle` is a borrowed pointer
+                // from the cdylib's
+                // `HostVulkanTimelineSemaphore::wait_via_vtable`
+                // (which gets it via `self as *const Self`). The
+                // host borrow lasts only for the duration of the
+                // wait call. We call `wait_direct` to bypass the
+                // `host_callbacks().is_some()` check on `wait()`
+                // itself — otherwise the host would re-dispatch
+                // through the vtable into infinite recursion.
+                let timeline = unsafe {
+                    &*(timeline_handle
+                        as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore)
+                };
+                match timeline.wait_direct(value, timeout_ns) {
+                    Ok(()) => 0,
+                    Err(e) => {
+                        write_err(
+                            &format!("wait_timeline_semaphore: {e}"),
+                            err_buf,
+                            err_buf_cap,
+                            err_len,
+                        );
+                        1
+                    }
+                }
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = (timeline_handle, value, timeout_ns);
+                write_err(
+                    "wait_timeline_semaphore: Linux-only",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                1
+            }
+        },
+        1,
+    )
+}
+
+// -------------------------------------------------------------------------
 // PooledTextureHandle lifecycle — drop-only (v4)
 // -------------------------------------------------------------------------
 
@@ -6502,6 +6641,11 @@ pub static HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE: GpuContextLimitedAccessVTable
         escalate_begin: host_gpu_lim_escalate_begin,
         escalate_end: host_gpu_lim_escalate_end,
         texture_native_dma_buf_fd: host_gpu_lim_texture_native_dma_buf_fd,
+        set_video_source_timeline_semaphore:
+            host_gpu_lim_set_video_source_timeline_semaphore,
+        clear_video_source_timeline_semaphore:
+            host_gpu_lim_clear_video_source_timeline_semaphore,
+        wait_timeline_semaphore: host_gpu_lim_wait_timeline_semaphore,
     };
 
 /// Pointer to the [`GpuContextLimitedAccessVTable`] this DSO should
@@ -10157,6 +10301,64 @@ mod gpu_lim_texture_native_dma_buf_fd_tests {
             fd, -1,
             "null texture_handle must produce -1 sentinel (None)"
         );
+    }
+}
+
+#[cfg(test)]
+mod gpu_lim_video_source_timeline_semaphore_tests {
+    //! Tier-1 wire-format tests for the v12 (#958)
+    //! `set_video_source_timeline_semaphore` /
+    //! `clear_video_source_timeline_semaphore` slots. Each wrapper
+    //! must short-circuit on null gpu_handle (and `set` on null
+    //! timeline_handle) without panicking and without dereferencing
+    //! the null pointers.
+    //!
+    //! The non-null-handle path is exercised end-to-end by the
+    //! `load_project_dylib_camera_smoke` integration test (which
+    //! holds a real `Arc<HostVulkanTimelineSemaphore>` and is the
+    //! only place a Tier-1 with-handle test could reach without
+    //! constructing a real `GpuContext` here).
+    //!
+    //! Mental-revert: stub the wrapper bodies to
+    //! `unimplemented!()` and these tests trip the underlying
+    //! deref / panic — the wire-format claim regresses.
+    use super::*;
+
+    #[test]
+    fn set_video_source_timeline_is_noop_on_null_gpu_handle() {
+        unsafe {
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE
+                .set_video_source_timeline_semaphore)(
+                std::ptr::null(),
+                std::ptr::null(),
+            );
+        }
+    }
+
+    #[test]
+    fn set_video_source_timeline_is_noop_on_null_timeline_handle() {
+        // Synthesize a non-null but garbage gpu_handle to exercise
+        // the second guard (`timeline_handle.is_null()` short-
+        // circuit). The host wrapper's first `handle_as_gpu_context`
+        // returns `None` for a garbage handle, so the call returns
+        // without reaching the deref. Either way the test is locked
+        // against UB on null timeline_handle.
+        let fake_gpu_handle: *const c_void = std::ptr::null();
+        unsafe {
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE
+                .set_video_source_timeline_semaphore)(
+                fake_gpu_handle,
+                std::ptr::null(),
+            );
+        }
+    }
+
+    #[test]
+    fn clear_video_source_timeline_is_noop_on_null_gpu_handle() {
+        unsafe {
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE
+                .clear_video_source_timeline_semaphore)(std::ptr::null());
+        }
     }
 }
 

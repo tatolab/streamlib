@@ -182,7 +182,32 @@ pub const SURFACE_STORE_VTABLE_LAYOUT_VERSION: u32 = 1;
 ///   `Option::None`. Non-Linux hosts return `-1` unconditionally;
 ///   the macOS / Windows native-handle variants are deferred per
 ///   #908's AI Agent Notes.
-pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 11;
+/// - v12: #958 follow-up to #914 — adds
+///   `set_video_source_timeline_semaphore` /
+///   `clear_video_source_timeline_semaphore` slots. The camera
+///   processor (loaded as a cdylib via `runtime.load_project`)
+///   publishes its `Arc<HostVulkanTimelineSemaphore>` for in-process
+///   display consumers to wait on; #971 originally panic-guarded
+///   these methods on the premise no cdylib reaches them, but the
+///   camera-as-cdylib lifecycle established by #914 does in fact
+///   call them. Wire format mirrors the LimitedAccess Arc-borrow
+///   pattern from `register_texture`: the cdylib passes
+///   `Arc::as_ptr(&timeline) as *const c_void`; the host
+///   `Arc::increment_strong_count` + `Arc::from_raw`s a temporary
+///   borrow, calls `set_video_source_timeline_semaphore(&arc)`
+///   (which itself clones into the slot), then lets the temporary
+///   drop. The clear variant is a void no-arg callback. Linux-only
+///   on the host side; non-Linux stubs are no-ops.
+/// - v13: #958 Phase E sub — adds `wait_timeline_semaphore` slot.
+///   Lets the cdylib-side `HostVulkanTimelineSemaphore::wait` —
+///   used per-frame by the camera processor on its capture
+///   timeline — dispatch through the host instead of touching the
+///   host's `vulkanalia::Device` from cdylib code directly.
+///   `timeline_handle` is `Arc::as_ptr(timeline) as *const c_void`
+///   (borrowed, same shape as `set_video_source_timeline_semaphore`).
+///   Returns 0 on success, non-zero (`err_buf` populated) on driver
+///   failure / timeout. Linux-only on the host side.
+pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 13;
 
 /// Layout version of [`GpuContextFullAccessVTable`].
 ///
@@ -1591,6 +1616,89 @@ pub struct GpuContextLimitedAccessVTable {
     /// Calling with a null `texture_handle` returns `-1` (no panic).
     pub texture_native_dma_buf_fd:
         unsafe extern "C" fn(texture_handle: *const c_void) -> i64,
+
+    // -------------------------------------------------------------------------
+    // Video-source timeline semaphore publish/clear (v12 — #958)
+    // -------------------------------------------------------------------------
+
+    /// Publish a producer's `Arc<HostVulkanTimelineSemaphore>` for
+    /// in-process GPU-GPU sync (the in-tree consumer is
+    /// `LinuxDisplayProcessor::render_frame`, which waits on the
+    /// camera's published timeline before binding the captured
+    /// texture).
+    ///
+    /// `timeline_handle` is `Arc::as_ptr(timeline) as *const c_void`
+    /// — a **borrowed** pointer; the cdylib retains its own Arc and
+    /// the host does NOT consume the caller's reference. The host
+    /// callback `Arc::increment_strong_count`s the pointer,
+    /// reconstitutes a temporary owned Arc via `Arc::from_raw`,
+    /// calls `gpu.set_video_source_timeline_semaphore(&arc)` (which
+    /// itself clones into the slot), and lets the temporary Arc
+    /// drop — net effect: one fresh strong count moves into the
+    /// slot; the cdylib's Arc is unchanged.
+    ///
+    /// Mirrors the Arc-borrow-+-strong-count-bump pattern
+    /// [`Self::register_texture`] uses for `Arc<TextureInner>`.
+    ///
+    /// **Arc-raw-pointer transit** — not a layout-stable β-shape.
+    /// In-tree consumers (camera) ride this freely because they're
+    /// built in the same workspace as the engine. Cross-repo plugin
+    /// distribution will need a β-shape lift for
+    /// `HostVulkanTimelineSemaphore`; tracked as a future follow-up
+    /// alongside `create_timeline_semaphore`'s identical caveat.
+    ///
+    /// Linux-only on the host side; non-Linux stubs are no-ops.
+    /// Calling with a null `gpu_handle` or null `timeline_handle` is
+    /// a no-op.
+    pub set_video_source_timeline_semaphore: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        timeline_handle: *const c_void,
+    ),
+
+    /// Drop the published producer timeline so consumers observe the
+    /// absence and skip the wait. Idempotent against a never-set or
+    /// already-cleared slot. Pairs with
+    /// [`Self::set_video_source_timeline_semaphore`].
+    ///
+    /// Linux-only on the host side; non-Linux stubs are no-ops.
+    /// Calling with a null `gpu_handle` is a no-op.
+    pub clear_video_source_timeline_semaphore: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+    ),
+
+    // -------------------------------------------------------------------------
+    // HostVulkanTimelineSemaphore::wait (v13 — #958 Phase E sub)
+    // -------------------------------------------------------------------------
+
+    /// Block until the host's `HostVulkanTimelineSemaphore` counter
+    /// has reached or surpassed `value`. Called per-frame from
+    /// `HostVulkanTimelineSemaphore::wait` on the cdylib side; the
+    /// host calls `vkWaitSemaphores` against its own loaded
+    /// `vulkanalia::Device` to avoid running Vulkan dispatch from a
+    /// statically-linked cdylib copy of the loader.
+    ///
+    /// `timeline_handle` is `Arc::as_ptr(timeline) as *const c_void`
+    /// (borrowed, same Arc-borrow pattern as
+    /// [`Self::set_video_source_timeline_semaphore`]); the host
+    /// short-circuits the deref but does NOT bump the refcount —
+    /// `wait` takes `&self`, not an Arc.
+    ///
+    /// `timeout_ns` is the per-call timeout; pass `u64::MAX` for
+    /// no timeout. Returns 0 on success, non-zero (`err_buf`
+    /// populated) on driver failure / timeout. Null `gpu_handle` or
+    /// null `timeline_handle` writes a "null handle" error and
+    /// returns non-zero.
+    ///
+    /// Linux-only on the host side; non-Linux stubs return non-zero.
+    pub wait_timeline_semaphore: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        timeline_handle: *const c_void,
+        value: u64,
+        timeout_ns: u64,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
 }
 
 unsafe impl Send for GpuContextLimitedAccessVTable {}
@@ -4067,7 +4175,7 @@ mod layout_tests {
         // v2: added owning-Arc handle lifetime callbacks
         // (`clone_handle` / `drop_handle`).
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
-        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 11);
+        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 13);
         assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 8);
         assert_eq!(TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION, 2);
@@ -4448,8 +4556,12 @@ mod layout_tests {
         // layout_version (u32) + _reserved_padding (u32) + 53 fn
         // pointers (8 bytes each) = 4 + 4 + 424 = 432 bytes.
         // (Phase F #957 appended texture_native_dma_buf_fd, taking the
-        // count from 52 → 53.)
-        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 432);
+        // count from 52 → 53. v12 / #958 appended
+        // set_video_source_timeline_semaphore +
+        // clear_video_source_timeline_semaphore, taking it 53 → 55.
+        // v13 / #958 Phase E sub appended wait_timeline_semaphore,
+        // taking it 55 → 56.)
+        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 456);
         assert_eq!(align_of::<GpuContextLimitedAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextLimitedAccessVTable, layout_version), 0);
         assert_eq!(
@@ -4669,6 +4781,26 @@ mod layout_tests {
         assert_eq!(
             offset_of!(GpuContextLimitedAccessVTable, texture_native_dma_buf_fd),
             424
+        );
+        // v12 entries (#958).
+        assert_eq!(
+            offset_of!(
+                GpuContextLimitedAccessVTable,
+                set_video_source_timeline_semaphore
+            ),
+            432
+        );
+        assert_eq!(
+            offset_of!(
+                GpuContextLimitedAccessVTable,
+                clear_video_source_timeline_semaphore
+            ),
+            440
+        );
+        // v13 entry (#958 Phase E sub).
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, wait_timeline_semaphore),
+            448
         );
     }
 
