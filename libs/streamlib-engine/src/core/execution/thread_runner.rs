@@ -155,10 +155,10 @@ fn run_reactive_mode(
     // etc.) fall through to the channel-poll sleep loop so process() still
     // ticks at NO_WAITER_FALLBACK_SLEEP cadence — same shape they had before.
     let listener_fd = {
-        let mut guard = processor.lock();
+        let guard = processor.lock();
         guard
-            .get_iceoryx2_input_mailboxes()
-            .and_then(|m| m.listener_fd())
+            .iceoryx2_input_mailboxes_inner()
+            .and_then(|inner| inner.listener_fd())
     };
 
     #[cfg(target_os = "linux")]
@@ -213,9 +213,9 @@ fn run_reactive_mode(
         match waiter.as_ref() {
             Some(w) => match w.wait() {
                 ReactiveLoopWakeOutcome::Notified => {
-                    let mut guard = processor.lock();
-                    if let Some(mailboxes) = guard.get_iceoryx2_input_mailboxes() {
-                        mailboxes.drain_listener();
+                    let guard = processor.lock();
+                    if let Some(inner) = guard.iceoryx2_input_mailboxes_inner() {
+                        inner.drain_listener();
                     }
                 }
                 ReactiveLoopWakeOutcome::Shutdown => {
@@ -266,9 +266,9 @@ fn run_reactive_mode(
             }
 
             let more_pending = {
-                let mut guard = processor.lock();
-                match guard.get_iceoryx2_input_mailboxes() {
-                    Some(mailboxes) => mailboxes.any_port_has_data(),
+                let guard = processor.lock();
+                match guard.iceoryx2_input_mailboxes_inner() {
+                    Some(inner) => inner.any_port_has_data(),
                     None => false,
                 }
             };

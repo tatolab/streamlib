@@ -84,7 +84,7 @@ impl ManualProcessor for BgraFileSourceProcessor::Processor {
 
         let is_running = Arc::clone(&self.is_running);
         let frame_counter = Arc::clone(&self.frame_counter);
-        let outputs: Arc<OutputWriter> = self.outputs.clone();
+        let outputs: OutputWriter = self.outputs.clone();
         let file_path = self.config.file_path.clone();
 
         let handle = std::thread::Builder::new()
@@ -130,7 +130,7 @@ fn source_thread_loop(
     frame_count: u32,
     is_running: Arc<AtomicBool>,
     frame_counter: Arc<AtomicU64>,
-    outputs: Arc<OutputWriter>,
+    outputs: OutputWriter,
     gpu_context: GpuContextLimitedAccess,
     texture_ring: TextureRing,
 ) {

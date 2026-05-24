@@ -2,17 +2,48 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Output writer for sending frames to downstream processors.
+//!
+//! # Two-type split: β-shape vs. inner
+//!
+//! Issue #894 retires the last shared-Rust-type plugin-ABI crossing
+//! by splitting this module's public surface into two types:
+//!
+//! - [`OutputWriterInner`] holds the actual state — the
+//!   `Mutex<HashMap<port, Vec<DownstreamConnection>>>` and the
+//!   iceoryx2 publish + notify logic. It runs entirely in the
+//!   host DSO; cdylib code never references this type directly.
+//! - [`OutputWriter`] is the public `#[repr(C)] { handle, vtable }`
+//!   β-shape that processor structs hold via the macro-emitted
+//!   `outputs: OutputWriter` field. In host mode the vtable
+//!   resolves to the host's static
+//!   `HOST_OUTPUT_WRITER_VTABLE`; in cdylib mode it points at the
+//!   host-installed pointer from
+//!   `HostServices::output_writer_vtable`. Either way the methods
+//!   on the β-shape (`write`, `write_raw`, `has_port`, `clone`,
+//!   `drop`) dispatch through the vtable to the host-allocated
+//!   inner.
+//!
+//! Host-side code that needs to mutate the inner (e.g. compiler ops
+//! adding downstream connections at wiring time) operates on
+//! `Arc<OutputWriterInner>` directly via
+//! [`OutputWriterInner::add_connection`] — no β-shape, no FFI hop.
+//! The cdylib's per-frame `write` calls cross extern "C" exactly
+//! once per emit (sub-microsecond on amd64; see the PR microbench
+//! for issue #894).
 
 use std::collections::HashMap;
+use std::ffi::c_void;
+use std::sync::Arc;
 
 use iceoryx2::port::notifier::Notifier;
 use iceoryx2::port::publisher::Publisher;
 use iceoryx2::prelude::*;
 use parking_lot::Mutex;
 use serde::Serialize;
+use streamlib_plugin_abi::OutputWriterVTable;
 
 use super::{FrameHeader, SchemaIdentWire, FRAME_HEADER_SIZE};
-use crate::core::error::{Result, Error};
+use crate::core::error::{Error, Result};
 use crate::core::media_clock::MediaClock;
 
 /// One downstream connection: structured schema identifier, destination
@@ -26,22 +57,25 @@ struct DownstreamConnection {
     notifier: Notifier<ipc::Service>,
 }
 
-/// Output writer that publishes frames via iceoryx2.
+/// Host-side inner state for an output writer. Owns the
+/// per-port-name `HashMap` and the iceoryx2 publishers and
+/// notifiers; all per-frame publish + notify work runs here.
 ///
-/// Thread-safe: can be written from any thread (e.g., AVFoundation callbacks).
-/// Supports fan-out: a single output port can publish to multiple downstream
-/// processors, each with its own iceoryx2 publisher and destination port name.
-pub struct OutputWriter {
+/// Never crosses the cdylib boundary. Held by the host via
+/// `Arc<OutputWriterInner>`; the cdylib's [`OutputWriter`] β-shape
+/// stores a separate `Arc::into_raw`-encoded strong reference to
+/// the same inner.
+pub struct OutputWriterInner {
     /// Map from output port name to downstream connections.
     connections: Mutex<HashMap<String, Vec<DownstreamConnection>>>,
 }
 
-// OutputWriter is Send + Sync via Mutex
-unsafe impl Send for OutputWriter {}
-unsafe impl Sync for OutputWriter {}
+// OutputWriterInner is Send + Sync via Mutex.
+unsafe impl Send for OutputWriterInner {}
+unsafe impl Sync for OutputWriterInner {}
 
-impl OutputWriter {
-    /// Create a new output writer with no connections (populated during wiring).
+impl OutputWriterInner {
+    /// Create a new inner with no connections (populated during wiring).
     pub fn new() -> Self {
         Self {
             connections: Mutex::new(HashMap::new()),
@@ -50,11 +84,12 @@ impl OutputWriter {
 
     /// Add a downstream connection for the given output port.
     ///
-    /// Each call adds a new publisher+notifier+routing pair. Multiple connections per
-    /// output port enables fan-out (one source port → multiple destinations).
+    /// Each call adds a new publisher+notifier+routing pair. Multiple
+    /// connections per output port enables fan-out (one source port →
+    /// multiple destinations).
     ///
-    /// `schema_ident` is the structured wire identifier the publisher will
-    /// stamp into every [`FrameHeader`] for this connection. Callers
+    /// `schema_ident` is the structured wire identifier the publisher
+    /// will stamp into every [`FrameHeader`] for this connection. Callers
     /// build it once at wiring time from the port's structured
     /// `PortSchemaSpec` via [`SchemaIdentWire::from_segments`] — no
     /// parser runs on the per-frame hot path.
@@ -78,30 +113,11 @@ impl OutputWriter {
             });
     }
 
-    /// Write a frame to the specified output port.
+    /// Write raw bytes to the specified output port without serialization.
     ///
-    /// The frame is serialized once, then published to all downstream connections
-    /// for the given port. Each connection gets its own FramePayload with the
-    /// correct destination port name for routing.
-    ///
-    /// Thread-safe: can be called from any thread.
-    pub fn write<T: Serialize>(&self, port: &str, value: &T) -> Result<()> {
-        let timestamp_ns = MediaClock::now().as_nanos() as i64;
-        self.write_with_timestamp(port, value, timestamp_ns)
-    }
-
-    /// Write a frame to the specified output port with an explicit timestamp.
-    ///
-    /// Thread-safe: can be called from any thread.
-    pub fn write_with_timestamp<T: Serialize>(
-        &self,
-        port: &str,
-        value: &T,
-        timestamp_ns: i64,
-    ) -> Result<()> {
-        let data = rmp_serde::to_vec_named(value)
-            .map_err(|e| Error::Link(format!("Failed to serialize frame: {}", e)))?;
-
+    /// The data is assumed to be pre-serialized (e.g., msgpack from a
+    /// subprocess bridge OR the β-shape's serialize-then-FFI path).
+    pub fn write_raw(&self, port: &str, data: &[u8], timestamp_ns: i64) -> Result<()> {
         let connections = self.connections.lock();
         let port_connections = connections
             .get(port)
@@ -112,7 +128,7 @@ impl OutputWriter {
             let mut frame = vec![0u8; total_len];
             FrameHeader::new(&conn.dest_port, conn.schema_ident, timestamp_ns, data.len() as u32)
                 .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
-            frame[FRAME_HEADER_SIZE..].copy_from_slice(&data);
+            frame[FRAME_HEADER_SIZE..].copy_from_slice(data);
 
             let sample = conn
                 .publisher
@@ -141,45 +157,6 @@ impl OutputWriter {
         Ok(())
     }
 
-    /// Write raw bytes to the specified output port without serialization.
-    ///
-    /// The data is assumed to be pre-serialized (e.g., msgpack from a subprocess bridge).
-    pub fn write_raw(&self, port: &str, data: &[u8], timestamp_ns: i64) -> Result<()> {
-        let connections = self.connections.lock();
-        let port_connections = connections
-            .get(port)
-            .ok_or_else(|| Error::Link(format!("Unknown output port: {}", port)))?;
-
-        for conn in port_connections {
-            let total_len = FRAME_HEADER_SIZE + data.len();
-            let mut frame = vec![0u8; total_len];
-            FrameHeader::new(&conn.dest_port, conn.schema_ident, timestamp_ns, data.len() as u32)
-                .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
-            frame[FRAME_HEADER_SIZE..].copy_from_slice(data);
-
-            let sample = conn
-                .publisher
-                .loan_slice_uninit(total_len)
-                .map_err(|e| Error::Link(format!("Failed to loan slice: {:?}", e)))?;
-
-            let sample = sample.write_from_slice(&frame);
-            sample
-                .send()
-                .map_err(|e| Error::Link(format!("Failed to send sample: {:?}", e)))?;
-
-            if let Err(e) = conn.notifier.notify() {
-                tracing::trace!(
-                    "OutputWriter: notify() failed for port '{}' -> '{}': {:?}",
-                    port,
-                    conn.dest_port,
-                    e
-                );
-            }
-        }
-
-        Ok(())
-    }
-
     /// Check if a port is configured.
     pub fn has_port(&self, port: &str) -> bool {
         self.connections.lock().contains_key(port)
@@ -191,9 +168,232 @@ impl OutputWriter {
     }
 }
 
-impl Default for OutputWriter {
+impl Default for OutputWriterInner {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// =============================================================================
+// OutputWriter β-shape
+// =============================================================================
+
+/// Public output writer β-shape. The macro emits
+/// `pub outputs: OutputWriter` on every processor struct that
+/// declares output ports.
+///
+/// Layout-stable: every field is either a primitive or an opaque
+/// pointer, so the cdylib's view of this type does not couple to
+/// the host's [`OutputWriterInner`] source layout.
+///
+/// `Clone` bumps the host-side `Arc<OutputWriterInner>` strong
+/// count via [`OutputWriterVTable::clone_arc`]; `Drop` decrements
+/// via [`OutputWriterVTable::drop_arc`]. Both run in host-compiled
+/// code regardless of which DSO holds this β-shape.
+#[repr(C)]
+pub struct OutputWriter {
+    /// Opaque handle. In host mode: `Arc::into_raw(Arc<OutputWriterInner>)`.
+    /// In cdylib mode: whatever the host hands via
+    /// `ProcessorVTable::set_iceoryx2_resources` (which is also
+    /// `Arc::into_raw`-shaped, so the wire contract is the same).
+    /// Null on a freshly-constructed processor before
+    /// `set_iceoryx2_resources` fires.
+    pub(crate) handle: *const c_void,
+    /// Static dispatch table. Host mode points at
+    /// `&HOST_OUTPUT_WRITER_VTABLE`; cdylib mode points at the
+    /// host-installed pointer from
+    /// `HostServices::output_writer_vtable`. Null on
+    /// freshly-constructed pre-wiring instances; methods short-
+    /// circuit to errors when the vtable is null.
+    pub(crate) vtable: *const OutputWriterVTable,
+}
+
+// SAFETY: `handle` points at an `Arc<OutputWriterInner>` whose
+// interior is Send+Sync (OutputWriterInner declares both above).
+// Refcount management crosses the cdylib boundary through the
+// vtable but the underlying Arc bookkeeping runs in host-compiled
+// code regardless.
+unsafe impl Send for OutputWriter {}
+unsafe impl Sync for OutputWriter {}
+
+impl OutputWriter {
+    /// Build a host-mode β-shape from an `Arc<OutputWriterInner>`.
+    /// The strong reference is consumed; the β-shape owns it for
+    /// its lifetime and releases on Drop.
+    ///
+    /// Engine-only — used by the host's processor wiring path
+    /// (`ProcessorInstanceFactory::install_iceoryx2_resources`) and
+    /// by the macro-emitted `from_config` initializer when no
+    /// outputs are declared (an empty inner is used).
+    pub fn from_inner_arc(inner: Arc<OutputWriterInner>) -> Self {
+        let handle = Arc::into_raw(inner) as *const c_void;
+        let vtable = crate::core::plugin::host_services::host_output_writer_vtable();
+        Self { handle, vtable }
+    }
+
+    /// Build an empty pre-wiring β-shape with null handle and
+    /// null vtable. The host patches in real values via
+    /// `ProcessorVTable::set_iceoryx2_resources` before any
+    /// downstream connection wiring runs. Method calls on the
+    /// empty β-shape return cleanly with no-op semantics
+    /// (matches today's pre-wiring behaviour of an empty
+    /// `OutputWriter::new()`).
+    pub fn empty() -> Self {
+        Self {
+            handle: std::ptr::null(),
+            vtable: std::ptr::null(),
+        }
+    }
+
+    /// Raw-pointer construction used by
+    /// `ProcessorVTable::set_iceoryx2_resources` host wiring to
+    /// patch an existing β-shape's fields without owning a typed
+    /// `Arc<OutputWriterInner>`.
+    pub(crate) fn from_raw_parts(
+        handle: *const c_void,
+        vtable: *const OutputWriterVTable,
+    ) -> Self {
+        Self { handle, vtable }
+    }
+
+    /// Returns true iff this β-shape has been wired to a real
+    /// host-allocated inner.
+    pub fn is_configured(&self) -> bool {
+        !self.handle.is_null() && !self.vtable.is_null()
+    }
+
+    /// Borrow the host-side `Arc<OutputWriterInner>` this β-shape
+    /// points at. Returns `None` for unwired β-shapes. Bumps the
+    /// strong count via the vtable's `clone_arc`; the returned
+    /// Arc balances with one Drop on the inner.
+    ///
+    /// Engine-only (used by the macro-emitted
+    /// `iceoryx2_output_writer_inner` trait method to expose the
+    /// host's wiring path to compiler ops). Cdylib code can call
+    /// this too but the host's inner reach is always preferred for
+    /// per-frame mutation since it skips the vtable hop.
+    pub fn inner_arc(&self) -> Option<Arc<OutputWriterInner>> {
+        if !self.is_configured() {
+            return None;
+        }
+        // SAFETY: handle came from Arc::into_raw; bumping the
+        // strong count via the vtable's clone_arc gives us a fresh
+        // owning reference we can reconstruct as Arc::from_raw.
+        unsafe {
+            let cloned_handle = ((*self.vtable).clone_arc)(self.handle);
+            if cloned_handle.is_null() {
+                return None;
+            }
+            Some(Arc::from_raw(cloned_handle as *const OutputWriterInner))
+        }
+    }
+
+    /// Write a frame to the specified output port.
+    ///
+    /// Source-compatible with the pre-#894 `OutputWriter::write` —
+    /// the cdylib serializes `T` to msgpack in its own DSO then
+    /// crosses extern "C" once with the bytes. Thread-safe.
+    pub fn write<T: Serialize>(&self, port: &str, value: &T) -> Result<()> {
+        let timestamp_ns = MediaClock::now().as_nanos() as i64;
+        self.write_with_timestamp(port, value, timestamp_ns)
+    }
+
+    /// Write a frame to the specified output port with an
+    /// explicit timestamp.
+    pub fn write_with_timestamp<T: Serialize>(
+        &self,
+        port: &str,
+        value: &T,
+        timestamp_ns: i64,
+    ) -> Result<()> {
+        let data = rmp_serde::to_vec_named(value)
+            .map_err(|e| Error::Link(format!("Failed to serialize frame: {}", e)))?;
+        self.write_raw(port, &data, timestamp_ns)
+    }
+
+    /// Write raw msgpack-encoded bytes to the specified output port.
+    pub fn write_raw(&self, port: &str, data: &[u8], timestamp_ns: i64) -> Result<()> {
+        if !self.is_configured() {
+            return Err(Error::Link(format!(
+                "OutputWriter not wired (port='{}'): host has not yet \
+                 installed iceoryx2 resources on this processor instance",
+                port
+            )));
+        }
+        let mut err_buf = [0u8; 256];
+        let mut err_len = 0usize;
+        // SAFETY: vtable + handle are non-null per is_configured().
+        // The fn pointer's lifetime is tied to the host's process
+        // (the vtable lives in static memory). The err_buf is a
+        // local stack allocation we own.
+        let rc = unsafe {
+            ((*self.vtable).write_raw)(
+                self.handle,
+                port.as_ptr(),
+                port.len(),
+                data.as_ptr(),
+                data.len(),
+                timestamp_ns,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if rc == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            Err(Error::Link(format!(
+                "OutputWriter::write_raw(port='{}') failed: {}",
+                port, msg
+            )))
+        }
+    }
+
+    /// Check if a port is configured.
+    pub fn has_port(&self, port: &str) -> bool {
+        if !self.is_configured() {
+            return false;
+        }
+        // SAFETY: vtable + handle are non-null per is_configured().
+        unsafe { ((*self.vtable).has_port)(self.handle, port.as_ptr(), port.len()) }
+    }
+}
+
+impl Default for OutputWriter {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl Clone for OutputWriter {
+    fn clone(&self) -> Self {
+        if !self.is_configured() {
+            return Self::empty();
+        }
+        // SAFETY: vtable + handle are non-null per is_configured().
+        let cloned_handle = unsafe { ((*self.vtable).clone_arc)(self.handle) };
+        Self {
+            handle: cloned_handle,
+            vtable: self.vtable,
+        }
+    }
+}
+
+impl Drop for OutputWriter {
+    fn drop(&mut self) {
+        if !self.is_configured() {
+            return;
+        }
+        // SAFETY: vtable + handle are non-null per is_configured().
+        // After dispatch, null out the local fields so a double-
+        // drop becomes a no-op (mirrors the Texture / PixelBuffer
+        // β-shape pattern).
+        unsafe {
+            ((*self.vtable).drop_arc)(self.handle);
+        }
+        self.handle = std::ptr::null();
+        self.vtable = std::ptr::null();
     }
 }
 
@@ -244,16 +444,17 @@ mod tests {
         let notifier = notify.notifier_builder().create().unwrap();
         let listener = notify.listener_builder().create().unwrap();
 
-        let writer = OutputWriter::new();
+        let inner = Arc::new(OutputWriterInner::new());
         let schema_ident =
             SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
-        writer.add_connection("out", schema_ident, "in", publisher, notifier);
+        inner.add_connection("out", schema_ident, "in", publisher, notifier);
 
         // Pre-flight: the listener has no events queued.
         let mut count: usize = 0;
         listener.try_wait_all(|_| count += 1).unwrap();
         assert_eq!(count, 0);
 
+        let writer = OutputWriter::from_inner_arc(inner);
         writer.write_raw("out", b"payload", 1234).unwrap();
         writer.write_raw("out", b"more", 5678).unwrap();
 
@@ -273,5 +474,38 @@ mod tests {
             "expected at least one notify after write_raw, got {}",
             count
         );
+    }
+
+    /// Empty (unwired) writers should fail cleanly rather than crash.
+    /// Mentally revert the `is_configured()` guard in `write_raw` and
+    /// the test segfaults dereferencing the null vtable.
+    #[test]
+    fn empty_writer_fails_cleanly() {
+        let writer = OutputWriter::empty();
+        assert!(!writer.is_configured());
+        let err = writer.write_raw("any_port", b"data", 0).unwrap_err();
+        let msg = format!("{}", err);
+        assert!(msg.contains("not wired"), "unexpected error message: {}", msg);
+        assert!(!writer.has_port("any_port"));
+    }
+
+    /// Clone bumps the strong count via the vtable; both clones drop
+    /// independently. Mentally revert the `clone_arc` call in
+    /// `Clone::clone` and the second clone observes a freed handle.
+    #[test]
+    fn clone_balances_drop() {
+        let inner = Arc::new(OutputWriterInner::new());
+        // Bump strong count once so we can observe the post-Drop
+        // strong-count drop without freeing the inner.
+        let inner_for_test = inner.clone();
+        let writer1 = OutputWriter::from_inner_arc(inner);
+        // strong_count is 2 here: writer1's into_raw + inner_for_test.
+        assert_eq!(Arc::strong_count(&inner_for_test), 2);
+        let writer2 = writer1.clone();
+        assert_eq!(Arc::strong_count(&inner_for_test), 3);
+        drop(writer2);
+        assert_eq!(Arc::strong_count(&inner_for_test), 2);
+        drop(writer1);
+        assert_eq!(Arc::strong_count(&inner_for_test), 1);
     }
 }

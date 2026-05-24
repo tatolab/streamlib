@@ -482,11 +482,26 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
         false
     }
 
-    fn get_iceoryx2_output_writer(&self) -> Option<Arc<crate::iceoryx2::OutputWriter>> {
+    fn set_iceoryx2_resources(
+        &mut self,
+        _output_writer: Option<crate::iceoryx2::OutputWriter>,
+        _input_mailboxes: Option<crate::iceoryx2::InputMailboxes>,
+    ) -> crate::core::Result<()> {
+        // Deno subprocess host wrappers don't carry host-side
+        // iceoryx2 inner Arcs — the subprocess owns its own
+        // iceoryx2 transport.
+        Ok(())
+    }
+
+    fn iceoryx2_output_writer_inner(
+        &self,
+    ) -> Option<Arc<crate::iceoryx2::OutputWriterInner>> {
         None
     }
 
-    fn get_iceoryx2_input_mailboxes(&mut self) -> Option<&mut crate::iceoryx2::InputMailboxes> {
+    fn iceoryx2_input_mailboxes_inner(
+        &self,
+    ) -> Option<Arc<crate::iceoryx2::InputMailboxesInner>> {
         None
     }
 

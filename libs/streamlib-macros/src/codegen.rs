@@ -413,7 +413,12 @@ fn generate_processor_struct_from_schema(
         quote! { pub #name: Config, }
     });
 
-    // Generate iceoryx2-based IPC fields if ports are defined
+    // Generate iceoryx2 β-shape fields if ports are defined.
+    // Issue #894 retires the shared-Rust-type crossings — the
+    // processor's `outputs` / `inputs` fields are now layout-stable
+    // `#[repr(C)] { handle, vtable }` β-shapes; the host patches
+    // them up via `ProcessorVTable::set_iceoryx2_resources` after
+    // `from_config` returns.
     let ipc_input_field = if !schema.inputs.is_empty() {
         quote! { pub inputs: ::streamlib::sdk::iceoryx2::InputMailboxes, }
     } else {
@@ -421,7 +426,7 @@ fn generate_processor_struct_from_schema(
     };
 
     let ipc_output_field = if !schema.outputs.is_empty() {
-        quote! { pub outputs: ::std::sync::Arc<::streamlib::sdk::iceoryx2::OutputWriter>, }
+        quote! { pub outputs: ::streamlib::sdk::iceoryx2::OutputWriter, }
     } else {
         quote! {}
     };
@@ -700,45 +705,23 @@ fn generate_from_config_from_schema(
     config_field_name: &Option<Ident>,
     custom_fields: &[CustomField],
 ) -> TokenStream {
-    // Generate iceoryx2-based IPC field initializers
+    // Issue #894: host-allocates iceoryx2 inner Arcs. The macro
+    // emits empty β-shapes; the host's
+    // `ProcessorInstance::install_iceoryx2_resources` patches in
+    // real handles via `ProcessorVTable::set_iceoryx2_resources`
+    // immediately after `from_config` returns. Per-port read_mode
+    // / buffer_size live in the macro-emitted
+    // `__post_install_iceoryx2_resources` body run from
+    // `set_iceoryx2_resources` so the schema-driven settings still
+    // reach the host-side `InputMailboxesInner::add_port` call.
     let ipc_input_init = if !schema.inputs.is_empty() {
-        let add_port_calls: Vec<TokenStream> = schema
-            .inputs
-            .iter()
-            .map(|port| {
-                let name = &port.name;
-                let buffer_size = port.buffer_size.unwrap_or(1);
-                let read_mode_tokens = match port.read_mode.as_deref() {
-                    Some("read_next_in_order") => {
-                        quote! { ::streamlib::sdk::iceoryx2::ReadMode::ReadNextInOrder }
-                    }
-                    Some("skip_to_latest") | None => {
-                        quote! { ::streamlib::sdk::iceoryx2::ReadMode::SkipToLatest }
-                    }
-                    Some(unknown) => {
-                        let msg = format!(
-                            "unknown read_mode '{}' on input port '{}', expected 'skip_to_latest' or 'read_next_in_order'",
-                            unknown, name
-                        );
-                        return quote! { compile_error!(#msg); };
-                    }
-                };
-                quote! { inputs.add_port(#name, #buffer_size, #read_mode_tokens); }
-            })
-            .collect();
-        quote! {
-            inputs: {
-                let mut inputs = ::streamlib::sdk::iceoryx2::InputMailboxes::new();
-                #(#add_port_calls)*
-                inputs
-            },
-        }
+        quote! { inputs: ::streamlib::sdk::iceoryx2::InputMailboxes::empty(), }
     } else {
         quote! {}
     };
 
     let ipc_output_init = if !schema.outputs.is_empty() {
-        quote! { outputs: ::std::sync::Arc::new(::streamlib::sdk::iceoryx2::OutputWriter::new()), }
+        quote! { outputs: ::streamlib::sdk::iceoryx2::OutputWriter::empty(), }
     } else {
         quote! {}
     };
@@ -905,31 +888,113 @@ fn generate_iceoryx2_accessors_from_schema(schema: &ProcessorSchema) -> TokenStr
         quote! {}
     };
 
-    let get_output_writer_impl = if has_iceoryx2_outputs {
+    // Issue #894: emit `set_iceoryx2_resources` to receive host-
+    // allocated β-shapes + the `iceoryx2_output_writer_inner` /
+    // `iceoryx2_input_mailboxes_inner` accessors so the host's
+    // wiring path can mutate the inner Arc directly.
+    let add_port_calls: Vec<TokenStream> = if has_iceoryx2_inputs {
+        schema
+            .inputs
+            .iter()
+            .map(|port| {
+                let name = &port.name;
+                let buffer_size = port.buffer_size.unwrap_or(1);
+                let read_mode_tokens = match port.read_mode.as_deref() {
+                    Some("read_next_in_order") => {
+                        quote! { ::streamlib::sdk::iceoryx2::ReadMode::ReadNextInOrder }
+                    }
+                    Some("skip_to_latest") | None => {
+                        quote! { ::streamlib::sdk::iceoryx2::ReadMode::SkipToLatest }
+                    }
+                    Some(unknown) => {
+                        let msg = format!(
+                            "unknown read_mode '{}' on input port '{}', expected 'skip_to_latest' or 'read_next_in_order'",
+                            unknown, name
+                        );
+                        return quote! { compile_error!(#msg); };
+                    }
+                };
+                quote! {
+                    if let ::std::option::Option::Some(ref input_inner) = input_inner_opt {
+                        if !input_inner.has_port(#name) {
+                            input_inner.add_port(#name, #buffer_size, #read_mode_tokens);
+                        }
+                    }
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let assign_outputs = if has_iceoryx2_outputs {
         quote! {
-            fn get_iceoryx2_output_writer(&self) -> Option<::std::sync::Arc<::streamlib::sdk::iceoryx2::OutputWriter>> {
-                Some(self.outputs.clone())
+            if let ::std::option::Option::Some(ow) = output_writer {
+                self.outputs = ow;
             }
         }
     } else {
         quote! {}
     };
 
-    let get_input_mailboxes_impl = if has_iceoryx2_inputs {
+    let assign_inputs = if has_iceoryx2_inputs {
         quote! {
-            fn get_iceoryx2_input_mailboxes(&mut self) -> Option<&mut ::streamlib::sdk::iceoryx2::InputMailboxes> {
-                Some(&mut self.inputs)
+            let input_inner_opt = input_mailboxes
+                .as_ref()
+                .and_then(|im| im.inner_arc());
+            if let ::std::option::Option::Some(im) = input_mailboxes {
+                self.inputs = im;
+            }
+            #(#add_port_calls)*
+        }
+    } else {
+        quote! {
+            let _ = input_mailboxes;
+        }
+    };
+
+    let outputs_inner_impl = if has_iceoryx2_outputs {
+        quote! {
+            fn iceoryx2_output_writer_inner(
+                &self,
+            ) -> ::std::option::Option<::std::sync::Arc<::streamlib::sdk::iceoryx2::OutputWriterInner>> {
+                self.outputs.inner_arc()
             }
         }
     } else {
         quote! {}
+    };
+
+    let inputs_inner_impl = if has_iceoryx2_inputs {
+        quote! {
+            fn iceoryx2_input_mailboxes_inner(
+                &self,
+            ) -> ::std::option::Option<::std::sync::Arc<::streamlib::sdk::iceoryx2::InputMailboxesInner>> {
+                self.inputs.inner_arc()
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    let set_resources_impl = quote! {
+        fn set_iceoryx2_resources(
+            &mut self,
+            output_writer: ::std::option::Option<::streamlib::sdk::iceoryx2::OutputWriter>,
+            input_mailboxes: ::std::option::Option<::streamlib::sdk::iceoryx2::InputMailboxes>,
+        ) -> ::streamlib::sdk::error::Result<()> {
+            #assign_outputs
+            #assign_inputs
+            ::std::result::Result::Ok(())
+        }
     };
 
     quote! {
         #has_outputs_impl
         #has_inputs_impl
-        #get_output_writer_impl
-        #get_input_mailboxes_impl
+        #set_resources_impl
+        #outputs_inner_impl
+        #inputs_inner_impl
     }
 }
 

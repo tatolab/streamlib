@@ -151,7 +151,7 @@ impl ManualProcessor for WebRtcWhepProcessor::Processor {
 async fn run_whep_receive_loop(
     mut video_rx: mpsc::Receiver<RtpSample>,
     mut audio_rx: mpsc::Receiver<RtpSample>,
-    outputs: Arc<OutputWriter>,
+    outputs: OutputWriter,
     audio_sample_rate: u32,
     mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) {

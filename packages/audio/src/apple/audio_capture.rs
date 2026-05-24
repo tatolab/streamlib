@@ -137,7 +137,7 @@ impl AppleAudioCaptureProcessor::Processor {
             )));
         }
 
-        let outputs_clone: Arc<OutputWriter> = self.outputs.clone();
+        let outputs_clone: OutputWriter = self.outputs.clone();
         let frame_counter_clone = self.frame_counter.clone();
         let is_capturing_clone = Arc::clone(&self.is_capturing);
         let sample_rate_clone = device_sample_rate;

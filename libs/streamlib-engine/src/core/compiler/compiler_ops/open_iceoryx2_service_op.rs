@@ -366,11 +366,13 @@ fn open_iceoryx2_pubsub(
         service_name
     );
 
-    // Configure source OutputWriter with port mapping, publisher, and notifier.
+    // Configure source OutputWriterInner with port mapping,
+    // publisher, and notifier (issue #894 — host operates on the
+    // inner Arc directly, no FFI hop).
     {
         let source_guard = source_processor.lock();
-        if let Some(output_writer) = source_guard.get_iceoryx2_output_writer() {
-            output_writer.add_connection(
+        if let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() {
+            output_inner.add_connection(
                 source_port,
                 schema_ident_wire_for_producer(&output_schema),
                 dest_port,
@@ -385,24 +387,26 @@ fn open_iceoryx2_pubsub(
         }
     }
 
-    // Configure destination InputMailboxes with port
-    // Only create subscriber if destination doesn't already have one (first connection wins)
+    // Configure destination InputMailboxesInner with port
+    // (issue #894 — host operates on the inner Arc directly).
+    // Only create subscriber if destination doesn't already have one
+    // (first connection wins).
     {
-        let mut dest_guard = dest_processor.lock();
-        if let Some(input_mailboxes) = dest_guard.get_iceoryx2_input_mailboxes() {
+        let dest_guard = dest_processor.lock();
+        if let Some(input_inner) = dest_guard.iceoryx2_input_mailboxes_inner() {
             // Only add the port if the macro-generated code didn't already
             // configure it. The macro reads schema metadata (read_mode,
             // buffer_size) and sets the correct values per port type.
             // Overwriting here would discard the schema-driven settings.
-            if !input_mailboxes.has_port(dest_port) {
-                input_mailboxes.add_port(dest_port, 1, Default::default());
+            if !input_inner.has_port(dest_port) {
+                input_inner.add_port(dest_port, 1, Default::default());
             }
 
             // Only set subscriber+listener if this is the first connection to this destination
             // All subsequent connections reuse the same pair (max_listeners=1 enforces this).
-            if !input_mailboxes.has_subscriber() {
+            if !input_inner.has_subscriber() {
                 let subscriber = service.create_subscriber()?;
-                input_mailboxes.set_subscriber(subscriber);
+                input_inner.set_subscriber(subscriber);
                 tracing::debug!(
                     "Created iceoryx2 Subscriber for '{}' on service '{}'",
                     dest_proc_id,
@@ -415,9 +419,9 @@ fn open_iceoryx2_pubsub(
                     dest_port
                 );
             }
-            if !input_mailboxes.has_listener() {
+            if !input_inner.has_listener() {
                 let listener = notify_service.create_listener()?;
-                input_mailboxes.set_listener(listener);
+                input_inner.set_listener(listener);
                 tracing::debug!(
                     "Created iceoryx2 Listener for '{}' on notify service '{}'",
                     dest_proc_id,
@@ -666,26 +670,27 @@ fn open_iceoryx2_subprocess_to_rust(
         }
     }
 
-    // Configure destination InputMailboxes with port (Rust side)
+    // Configure destination InputMailboxesInner with port (Rust
+    // side; issue #894 — host operates on the inner Arc directly).
     {
-        let mut dest_guard = dest_processor.lock();
-        if let Some(input_mailboxes) = dest_guard.get_iceoryx2_input_mailboxes() {
-            if !input_mailboxes.has_port(dest_port) {
-                input_mailboxes.add_port(dest_port, 1, Default::default());
+        let dest_guard = dest_processor.lock();
+        if let Some(input_inner) = dest_guard.iceoryx2_input_mailboxes_inner() {
+            if !input_inner.has_port(dest_port) {
+                input_inner.add_port(dest_port, 1, Default::default());
             }
 
-            if !input_mailboxes.has_subscriber() {
+            if !input_inner.has_subscriber() {
                 let subscriber = service.create_subscriber()?;
-                input_mailboxes.set_subscriber(subscriber);
+                input_inner.set_subscriber(subscriber);
                 tracing::debug!(
                     "Created iceoryx2 Subscriber for '{}' on service '{}' (source is subprocess)",
                     dest_proc_id,
                     service_name
                 );
             }
-            if !input_mailboxes.has_listener() {
+            if !input_inner.has_listener() {
                 let listener = notify_service.create_listener()?;
-                input_mailboxes.set_listener(listener);
+                input_inner.set_listener(listener);
                 tracing::debug!(
                     "Created iceoryx2 Listener for '{}' on notify service '{}' (source is subprocess)",
                     dest_proc_id,
@@ -764,11 +769,13 @@ fn open_iceoryx2_rust_to_subprocess(
     let publisher = service.create_publisher(max_payload)?;
     let notifier = notify_service.create_notifier()?;
 
-    // Configure source OutputWriter with port mapping, publisher, and notifier.
+    // Configure source OutputWriterInner with port mapping,
+    // publisher, and notifier (issue #894 — host operates on the
+    // inner Arc directly).
     {
         let source_guard = source_processor.lock();
-        if let Some(output_writer) = source_guard.get_iceoryx2_output_writer() {
-            output_writer.add_connection(
+        if let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() {
+            output_inner.add_connection(
                 source_port,
                 schema_ident_wire_for_producer(&output_schema),
                 dest_port,

@@ -177,6 +177,10 @@ png = "0.17"  # PNG decoding for shader-output fixture comparisons
 name = "logging"
 harness = false
 
+[[bench]]
+name = "output_writer_ffi_hop"
+harness = false
+
 [[bin]]
 name = "log_emit_1000"
 path = "tests/bin/log_emit_1000.rs"

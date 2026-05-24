@@ -107,7 +107,7 @@ impl ManualProcessor for UdpSourceProcessor::Processor {
 
         let shutdown = Arc::clone(&self.shutdown);
         let packets_received = Arc::clone(&self.packets_received);
-        let outputs: Arc<OutputWriter> = self.outputs.clone();
+        let outputs: OutputWriter = self.outputs.clone();
         let batch_size = resolve_batch_size(self.config.batch_size);
 
         let handle = tokio_handle.spawn(async move {
@@ -207,7 +207,7 @@ async fn recv_loop(
     socket: UdpSocket,
     shutdown: Arc<Notify>,
     packets_received: Arc<AtomicU64>,
-    outputs: Arc<OutputWriter>,
+    outputs: OutputWriter,
     batch_size: usize,
 ) {
     #[cfg(target_os = "linux")]
@@ -225,7 +225,7 @@ async fn recv_loop_linux(
     socket: UdpSocket,
     shutdown: Arc<Notify>,
     packets_received: Arc<AtomicU64>,
-    outputs: Arc<OutputWriter>,
+    outputs: OutputWriter,
     batch_size: usize,
 ) {
     use std::os::fd::AsRawFd;
@@ -290,7 +290,7 @@ async fn recv_loop_fallback(
     socket: UdpSocket,
     shutdown: Arc<Notify>,
     packets_received: Arc<AtomicU64>,
-    outputs: Arc<OutputWriter>,
+    outputs: OutputWriter,
     batch_size: usize,
 ) {
     let mut buf = vec![0u8; MAX_DATAGRAM_BYTES];
@@ -341,7 +341,7 @@ fn publish_one(
     payload: &[u8],
     peer: SocketAddr,
     packets_received: &Arc<AtomicU64>,
-    outputs: &Arc<OutputWriter>,
+    outputs: &OutputWriter,
 ) {
     let packet = NetworkPacket {
         payload: payload.to_vec(),

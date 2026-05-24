@@ -132,12 +132,36 @@ pub const STREAMLIB_ABI_VERSION: u32 = 4;
 ///   through it so cdylib camera processors can drive the
 ///   host-owned recorder per frame without tripping the
 ///   host-mode-only `host_inner_mut()` panic.
-pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 13;
+/// - v14: [`OutputWriterVTable`] + [`InputMailboxesVTable`]
+///   references appended (issue #894 — LAST shared-Rust-type
+///   crossings in the plugin ABI). The cdylib's β-shape
+///   `OutputWriter` / `InputMailboxes` field types source their
+///   vtable pointers from these slots; per-frame `write_raw` /
+///   `read_raw` dispatch through them. Paired with the
+///   `set_iceoryx2_resources` slot on `ProcessorVTable` v2 which
+///   delivers the per-instance opaque handles. Non-null for every
+///   host that wires processors through iceoryx2.
+pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 14;
 
 /// Layout version of the [`ProcessorVTable`] struct. Read by the
 /// host's `processor_register` impl before dereferencing any vtable
 /// entry; mismatching versions abort the registration cleanly.
-pub const PROCESSOR_VTABLE_LAYOUT_VERSION: u32 = 1;
+///
+/// - v1: 17 fn pointer slots including `get_iceoryx2_output_writer_arc`
+///   and `get_iceoryx2_input_mailboxes_mut` returning shared Rust types
+///   (the host coupled to the cdylib's `streamlib-engine` source
+///   version through `Arc<OutputWriter>` / `&mut InputMailboxes`
+///   layout).
+/// - v2: issue #894 retires both shared-type crossings. The two
+///   `get_iceoryx2_*` slots are removed and a single
+///   `set_iceoryx2_resources` slot is added. The host now allocates
+///   `OutputWriterInner` and `InputMailboxesInner` and hands the
+///   cdylib `(handle, vtable)` β-shapes via the new slot; the
+///   per-frame `write_raw` / `read_raw` calls dispatch through
+///   [`OutputWriterVTable`] / [`InputMailboxesVTable`]. **ABI-
+///   breaking** — plugins built against v1 are not load-compatible
+///   with a v2 host (the slot count and offsets differ).
+pub const PROCESSOR_VTABLE_LAYOUT_VERSION: u32 = 2;
 
 /// Layout version of [`RuntimeContextVTable`]. Pinned at offset 0;
 /// newer fields append to the end and bump this constant.
@@ -414,6 +438,33 @@ pub const RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 1;
 ///   pair.
 pub const RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 
+/// Layout version of [`OutputWriterVTable`].
+///
+/// - v1: ships the four slots a cdylib processor's `OutputWriter`
+///   β-shape needs to dispatch every public-API call through the
+///   host: `write_raw` (the per-frame hot-path emit), `has_port`
+///   (configuration query), `clone_arc` / `drop_arc`
+///   (refcount-managed handle lifetime so the cdylib-side β-shape
+///   can implement `Clone` + `Drop` without crossing the inner
+///   `Arc<OutputWriterInner>` source layout).
+pub const OUTPUT_WRITER_VTABLE_LAYOUT_VERSION: u32 = 1;
+
+/// Layout version of [`InputMailboxesVTable`].
+///
+/// - v1: ships four slots — the two cdylib processor's
+///   `InputMailboxes` β-shape needs from inside `process()`
+///   (`read_raw` returns the next raw frame for a port with
+///   `has_data` distinguishing "no data" from "error"; `has_data`
+///   queries without consuming), plus the Arc lifecycle pair
+///   (`clone_arc` / `drop_arc`) every Arc-handle β-shape on this
+///   ABI carries for refcount accounting in host-compiled code.
+///   All other `InputMailboxesInner` methods (`add_port`,
+///   `set_subscriber`, `set_listener`, `listener_fd`,
+///   `drain_listener`, `receive_pending`, `route`,
+///   `any_port_has_data`) are host-side only and don't need
+///   vtable slots.
+pub const INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION: u32 = 1;
+
 // =============================================================================
 // Primitive enums
 // =============================================================================
@@ -605,34 +656,61 @@ pub struct ProcessorVTable {
     ) -> usize,
 
     // -------------------------------------------------------------------------
-    // Iceoryx2 wiring (returns Rust types via raw pointer — known
-    // source-coupling for OutputWriter / InputMailboxes; the host
-    // casts back via Arc::from_raw to take ownership of the strong
-    // reference the cdylib leaks)
+    // Iceoryx2 wiring (host-allocates ownership flip — issue #894)
+    //
+    // The shared-Rust-type crossings (`Arc<OutputWriter>` /
+    // `&mut InputMailboxes`) are retired. The host allocates the
+    // `OutputWriterInner` and `InputMailboxesInner` and hands the
+    // cdylib opaque `(handle, vtable)` β-shapes via
+    // `set_iceoryx2_resources`. Per-frame `write_raw` / `read_raw`
+    // dispatch through the new
+    // [`OutputWriterVTable`] / [`InputMailboxesVTable`] slots.
     // -------------------------------------------------------------------------
 
     pub has_iceoryx2_outputs: unsafe extern "C" fn(instance: *const c_void) -> bool,
     pub has_iceoryx2_inputs: unsafe extern "C" fn(instance: *const c_void) -> bool,
 
-    /// Returns `Arc::into_raw(arc).cast()` of an `OutputWriter` arc
-    /// the processor exposes, or null for "no output writer". The
-    /// host casts back via `Arc::from_raw`, taking ownership of one
-    /// strong reference. The cdylib wrapper consumes the `Arc<...>`
-    /// returned by `<P as GeneratedProcessor>::get_iceoryx2_output_writer`
-    /// directly — that trait method is responsible for returning a
-    /// clone (the macro emits `Some(self.outputs.clone())`).
-    pub get_iceoryx2_output_writer_arc:
-        unsafe extern "C" fn(instance: *const c_void) -> *const c_void,
-
-    /// Returns `&mut self.inputs as *mut InputMailboxes` cast to
-    /// `*mut c_void`, or null for "no input mailboxes". The pointer
-    /// is valid for the lifetime of `instance` — caller must not
-    /// hold across other vtable calls (the cdylib could mutate
-    /// during a `process()` call from another thread). In practice
-    /// the compiler op holds the lock on `instance` and so the
-    /// borrow is sound.
-    pub get_iceoryx2_input_mailboxes_mut:
-        unsafe extern "C" fn(instance: *mut c_void) -> *mut c_void,
+    /// Install host-allocated `OutputWriter` and `InputMailboxes`
+    /// β-shape handles into the cdylib's processor instance.
+    ///
+    /// Called by the host once per processor instance after
+    /// `construct` returns and before any port connections are
+    /// wired. The cdylib's `from_config` initializes its `outputs`
+    /// / `inputs` β-shape fields with null `handle` + null `vtable`;
+    /// this callback patches in the host-allocated handles so the
+    /// per-frame `write_raw` / `read_raw` calls in `process()` see
+    /// non-null handles.
+    ///
+    /// `output_writer_handle` is an `Arc::into_raw(Arc<OutputWriterInner>)`
+    /// opaque pointer; the cdylib owns one strong reference and
+    /// balances it via `OutputWriterVTable::drop_arc` on Drop. Null
+    /// when the processor has no outputs (the cdylib then keeps
+    /// the field's null β-shape and never dispatches through it).
+    ///
+    /// `input_mailboxes_handle` is an `Arc::into_raw(Arc<InputMailboxesInner>)`
+    /// opaque pointer with the same lifetime contract. Null when
+    /// the processor has no inputs.
+    ///
+    /// `output_writer_vtable` / `input_mailboxes_vtable` are
+    /// `&'static` pointers to the host's vtables (sourced from
+    /// [`HostServices::output_writer_vtable`] /
+    /// [`HostServices::input_mailboxes_vtable`]). Layout-versions on
+    /// both vtables are validated at install time so the cdylib can
+    /// dereference without re-checking.
+    ///
+    /// Returns `0` on success, non-zero on failure (e.g., processor
+    /// has no `outputs` / `inputs` field for a non-null handle —
+    /// shape mismatch between host and cdylib).
+    pub set_iceoryx2_resources: unsafe extern "C" fn(
+        instance: *mut c_void,
+        output_writer_handle: *const c_void,
+        output_writer_vtable: *const OutputWriterVTable,
+        input_mailboxes_handle: *const c_void,
+        input_mailboxes_vtable: *const InputMailboxesVTable,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
 
     // -------------------------------------------------------------------------
     // Config / state IO (msgpack bytes on the wire)
@@ -3526,6 +3604,191 @@ pub struct RhiCommandRecorderMethodsVTable {
 unsafe impl Send for RhiCommandRecorderMethodsVTable {}
 unsafe impl Sync for RhiCommandRecorderMethodsVTable {}
 
+// =============================================================================
+// OutputWriterVTable — extern "C" dispatch for the cdylib's OutputWriter
+// β-shape
+// =============================================================================
+
+/// `extern "C" fn` dispatch table for the cdylib's `OutputWriter`
+/// β-shape. Replaces the shared-Rust-type `Arc<OutputWriter>`
+/// crossing the cdylib used to expose to the host via
+/// `ProcessorVTable::get_iceoryx2_output_writer_arc`.
+///
+/// Today the host allocates an `Arc<OutputWriterInner>` and hands
+/// the cdylib a `(handle, vtable)` β-shape that delegates every
+/// public-API call through this vtable. Hot-path emits cross extern
+/// "C" once per `write` call; the bytes carry msgpack-encoded
+/// frames the cdylib serialized in its own DSO.
+///
+/// # Layout discipline
+///
+/// `layout_version` is pinned at offset 0. Older vtables loaded
+/// into newer hosts are rejected cleanly. New fields append after
+/// `drop_arc` and bump [`OUTPUT_WRITER_VTABLE_LAYOUT_VERSION`].
+///
+/// # Error convention
+///
+/// `write_raw` returns `0` on success, non-zero on failure. The
+/// caller-provided `err_buf` / `err_buf_cap` is a UTF-8 scratch
+/// buffer the callee writes a message into; `*err_len` receives
+/// the actual byte count written. Truncation is benign.
+///
+/// `clone_arc` / `drop_arc` are infallible — they bump / decrement
+/// the host-side `Arc<OutputWriterInner>` strong count. `clone_arc`
+/// returns the same opaque handle (the underlying inner is the same
+/// object); the cdylib pairs each `clone_arc` with exactly one
+/// `drop_arc` to keep refcount accounting balanced.
+#[repr(C)]
+pub struct OutputWriterVTable {
+    /// Vtable layout version. Must equal
+    /// [`OUTPUT_WRITER_VTABLE_LAYOUT_VERSION`].
+    pub layout_version: u32,
+
+    /// Reserved padding (keeps the following pointer naturally
+    /// aligned; zero today, never read).
+    pub _reserved_padding: u32,
+
+    /// Write a raw msgpack-encoded frame to the named output port at
+    /// the given timestamp. The cdylib serializes `T` to msgpack in
+    /// its own DSO and passes the bytes through; the host then runs
+    /// the underlying iceoryx2 publish + notify. Returns `0` on
+    /// success, non-zero on failure.
+    pub write_raw: unsafe extern "C" fn(
+        handle: *const c_void,
+        port_ptr: *const u8,
+        port_len: usize,
+        data_ptr: *const u8,
+        data_len: usize,
+        timestamp_ns: i64,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Check whether a port has been configured. Returns `true` if
+    /// the host's `OutputWriterInner` has at least one
+    /// `add_connection` entry for the named port.
+    pub has_port: unsafe extern "C" fn(
+        handle: *const c_void,
+        port_ptr: *const u8,
+        port_len: usize,
+    ) -> bool,
+
+    /// Bump the host-side `Arc<OutputWriterInner>` strong count.
+    /// Returns the same opaque handle (the cdylib uses the same
+    /// handle in subsequent calls). Pairs 1:1 with `drop_arc`.
+    pub clone_arc: unsafe extern "C" fn(handle: *const c_void) -> *const c_void,
+
+    /// Decrement the host-side `Arc<OutputWriterInner>` strong
+    /// count. Releases the inner when the count reaches zero.
+    pub drop_arc: unsafe extern "C" fn(handle: *const c_void),
+}
+
+// Safety: every field is a primitive or an `extern "C" fn` pointer.
+// The vtable's `&'static` storage outlives the cdylib's process
+// lifetime via the `LOADED_PLUGIN_LIBRARIES` pinning shape.
+unsafe impl Send for OutputWriterVTable {}
+unsafe impl Sync for OutputWriterVTable {}
+
+// =============================================================================
+// InputMailboxesVTable — extern "C" dispatch for the cdylib's
+// InputMailboxes β-shape
+// =============================================================================
+
+/// `extern "C" fn` dispatch table for the cdylib's `InputMailboxes`
+/// β-shape. Replaces the shared-Rust-type `&mut InputMailboxes`
+/// crossing the cdylib used to expose to the host via
+/// `ProcessorVTable::get_iceoryx2_input_mailboxes_mut`.
+///
+/// The cdylib's `process()` body reaches input data through this
+/// vtable: `read_raw` consumes the next queued frame for a port
+/// according to its read mode, `has_data` queries without consuming.
+/// All other `InputMailboxes` methods (`add_port`, `set_subscriber`,
+/// `set_listener`, `listener_fd`, `drain_listener`,
+/// `receive_pending`, `route`, `any_port_has_data`) are host-side
+/// only and do not appear on this vtable.
+///
+/// # Layout discipline
+///
+/// `layout_version` is pinned at offset 0. Older vtables loaded
+/// into newer hosts are rejected cleanly. New fields append after
+/// `has_data` and bump [`INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION`].
+///
+/// # Error convention
+///
+/// `read_raw` returns `0` on success, non-zero on host-side
+/// failure (a malformed inbound frame, allocator failure, etc.).
+/// On success, `*has_data` distinguishes "consumed a frame"
+/// (`true`) from "no frames queued" (`false`). When `*has_data ==
+/// true`, the callee writes the raw msgpack-encoded frame body to
+/// `out_buf` and the timestamp to `*out_timestamp`. Truncation is
+/// signaled by `*out_len > out_cap` and is treated as an error by
+/// the cdylib (it resizes the buffer and retries).
+///
+/// `has_data` is infallible.
+#[repr(C)]
+pub struct InputMailboxesVTable {
+    /// Vtable layout version. Must equal
+    /// [`INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION`].
+    pub layout_version: u32,
+
+    /// Reserved padding (keeps the following pointer naturally
+    /// aligned; zero today, never read).
+    pub _reserved_padding: u32,
+
+    /// Consume the next queued raw frame for the named port. The
+    /// host runs `receive_pending` first (draining iceoryx2 into
+    /// the per-port mailbox) then pops according to the port's
+    /// `ReadMode` (skip-to-latest for video, FIFO for audio).
+    ///
+    /// On entry `*out_len = 0`. On success the callee writes:
+    /// - `*has_data = true` if a frame was consumed; the frame's
+    ///   msgpack-encoded body is copied to `out_buf[..*out_len]`
+    ///   and the frame's monotonic timestamp to `*out_timestamp`.
+    /// - `*has_data = false` if the mailbox was empty.
+    ///
+    /// If the frame body is larger than `out_cap`, `*out_len` is
+    /// set to the **required** length and the data is not copied —
+    /// the cdylib resizes its buffer and retries.
+    pub read_raw: unsafe extern "C" fn(
+        handle: *const c_void,
+        port_ptr: *const u8,
+        port_len: usize,
+        out_buf: *mut u8,
+        out_cap: usize,
+        out_len: *mut usize,
+        out_timestamp: *mut i64,
+        has_data: *mut bool,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Check whether the named port has at least one queued frame
+    /// after draining iceoryx2's per-publisher buffer into the
+    /// per-port mailbox. Returns `false` for unknown ports.
+    pub has_data: unsafe extern "C" fn(
+        handle: *const c_void,
+        port_ptr: *const u8,
+        port_len: usize,
+    ) -> bool,
+
+    /// Bump the host-side `Arc<InputMailboxesInner>` strong count.
+    /// Returns the same opaque handle (the underlying inner is the
+    /// same object). Pairs 1:1 with `drop_arc`.
+    pub clone_arc: unsafe extern "C" fn(handle: *const c_void) -> *const c_void,
+
+    /// Decrement the host-side `Arc<InputMailboxesInner>` strong
+    /// count. Releases the inner when the count reaches zero.
+    pub drop_arc: unsafe extern "C" fn(handle: *const c_void),
+}
+
+// Safety: every field is a primitive or an `extern "C" fn` pointer.
+// The vtable's `&'static` storage outlives the cdylib's process
+// lifetime via the `LOADED_PLUGIN_LIBRARIES` pinning shape.
+unsafe impl Send for InputMailboxesVTable {}
+unsafe impl Sync for InputMailboxesVTable {}
+
 /// Per-type method-dispatch vtable for the `VulkanGraphicsKernel`
 /// β-shape (issue #907 Phase E PR 3/5 + #951 method-dispatch slice).
 ///
@@ -4448,6 +4711,27 @@ pub struct HostServices {
     /// panic.
     pub rhi_command_recorder_methods_vtable:
         *const RhiCommandRecorderMethodsVTable,
+
+    // -------------------------------------------------------------------------
+    // OutputWriterVTable + InputMailboxesVTable references (v14 — issue #894)
+    // -------------------------------------------------------------------------
+
+    /// Static dispatch table for the cdylib's `OutputWriter` β-shape
+    /// method dispatch. Paired with the per-instance opaque handle
+    /// the cdylib stores on its `outputs` field after the host
+    /// invokes `ProcessorVTable::set_iceoryx2_resources`. Non-null
+    /// for every host that wires processors with output ports;
+    /// hosts that strictly don't ship the iceoryx2 transport can
+    /// leave it null and the cdylib will treat
+    /// `set_iceoryx2_resources` as a no-op for outputs.
+    pub output_writer_vtable: *const OutputWriterVTable,
+
+    /// Static dispatch table for the cdylib's `InputMailboxes`
+    /// β-shape method dispatch. Paired with the per-instance opaque
+    /// handle the cdylib stores on its `inputs` field after the host
+    /// invokes `ProcessorVTable::set_iceoryx2_resources`. Non-null
+    /// for every host that wires processors with input ports.
+    pub input_mailboxes_vtable: *const InputMailboxesVTable,
 }
 
 // Note: under v3 the ABI eliminates the tokio shared-type crossing
@@ -4520,9 +4804,13 @@ mod layout_tests {
 
     #[test]
     fn processor_vtable_layout() {
-        // header (u32 + u32) + 17 fn pointers @ 8 bytes each.
-        // 4 + 4 + 17 * 8 = 144 bytes.
-        assert_eq!(size_of::<ProcessorVTable>(), 144);
+        // v2 (issue #894): the two shared-Rust-type slots
+        // `get_iceoryx2_output_writer_arc` and
+        // `get_iceoryx2_input_mailboxes_mut` are replaced by a single
+        // `set_iceoryx2_resources` slot. 17 - 2 + 1 = 16 fn pointers.
+        // header (u32 + u32) + 16 fn pointers @ 8 bytes each =
+        // 4 + 4 + 16 * 8 = 136 bytes.
+        assert_eq!(size_of::<ProcessorVTable>(), 136);
         assert_eq!(align_of::<ProcessorVTable>(), 8);
         assert_eq!(offset_of!(ProcessorVTable, layout_version), 0);
         assert_eq!(offset_of!(ProcessorVTable, _reserved_padding), 4);
@@ -4538,17 +4826,38 @@ mod layout_tests {
         assert_eq!(offset_of!(ProcessorVTable, execution_config_msgpack), 80);
         assert_eq!(offset_of!(ProcessorVTable, has_iceoryx2_outputs), 88);
         assert_eq!(offset_of!(ProcessorVTable, has_iceoryx2_inputs), 96);
-        assert_eq!(
-            offset_of!(ProcessorVTable, get_iceoryx2_output_writer_arc),
-            104
-        );
-        assert_eq!(
-            offset_of!(ProcessorVTable, get_iceoryx2_input_mailboxes_mut),
-            112
-        );
-        assert_eq!(offset_of!(ProcessorVTable, apply_config_msgpack), 120);
-        assert_eq!(offset_of!(ProcessorVTable, to_runtime_msgpack), 128);
-        assert_eq!(offset_of!(ProcessorVTable, config_msgpack), 136);
+        assert_eq!(offset_of!(ProcessorVTable, set_iceoryx2_resources), 104);
+        assert_eq!(offset_of!(ProcessorVTable, apply_config_msgpack), 112);
+        assert_eq!(offset_of!(ProcessorVTable, to_runtime_msgpack), 120);
+        assert_eq!(offset_of!(ProcessorVTable, config_msgpack), 128);
+    }
+
+    #[test]
+    fn output_writer_vtable_layout() {
+        // header (u32 + u32) + 4 fn pointers @ 8 bytes each =
+        // 4 + 4 + 4 * 8 = 40 bytes.
+        assert_eq!(size_of::<OutputWriterVTable>(), 40);
+        assert_eq!(align_of::<OutputWriterVTable>(), 8);
+        assert_eq!(offset_of!(OutputWriterVTable, layout_version), 0);
+        assert_eq!(offset_of!(OutputWriterVTable, _reserved_padding), 4);
+        assert_eq!(offset_of!(OutputWriterVTable, write_raw), 8);
+        assert_eq!(offset_of!(OutputWriterVTable, has_port), 16);
+        assert_eq!(offset_of!(OutputWriterVTable, clone_arc), 24);
+        assert_eq!(offset_of!(OutputWriterVTable, drop_arc), 32);
+    }
+
+    #[test]
+    fn input_mailboxes_vtable_layout() {
+        // header (u32 + u32) + 4 fn pointers @ 8 bytes each =
+        // 4 + 4 + 4 * 8 = 40 bytes.
+        assert_eq!(size_of::<InputMailboxesVTable>(), 40);
+        assert_eq!(align_of::<InputMailboxesVTable>(), 8);
+        assert_eq!(offset_of!(InputMailboxesVTable, layout_version), 0);
+        assert_eq!(offset_of!(InputMailboxesVTable, _reserved_padding), 4);
+        assert_eq!(offset_of!(InputMailboxesVTable, read_raw), 8);
+        assert_eq!(offset_of!(InputMailboxesVTable, has_data), 16);
+        assert_eq!(offset_of!(InputMailboxesVTable, clone_arc), 24);
+        assert_eq!(offset_of!(InputMailboxesVTable, drop_arc), 32);
     }
 
     #[test]
@@ -4608,8 +4917,14 @@ mod layout_tests {
 
     #[test]
     fn host_services_layout_versions_pinned() {
-        assert_eq!(HOST_SERVICES_LAYOUT_VERSION, 13);
+        // v14: issue #894 appends OutputWriterVTable +
+        // InputMailboxesVTable references and bumps
+        // ProcessorVTable to v2 (slot swap).
+        assert_eq!(HOST_SERVICES_LAYOUT_VERSION, 14);
         assert_eq!(STREAMLIB_ABI_VERSION, 4);
+        // v2: shared-Rust-type iceoryx2 slots replaced by
+        // `set_iceoryx2_resources` (issue #894).
+        assert_eq!(PROCESSOR_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(AUDIO_CLOCK_VTABLE_LAYOUT_VERSION, 1);
         // v2: added owning-Arc handle lifetime callbacks
@@ -4629,10 +4944,15 @@ mod layout_tests {
         // `record_copy_image_to_pixel_buffer`) for cdylib camera
         // per-frame copy into pooled `PixelBuffer` destinations.
         assert_eq!(RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION, 2);
+        // v1 (issue #894): initial shape — `write_raw`, `has_port`,
+        // `clone_arc`, `drop_arc`.
+        assert_eq!(OUTPUT_WRITER_VTABLE_LAYOUT_VERSION, 1);
+        // v1 (issue #894): initial shape — `read_raw`, `has_data`.
+        assert_eq!(INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION, 1);
     }
 
     #[test]
-    fn host_services_tail_carries_thirteen_vtable_pointers() {
+    fn host_services_tail_carries_fifteen_vtable_pointers() {
         // Trailing vtable pointers on HostServices. We don't pin the
         // absolute offsets (earlier fields carry their own layout
         // audit), but we do pin:
@@ -4642,7 +4962,8 @@ mod layout_tests {
         //      GpuContextFullAccess → TextureRingMethods →
         //      VulkanComputeKernelMethods → VulkanGraphicsKernelMethods →
         //      VulkanRayTracingKernelMethods → VulkanAccelerationStructureMethods →
-        //      RhiColorConverterMethods → RhiCommandRecorderMethods.
+        //      RhiColorConverterMethods → RhiCommandRecorderMethods →
+        //      OutputWriterMethods → InputMailboxesMethods.
         //   3. They are contiguous (no padding inserted between them).
         assert_eq!(size_of::<*const RuntimeContextVTable>(), 8);
         assert_eq!(size_of::<*const AudioClockVTable>(), 8);
@@ -4660,6 +4981,8 @@ mod layout_tests {
         );
         assert_eq!(size_of::<*const RhiColorConverterMethodsVTable>(), 8);
         assert_eq!(size_of::<*const RhiCommandRecorderMethodsVTable>(), 8);
+        assert_eq!(size_of::<*const OutputWriterVTable>(), 8);
+        assert_eq!(size_of::<*const InputMailboxesVTable>(), 8);
 
         let runtime_ctx_off = offset_of!(HostServices, runtime_context_vtable);
         let audio_clock_off = offset_of!(HostServices, audio_clock_vtable);
@@ -4680,6 +5003,8 @@ mod layout_tests {
             offset_of!(HostServices, rhi_color_converter_methods_vtable);
         let command_recorder_off =
             offset_of!(HostServices, rhi_command_recorder_methods_vtable);
+        let output_writer_off = offset_of!(HostServices, output_writer_vtable);
+        let input_mailboxes_off = offset_of!(HostServices, input_mailboxes_vtable);
         assert!(runtime_ctx_off < audio_clock_off);
         assert!(audio_clock_off < runtime_ops_off);
         assert!(runtime_ops_off < gpu_lim_off);
@@ -4692,6 +5017,8 @@ mod layout_tests {
         assert!(rt_kernel_off < accel_struct_off);
         assert!(accel_struct_off < color_converter_off);
         assert!(color_converter_off < command_recorder_off);
+        assert!(command_recorder_off < output_writer_off);
+        assert!(output_writer_off < input_mailboxes_off);
         assert_eq!(audio_clock_off - runtime_ctx_off, 8);
         assert_eq!(runtime_ops_off - audio_clock_off, 8);
         assert_eq!(gpu_lim_off - runtime_ops_off, 8);
@@ -4704,10 +5031,12 @@ mod layout_tests {
         assert_eq!(accel_struct_off - rt_kernel_off, 8);
         assert_eq!(color_converter_off - accel_struct_off, 8);
         assert_eq!(command_recorder_off - color_converter_off, 8);
+        assert_eq!(output_writer_off - command_recorder_off, 8);
+        assert_eq!(input_mailboxes_off - output_writer_off, 8);
 
-        // The RhiCommandRecorderMethods pointer must end at the end of
-        // the struct (it is the last field added in v13).
-        assert_eq!(command_recorder_off + 8, size_of::<HostServices>());
+        // The InputMailboxes pointer must end at the end of the
+        // struct (it is the last field added in v14, issue #894).
+        assert_eq!(input_mailboxes_off + 8, size_of::<HostServices>());
     }
 
     #[test]

@@ -72,7 +72,7 @@ impl ManualProcessor for JpegBytesSourceProcessor::Processor {
 
         let is_running = Arc::clone(&self.is_running);
         let frame_counter = Arc::clone(&self.frame_counter);
-        let outputs: Arc<OutputWriter> = self.outputs.clone();
+        let outputs: OutputWriter = self.outputs.clone();
 
         let handle = std::thread::Builder::new()
             .name("jpeg-bytes-source".into())
@@ -111,7 +111,7 @@ fn source_thread_loop(
     frame_count: u32,
     is_running: Arc<AtomicBool>,
     frame_counter: Arc<AtomicU64>,
-    outputs: Arc<OutputWriter>,
+    outputs: OutputWriter,
 ) {
     let frame_interval_ns = 1_000_000_000i64 / fps as i64;
     let clock_start = std::time::Instant::now();

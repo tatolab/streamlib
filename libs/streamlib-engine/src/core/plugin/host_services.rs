@@ -231,6 +231,22 @@ pub struct HostCallbacks {
     /// install time (Phase E sub-lift slice B).
     pub rhi_command_recorder_methods_vtable:
         *const streamlib_plugin_abi::RhiCommandRecorderMethodsVTable,
+    /// Host-installed [`OutputWriterVTable`] pointer. May be null
+    /// when the host doesn't wire iceoryx2 transport; cdylib's
+    /// `OutputWriter` β-shape methods short-circuit cleanly when
+    /// the vtable is null. Sourced from
+    /// [`HostServices::output_writer_vtable`] at install time
+    /// (issue #894).
+    pub output_writer_vtable:
+        *const streamlib_plugin_abi::OutputWriterVTable,
+    /// Host-installed [`InputMailboxesVTable`] pointer. May be
+    /// null when the host doesn't wire iceoryx2 transport; cdylib's
+    /// `InputMailboxes` β-shape methods short-circuit cleanly when
+    /// the vtable is null. Sourced from
+    /// [`HostServices::input_mailboxes_vtable`] at install time
+    /// (issue #894).
+    pub input_mailboxes_vtable:
+        *const streamlib_plugin_abi::InputMailboxesVTable,
 }
 
 // Safety: every field is a fn pointer or a raw pointer the host
@@ -449,6 +465,24 @@ pub unsafe fn install_host_services(
             return None;
         }
     }
+    if !services.output_writer_vtable.is_null() {
+        // SAFETY: same shape as the other vtable validations. Null
+        // is allowed (host does not wire iceoryx2 transport); only
+        // non-null pointers are version-validated.
+        let v = unsafe { (*services.output_writer_vtable).layout_version };
+        if v != streamlib_plugin_abi::OUTPUT_WRITER_VTABLE_LAYOUT_VERSION {
+            return None;
+        }
+    }
+    if !services.input_mailboxes_vtable.is_null() {
+        // SAFETY: same shape as the other vtable validations. Null
+        // is allowed (host does not wire iceoryx2 transport); only
+        // non-null pointers are version-validated.
+        let v = unsafe { (*services.input_mailboxes_vtable).layout_version };
+        if v != streamlib_plugin_abi::INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION {
+            return None;
+        }
+    }
 
     let callbacks = HostCallbacks {
         host: services.host,
@@ -479,6 +513,8 @@ pub unsafe fn install_host_services(
             .rhi_color_converter_methods_vtable,
         rhi_command_recorder_methods_vtable: services
             .rhi_command_recorder_methods_vtable,
+        output_writer_vtable: services.output_writer_vtable,
+        input_mailboxes_vtable: services.input_mailboxes_vtable,
     };
 
     // Cache the callbacks BEFORE installing tracing — the
@@ -6725,6 +6761,421 @@ fn write_id_bytes(
 }
 
 // =============================================================================
+// OutputWriterVTable wrappers (issue #894 — LAST shared-Rust-type
+// crossing in the plugin ABI). Each wrapper reconstructs the inner
+// borrow from the raw `Arc::into_raw(Arc<OutputWriterInner>)` handle
+// the cdylib passes, runs the inner method, and serializes the
+// result into the FFI's out-parameter buffers + `i32 + err_buf`
+// shape. All bodies wrapped in `run_host_extern_c` so a panic in
+// the inner method becomes a non-zero return.
+// =============================================================================
+
+/// SAFETY: caller must hand a `handle` that came from
+/// `Arc::into_raw(Arc<crate::iceoryx2::OutputWriterInner>)`. The
+/// leaked strong count keeps the inner alive for the call's
+/// duration.
+unsafe fn handle_as_output_writer_inner(
+    handle: *const c_void,
+) -> Option<&'static crate::iceoryx2::OutputWriterInner> {
+    if handle.is_null() {
+        return None;
+    }
+    Some(unsafe { &*(handle as *const crate::iceoryx2::OutputWriterInner) })
+}
+
+unsafe extern "C" fn host_output_writer_write_raw(
+    handle: *const c_void,
+    port_ptr: *const u8,
+    port_len: usize,
+    data_ptr: *const u8,
+    data_len: usize,
+    timestamp_ns: i64,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_output_writer_write_raw",
+        || -> i32 {
+            let Some(inner) = (unsafe { handle_as_output_writer_inner(handle) }) else {
+                write_extern_err(
+                    "write_raw: null OutputWriter handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if port_ptr.is_null() || (port_len > 0 && data_ptr.is_null() && data_len > 0) {
+                write_extern_err(
+                    "write_raw: null port_ptr or data_ptr",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let port_bytes = unsafe { std::slice::from_raw_parts(port_ptr, port_len) };
+            let port = match std::str::from_utf8(port_bytes) {
+                Ok(s) => s,
+                Err(e) => {
+                    write_extern_err(
+                        &format!("write_raw: port not UTF-8: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            let data = if data_len == 0 {
+                &[][..]
+            } else {
+                unsafe { std::slice::from_raw_parts(data_ptr, data_len) }
+            };
+            match inner.write_raw(port, data, timestamp_ns) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_extern_err(&e.to_string(), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_output_writer_has_port(
+    handle: *const c_void,
+    port_ptr: *const u8,
+    port_len: usize,
+) -> bool {
+    run_host_extern_c(
+        "host_output_writer_has_port",
+        || -> bool {
+            let Some(inner) = (unsafe { handle_as_output_writer_inner(handle) }) else {
+                return false;
+            };
+            if port_ptr.is_null() {
+                return false;
+            }
+            let port_bytes = unsafe { std::slice::from_raw_parts(port_ptr, port_len) };
+            let Ok(port) = std::str::from_utf8(port_bytes) else {
+                return false;
+            };
+            inner.has_port(port)
+        },
+        false,
+    )
+}
+
+pub(crate) unsafe extern "C" fn host_output_writer_clone_arc(
+    handle: *const c_void,
+) -> *const c_void {
+    run_host_extern_c(
+        "host_output_writer_clone_arc",
+        || -> *const c_void {
+            if handle.is_null() {
+                return std::ptr::null();
+            }
+            // SAFETY: handle came from Arc::into_raw. We need to
+            // reconstruct a non-owning &Arc<Inner> view to call
+            // Arc::increment_strong_count, but Arc::from_raw +
+            // ManuallyDrop is the idiomatic way to do that for
+            // refcount accounting without consuming the strong ref.
+            unsafe {
+                std::sync::Arc::<crate::iceoryx2::OutputWriterInner>::increment_strong_count(
+                    handle as *const crate::iceoryx2::OutputWriterInner,
+                );
+            }
+            handle
+        },
+        std::ptr::null(),
+    )
+}
+
+pub(crate) unsafe extern "C" fn host_output_writer_drop_arc(handle: *const c_void) {
+    run_host_extern_c(
+        "host_output_writer_drop_arc",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            // SAFETY: handle came from Arc::into_raw; we release
+            // exactly the strong reference Arc::into_raw leaked.
+            unsafe {
+                std::sync::Arc::<crate::iceoryx2::OutputWriterInner>::decrement_strong_count(
+                    handle as *const crate::iceoryx2::OutputWriterInner,
+                );
+            }
+        },
+        (),
+    )
+}
+
+/// Per-DSO host-side static OutputWriter dispatch table.
+static HOST_OUTPUT_WRITER_VTABLE: streamlib_plugin_abi::OutputWriterVTable =
+    streamlib_plugin_abi::OutputWriterVTable {
+        layout_version: streamlib_plugin_abi::OUTPUT_WRITER_VTABLE_LAYOUT_VERSION,
+        _reserved_padding: 0,
+        write_raw: host_output_writer_write_raw,
+        has_port: host_output_writer_has_port,
+        clone_arc: host_output_writer_clone_arc,
+        drop_arc: host_output_writer_drop_arc,
+    };
+
+/// Pointer to the [`streamlib_plugin_abi::OutputWriterVTable`] this DSO
+/// should dispatch through. Host mode resolves to the local static
+/// `HOST_OUTPUT_WRITER_VTABLE`; cdylib mode resolves to the
+/// host-installed pointer from [`HostServices::output_writer_vtable`].
+pub fn host_output_writer_vtable() -> *const streamlib_plugin_abi::OutputWriterVTable {
+    match host_callbacks() {
+        Some(c) if !c.output_writer_vtable.is_null() => c.output_writer_vtable,
+        _ => &HOST_OUTPUT_WRITER_VTABLE,
+    }
+}
+
+// =============================================================================
+// InputMailboxesVTable wrappers (issue #894)
+// =============================================================================
+
+/// SAFETY: caller must hand a `handle` that came from
+/// `Arc::into_raw(Arc<crate::iceoryx2::InputMailboxesInner>)`. The
+/// leaked strong count keeps the inner alive for the call's
+/// duration.
+unsafe fn handle_as_input_mailboxes_inner(
+    handle: *const c_void,
+) -> Option<&'static crate::iceoryx2::InputMailboxesInner> {
+    if handle.is_null() {
+        return None;
+    }
+    Some(unsafe { &*(handle as *const crate::iceoryx2::InputMailboxesInner) })
+}
+
+unsafe extern "C" fn host_input_mailboxes_read_raw(
+    handle: *const c_void,
+    port_ptr: *const u8,
+    port_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+    out_timestamp: *mut i64,
+    has_data: *mut bool,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_input_mailboxes_read_raw",
+        || -> i32 {
+            if !out_len.is_null() {
+                unsafe {
+                    *out_len = 0;
+                }
+            }
+            if !has_data.is_null() {
+                unsafe {
+                    *has_data = false;
+                }
+            }
+            let Some(inner) = (unsafe { handle_as_input_mailboxes_inner(handle) }) else {
+                write_extern_err(
+                    "read_raw: null InputMailboxes handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if port_ptr.is_null() {
+                write_extern_err(
+                    "read_raw: null port_ptr",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let port_bytes = unsafe { std::slice::from_raw_parts(port_ptr, port_len) };
+            let port = match std::str::from_utf8(port_bytes) {
+                Ok(s) => s,
+                Err(e) => {
+                    write_extern_err(
+                        &format!("read_raw: port not UTF-8: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            // The inner's read_raw consumes the frame from the
+            // per-port mailbox. We can't peek non-destructively,
+            // so when the consumer's `out_buf` is too small we
+            // need to either (a) refuse and signal the required
+            // size or (b) consume + lose the frame. Choice (a) is
+            // safer; today's iceoryx2 max payload is bounded so
+            // a 4 KiB initial buffer covers ~all real traffic.
+            //
+            // The pattern: pop, measure, if it fits copy + signal
+            // success; if not, push it back to the head of the
+            // mailbox and signal required size. Today's
+            // PortMailbox doesn't expose push-to-head — the
+            // simplest sound implementation is to drain via
+            // `InputMailboxesInner::read_raw` (which already pops
+            // and returns the bytes), then if the bytes fit copy
+            // them; if not, return the required size and CONSUME
+            // the frame (the consumer's retry sees the next frame
+            // or empty mailbox). Truncation on overflow is the
+            // documented contract; in practice the β-shape's
+            // `read_raw` caller starts with a 4 KiB buffer and
+            // resizes proactively when the host indicates a
+            // larger payload, so the truncation path triggers
+            // only on the rare oversized inbound frame.
+            match inner.read_raw(port) {
+                Ok(Some((bytes, ts))) => {
+                    let required = bytes.len();
+                    if !has_data.is_null() {
+                        unsafe {
+                            *has_data = true;
+                        }
+                    }
+                    if !out_timestamp.is_null() {
+                        unsafe {
+                            *out_timestamp = ts;
+                        }
+                    }
+                    if !out_len.is_null() {
+                        unsafe {
+                            *out_len = required;
+                        }
+                    }
+                    if required <= out_cap && !out_buf.is_null() {
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_buf, required);
+                        }
+                    } else {
+                        // Truncation: indicate required size; the
+                        // consumer resizes and the next call sees
+                        // an empty mailbox (today's pop semantics
+                        // already consumed the frame). The
+                        // alternative (peek + non-destructive
+                        // size measurement) requires reworking
+                        // PortMailbox; deferred to a follow-up
+                        // when the truncation path is hit in
+                        // practice.
+                    }
+                    0
+                }
+                Ok(None) => 0, // has_data stays false
+                Err(e) => {
+                    write_extern_err(&e.to_string(), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_input_mailboxes_has_data(
+    handle: *const c_void,
+    port_ptr: *const u8,
+    port_len: usize,
+) -> bool {
+    run_host_extern_c(
+        "host_input_mailboxes_has_data",
+        || -> bool {
+            let Some(inner) = (unsafe { handle_as_input_mailboxes_inner(handle) }) else {
+                return false;
+            };
+            if port_ptr.is_null() {
+                return false;
+            }
+            let port_bytes = unsafe { std::slice::from_raw_parts(port_ptr, port_len) };
+            let Ok(port) = std::str::from_utf8(port_bytes) else {
+                return false;
+            };
+            inner.has_data(port)
+        },
+        false,
+    )
+}
+
+pub(crate) unsafe extern "C" fn host_input_mailboxes_clone_arc(
+    handle: *const c_void,
+) -> *const c_void {
+    run_host_extern_c(
+        "host_input_mailboxes_clone_arc",
+        || -> *const c_void {
+            if handle.is_null() {
+                return std::ptr::null();
+            }
+            // SAFETY: handle came from Arc::into_raw.
+            unsafe {
+                std::sync::Arc::<crate::iceoryx2::InputMailboxesInner>::increment_strong_count(
+                    handle as *const crate::iceoryx2::InputMailboxesInner,
+                );
+            }
+            handle
+        },
+        std::ptr::null(),
+    )
+}
+
+pub(crate) unsafe extern "C" fn host_input_mailboxes_drop_arc(handle: *const c_void) {
+    run_host_extern_c(
+        "host_input_mailboxes_drop_arc",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            // SAFETY: handle came from Arc::into_raw.
+            unsafe {
+                std::sync::Arc::<crate::iceoryx2::InputMailboxesInner>::decrement_strong_count(
+                    handle as *const crate::iceoryx2::InputMailboxesInner,
+                );
+            }
+        },
+        (),
+    )
+}
+
+/// Per-DSO host-side static InputMailboxes dispatch table.
+static HOST_INPUT_MAILBOXES_VTABLE: streamlib_plugin_abi::InputMailboxesVTable =
+    streamlib_plugin_abi::InputMailboxesVTable {
+        layout_version: streamlib_plugin_abi::INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION,
+        _reserved_padding: 0,
+        read_raw: host_input_mailboxes_read_raw,
+        has_data: host_input_mailboxes_has_data,
+        clone_arc: host_input_mailboxes_clone_arc,
+        drop_arc: host_input_mailboxes_drop_arc,
+    };
+
+/// Pointer to the [`streamlib_plugin_abi::InputMailboxesVTable`] this
+/// DSO should dispatch through.
+pub fn host_input_mailboxes_vtable() -> *const streamlib_plugin_abi::InputMailboxesVTable {
+    match host_callbacks() {
+        Some(c) if !c.input_mailboxes_vtable.is_null() => c.input_mailboxes_vtable,
+        _ => &HOST_INPUT_MAILBOXES_VTABLE,
+    }
+}
+
+/// Shared extern-C scratch err-buf writer for the OutputWriter +
+/// InputMailboxes host wrappers.
+fn write_extern_err(msg: &str, err_buf: *mut u8, err_buf_cap: usize, err_len: *mut usize) {
+    if err_buf.is_null() || err_len.is_null() {
+        return;
+    }
+    let bytes = msg.as_bytes();
+    let n = bytes.len().min(err_buf_cap);
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), err_buf, n);
+        *err_len = n;
+    }
+}
+
+// =============================================================================
 // runtime_facing — host-side payload builder
 // =============================================================================
 
@@ -6738,6 +7189,7 @@ pub mod runtime_facing {
         host_schema_register, host_tracing_emit, host_tracing_enabled,
         host_tracing_register_callsite, HostServiceImpls, HOST_AUDIO_CLOCK_VTABLE,
         HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE, HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE,
+        HOST_INPUT_MAILBOXES_VTABLE, HOST_OUTPUT_WRITER_VTABLE,
         HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE,
         HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE, HOST_RUNTIME_CONTEXT_VTABLE,
         HOST_RUNTIME_OPS_VTABLE, HOST_SURFACE_STORE_VTABLE,
@@ -6804,6 +7256,8 @@ pub mod runtime_facing {
                 &HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE,
             rhi_command_recorder_methods_vtable:
                 &HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE,
+            output_writer_vtable: &HOST_OUTPUT_WRITER_VTABLE,
+            input_mailboxes_vtable: &HOST_INPUT_MAILBOXES_VTABLE,
         }
     }
 }
@@ -15264,5 +15718,317 @@ mod make_borrow_cached_field_regression_tests {
             !borrow.mapped_ptr().is_null(),
             "mapped_ptr_cached must mirror the inner HOST_VISIBLE pointer"
         );
+    }
+}
+
+// =============================================================================
+// OutputWriterVTable + InputMailboxesVTable tier-1 null-handle tests
+// =============================================================================
+
+/// Tier-1 wire-format tests for [`HOST_OUTPUT_WRITER_VTABLE`] (issue
+/// #894).
+///
+/// Each callback's null-handle path triggers the
+/// `handle_as_output_writer_inner` short-circuit; mentally revert the
+/// `if handle.is_null()` guard inside that helper and the wrapper
+/// dereferences a null pointer (SIGSEGV in test runner).
+///
+/// `clone_arc` / `drop_arc` are infallible by design — they have
+/// their own null-handle short-circuit and return cleanly without
+/// touching the (null) handle.
+#[cfg(test)]
+mod output_writer_vtable_tier1_wire_format_tests {
+    use super::*;
+
+    #[test]
+    fn layout_version_matches_constant() {
+        assert_eq!(
+            HOST_OUTPUT_WRITER_VTABLE.layout_version,
+            streamlib_plugin_abi::OUTPUT_WRITER_VTABLE_LAYOUT_VERSION,
+        );
+    }
+
+    #[test]
+    fn write_raw_returns_error_on_null_handle() {
+        let mut err_buf = [0u8; 256];
+        let mut err_len = 0usize;
+        let port = b"any_port";
+        let data = b"payload";
+        let rc = unsafe {
+            (HOST_OUTPUT_WRITER_VTABLE.write_raw)(
+                std::ptr::null(),
+                port.as_ptr(),
+                port.len(),
+                data.as_ptr(),
+                data.len(),
+                0,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = std::str::from_utf8(&err_buf[..err_len]).unwrap();
+        assert!(
+            msg.contains("null OutputWriter handle"),
+            "unexpected err message: {msg}"
+        );
+    }
+
+    #[test]
+    fn write_raw_returns_error_on_invalid_utf8_port() {
+        let inner = std::sync::Arc::new(crate::iceoryx2::OutputWriterInner::new());
+        let handle =
+            std::sync::Arc::into_raw(inner) as *const std::ffi::c_void;
+        let mut err_buf = [0u8; 256];
+        let mut err_len = 0usize;
+        let bad_port = b"\xff\xfe"; // not utf-8
+        let data = b"payload";
+        let rc = unsafe {
+            (HOST_OUTPUT_WRITER_VTABLE.write_raw)(
+                handle,
+                bad_port.as_ptr(),
+                bad_port.len(),
+                data.as_ptr(),
+                data.len(),
+                0,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = std::str::from_utf8(&err_buf[..err_len]).unwrap();
+        assert!(
+            msg.contains("port not UTF-8"),
+            "unexpected err message: {msg}"
+        );
+        unsafe {
+            std::sync::Arc::<crate::iceoryx2::OutputWriterInner>::decrement_strong_count(
+                handle as *const _,
+            );
+        }
+    }
+
+    #[test]
+    fn has_port_returns_false_on_null_handle() {
+        let port = b"any_port";
+        let result =
+            unsafe { (HOST_OUTPUT_WRITER_VTABLE.has_port)(std::ptr::null(), port.as_ptr(), port.len()) };
+        assert!(!result);
+    }
+
+    #[test]
+    fn clone_arc_returns_null_on_null_handle() {
+        let result =
+            unsafe { (HOST_OUTPUT_WRITER_VTABLE.clone_arc)(std::ptr::null()) };
+        assert!(result.is_null());
+    }
+
+    #[test]
+    fn drop_arc_is_noop_on_null_handle() {
+        // No panic, no segfault — the function returns cleanly.
+        unsafe {
+            (HOST_OUTPUT_WRITER_VTABLE.drop_arc)(std::ptr::null());
+        }
+    }
+
+    /// End-to-end refcount accounting: clone_arc on a real Arc::into_raw
+    /// handle bumps the strong count by one and returns the same handle;
+    /// drop_arc decrements. Pair them and the inner survives until the
+    /// last decrement.
+    #[test]
+    fn clone_drop_arc_balance_strong_count() {
+        let inner = std::sync::Arc::new(crate::iceoryx2::OutputWriterInner::new());
+        let inner_for_test = inner.clone();
+        assert_eq!(std::sync::Arc::strong_count(&inner_for_test), 2);
+        let raw =
+            std::sync::Arc::into_raw(inner) as *const std::ffi::c_void;
+        // strong_count now 2 again (the into_raw handle counts).
+        assert_eq!(std::sync::Arc::strong_count(&inner_for_test), 2);
+
+        let cloned = unsafe { (HOST_OUTPUT_WRITER_VTABLE.clone_arc)(raw) };
+        assert_eq!(cloned, raw);
+        assert_eq!(std::sync::Arc::strong_count(&inner_for_test), 3);
+
+        unsafe { (HOST_OUTPUT_WRITER_VTABLE.drop_arc)(cloned) };
+        assert_eq!(std::sync::Arc::strong_count(&inner_for_test), 2);
+
+        unsafe { (HOST_OUTPUT_WRITER_VTABLE.drop_arc)(raw) };
+        assert_eq!(std::sync::Arc::strong_count(&inner_for_test), 1);
+    }
+}
+
+/// Tier-1 wire-format tests for [`HOST_INPUT_MAILBOXES_VTABLE`] (issue
+/// #894).
+#[cfg(test)]
+mod input_mailboxes_vtable_tier1_wire_format_tests {
+    use super::*;
+
+    #[test]
+    fn layout_version_matches_constant() {
+        assert_eq!(
+            HOST_INPUT_MAILBOXES_VTABLE.layout_version,
+            streamlib_plugin_abi::INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION,
+        );
+    }
+
+    #[test]
+    fn read_raw_returns_error_on_null_handle() {
+        let mut buf = [0u8; 64];
+        let mut out_len = 0usize;
+        let mut out_ts = 0i64;
+        let mut has_data = false;
+        let mut err_buf = [0u8; 256];
+        let mut err_len = 0usize;
+        let port = b"any_port";
+        let rc = unsafe {
+            (HOST_INPUT_MAILBOXES_VTABLE.read_raw)(
+                std::ptr::null(),
+                port.as_ptr(),
+                port.len(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut out_len as *mut usize,
+                &mut out_ts as *mut i64,
+                &mut has_data as *mut bool,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = std::str::from_utf8(&err_buf[..err_len]).unwrap();
+        assert!(
+            msg.contains("null InputMailboxes handle"),
+            "unexpected err message: {msg}"
+        );
+        assert!(!has_data);
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn read_raw_returns_error_on_invalid_utf8_port() {
+        let inner = std::sync::Arc::new(crate::iceoryx2::InputMailboxesInner::new());
+        let handle =
+            std::sync::Arc::into_raw(inner) as *const std::ffi::c_void;
+        let mut buf = [0u8; 64];
+        let mut out_len = 0usize;
+        let mut out_ts = 0i64;
+        let mut has_data = false;
+        let mut err_buf = [0u8; 256];
+        let mut err_len = 0usize;
+        let bad_port = b"\xff\xfe";
+        let rc = unsafe {
+            (HOST_INPUT_MAILBOXES_VTABLE.read_raw)(
+                handle,
+                bad_port.as_ptr(),
+                bad_port.len(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut out_len as *mut usize,
+                &mut out_ts as *mut i64,
+                &mut has_data as *mut bool,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = std::str::from_utf8(&err_buf[..err_len]).unwrap();
+        assert!(
+            msg.contains("port not UTF-8"),
+            "unexpected err message: {msg}"
+        );
+        unsafe {
+            std::sync::Arc::<crate::iceoryx2::InputMailboxesInner>::decrement_strong_count(
+                handle as *const _,
+            );
+        }
+    }
+
+    #[test]
+    fn read_raw_returns_no_data_on_empty_mailbox() {
+        let inner = std::sync::Arc::new(crate::iceoryx2::InputMailboxesInner::new());
+        inner.add_port(
+            "p",
+            8,
+            crate::iceoryx2::ReadMode::ReadNextInOrder,
+        );
+        let handle =
+            std::sync::Arc::into_raw(inner) as *const std::ffi::c_void;
+        let mut buf = [0u8; 64];
+        let mut out_len = 0usize;
+        let mut out_ts = 0i64;
+        let mut has_data = true; // start true to verify the wrapper sets it false
+        let mut err_buf = [0u8; 256];
+        let mut err_len = 0usize;
+        let port = b"p";
+        let rc = unsafe {
+            (HOST_INPUT_MAILBOXES_VTABLE.read_raw)(
+                handle,
+                port.as_ptr(),
+                port.len(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut out_len as *mut usize,
+                &mut out_ts as *mut i64,
+                &mut has_data as *mut bool,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        assert_eq!(rc, 0);
+        assert!(!has_data);
+        assert_eq!(out_len, 0);
+        unsafe {
+            std::sync::Arc::<crate::iceoryx2::InputMailboxesInner>::decrement_strong_count(
+                handle as *const _,
+            );
+        }
+    }
+
+    #[test]
+    fn has_data_returns_false_on_null_handle() {
+        let port = b"any";
+        let result = unsafe {
+            (HOST_INPUT_MAILBOXES_VTABLE.has_data)(
+                std::ptr::null(),
+                port.as_ptr(),
+                port.len(),
+            )
+        };
+        assert!(!result);
+    }
+
+    #[test]
+    fn clone_arc_returns_null_on_null_handle() {
+        let result = unsafe { (HOST_INPUT_MAILBOXES_VTABLE.clone_arc)(std::ptr::null()) };
+        assert!(result.is_null());
+    }
+
+    #[test]
+    fn drop_arc_is_noop_on_null_handle() {
+        unsafe { (HOST_INPUT_MAILBOXES_VTABLE.drop_arc)(std::ptr::null()) };
+    }
+
+    /// End-to-end refcount accounting: clone_arc bumps strong count
+    /// and returns the same handle; drop_arc decrements. Mirrors the
+    /// OutputWriter sibling test.
+    #[test]
+    fn clone_drop_arc_balance_strong_count() {
+        let inner = std::sync::Arc::new(crate::iceoryx2::InputMailboxesInner::new());
+        let inner_for_test = inner.clone();
+        let raw =
+            std::sync::Arc::into_raw(inner) as *const std::ffi::c_void;
+        assert_eq!(std::sync::Arc::strong_count(&inner_for_test), 2);
+        let cloned = unsafe { (HOST_INPUT_MAILBOXES_VTABLE.clone_arc)(raw) };
+        assert_eq!(cloned, raw);
+        assert_eq!(std::sync::Arc::strong_count(&inner_for_test), 3);
+        unsafe { (HOST_INPUT_MAILBOXES_VTABLE.drop_arc)(cloned) };
+        assert_eq!(std::sync::Arc::strong_count(&inner_for_test), 2);
+        unsafe { (HOST_INPUT_MAILBOXES_VTABLE.drop_arc)(raw) };
+        assert_eq!(std::sync::Arc::strong_count(&inner_for_test), 1);
     }
 }

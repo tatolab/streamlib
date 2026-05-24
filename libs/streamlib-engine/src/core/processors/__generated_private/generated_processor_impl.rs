@@ -49,11 +49,22 @@ pub trait DynGeneratedProcessor: Send + 'static {
     /// Check if this processor has iceoryx2-based input ports.
     fn has_iceoryx2_inputs(&self) -> bool;
 
-    /// Get the OutputWriter if this processor uses iceoryx2 outputs.
-    fn get_iceoryx2_output_writer(&self) -> Option<std::sync::Arc<crate::iceoryx2::OutputWriter>>;
+    /// Install host-allocated iceoryx2 resources (issue #894).
+    fn set_iceoryx2_resources(
+        &mut self,
+        output_writer: Option<crate::iceoryx2::OutputWriter>,
+        input_mailboxes: Option<crate::iceoryx2::InputMailboxes>,
+    ) -> crate::core::Result<()>;
 
-    /// Get a mutable reference to the InputMailboxes if this processor uses iceoryx2 inputs.
-    fn get_iceoryx2_input_mailboxes(&mut self) -> Option<&mut crate::iceoryx2::InputMailboxes>;
+    /// Borrow the host-side `OutputWriterInner` Arc.
+    fn iceoryx2_output_writer_inner(
+        &self,
+    ) -> Option<std::sync::Arc<crate::iceoryx2::OutputWriterInner>>;
+
+    /// Borrow the host-side `InputMailboxesInner` Arc.
+    fn iceoryx2_input_mailboxes_inner(
+        &self,
+    ) -> Option<std::sync::Arc<crate::iceoryx2::InputMailboxesInner>>;
 
     /// Apply a JSON config update at runtime.
     fn apply_config_json(&mut self, config_json: &serde_json::Value) -> crate::core::Result<()>;
@@ -120,12 +131,28 @@ where
         <Self as GeneratedProcessor>::has_iceoryx2_inputs(self)
     }
 
-    fn get_iceoryx2_output_writer(&self) -> Option<std::sync::Arc<crate::iceoryx2::OutputWriter>> {
-        <Self as GeneratedProcessor>::get_iceoryx2_output_writer(self)
+    fn set_iceoryx2_resources(
+        &mut self,
+        output_writer: Option<crate::iceoryx2::OutputWriter>,
+        input_mailboxes: Option<crate::iceoryx2::InputMailboxes>,
+    ) -> crate::core::Result<()> {
+        <Self as GeneratedProcessor>::set_iceoryx2_resources(
+            self,
+            output_writer,
+            input_mailboxes,
+        )
     }
 
-    fn get_iceoryx2_input_mailboxes(&mut self) -> Option<&mut crate::iceoryx2::InputMailboxes> {
-        <Self as GeneratedProcessor>::get_iceoryx2_input_mailboxes(self)
+    fn iceoryx2_output_writer_inner(
+        &self,
+    ) -> Option<std::sync::Arc<crate::iceoryx2::OutputWriterInner>> {
+        <Self as GeneratedProcessor>::iceoryx2_output_writer_inner(self)
+    }
+
+    fn iceoryx2_input_mailboxes_inner(
+        &self,
+    ) -> Option<std::sync::Arc<crate::iceoryx2::InputMailboxesInner>> {
+        <Self as GeneratedProcessor>::iceoryx2_input_mailboxes_inner(self)
     }
 
     fn apply_config_json(&mut self, config_json: &serde_json::Value) -> crate::core::Result<()> {

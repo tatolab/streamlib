@@ -145,7 +145,7 @@ struct CameraCallbackContext {
     /// Negotiated capture frame rate (set during AVFoundation init, read by callback).
     capture_fps: std::sync::atomic::AtomicU32,
     /// Holds the Arc to keep the OutputWriter alive while the pointer is in use.
-    _outputs_arc: Arc<OutputWriter>,
+    _outputs_arc: OutputWriter,
 }
 
 // SAFETY: OutputWriter is Sync, and the pointer is only dereferenced while valid
@@ -369,7 +369,7 @@ impl streamlib::sdk::processors::ManualProcessor for AppleCameraProcessor::Proce
         // Create callback context with pointer to OutputWriter and GPU context
         // SAFETY: The processor outlives the callback context (stop() clears it before drop)
         // Clone the Arc to get a reference we can convert to a pointer
-        let outputs_arc: Arc<OutputWriter> = self.outputs.clone();
+        let outputs_arc: OutputWriter = self.outputs.clone();
         let output_writer_ptr = Arc::as_ptr(&outputs_arc);
         let callback_context = Arc::new(CameraCallbackContext {
             output_writer: output_writer_ptr,

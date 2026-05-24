@@ -206,7 +206,7 @@ impl ManualProcessor for ClapEffectProcessor::Processor {
         let inputs_ptr = SendableInputsPtr(&self.inputs as *const _);
         let audio_ptr = SendableAudioConverterPtr(audio as *mut _);
         let host_ptr = SendableClapHostPtr(&mut self.host as *mut _);
-        let outputs = Arc::clone(&self.outputs);
+        let outputs = self.outputs.clone();
         let buffer_size = self.buffer_size;
 
         let polling_thread = std::thread::spawn(move || {

@@ -61,13 +61,42 @@ pub trait GeneratedProcessor: Send + 'static {
         false
     }
 
-    /// Get the OutputWriter if this processor uses iceoryx2 outputs.
-    fn get_iceoryx2_output_writer(&self) -> Option<std::sync::Arc<crate::iceoryx2::OutputWriter>> {
+    /// Install host-allocated iceoryx2 resources on this processor
+    /// (issue #894 host-allocates flip).
+    ///
+    /// Called by the host once after `from_config` returns and
+    /// before any connections are wired. Default impl is a no-op
+    /// for processors that declare no input/output ports; the macro
+    /// emits an override that writes the β-shapes into `self.outputs`
+    /// / `self.inputs` for processors that do.
+    fn set_iceoryx2_resources(
+        &mut self,
+        _output_writer: Option<crate::iceoryx2::OutputWriter>,
+        _input_mailboxes: Option<crate::iceoryx2::InputMailboxes>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Borrow the (now host-side) `OutputWriterInner` Arc the
+    /// processor's β-shape is wired to, if any. Default `None`;
+    /// the macro emits an override for processors with outputs.
+    ///
+    /// Used by the host's connection-wiring path to mutate the
+    /// inner directly (add_connection, etc.) without crossing
+    /// the cdylib boundary. The returned Arc is cloned from the
+    /// β-shape's stored Arc, so it's safe to retain.
+    fn iceoryx2_output_writer_inner(
+        &self,
+    ) -> Option<std::sync::Arc<crate::iceoryx2::OutputWriterInner>> {
         None
     }
 
-    /// Get a mutable reference to the InputMailboxes if this processor uses iceoryx2 inputs.
-    fn get_iceoryx2_input_mailboxes(&mut self) -> Option<&mut crate::iceoryx2::InputMailboxes> {
+    /// Borrow the (now host-side) `InputMailboxesInner` Arc the
+    /// processor's β-shape is wired to, if any. Default `None`;
+    /// the macro emits an override for processors with inputs.
+    fn iceoryx2_input_mailboxes_inner(
+        &self,
+    ) -> Option<std::sync::Arc<crate::iceoryx2::InputMailboxesInner>> {
         None
     }
 
