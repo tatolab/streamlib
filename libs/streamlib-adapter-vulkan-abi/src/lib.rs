@@ -202,9 +202,9 @@ pub struct RawVulkanHandlesRepr {
 /// The cdylib holds an opaque `*const c_void` handle (an
 /// `Arc::into_raw(Arc<VulkanSurfaceAdapter<D>>)`-shaped pointer
 /// produced by the host) plus a `*const VulkanSurfaceAdapterVTable`
-/// it reads from [`HostServices::vulkan_surface_adapter_vtable`]
-/// when the cdylib boundary lift lands. Method-dispatch callbacks
-/// cover every cdylib-callable inherent method on
+/// it reads from the `HostServices` payload when the cdylib β-shape
+/// lift lands (sibling slice to this trunk PR). Method-dispatch
+/// callbacks cover every cdylib-callable inherent method on
 /// `VulkanSurfaceAdapter` plus the `SurfaceAdapter` trait methods.
 ///
 /// # Handle lifetime
@@ -253,13 +253,14 @@ pub struct VulkanSurfaceAdapterVTable {
     // Handle lifetime
     // -----------------------------------------------------------------
 
-    /// Take a borrowed handle (typically returned by a future
-    /// `RuntimeContextVTable::vulkan_surface_adapter` accessor) and
-    /// return a new owned handle with an Arc refcount bump on the
-    /// underlying `Arc<VulkanSurfaceAdapter<D>>`. The owned handle
-    /// remains valid even after the originating context is dropped
-    /// and MUST be released exactly once via [`Self::drop_handle`].
-    /// Calling on a null pointer returns null.
+    /// Take a borrowed handle (typically minted by the host's
+    /// runtime context when wiring the cdylib-side `VulkanContext`
+    /// β-shape) and return a new owned handle with an Arc refcount
+    /// bump on the underlying `Arc<VulkanSurfaceAdapter<D>>`. The
+    /// owned handle remains valid even after the originating
+    /// context is dropped and MUST be released exactly once via
+    /// [`Self::drop_handle`]. Calling on a null pointer returns
+    /// null.
     pub clone_handle: unsafe extern "C" fn(borrowed_handle: *const c_void) -> *const c_void,
 
     /// Release an owned handle previously obtained from
