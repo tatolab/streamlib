@@ -15164,3 +15164,63 @@ mod run_host_extern_c_panic_safety_net_tests {
         assert!(p.is_null());
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod make_borrow_cached_field_regression_tests {
+    //! Locks the issue #988 bug: `make_*_borrow` helpers MUST populate
+    //! the β-shape's cached POD fields from the host-side inner —
+    //! NOT leave them zeroed. Reverting any `make_*_borrow` to
+    //! `width_cached: 0` / `byte_size_cached: 0` / etc. trips these
+    //! assertions.
+    //!
+    //! Requires a working Vulkan device; skips cleanly when one isn't
+    //! available (per `project_ci_strategy_no_gpu`).
+    use super::*;
+    use std::sync::Arc;
+
+    fn try_vulkan_device() -> Option<Arc<crate::vulkan::rhi::HostVulkanDevice>> {
+        crate::vulkan::rhi::HostVulkanDevice::new().ok()
+    }
+
+    #[test]
+    fn make_texture_borrow_populates_cached_pod_fields() {
+        let Some(device) = try_vulkan_device() else {
+            return;
+        };
+        let desc = crate::core::rhi::TextureDescriptor::new(
+            640,
+            480,
+            crate::core::rhi::TextureFormat::Rgba8Unorm,
+        );
+        let host_texture = crate::vulkan::rhi::HostVulkanTexture::new(&device, &desc)
+            .expect("texture allocate");
+        use crate::host_rhi::HostTextureExt;
+        let texture = crate::core::rhi::Texture::from_vulkan(host_texture);
+        let borrow = make_texture_borrow(texture.handle);
+        assert_eq!(borrow.width(), 640, "width_cached must mirror the inner");
+        assert_eq!(borrow.height(), 480, "height_cached must mirror the inner");
+        assert!(
+            matches!(borrow.format(), crate::core::rhi::TextureFormat::Rgba8Unorm),
+            "format_raw must mirror the inner"
+        );
+    }
+
+    #[test]
+    fn make_storage_buffer_borrow_populates_cached_pod_fields() {
+        let Some(device) = try_vulkan_device() else {
+            return;
+        };
+        let host_buffer =
+            crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible(
+                &device, 16_384,
+            )
+            .expect("storage buffer allocate");
+        let buffer = crate::core::rhi::StorageBuffer::from_arc_into_raw(Arc::new(host_buffer));
+        let borrow = make_storage_buffer_borrow(buffer.handle);
+        assert_eq!(borrow.byte_size(), 16_384, "byte_size_cached must mirror the inner");
+        assert!(
+            !borrow.mapped_ptr().is_null(),
+            "mapped_ptr_cached must mirror the inner HOST_VISIBLE pointer"
+        );
+    }
+}

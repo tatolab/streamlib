@@ -4624,7 +4624,11 @@ mod layout_tests {
         assert_eq!(VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION, 1);
-        assert_eq!(RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION, 1);
+        // v2: appended PixelBuffer-flavored sibling slots
+        // (`record_pixel_buffer_barrier`,
+        // `record_copy_image_to_pixel_buffer`) for cdylib camera
+        // per-frame copy into pooled `PixelBuffer` destinations.
+        assert_eq!(RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION, 2);
     }
 
     #[test]
