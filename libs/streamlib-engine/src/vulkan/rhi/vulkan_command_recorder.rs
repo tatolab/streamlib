@@ -872,12 +872,14 @@ impl RhiCommandRecorder {
     /// Buffer memory barrier covering the whole buffer.
     ///
     /// Mode-routed; see [`Self::begin`] for the dispatch contract.
-    /// **Cdylib path only supports
-    /// [`crate::core::rhi::StorageBuffer`]-flavored buffers today**
-    /// — the buffer must report a non-`None`
-    /// [`VulkanBufferLike::cdylib_storage_buffer_handle`] or the
+    /// **Cdylib path supports
+    /// [`crate::core::rhi::StorageBuffer`]- and
+    /// [`crate::core::rhi::PixelBuffer`]-flavored buffers today** —
+    /// the buffer must report a non-`None`
+    /// [`VulkanBufferLike::cdylib_storage_buffer_handle`] or
+    /// [`VulkanBufferLike::cdylib_pixel_buffer_handle`] or the
     /// dispatch returns a typed error. Future buffer flavors add
-    /// sibling vtable slots; the host path is unchanged.
+    /// further sibling vtable slots; the host path is unchanged.
     pub fn record_buffer_barrier(
         &mut self,
         buffer: &(impl VulkanBufferLike + ?Sized),
@@ -903,9 +905,10 @@ impl RhiCommandRecorder {
     /// Copy image → buffer. See [`RhiCommandRecorderInner::record_copy_image_to_buffer`].
     ///
     /// Mode-routed; see [`Self::begin`] for the dispatch contract.
-    /// **Cdylib path only supports
-    /// [`crate::core::rhi::StorageBuffer`]-flavored destinations
-    /// today** — the same buffer-flavor constraint as
+    /// **Cdylib path supports
+    /// [`crate::core::rhi::StorageBuffer`]- and
+    /// [`crate::core::rhi::PixelBuffer`]-flavored destinations
+    /// today** — same buffer-flavor coverage as
     /// [`Self::record_buffer_barrier`].
     pub fn record_copy_image_to_buffer(
         &mut self,
@@ -1086,28 +1089,48 @@ impl RhiCommandRecorder {
                     .into(),
             ));
         }
-        let Some(storage_handle) = buffer.cdylib_storage_buffer_handle() else {
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = if let Some(storage_handle) =
+            buffer.cdylib_storage_buffer_handle()
+        {
+            unsafe {
+                ((*self.methods_vtable).record_buffer_barrier)(
+                    self.handle,
+                    storage_handle,
+                    from_stage.0 as i64,
+                    to_stage.0 as i64,
+                    from_access.0 as i64,
+                    to_access.0 as i64,
+                    err_buf.as_mut_ptr(),
+                    err_buf.len(),
+                    &mut err_len as *mut usize,
+                )
+            }
+        } else if let Some(pixel_handle) =
+            buffer.cdylib_pixel_buffer_handle()
+        {
+            unsafe {
+                ((*self.methods_vtable).record_pixel_buffer_barrier)(
+                    self.handle,
+                    pixel_handle,
+                    from_stage.0 as i64,
+                    to_stage.0 as i64,
+                    from_access.0 as i64,
+                    to_access.0 as i64,
+                    err_buf.as_mut_ptr(),
+                    err_buf.len(),
+                    &mut err_len as *mut usize,
+                )
+            }
+        } else {
             return Err(Error::GpuError(
-                "record_buffer_barrier: cdylib path only supports StorageBuffer-flavored \
-                 buffers today (extend the methods vtable with a sibling slot for other \
+                "record_buffer_barrier: cdylib path only supports \
+                 StorageBuffer- or PixelBuffer-flavored buffers today \
+                 (extend the methods vtable with a sibling slot for other \
                  flavors)"
                     .into(),
             ));
-        };
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).record_buffer_barrier)(
-                self.handle,
-                storage_handle,
-                from_stage.0 as i64,
-                to_stage.0 as i64,
-                from_access.0 as i64,
-                to_access.0 as i64,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
         };
         if status == 0 {
             Ok(())
@@ -1166,14 +1189,6 @@ impl RhiCommandRecorder {
                     .into(),
             ));
         }
-        let Some(dst_storage_handle) = dst.cdylib_storage_buffer_handle() else {
-            return Err(Error::GpuError(
-                "record_copy_image_to_buffer: cdylib path only supports \
-                 StorageBuffer-flavored destinations today (extend the methods vtable \
-                 with a sibling slot for other flavors)"
-                    .into(),
-            ));
-        };
         let region_repr = streamlib_plugin_abi::ImageCopyRegionRepr {
             width: region.width,
             height: region.height,
@@ -1186,17 +1201,44 @@ impl RhiCommandRecorder {
         };
         let mut err_buf = [0u8; 256];
         let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).record_copy_image_to_buffer)(
-                self.handle,
-                src.handle,
-                src_layout.0,
-                dst_storage_handle,
-                &region_repr,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
+        let status = if let Some(dst_storage_handle) =
+            dst.cdylib_storage_buffer_handle()
+        {
+            unsafe {
+                ((*self.methods_vtable).record_copy_image_to_buffer)(
+                    self.handle,
+                    src.handle,
+                    src_layout.0,
+                    dst_storage_handle,
+                    &region_repr,
+                    err_buf.as_mut_ptr(),
+                    err_buf.len(),
+                    &mut err_len as *mut usize,
+                )
+            }
+        } else if let Some(dst_pixel_handle) =
+            dst.cdylib_pixel_buffer_handle()
+        {
+            unsafe {
+                ((*self.methods_vtable).record_copy_image_to_pixel_buffer)(
+                    self.handle,
+                    src.handle,
+                    src_layout.0,
+                    dst_pixel_handle,
+                    &region_repr,
+                    err_buf.as_mut_ptr(),
+                    err_buf.len(),
+                    &mut err_len as *mut usize,
+                )
+            }
+        } else {
+            return Err(Error::GpuError(
+                "record_copy_image_to_buffer: cdylib path only supports \
+                 StorageBuffer- or PixelBuffer-flavored destinations today \
+                 (extend the methods vtable with a sibling slot for other \
+                 flavors)"
+                    .into(),
+            ));
         };
         if status == 0 {
             Ok(())

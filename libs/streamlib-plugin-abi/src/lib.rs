@@ -401,7 +401,18 @@ pub const RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 1;
 ///   `submit_signaling_timeline`. Without these the β-shape's
 ///   `host_inner()` / `host_inner_mut()` panic-guards fire from
 ///   cdylib code on every per-frame call.
-pub const RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 1;
+/// - v2: appends two PixelBuffer-flavored sibling slots —
+///   `record_pixel_buffer_barrier` and
+///   `record_copy_image_to_pixel_buffer` — so cdylibs can barrier
+///   and copy-image-to into a `PixelBuffer` destination. The v1
+///   StorageBuffer-flavored slots are unchanged; the new slots
+///   are appended at the end of the struct. This is the
+///   "sibling-slot per buffer flavor" pattern documented on
+///   `RhiCommandRecorderMethodsVTable` and already used by
+///   `VulkanGraphicsKernelMethodsVTable`'s
+///   `set_storage_buffer_pixel` / `set_storage_buffer_storage`
+///   pair.
+pub const RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 
 // =============================================================================
 // Primitive enums
@@ -3329,12 +3340,16 @@ unsafe impl Sync for RhiColorConverterMethodsVTable {}
 /// don't sit on the camera hot path and a follow-up slice lifts
 /// them when a consumer arrives.
 ///
-/// **Buffer-flavor coverage today:** `record_buffer_barrier` and
-/// `record_copy_image_to_buffer` accept a `StorageBuffer`-shaped
-/// handle. Today's camera per-frame call site copies into a
-/// `StorageBuffer`; future consumers needing uniform / vertex /
-/// index buffer barriers add sibling slots rather than discriminating
-/// on these.
+/// **Buffer-flavor coverage today:** the v1 `record_buffer_barrier`
+/// and `record_copy_image_to_buffer` slots accept a
+/// `StorageBuffer`-shaped handle. v2 added `record_pixel_buffer_barrier`
+/// and `record_copy_image_to_pixel_buffer` sibling slots — the
+/// camera's per-frame path copies the compute output into a pooled
+/// `PixelBuffer` and barriers it through `HOST_READ`. Future
+/// consumers needing uniform / vertex / index buffer barriers add
+/// further sibling slots rather than discriminating on these (same
+/// pattern as `VulkanGraphicsKernelMethodsVTable`'s
+/// `set_storage_buffer_pixel` / `set_storage_buffer_storage`).
 #[repr(C)]
 pub struct RhiCommandRecorderMethodsVTable {
     /// Vtable layout version. Must equal
@@ -3455,6 +3470,53 @@ pub struct RhiCommandRecorderMethodsVTable {
         recorder_handle: *const c_void,
         timeline_handle: *const c_void,
         signal_value: u64,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// v2 sibling of `record_buffer_barrier` for `PixelBuffer`-shaped
+    /// destinations. The camera's per-frame path uses this after the
+    /// `vkCmdCopyImageToBuffer` to barrier the pooled pixel buffer
+    /// from `TRANSFER_WRITE` to `HOST_READ` so the IPC consumer can
+    /// map it.
+    ///
+    /// - `pixel_buffer_handle` is
+    ///   `Arc::into_raw(Arc<PixelBufferRef>)`-shaped from the
+    ///   `PixelBuffer` β-shape's `handle` field (borrowed).
+    pub record_pixel_buffer_barrier: unsafe extern "C" fn(
+        recorder_handle: *const c_void,
+        pixel_buffer_handle: *const c_void,
+        from_stage_raw: i64,
+        to_stage_raw: i64,
+        from_access_raw: i64,
+        to_access_raw: i64,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// v2 sibling of `record_copy_image_to_buffer` for
+    /// `PixelBuffer`-shaped destinations. The camera's per-frame
+    /// path copies the compute output (a host-allocated
+    /// `Texture` ring slot) into a pooled `PixelBuffer` for
+    /// cross-process IPC.
+    ///
+    /// - `src_texture_handle` is
+    ///   `Arc::into_raw(Arc<TextureInner>)`-shaped from the source
+    ///   `Texture` β-shape's `handle` field (borrowed).
+    /// - `dst_pixel_buffer_handle` is
+    ///   `Arc::into_raw(Arc<PixelBufferRef>)`-shaped from the
+    ///   destination `PixelBuffer` β-shape's `handle` field
+    ///   (borrowed).
+    /// - `region` points at an [`ImageCopyRegionRepr`] the host
+    ///   reads once at call time.
+    pub record_copy_image_to_pixel_buffer: unsafe extern "C" fn(
+        recorder_handle: *const c_void,
+        src_texture_handle: *const c_void,
+        src_layout_raw: i32,
+        dst_pixel_buffer_handle: *const c_void,
+        region: *const ImageCopyRegionRepr,
         err_buf: *mut u8,
         err_buf_cap: usize,
         err_len: *mut usize,
@@ -4562,7 +4624,11 @@ mod layout_tests {
         assert_eq!(VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION, 1);
-        assert_eq!(RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION, 1);
+        // v2: appended PixelBuffer-flavored sibling slots
+        // (`record_pixel_buffer_barrier`,
+        // `record_copy_image_to_pixel_buffer`) for cdylib camera
+        // per-frame copy into pooled `PixelBuffer` destinations.
+        assert_eq!(RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION, 2);
     }
 
     #[test]
@@ -5018,17 +5084,19 @@ mod layout_tests {
 
     #[test]
     fn rhi_command_recorder_methods_vtable_layout() {
-        // v1:
-        //   layout_version                @ 0   (4 bytes, u32)
-        //   _reserved_padding             @ 4   (4 bytes, u32)
-        //   begin                         @ 8   (8 bytes, fn pointer)
-        //   record_image_barrier          @ 16  (8 bytes, fn pointer)
-        //   record_buffer_barrier         @ 24  (8 bytes, fn pointer)
-        //   record_dispatch               @ 32  (8 bytes, fn pointer)
-        //   record_copy_image_to_buffer   @ 40  (8 bytes, fn pointer)
-        //   submit_signaling_timeline     @ 48  (8 bytes, fn pointer)
-        // Total = 56 bytes, align = 8.
-        assert_eq!(size_of::<RhiCommandRecorderMethodsVTable>(), 56);
+        // v2 (v1 unchanged through @48, sibling slots appended):
+        //   layout_version                       @ 0   (4 bytes, u32)
+        //   _reserved_padding                    @ 4   (4 bytes, u32)
+        //   begin                                @ 8   (8 bytes, fn pointer)
+        //   record_image_barrier                 @ 16  (8 bytes, fn pointer)
+        //   record_buffer_barrier                @ 24  (8 bytes, fn pointer)
+        //   record_dispatch                      @ 32  (8 bytes, fn pointer)
+        //   record_copy_image_to_buffer          @ 40  (8 bytes, fn pointer)
+        //   submit_signaling_timeline            @ 48  (8 bytes, fn pointer)
+        //   record_pixel_buffer_barrier          @ 56  (8 bytes, fn pointer, v2)
+        //   record_copy_image_to_pixel_buffer    @ 64  (8 bytes, fn pointer, v2)
+        // Total = 72 bytes, align = 8.
+        assert_eq!(size_of::<RhiCommandRecorderMethodsVTable>(), 72);
         assert_eq!(align_of::<RhiCommandRecorderMethodsVTable>(), 8);
         assert_eq!(
             offset_of!(RhiCommandRecorderMethodsVTable, layout_version),
@@ -5067,6 +5135,20 @@ mod layout_tests {
                 submit_signaling_timeline
             ),
             48
+        );
+        assert_eq!(
+            offset_of!(
+                RhiCommandRecorderMethodsVTable,
+                record_pixel_buffer_barrier
+            ),
+            56
+        );
+        assert_eq!(
+            offset_of!(
+                RhiCommandRecorderMethodsVTable,
+                record_copy_image_to_pixel_buffer
+            ),
+            64
         );
     }
 

@@ -7325,17 +7325,42 @@ unsafe extern "C" fn host_compute_kernel_dispatch(
 // borrow is well-formed for any field-only read, even though no
 // vtable callback is supposed to fire while the borrow is alive.
 
+// Each `make_*_borrow` populates the cached POD fields on the
+// reconstructed β-shape from the host-side inner we hold via
+// `handle`. Cdylib β-shapes carry these cached for free-on-deref
+// POD getters (`width()`, `height()`, `mapped_ptr()`, etc.); when
+// the host reconstructs a borrow inside a vtable callback for code
+// that reads those getters host-side, the borrow's cached fields
+// MUST hold the real values — not zero. Reading zero from a "borrow"
+// of an otherwise-valid resource was the bug behind issue #988
+// (camera-as-cdylib color converter received width=0/height=0 in
+// push constants → kernel produced zero-filled output).
 #[cfg(target_os = "linux")]
 fn make_pixel_buffer_borrow(
     handle: *const c_void,
 ) -> std::mem::ManuallyDrop<crate::core::rhi::PixelBuffer> {
-    std::mem::ManuallyDrop::new(crate::core::rhi::PixelBuffer {
+    use crate::host_rhi::HostPixelBufferRefExt;
+    // Reconstruct a minimal Pixel-buffer borrow whose `buffer_ref()`
+    // can read the host-side `PixelBufferRef` we already hold via
+    // `handle`.
+    let pb_for_inner = std::mem::ManuallyDrop::new(crate::core::rhi::PixelBuffer {
         handle,
         vtable: host_gpu_context_limited_access_vtable(),
         width: 0,
         height: 0,
         format_raw: 0,
         plane_count_cached: 0,
+    });
+    let pb_ref = pb_for_inner.buffer_ref();
+    let hvb = pb_ref.vulkan_inner();
+    let format = pb_ref.format();
+    std::mem::ManuallyDrop::new(crate::core::rhi::PixelBuffer {
+        handle,
+        vtable: host_gpu_context_limited_access_vtable(),
+        width: pb_ref.width(),
+        height: pb_ref.height(),
+        format_raw: format as u32,
+        plane_count_cached: hvb.plane_count() as u32,
     })
 }
 
@@ -7343,11 +7368,18 @@ fn make_pixel_buffer_borrow(
 fn make_storage_buffer_borrow(
     handle: *const c_void,
 ) -> std::mem::ManuallyDrop<crate::core::rhi::StorageBuffer> {
-    std::mem::ManuallyDrop::new(crate::core::rhi::StorageBuffer {
+    let sb_for_inner = std::mem::ManuallyDrop::new(crate::core::rhi::StorageBuffer {
         handle,
         vtable: host_gpu_context_limited_access_vtable(),
         byte_size_cached: 0,
         mapped_ptr_cached: std::ptr::null_mut(),
+    });
+    let hvb = sb_for_inner.host_inner();
+    std::mem::ManuallyDrop::new(crate::core::rhi::StorageBuffer {
+        handle,
+        vtable: host_gpu_context_limited_access_vtable(),
+        byte_size_cached: hvb.size() as u64,
+        mapped_ptr_cached: hvb.mapped_ptr(),
     })
 }
 
@@ -7355,11 +7387,18 @@ fn make_storage_buffer_borrow(
 fn make_uniform_buffer_borrow(
     handle: *const c_void,
 ) -> std::mem::ManuallyDrop<crate::core::rhi::UniformBuffer> {
-    std::mem::ManuallyDrop::new(crate::core::rhi::UniformBuffer {
+    let ub_for_inner = std::mem::ManuallyDrop::new(crate::core::rhi::UniformBuffer {
         handle,
         vtable: host_gpu_context_limited_access_vtable(),
         byte_size_cached: 0,
         mapped_ptr_cached: std::ptr::null_mut(),
+    });
+    let hvb = ub_for_inner.host_inner();
+    std::mem::ManuallyDrop::new(crate::core::rhi::UniformBuffer {
+        handle,
+        vtable: host_gpu_context_limited_access_vtable(),
+        byte_size_cached: hvb.size() as u64,
+        mapped_ptr_cached: hvb.mapped_ptr(),
     })
 }
 
@@ -7367,12 +7406,36 @@ fn make_uniform_buffer_borrow(
 fn make_texture_borrow(
     handle: *const c_void,
 ) -> std::mem::ManuallyDrop<crate::core::rhi::Texture> {
-    std::mem::ManuallyDrop::new(crate::core::rhi::Texture {
+    // Populate the cached POD fields from the host-side TextureInner
+    // we already have via `handle`. Cdylib β-shapes carry these cached
+    // for free-on-deref POD getters (`Texture::width()`, etc.); when
+    // the host reconstructs a borrow inside a vtable callback for
+    // host-side code that reads `Texture::width()` / `height()`, the
+    // borrow's cached fields MUST hold the real values — not zero —
+    // because that's what those POD getters return. Reading zero from
+    // a "borrow" of an otherwise-valid texture caused the camera-as-
+    // cdylib color-converter push constants to encode width=0/height=0
+    // and the compute kernel produced zero-filled output (issue #988
+    // debug).
+    use crate::host_rhi::HostTextureExt;
+    let tex_for_inner = std::mem::ManuallyDrop::new(crate::core::rhi::Texture {
         handle,
         vtable: host_gpu_context_limited_access_vtable(),
         width_cached: 0,
         height_cached: 0,
         format_raw: 0,
+        _padding: 0,
+    });
+    let hvt = tex_for_inner.vulkan_inner();
+    let width = hvt.width();
+    let height = hvt.height();
+    let format = hvt.format();
+    std::mem::ManuallyDrop::new(crate::core::rhi::Texture {
+        handle,
+        vtable: host_gpu_context_limited_access_vtable(),
+        width_cached: width,
+        height_cached: height,
+        format_raw: format as u32,
         _padding: 0,
     })
 }
@@ -10294,6 +10357,207 @@ unsafe extern "C" fn host_command_recorder_record_copy_image_to_buffer(
 
 #[cfg(target_os = "linux")]
 #[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_command_recorder_record_pixel_buffer_barrier(
+    recorder_handle: *const c_void,
+    pixel_buffer_handle: *const c_void,
+    from_stage_raw: i64,
+    to_stage_raw: i64,
+    from_access_raw: i64,
+    to_access_raw: i64,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_command_recorder_record_pixel_buffer_barrier",
+        || -> i32 {
+            let Some(recorder) =
+                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            else {
+                write_err(
+                    "record_pixel_buffer_barrier: null recorder handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if pixel_buffer_handle.is_null() {
+                write_err(
+                    "record_pixel_buffer_barrier: null pixel_buffer handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let buffer_borrow =
+                make_pixel_buffer_borrow(pixel_buffer_handle);
+            let from_stage =
+                crate::vulkan::rhi::VulkanStage(from_stage_raw as u64);
+            let to_stage = crate::vulkan::rhi::VulkanStage(to_stage_raw as u64);
+            let from_access =
+                crate::vulkan::rhi::VulkanAccess(from_access_raw as u64);
+            let to_access =
+                crate::vulkan::rhi::VulkanAccess(to_access_raw as u64);
+            match recorder.record_buffer_barrier(
+                &*buffer_borrow,
+                from_stage,
+                to_stage,
+                from_access,
+                to_access,
+            ) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("record_pixel_buffer_barrier: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_command_recorder_record_pixel_buffer_barrier(
+    _recorder_handle: *const c_void,
+    _pixel_buffer_handle: *const c_void,
+    _from_stage_raw: i64,
+    _to_stage_raw: i64,
+    _from_access_raw: i64,
+    _to_access_raw: i64,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "record_pixel_buffer_barrier: Linux-only",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_command_recorder_record_copy_image_to_pixel_buffer(
+    recorder_handle: *const c_void,
+    src_texture_handle: *const c_void,
+    src_layout_raw: i32,
+    dst_pixel_buffer_handle: *const c_void,
+    region: *const streamlib_plugin_abi::ImageCopyRegionRepr,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_command_recorder_record_copy_image_to_pixel_buffer",
+        || -> i32 {
+            let Some(recorder) =
+                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            else {
+                write_err(
+                    "record_copy_image_to_pixel_buffer: null recorder handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if src_texture_handle.is_null() {
+                write_err(
+                    "record_copy_image_to_pixel_buffer: null src texture handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            if dst_pixel_buffer_handle.is_null() {
+                write_err(
+                    "record_copy_image_to_pixel_buffer: null dst pixel_buffer handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            if region.is_null() {
+                write_err(
+                    "record_copy_image_to_pixel_buffer: null region pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let region_ref = unsafe { &*region };
+            let src_borrow = make_texture_borrow(src_texture_handle);
+            let dst_borrow =
+                make_pixel_buffer_borrow(dst_pixel_buffer_handle);
+            let src_layout =
+                streamlib_consumer_rhi::VulkanLayout(src_layout_raw);
+            let region_rust = crate::vulkan::rhi::ImageCopyRegion {
+                width: region_ref.width,
+                height: region_ref.height,
+                buffer_offset: region_ref.buffer_offset,
+                buffer_row_length: region_ref.buffer_row_length,
+                buffer_image_height: region_ref.buffer_image_height,
+                mip_level: region_ref.mip_level,
+                array_layer: region_ref.array_layer,
+            };
+            match recorder.record_copy_image_to_buffer(
+                &*src_borrow,
+                src_layout,
+                &*dst_borrow,
+                region_rust,
+            ) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("record_copy_image_to_pixel_buffer: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_command_recorder_record_copy_image_to_pixel_buffer(
+    _recorder_handle: *const c_void,
+    _src_texture_handle: *const c_void,
+    _src_layout_raw: i32,
+    _dst_pixel_buffer_handle: *const c_void,
+    _region: *const streamlib_plugin_abi::ImageCopyRegionRepr,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "record_copy_image_to_pixel_buffer: Linux-only",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
 unsafe extern "C" fn host_command_recorder_submit_signaling_timeline(
     recorder_handle: *const c_void,
     timeline_handle: *const c_void,
@@ -10389,6 +10653,10 @@ pub static HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE:
             host_command_recorder_record_copy_image_to_buffer,
         submit_signaling_timeline:
             host_command_recorder_submit_signaling_timeline,
+        record_pixel_buffer_barrier:
+            host_command_recorder_record_pixel_buffer_barrier,
+        record_copy_image_to_pixel_buffer:
+            host_command_recorder_record_copy_image_to_pixel_buffer,
     };
 
 /// Accessor for the host's static `RhiCommandRecorderMethodsVTable`
@@ -11742,6 +12010,57 @@ mod gpu_rhi_command_recorder_methods_vtable_null_tests {
         assert!(
             err_buf_as_str(&buf, len)
                 .contains("submit_signaling_timeline: null recorder handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn record_pixel_buffer_barrier_rejects_null_recorder_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE.record_pixel_buffer_barrier)(
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                0,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("record_pixel_buffer_barrier: null recorder handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn record_copy_image_to_pixel_buffer_rejects_null_recorder_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let region = dummy_region();
+        let rc = unsafe {
+            (HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE
+                .record_copy_image_to_pixel_buffer)(
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                &region,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("record_copy_image_to_pixel_buffer: null recorder handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -14843,5 +15162,65 @@ mod run_host_extern_c_panic_safety_net_tests {
             std::ptr::null(),
         );
         assert!(p.is_null());
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod make_borrow_cached_field_regression_tests {
+    //! Locks the issue #988 bug: `make_*_borrow` helpers MUST populate
+    //! the β-shape's cached POD fields from the host-side inner —
+    //! NOT leave them zeroed. Reverting any `make_*_borrow` to
+    //! `width_cached: 0` / `byte_size_cached: 0` / etc. trips these
+    //! assertions.
+    //!
+    //! Requires a working Vulkan device; skips cleanly when one isn't
+    //! available (per `project_ci_strategy_no_gpu`).
+    use super::*;
+    use std::sync::Arc;
+
+    fn try_vulkan_device() -> Option<Arc<crate::vulkan::rhi::HostVulkanDevice>> {
+        crate::vulkan::rhi::HostVulkanDevice::new().ok()
+    }
+
+    #[test]
+    fn make_texture_borrow_populates_cached_pod_fields() {
+        let Some(device) = try_vulkan_device() else {
+            return;
+        };
+        let desc = crate::core::rhi::TextureDescriptor::new(
+            640,
+            480,
+            crate::core::rhi::TextureFormat::Rgba8Unorm,
+        );
+        let host_texture = crate::vulkan::rhi::HostVulkanTexture::new(&device, &desc)
+            .expect("texture allocate");
+        use crate::host_rhi::HostTextureExt;
+        let texture = crate::core::rhi::Texture::from_vulkan(host_texture);
+        let borrow = make_texture_borrow(texture.handle);
+        assert_eq!(borrow.width(), 640, "width_cached must mirror the inner");
+        assert_eq!(borrow.height(), 480, "height_cached must mirror the inner");
+        assert!(
+            matches!(borrow.format(), crate::core::rhi::TextureFormat::Rgba8Unorm),
+            "format_raw must mirror the inner"
+        );
+    }
+
+    #[test]
+    fn make_storage_buffer_borrow_populates_cached_pod_fields() {
+        let Some(device) = try_vulkan_device() else {
+            return;
+        };
+        let host_buffer =
+            crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible(
+                &device, 16_384,
+            )
+            .expect("storage buffer allocate");
+        let buffer = crate::core::rhi::StorageBuffer::from_arc_into_raw(Arc::new(host_buffer));
+        let borrow = make_storage_buffer_borrow(buffer.handle);
+        assert_eq!(borrow.byte_size(), 16_384, "byte_size_cached must mirror the inner");
+        assert!(
+            !borrow.mapped_ptr().is_null(),
+            "mapped_ptr_cached must mirror the inner HOST_VISIBLE pointer"
+        );
     }
 }
