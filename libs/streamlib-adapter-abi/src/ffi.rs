@@ -24,8 +24,11 @@
 /// `target` (e.g. `streamlib_adapter_vulkan::ffi`) — this is now
 /// folded into the structured `callback` field, which already names
 /// the adapter via its prefix (`host_vulkan_*`, `host_opengl_*`,
-/// etc.). Filters that want adapter-specific routing match on
-/// `callback` rather than on the target.
+/// etc.). All FFI panics route under the single
+/// `streamlib_adapter_abi::ffi` target; filters that want adapter-
+/// specific routing match on `callback`. (The earlier `streamlib::ffi`
+/// target string violated the xtask check-boundaries top-level-shortcut
+/// rule, so the canonical helper lives under the crate's own path.)
 #[inline]
 pub fn run_host_extern_c<F, T>(
     callback_name: &'static str,
@@ -47,7 +50,7 @@ where
                 "<non-string panic payload>".to_string()
             };
             tracing::error!(
-                target: "streamlib::ffi",
+                target: "streamlib_adapter_abi::ffi",
                 callback = callback_name,
                 panic = %msg,
                 "host extern \"C\" callback panicked; FFI boundary converted panic to default return",
