@@ -8329,11 +8329,18 @@ unsafe fn handle_as_graphics_kernel(
 fn make_vertex_buffer_borrow(
     handle: *const c_void,
 ) -> std::mem::ManuallyDrop<crate::core::rhi::VertexBuffer> {
-    std::mem::ManuallyDrop::new(crate::core::rhi::VertexBuffer {
+    let vb_for_inner = std::mem::ManuallyDrop::new(crate::core::rhi::VertexBuffer {
         handle,
         vtable: host_gpu_context_limited_access_vtable(),
         byte_size_cached: 0,
         mapped_ptr_cached: std::ptr::null_mut(),
+    });
+    let hvb = vb_for_inner.host_inner();
+    std::mem::ManuallyDrop::new(crate::core::rhi::VertexBuffer {
+        handle,
+        vtable: host_gpu_context_limited_access_vtable(),
+        byte_size_cached: hvb.size() as u64,
+        mapped_ptr_cached: hvb.mapped_ptr(),
     })
 }
 
@@ -8341,11 +8348,18 @@ fn make_vertex_buffer_borrow(
 fn make_index_buffer_borrow(
     handle: *const c_void,
 ) -> std::mem::ManuallyDrop<crate::core::rhi::IndexBuffer> {
-    std::mem::ManuallyDrop::new(crate::core::rhi::IndexBuffer {
+    let ib_for_inner = std::mem::ManuallyDrop::new(crate::core::rhi::IndexBuffer {
         handle,
         vtable: host_gpu_context_limited_access_vtable(),
         byte_size_cached: 0,
         mapped_ptr_cached: std::ptr::null_mut(),
+    });
+    let hvb = ib_for_inner.host_inner();
+    std::mem::ManuallyDrop::new(crate::core::rhi::IndexBuffer {
+        handle,
+        vtable: host_gpu_context_limited_access_vtable(),
+        byte_size_cached: hvb.size() as u64,
+        mapped_ptr_cached: hvb.mapped_ptr(),
     })
 }
 
@@ -10361,16 +10375,12 @@ unsafe fn handle_as_command_recorder_mut(
 /// would decrement the kernel's Arc refcount through the vtable
 /// while the cdylib still holds an outstanding plugin handle.
 ///
-/// The cached POD fields (`cached_push_constant_size`,
-/// `_reserved_padding`) are filled with zeros. The
-/// `RhiCommandRecorderInner::record_dispatch` path only deref's
-/// `self.handle` to reach the underlying `VulkanComputeKernelInner`
-/// (via the engine-side `VulkanComputeKernel::record` →
-/// `host_inner()` chain that runs on host code, NOT through the
-/// vtable). If a future record-dispatch path starts reading
-/// `kernel.push_constant_size()` through the wrapper, the zeroed POD
-/// silently produces wrong results — extend this helper to populate
-/// the field at that point.
+/// The cached POD fields are populated from the host-side
+/// `VulkanComputeKernelInner` via the same two-step dance the other
+/// `make_*_borrow` helpers use: build a minimal borrow with zeroed
+/// fields, reach the inner through `host_inner()`, then construct
+/// the final borrow with the cached fields filled. Mirrors the
+/// contract `from_arc_into_raw` honors at construction.
 ///
 /// The vtable + methods_vtable pointers are filled with the host's
 /// own statics (matching what `from_arc_into_raw` would have written
@@ -10381,11 +10391,19 @@ unsafe fn handle_as_command_recorder_mut(
 fn make_compute_kernel_borrow(
     handle: *const c_void,
 ) -> std::mem::ManuallyDrop<crate::vulkan::rhi::VulkanComputeKernel> {
-    std::mem::ManuallyDrop::new(crate::vulkan::rhi::VulkanComputeKernel {
+    let k_for_inner = std::mem::ManuallyDrop::new(crate::vulkan::rhi::VulkanComputeKernel {
         handle,
         vtable: host_gpu_context_full_access_vtable(),
         methods_vtable: host_vulkan_compute_kernel_methods_vtable(),
         cached_push_constant_size: 0,
+        _reserved_padding: 0,
+    });
+    let inner = k_for_inner.host_inner();
+    std::mem::ManuallyDrop::new(crate::vulkan::rhi::VulkanComputeKernel {
+        handle,
+        vtable: host_gpu_context_full_access_vtable(),
+        methods_vtable: host_vulkan_compute_kernel_methods_vtable(),
+        cached_push_constant_size: inner.push_constant_size(),
         _reserved_padding: 0,
     })
 }
@@ -15717,6 +15735,106 @@ mod make_borrow_cached_field_regression_tests {
         assert!(
             !borrow.mapped_ptr().is_null(),
             "mapped_ptr_cached must mirror the inner HOST_VISIBLE pointer"
+        );
+    }
+
+    #[test]
+    fn make_vertex_buffer_borrow_populates_cached_pod_fields() {
+        let Some(device) = try_vulkan_device() else {
+            return;
+        };
+        let buffer = crate::core::rhi::VertexBuffer::new_host_visible(&device, 8_192)
+            .expect("vertex buffer allocate");
+        let borrow = make_vertex_buffer_borrow(buffer.handle);
+        assert_eq!(borrow.byte_size(), 8_192, "byte_size_cached must mirror the inner");
+        assert!(
+            !borrow.mapped_ptr().is_null(),
+            "mapped_ptr_cached must mirror the inner HOST_VISIBLE pointer"
+        );
+    }
+
+    #[test]
+    fn make_index_buffer_borrow_populates_cached_pod_fields() {
+        let Some(device) = try_vulkan_device() else {
+            return;
+        };
+        let buffer = crate::core::rhi::IndexBuffer::new_host_visible(&device, 2_048)
+            .expect("index buffer allocate");
+        let borrow = make_index_buffer_borrow(buffer.handle);
+        assert_eq!(borrow.byte_size(), 2_048, "byte_size_cached must mirror the inner");
+        assert!(
+            !borrow.mapped_ptr().is_null(),
+            "mapped_ptr_cached must mirror the inner HOST_VISIBLE pointer"
+        );
+    }
+
+    #[test]
+    fn make_compute_kernel_borrow_populates_cached_pod_fields() {
+        let Some(device) = try_vulkan_device() else {
+            return;
+        };
+        // Reuse the test_blend_1 shader already wired in build.rs: one
+        // storage buffer binding at slot 0, one push-constant block of
+        // 4 bytes. The assertion below pins the value the cached field
+        // must mirror.
+        const TEST_BLEND_1_SPV: &[u8] =
+            include_bytes!(concat!(env!("OUT_DIR"), "/test_blend_1.spv"));
+        let descriptor = crate::core::rhi::ComputeKernelDescriptor {
+            label: "make_compute_kernel_borrow_test",
+            spv: TEST_BLEND_1_SPV,
+            bindings: &[
+                crate::core::rhi::ComputeBindingSpec::storage_buffer(0),
+                crate::core::rhi::ComputeBindingSpec::storage_buffer(8),
+            ],
+            push_constant_size: 4,
+        };
+        let kernel =
+            crate::vulkan::rhi::VulkanComputeKernel::new(&device, &descriptor)
+                .expect("compute kernel construct");
+        let borrow = make_compute_kernel_borrow(kernel.handle);
+        assert_eq!(
+            borrow.push_constant_size(),
+            4,
+            "cached_push_constant_size must mirror the inner",
+        );
+    }
+
+    #[test]
+    fn make_acceleration_structure_borrow_populates_cached_pod_fields() {
+        let Some(device) = try_vulkan_device() else {
+            return;
+        };
+        if !device.supports_ray_tracing_pipeline() {
+            return;
+        }
+        // Single triangle BLAS, smallest payload that exercises the
+        // build path. Mirrors the rt-smoke fixture's vertex layout.
+        let vertices: Vec<f32> = vec![
+            0.0, -0.5, 0.0, -0.5, 0.5, 0.0, 0.5, 0.5, 0.0,
+        ];
+        let indices: Vec<u32> = vec![0, 1, 2];
+        let blas = crate::vulkan::rhi::VulkanAccelerationStructure::build_triangles_blas(
+            &device,
+            "make_borrow_test_blas",
+            &vertices,
+            &indices,
+        )
+        .expect("blas construct");
+        let borrow = make_acceleration_structure_borrow(blas.handle);
+        assert!(
+            matches!(
+                borrow.kind(),
+                crate::vulkan::rhi::AccelerationStructureKind::BottomLevel,
+            ),
+            "cached_kind must mirror the inner",
+        );
+        assert!(
+            borrow.device_address() > 0,
+            "cached_device_address must mirror the inner",
+        );
+        assert!(
+            borrow.storage_size() > 0,
+            "cached_storage_size must mirror the inner",
         );
     }
 }
