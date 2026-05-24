@@ -33,21 +33,27 @@
 //!
 //! What this test does NOT lock — guarded separately:
 //!
-//! - End-to-end per-frame capture through the color converter +
-//!   command recorder. Those β-shape return-type methods
-//!   (`RhiColorConverter::prepare_buffer_to_image_storage`,
-//!   `RhiCommandRecorder::record_*` / `submit_*`,
-//!   `HostVulkanTimelineSemaphore::wait`) still panic in cdylib mode
-//!   via their `host_inner()` short-circuits — Phase E follow-on
-//!   work that lifts method dispatch to the FullAccess vtable per
-//!   #907's shape. The capture thread therefore crashes shortly
-//!   after the first frame; a panic-hook strengthening on the test
-//!   side can't catch it because the cdylib carries its own libstd
-//!   panic-hook static (in-process panic hooks set on the host don't
-//!   chain into a statically-linked cdylib's std).
-//! - The vulkan-video-roundtrip manual gate from `docs/testing.md`
-//!   with camera loaded as a cdylib — blocked by the same Phase E
-//!   follow-on.
+//! > ~~End-to-end per-frame capture through the color converter +
+//! > command recorder. Those β-shape return-type methods
+//! > (`RhiColorConverter::prepare_buffer_to_image_storage`,
+//! > `RhiCommandRecorder::record_*` / `submit_*`,
+//! > `HostVulkanTimelineSemaphore::wait`) still panic in cdylib mode
+//! > via their `host_inner()` short-circuits — Phase E follow-on
+//! > work that lifts method dispatch to the FullAccess vtable per
+//! > #907's shape. The capture thread therefore crashes shortly
+//! > after the first frame.~~
+//! > ~~The vulkan-video-roundtrip manual gate from `docs/testing.md`
+//! > with camera loaded as a cdylib — blocked by the same Phase E
+//! > follow-on.~~ — Superseded 2026-05-24. The recorder methods
+//! > vtable (`RhiCommandRecorderMethodsVTable`), the color-converter
+//! > methods vtable's `prepare_buffer_to_image_storage` slot, the
+//! > timeline-semaphore wait dispatch, the PortSchemaSpec lossless
+//! > wire serde, and the `make_*_borrow` cached-fields contract all
+//! > landed; the per-frame path now completes cleanly in cdylib mode,
+//! > and the manual gate
+//! > (`examples/vulkan-video-roundtrip-cdylib-camera` against vivid)
+//! > produces valid SMPTE color-bar output matching the baseline
+//! > non-cdylib variant.
 //!
 //! What the test actually surfaces:
 //!
