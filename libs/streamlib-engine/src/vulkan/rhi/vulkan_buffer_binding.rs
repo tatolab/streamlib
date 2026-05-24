@@ -35,6 +35,21 @@ use crate::core::rhi::{IndexBuffer, StorageBuffer, UniformBuffer, VertexBuffer};
 pub trait VulkanBufferLike {
     fn vk_buffer(&self) -> vk::Buffer;
     fn vk_buffer_size(&self) -> vk::DeviceSize;
+
+    /// Cdylib-mode handle accessor: if this buffer flavor is
+    /// reachable as a [`crate::core::rhi::StorageBuffer`] β-shape,
+    /// return the underlying `Arc::into_raw(Arc<HostVulkanBufferInner>)`
+    /// pointer for cross-DSO dispatch (Phase E sub-lift slice B —
+    /// #984). Default is `None`; only [`crate::core::rhi::StorageBuffer`]
+    /// overrides today. The cdylib-side
+    /// [`crate::vulkan::rhi::RhiCommandRecorder::record_buffer_barrier`]
+    /// / `record_copy_image_to_buffer` paths surface a typed
+    /// "unsupported buffer flavor" error when this returns `None`,
+    /// matching the slot coverage of
+    /// [`streamlib_plugin_abi::RhiCommandRecorderMethodsVTable`].
+    fn cdylib_storage_buffer_handle(&self) -> Option<*const std::ffi::c_void> {
+        None
+    }
 }
 
 impl VulkanBufferLike for PixelBuffer {
@@ -68,6 +83,9 @@ impl VulkanBufferLike for StorageBuffer {
     }
     fn vk_buffer_size(&self) -> vk::DeviceSize {
         self.host_inner().size()
+    }
+    fn cdylib_storage_buffer_handle(&self) -> Option<*const std::ffi::c_void> {
+        Some(self.cdylib_handle())
     }
 }
 
