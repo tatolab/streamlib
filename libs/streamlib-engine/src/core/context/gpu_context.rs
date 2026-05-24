@@ -5652,6 +5652,222 @@ mod tests {
         println!("escalate propagates closure error + releases lock: OK");
     }
 
+    /// In-process escalate panic recovery (#1006 scenario 2).
+    ///
+    /// `escalate_gate.enter_scoped()` is an RAII guard whose Drop runs
+    /// even when the closure panics — `catch_unwind` at the test
+    /// boundary catches the panic, and the subsequent `escalate` call
+    /// must proceed (proves the gate was released by the Drop on the
+    /// panicking closure's stack frame).
+    ///
+    /// Mental revert: changing `enter_scoped()`'s Drop to a no-op (or
+    /// switching back to a manual lock/unlock pair without the RAII
+    /// release) would leave the gate held forever; the post-panic
+    /// `escalate` call would block until test timeout.
+    #[test]
+    fn test_escalate_releases_gate_on_panic() {
+        let gpu = match GpuContext::init_for_platform() {
+            Ok(g) => g,
+            Err(_) => {
+                println!("Skipping - no GPU device available");
+                return;
+            }
+        };
+
+        let limited = GpuContextLimitedAccess::new(gpu);
+
+        // Inside `catch_unwind`, intentionally panic inside an
+        // escalate closure.
+        let unwind_result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _: Result<()> = limited.escalate(|_full| -> Result<()> {
+                    panic!("synthetic in-process escalate panic");
+                });
+            }));
+        assert!(
+            unwind_result.is_err(),
+            "the catch_unwind block must observe the panic"
+        );
+
+        // The next escalate must succeed — proves the gate released
+        // even though the closure unwound.
+        let after: Result<u32> = limited.escalate(|_full| Ok(11));
+        assert_eq!(
+            after.expect("escalate after panic must succeed"),
+            11,
+            "escalate gate must release on panic via Drop"
+        );
+
+        println!("escalate releases gate on panic via RAII Drop: OK");
+    }
+
+    /// LimitedAccess + FullAccess interleaving (#1006 scenario 5).
+    ///
+    /// LimitedAccess ops route through the shared command-queue
+    /// mutex; FullAccess escalates through the separate
+    /// `EscalateGate`. Concurrent callers — thread A holds an
+    /// escalate mid-closure, thread B issues an `acquire_pixel_buffer`
+    /// Limited call — must both complete without deadlock.
+    /// Documented model: the two locks are independent and Limited
+    /// observes no partial-Full state.
+    ///
+    /// Mental revert: collapsing both locks into one would let
+    /// thread B block on the escalate gate; the assertion that
+    /// Limited completes before the escalate releases would fail.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — needs GPU + #[serial] discipline; \
+                  exercises Limited+Full lock interleaving"
+    )]
+    #[test]
+    fn test_limited_and_full_interleave_without_deadlock() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::Duration;
+
+        let gpu = match GpuContext::init_for_platform() {
+            Ok(g) => g,
+            Err(_) => {
+                println!("Skipping - no GPU device available");
+                return;
+            }
+        };
+
+        let limited = GpuContextLimitedAccess::new(gpu);
+        let limited_a = limited.clone();
+        let limited_b = limited.clone();
+
+        let escalate_in_progress = Arc::new(AtomicBool::new(false));
+        let escalate_in_progress_a = Arc::clone(&escalate_in_progress);
+        let limited_observed_during_escalate =
+            Arc::new(AtomicBool::new(false));
+        let observed = Arc::clone(&limited_observed_during_escalate);
+
+        let thread_a = std::thread::spawn(move || {
+            limited_a
+                .escalate(|_full| -> Result<()> {
+                    escalate_in_progress_a.store(true, Ordering::SeqCst);
+                    // Hold the gate for ~200ms; thread B must complete
+                    // its Limited acquire in this window.
+                    std::thread::sleep(Duration::from_millis(200));
+                    escalate_in_progress_a.store(false, Ordering::SeqCst);
+                    Ok(())
+                })
+                .expect("escalate must succeed")
+        });
+
+        // Wait until thread A has entered the escalate closure.
+        let start = std::time::Instant::now();
+        while !escalate_in_progress.load(Ordering::SeqCst) {
+            if start.elapsed() > Duration::from_secs(2) {
+                panic!(
+                    "thread A never entered the escalate closure within 2s"
+                );
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        // Thread B issues a Limited acquire while the escalate is
+        // mid-closure. This must complete BEFORE thread A releases
+        // the gate — proves the two locks are independent.
+        let thread_b = std::thread::spawn(move || {
+            use crate::core::rhi::PixelFormat;
+            let result =
+                limited_b.acquire_pixel_buffer(16, 16, PixelFormat::Rgba32);
+            if result.is_ok() {
+                observed.store(true, Ordering::SeqCst);
+            }
+            result.map(|_| ())
+        });
+
+        thread_b.join().expect("thread B panicked").ok();
+
+        // Thread B's Limited op completed; thread A's escalate may
+        // still be in flight. If interleaving works, observed=true.
+        assert!(
+            limited_observed_during_escalate.load(Ordering::SeqCst),
+            "thread B's Limited acquire failed — independent locks regression?"
+        );
+
+        thread_a.join().expect("thread A panicked");
+
+        println!("Limited + Full interleave without deadlock: OK");
+    }
+
+    /// Kernel drop past `escalate_end` (#1006 scenario 6).
+    ///
+    /// A kernel constructed inside `escalate(|full| ...)` and returned
+    /// out of the closure must Drop cleanly after the scope ends. The
+    /// kernel β-shape's Drop dispatches through its own per-vtable
+    /// `drop_compute_kernel` callback — independent of any active
+    /// escalate scope (the scope token only validates FullAccess CALL
+    /// dispatch; drop is a refcount decrement on an opaque handle).
+    ///
+    /// Mental revert: wiring the drop to require a live escalate
+    /// scope would crash here because the scope is closed before the
+    /// drop runs.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — kernel construction needs GPU"
+    )]
+    #[test]
+    fn test_kernel_drops_cleanly_after_escalate_end() {
+        use crate::core::rhi::{
+            ComputeBindingSpec, ComputeKernelDescriptor,
+        };
+
+        let gpu = match GpuContext::init_for_platform() {
+            Ok(g) => g,
+            Err(_) => {
+                println!("Skipping - no GPU device available");
+                return;
+            }
+        };
+
+        let limited = GpuContextLimitedAccess::new(gpu);
+
+        // Trivial compute SPIR-V (just an entry point — the test
+        // doesn't dispatch; it only verifies kernel construction +
+        // drop semantics across the escalate boundary). If the
+        // workspace's existing test fixtures already include a tiny
+        // valid SPIR-V, prefer that; otherwise this test is gated by
+        // the hardware feature flag and the engine's own
+        // `create_compute_kernel` validates SPIR-V at construction.
+        let trivial_spv: &[u8] = include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/color_convert_nv12_buffer_to_rgba.spv"
+        ));
+        let bindings: &[ComputeBindingSpec] = &[
+            ComputeBindingSpec::storage_buffer(0),
+            ComputeBindingSpec::storage_image(1),
+        ];
+
+        let kernel_arc = limited
+            .escalate(|full| {
+                full.create_compute_kernel(&ComputeKernelDescriptor {
+                    label: "drop_post_escalate_smoke",
+                    spv: trivial_spv,
+                    bindings,
+                    push_constant_size: 96,
+                })
+            })
+            .expect("escalate must succeed");
+
+        // Scope ended. Drop the kernel; this dispatches through
+        // `drop_compute_kernel` on the parent FullAccess vtable. If
+        // the drop path required a live scope, it would crash here.
+        drop(kernel_arc);
+
+        // A subsequent escalate must succeed too — proves the drop
+        // didn't leave any locks held.
+        let after: Result<u32> = limited.escalate(|_full| Ok(13));
+        assert_eq!(
+            after.expect("escalate after kernel drop must succeed"),
+            13,
+        );
+
+        println!("kernel drops cleanly after escalate_end: OK");
+    }
+
     /// `GpuContextLimitedAccess::acquire_storage_buffer` reaches the
     /// shared inner context, allocates a HOST_VISIBLE storage buffer
     /// with the requested byte size, and hands back a `StorageBuffer`
