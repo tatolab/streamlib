@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use streamlib_jtd_codegen::{generate, GenerateOptions, RuntimeTarget};
 
 pub mod check_boundaries;
+pub mod check_cdylib_reach;
 pub mod check_no_reverse_dns;
 pub mod check_no_streamlib_metadata;
 pub mod check_processor_spec_new;
@@ -98,6 +99,14 @@ enum Commands {
     /// `<Module>::schema_ident()`).
     CheckProcessorSpecNew,
 
+    /// CI gate for the cdylib-reachability invariant on engine `Host*`
+    /// constructors. Fails when any constructor-class method
+    /// (`new*` / `create*` / `from_*`) inside an `impl HostVulkan*`
+    /// block in the engine RHI references `host_inner()` or
+    /// `host_callbacks()` — those break the cdylib direct-call path
+    /// documented at `docs/architecture/cdylib-reachability.md`.
+    CheckCdylibReach,
+
     /// Regenerate `schemas/streamlib.schema.json` from the Rust
     /// [`StreamlibYaml`](streamlib_processor_schema::StreamlibYaml) source of
     /// truth (#714). Editors with `yaml-language-server` consume this schema
@@ -147,6 +156,7 @@ fn main() -> Result<()> {
         }
         Commands::CheckNoReverseDns => check_no_reverse_dns::run(&workspace_root()?)?,
         Commands::CheckProcessorSpecNew => check_processor_spec_new::run(&workspace_root()?)?,
+        Commands::CheckCdylibReach => check_cdylib_reach::run(&workspace_root()?)?,
         Commands::EmitManifestSchema => manifest_schema::emit(&workspace_root()?)?,
         Commands::CheckManifestSchema => manifest_schema::check(&workspace_root()?)?,
     }
