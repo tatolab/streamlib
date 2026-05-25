@@ -1,8 +1,11 @@
 # yaml-language-server: $schema=../../../schemas/streamlib.schema.json
 #
-# Rust runner sub-package. The polyglot processor lives in the sibling
-# `../python/` (Python runtime) and `../deno/` (Deno runtime) sub-packages;
-# the runner picks which one to load at startup based on `--runtime`.
+# Rust runner sub-package. Declares deps on the sibling Python and Deno
+# sub-packages via `patch:` `path:` overrides — `Runner::load_project(".")`
+# walks this manifest, resolves the declared sub-packages against their
+# local paths, and registers every declared processor + schema. The
+# runner picks which sibling's processor to instantiate at startup based
+# on `--runtime`.
 
 package:
   org: tatolab
@@ -12,10 +15,16 @@ package:
 
 dependencies:
   "@tatolab/core": "^1.0.0"
+  "@tatolab/polyglot-vulkan-ray-tracing": "^0.1.0"
+  "@tatolab/polyglot-vulkan-ray-tracing-deno": "^0.1.0"
 
 patch:
   "@tatolab/core":
     path: ../../../packages/core
+  "@tatolab/polyglot-vulkan-ray-tracing":
+    path: ../python
+  "@tatolab/polyglot-vulkan-ray-tracing-deno":
+    path: ../deno
 
 schemas:
   ColorInfo:

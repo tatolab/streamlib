@@ -1,8 +1,10 @@
 # yaml-language-server: $schema=../../../schemas/streamlib.schema.json
 #
-# Rust runner sub-package. The polyglot processor lives in the sibling
-# `../python/` sub-package; Python is the only runtime today
-# (skia-python wraps the Skia C API).
+# Rust runner sub-package. Declares a dep on the sibling Python
+# sub-package via a `patch:` `path:` override — `Runner::load_project(".")`
+# walks this manifest, resolves the sub-package against its local path,
+# and registers its declared processor + schemas. Python is the only
+# runtime today (skia-python wraps the Skia C API).
 
 package:
   org: tatolab
@@ -12,10 +14,13 @@ package:
 
 dependencies:
   "@tatolab/core": "^1.0.0"
+  "@tatolab/polyglot-skia-canvas": "^0.1.0"
 
 patch:
   "@tatolab/core":
     path: ../../../packages/core
+  "@tatolab/polyglot-skia-canvas":
+    path: ../python
 
 schemas:
   ColorInfo:
