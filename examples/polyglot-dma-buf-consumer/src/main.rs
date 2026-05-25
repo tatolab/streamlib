@@ -31,10 +31,9 @@ use std::path::PathBuf;
 use streamlib::sdk::descriptors::SchemaIdent;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib_camera::CameraProcessor;
-use streamlib_display::DisplayProcessor;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::schema_ident;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeKind {
@@ -119,6 +118,13 @@ fn main() -> Result<()> {
 
     let runtime = Runner::new()?;
 
+    // Load `@tatolab/camera` and `@tatolab/display` at runtime — both
+    // must have been staged via `cargo xtask build-plugins`
+    // (`--package @tatolab/camera --package @tatolab/display`) first.
+    runtime
+        .load_workspace_packages(["@tatolab/camera", "@tatolab/display"])
+        .map_err(streamlib::sdk::error::Error::from)?;
+
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     match runtime_kind {
         RuntimeKind::Python => {
@@ -144,10 +150,10 @@ fn main() -> Result<()> {
         }
     }
 
-    let camera = runtime.add_processor(CameraProcessor::node(CameraProcessor::Config {
-        device_id: Some(device.clone()),
-        ..Default::default()
-    }))?;
+    let camera = runtime.add_processor(ProcessorSpec::new(
+        schema_ident!("tatolab", "camera", "Camera", "1.0.0"),
+        serde_json::json!({ "device_id": device }),
+    ))?;
     println!("+ Camera: {camera}");
 
     let consumer_config = serde_json::json!({
@@ -159,15 +165,17 @@ fn main() -> Result<()> {
     ))?;
     println!("+ Consumer: {consumer}");
 
-    let display = runtime.add_processor(DisplayProcessor::node(DisplayProcessor::Config {
-        width: 1920,
-        height: 1080,
-        title: Some(format!(
-            "streamlib polyglot DMA-BUF consumer ({})",
-            runtime_kind.as_str()
-        )),
-        ..Default::default()
-    }))?;
+    let display = runtime.add_processor(ProcessorSpec::new(
+        schema_ident!("tatolab", "display", "Display", "1.0.0"),
+        serde_json::json!({
+            "width": 1920,
+            "height": 1080,
+            "title": format!(
+                "streamlib polyglot DMA-BUF consumer ({})",
+                runtime_kind.as_str()
+            ),
+        }),
+    ))?;
     println!("+ Display: {display}");
 
     runtime.connect(

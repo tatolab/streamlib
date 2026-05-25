@@ -66,10 +66,9 @@ use streamlib::sdk::rhi::TextureFormat;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::error::Error;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib_camera::CameraProcessor;
-use streamlib_display::DisplayProcessor;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::schema_ident;
 use streamlib_adapter_abi::SurfaceId;
 use streamlib_consumer_rhi::VulkanLayout;
 
@@ -120,6 +119,14 @@ pub fn main() -> Result<()> {
 
     let runtime = Runner::new()?;
     let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python");
+
+    // Load `@tatolab/camera` and `@tatolab/display` at runtime — both
+    // must have been staged via
+    // `cargo xtask build-plugins --package @tatolab/camera --package @tatolab/display`
+    // before this example runs.
+    runtime
+        .load_workspace_packages(["@tatolab/camera", "@tatolab/display"])
+        .map_err(streamlib::sdk::error::Error::from)?;
 
     // Load processor package from streamlib.yaml. The Python processors
     // (avatar_character, cyberpunk_*) compile-import their adapter
@@ -205,10 +212,14 @@ pub fn main() -> Result<()> {
     // / v4l2loopback fixtures during E2E. Default `None` lets the camera
     // processor pick by capability.
     let device_id = std::env::var("STREAMLIB_CAMERA_DEVICE").ok();
-    let camera = runtime.add_processor(CameraProcessor::node(CameraProcessor::Config {
-        device_id,
-        ..Default::default()
-    }))?;
+    let camera_config = match device_id.as_deref() {
+        Some(id) => serde_json::json!({ "device_id": id }),
+        None => serde_json::json!({}),
+    };
+    let camera = runtime.add_processor(ProcessorSpec::new(
+        schema_ident!("tatolab", "camera", "Camera", "1.0.0"),
+        camera_config,
+    ))?;
     println!("✓ Camera added: {camera}\n");
 
     // Camera → CUDA copy processor (#612). Sits between the camera
@@ -331,14 +342,15 @@ pub fn main() -> Result<()> {
 
     // Display processor (Vulkan swapchain).
     println!("🖥️  Adding display processor...");
-    let display = runtime.add_processor(DisplayProcessor::node(DisplayProcessor::Config {
-        width: SURFACE_WIDTH,
-        height: SURFACE_HEIGHT,
-        title: Some("Cyberpunk Pipeline Linux (#484 + #485)".to_string()),
-        scaling_mode: Default::default(),
-        vsync: Some(true),
-        ..Default::default()
-    }))?;
+    let display = runtime.add_processor(ProcessorSpec::new(
+        schema_ident!("tatolab", "display", "Display", "1.0.0"),
+        serde_json::json!({
+            "width": SURFACE_WIDTH,
+            "height": SURFACE_HEIGHT,
+            "title": "Cyberpunk Pipeline Linux (#484 + #485)",
+            "vsync": true,
+        }),
+    ))?;
     println!("✓ Display added: {display}\n");
 
     // Wire camera → camera_to_cuda → avatar (PiP) and the camera
