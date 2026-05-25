@@ -146,7 +146,7 @@ fn vulkan_compute_backend_eagerly_transitions_ring_slots_to_general_and_updates_
     for slot_index in 0..backend.ring().len() {
         let slot = backend.ring().slot(slot_index).expect("ring slot");
         let reg = gpu
-            .resolve_texture_registration_by_surface_id(&slot.surface_id, None, 64, 64)
+            .resolve_texture_registration_by_surface_id(&slot.surface_id(), None, 64, 64)
             .expect("registration in cache");
         assert_eq!(
             reg.current_layout(),

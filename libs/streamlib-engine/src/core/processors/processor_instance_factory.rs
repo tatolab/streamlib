@@ -25,7 +25,8 @@ const VTABLE_ERR_BUF_CAP: usize = 512;
 
 /// A created processor instance for runtime use.
 ///
-/// Two-variant: cdylib + inventory-registered processors land in
+/// Two-variant: cdylib registrations (via `STREAMLIB_PLUGIN`) and
+/// in-process `PROCESSOR_REGISTRY.register::<P>()` calls both land in
 /// [`Self::VTable`] (dispatch via extern "C" fn pointers, retiring
 /// the dyn-trait crossing class); legacy non-generic registrations
 /// (subprocess host wrappers via [`ProcessorInstanceFactory::register_dynamic`])
@@ -43,10 +44,12 @@ const VTABLE_ERR_BUF_CAP: usize = 512;
 /// Connection-wiring code on the host operates on the inner Arc
 /// directly (no FFI hop).
 pub enum ProcessorInstance {
-    /// Cdylib- or inventory-registered processor. `instance_ptr` is
-    /// a `Box::into_raw(Box::<P>::new(...))` allocation on the
+    /// Vtable-dispatched processor — cdylib registrations (via
+    /// `STREAMLIB_PLUGIN`) and in-process `register::<P>()` calls
+    /// both land here. `instance_ptr` is a
+    /// `Box::into_raw(Box::<P>::new(...))` allocation on the
     /// registering DSO's heap (cdylib for cross-DSO loads, host for
-    /// inventory). Dropped via `vtable.destroy`.
+    /// in-process registration). Dropped via `vtable.destroy`.
     ///
     /// `any_placeholder` is a ZST anchor whose `&mut` reference
     /// satisfies the `as_any_mut() -> &mut dyn Any` shape without
@@ -592,18 +595,6 @@ impl ProcessorInstance {
     }
 }
 
-/// Types used by macro-generated code. Not for direct use.
-pub mod macro_codegen {
-    use super::ProcessorInstanceFactory;
-
-    /// Registration entry for auto-registration of processor factories via inventory.
-    pub struct FactoryRegistration {
-        pub register_fn: fn(&ProcessorInstanceFactory),
-    }
-
-    inventory::collect!(FactoryRegistration);
-}
-
 /// Legacy-path factory function signature used by
 /// [`ProcessorInstanceFactory::register_dynamic`] for subprocess
 /// host wrappers (Python / Deno) that don't fit the generic vtable
@@ -611,13 +602,6 @@ pub mod macro_codegen {
 pub type DynamicProcessorConstructorFn = Box<
     dyn Fn(&ProcessorNode) -> Result<Box<dyn DynGeneratedProcessor + Send>> + Send + Sync,
 >;
-
-/// Result of processor registration.
-#[derive(Debug, Clone)]
-pub struct RegisterResult {
-    /// Number of processors registered.
-    pub count: usize,
-}
 
 /// Per-type registration entry the factory stores.
 enum RegistrationKind {
@@ -648,15 +632,20 @@ pub struct ProcessorInstanceFactory {
 }
 
 /// Global processor registry for runtime lookups.
-/// Auto-registers all processors collected via inventory on first access.
-pub static PROCESSOR_REGISTRY: LazyLock<ProcessorInstanceFactory> = LazyLock::new(|| {
-    let factory = ProcessorInstanceFactory::new();
-    // Auto-register all processors; ignore errors here (Runner::new checks for empty registry)
-    for registration in inventory::iter::<macro_codegen::FactoryRegistration> {
-        (registration.register_fn)(&factory);
-    }
-    factory
-});
+///
+/// Starts empty. Callers populate it through one of two paths:
+///
+/// - **Cdylib packages** loaded via `runtime.load_project(...)` /
+///   `runtime.load_package(...)` register their processors through the
+///   plugin ABI's `STREAMLIB_PLUGIN` symbol, which calls the host's
+///   `processor_register` callback (see
+///   [`crate::core::plugin::host_services`]).
+/// - **In-process Rust callers** invoke
+///   [`ProcessorInstanceFactory::register`] (typed) or
+///   [`ProcessorInstanceFactory::register_dynamic`] (subprocess host
+///   wrappers) directly on the registry.
+pub static PROCESSOR_REGISTRY: LazyLock<ProcessorInstanceFactory> =
+    LazyLock::new(ProcessorInstanceFactory::new);
 
 impl Default for ProcessorInstanceFactory {
     fn default() -> Self {
@@ -672,19 +661,6 @@ impl ProcessorInstanceFactory {
             descriptors: RwLock::new(HashMap::new()),
             schemas: RwLock::new(HashSet::new()),
         }
-    }
-
-    /// Register all processors collected via inventory at link time.
-    /// Safe to call multiple times - duplicates are skipped. Empty
-    /// inventory is a valid state: apps that compose processors via
-    /// `load_project()` instead of compile-time inventory have an
-    /// empty registry at construction and populate it later.
-    pub fn register_all_processors(&self) -> RegisterResult {
-        for registration in inventory::iter::<macro_codegen::FactoryRegistration> {
-            (registration.register_fn)(self);
-        }
-        let count = self.registrations.read().len();
-        RegisterResult { count }
     }
 
     /// Register a processor type with the vtable shape. Monomorphizes a

@@ -16,6 +16,7 @@ use streamlib_jtd_codegen::{generate, GenerateOptions, RuntimeTarget};
 pub mod build_plugins;
 pub mod check_boundaries;
 pub mod check_cdylib_reach;
+pub mod check_no_inventory_submit;
 pub mod check_no_reverse_dns;
 pub mod check_no_streamlib_metadata;
 pub mod check_processor_spec_new;
@@ -92,6 +93,15 @@ enum Commands {
     /// `tests/`, `*_test{s}.rs`), and Rust comments are allowed. See
     /// `docs/architecture/schema-identity-and-packaging.md`.
     CheckNoReverseDns,
+
+    /// CI gate for #793's all-dynamic registration rule. Fails on any
+    /// `inventory::submit!(FactoryRegistration { ... })` in live code —
+    /// the `#[processor]` macro no longer emits one, and reintroducing
+    /// the pattern would bypass the dynamic-load model from milestone
+    /// `All-Dynamic Package Loading` (#20). `RuntimeInitHookRegistration`
+    /// inventory submissions are unaffected — only `FactoryRegistration`
+    /// is flagged.
+    CheckNoInventorySubmit,
 
     /// CI gate for the structured-everywhere `ProcessorSpec` rule from
     /// #707. Fails on `ProcessorSpec::new("PascalCase", ...)` — every
@@ -175,6 +185,7 @@ fn main() -> Result<()> {
             check_no_streamlib_metadata::run(&workspace_root()?)?
         }
         Commands::CheckNoReverseDns => check_no_reverse_dns::run(&workspace_root()?)?,
+        Commands::CheckNoInventorySubmit => check_no_inventory_submit::run(&workspace_root()?)?,
         Commands::CheckProcessorSpecNew => check_processor_spec_new::run(&workspace_root()?)?,
         Commands::CheckCdylibReach => check_cdylib_reach::run(&workspace_root()?)?,
         Commands::EmitManifestSchema => manifest_schema::emit(&workspace_root()?)?,

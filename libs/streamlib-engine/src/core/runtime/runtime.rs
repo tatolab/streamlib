@@ -188,12 +188,13 @@ impl Runner {
         tracing::debug!("STREAMLIB_HOME: {}", streamlib_home.display());
         crate::core::runtime_hooks::run_init_hooks(&streamlib_home)?;
 
-        // Register all processors from inventory before any add_processor calls.
-        // This populates the global registry with link-time registered processors.
-        // Empty inventory is valid — apps that compose processors via `load_project()`
-        // start with `count == 0` and populate the registry afterwards.
-        let result = crate::core::processors::PROCESSOR_REGISTRY.register_all_processors();
-        tracing::debug!("Registered {} processors from inventory", result.count);
+        // The engine substrate is empty by construction — there are no
+        // compile-time-linked processors. Callers populate the
+        // `PROCESSOR_REGISTRY` after `Runner::new()` returns via
+        // `runtime.load_project(...)` / `runtime.load_package(...)` (which
+        // dlopen plugin cdylibs and register through the host's
+        // `processor_register` callback) or via direct
+        // `PROCESSOR_REGISTRY.register::<P>()` calls in-process.
 
         // Bridge iceoryx2's internal log records into streamlib tracing
         // before creating the iceoryx2 Node so any iceoryx2 emit at
@@ -2329,6 +2330,38 @@ mod tests {
     fn test_runtime_creation() {
         let _runtime = Runner::new();
         // Runtime creates successfully
+    }
+
+    /// Locks one half of the empty-substrate invariant from issue
+    /// #793 / the All-Dynamic Package Loading milestone:
+    /// `Runner::new()` itself must not walk any compile-time-linked
+    /// registration source. The other half — the `#[processor]` macro
+    /// not emitting `inventory::submit!(FactoryRegistration { ... })`
+    /// — is locked by `xtask check-no-inventory-submit` in CI, not by
+    /// this test.
+    ///
+    /// Together the two locks make regression impossible: even if a
+    /// future agent re-introduces the macro emission, `Runner::new()`
+    /// has nothing to walk it with, and even if a future agent re-adds
+    /// a registry-walking call to `Runner::new()`, the CI gate refuses
+    /// any `inventory::submit!(FactoryRegistration ...)` for it to find.
+    ///
+    /// `PROCESSOR_REGISTRY` is a process-global `LazyLock` and earlier
+    /// tests in the same binary may have populated it, so the
+    /// assertion is over the *delta* `Runner::new()` introduces, not
+    /// the absolute size.
+    #[test]
+    #[serial]
+    fn runner_new_registers_zero_processors() {
+        use crate::core::processors::PROCESSOR_REGISTRY;
+        let before = PROCESSOR_REGISTRY.list_registered().len();
+        let _runtime = Runner::new().expect("Runner::new");
+        let after = PROCESSOR_REGISTRY.list_registered().len();
+        assert_eq!(
+            after, before,
+            "Runner::new() must not register any processors — the engine \
+             substrate ships empty (issue #793). Delta: {before} → {after}."
+        );
     }
 
     #[test]

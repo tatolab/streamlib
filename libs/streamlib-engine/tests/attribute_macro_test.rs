@@ -9,11 +9,12 @@
 use streamlib_engine::core::GeneratedProcessor;
 use streamlib_engine::core::{EmptyConfig, Result, RuntimeContextFullAccess};
 
-// Define a simple processor using YAML schema. `no_inventory` opts out
-// of the macro's `inventory::submit!` emission — this test only exercises
-// the macro's typed-API surface (descriptor + ident + port markers) and
-// doesn't need the processor in the global `PROCESSOR_REGISTRY`.
-#[streamlib::sdk::processor("TestProcessor", no_inventory)]
+// Define a simple processor using YAML schema. The macro emits the
+// type, port markers, descriptor, and `schema_ident()` accessor — it
+// never auto-registers. This test exercises the macro's typed-API
+// surface (descriptor + ident + port markers) and intentionally does
+// not register the processor in the global `PROCESSOR_REGISTRY`.
+#[streamlib::sdk::processor("TestProcessor")]
 pub struct TestProcessor;
 
 // User implements the Processor trait on the generated Processor struct
