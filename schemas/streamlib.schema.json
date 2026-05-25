@@ -533,9 +533,9 @@
       "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
     },
     "SemVerRange": {
-      "description": "SemVer range matcher: `=1.2.3` exact, `>=1.2.3` lower bound, `^1.2.3` caret (npm), `~1.2.3` tilde, or bare `1.2.3` (exact).",
+      "description": "SemVer range matcher: `*` (any), `=1.2.3` exact, `>=1.2.3` lower bound, `^1.2.3` caret (npm), `~1.2.3` tilde, or bare `1.2.3` (exact).",
       "type": "string",
-      "pattern": "^(\\^|~|>=|=)?[0-9]+\\.[0-9]+\\.[0-9]+$"
+      "pattern": "^(\\*|(\\^|~|>=|=)?[0-9]+\\.[0-9]+\\.[0-9]+)$"
     },
     "ThreadPriority": {
       "description": "Thread scheduling priority.\n\nSerializes as `\"realtime\"` / `\"high\"` / `\"normal\"` so YAML manifests can declare `scheduling: { priority: high }` without PascalCase noise.",
