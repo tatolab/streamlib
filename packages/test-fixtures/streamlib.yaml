@@ -42,6 +42,8 @@ schemas:
     file: schemas/concurrent_escalate_test_processor_config.yaml
   CpuReadbackSmokeTestProcessorConfig:
     file: schemas/cpu_readback_smoke_test_processor_config.yaml
+  VulkanSmokeTestProcessorConfig:
+    file: schemas/vulkan_smoke_test_processor_config.yaml
 
 processors:
   - name: TestConfiguredProcessor
@@ -139,3 +141,11 @@ processors:
     config:
       name: config
       schema: CpuReadbackSmokeTestProcessorConfig
+
+  - name: VulkanSmokeTestProcessor
+    version: 1.0.0
+    description: "Dlopen-cdylib surface-adapter smoke fixture for the vulkan adapter. Exercises the cdylib-side adapter-construction chain end-to-end: host_vulkan_device_arc, acquire_render_target_dma_buf_image + host_vulkan_texture_arc, direct HostVulkanTimelineSemaphore::new, VulkanSurfaceAdapter::new, register_host_surface, acquire_write, vk_image() handle assertion."
+    execution: manual
+    config:
+      name: config
+      schema: VulkanSmokeTestProcessorConfig

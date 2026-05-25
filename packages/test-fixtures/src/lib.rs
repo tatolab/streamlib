@@ -21,6 +21,7 @@ pub mod panicking_lifecycle_processor;
 pub mod ray_tracing_kernel_smoke_test_processor;
 pub mod tcp_bind_test_processor;
 pub mod test_configured_processor;
+pub mod vulkan_smoke_test_processor;
 
 pub use compute_kernel_test_processor::ComputeKernelTest;
 pub use concurrent_escalate_test_processor::ConcurrentEscalateTest;
@@ -35,6 +36,7 @@ pub use panicking_lifecycle_processor::{
 pub use ray_tracing_kernel_smoke_test_processor::RayTracingKernelSmokeTest;
 pub use tcp_bind_test_processor::TcpBindTest;
 pub use test_configured_processor::ConfiguredProcessor;
+pub use vulkan_smoke_test_processor::VulkanSmokeTest;
 
 #[cfg(feature = "plugin")]
 streamlib_plugin_abi::export_plugin!(
@@ -50,4 +52,5 @@ streamlib_plugin_abi::export_plugin!(
     crate::PanickingContinuousLifecycle::Processor,
     crate::ConcurrentEscalateTest::Processor,
     crate::CpuReadbackSmokeTest::Processor,
+    crate::VulkanSmokeTest::Processor,
 );
