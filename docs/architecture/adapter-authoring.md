@@ -656,7 +656,7 @@ unchanged.
 
 ### Reference
 
-Implementation: `examples/polyglot-opengl-fragment-shader/`
+Implementation: `examples/polyglot-opengl-fragment-shader/runner/`
 demonstrates the pattern end-to-end for both Python and Deno
 runtimes. The host main.rs allocates and registers the timeline;
 the python/deno scenario binaries dual-register and call

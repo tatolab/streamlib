@@ -2808,7 +2808,7 @@ mod tests {
     /// `register_compute_kernel` / `run_compute_kernel` end-to-end
     /// (bridge missing, invalid hex, kernel_id stability, unregistered
     /// kernel_id). The bridge implementation lives in application setup
-    /// glue (`examples/polyglot-vulkan-compute/src/main.rs`); these
+    /// glue (`examples/polyglot-vulkan-compute/runner/src/main.rs`); these
     /// tests use a synthetic in-test bridge so the contract holds even
     /// when no GPU is available.
     #[cfg(target_os = "linux")]

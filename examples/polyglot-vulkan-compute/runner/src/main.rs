@@ -345,9 +345,15 @@ fn main() -> Result<()> {
         .map_err(streamlib::sdk::error::Error::from)?;
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let example_root = manifest_dir
+        .parent()
+        .ok_or_else(|| Error::Configuration(
+            "runner manifest dir has no parent".into(),
+        ))?
+        .to_path_buf();
     match runtime_kind {
         RuntimeKind::Python => {
-            let slpkg_path = manifest_dir
+            let slpkg_path = example_root
                 .join("python/polyglot-vulkan-compute-0.1.0.slpkg");
             if !slpkg_path.exists() {
                 return Err(Error::Configuration(format!(
@@ -358,7 +364,7 @@ fn main() -> Result<()> {
             runtime.load_package(&slpkg_path)?;
         }
         RuntimeKind::Deno => {
-            let project_path = manifest_dir.join("deno");
+            let project_path = example_root.join("deno");
             if !project_path.join("streamlib.yaml").exists() {
                 return Err(Error::Configuration(format!(
                     "Deno project not found: {}",
