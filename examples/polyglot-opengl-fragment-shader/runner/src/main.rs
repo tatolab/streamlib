@@ -224,7 +224,6 @@ fn main() -> Result<()> {
         .load_workspace_packages(["@tatolab/debug-utilities"])
         .map_err(streamlib::sdk::error::Error::from)?;
 
-    // Load the polyglot fragment-shader processor (Python or Deno subprocess host).
     // Load the polyglot processors declaratively. The runner's
     // `streamlib.yaml` declares both the Python and Deno sub-packages
     // via `patch:` `path:` overrides; `load_project` walks the manifest,

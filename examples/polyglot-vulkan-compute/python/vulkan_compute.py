@@ -40,7 +40,7 @@ Config keys:
     shader_spv_hex (str, required)
         Hex-encoded SPIR-V bytecode for the Mandelbrot compute shader,
         compiled at example-build-time from
-        ``examples/polyglot-vulkan-compute/shaders/mandelbrot.comp``.
+        ``examples/polyglot-vulkan-compute/runner/shaders/mandelbrot.comp``.
 """
 
 from __future__ import annotations
