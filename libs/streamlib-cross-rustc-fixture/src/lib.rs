@@ -67,7 +67,7 @@ use streamlib::sdk::rhi::{
     GraphicsShaderStageFlags, GraphicsStage, MultisampleState, NativeTextureHandle, PixelFormat,
     PrimitiveTopology, RasterizationState, RayTracingBindingSpec, RayTracingKernelDescriptor,
     RayTracingPushConstants, RayTracingShaderGroup, RayTracingShaderStageFlags, RayTracingStage,
-    TextureFormat, TextureUsages, VertexInputState,
+    TextureFormat, TextureUsages, VertexInputState, VulkanLayout,
 };
 
 #[cfg(target_os = "linux")]
@@ -381,6 +381,85 @@ fn run_beta_shape_round_trip(ctx: &RuntimeContextFullAccess<'_>) -> Result<Strin
         } else {
             summary.push_str("VulkanAccelerationStructure:SKIPPED_NO_RT_SUPPORT\n");
             summary.push_str("VulkanRayTracingKernel:SKIPPED_NO_RT_SUPPORT\n");
+        }
+
+        // -------- streamlib-consumer-rhi POD round-trip (#1039) --------
+        //
+        // The POD types in consumer-rhi (TextureFormat / TextureUsages /
+        // PixelFormat / VulkanLayout) cross the plugin FFI boundary as
+        // bare scalars: adapter and FullAccess vtables carry `u32` /
+        // `i32` payloads that get reconstituted on the receiving side
+        // via the type's `as`/`from_bits_truncate`/`VulkanLayout(raw)`
+        // round-trip. The consumer-rhi crate locks each type's
+        // discriminants / bit pattern at the data-structure level via
+        // `#[cfg(test)] mod layout_tests` (#1039); this block is the
+        // cross-rustc analogue — it constructs each POD instance
+        // *inside the divergently-compiled fixture* and asserts the
+        // discriminant matches the expected scalar. If a future drift
+        // in consumer-rhi changed the byte representation under the
+        // fixture's compilation but not the host's (or vice versa),
+        // the discriminant comparison fires here before any host code
+        // sees a mis-mapped enumerant.
+        //
+        // Run unconditionally (POD only — no GPU dependency, no
+        // platform gating).
+        let mut consumer_rhi_ok = true;
+        macro_rules! check {
+            ($cond:expr, $msg:expr) => {
+                if !($cond) {
+                    summary.push_str(&format!("ConsumerRhi:{}:FAIL\n", $msg));
+                    consumer_rhi_ok = false;
+                }
+            };
+        }
+        // TextureFormat: explicit u32 discriminants.
+        check!(TextureFormat::Rgba8Unorm as u32 == 0, "TextureFormat::Rgba8Unorm");
+        check!(TextureFormat::Rgba8UnormSrgb as u32 == 1, "TextureFormat::Rgba8UnormSrgb");
+        check!(TextureFormat::Bgra8Unorm as u32 == 2, "TextureFormat::Bgra8Unorm");
+        check!(TextureFormat::Bgra8UnormSrgb as u32 == 3, "TextureFormat::Bgra8UnormSrgb");
+        check!(TextureFormat::Rgba16Float as u32 == 4, "TextureFormat::Rgba16Float");
+        check!(TextureFormat::Rgba32Float as u32 == 5, "TextureFormat::Rgba32Float");
+        check!(TextureFormat::Nv12 as u32 == 6, "TextureFormat::Nv12");
+        // TextureUsages: bit-pattern + from_bits_truncate round-trip.
+        check!(TextureUsages::NONE.bits() == 0, "TextureUsages::NONE");
+        check!(TextureUsages::COPY_SRC.bits() == 1 << 0, "TextureUsages::COPY_SRC");
+        check!(TextureUsages::COPY_DST.bits() == 1 << 1, "TextureUsages::COPY_DST");
+        check!(TextureUsages::TEXTURE_BINDING.bits() == 1 << 2, "TextureUsages::TEXTURE_BINDING");
+        check!(TextureUsages::STORAGE_BINDING.bits() == 1 << 3, "TextureUsages::STORAGE_BINDING");
+        check!(TextureUsages::RENDER_ATTACHMENT.bits() == 1 << 4, "TextureUsages::RENDER_ATTACHMENT");
+        let usages_combined = TextureUsages::COPY_SRC | TextureUsages::COPY_DST;
+        check!(
+            TextureUsages::from_bits_truncate(usages_combined.bits()) == usages_combined,
+            "TextureUsages::from_bits_truncate round-trip"
+        );
+        // PixelFormat: FourCC discriminants.
+        check!(PixelFormat::Bgra32 as u32 == 0x42475241, "PixelFormat::Bgra32");
+        check!(PixelFormat::Rgba32 as u32 == 0x52474241, "PixelFormat::Rgba32");
+        check!(PixelFormat::Nv12VideoRange as u32 == 0x34323076, "PixelFormat::Nv12VideoRange");
+        check!(PixelFormat::Nv12FullRange as u32 == 0x34323066, "PixelFormat::Nv12FullRange");
+        check!(PixelFormat::Unknown as u32 == 0x00000000, "PixelFormat::Unknown");
+        // VulkanLayout: pinned VkImageLayout enumerants.
+        check!(VulkanLayout::UNDEFINED.0 == 0, "VulkanLayout::UNDEFINED");
+        check!(VulkanLayout::GENERAL.0 == 1, "VulkanLayout::GENERAL");
+        check!(
+            VulkanLayout::COLOR_ATTACHMENT_OPTIMAL.0 == 2,
+            "VulkanLayout::COLOR_ATTACHMENT_OPTIMAL"
+        );
+        check!(
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL.0 == 5,
+            "VulkanLayout::SHADER_READ_ONLY_OPTIMAL"
+        );
+        check!(
+            VulkanLayout::TRANSFER_SRC_OPTIMAL.0 == 6,
+            "VulkanLayout::TRANSFER_SRC_OPTIMAL"
+        );
+        check!(
+            VulkanLayout::TRANSFER_DST_OPTIMAL.0 == 7,
+            "VulkanLayout::TRANSFER_DST_OPTIMAL"
+        );
+
+        if consumer_rhi_ok {
+            summary.push_str("ConsumerRhiPodRoundTrip:OK\n");
         }
 
         Ok(summary)

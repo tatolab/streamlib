@@ -348,3 +348,26 @@ pub trait VulkanRhiDevice: Send + Sync {
         target: vk::ImageLayout,
     ) -> Result<()>;
 }
+
+#[cfg(test)]
+mod layout_tests {
+    //! Layout regression tests for the privilege markers.
+    //!
+    //! [`ConsumerMarker`] is a zero-sized typestate token used in
+    //! `Arc<P::TimelineSemaphore>` / `Arc<P::Texture>` /
+    //! `Arc<P::Buffer>` parameterizations across adapter code. The
+    //! marker never crosses the FFI boundary by value — it's a
+    //! compile-time-only privilege witness — but locking its ZST
+    //! property catches a future field accidentally being added to
+    //! the marker (which would silently change the size of every
+    //! `D: VulkanRhiDevice<Privilege = ConsumerMarker>` adapter
+    //! that holds it).
+    use super::*;
+    use core::mem::{align_of, size_of};
+
+    #[test]
+    fn consumer_marker_is_zst() {
+        assert_eq!(size_of::<ConsumerMarker>(), 0);
+        assert_eq!(align_of::<ConsumerMarker>(), 1);
+    }
+}

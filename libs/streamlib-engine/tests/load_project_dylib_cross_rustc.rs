@@ -309,6 +309,23 @@ fn dlopen_cross_rustc_fixture_round_trips_every_beta_shape() {
         );
     }
 
+    // Consumer-rhi POD round-trip (#1039): the divergently-compiled
+    // fixture asserts every `streamlib-consumer-rhi` POD type
+    // (TextureFormat / TextureUsages / PixelFormat / VulkanLayout)
+    // produces the same scalar discriminants the host expects.
+    // A failure here means a consumer-rhi POD got re-numbered under
+    // the fixture's compilation but not the host's (or vice versa) —
+    // the exact kind of silent drift `#[repr(...)]` + discriminant
+    // pinning exists to catch.
+    assert!(
+        contents.contains("ConsumerRhiPodRoundTrip:OK"),
+        "missing consumer-rhi POD round-trip line — full body:\n{contents}"
+    );
+    assert!(
+        !contents.contains("ConsumerRhi:") || contents.contains("ConsumerRhiPodRoundTrip:OK"),
+        "consumer-rhi POD round-trip emitted a FAIL line — full body:\n{contents}"
+    );
+
     // `Texture::native_handle` (#957, Phase F) is gated on EGL exposing
     // a render-target-capable DRM modifier
     // (`docs/learnings/nvidia-egl-dmabuf-render-target.md`). Accept

@@ -46,7 +46,16 @@ impl TextureFormat {
 }
 
 /// Texture usage flags.
+///
+/// `#[repr(transparent)]` so the newtype is byte-equivalent to its
+/// inner `u32` across the plugin FFI boundary — adapter vtables
+/// frequently carry `usage_bits: u32` arguments that get reconstituted
+/// via [`Self::from_bits_truncate`] on the receiving side. Pinning the
+/// repr means a cdylib compiled with a different rustc/dep-graph than
+/// the host still reads / writes the bit pattern at the same byte
+/// offset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
 pub struct TextureUsages(u32);
 
 impl TextureUsages {
@@ -92,5 +101,68 @@ impl std::ops::BitOr for TextureUsages {
 impl std::ops::BitOrAssign for TextureUsages {
     fn bitor_assign(&mut self, rhs: Self) {
         self.0 |= rhs.0;
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    //! Layout regression tests for the FFI-crossing format primitives.
+    //!
+    //! Mirrors the pattern in `streamlib-plugin-abi`'s `layout_tests`
+    //! module: every byte offset, size, and alignment is asserted so a
+    //! silent rustc / dep-graph drift fails CI loudly. The discriminant
+    //! values for [`TextureFormat`] are part of the wire contract —
+    //! adapter vtables in `streamlib-adapter-*` pass them as bare
+    //! `u32` ([`crate::TextureFormat`] then reconstitutes via an `as`
+    //! cast). Changing a discriminant silently re-maps existing
+    //! cdylibs' format payloads onto the wrong host-side variant; the
+    //! discriminant pins below are the regression lock for that.
+    use super::*;
+    use core::mem::{align_of, size_of};
+
+    #[test]
+    fn texture_format_layout() {
+        assert_eq!(size_of::<TextureFormat>(), 4);
+        assert_eq!(align_of::<TextureFormat>(), 4);
+    }
+
+    #[test]
+    fn texture_format_discriminants_are_pinned() {
+        // Every variant's discriminant value IS the wire contract.
+        assert_eq!(TextureFormat::Rgba8Unorm as u32, 0);
+        assert_eq!(TextureFormat::Rgba8UnormSrgb as u32, 1);
+        assert_eq!(TextureFormat::Bgra8Unorm as u32, 2);
+        assert_eq!(TextureFormat::Bgra8UnormSrgb as u32, 3);
+        assert_eq!(TextureFormat::Rgba16Float as u32, 4);
+        assert_eq!(TextureFormat::Rgba32Float as u32, 5);
+        assert_eq!(TextureFormat::Nv12 as u32, 6);
+    }
+
+    #[test]
+    fn texture_usages_layout() {
+        // `#[repr(transparent)]` over `u32` — byte-equivalent to its
+        // single inner field so adapter vtables can pass a bare
+        // `u32` and the receiver can `TextureUsages::from_bits_truncate`
+        // it back without copying.
+        assert_eq!(size_of::<TextureUsages>(), size_of::<u32>());
+        assert_eq!(align_of::<TextureUsages>(), align_of::<u32>());
+    }
+
+    #[test]
+    fn texture_usages_bit_pattern_is_pinned() {
+        // The bit pattern IS the wire contract.
+        assert_eq!(TextureUsages::NONE.bits(), 0);
+        assert_eq!(TextureUsages::COPY_SRC.bits(), 1 << 0);
+        assert_eq!(TextureUsages::COPY_DST.bits(), 1 << 1);
+        assert_eq!(TextureUsages::TEXTURE_BINDING.bits(), 1 << 2);
+        assert_eq!(TextureUsages::STORAGE_BINDING.bits(), 1 << 3);
+        assert_eq!(TextureUsages::RENDER_ATTACHMENT.bits(), 1 << 4);
+    }
+
+    #[test]
+    fn texture_usages_from_bits_truncate_drops_unknown_bits() {
+        let known = TextureUsages::COPY_SRC | TextureUsages::COPY_DST;
+        let with_unknown = TextureUsages::from_bits_truncate(known.bits() | 0xFFFF_0000);
+        assert_eq!(with_unknown, known);
     }
 }
