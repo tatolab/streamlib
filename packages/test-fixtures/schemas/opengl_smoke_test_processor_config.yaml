@@ -1,0 +1,15 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# Test-only config schema for the opengl surface-adapter dlopen
+# smoke test.
+
+metadata:
+  type: OpenGlSmokeTestProcessorConfig
+  description: "Test config schema for the cdylib opengl surface-adapter dlopen smoke test."
+
+properties:
+  output_path:
+    metadata:
+      description: "Filesystem path where the processor writes its result. Format on success: 'OK\n<width>x<height>\ngl_texture=<n>'. Format on failure: 'ERR:<message>'. EGL-init failure is reported as 'SKIP:<reason>' so the test can tolerate hosts without an EGL display."
+    type: string

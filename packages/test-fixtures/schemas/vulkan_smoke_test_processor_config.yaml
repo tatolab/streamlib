@@ -1,0 +1,15 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# Test-only config schema for the vulkan surface-adapter dlopen
+# smoke test.
+
+metadata:
+  type: VulkanSmokeTestProcessorConfig
+  description: "Test config schema for the cdylib vulkan surface-adapter dlopen smoke test."
+
+properties:
+  output_path:
+    metadata:
+      description: "Filesystem path where the processor writes its result. Format on success: 'OK\n<width>x<height>\nvk_image=0x<hex>'. Format on failure: 'ERR:<message>'."
+    type: string
