@@ -12,6 +12,7 @@ pub mod _generated_ {
 
 pub mod compute_kernel_test_processor;
 pub mod concurrent_escalate_test_processor;
+pub mod cpu_readback_smoke_test_processor;
 pub mod escalate_smoke_test_processor;
 pub mod gpu_acquire_test_processor;
 pub mod graphics_kernel_smoke_test_processor;
@@ -23,6 +24,7 @@ pub mod test_configured_processor;
 
 pub use compute_kernel_test_processor::ComputeKernelTest;
 pub use concurrent_escalate_test_processor::ConcurrentEscalateTest;
+pub use cpu_readback_smoke_test_processor::CpuReadbackSmokeTest;
 pub use escalate_smoke_test_processor::EscalateSmokeTest;
 pub use gpu_acquire_test_processor::GpuAcquireTest;
 pub use graphics_kernel_smoke_test_processor::GraphicsKernelSmokeTest;
@@ -47,4 +49,5 @@ streamlib_plugin_abi::export_plugin!(
     crate::PanickingManualLifecycle::Processor,
     crate::PanickingContinuousLifecycle::Processor,
     crate::ConcurrentEscalateTest::Processor,
+    crate::CpuReadbackSmokeTest::Processor,
 );

@@ -1,0 +1,17 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# Test-only config schema for the cpu-readback surface-adapter dlopen
+# smoke test. The processor runs the cdylib-side adapter construction +
+# acquire/release round-trip from inside `gpu.escalate(...)`, writing
+# "OK" or "ERR:<msg>" to `output_path`.
+
+metadata:
+  type: CpuReadbackSmokeTestProcessorConfig
+  description: "Test config schema for the cdylib cpu-readback surface-adapter dlopen smoke test."
+
+properties:
+  output_path:
+    metadata:
+      description: "Filesystem path where the processor writes its result. Format on success: 'OK\n<width>x<height>\nbytes_written=<n>'. Format on failure: 'ERR:<message>'."
+    type: string
