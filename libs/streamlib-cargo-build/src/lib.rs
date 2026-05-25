@@ -374,11 +374,17 @@ pub fn stage_package_for_dev_load(
     host_triple: &str,
 ) -> Result<PathBuf> {
     use streamlib_idents::Manifest;
+    use streamlib_processor_schema::StreamlibYaml;
 
     let manifest_path = package_dir.join(Manifest::FILE_NAME);
     let manifest_body = std::fs::read_to_string(&manifest_path)
         .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
-    let mut manifest: Manifest = serde_yaml::from_str(&manifest_body)
+    // Parse as the full `StreamlibYaml` schema (not the slimmer
+    // `streamlib_idents::Manifest`) so the `processors:` list survives
+    // the re-serialize step. Dropping that list during staging silently
+    // turns a Rust-impl package into a schemas-only one and the
+    // runtime never registers the cdylib's processors.
+    let mut manifest: StreamlibYaml = serde_yaml::from_str(&manifest_body)
         .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
     let package = manifest.package.as_ref().ok_or_else(|| {
         anyhow::anyhow!(
@@ -968,6 +974,62 @@ patch:
             }
             other => panic!("expected Path-flavor patch, got: {:?}", other),
         }
+    }
+
+    #[test]
+    fn stage_package_for_dev_load_preserves_processors_and_env_lists() {
+        // Regression: staging must NOT drop the `processors:` list or
+        // any other field outside `streamlib_idents::Manifest`'s slim
+        // schema. Earlier shape parsed-and-reserialized via
+        // `streamlib_idents::Manifest` which has no `processors` field
+        // (nor `env`) — the round-trip silently turned every Rust-impl
+        // package into a schemas-only one and the runtime saw zero
+        // processors to register. Mentally reverting to parsing as
+        // Manifest would re-emit a yaml without `processors:`, and
+        // `load_workspace_packages` would proceed without ever
+        // dlopening the cdylib's processor registrations, surfacing
+        // as `UnknownProcessorType` at the first `add_processor`
+        // call. Asserting on BOTH `processors` and `env` widens the
+        // regression net — any future intermediate struct that
+        // captures one but not the other would fail this test.
+        let src = tempdir().unwrap();
+        write_minimal_manifest(
+            src.path(),
+            "tatolab",
+            "demo",
+            r#"processors:
+  - name: DemoProcessor
+    version: 1.0.0
+    description: "demo"
+    runtime:
+      language: rust
+    execution: manual
+    inputs: []
+    outputs: []
+env:
+  DEMO_KEY: "demo-value"
+"#,
+        );
+
+        let staged_root = tempdir().unwrap();
+        let staged = stage_package_for_dev_load(
+            src.path(),
+            staged_root.path(),
+            None,
+            "x86_64-unknown-linux-gnu",
+        )
+        .unwrap();
+
+        let body = std::fs::read_to_string(staged.join("streamlib.yaml")).unwrap();
+        let restaged: streamlib_processor_schema::StreamlibYaml =
+            serde_yaml::from_str(&body).unwrap();
+        assert_eq!(restaged.processors.len(), 1, "processors list must round-trip");
+        assert_eq!(restaged.processors[0].name, "DemoProcessor");
+        assert_eq!(
+            restaged.env.get("DEMO_KEY").map(String::as_str),
+            Some("demo-value"),
+            "env map must round-trip"
+        );
     }
 
     #[test]
