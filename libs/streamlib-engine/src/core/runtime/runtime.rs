@@ -188,12 +188,13 @@ impl Runner {
         tracing::debug!("STREAMLIB_HOME: {}", streamlib_home.display());
         crate::core::runtime_hooks::run_init_hooks(&streamlib_home)?;
 
-        // Register all processors from inventory before any add_processor calls.
-        // This populates the global registry with link-time registered processors.
-        // Empty inventory is valid — apps that compose processors via `load_project()`
-        // start with `count == 0` and populate the registry afterwards.
-        let result = crate::core::processors::PROCESSOR_REGISTRY.register_all_processors();
-        tracing::debug!("Registered {} processors from inventory", result.count);
+        // The engine substrate is empty by construction — there are no
+        // compile-time-linked processors. Callers populate the
+        // `PROCESSOR_REGISTRY` after `Runner::new()` returns via
+        // `runtime.load_project(...)` / `runtime.load_package(...)` (which
+        // dlopen plugin cdylibs and register through the host's
+        // `processor_register` callback) or via direct
+        // `PROCESSOR_REGISTRY.register::<P>()` calls in-process.
 
         // Bridge iceoryx2's internal log records into streamlib tracing
         // before creating the iceoryx2 Node so any iceoryx2 emit at
@@ -2329,6 +2330,43 @@ mod tests {
     fn test_runtime_creation() {
         let _runtime = Runner::new();
         // Runtime creates successfully
+    }
+
+    /// Locks the empty-substrate invariant from issue #793 / the
+    /// All-Dynamic Package Loading milestone: `Runner::new()` must NOT
+    /// populate the global `PROCESSOR_REGISTRY` from any
+    /// compile-time-linked source. Every processor reaches the registry
+    /// through `runtime.load_project(...)` /
+    /// `runtime.load_package(...)` (cdylib `STREAMLIB_PLUGIN` callback)
+    /// or via an explicit `PROCESSOR_REGISTRY.register::<P>()` call.
+    ///
+    /// Reverting the `inventory::submit!` emission removal would flip
+    /// this assertion the moment any in-tree crate with a
+    /// `#[processor]`-decorated type linked into the engine's test
+    /// binary — which would be the regression the gate exists to
+    /// prevent. The engine substrate ships empty by construction.
+    ///
+    /// NOTE: this test uses `register_descriptor_only` for any
+    /// engine-internal mock processors lazily registered by earlier
+    /// tests in the same binary — the assertion runs against the
+    /// registry's state immediately after `Runner::new()` returns,
+    /// before any test-local registration. Because `PROCESSOR_REGISTRY`
+    /// is a process-global `LazyLock` that earlier tests may have
+    /// populated, this test asserts the *delta* introduced by
+    /// `Runner::new()` is zero rather than asserting the absolute size
+    /// is zero — `Runner::new()` itself contributes no entries.
+    #[test]
+    #[serial]
+    fn runner_new_registers_zero_processors() {
+        use crate::core::processors::PROCESSOR_REGISTRY;
+        let before = PROCESSOR_REGISTRY.list_registered().len();
+        let _runtime = Runner::new().expect("Runner::new");
+        let after = PROCESSOR_REGISTRY.list_registered().len();
+        assert_eq!(
+            after, before,
+            "Runner::new() must not register any processors — the engine \
+             substrate ships empty (issue #793). Delta: {before} → {after}."
+        );
     }
 
     #[test]

@@ -5,16 +5,15 @@
 //!
 //! The TestMock processor types live here so engine tests can drive
 //! graph + compiler code without depending on any external package's
-//! processors. They are declared with `no_inventory` so registration
-//! is explicit (via [`ensure_test_mocks_registered`]) rather than
-//! happening at link-time via the macro's `inventory::submit!`.
+//! processors. The `#[processor]` macro never auto-registers; tests
+//! register the mocks explicitly via [`ensure_test_mocks_registered`].
 
 use std::sync::Once;
 
 use crate::core::processors::PROCESSOR_REGISTRY;
 
 /// Mock processor with two input ports + two output ports.
-#[crate::processor("TestMockProcessor", no_inventory)]
+#[crate::processor("TestMockProcessor", )]
 pub(crate) struct MockProcessor;
 
 impl crate::core::ManualProcessor for MockProcessor::Processor {
@@ -39,7 +38,7 @@ impl crate::core::ManualProcessor for MockProcessor::Processor {
 }
 
 /// Mock processor with only output ports.
-#[crate::processor("TestMockOutputOnlyProcessor", no_inventory)]
+#[crate::processor("TestMockOutputOnlyProcessor", )]
 pub(crate) struct MockOutputOnlyProcessor;
 
 impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
@@ -64,7 +63,7 @@ impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
 }
 
 /// Mock processor with only input ports.
-#[crate::processor("TestMockInputOnlyProcessor", no_inventory)]
+#[crate::processor("TestMockInputOnlyProcessor", )]
 pub(crate) struct MockInputOnlyProcessor;
 
 impl crate::core::ManualProcessor for MockInputOnlyProcessor::Processor {

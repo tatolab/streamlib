@@ -24,19 +24,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::processors::ProcessorSpec;
+use streamlib::sdk::processors::{ProcessorSpec, PROCESSOR_REGISTRY};
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::schema_ident;
 use streamlib_vadr_vision::header::{ChunkHeader, encode};
 
-#[allow(unused_imports)]
-use streamlib_display::DisplayProcessor as _;
-#[allow(unused_imports)]
-use streamlib_jpeg::JpegDecoderProcessor as _;
-#[allow(unused_imports)]
-use streamlib_network::UdpSourceProcessor as _;
-#[allow(unused_imports)]
-use streamlib_vadr_vision::VadrVisionDepayloaderProcessor as _;
+/// Explicit typed registration for every processor this demo drives.
+/// The engine substrate ships empty — no link-time inventory walk
+/// auto-registers anything — so the demo populates the registry
+/// before any `runtime.add_processor` call.
+fn register_demo_processors() {
+    PROCESSOR_REGISTRY.register::<streamlib_network::UdpSourceProcessor::Processor>();
+    PROCESSOR_REGISTRY
+        .register::<streamlib_vadr_vision::VadrVisionDepayloaderProcessor::Processor>();
+    PROCESSOR_REGISTRY.register::<streamlib_jpeg::JpegDecoderProcessor::Processor>();
+    PROCESSOR_REGISTRY.register::<streamlib_display::DisplayProcessor::Processor>();
+}
 
 const CHUNK_PAYLOAD_BYTES: usize = 1200;
 const SEND_FPS: u32 = 15;
@@ -117,6 +120,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("UdpSource will bind: {bind_addr}");
 
     let runtime = Runner::new()?;
+    register_demo_processors();
 
     let source_id = runtime.add_processor(ProcessorSpec::new(
         schema_ident!("tatolab", "network", "UdpSource", "1.0.0"),

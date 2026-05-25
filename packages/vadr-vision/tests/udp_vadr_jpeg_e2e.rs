@@ -18,6 +18,11 @@
 //! `inventory::submit!` factory registration, and the actual UDP path
 //! the deployed pipeline uses.
 //!
+//! Per-test setup registers the package processors explicitly via
+//! `PROCESSOR_REGISTRY.register::<P>()` — the engine substrate ships
+//! empty and the `#[streamlib::sdk::processor]` macro never
+//! auto-registers.
+//!
 //! Marked `#[serial]` so multiple test binaries don't race on UDP port
 //! binding or the `VideoFrameCounter`'s process-global atomics.
 
@@ -222,7 +227,9 @@ fn run_pipeline(bind_addr: SocketAddr, jpeg: &[u8], frames: u32) {
 /// 2. `#[streamlib::sdk::processor]` macro plumbing — `setup` runs
 ///    with `FullAccess`, `process` runs with `LimitedAccess`, ports
 ///    `chunks_in` / `jpeg_out` are wired to the right schema variants,
-///    `inventory::submit!` factory is reachable from the link line.
+///    and the explicit `PROCESSOR_REGISTRY.register::<P>()` calls in
+///    `register_test_processors` populate the factory from the link
+///    line.
 /// 3. The real UDP path (`recv_loop` → `outputs.write` → iceoryx2 →
 ///    depayloader's `inputs.read`) — the udp_loopback test exercises
 ///    UdpSource + UdpSink only; this test exercises UdpSource +
