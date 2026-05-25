@@ -186,6 +186,31 @@ unsafe impl Sync for VulkanFence {}
 /// file descriptor to a subprocess, which imports it via
 /// [`Self::from_imported_opaque_fd`] into its own `VkDevice`. The two
 /// processes then signal/wait the same timeline.
+///
+/// # Cdylib reachability
+///
+/// Two paths are available to workspace plugin cdylibs that need an
+/// `Arc<HostVulkanTimelineSemaphore>` for adapter
+/// `register_host_surface`:
+///
+/// 1. **Non-exportable (in-process):** call
+///    `GpuContextFullAccess::create_timeline_semaphore(initial_value)` —
+///    backed by the v6 `create_timeline_semaphore` FullAccess vtable
+///    slot, returns `Arc<HostVulkanTimelineSemaphore>` already wired
+///    through Arc-raw-pointer transit.
+/// 2. **Exportable (cross-process / cuda / surface-share):** obtain
+///    `Arc<HostVulkanDevice>` via the v9 `host_vulkan_device_arc`
+///    slot, then call
+///    `HostVulkanTimelineSemaphore::new_exportable(device_arc.device(), initial_value)`
+///    directly. The constructor takes only a `&vulkanalia::Device`
+///    (cloned cheaply into the returned `Self`); no `host_inner()`,
+///    no host-private path.
+///
+/// Adding a `host_inner()` or `host_callbacks()` guard inside any of
+/// the `new` / `new_exportable` / `create` constructor bodies would
+/// break path 2 silently — reviewers touching constructor bodies must
+/// keep them guard-free. The cdylib surface-adapter dlopen smoke
+/// tests cover the full end-to-end path.
 pub struct HostVulkanTimelineSemaphore {
     device: vulkanalia::Device,
     semaphore: vk::Semaphore,
