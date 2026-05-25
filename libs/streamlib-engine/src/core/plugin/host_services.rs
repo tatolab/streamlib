@@ -6609,6 +6609,50 @@ unsafe extern "C" fn host_gpu_full_host_vulkan_device_arc(
     std::ptr::null()
 }
 
+/// Clone the host's `Arc<HostVulkanTexture>` backing a `Texture`
+/// β-shape and return the raw `Arc::into_raw` pointer. Second bridge
+/// of the cdylib-side adapter-construction chain: cdylibs can't
+/// reach `Texture::host_inner()` (panics in cdylib mode), so they
+/// dispatch through this slot to obtain a real
+/// `Arc<HostVulkanTexture>` for calls like
+/// `OpenGlSurfaceAdapter::register_host_surface`. On null
+/// `texture_handle` returns a null pointer.
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_full_host_vulkan_texture_arc(
+    texture_handle: *const c_void,
+) -> *const c_void {
+    run_host_extern_c(
+        "host_gpu_full_host_vulkan_texture_arc",
+        || -> *const c_void {
+            if texture_handle.is_null() {
+                return std::ptr::null();
+            }
+            // SAFETY: `texture_handle` is the same opaque
+            // `Arc::into_raw(Arc<TextureInner>)` pointer cached on the
+            // `Texture` β-shape's `handle` field (see
+            // `Texture::from_arc_into_raw`). The leaked strong count
+            // keeps the `TextureInner` alive at least until the
+            // β-shape's `Drop` runs. We borrow without taking
+            // ownership, clone the inner `Arc<HostVulkanTexture>`, and
+            // return its raw pointer with the strong count bumped by 1.
+            let inner = unsafe {
+                &*(texture_handle
+                    as *const crate::core::rhi::texture::TextureInner)
+            };
+            let arc = Arc::clone(&inner.inner);
+            Arc::into_raw(arc) as *const c_void
+        },
+        std::ptr::null(),
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_full_host_vulkan_texture_arc(
+    _texture_handle: *const c_void,
+) -> *const c_void {
+    std::ptr::null()
+}
+
 pub static HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE: GpuContextFullAccessVTable =
     GpuContextFullAccessVTable {
         layout_version: GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION,
@@ -6649,6 +6693,7 @@ pub static HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE: GpuContextFullAccessVTable =
         create_timeline_semaphore: host_gpu_full_create_timeline_semaphore,
         import_dma_buf_storage_buffer: host_gpu_full_import_dma_buf_storage_buffer,
         host_vulkan_device_arc: host_gpu_full_host_vulkan_device_arc,
+        host_vulkan_texture_arc: host_gpu_full_host_vulkan_texture_arc,
     };
 
 /// Pointer to the [`GpuContextFullAccessVTable`] this DSO should
@@ -12483,6 +12528,41 @@ mod gpu_full_access_vtable_tests {
             HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.layout_version,
             streamlib_plugin_abi::GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION
         );
+    }
+
+    // v9 slot: host_vulkan_device_arc takes a scope token (not an
+    // err-buf). The null-token case bottoms out in
+    // `with_scope(0, ...) → None`, so the callback returns a null
+    // pointer. Mental-revert: stub the callback body to call
+    // `Arc::into_raw(...)` directly on a freshly-cloned Arc without
+    // checking the token; this test trips on the resulting non-null
+    // return and the unmatched `from_raw` would Drop the Arc, lowering
+    // the refcount on the host's actual `Arc<HostVulkanDevice>`.
+    #[test]
+    fn host_vulkan_device_arc_returns_null_on_null_token() {
+        let raw = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.host_vulkan_device_arc)(
+                std::ptr::null(),
+            )
+        };
+        assert!(raw.is_null(), "null scope token must yield null pointer");
+    }
+
+    // v10 slot: host_vulkan_texture_arc takes a raw texture handle
+    // (not an err-buf). The null-handle case short-circuits in the
+    // wrapper before any deref, returning a null pointer. Mental-
+    // revert: remove the `if texture_handle.is_null()` guard inside
+    // `host_gpu_full_host_vulkan_texture_arc`; the wrapper would then
+    // UB-deref the null pointer as `*const TextureInner` and the test
+    // runner would SIGSEGV.
+    #[test]
+    fn host_vulkan_texture_arc_returns_null_on_null_handle() {
+        let raw = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.host_vulkan_texture_arc)(
+                std::ptr::null(),
+            )
+        };
+        assert!(raw.is_null(), "null texture handle must yield null pointer");
     }
 
     #[test]

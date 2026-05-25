@@ -328,7 +328,18 @@ pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 13;
 ///   workspace plugin cdylibs to construct host-flavor surface
 ///   adapters (`CpuReadbackSurfaceAdapter<HostVulkanDevice>` etc.)
 ///   for #1004's dlopen smoke tests.
-pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 9;
+/// - v10: `host_vulkan_texture_arc(texture_handle)` slot returning an
+///   `Arc::into_raw(Arc<HostVulkanTexture>)` raw pointer. Second
+///   bridge of the cdylib-side adapter-construction chain — gives
+///   workspace plugin cdylibs a non-panicking path to
+///   `Arc<HostVulkanTexture>` from a `Texture` β-shape (the existing
+///   `Texture::host_inner()` and `HostTextureExt::vulkan_inner()`
+///   panic in cdylib mode). Same rustc-version-coupling caveat as
+///   v9: `HostVulkanTexture` is not `#[repr(C)]`, so the Arc-raw
+///   pointer transit is safe only when the cdylib shares the host's
+///   rustc version and dep graph. Subprocess cdylibs don't dep on
+///   `streamlib-engine` and can't reach this slot in the first place.
+pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 10;
 
 /// Layout version of [`TextureRingMethodsVTable`].
 ///
@@ -2949,6 +2960,36 @@ pub struct GpuContextFullAccessVTable {
     /// allocation) cover the supported cross-DSO surface.
     pub host_vulkan_device_arc:
         unsafe extern "C" fn(gpu_handle: *const c_void) -> *const c_void,
+
+    // -------------------------------------------------------------------------
+    // v10: cdylib-reachable HostVulkanTexture Arc accessor.
+    // -------------------------------------------------------------------------
+
+    /// Clone the host's `Arc<HostVulkanTexture>` backing a `Texture`
+    /// β-shape and return the raw `Arc::into_raw` pointer on success.
+    ///
+    /// `texture_handle` is the same opaque `Arc::into_raw(Arc<TextureInner>)`
+    /// pointer cached on the `Texture` β-shape's `handle` field; the
+    /// host dereferences it without taking ownership, clones the
+    /// inner `Arc<HostVulkanTexture>`, and returns its raw pointer
+    /// with the strong count bumped by 1. The caller is responsible
+    /// for `Arc::from_raw` to reconstitute the Arc and matching its
+    /// eventual `Drop`. On a null `texture_handle` (or any host-side
+    /// failure caught by `catch_unwind`) returns `std::ptr::null()`.
+    ///
+    /// **Rustc-version coupling.** `HostVulkanTexture`'s layout isn't
+    /// `#[repr(C)]`; the returned pointer is valid only when the cdylib
+    /// shares the host's rustc version AND the engine's dep graph
+    /// (workspace plugin cdylibs do; subprocess cdylibs don't dep on
+    /// `streamlib-engine` so they can't reach `HostVulkanTexture` in
+    /// the first place).
+    ///
+    /// Used by the dlopen smoke fixtures for the OpenGL / Skia /
+    /// Vulkan surface adapters, which need to call
+    /// `XxxSurfaceAdapter::register_host_surface` with a real
+    /// `Arc<HostVulkanTexture>` to exercise `acquire_*` paths.
+    pub host_vulkan_texture_arc:
+        unsafe extern "C" fn(texture_handle: *const c_void) -> *const c_void,
 }
 
 unsafe impl Send for GpuContextFullAccessVTable {}
@@ -5090,7 +5131,7 @@ mod layout_tests {
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 13);
         assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
-        assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 9);
+        assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 10);
         assert_eq!(TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 4);
         assert_eq!(VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 3);
@@ -5930,10 +5971,10 @@ mod layout_tests {
 
     #[test]
     fn gpu_context_full_access_vtable_layout() {
-        // layout_version (u32) + _reserved_padding (u32) + 33 fn
-        // pointers (8 bytes each) = 4 + 4 + 264 = 272 bytes, align = 8.
+        // layout_version (u32) + _reserved_padding (u32) + 34 fn
+        // pointers (8 bytes each) = 4 + 4 + 272 = 280 bytes, align = 8.
         //
-        // 33 entries = 1 drop_handle + 7 clone/drop pairs (14 fn
+        // 34 entries = 1 drop_handle + 7 clone/drop pairs (14 fn
         // pointers for the 7 β-shape return types: compute / graphics /
         // ray-tracing kernels, texture ring, color converter,
         // acceleration structure, command recorder) + 4 create_* method
@@ -5944,8 +5985,9 @@ mod layout_tests {
         // create_command_recorder, build_triangles_blas, build_tlas,
         // supports_ray_tracing_pipeline, check_in_surface)
         // + 1 gpu_capabilities + 1 create_timeline_semaphore
-        // + 1 import_dma_buf_storage_buffer + 1 host_vulkan_device_arc.
-        assert_eq!(size_of::<GpuContextFullAccessVTable>(), 272);
+        // + 1 import_dma_buf_storage_buffer + 1 host_vulkan_device_arc
+        // + 1 host_vulkan_texture_arc.
+        assert_eq!(size_of::<GpuContextFullAccessVTable>(), 280);
         assert_eq!(align_of::<GpuContextFullAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextFullAccessVTable, layout_version), 0);
         assert_eq!(offset_of!(GpuContextFullAccessVTable, _reserved_padding), 4);
@@ -6096,6 +6138,11 @@ mod layout_tests {
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, host_vulkan_device_arc),
             264
+        );
+        // v10: host_vulkan_texture_arc.
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, host_vulkan_texture_arc),
+            272
         );
     }
 
