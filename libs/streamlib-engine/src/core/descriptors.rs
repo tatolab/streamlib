@@ -5,7 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 pub use streamlib_processor_schema::{
-    Org, Package, PortSchemaSpec, ProcessorScheduling, SchemaIdent, SemVer, TypeName,
+    ModuleIdent, Org, Package, PortSchemaSpec, ProcessorScheduling, SchemaIdent, SemVer,
+    SemVerRange, TypeName,
 };
 
 /// Lossless wire-format mirror of [`PortSchemaSpec`] used at the cdylib

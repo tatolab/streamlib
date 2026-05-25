@@ -30,7 +30,8 @@ pub use processor_schema_parser::{parse_processor_yaml, parse_processor_yaml_fil
 // loaders) reach `SchemaIdent`, `Org`, `Package`, etc. through this crate
 // without depending on `streamlib-idents` directly.
 pub use streamlib_idents::{
-    Org, Package, PackageMetadata, PackageRef, SchemaIdent, SemVer, TypeName,
+    ModuleIdent, Org, Package, PackageMetadata, PackageRef, SchemaIdent, SemVer, SemVerRange,
+    TypeName,
 };
 
 /// Minimal project config for the macro: surfaces the `package:` block (so

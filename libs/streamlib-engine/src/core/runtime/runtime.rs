@@ -1673,6 +1673,125 @@ impl Runner {
         };
         Ok(Some(get_cached_package_dir(&entry.cache_dir)))
     }
+
+    // =========================================================================
+    // Imperative module API
+    // =========================================================================
+
+    /// Load a `streamlib.yaml`-packaged module by typed
+    /// [`streamlib_idents::ModuleIdent`]. Resolves the identifier against
+    /// the workspace `target/streamlib-plugins/<org>__<name>/` staged
+    /// dir (dev / `cargo xtask build-plugins` flow) and the installed
+    /// `~/.streamlib/cache/packages/...` (installed slpkg flow); the
+    /// on-disk version must match the ident's [`SemVerRange`].
+    /// Transitive dependencies declared in the module's
+    /// `streamlib.yaml` are loaded recursively via [`Self::load_project`].
+    ///
+    /// **Imperative complement to the yaml-driven path.** Both
+    /// [`Self::load_project`] and this method drive into the same
+    /// internal module-loading machinery; the yaml form is for
+    /// declarative deployment manifests (containers / `streamlib install`
+    /// / dep solvers), the imperative form is for REST endpoints,
+    /// hot-reload tools, test setup, and composition-library wrapping.
+    ///
+    /// Calls are idempotent at the registry layer: re-loading a module
+    /// whose processors / schemas are already registered surfaces no
+    /// error and re-runs the dylib's plugin callback (which the engine
+    /// already tolerates per `register_dynamic`'s dedup semantics).
+    pub fn add_module(
+        &self,
+        module: streamlib_idents::ModuleIdent,
+    ) -> std::result::Result<(), AddModuleError> {
+        use streamlib_idents::Manifest;
+
+        let pkg_ref = module.package_ref();
+
+        // Resolution chain — workspace stage first (for dev /
+        // `cargo xtask build-plugins`), then installed cache.
+        let candidate = resolve_module_source(&pkg_ref)?;
+
+        let (source_path, on_disk_version) = match &candidate {
+            ResolvedModuleSource::WorkspaceStaged { path } => {
+                let manifest = Manifest::load(path).map_err(|e| {
+                    AddModuleError::ManifestLoadFailed {
+                        module: module.clone(),
+                        source_path: path.clone(),
+                        detail: e.to_string(),
+                    }
+                })?;
+                let metadata = manifest
+                    .package
+                    .as_ref()
+                    .ok_or_else(|| AddModuleError::ManifestLoadFailed {
+                        module: module.clone(),
+                        source_path: path.clone(),
+                        detail: "manifest has no `package:` block".into(),
+                    })?;
+                if metadata.org != module.org || metadata.name != module.name {
+                    return Err(AddModuleError::ManifestIdentityMismatch {
+                        module: module.clone(),
+                        source_path: path.clone(),
+                        actual: format!(
+                            "@{}/{}",
+                            metadata.org.as_str(),
+                            metadata.name.as_str()
+                        ),
+                    });
+                }
+                (path.clone(), metadata.version)
+            }
+            ResolvedModuleSource::InstalledCache {
+                path,
+                installed_version,
+            } => (path.clone(), *installed_version),
+        };
+
+        if !module.version.matches(on_disk_version) {
+            return Err(AddModuleError::VersionRangeUnsatisfied {
+                module: module.clone(),
+                found: on_disk_version,
+                source_path,
+            });
+        }
+
+        tracing::info!(
+            "add_module: resolving '{}' → {} (on-disk version {})",
+            module,
+            source_path.display(),
+            on_disk_version,
+        );
+
+        self.load_project(&source_path).map_err(|source| {
+            AddModuleError::LoadProjectFailed {
+                module,
+                source: Box::new(source),
+            }
+        })
+    }
+
+    /// Unload a previously-added module.
+    ///
+    /// **Not yet implemented.** Module-level unload requires the
+    /// hot-reload lifecycle work that's explicitly out of scope for
+    /// the current All-Dynamic Package Loading milestone — see the
+    /// milestone's "Explicitly out of scope (deferred to later
+    /// milestones)" section ("`unload_package` / hot-reload
+    /// lifecycle. Load-only, runtime-lifetime registration this
+    /// milestone."). The method exists as an explicit boundary
+    /// marker (rather than being absent) so AI agents and other
+    /// callers reaching for it from the `add_module` counterpart get
+    /// a typed error pointing at the milestone gap instead of a
+    /// `method not found` diagnostic.
+    ///
+    /// Calling this returns
+    /// [`RemoveModuleError::HotReloadLifecycleNotYetImplemented`]
+    /// without altering any runtime state.
+    pub fn remove_module(
+        &self,
+        module: streamlib_idents::ModuleIdent,
+    ) -> std::result::Result<(), RemoveModuleError> {
+        Err(RemoveModuleError::HotReloadLifecycleNotYetImplemented { module })
+    }
 }
 
 /// Iterate `config.schemas` map entries, registering each `Local` schema
@@ -2057,6 +2176,211 @@ fn bring_up_surface_service(
     );
 
     Ok((Arc::new(Mutex::new(Some(service))), socket_path))
+}
+
+// =============================================================================
+// add_module / remove_module — typed errors + resolver
+// =============================================================================
+
+/// Where a [`streamlib_idents::ModuleIdent`] was resolved to.
+enum ResolvedModuleSource {
+    /// Workspace stage dir (`<workspace>/target/streamlib-plugins/<org>__<name>/`).
+    /// Used in dev / `cargo xtask build-plugins` flow. Manifest is read
+    /// at the call site to extract the on-disk version + verify identity.
+    WorkspaceStaged { path: std::path::PathBuf },
+    /// Installed-package cache (`~/.streamlib/cache/packages/<entry.cache_dir>`).
+    /// The cache manifest carries `installed_version` directly; no
+    /// re-parse needed.
+    InstalledCache {
+        path: std::path::PathBuf,
+        installed_version: streamlib_idents::SemVer,
+    },
+}
+
+/// Resolve a `@org/name` reference to a workspace stage dir or an
+/// installed-cache entry. Workspace wins on coexistence — same
+/// precedence as `cargo`'s `[patch]` (per-consumer workspace overrides
+/// installed registry).
+fn resolve_module_source(
+    pkg_ref: &streamlib_idents::PackageRef,
+) -> std::result::Result<ResolvedModuleSource, AddModuleError> {
+    // 1. Workspace stage dir, when a workspace is locatable.
+    //
+    // Distinguish "env var set but invalid" (user typo'd
+    // `STREAMLIB_WORKSPACE_ROOT` — their stated intent is broken,
+    // surface it) from "no env var, no workspace nearby" (no intent
+    // expressed, silently fall through to the installed cache).
+    // Mirrors the `STREAMLIB_WORKSPACE_ROOT errors when env var path
+    // does not exist` precedent on `load_workspace_packages`.
+    let env_workspace_root = std::env::var("STREAMLIB_WORKSPACE_ROOT").ok();
+    let workspace_root = if let Some(env_root) = env_workspace_root.as_deref() {
+        let path = std::path::PathBuf::from(env_root);
+        if !path.is_dir() {
+            return Err(AddModuleError::WorkspaceRootInvalid {
+                env_value: env_root.to_string(),
+            });
+        }
+        Some(path)
+    } else {
+        // No env var: best-effort cargo-locate-project (in-workspace
+        // cargo invocations find the workspace; non-workspace callers
+        // silently miss and fall through to the installed cache).
+        resolve_workspace_root().ok()
+    };
+
+    if let Some(workspace_root) = workspace_root {
+        let staged_dir = workspace_root
+            .join("target")
+            .join("streamlib-plugins")
+            .join(format!(
+                "{}__{}",
+                pkg_ref.org.as_str(),
+                pkg_ref.name.as_str()
+            ));
+        if staged_dir.join("streamlib.yaml").exists() {
+            return Ok(ResolvedModuleSource::WorkspaceStaged { path: staged_dir });
+        }
+    }
+
+    // 2. Installed-package cache.
+    use crate::core::config::InstalledPackageManifest;
+    use crate::core::streamlib_home::get_cached_package_dir;
+
+    let manifest =
+        InstalledPackageManifest::load().map_err(|e| AddModuleError::InstalledCacheLoadFailed {
+            detail: e.to_string(),
+        })?;
+    if let Some(entry) = manifest.find_by_ref(pkg_ref) {
+        let path = get_cached_package_dir(&entry.cache_dir);
+        return Ok(ResolvedModuleSource::InstalledCache {
+            path,
+            installed_version: entry.version,
+        });
+    }
+
+    Err(AddModuleError::ModuleNotFound {
+        package: pkg_ref.clone(),
+    })
+}
+
+/// Per-failure-mode error returned by [`Runner::add_module`].
+#[derive(Debug, thiserror::Error)]
+pub enum AddModuleError {
+    /// No workspace stage dir AND no installed-package cache entry
+    /// matches `@org/name`. Surface the canonical ref so callers can
+    /// suggest `streamlib pkg install`, `cargo xtask build-plugins`,
+    /// or a typo fix.
+    #[error(
+        "Module '{package}' not found — no workspace stage dir at \
+         `target/streamlib-plugins/<org>__<name>/` and no installed-cache \
+         entry. Run `cargo xtask build-plugins --package {package}` (dev) \
+         or `streamlib pkg install <slpkg>` (distribution)."
+    )]
+    ModuleNotFound {
+        package: streamlib_idents::PackageRef,
+    },
+
+    /// Workspace stage dir or installed-cache entry was found but the
+    /// `streamlib.yaml` failed to parse / lacked a `package:` block.
+    #[error(
+        "Failed to load manifest for '{module}' from {}: {detail}",
+        source_path.display()
+    )]
+    ManifestLoadFailed {
+        module: streamlib_idents::ModuleIdent,
+        source_path: std::path::PathBuf,
+        detail: String,
+    },
+
+    /// Workspace stage dir was found but its `streamlib.yaml`'s
+    /// `package: { org, name }` doesn't match the requested ident
+    /// (manual clobbering, stale rename, wrong dir).
+    #[error(
+        "Module '{module}' identity mismatch at {}: \
+         staged manifest declares `{actual}`. \
+         Re-run `cargo xtask build-plugins` to regenerate.",
+        source_path.display()
+    )]
+    ManifestIdentityMismatch {
+        module: streamlib_idents::ModuleIdent,
+        source_path: std::path::PathBuf,
+        actual: String,
+    },
+
+    /// On-disk version doesn't satisfy the ident's [`SemVerRange`].
+    #[error(
+        "Module '{module}' resolved to version {found} at {} which doesn't \
+         satisfy the requested range. Install a matching version or relax \
+         the range.",
+        source_path.display()
+    )]
+    VersionRangeUnsatisfied {
+        module: streamlib_idents::ModuleIdent,
+        found: streamlib_idents::SemVer,
+        source_path: std::path::PathBuf,
+    },
+
+    /// `InstalledPackageManifest::load()` errored before lookup could
+    /// run. Catches I/O / parse failures distinct from "no entry."
+    #[error("Failed to load installed-package cache: {detail}")]
+    InstalledCacheLoadFailed { detail: String },
+
+    /// `STREAMLIB_WORKSPACE_ROOT` was set but its value isn't a
+    /// directory. Treats the env var as the user's stated intent —
+    /// don't silently fall through to the installed cache when the
+    /// override is broken. Mirrors `load_workspace_packages`'s
+    /// `WorkspaceRootNotFound` behavior on env-var-set-but-invalid.
+    #[error(
+        "STREAMLIB_WORKSPACE_ROOT is set to `{env_value}` but that path \
+         is not a directory. Fix the env var or unset it (in which case \
+         the resolver falls through to the installed-package cache)."
+    )]
+    WorkspaceRootInvalid { env_value: String },
+
+    /// `Runner::load_project` rejected the resolved source path.
+    #[error("load_project failed for '{module}': {source}")]
+    LoadProjectFailed {
+        module: streamlib_idents::ModuleIdent,
+        #[source]
+        source: Box<Error>,
+    },
+}
+
+impl From<AddModuleError> for Error {
+    fn from(err: AddModuleError) -> Self {
+        match err {
+            AddModuleError::LoadProjectFailed { source, .. } => *source,
+            other => Error::Configuration(other.to_string()),
+        }
+    }
+}
+
+/// Per-failure-mode error returned by [`Runner::remove_module`].
+///
+/// Today the only variant is the milestone-deferral marker; new
+/// variants land when the hot-reload lifecycle work ships.
+#[derive(Debug, thiserror::Error)]
+pub enum RemoveModuleError {
+    /// Module unload requires the hot-reload lifecycle work that's
+    /// explicitly out of scope for the current All-Dynamic Package
+    /// Loading milestone. Calling `remove_module` returns this without
+    /// altering any runtime state — see [`Runner::remove_module`] for
+    /// the rationale.
+    #[error(
+        "remove_module('{module}') is not yet implemented — \
+         hot-reload lifecycle is deferred to a future milestone. \
+         The runtime currently supports load-only, runtime-lifetime \
+         module registration."
+    )]
+    HotReloadLifecycleNotYetImplemented {
+        module: streamlib_idents::ModuleIdent,
+    },
+}
+
+impl From<RemoveModuleError> for Error {
+    fn from(err: RemoveModuleError) -> Self {
+        Error::Configuration(err.to_string())
+    }
 }
 
 // =============================================================================
@@ -3573,6 +3897,360 @@ package:
                         .expect("round-trip");
                 assert!(resp.get("error").is_some());
             });
+        }
+    }
+
+    // =========================================================================
+    // add_module / remove_module — imperative module API
+    // =========================================================================
+
+    mod add_module_tests {
+        use super::*;
+        use streamlib_idents::{ModuleIdent, Org, Package, SemVer, SemVerRange};
+
+        /// RAII guard that restores `STREAMLIB_WORKSPACE_ROOT` and
+        /// `STREAMLIB_HOME` to their pre-test values on drop. Every
+        /// `add_module` test isolates both env vars to a tempdir to
+        /// keep the host's real workspace / installed cache out of the
+        /// test surface (per the side-effect-cleanup discipline in
+        /// `docs/testing.md` — flag tests that mutate global state).
+        struct AddModuleEnvGuard {
+            workspace_prev: Option<std::ffi::OsString>,
+            home_prev: Option<std::ffi::OsString>,
+        }
+
+        impl AddModuleEnvGuard {
+            fn install(workspace_root: &std::path::Path, home_root: &std::path::Path) -> Self {
+                let workspace_prev = std::env::var_os("STREAMLIB_WORKSPACE_ROOT");
+                let home_prev = std::env::var_os("STREAMLIB_HOME");
+                unsafe {
+                    std::env::set_var("STREAMLIB_WORKSPACE_ROOT", workspace_root);
+                    std::env::set_var("STREAMLIB_HOME", home_root);
+                }
+                Self { workspace_prev, home_prev }
+            }
+        }
+
+        impl Drop for AddModuleEnvGuard {
+            fn drop(&mut self) {
+                unsafe {
+                    match self.workspace_prev.take() {
+                        Some(v) => std::env::set_var("STREAMLIB_WORKSPACE_ROOT", v),
+                        None => std::env::remove_var("STREAMLIB_WORKSPACE_ROOT"),
+                    }
+                    match self.home_prev.take() {
+                        Some(v) => std::env::set_var("STREAMLIB_HOME", v),
+                        None => std::env::remove_var("STREAMLIB_HOME"),
+                    }
+                }
+            }
+        }
+
+        /// Build a schemas-only `streamlib.yaml` at `dir` with the
+        /// given org/name/version. Schemas-only avoids the dylib-
+        /// loading branch — `add_module` resolution + version-range
+        /// matching is what we want to lock here, not the cdylib
+        /// mechanics that `load_workspace_packages` already covers.
+        ///
+        /// When `schema` is provided, emits a `schemas:` block plus
+        /// the named schema YAML under `schemas/<type_snake>.yaml`
+        /// so post-load callers can verify the schema actually
+        /// registered (locks "`load_project` ran" — not just "resolver
+        /// + range check ran").
+        fn write_schemas_only_manifest(
+            dir: &std::path::Path,
+            org: &str,
+            name: &str,
+            version: &str,
+            schema: Option<&str>,
+        ) {
+            let body = if let Some(type_name) = schema {
+                let stem = type_name.to_ascii_lowercase();
+                std::fs::create_dir_all(dir.join("schemas")).unwrap();
+                std::fs::write(
+                    dir.join("schemas").join(format!("{stem}.yaml")),
+                    format!(
+                        "metadata:\n  type: {type_name}\n  max_payload_bytes: 4096\n"
+                    ),
+                )
+                .unwrap();
+                format!(
+                    "package:\n  org: {org}\n  name: {name}\n  version: \"{version}\"\n\
+                     schemas:\n  {type_name}:\n    file: schemas/{stem}.yaml\n"
+                )
+            } else {
+                format!(
+                    "package:\n  org: {org}\n  name: {name}\n  version: \"{version}\"\n"
+                )
+            };
+            std::fs::write(dir.join("streamlib.yaml"), body)
+                .expect("write streamlib.yaml");
+        }
+
+        /// Stage a package under
+        /// `<workspace>/target/streamlib-plugins/<org>__<name>/`
+        /// and return the staged dir. Mirrors what
+        /// `cargo xtask build-plugins` produces.
+        fn stage_workspace_package(
+            workspace_root: &std::path::Path,
+            org: &str,
+            name: &str,
+            version: &str,
+            schema: Option<&str>,
+        ) -> std::path::PathBuf {
+            let staged = workspace_root
+                .join("target")
+                .join("streamlib-plugins")
+                .join(format!("{org}__{name}"));
+            std::fs::create_dir_all(&staged).expect("mkdir staged");
+            write_schemas_only_manifest(&staged, org, name, version, schema);
+            staged
+        }
+
+        #[test]
+        #[serial]
+        fn add_module_resolves_workspace_stage_and_loads() {
+            // The schema name is unique to this test so the runtime
+            // schema registry (a process-wide static) can be probed
+            // after `add_module` to confirm load_project actually
+            // ran — mentally reverting the `self.load_project(...)`
+            // call inside `add_module` to `Ok(())` would leave the
+            // earlier (resolver-only) assertion green but make the
+            // post-load schema lookup fail.
+            const TYPE_NAME: &str = "AddModuleResolvesStageSchema";
+            let tmp = tempfile::tempdir().unwrap();
+            let home = tempfile::tempdir().unwrap();
+            let _staged = stage_workspace_package(
+                tmp.path(),
+                "tatolab",
+                "add-module-stage",
+                "1.2.3",
+                Some(TYPE_NAME),
+            );
+
+            let _guard = AddModuleEnvGuard::install(tmp.path(), home.path());
+            let runtime = Runner::new().expect("Runner::new");
+
+            // Pre-condition: schema is NOT in the registry yet.
+            let canonical = format!("@tatolab/add-module-stage/{TYPE_NAME}");
+            assert!(
+                crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
+                    .is_none(),
+                "schema must not exist before add_module"
+            );
+
+            runtime
+                .add_module(ModuleIdent::new(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("add-module-stage").unwrap(),
+                    SemVerRange::Caret(SemVer::new(1, 0, 0)),
+                ))
+                .expect("workspace-staged add_module must succeed");
+
+            // Post-condition: schema IS registered. This is the
+            // "load_project actually ran" assertion the resolver-only
+            // tests didn't lock.
+            assert!(
+                crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
+                    .is_some(),
+                "schema must be registered after add_module — load_project did not run if this fails"
+            );
+        }
+
+        #[test]
+        #[serial]
+        fn add_module_any_version_succeeds_against_staged_v1() {
+            const TYPE_NAME: &str = "AddModuleAnyVersionSchema";
+            let tmp = tempfile::tempdir().unwrap();
+            let home = tempfile::tempdir().unwrap();
+            let _staged = stage_workspace_package(
+                tmp.path(),
+                "tatolab",
+                "add-module-any",
+                "0.4.0",
+                Some(TYPE_NAME),
+            );
+
+            let _guard = AddModuleEnvGuard::install(tmp.path(), home.path());
+            let runtime = Runner::new().expect("Runner::new");
+
+            let canonical = format!("@tatolab/add-module-any/{TYPE_NAME}");
+            assert!(
+                crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
+                    .is_none(),
+                "schema must not exist before add_module"
+            );
+
+            runtime
+                .add_module(ModuleIdent::any(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("add-module-any").unwrap(),
+                ))
+                .expect("any-version add_module must succeed against staged 0.4.0");
+
+            assert!(
+                crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
+                    .is_some(),
+                "any-version add_module must invoke load_project; schema registry is the witness",
+            );
+        }
+
+        #[test]
+        #[serial]
+        fn add_module_rejects_version_range_mismatch() {
+            // Staged 1.0.0 but ident asks for ^2.0.0 — must surface
+            // VersionRangeUnsatisfied, NOT a generic "module not
+            // found" or a silently-succeeded load. Mentally reverting
+            // the range check would let the wrong version load.
+            let tmp = tempfile::tempdir().unwrap();
+            let home = tempfile::tempdir().unwrap();
+            let _staged = stage_workspace_package(
+                tmp.path(),
+                "tatolab",
+                "add-module-range",
+                "1.0.0",
+                None,
+            );
+
+            let _guard = AddModuleEnvGuard::install(tmp.path(), home.path());
+            let runtime = Runner::new().expect("Runner::new");
+            let err = runtime
+                .add_module(ModuleIdent::new(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("add-module-range").unwrap(),
+                    SemVerRange::Caret(SemVer::new(2, 0, 0)),
+                ))
+                .expect_err("range mismatch must error");
+
+            assert!(
+                matches!(err, AddModuleError::VersionRangeUnsatisfied { found, .. } if found == SemVer::new(1, 0, 0)),
+                "expected VersionRangeUnsatisfied(1.0.0), got: {err:?}",
+            );
+        }
+
+        #[test]
+        #[serial]
+        fn add_module_rejects_identity_mismatch_on_staged_yaml() {
+            // Staged dir says `@vendor/other` but the requested ident
+            // is `@tatolab/add-module-identity`. The directory-name
+            // convention (`<org>__<name>/`) would point us there, but
+            // the manifest contents disagree. Surface
+            // ManifestIdentityMismatch rather than blindly loading.
+            let tmp = tempfile::tempdir().unwrap();
+            let home = tempfile::tempdir().unwrap();
+            let staged = tmp
+                .path()
+                .join("target")
+                .join("streamlib-plugins")
+                .join("tatolab__add-module-identity");
+            std::fs::create_dir_all(&staged).unwrap();
+            write_schemas_only_manifest(&staged, "vendor", "other", "1.0.0", None);
+
+            let _guard = AddModuleEnvGuard::install(tmp.path(), home.path());
+            let runtime = Runner::new().expect("Runner::new");
+            let err = runtime
+                .add_module(ModuleIdent::any(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("add-module-identity").unwrap(),
+                ))
+                .expect_err("clobbered staged manifest must error");
+
+            assert!(
+                matches!(err, AddModuleError::ManifestIdentityMismatch { ref actual, .. } if actual == "@vendor/other"),
+                "expected ManifestIdentityMismatch(@vendor/other), got: {err:?}",
+            );
+        }
+
+        #[test]
+        #[serial]
+        fn add_module_reports_module_not_found_when_unstaged_and_uncached() {
+            // No workspace stage AND no installed cache entry. Must
+            // surface the actionable `ModuleNotFound` rather than a
+            // generic "load_project failed" or a panic. The
+            // `STREAMLIB_HOME` redirect isolates the test from the
+            // host's real installed cache — without it, a stale entry
+            // for the canary name would mask the failure.
+            let tmp = tempfile::tempdir().unwrap();
+            let home = tempfile::tempdir().unwrap();
+            let _guard = AddModuleEnvGuard::install(tmp.path(), home.path());
+
+            let runtime = Runner::new().expect("Runner::new");
+            let err = runtime
+                .add_module(ModuleIdent::any(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("add-module-missing").unwrap(),
+                ))
+                .expect_err("missing module must error");
+
+            assert!(
+                matches!(err, AddModuleError::ModuleNotFound { ref package } if package.org.as_str() == "tatolab" && package.name.as_str() == "add-module-missing"),
+                "expected ModuleNotFound(@tatolab/add-module-missing), got: {err:?}",
+            );
+        }
+
+        #[test]
+        #[serial]
+        fn add_module_surfaces_workspace_root_typo() {
+            // STREAMLIB_WORKSPACE_ROOT pointing at a non-existent path
+            // is a user typo — surface it as WorkspaceRootInvalid
+            // rather than silently falling through to the installed
+            // cache (which would either find an unrelated entry, or
+            // mis-report ModuleNotFound when the real problem is the
+            // env var). Mirrors load_workspace_packages's behavior on
+            // the same condition.
+            //
+            // Install the RAII env guard against a tempdir first (its
+            // Drop will restore both env vars on exit / panic), then
+            // override STREAMLIB_WORKSPACE_ROOT to the bogus path
+            // inside the guard's lifetime. If `add_module` or
+            // `expect_err` panics, the guard still restores the
+            // original values — no env leak into sibling tests.
+            let home = tempfile::tempdir().unwrap();
+            let placeholder_workspace = tempfile::tempdir().unwrap();
+            let _guard =
+                AddModuleEnvGuard::install(placeholder_workspace.path(), home.path());
+            unsafe {
+                std::env::set_var(
+                    "STREAMLIB_WORKSPACE_ROOT",
+                    "/nonexistent/path/that/does/not/exist",
+                );
+            }
+
+            let runtime = Runner::new().expect("Runner::new");
+            let err = runtime
+                .add_module(ModuleIdent::any(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("add-module-typo-canary").unwrap(),
+                ))
+                .expect_err("typo'd env var must error");
+
+            assert!(
+                matches!(err, AddModuleError::WorkspaceRootInvalid { ref env_value } if env_value == "/nonexistent/path/that/does/not/exist"),
+                "expected WorkspaceRootInvalid, got: {err:?}",
+            );
+        }
+
+        #[test]
+        fn remove_module_returns_hot_reload_lifecycle_deferral() {
+            // The stub returns a typed error rather than silently
+            // succeeding or panicking. AI agents reading `add_module`
+            // will reach for `remove_module`; the typed error points
+            // them at the milestone boundary.
+            let runtime = Runner::new().expect("Runner::new");
+            let err = runtime
+                .remove_module(ModuleIdent::any(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("remove-module-stub").unwrap(),
+                ))
+                .expect_err("remove_module must error until hot-reload ships");
+            assert!(
+                matches!(
+                    err,
+                    RemoveModuleError::HotReloadLifecycleNotYetImplemented { ref module }
+                        if module.name.as_str() == "remove-module-stub"
+                ),
+                "got: {err:?}",
+            );
         }
     }
 }

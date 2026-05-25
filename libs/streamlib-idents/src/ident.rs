@@ -9,7 +9,7 @@ use std::borrow::Cow;
 use std::fmt;
 
 use crate::error::{IdentError, IdentResult};
-use crate::semver::SemVer;
+use crate::semver::{SemVer, SemVerRange};
 
 /// Org segment of an identifier (the `@org` part).
 ///
@@ -340,6 +340,121 @@ impl fmt::Display for SchemaIdent {
     }
 }
 
+/// Imperative-API identifier for a `streamlib.yaml`-packaged module
+/// (`@org/name@<range>`).
+///
+/// Carries the same `@org/name` pair as [`PackageRef`] plus a semver
+/// [`SemVerRange`] for version resolution. Constructed via [`ModuleIdent::new`]
+/// (already-typed segments), the `module_ident!` proc-macro
+/// (compile-time-validated string literals), or typed deserialization. No
+/// `parse` API by design — see `docs/architecture/schema-identity-and-packaging.md`.
+///
+/// Wire form is `@org/name@<range>` (e.g. `@tatolab/core@^1.0.0`,
+/// `@tatolab/audio@*`); `Display` emits it, `Deserialize` reads it. The
+/// version-suffix is required in the joined wire form — bare `@org/name`
+/// strings parse as a [`PackageRef`], not a `ModuleIdent`.
+///
+/// ```compile_fail
+/// use streamlib_idents::ModuleIdent;
+/// let _ = ModuleIdent::parse("@tatolab/core@^1.0.0");
+/// ```
+///
+/// ```compile_fail
+/// use streamlib_idents::ModuleIdent;
+/// let _: ModuleIdent = "@tatolab/core@^1.0.0".parse().unwrap();
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleIdent {
+    pub org: Org,
+    pub name: Package,
+    pub version: SemVerRange,
+}
+
+impl ModuleIdent {
+    /// Construct from already-validated segments.
+    pub fn new(org: Org, name: Package, version: SemVerRange) -> Self {
+        Self { org, name, version }
+    }
+
+    /// Convenience: any-version constructor (`@org/name@*`). Equivalent to
+    /// `ModuleIdent::new(org, name, SemVerRange::Any)`.
+    pub fn any(org: Org, name: Package) -> Self {
+        Self::new(org, name, SemVerRange::Any)
+    }
+
+    /// `@org/name` projection — the canonical [`PackageRef`] without the
+    /// version range.
+    pub fn package_ref(&self) -> PackageRef {
+        PackageRef::new(self.org.clone(), self.name.clone())
+    }
+}
+
+impl fmt::Display for ModuleIdent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "@{}/{}@{}", self.org, self.name, self.version)
+    }
+}
+
+impl Serialize for ModuleIdent {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for ModuleIdent {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(d)?;
+        parse_module_ident_wire(&raw).map_err(serde::de::Error::custom)
+    }
+}
+
+impl JsonSchema for ModuleIdent {
+    fn schema_name() -> String {
+        "ModuleIdent".into()
+    }
+    fn schema_id() -> Cow<'static, str> {
+        Cow::Borrowed("streamlib_idents::ModuleIdent")
+    }
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        ident_string_schema(
+            "Imperative-API module identifier of the form `@org/name@<range>` \
+             where `<range>` is a SemVerRange (`*`, `=1.2.3`, `>=1.2.3`, `^1.2.3`, \
+             `~1.2.3`, or bare `1.2.3`).",
+            r"^@[a-z][a-z0-9-]*/[a-z][a-z0-9-]*@(\*|(\^|~|>=|=)?[0-9]+\.[0-9]+\.[0-9]+)$",
+        )
+    }
+}
+
+/// Parse `@org/name@<range>` into a [`ModuleIdent`]. Used by typed
+/// deserialization and the `module_ident!` macro's joined-form arm —
+/// callers building from already-typed segments go through
+/// [`ModuleIdent::new`] / [`ModuleIdent::any`] instead, so no `parse`
+/// surface leaks into general use.
+pub(crate) fn parse_module_ident_wire(raw: &str) -> IdentResult<ModuleIdent> {
+    let stripped = raw.strip_prefix('@').ok_or_else(|| {
+        IdentError::InvalidModuleIdent(
+            raw.to_string(),
+            "must start with '@'".into(),
+        )
+    })?;
+    let (org_str, rest) = stripped.split_once('/').ok_or_else(|| {
+        IdentError::InvalidModuleIdent(
+            raw.to_string(),
+            "must contain '/' between org and name".into(),
+        )
+    })?;
+    let (name_str, range_str) = rest.split_once('@').ok_or_else(|| {
+        IdentError::InvalidModuleIdent(
+            raw.to_string(),
+            "must contain '@' before the version range (e.g. `@org/name@^1.0.0`)".into(),
+        )
+    })?;
+    let org = Org::new(org_str)?;
+    let name = Package::new(name_str)?;
+    let version = SemVerRange::from_str(range_str)?;
+    Ok(ModuleIdent { org, name, version })
+}
+
 /// Validate an org segment per the grammar: `[a-z][a-z0-9-]*`.
 pub fn validate_org(s: &str) -> IdentResult<()> {
     if s.is_empty() {
@@ -621,6 +736,106 @@ version: 1.0.0
         // SchemaIdent shape (which has its own typed deserialization).
         let res: Result<PackageRef, _> = serde_yaml::from_str(r#""@tatolab/core/extra""#);
         assert!(res.is_err());
+    }
+
+    fn module_ident(org: &str, pkg: &str, range: &str) -> ModuleIdent {
+        ModuleIdent::new(
+            Org::new(org).unwrap(),
+            Package::new(pkg).unwrap(),
+            SemVerRange::from_str(range).unwrap(),
+        )
+    }
+
+    #[test]
+    fn module_ident_display_round_trips_wire_form() {
+        let id = module_ident("tatolab", "core", "^1.0.0");
+        assert_eq!(id.to_string(), "@tatolab/core@^1.0.0");
+
+        let yaml = serde_yaml::to_string(&id).unwrap();
+        let back: ModuleIdent = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(id, back);
+    }
+
+    #[test]
+    fn module_ident_any_renders_star_suffix() {
+        let id = ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new("core").unwrap());
+        assert_eq!(id.to_string(), "@tatolab/core@*");
+        assert_eq!(id.version, SemVerRange::Any);
+    }
+
+    #[test]
+    fn module_ident_parses_each_range_flavor() {
+        // `(input wire form, expected typed range, canonical Display form)` —
+        // bare `1.2.3` normalizes to `=1.2.3` on Display (existing SemVerRange
+        // behavior).
+        let cases = [
+            ("@tatolab/core@*", SemVerRange::Any, "@tatolab/core@*"),
+            (
+                "@tatolab/core@1.2.3",
+                SemVerRange::Exact(SemVer::new(1, 2, 3)),
+                "@tatolab/core@=1.2.3",
+            ),
+            (
+                "@tatolab/core@=1.2.3",
+                SemVerRange::Exact(SemVer::new(1, 2, 3)),
+                "@tatolab/core@=1.2.3",
+            ),
+            (
+                "@tatolab/core@>=1.0.0",
+                SemVerRange::AtLeast(SemVer::new(1, 0, 0)),
+                "@tatolab/core@>=1.0.0",
+            ),
+            (
+                "@tatolab/core@^1.0.0",
+                SemVerRange::Caret(SemVer::new(1, 0, 0)),
+                "@tatolab/core@^1.0.0",
+            ),
+            (
+                "@tatolab/core@~1.2.0",
+                SemVerRange::Tilde(SemVer::new(1, 2, 0)),
+                "@tatolab/core@~1.2.0",
+            ),
+        ];
+        for (wire, expected_range, expected_display) in cases {
+            let id: ModuleIdent = serde_yaml::from_str(&format!("'{}'", wire)).unwrap();
+            assert_eq!(id.version, expected_range, "wire form: {wire}");
+            assert_eq!(id.to_string(), expected_display, "display for: {wire}");
+        }
+    }
+
+    #[test]
+    fn module_ident_rejects_missing_at_prefix() {
+        let res: Result<ModuleIdent, _> = serde_yaml::from_str(r#""tatolab/core@^1.0.0""#);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn module_ident_rejects_missing_version_suffix() {
+        // Bare `@org/name` parses as a PackageRef, not a ModuleIdent — the
+        // version segment is mandatory in the joined wire form.
+        let res: Result<ModuleIdent, _> = serde_yaml::from_str(r#""@tatolab/core""#);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn module_ident_rejects_invalid_org() {
+        let res: Result<ModuleIdent, _> = serde_yaml::from_str(r#""@Tatolab/core@^1.0.0""#);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn module_ident_rejects_invalid_range() {
+        let res: Result<ModuleIdent, _> = serde_yaml::from_str(r#""@tatolab/core@^1.2.x""#);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn module_ident_package_ref_projection_drops_version() {
+        let id = module_ident("tatolab", "core", "^1.0.0");
+        let pr = id.package_ref();
+        assert_eq!(pr.to_string(), "@tatolab/core");
+        assert_eq!(pr.org.as_str(), "tatolab");
+        assert_eq!(pr.name.as_str(), "core");
     }
 
     #[test]

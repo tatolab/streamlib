@@ -56,7 +56,10 @@ pub mod schemas {
 // Re-export attribute macros for processor syntax:
 // - #[streamlib::processor("Camera")] - Processor definition by name lookup in streamlib.yaml
 // - #[derive(ConfigDescriptor)] - Config field metadata derive macro
-pub use streamlib_macros::{processor, schema_ident, schema_ident_any_version, ConfigDescriptor};
+pub use streamlib_macros::{
+    module_ident, module_ident_any_version, module_ident_joined, module_ident_joined_any_version,
+    processor, schema_ident, schema_ident_any_version, ConfigDescriptor,
+};
 
 pub use core::{
     are_synchronized,
@@ -261,7 +264,10 @@ pub mod sdk {
     pub use crate::serde_json;
     pub use crate::crossbeam_channel;
 
-    pub use streamlib_macros::{processor, schema_ident, schema_ident_any_version, ConfigDescriptor};
+    pub use streamlib_macros::{
+    module_ident, module_ident_any_version, module_ident_joined, module_ident_joined_any_version,
+    processor, schema_ident, schema_ident_any_version, ConfigDescriptor,
+};
 
     pub mod permissions {
         pub use crate::{

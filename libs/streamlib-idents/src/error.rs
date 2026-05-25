@@ -40,6 +40,9 @@ pub enum IdentError {
 
     #[error("invalid semver range `{0}`: {1}")]
     InvalidSemVerRange(String, String),
+
+    #[error("invalid module identifier `{0}`: {1}")]
+    InvalidModuleIdent(String, String),
 }
 
 pub type ResolverResult<T> = Result<T, ResolverError>;
