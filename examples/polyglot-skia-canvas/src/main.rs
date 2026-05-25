@@ -59,7 +59,7 @@ use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::error::Error;
 use streamlib::sdk::engine::host_rhi::{HostVulkanTimelineSemaphore, VulkanTextureReadback};
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib_debug_utilities::BgraFileSourceProcessor;
+use streamlib::sdk::schema_ident;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
 
@@ -181,6 +181,13 @@ fn main() -> Result<()> {
         });
     }
 
+    // Load the BgraFileSource processor from `@tatolab/debug-utilities`
+    // at runtime — `cargo xtask build-plugins --package @tatolab/debug-utilities`
+    // must have run first.
+    runtime
+        .load_workspace_packages(["@tatolab/debug-utilities"])
+        .map_err(streamlib::sdk::error::Error::from)?;
+
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let slpkg_path =
         manifest_dir.join("python/polyglot-skia-canvas-0.1.0.slpkg");
@@ -195,21 +202,18 @@ fn main() -> Result<()> {
 
     let fixture_path =
         write_trigger_fixture().map_err(Error::Configuration)?;
-    let source = runtime.add_processor(BgraFileSourceProcessor::Processor::node(
-        BgraFileSourceProcessor::Config {
-            file_path: fixture_path
-                .to_str()
-                .ok_or_else(|| {
-                    Error::Configuration(
-                        "fixture path has non-utf8 component".into(),
-                    )
-                })?
-                .to_string(),
-            width: 4,
-            height: 4,
-            fps: FPS,
-            frame_count: FRAME_COUNT,
-        },
+    let fixture_path_str = fixture_path
+        .to_str()
+        .ok_or_else(|| Error::Configuration("fixture path has non-utf8 component".into()))?;
+    let source = runtime.add_processor(ProcessorSpec::new(
+        schema_ident!("tatolab", "debug-utilities", "BgraFileSource", "1.0.0"),
+        serde_json::json!({
+            "file_path": fixture_path_str,
+            "width": 4,
+            "height": 4,
+            "fps": FPS,
+            "frame_count": FRAME_COUNT,
+        }),
     ))?;
     println!("+ BgraFileSource: {source}");
 
