@@ -8,14 +8,9 @@
 
 use futures_util::StreamExt;
 use std::sync::Arc;
+use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
-use streamlib_api_server::{ApiServerConfig, ApiServerProcessor};
-// Force-link so SimplePassthroughProcessor's `inventory::submit!` fires
-// at link time; the demo POSTs `"processor_type": "SimplePassthroughProcessor"`
-// through the API server's dynamic-registry endpoint and that resolution
-// only succeeds if the processor is present in PROCESSOR_REGISTRY.
-#[allow(unused_imports)]
-use streamlib_debug_utilities::SimplePassthroughProcessor;
+use streamlib::sdk::schema_ident;
 
 use streamlib::sdk::error::Result;
 use tokio::sync::Mutex;
@@ -31,13 +26,26 @@ async fn main() -> Result<()> {
     // Runner::new() auto-detects tokio context and uses the current handle
     let runtime = Runner::new()?;
 
+    // Load `@tatolab/api-server` and `@tatolab/debug-utilities` at runtime.
+    // SimplePassthrough lives in debug-utilities — the demo POSTs
+    // `"processor_type": "SimplePassthroughProcessor"` through the API
+    // server's dynamic-registry endpoint and that resolution only
+    // succeeds if the processor is present in PROCESSOR_REGISTRY,
+    // which load_workspace_packages populates via the cdylib registration.
+    runtime.load_workspace_packages([
+        "@tatolab/api-server",
+        "@tatolab/debug-utilities",
+    ])?;
+
     // Add the API server processor
     println!("Adding API server processor...");
-    let _api_server = runtime.add_processor(ApiServerProcessor::node(ApiServerConfig {
-        host: "127.0.0.1".to_string(),
-        port: 9000,
-        ..Default::default()
-    }))?;
+    let _api_server = runtime.add_processor(ProcessorSpec::new(
+        schema_ident!("tatolab", "api-server", "ApiServer", "1.0.0"),
+        serde_json::json!({
+            "host": "127.0.0.1",
+            "port": 9000,
+        }),
+    ))?;
 
     // Start the runtime
     runtime.start()?;
