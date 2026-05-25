@@ -73,13 +73,18 @@ use streamlib_adapter_abi::SurfaceId;
 use streamlib_consumer_rhi::VulkanLayout;
 
 use crate::blending_compositor::BlendingCompositorProcessor;
-use crate::camera_to_cuda_copy::{CameraToCudaCopyProcessor, CUDA_CAMERA_SURFACE_ID};
 use crate::crt_film_grain::CrtFilmGrainProcessor;
 
-/// Re-exported alias so the Python avatar's JSON config and other
-/// pipeline wiring keep using the historical name; the processor's
-/// own [`CUDA_CAMERA_SURFACE_ID`] is the single source of truth.
-const AVATAR_CAMERA_CUDA_SURFACE_ID: SurfaceId = CUDA_CAMERA_SURFACE_ID;
+/// Cuda surface id the host-side `CameraToCudaCopy` processor
+/// registers under and the Python `AvatarCharacter` consumes via
+/// its config. The single source of truth is
+/// `packages/camera/src/camera_to_cuda_copy.rs::CUDA_CAMERA_SURFACE_ID`
+/// — the example doesn't Cargo-dep `@tatolab/camera`, so the value
+/// is duplicated here as a literal. If `@tatolab/camera`'s constant
+/// changes, the package's bump becomes visible to this consumer
+/// the same way any package contract bump becomes visible: through
+/// the package's published version.
+const AVATAR_CAMERA_CUDA_SURFACE_ID: SurfaceId = 484_001;
 
 /// Surface UUID for the avatar mesh-render output (tiled DMA-BUF
 /// `VkImage`). The Python processor renders into it via
@@ -233,8 +238,15 @@ pub fn main() -> Result<()> {
     // module re-exported here as `AVATAR_CAMERA_CUDA_SURFACE_ID` so
     // the Python config below pins to the same value.
     println!("🚛 Adding camera→cuda copy processor (host-pipeline producer)...");
-    let camera_to_cuda =
-        runtime.add_processor(CameraToCudaCopyProcessor::node(Default::default()))?;
+    // `CameraToCudaCopy` is registered through `@tatolab/camera`'s
+    // cdylib `STREAMLIB_PLUGIN` callback alongside `Camera`, so the
+    // example wires it via `ProcessorSpec` against the package
+    // identifier — no in-tree registration. Default config (1920x1080)
+    // matches the camera processor's output dimensions.
+    let camera_to_cuda = runtime.add_processor(ProcessorSpec::new(
+        schema_ident!("tatolab", "camera", "CameraToCudaCopy", "1.0.0"),
+        serde_json::json!({}),
+    ))?;
     println!("✓ Camera→CUDA copy added: {camera_to_cuda}\n");
 
     // AvatarCharacter (Python subprocess). Reads the cuda surface for

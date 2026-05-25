@@ -52,6 +52,16 @@ libc.workspace = true
 # this is the typed-layout interop type shared between the host RHI's
 # `RhiCommandRecorder` and the cross-process surface-share schema.
 streamlib-consumer-rhi = { path = "../../libs/streamlib-consumer-rhi" }
+# CUDA host-side surface adapter — the `CameraToCudaCopy` processor
+# allocates a DEVICE_LOCAL OPAQUE_FD VkBuffer + exportable timeline
+# and runs the host-side `vkCmdCopyImageToBuffer` per frame for
+# cross-API CUDA interop. The adapter crate itself stays cudarc-free
+# (`cudarc` integration happens in the cdylib consumer); this dep
+# does NOT pull `libcuda.so` into the camera package's link surface.
+streamlib-adapter-cuda = { path = "../../libs/streamlib-adapter-cuda" }
+# Adapter ABI — provides `SurfaceId` and `AdapterError` types the
+# CUDA adapter surface uses in its public API.
+streamlib-adapter-abi = { path = "../../libs/streamlib-adapter-abi" }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 # Objective-C interop and Apple framework bindings.

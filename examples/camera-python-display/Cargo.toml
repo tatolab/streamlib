@@ -33,12 +33,18 @@ png = "0.17"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 streamlib-adapter-abi = { path = "../../libs/streamlib-adapter-abi" }
-streamlib-adapter-cuda = { path = "../../libs/streamlib-adapter-cuda" }
-# `CameraToCudaCopyProcessor` (#612) passes the resolved camera
-# texture through `VulkanTextureLike` and uses the `VulkanLayout`
-# newtype, so the surface-adapter side stays out of `vulkanalia`
-# per the engine boundary rule.
+# `VulkanLayout` newtype used by the in-tree BlendingCompositor /
+# CrtFilmGrain wrappers when issuing layout barriers via the
+# `RhiCommandRecorder`. The wrappers are sandboxed scenario content
+# (#487); the engine boundary rule keeps the example out of
+# `vulkanalia` so this consumer-rhi import is the typed-layout
+# interop type it goes through instead.
 streamlib-consumer-rhi = { path = "../../libs/streamlib-consumer-rhi" }
+# Package deps (`@tatolab/camera`, `@tatolab/display`) flow through
+# `streamlib.yaml` and `Runner::load_workspace_packages` — not
+# through Cargo. The example never imports a package's Rust types
+# directly; processors register via the package's `STREAMLIB_PLUGIN`
+# callback and are wired via `ProcessorSpec::new(schema_ident!(...))`.
 # Direct vulkanalia dep — TRANSITIONAL exception (#487). The
 # example owns its `BlendingCompositor` + `CrtFilmGrain` graphics-
 # kernel wrappers as sandboxed scenario content; the wrappers

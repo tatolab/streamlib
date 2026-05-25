@@ -54,8 +54,6 @@ mod blending_compositor;
 // to RDG (#631).
 #[cfg(target_os = "linux")]
 mod blending_compositor_kernel;
-#[cfg(target_os = "linux")]
-mod camera_to_cuda_copy;
 // CRT/Film-Grain post-effect: processor + sandboxed kernel wrapper.
 // Wired into the Linux pipeline as
 // `BlendingCompositor → CrtFilmGrain → Glitch → Display` (#487).
