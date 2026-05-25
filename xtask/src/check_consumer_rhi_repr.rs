@@ -42,6 +42,18 @@
 //! `docs/architecture/subprocess-rhi-parity.md` for the carve-out
 //! shape.
 //!
+//! Same rationale exempts enums with one or more data-bearing variants
+//! (`Foo(String)` / `Bar { x: u32 }`). They're Rust-internal algebraic
+//! data types (error enums in particular) and a `#[repr(u32)]`
+//! discriminant doesn't apply to their shape. **Footgun warning**: a
+//! contributor adding a single data variant to an otherwise unit-only
+//! `pub enum` in this crate will silently exempt it from the gate. If
+//! the enum genuinely crosses the FFI boundary, that's a regression
+//! the gate can't catch — keep new FFI-crossing enums unit-only and
+//! pass payloads alongside as separate fields. See
+//! `flags_pub_enum_with_unit_variants_only_and_no_repr` and
+//! `skips_pub_enum_with_data_bearing_variants` for the boundary.
+//!
 //! Per-file opt-out is via a single-line pragma at top of file:
 //!     // check-consumer-rhi-repr:allow-file
 //! Reserved for unusual cases reviewers approve explicitly.
@@ -116,7 +128,11 @@ pub fn run(workspace_root: &Path) -> Result<()> {
          `#[repr(transparent)]` to scalar-newtype `pub struct X(T)` types. See \
          `docs/architecture/subprocess-rhi-parity.md` and the existing types in \
          `libs/streamlib-consumer-rhi/src/{{formats,vulkan_layout,pixel_format}}.rs` \
-         for the canonical pattern."
+         for the canonical pattern.\n  \
+         Note: this gate only inspects unit-only enums and scalar tuple newtypes. \
+         An FFI-crossing `pub enum` that mixes in a data-bearing variant (e.g. \
+         `Foo(String)`) silently slips past — keep FFI-crossing enums unit-only \
+         and pass payloads alongside as separate fields."
     );
     anyhow::bail!("check-consumer-rhi-repr failed");
 }

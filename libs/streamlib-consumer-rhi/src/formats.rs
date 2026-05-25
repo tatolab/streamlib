@@ -143,7 +143,13 @@ mod layout_tests {
         // `#[repr(transparent)]` over `u32` — byte-equivalent to its
         // single inner field so adapter vtables can pass a bare
         // `u32` and the receiver can `TextureUsages::from_bits_truncate`
-        // it back without copying.
+        // it back without copying. Size + align alone would also hold
+        // under Rust's default single-field tuple layout, so these
+        // asserts mostly lock against a future "second field added"
+        // drift; the missing-`#[repr(transparent)]` regression itself
+        // is caught at the workspace level by `cargo xtask
+        // check-consumer-rhi-repr`. The bit-pattern test below is the
+        // load-bearing wire-contract lock.
         assert_eq!(size_of::<TextureUsages>(), size_of::<u32>());
         assert_eq!(align_of::<TextureUsages>(), align_of::<u32>());
     }

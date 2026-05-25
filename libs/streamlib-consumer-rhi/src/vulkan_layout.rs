@@ -67,6 +67,13 @@ mod layout_tests {
 
     #[test]
     fn vulkan_layout_layout() {
+        // Size + align alone would also hold under Rust's default
+        // single-field tuple layout, so these asserts mostly lock
+        // against a future "second field added" drift; the
+        // missing-`#[repr(transparent)]` regression itself is caught
+        // at the workspace level by `cargo xtask
+        // check-consumer-rhi-repr`. The constants + round-trip tests
+        // below are the load-bearing wire-contract locks.
         assert_eq!(size_of::<VulkanLayout>(), size_of::<i32>());
         assert_eq!(align_of::<VulkanLayout>(), align_of::<i32>());
     }

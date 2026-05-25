@@ -316,14 +316,18 @@ fn dlopen_cross_rustc_fixture_round_trips_every_beta_shape() {
     // A failure here means a consumer-rhi POD got re-numbered under
     // the fixture's compilation but not the host's (or vice versa) —
     // the exact kind of silent drift `#[repr(...)]` + discriminant
-    // pinning exists to catch.
+    // pinning exists to catch. The fixture suppresses the OK line
+    // when any per-variant check fails, so the OK assert is
+    // sufficient to gate both shapes of failure (missing line / FAIL
+    // lines accumulated); the full body is included in the panic
+    // message so individual `ConsumerRhi:<name>:FAIL` lines surface
+    // in the failure report.
     assert!(
         contents.contains("ConsumerRhiPodRoundTrip:OK"),
-        "missing consumer-rhi POD round-trip line — full body:\n{contents}"
-    );
-    assert!(
-        !contents.contains("ConsumerRhi:") || contents.contains("ConsumerRhiPodRoundTrip:OK"),
-        "consumer-rhi POD round-trip emitted a FAIL line — full body:\n{contents}"
+        "missing consumer-rhi POD round-trip OK line — either the \
+         sweep never ran, or one or more per-variant checks failed \
+         (look for `ConsumerRhi:<name>:FAIL` lines below). Full \
+         body:\n{contents}"
     );
 
     // `Texture::native_handle` (#957, Phase F) is gated on EGL exposing
