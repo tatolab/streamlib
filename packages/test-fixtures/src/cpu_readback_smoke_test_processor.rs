@@ -182,7 +182,7 @@ fn run_smoke<const W: u32, const H: u32>(
                 ))
             })?;
 
-        // Step 6: acquire_write → view_mut → write sentinel → drop guard.
+        // Step 7: acquire_write → view_mut → write sentinel → drop guard.
         let surface = StreamlibSurface::new(
             surface_id,
             W,

@@ -46,6 +46,8 @@ schemas:
     file: schemas/vulkan_smoke_test_processor_config.yaml
   OpenGlSmokeTestProcessorConfig:
     file: schemas/opengl_smoke_test_processor_config.yaml
+  CudaSmokeTestProcessorConfig:
+    file: schemas/cuda_smoke_test_processor_config.yaml
 
 processors:
   - name: TestConfiguredProcessor
@@ -159,3 +161,11 @@ processors:
     config:
       name: config
       schema: OpenGlSmokeTestProcessorConfig
+
+  - name: CudaSmokeTestProcessor
+    version: 1.0.0
+    description: "Dlopen-cdylib surface-adapter smoke fixture for the cuda adapter. Exercises the OPAQUE_FD buffer path: host_vulkan_device_arc, opaque_fd_buffer_pool() probe (SKIP if unavailable), HostVulkanBuffer::new_opaque_fd_export, HostVulkanTimelineSemaphore::new_exportable, CudaSurfaceAdapter::new, register_host_surface, acquire_write, vk_buffer() handle assertion."
+    execution: manual
+    config:
+      name: config
+      schema: CudaSmokeTestProcessorConfig
