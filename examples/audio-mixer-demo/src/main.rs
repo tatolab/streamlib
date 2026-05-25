@@ -1,74 +1,72 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Audio Mixer Demo
+//! Audio Mixer Demo — canonical reference for the All-Dynamic Package
+//! Loading milestone.
 //!
-//! Demonstrates mixing multiple audio streams using AudioMixerProcessor.
-//! Creates three test tones at different frequencies and mixes them into a chord.
+//! Demonstrates loading `@tatolab/audio` at runtime via
+//! `Runner::load_workspace_packages` (no Cargo dep on
+//! `streamlib-audio`) and wiring its processors via structured
+//! `schema_ident!` + JSON config + string-named ports.
+//!
+//! Run prerequisite: `cargo xtask build-plugins --package @tatolab/audio`
+//! (or `cargo xtask build-plugins` with no filter) so the runtime can
+//! find the staged cdylib at `target/streamlib-plugins/tatolab__audio/`.
 
 use streamlib::sdk::error::Result;
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
-use streamlib::sdk::processors::{input, output};
-use streamlib_audio::{AudioOutputProcessor, ChordGeneratorProcessor};
+use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
-
     println!("\n🎵 Audio Mixer Demo - Mixing Multiple Tones\n");
 
-    // Step 1: Create runtime (event-driven, no FPS parameter!)
     println!("🎛️  Creating audio runtime...");
     let runtime = Runner::new()?;
 
-    // Step 2: Add chord generator (now outputs pre-mixed stereo)
+    // 1) Load @tatolab/audio (and any deps it walks via patch:) from
+    //    the workspace-staged location. `cargo xtask build-plugins`
+    //    must have run first.
+    runtime.load_workspace_packages(["@tatolab/audio"])?;
+    println!("+ @tatolab/audio loaded from target/streamlib-plugins/\n");
+
+    // 2) Chord generator — addressed by structured schema_ident,
+    //    configured via JSON payload (matches chord_generator_config.yaml).
     println!("🎹 Adding chord generator (C major chord)...");
-    println!("   Generates stereo output with C4 + E4 + G4 pre-mixed");
-
-    let chord_gen = runtime.add_processor(ChordGeneratorProcessor::node(
-        ChordGeneratorProcessor::Config {
-            // sample_rate and buffer_size now come from AudioClock (48kHz, 512 samples)
-            sample_rate: 0, // Ignored - uses AudioClock
-            buffer_size: 0, // Ignored - uses AudioClock
-            amplitude: 0.3, // Moderate volume (3 tones will sum)
-        },
-    ))?;
+    let chord_gen_ident = schema_ident!("tatolab", "audio", "ChordGenerator", "1.0.0");
+    let chord_gen_config = serde_json::json!({
+        // sample_rate / buffer_size are taken from the runtime AudioClock
+        // at runtime; the values supplied here are placeholders the
+        // processor ignores.
+        "sample_rate": 0,
+        "buffer_size": 0,
+        "amplitude": 0.3,
+    });
+    let chord_gen = runtime.add_processor(ProcessorSpec::new(chord_gen_ident, chord_gen_config))?;
     println!("   ✅ C4 (261.63 Hz) + E4 (329.63 Hz) + G4 (392.00 Hz)");
-    println!("   ✅ Pre-mixed stereo output on port 'chord'");
-    println!("   All 3 tones generated from single synchronized source\n");
+    println!("   ✅ Pre-mixed stereo output on port 'chord'\n");
 
-    // Step 3: Add speaker output
+    // 3) Speaker output — default audio device.
     println!("🔊 Adding speaker output...");
-    let speaker =
-        runtime.add_processor(AudioOutputProcessor::node(AudioOutputProcessor::Config {
-            device_id: None, // Use default speaker
-        }))?;
+    let speaker_ident = schema_ident!("tatolab", "audio", "AudioOutput", "1.0.0");
+    let speaker_config = serde_json::json!({});
+    let speaker = runtime.add_processor(ProcessorSpec::new(speaker_ident, speaker_config))?;
     println!("   Using default audio device\n");
 
-    // Step 4: Connect the audio pipeline using type-safe port markers
+    // 4) Connect chord_gen.chord → speaker.audio using runtime-typed
+    //    port refs. Schema compatibility is validated at connect time
+    //    against the registered processor descriptors.
     println!("🔗 Building audio pipeline...");
-
-    // Connect ChordGenerator directly to Speaker
     runtime.connect(
-        output::<ChordGeneratorProcessor::OutputLink::chord>(&chord_gen),
-        input::<AudioOutputProcessor::InputLink::audio>(&speaker),
+        OutputLinkPortRef::new(&chord_gen, "chord"),
+        InputLinkPortRef::new(&speaker, "audio"),
     )?;
     println!("   ✅ Chord Generator (stereo) → Speaker\n");
 
-    // Step 5: Start the runtime
     println!("▶️  Starting audio processing...");
     println!("   Press Ctrl+C to stop\n");
     println!("🎵 You should hear a clean C major chord!\n");
-    println!("💡 Audio pipeline:");
-    println!("   • Chord Generator (3 tones pre-mixed: C4 + E4 + G4)");
-    println!("     └─ Output 'chord' (stereo with all 3 tones mixed)");
-    println!("   • ChordGen → Speaker (direct connection)\n");
-    println!("⏰ AudioClock Synchronization:");
-    println!("   • ChordGenerator syncs to runtime's AudioClock (48kHz, 512 samples/tick)");
-    println!("   • All 3 tones generated in AudioClock tick callbacks");
-    println!("   • AudioOutput resamples to device's native rate if needed\n");
-    println!("📡 Event-driven architecture:");
-    println!("   • No FPS parameter in runtime");
-    println!("   • Hardware sources drive the clock");
-    println!("   • Type-safe connections verified at compile time\n");
 
     runtime.start()?;
     runtime.wait_for_signal()?;
