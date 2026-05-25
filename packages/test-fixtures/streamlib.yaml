@@ -48,6 +48,8 @@ schemas:
     file: schemas/opengl_smoke_test_processor_config.yaml
   CudaSmokeTestProcessorConfig:
     file: schemas/cuda_smoke_test_processor_config.yaml
+  SurfaceShareEscalateConsistencyTestProcessorConfig:
+    file: schemas/surface_share_escalate_consistency_test_processor_config.yaml
 
 processors:
   - name: TestConfiguredProcessor
@@ -169,3 +171,11 @@ processors:
     config:
       name: config
       schema: CudaSmokeTestProcessorConfig
+
+  - name: SurfaceShareEscalateConsistencyTestProcessor
+    version: 1.0.0
+    description: "Dlopen-cdylib smoke fixture verifying surface-share daemon and escalate-IPC paths agree on resource lifetime for the same surface_id. Registers a texture via both the cross-process surface_store.register_texture channel and the in-process gpu.register_texture_with_layout texture cache; resolves via both gpu.resolve_texture_registration_by_surface_id (Path 1 / escalate-IPC) and surface_store.lookup_texture (cross-process)."
+    execution: manual
+    config:
+      name: config
+      schema: SurfaceShareEscalateConsistencyTestProcessorConfig
