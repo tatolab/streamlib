@@ -18,7 +18,7 @@ pub use linux::{H265DecoderProcessor, H265EncoderProcessor};
 
 pub use _generated_::{H265DecoderConfig, H265EncoderConfig};
 
-#[cfg(all(feature = "plugin", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 streamlib_plugin_abi::export_plugin!(
     crate::H265DecoderProcessor::Processor,
     crate::H265EncoderProcessor::Processor,

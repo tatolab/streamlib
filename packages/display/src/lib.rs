@@ -23,5 +23,5 @@ pub mod linux;
 
 pub use display::{DisplayConfig, DisplayProcessor};
 
-#[cfg(all(feature = "plugin", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 streamlib_plugin_abi::export_plugin!(crate::DisplayProcessor::Processor);

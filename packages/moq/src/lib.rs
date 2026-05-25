@@ -26,7 +26,6 @@ pub use moq_session::{
 };
 pub use moq_subscribe_track::MoqSubscribeTrackProcessor;
 
-#[cfg(feature = "plugin")]
 streamlib_plugin_abi::export_plugin!(
     crate::MoqPublishTrackProcessor::Processor,
     crate::MoqSubscribeTrackProcessor::Processor,

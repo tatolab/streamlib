@@ -3,7 +3,7 @@
 
 //! Camera dlopen lifecycle smoke test (#958 / Phase D follow-up to #914).
 //!
-//! Builds `@tatolab/camera` as a cdylib (`--features plugin`), stages
+//! Builds `@tatolab/camera` as a cdylib, stages
 //! it as a streamlib project alongside `@tatolab/core`, dlopens it
 //! via `Runner::load_project`, then drives the camera processor
 //! through `setup()` + `start()` against vivid (`/dev/video0` on this
@@ -57,7 +57,7 @@
 //!
 //! What the test actually surfaces:
 //!
-//! - `cargo build -p streamlib-camera --features plugin` produces a
+//! - `cargo build -p streamlib-camera` produces a
 //!   `libstreamlib_camera.so` cdylib carrying the `STREAMLIB_PLUGIN`
 //!   symbol.
 //! - `Runner::load_project(...)` accepts the camera's project
@@ -120,19 +120,15 @@ fn dlopen_camera_processor_completes_lifecycle_against_vivid() {
         .unwrap()
         .parent()
         .unwrap();
-
     // Build streamlib-camera as a cdylib carrying the
-    // `STREAMLIB_PLUGIN` symbol. The `plugin` feature gates
-    // `streamlib_plugin_abi::export_plugin!` so multiple rlib
-    // consumers of the same processor type don't collide at link
-    // time on the unmangled static.
+    // `STREAMLIB_PLUGIN` symbol that the runtime dlopens.
     let status = std::process::Command::new(env!("CARGO"))
-        .args(["build", "-p", "streamlib-camera", "--features", "plugin"])
+        .args(["build", "-p", "streamlib-camera"])
         .status()
         .expect("invoking cargo build for streamlib-camera");
     assert!(
         status.success(),
-        "cargo build -p streamlib-camera --features plugin must succeed"
+        "cargo build -p streamlib-camera must succeed"
     );
 
     let dylib_ext = if cfg!(target_os = "macos") {

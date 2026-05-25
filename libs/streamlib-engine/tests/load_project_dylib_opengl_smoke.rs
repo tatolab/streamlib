@@ -55,8 +55,6 @@ fn dlopen_processor_round_trips_opengl_adapter() {
             "build",
             "-p",
             "streamlib-test-fixtures",
-            "--features",
-            "streamlib-test-fixtures/plugin",
         ])
         .status()
         .expect("invoking cargo build");

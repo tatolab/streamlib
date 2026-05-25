@@ -5,10 +5,9 @@ edition = "2024"
 
 # Deliberately NOT taking streamlib-camera as a Rust dep. The camera
 # is loaded at runtime via `Runner::load_project(...)` against a
-# staged copy of `packages/camera/` (built with --features plugin).
-# Linking streamlib-camera as a Rust dep would auto-register the
-# `Camera` processor at link time, conflicting with the cdylib's
-# registration at load time.
+# staged copy of `packages/camera/`. Linking streamlib-camera as a
+# Rust dep would auto-register the `Camera` processor at link time,
+# conflicting with the cdylib's registration at load time.
 [dependencies]
 streamlib = { path = "../../libs/streamlib-sdk" }
 serde_json = "1"

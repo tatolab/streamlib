@@ -116,9 +116,8 @@ impl CargoProfile {
 }
 
 /// Invoke `cargo build [--release] -p <cargo_name>
-/// --features <cargo_name>/plugin --message-format=json` from
-/// `package_dir` and parse the JSON output for the produced host-OS
-/// cdylib path.
+/// --message-format=json` from `package_dir` and parse the JSON
+/// output for the produced host-OS cdylib path.
 ///
 /// `--message-format=json` is the canonical way to discover Cargo
 /// artifact paths — it survives `CARGO_TARGET_DIR` overrides,
@@ -135,20 +134,12 @@ pub fn run_cargo_build(
     dylib_ext: &str,
     profile: CargoProfile,
 ) -> Result<PathBuf> {
-    // `--features <name>/plugin` enables the `export_plugin!` invocation
-    // in the package's `lib.rs`. The feature is default-off so force-link
-    // rlib consumers don't pull in the unmangled `STREAMLIB_PLUGIN`
-    // symbol (multiple rlibs with the same static collide at link time);
-    // pack / build-plugins flip it on so the produced cdylib carries the
-    // symbol the runtime dlopens.
-    let features_flag = format!("{}/plugin", cargo_name);
     let profile_label = profile.label();
     tracing::info!(
-        "Building {} ({} profile, cargo build -p {} --features {})",
+        "Building {} ({} profile, cargo build -p {})",
         cargo_name,
         profile_label,
         cargo_name,
-        features_flag
     );
     let mut command = Command::new("cargo");
     command.arg("build");
@@ -159,22 +150,19 @@ pub fn run_cargo_build(
         .arg("--message-format=json")
         .arg("-p")
         .arg(cargo_name)
-        .arg("--features")
-        .arg(&features_flag)
         .current_dir(package_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .output()
         .with_context(|| {
             format!(
-                "Failed to invoke `cargo build {} -p {} --features {}` in {}",
+                "Failed to invoke `cargo build {} -p {}` in {}",
                 if matches!(profile, CargoProfile::Release) {
                     "--release"
                 } else {
                     ""
                 },
                 cargo_name,
-                features_flag,
                 package_dir.display()
             )
         })?;

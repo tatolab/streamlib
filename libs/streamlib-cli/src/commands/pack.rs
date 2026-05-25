@@ -185,10 +185,8 @@ pub fn pack(package_dir: &Path, output: Option<&Path>, no_build: bool) -> Result
             }
         } else if no_build {
             let cargo_hint = read_cargo_package_name(package_dir)
-                .map(|name| format!("cargo build --release -p {n} --features {n}/plugin", n = name))
-                .unwrap_or_else(|_| {
-                    "cargo build --release -p <name> --features <name>/plugin".to_string()
-                });
+                .map(|name| format!("cargo build --release -p {n}", n = name))
+                .unwrap_or_else(|_| "cargo build --release -p <name>".to_string());
             anyhow::bail!(
                 "Package at {} declares Rust runtime processors but {} contains no \
                  host-OS dylib (`*.{}`) for triple `{}` and `--no-build` was specified. \

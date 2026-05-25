@@ -23,5 +23,5 @@ mod _apple_impl_pending_;
 
 pub use _generated_::LinuxMp4WriterConfig;
 
-#[cfg(all(feature = "plugin", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 streamlib_plugin_abi::export_plugin!(crate::LinuxMp4WriterProcessor::Processor);
