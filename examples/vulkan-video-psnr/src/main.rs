@@ -10,14 +10,16 @@
 //!
 //! Usage:
 //!   vulkan-video-psnr <h264|h265> <bgra-path> <width> <height> <fps> <frame-count>
+//!
+//! Run prerequisite: `cargo xtask build-plugins --package @tatolab/debug-utilities
+//! --package @tatolab/display --package @tatolab/h264 --package @tatolab/h265`
+//! so the runtime can resolve each cdylib at load time.
 
-use streamlib_debug_utilities::BgraFileSourceProcessor;
-use streamlib_display::DisplayProcessor;
-use streamlib_h264::{H264DecoderProcessor, H264EncoderProcessor};
-use streamlib_h265::{H265DecoderProcessor, H265EncoderProcessor};
 use streamlib::sdk::error::Result;
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
-use streamlib::sdk::processors::{input, output};
+use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -38,20 +40,22 @@ fn main() -> Result<()> {
 
     let runtime = Runner::new()?;
 
-    // Register the `@tatolab/core` wire vocabulary so iceoryx2 publishers
-    // honor each schema's `max_payload_bytes` instead of falling back to
-    // the 64 KiB default (which drops the encoder's first IDR with
-    // ExceedsMaxLoanSize and starves the decoder of SPS/PPS).
-    runtime.load_project(env!("CARGO_MANIFEST_DIR"))?;
+    runtime.load_workspace_packages([
+        "@tatolab/debug-utilities",
+        "@tatolab/display",
+        "@tatolab/h264",
+        "@tatolab/h265",
+    ])?;
 
-    let source = runtime.add_processor(BgraFileSourceProcessor::node(
-        BgraFileSourceProcessor::Config {
-            file_path: bgra_path,
-            width,
-            height,
-            fps,
-            frame_count,
-        },
+    let source = runtime.add_processor(ProcessorSpec::new(
+        schema_ident!("tatolab", "debug-utilities", "BgraFileSource", "1.0.0"),
+        serde_json::json!({
+            "file_path": bgra_path,
+            "width": width,
+            "height": height,
+            "fps": fps,
+            "frame_count": frame_count,
+        }),
     ))?;
     println!("+ BgraFileSource: {source}");
 
@@ -60,70 +64,56 @@ fn main() -> Result<()> {
     let effort_level: Option<u32> = std::env::var("STREAMLIB_ENCODER_EFFORT_LEVEL")
         .ok()
         .and_then(|s| s.parse().ok());
-
-    let encoder = if is_h265 {
-        runtime.add_processor(H265EncoderProcessor::node(H265EncoderProcessor::Config {
-            width: Some(width),
-            height: Some(height),
-            effort_level,
-            ..Default::default()
-        }))?
+    let mut encoder_config = serde_json::Map::new();
+    encoder_config.insert("width".into(), serde_json::Value::from(width));
+    encoder_config.insert("height".into(), serde_json::Value::from(height));
+    if let Some(e) = effort_level {
+        encoder_config.insert("effort_level".into(), serde_json::Value::from(e));
+    }
+    let encoder_ident = if is_h265 {
+        schema_ident!("tatolab", "h265", "H265Encoder", "1.0.0")
     } else {
-        runtime.add_processor(H264EncoderProcessor::node(H264EncoderProcessor::Config {
-            width: Some(width),
-            height: Some(height),
-            effort_level,
-            ..Default::default()
-        }))?
+        schema_ident!("tatolab", "h264", "H264Encoder", "1.0.0")
     };
+    let encoder = runtime.add_processor(ProcessorSpec::new(
+        encoder_ident,
+        serde_json::Value::Object(encoder_config),
+    ))?;
     println!("+ {}Encoder: {encoder}", codec.to_uppercase());
 
-    let decoder = if is_h265 {
-        runtime.add_processor(H265DecoderProcessor::node(
-            H265DecoderProcessor::Config::default(),
-        ))?
+    let decoder_ident = if is_h265 {
+        schema_ident!("tatolab", "h265", "H265Decoder", "1.0.0")
     } else {
-        runtime.add_processor(H264DecoderProcessor::node(
-            H264DecoderProcessor::Config::default(),
-        ))?
+        schema_ident!("tatolab", "h264", "H264Decoder", "1.0.0")
     };
+    let decoder = runtime.add_processor(ProcessorSpec::new(
+        decoder_ident,
+        serde_json::json!({}),
+    ))?;
     println!("+ {}Decoder: {decoder}", codec.to_uppercase());
 
-    let display = runtime.add_processor(DisplayProcessor::node(DisplayProcessor::Config {
-        width,
-        height,
-        title: Some(format!("streamlib {} PSNR rig", codec.to_uppercase())),
-        ..Default::default()
-    }))?;
+    let display = runtime.add_processor(ProcessorSpec::new(
+        schema_ident!("tatolab", "display", "Display", "1.0.0"),
+        serde_json::json!({
+            "width": width,
+            "height": height,
+            "title": format!("streamlib {} PSNR rig", codec.to_uppercase()),
+        }),
+    ))?;
     println!("+ Display: {display}");
 
-    if is_h265 {
-        runtime.connect(
-            output::<BgraFileSourceProcessor::OutputLink::video>(&source),
-            input::<H265EncoderProcessor::InputLink::video_in>(&encoder),
-        )?;
-        runtime.connect(
-            output::<H265EncoderProcessor::OutputLink::encoded_video_out>(&encoder),
-            input::<H265DecoderProcessor::InputLink::encoded_video_in>(&decoder),
-        )?;
-        runtime.connect(
-            output::<H265DecoderProcessor::OutputLink::video_out>(&decoder),
-            input::<DisplayProcessor::InputLink::video>(&display),
-        )?;
-    } else {
-        runtime.connect(
-            output::<BgraFileSourceProcessor::OutputLink::video>(&source),
-            input::<H264EncoderProcessor::InputLink::video_in>(&encoder),
-        )?;
-        runtime.connect(
-            output::<H264EncoderProcessor::OutputLink::encoded_video_out>(&encoder),
-            input::<H264DecoderProcessor::InputLink::encoded_video_in>(&decoder),
-        )?;
-        runtime.connect(
-            output::<H264DecoderProcessor::OutputLink::video_out>(&decoder),
-            input::<DisplayProcessor::InputLink::video>(&display),
-        )?;
-    }
+    runtime.connect(
+        OutputLinkPortRef::new(&source, "video"),
+        InputLinkPortRef::new(&encoder, "video_in"),
+    )?;
+    runtime.connect(
+        OutputLinkPortRef::new(&encoder, "encoded_video_out"),
+        InputLinkPortRef::new(&decoder, "encoded_video_in"),
+    )?;
+    runtime.connect(
+        OutputLinkPortRef::new(&decoder, "video_out"),
+        InputLinkPortRef::new(&display, "video"),
+    )?;
     println!("\nPipeline: bgra_file_source -> encoder -> decoder -> display\n");
 
     // Frame throttling in BgraFileSource is real-time, so the run length is
