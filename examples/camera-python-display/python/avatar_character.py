@@ -27,7 +27,7 @@ Two platform-specific paths:
   asset gating). Output is the pre-registered surface UUID — both
   inference and bg are zero-CPU-copy on Linux.
 
-Linux config keys (set by `examples/camera-python-display/src/linux.rs`):
+Linux config keys (set by `examples/camera-python-display/runner/src/linux.rs`):
     cuda_camera_surface_id (int)   — pre-registered cuda OPAQUE_FD buffer.
     opengl_output_surface_uuid (str) — pre-registered opengl DMA-BUF VkImage.
     width, height, channels (int)  — surface dimensions.

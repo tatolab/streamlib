@@ -123,7 +123,6 @@ pub fn main() -> Result<()> {
     println!("=== AvatarCharacter (Linux, #484 cuda + opengl adapters) ===\n");
 
     let runtime = Runner::new()?;
-    let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python");
 
     // Load `@tatolab/camera` and `@tatolab/display` at runtime — both
     // must have been staged via
@@ -133,11 +132,13 @@ pub fn main() -> Result<()> {
         .load_workspace_packages(["@tatolab/camera", "@tatolab/display"])
         .map_err(streamlib::sdk::error::Error::from)?;
 
-    // Load processor package from streamlib.yaml. The Python processors
-    // (avatar_character, cyberpunk_*) compile-import their adapter
-    // dependencies; the unused ones (#485/#486) just sit dormant until
-    // we add their pipeline edges.
-    runtime.load_project(&project_path)?;
+    // Load the runner's project. Its `streamlib.yaml` declares the
+    // sibling cyberpunk Python sub-package via
+    // `patch: path: ../python`, so this single call registers the
+    // Python processors alongside the runner's own Rust-backed
+    // CrtFilmGrain / BlendingCompositor declarations.
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    runtime.load_project(&manifest_dir)?;
     println!("✓ Loaded processor package from streamlib.yaml\n");
 
     // OpenGL + Skia DMA-BUF render-target output surfaces stay as setup

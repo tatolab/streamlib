@@ -70,16 +70,18 @@ pub fn run(workspace_root: &Path) -> Result<()> {
     anyhow::bail!("check-processor-spec-new failed");
 }
 
-/// True for paths under `<workspace_root>/examples/<crate>/src/`. The
-/// hand-rolled-literal pass is scoped to example main.rs / linux.rs files
-/// — codegen.rs in `streamlib-macros` legitimately emits the literal as a
-/// token stream, and integration tests in `libs/*/tests/` build expected
-/// values to assert against. Both must stay outside the lint's reach.
+/// True for paths under `<workspace_root>/examples/<crate>/.../src/`.
+/// The hand-rolled-literal pass is scoped to example main.rs / linux.rs
+/// files — codegen.rs in `streamlib-macros` legitimately emits the
+/// literal as a token stream, and integration tests in `libs/*/tests/`
+/// build expected values to assert against. Both must stay outside the
+/// lint's reach. Accepts both the flat shape (`examples/<crate>/src/`)
+/// and the monorepo-with-sub-packages shape
+/// (`examples/<crate>/runner/src/` per #804).
 fn is_example_src_file(path: &Path) -> bool {
     let mut components = path.components();
     let mut saw_examples = false;
     let mut saw_src_after_examples = false;
-    let mut depth_after_examples = 0;
     while let Some(c) = components.next() {
         let s = c.as_os_str();
         if !saw_examples {
@@ -88,9 +90,7 @@ fn is_example_src_file(path: &Path) -> bool {
             }
             continue;
         }
-        depth_after_examples += 1;
-        // Component layout under `examples/`: <crate>/src/<file>.rs.
-        if depth_after_examples == 2 && s == "src" {
+        if s == "src" {
             saw_src_after_examples = true;
         }
     }
@@ -348,7 +348,7 @@ mod tests {
             "/abs/examples/foo/src/main.rs"
         )));
         assert!(is_example_src_file(Path::new(
-            "/abs/examples/camera-python-display/src/linux.rs"
+            "/abs/examples/camera-python-display/runner/src/linux.rs"
         )));
         // libs/ tests legitimately build expected SchemaIdent values:
         assert!(!is_example_src_file(Path::new(

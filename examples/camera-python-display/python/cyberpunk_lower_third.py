@@ -27,7 +27,7 @@ Features:
 macOS support was removed in #485; the pre-RHI CGL+IOSurface path
 predated the surface-adapter pattern.
 
-Config keys (set by `examples/camera-python-display/src/linux.rs`):
+Config keys (set by `examples/camera-python-display/runner/src/linux.rs`):
     output_surface_uuid (str) — pre-registered render-target DMA-BUF VkImage.
     width, height (int) — surface dimensions.
 """

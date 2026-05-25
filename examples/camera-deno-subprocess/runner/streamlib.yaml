@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=../../../schemas/streamlib.schema.json
+#
+# Rust runner sub-package. Declares a dep on the sibling Deno
+# sub-package via a `patch:` `path:` override — `Runner::load_project(".")`
+# walks this manifest, resolves the sub-package against its local path,
+# and registers its declared processor + schemas.
+
+package:
+  org: tatolab
+  name: camera-deno-subprocess-runner
+  version: "0.1.0"
+  description: "Rust runner sub-package — wires a Camera → Deno subprocess → Display pipeline"
+
+dependencies:
+  "@tatolab/core": "^1.0.0"
+  "@tatolab/camera-deno-subprocess": "^0.1.0"
+
+patch:
+  "@tatolab/core":
+    path: ../../../packages/core
+  "@tatolab/camera-deno-subprocess":
+    path: ../deno
+
+schemas:
+  ColorInfo:
+    package: "@tatolab/core"
+  ContentLight:
+    package: "@tatolab/core"
+  MasteringDisplay:
+    package: "@tatolab/core"
+  VideoFrame:
+    package: "@tatolab/core"

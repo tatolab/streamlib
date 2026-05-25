@@ -1,4 +1,13 @@
-# yaml-language-server: $schema=../../schemas/streamlib.schema.json
+# yaml-language-server: $schema=../../../schemas/streamlib.schema.json
+#
+# Rust runner sub-package. Declares the sibling cyberpunk Python
+# sub-package via a `patch:` `path:` override — `Runner::load_project(".")`
+# walks this manifest, resolves the Python sub-package against
+# `../python`, and registers its declared processors + schemas. The
+# runner additionally declares its own Rust-backed processors below
+# (`CrtFilmGrain`, `BlendingCompositor`), which the runner's `main.rs`
+# wires via `ProcessorSpec::new(schema_ident!(...))` directly.
+
 package:
   org: tatolab
   name: camera-python-display
@@ -7,11 +16,13 @@ package:
 
 dependencies:
   "@tatolab/core": "^1.0.0"
+  "@tatolab/cyberpunk-processor": "^0.1.0"
 
-# Dev-time path override; `streamlib pack` rejects this (#717).
 patch:
   "@tatolab/core":
-    path: ../../packages/core
+    path: ../../../packages/core
+  "@tatolab/cyberpunk-processor":
+    path: ../python
 
 schemas:
   # Wire types imported from @tatolab/core.

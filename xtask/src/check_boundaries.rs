@@ -1256,7 +1256,7 @@ vulkanalia.workspace = true
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "examples/camera-python-display/src/blending_compositor.rs",
+            "examples/camera-python-display/runner/src/blending_compositor.rs",
             "use vulkanalia::vk;\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1269,7 +1269,7 @@ vulkanalia.workspace = true
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "examples/camera-python-display/Cargo.toml",
+            "examples/camera-python-display/runner/Cargo.toml",
             r#"[package]
 name = "camera-python-display"
 version = "0.1.0"

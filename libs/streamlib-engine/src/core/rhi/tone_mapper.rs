@@ -18,7 +18,7 @@
 //! as a struct field — same shape as `LinuxCameraProcessor` holds
 //! `Arc<RhiColorConverter>` per `packages/camera/src/linux/camera.rs`.
 //!
-//! [`BlendingCompositor`]: ../../../examples/camera-python-display/src/blending_compositor.rs
+//! [`BlendingCompositor`]: ../../../examples/camera-python-display/runner/src/blending_compositor.rs
 
 use crate::core::color::TransferId;
 

@@ -171,7 +171,7 @@ alternative — compose first, convert second — produces ringing on
 edges between sources in unaligned linear-light spaces, and is
 N² shaders for pairwise gamut combinations.
 
-`BlendingCompositor` (`examples/camera-python-display/src/blending_compositor.rs`)
+`BlendingCompositor` (`examples/camera-python-display/runner/src/blending_compositor.rs`)
 already stamps `sRGB / Identity / Full` on output by assumption —
 i.e., it implicitly takes the per-acquire model (inputs are
 sRGB-equivalent by convention, output is sRGB-equivalent by stamp).
