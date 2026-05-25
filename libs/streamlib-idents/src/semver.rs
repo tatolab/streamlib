@@ -114,6 +114,7 @@ impl JsonSchema for SemVer {
 /// SemVer range matcher. Supported operators (npm-flavoured subset chosen for
 /// what `streamlib.yaml` actually needs):
 ///
+/// - `*` wildcard — matches any version
 /// - `=1.2.3` exact
 /// - `>=1.2.3` lower bound
 /// - `^1.2.3` caret — same major, version >= input (npm semantics)
@@ -123,6 +124,9 @@ impl JsonSchema for SemVer {
 /// and `^0.0.3` matches exactly `0.0.3`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SemVerRange {
+    /// `*` — matches every version. The imperative module API uses this when
+    /// the caller doesn't pin a version range.
+    Any,
     Exact(SemVer),
     AtLeast(SemVer),
     Caret(SemVer),
@@ -130,8 +134,15 @@ pub enum SemVerRange {
 }
 
 impl SemVerRange {
-    pub(crate) fn from_str(s: &str) -> IdentResult<Self> {
+    /// Parse a range string. Accepts `*` (any), `=1.2.3` (exact),
+    /// `>=1.2.3` (lower bound), `^1.2.3` (caret, npm), `~1.2.3` (tilde),
+    /// and bare `1.2.3` (exact). Surfaces [`IdentError::InvalidSemVer`]
+    /// on malformed inputs.
+    pub fn from_str(s: &str) -> IdentResult<Self> {
         let s = s.trim();
+        if s == "*" {
+            return Ok(Self::Any);
+        }
         if let Some(rest) = s.strip_prefix("^") {
             return Ok(Self::Caret(SemVer::from_dotted(rest.trim())?));
         }
@@ -150,6 +161,7 @@ impl SemVerRange {
 
     pub fn matches(&self, v: SemVer) -> bool {
         match *self {
+            Self::Any => true,
             Self::Exact(req) => v == req,
             Self::AtLeast(req) => v >= req,
             Self::Caret(req) => caret_matches(req, v),
@@ -176,6 +188,7 @@ fn caret_matches(req: SemVer, v: SemVer) -> bool {
 impl fmt::Display for SemVerRange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Any => f.write_str("*"),
             Self::Exact(v) => write!(f, "={}", v),
             Self::AtLeast(v) => write!(f, ">={}", v),
             Self::Caret(v) => write!(f, "^{}", v),
@@ -206,8 +219,8 @@ impl JsonSchema for SemVerRange {
     }
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
         semver_string_schema(
-            "SemVer range matcher: `=1.2.3` exact, `>=1.2.3` lower bound, `^1.2.3` caret (npm), `~1.2.3` tilde, or bare `1.2.3` (exact).",
-            r"^(\^|~|>=|=)?[0-9]+\.[0-9]+\.[0-9]+$",
+            "SemVer range matcher: `*` (any), `=1.2.3` exact, `>=1.2.3` lower bound, `^1.2.3` caret (npm), `~1.2.3` tilde, or bare `1.2.3` (exact).",
+            r"^(\*|(\^|~|>=|=)?[0-9]+\.[0-9]+\.[0-9]+)$",
         )
     }
 }
@@ -308,6 +321,24 @@ mod tests {
     #[test]
     fn range_round_trip_through_yaml() {
         let r = SemVerRange::from_str("^1.2.3").unwrap();
+        let s = serde_yaml::to_string(&r).unwrap();
+        let back: SemVerRange = serde_yaml::from_str(&s).unwrap();
+        assert_eq!(r, back);
+    }
+
+    #[test]
+    fn range_any_matches_every_version() {
+        let r = SemVerRange::from_str("*").unwrap();
+        assert_eq!(r, SemVerRange::Any);
+        assert!(r.matches(SemVer::new(0, 0, 0)));
+        assert!(r.matches(SemVer::new(1, 2, 3)));
+        assert!(r.matches(SemVer::new(u32::MAX, u32::MAX, u32::MAX)));
+        assert_eq!(r.to_string(), "*");
+    }
+
+    #[test]
+    fn range_any_round_trips_through_yaml() {
+        let r = SemVerRange::Any;
         let s = serde_yaml::to_string(&r).unwrap();
         let back: SemVerRange = serde_yaml::from_str(&s).unwrap();
         assert_eq!(r, back);

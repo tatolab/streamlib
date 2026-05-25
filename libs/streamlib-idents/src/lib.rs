@@ -19,7 +19,8 @@ mod semver;
 pub use error::{IdentError, IdentResult, ResolverError, ResolverResult};
 pub use git::fetch_git;
 pub use ident::{
-    validate_org, validate_package, validate_type, Org, Package, PackageRef, SchemaIdent, TypeName,
+    validate_org, validate_package, validate_type, ModuleIdent, Org, Package, PackageRef,
+    SchemaIdent, TypeName,
 };
 pub use lockfile::{
     compute_content_hash, hash_content, read_lockfile, write_lockfile, Lockfile, LockfileEntry,

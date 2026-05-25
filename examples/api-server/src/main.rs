@@ -19,7 +19,17 @@
 //! Run prerequisite: `cargo xtask build-plugins --package @tatolab/api-server`
 //! so the runtime can find the staged cdylib at
 //! `target/streamlib-plugins/tatolab__api-server/`.
+//!
+//! Loads `@tatolab/api-server` through the imperative
+//! [`Runner::add_module`] API — the typed counterpart to the
+//! yaml-driven `load_project`. The fully spelled out
+//! [`streamlib::sdk::module_ident!`] call is one of four
+//! ergonomic shapes; the other three (split + any-version,
+//! joined + version, joined + any-version) are equally valid and
+//! resolve to the same `ModuleIdent::new(...)` expression at
+//! expansion time.
 
+use streamlib::sdk::module_ident;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::schema_ident;
@@ -28,7 +38,12 @@ use streamlib::sdk::schema_ident;
 async fn main() -> streamlib::sdk::error::Result<()> {
     let runtime = Runner::new()?;
 
-    runtime.load_workspace_packages(["@tatolab/api-server"])?;
+    // Imperative module load — REST-endpoint-friendly counterpart
+    // to `Runner::load_project` / `Runner::load_package`. The
+    // runtime resolves the ident against the workspace stage dir
+    // or installed-package cache, verifies the semver range, then
+    // drives the same internal module-loading machinery.
+    runtime.add_module(module_ident!("tatolab", "api-server", "^1.0.0"))?;
 
     let config = serde_json::json!({
         "host": "127.0.0.1",
@@ -47,4 +62,44 @@ async fn main() -> streamlib::sdk::error::Result<()> {
     runtime.wait_for_signal()?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    //! Compile-checks for the four `module_ident*!` macro shapes —
+    //! every shape must expand to a valid `ModuleIdent` against the
+    //! same `streamlib::sdk::descriptors::*` paths. The runtime
+    //! resolution of these idents is exercised in the engine's
+    //! `add_module_tests` module against fixture-staged packages.
+    use streamlib::sdk::descriptors::{ModuleIdent, SemVerRange};
+    use streamlib::sdk::{
+        module_ident, module_ident_any_version, module_ident_joined,
+        module_ident_joined_any_version,
+    };
+
+    #[test]
+    fn module_ident_split_with_version_round_trips() {
+        let id: ModuleIdent = module_ident!("tatolab", "api-server", "^1.0.0");
+        assert_eq!(id.to_string(), "@tatolab/api-server@^1.0.0");
+    }
+
+    #[test]
+    fn module_ident_split_any_version_emits_star_range() {
+        let id: ModuleIdent = module_ident_any_version!("tatolab", "api-server");
+        assert_eq!(id.to_string(), "@tatolab/api-server@*");
+        assert_eq!(id.version, SemVerRange::Any);
+    }
+
+    #[test]
+    fn module_ident_joined_with_version_round_trips() {
+        let id: ModuleIdent = module_ident_joined!("@tatolab/api-server", "~1.0.0");
+        assert_eq!(id.to_string(), "@tatolab/api-server@~1.0.0");
+    }
+
+    #[test]
+    fn module_ident_joined_any_version_emits_star_range() {
+        let id: ModuleIdent = module_ident_joined_any_version!("@tatolab/api-server");
+        assert_eq!(id.to_string(), "@tatolab/api-server@*");
+        assert_eq!(id.version, SemVerRange::Any);
+    }
 }
