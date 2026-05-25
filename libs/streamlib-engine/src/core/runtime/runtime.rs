@@ -798,6 +798,83 @@ impl Runner {
         Ok(())
     }
 
+    /// Resolve every name to its staged dir under
+    /// `<workspace>/target/streamlib-plugins/<org>__<name>/` and call
+    /// [`Self::load_project`] on each, in declaration order.
+    ///
+    /// `cargo xtask build-plugins` must have run first — the helper
+    /// errors with [`LoadWorkspacePackagesError::PackageNotStaged`] when
+    /// a name's staged dir is missing.
+    ///
+    /// Workspace root resolution: `STREAMLIB_WORKSPACE_ROOT` env var
+    /// when set (and the path exists), otherwise
+    /// `cargo locate-project --workspace`.
+    pub fn load_workspace_packages<I, S>(
+        &self,
+        names: I,
+    ) -> std::result::Result<(), LoadWorkspacePackagesError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        // Eagerly validate every id BEFORE touching the workspace root —
+        // a typo'd id should surface as `InvalidPackageId` immediately
+        // rather than masquerading as `WorkspaceRootNotFound` when the
+        // env var is unset.
+        let parsed: Vec<(String, String, String)> = names
+            .into_iter()
+            .map(|name| {
+                let name_str = name.as_ref().to_string();
+                let (org, pkg) = {
+                    let parsed = parse_canonical_package_id(&name_str)?;
+                    (parsed.org_str.to_string(), parsed.name_str.to_string())
+                };
+                Ok::<_, LoadWorkspacePackagesError>((name_str, org, pkg))
+            })
+            .collect::<std::result::Result<_, _>>()?;
+
+        let workspace_root = resolve_workspace_root()?;
+        let staged_root = workspace_root.join("target").join("streamlib-plugins");
+
+        for (name_str, org, name) in parsed {
+            let staged_dir = staged_root.join(format!("{}__{}", org, name));
+
+            if !staged_dir.exists() || !staged_dir.join("streamlib.yaml").exists() {
+                return Err(LoadWorkspacePackagesError::PackageNotStaged {
+                    name: name_str.clone(),
+                    expected_path: staged_dir,
+                });
+            }
+
+            // Identity check: the staged yaml's `[package]` org / name
+            // must match the requested id. Catches manual clobbering of
+            // the staged tree (someone copied wrong content into the
+            // expected dir) before `load_project` registers the wrong
+            // processors.
+            verify_staged_package_identity(&staged_dir, &org, &name, &name_str)?;
+
+            // For Rust-impl packages, the cdylib must be present at
+            // `lib/<host_triple>/`. Surface the precise diagnostic
+            // (rather than letting `load_project` fail with a generic
+            // "missing dylib for this triple" message).
+            verify_cdylib_present_when_rust_impl(&staged_dir, &name_str)?;
+
+            tracing::info!(
+                "Loading workspace package '{}' from {}",
+                name_str,
+                staged_dir.display()
+            );
+            self.load_project(&staged_dir).map_err(|source| {
+                LoadWorkspacePackagesError::LoadProjectFailed {
+                    name: name_str,
+                    source: Box::new(source),
+                }
+            })?;
+        }
+
+        Ok(())
+    }
+
     // =========================================================================
     // Lifecycle
     // =========================================================================
@@ -1981,6 +2058,260 @@ fn bring_up_surface_service(
     Ok((Arc::new(Mutex::new(Some(service))), socket_path))
 }
 
+// =============================================================================
+// load_workspace_packages — typed error + helpers
+// =============================================================================
+
+/// Per-failure-mode error returned by [`Runner::load_workspace_packages`].
+///
+/// The variants surface enough context (offending name, expected path,
+/// underlying engine error) that callers can match for retry vs. abort
+/// or surface an actionable message to the developer.
+#[derive(Debug, thiserror::Error)]
+pub enum LoadWorkspacePackagesError {
+    /// Name did not parse as `@<org>/<name>` per the typed `streamlib-idents`
+    /// org / name validators (charset, leading-letter, length).
+    #[error("Invalid package id '{0}' — expected `@<org>/<name>` with lowercase org and name")]
+    InvalidPackageId(String),
+
+    /// Workspace root could not be resolved — neither the
+    /// `STREAMLIB_WORKSPACE_ROOT` env var nor `cargo locate-project`
+    /// returned a usable directory.
+    #[error(
+        "Workspace root not found — set STREAMLIB_WORKSPACE_ROOT or run \
+         from within a Cargo workspace"
+    )]
+    WorkspaceRootNotFound,
+
+    /// Staged dir does not exist for this package. Most likely cause:
+    /// the dev hasn't run `cargo xtask build-plugins` yet (or pruned
+    /// `target/` since the last run).
+    #[error(
+        "Package '{name}' not staged at {expected_path}. \
+         Run `cargo xtask build-plugins` first."
+    )]
+    PackageNotStaged {
+        name: String,
+        expected_path: std::path::PathBuf,
+    },
+
+    /// Staged dir exists and parses, but its `[package]` org / name
+    /// don't match the requested id. Catches the case where the
+    /// staged tree was clobbered out-of-band (manual `cp`, stale
+    /// rename) before the runtime registers the wrong processors.
+    #[error(
+        "Package identity mismatch at {staged_path}: \
+         requested `@{requested_org}/{requested_name}`, found \
+         `@{actual_org}/{actual_name}` in staged streamlib.yaml. \
+         Re-run `cargo xtask build-plugins` to regenerate."
+    )]
+    PackageIdentityMismatch {
+        staged_path: std::path::PathBuf,
+        requested_org: String,
+        requested_name: String,
+        actual_org: String,
+        actual_name: String,
+    },
+
+    /// Staged dir is present and identity matches, but a Rust-impl
+    /// package's expected cdylib is missing under `lib/<host_triple>/`.
+    /// Distinguishes "staging succeeded but cargo build silently
+    /// produced no artifact" from a generic load_project failure.
+    #[error(
+        "Cdylib missing for Rust-impl package '{name}' — expected at \
+         {expected_path}. Re-run `cargo xtask build-plugins` to rebuild."
+    )]
+    CdylibMissing {
+        name: String,
+        expected_path: std::path::PathBuf,
+    },
+
+    /// `load_project` rejected the staged dir. Carries the engine
+    /// `Error` so callers can introspect further.
+    #[error("load_project failed for '{name}': {source}")]
+    LoadProjectFailed {
+        name: String,
+        #[source]
+        source: Box<Error>,
+    },
+}
+
+impl From<LoadWorkspacePackagesError> for Error {
+    fn from(err: LoadWorkspacePackagesError) -> Self {
+        match err {
+            LoadWorkspacePackagesError::LoadProjectFailed { source, .. } => *source,
+            other => Error::Configuration(other.to_string()),
+        }
+    }
+}
+
+/// Parsed `@<org>/<name>` canonical id. Only the slice references are
+/// kept — the caller's input must outlive this struct.
+#[derive(Debug)]
+struct CanonicalPackageId<'a> {
+    org_str: &'a str,
+    name_str: &'a str,
+}
+
+fn parse_canonical_package_id(name: &str) -> std::result::Result<
+    CanonicalPackageId<'_>,
+    LoadWorkspacePackagesError,
+> {
+    // Strip the leading '@', split on first '/', then route the
+    // halves through the typed `streamlib-idents` validators so
+    // charset / leading-letter / length rules apply here too. We
+    // don't surface the typed-parser's stringy diagnostic — the
+    // typed `InvalidPackageId` variant is what callers match on —
+    // but using the validators means a name like `@TaToLaB/CAMERA`
+    // fails fast here rather than at the filesystem-lookup stage.
+    let stripped = name
+        .strip_prefix('@')
+        .ok_or_else(|| LoadWorkspacePackagesError::InvalidPackageId(name.to_string()))?;
+    let (org, pkg) = stripped
+        .split_once('/')
+        .ok_or_else(|| LoadWorkspacePackagesError::InvalidPackageId(name.to_string()))?;
+    if org.is_empty() || pkg.is_empty() || pkg.contains('/') {
+        return Err(LoadWorkspacePackagesError::InvalidPackageId(name.to_string()));
+    }
+    streamlib_idents::Org::new(org)
+        .map_err(|_| LoadWorkspacePackagesError::InvalidPackageId(name.to_string()))?;
+    streamlib_idents::Package::new(pkg)
+        .map_err(|_| LoadWorkspacePackagesError::InvalidPackageId(name.to_string()))?;
+    Ok(CanonicalPackageId { org_str: org, name_str: pkg })
+}
+
+fn resolve_workspace_root() -> std::result::Result<std::path::PathBuf, LoadWorkspacePackagesError> {
+    // Env-var override wins when set AND the path resolves — the env
+    // var IS the user's intent, so a typo'd path should surface as a
+    // precise error rather than silently falling through to cargo.
+    if let Ok(env_root) = std::env::var("STREAMLIB_WORKSPACE_ROOT") {
+        let path = std::path::PathBuf::from(&env_root);
+        return if path.is_dir() {
+            Ok(path)
+        } else {
+            Err(LoadWorkspacePackagesError::WorkspaceRootNotFound)
+        };
+    }
+
+    let output = std::process::Command::new("cargo")
+        .args(["locate-project", "--workspace", "--message-format=plain"])
+        .output()
+        .map_err(|_| LoadWorkspacePackagesError::WorkspaceRootNotFound)?;
+    if !output.status.success() {
+        return Err(LoadWorkspacePackagesError::WorkspaceRootNotFound);
+    }
+    let manifest_path = String::from_utf8(output.stdout)
+        .map_err(|_| LoadWorkspacePackagesError::WorkspaceRootNotFound)?;
+    let trimmed = manifest_path.trim();
+    if trimmed.is_empty() {
+        return Err(LoadWorkspacePackagesError::WorkspaceRootNotFound);
+    }
+    std::path::PathBuf::from(trimmed)
+        .parent()
+        .map(|p| p.to_path_buf())
+        .ok_or(LoadWorkspacePackagesError::WorkspaceRootNotFound)
+}
+
+/// Read the staged `streamlib.yaml`'s `[package]` org / name and
+/// confirm they match what the caller asked for. The yaml is the
+/// authoritative identity at load time — a mismatch here means the
+/// staged tree was clobbered out-of-band.
+fn verify_staged_package_identity(
+    staged_dir: &std::path::Path,
+    requested_org: &str,
+    requested_name: &str,
+    requested_canonical_id: &str,
+) -> std::result::Result<(), LoadWorkspacePackagesError> {
+    let body = std::fs::read_to_string(staged_dir.join("streamlib.yaml")).map_err(|_| {
+        LoadWorkspacePackagesError::PackageNotStaged {
+            name: requested_canonical_id.to_string(),
+            expected_path: staged_dir.to_path_buf(),
+        }
+    })?;
+    let manifest: streamlib_idents::Manifest = serde_yaml::from_str(&body).map_err(|_| {
+        LoadWorkspacePackagesError::PackageIdentityMismatch {
+            staged_path: staged_dir.to_path_buf(),
+            requested_org: requested_org.to_string(),
+            requested_name: requested_name.to_string(),
+            actual_org: "<unparseable>".to_string(),
+            actual_name: "<unparseable>".to_string(),
+        }
+    })?;
+    let Some(metadata) = manifest.package.as_ref() else {
+        return Err(LoadWorkspacePackagesError::PackageIdentityMismatch {
+            staged_path: staged_dir.to_path_buf(),
+            requested_org: requested_org.to_string(),
+            requested_name: requested_name.to_string(),
+            actual_org: "<no package section>".to_string(),
+            actual_name: "<no package section>".to_string(),
+        });
+    };
+    let actual_org = metadata.org.as_str();
+    let actual_name = metadata.name.as_str();
+    if actual_org != requested_org || actual_name != requested_name {
+        return Err(LoadWorkspacePackagesError::PackageIdentityMismatch {
+            staged_path: staged_dir.to_path_buf(),
+            requested_org: requested_org.to_string(),
+            requested_name: requested_name.to_string(),
+            actual_org: actual_org.to_string(),
+            actual_name: actual_name.to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// When the staged manifest declares Rust runtime processors, the
+/// corresponding cdylib must exist under `lib/<host_triple>/`. Surface
+/// the missing-cdylib case explicitly so the dev knows to re-run
+/// `cargo xtask build-plugins` rather than chasing a generic
+/// load_project failure.
+fn verify_cdylib_present_when_rust_impl(
+    staged_dir: &std::path::Path,
+    requested_canonical_id: &str,
+) -> std::result::Result<(), LoadWorkspacePackagesError> {
+    let body = std::fs::read_to_string(staged_dir.join("streamlib.yaml")).map_err(|_| {
+        LoadWorkspacePackagesError::PackageNotStaged {
+            name: requested_canonical_id.to_string(),
+            expected_path: staged_dir.to_path_buf(),
+        }
+    })?;
+    let manifest: streamlib_processor_schema::ProjectConfigMinimal = match serde_yaml::from_str(&body)
+    {
+        Ok(m) => m,
+        Err(_) => return Ok(()), // identity check already surfaced this
+    };
+    let has_rust = manifest.processors.iter().any(|p| {
+        matches!(
+            p.runtime.language,
+            streamlib_processor_schema::ProcessorLanguage::Rust
+        )
+    });
+    if !has_rust {
+        return Ok(());
+    }
+    let triple_dir = staged_dir.join("lib").join(host_target_triple());
+    let dylib_ext = if cfg!(target_os = "macos") {
+        "dylib"
+    } else if cfg!(target_os = "windows") {
+        "dll"
+    } else {
+        "so"
+    };
+    let any_dylib_present = std::fs::read_dir(&triple_dir)
+        .map(|iter| {
+            iter.flatten()
+                .any(|e| e.path().extension().is_some_and(|ext| ext == dylib_ext))
+        })
+        .unwrap_or(false);
+    if !any_dylib_present {
+        return Err(LoadWorkspacePackagesError::CdylibMissing {
+            name: requested_canonical_id.to_string(),
+            expected_path: triple_dir,
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1998,6 +2329,292 @@ mod tests {
     fn test_runtime_creation() {
         let _runtime = Runner::new();
         // Runtime creates successfully
+    }
+
+    #[test]
+    fn parse_canonical_package_id_accepts_well_formed_input() {
+        // Tightest happy-path lock: every component round-trips
+        // (post-`@`, pre-`/`, post-`/`) into the parsed slices. The
+        // parser is the contract for what `load_workspace_packages`
+        // treats as a legal id — a regression that flipped `org` and
+        // `name` would break the lookup silently.
+        let parsed = parse_canonical_package_id("@tatolab/camera").unwrap();
+        assert_eq!(parsed.org_str, "tatolab");
+        assert_eq!(parsed.name_str, "camera");
+    }
+
+    #[test]
+    fn parse_canonical_package_id_rejects_missing_at_prefix() {
+        let err = parse_canonical_package_id("tatolab/camera").unwrap_err();
+        assert!(matches!(
+            err,
+            LoadWorkspacePackagesError::InvalidPackageId(ref s) if s == "tatolab/camera"
+        ));
+    }
+
+    #[test]
+    fn parse_canonical_package_id_rejects_missing_slash() {
+        let err = parse_canonical_package_id("@tatolab").unwrap_err();
+        assert!(matches!(
+            err,
+            LoadWorkspacePackagesError::InvalidPackageId(ref s) if s == "@tatolab"
+        ));
+    }
+
+    #[test]
+    fn parse_canonical_package_id_rejects_empty_org_or_name() {
+        // Both halves of `@<org>/<name>` must be non-empty. Mentally
+        // reverting either non-empty check would let `@/foo` or
+        // `@foo/` through to the path resolver, where the lookup
+        // would produce a confusing `not_staged` error instead of
+        // the precise `InvalidPackageId` one.
+        for bad in ["@/camera", "@tatolab/", "@/"] {
+            let err = parse_canonical_package_id(bad).unwrap_err();
+            assert!(matches!(err, LoadWorkspacePackagesError::InvalidPackageId(_)));
+        }
+    }
+
+    #[test]
+    fn parse_canonical_package_id_rejects_extra_slashes() {
+        // `@org/name` is a 2-segment id; nesting (`@org/group/name`)
+        // is not a legal shape. The lookup format must match the
+        // staged dir name `<org>__<name>` which is two-segment by
+        // construction.
+        let err = parse_canonical_package_id("@org/sub/name").unwrap_err();
+        assert!(matches!(err, LoadWorkspacePackagesError::InvalidPackageId(_)));
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_workspace_root_honors_streamlib_workspace_root_env_var() {
+        // Test fixture: tempdir set via STREAMLIB_WORKSPACE_ROOT must
+        // win over the cargo-locate-project fallback. Mentally
+        // reverting the env-var branch would silently fall through to
+        // cargo and pick the streamlib workspace root, which is
+        // wrong for hosting CI fixtures.
+        let tmp = tempfile::tempdir().unwrap();
+        let key = "STREAMLIB_WORKSPACE_ROOT";
+        let prev = std::env::var_os(key);
+        // SAFETY: protected by `#[serial]` against parallel test mutation.
+        unsafe {
+            std::env::set_var(key, tmp.path());
+        }
+        let resolved = resolve_workspace_root().unwrap();
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+        assert_eq!(resolved, tmp.path());
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_workspace_root_errors_when_env_var_path_does_not_exist() {
+        // Env var IS the user's stated intent — when it points at a
+        // non-existent dir, surface `WorkspaceRootNotFound` directly
+        // rather than silently falling through to cargo locate-project.
+        // The previous "fall through" branch swallowed user typos as
+        // "ran from outside a workspace" errors; this test pins the
+        // new behavior so a regression to silent-fallthrough fails.
+        let key = "STREAMLIB_WORKSPACE_ROOT";
+        let prev = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, "/nonexistent/path/that/does/not/exist");
+        }
+        let err = resolve_workspace_root().unwrap_err();
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+        assert!(matches!(err, LoadWorkspacePackagesError::WorkspaceRootNotFound));
+    }
+
+    #[test]
+    fn verify_staged_package_identity_flags_mismatch() {
+        // Identity check: the staged manifest's [package] org/name
+        // must match the requested id. Reverting the comparison would
+        // let the runtime register processors from the wrong staged
+        // package — the fixture creates a yaml whose name doesn't
+        // match the requested id and the helper must reject it.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("streamlib.yaml"),
+            "package:\n  org: vendor\n  name: other\n  version: 1.0.0\n",
+        )
+        .unwrap();
+        let err = verify_staged_package_identity(
+            tmp.path(),
+            "tatolab",
+            "camera",
+            "@tatolab/camera",
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            LoadWorkspacePackagesError::PackageIdentityMismatch {
+                ref actual_org,
+                ref actual_name,
+                ..
+            } if actual_org == "vendor" && actual_name == "other"
+        ));
+    }
+
+    #[test]
+    fn verify_staged_package_identity_accepts_matching_yaml() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: camera\n  version: 1.0.0\n",
+        )
+        .unwrap();
+        verify_staged_package_identity(
+            tmp.path(),
+            "tatolab",
+            "camera",
+            "@tatolab/camera",
+        )
+        .expect("matching identity must validate");
+    }
+
+    #[test]
+    fn verify_cdylib_present_when_rust_impl_flags_missing_artifact() {
+        // Setup: a staged Rust-impl package (yaml declares a Rust
+        // processor) with the triple dir missing. The helper must
+        // surface `CdylibMissing` rather than letting load_project
+        // report a less actionable error. Reverting the
+        // `has_rust_runtime_processors` check would either pass
+        // through silently or panic — the test pins the precise
+        // diagnostic.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("streamlib.yaml"),
+            r#"
+package:
+  org: tatolab
+  name: example
+  version: 1.0.0
+processors:
+  - name: ExampleProcessor
+    version: 1.0.0
+    description: "rust"
+    runtime:
+      language: rust
+    execution: manual
+    inputs: []
+    outputs: []
+"#,
+        )
+        .unwrap();
+        let err = verify_cdylib_present_when_rust_impl(tmp.path(), "@tatolab/example")
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            LoadWorkspacePackagesError::CdylibMissing { ref name, ref expected_path }
+                if name == "@tatolab/example"
+                && expected_path.ends_with(host_target_triple())
+        ));
+    }
+
+    #[test]
+    fn verify_cdylib_present_when_rust_impl_passes_for_schemas_only() {
+        // Schemas-only package has no Rust processors, so the cdylib
+        // check is a no-op. Reverting the early-return would surface
+        // a false-positive CdylibMissing.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: core\n  version: 1.0.0\n",
+        )
+        .unwrap();
+        verify_cdylib_present_when_rust_impl(tmp.path(), "@tatolab/core")
+            .expect("schemas-only package must skip the cdylib check");
+    }
+
+    #[test]
+    fn parse_canonical_package_id_rejects_uppercase_via_typed_validator() {
+        // The typed `streamlib-idents` validators enforce lowercase
+        // for org/name. Bypass would let `@TaToLaB/CAMERA` parse
+        // here, hit the filesystem at `target/streamlib-plugins/TaToLaB__CAMERA`,
+        // and surface a less informative `PackageNotStaged` error.
+        // Reverting the `Org::new` / `Package::new` validators would
+        // pass this through; the test catches that regression.
+        let err = parse_canonical_package_id("@TaToLaB/camera").unwrap_err();
+        assert!(matches!(err, LoadWorkspacePackagesError::InvalidPackageId(_)));
+        let err = parse_canonical_package_id("@tatolab/CAMERA").unwrap_err();
+        assert!(matches!(err, LoadWorkspacePackagesError::InvalidPackageId(_)));
+    }
+
+    #[test]
+    #[serial]
+    fn load_workspace_packages_reports_not_staged_when_dir_missing() {
+        // Setup: pristine workspace root with no `target/streamlib-plugins/`
+        // staging. Helper must surface the actionable PackageNotStaged
+        // error rather than papering over the missing dir with a
+        // generic load_project failure.
+        let tmp = tempfile::tempdir().unwrap();
+        let key = "STREAMLIB_WORKSPACE_ROOT";
+        let prev = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, tmp.path());
+        }
+        let runtime = Runner::new().expect("Runner::new");
+        let err = runtime
+            .load_workspace_packages(["@tatolab/camera"])
+            .unwrap_err();
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+        assert!(matches!(
+            err,
+            LoadWorkspacePackagesError::PackageNotStaged { ref name, ref expected_path }
+                if name == "@tatolab/camera"
+                && expected_path.ends_with("tatolab__camera")
+        ));
+    }
+
+    #[test]
+    #[serial]
+    fn load_workspace_packages_returns_invalid_id_before_filesystem_probe() {
+        // Validation order: every id must parse BEFORE the helper
+        // calls `resolve_workspace_root`. Without the env-var override
+        // pointing at a bogus path that can't be a workspace, the
+        // unparseable id must still surface as `InvalidPackageId`
+        // (not the cargo-locate-project-derived `WorkspaceRootNotFound`).
+        // Mentally reverting the eager parse-loop to interleaved
+        // parse-then-resolve would flip the verdict to
+        // WorkspaceRootNotFound on this fixture, so the test catches
+        // the regression.
+        let tmp = tempfile::tempdir().unwrap();
+        let bogus = tmp.path().join("nowhere");
+        let key = "STREAMLIB_WORKSPACE_ROOT";
+        let prev = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, &bogus);
+        }
+        let runtime = Runner::new().expect("Runner::new");
+        let err = runtime
+            .load_workspace_packages(["bad-no-at"])
+            .unwrap_err();
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+        assert!(
+            matches!(
+                err,
+                LoadWorkspacePackagesError::InvalidPackageId(ref s) if s == "bad-no-at"
+            ),
+            "expected InvalidPackageId surfaced before workspace resolution, got: {err:?}"
+        );
     }
 
     #[cfg(target_os = "linux")]

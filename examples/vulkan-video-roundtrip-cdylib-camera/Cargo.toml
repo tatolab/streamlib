@@ -14,5 +14,4 @@ streamlib = { path = "../../libs/streamlib-sdk" }
 streamlib-display = { path = "../../packages/display" }
 streamlib-h264 = { path = "../../packages/h264" }
 streamlib-h265 = { path = "../../packages/h265" }
-tempfile = "3.14"
 serde_json = "1"

@@ -13,6 +13,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use streamlib_jtd_codegen::{generate, GenerateOptions, RuntimeTarget};
 
+pub mod build_plugins;
 pub mod check_boundaries;
 pub mod check_cdylib_reach;
 pub mod check_no_reverse_dns;
@@ -118,6 +119,25 @@ enum Commands {
     /// `streamlib.yaml` carries the `# yaml-language-server: $schema=...`
     /// header, (3) every `streamlib.yaml` validates against the schema.
     CheckManifestSchema,
+
+    /// Stage every in-tree workspace package at
+    /// `target/streamlib-plugins/<org>__<name>/` so
+    /// `Runner::load_workspace_packages` can resolve them by canonical
+    /// id. Rust-impl packages get a cdylib build; schemas-only packages
+    /// stage just their `streamlib.yaml` + `schemas/`. Defaults to the
+    /// dev profile (faster inner loop); `--release` opts into the
+    /// production-shaped profile.
+    BuildPlugins {
+        /// Use `--release` instead of the dev-loop default profile.
+        #[arg(long)]
+        release: bool,
+
+        /// Build only these canonical-id packages (`@<org>/<name>`)
+        /// instead of every Rust-impl package the workspace declares.
+        /// Repeatable: `--package @tatolab/camera --package @tatolab/core`.
+        #[arg(long = "package", value_name = "ORG/NAME")]
+        packages: Vec<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -159,6 +179,9 @@ fn main() -> Result<()> {
         Commands::CheckCdylibReach => check_cdylib_reach::run(&workspace_root()?)?,
         Commands::EmitManifestSchema => manifest_schema::emit(&workspace_root()?)?,
         Commands::CheckManifestSchema => manifest_schema::check(&workspace_root()?)?,
+        Commands::BuildPlugins { release, packages } => {
+            build_plugins::run(&workspace_root()?, release, &packages)?
+        }
     }
 
     Ok(())
