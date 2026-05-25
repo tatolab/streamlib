@@ -153,6 +153,49 @@ impl Default for HostVkImageMeta {
 ///
 /// Wraps a VkImage with associated memory and metadata.
 /// Can be created from scratch or imported from an IOSurface via VK_EXT_metal_objects.
+///
+/// # Cdylib reachability
+///
+/// Two paths give workspace plugin cdylibs access to an
+/// `Arc<HostVulkanTexture>` for adapter `register_host_surface` calls
+/// (the opengl / skia / vulkan / cuda surface adapters' DMA-BUF
+/// render-target story):
+///
+/// 1. **High-level acquire (recommended for standard render-target
+///    use):** call
+///    `GpuContextFullAccess::acquire_render_target_dma_buf_image(w, h, format)`
+///    — backed by the FullAccess `acquire_render_target_dma_buf_image`
+///    vtable slot. Returns a `Texture` β-shape. Extract the underlying
+///    `Arc<HostVulkanTexture>` via the v10 `host_vulkan_texture_arc`
+///    bridge (`HostTextureExt::host_vulkan_texture_arc`). The slot's
+///    host-side body does FOURCC mapping, queries the device's RT-capable
+///    DRM modifier list, and allocates the VkImage through
+///    `new_render_target_dma_buf` internally — the cdylib never touches
+///    the modifier list directly for this path.
+///
+///    Once the cdylib holds the Arc, the `pub` methods
+///    [`Self::export_dma_buf_fd`], [`Self::dma_buf_plane_layout`], and
+///    [`Self::chosen_drm_format_modifier`] are all reachable for
+///    building the adapter's `HostSurfaceRegistration` (DMA-BUF FD +
+///    plane offset/stride + modifier).
+///
+/// 2. **Low-level allocation (advanced — for explicit modifier choice
+///    such as NVIDIA sampler-only `external_only=TRUE` modifiers):**
+///    obtain `Arc<HostVulkanDevice>` via the v9 `host_vulkan_device_arc`
+///    slot, query
+///    `device_arc.drm_modifier_table().rt_modifiers(fourcc)` for the
+///    candidate list (or build a custom list), and call
+///    `HostVulkanTexture::new_render_target_dma_buf(device_arc.device(), &desc, &modifiers)`
+///    directly. The constructor body uses only `pub` accessors on
+///    `HostVulkanDevice` (`allocator`, `dma_buf_image_pool_tiled`, …)
+///    plus `vulkanalia-vma` — no `host_inner()`, no β-shape deref.
+///
+/// Adding a `host_inner()` or `host_callbacks()` guard inside any of
+/// the `new*` constructor bodies (`new`, `new_render_target_dma_buf`,
+/// `new_opaque_fd_export`, etc.) would break path 2 silently — reviewers
+/// touching constructor bodies must keep them guard-free. The cdylib
+/// surface-adapter dlopen smoke tests exercise the full end-to-end
+/// path.
 pub struct HostVulkanTexture {
     /// HostVulkanDevice reference for tracked allocation/free through the RHI.
     vulkan_device: Option<Arc<HostVulkanDevice>>,
