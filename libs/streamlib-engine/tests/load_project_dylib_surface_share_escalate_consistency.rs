@@ -58,8 +58,6 @@ fn dlopen_processor_round_trips_surface_share_and_escalate_paths() {
             "build",
             "-p",
             "streamlib-test-fixtures",
-            "--features",
-            "streamlib-test-fixtures/plugin",
         ])
         .status()
         .expect("invoking cargo build");

@@ -58,14 +58,12 @@ fn build_and_stage_test_fixtures_dylib() -> (tempfile::TempDir, std::path::PathB
             "build",
             "-p",
             "streamlib-test-fixtures",
-            "--features",
-            "streamlib-test-fixtures/plugin",
         ])
         .status()
         .expect("invoking cargo build");
     assert!(
         status.success(),
-        "cargo build -p streamlib-test-fixtures --features plugin must succeed"
+        "cargo build -p streamlib-test-fixtures must succeed"
     );
 
     let dylib_ext = if cfg!(target_os = "macos") {

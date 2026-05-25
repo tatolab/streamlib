@@ -18,5 +18,4 @@ pub mod reassembly;
 
 pub use depayloader::VadrVisionDepayloaderProcessor;
 
-#[cfg(feature = "plugin")]
 streamlib_plugin_abi::export_plugin!(crate::VadrVisionDepayloaderProcessor::Processor);

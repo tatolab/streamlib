@@ -44,7 +44,6 @@ pub use tcp_bind_test_processor::TcpBindTest;
 pub use test_configured_processor::ConfiguredProcessor;
 pub use vulkan_smoke_test_processor::VulkanSmokeTest;
 
-#[cfg(feature = "plugin")]
 streamlib_plugin_abi::export_plugin!(
     crate::ConfiguredProcessor::Processor,
     crate::TcpBindTest::Processor,

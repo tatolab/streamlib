@@ -19,11 +19,6 @@ path = "src/bin/generate_openapi.rs"
 
 [features]
 default = []
-# Gates the `export_plugin!` invocation so the `STREAMLIB_PLUGIN` symbol
-# only ends up in the cdylib output (multiple Rust-impl rlibs sharing
-# the same unmangled static collide at link time). `streamlib pack`
-# invokes `cargo build --features plugin` when packing.
-plugin = []
 moq = ["dep:streamlib-moq"]
 
 [build-dependencies]

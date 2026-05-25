@@ -50,8 +50,6 @@ fn dlopen_processor_round_trips_cuda_adapter() {
             "build",
             "-p",
             "streamlib-test-fixtures",
-            "--features",
-            "streamlib-test-fixtures/plugin",
         ])
         .status()
         .expect("invoking cargo build");

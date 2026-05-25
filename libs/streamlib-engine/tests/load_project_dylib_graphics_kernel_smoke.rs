@@ -86,14 +86,12 @@ fn dlopen_processor_runs_graphics_kernel_offscreen_render_smoke() {
             "build",
             "-p",
             "streamlib-test-fixtures",
-            "--features",
-            "streamlib-test-fixtures/plugin",
         ])
         .status()
         .expect("invoking cargo build");
     assert!(
         status.success(),
-        "cargo build -p streamlib-test-fixtures --features plugin must succeed"
+        "cargo build -p streamlib-test-fixtures must succeed"
     );
 
     let dylib_ext = if cfg!(target_os = "macos") {

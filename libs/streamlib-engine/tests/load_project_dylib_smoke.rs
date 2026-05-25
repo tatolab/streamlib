@@ -48,14 +48,12 @@ fn load_project_real_dylib_registers_processor_via_export_plugin() {
             "build",
             "-p",
             "streamlib-test-fixtures",
-            "--features",
-            "streamlib-test-fixtures/plugin",
         ])
         .status()
         .expect("invoking cargo build");
     assert!(
         status.success(),
-        "cargo build -p streamlib-test-fixtures --features plugin must succeed"
+        "cargo build -p streamlib-test-fixtures must succeed"
     );
 
     let dylib_ext = if cfg!(target_os = "macos") {

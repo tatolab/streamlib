@@ -54,14 +54,12 @@ fn dylib_processor_create_and_drop_round_trips_through_vtable() {
             "build",
             "-p",
             "streamlib-test-fixtures",
-            "--features",
-            "streamlib-test-fixtures/plugin",
         ])
         .status()
         .expect("invoking cargo build");
     assert!(
         status.success(),
-        "cargo build -p streamlib-test-fixtures --features plugin must succeed"
+        "cargo build -p streamlib-test-fixtures must succeed"
     );
 
     let dylib_ext = if cfg!(target_os = "macos") {

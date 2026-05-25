@@ -51,10 +51,7 @@ pub use processor_audio_converter::{
     ProcessorAudioConverter, ProcessorAudioConverterStatus, ProcessorAudioConverterTargetFormat,
 };
 
-#[cfg(all(
-    feature = "plugin",
-    any(target_os = "linux", target_os = "macos", target_os = "ios")
-))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios"))]
 streamlib_plugin_abi::export_plugin!(
     crate::AudioChannelConverterProcessor::Processor,
     crate::AudioMixerProcessor::Processor,

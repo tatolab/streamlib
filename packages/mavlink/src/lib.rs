@@ -16,7 +16,6 @@ pub mod mavlink_encoder;
 pub use mavlink_decoder::MavlinkDecoderProcessor;
 pub use mavlink_encoder::MavlinkEncoderProcessor;
 
-#[cfg(feature = "plugin")]
 streamlib_plugin_abi::export_plugin!(
     crate::MavlinkDecoderProcessor::Processor,
     crate::MavlinkEncoderProcessor::Processor,
