@@ -2,10 +2,14 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-# @tatolab/camera — camera capture processor cluster carved out of the
-# streamlib engine substrate. Owns the camera config schema and the
-# Camera processor declaration (Linux V4L2 + macOS AVFoundation behind
-# a single platform-aliased name).
+# @tatolab/camera — camera capture processor cluster carved out of
+# the streamlib engine substrate. Owns:
+#  - the Camera processor (Linux V4L2 + macOS AVFoundation behind a
+#    single platform-aliased name)
+#  - the CameraToCudaCopy host-pipeline processor (Linux-only) for
+#    consumers that want the camera frame as a GPU-resident CUDA
+#    tensor (PyTorch / JAX / cuDNN / OptiX) with zero CPU staging
+#    on the inference path
 package:
   org: tatolab
   name: camera
@@ -48,3 +52,18 @@ processors:
       - name: video
         schema: VideoFrame
         description: Live video frames from the camera
+
+  - name: CameraToCudaCopy
+    version: 1.0.0
+    description: "Host-pipeline producer: camera VkImage -> cuda OPAQUE_FD VkBuffer with timeline signal for cross-API CUDA interop. Linux-only (CUDA is Linux-only on the in-tree adapter set)."
+    execution: reactive
+    scheduling:
+      priority: high
+    inputs:
+      - name: video_in
+        schema: VideoFrame
+        description: "Camera ring texture (RGBA8 DMA-BUF) frame metadata"
+    outputs:
+      - name: video_out
+        schema: VideoFrame
+        description: "Camera frame forwarded verbatim; cuda surface side-effect happens during process()"

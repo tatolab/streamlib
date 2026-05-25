@@ -1,46 +1,57 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Camera → CUDA host-pipeline copy processor (Linux, #612).
+//! Camera → CUDA host-pipeline copy processor (Linux only).
 //!
-//! Drops the CPU staging hop in `AvatarCharacter`'s Linux inference
-//! path. The host allocates a DEVICE_LOCAL OPAQUE_FD `VkBuffer` for
-//! the cuda surface (instead of a HOST_VISIBLE one), and this
-//! processor sits between the camera and the avatar in the DAG,
-//! issuing a per-frame `vkCmdCopyImageToBuffer` from the camera's
-//! ring `VkImage` into the cuda `VkBuffer` and signaling the cuda
-//! adapter's timeline GPU-side. Subprocess `acquire_read` waits on
-//! the same timeline value, so AvatarCharacter Python's inference
-//! reads GPU-resident bytes with zero CPU copies in the cuda path.
+//! Drops the CPU staging hop for any consumer that wants the camera
+//! frame as a GPU-resident CUDA tensor (e.g. PyTorch / JAX inference,
+//! cuDNN, OptiX). The host allocates a DEVICE_LOCAL OPAQUE_FD
+//! `VkBuffer` for the cuda surface (instead of a HOST_VISIBLE one),
+//! and this processor sits between the camera and downstream
+//! consumers in the DAG, issuing a per-frame `vkCmdCopyImageToBuffer`
+//! from the camera's ring `VkImage` into the cuda `VkBuffer` and
+//! signaling the cuda adapter's timeline GPU-side. Subprocess
+//! `acquire_read` waits on the same timeline value, so consumer
+//! Python / Deno inference reads GPU-resident bytes with zero CPU
+//! copies on the cuda path.
 //!
-//! This processor takes over the cuda-surface lifecycle that used
-//! to live in `linux.rs::register_cuda_camera_surface`.
+//! The processor owns the cuda OPAQUE_FD VkBuffer + the exportable
+//! timeline semaphore + the surface-share registration for both, all
+//! created in `setup()` and torn down when the processor's `Drop`
+//! fires. There is no setup-hook variant — the lifecycle binding to
+//! a single processor instance is what guarantees the cuda surface
+//! never outlives its producer.
+//!
+//! Linux-only. CUDA is Linux-only on the in-tree adapter set;
+//! macOS / iOS builds compile a no-op stub that returns a
+//! configuration error from `setup()`.
 
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use streamlib::sdk::error::{Result, Error};
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use crate::_generated_::VideoFrame;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
+use streamlib::sdk::error::{Error, Result};
 #[cfg(target_os = "linux")]
 use streamlib::sdk::engine::HostSurfaceStoreExt;
 
-#[cfg(target_os = "linux")]
-use streamlib::sdk::rhi::{PixelFormat, PixelBuffer};
+use crate::_generated_::VideoFrame;
+
 #[cfg(target_os = "linux")]
 use streamlib::sdk::context::GpuContextLimitedAccess;
 #[cfg(target_os = "linux")]
 use streamlib::sdk::engine::host_rhi::{HostMarker, HostVulkanBuffer, HostVulkanTimelineSemaphore};
+#[cfg(target_os = "linux")]
+use streamlib::sdk::rhi::{PixelBuffer, PixelFormat};
 #[cfg(target_os = "linux")]
 use streamlib_adapter_abi::{AdapterError, SurfaceId};
 #[cfg(target_os = "linux")]
 use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
 
 /// Surface id this processor registers the cuda OPAQUE_FD `VkBuffer`
-/// under. AvatarCharacter Python's `_process_linux` reads it under
-/// the same id; the Rust example main wires the avatar's Python
-/// config to this constant.
+/// under. Downstream Python / Deno consumers read it under the same
+/// id; the consumer's config pins to this constant so the wiring is
+/// fixed across the IPC boundary.
 #[cfg(target_os = "linux")]
 pub const CUDA_CAMERA_SURFACE_ID: SurfaceId = 484_001;
 
@@ -117,10 +128,10 @@ impl streamlib::sdk::processors::ReactiveProcessor for CameraToCudaCopyProcessor
         }
         let frame: VideoFrame = self.inputs.read("video_in")?;
         self.process_frame_inner(&frame)?;
-        // Forward the frame downstream verbatim — AvatarCharacter still
-        // needs the camera surface_id for its ModernGL background
-        // texture upload (handled separately, not via this processor).
-        // The cuda surface_id is in AvatarCharacter's config.
+        // Forward the frame downstream verbatim — downstream consumers
+        // still need the camera surface_id for any side-channel work
+        // (e.g. ModernGL background texture upload); the cuda surface_id
+        // travels via consumer config, not via the VideoFrame wire.
         self.outputs.write("video_out", &frame)?;
         self.frame_count.fetch_add(1, Ordering::Relaxed);
         Ok(())
@@ -146,7 +157,7 @@ impl CameraToCudaCopyProcessor::Processor {
         //    bytes; the GPU copy in `process()` populates them, and
         //    the cdylib's `cudaImportExternalMemory` →
         //    `cudaExternalMemoryGetMappedBuffer` exposes a
-        //    `kDLCUDA`-classified device pointer to PyTorch.
+        //    `kDLCUDA`-classified device pointer to PyTorch / JAX.
         let pixel_buffer = HostVulkanBuffer::new_opaque_fd_export_device_local(
             &host_device,
             (width as u64) * (height as u64) * 4,
@@ -288,8 +299,8 @@ impl CameraToCudaCopyProcessor::Processor {
         // extent extraction internally so this crate stays out of
         // `vulkanalia` per the engine boundary rule.
         //
-        // `WriteContended` is the expected race when AvatarCharacter
-        // Python's `cuda.acquire_read` is mid-YOLO-inference (~30 ms
+        // `WriteContended` is the expected race when a consumer's
+        // subprocess `cuda.acquire_read` is mid-inference (~30 ms
         // at 640x640 on Jetson-class GPUs); the camera frame is
         // dropped on this tick and the next ring slot will succeed.
         // Tearing down the pipeline on this error would defeat the

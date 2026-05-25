@@ -41,20 +41,11 @@ processors:
         schema: VideoFrame
         description: "Processed video frames"
 
-  - name: CameraToCudaCopy
-    version: 1.0.0
-    description: "Host-pipeline producer: camera VkImage -> cuda OPAQUE_FD VkBuffer with timeline signal (#612)"
-    execution: reactive
-    scheduling:
-      priority: high
-    inputs:
-      - name: video_in
-        schema: VideoFrame
-        description: "Camera ring texture (RGBA8 DMA-BUF) frame metadata"
-    outputs:
-      - name: video_out
-        schema: VideoFrame
-        description: "Camera frame forwarded verbatim; cuda surface side-effect happens during process()"
+  # `CameraToCudaCopy` lives in `@tatolab/camera` so any consumer of
+  # the camera package picks it up without re-deriving the cuda
+  # VkBuffer / timeline / surface-share wiring. The example loads it
+  # via `load_workspace_packages(["@tatolab/camera", ...])` and wires
+  # it via `ProcessorSpec` against `@tatolab/camera/CameraToCudaCopy@1.0.0`.
 
   - name: BlendingCompositor
     version: 1.0.0
