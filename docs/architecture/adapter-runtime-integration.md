@@ -50,7 +50,7 @@ Metadata travels alongside FDs: `width`, `height`, `format`,
 extensible — additional JSON fields can be added without breaking
 existing clients.
 
-Already used by `examples/polyglot-dma-buf-consumer/` from both
+Already used by `examples/polyglot-dma-buf-consumer/runner/` from both
 Python and Deno via `ctx.gpu_limited_access.resolve_surface(id)`,
 which under the hood does a `check_out` and hands back a handle
 the subprocess can `lock` / read / `unlock` / `release`.
@@ -299,7 +299,7 @@ shape (`gpu.set_compute_kernel_bridge`, `set_graphics_kernel_bridge`,
 dispatch through the host RHI.
 
 Reference implementation:
-`examples/polyglot-cpu-readback-blur/src/main.rs`. That example shows
+`examples/polyglot-cpu-readback-blur/runner/src/main.rs`. That example shows
 the cpu-readback case (which exercises the bridge path); the GPU
 adapters use the same hook but skip the `set_*_bridge` step.
 
