@@ -1,0 +1,15 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# Test-only config schema for the surface-share + escalate consistency
+# smoke test.
+
+metadata:
+  type: SurfaceShareEscalateConsistencyTestProcessorConfig
+  description: "Test config schema for the surface-share / escalate-IPC same-surface_id consistency fixture."
+
+properties:
+  output_path:
+    metadata:
+      description: "Filesystem path where the processor writes its result. Format on success: 'OK\nregister_texture_with_layout=ok\nsurface_store_register_texture=ok\nresolve_texture_registration=ok\nsurface_store_lookup_texture=ok'. Format on failure: 'ERR:<message>'."
+    type: string
