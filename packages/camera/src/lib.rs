@@ -27,9 +27,11 @@ pub mod linux;
 pub mod apple;
 
 pub use camera::{CameraDevice, CameraProcessor};
-pub use camera_to_cuda_copy::{
-    CameraToCudaCopyConfig, CameraToCudaCopyProcessor, CUDA_CAMERA_SURFACE_ID,
-};
+pub use camera_to_cuda_copy::{CameraToCudaCopyProcessor, CUDA_CAMERA_SURFACE_ID};
+// Re-exported from `_generated_` (codegen'd from
+// `schemas/camera_to_cuda_copy_config.yaml`) so callers can construct
+// the config without reaching into the `_generated_` path themselves.
+pub use _generated_::CameraToCudaCopyConfig;
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios"))]
 streamlib_plugin_abi::export_plugin!(

@@ -26,7 +26,6 @@
 //! macOS / iOS builds compile a no-op stub that returns a
 //! configuration error from `setup()`.
 
-use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
@@ -46,7 +45,15 @@ use streamlib::sdk::rhi::{PixelBuffer, PixelFormat};
 #[cfg(target_os = "linux")]
 use streamlib_adapter_abi::{AdapterError, SurfaceId};
 #[cfg(target_os = "linux")]
-use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
+use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration};
+// Import VulkanLayout from consumer-rhi directly for consistency with
+// the rest of the camera package (`linux/camera.rs` also imports from
+// `streamlib_consumer_rhi`). `streamlib_adapter_cuda` re-exports the
+// same type — both resolve to the identical newtype — but pinning the
+// import to the canonical home avoids future drift if the adapter
+// re-export ever diverges.
+#[cfg(target_os = "linux")]
+use streamlib_consumer_rhi::VulkanLayout;
 
 /// Surface id this processor registers the cuda OPAQUE_FD `VkBuffer`
 /// under. Downstream Python / Deno consumers read it under the same
@@ -58,8 +65,13 @@ pub const CUDA_CAMERA_SURFACE_ID: SurfaceId = 484_001;
 #[cfg(not(target_os = "linux"))]
 pub const CUDA_CAMERA_SURFACE_ID: u64 = 484_001;
 
-const SURFACE_WIDTH: u32 = 1920;
-const SURFACE_HEIGHT: u32 = 1080;
+/// Default cuda buffer dimensions applied when the consumer's
+/// `ProcessorSpec` config omits `width` / `height`. Matches the
+/// camera processor's default capture resolution; consumers that
+/// run at a non-default resolution must pass `{"width": N, "height": M}`
+/// matching their camera config.
+const DEFAULT_SURFACE_WIDTH: u32 = 1920;
+const DEFAULT_SURFACE_HEIGHT: u32 = 1080;
 
 // Per-platform backend stash. The proc-macro strips `#[cfg]` from
 // individual struct fields, so we collapse the platform-conditional
@@ -84,27 +96,19 @@ struct LinuxState {
     height: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CameraToCudaCopyConfig {
-    /// Buffer width in pixels. Must match the camera ring texture
-    /// width; mismatched sizes are rejected at the first copy.
-    pub width: u32,
-    /// Buffer height in pixels. Same constraint as `width`.
-    pub height: u32,
-}
-
-impl Default for CameraToCudaCopyConfig {
-    fn default() -> Self {
-        Self {
-            width: SURFACE_WIDTH,
-            height: SURFACE_HEIGHT,
-        }
-    }
-}
-
+// `CameraToCudaCopyConfig` is codegen'd from
+// `schemas/camera_to_cuda_copy_config.yaml` into `crate::_generated_`
+// — the macro pulls it via the `config:` block declared in the
+// package's `streamlib.yaml`. The `config` struct field is bound to
+// `Self::Config` (the schema-derived type), so JSON payloads passed
+// via `ProcessorSpec::new(..., serde_json::json!({...}))` reach the
+// `setup()` body through `self.config.width` / `.height` as
+// expected. (Hand-defining the struct here as a "custom field"
+// would silently discard the JSON — the macro initializes custom
+// fields via `Default::default()`. Schemas-driven config is the
+// only path that flows external config through to the processor.)
 #[streamlib::sdk::processor("CameraToCudaCopy")]
 pub struct CameraToCudaCopyProcessor {
-    config: CameraToCudaCopyConfig,
     backend: GpuBackendStash,
     frame_count: AtomicU64,
 }
@@ -141,8 +145,8 @@ impl streamlib::sdk::processors::ReactiveProcessor for CameraToCudaCopyProcessor
 impl CameraToCudaCopyProcessor::Processor {
     #[cfg(target_os = "linux")]
     fn setup_inner(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        let width = self.config.width;
-        let height = self.config.height;
+        let width = self.config.width.unwrap_or(DEFAULT_SURFACE_WIDTH);
+        let height = self.config.height.unwrap_or(DEFAULT_SURFACE_HEIGHT);
         if width == 0 || height == 0 {
             return Err(Error::Configuration(format!(
                 "CameraToCudaCopy: width/height must be non-zero, got {width}x{height}"

@@ -1,0 +1,24 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for CameraToCudaCopy config.
+
+metadata:
+  type: CameraToCudaCopyConfig
+  description: "Configuration for CameraToCudaCopy — allocates a DEVICE_LOCAL OPAQUE_FD VkBuffer for cross-API CUDA interop and issues a per-frame vkCmdCopyImageToBuffer + timeline signal. Width and height MUST match the upstream camera processor's ring texture dimensions; mismatched sizes are rejected at the first copy."
+
+# Width and height are optional in the wire schema (JTD has no
+# `default` keyword) but treated as required at the processor layer
+# — the consumer applies the 1920×1080 defaults via `.unwrap_or(...)`
+# in `setup()` so `ProcessorSpec::new(..., json!({}))` carries empty
+# JSON and still works, while `json!({"width": 1280, "height": 720})`
+# overrides cleanly.
+optionalProperties:
+  width:
+    metadata:
+      description: "Cuda buffer width in pixels. Must match the camera ring texture width. Default: 1920."
+    type: uint32
+  height:
+    metadata:
+      description: "Cuda buffer height in pixels. Must match the camera ring texture height. Default: 1080."
+    type: uint32

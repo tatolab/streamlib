@@ -37,6 +37,8 @@ schemas:
   # Local config schemas this package owns.
   CameraConfig:
     file: schemas/camera_config.yaml
+  CameraToCudaCopyConfig:
+    file: schemas/camera_to_cuda_copy_config.yaml
 
 processors:
   - name: Camera
@@ -59,6 +61,9 @@ processors:
     execution: reactive
     scheduling:
       priority: high
+    config:
+      name: config
+      schema: CameraToCudaCopyConfig
     inputs:
       - name: video_in
         schema: VideoFrame
