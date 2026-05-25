@@ -10,13 +10,16 @@
 //!
 //! Usage:
 //!   jpeg-psnr <jpeg-path> <width> <height> <fps> <frame-count>
+//!
+//! Run prerequisite: `cargo xtask build-plugins --package @tatolab/debug-utilities
+//! --package @tatolab/jpeg --package @tatolab/display` so the runtime can
+//! resolve each cdylib at load time.
 
 use streamlib::sdk::error::Result;
-use streamlib::sdk::processors::{input, output};
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
-use streamlib_debug_utilities::JpegBytesSourceProcessor;
-use streamlib_display::DisplayProcessor;
-use streamlib_jpeg::JpegDecoderProcessor;
+use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -35,40 +38,48 @@ fn main() -> Result<()> {
 
     let runtime = Runner::new()?;
 
-    runtime.load_project(env!("CARGO_MANIFEST_DIR"))?;
+    runtime.load_workspace_packages([
+        "@tatolab/debug-utilities",
+        "@tatolab/jpeg",
+        "@tatolab/display",
+    ])?;
 
-    let source = runtime.add_processor(JpegBytesSourceProcessor::node(
-        JpegBytesSourceProcessor::Config {
-            file_path: jpeg_path,
-            fps: Some(fps),
-            frame_count: Some(frame_count),
-        },
+    let source = runtime.add_processor(ProcessorSpec::new(
+        schema_ident!("tatolab", "debug-utilities", "JpegBytesSource", "1.0.0"),
+        serde_json::json!({
+            "file_path": jpeg_path,
+            "fps": fps,
+            "frame_count": frame_count,
+        }),
     ))?;
     println!("+ JpegBytesSource: {source}");
 
-    let decoder = runtime.add_processor(JpegDecoderProcessor::node(
-        JpegDecoderProcessor::Config {
-            max_width: Some(width.max(1)),
-            max_height: Some(height.max(1)),
-        },
+    let decoder = runtime.add_processor(ProcessorSpec::new(
+        schema_ident!("tatolab", "jpeg", "JpegDecoder", "1.0.0"),
+        serde_json::json!({
+            "max_width": width.max(1),
+            "max_height": height.max(1),
+        }),
     ))?;
     println!("+ JpegDecoder: {decoder}");
 
-    let display = runtime.add_processor(DisplayProcessor::node(DisplayProcessor::Config {
-        width,
-        height,
-        title: Some("streamlib JPEG PSNR rig".to_string()),
-        ..Default::default()
-    }))?;
+    let display = runtime.add_processor(ProcessorSpec::new(
+        schema_ident!("tatolab", "display", "Display", "1.0.0"),
+        serde_json::json!({
+            "width": width,
+            "height": height,
+            "title": "streamlib JPEG PSNR rig",
+        }),
+    ))?;
     println!("+ Display: {display}");
 
     runtime.connect(
-        output::<JpegBytesSourceProcessor::OutputLink::encoded_jpeg>(&source),
-        input::<JpegDecoderProcessor::InputLink::encoded_jpeg_in>(&decoder),
+        OutputLinkPortRef::new(&source, "encoded_jpeg"),
+        InputLinkPortRef::new(&decoder, "encoded_jpeg_in"),
     )?;
     runtime.connect(
-        output::<JpegDecoderProcessor::OutputLink::video_out>(&decoder),
-        input::<DisplayProcessor::InputLink::video>(&display),
+        OutputLinkPortRef::new(&decoder, "video_out"),
+        InputLinkPortRef::new(&display, "video"),
     )?;
     println!("\nPipeline: jpeg_bytes_source -> jpeg_decoder -> display\n");
 
