@@ -142,3 +142,49 @@ impl PixelFormat {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod layout_tests {
+    //! Layout regression tests for the FFI-crossing pixel-format
+    //! primitive.
+    //!
+    //! `#[repr(u32)]` so the enum is byte-equivalent to a bare `u32`
+    //! across the plugin FFI boundary — adapter vtables in
+    //! `streamlib-adapter-cpu-readback` (and elsewhere) carry
+    //! `format_raw: u32` arguments that round-trip through
+    //! [`PixelFormat`] via an `as` cast. Discriminant values are
+    //! CVPixelFormatType FourCC constants — pinning them locks
+    //! against silent re-numbering.
+    use super::*;
+    use core::mem::{align_of, size_of};
+
+    #[test]
+    fn pixel_format_layout() {
+        assert_eq!(size_of::<PixelFormat>(), 4);
+        assert_eq!(align_of::<PixelFormat>(), 4);
+    }
+
+    #[test]
+    fn pixel_format_discriminants_are_pinned() {
+        // CVPixelFormatType FourCC constants. Locked: a silent change
+        // in any of these silently re-maps cdylibs' format payloads
+        // onto the wrong host-side variant.
+        assert_eq!(PixelFormat::Bgra32 as u32, 0x42475241);
+        assert_eq!(PixelFormat::Rgba32 as u32, 0x52474241);
+        assert_eq!(PixelFormat::Argb32 as u32, 0x00000020);
+        assert_eq!(PixelFormat::Rgba64 as u32, 0x52476841);
+        assert_eq!(PixelFormat::Nv12VideoRange as u32, 0x34323076);
+        assert_eq!(PixelFormat::Nv12FullRange as u32, 0x34323066);
+        assert_eq!(PixelFormat::Uyvy422 as u32, 0x32767579);
+        assert_eq!(PixelFormat::Yuyv422 as u32, 0x79757673);
+        assert_eq!(PixelFormat::Gray8 as u32, 0x4C303038);
+        assert_eq!(PixelFormat::Unknown as u32, 0x00000000);
+    }
+
+    #[test]
+    fn pixel_format_default_is_bgra32() {
+        // The `Default` impl IS part of the wire contract for FFI
+        // payloads that default-initialize a buffer of `PixelFormat`.
+        assert_eq!(PixelFormat::default() as u32, PixelFormat::Bgra32 as u32);
+    }
+}

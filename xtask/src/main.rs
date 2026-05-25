@@ -16,6 +16,7 @@ use streamlib_jtd_codegen::{generate, GenerateOptions, RuntimeTarget};
 pub mod build_plugins;
 pub mod check_boundaries;
 pub mod check_cdylib_reach;
+pub mod check_consumer_rhi_repr;
 pub mod check_no_inventory_submit;
 pub mod check_no_reverse_dns;
 pub mod check_no_streamlib_metadata;
@@ -118,6 +119,16 @@ enum Commands {
     /// documented at `docs/architecture/cdylib-reachability.md`.
     CheckCdylibReach,
 
+    /// CI gate for issue #1039's consumer-rhi `#[repr(...)]` discipline.
+    /// Fails when any `pub enum` in `libs/streamlib-consumer-rhi/src/`
+    /// is missing an explicit `#[repr(...)]`, or when any
+    /// `pub struct X(T)` scalar tuple newtype is missing
+    /// `#[repr(transparent)]` / `#[repr(C)]`. Consumer-rhi POD types
+    /// cross the plugin FFI boundary as bare scalars; their byte
+    /// layout is part of the wire contract. See
+    /// `docs/architecture/subprocess-rhi-parity.md`.
+    CheckConsumerRhiRepr,
+
     /// Regenerate `schemas/streamlib.schema.json` from the Rust
     /// [`StreamlibYaml`](streamlib_processor_schema::StreamlibYaml) source of
     /// truth (#714). Editors with `yaml-language-server` consume this schema
@@ -188,6 +199,9 @@ fn main() -> Result<()> {
         Commands::CheckNoInventorySubmit => check_no_inventory_submit::run(&workspace_root()?)?,
         Commands::CheckProcessorSpecNew => check_processor_spec_new::run(&workspace_root()?)?,
         Commands::CheckCdylibReach => check_cdylib_reach::run(&workspace_root()?)?,
+        Commands::CheckConsumerRhiRepr => {
+            check_consumer_rhi_repr::run(&workspace_root()?)?
+        }
         Commands::EmitManifestSchema => manifest_schema::emit(&workspace_root()?)?,
         Commands::CheckManifestSchema => manifest_schema::check(&workspace_root()?)?,
         Commands::BuildPlugins { release, packages } => {
