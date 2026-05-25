@@ -13,7 +13,7 @@ use std::sync::Once;
 use crate::core::processors::PROCESSOR_REGISTRY;
 
 /// Mock processor with two input ports + two output ports.
-#[crate::processor("TestMockProcessor", )]
+#[crate::processor("TestMockProcessor")]
 pub(crate) struct MockProcessor;
 
 impl crate::core::ManualProcessor for MockProcessor::Processor {
@@ -38,7 +38,7 @@ impl crate::core::ManualProcessor for MockProcessor::Processor {
 }
 
 /// Mock processor with only output ports.
-#[crate::processor("TestMockOutputOnlyProcessor", )]
+#[crate::processor("TestMockOutputOnlyProcessor")]
 pub(crate) struct MockOutputOnlyProcessor;
 
 impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
@@ -63,7 +63,7 @@ impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
 }
 
 /// Mock processor with only input ports.
-#[crate::processor("TestMockInputOnlyProcessor", )]
+#[crate::processor("TestMockInputOnlyProcessor")]
 pub(crate) struct MockInputOnlyProcessor;
 
 impl crate::core::ManualProcessor for MockInputOnlyProcessor::Processor {

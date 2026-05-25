@@ -14,9 +14,10 @@
 //! match the fixture. This locks the cross-process pieces the unit tests
 //! and state-machine integration tests don't: the iceoryx2 NetworkPacket →
 //! EncodedJpegFrame → VideoFrame byte-shape mailbox path, the
-//! `#[streamlib::sdk::processor]` macro wiring, the
-//! `inventory::submit!` factory registration, and the actual UDP path
-//! the deployed pipeline uses.
+//! `#[streamlib::sdk::processor]` macro wiring, the explicit
+//! `PROCESSOR_REGISTRY.register::<P>()` calls in `register_test_processors`
+//! that populate the factory, and the actual UDP path the deployed
+//! pipeline uses.
 //!
 //! Per-test setup registers the package processors explicitly via
 //! `PROCESSOR_REGISTRY.register::<P>()` — the engine substrate ships
