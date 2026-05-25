@@ -24,26 +24,15 @@ mod _generated_ {
 #[cfg(target_os = "linux")]
 use streamlib::sdk::permissions::{request_audio_permission, request_camera_permission};
 #[cfg(target_os = "linux")]
-use streamlib_camera::CameraProcessor;
-#[cfg(target_os = "linux")]
-use streamlib_h264::H264EncoderProcessor;
-#[cfg(target_os = "linux")]
-use streamlib_opus::OpusEncoderProcessor;
-#[cfg(target_os = "linux")]
-use streamlib_webrtc::WebRtcWhipProcessor;
-#[cfg(target_os = "linux")]
 use streamlib::sdk::error::Result;
+#[cfg(target_os = "linux")]
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 #[cfg(target_os = "linux")]
 use streamlib::sdk::runtime::Runner;
 #[cfg(target_os = "linux")]
-use streamlib::sdk::processors::{input, output, ProcessorSpec};
+use streamlib::sdk::processors::ProcessorSpec;
 #[cfg(target_os = "linux")]
 use streamlib::sdk::schema_ident_any_version;
-#[cfg(target_os = "linux")]
-use streamlib_audio::{
-    AudioCaptureProcessor, AudioChannelConverterProcessor, AudioResamplerProcessor,
-    BufferRechunkerProcessor,
-};
 
 #[cfg(target_os = "linux")]
 use crate::_generated_::tatolab__camera::CameraConfig;
@@ -73,6 +62,14 @@ fn main() -> Result<()> {
     println!("=== WebRTC WHIP Streaming to Cloudflare Stream ===\n");
 
     let runtime = Runner::new()?;
+
+    runtime.load_workspace_packages([
+        "@tatolab/audio",
+        "@tatolab/camera",
+        "@tatolab/h264",
+        "@tatolab/opus",
+        "@tatolab/webrtc",
+    ])?;
 
     println!("🔒 Requesting camera permission...");
     if !request_camera_permission()? {
@@ -200,14 +197,14 @@ fn main() -> Result<()> {
     println!("🔗 Connecting pipeline:");
 
     runtime.connect(
-        output::<CameraProcessor::OutputLink::video>(&camera),
-        input::<H264EncoderProcessor::InputLink::video_in>(&h264_encoder),
+        OutputLinkPortRef::new(&camera, "video"),
+        InputLinkPortRef::new(&h264_encoder, "video_in"),
     )?;
     println!("   ✓ Camera → H.264 encoder");
 
     runtime.connect(
-        output::<H264EncoderProcessor::OutputLink::encoded_video_out>(&h264_encoder),
-        input::<WebRtcWhipProcessor::InputLink::encoded_video_in>(&webrtc),
+        OutputLinkPortRef::new(&h264_encoder, "encoded_video_out"),
+        InputLinkPortRef::new(&webrtc, "encoded_video_in"),
     )?;
     println!("   ✓ H.264 encoder → WebRTC\n");
 
@@ -215,24 +212,24 @@ fn main() -> Result<()> {
         &audio_pipeline
     {
         runtime.connect(
-            output::<AudioCaptureProcessor::OutputLink::audio>(audio_capture),
-            input::<AudioResamplerProcessor::InputLink::audio_in>(resampler),
+            OutputLinkPortRef::new(audio_capture, "audio"),
+            InputLinkPortRef::new(resampler, "audio_in"),
         )?;
         runtime.connect(
-            output::<AudioResamplerProcessor::OutputLink::audio_out>(resampler),
-            input::<AudioChannelConverterProcessor::InputLink::audio_in>(channel_converter),
+            OutputLinkPortRef::new(resampler, "audio_out"),
+            InputLinkPortRef::new(channel_converter, "audio_in"),
         )?;
         runtime.connect(
-            output::<AudioChannelConverterProcessor::OutputLink::audio_out>(channel_converter),
-            input::<BufferRechunkerProcessor::InputLink::audio_in>(rechunker),
+            OutputLinkPortRef::new(channel_converter, "audio_out"),
+            InputLinkPortRef::new(rechunker, "audio_in"),
         )?;
         runtime.connect(
-            output::<BufferRechunkerProcessor::OutputLink::audio_out>(rechunker),
-            input::<OpusEncoderProcessor::InputLink::audio_in>(opus_encoder),
+            OutputLinkPortRef::new(rechunker, "audio_out"),
+            InputLinkPortRef::new(opus_encoder, "audio_in"),
         )?;
         runtime.connect(
-            output::<OpusEncoderProcessor::OutputLink::encoded_audio_out>(opus_encoder),
-            input::<WebRtcWhipProcessor::InputLink::encoded_audio_in>(&webrtc),
+            OutputLinkPortRef::new(opus_encoder, "encoded_audio_out"),
+            InputLinkPortRef::new(&webrtc, "encoded_audio_in"),
         )?;
         println!("   ✓ Mic → resampler → converter → rechunker → Opus → WebRTC\n");
     } else {

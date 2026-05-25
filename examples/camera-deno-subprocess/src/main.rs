@@ -20,25 +20,30 @@
 //! ```
 
 use std::path::PathBuf;
+use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib_camera::CameraProcessor;
-use streamlib_display::DisplayProcessor;
-use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
     let runtime = Runner::new()?;
     let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("deno");
 
-    // 1. Load processor package from streamlib.yaml
+    // 1. Load `@tatolab/camera` and `@tatolab/display` from the
+    //    workspace-staged location. `cargo xtask build-plugins
+    //    --package @tatolab/camera --package @tatolab/display` must
+    //    have run first.
+    runtime.load_workspace_packages(["@tatolab/camera", "@tatolab/display"])?;
+
+    // 2. Load the Deno halftone processor package from streamlib.yaml
     runtime.load_project(&project_path)?;
 
-    // 2. Add processors
-    let camera = runtime.add_processor(CameraProcessor::node(CameraProcessor::Config {
-        device_id: None,
-        ..Default::default()
-    }))?;
+    // 3. Add processors
+    let camera = runtime.add_processor(ProcessorSpec::new(
+        schema_ident!("tatolab", "camera", "Camera", "1.0.0"),
+        serde_json::json!({}),
+    ))?;
 
     let halftone = runtime.add_processor(ProcessorSpec::new(
         streamlib::sdk::schema_ident_any_version!(
@@ -49,12 +54,14 @@ fn main() -> Result<()> {
         serde_json::json!({}),
     ))?;
 
-    let display = runtime.add_processor(DisplayProcessor::node(DisplayProcessor::Config {
-        width: 1920,
-        height: 1080,
-        title: Some("Camera → TypeGPU Halftone → Display".to_string()),
-        ..Default::default()
-    }))?;
+    let display = runtime.add_processor(ProcessorSpec::new(
+        schema_ident!("tatolab", "display", "Display", "1.0.0"),
+        serde_json::json!({
+            "width": 1920,
+            "height": 1080,
+            "title": "Camera → TypeGPU Halftone → Display",
+        }),
+    ))?;
 
     // 3. Connect: Camera → Deno Halftone → Display
     runtime.connect(
