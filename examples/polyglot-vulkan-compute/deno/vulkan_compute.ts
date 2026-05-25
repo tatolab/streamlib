@@ -26,7 +26,7 @@
  *
  * Config keys: vulkan_surface_uuid, width, height, max_iter, variant,
  * shader_spv_hex (hex-encoded SPIR-V from
- * `examples/polyglot-vulkan-compute/shaders/mandelbrot.comp`).
+ * `examples/polyglot-vulkan-compute/runner/shaders/mandelbrot.comp`).
  */
 
 import {

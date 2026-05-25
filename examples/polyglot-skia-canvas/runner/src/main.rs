@@ -29,9 +29,6 @@
 //! See `libs/streamlib-python/python/streamlib/adapters/skia.py` for
 //! why GL, not Vulkan, in Python.
 //!
-//! Build the Python `.slpkg` first:
-//!   cargo run -p streamlib-cli -- pack examples/polyglot-skia-canvas/python
-//!
 //! Run:
 //!   cargo run -p polyglot-skia-canvas-scenario -- \
 //!       --output-dir=/tmp/skia-canvas-py
@@ -188,17 +185,12 @@ fn main() -> Result<()> {
         .load_workspace_packages(["@tatolab/debug-utilities"])
         .map_err(streamlib::sdk::error::Error::from)?;
 
+    // Load the polyglot processor declaratively. The runner's
+    // `streamlib.yaml` declares the Python sub-package via a `patch:`
+    // `path:` override; `load_project` walks the manifest, resolves
+    // it against `../python`, and registers its processor + schemas.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let slpkg_path =
-        manifest_dir.join("python/polyglot-skia-canvas-0.1.0.slpkg");
-    if !slpkg_path.exists() {
-        return Err(Error::Configuration(format!(
-            "Package not found: {}\n\
-             Run: cargo run -p streamlib-cli -- pack examples/polyglot-skia-canvas/python",
-            slpkg_path.display()
-        )));
-    }
-    runtime.load_package(&slpkg_path)?;
+    runtime.load_project(&manifest_dir)?;
 
     let fixture_path =
         write_trigger_fixture().map_err(Error::Configuration)?;

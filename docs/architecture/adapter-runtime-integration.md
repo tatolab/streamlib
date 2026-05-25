@@ -370,7 +370,7 @@ When the surface is consumed **only** by subprocess customers (or
 by a post-stop one-shot like `gpu.create_texture_readback`), the
 in-process call is redundant — Path 1 is never consulted. The
 canonical example is
-[`examples/polyglot-opengl-fragment-shader/src/main.rs`](../../examples/polyglot-opengl-fragment-shader/src/main.rs):
+[`examples/polyglot-opengl-fragment-shader/runner/src/main.rs`](../../examples/polyglot-opengl-fragment-shader/runner/src/main.rs):
 the host registers via `surface_store.register_texture` only and
 relies on `gpu.create_texture_readback` for its post-stop pixel
 capture. Don't dual-register surfaces with no in-process hot-path
