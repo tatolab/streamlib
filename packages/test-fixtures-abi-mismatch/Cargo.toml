@@ -1,0 +1,32 @@
+[package]
+name = "streamlib-test-fixtures-abi-mismatch"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "Test-only cdylib emitting STREAMLIB_PLUGIN with a tampered abi_version — drives the load_project rejection-path integration test."
+keywords = ["streamlib", "test-fixtures", "abi"]
+categories = ["development-tools::testing"]
+
+[lib]
+name = "streamlib_test_fixtures_abi_mismatch"
+crate-type = ["cdylib"]
+
+[features]
+# Pick which mismatch direction to tamper with. The integration test
+# builds the crate twice — once with each feature — and asserts the
+# load_project rejection on both halves. Default is `tamper-too-low`
+# so a bare `cargo build -p streamlib-test-fixtures-abi-mismatch`
+# produces a usable fixture without extra flags.
+default = ["tamper-too-low"]
+# abi_version = 0 (below the runtime's expected version).
+tamper-too-low = []
+# abi_version = u32::MAX (above the runtime's expected version).
+tamper-too-high = []
+
+[dependencies]
+streamlib-plugin-abi = { path = "../../libs/streamlib-plugin-abi" }
+
+[lints]
+workspace = true

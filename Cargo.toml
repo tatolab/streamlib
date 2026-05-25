@@ -45,6 +45,7 @@ members = [
     "packages/clap",             # @tatolab/clap — CLAP audio plugin host processor (Apple-only)
     "packages/screen-capture",   # @tatolab/screen-capture — screen capture processor (Apple-only today; Linux follows in #374)
     "packages/test-fixtures",    # @tatolab/test-fixtures — attribute-macro test fixtures (TestConfiguredProcessor)
+    "packages/test-fixtures-abi-mismatch", # @tatolab/test-fixtures-abi-mismatch — hand-crafted STREAMLIB_PLUGIN with tampered abi_version for the load_project rejection test
     "packages/debug-utilities",  # @tatolab/debug-utilities — utility processors for development, demos, and rigorous-input testing (BgraFileSource, SimplePassthrough)
     "packages/network",          # @tatolab/network — generic UDP source/sink processors (byte-level transport)
     "packages/mavlink",          # @tatolab/mavlink — MAVLink2 encoder + decoder processors (rust-mavlink wrapper)
