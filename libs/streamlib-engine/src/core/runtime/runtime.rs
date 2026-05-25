@@ -4198,15 +4198,22 @@ package:
             // mis-report ModuleNotFound when the real problem is the
             // env var). Mirrors load_workspace_packages's behavior on
             // the same condition.
+            //
+            // Install the RAII env guard against a tempdir first (its
+            // Drop will restore both env vars on exit / panic), then
+            // override STREAMLIB_WORKSPACE_ROOT to the bogus path
+            // inside the guard's lifetime. If `add_module` or
+            // `expect_err` panics, the guard still restores the
+            // original values — no env leak into sibling tests.
             let home = tempfile::tempdir().unwrap();
-            let workspace_prev = std::env::var_os("STREAMLIB_WORKSPACE_ROOT");
-            let home_prev = std::env::var_os("STREAMLIB_HOME");
+            let placeholder_workspace = tempfile::tempdir().unwrap();
+            let _guard =
+                AddModuleEnvGuard::install(placeholder_workspace.path(), home.path());
             unsafe {
                 std::env::set_var(
                     "STREAMLIB_WORKSPACE_ROOT",
                     "/nonexistent/path/that/does/not/exist",
                 );
-                std::env::set_var("STREAMLIB_HOME", home.path());
             }
 
             let runtime = Runner::new().expect("Runner::new");
@@ -4216,17 +4223,6 @@ package:
                     Package::new("add-module-typo-canary").unwrap(),
                 ))
                 .expect_err("typo'd env var must error");
-
-            unsafe {
-                match workspace_prev {
-                    Some(v) => std::env::set_var("STREAMLIB_WORKSPACE_ROOT", v),
-                    None => std::env::remove_var("STREAMLIB_WORKSPACE_ROOT"),
-                }
-                match home_prev {
-                    Some(v) => std::env::set_var("STREAMLIB_HOME", v),
-                    None => std::env::remove_var("STREAMLIB_HOME"),
-                }
-            }
 
             assert!(
                 matches!(err, AddModuleError::WorkspaceRootInvalid { ref env_value } if env_value == "/nonexistent/path/that/does/not/exist"),
