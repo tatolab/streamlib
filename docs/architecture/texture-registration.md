@@ -482,7 +482,7 @@ When a new field lands on `TextureRegistration`:
 - **First consumer**: `LinuxDisplayProcessor::render_frame` in
   `packages/display/src/linux/display.rs`.
 - **First adapter-output producer**: `register_render_target_surface`
-  in `examples/camera-python-display/src/linux.rs`.
+  in `examples/camera-python-display/runner/src/linux.rs`.
 - **First in-tree producer**: `LinuxCameraProcessor` in the
   `streamlib-camera` package —
   `packages/camera/src/linux/camera.rs`.

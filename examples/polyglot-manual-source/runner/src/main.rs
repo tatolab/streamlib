@@ -24,10 +24,7 @@
 //! thread-safe under the new cdylib Mutex (#604), (d) the iceoryx2
 //! frame actually reached a subscriber.
 //!
-//! Build the Python `.slpkg` first (Deno doesn't need a pack step):
-//!   cargo run -p streamlib-cli -- pack examples/polyglot-manual-source/python
-//!
-//! Build the counting-sink plugin:
+//! Build the counting-sink plugin first:
 //!   cargo build -p polyglot-manual-source-counting-sink-plugin
 //!
 //! Run:
@@ -172,33 +169,25 @@ fn run() -> Result<SinkReport> {
     let runtime = Runner::new()?;
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let example_root = manifest_dir
+        .parent()
+        .expect("runner manifest dir has no parent")
+        .to_path_buf();
 
-    // 1. Stage the counting-sink plugin. The plugin sub-crate builds a
-    //    cdylib that `runtime.load_project(plugin/)` picks up by
-    //    iterating `plugin/lib/` for `*.so`. Mirrors the camera-rust-plugin
-    //    pattern: the example's `cargo build` produces the dylib in
-    //    `target/<profile>/`, and the scenario binary copies it into
-    //    `plugin/lib/` before loading.
-    let plugin_dir = manifest_dir.join("plugin");
+    // Stage the counting-sink plugin's cdylib into `../plugin/lib/`
+    // before `load_project` walks the runner's `streamlib.yaml`. The
+    // runner's manifest declares `@tatolab/polyglot-manual-source-counting-sink`
+    // with `path: ../plugin`; `load_project` finds the staged `*.so`
+    // in `plugin/lib/`. Mirrors the camera-rust-plugin pattern.
+    let plugin_dir = example_root.join("plugin");
     stage_plugin_dylib(&plugin_dir)?;
-    runtime.load_project(&plugin_dir)?;
 
-    // 2. Load the polyglot project (Python .slpkg or Deno project).
-    match runtime_kind {
-        RuntimeKind::Python => {
-            let slpkg_path =
-                manifest_dir.join("python/polyglot-manual-source-0.1.0.slpkg");
-            let project_path = manifest_dir.join("python");
-            if slpkg_path.exists() {
-                runtime.load_package(&slpkg_path)?;
-            } else {
-                runtime.load_project(&project_path)?;
-            }
-        }
-        RuntimeKind::Deno => {
-            runtime.load_project(&manifest_dir.join("deno"))?;
-        }
-    }
+    // Load the runner's project — the streamlib.yaml declares the
+    // plugin, Python, and Deno sub-packages via `patch:` `path:`
+    // overrides, so this single call registers all three. The runner
+    // then picks which polyglot processor to instantiate via
+    // `schema_ident_any_version!` based on `--runtime`.
+    runtime.load_project(&manifest_dir)?;
 
     // 3. Add processors.
     let manual = runtime.add_processor(ProcessorSpec::new(
@@ -255,6 +244,7 @@ fn stage_plugin_dylib(plugin_dir: &std::path::Path) -> Result<()> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let workspace_root = manifest_dir
         .parent()
+        .and_then(|p| p.parent())
         .and_then(|p| p.parent())
         .ok_or_else(|| Error::Configuration("workspace root not found".into()))?;
 

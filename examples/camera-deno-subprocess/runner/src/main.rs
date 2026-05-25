@@ -1,24 +1,22 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Camera → Python Grayscale → Display Pipeline Example
+//! Camera → Deno Halftone → Display Pipeline Example
 //!
-//! Demonstrates loading processors from a `.slpkg` package bundle.
-//! The Python processor accesses camera pixels through IOSurface shared memory
-//! (no pixel data through pipes), converts to grayscale using numpy, and writes
-//! results to a new IOSurface.
+//! Demonstrates GPU-accelerated pixel processing via a Deno/TypeScript subprocess
+//! using WebGPU compute shaders (TypeGPU). The TypeScript processor accesses camera
+//! pixels through IOSurface shared memory via FFI, applies a halftone dot pattern
+//! effect on the GPU, and writes results to a new IOSurface.
 //!
 //! ## Prerequisites
 //!
-//! Build the `.slpkg` package first:
-//! ```bash
-//! cargo run -p streamlib-cli -- pack examples/camera-python-subprocess/python
-//! ```
+//! 1. Install Deno: `curl -fsSL https://deno.land/install.sh | sh`
+//! 2. Build the native FFI lib: `cargo build -p streamlib-deno-native`
 //!
 //! ## Usage
 //!
 //! ```bash
-//! cargo run -p camera-python-subprocess
+//! cargo run -p camera-deno-subprocess
 //! ```
 
 use std::path::PathBuf;
@@ -37,10 +35,11 @@ fn main() -> Result<()> {
     //    have run first.
     runtime.load_workspace_packages(["@tatolab/camera", "@tatolab/display"])?;
 
-    // 2. Load the Python grayscale processor from .slpkg package bundle
-    let slpkg_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("python/camera-python-subprocess-0.1.0.slpkg");
-    runtime.load_package(&slpkg_path)?;
+    // 2. Load the runner's project — its streamlib.yaml declares
+    //    the sibling Deno sub-package via `patch: path: ../deno`,
+    //    so this single call registers the Deno processor + schemas.
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    runtime.load_project(&manifest_dir)?;
 
     // 3. Add processors
     let camera = runtime.add_processor(ProcessorSpec::new(
@@ -48,11 +47,11 @@ fn main() -> Result<()> {
         serde_json::json!({}),
     ))?;
 
-    let grayscale = runtime.add_processor(ProcessorSpec::new(
+    let halftone = runtime.add_processor(ProcessorSpec::new(
         streamlib::sdk::schema_ident_any_version!(
             "tatolab",
-            "camera-python-subprocess",
-            "Grayscale"
+            "camera-deno-subprocess",
+            "HalftoneProcessor"
         )?,
         serde_json::json!({}),
     ))?;
@@ -62,17 +61,17 @@ fn main() -> Result<()> {
         serde_json::json!({
             "width": 1920,
             "height": 1080,
-            "title": "Camera → Python Grayscale → Display",
+            "title": "Camera → TypeGPU Halftone → Display",
         }),
     ))?;
 
-    // 3. Connect: Camera → Python Grayscale → Display
+    // 3. Connect: Camera → Deno Halftone → Display
     runtime.connect(
         OutputLinkPortRef::new(&camera, "video"),
-        InputLinkPortRef::new(&grayscale, "video_in"),
+        InputLinkPortRef::new(&halftone, "video_in"),
     )?;
     runtime.connect(
-        OutputLinkPortRef::new(&grayscale, "video_out"),
+        OutputLinkPortRef::new(&halftone, "video_out"),
         InputLinkPortRef::new(&display, "video"),
     )?;
 

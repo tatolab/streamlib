@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=../../../schemas/streamlib.schema.json
+#
+# Rust runner sub-package. Declares deps on the sibling counting-sink
+# plugin, Python, and Deno sub-packages via `patch:` `path:` overrides
+# — `Runner::load_project(".")` walks this manifest, resolves the
+# declared sub-packages against their local paths, and registers every
+# declared processor + schema. The runner picks which polyglot
+# sibling's processor to instantiate at startup based on `--runtime`.
+#
+# The plugin sub-package's cdylib must already be staged into
+# `../plugin/lib/` before the runner starts; the runner's
+# `stage_plugin_dylib` step handles that.
+
+package:
+  org: tatolab
+  name: polyglot-manual-source-runner
+  version: "0.1.0"
+  description: "Rust runner sub-package — wires a polyglot manual-source pipeline (Python or Deno worker thread paced by MonotonicTimer, into a Rust counting-sink dylib plugin)"
+
+dependencies:
+  "@tatolab/core": "^1.0.0"
+  "@tatolab/polyglot-manual-source-counting-sink": "^0.1.0"
+  "@tatolab/polyglot-manual-source": "^0.1.0"
+  "@tatolab/polyglot-manual-source-deno": "^0.1.0"
+
+patch:
+  "@tatolab/core":
+    path: ../../../packages/core
+  "@tatolab/polyglot-manual-source-counting-sink":
+    path: ../plugin
+  "@tatolab/polyglot-manual-source":
+    path: ../python
+  "@tatolab/polyglot-manual-source-deno":
+    path: ../deno
+
+schemas:
+  ColorInfo:
+    package: "@tatolab/core"
+  ContentLight:
+    package: "@tatolab/core"
+  MasteringDisplay:
+    package: "@tatolab/core"
+  VideoFrame:
+    package: "@tatolab/core"

@@ -149,5 +149,5 @@ These are the failure modes the recipe exists to prevent:
   `allows_use_vulkanalia_in_camera_python_display_example` and
   `allows_vulkanalia_cargo_dep_in_camera_python_display_example`).
 - Sandboxed wrappers (reference shape):
-  `examples/camera-python-display/src/blending_compositor_kernel.rs`,
-  `examples/camera-python-display/src/crt_film_grain_kernel.rs`.
+  `examples/camera-python-display/runner/src/blending_compositor_kernel.rs`,
+  `examples/camera-python-display/runner/src/crt_film_grain_kernel.rs`.

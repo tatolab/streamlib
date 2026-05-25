@@ -29,9 +29,6 @@
 //! on teardown) give clean measurements that surface the timer's
 //! true accuracy.
 //!
-//! Build the Python `.slpkg` first:
-//!   cargo run -p streamlib-cli -- pack examples/polyglot-continuous-processor/python
-//!
 //! Run:
 //!   cargo run -p polyglot-continuous-processor-scenario -- --runtime=python
 //!   cargo run -p polyglot-continuous-processor-scenario -- --runtime=deno
@@ -167,22 +164,14 @@ fn run() -> Result<TickReport> {
     println!("Run length:        {:?}", RUN_DURATION);
 
     let runtime = Runner::new()?;
+    // Load the polyglot processors declaratively. The runner's
+    // `streamlib.yaml` declares both the Python and Deno sub-packages
+    // via `patch:` `path:` overrides; `load_project` walks the manifest,
+    // resolves both, and registers each package's processors + schemas.
+    // The runner then picks which one to instantiate via
+    // `schema_ident_any_version!` based on `--runtime`.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    match runtime_kind {
-        RuntimeKind::Python => {
-            let slpkg_path = manifest_dir
-                .join("python/polyglot-continuous-processor-0.1.0.slpkg");
-            let project_path = manifest_dir.join("python");
-            if slpkg_path.exists() {
-                runtime.load_package(&slpkg_path)?;
-            } else {
-                runtime.load_project(&project_path)?;
-            }
-        }
-        RuntimeKind::Deno => {
-            runtime.load_project(&manifest_dir.join("deno"))?;
-        }
-    }
+    runtime.load_project(&manifest_dir)?;
 
     let processor = runtime.add_processor(ProcessorSpec::new(
         runtime_kind.processor_ident()?,
