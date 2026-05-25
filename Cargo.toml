@@ -65,8 +65,8 @@ members = [
     "examples/camera-python-display",     # Example: Camera → Python → Display pipeline
     "examples/camera-python-subprocess",  # Example: Camera → Python subprocess → Display pipeline
     "examples/camera-deno-subprocess",   # Example: Camera → Deno subprocess → Display pipeline
-    "examples/polyglot-dma-buf-consumer", # Example: Camera → Python DMA-BUF consumer → Display (Linux polyglot E2E)
-    "examples/polyglot-cpu-readback-blur", # Example: Polyglot cpu-readback adapter — Python cv2 / Deno hand-rolled Gaussian blur (#529)
+    "examples/polyglot-dma-buf-consumer/runner", # Example: Camera → Python DMA-BUF consumer → Display (Linux polyglot E2E)
+    "examples/polyglot-cpu-readback-blur/runner", # Example: Polyglot cpu-readback adapter — Python cv2 / Deno hand-rolled Gaussian blur (#529)
     "examples/polyglot-manual-source",       # Example: Polyglot manual source — Python/Deno worker thread paced by MonotonicTimer (#542)
     "examples/polyglot-manual-source/plugin", # Counting-sink Rust dylib plugin for polyglot-manual-source (#604)
     "examples/polyglot-continuous-processor", # Example: Polyglot continuous processor — Python/Deno process() driven by monotonic-clock timerfd (#542)
@@ -75,7 +75,7 @@ members = [
     "examples/polyglot-vulkan-graphics/runner",  # Example: Polyglot Vulkan adapter — Python/Deno triangle vertex/fragment graphics kernel rendered into a host DMA-BUF VkImage (#656)
     "examples/polyglot-vulkan-ray-tracing/runner", # Example: Polyglot Vulkan adapter — Python/Deno ray-traced cube via host VulkanRayTracingKernel + AS escalate IPC (#667)
     "examples/polyglot-skia-canvas/runner",      # Example: Polyglot Skia adapter — Python skia-python draws into a host DMA-BUF VkImage via composing on the Vulkan adapter (#513)
-    "examples/polyglot-cuda-inference",   # Example: Polyglot CUDA adapter — Python YOLO inference / Deno DLPack capsule validation against a host OPAQUE_FD VkBuffer (#591)
+    "examples/polyglot-cuda-inference/runner",   # Example: Polyglot CUDA adapter — Python YOLO inference / Deno DLPack capsule validation against a host OPAQUE_FD VkBuffer (#591)
     "examples/cuda-fisheye-detection/runner", # Example: Polyglot CUDA adapter image path — host fisheye-warps bus.jpg into an OPAQUE_FD VkImage, Python undistorts via cupy.RawKernel hardware bilinear + YOLOv8n detection
     "examples/camera-rust-plugin",       # Example: Camera → Rust dylib plugin → Display pipeline
     "examples/camera-rust-plugin/plugin", # Grayscale plugin cdylib for camera-rust-plugin example

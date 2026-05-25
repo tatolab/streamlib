@@ -453,7 +453,7 @@ has created the live `GpuContext`, before any processor's `setup()`
 runs — the window where adapter bridges and pre-allocated host
 surfaces have to be in place.
 
-See `examples/polyglot-cpu-readback-blur/src/main.rs` for the
+See `examples/polyglot-cpu-readback-blur/runner/src/main.rs` for the
 canonical reference (it exercises the bridge path; GPU adapters
 omit the `set_*_bridge` step).
 

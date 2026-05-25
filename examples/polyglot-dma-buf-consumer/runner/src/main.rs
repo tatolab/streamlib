@@ -20,11 +20,8 @@
 //! `force_bad_surface_id` config so resolve_surface fails deterministically on
 //! every frame — the pipeline must still shut down cleanly.
 //!
-//! Build the Python .slpkg first when running --runtime=python (or it will
-//! not be found):
-//!   cargo run -p streamlib-cli -- pack examples/polyglot-dma-buf-consumer/python
-//!
-//! The Deno project loads its `streamlib.yaml` directly — no pack step.
+//! Both Python and Deno sub-packages are loaded declaratively via the
+//! runner's `streamlib.yaml` (no separate pack step required).
 
 use std::path::PathBuf;
 
@@ -125,30 +122,14 @@ fn main() -> Result<()> {
         .load_workspace_packages(["@tatolab/camera", "@tatolab/display"])
         .map_err(streamlib::sdk::error::Error::from)?;
 
+    // Load the polyglot processors declaratively. The runner's
+    // `streamlib.yaml` declares both the Python and Deno sub-packages
+    // via `patch:` `path:` overrides; `load_project` walks the manifest,
+    // resolves both, and registers each package's processors + schemas.
+    // The runner then picks which one to instantiate via
+    // `schema_ident_any_version!` based on `--runtime`.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    match runtime_kind {
-        RuntimeKind::Python => {
-            let slpkg_path =
-                manifest_dir.join("python/polyglot-dma-buf-consumer-0.1.0.slpkg");
-            if !slpkg_path.exists() {
-                return Err(streamlib::sdk::error::Error::Configuration(format!(
-                    "Package not found: {}\nRun: cargo run -p streamlib-cli -- pack examples/polyglot-dma-buf-consumer/python",
-                    slpkg_path.display()
-                )));
-            }
-            runtime.load_package(&slpkg_path)?;
-        }
-        RuntimeKind::Deno => {
-            let project_path = manifest_dir.join("deno");
-            if !project_path.join("streamlib.yaml").exists() {
-                return Err(streamlib::sdk::error::Error::Configuration(format!(
-                    "Deno project not found: {}",
-                    project_path.display()
-                )));
-            }
-            runtime.load_project(&project_path)?;
-        }
-    }
+    runtime.load_project(&manifest_dir)?;
 
     let camera = runtime.add_processor(ProcessorSpec::new(
         schema_ident!("tatolab", "camera", "Camera", "1.0.0"),
