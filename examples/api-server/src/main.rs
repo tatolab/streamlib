@@ -15,21 +15,29 @@
 //! - POST /api/connections - Create a connection
 //! - DELETE /api/connections/:id - Remove a connection
 //! - WS /ws/events - WebSocket event stream
+//!
+//! Run prerequisite: `cargo xtask build-plugins --package @tatolab/api-server`
+//! so the runtime can find the staged cdylib at
+//! `target/streamlib-plugins/tatolab__api-server/`.
 
+use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
-use streamlib_api_server::{ApiServerConfig, ApiServerProcessor};
+use streamlib::sdk::schema_ident;
 
 #[tokio::main]
 async fn main() -> streamlib::sdk::error::Result<()> {
     let runtime = Runner::new()?;
 
-    let config = ApiServerConfig {
-        host: "127.0.0.1".to_string(),
-        port: 9000,
-        ..Default::default()
-    };
+    runtime.load_workspace_packages(["@tatolab/api-server"])?;
 
-    runtime.add_processor(ApiServerProcessor::node(config))?;
+    let config = serde_json::json!({
+        "host": "127.0.0.1",
+        "port": 9000,
+    });
+    runtime.add_processor(ProcessorSpec::new(
+        schema_ident!("tatolab", "api-server", "ApiServer", "1.0.0"),
+        config,
+    ))?;
     runtime.start()?;
 
     println!("API server running at http://127.0.0.1:9000");
