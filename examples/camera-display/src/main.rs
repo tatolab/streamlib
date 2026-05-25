@@ -3,182 +3,83 @@
 
 //! Camera → Display Pipeline Example
 //!
-//! Demonstrates both typed and string-based processor creation APIs.
+//! Loads `@tatolab/camera`, `@tatolab/display`, and `@tatolab/api-server`
+//! at runtime, wires camera → display, and exposes the runtime's REST
+//! API on `http://127.0.0.1:9000`.
 //!
-//! ## Usage
-//!
-//! **Typed mode (default)** - compile-time type safety:
-//! ```bash
-//! cargo run -p camera-display
-//! ```
-//!
-//! **String mode** - REST API style with string names and JSON configs:
-//! ```bash
-//! cargo run -p camera-display -- --string-mode
-//! ```
+//! Run prerequisite: `cargo xtask build-plugins --package @tatolab/camera
+//! --package @tatolab/display --package @tatolab/api-server` so the
+//! runtime can resolve each cdylib at load time.
 
+use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib_api_server::{ApiServerConfig, ApiServerProcessor};
-use streamlib_camera::CameraProcessor;
-use streamlib_display::DisplayProcessor;
-use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
-use streamlib::sdk::processors::{input, output};
+use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
+    println!("=== Camera → Display Pipeline ===\n");
 
-    // Check for --string-mode argument
-    let use_string_mode = std::env::args().any(|arg| arg == "--string-mode");
-
-    if use_string_mode {
-        println!("=== Camera → Display Pipeline (STRING MODE) ===\n");
-        println!("This mode simulates REST API usage with string-based processor names.\n");
-        run_string_mode()
-    } else {
-        println!("=== Camera → Display Pipeline (TYPED MODE) ===\n");
-        println!("Use --string-mode to test REST API style string-based creation.\n");
-        run_typed_mode()
-    }
-}
-
-/// Typed mode - uses compile-time type safety with ::node() methods
-fn run_typed_mode() -> Result<()> {
     let runtime = Runner::new()?;
 
-    // Register the `@tatolab/core` wire vocabulary so iceoryx2 publishers
-    // honor each schema's `max_payload_bytes` instead of falling back to
-    // the 64 KiB default.
-    runtime.load_project(env!("CARGO_MANIFEST_DIR"))?;
-
-    // =========================================================================
-    // Add processors using typed API
-    // =========================================================================
+    runtime.load_workspace_packages([
+        "@tatolab/camera",
+        "@tatolab/display",
+        "@tatolab/api-server",
+    ])?;
 
     println!("📷 Adding camera processor...");
     let device_id = std::env::var("STREAMLIB_CAMERA_DEVICE").ok();
-    // STREAMLIB_CAMERA_MAX_WIDTH / STREAMLIB_CAMERA_MAX_HEIGHT cap V4L2
-    // negotiation below the camera's advertised maximum. Useful for
-    // exercising non-1080p paths on devices that prefer 1080p.
-    let max_width = std::env::var("STREAMLIB_CAMERA_MAX_WIDTH")
+    let max_width: Option<u32> = std::env::var("STREAMLIB_CAMERA_MAX_WIDTH")
         .ok()
         .and_then(|s| s.parse().ok());
-    let max_height = std::env::var("STREAMLIB_CAMERA_MAX_HEIGHT")
+    let max_height: Option<u32> = std::env::var("STREAMLIB_CAMERA_MAX_HEIGHT")
         .ok()
         .and_then(|s| s.parse().ok());
-    let camera = runtime.add_processor(CameraProcessor::node(CameraProcessor::Config {
-        device_id,
-        max_width,
-        max_height,
-        ..Default::default()
-    }))?;
+    let mut camera_config = serde_json::Map::new();
+    if let Some(id) = device_id {
+        camera_config.insert("device_id".into(), serde_json::Value::String(id));
+    }
+    if let Some(w) = max_width {
+        camera_config.insert("max_width".into(), serde_json::Value::from(w));
+    }
+    if let Some(h) = max_height {
+        camera_config.insert("max_height".into(), serde_json::Value::from(h));
+    }
+    let camera = runtime.add_processor(ProcessorSpec::new(
+        schema_ident!("tatolab", "camera", "Camera", "1.0.0"),
+        serde_json::Value::Object(camera_config),
+    ))?;
     println!("✓ Camera added: {}\n", camera);
 
     println!("🖥️  Adding display processor...");
-    let display = runtime.add_processor(DisplayProcessor::node(DisplayProcessor::Config {
-        width: 1920,
-        height: 1080,
-        title: Some("streamlib Camera Display".to_string()),
-        scaling_mode: Default::default(),
-        ..Default::default()
-    }))?;
-    println!("✓ Display added: {}\n", display);
-
-    println!("🌐 Adding API server processor...");
-    runtime.add_processor(ApiServerProcessor::node(ApiServerConfig {
-        host: "127.0.0.1".to_string(),
-        port: 9000,
-        ..Default::default()
-    }))?;
-    println!("✓ API server at http://127.0.0.1:9000\n");
-
-    // =========================================================================
-    // Connect ports using typed API
-    // =========================================================================
-
-    println!("🔗 Connecting camera → display...");
-    runtime.connect(
-        output::<CameraProcessor::OutputLink::video>(&camera),
-        input::<DisplayProcessor::InputLink::video>(&display),
-    )?;
-    println!("✓ Pipeline connected\n");
-
-    // =========================================================================
-    // Run the pipeline
-    // =========================================================================
-
-    run_pipeline(runtime)
-}
-
-/// String mode - simulates REST API with string-based processor names and JSON configs
-fn run_string_mode() -> Result<()> {
-    let runtime = Runner::new()?;
-
-    // Register the `@tatolab/core` wire vocabulary so iceoryx2 publishers
-    // honor each schema's `max_payload_bytes` instead of falling back to
-    // the 64 KiB default.
-    runtime.load_project(env!("CARGO_MANIFEST_DIR"))?;
-
-    // =========================================================================
-    // Add processors using string-based API (REST API style)
-    // =========================================================================
-
-    // Simulate receiving the structured-spec form a REST API client sends —
-    // the wire format is the four-field `SchemaIdent` map.
-    println!("📷 Adding camera processor (string mode)...");
-    let camera_spec = ProcessorSpec::new(
-        CameraProcessor::schema_ident(),
-        serde_json::json!({
-            "device_id": null
-        }),
-    );
-    let camera = runtime.add_processor(camera_spec)?;
-    println!("✓ Camera added: {}\n", camera);
-
-    println!("🖥️  Adding display processor (string mode)...");
-    let display_spec = ProcessorSpec::new(
-        DisplayProcessor::schema_ident(),
+    let display = runtime.add_processor(ProcessorSpec::new(
+        schema_ident!("tatolab", "display", "Display", "1.0.0"),
         serde_json::json!({
             "width": 1920,
             "height": 1080,
-            "title": "streamlib Camera Display (String Mode)",
-            "scaling_mode": "Stretch"
+            "title": "streamlib Camera Display",
         }),
-    );
-    let display = runtime.add_processor(display_spec)?;
+    ))?;
     println!("✓ Display added: {}\n", display);
 
-    println!("🌐 Adding API server processor (string mode)...");
+    println!("🌐 Adding API server processor...");
     runtime.add_processor(ProcessorSpec::new(
-        ApiServerProcessor::schema_ident(),
+        schema_ident!("tatolab", "api-server", "ApiServer", "1.0.0"),
         serde_json::json!({
             "host": "127.0.0.1",
-            "port": 9000
+            "port": 9000,
         }),
     ))?;
     println!("✓ API server at http://127.0.0.1:9000\n");
 
-    // =========================================================================
-    // Connect ports using string-based API (REST API style)
-    // =========================================================================
-
-    // Simulate receiving JSON from REST API:
-    // { "from": { "processor_id": "...", "port": "video" }, "to": { "processor_id": "...", "port": "video" } }
-    println!("🔗 Connecting camera → display (string mode)...");
+    println!("🔗 Connecting camera → display...");
     runtime.connect(
         OutputLinkPortRef::new(&camera, "video"),
         InputLinkPortRef::new(&display, "video"),
     )?;
     println!("✓ Pipeline connected\n");
 
-    // =========================================================================
-    // Run the pipeline
-    // =========================================================================
-
-    run_pipeline(runtime)
-}
-
-fn run_pipeline(runtime: std::sync::Arc<Runner>) -> Result<()> {
     println!("▶️  Starting pipeline...");
     #[cfg(target_os = "macos")]
     println!("   Press Cmd+Q to stop\n");
@@ -188,7 +89,7 @@ fn run_pipeline(runtime: std::sync::Arc<Runner>) -> Result<()> {
     runtime.start()?;
     runtime.wait_for_signal()?;
 
-    println!("\n✓ Pipeline stopped gracefully");
-
+    println!("\n⏹️  Stopping...");
+    println!("✓ Stopped");
     Ok(())
 }

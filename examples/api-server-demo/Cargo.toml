@@ -4,13 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# `@tatolab/api-server` and `@tatolab/debug-utilities` load at runtime
+# via `Runner::load_workspace_packages` — no compile-time link.
 streamlib = { path = "../../libs/streamlib-sdk" }
-streamlib-api-server = { path = "../../packages/api-server" }
-# The demo POSTs `processor_type: "SimplePassthroughProcessor"` through
-# the API server's dynamic-registry endpoint, so SimplePassthrough must
-# be link-time-present for its `inventory::submit!` to fire and the
-# resolution to succeed.
-streamlib-debug-utilities = { path = "../../packages/debug-utilities" }
 tokio = { version = "1.48.0", features = ["full"] }
 reqwest = { version = "0.12", features = ["json"] }
 serde_json = "1.0"
