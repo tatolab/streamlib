@@ -62,7 +62,7 @@ use streamlib::sdk::engine::host_rhi::{
     HostVulkanTimelineSemaphore,
 };
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib_debug_utilities::BgraFileSourceProcessor;
+use streamlib::sdk::schema_ident;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
 use streamlib_adapter_abi::SurfaceId;
@@ -182,7 +182,14 @@ fn main() -> Result<()> {
         });
     }
 
-    // Load the polyglot package.
+    // Load the BgraFileSource processor from `@tatolab/debug-utilities`
+    // at runtime — `cargo xtask build-plugins --package @tatolab/debug-utilities`
+    // must have run first.
+    runtime
+        .load_workspace_packages(["@tatolab/debug-utilities"])
+        .map_err(streamlib::sdk::error::Error::from)?;
+
+    // Load the polyglot CUDA-inference processor (Python or Deno subprocess host).
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     match runtime_kind {
         RuntimeKind::Python => {
@@ -216,21 +223,18 @@ fn main() -> Result<()> {
     let fixture_path = write_trigger_fixture()
         .map_err(Error::Configuration)?;
 
-    let source = runtime.add_processor(BgraFileSourceProcessor::Processor::node(
-        BgraFileSourceProcessor::Config {
-            file_path: fixture_path
-                .to_str()
-                .ok_or_else(|| {
-                    Error::Configuration(
-                        "fixture path has non-utf8 component".into(),
-                    )
-                })?
-                .to_string(),
-            width: 4,
-            height: 4,
-            fps: 5,
-            frame_count: 3,
-        },
+    let fixture_path_str = fixture_path
+        .to_str()
+        .ok_or_else(|| Error::Configuration("fixture path has non-utf8 component".into()))?;
+    let source = runtime.add_processor(ProcessorSpec::new(
+        schema_ident!("tatolab", "debug-utilities", "BgraFileSource", "1.0.0"),
+        serde_json::json!({
+            "file_path": fixture_path_str,
+            "width": 4,
+            "height": 4,
+            "fps": 5,
+            "frame_count": 3,
+        }),
     ))?;
     println!("+ BgraFileSource: {source}");
 
