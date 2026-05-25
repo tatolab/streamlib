@@ -80,6 +80,28 @@ pub struct VideoBitstreamBufferDescriptor<'a> {
 /// not on this type. Matches UE5 `FRHIBuffer` / wgpu `Buffer` / Vulkano
 /// `Buffer` / Granite `Buffer` shape: the bottom-layer primitive carries
 /// only `(size, usage, memory)`; role is a composition concern above.
+///
+/// # Cdylib reachability
+///
+/// All `new*` constructors take `&Arc<HostVulkanDevice>` plus primitives
+/// and return `HostVulkanBuffer`. They do **not** reach for `host_inner()`
+/// or any host-private state — they only call `pub` accessors on
+/// [`HostVulkanDevice`] (`allocator`, `dma_buf_buffer_pool`,
+/// `opaque_fd_buffer_pool*`) plus `vulkanalia-vma`. Workspace plugin
+/// cdylibs that hold an `Arc<HostVulkanDevice>` (via the
+/// `host_vulkan_device_arc` slot on `GpuContextFullAccessVTable`)
+/// therefore call these constructors directly, without a per-constructor
+/// FullAccess vtable slot. The escape-hatch path is
+/// `escalate(|full| full.host_vulkan_device_arc())` → directly invoke the
+/// desired constructor.
+///
+/// Adding a `host_inner()` panic guard inside any of these constructor
+/// bodies breaks the cdylib path silently — the cdylib path bypasses
+/// `host_inner()` by construction today, and a future guard would
+/// surface as a runtime panic from inside an `escalate` closure.
+/// Reviewers touching constructor bodies must keep them
+/// `host_inner()`-free; the cdylib surface-adapter dlopen smoke tests
+/// exercise the full end-to-end path.
 pub struct HostVulkanBuffer {
     /// HostVulkanDevice reference for tracked allocation/free through the RHI.
     vulkan_device: Arc<HostVulkanDevice>,
