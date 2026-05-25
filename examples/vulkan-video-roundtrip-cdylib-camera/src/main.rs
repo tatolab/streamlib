@@ -17,86 +17,14 @@
 //!   cargo run -p vulkan-video-roundtrip-cdylib-camera -- h264 [device] [seconds]
 //!   cargo run -p vulkan-video-roundtrip-cdylib-camera -- h265 /dev/video0 10
 
-use std::path::{Path, PathBuf};
-
-use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{OutputLinkPortRef, ProcessorUniqueId};
 use streamlib::sdk::processors::{input, output, ProcessorSpec};
-use streamlib::sdk::runtime::{host_target_triple, Runner};
+use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::schema_ident;
 use streamlib_display::DisplayProcessor;
 use streamlib_h264::{H264DecoderProcessor, H264EncoderProcessor};
 use streamlib_h265::{H265DecoderProcessor, H265EncoderProcessor};
-
-fn copy_dir_contents(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let dst_entry = dst.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir_contents(&entry.path(), &dst_entry)?;
-        } else {
-            std::fs::copy(entry.path(), &dst_entry)?;
-        }
-    }
-    Ok(())
-}
-
-fn stage_camera_project(workspace_root: &Path) -> Result<PathBuf> {
-    let dylib_ext = if cfg!(target_os = "macos") {
-        "dylib"
-    } else if cfg!(target_os = "windows") {
-        "dll"
-    } else {
-        "so"
-    };
-    let dylib_name = format!("libstreamlib_camera.{dylib_ext}");
-    let built_dylib = workspace_root.join("target").join("debug").join(&dylib_name);
-    if !built_dylib.exists() {
-        return Err(Error::Configuration(format!(
-            "camera cdylib not at {} — run \
-             `cargo build -p streamlib-camera --features plugin` first",
-            built_dylib.display()
-        )));
-    }
-
-    let tmp = tempfile::tempdir()
-        .map_err(|e| Error::Configuration(format!("tempdir: {e}")))?;
-    let staged_root = tmp.keep();
-
-    let camera_src = workspace_root.join("packages/camera");
-    let core_src = workspace_root.join("packages/core");
-    let camera_dst = staged_root.join("packages/camera");
-    let core_dst = staged_root.join("packages/core");
-
-    std::fs::create_dir_all(&camera_dst)
-        .map_err(|e| Error::Configuration(format!("mkdir camera dst: {e}")))?;
-    std::fs::copy(
-        camera_src.join("streamlib.yaml"),
-        camera_dst.join("streamlib.yaml"),
-    )
-    .map_err(|e| Error::Configuration(format!("copy camera streamlib.yaml: {e}")))?;
-    copy_dir_contents(&camera_src.join("schemas"), &camera_dst.join("schemas"))
-        .map_err(|e| Error::Configuration(format!("copy camera schemas: {e}")))?;
-
-    std::fs::create_dir_all(&core_dst)
-        .map_err(|e| Error::Configuration(format!("mkdir core dst: {e}")))?;
-    std::fs::copy(
-        core_src.join("streamlib.yaml"),
-        core_dst.join("streamlib.yaml"),
-    )
-    .map_err(|e| Error::Configuration(format!("copy core streamlib.yaml: {e}")))?;
-    copy_dir_contents(&core_src.join("schemas"), &core_dst.join("schemas"))
-        .map_err(|e| Error::Configuration(format!("copy core schemas: {e}")))?;
-
-    let triple_dir = camera_dst.join("lib").join(host_target_triple());
-    std::fs::create_dir_all(&triple_dir)
-        .map_err(|e| Error::Configuration(format!("mkdir triple dir: {e}")))?;
-    std::fs::copy(&built_dylib, triple_dir.join(&dylib_name))
-        .map_err(|e| Error::Configuration(format!("copy camera cdylib: {e}")))?;
-
-    Ok(camera_dst)
-}
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -112,28 +40,14 @@ fn main() -> Result<()> {
     println!("Camera:   {device} (loaded as cdylib via runtime.load_project)");
     println!("Duration: {duration_secs}s\n");
 
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|p| p.parent())
-        .ok_or_else(|| {
-            Error::Configuration("CARGO_MANIFEST_DIR has no two parents".into())
-        })?;
-
     let runtime = Runner::new()?;
 
-    // 1) Stage @tatolab/camera as a project with its cdylib placed
-    //    under `lib/<target-triple>/`, then load it.
-    let camera_project = stage_camera_project(workspace_root)?;
-    println!("+ Camera staged at: {}", camera_project.display());
-    runtime.load_project(&camera_project)?;
-    println!("+ Camera project loaded (cdylib path)");
-
-    // 2) Also load the example's own streamlib.yaml so the
-    //    `@tatolab/core` wire vocabulary is registered (the
-    //    vulkan-video-roundtrip baseline does this too — see its
-    //    comment on the EncodedVideoFrame max-payload-bytes hookup).
-    runtime.load_project(env!("CARGO_MANIFEST_DIR"))?;
-    println!("+ Wire vocabulary registered\n");
+    // 1) Load `@tatolab/camera` (and its `@tatolab/core` dep, walked
+    //    via the staged manifest's patch:) from the workspace-staged
+    //    location. `cargo xtask build-plugins` must have run first.
+    runtime.load_workspace_packages(["@tatolab/camera"])?;
+    println!("+ @tatolab/camera loaded from target/streamlib-plugins/");
+    println!("+ Wire vocabulary registered (via @tatolab/core dep walk)\n");
 
     // 3) Camera processor — minted from the cdylib's registration,
     //    addressed by its structured schema_ident, configured via

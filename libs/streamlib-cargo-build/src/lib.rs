@@ -94,7 +94,28 @@ pub fn read_cargo_package_name(package_dir: &Path) -> Result<String> {
     Ok(name.to_string())
 }
 
-/// Invoke `cargo build --release -p <cargo_name>
+/// Cargo build profile selector for [`run_cargo_build`].
+///
+/// `Release` is the production-distribution shape (`streamlib pack`
+/// uses it). `Dev` skips optimization for a faster inner loop
+/// (`cargo xtask build-plugins` defaults to it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CargoProfile {
+    Dev,
+    Release,
+}
+
+impl CargoProfile {
+    /// Human-facing label for log lines.
+    pub fn label(self) -> &'static str {
+        match self {
+            CargoProfile::Dev => "dev",
+            CargoProfile::Release => "release",
+        }
+    }
+}
+
+/// Invoke `cargo build [--release] -p <cargo_name>
 /// --features <cargo_name>/plugin --message-format=json` from
 /// `package_dir` and parse the JSON output for the produced host-OS
 /// cdylib path.
@@ -108,27 +129,33 @@ pub fn read_cargo_package_name(package_dir: &Path) -> Result<String> {
 /// Cargo's progress output (the `Compiling foo …` lines and compiler
 /// diagnostics) is left inherited on stderr so a cold build does not
 /// appear hung. Only stdout — the JSON message stream — is captured.
-pub fn run_cargo_build_release(
+pub fn run_cargo_build(
     package_dir: &Path,
     cargo_name: &str,
     dylib_ext: &str,
+    profile: CargoProfile,
 ) -> Result<PathBuf> {
     // `--features <name>/plugin` enables the `export_plugin!` invocation
     // in the package's `lib.rs`. The feature is default-off so force-link
     // rlib consumers don't pull in the unmangled `STREAMLIB_PLUGIN`
     // symbol (multiple rlibs with the same static collide at link time);
-    // pack flips it on so the produced cdylib carries the symbol the
-    // runtime dlopens.
+    // pack / build-plugins flip it on so the produced cdylib carries the
+    // symbol the runtime dlopens.
     let features_flag = format!("{}/plugin", cargo_name);
+    let profile_label = profile.label();
     tracing::info!(
-        "Building {} (cargo build --release -p {} --features {})",
+        "Building {} ({} profile, cargo build -p {} --features {})",
         cargo_name,
+        profile_label,
         cargo_name,
         features_flag
     );
-    let output = Command::new("cargo")
-        .arg("build")
-        .arg("--release")
+    let mut command = Command::new("cargo");
+    command.arg("build");
+    if matches!(profile, CargoProfile::Release) {
+        command.arg("--release");
+    }
+    let output = command
         .arg("--message-format=json")
         .arg("-p")
         .arg(cargo_name)
@@ -140,7 +167,12 @@ pub fn run_cargo_build_release(
         .output()
         .with_context(|| {
             format!(
-                "Failed to invoke `cargo build --release -p {} --features {}` in {}",
+                "Failed to invoke `cargo build {} -p {} --features {}` in {}",
+                if matches!(profile, CargoProfile::Release) {
+                    "--release"
+                } else {
+                    ""
+                },
                 cargo_name,
                 features_flag,
                 package_dir.display()
@@ -149,8 +181,9 @@ pub fn run_cargo_build_release(
 
     if !output.status.success() {
         anyhow::bail!(
-            "cargo build --release -p {} failed (run from {}). \
+            "cargo build ({}) -p {} failed (run from {}). \
              See cargo's output above.",
+            profile_label,
             cargo_name,
             package_dir.display(),
         );
@@ -165,13 +198,25 @@ pub fn run_cargo_build_release(
 
     parse_cargo_artifact_for_cdylib(&stdout, cargo_name, dylib_ext)?.ok_or_else(|| {
         anyhow::anyhow!(
-            "cargo build --release -p {} completed but produced no \
+            "cargo build ({}) -p {} completed but produced no \
              host-OS cdylib (`*.{}`). Confirm the crate declares \
              `crate-type = [\"cdylib\"]` in [lib].",
+            profile_label,
             cargo_name,
             dylib_ext
         )
     })
+}
+
+/// Back-compat wrapper for [`run_cargo_build`] with [`CargoProfile::Release`].
+/// `streamlib pack` retains this entry point so the release-default shape
+/// for distribution artifacts is preserved.
+pub fn run_cargo_build_release(
+    package_dir: &Path,
+    cargo_name: &str,
+    dylib_ext: &str,
+) -> Result<PathBuf> {
+    run_cargo_build(package_dir, cargo_name, dylib_ext, CargoProfile::Release)
 }
 
 /// Scan one stream of `--message-format=json` cargo output for the
@@ -296,6 +341,138 @@ pub fn discover_rust_impl_packages(roots: &[&Path]) -> Result<Vec<PathBuf>> {
         }
     }
     Ok(out)
+}
+
+/// Canonical staged-directory name for a package: `<org>__<name>` with
+/// no `@` literal so the path is filesystem-safe across every
+/// supported host. The corresponding wire-form id is `@<org>/<name>`.
+///
+/// `cargo xtask build-plugins` and `Runner::load_workspace_packages`
+/// MUST agree on this format — keep the conversion in one place.
+pub fn staged_package_dir_name(org: &str, name: &str) -> String {
+    format!("{}__{}", org, name)
+}
+
+/// Stage a workspace package into `staged_root/<org>__<name>/` so
+/// `Runner::load_workspace_packages` can find it without depending on
+/// the original `packages/` layout.
+///
+/// Copies the package's `streamlib.yaml` and `schemas/` directory into
+/// the staged dir, rewriting every `patch:` entry's path so it
+/// resolves to a sibling staged dir (`../<dep_org>__<dep_name>`)
+/// rather than the source-tree path. When `built_cdylib` is
+/// `Some(path)`, the cdylib is staged into
+/// `<staged_dir>/lib/<host_triple>/<filename>` matching the
+/// `Runner::load_project` triple-keyed convention. Schemas-only
+/// packages pass `None`.
+///
+/// Returns the staged package directory (absolute path).
+pub fn stage_package_for_dev_load(
+    package_dir: &Path,
+    staged_root: &Path,
+    built_cdylib: Option<&Path>,
+    host_triple: &str,
+) -> Result<PathBuf> {
+    use streamlib_idents::Manifest;
+
+    let manifest_path = package_dir.join(Manifest::FILE_NAME);
+    let manifest_body = std::fs::read_to_string(&manifest_path)
+        .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
+    let mut manifest: Manifest = serde_yaml::from_str(&manifest_body)
+        .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
+    let package = manifest.package.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "{} has no [package] section — cannot determine staged dir name",
+            manifest_path.display()
+        )
+    })?;
+    let org = package.org.as_str().to_string();
+    let name = package.name.as_str().to_string();
+
+    // Rewrite every `patch:` entry to resolve to a sibling staged dir
+    // (`../<dep_org>__<dep_name>`). Same for path-flavor `dependencies:`
+    // entries (rare but legal). Registry / git entries pass through
+    // unchanged.
+    rewrite_patches_to_staged_siblings(&mut manifest.patch);
+    rewrite_patches_to_staged_siblings(&mut manifest.dependencies);
+
+    let staged_dir = staged_root.join(staged_package_dir_name(&org, &name));
+    // Wipe the staged dir before re-staging so removed schemas / renamed
+    // patches don't linger. Hermetic regeneration is the contract — if
+    // a user clobbers files into staged_dir manually, they lose them on
+    // the next stage.
+    if staged_dir.exists() {
+        std::fs::remove_dir_all(&staged_dir).with_context(|| {
+            format!(
+                "Failed to clear stale staged dir {}",
+                staged_dir.display()
+            )
+        })?;
+    }
+    std::fs::create_dir_all(&staged_dir)
+        .with_context(|| format!("Failed to create {}", staged_dir.display()))?;
+
+    // Write the rewritten manifest into the staged dir.
+    let rewritten_yaml = serde_yaml::to_string(&manifest)
+        .with_context(|| format!("Failed to serialize rewritten {}", Manifest::FILE_NAME))?;
+    std::fs::write(staged_dir.join(Manifest::FILE_NAME), rewritten_yaml)
+        .with_context(|| format!("Failed to write staged {}", Manifest::FILE_NAME))?;
+
+    // Copy schemas/ if it exists.
+    let src_schemas = package_dir.join("schemas");
+    if src_schemas.is_dir() {
+        let dst_schemas = staged_dir.join("schemas");
+        copy_dir_recursive(&src_schemas, &dst_schemas)?;
+    }
+
+    // Stage the cdylib if provided. Schemas-only packages skip this.
+    if let Some(cdylib_src) = built_cdylib {
+        stage_built_cdylib(&staged_dir, cdylib_src, host_triple)?;
+    }
+
+    Ok(staged_dir)
+}
+
+fn rewrite_patches_to_staged_siblings(
+    entries: &mut std::collections::BTreeMap<
+        streamlib_idents::PackageRef,
+        streamlib_idents::DependencySpec,
+    >,
+) {
+    use streamlib_idents::{DependencySpec, PathDependency};
+    for (dep_ref, spec) in entries.iter_mut() {
+        if let DependencySpec::Path(_) = spec {
+            let sibling = PathBuf::from("..").join(staged_package_dir_name(
+                dep_ref.org.as_str(),
+                dep_ref.name.as_str(),
+            ));
+            *spec = DependencySpec::Path(PathDependency { path: sibling });
+        }
+    }
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst)
+        .with_context(|| format!("Failed to create {}", dst.display()))?;
+    for entry in std::fs::read_dir(src)
+        .with_context(|| format!("Failed to read {}", src.display()))?
+    {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path).with_context(|| {
+                format!(
+                    "Failed to copy {} → {}",
+                    src_path.display(),
+                    dst_path.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
 }
 
 /// Stage a freshly-built cdylib at `<package_dir>/lib/<host_triple>/<filename>`
@@ -654,5 +831,173 @@ package:
         // Source is preserved — staging copies, never moves; a
         // subsequent `cargo clean` mustn't invalidate the staged copy.
         assert!(built.exists(), "source artifact must remain after staging");
+    }
+
+    #[test]
+    fn staged_package_dir_name_uses_double_underscore_no_at_literal() {
+        // The wire-form id `@tatolab/core` becomes the
+        // filesystem-safe dir name `tatolab__core`. Both the xtask
+        // and Runner::load_workspace_packages must compute it the same
+        // way — reverting the format would silently break the load
+        // helper's lookup, so the test pins the literal shape.
+        assert_eq!(staged_package_dir_name("tatolab", "core"), "tatolab__core");
+        assert_eq!(
+            staged_package_dir_name("vendor", "fancy-plugin"),
+            "vendor__fancy-plugin",
+        );
+    }
+
+    fn write_minimal_manifest(dir: &Path, org: &str, name: &str, body: &str) {
+        let yaml = format!(
+            "package:\n  org: {org}\n  name: {name}\n  version: 1.0.0\n{body}"
+        );
+        std::fs::write(dir.join("streamlib.yaml"), yaml).unwrap();
+    }
+
+    #[test]
+    fn stage_package_for_dev_load_schemas_only_copies_yaml_and_schemas_no_lib() {
+        // Schemas-only packages — like `@tatolab/core` — must stage
+        // cleanly without a `lib/` directory. Reverting the
+        // `if let Some(cdylib_src) = built_cdylib` gate would either
+        // panic (cdylib_src is None) or silently create an empty
+        // lib/ — both shapes are wrong and load_workspace_packages
+        // would mis-resolve.
+        let src = tempdir().unwrap();
+        write_minimal_manifest(src.path(), "tatolab", "core", "");
+        let schemas_dir = src.path().join("schemas");
+        std::fs::create_dir(&schemas_dir).unwrap();
+        std::fs::write(
+            schemas_dir.join("video_frame.yaml"),
+            "metadata:\n  type: VideoFrame\n",
+        )
+        .unwrap();
+
+        let staged_root = tempdir().unwrap();
+        let staged = stage_package_for_dev_load(
+            src.path(),
+            staged_root.path(),
+            None, /* schemas-only */
+            "x86_64-unknown-linux-gnu",
+        )
+        .unwrap();
+
+        assert_eq!(staged, staged_root.path().join("tatolab__core"));
+        assert!(staged.join("streamlib.yaml").exists());
+        assert!(staged.join("schemas/video_frame.yaml").exists());
+        assert!(!staged.join("lib").exists(), "schemas-only stage must not create lib/");
+    }
+
+    #[test]
+    fn stage_package_for_dev_load_with_cdylib_lands_under_triple_keyed_lib() {
+        // Rust-impl packages stage both the yaml/schemas AND the cdylib
+        // (under `lib/<host_triple>/<filename>`). The staged dir is the
+        // self-contained mini-project Runner::load_workspace_packages
+        // points at.
+        let src = tempdir().unwrap();
+        write_minimal_manifest(src.path(), "tatolab", "camera", "");
+        let cdylib = src.path().join("libstreamlib_camera.so");
+        std::fs::write(&cdylib, b"camera-cdylib-bytes").unwrap();
+
+        let staged_root = tempdir().unwrap();
+        let staged = stage_package_for_dev_load(
+            src.path(),
+            staged_root.path(),
+            Some(&cdylib),
+            "x86_64-unknown-linux-gnu",
+        )
+        .unwrap();
+
+        assert_eq!(staged, staged_root.path().join("tatolab__camera"));
+        let staged_cdylib = staged
+            .join("lib")
+            .join("x86_64-unknown-linux-gnu")
+            .join("libstreamlib_camera.so");
+        assert!(staged_cdylib.exists(), "expected staged cdylib at {}", staged_cdylib.display());
+        let bytes = std::fs::read(&staged_cdylib).unwrap();
+        assert_eq!(bytes, b"camera-cdylib-bytes");
+    }
+
+    #[test]
+    fn stage_package_for_dev_load_rewrites_patches_to_sibling_staged_dirs() {
+        // The whole point of staging is that the staged manifest's
+        // `patch:` entries resolve to sibling staged dirs, not back
+        // into the workspace source tree. Mentally reverting the
+        // rewrite step would leave `path: ../core` in the staged yaml
+        // and `load_workspace_packages` would either find the wrong
+        // package (the source tree one, missing its built cdylib) or
+        // fail outright.
+        let src = tempdir().unwrap();
+        write_minimal_manifest(
+            src.path(),
+            "tatolab",
+            "camera",
+            r#"dependencies:
+  "@tatolab/core": "^1.0.0"
+patch:
+  "@tatolab/core":
+    path: ../core
+"#,
+        );
+
+        let staged_root = tempdir().unwrap();
+        let staged = stage_package_for_dev_load(
+            src.path(),
+            staged_root.path(),
+            None,
+            "x86_64-unknown-linux-gnu",
+        )
+        .unwrap();
+
+        // Re-parse the staged yaml and assert the patch path is the
+        // sibling-staged-dir form.
+        let body = std::fs::read_to_string(staged.join("streamlib.yaml")).unwrap();
+        let restaged: streamlib_idents::Manifest = serde_yaml::from_str(&body).unwrap();
+        let core_ref = restaged
+            .patch
+            .keys()
+            .find(|k| k.org.as_str() == "tatolab" && k.name.as_str() == "core")
+            .expect("patch must retain the @tatolab/core key");
+        match &restaged.patch[core_ref] {
+            streamlib_idents::DependencySpec::Path(p) => {
+                assert_eq!(
+                    p.path,
+                    PathBuf::from("..").join("tatolab__core"),
+                    "patch path must be rewritten to sibling staged dir, got: {}",
+                    p.path.display()
+                );
+            }
+            other => panic!("expected Path-flavor patch, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn stage_package_for_dev_load_wipes_stale_files_on_restage() {
+        // Hermetic restaging — a file present in the previous staged
+        // dir but absent in the current source must disappear. Without
+        // the `remove_dir_all` step, removed schemas or renamed
+        // patches linger and `load_workspace_packages` resolves stale
+        // content. Reverting the wipe would let stale_file survive
+        // here.
+        let src = tempdir().unwrap();
+        write_minimal_manifest(src.path(), "tatolab", "stub", "");
+        let staged_root = tempdir().unwrap();
+        let staged_dir = staged_root.path().join("tatolab__stub");
+        std::fs::create_dir(&staged_dir).unwrap();
+        std::fs::write(staged_dir.join("stale.txt"), b"residue from a prior stage").unwrap();
+
+        let staged = stage_package_for_dev_load(
+            src.path(),
+            staged_root.path(),
+            None,
+            "x86_64-unknown-linux-gnu",
+        )
+        .unwrap();
+
+        assert_eq!(staged, staged_dir);
+        assert!(
+            !staged_dir.join("stale.txt").exists(),
+            "stage must wipe stale files left over from a prior stage"
+        );
+        assert!(staged_dir.join("streamlib.yaml").exists());
     }
 }
