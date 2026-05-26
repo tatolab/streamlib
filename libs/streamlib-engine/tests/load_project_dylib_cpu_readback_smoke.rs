@@ -35,8 +35,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 use serial_test::serial;
+use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
 use streamlib::sdk::schema_ident;
 use streamlib_engine::core::runtime::host_target_triple;
 
@@ -116,7 +117,12 @@ fn dlopen_processor_round_trips_cpu_readback_adapter() {
 
     let runtime = Runner::new().unwrap();
     runtime
-        .load_project(&fixtures_dst)
+        .add_module_with(
+            module_ident_any_version!("tatolab", "test-fixtures"),
+            ModuleResolverStrategy::ManifestDirectory {
+                path: fixtures_dst.clone(),
+            },
+        )
         .expect("load_project must succeed against the test-fixtures cdylib");
 
     let ident = schema_ident!(

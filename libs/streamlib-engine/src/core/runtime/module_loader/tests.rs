@@ -203,11 +203,11 @@ fn load_workspace_packages_returns_invalid_id_before_filesystem_probe() {
 // load_project dep walker
 // =========================================================================
 
-/// Path-style dep recursion: `runtime.load_project(A)` must walk into
-/// `B` (declared as `path: ../b`) and parse its manifest.
+/// Path-style dep recursion: `add_module_with(ManifestDirectory(A))`
+/// must walk into `B` (declared as `path: ../b`) and parse its manifest.
 #[test]
 #[serial]
-fn test_load_project_recurses_into_path_dep() {
+fn test_add_module_with_manifest_directory_recurses_into_path_dep() {
     let runtime = Runner::new().unwrap();
     let tmp = tempfile::tempdir().unwrap();
 
@@ -241,13 +241,19 @@ package:
     .unwrap();
 
     runtime
-        .load_project(&a)
-        .expect("load_project should recurse into path dep without error");
+        .add_module_with(
+            streamlib_idents::ModuleIdent::any(
+                streamlib_idents::Org::new("tatolab").unwrap(),
+                streamlib_idents::Package::new("a").unwrap(),
+            ),
+            ModuleResolverStrategy::ManifestDirectory { path: a.clone() },
+        )
+        .expect("add_module_with should recurse into path dep without error");
 }
 
 #[test]
 #[serial]
-fn test_load_project_registers_package_schemas_for_runtime_lookup() {
+fn test_add_module_with_manifest_directory_registers_package_schemas_for_runtime_lookup() {
     let runtime = Runner::new().unwrap();
     let tmp = tempfile::tempdir().unwrap();
 
@@ -279,12 +285,18 @@ schemas:
 
     assert!(
         crate::core::embedded_schemas::get_embedded_schema_definition(canonical).is_none(),
-        "fresh canonical id must not exist before load_project"
+        "fresh canonical id must not exist before add_module_with"
     );
 
     runtime
-        .load_project(&pkg)
-        .expect("load_project must succeed for schemas-only package");
+        .add_module_with(
+            streamlib_idents::ModuleIdent::any(
+                streamlib_idents::Org::new("tatolab").unwrap(),
+                streamlib_idents::Package::new("test-load-project-registers-schemas").unwrap(),
+            ),
+            ModuleResolverStrategy::ManifestDirectory { path: pkg.clone() },
+        )
+        .expect("add_module_with must succeed for schemas-only package");
 
     let body = crate::core::embedded_schemas::get_embedded_schema_definition(canonical)
         .expect("registered schema must be discoverable post-load");
@@ -309,7 +321,7 @@ schemas:
 
 #[test]
 #[serial]
-fn test_load_project_path_dep_missing_manifest_propagates_error() {
+fn test_add_module_with_manifest_directory_path_dep_missing_manifest_propagates_error() {
     let runtime = Runner::new().unwrap();
     let tmp = tempfile::tempdir().unwrap();
 
@@ -329,16 +341,22 @@ dependencies:
     )
     .unwrap();
 
-    let result = runtime.load_project(&a);
+    let result = runtime.add_module_with(
+        streamlib_idents::ModuleIdent::any(
+            streamlib_idents::Org::new("tatolab").unwrap(),
+            streamlib_idents::Package::new("a").unwrap(),
+        ),
+        ModuleResolverStrategy::ManifestDirectory { path: a.clone() },
+    );
     assert!(
         result.is_err(),
-        "load_project must error when a path dep target has no streamlib.yaml"
+        "add_module_with must error when a path dep target has no streamlib.yaml"
     );
 }
 
 #[test]
 #[serial]
-fn test_load_project_resolves_registry_dep_via_consumer_patch() {
+fn test_add_module_with_manifest_directory_resolves_registry_dep_via_consumer_patch() {
     let runtime = Runner::new().unwrap();
     let tmp = tempfile::tempdir().unwrap();
 
@@ -369,13 +387,19 @@ patch:
     .unwrap();
 
     runtime
-        .load_project(&a)
+        .add_module_with(
+            streamlib_idents::ModuleIdent::any(
+                streamlib_idents::Org::new("tatolab").unwrap(),
+                streamlib_idents::Package::new("a").unwrap(),
+            ),
+            ModuleResolverStrategy::ManifestDirectory { path: a.clone() },
+        )
         .expect("consumer-scoped patch must resolve the registry dep to ../b/");
 }
 
 #[test]
 #[serial]
-fn test_load_project_resolves_git_patch_via_shared_helper() {
+fn test_add_module_with_manifest_directory_resolves_git_patch_via_shared_helper() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("b-repo");
     std::fs::create_dir(&repo).unwrap();
@@ -437,13 +461,21 @@ patch:
 
     let runtime = Runner::new().unwrap();
     runtime
-        .load_project(consumer.path())
+        .add_module_with(
+            streamlib_idents::ModuleIdent::any(
+                streamlib_idents::Org::new("tatolab").unwrap(),
+                streamlib_idents::Package::new("consumer").unwrap(),
+            ),
+            ModuleResolverStrategy::ManifestDirectory {
+                path: consumer.path().to_path_buf(),
+            },
+        )
         .expect("git patch must clone the local repo and recurse into it");
 }
 
 #[test]
 #[serial]
-fn test_load_project_strict_errors_on_missing_patch_path() {
+fn test_add_module_with_manifest_directory_strict_errors_on_missing_patch_path() {
     let runtime = Runner::new().unwrap();
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -463,7 +495,15 @@ patch:
     .unwrap();
 
     let err = runtime
-        .load_project(tmp.path())
+        .add_module_with(
+            streamlib_idents::ModuleIdent::any(
+                streamlib_idents::Org::new("tatolab").unwrap(),
+                streamlib_idents::Package::new("a").unwrap(),
+            ),
+            ModuleResolverStrategy::ManifestDirectory {
+                path: tmp.path().to_path_buf(),
+            },
+        )
         .expect_err("missing patch path must error strictly");
     let msg = format!("{err}");
     assert!(
@@ -495,7 +535,7 @@ impl Drop for StreamlibHomeRestore {
 
 #[test]
 #[serial]
-fn test_load_project_resolves_registry_dep_via_installed_cache() {
+fn test_add_module_with_manifest_directory_resolves_registry_dep_via_installed_cache() {
     let sandbox = tempfile::tempdir().unwrap();
     let prev_home = std::env::var_os("STREAMLIB_HOME");
     unsafe {
@@ -543,13 +583,21 @@ dependencies:
 
     let runtime = Runner::new().unwrap();
     runtime
-        .load_project(consumer.path())
+        .add_module_with(
+            streamlib_idents::ModuleIdent::any(
+                streamlib_idents::Org::new("tatolab").unwrap(),
+                streamlib_idents::Package::new("consumer").unwrap(),
+            ),
+            ModuleResolverStrategy::ManifestDirectory {
+                path: consumer.path().to_path_buf(),
+            },
+        )
         .expect("registry dep must resolve via installed-package cache");
 }
 
 #[test]
 #[serial]
-fn test_load_project_unresolvable_registry_dep_errors_actionably() {
+fn test_add_module_with_manifest_directory_unresolvable_registry_dep_errors_actionably() {
     let runtime = Runner::new().unwrap();
     let tmp = tempfile::tempdir().unwrap();
 
@@ -569,7 +617,13 @@ dependencies:
     .unwrap();
 
     let err = runtime
-        .load_project(&a)
+        .add_module_with(
+            streamlib_idents::ModuleIdent::any(
+                streamlib_idents::Org::new("tatolab").unwrap(),
+                streamlib_idents::Package::new("a").unwrap(),
+            ),
+            ModuleResolverStrategy::ManifestDirectory { path: a.clone() },
+        )
         .expect_err("unresolvable registry dep must error");
     let msg = format!("{}", err);
     assert!(
@@ -584,7 +638,7 @@ dependencies:
 
 #[test]
 #[serial]
-fn test_load_project_rust_dylib_missing_host_triple_surfaces_available_triples() {
+fn test_add_module_with_manifest_directory_rust_dylib_missing_host_triple_surfaces_available_triples() {
     let runtime = Runner::new().unwrap();
     let tmp = tempfile::tempdir().unwrap();
 
@@ -619,7 +673,13 @@ processors:
     std::fs::write(wrong_dir.join("libfake.so"), b"not-a-real-dylib").unwrap();
 
     let err = runtime
-        .load_project(&pkg)
+        .add_module_with(
+            streamlib_idents::ModuleIdent::any(
+                streamlib_idents::Org::new("tatolab").unwrap(),
+                streamlib_idents::Package::new("triple-mismatch-pkg").unwrap(),
+            ),
+            ModuleResolverStrategy::ManifestDirectory { path: pkg.clone() },
+        )
         .expect_err("missing host-triple subdir must error");
     let msg = format!("{}", err);
     assert!(
@@ -634,7 +694,7 @@ processors:
 
 #[test]
 #[serial]
-fn test_load_project_rust_dylib_resolves_host_triple_then_dlopens() {
+fn test_add_module_with_manifest_directory_rust_dylib_resolves_host_triple_then_dlopens() {
     let runtime = Runner::new().unwrap();
     let tmp = tempfile::tempdir().unwrap();
 
@@ -676,7 +736,13 @@ processors:
     std::fs::write(&dylib_path, b"not-a-real-dylib").unwrap();
 
     let err = runtime
-        .load_project(&pkg)
+        .add_module_with(
+            streamlib_idents::ModuleIdent::any(
+                streamlib_idents::Org::new("tatolab").unwrap(),
+                streamlib_idents::Package::new("triple-match-pkg").unwrap(),
+            ),
+            ModuleResolverStrategy::ManifestDirectory { path: pkg.clone() },
+        )
         .expect_err("junk dylib must fail at dlopen, not at path resolution");
     let msg = format!("{}", err);
     assert!(
@@ -693,7 +759,7 @@ processors:
 
 #[test]
 #[serial]
-fn test_load_project_schemas_only_skips_lib_lookup() {
+fn test_add_module_with_manifest_directory_schemas_only_skips_lib_lookup() {
     let runtime = Runner::new().unwrap();
     let tmp = tempfile::tempdir().unwrap();
 
@@ -711,7 +777,13 @@ package:
     .unwrap();
 
     runtime
-        .load_project(&pkg)
+        .add_module_with(
+            streamlib_idents::ModuleIdent::any(
+                streamlib_idents::Org::new("tatolab").unwrap(),
+                streamlib_idents::Package::new("schemas-only-pkg").unwrap(),
+            ),
+            ModuleResolverStrategy::ManifestDirectory { path: pkg.clone() },
+        )
         .expect("schemas-only package must load without touching lib/");
 }
 

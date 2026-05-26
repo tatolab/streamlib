@@ -30,7 +30,8 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use serial_test::serial;
 use streamlib::sdk::pubsub::{topics, Event, EventListener, RuntimeEvent, PUBSUB};
-use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::module_ident_any_version;
+use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
 use streamlib_engine::core::runtime::host_target_triple;
 
 fn copy_dir_contents(src: &Path, dst: &Path) {
@@ -148,7 +149,12 @@ fn plugin_register_pubsub_event_reaches_host_subscriber() {
     std::thread::sleep(Duration::from_millis(200));
 
     runtime
-        .load_project(&fixtures_dst)
+        .add_module_with(
+            module_ident_any_version!("tatolab", "test-fixtures"),
+            ModuleResolverStrategy::ManifestDirectory {
+                path: fixtures_dst.clone(),
+            },
+        )
         .expect("load_project must succeed");
 
     let deadline = Instant::now() + Duration::from_secs(2);

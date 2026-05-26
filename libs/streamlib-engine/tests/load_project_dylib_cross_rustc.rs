@@ -59,8 +59,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 use serial_test::serial;
+use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
 use streamlib::sdk::schema_ident;
 use streamlib_engine::core::runtime::host_target_triple;
 
@@ -244,7 +245,12 @@ fn dlopen_cross_rustc_fixture_round_trips_every_beta_shape() {
 
     let runtime = Runner::new().unwrap();
     runtime
-        .load_project(&fixture_dst)
+        .add_module_with(
+            module_ident_any_version!("tatolab", "cross-rustc-fixture"),
+            ModuleResolverStrategy::ManifestDirectory {
+                path: fixture_dst.clone(),
+            },
+        )
         .expect("load_project must succeed against the cross-rustc cdylib");
 
     let ident = schema_ident!(

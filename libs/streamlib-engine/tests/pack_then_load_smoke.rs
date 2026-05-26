@@ -46,8 +46,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serial_test::serial;
+use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
-use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
 use streamlib_engine::core::runtime::host_target_triple;
 use streamlib_engine::schemas::current_schema_definition;
 
@@ -196,8 +197,11 @@ fn pack_then_load_rust_package_registers_processors() {
 
     let runtime = Runner::new().unwrap();
     runtime
-        .load_package(&slpkg)
-        .expect("load_package against a freshly-packed Rust slpkg must succeed");
+        .add_module_with(
+            module_ident_any_version!("tatolab", "network"),
+            ModuleResolverStrategy::SlpkgArchive { path: slpkg.clone() },
+        )
+        .expect("add_module_with SlpkgArchive against a freshly-packed Rust slpkg must succeed");
 
     let registered: Vec<String> = PROCESSOR_REGISTRY
         .list_registered()
@@ -257,8 +261,11 @@ fn pack_then_load_schemas_only_package_registers_schemas() {
 
     let runtime = Runner::new().unwrap();
     runtime
-        .load_package(&slpkg)
-        .expect("load_package against a schemas-only slpkg must succeed");
+        .add_module_with(
+            module_ident_any_version!("tatolab", "core"),
+            ModuleResolverStrategy::SlpkgArchive { path: slpkg.clone() },
+        )
+        .expect("add_module_with SlpkgArchive against a schemas-only slpkg must succeed");
 
     assert!(
         current_schema_definition("@tatolab/core/VideoFrame").is_some(),
@@ -281,8 +288,16 @@ fn load_package_with_missing_file_errors_cleanly() {
     let runtime = Runner::new().unwrap();
     let missing = std::path::PathBuf::from("/nonexistent/path/missing.slpkg");
     let err = runtime
-        .load_package(&missing)
-        .expect_err("load_package against a missing .slpkg must error");
+        .add_module_with(
+            // Any ident — the strategy resolver errors during extraction
+            // before the ident is checked against the (non-existent)
+            // archive's manifest.
+            module_ident_any_version!("tatolab", "core"),
+            ModuleResolverStrategy::SlpkgArchive {
+                path: missing.clone(),
+            },
+        )
+        .expect_err("add_module_with SlpkgArchive against a missing .slpkg must error");
     let msg = format!("{err}");
     assert!(
         msg.contains("missing.slpkg") || msg.to_lowercase().contains("no such file"),
@@ -344,8 +359,11 @@ processors:
 
     let runtime = Runner::new().unwrap();
     let err = runtime
-        .load_package(&slpkg)
-        .expect_err("load_package against a foreign-triple-only slpkg must error");
+        .add_module_with(
+            module_ident_any_version!("tatolab", "foreign-triple-fixture"),
+            ModuleResolverStrategy::SlpkgArchive { path: slpkg.clone() },
+        )
+        .expect_err("add_module_with SlpkgArchive against a foreign-triple-only slpkg must error");
     let msg = format!("{err}");
     let host = host_target_triple();
     assert!(

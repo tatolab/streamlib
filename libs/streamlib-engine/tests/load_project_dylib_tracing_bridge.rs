@@ -26,7 +26,8 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use serial_test::serial;
-use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::module_ident_any_version;
+use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
 use streamlib_engine::core::runtime::host_target_triple;
 
 fn copy_dir_contents(src: &Path, dst: &Path) {
@@ -121,7 +122,12 @@ fn plugin_register_tracing_event_reaches_host_jsonl() {
         );
 
     runtime
-        .load_project(&fixtures_dst)
+        .add_module_with(
+            module_ident_any_version!("tatolab", "test-fixtures"),
+            ModuleResolverStrategy::ManifestDirectory {
+                path: fixtures_dst.clone(),
+            },
+        )
         .expect("load_project must succeed");
 
     // Tracing→JSONL flow under the callback-table architecture:

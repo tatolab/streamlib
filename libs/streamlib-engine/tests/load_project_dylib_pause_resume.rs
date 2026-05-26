@@ -22,8 +22,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 use serial_test::serial;
+use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
 use streamlib::sdk::schema_ident;
 use streamlib_engine::core::runtime::host_target_triple;
 
@@ -122,7 +123,14 @@ fn dlopen_processor_pause_resume_hooks_fire_through_vtable() {
     let output_path_str = output_path.to_string_lossy().to_string();
 
     let runtime = Runner::new().unwrap();
-    runtime.load_project(&fixtures_dst).expect("load_project");
+    runtime
+        .add_module_with(
+            module_ident_any_version!("tatolab", "test-fixtures"),
+            ModuleResolverStrategy::ManifestDirectory {
+                path: fixtures_dst.clone(),
+            },
+        )
+        .expect("add_module_with ManifestDirectory");
 
     let ident = schema_ident!(
         "tatolab",
