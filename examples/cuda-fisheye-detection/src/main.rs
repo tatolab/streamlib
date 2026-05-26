@@ -16,12 +16,12 @@
 //! workload), runs YOLOv8n detection, and writes an annotated PNG.
 //!
 //! Sibling of `polyglot-cuda-inference` (which validates the DLPack
-//! `VkBuffer` flat-tensor path). This example is the first to land in
-//! the monorepo-with-sub-packages structure: the Rust runner and the
-//! Python processor live in sibling sub-packages, each with their own
-//! `streamlib.yaml`; `Runner::load_project(.)` walks the runner's
-//! manifest and dynamically loads the Python sub-package via the
-//! declared `patch:` `path:` override.
+//! `VkBuffer` flat-tensor path). The Rust runner sits at the example
+//! root and the Python processor lives in a sibling `python/`
+//! sub-package with its own `streamlib.yaml`; the runner calls
+//! `Runner::add_module_with(..., ModuleResolverStrategy::ManifestDirectory)`
+//! at startup to register the Python processor against its
+//! manifest directory.
 //!
 //! Run:
 //!   cargo run -p cuda-fisheye-detection-scenario -- \
@@ -45,9 +45,10 @@ use streamlib::sdk::engine::host_rhi::{
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostSurfaceStoreExt, HostTextureExt};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::rhi::{StorageBuffer, Texture, TextureDescriptor, TextureFormat, VulkanLayout};
-use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
 use streamlib_adapter_abi::SurfaceId;
 use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostImageSurfaceRegistration};
 use streamlib_debug_utilities::BgraFileSourceProcessor;
@@ -147,13 +148,19 @@ fn main() -> Result<()> {
         });
     }
 
-    // Load the polyglot project — the runner's `streamlib.yaml`
-    // declares a dep on `@tatolab/cuda-fisheye-python` via
-    // `patch:` `path: ../python`. `load_project` walks that manifest,
-    // resolves the sibling Python sub-package, and registers its
-    // processor + schema declarations dynamically.
+    // Load the Python sub-package via an explicit add_module_with
+    // call. The Python sub-package is example-local (sibling of this
+    // example crate) and not workspace-staged, so it's resolved by
+    // its manifest directory. The recursive dep walker follows the
+    // sub-package's own dependencies (`@tatolab/core` patched to
+    // `../../../packages/core`).
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    runtime.load_project(&manifest_dir)?;
+    runtime.add_module_with(
+        module_ident_any_version!("tatolab", "cuda-fisheye-python"),
+        ModuleResolverStrategy::ManifestDirectory {
+            path: manifest_dir.join("python"),
+        },
+    )?;
 
     // Trigger source — emits a tiny BGRA fixture frame whose contents
     // are unused. The polyglot processor runs against the
