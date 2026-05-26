@@ -228,7 +228,7 @@ pub const SURFACE_STORE_VTABLE_LAYOUT_VERSION: u32 = 1;
 /// - v12: #958 follow-up to #914 — adds
 ///   `set_video_source_timeline_semaphore` /
 ///   `clear_video_source_timeline_semaphore` slots. The camera
-///   processor (loaded as a cdylib via `runtime.load_project`)
+///   processor (loaded as a cdylib via `runtime.add_module`)
 ///   publishes its `Arc<HostVulkanTimelineSemaphore>` for in-process
 ///   display consumers to wait on; #971 originally panic-guarded
 ///   these methods on the premise no cdylib reaches them, but the

@@ -7,9 +7,9 @@
 //! The engine substrate is an empty registry; processors land in
 //! `PROCESSOR_REGISTRY` through one of two paths:
 //!
-//! 1. Cdylib packages loaded via `runtime.load_project(...)` /
-//!    `runtime.load_package(...)`, which trip `STREAMLIB_PLUGIN` and
-//!    call the host's `processor_register` callback.
+//! 1. Cdylib packages loaded via `runtime.add_module(...)`, which trip
+//!    `STREAMLIB_PLUGIN` and call the host's `processor_register`
+//!    callback.
 //! 2. In-process Rust callers invoking
 //!    `PROCESSOR_REGISTRY.register::<P>()` directly.
 //!
@@ -17,7 +17,7 @@
 //! emission the `#[processor]` macro used to do is gone. Anyone
 //! reintroducing it would bypass the dynamic-load model — `Runner::new()`
 //! would silently grow non-empty in builds that link the offending crate,
-//! processors would register before any `load_project` call, and
+//! processors would register before any `add_module` call, and
 //! cross-rustc-version plugin builds would start to "work" via the
 //! force-link path that the milestone wants gone.
 //!

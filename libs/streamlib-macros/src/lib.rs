@@ -62,9 +62,9 @@ use syn::{
 ///
 /// - **Cdylib packages** declare `crate-type = ["rlib", "cdylib"]` and
 ///   call `export_plugin!(...)` from `lib.rs`. The runtime `dlopen()`s
-///   the cdylib at `runtime.load_project(...)` / `load_package(...)`
-///   time; the plugin ABI's `STREAMLIB_PLUGIN` callback registers each
-///   processor via the host's `processor_register` callback.
+///   the cdylib at `runtime.add_module(...)` time; the plugin ABI's
+///   `STREAMLIB_PLUGIN` callback registers each processor via the host's
+///   `processor_register` callback.
 /// - **In-process Rust callers** invoke
 ///   `PROCESSOR_REGISTRY.register::<Foo::Processor>()` directly. Tests
 ///   and engine-internal mocks use this path.
@@ -431,7 +431,7 @@ pub fn schema_ident(input: TokenStream) -> TokenStream {
 ///
 /// This is the right shape for nearly every call site — the spawning
 /// binary should match whatever version of a processor happens to be
-/// registered when `runtime.load_project(...)` finishes. Reach for the
+/// registered when `runtime.add_module(...)` finishes. Reach for the
 /// strict-pin [`schema_ident!`] form only when you have a deliberate
 /// reason to refuse newer-but-compatible registered versions.
 ///

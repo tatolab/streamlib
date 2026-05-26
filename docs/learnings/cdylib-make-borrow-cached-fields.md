@@ -2,7 +2,7 @@
 
 ## Symptom
 
-A cdylib (Rust plugin loaded via `runtime.load_project(...)`) runs
+A cdylib (Rust plugin loaded via `runtime.add_module(...)`) runs
 end-to-end with **zero errors, zero panics, zero validation layer
 complaints** — and produces **all-zero output**. Examples:
 

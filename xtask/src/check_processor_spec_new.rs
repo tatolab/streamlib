@@ -75,9 +75,11 @@ pub fn run(workspace_root: &Path) -> Result<()> {
 /// files — codegen.rs in `streamlib-macros` legitimately emits the
 /// literal as a token stream, and integration tests in `libs/*/tests/`
 /// build expected values to assert against. Both must stay outside the
-/// lint's reach. Accepts both the flat shape (`examples/<crate>/src/`)
-/// and the monorepo-with-sub-packages shape
-/// (`examples/<crate>/runner/src/` per #804).
+/// lint's reach. Accepts the flat shape (`examples/<crate>/src/`) as
+/// well as the sibling-sub-package shapes that some examples carry
+/// (e.g. `examples/<crate>/plugin/src/` for cdylib plugin packages,
+/// `examples/<crate>/effects/src/` for carved-out Rust effects
+/// packages). Any `examples/.../src/<file>.rs` is in scope.
 fn is_example_src_file(path: &Path) -> bool {
     let mut components = path.components();
     let mut saw_examples = false;
@@ -344,11 +346,17 @@ mod tests {
 
     #[test]
     fn is_example_src_correctly_classifies_paths() {
+        // Flat-shape example: examples/<crate>/src/<file>.rs
         assert!(is_example_src_file(Path::new(
             "/abs/examples/foo/src/main.rs"
         )));
+        // Sibling effects sub-package: examples/<crate>/effects/src/<file>.rs
         assert!(is_example_src_file(Path::new(
-            "/abs/examples/camera-python-display/runner/src/linux.rs"
+            "/abs/examples/camera-python-display/effects/src/linux.rs"
+        )));
+        // Sibling plugin sub-package: examples/<crate>/plugin/src/<file>.rs
+        assert!(is_example_src_file(Path::new(
+            "/abs/examples/camera-rust-plugin/plugin/src/lib.rs"
         )));
         // libs/ tests legitimately build expected SchemaIdent values:
         assert!(!is_example_src_file(Path::new(

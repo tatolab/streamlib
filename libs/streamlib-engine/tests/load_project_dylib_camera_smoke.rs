@@ -5,7 +5,7 @@
 //!
 //! Builds `@tatolab/camera` as a cdylib, stages
 //! it as a streamlib project alongside `@tatolab/core`, dlopens it
-//! via `Runner::load_project`, then drives the camera processor
+//! via `Runner::add_module_with(_, ManifestDirectory)`, then drives the camera processor
 //! through `setup()` + `start()` against vivid (`/dev/video0` on this
 //! host — vivid is exposed at `/dev/video0` on the workstation per
 //! `reference_vivid_video_device`; the streamlib testing doc names
@@ -61,7 +61,7 @@
 //! - `cargo build -p streamlib-camera` produces a
 //!   `libstreamlib_camera.so` cdylib carrying the `STREAMLIB_PLUGIN`
 //!   symbol.
-//! - `Runner::load_project(...)` accepts the camera's project
+//! - `Runner::add_module_with(...)` accepts the camera's project
 //!   manifest (with `@tatolab/core` resolved via the dev-time `patch`
 //!   entry mirrored into the staging tmpdir).
 //! - The runtime adds a `Camera` processor configured to point at
@@ -148,7 +148,7 @@ fn dlopen_camera_processor_completes_lifecycle_against_vivid() {
         built_dylib.display()
     );
 
-    // Stage as a streamlib project the runtime can `load_project`.
+    // Stage as a streamlib project the runtime can `add_module_with`.
     // Mirror the host workspace's `packages/camera/` +
     // `packages/core/` layout inside the tmpdir so the camera's
     // `streamlib.yaml` dev-time `patch: "@tatolab/core": path:

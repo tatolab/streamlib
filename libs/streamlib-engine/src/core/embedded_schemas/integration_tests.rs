@@ -143,12 +143,12 @@ fn test_schema_max_payload_bytes_videoframe() {
 
 /// A `Specific` spec for an unregistered schema must surface as a typed
 /// configuration error naming the missing canonical id and pointing at
-/// `load_project`. Silent fallback to the iceoryx2 default on registry
+/// `add_module`. Silent fallback to the iceoryx2 default on registry
 /// miss would defer the failure to first-frame `ExceedsMaxLoanSize`
-/// instead of catching the "forgot `runtime.load_project(...)`" footgun
+/// instead of catching the "forgot `runtime.add_module(...)`" footgun
 /// at wire time.
 #[test]
-fn test_schema_max_payload_bytes_unknown_schema_errors_with_load_project_hint() {
+fn test_schema_max_payload_bytes_unknown_schema_errors_with_add_module_hint() {
     let spec = PortSchemaSpec::Specific(SchemaIdent::new(
         Org::new("unknown").unwrap(),
         Package::new("does-not-exist-integration").unwrap(),
@@ -163,8 +163,8 @@ fn test_schema_max_payload_bytes_unknown_schema_errors_with_load_project_hint() 
         "error must name the missing canonical id; got: {msg}"
     );
     assert!(
-        msg.contains("load_project"),
-        "error must point at runtime.load_project(...) as the fix; got: {msg}"
+        msg.contains("add_module"),
+        "error must point at runtime.add_module(...) as the fix; got: {msg}"
     );
 }
 

@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! End-to-end gate for the `streamlib pack` → `Runner::load_package`
+//! End-to-end gate for the `streamlib pack` →
+//! `Runner::add_module_with(_, ModuleResolverStrategy::SlpkgArchive)`
 //! chain: pack a real workspace package into a `.slpkg`, hand the
 //! bundle back to a fresh `Runner`, and assert the loaded artifacts
 //! (processors for Rust-impl packages, schemas for the canonical
@@ -10,25 +11,25 @@
 //! Mentally-revert lock summary (each maps to a specific test):
 //! - Drop *any one* processor from `streamlib-network`'s
 //!   `export_plugin!` arg list: dlopen still succeeds and the other
-//!   processor still registers, so `load_package` returns `Ok` — but
-//!   the listed-name assertion that *both* `UdpSource` and `UdpSink`
-//!   appear in `PROCESSOR_REGISTRY` fails. (Dropping the whole
-//!   `export_plugin!` macro is caught earlier — by the
-//!   `STREAMLIB_PLUGIN missing` error path inside `load_project` —
-//!   the listed-name assertion locks the omit-one regression class
-//!   the symbol-missing error path doesn't cover.)
-//! - Drop the `schemas:` walk (`register_package_schemas`) in
-//!   `Runner::load_project` and the schemas-only assertion fails
+//!   processor still registers, so `add_module_with(SlpkgArchive)`
+//!   returns `Ok` — but the listed-name assertion that *both*
+//!   `UdpSource` and `UdpSink` appear in `PROCESSOR_REGISTRY` fails.
+//!   (Dropping the whole `export_plugin!` macro is caught earlier —
+//!   by the `STREAMLIB_PLUGIN missing` error path inside the module
+//!   loader — the listed-name assertion locks the omit-one regression
+//!   class the symbol-missing error path doesn't cover.)
+//! - Drop the `schemas:` walk (`register_package_schemas`) in the
+//!   module loader and the schemas-only assertion fails
 //!   (`current_schema_definition("@tatolab/core/VideoFrame")`
 //!   returns `None`).
 //! - Drop the `current_image_layout` / wrong-triple error chain in
-//!   `load_project`'s Rust-runtime branch and the foreign-triple
+//!   the module loader's Rust-runtime branch and the foreign-triple
 //!   negative test sees a panic or a non-actionable error message
 //!   instead of the triple-naming `Configuration` error it asserts
 //!   against.
 //!
-//! Cache scope: `Runner::load_package` extracts every slpkg into the
-//! process-global `~/.streamlib/cache/packages/<name>-<version>/`
+//! Cache scope: the `SlpkgArchive` strategy extracts every slpkg into
+//! the process-global `~/.streamlib/cache/packages/<name>-<version>/`
 //! cache. This test therefore writes to the *real* `network-1.0.0`
 //! and `core-1.0.0` cache entries on the host running the test. The
 //! extract is idempotent (`extract_slpkg_to_cache` clears the dir
@@ -39,8 +40,9 @@
 //! runs against the current workspace tree.
 //!
 //! Companion to `load_project_dylib_smoke.rs`, which exercises the
-//! same dlopen path but feeds `load_project` against a staged
-//! directory rather than the full pack → extract → load round-trip.
+//! same dlopen path but feeds `add_module_with(ManifestDirectory)`
+//! against a staged directory rather than the full pack → extract →
+//! load round-trip.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -169,7 +171,7 @@ fn pack_then_load_rust_package_registers_processors() {
     // / audio hardware, no transitive `@tatolab/core` dep so the
     // pack-then-load chain stands alone without an installed-package
     // cache prime) and assert both exported processors land in
-    // `PROCESSOR_REGISTRY` after `Runner::load_package`.
+    // `PROCESSOR_REGISTRY` after `Runner::add_module_with`.
     let cli = build_streamlib_cli();
     let dylib = cargo_build_dylib("streamlib-network");
 
@@ -210,12 +212,12 @@ fn pack_then_load_rust_package_registers_processors() {
         .collect();
     assert!(
         registered.iter().any(|n| n == "UdpSource"),
-        "UdpSource must be registered after load_package, got: {:?}",
+        "UdpSource must be registered after add_module_with, got: {:?}",
         registered
     );
     assert!(
         registered.iter().any(|n| n == "UdpSink"),
-        "UdpSink must be registered after load_package, got: {:?}",
+        "UdpSink must be registered after add_module_with, got: {:?}",
         registered
     );
 }
@@ -226,9 +228,9 @@ fn pack_then_load_schemas_only_package_registers_schemas() {
     // Schemas-only gate: pack `@tatolab/core` (the canonical
     // schemas-only package — zero processors, four wire-stable types)
     // and assert at least one canonical schema lands in the runtime
-    // schema registry after `Runner::load_package`. Exercises the
+    // schema registry after `Runner::add_module_with`. Exercises the
     // no-cdylib branch of pack (no `lib/` in the archive, no dlopen
-    // at load time) plus the `schemas:` walk inside `load_project`.
+    // at load time) plus the `schemas:` walk inside `add_module_with`.
     let cli = build_streamlib_cli();
 
     let tmp = tempfile::tempdir().unwrap();
@@ -269,22 +271,22 @@ fn pack_then_load_schemas_only_package_registers_schemas() {
 
     assert!(
         current_schema_definition("@tatolab/core/VideoFrame").is_some(),
-        "@tatolab/core/VideoFrame must be registered after load_package"
+        "@tatolab/core/VideoFrame must be registered after add_module_with"
     );
     assert!(
         current_schema_definition("@tatolab/core/AudioFrame").is_some(),
-        "@tatolab/core/AudioFrame must be registered after load_package"
+        "@tatolab/core/AudioFrame must be registered after add_module_with"
     );
 }
 
 #[test]
 #[serial]
-fn load_package_with_missing_file_errors_cleanly() {
-    // Negative-path gate: load_package against a path that doesn't
+fn add_module_with_slpkg_archive_missing_file_errors_cleanly() {
+    // Negative-path gate: add_module_with against a path that doesn't
     // exist must surface a `Configuration` error naming the missing
     // path rather than panicking, returning silently, or
     // deadlocking. Mirrors the actionable-error contract pack /
-    // load_project hold for misconfigured manifests.
+    // add_module_with(ManifestDirectory) holds for misconfigured manifests.
     let runtime = Runner::new().unwrap();
     let missing = std::path::PathBuf::from("/nonexistent/path/missing.slpkg");
     let err = runtime
@@ -307,7 +309,7 @@ fn load_package_with_missing_file_errors_cleanly() {
 
 #[test]
 #[serial]
-fn load_package_with_wrong_triple_errors_with_actionable_message() {
+fn add_module_with_slpkg_archive_wrong_triple_errors_with_actionable_message() {
     // Negative-path gate: a `.slpkg` whose `lib/` directory carries
     // only a foreign-triple subdir (no `lib/<host_triple>/...` for
     // this machine) must fail with an actionable error naming the

@@ -98,7 +98,7 @@ fn load_project_real_dylib_registers_processor_via_export_plugin() {
     copy_dir_contents(&core_src.join("schemas"), &core_dst.join("schemas"));
 
     // Stage the cdylib under `lib/<host-triple>/` — the layout
-    // `load_project` expects for `runtime: rust` processor entries.
+    // `add_module_with` expects for `runtime: rust` processor entries.
     let triple_dir = fixtures_dst.join("lib").join(host_target_triple());
     std::fs::create_dir_all(&triple_dir).unwrap();
     std::fs::copy(&built_dylib, triple_dir.join(&dylib_name)).unwrap();
@@ -119,7 +119,7 @@ fn load_project_real_dylib_registers_processor_via_export_plugin() {
         .any(|desc| desc.name.r#type.as_str() == "TestConfiguredProcessor");
     assert!(
         registered,
-        "TestConfiguredProcessor must be registered after load_project — \
+        "TestConfiguredProcessor must be registered after add_module_with — \
          STREAMLIB_PLUGIN callback should have fired"
     );
 }

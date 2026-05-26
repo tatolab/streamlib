@@ -1,21 +1,22 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Load-project rejection test for the ABI-version mismatch path.
+//! Module-load rejection test for the ABI-version mismatch path.
 //!
 //! Builds the `streamlib-test-fixtures-abi-mismatch` cdylib once per
 //! mismatch direction (`tamper-too-low` → `abi_version = 0`;
 //! `tamper-too-high` → `abi_version = u32::MAX`), assembles a minimal
-//! project directory, calls `runtime.load_project`, and asserts the
-//! returned error is `Error::Configuration` with the documented
-//! "ABI version mismatch" prefix.
+//! project directory, calls
+//! `runtime.add_module_with(_, ModuleResolverStrategy::ManifestDirectory)`,
+//! and asserts the returned error is `Error::Configuration` with the
+//! documented "ABI version mismatch" prefix.
 //!
 //! Both directions are covered to lock the equality check in
 //! `core/runtime/runtime.rs` — a future `<` or `>` regression would
 //! only catch one direction.
 //!
 //! Mental-revert: removing the `if decl.abi_version != STREAMLIB_ABI_VERSION`
-//! check in `load_project` would let the runtime invoke the fixture's
+//! check in the module loader would let the runtime invoke the fixture's
 //! no-op `register` stub, which never registers `AbiMismatchSentinel`.
 //! The runtime's subsequent "processor not registered" check would
 //! then surface a different error, regressing the contract this test

@@ -16,7 +16,7 @@
 //!   transitive deps than the host's compiled artifacts — proves the
 //!   plugin author can ship a `.so` without coordinating dep graphs
 //!   with the host.
-//! - **Load-level**: `Runner::load_project(...)` dlopens that `.so`
+//! - **Load-level**: `Runner::add_module_with(...)` dlopens that `.so`
 //!   and the host's `STREAMLIB_PLUGIN` ABI accepts the cdylib's
 //!   exported symbol shape — proves the FFI surface from #918 is
 //!   layout-stable across the divergent compiles.

@@ -3,70 +3,16 @@
 
 //! Module-loading tests. Runner-lifecycle tests stay in
 //! `runtime.rs`'s `tests` module; everything else (strategy
-//! resolver, parse_canonical_package_id, resolve_workspace_root,
-//! list_available_triples, load_project test fixtures,
-//! add_module_tests) lives here.
+//! resolver, resolve_workspace_root, list_available_triples,
+//! `add_module` / `add_module_with` dep-walker fixtures, every
+//! [`ModuleResolverStrategy`] variant's resolver behavior, recursive
+//! dep walking, cycle detection, and `remove_module` deferral)
+//! lives here.
 
-use super::processor_registration::list_available_triples;
-use super::workspace::{parse_canonical_package_id, resolve_workspace_root};
+use super::processor_registration::{host_target_triple, list_available_triples};
+use super::workspace::resolve_workspace_root;
 use super::*;
 use serial_test::serial;
-
-// =========================================================================
-// parse_canonical_package_id
-// =========================================================================
-
-#[test]
-fn parse_canonical_package_id_accepts_well_formed_input() {
-    // Tightest happy-path lock: every component round-trips
-    // (post-`@`, pre-`/`, post-`/`) into the parsed slices. The
-    // parser is the contract for what `load_workspace_packages`
-    // treats as a legal id — a regression that flipped `org` and
-    // `name` would break the lookup silently.
-    let parsed = parse_canonical_package_id("@tatolab/camera").unwrap();
-    assert_eq!(parsed.org_str, "tatolab");
-    assert_eq!(parsed.name_str, "camera");
-}
-
-#[test]
-fn parse_canonical_package_id_rejects_missing_at_prefix() {
-    let err = parse_canonical_package_id("tatolab/camera").unwrap_err();
-    assert!(matches!(
-        err,
-        LoadWorkspacePackagesError::InvalidPackageId(ref s) if s == "tatolab/camera"
-    ));
-}
-
-#[test]
-fn parse_canonical_package_id_rejects_missing_slash() {
-    let err = parse_canonical_package_id("@tatolab").unwrap_err();
-    assert!(matches!(
-        err,
-        LoadWorkspacePackagesError::InvalidPackageId(ref s) if s == "@tatolab"
-    ));
-}
-
-#[test]
-fn parse_canonical_package_id_rejects_empty_org_or_name() {
-    for bad in ["@/camera", "@tatolab/", "@/"] {
-        let err = parse_canonical_package_id(bad).unwrap_err();
-        assert!(matches!(err, LoadWorkspacePackagesError::InvalidPackageId(_)));
-    }
-}
-
-#[test]
-fn parse_canonical_package_id_rejects_extra_slashes() {
-    let err = parse_canonical_package_id("@org/sub/name").unwrap_err();
-    assert!(matches!(err, LoadWorkspacePackagesError::InvalidPackageId(_)));
-}
-
-#[test]
-fn parse_canonical_package_id_rejects_uppercase_via_typed_validator() {
-    let err = parse_canonical_package_id("@TaToLaB/camera").unwrap_err();
-    assert!(matches!(err, LoadWorkspacePackagesError::InvalidPackageId(_)));
-    let err = parse_canonical_package_id("@tatolab/CAMERA").unwrap_err();
-    assert!(matches!(err, LoadWorkspacePackagesError::InvalidPackageId(_)));
-}
 
 // =========================================================================
 // resolve_workspace_root
@@ -109,7 +55,7 @@ fn resolve_workspace_root_errors_when_env_var_path_does_not_exist() {
             None => std::env::remove_var(key),
         }
     }
-    assert!(matches!(err, LoadWorkspacePackagesError::WorkspaceRootNotFound));
+    assert!(matches!(err, AddModuleError::WorkspaceRootInvalid { .. }));
 }
 
 // =========================================================================
@@ -140,12 +86,15 @@ fn list_available_triples_filters_to_subdirs_and_sorts() {
 }
 
 // =========================================================================
-// load_workspace_packages
+// add_module_with(WorkspaceStaged)
 // =========================================================================
 
+/// Workspace stage dir missing for the requested package surfaces as
+/// the typed [`AddModuleError::WorkspaceStageMiss`] with the expected
+/// path the resolver looked at.
 #[test]
 #[serial]
-fn load_workspace_packages_reports_not_staged_when_dir_missing() {
+fn add_module_with_workspace_staged_reports_stage_miss_when_dir_missing() {
     let tmp = tempfile::tempdir().unwrap();
     let key = "STREAMLIB_WORKSPACE_ROOT";
     let prev = std::env::var_os(key);
@@ -153,8 +102,12 @@ fn load_workspace_packages_reports_not_staged_when_dir_missing() {
         std::env::set_var(key, tmp.path());
     }
     let runtime = Runner::new().expect("Runner::new");
+    let ident = streamlib_idents::ModuleIdent::any(
+        streamlib_idents::Org::new("tatolab").unwrap(),
+        streamlib_idents::Package::new("camera").unwrap(),
+    );
     let err = runtime
-        .load_workspace_packages(["@tatolab/camera"])
+        .add_module_with(ident, ModuleResolverStrategy::WorkspaceStaged)
         .unwrap_err();
     unsafe {
         match prev {
@@ -164,39 +117,11 @@ fn load_workspace_packages_reports_not_staged_when_dir_missing() {
     }
     assert!(matches!(
         err,
-        LoadWorkspacePackagesError::PackageNotStaged { ref name, ref expected_path }
-            if name == "@tatolab/camera"
+        AddModuleError::WorkspaceStageMiss { ref package, ref expected_path }
+            if package.org.as_str() == "tatolab"
+            && package.name.as_str() == "camera"
             && expected_path.ends_with("tatolab__camera")
     ));
-}
-
-#[test]
-#[serial]
-fn load_workspace_packages_returns_invalid_id_before_filesystem_probe() {
-    let tmp = tempfile::tempdir().unwrap();
-    let bogus = tmp.path().join("nowhere");
-    let key = "STREAMLIB_WORKSPACE_ROOT";
-    let prev = std::env::var_os(key);
-    unsafe {
-        std::env::set_var(key, &bogus);
-    }
-    let runtime = Runner::new().expect("Runner::new");
-    let err = runtime
-        .load_workspace_packages(["bad-no-at"])
-        .unwrap_err();
-    unsafe {
-        match prev {
-            Some(v) => std::env::set_var(key, v),
-            None => std::env::remove_var(key),
-        }
-    }
-    assert!(
-        matches!(
-            err,
-            LoadWorkspacePackagesError::InvalidPackageId(ref s) if s == "bad-no-at"
-        ),
-        "expected InvalidPackageId surfaced before workspace resolution, got: {err:?}"
-    );
 }
 
 // =========================================================================
@@ -837,12 +762,12 @@ mod add_module_tests {
     /// given org/name/version. Schemas-only avoids the dylib-
     /// loading branch — `add_module` resolution + version-range
     /// matching is what we want to lock here, not the cdylib
-    /// mechanics that `load_workspace_packages` already covers.
+    /// mechanics that the dlopen smoke tests already cover.
     ///
     /// When `schema` is provided, emits a `schemas:` block plus
     /// the named schema YAML under `schemas/<type_snake>.yaml`
     /// so post-load callers can verify the schema actually
-    /// registered (locks "`load_project` ran" — not just "resolver
+    /// registered (locks "the loader ran" — not just "resolver
     /// + range check ran").
     fn write_schemas_only_manifest(
         dir: &std::path::Path,
@@ -929,7 +854,7 @@ mod add_module_tests {
         assert!(
             crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
                 .is_some(),
-            "schema must be registered after add_module — load_project did not run if this fails"
+            "schema must be registered after add_module — the loader did not run if this fails"
         );
     }
 
@@ -967,7 +892,7 @@ mod add_module_tests {
         assert!(
             crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
                 .is_some(),
-            "any-version add_module must invoke load_project; schema registry is the witness",
+            "any-version add_module must invoke the loader; schema registry is the witness",
         );
     }
 

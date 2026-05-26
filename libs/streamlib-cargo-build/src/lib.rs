@@ -335,24 +335,25 @@ pub fn discover_rust_impl_packages(roots: &[&Path]) -> Result<Vec<PathBuf>> {
 /// no `@` literal so the path is filesystem-safe across every
 /// supported host. The corresponding wire-form id is `@<org>/<name>`.
 ///
-/// `cargo xtask build-plugins` and `Runner::load_workspace_packages`
-/// MUST agree on this format — keep the conversion in one place.
+/// `cargo xtask build-plugins` and the runtime's
+/// `ModuleResolverStrategy::WorkspaceStaged` resolver MUST agree on
+/// this format — keep the conversion in one place.
 pub fn staged_package_dir_name(org: &str, name: &str) -> String {
     format!("{}__{}", org, name)
 }
 
-/// Stage a workspace package into `staged_root/<org>__<name>/` so
-/// `Runner::load_workspace_packages` can find it without depending on
-/// the original `packages/` layout.
+/// Stage a workspace package into `staged_root/<org>__<name>/` so the
+/// runtime's `ModuleResolverStrategy::WorkspaceStaged` resolver can
+/// find it without depending on the original `packages/` layout.
 ///
 /// Copies the package's `streamlib.yaml` and `schemas/` directory into
 /// the staged dir, rewriting every `patch:` entry's path so it
 /// resolves to a sibling staged dir (`../<dep_org>__<dep_name>`)
 /// rather than the source-tree path. When `built_cdylib` is
 /// `Some(path)`, the cdylib is staged into
-/// `<staged_dir>/lib/<host_triple>/<filename>` matching the
-/// `Runner::load_project` triple-keyed convention. Schemas-only
-/// packages pass `None`.
+/// `<staged_dir>/lib/<host_triple>/<filename>` matching the runtime's
+/// triple-keyed cdylib lookup convention. Schemas-only packages pass
+/// `None`.
 ///
 /// Returns the staged package directory (absolute path).
 pub fn stage_package_for_dev_load(
@@ -470,9 +471,9 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 }
 
 /// Stage a freshly-built cdylib at `<package_dir>/lib/<host_triple>/<filename>`
-/// so `Runner::load_project` can resolve it by the triple-keyed
-/// convention. Creates the directory as needed. Returns the staged
-/// destination path. Copies (not symlinks) so a subsequent
+/// so the runtime's `Runner::add_module` flow can resolve it by the
+/// triple-keyed convention. Creates the directory as needed. Returns
+/// the staged destination path. Copies (not symlinks) so a subsequent
 /// `cargo clean` doesn't invalidate the staged artifact.
 pub fn stage_built_cdylib(
     package_dir: &Path,
@@ -802,7 +803,7 @@ package:
     fn stage_built_cdylib_copies_into_triple_keyed_dir() {
         // The staged path must land at
         // `<package_dir>/lib/<host_triple>/<filename>` because that's
-        // the convention `Runner::load_project` resolves against.
+        // the convention the runtime's add_module flow resolves against.
         // Reverting the `create_dir_all` would error when the triple
         // subdir is missing on a fresh workspace — the test covers
         // that path by intentionally not pre-creating the destination.
@@ -831,9 +832,9 @@ package:
     fn staged_package_dir_name_uses_double_underscore_no_at_literal() {
         // The wire-form id `@tatolab/core` becomes the
         // filesystem-safe dir name `tatolab__core`. Both the xtask
-        // and Runner::load_workspace_packages must compute it the same
-        // way — reverting the format would silently break the load
-        // helper's lookup, so the test pins the literal shape.
+        // and the runtime's WorkspaceStaged resolver must compute it
+        // the same way — reverting the format would silently break
+        // the resolver's lookup, so the test pins the literal shape.
         assert_eq!(staged_package_dir_name("tatolab", "core"), "tatolab__core");
         assert_eq!(
             staged_package_dir_name("vendor", "fancy-plugin"),
@@ -854,7 +855,7 @@ package:
         // cleanly without a `lib/` directory. Reverting the
         // `if let Some(cdylib_src) = built_cdylib` gate would either
         // panic (cdylib_src is None) or silently create an empty
-        // lib/ — both shapes are wrong and load_workspace_packages
+        // lib/ — both shapes are wrong and the WorkspaceStaged resolver
         // would mis-resolve.
         let src = tempdir().unwrap();
         write_minimal_manifest(src.path(), "tatolab", "core", "");
@@ -885,7 +886,7 @@ package:
     fn stage_package_for_dev_load_with_cdylib_lands_under_triple_keyed_lib() {
         // Rust-impl packages stage both the yaml/schemas AND the cdylib
         // (under `lib/<host_triple>/<filename>`). The staged dir is the
-        // self-contained mini-project Runner::load_workspace_packages
+        // self-contained mini-project the WorkspaceStaged resolver
         // points at.
         let src = tempdir().unwrap();
         write_minimal_manifest(src.path(), "tatolab", "camera", "");
@@ -917,7 +918,7 @@ package:
         // `patch:` entries resolve to sibling staged dirs, not back
         // into the workspace source tree. Mentally reverting the
         // rewrite step would leave `path: ../core` in the staged yaml
-        // and `load_workspace_packages` would either find the wrong
+        // and the WorkspaceStaged resolver would either find the wrong
         // package (the source tree one, missing its built cdylib) or
         // fail outright.
         let src = tempdir().unwrap();
@@ -974,7 +975,7 @@ patch:
         // package into a schemas-only one and the runtime saw zero
         // processors to register. Mentally reverting to parsing as
         // Manifest would re-emit a yaml without `processors:`, and
-        // `load_workspace_packages` would proceed without ever
+        // the WorkspaceStaged resolver would proceed without ever
         // dlopening the cdylib's processor registrations, surfacing
         // as `UnknownProcessorType` at the first `add_processor`
         // call. Asserting on BOTH `processors` and `env` widens the
@@ -1025,9 +1026,9 @@ env:
         // Hermetic restaging — a file present in the previous staged
         // dir but absent in the current source must disappear. Without
         // the `remove_dir_all` step, removed schemas or renamed
-        // patches linger and `load_workspace_packages` resolves stale
-        // content. Reverting the wipe would let stale_file survive
-        // here.
+        // patches linger and the WorkspaceStaged resolver resolves
+        // stale content. Reverting the wipe would let stale_file
+        // survive here.
         let src = tempdir().unwrap();
         write_minimal_manifest(src.path(), "tatolab", "stub", "");
         let staged_root = tempdir().unwrap();

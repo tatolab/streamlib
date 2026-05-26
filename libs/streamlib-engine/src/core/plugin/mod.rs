@@ -3,9 +3,9 @@
 
 //! Cross-DSO plugin bridging.
 //!
-//! Rust plugin cdylibs loaded via `Runner::load_project` /
-//! `Runner::load_package` (or the standalone `streamlib-runtime`
-//! binary's `--plugin` flag) statically embed their entire transitive
+//! Rust plugin cdylibs loaded via `Runner::add_module` (or the
+//! standalone `streamlib-runtime` binary's `--plugin` flag)
+//! statically embed their entire transitive
 //! dep tree. Without bridging, every process-wide static the engine
 //! relies on (tracing dispatch, [`PUBSUB`], the schema registry,
 //! iceoryx2's logger) exists as a per-DSO copy with no

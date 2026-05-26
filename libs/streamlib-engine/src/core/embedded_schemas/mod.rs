@@ -4,11 +4,11 @@
 //! Schema registry, looked up by canonical identifier.
 //!
 //! The registry starts empty. Every entry arrives at runtime via
-//! [`register_schema`], invoked by `Runner::load_project` for each
+//! [`register_schema`], invoked by `Runner::add_module` for each
 //! `schemas:` entry in a loaded package's `streamlib.yaml`. Apps wire
 //! the packages they need (`@tatolab/core` for the wire vocabulary,
 //! `@tatolab/audio` / `@tatolab/h264` / etc. for domain processors);
-//! `load_project` walks the dependency graph and registers each
+//! the module loader walks the dependency graph and registers each
 //! package's schemas as it traverses.
 //!
 //! Canonical identifiers are stored unversioned:
@@ -121,7 +121,7 @@ pub fn get_embedded_schema_definition(name: &str) -> Option<Arc<str>> {
 /// Returns [`Error::Configuration`] when a [`PortSchemaSpec::Specific`]
 /// (or [`PortSchemaSpec::Named`]) refers to a schema absent from the
 /// runtime registry — the actionable shape catches the "forgot
-/// `runtime.load_project(...)`" footgun at wire time rather than at
+/// `runtime.add_module(...)`" footgun at wire time rather than at
 /// first-frame `ExceedsMaxLoanSize`.
 ///
 /// [`Error::Configuration`]: crate::core::error::Error::Configuration
@@ -142,7 +142,7 @@ pub fn max_payload_bytes_for_port_spec(
 /// and for registered schemas that don't declare the field. Returns
 /// [`Error::Configuration`] when the spec refers to a schema absent from
 /// the runtime registry — the actionable shape catches the "forgot
-/// `runtime.load_project(...)`" footgun at wire time rather than as a
+/// `runtime.add_module(...)`" footgun at wire time rather than as a
 /// silently undersized ring dropping messages under burst load.
 ///
 /// [`DEFAULT_MAX_QUEUED_MESSAGES`]: crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES
@@ -164,7 +164,7 @@ pub fn max_queued_messages_for_port_spec(
 /// constrain).
 /// `Specific` / `Named` with registry miss → `Err(Configuration(...))`
 /// naming the missing canonical id and pointing the developer at
-/// `runtime.load_project(...)`.
+/// `runtime.add_module(...)`.
 fn resolve_metadata_u64_for_port_spec(
     schema_spec: &streamlib_processor_schema::PortSchemaSpec,
     field: &str,
@@ -177,7 +177,7 @@ fn resolve_metadata_u64_for_port_spec(
         crate::core::error::Error::Configuration(format!(
             "schema '{canonical}' referenced by a port spec but not in the \
              runtime schema registry — did you forget to call \
-             `runtime.load_project(...)` for the package providing it? \
+             `runtime.add_module(...)` for the package providing it? \
              (Use `list_embedded_schema_names()` to inspect what's currently \
              registered.)"
         ))
@@ -233,8 +233,8 @@ pub(crate) mod test_support {
     //! Test helpers: register the `@tatolab/core` wire vocabulary
     //! against the live registry so consumers exercising VideoFrame /
     //! AudioFrame / EncodedVideoFrame lookups can run without spinning
-    //! up a full `Runner::load_project` chain. Mirrors what
-    //! `Runner::load_project(packages/core)` would do in production.
+    //! up a full `Runner::add_module` chain. Mirrors what
+    //! `Runner::add_module(@tatolab/core)` would do in production.
     //!
     //! Schemas are embedded via `include_str!` at compile time — the
     //! engine doesn't depend on `@tatolab/core` as a Cargo crate, the
@@ -327,7 +327,7 @@ mod tests {
         // `@tatolab/escalate/EscalateRequest` into the registry.
         // No test in this crate's test binary registers it (the
         // wire-vocabulary setup helper only covers `@tatolab/core/*`,
-        // and the `load_project` regression tests build fresh tempdir
+        // and the `add_module` regression tests build fresh tempdir
         // packages with no `@tatolab/escalate` dep). So if this lookup
         // ever returns Some, someone has reintroduced a build-time
         // seeding path.
@@ -371,11 +371,11 @@ mod tests {
 
     /// A `Specific` spec referencing a schema absent from the registry
     /// must return a typed configuration error naming the missing
-    /// canonical id and pointing at `runtime.load_project(...)`. Mentally
+    /// canonical id and pointing at `runtime.add_module(...)`. Mentally
     /// reverting the resolver to silently fall back to `MAX_PAYLOAD_SIZE`
     /// will make this test fail.
     #[test]
-    fn max_payload_bytes_errors_on_registry_miss_with_load_project_hint() {
+    fn max_payload_bytes_errors_on_registry_miss_with_add_module_hint() {
         let spec = PortSchemaSpec::Specific(SchemaIdent::new(
             Org::new("tatolab").unwrap(),
             Package::new("does-not-exist-payload").unwrap(),
@@ -390,8 +390,8 @@ mod tests {
             "error must name the missing canonical id; got: {msg}"
         );
         assert!(
-            msg.contains("load_project"),
-            "error must point at `runtime.load_project(...)` as the fix; got: {msg}"
+            msg.contains("add_module"),
+            "error must point at `runtime.add_module(...)` as the fix; got: {msg}"
         );
         assert!(
             matches!(err, crate::core::error::Error::Configuration(_)),
@@ -421,7 +421,7 @@ mod tests {
     /// silently drops messages under burst load with no error visible to
     /// the application).
     #[test]
-    fn max_queued_messages_errors_on_registry_miss_with_load_project_hint() {
+    fn max_queued_messages_errors_on_registry_miss_with_add_module_hint() {
         let spec = PortSchemaSpec::Specific(SchemaIdent::new(
             Org::new("tatolab").unwrap(),
             Package::new("does-not-exist-mqm").unwrap(),
@@ -436,8 +436,8 @@ mod tests {
             "error must name the missing canonical id; got: {msg}"
         );
         assert!(
-            msg.contains("load_project"),
-            "error must point at `runtime.load_project(...)` as the fix; got: {msg}"
+            msg.contains("add_module"),
+            "error must point at `runtime.add_module(...)` as the fix; got: {msg}"
         );
         assert!(
             matches!(err, crate::core::error::Error::Configuration(_)),
