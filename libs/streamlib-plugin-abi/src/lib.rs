@@ -250,7 +250,22 @@ pub const SURFACE_STORE_VTABLE_LAYOUT_VERSION: u32 = 1;
 ///   (borrowed, same shape as `set_video_source_timeline_semaphore`).
 ///   Returns 0 on success, non-zero (`err_buf` populated) on driver
 ///   failure / timeout. Linux-only on the host side.
-pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 13;
+/// - v14: #1066 — adds `host_video_source_timeline_arc` slot. The
+///   read-side counterpart of v12's `set_/clear_` pair: cdylib
+///   consumers (the in-tree consumer is `LinuxDisplayProcessor`'s
+///   render loop) clone the host's published
+///   `Arc<HostVulkanTimelineSemaphore>` across the FFI to GPU-wait
+///   on the producer's writeback timeline. Mirrors the v9
+///   `host_vulkan_device_arc` FullAccess pattern: the host callback
+///   `Arc::into_raw`s a fresh clone (or returns null when no
+///   producer has published a timeline); the cdylib reconstitutes
+///   via `Arc::from_raw`. Same rustc-version + dep-graph coupling
+///   caveat as `set_video_source_timeline_semaphore` (in-tree
+///   workspace plugins share the contract;
+///   `HostVulkanTimelineSemaphore` is not `#[repr(C)]`). Linux-only
+///   on the host side; non-Linux stub returns null. Null
+///   `gpu_handle` returns null.
+pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 14;
 
 /// Layout version of [`GpuContextFullAccessVTable`].
 ///
@@ -1871,6 +1886,45 @@ pub struct GpuContextLimitedAccessVTable {
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // host_video_source_timeline_arc (v14 — #1066)
+    // -------------------------------------------------------------------------
+
+    /// Clone the host's `Arc<HostVulkanTimelineSemaphore>` that was
+    /// most recently published via
+    /// [`Self::set_video_source_timeline_semaphore`], so a cdylib
+    /// consumer can GPU-wait on it without reaching engine-internal
+    /// state. The in-tree consumer is `LinuxDisplayProcessor`'s
+    /// render loop (waits on the camera's published timeline before
+    /// binding the captured texture).
+    ///
+    /// Mirrors the v9 `host_vulkan_device_arc` FullAccess shape:
+    /// host callback `Arc::into_raw`s a fresh clone of the
+    /// `Arc<HostVulkanTimelineSemaphore>` from the slot; cdylib
+    /// reconstitutes via `Arc::from_raw`. The fresh strong count
+    /// moves into the cdylib's Arc; the host's slot keeps its own
+    /// independent strong count.
+    ///
+    /// Returns `*const c_void` carrying the leaked Arc pointer (a
+    /// `*const HostVulkanTimelineSemaphore` widened to the FFI
+    /// type), or null when no producer has published a timeline
+    /// yet, when the slot was cleared via
+    /// [`Self::clear_video_source_timeline_semaphore`], when
+    /// `gpu_handle` is null, or on non-Linux hosts.
+    ///
+    /// **Arc-raw-pointer transit** — same rustc-version coupling
+    /// caveat as `set_video_source_timeline_semaphore`.
+    /// `HostVulkanTimelineSemaphore` is not `#[repr(C)]`; in-tree
+    /// workspace plugin cdylibs share the host's rustc + dep graph
+    /// and ride this freely. Cross-repo plugin distribution awaits
+    /// a β-shape lift of `HostVulkanTimelineSemaphore` (the same
+    /// dormant work the v12 set/clear pair flagged).
+    ///
+    /// Linux-only on the host side; non-Linux stubs return null.
+    pub host_video_source_timeline_arc: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+    ) -> *const c_void,
 }
 
 unsafe impl Send for GpuContextLimitedAccessVTable {}
@@ -5129,7 +5183,7 @@ mod layout_tests {
         // v2: added owning-Arc handle lifetime callbacks
         // (`clone_handle` / `drop_handle`).
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
-        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 13);
+        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 14);
         assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 10);
         assert_eq!(TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION, 2);
@@ -5724,9 +5778,9 @@ mod layout_tests {
 
     #[test]
     fn gpu_context_limited_access_vtable_layout() {
-        // layout_version (u32) + _reserved_padding (u32) + 56 fn
-        // pointers (8 bytes each) = 4 + 4 + 448 = 456 bytes, align = 8.
-        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 456);
+        // layout_version (u32) + _reserved_padding (u32) + 57 fn
+        // pointers (8 bytes each) = 4 + 4 + 456 = 464 bytes, align = 8.
+        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 464);
         assert_eq!(align_of::<GpuContextLimitedAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextLimitedAccessVTable, layout_version), 0);
         assert_eq!(
@@ -5966,6 +6020,14 @@ mod layout_tests {
         assert_eq!(
             offset_of!(GpuContextLimitedAccessVTable, wait_timeline_semaphore),
             448
+        );
+        // v14 entry (#1066).
+        assert_eq!(
+            offset_of!(
+                GpuContextLimitedAccessVTable,
+                host_video_source_timeline_arc
+            ),
+            456
         );
     }
 

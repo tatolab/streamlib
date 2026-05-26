@@ -623,7 +623,7 @@ impl DisplayEventLoopHandler {
         // signals this on writeback completion; we GPU-wait it at FRAGMENT_SHADER.
         let video_source_timeline_wait_value: u64 = ipc_frame.frame_index.parse().unwrap_or(0);
         let video_source_timeline =
-            self.gpu_context.video_source_timeline_semaphore();
+            self.gpu_context.host_video_source_timeline_arc();
 
         let scaling_mode = self.scaling_mode.clone();
         let kernel_for_draw = Arc::clone(&graphics_kernel);

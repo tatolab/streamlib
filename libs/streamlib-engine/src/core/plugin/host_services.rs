@@ -2228,6 +2228,42 @@ unsafe extern "C" fn host_gpu_lim_wait_timeline_semaphore(
 }
 
 // -------------------------------------------------------------------------
+// host_video_source_timeline_arc — v14 (#1066)
+// -------------------------------------------------------------------------
+
+/// Clone the host's `Arc<HostVulkanTimelineSemaphore>` from the
+/// publish slot and return the raw `Arc::into_raw` pointer to the
+/// cdylib. The cdylib reconstitutes via `Arc::from_raw`; the host's
+/// slot retains its own independent strong count. Returns null when
+/// `gpu_handle` is null or when no producer has published a
+/// timeline (the slot is `None`).
+unsafe extern "C" fn host_gpu_lim_host_video_source_timeline_arc(
+    handle: *const c_void,
+) -> *const c_void {
+    run_host_extern_c(
+        "host_gpu_lim_host_video_source_timeline_arc",
+        || -> *const c_void {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(handle) }) else {
+                return std::ptr::null();
+            };
+            #[cfg(target_os = "linux")]
+            {
+                match gpu.video_source_timeline_semaphore() {
+                    Some(arc) => Arc::into_raw(arc) as *const c_void,
+                    None => std::ptr::null(),
+                }
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = gpu;
+                std::ptr::null()
+            }
+        },
+        std::ptr::null(),
+    )
+}
+
+// -------------------------------------------------------------------------
 // PooledTextureHandle lifecycle — drop-only (v4)
 // -------------------------------------------------------------------------
 
@@ -6774,6 +6810,8 @@ pub static HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE: GpuContextLimitedAccessVTable
         clear_video_source_timeline_semaphore:
             host_gpu_lim_clear_video_source_timeline_semaphore,
         wait_timeline_semaphore: host_gpu_lim_wait_timeline_semaphore,
+        host_video_source_timeline_arc:
+            host_gpu_lim_host_video_source_timeline_arc,
     };
 
 /// Pointer to the [`GpuContextLimitedAccessVTable`] this DSO should
@@ -12995,6 +13033,26 @@ mod gpu_lim_video_source_timeline_semaphore_tests {
             (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE
                 .clear_video_source_timeline_semaphore)(std::ptr::null());
         }
+    }
+
+    /// v14 slot (#1066): tier-1 wire-format guard. Null `gpu_handle`
+    /// must return null rather than dereferencing the pointer. The
+    /// non-null-handle "slot empty" → null and "slot populated" →
+    /// non-null Arc pointer paths are exercised end-to-end by the
+    /// camera-display cdylib reproducer; a tier-1 unit test for them
+    /// would need a real `GpuContext` instance, which this module
+    /// deliberately avoids constructing.
+    ///
+    /// Mental-revert: stub the wrapper to `unimplemented!()` and
+    /// this test trips the underlying panic — the null-guard
+    /// contract regresses.
+    #[test]
+    fn host_video_source_timeline_arc_returns_null_on_null_gpu_handle() {
+        let raw = unsafe {
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE
+                .host_video_source_timeline_arc)(std::ptr::null())
+        };
+        assert!(raw.is_null(), "expected null on null gpu_handle");
     }
 }
 

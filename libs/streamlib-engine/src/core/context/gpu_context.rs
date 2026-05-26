@@ -3242,9 +3242,15 @@ impl GpuContextLimitedAccess {
 
     /// See [`GpuContext::video_source_timeline_semaphore`].
     ///
-    /// **Engine-only** — return type is
-    /// `Option<Arc<HostVulkanTimelineSemaphore>>` (host-internal
-    /// type). Explicit guard below.
+    /// **Engine-only** — return type
+    /// `Option<Arc<HostVulkanTimelineSemaphore>>` borrows into
+    /// host-private state, so the borrow can't cross the FFI
+    /// boundary. Calling from a cdylib panics at the explicit guard
+    /// below. **Cdylib callers** must use
+    /// [`Self::host_video_source_timeline_arc`] instead — it returns
+    /// the same `Option<Arc<...>>` but via the v14 vtable slot that
+    /// transits the Arc as a raw pointer
+    /// (`Arc::into_raw` / `Arc::from_raw`).
     #[cfg(target_os = "linux")]
     pub fn video_source_timeline_semaphore(
         &self,
@@ -3252,13 +3258,58 @@ impl GpuContextLimitedAccess {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
             panic!(
                 "GpuContextLimitedAccess::video_source_timeline_semaphore() \
-                 reached from cdylib code; return type \
-                 `Option<Arc<HostVulkanTimelineSemaphore>>` is host-internal \
-                 (crate::vulkan::rhi) and cannot cross the FFI boundary. \
-                 Engine-only — cdylib code must not call it."
+                 reached from cdylib code; use \
+                 `host_video_source_timeline_arc()` instead. The legacy method \
+                 returns `Option<Arc<HostVulkanTimelineSemaphore>>` from \
+                 `host_inner()` which borrows host-private state and cannot \
+                 cross the FFI boundary."
             );
         }
         self.host_inner().video_source_timeline_semaphore()
+    }
+
+    /// Cdylib-safe sibling of
+    /// [`Self::video_source_timeline_semaphore`]. Dispatches through
+    /// the v14
+    /// [`GpuContextLimitedAccessVTable::host_video_source_timeline_arc`](streamlib_plugin_abi::GpuContextLimitedAccessVTable::host_video_source_timeline_arc)
+    /// slot in cdylib mode; in host mode the same vtable dispatch
+    /// resolves to the local `HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE`
+    /// static. Returns `None` when no producer has published a
+    /// timeline yet (the slot is empty), when the slot was cleared
+    /// via [`Self::clear_video_source_timeline_semaphore`], or when
+    /// the handle/vtable is null.
+    ///
+    /// **Arc-raw-pointer transit** — same rustc-version coupling
+    /// caveat as
+    /// [`Self::set_video_source_timeline_semaphore`].
+    /// `HostVulkanTimelineSemaphore` is not `#[repr(C)]`; in-tree
+    /// workspace plugin cdylibs share the host's rustc + dep graph
+    /// and ride this freely.
+    #[cfg(target_os = "linux")]
+    pub fn host_video_source_timeline_arc(
+        &self,
+    ) -> Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
+        if self.handle.is_null() || self.vtable.is_null() {
+            return None;
+        }
+        // SAFETY: handle + vtable were paired at construction. The
+        // host's callback either returns null (slot empty / null
+        // handle) or `Arc::into_raw` on a freshly cloned
+        // `Arc<HostVulkanTimelineSemaphore>` (fresh strong count
+        // moves into the cdylib).
+        let raw = unsafe {
+            ((*self.vtable).host_video_source_timeline_arc)(self.handle)
+        };
+        if raw.is_null() {
+            return None;
+        }
+        // SAFETY: matched with the host's `Arc::into_raw` above.
+        let arc = unsafe {
+            Arc::from_raw(
+                raw as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore,
+            )
+        };
+        Some(arc)
     }
 
     /// Acquire a pooled texture from a pre-reserved pool (Split: fast path).
