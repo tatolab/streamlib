@@ -51,6 +51,19 @@ jobs:
             protobuf-compiler \
             libvulkan-dev
 
+      - name: Install jtd-codegen
+        # The engine's `build.rs` invokes the upstream `jtd-codegen`
+        # binary (v0.4.1) to generate typed bindings from JTD schemas
+        # — see `libs/streamlib-jtd-codegen/src/lib.rs` for the
+        # version contract. The streamlib-engine build fails without
+        # it (`jtd-codegen not found. Install v0.4.1 from
+        # https://github.com/jsontypedef/json-typedef-codegen/releases/tag/v0.4.1`).
+        run: |
+          curl -sSL https://github.com/jsontypedef/json-typedef-codegen/releases/download/v0.4.1/x86_64-unknown-linux-gnu.zip -o /tmp/jtd-codegen.zip
+          unzip -q /tmp/jtd-codegen.zip -d /tmp/jtd-codegen
+          sudo install -m 0755 /tmp/jtd-codegen/jtd-codegen /usr/local/bin/jtd-codegen
+          jtd-codegen --version
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
