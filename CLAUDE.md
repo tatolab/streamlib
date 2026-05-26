@@ -34,7 +34,7 @@ Past models repeatedly created parallel abstractions without reading existing co
 
 ### Plugin Distribution Model — the cross-repo dream
 
-The engine is a pure substrate. It ships with **no processors, no schemas, no `streamlib.yaml` of its own** — `Runner::new()` starts with an empty registry, and every processor / schema / link is contributed by `.slpkg` packages loaded at runtime via `runtime.load_project(...)` or `runtime.load_package(...)`.
+The engine is a pure substrate. It ships with **no processors, no schemas, no `streamlib.yaml` of its own** — `Runner::new()` starts with an empty registry, and every processor / schema / link is contributed by `.slpkg` packages loaded at runtime via `runtime.add_module(ident)` (or `runtime.add_module_with(ident, ModuleResolverStrategy::...)` when the caller needs to pin a strategy explicitly).
 
 **The target distribution shape**: a plugin author in a completely separate GitHub repo, building on a completely different machine with a different rustc version and different transitive Cargo dep graph, can publish a `.slpkg` file. A streamlib host (e.g. tatolab/drone-racer, or any third-party host that Cargo-deps `streamlib`) loads that `.slpkg` at runtime via `dlopen` and the plugin's processors register cleanly into the host's runtime graph. The plugin author and the host author **never coordinate toolchains**.
 

@@ -3,7 +3,7 @@
 
 //! `STREAMLIB_PLUGIN` ABI v2 — PUBSUB bridge end-to-end.
 //!
-//! A listener subscribed in the host before `load_project` receives
+//! A listener subscribed in the host before `add_module_with` receives
 //! the `RuntimeDidRegisterProcessorType` event that cdylib code
 //! publishes when it invokes `host_registry.register::<P>()`.
 //! Mentally revert the `host_callbacks()`-routing branch in
@@ -136,7 +136,7 @@ fn plugin_register_pubsub_event_reaches_host_subscriber() {
 
     let runtime = Runner::new().unwrap();
 
-    // Subscribe BEFORE load_project so the cdylib's register-time
+    // Subscribe BEFORE add_module_with so the cdylib's register-time
     // publish has somewhere to land. Sleep ~200 ms so the subscriber
     // thread opens its iceoryx2 service before the publish (per the
     // pubsub-lazy-init-silent-noop learning's setup-time recipe).

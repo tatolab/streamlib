@@ -5,19 +5,13 @@ use super::errors::AddModuleError;
 use super::processor_registration::host_target_triple;
 use super::slpkg::extract_slpkg_to_cache;
 use super::workspace::resolve_workspace_root;
-use crate::core::{Error, Result};
 
 /// How [`Runner::add_module_with`] should source the manifest for a
-/// module. Each variant maps to one of the historical loader methods
-/// (`load_project`, `load_package`, `load_workspace_packages`) plus the
-/// imperative default chain that bare [`Runner::add_module`] uses.
+/// module. The strategy is the in-code equivalent of the manifest's
+/// `patch:` table — callers can pin a dep to a workspace stage dir, a
+/// specific resolver tier, a `.slpkg` archive, or an arbitrary
+/// directory without editing yaml.
 ///
-/// The strategy is the in-code equivalent of the manifest's `patch:`
-/// table — callers can pin a dep to a workspace stage dir, a specific
-/// resolver tier, a `.slpkg` archive, or an arbitrary directory
-/// without editing yaml.
-///
-/// [`Runner::add_module`]: super::super::Runner::add_module
 /// [`Runner::add_module_with`]: super::super::Runner::add_module_with
 #[derive(Debug, Clone)]
 pub enum ModuleResolverStrategy {
@@ -31,10 +25,7 @@ pub enum ModuleResolverStrategy {
     DefaultChain,
 
     /// Look up the workspace stage dir only; do not fall back to the
-    /// installed-package cache. Counterpart of the legacy
-    /// [`Runner::load_workspace_packages`] per-id lookup.
-    ///
-    /// [`Runner::load_workspace_packages`]: super::super::Runner::load_workspace_packages
+    /// installed-package cache.
     WorkspaceStaged,
 
     /// Look up the installed-package cache only; skip workspace.
@@ -42,17 +33,11 @@ pub enum ModuleResolverStrategy {
     /// slpkg copy even when a workspace stage dir exists.
     InstalledCache,
 
-    /// Load the manifest at this directory directly. Counterpart of
-    /// the legacy [`Runner::load_project`].
-    ///
-    /// [`Runner::load_project`]: super::super::Runner::load_project
+    /// Load the manifest at this directory directly.
     ManifestDirectory { path: std::path::PathBuf },
 
     /// Extract this `.slpkg` archive into the package cache, then
-    /// load the extracted manifest. Counterpart of the legacy
-    /// [`Runner::load_package`].
-    ///
-    /// [`Runner::load_package`]: super::super::Runner::load_package
+    /// load the extracted manifest.
     SlpkgArchive { path: std::path::PathBuf },
 }
 
@@ -215,58 +200,6 @@ fn read_version_from_manifest_dir(
         })
 }
 
-/// Read just the `(org, name, version)` triple from a manifest
-/// directory's streamlib.yaml and build an `any`-version [`ModuleIdent`]
-/// from it. Used by the path-keyed wrappers
-/// (`Runner::load_project`, `Runner::load_package`) to build the
-/// strict ident the unified flow validates against.
-///
-/// [`ModuleIdent`]: streamlib_idents::ModuleIdent
-pub(super) fn read_module_ident_from_manifest_dir(
-    dir: &std::path::Path,
-) -> Result<streamlib_idents::ModuleIdent> {
-    use crate::core::config::ProjectConfig;
-    let config = ProjectConfig::load(dir)?;
-    let pkg = config.package.as_ref().ok_or_else(|| {
-        Error::Configuration(format!(
-            "{} at {} has no `[package]` block — required to build a ModuleIdent.",
-            ProjectConfig::FILE_NAME,
-            dir.display()
-        ))
-    })?;
-    Ok(streamlib_idents::ModuleIdent::any(pkg.org.clone(), pkg.name.clone()))
-}
-
-/// Peek the `[package]` block out of a `.slpkg` archive's embedded
-/// manifest WITHOUT fully extracting the archive. Used by
-/// `Runner::load_package` to build the ident the unified flow
-/// validates against — the strategy's extraction step then writes
-/// the package to the cache.
-pub(super) fn read_module_ident_from_slpkg(
-    slpkg_path: &std::path::Path,
-) -> Result<streamlib_idents::ModuleIdent> {
-    use crate::core::config::ProjectConfig;
-    let bytes = std::fs::read(slpkg_path)
-        .map_err(|e| Error::Configuration(format!("Failed to read {}: {}", slpkg_path.display(), e)))?;
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes))
-        .map_err(|e| Error::Configuration(format!("Failed to open .slpkg archive: {}", e)))?;
-    let mut manifest_file = archive
-        .by_name(ProjectConfig::FILE_NAME)
-        .map_err(|e| Error::Configuration(format!(".slpkg archive missing {}: {}", ProjectConfig::FILE_NAME, e)))?;
-    let mut yaml_body = String::new();
-    std::io::Read::read_to_string(&mut manifest_file, &mut yaml_body)
-        .map_err(|e| Error::Configuration(format!("Failed to read manifest from .slpkg: {}", e)))?;
-    let config: ProjectConfig = serde_yaml::from_str(&yaml_body)
-        .map_err(|e| Error::Configuration(format!("Failed to parse manifest from .slpkg: {}", e)))?;
-    let pkg = config.package.as_ref().ok_or_else(|| {
-        Error::Configuration(format!(
-            ".slpkg at {} has no `[package]` block — required to build a ModuleIdent.",
-            slpkg_path.display()
-        ))
-    })?;
-    Ok(streamlib_idents::ModuleIdent::any(pkg.org.clone(), pkg.name.clone()))
-}
-
 /// Check that a Rust-impl staged package has its cdylib present at
 /// `lib/<host_triple>/`. No-op for schemas-only or non-Rust packages.
 /// Used by [`ModuleResolverStrategy::WorkspaceStaged`] to surface the
@@ -318,17 +251,3 @@ fn check_cdylib_present_when_rust_impl(
     Ok(())
 }
 
-/// Bridge helper used by `Runner::load_workspace_packages`'s
-/// back-compat error translation: split an `"@org/name"` actual-id
-/// string back into `(org, name)` halves so the legacy
-/// `PackageIdentityMismatch` variant can carry the structured fields
-/// the historical tests assert on. Falls back to empty strings when
-/// the input shape is unexpected — the wrapper only uses this on
-/// inputs that the unified flow itself produced.
-pub(super) fn split_canonical_for_legacy_error(actual: &str) -> (String, String) {
-    actual
-        .strip_prefix('@')
-        .and_then(|s| s.split_once('/'))
-        .map(|(o, n)| (o.to_string(), n.to_string()))
-        .unwrap_or_default()
-}

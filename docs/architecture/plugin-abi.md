@@ -439,7 +439,8 @@ land.
 
 The `libs/streamlib-engine/tests/load_project_dylib_*.rs` suite
 loads `examples/camera-rust-plugin` (or a tailored test fixture)
-through `runtime.load_project(...)` and exercises the full
+through `runtime.add_module_with(ident, ModuleResolverStrategy::ManifestDirectory { path })`
+and exercises the full
 ABI roundtrip: cdylib registers via `STREAMLIB_PLUGIN` → host
 populates `HostServices` → cdylib instantiates a processor →
 runtime drives it through `setup` / `start` / `process` / `stop` /

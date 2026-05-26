@@ -495,8 +495,8 @@ set into each language's codegen pipeline. A CI lint
 The schema registry at
 `libs/streamlib-engine/src/core/embedded_schemas/mod.rs` is a runtime
 `LazyLock<RwLock<HashMap<String, Arc<str>>>>` populated by
-`Runner::load_project`: for every package the project depends on,
-`load_project` walks the package's `schemas:` declarations and calls
+`Runner::add_module`: for every package the project depends on,
+the module loader walks the package's `schemas:` declarations and calls
 `register_schema(canonical_id, yaml_body)`. Adding a schema means
 declaring it in your `streamlib.yaml` and depending on the owning
 package; nothing else. Hand-curated match arms mapping schema IDs to
@@ -602,7 +602,7 @@ const today.
   - `libs/streamlib-engine/src/core/embedded_schemas/mod.rs` — runtime
     `LazyLock<RwLock<HashMap<…>>>` registry; `register_schema` /
     `get_embedded_schema_definition` / `list_embedded_schema_names`
-    public surface. Populated by `Runner::load_project` walking each
+    public surface. Populated by `Runner::add_module` walking each
     loaded package's `schemas:` declarations.
   - `xtask/src/check_schema_versions.rs` — CI lint (no per-schema
     `version` keys in YAML).

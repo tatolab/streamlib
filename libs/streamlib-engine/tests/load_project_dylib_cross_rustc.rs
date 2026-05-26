@@ -17,7 +17,7 @@
 //!   transitive versions than the host's (asserted at runtime —
 //!   see [`assert_dep_graph_divergence`]).
 //! - `cargo build` against that fixture produces a `.so`.
-//! - `Runner::load_project(...)` accepts the `STREAMLIB_PLUGIN`
+//! - `Runner::add_module_with(...)` accepts the `STREAMLIB_PLUGIN`
 //!   symbol from the divergently-compiled cdylib.
 //! - Each #918 β-shape return type (`TextureRing`,
 //!   `RhiColorConverter`, `RhiCommandRecorder`, `VulkanComputeKernel`,

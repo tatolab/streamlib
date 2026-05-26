@@ -184,8 +184,8 @@ impl Runner {
         // The engine substrate is empty by construction — there are no
         // compile-time-linked processors. Callers populate the
         // `PROCESSOR_REGISTRY` after `Runner::new()` returns via
-        // `runtime.load_project(...)` / `runtime.load_package(...)` (which
-        // dlopen plugin cdylibs and register through the host's
+        // `runtime.add_module(...)` / `runtime.add_module_with(...)`
+        // (which dlopen plugin cdylibs and register through the host's
         // `processor_register` callback) or via direct
         // `PROCESSOR_REGISTRY.register::<P>()` calls in-process.
 
@@ -286,7 +286,7 @@ impl Runner {
 
     /// This runtime's iceoryx2 node. Exposed so external loaders
     /// (`streamlib-runtime`'s `--plugin` flag, embedding apps that
-    /// `dlopen` a cdylib outside `load_project`) can hand it to
+    /// `dlopen` a cdylib outside `add_module`) can hand it to
     /// [`crate::core::plugin::host_services::runtime_facing::host_services_for_self`]
     /// when assembling the `HostServices` payload for a plugin
     /// register callback.

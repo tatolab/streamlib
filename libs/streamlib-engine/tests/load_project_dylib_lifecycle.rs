@@ -116,7 +116,7 @@ fn dylib_processor_create_and_drop_round_trips_through_vtable() {
         .list_registered()
         .into_iter()
         .find(|d| d.name.r#type.as_str() == "TestConfiguredProcessor")
-        .expect("TestConfiguredProcessor must be registered after load_project");
+        .expect("TestConfiguredProcessor must be registered after add_module");
 
     // Build a minimal ProcessorNode. The factory's `create()` path
     // serializes `node.config` to msgpack and hands it to the

@@ -7229,7 +7229,7 @@ fn write_extern_err(msg: &str, err_buf: *mut u8, err_buf_cap: usize, err_len: *m
 // runtime_facing — host-side payload builder
 // =============================================================================
 
-/// Host-facing helpers used by `Runner::load_project` (and the
+/// Host-facing helpers used by `Runner::add_module` (and the
 /// `streamlib-runtime` binary's plugin loader) to assemble a
 /// [`HostServices`] payload pointing at this DSO's callback
 /// implementations.

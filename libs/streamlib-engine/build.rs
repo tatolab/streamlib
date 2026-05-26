@@ -12,7 +12,7 @@
 fn main() {
     streamlib_jtd_codegen::build_rs::run_for_rust_crate();
 
-    // Propagate the host target triple so `Runner::load_project` can
+    // Propagate the host target triple so `Runner::add_module` can
     // resolve plugin cdylibs by `lib/<triple>/...` at load time.
     let target = std::env::var("TARGET").expect("TARGET env var set by cargo for build.rs");
     println!("cargo:rustc-env=STREAMLIB_HOST_TARGET={}", target);

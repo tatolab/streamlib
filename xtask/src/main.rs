@@ -142,9 +142,10 @@ enum Commands {
     CheckManifestSchema,
 
     /// Stage every in-tree workspace package at
-    /// `target/streamlib-plugins/<org>__<name>/` so
-    /// `Runner::load_workspace_packages` can resolve them by canonical
-    /// id. Rust-impl packages get a cdylib build; schemas-only packages
+    /// `target/streamlib-plugins/<org>__<name>/` so the runtime's
+    /// `ModuleResolverStrategy::WorkspaceStaged` resolver can resolve
+    /// them by canonical id. Rust-impl packages get a cdylib build;
+    /// schemas-only packages
     /// stage just their `streamlib.yaml` + `schemas/`. Defaults to the
     /// dev profile (faster inner loop); `--release` opts into the
     /// production-shaped profile.

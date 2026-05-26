@@ -960,13 +960,13 @@ mod tests {
     /// Wire-time integration lock: when a processor's registered output
     /// port carries a `PortSchemaSpec::Specific(ident)` whose canonical
     /// id is NOT in the runtime schema registry (the "forgot to call
-    /// `runtime.load_project(...)`" footgun), the helper chain
+    /// `runtime.add_module(...)`" footgun), the helper chain
     /// `port_info → data_type → max_payload_bytes_for_port_spec`
-    /// surfaces a typed configuration error pointing at `load_project`
+    /// surfaces a typed configuration error pointing at `add_module`
     /// rather than silently falling back to the iceoryx2 default and
     /// deferring the failure to first publish.
     ///
-    /// Locks the registry-miss-vs-load-project boundary at the same
+    /// Locks the registry-miss-vs-add-module boundary at the same
     /// shape `open_iceoryx2_pubsub` exercises: descriptor declares port
     /// schema → `PROCESSOR_REGISTRY.port_info(...)` reads it → the
     /// resolver gates allocation on registry membership. The compiler-
@@ -994,7 +994,7 @@ mod tests {
             SemVer::new(1, 0, 0),
         );
         // Mint a wire schema identity whose package was NEVER loaded
-        // via `runtime.load_project(...)`. The processor declares an
+        // via `runtime.add_module(...)`. The processor declares an
         // output port carrying this schema.
         let unloaded_schema_ident = SchemaIdent::new(
             Org::new("tatolab").unwrap(),
@@ -1045,8 +1045,8 @@ mod tests {
             "error must name the missing canonical id; got: {msg}"
         );
         assert!(
-            msg.contains("load_project"),
-            "error must point at `runtime.load_project(...)` as the fix; got: {msg}"
+            msg.contains("add_module"),
+            "error must point at `runtime.add_module(...)` as the fix; got: {msg}"
         );
         assert!(
             matches!(err, crate::core::error::Error::Configuration(_)),

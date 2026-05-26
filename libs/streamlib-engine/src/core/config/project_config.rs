@@ -42,7 +42,7 @@ pub struct ProjectConfig {
     /// [`streamlib_idents::Manifest::schemas`]. Each entry is either a
     /// `Local { file }` (schema file owned by this package) or
     /// `External { package }` (bare-name import from a declared dep).
-    /// The runtime reads `Local` entries at `Runner::load_project` time
+    /// The runtime reads `Local` entries at `Runner::add_module` time
     /// and registers their YAML bodies with the engine's schema
     /// registry; `External` entries are import declarations only,
     /// resolved at `schemas:`-map lookup time. Absent from

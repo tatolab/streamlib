@@ -7,9 +7,10 @@
 //! Walks every `packages/<name>/streamlib.yaml` (Rust-impl + schemas-only
 //! both), invokes `cargo build` against each Rust-impl package's cdylib,
 //! and stages the output hermetically at
-//! `<workspace>/target/streamlib-plugins/<org>__<name>/` so
-//! `Runner::load_workspace_packages` can resolve packages by canonical
-//! name without depending on the original source tree layout.
+//! `<workspace>/target/streamlib-plugins/<org>__<name>/` so the
+//! runtime's `ModuleResolverStrategy::WorkspaceStaged` resolver can
+//! resolve packages by canonical name without depending on the
+//! original source tree layout.
 
 use std::path::Path;
 

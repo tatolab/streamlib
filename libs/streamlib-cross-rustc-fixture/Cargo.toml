@@ -8,7 +8,7 @@
 # crate's own `Cargo.lock`, producing a `.so` whose transitive crate
 # graph diverges from the host's by construction.
 #
-# This is the empirical fixture for issue #927: the load_project
+# This is the empirical fixture for issue #927: the add_module
 # dlopen integration test exercises that the layout-stable β-shape
 # FFI established in #917 is sufficient for cross-rustc-version /
 # cross-dep-graph plugin distribution. Plugin authors building in a
