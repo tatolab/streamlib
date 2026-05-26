@@ -27,9 +27,10 @@ use std::path::PathBuf;
 
 use streamlib::sdk::descriptors::SchemaIdent;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
 use streamlib::sdk::schema_ident;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -115,21 +116,33 @@ fn main() -> Result<()> {
 
     let runtime = Runner::new()?;
 
-    // Load `@tatolab/camera` and `@tatolab/display` at runtime — both
-    // must have been staged via `cargo xtask build-plugins`
-    // (`--package @tatolab/camera --package @tatolab/display`) first.
-    runtime
-        .load_workspace_packages(["@tatolab/camera", "@tatolab/display"])
-        .map_err(streamlib::sdk::error::Error::from)?;
+    // Load `@tatolab/camera` and `@tatolab/display` via the default
+    // resolver chain (workspace stage → installed cache). Both must
+    // have been staged via `cargo xtask build-plugins
+    // --package @tatolab/camera --package @tatolab/display` first.
+    runtime.add_module(module_ident_any_version!("tatolab", "camera"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "display"))?;
 
-    // Load the polyglot processors declaratively. The runner's
-    // `streamlib.yaml` declares both the Python and Deno sub-packages
-    // via `patch:` `path:` overrides; `load_project` walks the manifest,
-    // resolves both, and registers each package's processors + schemas.
-    // The runner then picks which one to instantiate via
-    // `schema_ident_any_version!` based on `--runtime`.
+    // Load the polyglot processors via explicit add_module_with calls.
+    // The Python and Deno sub-packages are example-local (siblings of
+    // this example crate) and not workspace-staged, so each is
+    // resolved by its manifest directory. The recursive dep walker
+    // follows each sub-package's own dependencies. The runner picks
+    // which one to instantiate via `schema_ident_any_version!` based
+    // on `--runtime`.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    runtime.load_project(&manifest_dir)?;
+    runtime.add_module_with(
+        module_ident_any_version!("tatolab", "polyglot-dma-buf-consumer"),
+        ModuleResolverStrategy::ManifestDirectory {
+            path: manifest_dir.join("python"),
+        },
+    )?;
+    runtime.add_module_with(
+        module_ident_any_version!("tatolab", "polyglot-dma-buf-consumer-deno"),
+        ModuleResolverStrategy::ManifestDirectory {
+            path: manifest_dir.join("deno"),
+        },
+    )?;
 
     let camera = runtime.add_processor(ProcessorSpec::new(
         schema_ident!("tatolab", "camera", "Camera", "1.0.0"),

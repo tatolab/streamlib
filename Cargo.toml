@@ -63,13 +63,13 @@ members = [
     "examples/api-server-demo",           # Example: API server processor demo
     "examples/tokio-integration",         # Example: StreamRuntime with existing tokio runtime
     "examples/camera-python-display/runner",     # Example: Camera → Python → Display pipeline
-    "examples/camera-python-subprocess/runner",  # Example: Camera → Python subprocess → Display pipeline
-    "examples/camera-deno-subprocess/runner",   # Example: Camera → Deno subprocess → Display pipeline
-    "examples/polyglot-dma-buf-consumer/runner", # Example: Camera → Python DMA-BUF consumer → Display (Linux polyglot E2E)
+    "examples/camera-python-subprocess",  # Example: Camera → Python subprocess → Display pipeline
+    "examples/camera-deno-subprocess",   # Example: Camera → Deno subprocess → Display pipeline
+    "examples/polyglot-dma-buf-consumer", # Example: Camera → Python DMA-BUF consumer → Display (Linux polyglot E2E)
     "examples/polyglot-cpu-readback-blur", # Example: Polyglot cpu-readback adapter — Python cv2 / Deno hand-rolled Gaussian blur (#529)
-    "examples/polyglot-manual-source/runner",       # Example: Polyglot manual source — Python/Deno worker thread paced by MonotonicTimer (#542)
+    "examples/polyglot-manual-source",       # Example: Polyglot manual source — Python/Deno worker thread paced by MonotonicTimer (#542)
     "examples/polyglot-manual-source/plugin", # Counting-sink Rust dylib plugin for polyglot-manual-source (#604)
-    "examples/polyglot-continuous-processor/runner", # Example: Polyglot continuous processor — Python/Deno process() driven by monotonic-clock timerfd (#542)
+    "examples/polyglot-continuous-processor", # Example: Polyglot continuous processor — Python/Deno process() driven by monotonic-clock timerfd (#542)
     "examples/polyglot-opengl-fragment-shader", # Example: Polyglot OpenGL adapter — Python Mandelbrot / Deno plasma fragment shader rendered into a host DMA-BUF (#530)
     "examples/polyglot-vulkan-compute",   # Example: Polyglot Vulkan adapter — Python/Deno Mandelbrot compute kernel dispatched against a host DMA-BUF VkImage (#531)
     "examples/polyglot-vulkan-graphics",  # Example: Polyglot Vulkan adapter — Python/Deno triangle vertex/fragment graphics kernel rendered into a host DMA-BUF VkImage (#656)
