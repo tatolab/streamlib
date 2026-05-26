@@ -961,8 +961,13 @@ unsafe extern "C" fn host_processor_register(
             // the pointer outlives the host's usage.
             let vtable_ref: &'static ProcessorVTable = unsafe { &*vtable };
 
+            // Cdylib-resident registration — the vtable's function
+            // pointers target the cdylib's address space, so
+            // lifecycle dispatch needs the `with_cdylib_scope` wrap
+            // to give the cdylib body a `ScopeToken`-shaped
+            // FullAccess that routes through the FullAccess vtable.
             match crate::core::processors::PROCESSOR_REGISTRY
-                .register_via_vtable(descriptor, vtable_ref)
+                .register_via_vtable(descriptor, vtable_ref, /* cdylib_resident */ true)
             {
                 Ok(()) => 0,
                 Err(e) => {

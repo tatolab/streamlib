@@ -1058,3 +1058,99 @@ mod capability_view_tests {
         assert!(is_not_clone::<RuntimeContextLimitedAccess<'_>>());
     }
 }
+
+#[cfg(test)]
+mod with_cdylib_scope_tests {
+    //! Lock-in for the invariant the #1072 engine fix relies on:
+    //! [`RuntimeContextFullAccess::with_cdylib_scope`] hands the closure a
+    //! sibling [`RuntimeContextFullAccess`] whose `gpu_full` is
+    //! `HandleKind::ScopeToken`-shaped (so cdylib bodies' direct
+    //! `ctx.gpu_full_access()` calls dispatch through the FullAccess
+    //! vtable instead of tripping the Boxed branch's `host_inner()`
+    //! panic guard).
+    //!
+    //! Mentally revert the `from_scope_token` call inside
+    //! `with_cdylib_scope` to `GpuContextFullAccess::new(...)` (Boxed
+    //! shape) — this test fails because the closure sees
+    //! `HandleKind::Boxed`, which is exactly the bug #1072 is fixing.
+    //! Sibling tests at the gate layer
+    //! ([`super::escalate_gate::tests::same_thread_reentry_panics`])
+    //! and at the spawn-op layer
+    //! (`rust_processor_setup_phase_does_not_hold_gate_against_concurrent_escalate`)
+    //! lock different invariants; this one specifically locks the
+    //! ScopeToken-shape claim.
+
+    use super::super::gpu_context::HandleKind;
+    use super::*;
+    use crate::core::context::GpuContext;
+    use serial_test::serial;
+
+    fn gpu_or_skip(test_name: &str) -> Option<GpuContext> {
+        match GpuContext::init_for_platform_sync() {
+            Ok(gpu) => Some(gpu),
+            Err(e) => {
+                tracing::warn!("{test_name}: no GPU device ({e}) — skipping");
+                None
+            }
+        }
+    }
+
+    /// Hand-construct a [`RuntimeContextFullAccess`] from just a
+    /// [`GpuContext`] — bypasses the full [`RuntimeContext::new`]
+    /// requires (tokio handle, iceoryx2 node, runtime ops, audio
+    /// clock, surface socket). `with_cdylib_scope` only touches
+    /// `gpu_limited.host_inner()` and the sibling's struct fields,
+    /// so the runtime-side fields can stay null for this assertion.
+    fn ctx_from_gpu(gpu: GpuContext) -> RuntimeContextFullAccess<'static> {
+        RuntimeContextFullAccess {
+            handle: std::ptr::null(),
+            vtable: std::ptr::null(),
+            gpu_full: GpuContextFullAccess::new(gpu.clone()),
+            gpu_limited: GpuContextLimitedAccess::new(gpu),
+            _marker: PhantomData,
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn closure_receives_scope_token_full_access() {
+        const TEST: &str = "closure_receives_scope_token_full_access";
+        let Some(gpu) = gpu_or_skip(TEST) else {
+            return;
+        };
+
+        let outer_ctx = ctx_from_gpu(gpu);
+        // The outer ctx's gpu_full is Boxed by design — that's what
+        // host-internal callers use directly via `host_inner()`.
+        assert_eq!(
+            outer_ctx.gpu_full.handle_kind,
+            HandleKind::Boxed,
+            "{TEST}: outer (host-internal) ctx must hold a Boxed FullAccess; \
+             ScopeToken there would break in-process host callers that deref \
+             the handle as `*const Arc<GpuContext>`"
+        );
+
+        // The closure's sibling ctx must hold a ScopeToken FullAccess.
+        // That's the load-bearing claim: cdylib bodies' direct
+        // `ctx.gpu_full_access()` calls dispatch through the
+        // FullAccess vtable, NOT the host_inner() panic guard.
+        //
+        // Mentally revert `with_cdylib_scope`'s
+        // `GpuContextFullAccess::from_scope_token(...)` to
+        // `GpuContextFullAccess::new(host_gpu.clone())` (the Boxed
+        // shape) — this assertion fails because the closure sees
+        // `HandleKind::Boxed`, which is exactly the bug #1072 fixes.
+        let result: crate::core::error::Result<()> =
+            outer_ctx.with_cdylib_scope(|cdylib_ctx| {
+                assert_eq!(
+                    cdylib_ctx.gpu_full.handle_kind,
+                    HandleKind::ScopeToken,
+                    "{TEST}: cdylib-scope sibling must hold a ScopeToken \
+                     FullAccess — this is the engine-fix invariant #1072 \
+                     relies on"
+                );
+                Ok(())
+            });
+        result.unwrap_or_else(|e| panic!("{TEST}: with_cdylib_scope returned err: {e}"));
+    }
+}
