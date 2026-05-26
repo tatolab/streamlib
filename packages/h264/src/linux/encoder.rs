@@ -91,7 +91,14 @@ impl streamlib::sdk::processors::ReactiveProcessor for H264EncoderProcessor::Pro
             frame.width,
             frame.height,
         )?;
-        let image_view = texture.vulkan_inner().image_view().map_err(|e| {
+        // Cdylib-safe: `Texture::vulkan_inner()` reaches `host_inner()` which
+        // panics under `host_callbacks().is_some()`. Route through the
+        // `host_vulkan_texture_arc` FullAccess slot so cdylib callers don't
+        // trip the panic guard.
+        let host_texture = texture.host_vulkan_texture_arc().map_err(|e| {
+            Error::GpuError(format!("Failed to acquire host texture for encode: {e}"))
+        })?;
+        let image_view = host_texture.image_view().map_err(|e| {
             Error::GpuError(format!("Failed to get image view: {e}"))
         })?;
 
