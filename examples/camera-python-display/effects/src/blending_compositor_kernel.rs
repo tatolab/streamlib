@@ -63,7 +63,6 @@ use streamlib::sdk::rhi::{
     GraphicsShaderStageFlags,
     GraphicsStage,
     MultisampleState,
-    PixelFormat,
     PrimitiveTopology,
     RasterizationState,
     ScissorRect,

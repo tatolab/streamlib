@@ -304,19 +304,20 @@ const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
     // `vulkanalia` in those crates means an example bypassed the RHI.
     //
     // camera-python-display (#487) — TRANSITIONAL exception. The
-    // example owns its `BlendingCompositor` + `CrtFilmGrain` graphics-
-    // kernel wrappers as sandboxed scenario content rather than
-    // engine code (the prior placement in `libs/streamlib-engine/` encoded
-    // demo-specific app content into the engine). The wrappers
-    // hand-roll synchronous fence-blocked dispatch with internal
-    // layout-barrier management — a pattern the engine deliberately
-    // doesn't expose because it's wrong-shape for production hot-
-    // paths. **This exception is removed when RDG (#631) ships and
-    // absorbs the kernel wrappers into render-graph passes**; the
-    // example switches to RDG primitives in the same PR that adds
-    // RDG, and this allowlist entry goes away with it.
+    // sibling `effects/` package owns the `BlendingCompositor` +
+    // `CrtFilmGrain` graphics-kernel wrappers as sandboxed scenario
+    // content rather than engine code (the prior placement in
+    // `libs/streamlib-engine/` encoded demo-specific app content
+    // into the engine). The wrappers hand-roll synchronous
+    // fence-blocked dispatch with internal layout-barrier management
+    // — a pattern the engine deliberately doesn't expose because
+    // it's wrong-shape for production hot-paths. **This exception
+    // is removed when RDG (#631) ships and absorbs the kernel
+    // wrappers into render-graph passes**; the effects package
+    // switches to RDG primitives in the same PR that adds RDG, and
+    // this allowlist entry goes away with it.
     AllowEntry {
-        path: "examples/camera-python-display/",
+        path: "examples/camera-python-display/effects/",
         kind: AllowKind::PathPrefix,
         rationale: "transitional kernel-wrapper sandbox pending RDG (#631)",
     },
@@ -426,7 +427,7 @@ const VULKANALIA_CARGO_DEP_ALLOWLIST: &[AllowEntry] = &[
     // that mirrors the per-file allowlist entry above. Removed when
     // RDG (#631) absorbs the example's kernel wrappers.
     AllowEntry {
-        path: "examples/camera-python-display/",
+        path: "examples/camera-python-display/effects/",
         kind: AllowKind::PathPrefix,
         rationale: "transitional kernel-wrapper sandbox pending RDG (#631)",
     },
@@ -1252,26 +1253,46 @@ vulkanalia.workspace = true
     // drop the allowlist entry while sweeping nearby code.
 
     #[test]
-    fn allows_use_vulkanalia_in_camera_python_display_example() {
+    fn allows_use_vulkanalia_in_camera_python_display_effects() {
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "examples/camera-python-display/runner/src/blending_compositor.rs",
+            "examples/camera-python-display/effects/src/blending_compositor.rs",
             "use vulkanalia::vk;\n",
         );
         let report = scan_all(dir.path()).unwrap();
         let vk: Vec<_> = report.violations.iter().filter(|v| v.check == CHECK_VULKANALIA).collect();
-        assert!(vk.is_empty(), "transitional exception should allow vulkanalia in camera-python-display: {:?}", vk);
+        assert!(vk.is_empty(), "transitional exception should allow vulkanalia in camera-python-display effects: {:?}", vk);
     }
 
     #[test]
-    fn allows_vulkanalia_cargo_dep_in_camera_python_display_example() {
+    fn rejects_use_vulkanalia_in_camera_python_display_runner() {
+        // The runner is pure-glue after the effects carve-out; the
+        // transitional exception applies only to the sibling
+        // `effects/` package. Raw `vulkanalia` outside `effects/`
+        // means a regression of the carve-out's intent.
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "examples/camera-python-display/runner/Cargo.toml",
+            "examples/camera-python-display/src/linux.rs",
+            "use vulkanalia::vk;\n",
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report.violations.iter().any(|v| v.check == CHECK_VULKANALIA),
+            "runner is pure-glue after the effects carve-out; vulkanalia exception applies only under effects/: {:?}",
+            report.violations,
+        );
+    }
+
+    #[test]
+    fn allows_vulkanalia_cargo_dep_in_camera_python_display_effects() {
+        let dir = empty_workspace();
+        write_fixture(
+            dir.path(),
+            "examples/camera-python-display/effects/Cargo.toml",
             r#"[package]
-name = "camera-python-display"
+name = "camera-python-display-effects"
 version = "0.1.0"
 edition = "2021"
 

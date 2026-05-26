@@ -62,7 +62,8 @@ members = [
     "examples/api-server",                # Example: Minimal API server (runtime + wait_for_signal)
     "examples/api-server-demo",           # Example: API server processor demo
     "examples/tokio-integration",         # Example: StreamRuntime with existing tokio runtime
-    "examples/camera-python-display/runner",     # Example: Camera → Python → Display pipeline
+    "examples/camera-python-display",             # Example: Camera → Python → Display pipeline (runner)
+    "examples/camera-python-display/effects",     # Rust cdylib plugin for camera-python-display: CrtFilmGrain + BlendingCompositor processors
     "examples/camera-python-subprocess",  # Example: Camera → Python subprocess → Display pipeline
     "examples/camera-deno-subprocess",   # Example: Camera → Deno subprocess → Display pipeline
     "examples/polyglot-dma-buf-consumer", # Example: Camera → Python DMA-BUF consumer → Display (Linux polyglot E2E)

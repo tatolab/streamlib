@@ -1,28 +1,25 @@
 # yaml-language-server: $schema=../../../schemas/streamlib.schema.json
 #
-# Rust runner sub-package. Declares the sibling cyberpunk Python
-# sub-package via a `patch:` `path:` override — `Runner::load_project(".")`
-# walks this manifest, resolves the Python sub-package against
-# `../python`, and registers its declared processors + schemas. The
-# runner additionally declares its own Rust-backed processors below
-# (`CrtFilmGrain`, `BlendingCompositor`), which the runner's `main.rs`
-# wires via `ProcessorSpec::new(schema_ident!(...))` directly.
+# Sibling Rust-impl package carrying camera-python-display's
+# Rust-backed effect processors (CrtFilmGrain + BlendingCompositor)
+# and the schemas they read/write. The runner loads this package via
+# `runtime.add_module_with(..., ModuleResolverStrategy::ManifestDirectory)`
+# pointed at this directory; the cdylib's `STREAMLIB_PLUGIN` callback
+# registers both processors with the host registry.
 
 package:
   org: tatolab
-  name: camera-python-display
+  name: camera-python-display-effects
   version: 0.1.0
-  description: "Camera + Python processor + Display example with CRT/film-grain, CUDA copy, and blending compositor processors"
+  description: "Camera + Python + Display example — Rust-backed CRT/film-grain + blending compositor processors"
 
 dependencies:
   "@tatolab/core": "^1.0.0"
-  "@tatolab/cyberpunk-processor": "^0.1.0"
 
+# Dev-time path override; `streamlib pack` rejects this (#717).
 patch:
   "@tatolab/core":
     path: ../../../packages/core
-  "@tatolab/cyberpunk-processor":
-    path: ../python
 
 schemas:
   # Wire types imported from @tatolab/core.
@@ -51,12 +48,6 @@ processors:
       - name: video_out
         schema: VideoFrame
         description: "Processed video frames"
-
-  # `CameraToCudaCopy` lives in `@tatolab/camera` so any consumer of
-  # the camera package picks it up without re-deriving the cuda
-  # VkBuffer / timeline / surface-share wiring. The example loads it
-  # via `load_workspace_packages(["@tatolab/camera", ...])` and wires
-  # it via `ProcessorSpec` against `@tatolab/camera/CameraToCudaCopy@1.0.0`.
 
   - name: BlendingCompositor
     version: 1.0.0

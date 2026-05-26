@@ -29,7 +29,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
+use streamlib::sdk::engine::HostTextureExt;
 use streamlib::sdk::error::{Error, Result};
 #[cfg(target_os = "linux")]
 use streamlib::sdk::engine::HostSurfaceStoreExt;
@@ -153,48 +153,71 @@ impl CameraToCudaCopyProcessor::Processor {
             )));
         }
 
-        let gpu_full = ctx.gpu_full_access();
         let gpu_lim = ctx.gpu_limited_access().clone();
-        let host_device = Arc::clone(gpu_full.device().vulkan_device());
 
-        // 1. DEVICE_LOCAL OPAQUE_FD VkBuffer. CPU never touches the
-        //    bytes; the GPU copy in `process()` populates them, and
-        //    the cdylib's `cudaImportExternalMemory` →
-        //    `cudaExternalMemoryGetMappedBuffer` exposes a
-        //    `kDLCUDA`-classified device pointer to PyTorch / JAX.
-        let pixel_buffer = HostVulkanBuffer::new_opaque_fd_export_device_local(
-            &host_device,
-            (width as u64) * (height as u64) * 4,
-        )
-        .map_err(|e| {
-            Error::Configuration(format!(
-                "CameraToCudaCopy: new_opaque_fd_export_device_local: {e}"
-            ))
-        })?;
-        let pixel_buffer_arc = Arc::new(pixel_buffer);
-        let pixel_buffer_rhi = PixelBuffer::from_host_vulkan_buffer(
-            Arc::clone(&pixel_buffer_arc),
-            width,
-            height,
-            4,
-            PixelFormat::Bgra32,
-        );
+        // Privileged Vulkan-side allocation runs inside
+        // `escalate(|full| ...)` so the closure executes against a
+        // host-mode FullAccess regardless of whether the caller is
+        // host-linked or loaded as a workspace cdylib. The
+        // `host_vulkan_device_arc` + raw `HostVulkanBuffer` /
+        // `HostVulkanTimelineSemaphore` constructors below would panic
+        // when called through a cdylib's FullAccess vtable proxy
+        // because they reach `host_inner()` to get the underlying
+        // `HostVulkanDevice`. After escalate returns, the surface-share
+        // registration + the adapter's surface-state HashMap insert
+        // run on LimitedAccess — matching the camera package's pattern
+        // (see `streamlib-camera`'s `LinuxCameraProcessor::start_v4l2`,
+        // where `surface_store.register_texture` runs after escalate).
+        let (host_device, pixel_buffer_arc, pixel_buffer_rhi, timeline) = gpu_lim
+            .escalate(|full| {
+                let host_device = full.host_vulkan_device_arc()?;
 
-        // 2. Exportable timeline. The cdylib imports it as a CUDA
-        //    timeline external semaphore so `acquire_read` blocks
-        //    on the GPU signal this processor emits per frame.
-        let timeline = Arc::new(
-            HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0).map_err(|e| {
-                Error::Configuration(format!(
-                    "CameraToCudaCopy: HostVulkanTimelineSemaphore::new_exportable: {e}"
-                ))
-            })?,
-        );
+                // 1. DEVICE_LOCAL OPAQUE_FD VkBuffer. CPU never touches
+                //    the bytes; the GPU copy in `process()` populates
+                //    them, and the cdylib's `cudaImportExternalMemory`
+                //    → `cudaExternalMemoryGetMappedBuffer` exposes a
+                //    `kDLCUDA`-classified device pointer to PyTorch /
+                //    JAX.
+                let pixel_buffer = HostVulkanBuffer::new_opaque_fd_export_device_local(
+                    &host_device,
+                    (width as u64) * (height as u64) * 4,
+                )
+                .map_err(|e| {
+                    Error::Configuration(format!(
+                        "CameraToCudaCopy: new_opaque_fd_export_device_local: {e}"
+                    ))
+                })?;
+                let pixel_buffer_arc = Arc::new(pixel_buffer);
+                let pixel_buffer_rhi = PixelBuffer::from_host_vulkan_buffer(
+                    Arc::clone(&pixel_buffer_arc),
+                    width,
+                    height,
+                    4,
+                    PixelFormat::Bgra32,
+                );
+
+                // 2. Exportable timeline. The cdylib imports it as a
+                //    CUDA timeline external semaphore so `acquire_read`
+                //    blocks on the GPU signal this processor emits per
+                //    frame.
+                let timeline = Arc::new(
+                    HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+                        .map_err(|e| {
+                            Error::Configuration(format!(
+                                "CameraToCudaCopy: HostVulkanTimelineSemaphore::new_exportable: {e}"
+                            ))
+                        })?,
+                );
+
+                Ok((host_device, pixel_buffer_arc, pixel_buffer_rhi, timeline))
+            })?;
 
         // 3. Surface-share registration so subprocess customers can
         //    `check_out` the OPAQUE_FD memory + timeline in one round
-        //    trip.
-        let surface_store = gpu_full.surface_store().ok_or_else(|| {
+        //    trip. Use the LimitedAccess `surface_store()` accessor
+        //    (vtable-dispatched in cdylib mode); the camera package
+        //    follows the same pattern for its ring textures.
+        let surface_store = gpu_lim.surface_store().ok_or_else(|| {
             Error::Configuration(
                 "CameraToCudaCopy: GpuContext has no surface_store (Linux runtime?)".into(),
             )
@@ -213,11 +236,12 @@ impl CameraToCudaCopyProcessor::Processor {
             })?;
 
         // 4. Cuda adapter — owns the registration's `Arc`s and runs
-        //    the timeline-wait protocol on per-acquire from the
-        //    cdylib customer.
-        let adapter: Arc<CudaSurfaceAdapter<streamlib::sdk::engine::host_rhi::HostVulkanDevice>> = Arc::new(
-            CudaSurfaceAdapter::new(Arc::clone(&host_device)),
-        );
+        //    the timeline-wait protocol on per-acquire from the cdylib
+        //    customer. Construction + the `register_host_surface`
+        //    HashMap insert are pure Rust (no GPU work, no FullAccess
+        //    methods), so they live outside escalate.
+        let adapter: Arc<CudaSurfaceAdapter<streamlib::sdk::engine::host_rhi::HostVulkanDevice>> =
+            Arc::new(CudaSurfaceAdapter::new(Arc::clone(&host_device)));
         adapter
             .register_host_surface(
                 CUDA_CAMERA_SURFACE_ID,

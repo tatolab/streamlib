@@ -3,19 +3,20 @@
 
 #![allow(clippy::disallowed_macros)] // build.rs uses println! for `cargo:` directives
 
-//! Compile the example's Vulkan shaders to SPIR-V via `glslc`.
+//! Codegen + Vulkan shader compilation for the camera-python-display
+//! effects package.
 //!
-//! These shaders + their kernel wrappers (`blending_compositor.rs`,
-//! `crt_film_grain.rs`) are sandboxed scenario content for this demo,
-//! NOT engine primitives — they previously lived in
-//! `libs/streamlib/src/vulkan/rhi/` and were relocated in #487 because
-//! they encode application-specific effect logic (cyberpunk N54 News
-//! PiP chrome, 80s Blade Runner CRT post-process) that doesn't belong
-//! in the engine. The wrappers migrate into RDG passes when #631 ships
-//! and this build.rs (along with the example's `vulkanalia` dep and
-//! the boundary-check allowlist exception) goes away.
+//! The two graphics-kernel wrappers in this crate
+//! (`blending_compositor.rs`, `crt_film_grain.rs`) are sandboxed
+//! scenario content for the camera-python-display demo. The wrappers
+//! hand-roll synchronous fence-blocked dispatch with internal
+//! layout-barrier management — a pattern the engine deliberately
+//! doesn't expose because it's wrong-shape for production hot-paths.
+//! When RDG ships and absorbs the wrappers into render-graph passes,
+//! this crate (along with the transitional `vulkanalia` dep and the
+//! boundary-check allowlist exception) goes away.
 //!
-//! `main.rs` embeds the resulting SPIR-V via
+//! `lib.rs` embeds the resulting SPIR-V via
 //! `include_bytes!(concat!(env!("OUT_DIR"), …))`.
 
 fn main() {
@@ -31,22 +32,22 @@ fn compile_shaders() {
 
     let shaders: &[(&str, &str, &str)] = &[
         (
-            "src/shaders/blending_compositor.vert",
+            "shaders/blending_compositor.vert",
             "blending_compositor.vert.spv",
             "vertex",
         ),
         (
-            "src/shaders/blending_compositor.frag",
+            "shaders/blending_compositor.frag",
             "blending_compositor.frag.spv",
             "fragment",
         ),
         (
-            "src/shaders/crt_film_grain.vert",
+            "shaders/crt_film_grain.vert",
             "crt_film_grain.vert.spv",
             "vertex",
         ),
         (
-            "src/shaders/crt_film_grain.frag",
+            "shaders/crt_film_grain.frag",
             "crt_film_grain.frag.spv",
             "fragment",
         ),
