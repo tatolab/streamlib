@@ -306,7 +306,15 @@ impl CameraToCudaCopyProcessor::Processor {
                 frame.surface_id
             ))
         })?;
-        let host_texture = texture.vulkan_inner();
+        // Cdylib-safe: `Texture::vulkan_inner()` reaches `host_inner()` which
+        // panics under `host_callbacks().is_some()`. Route through the
+        // `host_vulkan_texture_arc` FullAccess slot so cdylib callers don't
+        // trip the panic guard.
+        let host_texture = texture.host_vulkan_texture_arc().map_err(|e| {
+            Error::Configuration(format!(
+                "CameraToCudaCopy: host_vulkan_texture_arc: {e}"
+            ))
+        })?;
         let cam_w = host_texture.width();
         let cam_h = host_texture.height();
         if cam_w != backend.width || cam_h != backend.height {
