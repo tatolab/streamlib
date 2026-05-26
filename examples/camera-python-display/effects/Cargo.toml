@@ -1,0 +1,47 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "camera-python-display-effects"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+publish = false
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[build-dependencies]
+streamlib-jtd-codegen = { path = "../../../libs/streamlib-jtd-codegen" }
+
+[dependencies]
+streamlib = { path = "../../../libs/streamlib-sdk" }
+streamlib-plugin-abi = { path = "../../../libs/streamlib-plugin-abi" }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# `png` for the kernel-wrapper visual-smoke test (writes a synthetic
+# CRT post-effect output to PNG for human review). Test-only.
+png = "0.17"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+streamlib-adapter-abi = { path = "../../../libs/streamlib-adapter-abi" }
+# `VulkanLayout` newtype used by the BlendingCompositor / CrtFilmGrain
+# wrappers when issuing layout barriers via the `RhiCommandRecorder`.
+# Goes through the typed consumer-rhi interop type rather than reaching
+# for `vulkanalia::vk::ImageLayout` directly.
+streamlib-consumer-rhi = { path = "../../../libs/streamlib-consumer-rhi" }
+# Direct vulkanalia dep — TRANSITIONAL exception (#487). The package
+# owns its `BlendingCompositor` + `CrtFilmGrain` graphics-kernel
+# wrappers as sandboxed scenario content; the wrappers hand-roll
+# synchronous fence-blocked dispatch with internal layout-barrier
+# management, a pattern the engine deliberately doesn't expose because
+# it's wrong-shape for production hot-paths. Removed when RDG (#631)
+# ships and absorbs the wrappers into render-graph passes. The
+# `xtask check-boundaries` allowlist
+# (`xtask/src/check_boundaries.rs::VULKANALIA_*_ALLOWLIST`) carries the
+# matching exception entries.
+vulkanalia = { workspace = true }

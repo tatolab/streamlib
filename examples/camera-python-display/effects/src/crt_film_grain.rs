@@ -26,7 +26,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use streamlib::sdk::engine::HostGpuDeviceExt;
 use streamlib::sdk::engine::HostSurfaceStoreExt;
 
 use streamlib::sdk::rhi::{Texture, TextureFormat, VulkanLayout};
@@ -233,59 +232,61 @@ impl streamlib::sdk::processors::ReactiveProcessor for CrtFilmGrainProcessor::Pr
 impl CrtFilmGrainProcessor::Processor {
     fn setup_inner(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!("CrtFilmGrain: setup (Vulkan graphics kernel)");
-        self.gpu_context = Some(ctx.gpu_limited_access().clone());
+        let gpu_context = ctx.gpu_limited_access().clone();
+        self.gpu_context = Some(gpu_context.clone());
         self.start_time = Some(Instant::now());
 
-        let gpu_full = ctx.gpu_full_access();
-        let vulkan_device = gpu_full.device().vulkan_device().clone();
-        let kernel = Arc::new(SandboxedCrtFilmGrain::new(&vulkan_device)?);
-
-        // Pre-allocate the output texture ring — render-target-capable
-        // tiled DMA-BUF VkImages, dual-registered (texture_cache for
-        // in-process Path 1 consumers like Display; surface_store for
-        // cross-process consumers like the cyberpunk_glitch Python
-        // subprocess from #486 reaching the ring via
-        // `OpenGLContext.acquire_read`). Mirrors the
-        // `BlendingCompositor` ring shape exactly — the engine-wide
-        // anti-pattern #2 in `texture-registration.md` warns against
-        // descriptor-side claims that diverge from registration; we
-        // keep both registrations honest.
-        let mut output_ring: Vec<OutputSlot> = Vec::with_capacity(OUTPUT_RING_DEPTH);
-        let surface_store = gpu_full.surface_store().ok_or_else(|| {
-            Error::Configuration(
-                "CrtFilmGrain: GpuContext has no surface_store \
-                 — cross-process output (Glitch consumer, #486) unavailable"
-                    .into(),
-            )
-        })?;
-        // Output ring slot dimensions come from the processor's
-        // config — same shape `BlendingCompositor` uses. Default is
-        // 1920x1080 to match the example pipeline; if the upstream
-        // compositor's resolution drifts, both configs must change in
-        // lock-step (the kernel's dispatch-time size guard catches a
-        // mismatch loudly).
+        // Same shape as `BlendingCompositor::setup_inner` — privileged
+        // allocation runs inside `escalate(|full| ...)` so the cdylib
+        // path doesn't trip `host_inner()` panic-guards on the
+        // FullAccess vtable. See the comment in
+        // `blending_compositor.rs` for the full rationale.
         let width = self.config.width;
         let height = self.config.height;
-        for slot_idx in 0..OUTPUT_RING_DEPTH {
-            let texture = gpu_full.acquire_render_target_dma_buf_image(
-                width,
-                height,
-                TextureFormat::Bgra8Unorm,
-            )?;
-            let surface_id = CRT_OUTPUT_SURFACE_UUIDS[slot_idx].to_string();
-            // Initial layout UNDEFINED — first dispatch's pre-render
-            // barrier transitions UNDEFINED → COLOR_ATTACHMENT_OPTIMAL,
-            // and the post-render barrier ends in
-            // SHADER_READ_ONLY_OPTIMAL. From the second dispatch
-            // forward the registration carries SHADER_READ_ONLY_OPTIMAL.
-            gpu_full.register_texture_with_layout(
+        let (kernel, ring_descriptors) = gpu_context.escalate(|full| {
+            let vulkan_device = full.host_vulkan_device_arc()?;
+            let kernel = Arc::new(SandboxedCrtFilmGrain::new(&vulkan_device)?);
+
+            let mut ring_descriptors: Vec<(String, Texture)> =
+                Vec::with_capacity(OUTPUT_RING_DEPTH);
+            for slot_idx in 0..OUTPUT_RING_DEPTH {
+                let texture = full.acquire_render_target_dma_buf_image(
+                    width,
+                    height,
+                    TextureFormat::Bgra8Unorm,
+                )?;
+                let surface_id = CRT_OUTPUT_SURFACE_UUIDS[slot_idx].to_string();
+                ring_descriptors.push((surface_id, texture));
+            }
+            Ok((kernel, ring_descriptors))
+        })?;
+
+        // Dual-register each slot outside `escalate`:
+        // - `GpuContext::texture_cache` (Path 1 — in-process consumers
+        //   like `Display`).
+        // - `surface_store` (Path 2 — cross-process consumers like the
+        //   `cyberpunk_glitch` Python subprocess reaching the ring via
+        //   `OpenGLContext.acquire_read`).
+        //
+        // Path 1 starts at `UNDEFINED` (the kernel's pre-render barrier
+        // handles `UNDEFINED → COLOR_ATTACHMENT_OPTIMAL`); Path 2
+        // declares `SHADER_READ_ONLY_OPTIMAL` because Glitch reads
+        // after the first dispatch lands.
+        let mut output_ring: Vec<OutputSlot> = Vec::with_capacity(OUTPUT_RING_DEPTH);
+        for (slot_idx, (surface_id, texture)) in ring_descriptors.into_iter().enumerate()
+        {
+            gpu_context.register_texture_with_layout(
                 &surface_id,
                 texture.clone(),
                 VulkanLayout::UNDEFINED,
             );
-            // Cross-process registration — declare the steady-state
-            // post-render layout (SHADER_READ_ONLY_OPTIMAL). Glitch
-            // reads after the first dispatch lands.
+            let surface_store = gpu_context.surface_store().ok_or_else(|| {
+                Error::Configuration(
+                    "CrtFilmGrain: GpuContext has no surface_store \
+                     — cross-process output (Glitch consumer) unavailable"
+                        .into(),
+                )
+            })?;
             surface_store
                 .register_texture(
                     &surface_id,
@@ -298,10 +299,7 @@ impl CrtFilmGrainProcessor::Processor {
                         "CrtFilmGrain: surface_store.register_texture slot {slot_idx}: {e}"
                     ))
                 })?;
-            output_ring.push(OutputSlot {
-                surface_id,
-                texture,
-            });
+            output_ring.push(OutputSlot { surface_id, texture });
         }
 
         tracing::info!(

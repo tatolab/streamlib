@@ -35,7 +35,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use streamlib::sdk::engine::host_rhi::HostVulkanTexture;
-use streamlib::sdk::engine::{HostGpuDeviceExt, HostSurfaceStoreExt, HostTextureExt};
+use streamlib::sdk::engine::{HostSurfaceStoreExt, HostTextureExt};
 
 use streamlib::sdk::color::TransferId;
 use streamlib::sdk::display_info;
@@ -318,80 +318,89 @@ impl BlendingCompositorProcessor::Processor {
 
     fn setup_inner(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!("BlendingCompositor: setup (Vulkan)");
-        self.gpu_context = Some(ctx.gpu_limited_access().clone());
+        let gpu_context = ctx.gpu_limited_access().clone();
+        self.gpu_context = Some(gpu_context.clone());
 
-        let gpu_full = ctx.gpu_full_access();
-        let vulkan_device = gpu_full.device().vulkan_device().clone();
-        let compositor = Arc::new(SandboxedBlendingCompositor::new(&vulkan_device)?);
-
-        // Pre-allocate the output texture ring — render-target-capable
-        // tiled DMA-BUF VkImages, registered in BOTH
-        // `GpuContext::texture_cache` (Path 1 — in-process consumers
-        // like `LinuxDisplayProcessor` and future encoders) AND
-        // `surface_store` (Path 2 — cross-process consumers like the
-        // `cyberpunk_glitch` Python subprocess from #486 reaching the
-        // ring via `OpenGLContext.acquire_read`). The dual-registration
-        // mirrors the `register_render_target_surface` helper in
-        // `linux.rs`; both registrations describe the same texture and
-        // declare matching layouts (anti-pattern #2 in
-        // `texture-registration.md` — never let descriptor-side claims
-        // diverge from registration).
+        // Privileged setup runs inside `escalate(|full| ...)`. The
+        // closure executes against a host-mode FullAccess regardless
+        // of whether the caller is host-linked or loaded as a workspace
+        // cdylib — matching the pattern `@tatolab/camera`'s
+        // `LinuxCameraProcessor` uses for the same reason
+        // (`host_inner()`-bearing FullAccess methods panic when called
+        // through the cdylib's vtable proxy).
         //
-        // UUIDs encode both the processor ("blending_compositor") and
-        // the slot index so a future debugger reading the registry
-        // sees what the surface_id actually maps to without a grep.
+        // `host_vulkan_device_arc()` is part of the v9 cdylib-safe
+        // FullAccess surface; the `Arc<HostVulkanDevice>` it returns
+        // is held by the sandboxed graphics-kernel wrapper for steady-
+        // state dispatch.
+        let width = self.config.width;
+        let height = self.config.height;
+        let (compositor, ring_descriptors, tone_mapper, vulkan_device) = gpu_context
+            .escalate(|full| {
+                let vulkan_device = full.host_vulkan_device_arc()?;
+                let compositor =
+                    Arc::new(SandboxedBlendingCompositor::new(&vulkan_device)?);
+
+                // Pre-allocate the output texture ring — render-target-
+                // capable tiled DMA-BUF VkImages. Dual-registration
+                // happens outside the closure via the LimitedAccess
+                // `register_texture_with_layout` / `surface_store`
+                // primitives.
+                let mut ring_descriptors: Vec<(String, Texture)> =
+                    Vec::with_capacity(OUTPUT_RING_DEPTH);
+                for slot_idx in 0..OUTPUT_RING_DEPTH {
+                    let texture = full.acquire_render_target_dma_buf_image(
+                        width,
+                        height,
+                        TextureFormat::Bgra8Unorm,
+                    )?;
+                    // Engine UUIDv4-shaped fixed string per slot — keeps
+                    // the `surface_id` stable across runs (helpful for
+                    // log correlation) and the slot index visible in the
+                    // last octet so a tail of warnings names the slot in
+                    // flight. Hex-only by construction so any future
+                    // consumer that parses surface_id as a real UUID
+                    // still resolves it (`b1e0d` ≈ "blend").
+                    let surface_id =
+                        format!("00000000-0000-0000-0000-00000b1e0d{slot_idx:02x}");
+                    ring_descriptors.push((surface_id, texture));
+                }
+
+                // Per-input tone-mapper. Cheap to construct (kernel
+                // built lazily on first dispatch); each consumer owns
+                // its own instance per the "no engine-side cache"
+                // pattern.
+                let tone_mapper = Arc::new(RhiToneMapper::new(&vulkan_device));
+
+                Ok((compositor, ring_descriptors, tone_mapper, vulkan_device))
+            })?;
+
+        // Dual-register each slot outside `escalate`:
+        // - `GpuContext::texture_cache` (Path 1 — in-process consumers
+        //   like `LinuxDisplayProcessor` and `CrtFilmGrain`).
+        // - `surface_store` (Path 2 — cross-process consumers like the
+        //   `cyberpunk_glitch` Python subprocess reaching the ring via
+        //   `OpenGLContext.acquire_read`).
+        //
+        // The two registrations describe the same texture and declare
+        // matching layouts (anti-pattern #2 in `texture-registration.md`
+        // — never let descriptor-side claims diverge from registration).
+        // Path 1 starts at `UNDEFINED` (the compositor's barrier code
+        // handles the first-render transition); Path 2 declares
+        // `SHADER_READ_ONLY_OPTIMAL` because Glitch reads after the
+        // first render lands.
         let mut output_ring: Vec<OutputSlot> = Vec::with_capacity(OUTPUT_RING_DEPTH);
-        for slot_idx in 0..OUTPUT_RING_DEPTH {
-            let texture = gpu_full.acquire_render_target_dma_buf_image(
-                self.config.width,
-                self.config.height,
-                TextureFormat::Bgra8Unorm,
-            )?;
-            // Engine UUIDv4-shaped fixed string per slot — keeps the
-            // `surface_id` stable across runs (helpful for log
-            // correlation) and the slot index visible in the last
-            // octet so a tail of warnings names the slot in flight.
-            // Hex-only by construction so any future consumer that
-            // parses surface_id as a real UUID still resolves it
-            // (`b1e0d` ≈ "blend").
-            let surface_id =
-                format!("00000000-0000-0000-0000-00000b1e0d{slot_idx:02x}");
-            // Compositor's post-render barrier leaves the texture in
-            // SHADER_READ_ONLY_OPTIMAL — declare that as the registered
-            // current layout so downstream consumers issue zero-cost
-            // (no-op) read barriers from the steady-state second
-            // dispatch onward. The very first dispatch into a slot
-            // reads the registration as UNDEFINED (because it has yet
-            // to be rendered to) and the compositor's input/output
-            // barrier code handles the transition. We declare
-            // UNDEFINED here so the registration matches the actual
-            // Vulkan tracker state pre-first-render; the compositor
-            // updates the layout (via `update_layout`) after each
-            // render.
-            gpu_full.register_texture_with_layout(
+        for (slot_idx, (surface_id, texture)) in ring_descriptors.into_iter().enumerate()
+        {
+            gpu_context.register_texture_with_layout(
                 &surface_id,
                 texture.clone(),
                 VulkanLayout::UNDEFINED,
             );
-            // Cross-process registration. The cdylib OpenGL adapter
-            // (Path 2 consumer) imports the DMA-BUF as an EGLImage and
-            // exposes it as a `GL_TEXTURE_2D` — no consumer-side
-            // VkImage, so the Vulkan layout state machine doesn't
-            // cross the boundary. Content visibility is carried by the
-            // DMA-BUF kernel-fence + the compositor's post-render
-            // pipeline barrier; the declared layout is informational
-            // for any future cross-process Vulkan consumer (which
-            // would chain `VkExternalMemoryAcquireUnmodifiedEXT` on a
-            // QFOT acquire from this layout, or fall back to bridging
-            // — see `docs/learnings/cross-process-vkimage-layout.md`).
-            // Glitch reads after the first render lands, so declaring
-            // SHADER_READ_ONLY_OPTIMAL (the steady-state post-render
-            // layout) is honest.
-            let surface_store = gpu_full.surface_store().ok_or_else(|| {
+            let surface_store = gpu_context.surface_store().ok_or_else(|| {
                 Error::Configuration(
                     "BlendingCompositor: GpuContext has no surface_store \
-                     — cross-process output (Glitch consumer, #486) \
-                     unavailable"
+                     — cross-process output (Glitch consumer) unavailable"
                         .to_string(),
                 )
             })?;
@@ -408,21 +417,11 @@ impl BlendingCompositorProcessor::Processor {
                          slot {slot_idx}: {e}"
                     ))
                 })?;
-            output_ring.push(OutputSlot {
-                surface_id,
-                texture,
-            });
+            output_ring.push(OutputSlot { surface_id, texture });
         }
         tracing::info!(
-            "BlendingCompositor: pre-allocated {OUTPUT_RING_DEPTH} output ring slots ({}x{} BGRA8)",
-            self.config.width,
-            self.config.height
+            "BlendingCompositor: pre-allocated {OUTPUT_RING_DEPTH} output ring slots ({width}x{height} BGRA8)"
         );
-
-        // Per-input tone-mapper. Cheap to construct (kernel built
-        // lazily on first dispatch); each consumer owns its own
-        // instance per the "no engine-side cache" pattern.
-        let tone_mapper = Arc::new(RhiToneMapper::new(&vulkan_device));
 
         self.backend = Some(GpuBackend {
             compositor,

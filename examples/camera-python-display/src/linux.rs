@@ -1,22 +1,22 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Linux path for camera-python-display (#484 AvatarCharacter, #485
-//! Skia-on-Vulkan overlays).
+//! Linux path for camera-python-display.
 //!
 //! Wires three surface adapters across the four Linux Python ports
 //! that exist today:
 //!
 //! - `streamlib-adapter-cuda` — the camera frame is copied GPU-side into
-//!   a DEVICE_LOCAL OPAQUE_FD `VkBuffer` by [`CameraToCudaCopyProcessor`]
-//!   (a host-pipeline processor inserted between the camera and avatar)
-//!   so AvatarCharacter Python's `_process_linux` can `acquire_read` a
-//!   GPU-resident DLPack tensor straight into PyTorch — no CPU staging
-//!   round-trip on the inference path. Per #612.
+//!   a DEVICE_LOCAL OPAQUE_FD `VkBuffer` by `@tatolab/camera`'s
+//!   `CameraToCudaCopy` processor (a host-pipeline processor inserted
+//!   between the camera and avatar) so AvatarCharacter Python's
+//!   `_process_linux` can `acquire_read` a GPU-resident DLPack tensor
+//!   straight into PyTorch — no CPU staging round-trip on the
+//!   inference path.
 //! - `streamlib-adapter-opengl` — pre-registers a render-target-capable
 //!   tiled DMA-BUF `VkImage` so AvatarCharacter can `acquire_write` it
 //!   and ModernGL renders the skinned mesh into it.
-//! - `streamlib-adapter-skia` (#485) — pre-registers two more
+//! - `streamlib-adapter-skia` — pre-registers two more
 //!   render-target-capable tiled DMA-BUF `VkImage`s for the Python Skia
 //!   overlays (`CyberpunkLowerThird` and `CyberpunkWatermark`). Skia
 //!   composes on the OpenGL adapter via
@@ -25,7 +25,7 @@
 //!   `acquire_render_target_dma_buf_image` + surface-share
 //!   registration flow.
 //!
-//! Pipeline shape (post-#487):
+//! Pipeline shape:
 //!
 //! ```text
 //!   Camera ──→ CameraToCudaCopy ──┬──→ AvatarCharacter ──┐
@@ -44,14 +44,15 @@
 //! `GLITCH_OUTPUT_SURFACE_UUID` and emits the UUID downstream to
 //! Display.
 //!
-//! `CrtFilmGrain` is an in-process Rust processor that owns a
-//! sandboxed graphics-kernel wrapper (`SandboxedCrtFilmGrain` in
-//! `crt_film_grain_kernel.rs`). Pre-#487 the kernel + its compute
-//! shader lived in `libs/streamlib/src/vulkan/rhi/`; that placement
-//! encoded a single demo's app content (Blade Runner CRT vibe) into
-//! the engine. They migrated out into the example as transitional
-//! sandboxed code (gated by an explicit `xtask check-boundaries`
-//! allowlist exception) and migrate into RDG passes when #631 ships.
+//! `CrtFilmGrain` and `BlendingCompositor` are in-process Rust
+//! processors that live in the sibling `effects/` package. The runner
+//! stages that cdylib at `effects/lib/<host_triple>/` and registers
+//! the package via `runtime.add_module_with(...,
+//! ModuleResolverStrategy::ManifestDirectory)`. Their graphics-kernel
+//! wrappers hand-roll synchronous fence-blocked dispatch with internal
+//! layout-barrier management — a pattern the engine deliberately
+//! doesn't expose because it's wrong-shape for production hot-paths.
+//! They migrate into RDG passes when that lands.
 //!
 //! See `docs/architecture/adapter-runtime-integration.md` for the
 //! single-pattern principle these adapters ride and
@@ -65,15 +66,13 @@ use streamlib::sdk::engine::HostSurfaceStoreExt;
 use streamlib::sdk::rhi::TextureFormat;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::error::Error;
+use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
 use streamlib::sdk::schema_ident;
 use streamlib_adapter_abi::SurfaceId;
 use streamlib_consumer_rhi::VulkanLayout;
-
-use crate::blending_compositor::BlendingCompositorProcessor;
-use crate::crt_film_grain::CrtFilmGrainProcessor;
 
 /// Cuda surface id the host-side `CameraToCudaCopy` processor
 /// registers under and the Python `AvatarCharacter` consumes via
@@ -95,8 +94,7 @@ const AVATAR_OUTPUT_SURFACE_UUID: &str = "00000000-0000-0000-0000-000000000484";
 /// Surface UUID for the cyberpunk lower-third overlay output (tiled
 /// DMA-BUF `VkImage`). The Python processor renders into it via
 /// `SkiaContext.acquire_write` (Skia-on-GL); the BlendingCompositor
-/// consumes it as the `lower_third_in` input. UUID encodes the issue
-/// number for traceability.
+/// consumes it as the `lower_third_in` input.
 const LOWER_THIRD_OUTPUT_SURFACE_UUID: &str = "00000000-0000-0000-0000-000000000485";
 
 /// Surface UUID for the spray-paint watermark overlay output. Same
@@ -104,12 +102,10 @@ const LOWER_THIRD_OUTPUT_SURFACE_UUID: &str = "00000000-0000-0000-0000-000000000
 /// SkiaContext, consumed by BlendingCompositor as `watermark_in`.
 const WATERMARK_OUTPUT_SURFACE_UUID: &str = "00000000-0000-0000-0000-000000000486";
 
-/// Surface UUID for the cyberpunk glitch GLSL post-process output
-/// (#486). Tiled DMA-BUF VkImage written by the Python `Glitch`
-/// subprocess via `OpenGLContext.acquire_write` (ModernGL fragment
-/// shader); consumed in-process by `Display` via Path 1. UUID's last
-/// octet (`487`) is sequenced after the watermark slot, leaving 486
-/// stable for back-traceability.
+/// Surface UUID for the cyberpunk glitch GLSL post-process output.
+/// Tiled DMA-BUF VkImage written by the Python `Glitch` subprocess
+/// via `OpenGLContext.acquire_write` (ModernGL fragment shader);
+/// consumed in-process by `Display` via Path 1.
 const GLITCH_OUTPUT_SURFACE_UUID: &str = "00000000-0000-0000-0000-000000000487";
 
 /// Pin everything to 1920x1080 for the first iteration. The Linux
@@ -120,26 +116,42 @@ const SURFACE_HEIGHT: u32 = 1080;
 const BYTES_PER_PIXEL: u32 = 4;
 
 pub fn main() -> Result<()> {
-    println!("=== AvatarCharacter (Linux, #484 cuda + opengl adapters) ===\n");
+    println!("=== AvatarCharacter (Linux, cuda + opengl + skia adapters) ===\n");
 
     let runtime = Runner::new()?;
 
-    // Load `@tatolab/camera` and `@tatolab/display` at runtime — both
-    // must have been staged via
-    // `cargo xtask build-plugins --package @tatolab/camera --package @tatolab/display`
-    // before this example runs.
-    runtime
-        .load_workspace_packages(["@tatolab/camera", "@tatolab/display"])
-        .map_err(streamlib::sdk::error::Error::from)?;
-
-    // Load the runner's project. Its `streamlib.yaml` declares the
-    // sibling cyberpunk Python sub-package via
-    // `patch: path: ../python`, so this single call registers the
-    // Python processors alongside the runner's own Rust-backed
-    // CrtFilmGrain / BlendingCompositor declarations.
+    // Stage the sibling effects cdylib at `effects/lib/<host_triple>/`
+    // so `ModuleResolverStrategy::ManifestDirectory` picks it up via
+    // the same triple-keyed convention `streamlib pack` produces.
+    // The effects package is example-local (not a workspace-staged
+    // package), so the canonical `cargo xtask build-plugins` doesn't
+    // stage it; the runner handles its own copy step. The user is
+    // expected to have run `cargo build -p camera-python-display-effects`
+    // beforehand.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    runtime.load_project(&manifest_dir)?;
-    println!("✓ Loaded processor package from streamlib.yaml\n");
+    let effects_dir = manifest_dir.join("effects");
+    stage_effects_cdylib(&effects_dir)?;
+
+    // Load packages: `@tatolab/camera` + `@tatolab/display` via the
+    // canonical workspace-staged path (`cargo xtask build-plugins
+    // --package @tatolab/camera --package @tatolab/display` must have
+    // run first). The example-local effects + Python sub-packages
+    // resolve via their manifest directories.
+    runtime.add_module(module_ident_any_version!("tatolab", "camera"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "display"))?;
+    runtime.add_module_with(
+        module_ident_any_version!("tatolab", "camera-python-display-effects"),
+        ModuleResolverStrategy::ManifestDirectory {
+            path: effects_dir.clone(),
+        },
+    )?;
+    runtime.add_module_with(
+        module_ident_any_version!("tatolab", "cyberpunk-processor"),
+        ModuleResolverStrategy::ManifestDirectory {
+            path: manifest_dir.join("python"),
+        },
+    )?;
+    println!("✓ Loaded packages (camera, display, effects, cyberpunk-processor)\n");
 
     // OpenGL + Skia DMA-BUF render-target output surfaces stay as setup
     // hooks (one-shot pre-allocation; no per-frame host work). Each
@@ -147,10 +159,6 @@ pub fn main() -> Result<()> {
     // and dual-registered (surface-share for cross-process consumers,
     // GpuContext::texture_cache for in-process Path 1 fast path — the
     // BlendingCompositor reads all three via Path 1).
-    //
-    // The cuda surface used to ride a setup hook too — that's now
-    // owned by the CameraToCudaCopyProcessor below, which also issues
-    // the per-frame GPU-side copy.
     runtime.install_setup_hook(move |gpu| {
         register_render_target_surface(
             gpu,
@@ -168,7 +176,7 @@ pub fn main() -> Result<()> {
         register_render_target_surface(
             gpu,
             LOWER_THIRD_OUTPUT_SURFACE_UUID,
-            "lower-third Skia output (#485)",
+            "lower-third Skia output",
         )
         .map_err(|e| {
             Error::Configuration(format!(
@@ -181,7 +189,7 @@ pub fn main() -> Result<()> {
         register_render_target_surface(
             gpu,
             WATERMARK_OUTPUT_SURFACE_UUID,
-            "watermark Skia output (#485)",
+            "watermark Skia output",
         )
         .map_err(|e| {
             Error::Configuration(format!(
@@ -194,7 +202,7 @@ pub fn main() -> Result<()> {
         register_render_target_surface(
             gpu,
             GLITCH_OUTPUT_SURFACE_UUID,
-            "glitch OpenGL output (#486)",
+            "glitch OpenGL output",
         )
         .map_err(|e| {
             Error::Configuration(format!(
@@ -228,22 +236,17 @@ pub fn main() -> Result<()> {
     ))?;
     println!("✓ Camera added: {camera}\n");
 
-    // Camera → CUDA copy processor (#612). Sits between the camera
-    // and avatar in the DAG; allocates the cuda DEVICE_LOCAL OPAQUE_FD
-    // VkBuffer, registers it under AVATAR_CAMERA_CUDA_SURFACE_ID, and
-    // issues a per-frame vkCmdCopyImageToBuffer + timeline GPU signal.
+    // Camera → CUDA copy processor. Sits between the camera and avatar
+    // in the DAG; allocates the cuda DEVICE_LOCAL OPAQUE_FD VkBuffer,
+    // registers it under `AVATAR_CAMERA_CUDA_SURFACE_ID`, and issues
+    // a per-frame `vkCmdCopyImageToBuffer` + timeline GPU signal.
     // AvatarCharacter Python's `cuda.acquire_read(...)` waits on the
-    // same timeline value.
-    // Default config matches the camera processor's 1920x1080 output;
-    // the cuda surface id is a hardcoded constant on the processor
-    // module re-exported here as `AVATAR_CAMERA_CUDA_SURFACE_ID` so
-    // the Python config below pins to the same value.
+    // same timeline value. `CameraToCudaCopy` ships inside
+    // `@tatolab/camera`'s `STREAMLIB_PLUGIN` callback alongside
+    // `Camera`, so the example wires it via `ProcessorSpec` against
+    // the package identifier — no in-tree registration. Default
+    // config (1920x1080) matches the camera processor's output.
     println!("🚛 Adding camera→cuda copy processor (host-pipeline producer)...");
-    // `CameraToCudaCopy` is registered through `@tatolab/camera`'s
-    // cdylib `STREAMLIB_PLUGIN` callback alongside `Camera`, so the
-    // example wires it via `ProcessorSpec` against the package
-    // identifier — no in-tree registration. Default config (1920x1080)
-    // matches the camera processor's output dimensions.
     let camera_to_cuda = runtime.add_processor(ProcessorSpec::new(
         schema_ident!("tatolab", "camera", "CameraToCudaCopy", "1.0.0"),
         serde_json::json!({}),
@@ -305,39 +308,38 @@ pub fn main() -> Result<()> {
     ))?;
     println!("✓ Watermark processor added: {watermark}\n");
 
-    // BlendingCompositor (Rust ManualProcessor backed by a sandboxed
-    // graphics kernel — see `blending_compositor_kernel.rs` for the
-    // transitional rationale). Composites four input layers (video,
-    // lower_third, watermark, pip) into one output frame paced against
-    // the display refresh rate. Each output ring slot is
-    // dual-registered (`texture_cache` for in-process consumers
-    // — CrtFilmGrain reads here — `surface_store` for cross-process
-    // consumers — would be reachable via the OpenGL adapter); see
-    // `blending_compositor.rs::setup_inner`.
+    // BlendingCompositor — Rust ManualProcessor from the effects
+    // package. Composites four input layers (video, lower_third,
+    // watermark, pip) into one output frame paced against the
+    // display refresh rate.
     println!("🎨 Adding blending compositor (parallel layer blending)...");
-    let blending = runtime.add_processor(BlendingCompositorProcessor::node(Default::default()))?;
+    let blending = runtime.add_processor(ProcessorSpec::new(
+        streamlib::sdk::schema_ident_any_version!(
+            "tatolab",
+            "camera-python-display-effects",
+            "BlendingCompositor"
+        )?,
+        serde_json::Value::Null,
+    ))?;
     println!("✓ Blending compositor added: {blending}\n");
 
-    // CrtFilmGrain (Rust ReactiveProcessor, Linux only post-#485).
-    // Pre-#487 this kernel + its shader lived in `libs/streamlib/`;
-    // they relocated to the example as transitional sandboxed content
-    // (`crt_film_grain_kernel.rs`) and the .comp shader was ported to
-    // .vert + .frag for the texture-throughout pipeline. The
-    // processor allocates and dual-registers its own 2-slot output
-    // ring in `setup_inner`, so it doesn't need a setup-hook entry
-    // here.
+    // CrtFilmGrain — Rust ReactiveProcessor from the effects package.
     println!("📺 Adding CRT/film-grain post-effect...");
-    let crt = runtime.add_processor(CrtFilmGrainProcessor::node(Default::default()))?;
+    let crt = runtime.add_processor(ProcessorSpec::new(
+        streamlib::sdk::schema_ident_any_version!(
+            "tatolab",
+            "camera-python-display-effects",
+            "CrtFilmGrain"
+        )?,
+        serde_json::Value::Null,
+    ))?;
     println!("✓ CRT/film-grain added: {crt}\n");
 
     // Cyberpunk Glitch (Python subprocess, OpenGL adapter, GLSL
     // fragment shader). Reads CrtFilmGrain's output cross-process via
     // `OpenGLContext.acquire_read`, applies chromatic aberration /
     // scanlines / slice displacement / film-grain glitches, writes
-    // into the host-pre-registered GLITCH_OUTPUT_SURFACE_UUID. The
-    // intermittent dramatic-mode trigger lives Python-side (single
-    // timer, 0–8 s after a 2 s cooldown — see
-    // `cyberpunk_glitch.py::GlitchState`).
+    // into the host-pre-registered GLITCH_OUTPUT_SURFACE_UUID.
     println!("🐍 Adding Python cyberpunk glitch (subprocess, OpenGL fragment shader)...");
     let glitch = runtime.add_processor(ProcessorSpec::new(
         streamlib::sdk::schema_ident_any_version!(
@@ -360,7 +362,7 @@ pub fn main() -> Result<()> {
         serde_json::json!({
             "width": SURFACE_WIDTH,
             "height": SURFACE_HEIGHT,
-            "title": "Cyberpunk Pipeline Linux (#484 + #485)",
+            "title": "Cyberpunk Pipeline Linux",
             "vsync": true,
         }),
     ))?;
@@ -368,8 +370,7 @@ pub fn main() -> Result<()> {
 
     // Wire camera → camera_to_cuda → avatar (PiP) and the camera
     // background + lower_third + watermark + avatar all into the
-    // BlendingCompositor → Display. CRT/FilmGrain + Glitch land
-    // alongside this in #486/#487.
+    // BlendingCompositor → CrtFilmGrain → Glitch → Display.
     println!("🔗 Connecting pipeline...");
     runtime.connect(
         OutputLinkPortRef::new(&camera, "video"),
@@ -418,7 +419,7 @@ pub fn main() -> Result<()> {
     println!("   ✓ Glitch → Display\n");
 
     println!("▶️  Starting pipeline...");
-    println!("   Architecture (Linux, #484 + #485 + #486 + #487 + #612):");
+    println!("   Architecture (Linux):");
     println!("     Camera ──→ CameraToCudaCopy ──┬──→ AvatarCharacter ──┐");
     println!("                                   ├──────────────────────┴── BlendingCompositor ──→ CrtFilmGrain ──→ Glitch ──→ Display");
     println!("                                   │   LowerThird ───────────/");
@@ -431,6 +432,75 @@ pub fn main() -> Result<()> {
     runtime.wait_for_signal()?;
 
     println!("\n✓ Pipeline stopped gracefully");
+    Ok(())
+}
+
+/// Copy the sibling effects cdylib into `effects/lib/<host_triple>/`
+/// so the `ManifestDirectory` resolver picks it up via the same
+/// triple-keyed convention `streamlib pack` produces. The effects
+/// package is example-local (not a workspace-staged package); the
+/// canonical `cargo xtask build-plugins` doesn't stage it, so the
+/// runner does its own copy. Mirror of the camera-rust-plugin
+/// stage step.
+fn stage_effects_cdylib(effects_dir: &std::path::Path) -> Result<()> {
+    let host_triple = streamlib::sdk::runtime::host_target_triple();
+    let triple_lib_dir = effects_dir.join("lib").join(host_triple);
+    std::fs::create_dir_all(&triple_lib_dir).map_err(|e| {
+        Error::Configuration(format!(
+            "Failed to create effects lib dir {}: {}",
+            triple_lib_dir.display(),
+            e
+        ))
+    })?;
+
+    let workspace_root = effects_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .ok_or_else(|| {
+            Error::Configuration(
+                "Failed to derive workspace root from effects dir".into(),
+            )
+        })?;
+
+    let dylib_name = if cfg!(target_os = "macos") {
+        "libcamera_python_display_effects.dylib"
+    } else if cfg!(target_os = "windows") {
+        "camera_python_display_effects.dll"
+    } else {
+        "libcamera_python_display_effects.so"
+    };
+
+    let debug_dylib = workspace_root.join("target").join("debug").join(dylib_name);
+    let release_dylib = workspace_root
+        .join("target")
+        .join("release")
+        .join(dylib_name);
+
+    let source_dylib = if debug_dylib.exists() {
+        &debug_dylib
+    } else if release_dylib.exists() {
+        &release_dylib
+    } else {
+        return Err(Error::Configuration(format!(
+            "effects cdylib not found.\n  \
+             Build it first: cargo build -p camera-python-display-effects\n  \
+             Looked in:\n    {}\n    {}",
+            debug_dylib.display(),
+            release_dylib.display()
+        )));
+    };
+
+    let dest_dylib = triple_lib_dir.join(dylib_name);
+    std::fs::copy(source_dylib, &dest_dylib).map_err(|e| {
+        Error::Configuration(format!(
+            "Failed to copy effects dylib from {} to {}: {}",
+            source_dylib.display(),
+            dest_dylib.display(),
+            e
+        ))
+    })?;
+    println!("✓ Staged effects cdylib at {}", dest_dylib.display());
     Ok(())
 }
 
@@ -466,8 +536,7 @@ fn register_render_target_surface(
     // underlying DMA-BUF in GENERAL from Vulkan's perspective.
     // Declaring it here means cross-process consumers reaching the
     // surface via Path 2 issue their first QFOT acquire barrier from
-    // GENERAL — same convention as `polyglot-opengl-fragment-shader`
-    // (#633).
+    // GENERAL — same convention as `polyglot-opengl-fragment-shader`.
     surface_store
         .register_texture(
             uuid,
@@ -491,14 +560,6 @@ fn register_render_target_surface(
     // on release; DMA-BUF kernel-fence semantics carry data visibility,
     // but Vulkan's layout tracker stays at the image's `initialLayout`
     // which is `UNDEFINED` from `acquire_render_target_dma_buf_image`).
-    // The consumer's first-frame barrier transitions UNDEFINED →
-    // SHADER_READ_ONLY_OPTIMAL — content is technically allowed to be
-    // discarded by the spec on this transition but NVIDIA preserves
-    // it (verified empirically on RTX 3090). After that first barrier,
-    // the consumer's `update_layout` advances the registration to
-    // SHADER_READ_ONLY_OPTIMAL; subsequent GL writes don't change the
-    // Vulkan tracker, so steady-state barriers are SHADER_READ_ONLY
-    // → SHADER_READ_ONLY no-ops.
     gpu.register_texture_with_layout(
         uuid,
         texture,

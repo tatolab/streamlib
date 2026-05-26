@@ -18,7 +18,6 @@ use streamlib::sdk::engine::host_rhi::{
     HostVulkanDevice, PresentFrame, VulkanAccess, VulkanGraphicsKernel, VulkanPresentTarget,
     VulkanStage, VulkanTextureReadback,
 };
-use streamlib::sdk::engine::HostGpuDeviceExt;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::rhi::{
     AttachmentFormats, ColorBlendState, ColorWriteMask, DepthStencilState, DrawCall,
@@ -121,10 +120,18 @@ impl streamlib::sdk::processors::ManualProcessor for LinuxDisplayProcessor::Proc
             .clone()
             .ok_or_else(|| Error::Configuration("GPU context not initialized".into()))?;
 
-        // Engine-bridge: reach the underlying `HostVulkanDevice` via the
-        // `HostGpuDeviceExt` trait. The Sandbox clone is what the render
-        // thread keeps for steady-state frame resolution.
-        let vulkan_device = Arc::clone(ctx.gpu_full_access().device().vulkan_device());
+        // Engine-bridge: reach the underlying `HostVulkanDevice` via
+        // `escalate(|full| ...)`, mirroring the pattern in
+        // `@tatolab/camera`'s `LinuxCameraProcessor`. The cdylib's
+        // `ctx.gpu_full_access()` proxy returns a host-Boxed handle
+        // whose `host_inner()`-bearing methods panic when called
+        // through the FFI; escalating routes the call to a true
+        // host-mode FullAccess where `host_vulkan_device_arc()` is
+        // safe.
+        let vulkan_device = ctx
+            .gpu_limited_access()
+            .clone()
+            .escalate(|full| full.host_vulkan_device_arc())?;
 
         running.store(true, Ordering::Release);
 
