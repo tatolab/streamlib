@@ -1101,6 +1101,14 @@ mod with_cdylib_scope_tests {
     /// clock, surface socket). `with_cdylib_scope` only touches
     /// `gpu_limited.host_inner()` and the sibling's struct fields,
     /// so the runtime-side fields can stay null for this assertion.
+    ///
+    /// Invariant the null handle/vtable rely on: `with_cdylib_scope`
+    /// must NOT vtable-dispatch on the ctx itself (i.e., must not
+    /// reach `(*self.vtable).…(self.handle)` against the runtime-
+    /// context vtable). Today it only copies them as opaque pointers
+    /// into the sibling — if a future revision adds a runtime-context
+    /// vtable call, this test stops being safe and the helper needs
+    /// to build a real RuntimeContext.
     fn ctx_from_gpu(gpu: GpuContext) -> RuntimeContextFullAccess<'static> {
         RuntimeContextFullAccess {
             handle: std::ptr::null(),
