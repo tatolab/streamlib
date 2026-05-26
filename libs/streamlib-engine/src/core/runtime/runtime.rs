@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use std::collections::HashSet;
 use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -347,28 +348,447 @@ impl Runner {
     }
 
     // =========================================================================
-    // Package Loading
+    // Module Loading — public API surface
     // =========================================================================
+    //
+    // Every module-loading entry point on `Runner` routes through
+    // `add_module_with(ident, strategy)`. The three deprecated methods
+    // (`load_project` / `load_package` / `load_workspace_packages`) stay
+    // functional as one-line wrappers that construct the matching
+    // `ModuleResolverStrategy` variant and dispatch through the unified
+    // resolver. They will move behind a non-public visibility (or be
+    // deleted) in a later cleanup; the body lives in the strategy
+    // resolver below.
 
-    /// Load processors from a .slpkg package file.
+    /// Extract a `.slpkg` archive, then load the manifest it contains.
+    ///
+    /// One-line wrapper around
+    /// [`Self::add_module_with`] with
+    /// [`ModuleResolverStrategy::SlpkgArchive`]. The strategy's resolver
+    /// extracts the archive to the package cache, reads the embedded
+    /// manifest, then drives the unified module-load flow.
     pub fn load_package(&self, slpkg_path: impl AsRef<std::path::Path>) -> Result<()> {
-        let slpkg_path = slpkg_path.as_ref();
-        tracing::info!("Loading package from: {}", slpkg_path.display());
-
-        let project_path = extract_slpkg_to_cache(slpkg_path)?;
-        self.load_project(&project_path)
+        let slpkg_path = slpkg_path.as_ref().to_path_buf();
+        // Pre-read the manifest so we can build the strict
+        // `ModuleIdent` the unified flow requires. The `.slpkg`'s
+        // embedded `streamlib.yaml` is authoritative for the identity
+        // — `add_module_with` then re-verifies that the extracted
+        // manifest matches what we declared here, so the round-trip is
+        // self-checking.
+        let ident = read_module_ident_from_slpkg(&slpkg_path)?;
+        self.add_module_with(
+            ident,
+            ModuleResolverStrategy::SlpkgArchive { path: slpkg_path },
+        )?;
+        Ok(())
     }
 
-    /// Load processors from a project directory containing `streamlib.yaml`.
+    /// Load the manifest at a directory containing `streamlib.yaml`.
     ///
-    /// Reads `processors` entries from the manifest and registers each
-    /// with the global processor registry, dispatching to the appropriate
-    /// subprocess host constructor based on the `runtime` field.
-    ///
-    /// For Python packages, eagerly creates the venv and installs dependencies
-    /// once during loading, so processors don't race to create it at spawn time.
-    #[allow(clippy::only_used_in_recursion)]
+    /// One-line wrapper around
+    /// [`Self::add_module_with`] with
+    /// [`ModuleResolverStrategy::ManifestDirectory`]. The strategy's
+    /// resolver returns the directory as-is; the manifest's own
+    /// `[package]` block supplies the identity the unified flow
+    /// validates against.
     pub fn load_project(&self, project_path: impl AsRef<std::path::Path>) -> Result<()> {
+        let project_path = project_path.as_ref().to_path_buf();
+        let ident = read_module_ident_from_manifest_dir(&project_path)?;
+        self.add_module_with(
+            ident,
+            ModuleResolverStrategy::ManifestDirectory { path: project_path },
+        )?;
+        Ok(())
+    }
+
+    /// Look up workspace-staged packages by canonical id and route each
+    /// through [`Self::add_module_with`] with
+    /// [`ModuleResolverStrategy::WorkspaceStaged`].
+    ///
+    /// `cargo xtask build-plugins` must have run first — the strategy's
+    /// resolver errors with [`LoadWorkspacePackagesError::PackageNotStaged`]
+    /// when a name's staged dir is missing.
+    ///
+    /// Workspace root resolution: `STREAMLIB_WORKSPACE_ROOT` env var
+    /// when set (and the path exists), otherwise
+    /// `cargo locate-project --workspace`.
+    pub fn load_workspace_packages<I, S>(
+        &self,
+        names: I,
+    ) -> std::result::Result<(), LoadWorkspacePackagesError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        // Eagerly validate every id BEFORE touching the workspace root —
+        // a typo'd id should surface as `InvalidPackageId` immediately
+        // rather than masquerading as `WorkspaceRootNotFound` when the
+        // env var is unset.
+        let parsed: Vec<(String, streamlib_idents::PackageRef)> = names
+            .into_iter()
+            .map(|name| {
+                let name_str = name.as_ref().to_string();
+                let parsed = parse_canonical_package_id(&name_str)?;
+                let pkg_ref = streamlib_idents::PackageRef::new(
+                    streamlib_idents::Org::new(parsed.org_str).map_err(|_| {
+                        LoadWorkspacePackagesError::InvalidPackageId(name_str.clone())
+                    })?,
+                    streamlib_idents::Package::new(parsed.name_str).map_err(|_| {
+                        LoadWorkspacePackagesError::InvalidPackageId(name_str.clone())
+                    })?,
+                );
+                Ok::<_, LoadWorkspacePackagesError>((name_str, pkg_ref))
+            })
+            .collect::<std::result::Result<_, _>>()?;
+
+        // Surface workspace-root failure once, up front, so the error
+        // mode matches the historical helper's contract (single
+        // `WorkspaceRootNotFound` rather than one-per-id).
+        let _ = resolve_workspace_root()?;
+
+        for (name_str, pkg_ref) in parsed {
+            let ident = streamlib_idents::ModuleIdent::any(pkg_ref.org, pkg_ref.name);
+            self.add_module_with(ident, ModuleResolverStrategy::WorkspaceStaged)
+                .map_err(|err| match err {
+                    AddModuleError::WorkspaceStageMiss { expected_path, .. } => {
+                        LoadWorkspacePackagesError::PackageNotStaged {
+                            name: name_str.clone(),
+                            expected_path,
+                        }
+                    }
+                    AddModuleError::ManifestIdentityMismatch {
+                        source_path, actual, ..
+                    } => {
+                        let (actual_org, actual_name) = split_canonical_for_legacy_error(&actual);
+                        LoadWorkspacePackagesError::PackageIdentityMismatch {
+                            staged_path: source_path,
+                            requested_org: name_str
+                                .strip_prefix('@')
+                                .and_then(|s| s.split_once('/'))
+                                .map(|(o, _)| o.to_string())
+                                .unwrap_or_default(),
+                            requested_name: name_str
+                                .rsplit_once('/')
+                                .map(|(_, n)| n.to_string())
+                                .unwrap_or_default(),
+                            actual_org,
+                            actual_name,
+                        }
+                    }
+                    AddModuleError::CdylibMissingForRustImpl { expected_path, .. } => {
+                        LoadWorkspacePackagesError::CdylibMissing {
+                            name: name_str.clone(),
+                            expected_path,
+                        }
+                    }
+                    AddModuleError::LoadProjectFailed { source, .. } => {
+                        LoadWorkspacePackagesError::LoadProjectFailed {
+                            name: name_str.clone(),
+                            source,
+                        }
+                    }
+                    AddModuleError::WorkspaceRootInvalid { .. } => {
+                        LoadWorkspacePackagesError::WorkspaceRootNotFound
+                    }
+                    other => LoadWorkspacePackagesError::LoadProjectFailed {
+                        name: name_str.clone(),
+                        source: Box::new(other.into()),
+                    },
+                })?;
+        }
+
+        Ok(())
+    }
+
+    /// Load a `streamlib.yaml`-packaged module by typed
+    /// [`streamlib_idents::ModuleIdent`]. Routes through the default
+    /// resolver chain (workspace stage → installed-package cache).
+    ///
+    /// Imperative complement to the yaml-driven path: both this and
+    /// [`Self::load_project`] drive into the same internal
+    /// module-loading machinery; the yaml form is for declarative
+    /// deployment manifests, the imperative form is for REST endpoints,
+    /// hot-reload tools, test setup, and composition-library wrapping.
+    ///
+    /// Transitive dependencies declared in the loaded module's
+    /// `streamlib.yaml` are recursively routed through the same flow,
+    /// each picking the dep's appropriate strategy (declared `path:` →
+    /// [`ModuleResolverStrategy::ManifestDirectory`]; consumer `patch:`
+    /// override of any kind likewise; bare registry/git declarations →
+    /// [`ModuleResolverStrategy::DefaultChain`]). Cycles are detected
+    /// per-call and surfaced as
+    /// [`AddModuleError::DependencyCycleDetected`].
+    ///
+    /// Calls are idempotent at the registry layer: re-loading a module
+    /// whose processors / schemas are already registered surfaces no
+    /// error and re-runs the dylib's plugin callback (which the engine
+    /// already tolerates per `register_dynamic`'s dedup semantics).
+    pub fn add_module(
+        &self,
+        module: streamlib_idents::ModuleIdent,
+    ) -> std::result::Result<(), AddModuleError> {
+        self.add_module_with(module, ModuleResolverStrategy::DefaultChain)
+    }
+
+    /// Load a module via an explicit [`ModuleResolverStrategy`].
+    ///
+    /// In-code equivalent of the manifest's `patch:` table — callers
+    /// can pin a dep to a workspace path, a `.slpkg` archive, or a
+    /// specific resolver tier without editing yaml. See
+    /// [`ModuleResolverStrategy`] for the variant catalog.
+    #[tracing::instrument(name = "runtime.add_module_with", skip(self), fields(module = %module, strategy = ?strategy))]
+    pub fn add_module_with(
+        &self,
+        module: streamlib_idents::ModuleIdent,
+        strategy: ModuleResolverStrategy,
+    ) -> std::result::Result<(), AddModuleError> {
+        let mut seen: HashSet<streamlib_idents::PackageRef> = HashSet::new();
+        self.add_module_recursively(module, strategy, &mut seen)
+    }
+
+    /// Recursive worker: resolves the strategy, validates the
+    /// manifest's identity + version range, registers the package's
+    /// schemas, walks dependencies (each routed through this same
+    /// helper), then registers the package's processors.
+    ///
+    /// `seen` tracks every [`PackageRef`] currently on the recursion
+    /// stack — a hit means a dep cycle and surfaces
+    /// [`AddModuleError::DependencyCycleDetected`]. The current
+    /// package's ref is inserted on entry and removed on exit, so
+    /// sibling sub-trees can revisit a shared transitive dep without
+    /// false positives.
+    ///
+    /// Order matters: deps load before this package's own processors so
+    /// schemas referenced from `with_config_schema(...)` resolve.
+    fn add_module_recursively(
+        &self,
+        module: streamlib_idents::ModuleIdent,
+        strategy: ModuleResolverStrategy,
+        seen: &mut HashSet<streamlib_idents::PackageRef>,
+    ) -> std::result::Result<(), AddModuleError> {
+        let pkg_ref = module.package_ref();
+        if !seen.insert(pkg_ref.clone()) {
+            // Reaching this package while it is already mid-load on
+            // the recursion stack is the dependency-cycle signal.
+            // Surface the cycle's repeated vertex so the caller can
+            // diagnose without re-walking the graph.
+            return Err(AddModuleError::DependencyCycleDetected {
+                cycle: vec![pkg_ref],
+            });
+        }
+        // Run the body, then remove `pkg_ref` from `seen` regardless
+        // of the body's exit path — sibling sub-trees can revisit a
+        // shared transitive dep without false-positive cycle reports.
+        let result = self.add_module_recursive_body(module, strategy, seen);
+        seen.remove(&pkg_ref);
+        result
+    }
+
+    /// Body of [`Self::add_module_recursively`] — split out so the
+    /// caller can pop `pkg_ref` from `seen` after every exit path.
+    fn add_module_recursive_body(
+        &self,
+        module: streamlib_idents::ModuleIdent,
+        strategy: ModuleResolverStrategy,
+        seen: &mut HashSet<streamlib_idents::PackageRef>,
+    ) -> std::result::Result<(), AddModuleError> {
+        use crate::core::config::ProjectConfig;
+
+        let pkg_ref = module.package_ref();
+        let (manifest_dir, on_disk_version) =
+            resolve_strategy_to_manifest_dir(&strategy, Some(&pkg_ref))?;
+
+        // Read the manifest; this is the authoritative source of
+        // identity for the package at the resolved location.
+        let config = ProjectConfig::load(&manifest_dir)
+            .map_err(|e| AddModuleError::ManifestLoadFailed {
+                module: module.clone(),
+                source_path: manifest_dir.clone(),
+                detail: e.to_string(),
+            })?;
+
+        config
+            .check_streamlib_version_compatibility()
+            .map_err(|e| AddModuleError::ManifestLoadFailed {
+                module: module.clone(),
+                source_path: manifest_dir.clone(),
+                detail: e.to_string(),
+            })?;
+
+        // Identity check: the manifest's `[package]` org/name must
+        // match the requested ident. Catches `.slpkg`s shipped with
+        // the wrong content as well as workspace-stage clobbers.
+        let pkg_meta = config
+            .package
+            .as_ref()
+            .ok_or_else(|| AddModuleError::ManifestLoadFailed {
+                module: module.clone(),
+                source_path: manifest_dir.clone(),
+                detail: "manifest has no `package:` block".into(),
+            })?;
+        if pkg_meta.org != module.org || pkg_meta.name != module.name {
+            return Err(AddModuleError::ManifestIdentityMismatch {
+                module: module.clone(),
+                source_path: manifest_dir.clone(),
+                actual: format!(
+                    "@{}/{}",
+                    pkg_meta.org.as_str(),
+                    pkg_meta.name.as_str()
+                ),
+            });
+        }
+        if !module.version.matches(on_disk_version) {
+            return Err(AddModuleError::VersionRangeUnsatisfied {
+                module: module.clone(),
+                found: on_disk_version,
+                source_path: manifest_dir.clone(),
+            });
+        }
+
+        tracing::info!(
+            "add_module: '{}' → {} (on-disk version {})",
+            module,
+            manifest_dir.display(),
+            on_disk_version,
+        );
+
+        // Register every schema declared in this package's
+        // `streamlib.yaml`'s `schemas:` list BEFORE recursing — schemas
+        // are leaves in the dep graph and don't depend on transitive
+        // package state. (Processor registration runs AFTER deps so
+        // bare-name config schemas in dep packages have already
+        // populated the registry.)
+        register_package_schemas(&manifest_dir, &config).map_err(|e| {
+            AddModuleError::LoadProjectFailed {
+                module: module.clone(),
+                source: Box::new(e),
+            }
+        })?;
+
+        // Walk transitive deps. Each dep is itself routed through
+        // `add_module_recursively`, so the per-dep strategy lookup is
+        // the same shape as the consumer's own top-level call.
+        for (dep_ref, spec) in &config.dependencies {
+            let (dep_ident, dep_strategy) = self
+                .derive_dep_strategy_and_ident(&manifest_dir, dep_ref, spec, &config.patch)
+                .map_err(|e| AddModuleError::LoadProjectFailed {
+                    module: module.clone(),
+                    source: Box::new(e),
+                })?;
+            tracing::info!(
+                "Loading dependency '{}' (strategy {:?})",
+                dep_ident,
+                dep_strategy
+            );
+            self.add_module_recursively(dep_ident, dep_strategy, seen)?;
+        }
+
+        // Now register this package's own processors.
+        self.register_manifest_processors(&manifest_dir, &config)
+            .map_err(|e| AddModuleError::LoadProjectFailed {
+                module: module.clone(),
+                source: Box::new(e),
+            })?;
+
+        Ok(())
+    }
+
+    /// Map a single declared dep (with optional consumer `patch:`
+    /// override) to the [`ModuleIdent`] + [`ModuleResolverStrategy`]
+    /// pair that recursively re-enters [`Self::add_module_recursively`].
+    ///
+    /// Patch precedence mirrors Cargo's `[patch.crates-io]`:
+    /// consumer's patch table wins when present; otherwise the dep
+    /// declaration's source variant decides.
+    fn derive_dep_strategy_and_ident(
+        &self,
+        consumer_dir: &std::path::Path,
+        dep_ref: &streamlib_idents::PackageRef,
+        spec: &streamlib_idents::DependencySpec,
+        patch: &std::collections::BTreeMap<
+            streamlib_idents::PackageRef,
+            streamlib_idents::DependencySpec,
+        >,
+    ) -> Result<(streamlib_idents::ModuleIdent, ModuleResolverStrategy)> {
+        use streamlib_idents::{DependencySpec, ModuleIdent, SemVerRange};
+
+        // The declared range (registry deps) constrains version
+        // resolution even when the source is patched. Path / git deps
+        // don't carry a range at declaration time — the patched
+        // location's manifest version becomes authoritative
+        // (range = any).
+        let declared_range = match spec {
+            DependencySpec::Registry(r) => r.version.clone(),
+            DependencySpec::Path(_) | DependencySpec::Git(_) => SemVerRange::Any,
+        };
+
+        let (strategy_spec, source_label) = match patch.get(dep_ref) {
+            Some(patched) => (patched, "patch"),
+            None => (spec, "dep"),
+        };
+
+        let strategy = match strategy_spec {
+            DependencySpec::Path(p) => {
+                let abs = if p.path.is_absolute() {
+                    p.path.clone()
+                } else {
+                    consumer_dir.join(&p.path)
+                };
+                // npm/wrangler-style strict validation: a missing path
+                // is a hard error so the dev knows immediately to fix
+                // the manifest.
+                if source_label == "patch" && !abs.exists() {
+                    return Err(Error::Configuration(format!(
+                        "patch entry for '{dep_ref}' in {}/{} points at `{}` \
+                         which does not exist. Path patches are dev-time \
+                         overrides — they must resolve to a real directory \
+                         at parse time.",
+                        consumer_dir.display(),
+                        crate::core::config::ProjectConfig::FILE_NAME,
+                        abs.display(),
+                    )));
+                }
+                ModuleResolverStrategy::ManifestDirectory { path: abs }
+            }
+            DependencySpec::Git(g) => {
+                let cache_dir =
+                    crate::core::streamlib_home::get_streamlib_home().join("resolver-cache");
+                let checkout = streamlib_idents::fetch_git(
+                    &dep_ref.to_string(),
+                    &g.git,
+                    &g.rev,
+                    &cache_dir,
+                )
+                .map_err(|e| Error::Configuration(e.to_string()))?;
+                ModuleResolverStrategy::ManifestDirectory { path: checkout }
+            }
+            DependencySpec::Registry(_) => {
+                if source_label == "patch" {
+                    return Err(Error::Configuration(format!(
+                        "patch entry for '{dep_ref}' in {}/{} is registry-flavored. \
+                         The v1 resolver doesn't ship a registry — declare a \
+                         `path:` or `git:` patch entry, or remove the patch and \
+                         rely on the installed-package cache.",
+                        consumer_dir.display(),
+                        crate::core::config::ProjectConfig::FILE_NAME,
+                    )));
+                }
+                ModuleResolverStrategy::DefaultChain
+            }
+        };
+
+        let ident = ModuleIdent::new(dep_ref.org.clone(), dep_ref.name.clone(), declared_range);
+        Ok((ident, strategy))
+    }
+
+    /// Register this package's processors with the global processor
+    /// registry. Non-recursive — the caller is responsible for having
+    /// walked any transitive deps first.
+    fn register_manifest_processors(
+        &self,
+        project_path: &std::path::Path,
+        config: &crate::core::config::ProjectConfig,
+    ) -> Result<()> {
         use crate::core::compiler::compiler_ops::create_deno_subprocess_host_constructor;
         use crate::core::compiler::compiler_ops::create_python_native_subprocess_host_constructor;
         use crate::core::compiler::compiler_ops::ensure_processor_venv;
@@ -377,53 +797,6 @@ impl Runner {
         use crate::core::descriptors::{PortDescriptor, ProcessorRuntime};
         use crate::core::execution::{ExecutionConfig, ProcessExecution};
         use crate::core::ProcessorDescriptor;
-
-        let project_path = project_path.as_ref();
-
-        tracing::info!("Loading project from: {}", project_path.display());
-
-        let config = ProjectConfig::load(project_path)?;
-
-        config.check_streamlib_version_compatibility()?;
-
-        // Load dependency packages first (schemas/processors they export).
-        //
-        // The dep map is `BTreeMap<PackageRef, DependencySpec>` end-to-end
-        // — `PackageRef`'s typed Deserialize validates the `@org/name` shape
-        // at YAML-read time so the lookup site below never parses a string.
-        // Resolution chain (mirrors Cargo's `[patch.crates-io]` shape, but
-        // per-consumer rather than workspace-level):
-        //
-        //   1. **Consumer's own `patch:` table** — overrides the dep
-        //      declaration when present. Path entries resolve relative
-        //      to the consumer's manifest dir; missing paths fail with
-        //      a clear error (strict validation, npm/wrangler-style).
-        //   2. **Installed-package cache** (`InstalledPackageManifest`).
-        //   3. **Actionable error** — neither tier covers the dep.
-        if !config.dependencies.is_empty() {
-            for (dep_ref, spec) in &config.dependencies {
-                let dep_path =
-                    self.resolve_dependency_path(project_path, dep_ref, spec, &config.patch)?;
-                tracing::info!(
-                    "Loading dependency '{}' from {}",
-                    dep_ref,
-                    dep_path.display()
-                );
-                self.load_project(&dep_path)?;
-            }
-        }
-
-        // Register every schema declared in `streamlib.yaml`'s
-        // `schemas:` list with the engine's runtime schema registry so
-        // `get_embedded_schema_definition` /
-        // `max_payload_bytes_for_port_spec` / api-server `/schemas`
-        // discover this package's schemas. The registry starts empty
-        // and is populated exclusively through this path — apps wire
-        // the packages they need (`@tatolab/core` for wire vocabulary,
-        // `@tatolab/audio` / etc. for domain processors) and
-        // `load_project` walks the dependency graph and registers each
-        // package's schemas as it traverses.
-        register_package_schemas(project_path, &config)?;
 
         if config.processors.is_empty() {
             tracing::debug!(
@@ -795,83 +1168,6 @@ impl Runner {
             registered_count,
             project_path.display()
         );
-
-        Ok(())
-    }
-
-    /// Resolve every name to its staged dir under
-    /// `<workspace>/target/streamlib-plugins/<org>__<name>/` and call
-    /// [`Self::load_project`] on each, in declaration order.
-    ///
-    /// `cargo xtask build-plugins` must have run first — the helper
-    /// errors with [`LoadWorkspacePackagesError::PackageNotStaged`] when
-    /// a name's staged dir is missing.
-    ///
-    /// Workspace root resolution: `STREAMLIB_WORKSPACE_ROOT` env var
-    /// when set (and the path exists), otherwise
-    /// `cargo locate-project --workspace`.
-    pub fn load_workspace_packages<I, S>(
-        &self,
-        names: I,
-    ) -> std::result::Result<(), LoadWorkspacePackagesError>
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<str>,
-    {
-        // Eagerly validate every id BEFORE touching the workspace root —
-        // a typo'd id should surface as `InvalidPackageId` immediately
-        // rather than masquerading as `WorkspaceRootNotFound` when the
-        // env var is unset.
-        let parsed: Vec<(String, String, String)> = names
-            .into_iter()
-            .map(|name| {
-                let name_str = name.as_ref().to_string();
-                let (org, pkg) = {
-                    let parsed = parse_canonical_package_id(&name_str)?;
-                    (parsed.org_str.to_string(), parsed.name_str.to_string())
-                };
-                Ok::<_, LoadWorkspacePackagesError>((name_str, org, pkg))
-            })
-            .collect::<std::result::Result<_, _>>()?;
-
-        let workspace_root = resolve_workspace_root()?;
-        let staged_root = workspace_root.join("target").join("streamlib-plugins");
-
-        for (name_str, org, name) in parsed {
-            let staged_dir = staged_root.join(format!("{}__{}", org, name));
-
-            if !staged_dir.exists() || !staged_dir.join("streamlib.yaml").exists() {
-                return Err(LoadWorkspacePackagesError::PackageNotStaged {
-                    name: name_str.clone(),
-                    expected_path: staged_dir,
-                });
-            }
-
-            // Identity check: the staged yaml's `[package]` org / name
-            // must match the requested id. Catches manual clobbering of
-            // the staged tree (someone copied wrong content into the
-            // expected dir) before `load_project` registers the wrong
-            // processors.
-            verify_staged_package_identity(&staged_dir, &org, &name, &name_str)?;
-
-            // For Rust-impl packages, the cdylib must be present at
-            // `lib/<host_triple>/`. Surface the precise diagnostic
-            // (rather than letting `load_project` fail with a generic
-            // "missing dylib for this triple" message).
-            verify_cdylib_present_when_rust_impl(&staged_dir, &name_str)?;
-
-            tracing::info!(
-                "Loading workspace package '{}' from {}",
-                name_str,
-                staged_dir.display()
-            );
-            self.load_project(&staged_dir).map_err(|source| {
-                LoadWorkspacePackagesError::LoadProjectFailed {
-                    name: name_str,
-                    source: Box::new(source),
-                }
-            })?;
-        }
 
         Ok(())
     }
@@ -1534,241 +1830,6 @@ impl Runner {
         self.load_graph_file(&def)
     }
 
-    /// Resolve a single dependency declaration to a directory the runtime
-    /// can recurse into via [`Self::load_project`].
-    ///
-    /// Resolution chain (mirrors Cargo's `[patch.crates-io]`, per-consumer):
-    ///
-    /// 1. **Consumer's own `patch:` table** — overrides the dep declaration
-    ///    when present. Path entries resolve relative to the consumer's
-    ///    manifest dir and are validated strictly: a missing path is a
-    ///    hard error so the dev knows immediately to fix the manifest.
-    /// 2. **Direct path declaration** in `dependencies:` (legacy / pre-canonical
-    ///    deps). Resolves relative to the consumer dir, no existence check
-    ///    yet (`load_project` will surface the missing manifest error
-    ///    downstream).
-    /// 3. **Installed-package cache** (`InstalledPackageManifest`).
-    /// 4. **Actionable error** — registry/git deps with no matching patch
-    ///    or installed entry.
-    fn resolve_dependency_path(
-        &self,
-        consumer_dir: &std::path::Path,
-        dep_ref: &streamlib_idents::PackageRef,
-        spec: &streamlib_idents::DependencySpec,
-        patch: &std::collections::BTreeMap<
-            streamlib_idents::PackageRef,
-            streamlib_idents::DependencySpec,
-        >,
-    ) -> Result<std::path::PathBuf> {
-        use streamlib_idents::DependencySpec;
-
-        // Tier 1: consumer's own `patch:` table.
-        if let Some(patch_spec) = patch.get(dep_ref) {
-            return self.resolve_consumer_patch(consumer_dir, dep_ref, patch_spec);
-        }
-
-        // Tier 2-4: dispatch on the dep declaration's flavor.
-        match spec {
-            DependencySpec::Path(p) => Ok(if p.path.is_absolute() {
-                p.path.clone()
-            } else {
-                consumer_dir.join(&p.path)
-            }),
-            DependencySpec::Registry(_) | DependencySpec::Git(_) => {
-                if let Some(installed) = self.lookup_installed_package(dep_ref)? {
-                    return Ok(installed);
-                }
-                Err(Error::Configuration(format!(
-                    "Dependency '{dep_ref}' could not be resolved. \
-                     No matching `patch:` entry was found in {}/{}, and no matching \
-                     package is installed (run `streamlib pkg list` to see \
-                     installed packages, `streamlib pkg install <slpkg>` to \
-                     install one).",
-                    consumer_dir.display(),
-                    streamlib_idents::Manifest::FILE_NAME,
-                )))
-            }
-        }
-    }
-
-    /// Resolve a consumer-scoped `patch:` entry to an absolute path the
-    /// runtime can recurse into.
-    ///
-    /// - `path:` patches: validated strictly — missing path is a hard
-    ///   error so the dev knows immediately to fix the manifest
-    ///   (npm / wrangler-style strictness; CLAUDE.md "make the right
-    ///   way easy and the wrong way hard").
-    /// - `git:` patches: cloned at the pinned rev to the shared
-    ///   resolver cache (`~/.streamlib/resolver-cache/git/`). Idempotent
-    ///   — a previously-cloned checkout is reused. Same helper the
-    ///   build-time resolver uses, so checkouts are shared across
-    ///   codegen and runtime startups.
-    /// - `version:` (registry) patches: not yet supported — the v1
-    ///   resolver doesn't ship a registry. Consumers either declare a
-    ///   git/path patch or rely on the installed-package cache.
-    fn resolve_consumer_patch(
-        &self,
-        consumer_dir: &std::path::Path,
-        dep_ref: &streamlib_idents::PackageRef,
-        patch_spec: &streamlib_idents::DependencySpec,
-    ) -> Result<std::path::PathBuf> {
-        use streamlib_idents::DependencySpec;
-
-        match patch_spec {
-            DependencySpec::Path(p) => {
-                let abs = if p.path.is_absolute() {
-                    p.path.clone()
-                } else {
-                    consumer_dir.join(&p.path)
-                };
-                if !abs.exists() {
-                    return Err(Error::Configuration(format!(
-                        "patch entry for '{dep_ref}' in {}/{} points at \
-                         `{}` which does not exist. Path patches are \
-                         dev-time overrides — they must resolve to a \
-                         real directory at parse time. Either fix the \
-                         path or remove the patch entry.",
-                        consumer_dir.display(),
-                        streamlib_idents::Manifest::FILE_NAME,
-                        abs.display(),
-                    )));
-                }
-                Ok(abs)
-            }
-            DependencySpec::Git(g) => {
-                let cache_dir = crate::core::streamlib_home::get_streamlib_home()
-                    .join("resolver-cache");
-                streamlib_idents::fetch_git(
-                    &dep_ref.to_string(),
-                    &g.git,
-                    &g.rev,
-                    &cache_dir,
-                )
-                .map_err(|e| Error::Configuration(e.to_string()))
-            }
-            DependencySpec::Registry(_) => Err(Error::Configuration(format!(
-                "patch entry for '{dep_ref}' in {}/{} is registry-flavored. \
-                 The v1 resolver doesn't ship a registry — declare a \
-                 `path:` or `git:` patch entry, or remove the patch and \
-                 rely on the installed-package cache.",
-                consumer_dir.display(),
-                streamlib_idents::Manifest::FILE_NAME,
-            ))),
-        }
-    }
-
-    /// Look the canonical [`streamlib_idents::PackageRef`] up in the
-    /// installed-package cache (`InstalledPackageManifest`). Returns the
-    /// extracted slpkg cache directory when present.
-    fn lookup_installed_package(
-        &self,
-        dep_ref: &streamlib_idents::PackageRef,
-    ) -> Result<Option<std::path::PathBuf>> {
-        use crate::core::config::InstalledPackageManifest;
-        use crate::core::streamlib_home::get_cached_package_dir;
-
-        let manifest = InstalledPackageManifest::load()?;
-        let Some(entry) = manifest.find_by_ref(dep_ref) else {
-            return Ok(None);
-        };
-        Ok(Some(get_cached_package_dir(&entry.cache_dir)))
-    }
-
-    // =========================================================================
-    // Imperative module API
-    // =========================================================================
-
-    /// Load a `streamlib.yaml`-packaged module by typed
-    /// [`streamlib_idents::ModuleIdent`]. Resolves the identifier against
-    /// the workspace `target/streamlib-plugins/<org>__<name>/` staged
-    /// dir (dev / `cargo xtask build-plugins` flow) and the installed
-    /// `~/.streamlib/cache/packages/...` (installed slpkg flow); the
-    /// on-disk version must match the ident's [`SemVerRange`].
-    /// Transitive dependencies declared in the module's
-    /// `streamlib.yaml` are loaded recursively via [`Self::load_project`].
-    ///
-    /// **Imperative complement to the yaml-driven path.** Both
-    /// [`Self::load_project`] and this method drive into the same
-    /// internal module-loading machinery; the yaml form is for
-    /// declarative deployment manifests (containers / `streamlib install`
-    /// / dep solvers), the imperative form is for REST endpoints,
-    /// hot-reload tools, test setup, and composition-library wrapping.
-    ///
-    /// Calls are idempotent at the registry layer: re-loading a module
-    /// whose processors / schemas are already registered surfaces no
-    /// error and re-runs the dylib's plugin callback (which the engine
-    /// already tolerates per `register_dynamic`'s dedup semantics).
-    pub fn add_module(
-        &self,
-        module: streamlib_idents::ModuleIdent,
-    ) -> std::result::Result<(), AddModuleError> {
-        use streamlib_idents::Manifest;
-
-        let pkg_ref = module.package_ref();
-
-        // Resolution chain — workspace stage first (for dev /
-        // `cargo xtask build-plugins`), then installed cache.
-        let candidate = resolve_module_source(&pkg_ref)?;
-
-        let (source_path, on_disk_version) = match &candidate {
-            ResolvedModuleSource::WorkspaceStaged { path } => {
-                let manifest = Manifest::load(path).map_err(|e| {
-                    AddModuleError::ManifestLoadFailed {
-                        module: module.clone(),
-                        source_path: path.clone(),
-                        detail: e.to_string(),
-                    }
-                })?;
-                let metadata = manifest
-                    .package
-                    .as_ref()
-                    .ok_or_else(|| AddModuleError::ManifestLoadFailed {
-                        module: module.clone(),
-                        source_path: path.clone(),
-                        detail: "manifest has no `package:` block".into(),
-                    })?;
-                if metadata.org != module.org || metadata.name != module.name {
-                    return Err(AddModuleError::ManifestIdentityMismatch {
-                        module: module.clone(),
-                        source_path: path.clone(),
-                        actual: format!(
-                            "@{}/{}",
-                            metadata.org.as_str(),
-                            metadata.name.as_str()
-                        ),
-                    });
-                }
-                (path.clone(), metadata.version)
-            }
-            ResolvedModuleSource::InstalledCache {
-                path,
-                installed_version,
-            } => (path.clone(), *installed_version),
-        };
-
-        if !module.version.matches(on_disk_version) {
-            return Err(AddModuleError::VersionRangeUnsatisfied {
-                module: module.clone(),
-                found: on_disk_version,
-                source_path,
-            });
-        }
-
-        tracing::info!(
-            "add_module: resolving '{}' → {} (on-disk version {})",
-            module,
-            source_path.display(),
-            on_disk_version,
-        );
-
-        self.load_project(&source_path).map_err(|source| {
-            AddModuleError::LoadProjectFailed {
-                module,
-                source: Box::new(source),
-            }
-        })
-    }
-
     /// Unload a previously-added module.
     ///
     /// **Not yet implemented.** Module-level unload requires the
@@ -2179,70 +2240,136 @@ fn bring_up_surface_service(
 }
 
 // =============================================================================
-// add_module / remove_module — typed errors + resolver
+// ModuleResolverStrategy — unified resolver for the four module-loading
+// entry points. Each variant covers one historical loader behavior;
+// `add_module_with(ident, strategy)` is the single dispatch point.
 // =============================================================================
 
-/// Where a [`streamlib_idents::ModuleIdent`] was resolved to.
-enum ResolvedModuleSource {
-    /// Workspace stage dir (`<workspace>/target/streamlib-plugins/<org>__<name>/`).
-    /// Used in dev / `cargo xtask build-plugins` flow. Manifest is read
-    /// at the call site to extract the on-disk version + verify identity.
-    WorkspaceStaged { path: std::path::PathBuf },
-    /// Installed-package cache (`~/.streamlib/cache/packages/<entry.cache_dir>`).
-    /// The cache manifest carries `installed_version` directly; no
-    /// re-parse needed.
-    InstalledCache {
-        path: std::path::PathBuf,
-        installed_version: streamlib_idents::SemVer,
-    },
+/// How [`Runner::add_module_with`] should source the manifest for a
+/// module. Each variant maps to one of the historical loader methods
+/// (`load_project`, `load_package`, `load_workspace_packages`) plus the
+/// imperative default chain that bare [`Runner::add_module`] uses.
+///
+/// The strategy is the in-code equivalent of the manifest's `patch:`
+/// table — callers can pin a dep to a workspace stage dir, a specific
+/// resolver tier, a `.slpkg` archive, or an arbitrary directory
+/// without editing yaml.
+#[derive(Debug, Clone)]
+pub enum ModuleResolverStrategy {
+    /// Default ident-keyed resolution chain: workspace stage dir
+    /// (`<workspace>/target/streamlib-plugins/<org>__<name>/`) first,
+    /// falling back to the installed-package cache. Behavior used by
+    /// bare [`Runner::add_module`] and by transitive `dependencies:`
+    /// entries declared as `"@org/name": "^version"`.
+    DefaultChain,
+
+    /// Look up the workspace stage dir only; do not fall back to the
+    /// installed-package cache. Counterpart of the legacy
+    /// [`Runner::load_workspace_packages`] per-id lookup.
+    WorkspaceStaged,
+
+    /// Look up the installed-package cache only; skip workspace.
+    /// Useful for runtimes that explicitly want the installed-from-
+    /// slpkg copy even when a workspace stage dir exists.
+    InstalledCache,
+
+    /// Load the manifest at this directory directly. Counterpart of
+    /// the legacy [`Runner::load_project`].
+    ManifestDirectory { path: std::path::PathBuf },
+
+    /// Extract this `.slpkg` archive into the package cache, then
+    /// load the extracted manifest. Counterpart of the legacy
+    /// [`Runner::load_package`].
+    SlpkgArchive { path: std::path::PathBuf },
 }
 
-/// Resolve a `@org/name` reference to a workspace stage dir or an
-/// installed-cache entry. Workspace wins on coexistence — same
-/// precedence as `cargo`'s `[patch]` (per-consumer workspace overrides
-/// installed registry).
-fn resolve_module_source(
-    pkg_ref: &streamlib_idents::PackageRef,
-) -> std::result::Result<ResolvedModuleSource, AddModuleError> {
-    // 1. Workspace stage dir, when a workspace is locatable.
-    //
-    // Distinguish "env var set but invalid" (user typo'd
-    // `STREAMLIB_WORKSPACE_ROOT` — their stated intent is broken,
-    // surface it) from "no env var, no workspace nearby" (no intent
-    // expressed, silently fall through to the installed cache).
-    // Mirrors the `STREAMLIB_WORKSPACE_ROOT errors when env var path
-    // does not exist` precedent on `load_workspace_packages`.
-    let env_workspace_root = std::env::var("STREAMLIB_WORKSPACE_ROOT").ok();
-    let workspace_root = if let Some(env_root) = env_workspace_root.as_deref() {
-        let path = std::path::PathBuf::from(env_root);
-        if !path.is_dir() {
-            return Err(AddModuleError::WorkspaceRootInvalid {
-                env_value: env_root.to_string(),
-            });
+/// Resolve a [`ModuleResolverStrategy`] to `(manifest_dir, on_disk_version)`.
+///
+/// `package_ref` supplies the canonical `@org/name` for the
+/// ident-keyed strategies ([`ModuleResolverStrategy::DefaultChain`],
+/// [`ModuleResolverStrategy::WorkspaceStaged`],
+/// [`ModuleResolverStrategy::InstalledCache`]); it is ignored by the
+/// path-keyed ones.
+///
+/// The returned version is sourced from the resolver tier that hit:
+/// workspace stage dirs re-parse the staged manifest, the installed
+/// cache reads `InstalledPackageEntry::version`, the path-keyed
+/// variants read the manifest at the directory. The caller is
+/// responsible for validating it against the requested
+/// [`SemVerRange`] (see [`Runner::add_module_recursively`]).
+fn resolve_strategy_to_manifest_dir(
+    strategy: &ModuleResolverStrategy,
+    package_ref: Option<&streamlib_idents::PackageRef>,
+) -> std::result::Result<(std::path::PathBuf, streamlib_idents::SemVer), AddModuleError> {
+    match strategy {
+        ModuleResolverStrategy::DefaultChain => {
+            let pkg_ref = package_ref.ok_or_else(|| AddModuleError::StrategyNeedsPackageRef {
+                strategy: "DefaultChain".into(),
+            })?;
+            // Try workspace stage dir first, then installed cache.
+            if let Some(workspace_root) = locate_workspace_root_for_strategy()? {
+                let staged_dir = workspace_stage_dir(&workspace_root, pkg_ref);
+                if staged_dir.join("streamlib.yaml").exists() {
+                    return Ok((staged_dir.clone(), read_version_from_manifest_dir(&staged_dir)?));
+                }
+            }
+            lookup_installed_cache(pkg_ref)?
+                .ok_or_else(|| AddModuleError::ModuleNotFound { package: pkg_ref.clone() })
         }
-        Some(path)
-    } else {
-        // No env var: best-effort cargo-locate-project (in-workspace
-        // cargo invocations find the workspace; non-workspace callers
-        // silently miss and fall through to the installed cache).
-        resolve_workspace_root().ok()
-    };
-
-    if let Some(workspace_root) = workspace_root {
-        let staged_dir = workspace_root
-            .join("target")
-            .join("streamlib-plugins")
-            .join(format!(
-                "{}__{}",
-                pkg_ref.org.as_str(),
-                pkg_ref.name.as_str()
-            ));
-        if staged_dir.join("streamlib.yaml").exists() {
-            return Ok(ResolvedModuleSource::WorkspaceStaged { path: staged_dir });
+        ModuleResolverStrategy::WorkspaceStaged => {
+            let pkg_ref = package_ref.ok_or_else(|| AddModuleError::StrategyNeedsPackageRef {
+                strategy: "WorkspaceStaged".into(),
+            })?;
+            let workspace_root = locate_workspace_root_for_strategy()?
+                .ok_or(AddModuleError::WorkspaceRootNotFound)?;
+            let staged_dir = workspace_stage_dir(&workspace_root, pkg_ref);
+            if !staged_dir.join("streamlib.yaml").exists() {
+                return Err(AddModuleError::WorkspaceStageMiss {
+                    package: pkg_ref.clone(),
+                    expected_path: staged_dir,
+                });
+            }
+            // For Rust-impl packages, the cdylib must exist at
+            // `lib/<host_triple>/`. Surface the missing-cdylib case
+            // explicitly so callers see the actionable diagnostic
+            // (rather than letting `register_manifest_processors` fail
+            // with a generic "missing dylib for this triple" message).
+            check_cdylib_present_when_rust_impl(&staged_dir, pkg_ref)?;
+            let version = read_version_from_manifest_dir(&staged_dir)?;
+            Ok((staged_dir, version))
+        }
+        ModuleResolverStrategy::InstalledCache => {
+            let pkg_ref = package_ref.ok_or_else(|| AddModuleError::StrategyNeedsPackageRef {
+                strategy: "InstalledCache".into(),
+            })?;
+            lookup_installed_cache(pkg_ref)?
+                .ok_or_else(|| AddModuleError::ModuleNotFound { package: pkg_ref.clone() })
+        }
+        ModuleResolverStrategy::ManifestDirectory { path } => {
+            if !path.join("streamlib.yaml").exists() {
+                return Err(AddModuleError::ManifestDirectoryMissing { path: path.clone() });
+            }
+            let version = read_version_from_manifest_dir(path)?;
+            Ok((path.clone(), version))
+        }
+        ModuleResolverStrategy::SlpkgArchive { path } => {
+            let extracted =
+                extract_slpkg_to_cache(path).map_err(|e| AddModuleError::SlpkgExtractionFailed {
+                    archive: path.clone(),
+                    detail: e.to_string(),
+                })?;
+            let version = read_version_from_manifest_dir(&extracted)?;
+            Ok((extracted, version))
         }
     }
+}
 
-    // 2. Installed-package cache.
+/// Look the canonical [`streamlib_idents::PackageRef`] up in the
+/// installed-package cache (`InstalledPackageManifest`). Returns the
+/// `(cache_dir, version)` pair when present.
+fn lookup_installed_cache(
+    pkg_ref: &streamlib_idents::PackageRef,
+) -> std::result::Result<Option<(std::path::PathBuf, streamlib_idents::SemVer)>, AddModuleError> {
     use crate::core::config::InstalledPackageManifest;
     use crate::core::streamlib_home::get_cached_package_dir;
 
@@ -2250,17 +2377,184 @@ fn resolve_module_source(
         InstalledPackageManifest::load().map_err(|e| AddModuleError::InstalledCacheLoadFailed {
             detail: e.to_string(),
         })?;
-    if let Some(entry) = manifest.find_by_ref(pkg_ref) {
-        let path = get_cached_package_dir(&entry.cache_dir);
-        return Ok(ResolvedModuleSource::InstalledCache {
-            path,
-            installed_version: entry.version,
+    Ok(manifest
+        .find_by_ref(pkg_ref)
+        .map(|entry| (get_cached_package_dir(&entry.cache_dir), entry.version)))
+}
+
+/// Best-effort workspace-root resolution for strategy lookups.
+/// Honors `STREAMLIB_WORKSPACE_ROOT` strictly (typo'd env var ⇒
+/// `WorkspaceRootInvalid`); otherwise falls back to
+/// `cargo locate-project --workspace`, returning `Ok(None)` when no
+/// workspace is reachable (so [`ModuleResolverStrategy::DefaultChain`]
+/// can silently fall through to the installed cache).
+fn locate_workspace_root_for_strategy(
+) -> std::result::Result<Option<std::path::PathBuf>, AddModuleError> {
+    if let Ok(env_root) = std::env::var("STREAMLIB_WORKSPACE_ROOT") {
+        let path = std::path::PathBuf::from(&env_root);
+        if !path.is_dir() {
+            return Err(AddModuleError::WorkspaceRootInvalid { env_value: env_root });
+        }
+        return Ok(Some(path));
+    }
+    Ok(resolve_workspace_root().ok())
+}
+
+fn workspace_stage_dir(
+    workspace_root: &std::path::Path,
+    pkg_ref: &streamlib_idents::PackageRef,
+) -> std::path::PathBuf {
+    workspace_root
+        .join("target")
+        .join("streamlib-plugins")
+        .join(format!(
+            "{}__{}",
+            pkg_ref.org.as_str(),
+            pkg_ref.name.as_str()
+        ))
+}
+
+/// Read the `[package].version` field from the streamlib.yaml at
+/// `dir`. Surfaces [`AddModuleError::ManifestDirectoryMissing`] when
+/// the file is absent and a generic [`AddModuleError::ManifestLoadFailed`]
+/// (with an `any` ident placeholder; the caller re-wraps with the
+/// real ident) when the parse or package-block lookup fails.
+fn read_version_from_manifest_dir(
+    dir: &std::path::Path,
+) -> std::result::Result<streamlib_idents::SemVer, AddModuleError> {
+    use streamlib_idents::Manifest;
+    let manifest_path = dir.join(Manifest::FILE_NAME);
+    if !manifest_path.exists() {
+        return Err(AddModuleError::ManifestDirectoryMissing { path: dir.to_path_buf() });
+    }
+    let manifest = Manifest::load(dir).map_err(|e| AddModuleError::StrategyManifestLoadFailed {
+        source_path: dir.to_path_buf(),
+        detail: e.to_string(),
+    })?;
+    manifest
+        .package
+        .as_ref()
+        .map(|p| p.version)
+        .ok_or_else(|| AddModuleError::StrategyManifestLoadFailed {
+            source_path: dir.to_path_buf(),
+            detail: "manifest has no `package:` block".into(),
+        })
+}
+
+/// Read just the `(org, name, version)` triple from a manifest
+/// directory's streamlib.yaml and build an `any`-version
+/// [`ModuleIdent`] from it. Used by the path-keyed wrappers
+/// ([`Runner::load_project`], [`Runner::load_package`]) to build the
+/// strict ident the unified flow validates against.
+fn read_module_ident_from_manifest_dir(
+    dir: &std::path::Path,
+) -> Result<streamlib_idents::ModuleIdent> {
+    use crate::core::config::ProjectConfig;
+    let config = ProjectConfig::load(dir)?;
+    let pkg = config.package.as_ref().ok_or_else(|| {
+        Error::Configuration(format!(
+            "{} at {} has no `[package]` block — required to build a ModuleIdent.",
+            ProjectConfig::FILE_NAME,
+            dir.display()
+        ))
+    })?;
+    Ok(streamlib_idents::ModuleIdent::any(pkg.org.clone(), pkg.name.clone()))
+}
+
+/// Peek the `[package]` block out of a `.slpkg` archive's embedded
+/// manifest WITHOUT fully extracting the archive. Used by
+/// [`Runner::load_package`] to build the ident the unified flow
+/// validates against — the strategy's extraction step then writes
+/// the package to the cache.
+fn read_module_ident_from_slpkg(
+    slpkg_path: &std::path::Path,
+) -> Result<streamlib_idents::ModuleIdent> {
+    use crate::core::config::ProjectConfig;
+    let bytes = std::fs::read(slpkg_path)
+        .map_err(|e| Error::Configuration(format!("Failed to read {}: {}", slpkg_path.display(), e)))?;
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes))
+        .map_err(|e| Error::Configuration(format!("Failed to open .slpkg archive: {}", e)))?;
+    let mut manifest_file = archive
+        .by_name(ProjectConfig::FILE_NAME)
+        .map_err(|e| Error::Configuration(format!(".slpkg archive missing {}: {}", ProjectConfig::FILE_NAME, e)))?;
+    let mut yaml_body = String::new();
+    std::io::Read::read_to_string(&mut manifest_file, &mut yaml_body)
+        .map_err(|e| Error::Configuration(format!("Failed to read manifest from .slpkg: {}", e)))?;
+    let config: ProjectConfig = serde_yaml::from_str(&yaml_body)
+        .map_err(|e| Error::Configuration(format!("Failed to parse manifest from .slpkg: {}", e)))?;
+    let pkg = config.package.as_ref().ok_or_else(|| {
+        Error::Configuration(format!(
+            ".slpkg at {} has no `[package]` block — required to build a ModuleIdent.",
+            slpkg_path.display()
+        ))
+    })?;
+    Ok(streamlib_idents::ModuleIdent::any(pkg.org.clone(), pkg.name.clone()))
+}
+
+/// Check that a Rust-impl staged package has its cdylib present at
+/// `lib/<host_triple>/`. No-op for schemas-only or non-Rust packages.
+/// Used by [`ModuleResolverStrategy::WorkspaceStaged`] to surface the
+/// missing-cdylib case as [`AddModuleError::CdylibMissingForRustImpl`]
+/// rather than letting `register_manifest_processors` fail later with
+/// a less actionable message.
+fn check_cdylib_present_when_rust_impl(
+    staged_dir: &std::path::Path,
+    pkg_ref: &streamlib_idents::PackageRef,
+) -> std::result::Result<(), AddModuleError> {
+    let body = match std::fs::read_to_string(staged_dir.join("streamlib.yaml")) {
+        Ok(b) => b,
+        Err(_) => return Ok(()),
+    };
+    let manifest: streamlib_processor_schema::ProjectConfigMinimal =
+        match serde_yaml::from_str(&body) {
+            Ok(m) => m,
+            Err(_) => return Ok(()),
+        };
+    let has_rust = manifest.processors.iter().any(|p| {
+        matches!(
+            p.runtime.language,
+            streamlib_processor_schema::ProcessorLanguage::Rust
+        )
+    });
+    if !has_rust {
+        return Ok(());
+    }
+    let triple_dir = staged_dir.join("lib").join(host_target_triple());
+    let dylib_ext = if cfg!(target_os = "macos") {
+        "dylib"
+    } else if cfg!(target_os = "windows") {
+        "dll"
+    } else {
+        "so"
+    };
+    let any_dylib_present = std::fs::read_dir(&triple_dir)
+        .map(|iter| {
+            iter.flatten()
+                .any(|e| e.path().extension().is_some_and(|ext| ext == dylib_ext))
+        })
+        .unwrap_or(false);
+    if !any_dylib_present {
+        return Err(AddModuleError::CdylibMissingForRustImpl {
+            package: pkg_ref.clone(),
+            expected_path: triple_dir,
         });
     }
+    Ok(())
+}
 
-    Err(AddModuleError::ModuleNotFound {
-        package: pkg_ref.clone(),
-    })
+/// Bridge helper used by `load_workspace_packages`'s back-compat
+/// error translation: split an `"@org/name"` actual-id string back
+/// into `(org, name)` halves so the legacy
+/// `PackageIdentityMismatch` variant can carry the structured fields
+/// the historical tests assert on. Falls back to empty strings when
+/// the input shape is unexpected — the wrapper only uses this on
+/// inputs that the unified flow itself produced.
+fn split_canonical_for_legacy_error(actual: &str) -> (String, String) {
+    actual
+        .strip_prefix('@')
+        .and_then(|s| s.split_once('/'))
+        .map(|(o, n)| (o.to_string(), n.to_string()))
+        .unwrap_or_default()
 }
 
 /// Per-failure-mode error returned by [`Runner::add_module`].
@@ -2337,12 +2631,111 @@ pub enum AddModuleError {
     )]
     WorkspaceRootInvalid { env_value: String },
 
-    /// `Runner::load_project` rejected the resolved source path.
+    /// `Runner::load_project` (or the recursive dep walker rooted in
+    /// it) rejected the resolved source path. Wraps the underlying
+    /// engine [`Error`] so callers can introspect.
     #[error("load_project failed for '{module}': {source}")]
     LoadProjectFailed {
         module: streamlib_idents::ModuleIdent,
         #[source]
         source: Box<Error>,
+    },
+
+    /// `Runner::add_module_with` was called with
+    /// [`ModuleResolverStrategy::WorkspaceStaged`] but no streamlib.yaml
+    /// exists at the workspace stage dir. Surface the expected path so
+    /// callers see exactly where the resolver looked.
+    #[error(
+        "Module '{package}' not staged under target/streamlib-plugins. \
+         Expected `streamlib.yaml` at {expected_path}. \
+         Run `cargo xtask build-plugins --package {package}` first."
+    )]
+    WorkspaceStageMiss {
+        package: streamlib_idents::PackageRef,
+        expected_path: std::path::PathBuf,
+    },
+
+    /// Workspace stage dir resolution requires a workspace root but
+    /// neither `STREAMLIB_WORKSPACE_ROOT` nor `cargo locate-project`
+    /// returned one. Distinct from
+    /// [`Self::WorkspaceRootInvalid`] (set-but-broken env var).
+    #[error(
+        "Workspace root not found — set STREAMLIB_WORKSPACE_ROOT or run \
+         from within a Cargo workspace"
+    )]
+    WorkspaceRootNotFound,
+
+    /// A `Rust`-impl workspace-staged package has no cdylib at
+    /// `lib/<host_triple>/`. The staged manifest declares Rust
+    /// processors but `cargo xtask build-plugins` either was never
+    /// run or produced no artifact for this host triple.
+    #[error(
+        "Cdylib missing for Rust-impl package '{package}' — expected at \
+         {expected_path}. Re-run `cargo xtask build-plugins` to rebuild."
+    )]
+    CdylibMissingForRustImpl {
+        package: streamlib_idents::PackageRef,
+        expected_path: std::path::PathBuf,
+    },
+
+    /// [`ModuleResolverStrategy::ManifestDirectory`] pointed at a
+    /// directory that does not contain a `streamlib.yaml`. Catches
+    /// the `load_project("./does-not-exist")` and patch-points-at-
+    /// missing-path cases at the strategy layer.
+    #[error("Manifest directory has no streamlib.yaml at {}", path.display())]
+    ManifestDirectoryMissing { path: std::path::PathBuf },
+
+    /// Strategy was [`ModuleResolverStrategy::SlpkgArchive`] and the
+    /// extraction step failed (I/O, malformed ZIP, missing embedded
+    /// manifest, etc.).
+    #[error(
+        "Failed to extract .slpkg archive at {}: {detail}",
+        archive.display()
+    )]
+    SlpkgExtractionFailed {
+        archive: std::path::PathBuf,
+        detail: String,
+    },
+
+    /// Strategy resolver failed while reading the manifest at the
+    /// resolved directory (parse error, missing `[package]` block).
+    /// Distinct from [`Self::ManifestLoadFailed`] because the caller
+    /// hasn't bound a [`ModuleIdent`] yet at this stage.
+    #[error(
+        "Failed to read manifest at {}: {detail}",
+        source_path.display()
+    )]
+    StrategyManifestLoadFailed {
+        source_path: std::path::PathBuf,
+        detail: String,
+    },
+
+    /// Strategy was ident-keyed
+    /// ([`ModuleResolverStrategy::DefaultChain`] /
+    /// [`ModuleResolverStrategy::WorkspaceStaged`] /
+    /// [`ModuleResolverStrategy::InstalledCache`]) but no
+    /// [`PackageRef`](streamlib_idents::PackageRef) was supplied.
+    /// Internal invariant — callers route through
+    /// [`Runner::add_module_with`] which always supplies the ref.
+    #[error(
+        "Strategy '{strategy}' requires a PackageRef but none was supplied — \
+         internal invariant violation"
+    )]
+    StrategyNeedsPackageRef { strategy: String },
+
+    /// A dependency cycle was detected during recursive dep walking.
+    /// `cycle` lists the [`PackageRef`](streamlib_idents::PackageRef)
+    /// that was hit while already mid-load on the recursion stack.
+    /// Cycles can only arise from a `streamlib.yaml` that transitively
+    /// depends on itself; surface the canonical ref so the dev can
+    /// trace the offending edge.
+    #[error(
+        "Dependency cycle detected — package {} is already mid-load on the \
+         recursion stack while a transitive dep tries to load it again",
+        cycle.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" → ")
+    )]
+    DependencyCycleDetected {
+        cycle: Vec<streamlib_idents::PackageRef>,
     },
 }
 
@@ -2537,106 +2930,6 @@ fn resolve_workspace_root() -> std::result::Result<std::path::PathBuf, LoadWorks
         .ok_or(LoadWorkspacePackagesError::WorkspaceRootNotFound)
 }
 
-/// Read the staged `streamlib.yaml`'s `[package]` org / name and
-/// confirm they match what the caller asked for. The yaml is the
-/// authoritative identity at load time — a mismatch here means the
-/// staged tree was clobbered out-of-band.
-fn verify_staged_package_identity(
-    staged_dir: &std::path::Path,
-    requested_org: &str,
-    requested_name: &str,
-    requested_canonical_id: &str,
-) -> std::result::Result<(), LoadWorkspacePackagesError> {
-    let body = std::fs::read_to_string(staged_dir.join("streamlib.yaml")).map_err(|_| {
-        LoadWorkspacePackagesError::PackageNotStaged {
-            name: requested_canonical_id.to_string(),
-            expected_path: staged_dir.to_path_buf(),
-        }
-    })?;
-    let manifest: streamlib_idents::Manifest = serde_yaml::from_str(&body).map_err(|_| {
-        LoadWorkspacePackagesError::PackageIdentityMismatch {
-            staged_path: staged_dir.to_path_buf(),
-            requested_org: requested_org.to_string(),
-            requested_name: requested_name.to_string(),
-            actual_org: "<unparseable>".to_string(),
-            actual_name: "<unparseable>".to_string(),
-        }
-    })?;
-    let Some(metadata) = manifest.package.as_ref() else {
-        return Err(LoadWorkspacePackagesError::PackageIdentityMismatch {
-            staged_path: staged_dir.to_path_buf(),
-            requested_org: requested_org.to_string(),
-            requested_name: requested_name.to_string(),
-            actual_org: "<no package section>".to_string(),
-            actual_name: "<no package section>".to_string(),
-        });
-    };
-    let actual_org = metadata.org.as_str();
-    let actual_name = metadata.name.as_str();
-    if actual_org != requested_org || actual_name != requested_name {
-        return Err(LoadWorkspacePackagesError::PackageIdentityMismatch {
-            staged_path: staged_dir.to_path_buf(),
-            requested_org: requested_org.to_string(),
-            requested_name: requested_name.to_string(),
-            actual_org: actual_org.to_string(),
-            actual_name: actual_name.to_string(),
-        });
-    }
-    Ok(())
-}
-
-/// When the staged manifest declares Rust runtime processors, the
-/// corresponding cdylib must exist under `lib/<host_triple>/`. Surface
-/// the missing-cdylib case explicitly so the dev knows to re-run
-/// `cargo xtask build-plugins` rather than chasing a generic
-/// load_project failure.
-fn verify_cdylib_present_when_rust_impl(
-    staged_dir: &std::path::Path,
-    requested_canonical_id: &str,
-) -> std::result::Result<(), LoadWorkspacePackagesError> {
-    let body = std::fs::read_to_string(staged_dir.join("streamlib.yaml")).map_err(|_| {
-        LoadWorkspacePackagesError::PackageNotStaged {
-            name: requested_canonical_id.to_string(),
-            expected_path: staged_dir.to_path_buf(),
-        }
-    })?;
-    let manifest: streamlib_processor_schema::ProjectConfigMinimal = match serde_yaml::from_str(&body)
-    {
-        Ok(m) => m,
-        Err(_) => return Ok(()), // identity check already surfaced this
-    };
-    let has_rust = manifest.processors.iter().any(|p| {
-        matches!(
-            p.runtime.language,
-            streamlib_processor_schema::ProcessorLanguage::Rust
-        )
-    });
-    if !has_rust {
-        return Ok(());
-    }
-    let triple_dir = staged_dir.join("lib").join(host_target_triple());
-    let dylib_ext = if cfg!(target_os = "macos") {
-        "dylib"
-    } else if cfg!(target_os = "windows") {
-        "dll"
-    } else {
-        "so"
-    };
-    let any_dylib_present = std::fs::read_dir(&triple_dir)
-        .map(|iter| {
-            iter.flatten()
-                .any(|e| e.path().extension().is_some_and(|ext| ext == dylib_ext))
-        })
-        .unwrap_or(false);
-    if !any_dylib_present {
-        return Err(LoadWorkspacePackagesError::CdylibMissing {
-            name: requested_canonical_id.to_string(),
-            expected_path: triple_dir,
-        });
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2788,107 +3081,6 @@ mod tests {
             }
         }
         assert!(matches!(err, LoadWorkspacePackagesError::WorkspaceRootNotFound));
-    }
-
-    #[test]
-    fn verify_staged_package_identity_flags_mismatch() {
-        // Identity check: the staged manifest's [package] org/name
-        // must match the requested id. Reverting the comparison would
-        // let the runtime register processors from the wrong staged
-        // package — the fixture creates a yaml whose name doesn't
-        // match the requested id and the helper must reject it.
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            tmp.path().join("streamlib.yaml"),
-            "package:\n  org: vendor\n  name: other\n  version: 1.0.0\n",
-        )
-        .unwrap();
-        let err = verify_staged_package_identity(
-            tmp.path(),
-            "tatolab",
-            "camera",
-            "@tatolab/camera",
-        )
-        .unwrap_err();
-        assert!(matches!(
-            err,
-            LoadWorkspacePackagesError::PackageIdentityMismatch {
-                ref actual_org,
-                ref actual_name,
-                ..
-            } if actual_org == "vendor" && actual_name == "other"
-        ));
-    }
-
-    #[test]
-    fn verify_staged_package_identity_accepts_matching_yaml() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            tmp.path().join("streamlib.yaml"),
-            "package:\n  org: tatolab\n  name: camera\n  version: 1.0.0\n",
-        )
-        .unwrap();
-        verify_staged_package_identity(
-            tmp.path(),
-            "tatolab",
-            "camera",
-            "@tatolab/camera",
-        )
-        .expect("matching identity must validate");
-    }
-
-    #[test]
-    fn verify_cdylib_present_when_rust_impl_flags_missing_artifact() {
-        // Setup: a staged Rust-impl package (yaml declares a Rust
-        // processor) with the triple dir missing. The helper must
-        // surface `CdylibMissing` rather than letting load_project
-        // report a less actionable error. Reverting the
-        // `has_rust_runtime_processors` check would either pass
-        // through silently or panic — the test pins the precise
-        // diagnostic.
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            tmp.path().join("streamlib.yaml"),
-            r#"
-package:
-  org: tatolab
-  name: example
-  version: 1.0.0
-processors:
-  - name: ExampleProcessor
-    version: 1.0.0
-    description: "rust"
-    runtime:
-      language: rust
-    execution: manual
-    inputs: []
-    outputs: []
-"#,
-        )
-        .unwrap();
-        let err = verify_cdylib_present_when_rust_impl(tmp.path(), "@tatolab/example")
-            .unwrap_err();
-        assert!(matches!(
-            err,
-            LoadWorkspacePackagesError::CdylibMissing { ref name, ref expected_path }
-                if name == "@tatolab/example"
-                && expected_path.ends_with(host_target_triple())
-        ));
-    }
-
-    #[test]
-    fn verify_cdylib_present_when_rust_impl_passes_for_schemas_only() {
-        // Schemas-only package has no Rust processors, so the cdylib
-        // check is a no-op. Reverting the early-return would surface
-        // a false-positive CdylibMissing.
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            tmp.path().join("streamlib.yaml"),
-            "package:\n  org: tatolab\n  name: core\n  version: 1.0.0\n",
-        )
-        .unwrap();
-        verify_cdylib_present_when_rust_impl(tmp.path(), "@tatolab/core")
-            .expect("schemas-only package must skip the cdylib check");
     }
 
     #[test]
@@ -4227,6 +4419,583 @@ package:
             assert!(
                 matches!(err, AddModuleError::WorkspaceRootInvalid { ref env_value } if env_value == "/nonexistent/path/that/does/not/exist"),
                 "expected WorkspaceRootInvalid, got: {err:?}",
+            );
+        }
+
+        // =====================================================================
+        // ModuleResolverStrategy conformance — one test per variant.
+        //
+        // Each test exercises `add_module_with(ident, strategy)` against a
+        // fixture set up to satisfy exactly that strategy's resolver tier,
+        // then asserts the module loads. Mentally reverting the strategy
+        // resolver's hit-arm for the variant under test would surface the
+        // typed error variant the negative sibling pins.
+        // =====================================================================
+
+        #[test]
+        #[serial]
+        fn add_module_with_default_chain_falls_through_workspace_to_installed_cache() {
+            // Default chain semantics: try workspace stage first, then
+            // installed cache. With NO workspace stage but a populated
+            // installed cache, the strategy must hit tier 2.
+            const TYPE_NAME: &str = "DefaultChainFallsThroughSchema";
+            let workspace = tempfile::tempdir().unwrap();
+            let home = tempfile::tempdir().unwrap();
+            let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
+
+            // Populate the installed cache with @tatolab/dc-fallthrough@0.1.0.
+            let cache_root = home.path().join("cache/packages");
+            std::fs::create_dir_all(&cache_root).unwrap();
+            let dep_cache_dir = cache_root.join("dc-fallthrough-0.1.0");
+            std::fs::create_dir(&dep_cache_dir).unwrap();
+            write_schemas_only_manifest(
+                &dep_cache_dir,
+                "tatolab",
+                "dc-fallthrough",
+                "0.1.0",
+                Some(TYPE_NAME),
+            );
+            let mut installed =
+                crate::core::config::InstalledPackageManifest::default();
+            installed.add(crate::core::config::InstalledPackageEntry {
+                name: streamlib_idents::PackageRef::new(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("dc-fallthrough").unwrap(),
+                ),
+                version: SemVer::new(0, 1, 0),
+                description: None,
+                installed_from: "test".into(),
+                installed_at: "1970-01-01T00:00:00Z".into(),
+                cache_dir: "dc-fallthrough-0.1.0".to_string(),
+            });
+            installed.save().unwrap();
+
+            let runtime = Runner::new().expect("Runner::new");
+            let canonical = format!("@tatolab/dc-fallthrough/{TYPE_NAME}");
+            assert!(
+                crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
+                    .is_none()
+            );
+
+            runtime
+                .add_module_with(
+                    ModuleIdent::any(
+                        Org::new("tatolab").unwrap(),
+                        Package::new("dc-fallthrough").unwrap(),
+                    ),
+                    ModuleResolverStrategy::DefaultChain,
+                )
+                .expect("DefaultChain must reach installed cache when workspace has no stage");
+
+            assert!(
+                crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
+                    .is_some(),
+                "DefaultChain's installed-cache tier did not actually run load",
+            );
+        }
+
+        #[test]
+        #[serial]
+        fn add_module_with_workspace_staged_strategy_hits_stage_dir_only() {
+            const TYPE_NAME: &str = "WorkspaceStagedOnlySchema";
+            let workspace = tempfile::tempdir().unwrap();
+            let home = tempfile::tempdir().unwrap();
+            let _staged = stage_workspace_package(
+                workspace.path(),
+                "tatolab",
+                "ws-only",
+                "1.0.0",
+                Some(TYPE_NAME),
+            );
+            let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
+            let runtime = Runner::new().expect("Runner::new");
+            let canonical = format!("@tatolab/ws-only/{TYPE_NAME}");
+            assert!(
+                crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
+                    .is_none()
+            );
+            runtime
+                .add_module_with(
+                    ModuleIdent::any(
+                        Org::new("tatolab").unwrap(),
+                        Package::new("ws-only").unwrap(),
+                    ),
+                    ModuleResolverStrategy::WorkspaceStaged,
+                )
+                .expect("WorkspaceStaged must hit the stage dir");
+            assert!(
+                crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
+                    .is_some()
+            );
+        }
+
+        #[test]
+        #[serial]
+        fn add_module_with_workspace_staged_strategy_surfaces_miss() {
+            // No workspace stage and no fallback: WorkspaceStaged must
+            // surface the typed `WorkspaceStageMiss` rather than silently
+            // falling through. Mentally reverting the
+            // [`WorkspaceStageMiss`] return in the resolver would make
+            // this surface a generic `ModuleNotFound`.
+            let workspace = tempfile::tempdir().unwrap();
+            let home = tempfile::tempdir().unwrap();
+            let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
+            let runtime = Runner::new().expect("Runner::new");
+            let err = runtime
+                .add_module_with(
+                    ModuleIdent::any(
+                        Org::new("tatolab").unwrap(),
+                        Package::new("ws-only-miss").unwrap(),
+                    ),
+                    ModuleResolverStrategy::WorkspaceStaged,
+                )
+                .expect_err("missing stage dir must error");
+            assert!(
+                matches!(
+                    err,
+                    AddModuleError::WorkspaceStageMiss { ref package, ref expected_path }
+                        if package.name.as_str() == "ws-only-miss"
+                            && expected_path.ends_with("tatolab__ws-only-miss")
+                ),
+                "expected WorkspaceStageMiss, got: {err:?}",
+            );
+        }
+
+        #[test]
+        #[serial]
+        fn add_module_with_installed_cache_strategy_hits_cache_only() {
+            const TYPE_NAME: &str = "InstalledCacheOnlySchema";
+            // Set workspace to something OTHER than where a stage would
+            // be — strategy is InstalledCache so workspace must not be
+            // consulted. (We still need an existing dir for the env
+            // guard since WorkspaceRootInvalid would otherwise fire.)
+            let workspace = tempfile::tempdir().unwrap();
+            let home = tempfile::tempdir().unwrap();
+            let cache_root = home.path().join("cache/packages");
+            std::fs::create_dir_all(&cache_root).unwrap();
+            let dep_cache_dir = cache_root.join("ic-only-1.0.0");
+            std::fs::create_dir(&dep_cache_dir).unwrap();
+            write_schemas_only_manifest(
+                &dep_cache_dir,
+                "tatolab",
+                "ic-only",
+                "1.0.0",
+                Some(TYPE_NAME),
+            );
+            let mut installed =
+                crate::core::config::InstalledPackageManifest::default();
+            installed.add(crate::core::config::InstalledPackageEntry {
+                name: streamlib_idents::PackageRef::new(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("ic-only").unwrap(),
+                ),
+                version: SemVer::new(1, 0, 0),
+                description: None,
+                installed_from: "test".into(),
+                installed_at: "1970-01-01T00:00:00Z".into(),
+                cache_dir: "ic-only-1.0.0".to_string(),
+            });
+            let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
+            installed.save().unwrap();
+
+            let runtime = Runner::new().expect("Runner::new");
+            let canonical = format!("@tatolab/ic-only/{TYPE_NAME}");
+            runtime
+                .add_module_with(
+                    ModuleIdent::any(
+                        Org::new("tatolab").unwrap(),
+                        Package::new("ic-only").unwrap(),
+                    ),
+                    ModuleResolverStrategy::InstalledCache,
+                )
+                .expect("InstalledCache strategy must hit the cache");
+            assert!(
+                crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
+                    .is_some()
+            );
+        }
+
+        #[test]
+        #[serial]
+        fn add_module_with_manifest_directory_loads_arbitrary_dir() {
+            // ManifestDirectory bypasses ident-keyed resolution
+            // entirely — the path IS the source of truth. Used by
+            // load_project() and by per-call patch overrides.
+            const TYPE_NAME: &str = "ManifestDirectorySchema";
+            let workspace = tempfile::tempdir().unwrap();
+            let home = tempfile::tempdir().unwrap();
+            let arbitrary = tempfile::tempdir().unwrap();
+            write_schemas_only_manifest(
+                arbitrary.path(),
+                "tatolab",
+                "md-arbitrary",
+                "0.7.2",
+                Some(TYPE_NAME),
+            );
+            let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
+            let runtime = Runner::new().expect("Runner::new");
+            let canonical = format!("@tatolab/md-arbitrary/{TYPE_NAME}");
+            runtime
+                .add_module_with(
+                    ModuleIdent::any(
+                        Org::new("tatolab").unwrap(),
+                        Package::new("md-arbitrary").unwrap(),
+                    ),
+                    ModuleResolverStrategy::ManifestDirectory {
+                        path: arbitrary.path().to_path_buf(),
+                    },
+                )
+                .expect("ManifestDirectory must load the arbitrary dir");
+            assert!(
+                crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
+                    .is_some()
+            );
+        }
+
+        #[test]
+        #[serial]
+        fn add_module_with_manifest_directory_surfaces_missing_dir() {
+            let workspace = tempfile::tempdir().unwrap();
+            let home = tempfile::tempdir().unwrap();
+            let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
+            let runtime = Runner::new().expect("Runner::new");
+            let err = runtime
+                .add_module_with(
+                    ModuleIdent::any(
+                        Org::new("tatolab").unwrap(),
+                        Package::new("md-missing").unwrap(),
+                    ),
+                    ModuleResolverStrategy::ManifestDirectory {
+                        path: std::path::PathBuf::from("/nonexistent/does-not-exist"),
+                    },
+                )
+                .expect_err("missing manifest dir must error");
+            assert!(
+                matches!(err, AddModuleError::ManifestDirectoryMissing { .. }),
+                "expected ManifestDirectoryMissing, got: {err:?}",
+            );
+        }
+
+        #[test]
+        #[serial]
+        fn add_module_with_explicit_strategy_overrides_default_chain() {
+            // The per-call override IS the in-code equivalent of the
+            // manifest's `patch: path:` table — proves that an explicit
+            // strategy reaches the resolver and short-circuits the
+            // workspace-stage / installed-cache default chain even when
+            // BOTH default tiers would also have hit.
+            const TYPE_NAME: &str = "PerCallOverrideSchema";
+            let workspace = tempfile::tempdir().unwrap();
+            let home = tempfile::tempdir().unwrap();
+
+            // Stage a "wrong" version (0.1.0) under the workspace.
+            let _staged = stage_workspace_package(
+                workspace.path(),
+                "tatolab",
+                "per-call-override",
+                "0.1.0",
+                None,
+            );
+
+            // Also write the "right" version (9.0.0) at an arbitrary
+            // directory the override will point at, AND emit a schema
+            // unique to this version so the post-load registry probe
+            // can witness WHICH manifest actually loaded.
+            let overridden = tempfile::tempdir().unwrap();
+            write_schemas_only_manifest(
+                overridden.path(),
+                "tatolab",
+                "per-call-override",
+                "9.0.0",
+                Some(TYPE_NAME),
+            );
+
+            let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
+            let runtime = Runner::new().expect("Runner::new");
+
+            runtime
+                .add_module_with(
+                    ModuleIdent::any(
+                        Org::new("tatolab").unwrap(),
+                        Package::new("per-call-override").unwrap(),
+                    ),
+                    ModuleResolverStrategy::ManifestDirectory {
+                        path: overridden.path().to_path_buf(),
+                    },
+                )
+                .expect("explicit override must reach the resolver");
+
+            let canonical = format!("@tatolab/per-call-override/{TYPE_NAME}");
+            assert!(
+                crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
+                    .is_some(),
+                "explicit strategy didn't actually divert the resolver — schema from \
+                 overridden path is missing",
+            );
+        }
+
+        // =====================================================================
+        // Recursive dep walker — each declared dep routes through
+        // `add_module_with`, which means the new shape's contract is
+        // "single primitive, multiple entry points." Tests below
+        // exercise multi-dep walk, version-range mismatch surfaced from
+        // a dep, and the cycle-detection error.
+        // =====================================================================
+
+        #[test]
+        #[serial]
+        fn add_module_recurses_through_add_module_with_for_each_dep() {
+            // A → B → C — all three must register.
+            const TYPE_A: &str = "DepWalkAllThreeASchema";
+            const TYPE_B: &str = "DepWalkAllThreeBSchema";
+            const TYPE_C: &str = "DepWalkAllThreeCSchema";
+            let workspace = tempfile::tempdir().unwrap();
+            let home = tempfile::tempdir().unwrap();
+            let pkg_root = tempfile::tempdir().unwrap();
+
+            // Build three manifest dirs side-by-side; A path-deps B
+            // which path-deps C.
+            let a = pkg_root.path().join("a");
+            let b = pkg_root.path().join("b");
+            let c = pkg_root.path().join("c");
+            std::fs::create_dir(&a).unwrap();
+            std::fs::create_dir(&b).unwrap();
+            std::fs::create_dir(&c).unwrap();
+            std::fs::create_dir(a.join("schemas")).unwrap();
+            std::fs::create_dir(b.join("schemas")).unwrap();
+            std::fs::create_dir(c.join("schemas")).unwrap();
+            std::fs::write(
+                a.join("schemas/depwalkallthreeaschema.yaml"),
+                format!("metadata:\n  type: {TYPE_A}\n  max_payload_bytes: 4096\n"),
+            )
+            .unwrap();
+            std::fs::write(
+                b.join("schemas/depwalkallthreebschema.yaml"),
+                format!("metadata:\n  type: {TYPE_B}\n  max_payload_bytes: 4096\n"),
+            )
+            .unwrap();
+            std::fs::write(
+                c.join("schemas/depwalkallthreecschema.yaml"),
+                format!("metadata:\n  type: {TYPE_C}\n  max_payload_bytes: 4096\n"),
+            )
+            .unwrap();
+            std::fs::write(
+                a.join("streamlib.yaml"),
+                format!(
+                    "package:\n  org: tatolab\n  name: dwa-a\n  version: \"0.1.0\"\n\
+                     dependencies:\n  \"@tatolab/dwa-b\":\n    path: ../b\n\
+                     schemas:\n  {TYPE_A}:\n    file: schemas/depwalkallthreeaschema.yaml\n"
+                ),
+            )
+            .unwrap();
+            std::fs::write(
+                b.join("streamlib.yaml"),
+                format!(
+                    "package:\n  org: tatolab\n  name: dwa-b\n  version: \"0.1.0\"\n\
+                     dependencies:\n  \"@tatolab/dwa-c\":\n    path: ../c\n\
+                     schemas:\n  {TYPE_B}:\n    file: schemas/depwalkallthreebschema.yaml\n"
+                ),
+            )
+            .unwrap();
+            std::fs::write(
+                c.join("streamlib.yaml"),
+                format!(
+                    "package:\n  org: tatolab\n  name: dwa-c\n  version: \"0.1.0\"\n\
+                     schemas:\n  {TYPE_C}:\n    file: schemas/depwalkallthreecschema.yaml\n"
+                ),
+            )
+            .unwrap();
+
+            let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
+            let runtime = Runner::new().expect("Runner::new");
+            runtime
+                .add_module_with(
+                    ModuleIdent::any(
+                        Org::new("tatolab").unwrap(),
+                        Package::new("dwa-a").unwrap(),
+                    ),
+                    ModuleResolverStrategy::ManifestDirectory { path: a.clone() },
+                )
+                .expect("dep walker must succeed end-to-end");
+            for (pkg, ty) in [
+                ("dwa-a", TYPE_A),
+                ("dwa-b", TYPE_B),
+                ("dwa-c", TYPE_C),
+            ] {
+                let canonical = format!("@tatolab/{pkg}/{ty}");
+                assert!(
+                    crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
+                        .is_some(),
+                    "expected schema {canonical} registered after dep walk",
+                );
+            }
+        }
+
+        #[test]
+        #[serial]
+        fn add_module_detects_self_referential_cycle() {
+            // A depends on A (path: .). The recursive walker must surface
+            // `DependencyCycleDetected` rather than infinite-loop or
+            // panic on stack overflow.
+            let workspace = tempfile::tempdir().unwrap();
+            let home = tempfile::tempdir().unwrap();
+            let pkg = tempfile::tempdir().unwrap();
+            std::fs::write(
+                pkg.path().join("streamlib.yaml"),
+                "package:\n  org: tatolab\n  name: cycle-self\n  version: \"0.1.0\"\n\
+                 dependencies:\n  \"@tatolab/cycle-self\":\n    path: .\n",
+            )
+            .unwrap();
+            let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
+            let runtime = Runner::new().expect("Runner::new");
+            let err = runtime
+                .add_module_with(
+                    ModuleIdent::any(
+                        Org::new("tatolab").unwrap(),
+                        Package::new("cycle-self").unwrap(),
+                    ),
+                    ModuleResolverStrategy::ManifestDirectory {
+                        path: pkg.path().to_path_buf(),
+                    },
+                )
+                .expect_err("self-referential cycle must error");
+            // Cycle detection currently surfaces wrapped inside the dep
+            // walker's `LoadProjectFailed` envelope because the dep walk
+            // recurses via the same channel as a normal dep load. Match
+            // on the unwrapped form to lock the contract.
+            let cycle_visible = matches!(
+                err,
+                AddModuleError::DependencyCycleDetected { ref cycle }
+                    if cycle.iter().any(|p| p.name.as_str() == "cycle-self")
+            ) || matches!(
+                err,
+                AddModuleError::LoadProjectFailed { ref source, .. }
+                    if source.to_string().contains("Dependency cycle detected")
+                        && source.to_string().contains("cycle-self")
+            );
+            assert!(cycle_visible, "expected cycle detection, got: {err:?}");
+        }
+
+        #[test]
+        #[serial]
+        fn add_module_detects_mutual_cycle_a_to_b_to_a() {
+            // A path-deps B, B path-deps A. Same contract as the
+            // self-cycle test; tests the two-step cycle case.
+            let workspace = tempfile::tempdir().unwrap();
+            let home = tempfile::tempdir().unwrap();
+            let pkg_root = tempfile::tempdir().unwrap();
+            let a = pkg_root.path().join("a");
+            let b = pkg_root.path().join("b");
+            std::fs::create_dir(&a).unwrap();
+            std::fs::create_dir(&b).unwrap();
+            std::fs::write(
+                a.join("streamlib.yaml"),
+                "package:\n  org: tatolab\n  name: cycle-a\n  version: \"0.1.0\"\n\
+                 dependencies:\n  \"@tatolab/cycle-b\":\n    path: ../b\n",
+            )
+            .unwrap();
+            std::fs::write(
+                b.join("streamlib.yaml"),
+                "package:\n  org: tatolab\n  name: cycle-b\n  version: \"0.1.0\"\n\
+                 dependencies:\n  \"@tatolab/cycle-a\":\n    path: ../a\n",
+            )
+            .unwrap();
+            let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
+            let runtime = Runner::new().expect("Runner::new");
+            let err = runtime
+                .add_module_with(
+                    ModuleIdent::any(
+                        Org::new("tatolab").unwrap(),
+                        Package::new("cycle-a").unwrap(),
+                    ),
+                    ModuleResolverStrategy::ManifestDirectory { path: a.clone() },
+                )
+                .expect_err("mutual cycle must error");
+            let msg = format!("{err}");
+            assert!(
+                msg.contains("cycle") && (msg.contains("cycle-a") || msg.contains("cycle-b")),
+                "expected cycle diagnostic naming cycle-a or cycle-b, got: {err:?}",
+            );
+        }
+
+        #[test]
+        #[serial]
+        fn add_module_surfaces_version_mismatch_propagating_from_dep() {
+            // A path-deps B; A's manifest pins B to "^2.0.0" but B's
+            // path target ships "1.0.0". For path-style declarations
+            // the declared range is `any` (path is authoritative), so a
+            // pure path dep does NOT trigger version mismatch.
+            // Instead, use a registry-style declaration patched with a
+            // path: the patch swaps the SOURCE while keeping the
+            // declared range — exactly Cargo's `[patch]` semantics —
+            // and the resulting version range check fires.
+            let workspace = tempfile::tempdir().unwrap();
+            let home = tempfile::tempdir().unwrap();
+            let pkg_root = tempfile::tempdir().unwrap();
+            let a = pkg_root.path().join("a");
+            let b = pkg_root.path().join("b");
+            std::fs::create_dir(&a).unwrap();
+            std::fs::create_dir(&b).unwrap();
+            std::fs::write(
+                a.join("streamlib.yaml"),
+                "package:\n  org: tatolab\n  name: vmm-a\n  version: \"0.1.0\"\n\
+                 dependencies:\n  \"@tatolab/vmm-b\": \"^2.0.0\"\n\
+                 patch:\n  \"@tatolab/vmm-b\":\n    path: ../b\n",
+            )
+            .unwrap();
+            std::fs::write(
+                b.join("streamlib.yaml"),
+                "package:\n  org: tatolab\n  name: vmm-b\n  version: \"1.0.0\"\n",
+            )
+            .unwrap();
+            let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
+            let runtime = Runner::new().expect("Runner::new");
+            let err = runtime
+                .add_module_with(
+                    ModuleIdent::any(
+                        Org::new("tatolab").unwrap(),
+                        Package::new("vmm-a").unwrap(),
+                    ),
+                    ModuleResolverStrategy::ManifestDirectory { path: a.clone() },
+                )
+                .expect_err("version mismatch from dep must propagate");
+            assert!(
+                matches!(err, AddModuleError::VersionRangeUnsatisfied { ref module, found, .. }
+                    if module.name.as_str() == "vmm-b" && found == SemVer::new(1, 0, 0)),
+                "expected VersionRangeUnsatisfied for vmm-b@1.0.0, got: {err:?}",
+            );
+        }
+
+        #[test]
+        #[serial]
+        fn add_module_default_path_keeps_default_chain_when_no_override() {
+            // Lock the negative half of the override contract: bare
+            // `add_module(ident)` keeps the default-chain behavior —
+            // proves the override path is the ONLY way to escape the
+            // default chain, and that the absence of an override
+            // doesn't silently morph into a different strategy.
+            const TYPE_NAME: &str = "DefaultChainStaysSchema";
+            let workspace = tempfile::tempdir().unwrap();
+            let home = tempfile::tempdir().unwrap();
+            let _staged = stage_workspace_package(
+                workspace.path(),
+                "tatolab",
+                "default-chain-stays",
+                "1.0.0",
+                Some(TYPE_NAME),
+            );
+            let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
+            let runtime = Runner::new().expect("Runner::new");
+            runtime
+                .add_module(ModuleIdent::any(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("default-chain-stays").unwrap(),
+                ))
+                .expect("bare add_module must keep DefaultChain behavior");
+            let canonical = format!("@tatolab/default-chain-stays/{TYPE_NAME}");
+            assert!(
+                crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
+                    .is_some()
             );
         }
 
