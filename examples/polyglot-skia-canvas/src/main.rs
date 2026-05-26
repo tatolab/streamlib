@@ -55,10 +55,11 @@ use streamlib::sdk::rhi::{
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::error::Error;
 use streamlib::sdk::engine::host_rhi::{HostVulkanTimelineSemaphore, VulkanTextureReadback};
+use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::schema_ident;
 use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
 
 const SCENARIO_SURFACE_UUID: &str = "00000000-0000-0000-0000-000000005c1a";
 const SURFACE_SIZE: u32 = 512;
@@ -179,18 +180,24 @@ fn main() -> Result<()> {
     }
 
     // Load the BgraFileSource processor from `@tatolab/debug-utilities`
-    // at runtime — `cargo xtask build-plugins --package @tatolab/debug-utilities`
+    // via the default resolver chain (workspace stage → installed
+    // cache). `cargo xtask build-plugins --package @tatolab/debug-utilities`
     // must have run first.
-    runtime
-        .load_workspace_packages(["@tatolab/debug-utilities"])
-        .map_err(streamlib::sdk::error::Error::from)?;
+    runtime.add_module(module_ident_any_version!("tatolab", "debug-utilities"))?;
 
-    // Load the polyglot processor declaratively. The runner's
-    // `streamlib.yaml` declares the Python sub-package via a `patch:`
-    // `path:` override; `load_project` walks the manifest, resolves
-    // it against `../python`, and registers its processor + schemas.
+    // Load the polyglot processor via an explicit add_module_with
+    // call. The Python sub-package is example-local (sibling of this
+    // example crate) and not workspace-staged, so it's resolved by
+    // its manifest directory. The recursive dep walker follows the
+    // sub-package's own dependencies. Python is the only runtime
+    // today — skia-python wraps the Skia C API.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    runtime.load_project(&manifest_dir)?;
+    runtime.add_module_with(
+        module_ident_any_version!("tatolab", "polyglot-skia-canvas"),
+        ModuleResolverStrategy::ManifestDirectory {
+            path: manifest_dir.join("python"),
+        },
+    )?;
 
     let fixture_path =
         write_trigger_fixture().map_err(Error::Configuration)?;
