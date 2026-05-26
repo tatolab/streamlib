@@ -276,11 +276,10 @@ impl VulkanTextureReadback {
             });
         }
 
-        // Route through the v10 `host_vulkan_texture_arc` FullAccess slot
-        // so this submit path is safe to call from cdylib-loaded packages
-        // (e.g. `@tatolab/display`'s `sample_texture_to_png` fallback).
-        // `Texture::vulkan_inner()` reaches `host_inner()` which panics
-        // when `host_callbacks().is_some()`.
+        // Cdylib-safe: `Texture::vulkan_inner()` reaches `host_inner()` which
+        // panics under `host_callbacks().is_some()`. Route through the
+        // `host_vulkan_texture_arc` FullAccess slot so cdylib callers don't
+        // trip the panic guard.
         let host_texture = texture.host_vulkan_texture_arc().map_err(|e| {
             TextureReadbackError::Submit {
                 label: self.label.clone(),
