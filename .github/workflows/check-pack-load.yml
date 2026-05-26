@@ -1,0 +1,83 @@
+name: Check Pack → Load
+
+# Foundation gate for the All-Dynamic Package Loading distribution
+# model: `streamlib pack` produces a `.slpkg`, `Runner::load_package`
+# consumes it, and the package's processors + schemas land in the
+# runtime registries. Any mismatch between the pack producer side
+# (`libs/streamlib-cli/src/commands/pack.rs`) and the load consumer
+# side (`Runner::load_package` / `extract_slpkg_to_cache` in
+# `libs/streamlib-engine/src/core/runtime/runtime.rs`) surfaces here
+# before the broader example sweep / container smoke test would
+# amplify the failure.
+#
+# Covers:
+#   - One Rust-impl package (`@tatolab/network`): pack-then-load
+#     populates `PROCESSOR_REGISTRY` with the package's processors
+#     via the `STREAMLIB_PLUGIN` callback.
+#   - One schemas-only package (`@tatolab/core`): exercises the
+#     no-cdylib branch — pack emits no `lib/` entries, load_package
+#     walks the `schemas:` map and registers each canonical schema.
+#   - Negative paths: missing slpkg, foreign-triple-only slpkg.
+#
+# Companion to the container smoke workflow (covered separately) —
+# this gate runs in workspace CI without container infrastructure.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  pack-then-load-smoke:
+    name: pack → load smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        # The pack-then-load test builds `streamlib-cli` (depends on
+        # the full SDK) and `streamlib-network` (a Rust-impl package
+        # producing a real cdylib). Both inherit the engine's Linux
+        # dep set; minimal subset covers them without dragging in the
+        # GPU/codec backends.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            protobuf-compiler \
+            libvulkan-dev \
+            glslc
+
+      - name: Install jtd-codegen
+        # The engine's `build.rs` invokes the upstream `jtd-codegen`
+        # binary (v0.4.1) to generate typed bindings from JTD schemas
+        # — see `libs/streamlib-jtd-codegen/src/lib.rs` for the
+        # version contract. The streamlib-engine build fails without
+        # it (`jtd-codegen not found. Install v0.4.1 from
+        # https://github.com/jsontypedef/json-typedef-codegen/releases/tag/v0.4.1`).
+        run: |
+          curl -sSL https://github.com/jsontypedef/json-typedef-codegen/releases/download/v0.4.1/x86_64-unknown-linux-gnu.zip -o /tmp/jtd-codegen.zip
+          unzip -q /tmp/jtd-codegen.zip -d /tmp/jtd-codegen
+          sudo install -m 0755 /tmp/jtd-codegen/jtd-codegen /usr/local/bin/jtd-codegen
+          jtd-codegen --version
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-pack-load-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-pack-load-
+
+      - name: cargo test pack_then_load_smoke
+        run: cargo test --test pack_then_load_smoke -p streamlib-engine
