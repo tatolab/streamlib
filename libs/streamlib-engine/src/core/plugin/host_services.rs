@@ -12105,24 +12105,18 @@ unsafe extern "C" fn host_command_recorder_record_swapchain_image_barrier(
                 );
                 return 1;
             };
-            use vulkanalia::vk::{self, Handle};
-            // SAFETY: caller passes a raw VkImage handle minted by the
-            // host-side swapchain creation; this widens it to the
-            // `Handle` type without dereferencing anything.
-            let image = vk::Image::from_raw(image_raw);
-            let old_layout = vk::ImageLayout::from_raw(from_layout_raw);
-            let new_layout = vk::ImageLayout::from_raw(to_layout_raw);
-            let src_stage =
-                vk::PipelineStageFlags2::from_bits_truncate(from_stage_raw as u64);
-            let src_access =
-                vk::AccessFlags2::from_bits_truncate(from_access_raw as u64);
-            let dst_stage =
-                vk::PipelineStageFlags2::from_bits_truncate(to_stage_raw as u64);
-            let dst_access =
-                vk::AccessFlags2::from_bits_truncate(to_access_raw as u64);
-            match recorder.record_swapchain_image_barrier(
-                image, old_layout, new_layout, src_stage, src_access, dst_stage,
-                dst_access,
+            // Dispatch into the RHI-side `from_wire` shim — all
+            // `vulkanalia` construction stays inside `vulkan/rhi/`
+            // (the check-boundaries rule keeps raw vulkanalia out of
+            // `core/plugin/`).
+            match recorder.record_swapchain_image_barrier_from_wire(
+                image_raw,
+                from_layout_raw,
+                to_layout_raw,
+                from_stage_raw,
+                to_stage_raw,
+                from_access_raw,
+                to_access_raw,
             ) {
                 Ok(()) => 0,
                 Err(e) => {
@@ -12194,16 +12188,18 @@ unsafe extern "C" fn host_command_recorder_cmd_begin_dynamic_rendering(
                 );
                 return 1;
             };
-            use vulkanalia::vk::{self, Handle};
-            let image_view = vk::ImageView::from_raw(image_view_raw);
             let clear = if has_clear_color != 0 {
                 Some([clear_r, clear_g, clear_b, clear_a])
             } else {
                 None
             };
-            match recorder.cmd_begin_dynamic_rendering(
-                image_view,
-                (extent_w, extent_h),
+            // Dispatch into the RHI-side `from_wire` shim — see the
+            // `record_swapchain_image_barrier` wrapper above for the
+            // check-boundaries rationale.
+            match recorder.cmd_begin_dynamic_rendering_from_wire(
+                image_view_raw,
+                extent_w,
+                extent_h,
                 clear,
             ) {
                 Ok(()) => 0,
@@ -12327,7 +12323,6 @@ unsafe extern "C" fn host_command_recorder_submit_with_semaphores(
                 );
                 return 1;
             };
-            use vulkanalia::vk::{self, Handle, HasBuilder};
             // SAFETY: caller-owned arrays. We only read; the buffers
             // outlive the call by the cdylib-side `Vec` they came from.
             let waits_repr: &[streamlib_plugin_abi::SemaphoreSubmitInfoRepr] =
@@ -12342,33 +12337,11 @@ unsafe extern "C" fn host_command_recorder_submit_with_semaphores(
                 } else {
                     unsafe { std::slice::from_raw_parts(signals_ptr, signals_count) }
                 };
-            let waits: Vec<vk::SemaphoreSubmitInfo> = waits_repr
-                .iter()
-                .map(|r| {
-                    vk::SemaphoreSubmitInfo::builder()
-                        .semaphore(vk::Semaphore::from_raw(r.semaphore))
-                        .value(r.value)
-                        .stage_mask(vk::PipelineStageFlags2::from_bits_truncate(
-                            r.stage_mask,
-                        ))
-                        .device_index(r.device_index)
-                        .build()
-                })
-                .collect();
-            let signals: Vec<vk::SemaphoreSubmitInfo> = signals_repr
-                .iter()
-                .map(|r| {
-                    vk::SemaphoreSubmitInfo::builder()
-                        .semaphore(vk::Semaphore::from_raw(r.semaphore))
-                        .value(r.value)
-                        .stage_mask(vk::PipelineStageFlags2::from_bits_truncate(
-                            r.stage_mask,
-                        ))
-                        .device_index(r.device_index)
-                        .build()
-                })
-                .collect();
-            match recorder.submit_with_semaphores(&waits, &signals) {
+            // Dispatch into the RHI-side `from_wire` shim — see the
+            // `record_swapchain_image_barrier` wrapper above for the
+            // check-boundaries rationale.
+            match recorder.submit_with_semaphores_from_wire(waits_repr, signals_repr)
+            {
                 Ok(()) => 0,
                 Err(e) => {
                     write_err(
