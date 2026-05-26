@@ -408,8 +408,13 @@ async function main(): Promise<void> {
 
           // Parse entrypoint: "module.ts:export_name"
           const [modulePath, exportName] = parseEntrypoint(entrypoint);
+          // Resolve against the project path. `streamlib pack` writes the
+          // module under `deno/<module>.ts` for layout symmetry with
+          // `python/wheels/`; dev-tree projects keep the module at the
+          // project root (where `streamlib.yaml` lives). Try the packed
+          // layout first, then fall back to project root.
           const fullModulePath = projectPath
-            ? `${projectPath}/${modulePath}`
+            ? resolveDenoModulePath(projectPath, modulePath)
             : modulePath;
 
           log.info("Importing processor module", {
@@ -814,6 +819,27 @@ function parseEntrypoint(entrypoint: string): [string, string] {
     return [entrypoint, "default"];
   }
   return [entrypoint.substring(0, colonIdx), entrypoint.substring(colonIdx + 1)];
+}
+
+/**
+ * Resolve a Deno processor module path against the project directory.
+ *
+ * `streamlib pack` writes the module under `deno/<module>.ts` inside
+ * the .slpkg for layout symmetry with `python/wheels/`. Dev-tree
+ * projects keep the module at the project root (where `streamlib.yaml`
+ * lives). Try the packed-layout path first; fall back to project root.
+ */
+function resolveDenoModulePath(
+  projectPath: string,
+  modulePath: string,
+): string {
+  const packed = `${projectPath}/deno/${modulePath}`;
+  try {
+    Deno.statSync(packed);
+    return packed;
+  } catch {
+    return `${projectPath}/${modulePath}`;
+  }
 }
 
 // Run
