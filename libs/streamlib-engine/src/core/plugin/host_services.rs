@@ -8458,7 +8458,20 @@ pub static HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE:
 /// the β-shape's `methods_vtable` field.
 pub fn host_vulkan_compute_kernel_methods_vtable(
 ) -> *const streamlib_plugin_abi::VulkanComputeKernelMethodsVTable {
-    &HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE
+    // Same routing as `host_gpu_context_limited_access_vtable`:
+    // cdylib β-shape constructors must store the host's vtable
+    // pointer so dispatches actually cross to host code (whose
+    // `host_callbacks()` returns `None`). Without this routing, the
+    // β-shape stored the cdylib's local static and dispatched to the
+    // cdylib's own copy of the wrapper — where `host_callbacks()`
+    // returns `Some` and any reach through `Texture::host_inner()` or
+    // sibling β-shape `host_inner()` accessors panics.
+    match host_callbacks() {
+        Some(c) if !c.vulkan_compute_kernel_methods_vtable.is_null() => {
+            c.vulkan_compute_kernel_methods_vtable
+        }
+        _ => &HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE,
+    }
 }
 
 // ---- VulkanGraphicsKernelMethodsVTable wrappers (#951) ---------------------
@@ -9919,7 +9932,15 @@ pub static HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE:
 /// the β-shape's `methods_vtable` field.
 pub fn host_vulkan_graphics_kernel_methods_vtable(
 ) -> *const streamlib_plugin_abi::VulkanGraphicsKernelMethodsVTable {
-    &HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE
+    // See [`host_vulkan_compute_kernel_methods_vtable`] for the routing
+    // rationale — cdylib β-shape constructors must store the host's
+    // vtable pointer so dispatches actually cross DSO boundaries.
+    match host_callbacks() {
+        Some(c) if !c.vulkan_graphics_kernel_methods_vtable.is_null() => {
+            c.vulkan_graphics_kernel_methods_vtable
+        }
+        _ => &HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE,
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -12526,9 +12547,18 @@ pub static HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE:
 /// Accessor for the host's static `RhiCommandRecorderMethodsVTable`
 /// — used by `RhiCommandRecorder::from_inner` to populate the
 /// β-shape's `methods_vtable` field.
+///
+/// See [`host_vulkan_compute_kernel_methods_vtable`] for the routing
+/// rationale — cdylib β-shape constructors must store the host's
+/// vtable pointer so dispatches actually cross DSO boundaries.
 pub fn host_rhi_command_recorder_methods_vtable(
 ) -> *const streamlib_plugin_abi::RhiCommandRecorderMethodsVTable {
-    &HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE
+    match host_callbacks() {
+        Some(c) if !c.rhi_command_recorder_methods_vtable.is_null() => {
+            c.rhi_command_recorder_methods_vtable
+        }
+        _ => &HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE,
+    }
 }
 
 // =============================================================================
