@@ -508,7 +508,14 @@ pub const RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 ///   take raw `VkImage` / `VkImageView` / `VkSemaphore` handles as
 ///   `u64` integers; the host materializes the typed `vk::*`
 ///   wrappers internally.
-pub const RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 3;
+/// - v4: #1066 — appends `record_draw_indexed` (sibling of v3
+///   `record_draw` for `vkCmdDrawIndexed`). Added eagerly alongside
+///   `record_draw` rather than waiting for a consumer because the
+///   marginal cost of mirroring the non-indexed slot is trivial and
+///   the asymmetry would force the next "first indexed-draw cdylib
+///   consumer" to re-derive the same engine work mid-task. Same
+///   wire shape as `record_draw` but takes a `DrawIndexedCallRepr`.
+pub const RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 4;
 
 /// Layout version of [`OutputWriterVTable`].
 ///
@@ -3689,11 +3696,15 @@ unsafe impl Sync for RhiColorConverterMethodsVTable {}
 /// v3 (#1066) appends `record_swapchain_image_barrier`,
 /// `cmd_begin_dynamic_rendering`, `cmd_end_dynamic_rendering`,
 /// `submit_with_semaphores`, and `record_draw` for cdylib display
-/// processors. The remaining `RhiCommandRecorder` methods
-/// (`record_draw_indexed`, `record_copy_buffer_to_image`, `submit`,
-/// `submit_and_wait`) keep their cdylib-mode panic in place — they
-/// don't sit on any cdylib hot path today and a follow-up slice
-/// lifts them when a consumer arrives.
+/// processors. v4 (same milestone) appends `record_draw_indexed`
+/// eagerly alongside `record_draw` — the marginal cost of mirroring
+/// the non-indexed slot is trivial and the asymmetry would force
+/// the next indexed-draw cdylib consumer to re-derive the engine
+/// work mid-task. The remaining `RhiCommandRecorder` methods
+/// (`record_copy_buffer_to_image`, `submit`, `submit_and_wait`)
+/// keep their cdylib-mode panic in place — they don't sit on any
+/// cdylib hot path today and a follow-up slice lifts them when a
+/// consumer arrives.
 ///
 /// **Buffer-flavor coverage today:** the v1 `record_buffer_barrier`
 /// and `record_copy_image_to_buffer` slots accept a
@@ -3982,6 +3993,20 @@ pub struct RhiCommandRecorderMethodsVTable {
         kernel_handle: *const c_void,
         frame_index: u32,
         draw: *const DrawCallRepr,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Indexed-draw sibling of [`Self::record_draw`]. Caller must
+    /// have bound an index buffer for `frame_index` via the kernel's
+    /// `set_index_buffer` before this call. Same wire convention as
+    /// `record_draw`; `draw` points at a [`DrawIndexedCallRepr`].
+    pub record_draw_indexed: unsafe extern "C" fn(
+        recorder_handle: *const c_void,
+        kernel_handle: *const c_void,
+        frame_index: u32,
+        draw: *const DrawIndexedCallRepr,
         err_buf: *mut u8,
         err_buf_cap: usize,
         err_len: *mut usize,
@@ -5356,7 +5381,7 @@ mod layout_tests {
         // (`record_pixel_buffer_barrier`,
         // `record_copy_image_to_pixel_buffer`) for cdylib camera
         // per-frame copy into pooled `PixelBuffer` destinations.
-        assert_eq!(RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION, 3);
+        assert_eq!(RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION, 4);
         // v1 (issue #894): initial shape — `write_raw`, `has_port`,
         // `clone_arc`, `drop_arc`.
         assert_eq!(OUTPUT_WRITER_VTABLE_LAYOUT_VERSION, 1);
@@ -5880,9 +5905,9 @@ mod layout_tests {
         //   record_pixel_buffer_barrier          @ 56  (8 bytes, fn pointer, v2)
         //   record_copy_image_to_pixel_buffer    @ 64  (8 bytes, fn pointer, v2)
         // Total = 72 bytes, align = 8.
-        // layout_version (u32) + _reserved_padding (u32) + 13 fn
-        // pointers (8 bytes each) = 4 + 4 + 104 = 112 bytes, align = 8.
-        assert_eq!(size_of::<RhiCommandRecorderMethodsVTable>(), 112);
+        // layout_version (u32) + _reserved_padding (u32) + 14 fn
+        // pointers (8 bytes each) = 4 + 4 + 112 = 120 bytes, align = 8.
+        assert_eq!(size_of::<RhiCommandRecorderMethodsVTable>(), 120);
         assert_eq!(align_of::<RhiCommandRecorderMethodsVTable>(), 8);
         assert_eq!(
             offset_of!(RhiCommandRecorderMethodsVTable, layout_version),
@@ -5965,6 +5990,11 @@ mod layout_tests {
         assert_eq!(
             offset_of!(RhiCommandRecorderMethodsVTable, record_draw),
             104
+        );
+        // v4 entry (#1066).
+        assert_eq!(
+            offset_of!(RhiCommandRecorderMethodsVTable, record_draw_indexed),
+            112
         );
     }
 

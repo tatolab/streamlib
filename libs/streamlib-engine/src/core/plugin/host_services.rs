@@ -12513,6 +12513,123 @@ unsafe extern "C" fn host_command_recorder_record_draw(
     1
 }
 
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_command_recorder_record_draw_indexed(
+    recorder_handle: *const c_void,
+    kernel_handle: *const c_void,
+    frame_index: u32,
+    draw: *const streamlib_plugin_abi::DrawIndexedCallRepr,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_command_recorder_record_draw_indexed",
+        || -> i32 {
+            let Some(recorder) =
+                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            else {
+                write_err(
+                    "record_draw_indexed: null recorder handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if kernel_handle.is_null() {
+                write_err(
+                    "record_draw_indexed: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            if draw.is_null() {
+                write_err(
+                    "record_draw_indexed: null draw pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let draw_ref = unsafe { &*draw };
+            let viewport = if draw_ref.viewport_present != 0 {
+                Some(crate::core::rhi::Viewport {
+                    x: draw_ref.viewport.x,
+                    y: draw_ref.viewport.y,
+                    width: draw_ref.viewport.width,
+                    height: draw_ref.viewport.height,
+                    min_depth: draw_ref.viewport.min_depth,
+                    max_depth: draw_ref.viewport.max_depth,
+                })
+            } else {
+                None
+            };
+            let scissor = if draw_ref.scissor_present != 0 {
+                Some(crate::core::rhi::ScissorRect {
+                    x: draw_ref.scissor.x,
+                    y: draw_ref.scissor.y,
+                    width: draw_ref.scissor.width,
+                    height: draw_ref.scissor.height,
+                })
+            } else {
+                None
+            };
+            let draw_call = crate::core::rhi::DrawIndexedCall {
+                index_count: draw_ref.index_count,
+                instance_count: draw_ref.instance_count,
+                first_index: draw_ref.first_index,
+                vertex_offset: draw_ref.vertex_offset,
+                first_instance: draw_ref.first_instance,
+                viewport,
+                scissor,
+            };
+            let kernel_borrow = make_graphics_kernel_borrow(kernel_handle);
+            match recorder.record_draw_indexed(
+                &*kernel_borrow,
+                frame_index,
+                &draw_call,
+            ) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("record_draw_indexed: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_command_recorder_record_draw_indexed(
+    _recorder_handle: *const c_void,
+    _kernel_handle: *const c_void,
+    _frame_index: u32,
+    _draw: *const streamlib_plugin_abi::DrawIndexedCallRepr,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "record_draw_indexed: Linux-only",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
 /// Host-side `RhiCommandRecorderMethodsVTable` wired to the
 /// per-method wrappers above (Phase E sub-lift slice B — #984;
 /// v3 swapchain render-path slots — #1066).
@@ -12542,6 +12659,7 @@ pub static HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE:
             host_command_recorder_cmd_end_dynamic_rendering,
         submit_with_semaphores: host_command_recorder_submit_with_semaphores,
         record_draw: host_command_recorder_record_draw,
+        record_draw_indexed: host_command_recorder_record_draw_indexed,
     };
 
 /// Accessor for the host's static `RhiCommandRecorderMethodsVTable`

@@ -829,14 +829,14 @@ impl std::fmt::Debug for RhiCommandRecorderInner {
 ///   `record_copy_image_to_buffer`, `submit_signaling_timeline`,
 ///   `record_swapchain_image_barrier`,
 ///   `cmd_begin_dynamic_rendering`, `cmd_end_dynamic_rendering`,
-///   `submit_with_semaphores`, `record_draw`) route through the
-///   per-type
+///   `submit_with_semaphores`, `record_draw`, `record_draw_indexed`)
+///   route through the per-type
 ///   [`streamlib_plugin_abi::RhiCommandRecorderMethodsVTable`] when
 ///   called from cdylib code.
-/// - The remaining host-only methods (`record_draw_indexed`,
-///   `record_copy_buffer_to_image`, `submit`, `submit_and_wait`)
-///   keep their cdylib-mode panic via [`Self::host_inner_mut`]; a
-///   follow-up slice lifts each as a consumer arrives.
+/// - The remaining host-only methods (`record_copy_buffer_to_image`,
+///   `submit`, `submit_and_wait`) keep their cdylib-mode panic via
+///   [`Self::host_inner_mut`]; a follow-up slice lifts each as a
+///   consumer arrives.
 #[repr(C)]
 pub struct RhiCommandRecorder {
     /// Opaque handle to the host's `Box<RhiCommandRecorderInner>`.
@@ -1053,14 +1053,25 @@ impl RhiCommandRecorder {
         self.host_inner_mut().record_draw(kernel, frame_index, draw)
     }
 
-    /// Indexed-draw variant. Host-only until a cdylib consumer
-    /// arrives; cdylib callers panic at [`Self::host_inner_mut`].
+    /// Indexed-draw variant.
+    ///
+    /// Mode-routed: host callers dispatch through `host_inner_mut`;
+    /// cdylib callers dispatch through the v4 `record_draw_indexed`
+    /// slot on
+    /// [`RhiCommandRecorderMethodsVTable`](streamlib_plugin_abi::RhiCommandRecorderMethodsVTable).
     pub fn record_draw_indexed(
         &mut self,
         kernel: &VulkanGraphicsKernel,
         frame_index: u32,
         draw: &DrawIndexedCall,
     ) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_record_draw_indexed_via_vtable(
+                kernel,
+                frame_index,
+                draw,
+            );
+        }
         self.host_inner_mut()
             .record_draw_indexed(kernel, frame_index, draw)
     }
@@ -1517,6 +1528,72 @@ impl RhiCommandRecorder {
         let mut err_len: usize = 0;
         let status = unsafe {
             ((*self.methods_vtable).record_draw)(
+                self.handle,
+                kernel.handle,
+                frame_index,
+                &draw_repr,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    fn dispatch_record_draw_indexed_via_vtable(
+        &self,
+        kernel: &VulkanGraphicsKernel,
+        frame_index: u32,
+        draw: &DrawIndexedCall,
+    ) -> Result<()> {
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "record_draw_indexed: command recorder methods vtable is null"
+                    .into(),
+            ));
+        }
+        let (viewport_present, vp) = match draw.viewport {
+            Some(v) => (1u32, v),
+            None => (0u32, Viewport::full(0, 0)),
+        };
+        let (scissor_present, sc) = match draw.scissor {
+            Some(s) => (1u32, s),
+            None => (0u32, ScissorRect::full(0, 0)),
+        };
+        let draw_repr = streamlib_plugin_abi::DrawIndexedCallRepr {
+            index_count: draw.index_count,
+            instance_count: draw.instance_count,
+            first_index: draw.first_index,
+            vertex_offset: draw.vertex_offset,
+            first_instance: draw.first_instance,
+            viewport_present,
+            scissor_present,
+            _reserved_padding: 0,
+            viewport: streamlib_plugin_abi::ViewportRepr {
+                x: vp.x,
+                y: vp.y,
+                width: vp.width,
+                height: vp.height,
+                min_depth: vp.min_depth,
+                max_depth: vp.max_depth,
+            },
+            scissor: streamlib_plugin_abi::ScissorRectRepr {
+                x: sc.x,
+                y: sc.y,
+                width: sc.width,
+                height: sc.height,
+            },
+        };
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).record_draw_indexed)(
                 self.handle,
                 kernel.handle,
                 frame_index,
