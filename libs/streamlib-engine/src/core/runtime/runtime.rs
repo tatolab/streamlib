@@ -447,6 +447,12 @@ impl Runner {
         let _ = resolve_workspace_root()?;
 
         for (name_str, pkg_ref) in parsed {
+            // Keep the typed segments around for the back-compat error
+            // translation below — moving them into ModuleIdent::any
+            // would consume the values one statement before we need
+            // them for the LegacyPackageIdentityMismatch arm.
+            let req_org = pkg_ref.org.as_str().to_string();
+            let req_name = pkg_ref.name.as_str().to_string();
             let ident = streamlib_idents::ModuleIdent::any(pkg_ref.org, pkg_ref.name);
             self.add_module_with(ident, ModuleResolverStrategy::WorkspaceStaged)
                 .map_err(|err| match err {
@@ -462,15 +468,8 @@ impl Runner {
                         let (actual_org, actual_name) = split_canonical_for_legacy_error(&actual);
                         LoadWorkspacePackagesError::PackageIdentityMismatch {
                             staged_path: source_path,
-                            requested_org: name_str
-                                .strip_prefix('@')
-                                .and_then(|s| s.split_once('/'))
-                                .map(|(o, _)| o.to_string())
-                                .unwrap_or_default(),
-                            requested_name: name_str
-                                .rsplit_once('/')
-                                .map(|(_, n)| n.to_string())
-                                .unwrap_or_default(),
+                            requested_org: req_org.clone(),
+                            requested_name: req_name.clone(),
                             actual_org,
                             actual_name,
                         }
@@ -542,8 +541,13 @@ impl Runner {
         module: streamlib_idents::ModuleIdent,
         strategy: ModuleResolverStrategy,
     ) -> std::result::Result<(), AddModuleError> {
+        // Two collections threaded through the recursion:
+        // - `seen` is O(1) cycle membership lookup
+        // - `path` preserves insertion order so cycle errors carry the
+        //   full recursion edge (`A → B → A` rather than just `A`)
         let mut seen: HashSet<streamlib_idents::PackageRef> = HashSet::new();
-        self.add_module_recursively(module, strategy, &mut seen)
+        let mut path: Vec<streamlib_idents::PackageRef> = Vec::new();
+        self.add_module_recursively(module, strategy, &mut seen, &mut path)
     }
 
     /// Recursive worker: resolves the strategy, validates the
@@ -565,32 +569,38 @@ impl Runner {
         module: streamlib_idents::ModuleIdent,
         strategy: ModuleResolverStrategy,
         seen: &mut HashSet<streamlib_idents::PackageRef>,
+        path: &mut Vec<streamlib_idents::PackageRef>,
     ) -> std::result::Result<(), AddModuleError> {
         let pkg_ref = module.package_ref();
         if !seen.insert(pkg_ref.clone()) {
             // Reaching this package while it is already mid-load on
             // the recursion stack is the dependency-cycle signal.
-            // Surface the cycle's repeated vertex so the caller can
-            // diagnose without re-walking the graph.
-            return Err(AddModuleError::DependencyCycleDetected {
-                cycle: vec![pkg_ref],
-            });
+            // Surface the full recursion path plus the repeated vertex
+            // so the caller can see exactly which edge re-entered.
+            let mut cycle = path.clone();
+            cycle.push(pkg_ref);
+            return Err(AddModuleError::DependencyCycleDetected { cycle });
         }
-        // Run the body, then remove `pkg_ref` from `seen` regardless
-        // of the body's exit path — sibling sub-trees can revisit a
-        // shared transitive dep without false-positive cycle reports.
-        let result = self.add_module_recursive_body(module, strategy, seen);
+        path.push(pkg_ref.clone());
+        // Run the body, then remove `pkg_ref` from both `seen` and
+        // `path` regardless of the body's exit path — sibling
+        // sub-trees can revisit a shared transitive dep without
+        // false-positive cycle reports.
+        let result = self.add_module_recursive_body(module, strategy, seen, path);
         seen.remove(&pkg_ref);
+        path.pop();
         result
     }
 
     /// Body of [`Self::add_module_recursively`] — split out so the
-    /// caller can pop `pkg_ref` from `seen` after every exit path.
+    /// caller can pop `pkg_ref` from `seen` + `path` after every
+    /// exit path.
     fn add_module_recursive_body(
         &self,
         module: streamlib_idents::ModuleIdent,
         strategy: ModuleResolverStrategy,
         seen: &mut HashSet<streamlib_idents::PackageRef>,
+        path: &mut Vec<streamlib_idents::PackageRef>,
     ) -> std::result::Result<(), AddModuleError> {
         use crate::core::config::ProjectConfig;
 
@@ -680,7 +690,7 @@ impl Runner {
                 dep_ident,
                 dep_strategy
             );
-            self.add_module_recursively(dep_ident, dep_strategy, seen)?;
+            self.add_module_recursively(dep_ident, dep_strategy, seen, path)?;
         }
 
         // Now register this package's own processors.
@@ -4836,7 +4846,9 @@ package:
         fn add_module_detects_self_referential_cycle() {
             // A depends on A (path: .). The recursive walker must surface
             // `DependencyCycleDetected` rather than infinite-loop or
-            // panic on stack overflow.
+            // panic on stack overflow. The dep-walker propagates the
+            // typed error unwrapped via bare `?`, so any
+            // `LoadProjectFailed`-shaped wrap would be a regression.
             let workspace = tempfile::tempdir().unwrap();
             let home = tempfile::tempdir().unwrap();
             let pkg = tempfile::tempdir().unwrap();
@@ -4859,28 +4871,29 @@ package:
                     },
                 )
                 .expect_err("self-referential cycle must error");
-            // Cycle detection currently surfaces wrapped inside the dep
-            // walker's `LoadProjectFailed` envelope because the dep walk
-            // recurses via the same channel as a normal dep load. Match
-            // on the unwrapped form to lock the contract.
-            let cycle_visible = matches!(
-                err,
-                AddModuleError::DependencyCycleDetected { ref cycle }
-                    if cycle.iter().any(|p| p.name.as_str() == "cycle-self")
-            ) || matches!(
-                err,
-                AddModuleError::LoadProjectFailed { ref source, .. }
-                    if source.to_string().contains("Dependency cycle detected")
-                        && source.to_string().contains("cycle-self")
-            );
-            assert!(cycle_visible, "expected cycle detection, got: {err:?}");
+            // Strict match: cycle detection surfaces unwrapped. The
+            // recursion-path Vec must contain the repeated vertex
+            // (`cycle-self`) as both the first and last entry so a
+            // reader sees `cycle-self → cycle-self`.
+            match err {
+                AddModuleError::DependencyCycleDetected { cycle } => {
+                    assert!(
+                        cycle.len() >= 2
+                            && cycle.first().unwrap().name.as_str() == "cycle-self"
+                            && cycle.last().unwrap().name.as_str() == "cycle-self",
+                        "expected cycle starting and ending at cycle-self, got: {cycle:?}",
+                    );
+                }
+                other => panic!("expected DependencyCycleDetected, got: {other:?}"),
+            }
         }
 
         #[test]
         #[serial]
         fn add_module_detects_mutual_cycle_a_to_b_to_a() {
-            // A path-deps B, B path-deps A. Same contract as the
-            // self-cycle test; tests the two-step cycle case.
+            // A path-deps B, B path-deps A. The recursion-path Vec
+            // must record the full A → B → A edge so the diagnostic
+            // shows exactly which transitive load re-entered.
             let workspace = tempfile::tempdir().unwrap();
             let home = tempfile::tempdir().unwrap();
             let pkg_root = tempfile::tempdir().unwrap();
@@ -4911,11 +4924,24 @@ package:
                     ModuleResolverStrategy::ManifestDirectory { path: a.clone() },
                 )
                 .expect_err("mutual cycle must error");
-            let msg = format!("{err}");
-            assert!(
-                msg.contains("cycle") && (msg.contains("cycle-a") || msg.contains("cycle-b")),
-                "expected cycle diagnostic naming cycle-a or cycle-b, got: {err:?}",
-            );
+            match err {
+                AddModuleError::DependencyCycleDetected { cycle } => {
+                    let names: Vec<&str> = cycle.iter().map(|p| p.name.as_str()).collect();
+                    // First entry is the root we asked to load
+                    // (`cycle-a`); somewhere later in the path the
+                    // dep walker re-enters `cycle-a` after visiting
+                    // `cycle-b`. The repeated vertex is the last
+                    // entry, so `names.last()` must equal `cycle-a`
+                    // and `cycle-b` must appear between them.
+                    assert_eq!(names.first(), Some(&"cycle-a"));
+                    assert_eq!(names.last(), Some(&"cycle-a"));
+                    assert!(
+                        names.contains(&"cycle-b"),
+                        "expected cycle path to traverse cycle-b, got: {names:?}",
+                    );
+                }
+                other => panic!("expected DependencyCycleDetected, got: {other:?}"),
+            }
         }
 
         #[test]
