@@ -171,9 +171,17 @@ impl SimpleDecoder {
         full: &crate::core::context::GpuContextFullAccess,
         config: SimpleDecoderConfig,
     ) -> Result<Self, VideoError> {
-        use crate::host_rhi::HostGpuDeviceExt;
-
-        let host_device = full.device().vulkan_device();
+        // Cdylib-safe: `GpuContextFullAccess::device()` returns
+        // `&Arc<GpuDevice>` which borrows engine-private state and
+        // panics in cdylib mode. Route through the
+        // `host_vulkan_device_arc` FullAccess vtable slot so workspace
+        // plugin cdylibs (the decoder packages) can construct a
+        // decoder without tripping the panic guard.
+        let host_device = full.host_vulkan_device_arc().map_err(|e| {
+            VideoError::Engine(format!(
+                "Failed to acquire host Vulkan device for decoder: {e}"
+            ))
+        })?;
         let decode_queue = host_device.video_decode_queue().ok_or_else(|| {
             VideoError::BitstreamError(
                 "host device has no video decode queue family — \
@@ -187,7 +195,7 @@ impl SimpleDecoder {
                     "host device exposes decode queue but no queue family index".into(),
                 )
             })?;
-        let host_arc: Arc<crate::vulkan::rhi::HostVulkanDevice> = Arc::clone(host_device);
+        let host_arc: Arc<crate::vulkan::rhi::HostVulkanDevice> = Arc::clone(&host_device);
 
         Self::from_host_device(
             config,

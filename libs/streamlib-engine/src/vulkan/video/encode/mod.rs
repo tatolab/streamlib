@@ -236,11 +236,19 @@ impl SimpleEncoder {
         full: &crate::core::context::GpuContextFullAccess,
         config: SimpleEncoderConfig,
     ) -> Result<Self, VideoError> {
-        use crate::host_rhi::HostGpuDeviceExt;
-
         config.validate().map_err(VideoError::BitstreamError)?;
 
-        let host_device = full.device().vulkan_device();
+        // Cdylib-safe: `GpuContextFullAccess::device()` returns
+        // `&Arc<GpuDevice>` which borrows engine-private state and
+        // panics in cdylib mode. Route through the
+        // `host_vulkan_device_arc` FullAccess vtable slot so workspace
+        // plugin cdylibs (the encoder packages) can construct an
+        // encoder without tripping the panic guard.
+        let host_device = full.host_vulkan_device_arc().map_err(|e| {
+            VideoError::Engine(format!(
+                "Failed to acquire host Vulkan device for encoder: {e}"
+            ))
+        })?;
         let encode_queue = host_device.video_encode_queue().ok_or_else(|| {
             VideoError::BitstreamError(
                 "host device has no video encode queue family — \
@@ -260,7 +268,7 @@ impl SimpleEncoder {
         let compute_queue_family = host_device
             .compute_queue_family_index()
             .unwrap_or_else(|| host_device.queue_family_index());
-        let host_arc: Arc<crate::vulkan::rhi::HostVulkanDevice> = Arc::clone(host_device);
+        let host_arc: Arc<crate::vulkan::rhi::HostVulkanDevice> = Arc::clone(&host_device);
 
         unsafe {
             Self::create_from_external(
