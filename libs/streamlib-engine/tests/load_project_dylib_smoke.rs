@@ -3,18 +3,19 @@
 
 //! Smoke test for the dynamic Rust-plugin load path: build a real
 //! `packages/test-fixtures` cdylib, stage it next to its manifest in a
-//! tempdir, call `runtime.load_project(...)`, and assert
-//! `TestConfiguredProcessor` registered via the `STREAMLIB_PLUGIN`
-//! callback. Mentally revert the `export_plugin!` invocation in
-//! `packages/test-fixtures/src/lib.rs` and this test fails — the
-//! dlopen path validates the processor was registered by the dylib
-//! and surfaces a `Configuration` error when it wasn't.
+//! tempdir, route it through `add_module_with(..., ManifestDirectory)`,
+//! and assert `TestConfiguredProcessor` registered via the
+//! `STREAMLIB_PLUGIN` callback. Mentally revert the `export_plugin!`
+//! invocation in `packages/test-fixtures/src/lib.rs` and this test
+//! fails — the dlopen path validates the processor was registered by
+//! the dylib and surfaces a `Configuration` error when it wasn't.
 
 use std::path::Path;
 
 use serial_test::serial;
+use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
-use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
 use streamlib_engine::core::runtime::host_target_triple;
 
 fn copy_dir_contents(src: &Path, dst: &Path) {
@@ -104,8 +105,13 @@ fn load_project_real_dylib_registers_processor_via_export_plugin() {
 
     let runtime = Runner::new().unwrap();
     runtime
-        .load_project(&fixtures_dst)
-        .expect("load_project must succeed against a real test-fixtures cdylib");
+        .add_module_with(
+            module_ident_any_version!("tatolab", "test-fixtures"),
+            ModuleResolverStrategy::ManifestDirectory {
+                path: fixtures_dst.clone(),
+            },
+        )
+        .expect("add_module_with ManifestDirectory must succeed against a real test-fixtures cdylib");
 
     let registered = PROCESSOR_REGISTRY
         .list_registered()
