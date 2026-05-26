@@ -236,30 +236,31 @@ impl CrtFilmGrainProcessor::Processor {
         self.gpu_context = Some(gpu_context.clone());
         self.start_time = Some(Instant::now());
 
-        // Same shape as `BlendingCompositor::setup_inner` — privileged
-        // allocation runs inside `escalate(|full| ...)` so the cdylib
-        // path doesn't trip `host_inner()` panic-guards on the
-        // FullAccess vtable. See the comment in
-        // `blending_compositor.rs` for the full rationale.
+        // setup() runs inside the engine's privileged lifecycle dispatch
+        // (`ProcessorInstance::setup`), so `ctx.gpu_full_access()` is
+        // already privileged in both cdylib and in-process modes: cdylib
+        // bodies see a ScopeToken-shaped FullAccess routed through the
+        // FullAccess vtable, in-process bodies see the Boxed FullAccess
+        // dispatched directly. Calling `gpu_limited_access().escalate(...)`
+        // here would re-enter the same gate and trip the gate's same-
+        // thread re-entry panic.
         let width = self.config.width;
         let height = self.config.height;
-        let (kernel, ring_descriptors) = gpu_context.escalate(|full| {
-            let vulkan_device = full.host_vulkan_device_arc()?;
-            let kernel = Arc::new(SandboxedCrtFilmGrain::new(&vulkan_device)?);
+        let full = ctx.gpu_full_access();
+        let vulkan_device = full.host_vulkan_device_arc()?;
+        let kernel = Arc::new(SandboxedCrtFilmGrain::new(&vulkan_device)?);
 
-            let mut ring_descriptors: Vec<(String, Texture)> =
-                Vec::with_capacity(OUTPUT_RING_DEPTH);
-            for slot_idx in 0..OUTPUT_RING_DEPTH {
-                let texture = full.acquire_render_target_dma_buf_image(
-                    width,
-                    height,
-                    TextureFormat::Bgra8Unorm,
-                )?;
-                let surface_id = CRT_OUTPUT_SURFACE_UUIDS[slot_idx].to_string();
-                ring_descriptors.push((surface_id, texture));
-            }
-            Ok((kernel, ring_descriptors))
-        })?;
+        let mut ring_descriptors: Vec<(String, Texture)> =
+            Vec::with_capacity(OUTPUT_RING_DEPTH);
+        for slot_idx in 0..OUTPUT_RING_DEPTH {
+            let texture = full.acquire_render_target_dma_buf_image(
+                width,
+                height,
+                TextureFormat::Bgra8Unorm,
+            )?;
+            let surface_id = CRT_OUTPUT_SURFACE_UUIDS[slot_idx].to_string();
+            ring_descriptors.push((surface_id, texture));
+        }
 
         // Dual-register each slot outside `escalate`:
         // - `GpuContext::texture_cache` (Path 1 — in-process consumers

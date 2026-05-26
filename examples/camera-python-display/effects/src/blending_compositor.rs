@@ -321,59 +321,53 @@ impl BlendingCompositorProcessor::Processor {
         let gpu_context = ctx.gpu_limited_access().clone();
         self.gpu_context = Some(gpu_context.clone());
 
-        // Privileged setup runs inside `escalate(|full| ...)`. The
-        // closure executes against a host-mode FullAccess regardless
-        // of whether the caller is host-linked or loaded as a workspace
-        // cdylib — matching the pattern `@tatolab/camera`'s
-        // `LinuxCameraProcessor` uses for the same reason
-        // (`host_inner()`-bearing FullAccess methods panic when called
-        // through the cdylib's vtable proxy).
+        // setup() runs inside the engine's privileged lifecycle dispatch
+        // (`ProcessorInstance::setup`), so `ctx.gpu_full_access()` is
+        // already privileged in both cdylib and in-process modes: cdylib
+        // bodies see a ScopeToken-shaped FullAccess routed through the
+        // FullAccess vtable, in-process bodies see the Boxed FullAccess
+        // dispatched directly. Calling `gpu_limited_access().escalate(...)`
+        // here would re-enter the same gate and trip the gate's same-
+        // thread re-entry panic.
         //
-        // `host_vulkan_device_arc()` is part of the v9 cdylib-safe
-        // FullAccess surface; the `Arc<HostVulkanDevice>` it returns
-        // is held by the sandboxed graphics-kernel wrapper for steady-
-        // state dispatch.
+        // `host_vulkan_device_arc()` is the cdylib-safe FullAccess
+        // accessor; the `Arc<HostVulkanDevice>` it returns is held by
+        // the sandboxed graphics-kernel wrapper for steady-state
+        // dispatch.
         let width = self.config.width;
         let height = self.config.height;
-        let (compositor, ring_descriptors, tone_mapper, vulkan_device) = gpu_context
-            .escalate(|full| {
-                let vulkan_device = full.host_vulkan_device_arc()?;
-                let compositor =
-                    Arc::new(SandboxedBlendingCompositor::new(&vulkan_device)?);
+        let full = ctx.gpu_full_access();
+        let vulkan_device = full.host_vulkan_device_arc()?;
+        let compositor = Arc::new(SandboxedBlendingCompositor::new(&vulkan_device)?);
 
-                // Pre-allocate the output texture ring — render-target-
-                // capable tiled DMA-BUF VkImages. Dual-registration
-                // happens outside the closure via the LimitedAccess
-                // `register_texture_with_layout` / `surface_store`
-                // primitives.
-                let mut ring_descriptors: Vec<(String, Texture)> =
-                    Vec::with_capacity(OUTPUT_RING_DEPTH);
-                for slot_idx in 0..OUTPUT_RING_DEPTH {
-                    let texture = full.acquire_render_target_dma_buf_image(
-                        width,
-                        height,
-                        TextureFormat::Bgra8Unorm,
-                    )?;
-                    // Engine UUIDv4-shaped fixed string per slot — keeps
-                    // the `surface_id` stable across runs (helpful for
-                    // log correlation) and the slot index visible in the
-                    // last octet so a tail of warnings names the slot in
-                    // flight. Hex-only by construction so any future
-                    // consumer that parses surface_id as a real UUID
-                    // still resolves it (`b1e0d` ≈ "blend").
-                    let surface_id =
-                        format!("00000000-0000-0000-0000-00000b1e0d{slot_idx:02x}");
-                    ring_descriptors.push((surface_id, texture));
-                }
+        // Pre-allocate the output texture ring — render-target-capable
+        // tiled DMA-BUF VkImages. Dual-registration happens below via
+        // the LimitedAccess `register_texture_with_layout` /
+        // `surface_store` primitives.
+        let mut ring_descriptors: Vec<(String, Texture)> =
+            Vec::with_capacity(OUTPUT_RING_DEPTH);
+        for slot_idx in 0..OUTPUT_RING_DEPTH {
+            let texture = full.acquire_render_target_dma_buf_image(
+                width,
+                height,
+                TextureFormat::Bgra8Unorm,
+            )?;
+            // Engine UUIDv4-shaped fixed string per slot — keeps the
+            // `surface_id` stable across runs (helpful for log
+            // correlation) and the slot index visible in the last
+            // octet so a tail of warnings names the slot in flight.
+            // Hex-only by construction so any future consumer that
+            // parses surface_id as a real UUID still resolves it
+            // (`b1e0d` ≈ "blend").
+            let surface_id =
+                format!("00000000-0000-0000-0000-00000b1e0d{slot_idx:02x}");
+            ring_descriptors.push((surface_id, texture));
+        }
 
-                // Per-input tone-mapper. Cheap to construct (kernel
-                // built lazily on first dispatch); each consumer owns
-                // its own instance per the "no engine-side cache"
-                // pattern.
-                let tone_mapper = Arc::new(RhiToneMapper::new(&vulkan_device));
-
-                Ok((compositor, ring_descriptors, tone_mapper, vulkan_device))
-            })?;
+        // Per-input tone-mapper. Cheap to construct (kernel built
+        // lazily on first dispatch); each consumer owns its own
+        // instance per the "no engine-side cache" pattern.
+        let tone_mapper = Arc::new(RhiToneMapper::new(&vulkan_device));
 
         // Dual-register each slot outside `escalate`:
         // - `GpuContext::texture_cache` (Path 1 — in-process consumers

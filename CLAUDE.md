@@ -242,6 +242,7 @@ Use the `/refine-name` command to get suggestions that follow this pattern. The 
 5. ❌ Bypassing type safety "just to make it compile"
 6. ❌ Reshaping library code to satisfy a test — code and architecture drive tests, not the reverse. If a test is failing because the code changed intentionally, update the test. If a test reveals a real defect, fix the defect.
 7. ❌ Writing tests that paper over broken APIs — if you have to mock half the system or ignore errors to get a test green, the test is lying. A test that passes against a broken API is worse than no test.
+8. ❌ `gpu_limited_access().escalate(...)` from inside a `setup()` or `teardown()` body. Lifecycle dispatch already holds the escalate gate around setup/teardown; a body that re-enters it trips the gate's same-thread re-entry panic. The historical sandbox contract gave setup/teardown direct privileged access — call `ctx.gpu_full_access()` directly instead (cdylib-safe since #1072 — the engine wraps cdylib lifecycle dispatch in a `ScopeToken`-shaped FullAccess that routes through the vtable).
 
 **Instead**: Stop, explain the problem, present options, and wait for guidance.
 

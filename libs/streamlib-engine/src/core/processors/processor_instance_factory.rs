@@ -174,22 +174,62 @@ impl ProcessorInstance {
     }
 
     /// Run the processor's `setup` lifecycle.
+    ///
+    /// Variant-aware dispatch:
+    /// - **`VTable` (cdylib)**: wraps the call in
+    ///   [`RuntimeContextFullAccess::with_cdylib_scope`] so the
+    ///   cdylib body's `ctx.gpu_full_access()` is `ScopeToken`-
+    ///   flavored and dispatches through the FullAccess vtable
+    ///   instead of tripping the Boxed branch's `host_inner` panic
+    ///   guard. Scope acquisition serializes against other privileged
+    ///   GPU work (same gate as in-process escalate) and ends with
+    ///   `wait_device_idle`.
+    /// - **`LegacyDyn` (in-process)**: serializes via
+    ///   `gpu_limited_access().escalate(|_| ...)`, matching the
+    ///   pre-#912 `processor_setup_lock` contract — the in-process
+    ///   body uses the Boxed FullAccess on `ctx` directly (no vtable
+    ///   hop) and the escalate wrap provides the gate + wait-idle.
+    ///
+    /// Either way the escalate gate is held for exactly one
+    /// nesting depth across the setup body, so a setup body that
+    /// also tries to call `.escalate(...)` trips the gate's
+    /// same-thread re-entry panic instead of silently deadlocking.
     pub fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         match self {
             Self::VTable { instance_ptr, vtable, .. } => {
-                Self::vtable_call_full(*instance_ptr, vtable.setup, ctx, "setup")
+                let instance_ptr = *instance_ptr;
+                let setup_fn = vtable.setup;
+                ctx.with_cdylib_scope(|cdylib_ctx| {
+                    Self::vtable_call_full(instance_ptr, setup_fn, cdylib_ctx, "setup")
+                })
             }
-            Self::LegacyDyn(inner) => inner.__generated_setup(ctx),
+            Self::LegacyDyn(inner) => {
+                let sandbox = ctx.gpu_limited_access().clone();
+                sandbox.escalate(|_full| inner.__generated_setup(ctx))
+            }
         }
     }
 
     /// Run the processor's `teardown` lifecycle.
+    ///
+    /// Mirrors [`Self::setup`]'s variant-aware dispatch — the cdylib
+    /// path needs the same `ScopeToken` shape for `teardown` bodies
+    /// that release privileged GPU resources, and the in-process
+    /// path serializes its teardown body under the same gate it used
+    /// for setup.
     pub fn teardown(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         match self {
             Self::VTable { instance_ptr, vtable, .. } => {
-                Self::vtable_call_full(*instance_ptr, vtable.teardown, ctx, "teardown")
+                let instance_ptr = *instance_ptr;
+                let teardown_fn = vtable.teardown;
+                ctx.with_cdylib_scope(|cdylib_ctx| {
+                    Self::vtable_call_full(instance_ptr, teardown_fn, cdylib_ctx, "teardown")
+                })
             }
-            Self::LegacyDyn(inner) => inner.__generated_teardown(ctx),
+            Self::LegacyDyn(inner) => {
+                let sandbox = ctx.gpu_limited_access().clone();
+                sandbox.escalate(|_full| inner.__generated_teardown(ctx))
+            }
         }
     }
 

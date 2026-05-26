@@ -755,6 +755,110 @@ impl<'a> RuntimeContextFullAccess<'a> {
         RuntimeOpsShim::from_ffi(owned_handle, rov) as Arc<dyn RuntimeOperations>
     }
 
+    /// Run `f` against a cdylib-shaped sibling
+    /// `RuntimeContextFullAccess` whose `gpu_full` is a `ScopeToken`-
+    /// flavored [`GpuContextFullAccess`] (instead of the `Boxed`
+    /// shape this struct holds by default).
+    ///
+    /// The cdylib-shaped sibling's
+    /// [`GpuContextFullAccess`] methods dispatch through the
+    /// FullAccess vtable (cross-DSO via fn pointers in cdylib
+    /// address space, direct via host callbacks in host address
+    /// space) instead of the host-only direct-deref `host_inner`
+    /// path the Boxed shape uses. That makes `ctx.gpu_full_access()`
+    /// methods (e.g. `host_vulkan_device_arc`) usable from cdylib-
+    /// resident processor `setup()` / `teardown()` bodies without
+    /// tripping the `host_inner` panic guard.
+    ///
+    /// Engine-internal lifecycle dispatch (see
+    /// [`crate::core::processors::ProcessorInstance::setup`]) uses
+    /// this to wrap each cdylib lifecycle callback. The scope
+    /// management mirrors the cdylib-mode path of
+    /// [`GpuContextLimitedAccess::escalate`]:
+    ///
+    /// 1. Acquire the escalate gate + register the scope (via
+    ///    [`crate::core::context::escalate_scope_registry::begin_escalate_scope`]).
+    /// 2. Build the `ScopeToken`-shaped sibling.
+    /// 3. Run `f` against it under `catch_unwind` so a panic from
+    ///    the closure still releases the gate.
+    /// 4. End the scope (releases gate) and run `wait_device_idle`
+    ///    on the sibling Arc — matching `escalate_in_process`'s
+    ///    post-closure semantics.
+    /// 5. Re-raise the closure panic (if any).
+    ///
+    /// The historical sandbox contract serialized privileged
+    /// setup() work via the same escalate gate, so this helper
+    /// preserves that serialization invariant. Same-thread re-entry
+    /// (a `setup()` body that itself calls `escalate(...)`) is
+    /// rejected at the gate level — see
+    /// [`crate::core::context::escalate_gate::EscalateGate`].
+    pub(crate) fn with_cdylib_scope<F, T>(
+        &self,
+        f: F,
+    ) -> crate::core::error::Result<T>
+    where
+        F: FnOnce(&RuntimeContextFullAccess<'_>) -> crate::core::error::Result<T>,
+    {
+        use super::escalate_scope_registry::{
+            begin_escalate_scope, end_escalate_scope, with_scope,
+        };
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+
+        // Build the Arc<GpuContext> that backs the scope. The
+        // LimitedAccess's `host_inner` deref reaches the boxed
+        // `Arc<GpuContext>` that backs this context; the value
+        // clone here produces a fresh `GpuContext` whose Arc-
+        // wrapped fields (notably `escalate_gate`) share state
+        // with the original, so gate semantics still serialize
+        // across all clones.
+        let host_lim = &self.gpu_limited;
+        let host_gpu = host_lim.host_inner();
+        let gpu_arc = Arc::new(host_gpu.clone());
+
+        // begin_escalate_scope acquires the gate. If the caller
+        // somehow already holds the gate on this thread (the
+        // historical "escalate-from-setup" footgun), the gate
+        // panics with an actionable message before this returns.
+        let scope_token = begin_escalate_scope(gpu_arc);
+        let scope_full = GpuContextFullAccess::from_scope_token(
+            scope_token as *const c_void,
+            host_lim.handle,
+            host_lim.vtable,
+        );
+
+        // Sibling ctx — same RuntimeContext handle / vtable; same
+        // host-side gpu_limited (cloned via the LimitedAccess
+        // vtable's `clone_handle`); ScopeToken-shaped gpu_full.
+        // PhantomData reuses 'a so the sibling can't outlive the
+        // original.
+        let cdylib_ctx: RuntimeContextFullAccess<'_> = RuntimeContextFullAccess {
+            handle: self.handle,
+            vtable: self.vtable,
+            gpu_full: scope_full,
+            gpu_limited: host_lim.clone(),
+            _marker: PhantomData,
+        };
+
+        let call_result = catch_unwind(AssertUnwindSafe(|| f(&cdylib_ctx)));
+
+        // Always end the scope. `with_scope` keeps the Arc alive
+        // across the registry removal so wait_device_idle can run
+        // afterward (mirrors `host_gpu_lim_escalate_end`).
+        let arc_for_wait = with_scope(scope_token, Arc::clone);
+        let _removed = end_escalate_scope(scope_token);
+        let wait_result = match arc_for_wait.as_ref().map(|arc| arc.wait_device_idle()) {
+            Some(Ok(())) | None => Ok(()),
+            Some(Err(e)) => Err(e),
+        };
+
+        match (call_result, wait_result) {
+            (Ok(Ok(value)), Ok(())) => Ok(value),
+            (Ok(Err(e)), _) => Err(e),
+            (Ok(Ok(_)), Err(e)) => Err(e),
+            (Err(payload), _) => std::panic::resume_unwind(payload),
+        }
+    }
+
     // ------------ Engine-internal host accessors ------------
 
     /// Direct reference to the underlying [`RuntimeContext`]. **Host-only**:
