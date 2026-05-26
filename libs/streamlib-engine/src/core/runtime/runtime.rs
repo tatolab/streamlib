@@ -3109,7 +3109,7 @@ schemas:
             ),
         );
         assert_eq!(
-            crate::core::embedded_schemas::max_payload_bytes_for_port_spec(&port_spec),
+            crate::core::embedded_schemas::max_payload_bytes_for_port_spec(&port_spec).unwrap(),
             8192,
             "max_payload_bytes_for_port_spec must read metadata declared by the loaded package"
         );

@@ -129,41 +129,53 @@ fn test_loan_256kb_succeeds_with_512kb_publisher_limit() {
 #[test]
 fn test_schema_max_payload_bytes_audioframe() {
     test_support::register_core_wire_vocabulary();
-    let bytes = max_payload_bytes_for_port_spec(&core_spec("AudioFrame"));
+    let bytes = max_payload_bytes_for_port_spec(&core_spec("AudioFrame")).unwrap();
     assert_eq!(bytes, 65536, "audioframe should declare 64 KB");
 }
 
 #[test]
 fn test_schema_max_payload_bytes_videoframe() {
     test_support::register_core_wire_vocabulary();
-    let bytes = max_payload_bytes_for_port_spec(&core_spec("VideoFrame"));
+    let bytes = max_payload_bytes_for_port_spec(&core_spec("VideoFrame")).unwrap();
     assert_eq!(
         bytes, 65536,
         "videoframe carries surface IDs only — 64 KB default is correct"
     );
 }
 
+/// A `Specific` spec for an unregistered schema must surface as a typed
+/// configuration error naming the missing canonical id and pointing at
+/// `load_project`. This is the bug-class lock for issue #869 — silent
+/// fallback to `MAX_PAYLOAD_SIZE` on registry miss would re-create the
+/// first-frame `ExceedsMaxLoanSize` footgun.
 #[test]
-fn test_schema_max_payload_bytes_unknown_schema_returns_default() {
+fn test_schema_max_payload_bytes_unknown_schema_errors_with_load_project_hint() {
     let spec = PortSchemaSpec::Specific(SchemaIdent::new(
         Org::new("unknown").unwrap(),
-        Package::new("does-not-exist").unwrap(),
+        Package::new("does-not-exist-integration").unwrap(),
         TypeName::new("Nothing").unwrap(),
         SemVer::new(1, 0, 0),
     ));
-    let bytes = max_payload_bytes_for_port_spec(&spec);
-    assert_eq!(
-        bytes,
-        MAX_PAYLOAD_SIZE as usize,
-        "unknown schema should fall back to MAX_PAYLOAD_SIZE"
+    let err = max_payload_bytes_for_port_spec(&spec)
+        .expect_err("registry miss must surface as Err, not as a silent default fallback");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("@unknown/does-not-exist-integration/Nothing"),
+        "error must name the missing canonical id; got: {msg}"
     );
+    assert!(
+        msg.contains("load_project"),
+        "error must point at runtime.load_project(...) as the fix; got: {msg}"
+    );
+    // Silence the unused import warning that the previous test consumed.
+    let _ = MAX_PAYLOAD_SIZE;
 }
 
 #[test]
 fn test_encodedvideoframe_larger_than_audioframe() {
     test_support::register_core_wire_vocabulary();
-    let audio = max_payload_bytes_for_port_spec(&core_spec("AudioFrame"));
-    let video = max_payload_bytes_for_port_spec(&core_spec("EncodedVideoFrame"));
+    let audio = max_payload_bytes_for_port_spec(&core_spec("AudioFrame")).unwrap();
+    let video = max_payload_bytes_for_port_spec(&core_spec("EncodedVideoFrame")).unwrap();
     assert!(
         video > audio,
         "encodedvideoframe ({} bytes) should declare more capacity than audioframe ({} bytes)",
@@ -193,7 +205,7 @@ fn test_audioframe_schema_publisher_rejects_256kb() {
         )
         .unwrap();
 
-    let max_bytes = max_payload_bytes_for_port_spec(&core_spec("AudioFrame"));
+    let max_bytes = max_payload_bytes_for_port_spec(&core_spec("AudioFrame")).unwrap();
     let publisher = service.create_publisher(max_bytes).unwrap();
 
     // 256 KB exceeds the 64 KB audioframe limit.
@@ -218,7 +230,7 @@ fn test_encodedvideoframe_schema_publisher_accepts_256kb() {
         )
         .unwrap();
 
-    let max_bytes = max_payload_bytes_for_port_spec(&core_spec("EncodedVideoFrame"));
+    let max_bytes = max_payload_bytes_for_port_spec(&core_spec("EncodedVideoFrame")).unwrap();
     let publisher = service.create_publisher(max_bytes).unwrap();
 
     let result = publisher.loan_slice_uninit(256 * 1024);
@@ -249,7 +261,7 @@ fn test_frame_header_plus_256kb_roundtrip_through_slice_service() {
         .unwrap();
 
     let data_size = 256 * 1024;
-    let max_bytes = max_payload_bytes_for_port_spec(&core_spec("EncodedVideoFrame"));
+    let max_bytes = max_payload_bytes_for_port_spec(&core_spec("EncodedVideoFrame")).unwrap();
     // Publisher sized like the FFI layer: schema max + header.
     let publisher = service.create_publisher(max_bytes).unwrap();
     let subscriber = service.create_subscriber().unwrap();
@@ -321,7 +333,7 @@ fn test_encodedvideoframe_schema_publisher_subscriber_roundtrip_256kb() {
         )
         .unwrap();
 
-    let max_bytes = max_payload_bytes_for_port_spec(&core_spec("EncodedVideoFrame"));
+    let max_bytes = max_payload_bytes_for_port_spec(&core_spec("EncodedVideoFrame")).unwrap();
     let publisher = service.create_publisher(max_bytes).unwrap();
     let subscriber = service.create_subscriber().unwrap();
 
