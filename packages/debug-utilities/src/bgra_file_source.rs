@@ -9,7 +9,6 @@
 
 use crate::_generated_::VideoFrame;
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess, TextureRing};
-use streamlib::sdk::engine::HostPixelBufferRefExt;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::OutputWriter;
 use streamlib::sdk::processors::ManualProcessor;
@@ -167,7 +166,7 @@ fn source_thread_loop(
                 }
             };
 
-        let dst_ptr = pixel_buffer.buffer_ref().vulkan_inner().mapped_ptr();
+        let dst_ptr = pixel_buffer.plane_base_address(0);
         unsafe {
             std::ptr::copy_nonoverlapping(frame_buf.as_ptr(), dst_ptr, frame_size);
         }

@@ -12,7 +12,6 @@ use crate::linux::color_vui_translate::h273_to_color_info;
 use streamlib::sdk::context::{
     GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess, TextureRing,
 };
-use streamlib::sdk::engine::HostPixelBufferRefExt;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::rhi::{PixelFormat, TextureFormat, TextureUsages};
 
@@ -147,7 +146,7 @@ impl streamlib::sdk::processors::ReactiveProcessor for H265DecoderProcessor::Pro
             // pre-allocated by `create_texture_ring`, reset+reused per call).
             let (_pool_id, pixel_buffer) =
                 gpu_ctx.acquire_pixel_buffer(width, height, PixelFormat::Rgba32)?;
-            let dst_ptr = pixel_buffer.buffer_ref().vulkan_inner().mapped_ptr();
+            let dst_ptr = pixel_buffer.plane_base_address(0);
             unsafe {
                 std::ptr::copy_nonoverlapping(src.as_ptr(), dst_ptr, src.len());
             }

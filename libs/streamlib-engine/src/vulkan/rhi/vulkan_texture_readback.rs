@@ -276,7 +276,19 @@ impl VulkanTextureReadback {
             });
         }
 
-        let image = texture.vulkan_inner().image().ok_or_else(|| {
+        // Route through the v10 `host_vulkan_texture_arc` FullAccess slot
+        // so this submit path is safe to call from cdylib-loaded packages
+        // (e.g. `@tatolab/display`'s `sample_texture_to_png` fallback).
+        // `Texture::vulkan_inner()` reaches `host_inner()` which panics
+        // when `host_callbacks().is_some()`.
+        let host_texture = texture.host_vulkan_texture_arc().map_err(|e| {
+            TextureReadbackError::Submit {
+                label: self.label.clone(),
+                what: "host_vulkan_texture_arc",
+                cause: e.to_string(),
+            }
+        })?;
+        let image = host_texture.image().ok_or_else(|| {
             TextureReadbackError::TextureMissingVulkanImage {
                 label: self.label.clone(),
             }

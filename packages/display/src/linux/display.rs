@@ -755,9 +755,7 @@ impl DisplayEventLoopHandler {
                     self.window_id, frame_idx, input_frame_index
                 ));
                 if let Ok(buf) = self.gpu_context.resolve_pixel_buffer_by_surface_id(&ipc_frame.surface_id) {
-                    use streamlib::sdk::engine::HostPixelBufferRefExt;
-                    let vk_buf = buf.buffer_ref().vulkan_inner();
-                    let mapped_ptr = vk_buf.mapped_ptr();
+                    let mapped_ptr = buf.plane_base_address(0);
                     if !mapped_ptr.is_null() {
                         let len = (src_width as usize) * (src_height as usize) * 4;
                         let rgba =
