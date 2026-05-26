@@ -41,9 +41,10 @@ use std::time::Duration;
 
 use streamlib::sdk::descriptors::SchemaIdent;
 use streamlib::sdk::error::Error;
+use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
 
 const RUN_DURATION: Duration = Duration::from_secs(2);
 /// Manifest-declared interval. Must match the YAML in
@@ -164,14 +165,26 @@ fn run() -> Result<TickReport> {
     println!("Run length:        {:?}", RUN_DURATION);
 
     let runtime = Runner::new()?;
-    // Load the polyglot processors declaratively. The runner's
-    // `streamlib.yaml` declares both the Python and Deno sub-packages
-    // via `patch:` `path:` overrides; `load_project` walks the manifest,
-    // resolves both, and registers each package's processors + schemas.
-    // The runner then picks which one to instantiate via
-    // `schema_ident_any_version!` based on `--runtime`.
+    // Load the polyglot processors via explicit add_module_with calls.
+    // The Python and Deno sub-packages are example-local (siblings of
+    // this example crate) and not workspace-staged, so each is
+    // resolved by its manifest directory. The recursive dep walker
+    // follows each sub-package's own dependencies. The runner picks
+    // which one to instantiate via `schema_ident_any_version!` based
+    // on `--runtime`.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    runtime.load_project(&manifest_dir)?;
+    runtime.add_module_with(
+        module_ident_any_version!("tatolab", "polyglot-continuous-processor"),
+        ModuleResolverStrategy::ManifestDirectory {
+            path: manifest_dir.join("python"),
+        },
+    )?;
+    runtime.add_module_with(
+        module_ident_any_version!("tatolab", "polyglot-continuous-processor-deno"),
+        ModuleResolverStrategy::ManifestDirectory {
+            path: manifest_dir.join("deno"),
+        },
+    )?;
 
     let processor = runtime.add_processor(ProcessorSpec::new(
         runtime_kind.processor_ident()?,

@@ -16,24 +16,33 @@
 use std::path::PathBuf;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
 use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
     let runtime = Runner::new()?;
 
     // 1. Load `@tatolab/camera` and `@tatolab/display` from the
-    //    workspace-staged location. `cargo xtask build-plugins
+    //    workspace-staged location via the default resolver chain
+    //    (workspace stage → installed cache). `cargo xtask build-plugins
     //    --package @tatolab/camera --package @tatolab/display` must
     //    have run first.
-    runtime.load_workspace_packages(["@tatolab/camera", "@tatolab/display"])?;
+    runtime.add_module(module_ident_any_version!("tatolab", "camera"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "display"))?;
 
-    // 2. Load the runner's project — its streamlib.yaml declares
-    //    the sibling Python sub-package via `patch: path: ../python`,
-    //    so this single call registers the Python processor + schemas.
+    // 2. Load the sibling Python sub-package — it lives at `./python`
+    //    relative to this example, isn't workspace-staged, so we
+    //    resolve it by its manifest directory. The recursive dep
+    //    walker follows its own dependencies.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    runtime.load_project(&manifest_dir)?;
+    runtime.add_module_with(
+        module_ident_any_version!("tatolab", "camera-python-subprocess"),
+        ModuleResolverStrategy::ManifestDirectory {
+            path: manifest_dir.join("python"),
+        },
+    )?;
 
     // 3. Add processors
     let camera = runtime.add_processor(ProcessorSpec::new(

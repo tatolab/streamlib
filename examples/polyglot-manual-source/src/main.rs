@@ -40,9 +40,10 @@ use std::time::Duration;
 use streamlib::sdk::descriptors::SchemaIdent;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::error::Error;
+use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
 
 const RUN_DURATION: Duration = Duration::from_secs(2);
 const INTERVAL_MS: u32 = 33;
@@ -169,25 +170,38 @@ fn run() -> Result<SinkReport> {
     let runtime = Runner::new()?;
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let example_root = manifest_dir
-        .parent()
-        .expect("runner manifest dir has no parent")
-        .to_path_buf();
 
-    // Stage the counting-sink plugin's cdylib into `../plugin/lib/`
-    // before `load_project` walks the runner's `streamlib.yaml`. The
-    // runner's manifest declares `@tatolab/polyglot-manual-source-counting-sink`
-    // with `path: ../plugin`; `load_project` finds the staged `*.so`
-    // in `plugin/lib/`. Mirrors the camera-rust-plugin pattern.
-    let plugin_dir = example_root.join("plugin");
+    // Stage the counting-sink plugin's cdylib into `./plugin/lib/`
+    // before loading the plugin sub-package. The plugin lives in the
+    // sibling `plugin/` sub-package with its own `streamlib.yaml`;
+    // `add_module_with(..., ManifestDirectory)` will look for the
+    // staged `*.so` in `plugin/lib/`. Mirrors the camera-rust-plugin
+    // pattern.
+    let plugin_dir = manifest_dir.join("plugin");
     stage_plugin_dylib(&plugin_dir)?;
 
-    // Load the runner's project — the streamlib.yaml declares the
-    // plugin, Python, and Deno sub-packages via `patch:` `path:`
-    // overrides, so this single call registers all three. The runner
-    // then picks which polyglot processor to instantiate via
-    // `schema_ident_any_version!` based on `--runtime`.
-    runtime.load_project(&manifest_dir)?;
+    // Load the plugin + sibling Python + sibling Deno sub-packages via
+    // explicit add_module_with calls. The runner picks which polyglot
+    // processor to instantiate via `schema_ident_any_version!` based
+    // on `--runtime`.
+    runtime.add_module_with(
+        module_ident_any_version!("tatolab", "polyglot-manual-source-counting-sink"),
+        ModuleResolverStrategy::ManifestDirectory {
+            path: plugin_dir.clone(),
+        },
+    )?;
+    runtime.add_module_with(
+        module_ident_any_version!("tatolab", "polyglot-manual-source"),
+        ModuleResolverStrategy::ManifestDirectory {
+            path: manifest_dir.join("python"),
+        },
+    )?;
+    runtime.add_module_with(
+        module_ident_any_version!("tatolab", "polyglot-manual-source-deno"),
+        ModuleResolverStrategy::ManifestDirectory {
+            path: manifest_dir.join("deno"),
+        },
+    )?;
 
     // 3. Add processors.
     let manual = runtime.add_processor(ProcessorSpec::new(
@@ -230,8 +244,9 @@ fn run() -> Result<SinkReport> {
 }
 
 /// Locate the built plugin cdylib in the workspace target dir and copy
-/// it under `plugin/lib/` so `load_project` finds it. Mirrors the
-/// `camera-rust-plugin` example.
+/// it under `plugin/lib/` so the plugin sub-package's
+/// `add_module_with(..., ManifestDirectory)` load finds it. Mirrors
+/// the `camera-rust-plugin` example.
 fn stage_plugin_dylib(plugin_dir: &std::path::Path) -> Result<()> {
     let lib_dir = plugin_dir.join("lib");
     std::fs::create_dir_all(&lib_dir).map_err(|e| {
@@ -244,7 +259,6 @@ fn stage_plugin_dylib(plugin_dir: &std::path::Path) -> Result<()> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let workspace_root = manifest_dir
         .parent()
-        .and_then(|p| p.parent())
         .and_then(|p| p.parent())
         .ok_or_else(|| Error::Configuration("workspace root not found".into()))?;
 
