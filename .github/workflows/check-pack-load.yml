@@ -49,7 +49,8 @@ jobs:
           sudo apt-get install -y \
             pkg-config \
             protobuf-compiler \
-            libvulkan-dev
+            libvulkan-dev \
+            glslc
 
       - name: Install jtd-codegen
         # The engine's `build.rs` invokes the upstream `jtd-codegen`
