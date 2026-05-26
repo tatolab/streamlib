@@ -281,7 +281,7 @@ fn pack_then_load_schemas_only_package_registers_schemas() {
 
 #[test]
 #[serial]
-fn add_module_with_with_missing_file_errors_cleanly() {
+fn add_module_with_slpkg_archive_missing_file_errors_cleanly() {
     // Negative-path gate: add_module_with against a path that doesn't
     // exist must surface a `Configuration` error naming the missing
     // path rather than panicking, returning silently, or
@@ -309,7 +309,7 @@ fn add_module_with_with_missing_file_errors_cleanly() {
 
 #[test]
 #[serial]
-fn add_module_with_with_wrong_triple_errors_with_actionable_message() {
+fn add_module_with_slpkg_archive_wrong_triple_errors_with_actionable_message() {
     // Negative-path gate: a `.slpkg` whose `lib/` directory carries
     // only a foreign-triple subdir (no `lib/<host_triple>/...` for
     // this machine) must fail with an actionable error naming the
