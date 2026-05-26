@@ -3686,12 +3686,14 @@ unsafe impl Sync for RhiColorConverterMethodsVTable {}
 /// Without these the β-shape's `host_inner_mut()` / `host_inner()`
 /// panic-guards fire from cdylib code on every per-frame call.
 ///
-/// The remaining `RhiCommandRecorder` methods (`record_draw`,
-/// `record_draw_indexed`, `record_copy_buffer_to_image`, `submit`,
-/// `submit_and_wait`, `submit_with_semaphores`, `command_buffer_raw`,
-/// `vulkan_device_ref`) keep their cdylib-mode panic in place — they
-/// don't sit on the camera hot path and a follow-up slice lifts
-/// them when a consumer arrives.
+/// v3 (#1066) appends `record_swapchain_image_barrier`,
+/// `cmd_begin_dynamic_rendering`, `cmd_end_dynamic_rendering`,
+/// `submit_with_semaphores`, and `record_draw` for cdylib display
+/// processors. The remaining `RhiCommandRecorder` methods
+/// (`record_draw_indexed`, `record_copy_buffer_to_image`, `submit`,
+/// `submit_and_wait`) keep their cdylib-mode panic in place — they
+/// don't sit on any cdylib hot path today and a follow-up slice
+/// lifts them when a consumer arrives.
 ///
 /// **Buffer-flavor coverage today:** the v1 `record_buffer_barrier`
 /// and `record_copy_image_to_buffer` slots accept a

@@ -478,23 +478,6 @@ impl RhiCommandRecorderInner {
         kernel.cmd_bind_and_draw_indexed(self.command_buffer, frame_index, draw)
     }
 
-    /// Engine-internal accessor for the underlying command buffer.
-    /// Used by [`VulkanPresentTarget`](super::vulkan_present_target::VulkanPresentTarget)
-    /// to record swapchain-image transitions + `cmd_begin/end_rendering`
-    /// alongside the user's recorded draws.
-    pub(crate) fn command_buffer_raw(&self) -> vk::CommandBuffer {
-        self.command_buffer
-    }
-
-    /// Engine-internal accessor for the underlying [`HostVulkanDevice`].
-    /// Used by [`VulkanPresentTarget`](super::vulkan_present_target::VulkanPresentTarget)'s
-    /// `PresentFrame::begin_rendering` / `end_rendering` to issue
-    /// `cmd_begin_rendering` / `cmd_end_rendering` on the same command
-    /// buffer this recorder owns.
-    pub(crate) fn vulkan_device_ref(&self) -> &Arc<HostVulkanDevice> {
-        &self.vulkan_device
-    }
-
     /// Engine-internal submit path supporting binary + timeline waits
     /// and signals, used by [`VulkanPresentTarget`](super::vulkan_present_target::VulkanPresentTarget)
     /// for the swapchain image-available wait → render-finished binary
@@ -843,17 +826,17 @@ impl std::fmt::Debug for RhiCommandRecorderInner {
 ///   (the parent vtable).
 /// - The six camera-hot-path methods (`begin`, `record_image_barrier`,
 ///   `record_buffer_barrier`, `record_dispatch`,
-///   `record_copy_image_to_buffer`, `submit_signaling_timeline`)
-///   route through the per-type
+///   `record_copy_image_to_buffer`, `submit_signaling_timeline`,
+///   `record_swapchain_image_barrier`,
+///   `cmd_begin_dynamic_rendering`, `cmd_end_dynamic_rendering`,
+///   `submit_with_semaphores`, `record_draw`) route through the
+///   per-type
 ///   [`streamlib_plugin_abi::RhiCommandRecorderMethodsVTable`] when
-///   called from cdylib code (Phase E sub-lift slice B — #984).
-/// - The remaining host-only methods (`record_draw`,
-///   `record_draw_indexed`, `record_copy_buffer_to_image`, `submit`,
-///   `submit_and_wait`, the engine-internal `submit_with_semaphores`
-///   / `command_buffer_raw` / `vulkan_device_ref` accessors) keep
-///   their cdylib-mode panic via [`Self::host_inner_mut`] /
-///   [`Self::host_inner`]; a follow-up slice lifts each as a
-///   consumer arrives.
+///   called from cdylib code.
+/// - The remaining host-only methods (`record_draw_indexed`,
+///   `record_copy_buffer_to_image`, `submit`, `submit_and_wait`)
+///   keep their cdylib-mode panic via [`Self::host_inner_mut`]; a
+///   follow-up slice lifts each as a consumer arrives.
 #[repr(C)]
 pub struct RhiCommandRecorder {
     /// Opaque handle to the host's `Box<RhiCommandRecorderInner>`.
@@ -909,19 +892,6 @@ impl RhiCommandRecorder {
         // SAFETY: `self.handle` is `Box::into_raw(Box<RhiCommandRecorderInner>)`
         // and `&mut self` guarantees no other reference exists.
         unsafe { &mut *(self.handle as *mut RhiCommandRecorderInner) }
-    }
-
-    /// Engine-internal shared borrow of the host-owned
-    /// `RhiCommandRecorderInner`. **Panics if called from cdylib code.**
-    pub(crate) fn host_inner(&self) -> &RhiCommandRecorderInner {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "RhiCommandRecorder::host_inner() reached from cdylib code; \
-                 this method must dispatch through the GpuContextFullAccessVTable."
-            );
-        }
-        // SAFETY: `self.handle` is `Box::into_raw(Box<RhiCommandRecorderInner>)`.
-        unsafe { &*(self.handle as *const RhiCommandRecorderInner) }
     }
 
     // -------------------------------------------------------------------------
@@ -1405,18 +1375,6 @@ impl RhiCommandRecorder {
     /// Submit and block until the GPU completes.
     pub fn submit_and_wait(&mut self) -> Result<()> {
         self.host_inner_mut().submit_and_wait()
-    }
-
-    /// Engine-internal accessor for the underlying command buffer.
-    /// **Engine-only** — for `VulkanPresentTarget`.
-    pub(crate) fn command_buffer_raw(&self) -> vk::CommandBuffer {
-        self.host_inner().command_buffer_raw()
-    }
-
-    /// Engine-internal accessor for the recorder's `HostVulkanDevice`.
-    /// **Engine-only** — for `VulkanPresentTarget::begin_rendering` etc.
-    pub(crate) fn vulkan_device_ref(&self) -> &Arc<HostVulkanDevice> {
-        self.host_inner().vulkan_device_ref()
     }
 
     /// Engine-internal submit path supporting binary + timeline waits.

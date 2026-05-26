@@ -465,9 +465,7 @@ impl VulkanPresentTarget {
         // Pre-draw barrier: swapchain image UNDEFINED → COLOR_ATTACHMENT_OPTIMAL.
         // UNDEFINED is valid on every reuse because the render pass uses
         // CLEAR load op (set by `PresentFrame::begin_rendering`).
-        record_swapchain_barrier(
-            recorder.command_buffer_raw(),
-            raw_device,
+        recorder.record_swapchain_image_barrier(
             swapchain_image,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
@@ -475,7 +473,7 @@ impl VulkanPresentTarget {
             vk::AccessFlags2::NONE,
             vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
             vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-        );
+        )?;
 
         let extra_waits: Vec<vk::SemaphoreSubmitInfo> = Vec::new();
         let mut frame = PresentFrame {
@@ -495,9 +493,7 @@ impl VulkanPresentTarget {
 
         // If the user opened a render pass and didn't close it, close it now.
         if frame.inner.in_render_pass {
-            unsafe {
-                raw_device.cmd_end_rendering(frame.recorder.command_buffer_raw());
-            }
+            frame.recorder.cmd_end_dynamic_rendering()?;
             frame.inner.in_render_pass = false;
         }
 
@@ -521,9 +517,7 @@ impl VulkanPresentTarget {
         // consistent state.
         //
         // Post-draw barrier: swapchain image COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR.
-        record_swapchain_barrier(
-            frame.recorder.command_buffer_raw(),
-            raw_device,
+        frame.recorder.record_swapchain_image_barrier(
             swapchain_image,
             vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
             vk::ImageLayout::PRESENT_SRC_KHR,
@@ -531,7 +525,7 @@ impl VulkanPresentTarget {
             vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
             vk::PipelineStageFlags2::NONE,
             vk::AccessFlags2::NONE,
-        );
+        )?;
 
         // Submit: wait on image_available (binary, COLOR_ATTACHMENT_OUTPUT)
         // + any caller-added timeline waits; signal render_finished (binary,
@@ -623,42 +617,11 @@ impl<'a> PresentFrame<'a> {
                 "PresentFrame::begin_rendering: render pass already active".into(),
             ));
         }
-        let device = self.recorder.command_buffer_raw();
-        let load_op = if clear_color.is_some() {
-            vk::AttachmentLoadOp::CLEAR
-        } else {
-            vk::AttachmentLoadOp::LOAD
-        };
-        let clear_value = vk::ClearValue {
-            color: vk::ClearColorValue {
-                float32: clear_color.unwrap_or([0.0, 0.0, 0.0, 1.0]),
-            },
-        };
-        let color_attachment = vk::RenderingAttachmentInfo::builder()
-            .image_view(self.inner.image_view)
-            .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-            .load_op(load_op)
-            .store_op(vk::AttachmentStoreOp::STORE)
-            .clear_value(clear_value)
-            .build();
-        let color_attachments = [color_attachment];
-        let rendering_info = vk::RenderingInfo::builder()
-            .render_area(vk::Rect2D {
-                offset: vk::Offset2D { x: 0, y: 0 },
-                extent: vk::Extent2D {
-                    width: self.extent.0,
-                    height: self.extent.1,
-                },
-            })
-            .layer_count(1)
-            .color_attachments(&color_attachments)
-            .build();
-        unsafe {
-            // Reach the device handle via the recorder's already-borrowed
-            // command buffer.
-            let raw_device = recorder_device(self.recorder);
-            raw_device.cmd_begin_rendering(device, &rendering_info);
-        }
+        self.recorder.cmd_begin_dynamic_rendering(
+            self.inner.image_view,
+            self.extent,
+            clear_color,
+        )?;
         self.inner.in_render_pass = true;
         Ok(())
     }
@@ -670,11 +633,7 @@ impl<'a> PresentFrame<'a> {
                 "PresentFrame::end_rendering: no active render pass".into(),
             ));
         }
-        let cmd = self.recorder.command_buffer_raw();
-        let raw_device = recorder_device(self.recorder);
-        unsafe {
-            raw_device.cmd_end_rendering(cmd);
-        }
+        self.recorder.cmd_end_dynamic_rendering()?;
         self.inner.in_render_pass = false;
         Ok(())
     }
@@ -887,55 +846,6 @@ fn create_swapchain(
     ))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn record_swapchain_barrier(
-    command_buffer: vk::CommandBuffer,
-    device: &vulkanalia::Device,
-    image: vk::Image,
-    old_layout: vk::ImageLayout,
-    new_layout: vk::ImageLayout,
-    src_stage: vk::PipelineStageFlags2,
-    src_access: vk::AccessFlags2,
-    dst_stage: vk::PipelineStageFlags2,
-    dst_access: vk::AccessFlags2,
-) {
-    let subresource = vk::ImageSubresourceRange::builder()
-        .aspect_mask(vk::ImageAspectFlags::COLOR)
-        .base_mip_level(0)
-        .level_count(1)
-        .base_array_layer(0)
-        .layer_count(1)
-        .build();
-    let barrier = vk::ImageMemoryBarrier2::builder()
-        .src_stage_mask(src_stage)
-        .src_access_mask(src_access)
-        .dst_stage_mask(dst_stage)
-        .dst_access_mask(dst_access)
-        .old_layout(old_layout)
-        .new_layout(new_layout)
-        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .image(image)
-        .subresource_range(subresource)
-        .build();
-    let barriers = [barrier];
-    let dep = vk::DependencyInfo::builder()
-        .image_memory_barriers(&barriers)
-        .build();
-    unsafe {
-        device.cmd_pipeline_barrier2(command_buffer, &dep);
-    }
-}
-
-/// Engine-internal helper to access the recorder's underlying `vulkanalia::Device`
-/// for `cmd_begin_rendering` / `cmd_end_rendering` from inside `PresentFrame`.
-/// The recorder owns an `Arc<HostVulkanDevice>` and exposes the raw command
-/// buffer via [`RhiCommandRecorder::command_buffer_raw`]; this helper reaches
-/// the device handle via a one-line accessor on the recorder rather than
-/// duplicating an `Arc<HostVulkanDevice>` field on `PresentFrame`.
-fn recorder_device(recorder: &RhiCommandRecorder) -> &vulkanalia::Device {
-    recorder.vulkan_device_ref().device()
-}
 
 /// Strip surface formats the engine's [`vk_format_to_texture_format`]
 /// table can't project to [`TextureFormat`]. Called by
