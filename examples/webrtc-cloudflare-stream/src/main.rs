@@ -28,6 +28,8 @@ use streamlib::sdk::error::Result;
 #[cfg(target_os = "linux")]
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 #[cfg(target_os = "linux")]
+use streamlib::sdk::module_ident_any_version;
+#[cfg(target_os = "linux")]
 use streamlib::sdk::runtime::Runner;
 #[cfg(target_os = "linux")]
 use streamlib::sdk::processors::ProcessorSpec;
@@ -63,13 +65,11 @@ fn main() -> Result<()> {
 
     let runtime = Runner::new()?;
 
-    runtime.load_workspace_packages([
-        "@tatolab/audio",
-        "@tatolab/camera",
-        "@tatolab/h264",
-        "@tatolab/opus",
-        "@tatolab/webrtc",
-    ])?;
+    runtime.add_module(module_ident_any_version!("tatolab", "audio"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "camera"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "h264"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "opus"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "webrtc"))?;
 
     println!("🔒 Requesting camera permission...");
     if !request_camera_permission()? {

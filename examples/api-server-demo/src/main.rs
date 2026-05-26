@@ -8,6 +8,7 @@
 
 use futures_util::StreamExt;
 use std::sync::Arc;
+use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::schema_ident;
@@ -31,11 +32,9 @@ async fn main() -> Result<()> {
     // `"processor_type": "SimplePassthroughProcessor"` through the API
     // server's dynamic-registry endpoint and that resolution only
     // succeeds if the processor is present in PROCESSOR_REGISTRY,
-    // which load_workspace_packages populates via the cdylib registration.
-    runtime.load_workspace_packages([
-        "@tatolab/api-server",
-        "@tatolab/debug-utilities",
-    ])?;
+    // which add_module populates via the cdylib registration.
+    runtime.add_module(module_ident_any_version!("tatolab", "api-server"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "debug-utilities"))?;
 
     // Add the API server processor
     println!("Adding API server processor...");

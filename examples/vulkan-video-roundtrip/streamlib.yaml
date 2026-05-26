@@ -2,13 +2,15 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 #
-# vulkan-video-roundtrip example. Declares `@tatolab/core` so
-# `Runner::load_project(.)` registers the wire-vocabulary schemas
-# (VideoFrame, EncodedVideoFrame, …) with the engine's runtime schema
-# registry. Without that, iceoryx2 publishers size to the 64 KiB default
-# from `streamlib-ipc-types::MAX_PAYLOAD_SIZE` and the encoder's first
-# IDR (which carries SPS+PPS) is rejected with ExceedsMaxLoanSize, so the
-# decoder never sees the session parameters and decodes zero frames.
+# vulkan-video-roundtrip example. Declares `@tatolab/core` so the
+# runtime registers the wire-vocabulary schemas (VideoFrame,
+# EncodedVideoFrame, …) — via the recursive dep walker that runs when
+# each `runtime.add_module(...)` in `src/main.rs` follows its package's
+# transitive deps. Without that, iceoryx2 publishers size to the 64 KiB
+# default from `streamlib-ipc-types::MAX_PAYLOAD_SIZE` and the encoder's
+# first IDR (which carries SPS+PPS) is rejected with ExceedsMaxLoanSize,
+# so the decoder never sees the session parameters and decodes zero
+# frames.
 
 package:
   org: tatolab

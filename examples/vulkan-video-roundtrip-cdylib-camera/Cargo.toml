@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 # Deliberately NOT taking streamlib-camera as a Rust dep. The camera
-# is loaded at runtime via `Runner::load_project(...)` against a
+# is loaded at runtime via `Runner::add_module(...)` against a
 # staged copy of `packages/camera/`. Linking streamlib-camera as a
 # Rust dep would auto-register the `Camera` processor at link time,
 # conflicting with the cdylib's registration at load time.

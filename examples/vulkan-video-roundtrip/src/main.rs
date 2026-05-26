@@ -19,6 +19,7 @@
 
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::schema_ident;
@@ -40,12 +41,10 @@ fn main() -> Result<()> {
     // pulled in transitively by each — its wire-vocabulary schemas
     // (`EncodedVideoFrame.max_payload_bytes` in particular) are
     // load-bearing for iceoryx2 publisher sizing.
-    runtime.load_workspace_packages([
-        "@tatolab/camera",
-        "@tatolab/display",
-        "@tatolab/h264",
-        "@tatolab/h265",
-    ])?;
+    runtime.add_module(module_ident_any_version!("tatolab", "camera"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "display"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "h264"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "h265"))?;
 
     // --- Camera ---
     // STREAMLIB_CAMERA_MAX_WIDTH / STREAMLIB_CAMERA_MAX_HEIGHT cap V4L2

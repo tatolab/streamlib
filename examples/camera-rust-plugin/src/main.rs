@@ -7,14 +7,15 @@
 //! sibling `plugin/` crate that builds as a cdylib carrying the
 //! `GrayscaleRust` processor, and the host manually stages that cdylib
 //! into `plugin/lib/<host_triple>/` before calling
-//! `runtime.load_project(plugin_dir)` to register it. This is the
-//! "build from source + load from path" shape, distinct from the
-//! `cargo xtask build-plugins` + `load_workspace_packages` flow that
-//! the other examples use for canonical workspace packages.
+//! `runtime.add_module_with(..., ModuleResolverStrategy::ManifestDirectory)`
+//! to register it. This is the "build from source + load from path"
+//! shape, distinct from the `cargo xtask build-plugins` +
+//! `runtime.add_module(...)` flow that the other examples use for
+//! canonical workspace packages.
 //!
 //! `@tatolab/camera` and `@tatolab/display` themselves load via
-//! `load_workspace_packages` — only the example-local plugin subdir
-//! goes through the manual stage path.
+//! `add_module` against the workspace-staged plugin dir — only the
+//! example-local plugin subdir goes through the manual stage path.
 //!
 //! ## Prerequisites
 //!
@@ -33,8 +34,9 @@
 use std::path::PathBuf;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
 use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
@@ -43,14 +45,15 @@ fn main() -> Result<()> {
     // 1. Load `@tatolab/camera` and `@tatolab/display` via the canonical
     //    workspace-staged path. `cargo xtask build-plugins --package
     //    @tatolab/camera --package @tatolab/display` must have run first.
-    runtime.load_workspace_packages(["@tatolab/camera", "@tatolab/display"])?;
+    runtime.add_module(module_ident_any_version!("tatolab", "camera"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "display"))?;
 
     // 2. Stage the example-local grayscale plugin cdylib at
-    //    `plugin/lib/<triple>/` so `load_project(plugin_dir)` resolves
-    //    it via the same triple-keyed convention `streamlib pack`
-    //    produces. The plugin lives in this example's repo (sibling
-    //    crate, not a workspace package) so the canonical xtask doesn't
-    //    stage it; the example handles its own copy step.
+    //    `plugin/lib/<triple>/` so the explicit `ManifestDirectory`
+    //    resolver picks it up via the same triple-keyed convention
+    //    `streamlib pack` produces. The plugin lives in this example's
+    //    repo (sibling crate, not a workspace package) so the canonical
+    //    xtask doesn't stage it; the example handles its own copy step.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let plugin_dir = manifest_dir.join("plugin");
     let host_triple = streamlib::sdk::runtime::host_target_triple();
@@ -107,8 +110,17 @@ fn main() -> Result<()> {
     println!("Copied plugin dylib to {}", dest_dylib.display());
 
     // 3. Load the example-local plugin project (registers the
-    //    grayscale processor from the staged cdylib).
-    runtime.load_project(&plugin_dir)?;
+    //    grayscale processor from the staged cdylib). The
+    //    `ManifestDirectory` strategy preserves the recursive
+    //    dep-walker shape — it reads `plugin/streamlib.yaml`, walks
+    //    declared deps (`@tatolab/core` patched to a workspace path),
+    //    and registers the local plugin's processors + schemas.
+    runtime.add_module_with(
+        module_ident_any_version!("tatolab", "camera-rust-plugin"),
+        ModuleResolverStrategy::ManifestDirectory {
+            path: plugin_dir.clone(),
+        },
+    )?;
 
     // 4. Add processors
     let camera = runtime.add_processor(ProcessorSpec::new(

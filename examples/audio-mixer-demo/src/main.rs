@@ -5,9 +5,9 @@
 //! Loading milestone.
 //!
 //! Demonstrates loading `@tatolab/audio` at runtime via
-//! `Runner::load_workspace_packages` (no Cargo dep on
-//! `streamlib-audio`) and wiring its processors via structured
-//! `schema_ident!` + JSON config + string-named ports.
+//! `Runner::add_module` (no Cargo dep on `streamlib-audio`) and wiring
+//! its processors via structured `schema_ident!` + JSON config +
+//! string-named ports.
 //!
 //! Run prerequisite: `cargo xtask build-plugins --package @tatolab/audio`
 //! (or `cargo xtask build-plugins` with no filter) so the runtime can
@@ -15,6 +15,7 @@
 
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::schema_ident;
@@ -28,7 +29,7 @@ fn main() -> Result<()> {
     // 1) Load @tatolab/audio (and any deps it walks via patch:) from
     //    the workspace-staged location. `cargo xtask build-plugins`
     //    must have run first.
-    runtime.load_workspace_packages(["@tatolab/audio"])?;
+    runtime.add_module(module_ident_any_version!("tatolab", "audio"))?;
     println!("+ @tatolab/audio loaded from target/streamlib-plugins/\n");
 
     // 2) Chord generator — addressed by structured schema_ident,
