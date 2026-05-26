@@ -489,7 +489,26 @@ pub const RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 ///   `VulkanGraphicsKernelMethodsVTable`'s
 ///   `set_storage_buffer_pixel` / `set_storage_buffer_storage`
 ///   pair.
-pub const RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
+/// - v3: #1066 — appends five slots needed for cdylib display
+///   processors to drive the swapchain render path through the
+///   recorder rather than reaching for `command_buffer_raw()` /
+///   `vulkan_device_ref()` / `host_inner_mut()` directly:
+///   `record_swapchain_image_barrier` (raw `VkImage` layout
+///   transitions on swapchain images — distinct from the v1
+///   `record_image_barrier` which takes a `Texture` β-shape),
+///   `cmd_begin_dynamic_rendering` and `cmd_end_dynamic_rendering`
+///   (dynamic-rendering pass bracketing against a caller-owned
+///   `VkImageView` — no `VkRenderPass` / `VkFramebuffer` needed),
+///   `submit_with_semaphores` (general queue submit with
+///   variable-length wait/signal semaphore lists — sibling of v1
+///   `submit_signaling_timeline` but accepts arbitrary
+///   wait/signal sets), and `record_draw` (sibling of v1
+///   `record_dispatch` but binds a `VulkanGraphicsKernel`'s
+///   graphics pipeline + records `vkCmdDraw`). These slots all
+///   take raw `VkImage` / `VkImageView` / `VkSemaphore` handles as
+///   `u64` integers; the host materializes the typed `vk::*`
+///   wrappers internally.
+pub const RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 3;
 
 /// Layout version of [`OutputWriterVTable`].
 ///
@@ -3482,6 +3501,35 @@ pub struct ImageCopyRegionRepr {
     pub _reserved_padding: u32,
 }
 
+/// `#[repr(C)]` mirror of [`vk::SemaphoreSubmitInfo`]'s
+/// engine-relevant fields, for the v3 `submit_with_semaphores`
+/// vtable slot. Layout-locked by the regression test in
+/// `layout_tests`.
+///
+/// The host re-materializes a `vk::SemaphoreSubmitInfo` from these
+/// fields on the host side at the call site; the ABI doesn't pull
+/// `vulkanalia-sys` into its dep graph.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SemaphoreSubmitInfoRepr {
+    /// Raw `VkSemaphore` handle (widened to `u64`). Binary or
+    /// timeline; the host doesn't need to know which here — the
+    /// `value` field is `0` for binary semaphores by convention.
+    pub semaphore: u64,
+    /// Wait/signal value for timeline semaphores; `0` for binary
+    /// semaphores.
+    pub value: u64,
+    /// `VkPipelineStageFlags2` bitmask (Vulkan 1.3 / synchronization2).
+    pub stage_mask: u64,
+    /// Device index for multi-device submits; `0` for single-device
+    /// (the only case streamlib supports today).
+    pub device_index: u32,
+    /// Reserved padding so the struct stays 8-byte-aligned and the
+    /// trailing bytes are deterministic; zero today, never read.
+    pub _reserved_padding: u32,
+}
+
+
 /// `#[repr(C)]` mirror of `streamlib::core::color::ResolvedColorInfo`.
 ///
 /// Each field is the matching engine-side `#[repr(u32)]` enum's
@@ -3822,6 +3870,116 @@ pub struct RhiCommandRecorderMethodsVTable {
         src_layout_raw: i32,
         dst_pixel_buffer_handle: *const c_void,
         region: *const ImageCopyRegionRepr,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // v3 entries (#1066) — swapchain render-path slots.
+    // -------------------------------------------------------------------------
+
+    /// Record a layout transition on a raw `VkImage` handle —
+    /// distinct from v1 [`Self::record_image_barrier`] which takes
+    /// a `Texture` β-shape. Used by `VulkanPresentTarget` to
+    /// transition swapchain images (UNDEFINED →
+    /// COLOR_ATTACHMENT_OPTIMAL and COLOR_ATTACHMENT_OPTIMAL →
+    /// PRESENT_SRC_KHR) between cdylib-driven render-frame
+    /// iterations. The image is COLOR-aspect, single mip, single
+    /// array layer, QUEUE_FAMILY_IGNORED on both sides.
+    ///
+    /// - `image_raw` is the raw `VkImage` handle (`u64`).
+    /// - Layout / stage / access enumerants follow v1
+    ///   `record_image_barrier`'s integer-typed wire format.
+    pub record_swapchain_image_barrier: unsafe extern "C" fn(
+        recorder_handle: *const c_void,
+        image_raw: u64,
+        from_layout_raw: i32,
+        to_layout_raw: i32,
+        from_stage_raw: i64,
+        to_stage_raw: i64,
+        from_access_raw: i64,
+        to_access_raw: i64,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Begin a dynamic-rendering pass against a caller-owned
+    /// `VkImageView`. Used by `VulkanPresentTarget::PresentFrame`
+    /// to open the swapchain-image render pass. CLEAR load op is
+    /// selected by `has_clear_color = 1`; LOAD by
+    /// `has_clear_color = 0`.
+    ///
+    /// - `image_view_raw` is the raw `VkImageView` handle (`u64`).
+    /// - `extent_w` / `extent_h` are the render-area extents in
+    ///   pixels.
+    /// - `clear_rgba` is the CLEAR color (ignored when
+    ///   `has_clear_color == 0`).
+    pub cmd_begin_dynamic_rendering: unsafe extern "C" fn(
+        recorder_handle: *const c_void,
+        image_view_raw: u64,
+        extent_w: u32,
+        extent_h: u32,
+        has_clear_color: u32,
+        clear_r: f32,
+        clear_g: f32,
+        clear_b: f32,
+        clear_a: f32,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Close the dynamic-rendering pass opened by
+    /// [`Self::cmd_begin_dynamic_rendering`].
+    pub cmd_end_dynamic_rendering: unsafe extern "C" fn(
+        recorder_handle: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// End recording and submit with arbitrary wait + signal
+    /// semaphore lists. Sibling of v1
+    /// [`Self::submit_signaling_timeline`] — that slot only
+    /// covered the single-timeline-signal case the camera
+    /// processor needed; this one covers the general case
+    /// `VulkanPresentTarget::render_frame` uses (wait on
+    /// image-available binary + caller-added timeline waits;
+    /// signal render-finished binary + frame-timeline).
+    ///
+    /// - `waits_ptr` / `waits_count` and `signals_ptr` /
+    ///   `signals_count` describe two arrays of
+    ///   [`SemaphoreSubmitInfoRepr`]. Empty arrays are valid
+    ///   (`*_ptr` may be null when `*_count == 0`).
+    pub submit_with_semaphores: unsafe extern "C" fn(
+        recorder_handle: *const c_void,
+        waits_ptr: *const SemaphoreSubmitInfoRepr,
+        waits_count: usize,
+        signals_ptr: *const SemaphoreSubmitInfoRepr,
+        signals_count: usize,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Record a non-indexed draw via
+    /// `VulkanGraphicsKernel::cmd_bind_and_draw`. Sibling of v1
+    /// [`Self::record_dispatch`] (compute) for graphics pipelines.
+    /// Bindings + push constants for `frame_index` must have been
+    /// staged via the kernel's `set_*` methods before this call.
+    ///
+    /// - `kernel_handle` is the
+    ///   `Arc::into_raw(Arc<VulkanGraphicsKernelInner>)` pointer
+    ///   from the kernel β-shape's `handle` field (borrowed).
+    /// - `draw` points at a [`DrawCallRepr`] the host reads once
+    ///   at call time.
+    pub record_draw: unsafe extern "C" fn(
+        recorder_handle: *const c_void,
+        kernel_handle: *const c_void,
+        frame_index: u32,
+        draw: *const DrawCallRepr,
         err_buf: *mut u8,
         err_buf_cap: usize,
         err_len: *mut usize,
@@ -5196,7 +5354,7 @@ mod layout_tests {
         // (`record_pixel_buffer_barrier`,
         // `record_copy_image_to_pixel_buffer`) for cdylib camera
         // per-frame copy into pooled `PixelBuffer` destinations.
-        assert_eq!(RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION, 2);
+        assert_eq!(RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION, 3);
         // v1 (issue #894): initial shape — `write_raw`, `has_port`,
         // `clone_arc`, `drop_arc`.
         assert_eq!(OUTPUT_WRITER_VTABLE_LAYOUT_VERSION, 1);
@@ -5720,7 +5878,9 @@ mod layout_tests {
         //   record_pixel_buffer_barrier          @ 56  (8 bytes, fn pointer, v2)
         //   record_copy_image_to_pixel_buffer    @ 64  (8 bytes, fn pointer, v2)
         // Total = 72 bytes, align = 8.
-        assert_eq!(size_of::<RhiCommandRecorderMethodsVTable>(), 72);
+        // layout_version (u32) + _reserved_padding (u32) + 13 fn
+        // pointers (8 bytes each) = 4 + 4 + 104 = 112 bytes, align = 8.
+        assert_eq!(size_of::<RhiCommandRecorderMethodsVTable>(), 112);
         assert_eq!(align_of::<RhiCommandRecorderMethodsVTable>(), 8);
         assert_eq!(
             offset_of!(RhiCommandRecorderMethodsVTable, layout_version),
@@ -5773,6 +5933,52 @@ mod layout_tests {
                 record_copy_image_to_pixel_buffer
             ),
             64
+        );
+        // v3 entries (#1066).
+        assert_eq!(
+            offset_of!(
+                RhiCommandRecorderMethodsVTable,
+                record_swapchain_image_barrier
+            ),
+            72
+        );
+        assert_eq!(
+            offset_of!(
+                RhiCommandRecorderMethodsVTable,
+                cmd_begin_dynamic_rendering
+            ),
+            80
+        );
+        assert_eq!(
+            offset_of!(
+                RhiCommandRecorderMethodsVTable,
+                cmd_end_dynamic_rendering
+            ),
+            88
+        );
+        assert_eq!(
+            offset_of!(RhiCommandRecorderMethodsVTable, submit_with_semaphores),
+            96
+        );
+        assert_eq!(
+            offset_of!(RhiCommandRecorderMethodsVTable, record_draw),
+            104
+        );
+    }
+
+    #[test]
+    fn semaphore_submit_info_repr_layout() {
+        // semaphore (u64, 8) + value (u64, 8) + stage_mask (u64, 8)
+        // + device_index (u32, 4) + _reserved_padding (u32, 4) = 32
+        assert_eq!(size_of::<SemaphoreSubmitInfoRepr>(), 32);
+        assert_eq!(align_of::<SemaphoreSubmitInfoRepr>(), 8);
+        assert_eq!(offset_of!(SemaphoreSubmitInfoRepr, semaphore), 0);
+        assert_eq!(offset_of!(SemaphoreSubmitInfoRepr, value), 8);
+        assert_eq!(offset_of!(SemaphoreSubmitInfoRepr, stage_mask), 16);
+        assert_eq!(offset_of!(SemaphoreSubmitInfoRepr, device_index), 24);
+        assert_eq!(
+            offset_of!(SemaphoreSubmitInfoRepr, _reserved_padding),
+            28
         );
     }
 

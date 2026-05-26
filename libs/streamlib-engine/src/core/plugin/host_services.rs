@@ -12024,8 +12024,477 @@ unsafe extern "C" fn host_command_recorder_submit_signaling_timeline(
     1
 }
 
+// -------------------------------------------------------------------------
+// v3 (#1066) — swapchain render-path wrappers
+// -------------------------------------------------------------------------
+
+/// Reconstruct a borrowed `VulkanGraphicsKernel` β-shape from its
+/// `Arc::into_raw`-shaped handle. Same pattern as
+/// `make_compute_kernel_borrow` — cached POD fields are populated by
+/// reading the host-side inner.
+#[cfg(target_os = "linux")]
+fn make_graphics_kernel_borrow(
+    handle: *const c_void,
+) -> std::mem::ManuallyDrop<crate::vulkan::rhi::VulkanGraphicsKernel> {
+    let k_for_inner = std::mem::ManuallyDrop::new(
+        crate::vulkan::rhi::VulkanGraphicsKernel {
+            handle,
+            vtable: host_gpu_context_full_access_vtable(),
+            methods_vtable: host_vulkan_graphics_kernel_methods_vtable(),
+            cached_push_constant_size: 0,
+            cached_descriptor_sets_in_flight: 0,
+        },
+    );
+    let inner = k_for_inner.host_inner();
+    std::mem::ManuallyDrop::new(crate::vulkan::rhi::VulkanGraphicsKernel {
+        handle,
+        vtable: host_gpu_context_full_access_vtable(),
+        methods_vtable: host_vulkan_graphics_kernel_methods_vtable(),
+        cached_push_constant_size: inner.push_constant_size(),
+        cached_descriptor_sets_in_flight: inner.descriptor_sets_in_flight(),
+    })
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_command_recorder_record_swapchain_image_barrier(
+    recorder_handle: *const c_void,
+    image_raw: u64,
+    from_layout_raw: i32,
+    to_layout_raw: i32,
+    from_stage_raw: i64,
+    to_stage_raw: i64,
+    from_access_raw: i64,
+    to_access_raw: i64,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_command_recorder_record_swapchain_image_barrier",
+        || -> i32 {
+            let Some(recorder) =
+                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            else {
+                write_err(
+                    "record_swapchain_image_barrier: null recorder handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            use vulkanalia::vk::{self, Handle};
+            // SAFETY: caller passes a raw VkImage handle minted by the
+            // host-side swapchain creation; this widens it to the
+            // `Handle` type without dereferencing anything.
+            let image = vk::Image::from_raw(image_raw);
+            let old_layout = vk::ImageLayout::from_raw(from_layout_raw);
+            let new_layout = vk::ImageLayout::from_raw(to_layout_raw);
+            let src_stage =
+                vk::PipelineStageFlags2::from_bits_truncate(from_stage_raw as u64);
+            let src_access =
+                vk::AccessFlags2::from_bits_truncate(from_access_raw as u64);
+            let dst_stage =
+                vk::PipelineStageFlags2::from_bits_truncate(to_stage_raw as u64);
+            let dst_access =
+                vk::AccessFlags2::from_bits_truncate(to_access_raw as u64);
+            match recorder.record_swapchain_image_barrier(
+                image, old_layout, new_layout, src_stage, src_access, dst_stage,
+                dst_access,
+            ) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("record_swapchain_image_barrier: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_command_recorder_record_swapchain_image_barrier(
+    _recorder_handle: *const c_void,
+    _image_raw: u64,
+    _from_layout_raw: i32,
+    _to_layout_raw: i32,
+    _from_stage_raw: i64,
+    _to_stage_raw: i64,
+    _from_access_raw: i64,
+    _to_access_raw: i64,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "record_swapchain_image_barrier: Linux-only",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_command_recorder_cmd_begin_dynamic_rendering(
+    recorder_handle: *const c_void,
+    image_view_raw: u64,
+    extent_w: u32,
+    extent_h: u32,
+    has_clear_color: u32,
+    clear_r: f32,
+    clear_g: f32,
+    clear_b: f32,
+    clear_a: f32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_command_recorder_cmd_begin_dynamic_rendering",
+        || -> i32 {
+            let Some(recorder) =
+                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            else {
+                write_err(
+                    "cmd_begin_dynamic_rendering: null recorder handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            use vulkanalia::vk::{self, Handle};
+            let image_view = vk::ImageView::from_raw(image_view_raw);
+            let clear = if has_clear_color != 0 {
+                Some([clear_r, clear_g, clear_b, clear_a])
+            } else {
+                None
+            };
+            match recorder.cmd_begin_dynamic_rendering(
+                image_view,
+                (extent_w, extent_h),
+                clear,
+            ) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("cmd_begin_dynamic_rendering: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_command_recorder_cmd_begin_dynamic_rendering(
+    _recorder_handle: *const c_void,
+    _image_view_raw: u64,
+    _extent_w: u32,
+    _extent_h: u32,
+    _has_clear_color: u32,
+    _clear_r: f32,
+    _clear_g: f32,
+    _clear_b: f32,
+    _clear_a: f32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "cmd_begin_dynamic_rendering: Linux-only",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_command_recorder_cmd_end_dynamic_rendering(
+    recorder_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_command_recorder_cmd_end_dynamic_rendering",
+        || -> i32 {
+            let Some(recorder) =
+                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            else {
+                write_err(
+                    "cmd_end_dynamic_rendering: null recorder handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            match recorder.cmd_end_dynamic_rendering() {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("cmd_end_dynamic_rendering: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_command_recorder_cmd_end_dynamic_rendering(
+    _recorder_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "cmd_end_dynamic_rendering: Linux-only",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_command_recorder_submit_with_semaphores(
+    recorder_handle: *const c_void,
+    waits_ptr: *const streamlib_plugin_abi::SemaphoreSubmitInfoRepr,
+    waits_count: usize,
+    signals_ptr: *const streamlib_plugin_abi::SemaphoreSubmitInfoRepr,
+    signals_count: usize,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_command_recorder_submit_with_semaphores",
+        || -> i32 {
+            let Some(recorder) =
+                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            else {
+                write_err(
+                    "submit_with_semaphores: null recorder handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            use vulkanalia::vk::{self, Handle, HasBuilder};
+            // SAFETY: caller-owned arrays. We only read; the buffers
+            // outlive the call by the cdylib-side `Vec` they came from.
+            let waits_repr: &[streamlib_plugin_abi::SemaphoreSubmitInfoRepr] =
+                if waits_count == 0 {
+                    &[]
+                } else {
+                    unsafe { std::slice::from_raw_parts(waits_ptr, waits_count) }
+                };
+            let signals_repr: &[streamlib_plugin_abi::SemaphoreSubmitInfoRepr] =
+                if signals_count == 0 {
+                    &[]
+                } else {
+                    unsafe { std::slice::from_raw_parts(signals_ptr, signals_count) }
+                };
+            let waits: Vec<vk::SemaphoreSubmitInfo> = waits_repr
+                .iter()
+                .map(|r| {
+                    vk::SemaphoreSubmitInfo::builder()
+                        .semaphore(vk::Semaphore::from_raw(r.semaphore))
+                        .value(r.value)
+                        .stage_mask(vk::PipelineStageFlags2::from_bits_truncate(
+                            r.stage_mask,
+                        ))
+                        .device_index(r.device_index)
+                        .build()
+                })
+                .collect();
+            let signals: Vec<vk::SemaphoreSubmitInfo> = signals_repr
+                .iter()
+                .map(|r| {
+                    vk::SemaphoreSubmitInfo::builder()
+                        .semaphore(vk::Semaphore::from_raw(r.semaphore))
+                        .value(r.value)
+                        .stage_mask(vk::PipelineStageFlags2::from_bits_truncate(
+                            r.stage_mask,
+                        ))
+                        .device_index(r.device_index)
+                        .build()
+                })
+                .collect();
+            match recorder.submit_with_semaphores(&waits, &signals) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("submit_with_semaphores: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_command_recorder_submit_with_semaphores(
+    _recorder_handle: *const c_void,
+    _waits_ptr: *const streamlib_plugin_abi::SemaphoreSubmitInfoRepr,
+    _waits_count: usize,
+    _signals_ptr: *const streamlib_plugin_abi::SemaphoreSubmitInfoRepr,
+    _signals_count: usize,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "submit_with_semaphores: Linux-only",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_command_recorder_record_draw(
+    recorder_handle: *const c_void,
+    kernel_handle: *const c_void,
+    frame_index: u32,
+    draw: *const streamlib_plugin_abi::DrawCallRepr,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_command_recorder_record_draw",
+        || -> i32 {
+            let Some(recorder) =
+                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            else {
+                write_err(
+                    "record_draw: null recorder handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if kernel_handle.is_null() {
+                write_err(
+                    "record_draw: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            if draw.is_null() {
+                write_err(
+                    "record_draw: null draw pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let draw_ref = unsafe { &*draw };
+            let viewport = if draw_ref.viewport_present != 0 {
+                Some(crate::core::rhi::Viewport {
+                    x: draw_ref.viewport.x,
+                    y: draw_ref.viewport.y,
+                    width: draw_ref.viewport.width,
+                    height: draw_ref.viewport.height,
+                    min_depth: draw_ref.viewport.min_depth,
+                    max_depth: draw_ref.viewport.max_depth,
+                })
+            } else {
+                None
+            };
+            let scissor = if draw_ref.scissor_present != 0 {
+                Some(crate::core::rhi::ScissorRect {
+                    x: draw_ref.scissor.x,
+                    y: draw_ref.scissor.y,
+                    width: draw_ref.scissor.width,
+                    height: draw_ref.scissor.height,
+                })
+            } else {
+                None
+            };
+            let draw_call = crate::core::rhi::DrawCall {
+                vertex_count: draw_ref.vertex_count,
+                instance_count: draw_ref.instance_count,
+                first_vertex: draw_ref.first_vertex,
+                first_instance: draw_ref.first_instance,
+                viewport,
+                scissor,
+            };
+            let kernel_borrow = make_graphics_kernel_borrow(kernel_handle);
+            match recorder.record_draw(&*kernel_borrow, frame_index, &draw_call) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("record_draw: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn host_command_recorder_record_draw(
+    _recorder_handle: *const c_void,
+    _kernel_handle: *const c_void,
+    _frame_index: u32,
+    _draw: *const streamlib_plugin_abi::DrawCallRepr,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err("record_draw: Linux-only", err_buf, err_buf_cap, err_len);
+    1
+}
+
 /// Host-side `RhiCommandRecorderMethodsVTable` wired to the
-/// per-method wrappers above (Phase E sub-lift slice B — #984).
+/// per-method wrappers above (Phase E sub-lift slice B — #984;
+/// v3 swapchain render-path slots — #1066).
 pub static HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE:
     streamlib_plugin_abi::RhiCommandRecorderMethodsVTable =
     streamlib_plugin_abi::RhiCommandRecorderMethodsVTable {
@@ -12044,6 +12513,14 @@ pub static HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE:
             host_command_recorder_record_pixel_buffer_barrier,
         record_copy_image_to_pixel_buffer:
             host_command_recorder_record_copy_image_to_pixel_buffer,
+        record_swapchain_image_barrier:
+            host_command_recorder_record_swapchain_image_barrier,
+        cmd_begin_dynamic_rendering:
+            host_command_recorder_cmd_begin_dynamic_rendering,
+        cmd_end_dynamic_rendering:
+            host_command_recorder_cmd_end_dynamic_rendering,
+        submit_with_semaphores: host_command_recorder_submit_with_semaphores,
+        record_draw: host_command_recorder_record_draw,
     };
 
 /// Accessor for the host's static `RhiCommandRecorderMethodsVTable`

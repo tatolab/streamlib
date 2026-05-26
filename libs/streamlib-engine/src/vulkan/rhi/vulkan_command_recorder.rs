@@ -11,7 +11,9 @@ use streamlib_plugin_abi::GpuContextFullAccessVTable;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::core::rhi::{DrawCall, DrawIndexedCall, Texture, VulkanLayout};
+use crate::core::rhi::{
+    DrawCall, DrawIndexedCall, ScissorRect, Texture, Viewport, VulkanLayout,
+};
 use crate::core::{Error, Result};
 
 use super::{
@@ -663,6 +665,112 @@ impl RhiCommandRecorderInner {
         Ok(())
     }
 
+    /// Record a layout transition on a raw `VkImage` handle.
+    /// Distinct from [`Self::record_image_barrier`] which takes a
+    /// `Texture` β-shape; this variant is used by
+    /// [`VulkanPresentTarget`](super::vulkan_present_target::VulkanPresentTarget)
+    /// for swapchain images (which are never wrapped in a `Texture`).
+    /// COLOR aspect, single mip / single layer, QUEUE_FAMILY_IGNORED
+    /// on both sides.
+    pub(crate) fn record_swapchain_image_barrier(
+        &mut self,
+        image: vk::Image,
+        old_layout: vk::ImageLayout,
+        new_layout: vk::ImageLayout,
+        src_stage: vk::PipelineStageFlags2,
+        src_access: vk::AccessFlags2,
+        dst_stage: vk::PipelineStageFlags2,
+        dst_access: vk::AccessFlags2,
+    ) -> Result<()> {
+        self.expect_recording("record_swapchain_image_barrier")?;
+        let subresource = vk::ImageSubresourceRange::builder()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .base_mip_level(0)
+            .level_count(1)
+            .base_array_layer(0)
+            .layer_count(1)
+            .build();
+        let barrier = vk::ImageMemoryBarrier2::builder()
+            .src_stage_mask(src_stage)
+            .src_access_mask(src_access)
+            .dst_stage_mask(dst_stage)
+            .dst_access_mask(dst_access)
+            .old_layout(old_layout)
+            .new_layout(new_layout)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(image)
+            .subresource_range(subresource)
+            .build();
+        let barriers = [barrier];
+        let dep = vk::DependencyInfo::builder()
+            .image_memory_barriers(&barriers)
+            .build();
+        unsafe {
+            self.device.cmd_pipeline_barrier2(self.command_buffer, &dep);
+        }
+        Ok(())
+    }
+
+    /// Begin a dynamic-rendering pass against a caller-owned
+    /// `VkImageView`. CLEAR load op when `clear_color` is `Some`,
+    /// LOAD otherwise. The image must already be in
+    /// `COLOR_ATTACHMENT_OPTIMAL` (transition via
+    /// [`Self::record_swapchain_image_barrier`] beforehand). Used
+    /// by [`PresentFrame::begin_rendering`](super::vulkan_present_target::PresentFrame::begin_rendering).
+    pub(crate) fn cmd_begin_dynamic_rendering(
+        &mut self,
+        image_view: vk::ImageView,
+        extent: (u32, u32),
+        clear_color: Option<[f32; 4]>,
+    ) -> Result<()> {
+        self.expect_recording("cmd_begin_dynamic_rendering")?;
+        let load_op = if clear_color.is_some() {
+            vk::AttachmentLoadOp::CLEAR
+        } else {
+            vk::AttachmentLoadOp::LOAD
+        };
+        let clear_value = vk::ClearValue {
+            color: vk::ClearColorValue {
+                float32: clear_color.unwrap_or([0.0, 0.0, 0.0, 1.0]),
+            },
+        };
+        let color_attachment = vk::RenderingAttachmentInfo::builder()
+            .image_view(image_view)
+            .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .load_op(load_op)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .clear_value(clear_value)
+            .build();
+        let color_attachments = [color_attachment];
+        let rendering_info = vk::RenderingInfo::builder()
+            .render_area(vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: vk::Extent2D {
+                    width: extent.0,
+                    height: extent.1,
+                },
+            })
+            .layer_count(1)
+            .color_attachments(&color_attachments)
+            .build();
+        unsafe {
+            self.device
+                .cmd_begin_rendering(self.command_buffer, &rendering_info);
+        }
+        Ok(())
+    }
+
+    /// Close the dynamic-rendering pass opened by
+    /// [`Self::cmd_begin_dynamic_rendering`].
+    pub(crate) fn cmd_end_dynamic_rendering(&mut self) -> Result<()> {
+        self.expect_recording("cmd_end_dynamic_rendering")?;
+        unsafe {
+            self.device.cmd_end_rendering(self.command_buffer);
+        }
+        Ok(())
+    }
+
     fn expect_recording(&self, op: &'static str) -> Result<()> {
         let state = self.state.lock();
         if *state != RecorderState::Recording {
@@ -958,14 +1066,20 @@ impl RhiCommandRecorder {
             .record_dispatch(kernel, group_x, group_y, group_z)
     }
 
-    /// Draw call. Host-only until a cdylib consumer arrives;
-    /// cdylib callers panic at [`Self::host_inner_mut`].
+    /// Draw call.
+    ///
+    /// Mode-routed: host callers dispatch through `host_inner_mut`;
+    /// cdylib callers dispatch through the v3 `record_draw` slot on
+    /// [`RhiCommandRecorderMethodsVTable`](streamlib_plugin_abi::RhiCommandRecorderMethodsVTable).
     pub fn record_draw(
         &mut self,
         kernel: &VulkanGraphicsKernel,
         frame_index: u32,
         draw: &DrawCall,
     ) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_record_draw_via_vtable(kernel, frame_index, draw);
+        }
         self.host_inner_mut().record_draw(kernel, frame_index, draw)
     }
 
@@ -1306,13 +1420,334 @@ impl RhiCommandRecorder {
     }
 
     /// Engine-internal submit path supporting binary + timeline waits.
-    /// **Engine-only** — for `VulkanPresentTarget`'s render submit.
+    /// **Engine-internal** — for `VulkanPresentTarget`'s render submit.
+    ///
+    /// Mode-routed: host callers dispatch through `host_inner_mut`;
+    /// cdylib callers dispatch through the v3
+    /// `submit_with_semaphores` slot.
     pub(crate) fn submit_with_semaphores(
         &mut self,
         waits: &[vk::SemaphoreSubmitInfo],
         signals: &[vk::SemaphoreSubmitInfo],
     ) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_submit_with_semaphores_via_vtable(waits, signals);
+        }
         self.host_inner_mut().submit_with_semaphores(waits, signals)
+    }
+
+    /// Engine-internal swapchain-image layout transition.
+    /// **Engine-internal** — for `VulkanPresentTarget`'s pre/post-draw
+    /// barriers. Mode-routed: host callers dispatch through
+    /// `host_inner_mut`; cdylib callers dispatch through the v3
+    /// `record_swapchain_image_barrier` slot.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn record_swapchain_image_barrier(
+        &mut self,
+        image: vk::Image,
+        old_layout: vk::ImageLayout,
+        new_layout: vk::ImageLayout,
+        src_stage: vk::PipelineStageFlags2,
+        src_access: vk::AccessFlags2,
+        dst_stage: vk::PipelineStageFlags2,
+        dst_access: vk::AccessFlags2,
+    ) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_record_swapchain_image_barrier_via_vtable(
+                image,
+                old_layout,
+                new_layout,
+                src_stage,
+                src_access,
+                dst_stage,
+                dst_access,
+            );
+        }
+        self.host_inner_mut().record_swapchain_image_barrier(
+            image,
+            old_layout,
+            new_layout,
+            src_stage,
+            src_access,
+            dst_stage,
+            dst_access,
+        )
+    }
+
+    /// Engine-internal dynamic-rendering begin.
+    /// **Engine-internal** — for
+    /// [`PresentFrame::begin_rendering`](super::vulkan_present_target::PresentFrame::begin_rendering).
+    /// Mode-routed: host callers dispatch through `host_inner_mut`;
+    /// cdylib callers dispatch through the v3
+    /// `cmd_begin_dynamic_rendering` slot.
+    pub(crate) fn cmd_begin_dynamic_rendering(
+        &mut self,
+        image_view: vk::ImageView,
+        extent: (u32, u32),
+        clear_color: Option<[f32; 4]>,
+    ) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_cmd_begin_dynamic_rendering_via_vtable(
+                image_view,
+                extent,
+                clear_color,
+            );
+        }
+        self.host_inner_mut()
+            .cmd_begin_dynamic_rendering(image_view, extent, clear_color)
+    }
+
+    /// Engine-internal dynamic-rendering end.
+    /// **Engine-internal** — for
+    /// [`PresentFrame::end_rendering`](super::vulkan_present_target::PresentFrame::end_rendering).
+    /// Mode-routed: host callers dispatch through `host_inner_mut`;
+    /// cdylib callers dispatch through the v3
+    /// `cmd_end_dynamic_rendering` slot.
+    pub(crate) fn cmd_end_dynamic_rendering(&mut self) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_cmd_end_dynamic_rendering_via_vtable();
+        }
+        self.host_inner_mut().cmd_end_dynamic_rendering()
+    }
+
+    // -------------------------------------------------------------------------
+    // v3 dispatch helpers (#1066) — match the v1 / v2 helpers above.
+    // -------------------------------------------------------------------------
+
+    fn dispatch_record_draw_via_vtable(
+        &self,
+        kernel: &VulkanGraphicsKernel,
+        frame_index: u32,
+        draw: &DrawCall,
+    ) -> Result<()> {
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "record_draw: command recorder methods vtable is null".into(),
+            ));
+        }
+        let (viewport_present, vp) = match draw.viewport {
+            Some(v) => (1u32, v),
+            None => (0u32, Viewport::full(0, 0)),
+        };
+        let (scissor_present, sc) = match draw.scissor {
+            Some(s) => (1u32, s),
+            None => (0u32, ScissorRect::full(0, 0)),
+        };
+        let draw_repr = streamlib_plugin_abi::DrawCallRepr {
+            vertex_count: draw.vertex_count,
+            instance_count: draw.instance_count,
+            first_vertex: draw.first_vertex,
+            first_instance: draw.first_instance,
+            viewport_present,
+            scissor_present,
+            viewport: streamlib_plugin_abi::ViewportRepr {
+                x: vp.x,
+                y: vp.y,
+                width: vp.width,
+                height: vp.height,
+                min_depth: vp.min_depth,
+                max_depth: vp.max_depth,
+            },
+            scissor: streamlib_plugin_abi::ScissorRectRepr {
+                x: sc.x,
+                y: sc.y,
+                width: sc.width,
+                height: sc.height,
+            },
+        };
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).record_draw)(
+                self.handle,
+                kernel.handle,
+                frame_index,
+                &draw_repr,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_record_swapchain_image_barrier_via_vtable(
+        &self,
+        image: vk::Image,
+        old_layout: vk::ImageLayout,
+        new_layout: vk::ImageLayout,
+        src_stage: vk::PipelineStageFlags2,
+        src_access: vk::AccessFlags2,
+        dst_stage: vk::PipelineStageFlags2,
+        dst_access: vk::AccessFlags2,
+    ) -> Result<()> {
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "record_swapchain_image_barrier: command recorder methods vtable is null"
+                    .into(),
+            ));
+        }
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).record_swapchain_image_barrier)(
+                self.handle,
+                image.as_raw(),
+                old_layout.as_raw(),
+                new_layout.as_raw(),
+                src_stage.bits() as i64,
+                src_access.bits() as i64,
+                dst_stage.bits() as i64,
+                dst_access.bits() as i64,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    fn dispatch_cmd_begin_dynamic_rendering_via_vtable(
+        &self,
+        image_view: vk::ImageView,
+        extent: (u32, u32),
+        clear_color: Option<[f32; 4]>,
+    ) -> Result<()> {
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "cmd_begin_dynamic_rendering: command recorder methods vtable is null"
+                    .into(),
+            ));
+        }
+        let has_clear = if clear_color.is_some() { 1u32 } else { 0u32 };
+        let rgba = clear_color.unwrap_or([0.0; 4]);
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).cmd_begin_dynamic_rendering)(
+                self.handle,
+                image_view.as_raw(),
+                extent.0,
+                extent.1,
+                has_clear,
+                rgba[0],
+                rgba[1],
+                rgba[2],
+                rgba[3],
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    fn dispatch_cmd_end_dynamic_rendering_via_vtable(&self) -> Result<()> {
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "cmd_end_dynamic_rendering: command recorder methods vtable is null"
+                    .into(),
+            ));
+        }
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).cmd_end_dynamic_rendering)(
+                self.handle,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    fn dispatch_submit_with_semaphores_via_vtable(
+        &self,
+        waits: &[vk::SemaphoreSubmitInfo],
+        signals: &[vk::SemaphoreSubmitInfo],
+    ) -> Result<()> {
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "submit_with_semaphores: command recorder methods vtable is null"
+                    .into(),
+            ));
+        }
+        // Project the vk::SemaphoreSubmitInfo arrays into POD reprs.
+        let waits_repr: Vec<streamlib_plugin_abi::SemaphoreSubmitInfoRepr> = waits
+            .iter()
+            .map(|w| streamlib_plugin_abi::SemaphoreSubmitInfoRepr {
+                semaphore: w.semaphore.as_raw(),
+                value: w.value,
+                stage_mask: w.stage_mask.bits() as u64,
+                device_index: w.device_index,
+                _reserved_padding: 0,
+            })
+            .collect();
+        let signals_repr: Vec<streamlib_plugin_abi::SemaphoreSubmitInfoRepr> = signals
+            .iter()
+            .map(|s| streamlib_plugin_abi::SemaphoreSubmitInfoRepr {
+                semaphore: s.semaphore.as_raw(),
+                value: s.value,
+                stage_mask: s.stage_mask.bits() as u64,
+                device_index: s.device_index,
+                _reserved_padding: 0,
+            })
+            .collect();
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).submit_with_semaphores)(
+                self.handle,
+                if waits_repr.is_empty() {
+                    std::ptr::null()
+                } else {
+                    waits_repr.as_ptr()
+                },
+                waits_repr.len(),
+                if signals_repr.is_empty() {
+                    std::ptr::null()
+                } else {
+                    signals_repr.as_ptr()
+                },
+                signals_repr.len(),
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 }
 
