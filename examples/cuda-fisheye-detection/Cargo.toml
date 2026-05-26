@@ -8,9 +8,9 @@ edition = "2024"
 publish = false
 
 [dependencies]
-streamlib = { path = "../../../libs/streamlib-sdk" }
-streamlib-adapter-abi = { path = "../../../libs/streamlib-adapter-abi" }
-streamlib-adapter-cuda = { path = "../../../libs/streamlib-adapter-cuda" }
-streamlib-debug-utilities = { path = "../../../packages/debug-utilities" }
+streamlib = { path = "../../libs/streamlib-sdk" }
+streamlib-adapter-abi = { path = "../../libs/streamlib-adapter-abi" }
+streamlib-adapter-cuda = { path = "../../libs/streamlib-adapter-cuda" }
+streamlib-debug-utilities = { path = "../../packages/debug-utilities" }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 serde_json = "1.0"

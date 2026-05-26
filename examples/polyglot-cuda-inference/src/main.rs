@@ -58,10 +58,11 @@ use streamlib::sdk::engine::host_rhi::{
     HostVulkanBuffer,
     HostVulkanTimelineSemaphore,
 };
+use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::schema_ident;
 use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
 use streamlib_adapter_abi::SurfaceId;
 use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
 
@@ -180,20 +181,31 @@ fn main() -> Result<()> {
     }
 
     // Load the BgraFileSource processor from `@tatolab/debug-utilities`
-    // at runtime — `cargo xtask build-plugins --package @tatolab/debug-utilities`
+    // via the default resolver chain (workspace stage → installed
+    // cache). `cargo xtask build-plugins --package @tatolab/debug-utilities`
     // must have run first.
-    runtime
-        .load_workspace_packages(["@tatolab/debug-utilities"])
-        .map_err(streamlib::sdk::error::Error::from)?;
+    runtime.add_module(module_ident_any_version!("tatolab", "debug-utilities"))?;
 
-    // Load the polyglot processors declaratively. The runner's
-    // `streamlib.yaml` declares both the Python and Deno sub-packages
-    // via `patch:` `path:` overrides; `load_project` walks the manifest,
-    // resolves both, and registers each package's processors + schemas.
-    // The runner then picks which one to instantiate via
-    // `schema_ident_any_version!` based on `--runtime`.
+    // Load the polyglot processors via explicit add_module_with calls.
+    // The Python and Deno sub-packages are example-local (siblings of
+    // this example crate) and not workspace-staged, so each is
+    // resolved by its manifest directory. The recursive dep walker
+    // follows each sub-package's own dependencies. The runner picks
+    // which one to instantiate via `schema_ident_any_version!` based
+    // on `--runtime`.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    runtime.load_project(&manifest_dir)?;
+    runtime.add_module_with(
+        module_ident_any_version!("tatolab", "polyglot-cuda-inference"),
+        ModuleResolverStrategy::ManifestDirectory {
+            path: manifest_dir.join("python"),
+        },
+    )?;
+    runtime.add_module_with(
+        module_ident_any_version!("tatolab", "polyglot-cuda-inference-deno"),
+        ModuleResolverStrategy::ManifestDirectory {
+            path: manifest_dir.join("deno"),
+        },
+    )?;
 
     // Trigger source: a tiny BGRA fixture that drives Videoframes
     // through the pipeline so the polyglot processor's `process()` is
