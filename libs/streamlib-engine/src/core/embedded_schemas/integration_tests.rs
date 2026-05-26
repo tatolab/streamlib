@@ -19,9 +19,7 @@
 use std::time::{Duration, Instant};
 
 use super::{max_payload_bytes_for_port_spec, test_support};
-use crate::iceoryx2::{
-    FrameHeader, Iceoryx2Node, SchemaIdentWire, FRAME_HEADER_SIZE, MAX_PAYLOAD_SIZE,
-};
+use crate::iceoryx2::{FrameHeader, Iceoryx2Node, SchemaIdentWire, FRAME_HEADER_SIZE};
 use iceoryx2::prelude::*;
 use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib_processor_schema::PortSchemaSpec;
@@ -145,9 +143,10 @@ fn test_schema_max_payload_bytes_videoframe() {
 
 /// A `Specific` spec for an unregistered schema must surface as a typed
 /// configuration error naming the missing canonical id and pointing at
-/// `load_project`. This is the bug-class lock for issue #869 — silent
-/// fallback to `MAX_PAYLOAD_SIZE` on registry miss would re-create the
-/// first-frame `ExceedsMaxLoanSize` footgun.
+/// `load_project`. Silent fallback to the iceoryx2 default on registry
+/// miss would defer the failure to first-frame `ExceedsMaxLoanSize`
+/// instead of catching the "forgot `runtime.load_project(...)`" footgun
+/// at wire time.
 #[test]
 fn test_schema_max_payload_bytes_unknown_schema_errors_with_load_project_hint() {
     let spec = PortSchemaSpec::Specific(SchemaIdent::new(
@@ -167,8 +166,6 @@ fn test_schema_max_payload_bytes_unknown_schema_errors_with_load_project_hint() 
         msg.contains("load_project"),
         "error must point at runtime.load_project(...) as the fix; got: {msg}"
     );
-    // Silence the unused import warning that the previous test consumed.
-    let _ = MAX_PAYLOAD_SIZE;
 }
 
 #[test]

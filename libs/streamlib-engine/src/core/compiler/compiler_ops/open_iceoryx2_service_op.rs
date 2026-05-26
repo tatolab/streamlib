@@ -957,13 +957,13 @@ mod tests {
             .expect("fan-in == cap must succeed");
     }
 
-    /// Wire-time integration lock for issue #869: when a processor's
-    /// registered output port carries a `PortSchemaSpec::Specific(ident)`
-    /// whose canonical id is NOT in the runtime schema registry (the
-    /// "forgot to call `runtime.load_project(...)`" footgun), the helper
-    /// chain `port_info → data_type → max_payload_bytes_for_port_spec`
+    /// Wire-time integration lock: when a processor's registered output
+    /// port carries a `PortSchemaSpec::Specific(ident)` whose canonical
+    /// id is NOT in the runtime schema registry (the "forgot to call
+    /// `runtime.load_project(...)`" footgun), the helper chain
+    /// `port_info → data_type → max_payload_bytes_for_port_spec`
     /// surfaces a typed configuration error pointing at `load_project`
-    /// rather than silently falling back to `MAX_PAYLOAD_SIZE` and
+    /// rather than silently falling back to the iceoryx2 default and
     /// deferring the failure to first publish.
     ///
     /// Locks the registry-miss-vs-load-project boundary at the same
