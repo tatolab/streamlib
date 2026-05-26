@@ -149,7 +149,7 @@ fn dlopen_processor_runs_ray_tracing_kernel_trace_rays_smoke() {
                 path: fixtures_dst.clone(),
             },
         )
-        .expect("load_project must succeed against the test-fixtures cdylib");
+        .expect("add_module_with must succeed against the test-fixtures cdylib");
 
     let ident = schema_ident!(
         "tatolab",

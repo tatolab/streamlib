@@ -146,7 +146,7 @@ fn dlopen_processor_dispatches_compute_kernel_against_cpu_reference() {
                 path: fixtures_dst.clone(),
             },
         )
-        .expect("load_project must succeed against the test-fixtures cdylib");
+        .expect("add_module_with must succeed against the test-fixtures cdylib");
 
     let ident = schema_ident!(
         "tatolab",

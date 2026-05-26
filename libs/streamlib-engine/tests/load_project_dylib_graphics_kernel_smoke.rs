@@ -142,7 +142,7 @@ fn dlopen_processor_runs_graphics_kernel_offscreen_render_smoke() {
                 path: fixtures_dst.clone(),
             },
         )
-        .expect("load_project must succeed against the test-fixtures cdylib");
+        .expect("add_module_with must succeed against the test-fixtures cdylib");
 
     let ident = schema_ident!(
         "tatolab",

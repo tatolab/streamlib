@@ -251,7 +251,7 @@ fn dlopen_cross_rustc_fixture_round_trips_every_beta_shape() {
                 path: fixture_dst.clone(),
             },
         )
-        .expect("load_project must succeed against the cross-rustc cdylib");
+        .expect("add_module_with must succeed against the cross-rustc cdylib");
 
     let ident = schema_ident!(
         "tatolab",

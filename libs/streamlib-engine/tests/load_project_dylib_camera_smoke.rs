@@ -187,7 +187,7 @@ fn dlopen_camera_processor_completes_lifecycle_against_vivid() {
                 path: camera_dst.clone(),
             },
         )
-        .expect("load_project must succeed against the camera cdylib");
+        .expect("add_module_with must succeed against the camera cdylib");
 
     let ident = schema_ident!("tatolab", "camera", "Camera", "1.0.0");
 

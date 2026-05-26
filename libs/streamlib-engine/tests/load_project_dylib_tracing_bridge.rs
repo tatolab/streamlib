@@ -128,7 +128,7 @@ fn plugin_register_tracing_event_reaches_host_jsonl() {
                 path: fixtures_dst.clone(),
             },
         )
-        .expect("load_project must succeed");
+        .expect("add_module_with must succeed");
 
     // Tracing→JSONL flow under the callback-table architecture:
     // cdylib's `ProcessorInstanceFactory::register::<P>()` calls

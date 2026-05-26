@@ -107,7 +107,7 @@ fn dylib_processor_create_and_drop_round_trips_through_vtable() {
                 path: fixtures_dst.clone(),
             },
         )
-        .expect("load_project must succeed against a real test-fixtures cdylib");
+        .expect("add_module_with must succeed against a real test-fixtures cdylib");
 
     // Locate the registered TestConfiguredProcessor's descriptor so we
     // can build a ProcessorNode against the exact structured ident the

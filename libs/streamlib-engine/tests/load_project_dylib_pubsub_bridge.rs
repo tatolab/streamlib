@@ -155,7 +155,7 @@ fn plugin_register_pubsub_event_reaches_host_subscriber() {
                 path: fixtures_dst.clone(),
             },
         )
-        .expect("load_project must succeed");
+        .expect("add_module_with must succeed");
 
     let deadline = Instant::now() + Duration::from_secs(2);
     while matched.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {

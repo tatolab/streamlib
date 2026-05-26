@@ -133,7 +133,7 @@ fn dlopen_processor_round_trips_gpu_vtable_callbacks() {
                 path: fixtures_dst.clone(),
             },
         )
-        .expect("load_project must succeed against a real test-fixtures cdylib");
+        .expect("add_module_with must succeed against a real test-fixtures cdylib");
 
     let ident = schema_ident!(
         "tatolab",

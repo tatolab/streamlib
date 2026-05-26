@@ -111,7 +111,7 @@ fn dlopen_processor_round_trips_surface_share_and_escalate_paths() {
                 path: fixtures_dst.clone(),
             },
         )
-        .expect("load_project must succeed");
+        .expect("add_module_with must succeed");
 
     let ident = schema_ident!(
         "tatolab",

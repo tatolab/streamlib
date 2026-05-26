@@ -200,7 +200,7 @@ fn load_workspace_packages_returns_invalid_id_before_filesystem_probe() {
 }
 
 // =========================================================================
-// load_project dep walker
+// add_module_with(ManifestDirectory) dep walker
 // =========================================================================
 
 /// Path-style dep recursion: `add_module_with(ManifestDirectory(A))`
