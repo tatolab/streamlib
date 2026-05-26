@@ -25,6 +25,7 @@
 
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::schema_ident;
@@ -40,14 +41,12 @@ fn main() -> Result<()> {
 
     let runtime = Runner::new()?;
 
-    runtime.load_workspace_packages([
-        "@tatolab/audio",
-        "@tatolab/camera",
-        "@tatolab/display",
-        "@tatolab/h264",
-        "@tatolab/moq",
-        "@tatolab/opus",
-    ])?;
+    runtime.add_module(module_ident_any_version!("tatolab", "audio"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "camera"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "display"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "h264"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "moq"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "opus"))?;
 
     // ---- PUBLISH SIDE ----
 

@@ -17,6 +17,7 @@
 
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::schema_ident;
@@ -38,11 +39,9 @@ fn main() -> Result<()> {
 
     let runtime = Runner::new()?;
 
-    runtime.load_workspace_packages([
-        "@tatolab/debug-utilities",
-        "@tatolab/jpeg",
-        "@tatolab/display",
-    ])?;
+    runtime.add_module(module_ident_any_version!("tatolab", "debug-utilities"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "jpeg"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "display"))?;
 
     let source = runtime.add_processor(ProcessorSpec::new(
         schema_ident!("tatolab", "debug-utilities", "JpegBytesSource", "1.0.0"),

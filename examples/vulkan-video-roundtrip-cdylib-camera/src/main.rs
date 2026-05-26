@@ -4,7 +4,7 @@
 //! Vulkan Video Encode/Decode Roundtrip Pipeline — camera-as-cdylib variant.
 //!
 //! Sibling of `examples/vulkan-video-roundtrip` that loads every
-//! processor as a cdylib via `runtime.load_workspace_packages(...)`.
+//! processor as a cdylib via `runtime.add_module(...)`.
 //! Exists to exercise the cdylib FFI surface (Phase E
 //! `RhiColorConverterMethodsVTable` + `RhiCommandRecorderMethodsVTable`)
 //! end-to-end through the encode → decode → display pipeline.
@@ -21,6 +21,7 @@
 
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::schema_ident;
@@ -36,17 +37,15 @@ fn main() -> Result<()> {
         "=== Vulkan Video {} Roundtrip (all-cdylib) ===",
         codec.to_uppercase()
     );
-    println!("Camera:   {device} (loaded as cdylib via load_workspace_packages)");
+    println!("Camera:   {device} (loaded as cdylib via add_module)");
     println!("Duration: {duration_secs}s\n");
 
     let runtime = Runner::new()?;
 
-    runtime.load_workspace_packages([
-        "@tatolab/camera",
-        "@tatolab/display",
-        "@tatolab/h264",
-        "@tatolab/h265",
-    ])?;
+    runtime.add_module(module_ident_any_version!("tatolab", "camera"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "display"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "h264"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "h265"))?;
     println!("+ Camera / Display / H264 / H265 loaded from target/streamlib-plugins/");
     println!("+ Wire vocabulary registered (via @tatolab/core dep walk)\n");
 

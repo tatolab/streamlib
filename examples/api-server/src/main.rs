@@ -21,8 +21,7 @@
 //! `target/streamlib-plugins/tatolab__api-server/`.
 //!
 //! Loads `@tatolab/api-server` through the imperative
-//! [`Runner::add_module`] API — the typed counterpart to the
-//! yaml-driven `load_project`. The fully spelled out
+//! [`Runner::add_module`] API. The fully spelled out
 //! [`streamlib::sdk::module_ident!`] call is one of four
 //! ergonomic shapes; the other three (split + any-version,
 //! joined + version, joined + any-version) are equally valid and
@@ -38,11 +37,10 @@ use streamlib::sdk::schema_ident;
 async fn main() -> streamlib::sdk::error::Result<()> {
     let runtime = Runner::new()?;
 
-    // Imperative module load — REST-endpoint-friendly counterpart
-    // to `Runner::load_project` / `Runner::load_package`. The
-    // runtime resolves the ident against the workspace stage dir
-    // or installed-package cache, verifies the semver range, then
-    // drives the same internal module-loading machinery.
+    // Imperative module load — the runtime resolves the ident
+    // against the workspace stage dir or installed-package cache,
+    // verifies the semver range, then drives the internal
+    // module-loading machinery.
     runtime.add_module(module_ident!("tatolab", "api-server", "^1.0.0"))?;
 
     let config = serde_json::json!({

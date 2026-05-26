@@ -13,6 +13,7 @@
 
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::schema_ident;
@@ -22,11 +23,9 @@ fn main() -> Result<()> {
 
     let runtime = Runner::new()?;
 
-    runtime.load_workspace_packages([
-        "@tatolab/camera",
-        "@tatolab/display",
-        "@tatolab/api-server",
-    ])?;
+    runtime.add_module(module_ident_any_version!("tatolab", "camera"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "display"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "api-server"))?;
 
     println!("📷 Adding camera processor...");
     let device_id = std::env::var("STREAMLIB_CAMERA_DEVICE").ok();

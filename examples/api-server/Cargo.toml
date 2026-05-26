@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 # `@tatolab/api-server` loaded at runtime via
-# `Runner::load_workspace_packages` — no compile-time link.
+# `Runner::add_module` — no compile-time link.
 [dependencies]
 streamlib = { path = "../../libs/streamlib-sdk" }
 serde_json = "1"
