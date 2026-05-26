@@ -352,13 +352,14 @@ fn open_iceoryx2_pubsub(
 
     // Create iceoryx2 Service (pub/sub) and paired Notify service (event/fd-wake).
     let iceoryx2_node = runtime_ctx.iceoryx2_node();
-    let max_queued_messages = max_queued_messages_for_port_spec(&output_schema);
+    let max_queued_messages = max_queued_messages_for_port_spec(&output_schema)?;
+    let max_payload = max_payload_bytes_for_port_spec(&output_schema)?;
     let service =
         iceoryx2_node.open_or_create_service(&service_name, max_queued_messages)?;
     let notify_service = iceoryx2_node.open_or_create_notify_service(&notify_service_name)?;
 
     // Create Publisher sized for this schema's declared max payload.
-    let publisher = service.create_publisher(max_payload_bytes_for_port_spec(&output_schema))?;
+    let publisher = service.create_publisher(max_payload)?;
     let notifier = notify_service.create_notifier()?;
     tracing::debug!(
         "Created iceoryx2 Publisher+Notifier for '{}' -> service '{}'",
@@ -484,8 +485,8 @@ fn open_iceoryx2_subprocess_to_subprocess(
             })
             .unwrap_or_default()
     };
-    let max_payload = max_payload_bytes_for_port_spec(&output_schema);
-    let max_queued_messages = max_queued_messages_for_port_spec(&output_schema);
+    let max_payload = max_payload_bytes_for_port_spec(&output_schema)?;
+    let max_queued_messages = max_queued_messages_for_port_spec(&output_schema)?;
 
     // Ensure both services exist (both subprocesses will open them independently).
     let iceoryx2_node = runtime_ctx.iceoryx2_node();
@@ -618,8 +619,8 @@ fn open_iceoryx2_subprocess_to_rust(
             })
             .unwrap_or_default()
     };
-    let max_payload = max_payload_bytes_for_port_spec(&output_schema);
-    let max_queued_messages = max_queued_messages_for_port_spec(&output_schema);
+    let max_payload = max_payload_bytes_for_port_spec(&output_schema)?;
+    let max_queued_messages = max_queued_messages_for_port_spec(&output_schema)?;
 
     let iceoryx2_node = runtime_ctx.iceoryx2_node();
     let service =
@@ -759,8 +760,8 @@ fn open_iceoryx2_rust_to_subprocess(
     };
 
     let iceoryx2_node = runtime_ctx.iceoryx2_node();
-    let max_payload = max_payload_bytes_for_port_spec(&output_schema);
-    let max_queued_messages = max_queued_messages_for_port_spec(&output_schema);
+    let max_payload = max_payload_bytes_for_port_spec(&output_schema)?;
+    let max_queued_messages = max_queued_messages_for_port_spec(&output_schema)?;
     let service =
         iceoryx2_node.open_or_create_service(&service_name, max_queued_messages)?;
     let notify_service = iceoryx2_node.open_or_create_notify_service(&notify_service_name)?;
@@ -954,5 +955,102 @@ mod tests {
         let dest_uid: ProcessorUniqueId = dest_id.as_str().into();
         reject_overcap_destination_fanin(&mut graph, &dest_uid)
             .expect("fan-in == cap must succeed");
+    }
+
+    /// Wire-time integration lock: when a processor's registered output
+    /// port carries a `PortSchemaSpec::Specific(ident)` whose canonical
+    /// id is NOT in the runtime schema registry (the "forgot to call
+    /// `runtime.load_project(...)`" footgun), the helper chain
+    /// `port_info → data_type → max_payload_bytes_for_port_spec`
+    /// surfaces a typed configuration error pointing at `load_project`
+    /// rather than silently falling back to the iceoryx2 default and
+    /// deferring the failure to first publish.
+    ///
+    /// Locks the registry-miss-vs-load-project boundary at the same
+    /// shape `open_iceoryx2_pubsub` exercises: descriptor declares port
+    /// schema → `PROCESSOR_REGISTRY.port_info(...)` reads it → the
+    /// resolver gates allocation on registry membership. The compiler-
+    /// enforced `?` operator at every helper call site in this module
+    /// guarantees the error propagates out of `open_iceoryx2_service`,
+    /// out of `compile_phase`, out of `Runner::start()`. Reverting the
+    /// helper signature back to infallible `usize` would fail compilation
+    /// of every call site immediately.
+    #[test]
+    fn unregistered_specific_port_schema_surfaces_typed_error_at_wire_time() {
+        use crate::core::descriptors::{
+            CodeExamples, PortDescriptor, ProcessorDescriptor, ProcessorRuntime,
+            ProcessorScheduling,
+        };
+        use crate::core::embedded_schemas::max_payload_bytes_for_port_spec;
+        use streamlib_idents::{Org, Package, SemVer, TypeName};
+        use streamlib_processor_schema::PortSchemaSpec;
+
+        // Mint a processor identity (the carrying processor) that's
+        // unique to this test so the registry can hold it across runs.
+        let processor_ident = SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("test-wire-time-registry-miss").unwrap(),
+            TypeName::new("CarryingProcessor").unwrap(),
+            SemVer::new(1, 0, 0),
+        );
+        // Mint a wire schema identity whose package was NEVER loaded
+        // via `runtime.load_project(...)`. The processor declares an
+        // output port carrying this schema.
+        let unloaded_schema_ident = SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("test-wire-time-unloaded-schema-pkg").unwrap(),
+            TypeName::new("UnloadedWireType").unwrap(),
+            SemVer::new(1, 0, 0),
+        );
+        let unloaded_spec = PortSchemaSpec::Specific(unloaded_schema_ident.clone());
+
+        let descriptor = ProcessorDescriptor {
+            name: processor_ident.clone(),
+            description: "wire-time registry-miss regression mock".into(),
+            version: "1.0.0".into(),
+            repository: String::new(),
+            runtime: ProcessorRuntime::Rust,
+            entrypoint: None,
+            config_schema: None,
+            scheduling: ProcessorScheduling::default(),
+            inputs: Vec::new(),
+            outputs: vec![PortDescriptor::iceoryx2(
+                "out_unloaded",
+                "carries UnloadedWireType",
+                unloaded_spec,
+            )],
+            examples: CodeExamples::default(),
+        };
+        PROCESSOR_REGISTRY
+            .register_descriptor_only(descriptor)
+            .expect("register_descriptor_only must accept a fresh ident");
+
+        // Drive the exact lookup chain the open_iceoryx2_pubsub /
+        // open_iceoryx2_rust_to_subprocess / open_iceoryx2_subprocess_to_*
+        // helpers run when wiring a service.
+        let (_, outputs) = PROCESSOR_REGISTRY
+            .port_info(&processor_ident)
+            .expect("port_info must return the descriptor's ports");
+        let output_spec = outputs
+            .iter()
+            .find(|p| p.name == "out_unloaded")
+            .map(|p| p.data_type.clone())
+            .expect("descriptor advertises `out_unloaded`");
+
+        let err = max_payload_bytes_for_port_spec(&output_spec)
+            .expect_err("registry miss must surface as Err at wire time");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("@tatolab/test-wire-time-unloaded-schema-pkg/UnloadedWireType"),
+            "error must name the missing canonical id; got: {msg}"
+        );
+        assert!(
+            msg.contains("load_project"),
+            "error must point at `runtime.load_project(...)` as the fix; got: {msg}"
+        );
+        assert!(
+            matches!(err, crate::core::error::Error::Configuration(_)),
+            "registry miss at wire time must surface as Error::Configuration; got: {err:?}"
+        );
     }
 }

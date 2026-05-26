@@ -115,51 +115,83 @@ pub fn get_embedded_schema_definition(name: &str) -> Option<Arc<str>> {
 }
 
 /// Resolve `max_payload_bytes` from a structured port-schema spec.
-/// Renders the spec to its canonical lookup form, reads the embedded
-/// schema YAML, and returns the declared bound. Returns the iceoryx2
-/// default for `Any` and for unknown schemas.
+///
+/// Returns the iceoryx2 default for `Any` (legitimate wildcard) and for
+/// registered schemas that don't declare `metadata.max_payload_bytes`.
+/// Returns [`Error::Configuration`] when a [`PortSchemaSpec::Specific`]
+/// (or [`PortSchemaSpec::Named`]) refers to a schema absent from the
+/// runtime registry — the actionable shape catches the "forgot
+/// `runtime.load_project(...)`" footgun at wire time rather than at
+/// first-frame `ExceedsMaxLoanSize`.
+///
+/// [`Error::Configuration`]: crate::core::error::Error::Configuration
+/// [`PortSchemaSpec::Specific`]: streamlib_processor_schema::PortSchemaSpec::Specific
+/// [`PortSchemaSpec::Named`]: streamlib_processor_schema::PortSchemaSpec::Named
 pub fn max_payload_bytes_for_port_spec(
     schema_spec: &streamlib_processor_schema::PortSchemaSpec,
-) -> usize {
+) -> crate::core::error::Result<usize> {
     use crate::iceoryx2::MAX_PAYLOAD_SIZE;
-    let canonical = schema_spec.to_string();
-    if let Some(yaml) = get_embedded_schema_definition(&canonical) {
-        if let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(&yaml) {
-            if let Some(n) = value
-                .get("metadata")
-                .and_then(|m| m.get("max_payload_bytes"))
-                .and_then(|v| v.as_u64())
-            {
-                return n as usize;
-            }
-        }
-    }
-    MAX_PAYLOAD_SIZE as usize
+    resolve_metadata_u64_for_port_spec(schema_spec, "max_payload_bytes")
+        .map(|opt| opt.unwrap_or(MAX_PAYLOAD_SIZE as usize))
 }
 
 /// Resolve the iceoryx2 ring depth (slot count) for a port's wire schema
-/// from `metadata.max_queued_messages`. Returns
-/// [`DEFAULT_MAX_QUEUED_MESSAGES`] for `Any`, for unknown schemas, and
-/// for schemas that don't declare the field.
+/// from `metadata.max_queued_messages`.
+///
+/// Returns [`DEFAULT_MAX_QUEUED_MESSAGES`] for `Any` (legitimate wildcard)
+/// and for registered schemas that don't declare the field. Returns
+/// [`Error::Configuration`] when the spec refers to a schema absent from
+/// the runtime registry — the actionable shape catches the "forgot
+/// `runtime.load_project(...)`" footgun at wire time rather than as a
+/// silently undersized ring dropping messages under burst load.
 ///
 /// [`DEFAULT_MAX_QUEUED_MESSAGES`]: crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES
+/// [`Error::Configuration`]: crate::core::error::Error::Configuration
 pub fn max_queued_messages_for_port_spec(
     schema_spec: &streamlib_processor_schema::PortSchemaSpec,
-) -> usize {
+) -> crate::core::error::Result<usize> {
     use crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES;
-    let canonical = schema_spec.to_string();
-    if let Some(yaml) = get_embedded_schema_definition(&canonical) {
-        if let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(&yaml) {
-            if let Some(n) = value
-                .get("metadata")
-                .and_then(|m| m.get("max_queued_messages"))
-                .and_then(|v| v.as_u64())
-            {
-                return n as usize;
-            }
-        }
+    resolve_metadata_u64_for_port_spec(schema_spec, "max_queued_messages")
+        .map(|opt| opt.unwrap_or(DEFAULT_MAX_QUEUED_MESSAGES))
+}
+
+/// Shared lookup helper for both port-spec metadata resolvers.
+///
+/// `Any` → `Ok(None)` (caller substitutes default).
+/// `Specific` / `Named` with registry hit → `Ok(Some(value))` if the
+/// declared `metadata.<field>` parses as a `u64`, else `Ok(None)`
+/// (caller substitutes default — registered schema chose not to
+/// constrain).
+/// `Specific` / `Named` with registry miss → `Err(Configuration(...))`
+/// naming the missing canonical id and pointing the developer at
+/// `runtime.load_project(...)`.
+fn resolve_metadata_u64_for_port_spec(
+    schema_spec: &streamlib_processor_schema::PortSchemaSpec,
+    field: &str,
+) -> crate::core::error::Result<Option<usize>> {
+    if matches!(schema_spec, streamlib_processor_schema::PortSchemaSpec::Any) {
+        return Ok(None);
     }
-    DEFAULT_MAX_QUEUED_MESSAGES
+    let canonical = schema_spec.to_string();
+    let yaml = get_embedded_schema_definition(&canonical).ok_or_else(|| {
+        crate::core::error::Error::Configuration(format!(
+            "schema '{canonical}' referenced by a port spec but not in the \
+             runtime schema registry — did you forget to call \
+             `runtime.load_project(...)` for the package providing it? \
+             (Use `list_embedded_schema_names()` to inspect what's currently \
+             registered.)"
+        ))
+    })?;
+    let value: serde_yaml::Value = match serde_yaml::from_str(&yaml) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let declared = value
+        .get("metadata")
+        .and_then(|m| m.get(field))
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize);
+    Ok(declared)
 }
 
 /// List every registered schema's canonical identifier (unversioned).
@@ -337,25 +369,41 @@ mod tests {
         );
     }
 
+    /// A `Specific` spec referencing a schema absent from the registry
+    /// must return a typed configuration error naming the missing
+    /// canonical id and pointing at `runtime.load_project(...)`. Mentally
+    /// reverting the resolver to silently fall back to `MAX_PAYLOAD_SIZE`
+    /// will make this test fail.
     #[test]
-    fn max_payload_bytes_returns_default_for_unknown() {
-        use crate::iceoryx2::MAX_PAYLOAD_SIZE;
-        // A PortSchemaSpec that won't resolve in the registry — Specific
-        // form, fully structured, but the package isn't registered.
+    fn max_payload_bytes_errors_on_registry_miss_with_load_project_hint() {
         let spec = PortSchemaSpec::Specific(SchemaIdent::new(
             Org::new("tatolab").unwrap(),
-            Package::new("does-not-exist").unwrap(),
+            Package::new("does-not-exist-payload").unwrap(),
             TypeName::new("Nothing").unwrap(),
             SemVer::new(1, 0, 0),
         ));
-        assert_eq!(max_payload_bytes_for_port_spec(&spec), MAX_PAYLOAD_SIZE as usize);
+        let err = max_payload_bytes_for_port_spec(&spec)
+            .expect_err("registry miss must surface as Err");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("@tatolab/does-not-exist-payload/Nothing"),
+            "error must name the missing canonical id; got: {msg}"
+        );
+        assert!(
+            msg.contains("load_project"),
+            "error must point at `runtime.load_project(...)` as the fix; got: {msg}"
+        );
+        assert!(
+            matches!(err, crate::core::error::Error::Configuration(_)),
+            "registry miss must be Error::Configuration; got: {err:?}"
+        );
     }
 
     #[test]
     fn max_payload_bytes_resolves_video_frame() {
         test_support::register_core_wire_vocabulary();
         let spec = core_spec("VideoFrame");
-        let bytes = max_payload_bytes_for_port_spec(&spec);
+        let bytes = max_payload_bytes_for_port_spec(&spec).unwrap();
         assert!(bytes >= 65536, "VideoFrame should declare a generous payload bound");
     }
 
@@ -363,23 +411,37 @@ mod tests {
     fn max_payload_bytes_any_returns_default() {
         use crate::iceoryx2::MAX_PAYLOAD_SIZE;
         assert_eq!(
-            max_payload_bytes_for_port_spec(&PortSchemaSpec::Any),
+            max_payload_bytes_for_port_spec(&PortSchemaSpec::Any).unwrap(),
             MAX_PAYLOAD_SIZE as usize
         );
     }
 
+    /// Symmetric registry-miss test for `max_queued_messages_for_port_spec`
+    /// — the more insidious half of the helper pair (an undersized ring
+    /// silently drops messages under burst load with no error visible to
+    /// the application).
     #[test]
-    fn max_queued_messages_returns_default_for_unknown() {
-        use crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES;
+    fn max_queued_messages_errors_on_registry_miss_with_load_project_hint() {
         let spec = PortSchemaSpec::Specific(SchemaIdent::new(
             Org::new("tatolab").unwrap(),
-            Package::new("does-not-exist").unwrap(),
+            Package::new("does-not-exist-mqm").unwrap(),
             TypeName::new("Nothing").unwrap(),
             SemVer::new(1, 0, 0),
         ));
-        assert_eq!(
-            max_queued_messages_for_port_spec(&spec),
-            DEFAULT_MAX_QUEUED_MESSAGES
+        let err = max_queued_messages_for_port_spec(&spec)
+            .expect_err("registry miss must surface as Err");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("@tatolab/does-not-exist-mqm/Nothing"),
+            "error must name the missing canonical id; got: {msg}"
+        );
+        assert!(
+            msg.contains("load_project"),
+            "error must point at `runtime.load_project(...)` as the fix; got: {msg}"
+        );
+        assert!(
+            matches!(err, crate::core::error::Error::Configuration(_)),
+            "registry miss must be Error::Configuration; got: {err:?}"
         );
     }
 
@@ -387,7 +449,7 @@ mod tests {
     fn max_queued_messages_any_returns_default() {
         use crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES;
         assert_eq!(
-            max_queued_messages_for_port_spec(&PortSchemaSpec::Any),
+            max_queued_messages_for_port_spec(&PortSchemaSpec::Any).unwrap(),
             DEFAULT_MAX_QUEUED_MESSAGES
         );
     }
@@ -408,12 +470,15 @@ mod tests {
             TypeName::new("HighRateStream").unwrap(),
             SemVer::new(1, 0, 0),
         ));
-        assert_eq!(max_queued_messages_for_port_spec(&spec), 128);
+        assert_eq!(max_queued_messages_for_port_spec(&spec).unwrap(), 128);
     }
 
-    /// A schema without `metadata.max_queued_messages` falls back to the
-    /// default — proves the resolver doesn't accidentally read some
-    /// adjacent field.
+    /// A registered schema without `metadata.max_queued_messages` falls
+    /// back to the default — proves the resolver doesn't accidentally
+    /// read some adjacent field, and proves the registry-miss-vs-field-
+    /// absent split: a schema that IS registered but doesn't declare the
+    /// field is a legitimate "use default" case (no error), whereas a
+    /// registry miss is a configuration error.
     #[test]
     fn max_queued_messages_falls_back_when_field_absent() {
         use crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES;
@@ -429,7 +494,7 @@ mod tests {
             SemVer::new(1, 0, 0),
         ));
         assert_eq!(
-            max_queued_messages_for_port_spec(&spec),
+            max_queued_messages_for_port_spec(&spec).unwrap(),
             DEFAULT_MAX_QUEUED_MESSAGES
         );
     }
@@ -450,7 +515,7 @@ mod tests {
             TypeName::new("MavlinkMessage").unwrap(),
             SemVer::new(1, 0, 0),
         ));
-        assert_eq!(max_queued_messages_for_port_spec(&spec), 64);
+        assert_eq!(max_queued_messages_for_port_spec(&spec).unwrap(), 64);
     }
 
     #[test]
@@ -486,7 +551,7 @@ mod tests {
             TypeName::new("RuntimeOnlyType").unwrap(),
             SemVer::new(1, 0, 0),
         ));
-        assert_eq!(max_payload_bytes_for_port_spec(&spec), 4096);
+        assert_eq!(max_payload_bytes_for_port_spec(&spec).unwrap(), 4096);
 
         assert!(list_embedded_schema_names().iter().any(|n| n == canonical));
     }
@@ -504,12 +569,12 @@ mod tests {
             canonical,
             "metadata:\n  type: RewrittenType\n  max_payload_bytes: 1024\n",
         );
-        assert_eq!(max_payload_bytes_for_port_spec(&spec), 1024);
+        assert_eq!(max_payload_bytes_for_port_spec(&spec).unwrap(), 1024);
         register_schema(
             canonical,
             "metadata:\n  type: RewrittenType\n  max_payload_bytes: 2048\n",
         );
-        assert_eq!(max_payload_bytes_for_port_spec(&spec), 2048);
+        assert_eq!(max_payload_bytes_for_port_spec(&spec).unwrap(), 2048);
     }
 
     #[test]
