@@ -328,6 +328,18 @@ impl SandboxedBlendingCompositor {
             // output → COLOR_ATTACHMENT_OPTIMAL. The placeholder is built
             // already in SHADER_READ_ONLY_OPTIMAL and stays there
             // forever, so it never needs a barrier.
+            //
+            // Each `Texture` is dereferenced through
+            // `HostTextureExt::host_vulkan_texture_arc()` (the v10
+            // FullAccess vtable slot) rather than `vulkan_inner()`:
+            // this kernel ships as a cdylib, where `vulkan_inner()`
+            // panics under the engine's `Texture::host_inner()`
+            // panic-guard. Same shape as the
+            // `packages/camera/src/camera_to_cuda_copy.rs` /
+            // `packages/h264/src/linux/encoder.rs` /
+            // `packages/h265/src/linux/encoder.rs` reaches; the
+            // `xtask check-cdylib-reach` lint enforces the rule.
+            let output_host_tex = inputs.output.texture.host_vulkan_texture_arc()?;
             let mut barriers: Vec<vk::ImageMemoryBarrier2> = Vec::with_capacity(5);
             for (layer, layout) in [
                 (inputs.video.map(|l| l.texture), vlayout),
@@ -339,12 +351,13 @@ impl SandboxedBlendingCompositor {
                 if layout == VulkanLayout::SHADER_READ_ONLY_OPTIMAL {
                     continue;
                 }
-                let image = tex.vulkan_inner().image().ok_or_else(|| {
+                let host_tex = tex.host_vulkan_texture_arc()?;
+                let image = host_tex.image().ok_or_else(|| {
                     Error::GpuError(format!("{}: input texture has no VkImage", self.label))
                 })?;
                 barriers.push(input_barrier_to_shader_read_only(image, layout.as_vk()));
             }
-            let output_image = inputs.output.texture.vulkan_inner().image().ok_or_else(|| {
+            let output_image = output_host_tex.image().ok_or_else(|| {
                 Error::GpuError(format!("{}: output texture has no VkImage", self.label))
             })?;
             barriers.push(output_barrier_to_color_attachment(
@@ -361,10 +374,7 @@ impl SandboxedBlendingCompositor {
             // already covered by the barrier above; LOAD is fine
             // because we draw a full-screen triangle that overwrites
             // every pixel.
-            let output_view = inputs
-                .output
-                .texture
-                .vulkan_inner()
+            let output_view = output_host_tex
                 .image_view()
                 .unwrap_or(vk::ImageView::null());
             let color_attachment = vk::RenderingAttachmentInfo::builder()

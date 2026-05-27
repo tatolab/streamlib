@@ -421,7 +421,19 @@ pub const VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 5;
 ///
 /// - v3: appended the `bindings` introspection slot — same shape as
 ///   the compute-kernel v4 slot but writes `GraphicsBindingSpecRepr`.
-pub const VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 3;
+///
+/// - v4: appended the raw-vulkanalia-handle slots
+///   `cmd_bind_and_draw` / `cmd_bind_and_draw_indexed` so cdylib
+///   graphics consumers that mint their own `vk::CommandBuffer` can
+///   record bind + push + draw without tripping the kernel's
+///   `host_inner()` panic guard. Same shape as the
+///   `VulkanComputeKernelMethodsVTable` v5 `record` slot —
+///   `command_buffer_handle: u64` wraps `vk::CommandBuffer`'s
+///   `repr(transparent)` `usize` payload (lossless on 64-bit Linux,
+///   the only platform that ships); the draw call travels as the
+///   existing [`DrawCallRepr`] / [`DrawIndexedCallRepr`] shapes
+///   already wired for `offscreen_render`.
+pub const VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 4;
 
 /// Layout version of [`VulkanRayTracingKernelMethodsVTable`].
 ///
@@ -527,7 +539,16 @@ pub const RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 ///   the asymmetry would force the next "first indexed-draw cdylib
 ///   consumer" to re-derive the same engine work mid-task. Same
 ///   wire shape as `record_draw` but takes a `DrawIndexedCallRepr`.
-pub const RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 4;
+/// - v5: #1065 — appends `submit` and `submit_and_wait` (siblings
+///   of v1 `submit_signaling_timeline`). `RhiToneMapper::apply_with_layouts`
+///   creates its own recorder + calls `submit_and_wait()`; when
+///   engine SDK code that reaches the tone-mapper is compiled into
+///   a cdylib (the `camera-python-display-effects`
+///   `BlendingCompositor::normalize_layer` path is the first
+///   in-tree consumer), the bare-submit calls trip the recorder's
+///   `host_inner_mut()` panic guard. Same wire shape as
+///   `submit_signaling_timeline` minus the timeline parameters.
+pub const RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 5;
 
 /// Layout version of [`OutputWriterVTable`].
 ///
@@ -4084,6 +4105,30 @@ pub struct RhiCommandRecorderMethodsVTable {
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32,
+
+    /// End recording and submit without semaphore signaling. Sibling
+    /// of v1 [`Self::submit_signaling_timeline`] — that slot covered
+    /// the timeline-signal case the camera processor needed; this
+    /// covers the bare-submit case `RhiToneMapper::apply_with_layouts`
+    /// uses for its private recorder. (Available since v5.)
+    pub submit: unsafe extern "C" fn(
+        recorder_handle: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// End recording, submit, and block until the GPU completes.
+    /// Sibling of [`Self::submit`] — caller-side `vkWaitForFences`
+    /// after submit. Used by
+    /// `RhiToneMapper::apply_with_layouts` for its self-contained
+    /// dispatch-then-wait flow. (Available since v5.)
+    pub submit_and_wait: unsafe extern "C" fn(
+        recorder_handle: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
 }
 
 unsafe impl Send for RhiCommandRecorderMethodsVTable {}
@@ -4287,21 +4332,28 @@ unsafe impl Sync for InputMailboxesVTable {}
 /// `VulkanComputeKernelMethodsVTable` v3 shape and the production
 /// cross-DSO patterns in Dawn / WebGPU + Unreal RHI.
 ///
-/// **Coverage today** (v2):
+/// **Coverage today** (v4):
 /// - Binding slots: `set_storage_buffer_pixel`,
 ///   `set_storage_buffer_storage`, `set_uniform_buffer`,
 ///   `set_sampled_texture`, `set_storage_image`,
 ///   `set_vertex_buffer`, `set_index_buffer`.
 /// - Primitive-argument slots: `set_push_constants`,
 ///   `offscreen_render`.
+/// - Introspection slots: `bindings` (v3).
+/// - Raw-vulkanalia-handle slots: `cmd_bind_and_draw`,
+///   `cmd_bind_and_draw_indexed` (v4). Mirror the
+///   `VulkanComputeKernelMethodsVTable` v5 `record` slot — they
+///   accept a `command_buffer_handle: u64` carrying
+///   `vk::CommandBuffer`'s `repr(transparent)` `usize` payload from
+///   cdylib graphics consumers that mint and manage their own
+///   command buffer (the example
+///   `camera-python-display-effects` kernel wrappers, plus future
+///   pre-RDG cdylib pass authors). The host wrapper reconstructs
+///   the handle via `vk::CommandBuffer::from_raw` before dispatch.
 ///
-/// **Engine-only methods** (NOT on this vtable): `cmd_bind_and_draw`
-/// and `cmd_bind_and_draw_indexed` accept a raw `vk::CommandBuffer`
-/// from a caller-managed render-pass scope. They stay
-/// `host_inner`-routed; cdylib code cannot mint a `vk::CommandBuffer`
-/// without an `RhiCommandRecorder` β-shape (a separate concern). The
-/// `bindings()` / `pipeline_state()` accessors return host-internal
-/// types and stay `host_inner`-routed for the same reason.
+/// **Engine-only methods** (NOT on this vtable): `bindings()` /
+/// `pipeline_state()` accessors return host-internal types and
+/// stay `host_inner`-routed for that reason.
 #[repr(C)]
 pub struct VulkanGraphicsKernelMethodsVTable {
     /// Vtable layout version. Must equal
@@ -4459,6 +4511,36 @@ pub struct VulkanGraphicsKernelMethodsVTable {
         out_specs_buf: *mut GraphicsBindingSpecRepr,
         out_specs_cap: usize,
         out_specs_len: *mut usize,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Record bind + push + draw into a caller-owned command buffer.
+    /// `command_buffer_handle` carries `vk::CommandBuffer`'s
+    /// `repr(transparent)` `usize` payload as a `u64` (lossless on
+    /// 64-bit Linux). `draw` is the [`DrawCallRepr`] mirror of
+    /// `streamlib::core::rhi::DrawCall` already wired for
+    /// `offscreen_render`. Returns 0 on success; non-zero with UTF-8
+    /// message in `err_buf` on failure. (Available since v4.)
+    pub cmd_bind_and_draw: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        command_buffer_handle: u64,
+        frame_index: u32,
+        draw: *const DrawCallRepr,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Indexed variant of [`Self::cmd_bind_and_draw`]. Caller must
+    /// have set an index buffer at `frame_index` via
+    /// [`Self::set_index_buffer`]. (Available since v4.)
+    pub cmd_bind_and_draw_indexed: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        command_buffer_handle: u64,
+        frame_index: u32,
+        draw: *const DrawIndexedCallRepr,
         err_buf: *mut u8,
         err_buf_cap: usize,
         err_len: *mut usize,
@@ -5446,7 +5528,7 @@ mod layout_tests {
         assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 10);
         assert_eq!(TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 5);
-        assert_eq!(VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 3);
+        assert_eq!(VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 4);
         assert_eq!(VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 3);
         assert_eq!(VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION, 2);
@@ -5454,7 +5536,7 @@ mod layout_tests {
         // (`record_pixel_buffer_barrier`,
         // `record_copy_image_to_pixel_buffer`) for cdylib camera
         // per-frame copy into pooled `PixelBuffer` destinations.
-        assert_eq!(RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION, 4);
+        assert_eq!(RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION, 5);
         // v1 (issue #894): initial shape — `write_raw`, `has_port`,
         // `clone_arc`, `drop_arc`.
         assert_eq!(OUTPUT_WRITER_VTABLE_LAYOUT_VERSION, 1);
@@ -5723,8 +5805,19 @@ mod layout_tests {
             offset_of!(VulkanGraphicsKernelMethodsVTable, bindings),
             80
         );
-        // v3: 10 fn pointers @ 8 bytes each + 2 u32 = 88 bytes.
-        assert_eq!(size_of::<VulkanGraphicsKernelMethodsVTable>(), 88);
+        // v4 appended slots:
+        //   cmd_bind_and_draw           @ 88
+        //   cmd_bind_and_draw_indexed   @ 96
+        assert_eq!(
+            offset_of!(VulkanGraphicsKernelMethodsVTable, cmd_bind_and_draw),
+            88
+        );
+        assert_eq!(
+            offset_of!(VulkanGraphicsKernelMethodsVTable, cmd_bind_and_draw_indexed),
+            96
+        );
+        // v4: 12 fn pointers @ 8 bytes each + 2 u32 = 104 bytes.
+        assert_eq!(size_of::<VulkanGraphicsKernelMethodsVTable>(), 104);
     }
 
     #[test]
@@ -5998,9 +6091,9 @@ mod layout_tests {
         //   record_pixel_buffer_barrier          @ 56  (8 bytes, fn pointer, v2)
         //   record_copy_image_to_pixel_buffer    @ 64  (8 bytes, fn pointer, v2)
         // Total = 72 bytes, align = 8.
-        // layout_version (u32) + _reserved_padding (u32) + 14 fn
-        // pointers (8 bytes each) = 4 + 4 + 112 = 120 bytes, align = 8.
-        assert_eq!(size_of::<RhiCommandRecorderMethodsVTable>(), 120);
+        // layout_version (u32) + _reserved_padding (u32) + 16 fn
+        // pointers (8 bytes each) = 4 + 4 + 128 = 136 bytes, align = 8.
+        assert_eq!(size_of::<RhiCommandRecorderMethodsVTable>(), 136);
         assert_eq!(align_of::<RhiCommandRecorderMethodsVTable>(), 8);
         assert_eq!(
             offset_of!(RhiCommandRecorderMethodsVTable, layout_version),
@@ -6088,6 +6181,15 @@ mod layout_tests {
         assert_eq!(
             offset_of!(RhiCommandRecorderMethodsVTable, record_draw_indexed),
             112
+        );
+        // v5 entries (#1065).
+        assert_eq!(
+            offset_of!(RhiCommandRecorderMethodsVTable, submit),
+            120
+        );
+        assert_eq!(
+            offset_of!(RhiCommandRecorderMethodsVTable, submit_and_wait),
+            128
         );
     }
 

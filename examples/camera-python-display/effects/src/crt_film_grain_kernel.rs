@@ -268,9 +268,19 @@ impl SandboxedCrtFilmGrain {
 
             // Pre-render barriers: input → SHADER_READ_ONLY_OPTIMAL,
             // output → COLOR_ATTACHMENT_OPTIMAL.
+            //
+            // Each `Texture` is dereferenced through
+            // `HostTextureExt::host_vulkan_texture_arc()` (the v10
+            // FullAccess vtable slot) rather than `vulkan_inner()`:
+            // this kernel ships as a cdylib, where `vulkan_inner()`
+            // panics under the engine's `Texture::host_inner()`
+            // panic-guard. The `xtask check-cdylib-reach` lint
+            // enforces the rule.
+            let output_host_tex = inputs.output.texture.host_vulkan_texture_arc()?;
             let mut barriers: Vec<vk::ImageMemoryBarrier2> = Vec::with_capacity(2);
             if inputs.input.current_layout != VulkanLayout::SHADER_READ_ONLY_OPTIMAL {
-                let input_image = inputs.input.texture.vulkan_inner().image().ok_or_else(|| {
+                let input_host_tex = inputs.input.texture.host_vulkan_texture_arc()?;
+                let input_image = input_host_tex.image().ok_or_else(|| {
                     Error::GpuError(format!("{}: input texture has no VkImage", self.label))
                 })?;
                 barriers.push(input_barrier_to_shader_read_only(
@@ -278,7 +288,7 @@ impl SandboxedCrtFilmGrain {
                     inputs.input.current_layout.as_vk(),
                 ));
             }
-            let output_image = inputs.output.texture.vulkan_inner().image().ok_or_else(|| {
+            let output_image = output_host_tex.image().ok_or_else(|| {
                 Error::GpuError(format!("{}: output texture has no VkImage", self.label))
             })?;
             barriers.push(output_barrier_to_color_attachment(
@@ -293,10 +303,7 @@ impl SandboxedCrtFilmGrain {
             // Begin dynamic rendering with the output as the sole color
             // attachment. The full-screen triangle covers every pixel,
             // so DONT_CARE on load is fine.
-            let output_view = inputs
-                .output
-                .texture
-                .vulkan_inner()
+            let output_view = output_host_tex
                 .image_view()
                 .unwrap_or(vk::ImageView::null());
             let color_attachment = vk::RenderingAttachmentInfo::builder()

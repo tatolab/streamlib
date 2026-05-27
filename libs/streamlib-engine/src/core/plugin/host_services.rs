@@ -10099,11 +10099,19 @@ unsafe extern "C" fn host_graphics_kernel_offscreen_render(
 /// `set_storage_image` / `set_vertex_buffer` / `set_index_buffer` /
 /// `set_push_constants` / `offscreen_render` surface).
 ///
-/// Engine-only methods that take a raw `vk::CommandBuffer`
-/// (`cmd_bind_and_draw` / `cmd_bind_and_draw_indexed`) stay
-/// `host_inner`-routed and are NOT on this vtable — minting a
-/// `vk::CommandBuffer` from cdylib code requires an
-/// `RhiCommandRecorder` β-shape, which is a separate concern.
+/// Raw-vulkanalia-handle slots `cmd_bind_and_draw` /
+/// `cmd_bind_and_draw_indexed` (v4) live below alongside the
+/// `bindings` v3 slot — they unblock cdylib graphics consumers
+/// that mint and manage their own `vk::CommandBuffer` (the
+/// `camera-python-display-effects` kernel wrappers, plus future
+/// pre-RDG cdylib pass authors per #1081). The wire shape mirrors
+/// the `VulkanComputeKernelMethodsVTable` v5 `record` slot:
+/// `command_buffer_handle: u64` carries `vk::CommandBuffer`'s
+/// `repr(transparent)` `usize` payload (lossless on 64-bit Linux,
+/// the only platform that ships); the draw call travels as the
+/// existing `DrawCallRepr` / `DrawIndexedCallRepr` shapes already
+/// wired for `offscreen_render`.
+///
 /// Read the graphics kernel's declared bindings into a caller-provided
 /// `[GraphicsBindingSpecRepr]` buffer. v3 (introspection).
 #[cfg(target_os = "linux")]
@@ -10184,6 +10192,161 @@ unsafe extern "C" fn host_graphics_kernel_bindings(
     1
 }
 
+/// v4 — record bind + push + draw into a caller-owned
+/// `vk::CommandBuffer`. The cdylib mints + manages the command
+/// buffer; this callback reconstructs the handle and forwards to
+/// `VulkanGraphicsKernelInner::cmd_bind_and_draw_raw`, which does
+/// the `vk::CommandBuffer::from_raw` conversion under the engine's
+/// canonical vulkanalia-allowlist scope.
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_graphics_kernel_cmd_bind_and_draw(
+    kernel_handle: *const c_void,
+    command_buffer_handle: u64,
+    frame_index: u32,
+    draw: *const streamlib_plugin_abi::DrawCallRepr,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_graphics_kernel_cmd_bind_and_draw",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "cmd_bind_and_draw: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if draw.is_null() {
+                write_err(
+                    "cmd_bind_and_draw: null draw pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let draw_repr = unsafe { &*draw };
+            let inner_draw = draw_call_from_repr(draw_repr);
+            match kernel.cmd_bind_and_draw_raw(
+                command_buffer_handle,
+                frame_index,
+                &inner_draw,
+            ) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("cmd_bind_and_draw: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_graphics_kernel_cmd_bind_and_draw(
+    _kernel_handle: *const c_void,
+    _command_buffer_handle: u64,
+    _frame_index: u32,
+    _draw: *const streamlib_plugin_abi::DrawCallRepr,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "cmd_bind_and_draw: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+/// v4 — indexed variant of [`host_graphics_kernel_cmd_bind_and_draw`].
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_graphics_kernel_cmd_bind_and_draw_indexed(
+    kernel_handle: *const c_void,
+    command_buffer_handle: u64,
+    frame_index: u32,
+    draw: *const streamlib_plugin_abi::DrawIndexedCallRepr,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_graphics_kernel_cmd_bind_and_draw_indexed",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "cmd_bind_and_draw_indexed: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if draw.is_null() {
+                write_err(
+                    "cmd_bind_and_draw_indexed: null draw pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let draw_repr = unsafe { &*draw };
+            let inner_draw = draw_indexed_call_from_repr(draw_repr);
+            match kernel.cmd_bind_and_draw_indexed_raw(
+                command_buffer_handle,
+                frame_index,
+                &inner_draw,
+            ) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("cmd_bind_and_draw_indexed: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_graphics_kernel_cmd_bind_and_draw_indexed(
+    _kernel_handle: *const c_void,
+    _command_buffer_handle: u64,
+    _frame_index: u32,
+    _draw: *const streamlib_plugin_abi::DrawIndexedCallRepr,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "cmd_bind_and_draw_indexed: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
 pub static HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE:
     streamlib_plugin_abi::VulkanGraphicsKernelMethodsVTable =
     streamlib_plugin_abi::VulkanGraphicsKernelMethodsVTable {
@@ -10200,6 +10363,8 @@ pub static HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE:
         set_push_constants: host_graphics_kernel_set_push_constants,
         offscreen_render: host_graphics_kernel_offscreen_render,
         bindings: host_graphics_kernel_bindings,
+        cmd_bind_and_draw: host_graphics_kernel_cmd_bind_and_draw,
+        cmd_bind_and_draw_indexed: host_graphics_kernel_cmd_bind_and_draw_indexed,
     };
 
 /// Accessor for the host's static `VulkanGraphicsKernelMethodsVTable`
@@ -12878,9 +13043,115 @@ unsafe extern "C" fn host_command_recorder_record_draw_indexed(
     1
 }
 
+/// v5 — bare submit. Sibling of v1 `submit_signaling_timeline`
+/// without the timeline-semaphore parameters; used by
+/// `RhiToneMapper::apply_with_layouts`'s private recorder
+/// (the first in-tree cdylib consumer of this slot via the
+/// camera-python-display-effects path, #1065).
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_command_recorder_submit(
+    recorder_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_command_recorder_submit",
+        || -> i32 {
+            let Some(recorder) =
+                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            else {
+                write_err(
+                    "submit: null recorder handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            match recorder.submit() {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(&format!("submit: {e}"), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_command_recorder_submit(
+    _recorder_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err("submit: Linux-only", err_buf, err_buf_cap, err_len);
+    1
+}
+
+/// v5 — submit and block. Sibling of [`host_command_recorder_submit`];
+/// caller-side `vkWaitForFences` after submit.
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_command_recorder_submit_and_wait(
+    recorder_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_command_recorder_submit_and_wait",
+        || -> i32 {
+            let Some(recorder) =
+                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            else {
+                write_err(
+                    "submit_and_wait: null recorder handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            match recorder.submit_and_wait() {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("submit_and_wait: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_command_recorder_submit_and_wait(
+    _recorder_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "submit_and_wait: Linux-only",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
 /// Host-side `RhiCommandRecorderMethodsVTable` wired to the
 /// per-method wrappers above (Phase E sub-lift slice B — #984;
-/// v3 swapchain render-path slots — #1066).
+/// v3 swapchain render-path slots — #1066; v5 bare-submit slots
+/// for `RhiToneMapper` cdylib consumers — #1065).
 pub static HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE:
     streamlib_plugin_abi::RhiCommandRecorderMethodsVTable =
     streamlib_plugin_abi::RhiCommandRecorderMethodsVTable {
@@ -12908,6 +13179,8 @@ pub static HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE:
         submit_with_semaphores: host_command_recorder_submit_with_semaphores,
         record_draw: host_command_recorder_record_draw,
         record_draw_indexed: host_command_recorder_record_draw_indexed,
+        submit: host_command_recorder_submit,
+        submit_and_wait: host_command_recorder_submit_and_wait,
     };
 
 /// Accessor for the host's static `RhiCommandRecorderMethodsVTable`
@@ -14428,6 +14701,47 @@ mod gpu_rhi_command_recorder_methods_vtable_null_tests {
         );
     }
 
+    // v5 — submit / submit_and_wait wrappers.
+
+    #[test]
+    fn submit_rejects_null_recorder_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE.submit)(
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len).contains("submit: null recorder handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn submit_and_wait_rejects_null_recorder_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE.submit_and_wait)(
+                std::ptr::null(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("submit_and_wait: null recorder handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
     #[test]
     fn record_pixel_buffer_barrier_rejects_null_recorder_handle() {
         let (mut buf, mut len) = make_err_buf();
@@ -14717,6 +15031,58 @@ mod graphics_kernel_methods_vtable_null_tests {
             err_buf_as_str(&buf, len)
         );
     }
+
+    // v4 — cmd_bind_and_draw / cmd_bind_and_draw_indexed wrappers.
+
+    #[test]
+    fn cmd_bind_and_draw_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let draw: streamlib_plugin_abi::DrawCallRepr = unsafe { std::mem::zeroed() };
+        let rc = unsafe {
+            (HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE.cmd_bind_and_draw)(
+                std::ptr::null(),
+                0,
+                0,
+                &draw,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("cmd_bind_and_draw: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn cmd_bind_and_draw_indexed_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let draw: streamlib_plugin_abi::DrawIndexedCallRepr =
+            unsafe { std::mem::zeroed() };
+        let rc = unsafe {
+            (HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE.cmd_bind_and_draw_indexed)(
+                std::ptr::null(),
+                0,
+                0,
+                &draw,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("cmd_bind_and_draw_indexed: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
 }
 
 #[cfg(all(test, target_os = "linux"))]
