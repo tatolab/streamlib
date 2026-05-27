@@ -8,30 +8,28 @@
 //! Pre-#487 this kernel and its shaders lived in
 //! `libs/streamlib/src/vulkan/rhi/`. That placement encoded a single
 //! demo's app content (cyberpunk N54 News PiP chrome baked into the
-//! fragment) into the engine. It also encoded a **wrong-shape hot-path
-//! pattern** — synchronous fence-blocked GPU dispatch with internal
-//! layout-barrier management — into the engine's API surface, despite
-//! production engines (UE5, Bevy, Granite, wgpu) deliberately not
-//! shipping such an API. Real renderers use a render graph that
+//! fragment) into the engine. Real renderers use a render graph that
 //! schedules barriers across passes and lets the CPU race ahead 1–2
-//! frames; the synchronous-blocking shape stalls the CPU every
-//! frame.
+//! frames; the synchronous-blocking shape of a per-frame "dispatch"
+//! helper stalls the CPU every frame, which is why production engines
+//! (UE5, Bevy, Granite, wgpu) deliberately don't ship one.
 //!
-//! #487 relocated the kernel here as transitional sandboxed code,
-//! gated by an explicit `xtask check-boundaries` allowlist exception
-//! for `examples/camera-python-display/` (see
-//! `xtask/src/check_boundaries.rs::VULKANALIA_*_ALLOWLIST` and the
-//! tests `allows_use_vulkanalia_in_camera_python_display_example` /
-//! `allows_vulkanalia_cargo_dep_in_camera_python_display_example`).
+//! ## Engine surfaces this rides
 //!
-//! ## When this goes away
+//! - [`VulkanGraphicsKernel::offscreen_render`] — the cdylib-safe
+//!   Texture-typed render-scope helper. Opens the dynamic-rendering
+//!   pass internally, transitions output `UNDEFINED →
+//!   COLOR_ATTACHMENT_OPTIMAL`, records `cmd_bind_and_draw`, submits
+//!   through the host's queue mutex, waits. Output is left in
+//!   `COLOR_ATTACHMENT_OPTIMAL`.
+//! - [`RhiCommandRecorder`] + [`record_image_barrier`] — for the
+//!   input-side transitions (when an input isn't already
+//!   `SHADER_READ_ONLY_OPTIMAL`) and the post-pass `COLOR_ATTACHMENT_OPTIMAL
+//!   → SHADER_READ_ONLY_OPTIMAL` transition on the output.
 //!
-//! When **RDG (#631)** ships and absorbs the kernel-wrapper command-
-//! buffer recording into render-graph passes. The example switches
-//! to RDG primitives in the same PR; this file, the matching
-//! `crt_film_grain_kernel.rs`, the example's `vulkanalia` Cargo dep,
-//! and the boundary-check allowlist exception are all removed
-//! together.
+//! Neither surface exposes raw `vulkanalia` types — the kernel is
+//! cdylib-safe end-to-end. Every queue-mutex / fence / Drop / barrier
+//! bug the engine has fixed propagates here for free.
 //!
 //! ## Lifecycle
 //!
@@ -39,15 +37,14 @@
 //! `MAX_FRAMES_IN_FLIGHT = 2`), hands one to [`SandboxedBlendingCompositor::dispatch`]
 //! per frame along with the four layer textures + their current
 //! Vulkan layouts, and `dispatch` returns once the GPU has signaled
-//! the kernel's per-render fence. After return, every input texture
-//! and the output texture are left in `SHADER_READ_ONLY_OPTIMAL`,
-//! ready for the next consumer to sample without re-barriering.
+//! the underlying submits. After return, every input texture and the
+//! output texture are left in `SHADER_READ_ONLY_OPTIMAL`, ready for
+//! the next consumer to sample without re-barriering.
+//!
+//! [`record_image_barrier`]: streamlib::sdk::engine::host_rhi::RhiCommandRecorder::record_image_barrier
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use streamlib::sdk::engine::HostTextureExt;
-
-use vulkanalia::prelude::v1_4::*;
-use vulkanalia::vk;
 
 use streamlib::sdk::rhi::{
     AttachmentFormats,
@@ -75,7 +72,16 @@ use streamlib::sdk::rhi::{
     VulkanLayout,
 };
 use streamlib::sdk::error::{Result, Error};
-use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanBuffer, VulkanGraphicsKernel};
+use streamlib::sdk::engine::host_rhi::{
+    HostVulkanDevice,
+    HostVulkanBuffer,
+    OffscreenColorTarget,
+    OffscreenDraw,
+    RhiCommandRecorder,
+    VulkanAccess,
+    VulkanGraphicsKernel,
+    VulkanStage,
+};
 
 /// Push-constants layout — must match `blending_compositor.frag`'s
 /// `layout(push_constant)` block byte-for-byte.
@@ -108,14 +114,17 @@ pub struct BlendingLayer<'a> {
     pub current_layout: VulkanLayout,
 }
 
-/// Render target for one composited frame: caller-owned ring slot +
-/// the layout it was last left in (typically
-/// `SHADER_READ_ONLY_OPTIMAL` from the prior consumer's barrier, or
-/// `UNDEFINED` on the first dispatch into this slot).
+/// Render target for one composited frame: caller-owned ring slot.
+///
+/// Unlike [`BlendingLayer`], no `current_layout` is required —
+/// [`VulkanGraphicsKernel::offscreen_render`] transitions the output
+/// from `UNDEFINED` internally (content discard is permitted and the
+/// full-screen triangle overwrites every pixel). The caller-side
+/// post-pass barrier always lands the output in
+/// `SHADER_READ_ONLY_OPTIMAL`.
 #[derive(Clone, Copy)]
 pub struct BlendingOutput<'a> {
     pub texture: &'a Texture,
-    pub current_layout: VulkanLayout,
 }
 
 /// Inputs for one compositor dispatch.
@@ -136,19 +145,14 @@ pub struct BlendingCompositorInputs<'a> {
 }
 
 /// 4-layer Porter-Duff "over" compositor with animated PiP frame chrome.
-///
-/// See the module-level docs for the full transitional rationale and
-/// the link to RDG (#631) — the destination this code migrates to
-/// when the engine grows a proper render graph.
 pub struct SandboxedBlendingCompositor {
     label: &'static str,
-    vulkan_device: Arc<HostVulkanDevice>,
-    device: vulkanalia::Device,
-    queue: vk::Queue,
     kernel: VulkanGraphicsKernel,
-    command_pool: vk::CommandPool,
-    command_buffer: vk::CommandBuffer,
-    fence: vk::Fence,
+    /// Reused across dispatches for the input pre-pass barrier (when
+    /// any input is not already `SHADER_READ_ONLY_OPTIMAL`) and the
+    /// post-pass output `COLOR_ATTACHMENT_OPTIMAL → SHADER_READ_ONLY_OPTIMAL`
+    /// barrier that follows [`VulkanGraphicsKernel::offscreen_render`].
+    recorder: Mutex<RhiCommandRecorder>,
     /// 1×1 transparent BGRA texture used for any unbound layer slot —
     /// graphics-kernel descriptor sets must be fully populated even
     /// when the corresponding `has_*` flag is false. Pre-uploaded once
@@ -200,13 +204,7 @@ impl SandboxedBlendingCompositor {
         };
         let kernel = VulkanGraphicsKernel::new(vulkan_device, &descriptor)?;
 
-        let device = vulkan_device.device().clone();
-        let queue = vulkan_device.queue();
-        let queue_family_index = vulkan_device.queue_family_index();
-
-        let command_pool = create_command_pool(&device, queue_family_index)?;
-        let command_buffer = allocate_command_buffer(&device, command_pool)?;
-        let fence = create_signaled_fence(&device)?;
+        let recorder = RhiCommandRecorder::new(vulkan_device, "blending_compositor_recorder")?;
 
         // 1×1 transparent BGRA placeholder — the descriptor set must
         // bind a real image for every sampled_texture binding even
@@ -218,24 +216,21 @@ impl SandboxedBlendingCompositor {
 
         Ok(Self {
             label,
-            vulkan_device: Arc::clone(vulkan_device),
-            device,
-            queue,
             kernel,
-            command_pool,
-            command_buffer,
-            fence,
+            recorder: Mutex::new(recorder),
             placeholder,
         })
     }
 
     /// Composite `inputs` into `inputs.output` and signal completion.
     ///
-    /// Records (input barriers → begin_rendering → bind+draw →
-    /// end_rendering → output barrier) into a single command buffer
-    /// owned by this compositor, submits, and waits for the fence
-    /// before returning. After return, every input texture and the
-    /// output texture are in `SHADER_READ_ONLY_OPTIMAL`.
+    /// Records (input barriers → offscreen render → output barrier),
+    /// submits each via [`RhiCommandRecorder`] / [`VulkanGraphicsKernel::offscreen_render`],
+    /// and waits before returning. After return, every input texture
+    /// and the output texture are in `SHADER_READ_ONLY_OPTIMAL`. The
+    /// input pre-pass is elided when every bound input is already in
+    /// `SHADER_READ_ONLY_OPTIMAL` (the steady-state shape — typically
+    /// 2 submits/dispatch, 3 only when an input layout shifts).
     pub fn dispatch(&self, inputs: BlendingCompositorInputs<'_>) -> Result<()> {
         let width = inputs.output.texture.width();
         let height = inputs.output.texture.height();
@@ -260,10 +255,10 @@ impl SandboxedBlendingCompositor {
             }
         }
 
-        let (video, vlayout) = self.layer_or_placeholder(inputs.video);
-        let (lower_third, lt_layout) = self.layer_or_placeholder(inputs.lower_third);
-        let (watermark, wm_layout) = self.layer_or_placeholder(inputs.watermark);
-        let (pip, pip_layout) = self.layer_or_placeholder(inputs.pip);
+        let (video, _vlayout) = self.layer_or_placeholder(inputs.video);
+        let (lower_third, _lt_layout) = self.layer_or_placeholder(inputs.lower_third);
+        let (watermark, _wm_layout) = self.layer_or_placeholder(inputs.watermark);
+        let (pip, _pip_layout) = self.layer_or_placeholder(inputs.pip);
         let pip_dims = (pip.width(), pip.height());
 
         // Stage descriptor + push-constant writes onto the kernel
@@ -289,175 +284,91 @@ impl SandboxedBlendingCompositor {
         };
         self.kernel.set_push_constants_value(0, &push)?;
 
-        // Wait for any prior dispatch on this compositor to drain so
-        // we can safely reset the command buffer.
-        unsafe {
-            self.device
-                .wait_for_fences(&[self.fence], true, u64::MAX)
-                .map_err(|e| {
-                    Error::GpuError(format!(
-                        "{}: wait_for_fences failed: {e}",
-                        self.label
-                    ))
-                })?;
-            self.device.reset_fences(&[self.fence]).map_err(|e| {
-                Error::GpuError(format!("{}: reset_fences failed: {e}", self.label))
-            })?;
-            self.device
-                .reset_command_buffer(self.command_buffer, vk::CommandBufferResetFlags::empty())
-                .map_err(|e| {
-                    Error::GpuError(format!(
-                        "{}: reset_command_buffer failed: {e}",
-                        self.label
-                    ))
-                })?;
+        let mut recorder = self.recorder.lock().map_err(|e| {
+            Error::GpuError(format!("{}: recorder mutex poisoned: {e}", self.label))
+        })?;
 
-            let begin = vk::CommandBufferBeginInfo::builder()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-                .build();
-            self.device
-                .begin_command_buffer(self.command_buffer, &begin)
-                .map_err(|e| {
-                    Error::GpuError(format!(
-                        "{}: begin_command_buffer failed: {e}",
-                        self.label
-                    ))
-                })?;
-
-            // Pre-render barriers: each non-placeholder input → SHADER_READ_ONLY_OPTIMAL,
-            // output → COLOR_ATTACHMENT_OPTIMAL. The placeholder is built
-            // already in SHADER_READ_ONLY_OPTIMAL and stays there
-            // forever, so it never needs a barrier.
-            //
-            // Each `Texture` is dereferenced through
-            // `HostTextureExt::host_vulkan_texture_arc()` (the v10
-            // FullAccess vtable slot) rather than `vulkan_inner()`:
-            // this kernel ships as a cdylib, where `vulkan_inner()`
-            // panics under the engine's `Texture::host_inner()`
-            // panic-guard. Same shape as the
-            // `packages/camera/src/camera_to_cuda_copy.rs` /
-            // `packages/h264/src/linux/encoder.rs` /
-            // `packages/h265/src/linux/encoder.rs` reaches; the
-            // `xtask check-cdylib-reach` lint enforces the rule.
-            let output_host_tex = inputs.output.texture.host_vulkan_texture_arc()?;
-            let mut barriers: Vec<vk::ImageMemoryBarrier2> = Vec::with_capacity(5);
-            for (layer, layout) in [
-                (inputs.video.map(|l| l.texture), vlayout),
-                (inputs.lower_third.map(|l| l.texture), lt_layout),
-                (inputs.watermark.map(|l| l.texture), wm_layout),
-                (inputs.pip.map(|l| l.texture), pip_layout),
-            ] {
-                let Some(tex) = layer else { continue };
-                if layout == VulkanLayout::SHADER_READ_ONLY_OPTIMAL {
-                    continue;
-                }
-                let host_tex = tex.host_vulkan_texture_arc()?;
-                let image = host_tex.image().ok_or_else(|| {
-                    Error::GpuError(format!("{}: input texture has no VkImage", self.label))
-                })?;
-                barriers.push(input_barrier_to_shader_read_only(image, layout.as_vk()));
+        // Pre-pass: barrier every non-placeholder input whose current
+        // layout isn't already SHADER_READ_ONLY_OPTIMAL. The
+        // placeholder is born in SHADER_READ_ONLY_OPTIMAL (set by
+        // `upload_buffer_to_image`) and stays there forever, so it
+        // never needs a barrier.
+        let input_barriers: [Option<(&Texture, VulkanLayout)>; 4] = [
+            inputs
+                .video
+                .filter(|l| l.current_layout != VulkanLayout::SHADER_READ_ONLY_OPTIMAL)
+                .map(|l| (l.texture, l.current_layout)),
+            inputs
+                .lower_third
+                .filter(|l| l.current_layout != VulkanLayout::SHADER_READ_ONLY_OPTIMAL)
+                .map(|l| (l.texture, l.current_layout)),
+            inputs
+                .watermark
+                .filter(|l| l.current_layout != VulkanLayout::SHADER_READ_ONLY_OPTIMAL)
+                .map(|l| (l.texture, l.current_layout)),
+            inputs
+                .pip
+                .filter(|l| l.current_layout != VulkanLayout::SHADER_READ_ONLY_OPTIMAL)
+                .map(|l| (l.texture, l.current_layout)),
+        ];
+        if input_barriers.iter().any(Option::is_some) {
+            recorder.begin()?;
+            for slot in input_barriers.iter().flatten() {
+                let (texture, from_layout) = *slot;
+                // Tolerant src masks (ALL_COMMANDS + MEMORY_WRITE)
+                // cover every upstream producer (camera compute, OpenGL
+                // adapter glFinish, Skia/Vulkan adapters, future
+                // encoders) without per-producer tuning.
+                recorder.record_image_barrier(
+                    texture,
+                    from_layout,
+                    VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                    VulkanStage::ALL_COMMANDS,
+                    VulkanStage::FRAGMENT_SHADER,
+                    VulkanAccess::MEMORY_WRITE,
+                    VulkanAccess::SHADER_SAMPLED_READ,
+                )?;
             }
-            let output_image = output_host_tex.image().ok_or_else(|| {
-                Error::GpuError(format!("{}: output texture has no VkImage", self.label))
-            })?;
-            barriers.push(output_barrier_to_color_attachment(
-                output_image,
-                inputs.output.current_layout.as_vk(),
-            ));
-            let dep = vk::DependencyInfo::builder()
-                .image_memory_barriers(&barriers)
-                .build();
-            self.device.cmd_pipeline_barrier2(self.command_buffer, &dep);
-
-            // Begin dynamic rendering with the output as the sole color
-            // attachment. UNDEFINED → COLOR_ATTACHMENT_OPTIMAL is
-            // already covered by the barrier above; LOAD is fine
-            // because we draw a full-screen triangle that overwrites
-            // every pixel.
-            let output_view = output_host_tex
-                .image_view()
-                .unwrap_or(vk::ImageView::null());
-            let color_attachment = vk::RenderingAttachmentInfo::builder()
-                .image_view(output_view)
-                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .load_op(vk::AttachmentLoadOp::DONT_CARE)
-                .store_op(vk::AttachmentStoreOp::STORE)
-                .build();
-            let color_attachments = [color_attachment];
-            let rendering_info = vk::RenderingInfo::builder()
-                .render_area(vk::Rect2D {
-                    offset: vk::Offset2D { x: 0, y: 0 },
-                    extent: vk::Extent2D { width, height },
-                })
-                .layer_count(1)
-                .color_attachments(&color_attachments)
-                .build();
-            self.device.cmd_begin_rendering(self.command_buffer, &rendering_info);
-
-            self.kernel.cmd_bind_and_draw(
-                self.command_buffer,
-                0,
-                &DrawCall {
-                    vertex_count: 3,
-                    instance_count: 1,
-                    first_vertex: 0,
-                    first_instance: 0,
-                    viewport: Some(Viewport::full(width, height)),
-                    scissor: Some(ScissorRect::full(width, height)),
-                },
-            )?;
-
-            self.device.cmd_end_rendering(self.command_buffer);
-
-            // Post-render barrier: output COLOR_ATTACHMENT_OPTIMAL →
-            // SHADER_READ_ONLY_OPTIMAL so downstream consumers (display,
-            // future encoders) can sample it without re-barriering.
-            let post = vk::ImageMemoryBarrier2::builder()
-                .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-                .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-                .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-                .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
-                .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(output_image)
-                .subresource_range(color_subresource_range())
-                .build();
-            let post_barriers = [post];
-            let post_dep = vk::DependencyInfo::builder()
-                .image_memory_barriers(&post_barriers)
-                .build();
-            self.device.cmd_pipeline_barrier2(self.command_buffer, &post_dep);
-
-            self.device
-                .end_command_buffer(self.command_buffer)
-                .map_err(|e| {
-                    Error::GpuError(format!(
-                        "{}: end_command_buffer failed: {e}",
-                        self.label
-                    ))
-                })?;
-
-            let cmd_info = vk::CommandBufferSubmitInfo::builder()
-                .command_buffer(self.command_buffer)
-                .build();
-            let cmd_infos = [cmd_info];
-            let submit = vk::SubmitInfo2::builder()
-                .command_buffer_infos(&cmd_infos)
-                .build();
-            self.vulkan_device
-                .submit_to_queue(self.queue, &[submit], self.fence)?;
-
-            self.device
-                .wait_for_fences(&[self.fence], true, u64::MAX)
-                .map_err(|e| {
-                    Error::GpuError(format!(
-                        "{}: post-submit wait failed: {e}",
-                        self.label
-                    ))
-                })?;
+            recorder.submit_and_wait()?;
         }
+
+        // Render pass. `offscreen_render` transitions output
+        // `UNDEFINED → COLOR_ATTACHMENT_OPTIMAL` internally; the
+        // full-screen triangle covers every pixel so `clear_color =
+        // None` (LOAD) is sufficient. Output is left in
+        // `COLOR_ATTACHMENT_OPTIMAL`.
+        self.kernel.offscreen_render(
+            0,
+            &[OffscreenColorTarget {
+                texture: inputs.output.texture,
+                clear_color: None,
+            }],
+            (width, height),
+            OffscreenDraw::Draw(DrawCall {
+                vertex_count: 3,
+                instance_count: 1,
+                first_vertex: 0,
+                first_instance: 0,
+                viewport: Some(Viewport::full(width, height)),
+                scissor: Some(ScissorRect::full(width, height)),
+            }),
+        )?;
+
+        // Post-pass: output COLOR_ATTACHMENT_OPTIMAL →
+        // SHADER_READ_ONLY_OPTIMAL so downstream consumers (display,
+        // future encoders) can sample without re-barriering.
+        recorder.begin()?;
+        recorder.record_image_barrier(
+            inputs.output.texture,
+            VulkanLayout::COLOR_ATTACHMENT_OPTIMAL,
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+            VulkanStage::COLOR_ATTACHMENT_OUTPUT,
+            VulkanStage::ALL_COMMANDS,
+            VulkanAccess::COLOR_ATTACHMENT_WRITE,
+            VulkanAccess::SHADER_SAMPLED_READ,
+        )?;
+        recorder.submit_and_wait()?;
+
         Ok(())
     }
 
@@ -468,20 +379,6 @@ impl SandboxedBlendingCompositor {
         match layer {
             Some(BlendingLayer { texture, current_layout }) => (texture, current_layout),
             None => (&self.placeholder, VulkanLayout::SHADER_READ_ONLY_OPTIMAL),
-        }
-    }
-}
-
-impl Drop for SandboxedBlendingCompositor {
-    fn drop(&mut self) {
-        unsafe {
-            // Best-effort: the device may already be lost. None of these
-            // calls panic on stale handles.
-            let _ = self.device.wait_for_fences(&[self.fence], true, u64::MAX);
-            self.device.destroy_fence(self.fence, None);
-            self.device
-                .free_command_buffers(self.command_pool, &[self.command_buffer]);
-            self.device.destroy_command_pool(self.command_pool, None);
         }
     }
 }
@@ -499,98 +396,13 @@ fn make_placeholder_texture(vulkan_device: &Arc<HostVulkanDevice>) -> Result<Tex
 
     // Upload zeros (transparent BGRA); `upload_buffer_to_image` leaves
     // the image in SHADER_READ_ONLY_OPTIMAL.
-    let staging = HostVulkanBuffer::new(vulkan_device, (1 as u64) * (1 as u64) * (4 as u64))?;
+    let staging = HostVulkanBuffer::new(vulkan_device, 4)?;
     unsafe {
         std::ptr::write_bytes(staging.mapped_ptr(), 0, 4);
         vulkan_device.upload_buffer_to_image(staging.buffer(), image, 1, 1)?;
     }
 
     Ok(Texture::from_vulkan(host_tex))
-}
-
-fn create_command_pool(
-    device: &vulkanalia::Device,
-    queue_family_index: u32,
-) -> Result<vk::CommandPool> {
-    let info = vk::CommandPoolCreateInfo::builder()
-        .queue_family_index(queue_family_index)
-        .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-        .build();
-    unsafe { device.create_command_pool(&info, None) }
-        .map_err(|e| Error::GpuError(format!("create_command_pool: {e}")))
-}
-
-fn allocate_command_buffer(
-    device: &vulkanalia::Device,
-    pool: vk::CommandPool,
-) -> Result<vk::CommandBuffer> {
-    let info = vk::CommandBufferAllocateInfo::builder()
-        .command_pool(pool)
-        .level(vk::CommandBufferLevel::PRIMARY)
-        .command_buffer_count(1)
-        .build();
-    let buffers = unsafe { device.allocate_command_buffers(&info) }
-        .map_err(|e| Error::GpuError(format!("allocate_command_buffers: {e}")))?;
-    Ok(buffers[0])
-}
-
-fn create_signaled_fence(device: &vulkanalia::Device) -> Result<vk::Fence> {
-    let info = vk::FenceCreateInfo::builder()
-        .flags(vk::FenceCreateFlags::SIGNALED)
-        .build();
-    unsafe { device.create_fence(&info, None) }
-        .map_err(|e| Error::GpuError(format!("create_fence: {e}")))
-}
-
-fn color_subresource_range() -> vk::ImageSubresourceRange {
-    vk::ImageSubresourceRange::builder()
-        .aspect_mask(vk::ImageAspectFlags::COLOR)
-        .base_mip_level(0)
-        .level_count(1)
-        .base_array_layer(0)
-        .layer_count(1)
-        .build()
-}
-
-fn input_barrier_to_shader_read_only(
-    image: vk::Image,
-    old_layout: vk::ImageLayout,
-) -> vk::ImageMemoryBarrier2 {
-    // Tolerant src masks (ALL_COMMANDS + MEMORY_WRITE) cover every
-    // upstream producer (camera compute, OpenGL adapter glFinish,
-    // Skia/Vulkan adapters, future encoders) without per-producer
-    // tuning — same shape `LinuxDisplayProcessor` and
-    // `VulkanTextureReadback` use for the identical purpose.
-    vk::ImageMemoryBarrier2::builder()
-        .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-        .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
-        .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
-        .old_layout(old_layout)
-        .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .image(image)
-        .subresource_range(color_subresource_range())
-        .build()
-}
-
-fn output_barrier_to_color_attachment(
-    image: vk::Image,
-    old_layout: vk::ImageLayout,
-) -> vk::ImageMemoryBarrier2 {
-    vk::ImageMemoryBarrier2::builder()
-        .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-        .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-        .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-        .old_layout(old_layout)
-        .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .image(image)
-        .subresource_range(color_subresource_range())
-        .build()
 }
 
 #[cfg(test)]
@@ -727,10 +539,7 @@ mod tests {
                 lower_third: None,
                 watermark: None,
                 pip: None,
-                output: BlendingOutput {
-                    texture: &output,
-                    current_layout: VulkanLayout::UNDEFINED,
-                },
+                output: BlendingOutput { texture: &output },
                 pip_slide_progress: 0.0,
             })
             .expect("dispatch");
@@ -758,10 +567,7 @@ mod tests {
                 lower_third: None,
                 watermark: None,
                 pip: None,
-                output: BlendingOutput {
-                    texture: &output,
-                    current_layout: VulkanLayout::UNDEFINED,
-                },
+                output: BlendingOutput { texture: &output },
                 pip_slide_progress: 0.0,
             })
             .expect("dispatch");
@@ -799,10 +605,7 @@ mod tests {
                 lower_third: None,
                 watermark: None,
                 pip: None,
-                output: BlendingOutput {
-                    texture: &output,
-                    current_layout: VulkanLayout::UNDEFINED,
-                },
+                output: BlendingOutput { texture: &output },
                 pip_slide_progress: 0.0,
             })
             .expect_err("size mismatch must error");
@@ -855,10 +658,7 @@ mod tests {
                     texture: &pip,
                     current_layout: VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
                 }),
-                output: BlendingOutput {
-                    texture: &output,
-                    current_layout: VulkanLayout::UNDEFINED,
-                },
+                output: BlendingOutput { texture: &output },
                 pip_slide_progress: 1.0,
             })
             .expect("dispatch with 4 layers must succeed");

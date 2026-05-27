@@ -165,9 +165,12 @@ impl streamlib::sdk::processors::ReactiveProcessor for CrtFilmGrainProcessor::Pr
         backend.next_slot = (slot_idx + 1) % backend.output_ring.len();
         let slot = &backend.output_ring[slot_idx];
 
-        // Read the slot's current_layout from its registration. After
-        // the kernel's dispatch this becomes SHADER_READ_ONLY_OPTIMAL;
-        // first dispatch reads UNDEFINED.
+        // Resolve the slot's registration so we can `update_layout`
+        // after the dispatch returns. The kernel's `offscreen_render`
+        // starts from `UNDEFINED` internally (content discard
+        // permitted, full-screen triangle overwrites every pixel), so
+        // it doesn't read the slot's prior layout — we just need the
+        // registration handle.
         let slot_videoframe = synth_slot_videoframe(
             &slot.surface_id,
             slot.texture.width(),
@@ -179,17 +182,13 @@ impl streamlib::sdk::processors::ReactiveProcessor for CrtFilmGrainProcessor::Pr
             slot_videoframe.width,
             slot_videoframe.height,
         )?;
-        let slot_current_layout = slot_registration.current_layout();
 
         backend.kernel.dispatch(CrtFilmGrainInputs {
             input: CrtFilmGrainInput {
                 texture: &input_texture,
                 current_layout: input_layout,
             },
-            output: CrtFilmGrainOutput {
-                texture: &slot.texture,
-                current_layout: slot_current_layout,
-            },
+            output: CrtFilmGrainOutput { texture: &slot.texture },
             time_seconds: elapsed,
             crt_curve: self.config.crt_curve,
             scanline_intensity: self.config.scanline_intensity,

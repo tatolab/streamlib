@@ -9,31 +9,30 @@
 //! Pre-#487 this kernel and its compute shader (storage-buffer in/out,
 //! manual bilinear sampling, packed-BGRA uint addressing) lived in
 //! `libs/streamlib/src/vulkan/rhi/`. That placement encoded a single
-//! demo's app content (Blade Runner CRT vibe) into the engine. It also
-//! encoded a **wrong-shape hot-path pattern** — synchronous fence-
-//! blocked GPU dispatch with internal layout-barrier management — into
-//! the engine's API surface, despite production engines (UE5, Bevy,
-//! Granite, wgpu) deliberately not shipping such an API. Real
+//! demo's app content (Blade Runner CRT vibe) into the engine. Real
 //! renderers use a render graph that schedules barriers across passes
 //! and lets the CPU race ahead 1–2 frames; the synchronous-blocking
-//! shape stalls the CPU every frame.
+//! shape of a per-frame "dispatch" helper stalls the CPU every frame,
+//! which is why production engines (UE5, Bevy, Granite, wgpu)
+//! deliberately don't ship one.
 //!
-//! #487 relocated the kernel here as transitional sandboxed code
-//! AND ported it from a compute kernel (storage-buffer in/out) to a
-//! graphics kernel (sampled texture in / color attachment out) — the
-//! buffer-based shape can't consume the post-#485 texture-throughout
-//! pipeline. The boundary-check exception
-//! (`xtask/src/check_boundaries.rs::VULKANALIA_*_ALLOWLIST`) gates
-//! the example's `vulkanalia` import.
+//! ## Engine surfaces this rides
 //!
-//! ## When this goes away
+//! - [`VulkanGraphicsKernel::offscreen_render`] — the cdylib-safe
+//!   Texture-typed render-scope helper. Opens the dynamic-rendering
+//!   pass internally, transitions output `UNDEFINED →
+//!   COLOR_ATTACHMENT_OPTIMAL`, records `cmd_bind_and_draw`, submits
+//!   through the host's queue mutex, waits. Output is left in
+//!   `COLOR_ATTACHMENT_OPTIMAL`.
+//! - [`RhiCommandRecorder`] + [`record_image_barrier`] — for the
+//!   input-side transition (when the input isn't already
+//!   `SHADER_READ_ONLY_OPTIMAL`) and the post-pass
+//!   `COLOR_ATTACHMENT_OPTIMAL → SHADER_READ_ONLY_OPTIMAL` transition
+//!   on the output.
 //!
-//! When **RDG (#631)** ships and absorbs the kernel-wrapper command-
-//! buffer recording into render-graph passes. The example switches
-//! to RDG primitives in the same PR; this file, the matching
-//! `blending_compositor_kernel.rs`, the example's `vulkanalia` Cargo
-//! dep, and the boundary-check allowlist exception are all removed
-//! together.
+//! Neither surface exposes raw `vulkanalia` types — the kernel is
+//! cdylib-safe end-to-end. Every queue-mutex / fence / Drop / barrier
+//! bug the engine has fixed propagates here for free.
 //!
 //! ## Lifecycle
 //!
@@ -41,15 +40,13 @@
 //! `BlendingCompositor`'s `OUTPUT_RING_DEPTH = 2`), hands one to
 //! [`SandboxedCrtFilmGrain::dispatch`] per frame along with the input
 //! texture + its current Vulkan layout, and `dispatch` returns once
-//! the GPU has signaled the kernel's per-render fence. After return,
-//! both input and output textures are in `SHADER_READ_ONLY_OPTIMAL`,
-//! ready for the next consumer to sample without re-barriering.
+//! the GPU has signaled the underlying submits. After return, both
+//! input and output textures are in `SHADER_READ_ONLY_OPTIMAL`, ready
+//! for the next consumer to sample without re-barriering.
+//!
+//! [`record_image_barrier`]: streamlib::sdk::engine::host_rhi::RhiCommandRecorder::record_image_barrier
 
-use std::sync::Arc;
-use streamlib::sdk::engine::HostTextureExt;
-
-use vulkanalia::prelude::v1_4::*;
-use vulkanalia::vk;
+use std::sync::{Arc, Mutex};
 
 use streamlib::sdk::rhi::{
     AttachmentFormats,
@@ -75,7 +72,15 @@ use streamlib::sdk::rhi::{
     VulkanLayout,
 };
 use streamlib::sdk::error::{Result, Error};
-use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, VulkanGraphicsKernel};
+use streamlib::sdk::engine::host_rhi::{
+    HostVulkanDevice,
+    OffscreenColorTarget,
+    OffscreenDraw,
+    RhiCommandRecorder,
+    VulkanAccess,
+    VulkanGraphicsKernel,
+    VulkanStage,
+};
 
 /// Push-constants layout — must match `crt_film_grain.frag`'s
 /// `layout(push_constant)` block byte-for-byte.
@@ -104,12 +109,17 @@ pub struct CrtFilmGrainInput<'a> {
     pub current_layout: VulkanLayout,
 }
 
-/// Render target for one CRT/film-grain dispatch. Same shape as
-/// `BlendingOutput` in the sibling kernel.
+/// Render target for one CRT/film-grain dispatch.
+///
+/// Unlike [`CrtFilmGrainInput`], no `current_layout` is required —
+/// [`VulkanGraphicsKernel::offscreen_render`] transitions the output
+/// from `UNDEFINED` internally (content discard is permitted and the
+/// full-screen triangle overwrites every pixel). The caller-side
+/// post-pass barrier always lands the output in
+/// `SHADER_READ_ONLY_OPTIMAL`.
 #[derive(Clone, Copy)]
 pub struct CrtFilmGrainOutput<'a> {
     pub texture: &'a Texture,
-    pub current_layout: VulkanLayout,
 }
 
 pub struct CrtFilmGrainInputs<'a> {
@@ -126,19 +136,14 @@ pub struct CrtFilmGrainInputs<'a> {
 }
 
 /// CRT + film-grain post-effect graphics kernel.
-///
-/// See the module-level docs for the full transitional rationale and
-/// the link to RDG (#631) — the destination this code migrates to
-/// when the engine grows a proper render graph.
 pub struct SandboxedCrtFilmGrain {
     label: &'static str,
-    vulkan_device: Arc<HostVulkanDevice>,
-    device: vulkanalia::Device,
-    queue: vk::Queue,
     kernel: VulkanGraphicsKernel,
-    command_pool: vk::CommandPool,
-    command_buffer: vk::CommandBuffer,
-    fence: vk::Fence,
+    /// Reused across dispatches for the input pre-pass barrier (when
+    /// the input is not already `SHADER_READ_ONLY_OPTIMAL`) and the
+    /// post-pass output `COLOR_ATTACHMENT_OPTIMAL → SHADER_READ_ONLY_OPTIMAL`
+    /// barrier that follows [`VulkanGraphicsKernel::offscreen_render`].
+    recorder: Mutex<RhiCommandRecorder>,
 }
 
 impl SandboxedCrtFilmGrain {
@@ -178,23 +183,12 @@ impl SandboxedCrtFilmGrain {
         };
         let kernel = VulkanGraphicsKernel::new(vulkan_device, &descriptor)?;
 
-        let device = vulkan_device.device().clone();
-        let queue = vulkan_device.queue();
-        let queue_family_index = vulkan_device.queue_family_index();
-
-        let command_pool = create_command_pool(&device, queue_family_index)?;
-        let command_buffer = allocate_command_buffer(&device, command_pool)?;
-        let fence = create_signaled_fence(&device)?;
+        let recorder = RhiCommandRecorder::new(vulkan_device, "crt_film_grain_recorder")?;
 
         Ok(Self {
             label,
-            vulkan_device: Arc::clone(vulkan_device),
-            device,
-            queue,
             kernel,
-            command_pool,
-            command_buffer,
-            fence,
+            recorder: Mutex::new(recorder),
         })
     }
 
@@ -233,260 +227,74 @@ impl SandboxedCrtFilmGrain {
         };
         self.kernel.set_push_constants_value(0, &push)?;
 
-        unsafe {
-            self.device
-                .wait_for_fences(&[self.fence], true, u64::MAX)
-                .map_err(|e| {
-                    Error::GpuError(format!(
-                        "{}: wait_for_fences failed: {e}",
-                        self.label
-                    ))
-                })?;
-            self.device.reset_fences(&[self.fence]).map_err(|e| {
-                Error::GpuError(format!("{}: reset_fences failed: {e}", self.label))
-            })?;
-            self.device
-                .reset_command_buffer(self.command_buffer, vk::CommandBufferResetFlags::empty())
-                .map_err(|e| {
-                    Error::GpuError(format!(
-                        "{}: reset_command_buffer failed: {e}",
-                        self.label
-                    ))
-                })?;
+        let mut recorder = self.recorder.lock().map_err(|e| {
+            Error::GpuError(format!("{}: recorder mutex poisoned: {e}", self.label))
+        })?;
 
-            let begin = vk::CommandBufferBeginInfo::builder()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-                .build();
-            self.device
-                .begin_command_buffer(self.command_buffer, &begin)
-                .map_err(|e| {
-                    Error::GpuError(format!(
-                        "{}: begin_command_buffer failed: {e}",
-                        self.label
-                    ))
-                })?;
-
-            // Pre-render barriers: input → SHADER_READ_ONLY_OPTIMAL,
-            // output → COLOR_ATTACHMENT_OPTIMAL.
-            //
-            // Each `Texture` is dereferenced through
-            // `HostTextureExt::host_vulkan_texture_arc()` (the v10
-            // FullAccess vtable slot) rather than `vulkan_inner()`:
-            // this kernel ships as a cdylib, where `vulkan_inner()`
-            // panics under the engine's `Texture::host_inner()`
-            // panic-guard. The `xtask check-cdylib-reach` lint
-            // enforces the rule.
-            let output_host_tex = inputs.output.texture.host_vulkan_texture_arc()?;
-            let mut barriers: Vec<vk::ImageMemoryBarrier2> = Vec::with_capacity(2);
-            if inputs.input.current_layout != VulkanLayout::SHADER_READ_ONLY_OPTIMAL {
-                let input_host_tex = inputs.input.texture.host_vulkan_texture_arc()?;
-                let input_image = input_host_tex.image().ok_or_else(|| {
-                    Error::GpuError(format!("{}: input texture has no VkImage", self.label))
-                })?;
-                barriers.push(input_barrier_to_shader_read_only(
-                    input_image,
-                    inputs.input.current_layout.as_vk(),
-                ));
-            }
-            let output_image = output_host_tex.image().ok_or_else(|| {
-                Error::GpuError(format!("{}: output texture has no VkImage", self.label))
-            })?;
-            barriers.push(output_barrier_to_color_attachment(
-                output_image,
-                inputs.output.current_layout.as_vk(),
-            ));
-            let dep = vk::DependencyInfo::builder()
-                .image_memory_barriers(&barriers)
-                .build();
-            self.device.cmd_pipeline_barrier2(self.command_buffer, &dep);
-
-            // Begin dynamic rendering with the output as the sole color
-            // attachment. The full-screen triangle covers every pixel,
-            // so DONT_CARE on load is fine.
-            let output_view = output_host_tex
-                .image_view()
-                .unwrap_or(vk::ImageView::null());
-            let color_attachment = vk::RenderingAttachmentInfo::builder()
-                .image_view(output_view)
-                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .load_op(vk::AttachmentLoadOp::DONT_CARE)
-                .store_op(vk::AttachmentStoreOp::STORE)
-                .build();
-            let color_attachments = [color_attachment];
-            let rendering_info = vk::RenderingInfo::builder()
-                .render_area(vk::Rect2D {
-                    offset: vk::Offset2D { x: 0, y: 0 },
-                    extent: vk::Extent2D { width, height },
-                })
-                .layer_count(1)
-                .color_attachments(&color_attachments)
-                .build();
-            self.device.cmd_begin_rendering(self.command_buffer, &rendering_info);
-
-            self.kernel.cmd_bind_and_draw(
-                self.command_buffer,
-                0,
-                &DrawCall {
-                    vertex_count: 3,
-                    instance_count: 1,
-                    first_vertex: 0,
-                    first_instance: 0,
-                    viewport: Some(Viewport::full(width, height)),
-                    scissor: Some(ScissorRect::full(width, height)),
-                },
+        // Pre-pass: barrier the input into SHADER_READ_ONLY_OPTIMAL
+        // when it isn't already there. Tolerant src masks
+        // (ALL_COMMANDS + MEMORY_WRITE) cover every upstream producer
+        // (camera compute, OpenGL adapter glFinish, Skia/Vulkan
+        // adapters, future encoders) without per-producer tuning.
+        if inputs.input.current_layout != VulkanLayout::SHADER_READ_ONLY_OPTIMAL {
+            recorder.begin()?;
+            recorder.record_image_barrier(
+                inputs.input.texture,
+                inputs.input.current_layout,
+                VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                VulkanStage::ALL_COMMANDS,
+                VulkanStage::FRAGMENT_SHADER,
+                VulkanAccess::MEMORY_WRITE,
+                VulkanAccess::SHADER_SAMPLED_READ,
             )?;
-
-            self.device.cmd_end_rendering(self.command_buffer);
-
-            // Post-render: output COLOR_ATTACHMENT_OPTIMAL →
-            // SHADER_READ_ONLY_OPTIMAL.
-            let post = vk::ImageMemoryBarrier2::builder()
-                .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-                .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-                .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-                .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
-                .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(output_image)
-                .subresource_range(color_subresource_range())
-                .build();
-            let post_barriers = [post];
-            let post_dep = vk::DependencyInfo::builder()
-                .image_memory_barriers(&post_barriers)
-                .build();
-            self.device.cmd_pipeline_barrier2(self.command_buffer, &post_dep);
-
-            self.device
-                .end_command_buffer(self.command_buffer)
-                .map_err(|e| {
-                    Error::GpuError(format!(
-                        "{}: end_command_buffer failed: {e}",
-                        self.label
-                    ))
-                })?;
-
-            let cmd_info = vk::CommandBufferSubmitInfo::builder()
-                .command_buffer(self.command_buffer)
-                .build();
-            let cmd_infos = [cmd_info];
-            let submit = vk::SubmitInfo2::builder()
-                .command_buffer_infos(&cmd_infos)
-                .build();
-            self.vulkan_device
-                .submit_to_queue(self.queue, &[submit], self.fence)?;
-
-            self.device
-                .wait_for_fences(&[self.fence], true, u64::MAX)
-                .map_err(|e| {
-                    Error::GpuError(format!(
-                        "{}: post-submit wait failed: {e}",
-                        self.label
-                    ))
-                })?;
+            recorder.submit_and_wait()?;
         }
+
+        // Render pass. `offscreen_render` transitions output
+        // `UNDEFINED → COLOR_ATTACHMENT_OPTIMAL` internally; the
+        // full-screen triangle covers every pixel so `clear_color =
+        // None` (LOAD) is sufficient. Output is left in
+        // `COLOR_ATTACHMENT_OPTIMAL`.
+        self.kernel.offscreen_render(
+            0,
+            &[OffscreenColorTarget {
+                texture: inputs.output.texture,
+                clear_color: None,
+            }],
+            (width, height),
+            OffscreenDraw::Draw(DrawCall {
+                vertex_count: 3,
+                instance_count: 1,
+                first_vertex: 0,
+                first_instance: 0,
+                viewport: Some(Viewport::full(width, height)),
+                scissor: Some(ScissorRect::full(width, height)),
+            }),
+        )?;
+
+        // Post-pass: output COLOR_ATTACHMENT_OPTIMAL →
+        // SHADER_READ_ONLY_OPTIMAL.
+        recorder.begin()?;
+        recorder.record_image_barrier(
+            inputs.output.texture,
+            VulkanLayout::COLOR_ATTACHMENT_OPTIMAL,
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+            VulkanStage::COLOR_ATTACHMENT_OUTPUT,
+            VulkanStage::ALL_COMMANDS,
+            VulkanAccess::COLOR_ATTACHMENT_WRITE,
+            VulkanAccess::SHADER_SAMPLED_READ,
+        )?;
+        recorder.submit_and_wait()?;
+
         Ok(())
     }
-}
-
-impl Drop for SandboxedCrtFilmGrain {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = self.device.wait_for_fences(&[self.fence], true, u64::MAX);
-            self.device.destroy_fence(self.fence, None);
-            self.device
-                .free_command_buffers(self.command_pool, &[self.command_buffer]);
-            self.device.destroy_command_pool(self.command_pool, None);
-        }
-    }
-}
-
-fn create_command_pool(
-    device: &vulkanalia::Device,
-    queue_family_index: u32,
-) -> Result<vk::CommandPool> {
-    let info = vk::CommandPoolCreateInfo::builder()
-        .queue_family_index(queue_family_index)
-        .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-        .build();
-    unsafe { device.create_command_pool(&info, None) }
-        .map_err(|e| Error::GpuError(format!("create_command_pool: {e}")))
-}
-
-fn allocate_command_buffer(
-    device: &vulkanalia::Device,
-    pool: vk::CommandPool,
-) -> Result<vk::CommandBuffer> {
-    let info = vk::CommandBufferAllocateInfo::builder()
-        .command_pool(pool)
-        .level(vk::CommandBufferLevel::PRIMARY)
-        .command_buffer_count(1)
-        .build();
-    let buffers = unsafe { device.allocate_command_buffers(&info) }
-        .map_err(|e| Error::GpuError(format!("allocate_command_buffers: {e}")))?;
-    Ok(buffers[0])
-}
-
-fn create_signaled_fence(device: &vulkanalia::Device) -> Result<vk::Fence> {
-    let info = vk::FenceCreateInfo::builder()
-        .flags(vk::FenceCreateFlags::SIGNALED)
-        .build();
-    unsafe { device.create_fence(&info, None) }
-        .map_err(|e| Error::GpuError(format!("create_fence: {e}")))
-}
-
-fn color_subresource_range() -> vk::ImageSubresourceRange {
-    vk::ImageSubresourceRange::builder()
-        .aspect_mask(vk::ImageAspectFlags::COLOR)
-        .base_mip_level(0)
-        .level_count(1)
-        .base_array_layer(0)
-        .layer_count(1)
-        .build()
-}
-
-fn input_barrier_to_shader_read_only(
-    image: vk::Image,
-    old_layout: vk::ImageLayout,
-) -> vk::ImageMemoryBarrier2 {
-    vk::ImageMemoryBarrier2::builder()
-        .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-        .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
-        .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
-        .old_layout(old_layout)
-        .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .image(image)
-        .subresource_range(color_subresource_range())
-        .build()
-}
-
-fn output_barrier_to_color_attachment(
-    image: vk::Image,
-    old_layout: vk::ImageLayout,
-) -> vk::ImageMemoryBarrier2 {
-    vk::ImageMemoryBarrier2::builder()
-        .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-        .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-        .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-        .old_layout(old_layout)
-        .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .image(image)
-        .subresource_range(color_subresource_range())
-        .build()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use streamlib::sdk::engine::HostTextureExt;
     use streamlib::sdk::rhi::{
-        PixelFormat,
         TextureDescriptor,
         TextureReadbackDescriptor,
         TextureSourceLayout,
@@ -620,10 +428,7 @@ mod tests {
                 texture: input,
                 current_layout: VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
             },
-            output: CrtFilmGrainOutput {
-                texture: output,
-                current_layout: VulkanLayout::UNDEFINED,
-            },
+            output: CrtFilmGrainOutput { texture: output },
             time_seconds: 0.0,
             crt_curve: 0.7,
             scanline_intensity: 0.6,

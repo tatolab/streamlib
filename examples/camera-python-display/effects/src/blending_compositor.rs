@@ -625,11 +625,11 @@ fn compose_one_frame(
     state.next_output_slot = (slot_idx + 1) % backend.output_ring.len();
     let slot = &backend.output_ring[slot_idx];
 
-    // Resolve the slot's current layout from its registration. The
-    // compositor's pre-render barrier reads from this layout; on the
-    // very first dispatch into a slot the layout is UNDEFINED (initial
-    // declaration); on subsequent cycles it is SHADER_READ_ONLY_OPTIMAL
-    // (left there by the prior render's post-barrier).
+    // Resolve the slot's registration so we can `update_layout` after
+    // the dispatch returns. The compositor's `offscreen_render` starts
+    // from `UNDEFINED` internally (content discard permitted, full-
+    // screen triangle overwrites every pixel), so it doesn't read the
+    // slot's prior layout — we just need the registration handle.
     let output_registration = {
         let synth = slot_videoframe(&slot.surface_id, width, height);
         gpu_ctx.resolve_texture_registration_by_surface_id(
@@ -639,7 +639,6 @@ fn compose_one_frame(
             synth.height,
         )?
     };
-    let output_current_layout = output_registration.current_layout();
 
     // Borrow each cached layer immutably for the dispatch — `state`
     // is no longer mutated past this point.
@@ -648,8 +647,9 @@ fn compose_one_frame(
     let watermark = state.last_watermark.as_ref();
     let pip = state.last_pip.as_ref();
 
-    // Dispatch — the compositor records input barriers + render +
-    // output barrier in one CB, submits, and waits before returning.
+    // Dispatch — the compositor records input barriers (when needed) +
+    // offscreen render + output post-barrier through the engine RHI,
+    // submits each, and waits before returning.
     backend.compositor.dispatch(BlendingCompositorInputs {
         video: video.map(|l| l.as_layer()),
         lower_third: lower_third.map(|l| l.as_layer()),
@@ -659,10 +659,7 @@ fn compose_one_frame(
         } else {
             None
         },
-        output: BlendingOutput {
-            texture: &slot.texture,
-            current_layout: output_current_layout,
-        },
+        output: BlendingOutput { texture: &slot.texture },
         pip_slide_progress,
     })?;
 
