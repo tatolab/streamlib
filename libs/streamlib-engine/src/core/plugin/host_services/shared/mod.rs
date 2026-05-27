@@ -4,3 +4,6 @@
 //! Cross-submodule helpers used by every host-side vtable callback.
 
 pub(in crate::core::plugin::host_services) mod wire;
+
+#[cfg(target_os = "linux")]
+pub(in crate::core::plugin::host_services) mod borrow;
