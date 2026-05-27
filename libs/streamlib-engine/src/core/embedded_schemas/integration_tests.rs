@@ -199,6 +199,7 @@ fn test_audioframe_schema_publisher_rejects_256kb() {
         .open_or_create_service(
             "streamlib/test/schema-audio-reject",
             crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES,
+            true,
         )
         .unwrap();
 
@@ -224,6 +225,7 @@ fn test_encodedvideoframe_schema_publisher_accepts_256kb() {
         .open_or_create_service(
             "streamlib/test/schema-video-ok",
             crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES,
+            true,
         )
         .unwrap();
 
@@ -254,6 +256,7 @@ fn test_frame_header_plus_256kb_roundtrip_through_slice_service() {
         .open_or_create_service(
             "streamlib/test/frame-header-256kb",
             crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES,
+            true,
         )
         .unwrap();
 
@@ -327,6 +330,7 @@ fn test_encodedvideoframe_schema_publisher_subscriber_roundtrip_256kb() {
         .open_or_create_service(
             "streamlib/test/schema-video-roundtrip",
             crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES,
+            true,
         )
         .unwrap();
 

@@ -754,6 +754,10 @@ fn generate_descriptor_from_schema(
             let port_name = &p.name;
             let port_schema_tokens = port_schema_spec_tokens(&p.schema);
             let port_desc = p.description.as_deref().unwrap_or("");
+            let overflow_tokens = match p.overflow.as_deref() {
+                Some(value) => quote! { ::std::option::Option::Some(#value.to_string()) },
+                None => quote! { ::std::option::Option::None },
+            };
             quote! {
                 .with_input(::streamlib::sdk::descriptors::PortDescriptor {
                     name: #port_name.to_string(),
@@ -761,6 +765,7 @@ fn generate_descriptor_from_schema(
                     schema: #port_schema_tokens,
                     required: true,
                     is_iceoryx2: true,
+                    overflow: #overflow_tokens,
                 })
             }
         })
@@ -781,6 +786,7 @@ fn generate_descriptor_from_schema(
                     schema: #port_schema_tokens,
                     required: true,
                     is_iceoryx2: true,
+                    overflow: ::std::option::Option::None,
                 })
             }
         })

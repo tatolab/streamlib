@@ -144,6 +144,13 @@ pub struct PortDescriptor {
     /// Whether this port uses iceoryx2 IPC.
     #[serde(default)]
     pub is_iceoryx2: bool,
+    /// Producer-side overflow policy declared by an *input* port (the
+    /// destination of an iceoryx2 service). `None` defers to the
+    /// engine-wide default `drop_oldest` at wire time. Always `None`
+    /// on output ports — the producer side reads the destination port's
+    /// declaration. See [`crate::iceoryx2::Overflow`].
+    #[serde(default)]
+    pub overflow: Option<String>,
 }
 
 impl PortDescriptor {
@@ -159,6 +166,7 @@ impl PortDescriptor {
             schema,
             required,
             is_iceoryx2: false,
+            overflow: None,
         }
     }
 
@@ -174,7 +182,16 @@ impl PortDescriptor {
             schema,
             required: true,
             is_iceoryx2: true,
+            overflow: None,
         }
+    }
+
+    /// Builder-style override for the producer-side overflow policy.
+    /// Meaningful only on input ports; engine-side derivation ignores
+    /// this on output ports.
+    pub fn with_overflow(mut self, overflow: impl Into<String>) -> Self {
+        self.overflow = Some(overflow.into());
+        self
     }
 }
 

@@ -531,6 +531,15 @@ pub struct ProcessorPortSchema {
     /// Read mode for this input port (e.g., "skip_to_latest", "read_next_in_order").
     #[serde(default)]
     pub read_mode: Option<String>,
+    /// Producer-side overflow policy for the service feeding this input
+    /// port. `"drop_oldest"` (the engine-wide realtime default) lets
+    /// the publisher's `send()` never block — the iceoryx2 subscriber
+    /// buffer evicts the oldest sample to make room. `"block"` keeps
+    /// the producer waiting until the consumer drains a slot; reserve
+    /// for sinks that need every sample in order (file writers,
+    /// muxers, loggers).
+    #[serde(default)]
+    pub overflow: Option<String>,
     /// Ring buffer capacity for this input port.
     #[serde(default)]
     pub buffer_size: Option<usize>,

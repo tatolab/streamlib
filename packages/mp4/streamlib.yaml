@@ -42,5 +42,13 @@ processors:
       - name: video_in
         schema: VideoFrame
         description: Decoded video frames (raw pixels) to encode and write
-        read_mode: skip_to_latest
-        buffer_size: 4
+        # MP4 muxers need every frame in order — a silently dropped
+        # frame becomes a gap in the encoded file that no playback can
+        # recover. `read_next_in_order` + `overflow: block` makes the
+        # contract explicit: consumer reads FIFO, and when the
+        # subscriber buffer fills (slow disk / encode hiccup), the
+        # producer blocks until the writer catches up. `buffer_size`
+        # absorbs short hiccups before back-pressure fires upstream.
+        read_mode: read_next_in_order
+        overflow: block
+        buffer_size: 32

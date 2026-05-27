@@ -11,7 +11,7 @@ use parking_lot::Mutex;
 
 use crate::core::context::RuntimeContext;
 use crate::core::embedded_schemas::{
-    max_payload_bytes_for_port_spec, max_queued_messages_for_port_spec,
+    max_payload_bytes_for_port_spec, max_queued_messages_for_port_spec, overflow_for_input_port,
 };
 use crate::core::error::{Result, Error};
 use crate::core::graph::{
@@ -64,6 +64,32 @@ fn schema_ident_wire_for_producer(spec: &PortSchemaSpec) -> SchemaIdentWire {
 
 use super::spawn_deno_subprocess_op::DenoSubprocessHostProcessor;
 use super::spawn_python_native_subprocess_op::PythonNativeSubprocessHostProcessor;
+
+/// Resolve the iceoryx2 service-level `enable_safe_overflow` flag from
+/// the destination input port's declared overflow policy. Falls back to
+/// the engine-wide realtime default (`drop_oldest` →
+/// `enable_safe_overflow(true)`) when the destination processor or
+/// port can't be located (legitimate when the destination is a
+/// subprocess processor whose registry entry doesn't carry per-port
+/// overflow yet — those default to drop-oldest, the realtime
+/// invariant).
+fn resolve_enable_safe_overflow(
+    graph: &mut Graph,
+    dest_proc_id: &ProcessorUniqueId,
+    dest_port: &str,
+) -> Result<bool> {
+    let dest_proc_type = graph
+        .traversal_mut()
+        .v(dest_proc_id)
+        .first()
+        .map(|node| node.processor_type().clone());
+
+    let overflow = match dest_proc_type.as_ref() {
+        Some(ident) => overflow_for_input_port(ident, dest_port)?,
+        None => crate::iceoryx2::Overflow::default(),
+    };
+    Ok(overflow.enable_safe_overflow())
+}
 
 /// Check if a processor is a subprocess (Python, TypeScript, etc.)
 fn is_subprocess_processor(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> bool {
@@ -354,17 +380,22 @@ fn open_iceoryx2_pubsub(
     let iceoryx2_node = runtime_ctx.iceoryx2_node();
     let max_queued_messages = max_queued_messages_for_port_spec(&output_schema)?;
     let max_payload = max_payload_bytes_for_port_spec(&output_schema)?;
-    let service =
-        iceoryx2_node.open_or_create_service(&service_name, max_queued_messages)?;
+    let enable_safe_overflow = resolve_enable_safe_overflow(graph, dest_proc_id, dest_port)?;
+    let service = iceoryx2_node.open_or_create_service(
+        &service_name,
+        max_queued_messages,
+        enable_safe_overflow,
+    )?;
     let notify_service = iceoryx2_node.open_or_create_notify_service(&notify_service_name)?;
 
     // Create Publisher sized for this schema's declared max payload.
     let publisher = service.create_publisher(max_payload)?;
     let notifier = notify_service.create_notifier()?;
     tracing::debug!(
-        "Created iceoryx2 Publisher+Notifier for '{}' -> service '{}'",
+        "Created iceoryx2 Publisher+Notifier for '{}' -> service '{}' (enable_safe_overflow={})",
         source_proc_id,
-        service_name
+        service_name,
+        enable_safe_overflow
     );
 
     // Configure source OutputWriterInner with port mapping,
@@ -487,11 +518,15 @@ fn open_iceoryx2_subprocess_to_subprocess(
     };
     let max_payload = max_payload_bytes_for_port_spec(&output_schema)?;
     let max_queued_messages = max_queued_messages_for_port_spec(&output_schema)?;
+    let enable_safe_overflow = resolve_enable_safe_overflow(graph, dest_proc_id, dest_port)?;
 
     // Ensure both services exist (both subprocesses will open them independently).
     let iceoryx2_node = runtime_ctx.iceoryx2_node();
-    let _service =
-        iceoryx2_node.open_or_create_service(&service_name, max_queued_messages)?;
+    let _service = iceoryx2_node.open_or_create_service(
+        &service_name,
+        max_queued_messages,
+        enable_safe_overflow,
+    )?;
     let _notify_service = iceoryx2_node.open_or_create_notify_service(&notify_service_name)?;
 
     // Store output wiring info on the source subprocess
@@ -621,10 +656,14 @@ fn open_iceoryx2_subprocess_to_rust(
     };
     let max_payload = max_payload_bytes_for_port_spec(&output_schema)?;
     let max_queued_messages = max_queued_messages_for_port_spec(&output_schema)?;
+    let enable_safe_overflow = resolve_enable_safe_overflow(graph, dest_proc_id, dest_port)?;
 
     let iceoryx2_node = runtime_ctx.iceoryx2_node();
-    let service =
-        iceoryx2_node.open_or_create_service(&service_name, max_queued_messages)?;
+    let service = iceoryx2_node.open_or_create_service(
+        &service_name,
+        max_queued_messages,
+        enable_safe_overflow,
+    )?;
     let notify_service = iceoryx2_node.open_or_create_notify_service(&notify_service_name)?;
 
     // Source is subprocess - it creates its own publisher and notifier via FFI.
@@ -762,8 +801,12 @@ fn open_iceoryx2_rust_to_subprocess(
     let iceoryx2_node = runtime_ctx.iceoryx2_node();
     let max_payload = max_payload_bytes_for_port_spec(&output_schema)?;
     let max_queued_messages = max_queued_messages_for_port_spec(&output_schema)?;
-    let service =
-        iceoryx2_node.open_or_create_service(&service_name, max_queued_messages)?;
+    let enable_safe_overflow = resolve_enable_safe_overflow(graph, dest_proc_id, dest_port)?;
+    let service = iceoryx2_node.open_or_create_service(
+        &service_name,
+        max_queued_messages,
+        enable_safe_overflow,
+    )?;
     let notify_service = iceoryx2_node.open_or_create_notify_service(&notify_service_name)?;
 
     // Create Publisher sized for this schema's declared max payload.
