@@ -8458,6 +8458,11 @@ unsafe extern "C" fn host_compute_kernel_bindings(
 // FFI carries the raw integer as `u64`; the host reconstructs via
 // `Handle::from_raw` before forwarding.
 
+// The four callbacks below dispatch through `*_raw` shim methods on
+// `VulkanComputeKernelInner` so that this file stays off the
+// vulkanalia allowlist (`xtask check-boundaries`). The RHI-side shim
+// is the canonical owner of `Handle::from_raw` reconstruction.
+
 #[cfg(target_os = "linux")]
 unsafe extern "C" fn host_compute_kernel_set_sampled_image_view(
     kernel_handle: *const c_void,
@@ -8467,7 +8472,6 @@ unsafe extern "C" fn host_compute_kernel_set_sampled_image_view(
     err_buf_cap: usize,
     err_len: *mut usize,
 ) -> i32 {
-    use vulkanalia::vk::{self, Handle};
     run_host_extern_c(
         "host_compute_kernel_set_sampled_image_view",
         || -> i32 {
@@ -8481,8 +8485,7 @@ unsafe extern "C" fn host_compute_kernel_set_sampled_image_view(
                 );
                 return 1;
             };
-            let view = vk::ImageView::from_raw(image_view_handle);
-            match kernel.set_sampled_image_view(binding, view) {
+            match kernel.set_sampled_image_view_raw(binding, image_view_handle) {
                 Ok(()) => 0,
                 Err(e) => {
                     write_err(
@@ -8508,7 +8511,6 @@ unsafe extern "C" fn host_compute_kernel_set_combined_image_sampler_view(
     err_buf_cap: usize,
     err_len: *mut usize,
 ) -> i32 {
-    use vulkanalia::vk::{self, Handle};
     run_host_extern_c(
         "host_compute_kernel_set_combined_image_sampler_view",
         || -> i32 {
@@ -8522,8 +8524,9 @@ unsafe extern "C" fn host_compute_kernel_set_combined_image_sampler_view(
                 );
                 return 1;
             };
-            let view = vk::ImageView::from_raw(image_view_handle);
-            match kernel.set_combined_image_sampler_view(binding, view) {
+            match kernel
+                .set_combined_image_sampler_view_raw(binding, image_view_handle)
+            {
                 Ok(()) => 0,
                 Err(e) => {
                     write_err(
@@ -8549,7 +8552,6 @@ unsafe extern "C" fn host_compute_kernel_set_storage_image_view(
     err_buf_cap: usize,
     err_len: *mut usize,
 ) -> i32 {
-    use vulkanalia::vk::{self, Handle};
     run_host_extern_c(
         "host_compute_kernel_set_storage_image_view",
         || -> i32 {
@@ -8563,8 +8565,7 @@ unsafe extern "C" fn host_compute_kernel_set_storage_image_view(
                 );
                 return 1;
             };
-            let view = vk::ImageView::from_raw(image_view_handle);
-            match kernel.set_storage_image_view(binding, view) {
+            match kernel.set_storage_image_view_raw(binding, image_view_handle) {
                 Ok(()) => 0,
                 Err(e) => {
                     write_err(
@@ -8592,7 +8593,6 @@ unsafe extern "C" fn host_compute_kernel_record(
     err_buf_cap: usize,
     err_len: *mut usize,
 ) -> i32 {
-    use vulkanalia::vk::{self, Handle};
     run_host_extern_c(
         "host_compute_kernel_record",
         || -> i32 {
@@ -8606,10 +8606,12 @@ unsafe extern "C" fn host_compute_kernel_record(
                 );
                 return 1;
             };
-            // vulkanalia's CommandBuffer wraps a usize; on every supported
-            // target usize == u64, so the cast is lossless.
-            let cb = vk::CommandBuffer::from_raw(command_buffer_handle as usize);
-            match kernel.record(cb, group_x, group_y, group_z) {
+            match kernel.record_raw(
+                command_buffer_handle,
+                group_x,
+                group_y,
+                group_z,
+            ) {
                 Ok(()) => 0,
                 Err(e) => {
                     write_err(

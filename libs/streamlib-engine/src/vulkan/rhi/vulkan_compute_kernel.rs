@@ -643,6 +643,60 @@ impl VulkanComputeKernelInner {
         )
     }
 
+    // ---- Raw-handle entry points for the v5 cdylib vtable callbacks --------
+    //
+    // The four `*_raw` methods exist so the host-services callback layer
+    // (`core/plugin/host_services.rs`) can dispatch to the kernel without
+    // importing `vulkanalia` itself — that file isn't on the RHI vulkanalia
+    // allowlist by design (per `xtask check-boundaries`). Each shim
+    // reconstructs the typed vulkanalia handle via `Handle::from_raw` and
+    // forwards to the corresponding typed method above.
+
+    pub(crate) fn set_sampled_image_view_raw(
+        &self,
+        binding: u32,
+        image_view_handle: u64,
+    ) -> Result<()> {
+        use vulkanalia::vk::Handle;
+        self.set_sampled_image_view(binding, vk::ImageView::from_raw(image_view_handle))
+    }
+
+    pub(crate) fn set_combined_image_sampler_view_raw(
+        &self,
+        binding: u32,
+        image_view_handle: u64,
+    ) -> Result<()> {
+        use vulkanalia::vk::Handle;
+        self.set_combined_image_sampler_view(
+            binding,
+            vk::ImageView::from_raw(image_view_handle),
+        )
+    }
+
+    pub(crate) fn set_storage_image_view_raw(
+        &self,
+        binding: u32,
+        image_view_handle: u64,
+    ) -> Result<()> {
+        use vulkanalia::vk::Handle;
+        self.set_storage_image_view(binding, vk::ImageView::from_raw(image_view_handle))
+    }
+
+    pub(crate) fn record_raw(
+        &self,
+        command_buffer_handle: u64,
+        group_count_x: u32,
+        group_count_y: u32,
+        group_count_z: u32,
+    ) -> Result<()> {
+        use vulkanalia::vk::Handle;
+        // vulkanalia's CommandBuffer wraps a `usize`; on every supported
+        // target `usize == u64`, so the cast is lossless. The wire form
+        // is `u64` for ABI uniformity with the image-view slots.
+        let cb = vk::CommandBuffer::from_raw(command_buffer_handle as usize);
+        self.record(cb, group_count_x, group_count_y, group_count_z)
+    }
+
     fn drain_and_validate_pending(&self) -> Result<PendingState> {
         let pending = {
             let mut guard = self.pending.lock();
