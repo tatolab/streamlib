@@ -1464,13 +1464,81 @@ impl RhiCommandRecorder {
         }
     }
 
+    /// Cdylib-side dispatch helper for the v5 `submit` slot.
+    fn dispatch_submit_via_vtable(&self) -> Result<()> {
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "submit: command recorder methods vtable is null".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).submit)(
+                self.handle,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    /// Cdylib-side dispatch helper for the v5 `submit_and_wait` slot.
+    fn dispatch_submit_and_wait_via_vtable(&self) -> Result<()> {
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "submit_and_wait: command recorder methods vtable is null".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).submit_and_wait)(
+                self.handle,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
     /// Submit without semaphore signaling.
+    ///
+    /// Mode-routed: host callers dispatch through `host_inner_mut`;
+    /// cdylib callers dispatch through the v5 `submit` slot on
+    /// [`RhiCommandRecorderMethodsVTable`](streamlib_plugin_abi::RhiCommandRecorderMethodsVTable).
     pub fn submit(&mut self) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_submit_via_vtable();
+        }
         self.host_inner_mut().submit()
     }
 
     /// Submit and block until the GPU completes.
+    ///
+    /// Mode-routed: host callers dispatch through `host_inner_mut`;
+    /// cdylib callers dispatch through the v5 `submit_and_wait` slot
+    /// on [`RhiCommandRecorderMethodsVTable`](streamlib_plugin_abi::RhiCommandRecorderMethodsVTable).
+    /// `RhiToneMapper::apply_with_layouts` is the first in-tree
+    /// cdylib consumer.
     pub fn submit_and_wait(&mut self) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_submit_and_wait_via_vtable();
+        }
         self.host_inner_mut().submit_and_wait()
     }
 

@@ -543,14 +543,46 @@ impl VulkanGraphicsKernelInner {
         self.cmd_bind_and_draw_inner(command_buffer, frame_index, DrawKind::Draw(*draw))
     }
 
+    /// Cdylib-side shim — reconstruct the `vk::CommandBuffer` handle
+    /// the cdylib minted (via its own vulkanalia link, gated by
+    /// `xtask check-boundaries`) from the u64 wire form and forward
+    /// to [`Self::cmd_bind_and_draw`]. Owned here so this file is
+    /// the canonical site of the `vk::CommandBuffer::from_raw`
+    /// reconstruction and the host-services file (which is off the
+    /// `vulkanalia` allowlist) doesn't have to touch the type
+    /// directly. Mirrors `VulkanComputeKernelInner::record_raw`.
+    pub(crate) fn cmd_bind_and_draw_raw(
+        &self,
+        command_buffer_handle: u64,
+        frame_index: u32,
+        draw: &DrawCall,
+    ) -> Result<()> {
+        use vulkanalia::vk::Handle;
+        // vulkanalia's CommandBuffer wraps a `usize`; on every supported
+        // target `usize == u64`, so the cast is lossless. The wire form
+        // is `u64` for ABI uniformity with the compute kernel's
+        // v5 `record` slot.
+        let cb = vk::CommandBuffer::from_raw(command_buffer_handle as usize);
+        self.cmd_bind_and_draw(cb, frame_index, draw)
+    }
+
+    /// Cdylib-side shim for [`Self::cmd_bind_and_draw_indexed`].
+    /// Same reconstruction contract as
+    /// [`Self::cmd_bind_and_draw_raw`].
+    pub(crate) fn cmd_bind_and_draw_indexed_raw(
+        &self,
+        command_buffer_handle: u64,
+        frame_index: u32,
+        draw: &DrawIndexedCall,
+    ) -> Result<()> {
+        use vulkanalia::vk::Handle;
+        let cb = vk::CommandBuffer::from_raw(command_buffer_handle as usize);
+        self.cmd_bind_and_draw_indexed(cb, frame_index, draw)
+    }
+
     /// Indexed variant of [`Self::cmd_bind_and_draw`] (same drain-on-draw
     /// contract). Caller must have set an index buffer for `frame_index`
     /// via [`Self::set_index_buffer`].
-    ///
-    /// Crate-private: takes a raw `vk::CommandBuffer` which cdylibs cannot
-    /// construct (no `vulkanalia` dep). No out-of-engine consumers today;
-    /// host examples drive indexed draws through
-    /// [`RhiCommandRecorder::record_dispatch`]-style helpers instead.
     pub(crate) fn cmd_bind_and_draw_indexed(
         &self,
         command_buffer: vk::CommandBuffer,
@@ -1561,28 +1593,46 @@ impl VulkanGraphicsKernel {
             .set_index_buffer(frame_index, buffer, offset, index_type)
     }
 
-    /// Record bind + push + draw into `command_buffer`. Engine-only
-    /// — accepts a raw `vk::CommandBuffer` from a caller-managed
-    /// render-pass scope, which cdylib code cannot mint without an
-    /// `RhiCommandRecorder` β-shape (a separate concern). The
-    /// `host_inner()` reach-through panics if called from a cdylib.
+    /// Record bind + push + draw into `command_buffer`. Mode-routed:
+    /// host callers dispatch through `host_inner`; cdylib callers
+    /// dispatch through the v4 `cmd_bind_and_draw` slot on
+    /// [`VulkanGraphicsKernelMethodsVTable`](streamlib_plugin_abi::VulkanGraphicsKernelMethodsVTable).
+    ///
+    /// `command_buffer` is a raw `vk::CommandBuffer` the caller
+    /// minted and owns (typically from a cdylib's own command pool
+    /// under a `vulkanalia` boundary-check allowlist exception). The
+    /// wire form for the cdylib path carries the handle as `u64`
+    /// (same shape as `VulkanComputeKernelInner::record_raw`); on
+    /// 64-bit Linux — the only platform that ships — vulkanalia's
+    /// `CommandBuffer(usize)` cast is lossless.
     pub fn cmd_bind_and_draw(
         &self,
         cmd: vk::CommandBuffer,
         frame_index: u32,
         draw: &DrawCall,
     ) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_cmd_bind_and_draw_via_vtable(cmd, frame_index, draw);
+        }
         self.host_inner().cmd_bind_and_draw(cmd, frame_index, draw)
     }
 
-    /// Indexed variant of [`Self::cmd_bind_and_draw`]. Engine-only;
-    /// same `host_inner`-only contract.
+    /// Indexed variant of [`Self::cmd_bind_and_draw`]. Same
+    /// mode-routing contract; dispatches through the v4
+    /// `cmd_bind_and_draw_indexed` slot in cdylib mode.
     pub(crate) fn cmd_bind_and_draw_indexed(
         &self,
         cmd: vk::CommandBuffer,
         frame_index: u32,
         draw: &DrawIndexedCall,
     ) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_cmd_bind_and_draw_indexed_via_vtable(
+                cmd,
+                frame_index,
+                draw,
+            );
+        }
         self.host_inner().cmd_bind_and_draw_indexed(cmd, frame_index, draw)
     }
 
@@ -1940,6 +1990,91 @@ impl VulkanGraphicsKernel {
                 handles.len(),
                 extent.0,
                 extent.1,
+                &draw_repr,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    /// Cdylib-side dispatch helper for the v4 `cmd_bind_and_draw`
+    /// slot. Carries `vk::CommandBuffer`'s `repr(transparent)`
+    /// `usize` payload as a `u64` (lossless on 64-bit Linux) and
+    /// marshals the `DrawCall` into the `DrawCallRepr` shape the
+    /// host wrapper expects. Mirrors the `compute_kernel`'s
+    /// `dispatch_record_via_vtable`.
+    #[cfg(target_os = "linux")]
+    fn dispatch_cmd_bind_and_draw_via_vtable(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        frame_index: u32,
+        draw: &DrawCall,
+    ) -> Result<()> {
+        use vulkanalia::vk::Handle;
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "cmd_bind_and_draw: graphics kernel methods vtable is null".into(),
+            ));
+        }
+        let draw_repr = draw_call_to_repr(draw);
+        let cb_handle: u64 = command_buffer.as_raw() as u64;
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).cmd_bind_and_draw)(
+                self.handle,
+                cb_handle,
+                frame_index,
+                &draw_repr,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    /// Cdylib-side dispatch helper for the v4
+    /// `cmd_bind_and_draw_indexed` slot. Same shape as
+    /// [`Self::dispatch_cmd_bind_and_draw_via_vtable`], marshals
+    /// `DrawIndexedCall` into `DrawIndexedCallRepr`.
+    #[cfg(target_os = "linux")]
+    fn dispatch_cmd_bind_and_draw_indexed_via_vtable(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        frame_index: u32,
+        draw: &DrawIndexedCall,
+    ) -> Result<()> {
+        use vulkanalia::vk::Handle;
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "cmd_bind_and_draw_indexed: graphics kernel methods vtable is null"
+                    .into(),
+            ));
+        }
+        let draw_repr = draw_indexed_call_to_repr(draw);
+        let cb_handle: u64 = command_buffer.as_raw() as u64;
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).cmd_bind_and_draw_indexed)(
+                self.handle,
+                cb_handle,
+                frame_index,
                 &draw_repr,
                 err_buf.as_mut_ptr(),
                 err_buf.len(),
