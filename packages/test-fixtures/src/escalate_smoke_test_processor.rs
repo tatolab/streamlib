@@ -64,34 +64,31 @@ impl ManualProcessor for EscalateSmokeTest::Processor {
     fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let output_path = self.config.output_path.clone();
 
-        // Escalate and exercise both Phase D vtable dispatch paths
-        // end-to-end. In cdylib mode this routes through
-        // `escalate_via_vtable`: vtable.escalate_begin → mint
-        // scope_token → construct GpuContextFullAccess via
-        // from_scope_token → four FullAccess methods dispatch through
-        // the FullAccess vtable / inherited LimitedAccess vtable →
-        // vtable.escalate_end. A panic at any FFI boundary surfaces
-        // as a panic in the closure or a non-zero escalate return;
-        // both produce an "ERR:" line.
+        // Manual-mode start() takes FullAccess directly. The engine's
+        // `ProcessorInstance::start` wraps cdylib-resident lifecycle
+        // dispatch in `with_cdylib_scope` (#1075), so
+        // `ctx.gpu_full_access()` is `ScopeToken`-flavored and
+        // dispatches through the FullAccess vtable transparently —
+        // same coverage as the pre-#1075 `escalate(|full| ...)` path,
+        // just exercised via the lifecycle wrap instead of the
+        // explicit escalate primitive.
         //
-        // Coverage:
-        //   - wait_device_idle: Phase D Bucket B (new FullAccess slot).
+        // Coverage (same as pre-#1075):
+        //   - wait_device_idle: Phase D Bucket B (FullAccess vtable slot).
         //   - acquire_pixel_buffer: Phase D Bucket C (inherited
         //     LimitedAccess vtable via Option B).
-        //   - acquire_output_texture: Phase D Bucket B (new FullAccess
-        //     slot). Used to mint a Texture for the next call.
-        //   - register_texture_with_layout: Phase D Bucket C (inherited
-        //     LimitedAccess vtable). Per #906 exit criterion #4 this
-        //     method is explicitly required.
-        let result: Result<()> = ctx.gpu_limited_access().escalate(|full| {
-            // Bucket B — new FullAccess vtable slot.
+        //   - acquire_output_texture: Phase D Bucket B.
+        //   - register_texture_with_layout: Phase D Bucket C.
+        let full = ctx.gpu_full_access();
+        let result: Result<()> = (|| -> Result<()> {
+            // Bucket B — FullAccess vtable slot.
             full.wait_device_idle()?;
 
             // Bucket C — inherited LimitedAccess dispatch.
             let (_pool_id, _pb) =
                 full.acquire_pixel_buffer(64, 64, PixelFormat::Rgba32)?;
 
-            // Bucket B — new FullAccess vtable slot returning a Texture
+            // Bucket B — FullAccess vtable slot returning a Texture
             // we can hand to register_texture_with_layout below.
             let (id, texture) =
                 full.acquire_output_texture(64, 64, TextureFormat::Rgba8Unorm)?;
@@ -116,7 +113,7 @@ impl ManualProcessor for EscalateSmokeTest::Processor {
             }
 
             Ok(())
-        });
+        })();
 
         let line = match result {
             Ok(()) => "OK".to_string(),

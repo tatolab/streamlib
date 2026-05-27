@@ -21,24 +21,57 @@
 //! [`GpuContextLimitedAccess::escalate`]: super::gpu_context::GpuContextLimitedAccess::escalate
 
 use std::sync::{Condvar, Mutex};
+use std::thread::ThreadId;
 
 /// Exclusivity gate for escalate scopes on a single
 /// [`GpuContext`](super::gpu_context::GpuContext).
 ///
 /// `enter` blocks until any active scope releases (via `exit`), then
 /// marks the gate as in-scope. `exit` clears the in-scope flag and
-/// wakes one waiter. Same-thread re-entry is NOT supported — calling
-/// `enter` twice from the same thread without an intervening `exit`
-/// deadlocks.
+/// wakes one waiter.
+///
+/// **Same-thread re-entry panics.** The historical contract is that
+/// `escalate(|full| ...)` from inside a setup/teardown lifecycle
+/// body (which already runs with the gate held by the spawn op) is
+/// forbidden — it used to silently deadlock against the original
+/// `processor_setup_lock: Arc<Mutex<()>>`. After PR #912 replaced
+/// that mutex with this gate, the deadlock shape is the same; the
+/// added thread tracking here turns the silent hang into a clear
+/// panic at the call site. The panic is caught by the FFI boundary's
+/// `run_host_extern_c` wrapper (in cdylib mode) and propagates as a
+/// normal Rust panic for engine-internal callers, so the failure
+/// surface is "your code panicked with an actionable message" rather
+/// than "your test hangs forever."
+///
+/// The held-by-thread tracking is best-effort: it catches the
+/// common case (paired same-thread enter/enter recursion) but does
+/// NOT support recursive entry. Cross-thread enter/exit pairs are
+/// still allowed — the cdylib FFI path needs that flexibility
+/// because `escalate_begin` returns before the closure runs and the
+/// matching `escalate_end` may fire from a different thread (panic
+/// recovery, async runtimes).
 pub(crate) struct EscalateGate {
-    in_scope: Mutex<bool>,
+    state: Mutex<GateState>,
     cv: Condvar,
+}
+
+struct GateState {
+    in_scope: bool,
+    /// Thread that called `enter` and hasn't yet called `exit`.
+    /// `None` when the gate is free. Used solely to detect (and
+    /// panic on) same-thread re-entry; cross-thread paired
+    /// enter/exit clears this normally regardless of which thread
+    /// holds it.
+    holder: Option<ThreadId>,
 }
 
 impl EscalateGate {
     pub(crate) fn new() -> Self {
         Self {
-            in_scope: Mutex::new(false),
+            state: Mutex::new(GateState {
+                in_scope: false,
+                holder: None,
+            }),
             cv: Condvar::new(),
         }
     }
@@ -46,21 +79,37 @@ impl EscalateGate {
     /// Block until the gate is free, then claim it. Pairs with
     /// [`Self::exit`]. The companion [`Self::enter_scoped`] returns
     /// an RAII guard that releases on drop (engine-internal use).
+    ///
+    /// Panics if the gate is already held by the current thread —
+    /// see the type-level doc for the rationale.
     pub(crate) fn enter(&self) {
-        let mut guard = self
-            .in_scope
+        let mut state = self
+            .state
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        while *guard {
-            guard = self
+        let current = std::thread::current().id();
+        while state.in_scope {
+            if state.holder == Some(current) {
+                panic!(
+                    "EscalateGate::enter() called twice from the same thread \
+                     ({current:?}) without an intervening exit — escalate-from-setup \
+                     is forbidden by the sandbox contract. setup() / teardown() \
+                     bodies already run with the gate held by the spawn op; \
+                     call ctx.gpu_full_access() directly (cdylib-safe after #1072) \
+                     instead of ctx.gpu_limited_access().escalate(|full| ...)."
+                );
+            }
+            state = self
                 .cv
-                .wait(guard)
+                .wait(state)
                 .unwrap_or_else(|e| e.into_inner());
         }
-        *guard = true;
-        // Mutex<bool> drops here — the gate is held by the `true`
-        // flag, not by any guard. Other `enter` callers see `true` on
-        // their `while` check and wait on the Condvar.
+        state.in_scope = true;
+        state.holder = Some(current);
+        // Mutex<GateState> drops here — the gate is held by the
+        // in_scope flag, not by any guard. Other `enter` callers see
+        // in_scope=true on their `while` check and wait on the
+        // Condvar.
     }
 
     /// Release the gate. Wakes one waiter (if any).
@@ -69,11 +118,12 @@ impl EscalateGate {
     /// was already false — harmless but indicates a bug at the call
     /// site.
     pub(crate) fn exit(&self) {
-        let mut guard = self
-            .in_scope
+        let mut state = self
+            .state
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        *guard = false;
+        state.in_scope = false;
+        state.holder = None;
         self.cv.notify_one();
     }
 
@@ -187,5 +237,36 @@ mod tests {
         // Gate must be free again.
         gate.enter();
         gate.exit();
+    }
+
+    #[test]
+    fn same_thread_reentry_panics() {
+        // The historical sandbox contract forbids
+        // `escalate(|full| ...)` from inside a setup/teardown body
+        // (the spawn op already holds the gate). The gate's enter
+        // detects same-thread re-entry and panics with an actionable
+        // message rather than silently deadlocking — see the type
+        // doc for the rationale.
+        let gate = EscalateGate::new();
+        gate.enter();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            gate.enter();
+        }));
+        // Release the outer enter so other tests sharing global
+        // state aren't affected (this gate is local, but documenting
+        // the discipline).
+        gate.exit();
+        let panic_payload = result.expect_err(
+            "EscalateGate::enter must panic on same-thread re-entry, not deadlock or succeed",
+        );
+        let msg = panic_payload
+            .downcast_ref::<String>()
+            .map(|s| s.as_str())
+            .or_else(|| panic_payload.downcast_ref::<&'static str>().copied())
+            .unwrap_or("<non-string panic>");
+        assert!(
+            msg.contains("escalate-from-setup is forbidden"),
+            "expected escalate-from-setup panic message, got: {msg}"
+        );
     }
 }

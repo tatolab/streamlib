@@ -68,6 +68,15 @@ pub enum ProcessorInstance {
             Option<Arc<crate::iceoryx2::OutputWriterInner>>,
         iceoryx2_input_mailboxes_inner:
             Option<Arc<crate::iceoryx2::InputMailboxesInner>>,
+        /// `true` when the vtable's function pointers target a
+        /// cdylib's address space (loaded via `STREAMLIB_PLUGIN`);
+        /// `false` when they target the host's address space
+        /// (`register::<P>()`). Lifecycle dispatch
+        /// ([`Self::setup`] / [`Self::teardown`]) consults this to
+        /// pick the cdylib-shaped `ScopeToken` FullAccess wrap vs
+        /// the in-process Boxed dispatch — see the variant's doc
+        /// at [`super::RegistrationKind`].
+        cdylib_resident: bool,
     },
     /// Host-static dyn-trait registration. Used by subprocess host
     /// wrappers (Python / Deno) that register a `Box<dyn Fn>`
@@ -174,20 +183,110 @@ impl ProcessorInstance {
     }
 
     /// Run the processor's `setup` lifecycle.
+    ///
+    /// Dispatch shape depends on where the body's code lives:
+    /// - **`VTable { cdylib_resident: true }`** (loaded via
+    ///   `STREAMLIB_PLUGIN` dlopen): wraps the call in
+    ///   [`RuntimeContextFullAccess::with_cdylib_scope`] so the
+    ///   cdylib body's `ctx.gpu_full_access()` is `ScopeToken`-
+    ///   flavored and dispatches through the FullAccess vtable
+    ///   instead of tripping the Boxed branch's `host_inner` panic
+    ///   guard. Scope acquisition serializes against other
+    ///   privileged GPU work (same gate as in-process escalate)
+    ///   and ends with `wait_device_idle`.
+    /// - **`VTable { cdylib_resident: false }`** (in-process
+    ///   `register::<P>()`): serialize via
+    ///   `gpu_limited_access().escalate(|_| ...)`, matching the
+    ///   pre-#912 `processor_setup_lock` contract — the in-process
+    ///   body uses the Boxed FullAccess on `ctx` directly (no
+    ///   vtable hop) and the escalate wrap provides the gate +
+    ///   wait-idle. Using `with_cdylib_scope` for the in-process
+    ///   VTable case would hand the body a `ScopeToken` handle
+    ///   whose memory layout (a u64 serial) doesn't match
+    ///   `Box<Arc<GpuContext>>`, and any FullAccess method that
+    ///   reaches `host_inner()` without first matching `handle_kind`
+    ///   (e.g. `device()`) would execute UB instead of the expected
+    ///   direct deref.
+    /// - **`LegacyDyn`** (subprocess host wrappers — Python /
+    ///   TypeScript via `register_dynamic`): pure passthrough, no
+    ///   gate wrap. Subprocess host setup does no host-side GPU
+    ///   work — it spawns the child, constructs the bridge, sends a
+    ///   `setup` lifecycle, then blocks on the subprocess's `ready`
+    ///   reply. Wrapping that IPC wait in escalate would hold the
+    ///   gate against every escalate the subprocess issues during
+    ///   its own init — the bridge-reader thread dispatches each
+    ///   `escalate_request` inline through `sandbox.escalate(|full|
+    ///   ...)` and would deadlock on the same gate. Per-call
+    ///   bridge-handler escalates still acquire the gate + wait
+    ///   device idle on their own, so GPU-resource serialization
+    ///   is preserved (#867).
+    ///
+    /// For the wrapped variants the escalate gate is held for
+    /// exactly one nesting depth across the setup body, so a body
+    /// that itself calls `.escalate(...)` trips the gate's
+    /// same-thread re-entry panic instead of silently deadlocking.
     pub fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         match self {
-            Self::VTable { instance_ptr, vtable, .. } => {
-                Self::vtable_call_full(*instance_ptr, vtable.setup, ctx, "setup")
+            Self::VTable {
+                instance_ptr,
+                vtable,
+                cdylib_resident: true,
+                ..
+            } => {
+                let instance_ptr = *instance_ptr;
+                let setup_fn = vtable.setup;
+                ctx.with_cdylib_scope(|cdylib_ctx| {
+                    Self::vtable_call_full(instance_ptr, setup_fn, cdylib_ctx, "setup")
+                })
+            }
+            Self::VTable {
+                instance_ptr,
+                vtable,
+                cdylib_resident: false,
+                ..
+            } => {
+                let instance_ptr = *instance_ptr;
+                let setup_fn = vtable.setup;
+                let sandbox = ctx.gpu_limited_access().clone();
+                sandbox.escalate(|_full| {
+                    Self::vtable_call_full(instance_ptr, setup_fn, ctx, "setup")
+                })
             }
             Self::LegacyDyn(inner) => inner.__generated_setup(ctx),
         }
     }
 
     /// Run the processor's `teardown` lifecycle.
+    ///
+    /// Mirrors [`Self::setup`]'s variant-aware dispatch — see that
+    /// doc for the cdylib-resident vs in-process VTable vs
+    /// LegacyDyn shape rationale.
     pub fn teardown(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         match self {
-            Self::VTable { instance_ptr, vtable, .. } => {
-                Self::vtable_call_full(*instance_ptr, vtable.teardown, ctx, "teardown")
+            Self::VTable {
+                instance_ptr,
+                vtable,
+                cdylib_resident: true,
+                ..
+            } => {
+                let instance_ptr = *instance_ptr;
+                let teardown_fn = vtable.teardown;
+                ctx.with_cdylib_scope(|cdylib_ctx| {
+                    Self::vtable_call_full(instance_ptr, teardown_fn, cdylib_ctx, "teardown")
+                })
+            }
+            Self::VTable {
+                instance_ptr,
+                vtable,
+                cdylib_resident: false,
+                ..
+            } => {
+                let instance_ptr = *instance_ptr;
+                let teardown_fn = vtable.teardown;
+                let sandbox = ctx.gpu_limited_access().clone();
+                sandbox.escalate(|_full| {
+                    Self::vtable_call_full(instance_ptr, teardown_fn, ctx, "teardown")
+                })
             }
             Self::LegacyDyn(inner) => inner.__generated_teardown(ctx),
         }
@@ -224,21 +323,72 @@ impl ProcessorInstance {
     }
 
     /// Start a Manual-mode processor.
+    ///
+    /// Variant-aware dispatch matching the historical "FullAccess
+    /// in signature → direct access in body" contract for every
+    /// runtime variant:
+    /// - **`VTable { cdylib_resident: true }`**: wraps in
+    ///   [`RuntimeContextFullAccess::with_cdylib_scope`] so cdylib
+    ///   bodies see a `ScopeToken` FullAccess (direct access
+    ///   becomes vtable dispatch — no `host_inner()` panic).
+    /// - **`VTable { cdylib_resident: false }`** (in-process
+    ///   `register::<P>()`) and **`LegacyDyn`** (subprocess hosts):
+    ///   pure passthrough. Historical: start/stop were never
+    ///   gate-wrapped (thread_runner calls them directly), so adding
+    ///   a wrap here would change semantics for in-process bodies
+    ///   that legitimately escalate or do their own thread spawning.
+    ///   In-process bodies use `ctx.gpu_full_access()` directly
+    ///   (Boxed deref, host-only); subprocess host bodies do their
+    ///   own per-call gate management via the bridge handlers (#867
+    ///   contract).
     pub fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         match self {
-            Self::VTable { instance_ptr, vtable, .. } => {
-                Self::vtable_call_full(*instance_ptr, vtable.start, ctx, "start")
+            Self::VTable {
+                instance_ptr,
+                vtable,
+                cdylib_resident: true,
+                ..
+            } => {
+                let instance_ptr = *instance_ptr;
+                let start_fn = vtable.start;
+                ctx.with_cdylib_scope(|cdylib_ctx| {
+                    Self::vtable_call_full(instance_ptr, start_fn, cdylib_ctx, "start")
+                })
             }
+            Self::VTable {
+                instance_ptr,
+                vtable,
+                cdylib_resident: false,
+                ..
+            } => Self::vtable_call_full(*instance_ptr, vtable.start, ctx, "start"),
             Self::LegacyDyn(inner) => inner.start(ctx),
         }
     }
 
     /// Stop a Manual-mode processor.
+    ///
+    /// Mirrors [`Self::start`]'s variant-aware dispatch — see that
+    /// doc for the rationale.
     pub fn stop(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         match self {
-            Self::VTable { instance_ptr, vtable, .. } => {
-                Self::vtable_call_full(*instance_ptr, vtable.stop, ctx, "stop")
+            Self::VTable {
+                instance_ptr,
+                vtable,
+                cdylib_resident: true,
+                ..
+            } => {
+                let instance_ptr = *instance_ptr;
+                let stop_fn = vtable.stop;
+                ctx.with_cdylib_scope(|cdylib_ctx| {
+                    Self::vtable_call_full(instance_ptr, stop_fn, cdylib_ctx, "stop")
+                })
             }
+            Self::VTable {
+                instance_ptr,
+                vtable,
+                cdylib_resident: false,
+                ..
+            } => Self::vtable_call_full(*instance_ptr, vtable.stop, ctx, "stop"),
             Self::LegacyDyn(inner) => inner.stop(ctx),
         }
     }
@@ -609,8 +759,24 @@ enum RegistrationKind {
     /// (extern "C" wrappers landing in the cdylib's DSO) and
     /// inventory-registered host processors (extern "C" wrappers
     /// landing in the host's DSO).
+    ///
+    /// `cdylib_resident` distinguishes the two — `true` when the
+    /// vtable's function pointers target a cdylib's address space
+    /// (loaded via `STREAMLIB_PLUGIN` dlopen), `false` when they
+    /// target the host's address space (`register::<P>()`). The
+    /// lifecycle dispatch in [`ProcessorInstance::setup`] /
+    /// [`ProcessorInstance::teardown`] consults this flag to pick
+    /// between the cdylib-shaped `ScopeToken` FullAccess wrap and
+    /// the in-process Boxed FullAccess dispatch — only cdylib-
+    /// resident bodies need the vtable hop to dodge the
+    /// `host_inner()` panic guard. Mis-tagging an in-process
+    /// VTable as `cdylib_resident: true` would route its `device()`
+    /// (and other `host_inner()`-only) calls through an opaque
+    /// scope token whose memory layout doesn't match `Box<Arc<…>>`
+    /// — UB.
     VTable {
         vtable: &'static ProcessorVTable,
+        cdylib_resident: bool,
     },
     /// Box<dyn Fn> closure constructor — used for subprocess host
     /// wrappers via `register_dynamic`.
@@ -683,7 +849,10 @@ impl ProcessorInstanceFactory {
 
         let vtable = crate::core::plugin::processor_vtable::vtable_for::<P>();
 
-        if let Err(e) = self.register_via_vtable(descriptor, vtable) {
+        // In-process registration — vtable's function pointers
+        // target the host's address space; lifecycle dispatch uses
+        // the Boxed FullAccess directly (no FFI hop).
+        if let Err(e) = self.register_via_vtable(descriptor, vtable, /* cdylib_resident */ false) {
             tracing::warn!(
                 "Processor registration for {} failed: {}",
                 std::any::type_name::<P>(),
@@ -696,16 +865,25 @@ impl ProcessorInstanceFactory {
     /// structured ident. Idempotent on `(ident)` keys — a duplicate
     /// registration logs `debug!` and skips.
     ///
+    /// `cdylib_resident` is `true` when the vtable's function
+    /// pointers target a cdylib's address space (loaded via
+    /// `STREAMLIB_PLUGIN`) and `false` when they target the host's
+    /// address space (`register::<P>()`). The flag propagates onto
+    /// the [`ProcessorInstance::VTable`] variant so lifecycle
+    /// dispatch can pick the right FullAccess shape.
+    ///
     /// Used by:
     /// - `register::<P>()` (inventory + in-tree host-side
-    ///   registrations) — passes the vtable from `vtable_for::<P>()`.
+    ///   registrations) — passes the vtable from `vtable_for::<P>()`
+    ///   with `cdylib_resident: false`.
     /// - The cdylib-bridge `processor_register` callback in
     ///   `core::plugin::host_services` — passes the cdylib's
-    ///   `&'static ProcessorVTable`.
+    ///   `&'static ProcessorVTable` with `cdylib_resident: true`.
     pub fn register_via_vtable(
         &self,
         descriptor: ProcessorDescriptor,
         vtable: &'static ProcessorVTable,
+        cdylib_resident: bool,
     ) -> Result<()> {
         let type_name = descriptor.name.clone();
 
@@ -753,7 +931,10 @@ impl ProcessorInstanceFactory {
                 );
                 return Ok(());
             }
-            registrations.insert(type_name.clone(), RegistrationKind::VTable { vtable });
+            registrations.insert(
+                type_name.clone(),
+                RegistrationKind::VTable { vtable, cdylib_resident },
+            );
         }
 
         tracing::info!("[register] new processor type registered '{}'", type_name);
@@ -931,7 +1112,7 @@ impl ProcessorInstanceFactory {
         })?;
 
         match registration {
-            RegistrationKind::VTable { vtable } => {
+            RegistrationKind::VTable { vtable, cdylib_resident } => {
                 // Serialize node.config (serde_json::Value) to msgpack
                 // for the cdylib's construct fn to deserialize into
                 // P::Config.
@@ -971,6 +1152,7 @@ impl ProcessorInstanceFactory {
                     any_placeholder: (),
                     iceoryx2_output_writer_inner: None,
                     iceoryx2_input_mailboxes_inner: None,
+                    cdylib_resident: *cdylib_resident,
                 };
                 // Issue #894: host-allocates iceoryx2 inner Arcs +
                 // hands the cdylib opaque (handle, vtable) β-shapes

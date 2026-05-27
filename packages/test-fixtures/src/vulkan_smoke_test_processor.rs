@@ -111,63 +111,69 @@ fn run_smoke(
     width: u32,
     height: u32,
 ) -> Result<u64> {
-    ctx.gpu_limited_access().escalate(|full| {
-        let host_device = full.host_vulkan_device_arc()?;
-        let stream_texture = full.acquire_render_target_dma_buf_image(
-            width,
-            height,
-            TextureFormat::Bgra8Unorm,
-        )?;
-        let texture_arc = stream_texture.host_vulkan_texture_arc()?;
+    // Manual-mode start() takes FullAccess directly; the engine
+    // wraps cdylib lifecycle dispatch in `with_cdylib_scope` (#1075),
+    // so `ctx.gpu_full_access()` is `ScopeToken`-flavored and
+    // dispatches through the FullAccess vtable transparently.
+    // Same coverage as the pre-#1075 escalate path; the wrap is the
+    // engine-side replacement for the explicit `.escalate(|full|...)`.
+    let full = ctx.gpu_full_access();
 
-        let timeline = HostVulkanTimelineSemaphore::new(host_device.device(), 0)
-            .map_err(|e| {
-                Error::GpuError(format!("HostVulkanTimelineSemaphore::new: {e}"))
-            })?;
-        let timeline_arc = Arc::new(timeline);
+    let host_device = full.host_vulkan_device_arc()?;
+    let stream_texture = full.acquire_render_target_dma_buf_image(
+        width,
+        height,
+        TextureFormat::Bgra8Unorm,
+    )?;
+    let texture_arc = stream_texture.host_vulkan_texture_arc()?;
 
-        let adapter = Arc::new(VulkanSurfaceAdapter::new(Arc::clone(&host_device)));
-        adapter
-            .register_host_surface(
-                surface_id,
-                HostSurfaceRegistration {
-                    texture: Arc::clone(&texture_arc),
-                    timeline: Arc::clone(&timeline_arc),
-                    initial_layout: VulkanLayout::UNDEFINED,
-                },
-            )
-            .map_err(|e| {
-                Error::GpuError(format!(
-                    "VulkanSurfaceAdapter::register_host_surface: {e:?}"
-                ))
-            })?;
+    let timeline = HostVulkanTimelineSemaphore::new(host_device.device(), 0)
+        .map_err(|e| {
+            Error::GpuError(format!("HostVulkanTimelineSemaphore::new: {e}"))
+        })?;
+    let timeline_arc = Arc::new(timeline);
 
-        let surface = StreamlibSurface::new(
+    let adapter = Arc::new(VulkanSurfaceAdapter::new(Arc::clone(&host_device)));
+    adapter
+        .register_host_surface(
             surface_id,
-            width,
-            height,
-            SurfaceFormat::Bgra8,
-            SurfaceUsage::RENDER_TARGET | SurfaceUsage::SAMPLED,
-            SurfaceTransportHandle::empty(),
-            SurfaceSyncState::default(),
-        );
-        let guard = adapter.acquire_write(&surface).map_err(|e| {
+            HostSurfaceRegistration {
+                texture: Arc::clone(&texture_arc),
+                timeline: Arc::clone(&timeline_arc),
+                initial_layout: VulkanLayout::UNDEFINED,
+            },
+        )
+        .map_err(|e| {
             Error::GpuError(format!(
-                "VulkanSurfaceAdapter::acquire_write: {e:?}"
+                "VulkanSurfaceAdapter::register_host_surface: {e:?}"
             ))
         })?;
-        let view = guard.view();
-        let vk_image_raw = view.vk_image().0;
-        if vk_image_raw == 0 {
-            return Err(Error::GpuError(
-                "vk_image() returned a null handle".into(),
-            ));
-        }
-        drop(guard);
-        drop(adapter);
-        drop(timeline_arc);
-        drop(texture_arc);
 
-        Ok(vk_image_raw)
-    })
+    let surface = StreamlibSurface::new(
+        surface_id,
+        width,
+        height,
+        SurfaceFormat::Bgra8,
+        SurfaceUsage::RENDER_TARGET | SurfaceUsage::SAMPLED,
+        SurfaceTransportHandle::empty(),
+        SurfaceSyncState::default(),
+    );
+    let guard = adapter.acquire_write(&surface).map_err(|e| {
+        Error::GpuError(format!(
+            "VulkanSurfaceAdapter::acquire_write: {e:?}"
+        ))
+    })?;
+    let view = guard.view();
+    let vk_image_raw = view.vk_image().0;
+    if vk_image_raw == 0 {
+        return Err(Error::GpuError(
+            "vk_image() returned a null handle".into(),
+        ));
+    }
+    drop(guard);
+    drop(adapter);
+    drop(timeline_arc);
+    drop(texture_arc);
+
+    Ok(vk_image_raw)
 }

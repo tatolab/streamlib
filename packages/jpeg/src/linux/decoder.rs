@@ -42,11 +42,16 @@ impl streamlib::sdk::processors::ReactiveProcessor for JpegDecoderProcessor::Pro
         let max_width = self.config.max_width.unwrap_or(DEFAULT_MAX_WIDTH);
         let max_height = self.config.max_height.unwrap_or(DEFAULT_MAX_HEIGHT);
 
-        // setup() is already called inside the runtime's processor-setup
-        // mutex (the spawn op "escalates via setup mutex" before invoking
-        // setup), so `ctx.gpu_full_access()` is the privileged handle —
-        // calling `gpu_limited_access().escalate(...)` here would deadlock
-        // by re-acquiring the same mutex from the same thread.
+        // setup() runs inside the engine's privileged lifecycle dispatch
+        // (`ProcessorInstance::setup`), so `ctx.gpu_full_access()` is
+        // already privileged in both cdylib and in-process modes (cdylib
+        // bodies see a ScopeToken-shaped FullAccess routed through the
+        // FullAccess vtable; in-process bodies see the Boxed FullAccess
+        // dispatched directly). Calling `gpu_limited_access().escalate(...)`
+        // here would re-enter the escalate gate on the same thread and
+        // trip the gate's same-thread re-entry panic (see
+        // `EscalateGate`'s type doc — the historical sandbox contract
+        // forbids escalate-from-setup).
         let decoder = SimpleJpegDecoder::new(ctx.gpu_full_access(), max_width, max_height)?;
 
         tracing::info!(

@@ -17,6 +17,7 @@ pub mod build_plugins;
 pub mod check_boundaries;
 pub mod check_cdylib_reach;
 pub mod check_consumer_rhi_repr;
+pub mod check_no_escalate_in_lifecycle;
 pub mod check_no_inventory_submit;
 pub mod check_no_reverse_dns;
 pub mod check_no_streamlib_metadata;
@@ -119,6 +120,16 @@ enum Commands {
     /// documented at `docs/architecture/cdylib-reachability.md`.
     CheckCdylibReach,
 
+    /// CI gate for the escalate-from-lifecycle ban (anti-pattern #1
+    /// in `docs/architecture/cdylib-reachability.md`). Fails when
+    /// any fn taking `&RuntimeContextFullAccess<'_>` (typically
+    /// `setup` / `teardown` / `setup_inner` / `teardown_inner`) calls
+    /// `.escalate(...)` in its body. The lifecycle dispatch already
+    /// holds the escalate gate; re-entry panics at runtime via
+    /// `EscalateGate::enter`. The xtask is defense-in-depth — catches
+    /// the violation at PR review before the runtime panic fires.
+    CheckNoEscalateInLifecycle,
+
     /// CI gate for issue #1039's consumer-rhi `#[repr(...)]` discipline.
     /// Fails when any `pub enum` in `libs/streamlib-consumer-rhi/src/`
     /// is missing an explicit `#[repr(...)]`, or when any
@@ -200,6 +211,9 @@ fn main() -> Result<()> {
         Commands::CheckNoInventorySubmit => check_no_inventory_submit::run(&workspace_root()?)?,
         Commands::CheckProcessorSpecNew => check_processor_spec_new::run(&workspace_root()?)?,
         Commands::CheckCdylibReach => check_cdylib_reach::run(&workspace_root()?)?,
+        Commands::CheckNoEscalateInLifecycle => {
+            check_no_escalate_in_lifecycle::run(&workspace_root()?)?
+        }
         Commands::CheckConsumerRhiRepr => {
             check_consumer_rhi_repr::run(&workspace_root()?)?
         }

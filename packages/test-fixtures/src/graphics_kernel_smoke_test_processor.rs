@@ -128,50 +128,56 @@ fn run_graphics_kernel_smoke(ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         .acquire_texture(&pool_descriptor)
         .map_err(|e| Error::Runtime(format!("acquire_texture: {e}")))?;
 
-    let kernel = gpu_limited
-        .escalate(|full| {
-            let stages = [
-                GraphicsStage {
-                    stage: GraphicsShaderStage::Vertex,
-                    spv: SMOKE_VERT_SPV,
-                    entry_point: "main",
-                },
-                GraphicsStage {
-                    stage: GraphicsShaderStage::Fragment,
-                    spv: SMOKE_FRAG_SPV,
-                    entry_point: "main",
-                },
-            ];
-            let pipeline_state = GraphicsPipelineState {
-                topology: PrimitiveTopology::TriangleList,
-                vertex_input: VertexInputState::None,
-                rasterization: RasterizationState::default(),
-                multisample: MultisampleState::default(),
-                depth_stencil: DepthStencilState::Disabled,
-                color_blend: ColorBlendState::Disabled {
-                    color_write_mask: ColorWriteMask::RGBA,
-                },
-                attachment_formats: AttachmentFormats {
-                    color: vec![TextureFormat::Rgba8Unorm],
-                    depth: None,
-                },
-                dynamic_state: GraphicsDynamicState::ViewportScissor,
-            };
-            let descriptor = GraphicsKernelDescriptor {
-                label: "graphics_kernel_smoke",
-                stages: &stages,
-                bindings: SMOKE_BINDINGS,
-                push_constants: GraphicsPushConstants {
-                    size: SMOKE_PUSH_CONSTANT_SIZE,
-                    stages: GraphicsShaderStageFlags::VERTEX
-                        | GraphicsShaderStageFlags::FRAGMENT,
-                },
-                pipeline_state,
-                descriptor_sets_in_flight: 1,
-            };
-            full.create_graphics_kernel(&descriptor)
-        })
-        .map_err(|e| Error::Runtime(format!("create_graphics_kernel: {e}")))?;
+    // Manual-mode start() takes FullAccess directly; the engine
+    // wraps cdylib lifecycle dispatch in `with_cdylib_scope` (#1075),
+    // so `ctx.gpu_full_access()` is `ScopeToken`-flavored and
+    // dispatches through the FullAccess vtable transparently.
+    // Same coverage as the pre-#1075 escalate path; the wrap is the
+    // engine-side replacement for the explicit `.escalate(|full|...)`.
+    let full = ctx.gpu_full_access();
+    let kernel = {
+        let stages = [
+            GraphicsStage {
+                stage: GraphicsShaderStage::Vertex,
+                spv: SMOKE_VERT_SPV,
+                entry_point: "main",
+            },
+            GraphicsStage {
+                stage: GraphicsShaderStage::Fragment,
+                spv: SMOKE_FRAG_SPV,
+                entry_point: "main",
+            },
+        ];
+        let pipeline_state = GraphicsPipelineState {
+            topology: PrimitiveTopology::TriangleList,
+            vertex_input: VertexInputState::None,
+            rasterization: RasterizationState::default(),
+            multisample: MultisampleState::default(),
+            depth_stencil: DepthStencilState::Disabled,
+            color_blend: ColorBlendState::Disabled {
+                color_write_mask: ColorWriteMask::RGBA,
+            },
+            attachment_formats: AttachmentFormats {
+                color: vec![TextureFormat::Rgba8Unorm],
+                depth: None,
+            },
+            dynamic_state: GraphicsDynamicState::ViewportScissor,
+        };
+        let descriptor = GraphicsKernelDescriptor {
+            label: "graphics_kernel_smoke",
+            stages: &stages,
+            bindings: SMOKE_BINDINGS,
+            push_constants: GraphicsPushConstants {
+                size: SMOKE_PUSH_CONSTANT_SIZE,
+                stages: GraphicsShaderStageFlags::VERTEX
+                    | GraphicsShaderStageFlags::FRAGMENT,
+            },
+            pipeline_state,
+            descriptor_sets_in_flight: 1,
+        };
+        full.create_graphics_kernel(&descriptor)
+            .map_err(|e| Error::Runtime(format!("create_graphics_kernel: {e}")))?
+    };
 
     let variant: u32 = 0;
     kernel

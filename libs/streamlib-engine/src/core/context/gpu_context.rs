@@ -2676,7 +2676,16 @@ impl GpuContextFullAccess {
             panic!(
                 "GpuContextFullAccess::host_inner() reached from cdylib code; \
                  this method must dispatch through the GpuContextFullAccessVTable. \
-                 The panic is caught by run_host_extern_c at the FFI boundary."
+                 The panic is caught by run_host_extern_c at the FFI boundary. \
+                 \
+                 Read docs/architecture/cdylib-reachability.md before workarounds — \
+                 the right pattern depends on the lifecycle stage and the type \
+                 shape. For setup()/teardown() bodies, ctx.gpu_full_access() now \
+                 dispatches through the vtable (Pattern 1, #1072). For accessor \
+                 returns, see β-shape Arc-transit slots (Pattern 2). For per- \
+                 method binding work, see per-method vtable slots (Pattern 3). \
+                 DO NOT call gpu_limited_access().escalate(...) from setup() / \
+                 teardown() — the gate is already held and re-entry panics."
             );
         }
         // SAFETY: `self.handle` was produced by `Self::new`, which

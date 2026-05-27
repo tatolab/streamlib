@@ -121,83 +121,88 @@ fn run_smoke(
 ) -> Result<SmokeOutcome> {
     use streamlib::sdk::engine::host_rhi::HostMarker;
 
-    ctx.gpu_limited_access().escalate(|full| {
-        let host_device = full.host_vulkan_device_arc()?;
+    // Manual-mode start() takes FullAccess directly; the engine
+    // wraps cdylib lifecycle dispatch in `with_cdylib_scope` (#1075),
+    // so `ctx.gpu_full_access()` is `ScopeToken`-flavored and
+    // dispatches through the FullAccess vtable transparently.
+    // Same coverage as the pre-#1075 escalate path; the wrap is the
+    // engine-side replacement for the explicit `.escalate(|full|...)`.
+    let full = ctx.gpu_full_access();
+    let host_device = full.host_vulkan_device_arc()?;
 
-        // Probe OPAQUE_FD availability before allocating.
-        if host_device.opaque_fd_buffer_pool().is_none() {
-            return Ok(SmokeOutcome::SkipOpaqueFd(
-                "device does not expose OPAQUE_FD HOST_VISIBLE buffer pool".into(),
-            ));
-        }
+    // Probe OPAQUE_FD availability before allocating.
+    if host_device.opaque_fd_buffer_pool().is_none() {
+        return Ok(SmokeOutcome::SkipOpaqueFd(
+            "device does not expose OPAQUE_FD HOST_VISIBLE buffer pool".into(),
+        ));
+    }
 
-        let staging_bytes = (width as u64) * (height as u64) * 4u64;
-        let staging = HostVulkanBuffer::new_opaque_fd_export(
-            &host_device,
-            staging_bytes,
-        )
-        .map_err(|e| {
-            Error::GpuError(format!(
-                "HostVulkanBuffer::new_opaque_fd_export: {e}"
-            ))
-        })?;
-        let staging_arc = Arc::new(staging);
+    let staging_bytes = (width as u64) * (height as u64) * 4u64;
+    let staging = HostVulkanBuffer::new_opaque_fd_export(
+        &host_device,
+        staging_bytes,
+    )
+    .map_err(|e| {
+        Error::GpuError(format!(
+            "HostVulkanBuffer::new_opaque_fd_export: {e}"
+        ))
+    })?;
+    let staging_arc = Arc::new(staging);
 
-        let timeline = HostVulkanTimelineSemaphore::new_exportable(
-            host_device.device(),
-            0,
-        )
-        .map_err(|e| {
-            Error::GpuError(format!(
-                "HostVulkanTimelineSemaphore::new_exportable: {e}"
-            ))
-        })?;
-        let timeline_arc = Arc::new(timeline);
+    let timeline = HostVulkanTimelineSemaphore::new_exportable(
+        host_device.device(),
+        0,
+    )
+    .map_err(|e| {
+        Error::GpuError(format!(
+            "HostVulkanTimelineSemaphore::new_exportable: {e}"
+        ))
+    })?;
+    let timeline_arc = Arc::new(timeline);
 
-        let adapter = Arc::new(CudaSurfaceAdapter::new(Arc::clone(&host_device)));
-        adapter
-            .register_host_surface(
-                surface_id,
-                HostSurfaceRegistration::<HostMarker> {
-                    pixel_buffer: Arc::clone(&staging_arc),
-                    timeline: Arc::clone(&timeline_arc),
-                    initial_layout: VulkanLayout::UNDEFINED,
-                },
-            )
-            .map_err(|e| {
-                Error::GpuError(format!(
-                    "CudaSurfaceAdapter::register_host_surface: {e:?}"
-                ))
-            })?;
-
-        let surface = StreamlibSurface::new(
+    let adapter = Arc::new(CudaSurfaceAdapter::new(Arc::clone(&host_device)));
+    adapter
+        .register_host_surface(
             surface_id,
-            width,
-            height,
-            SurfaceFormat::Bgra8,
-            SurfaceUsage::SAMPLED,
-            SurfaceTransportHandle::empty(),
-            SurfaceSyncState::default(),
-        );
-        let guard = adapter.acquire_write(&surface).map_err(|e| {
+            HostSurfaceRegistration::<HostMarker> {
+                pixel_buffer: Arc::clone(&staging_arc),
+                timeline: Arc::clone(&timeline_arc),
+                initial_layout: VulkanLayout::UNDEFINED,
+            },
+        )
+        .map_err(|e| {
             Error::GpuError(format!(
-                "CudaSurfaceAdapter::acquire_write: {e:?}"
+                "CudaSurfaceAdapter::register_host_surface: {e:?}"
             ))
         })?;
-        let view = guard.view();
-        // `vk::Buffer` displays as `Handle(0x<hex>)`; format via Debug
-        // to avoid pulling vulkanalia into the test-fixtures crate.
-        let vk_buffer_debug = format!("{:?}", view.vk_buffer());
-        if vk_buffer_debug.contains("0x0)") || vk_buffer_debug.ends_with("(0)") {
-            return Err(Error::GpuError(format!(
-                "vk_buffer() returned a null handle: {vk_buffer_debug}"
-            )));
-        }
-        drop(guard);
-        drop(adapter);
-        drop(timeline_arc);
-        drop(staging_arc);
 
-        Ok(SmokeOutcome::Ok(vk_buffer_debug))
-    })
+    let surface = StreamlibSurface::new(
+        surface_id,
+        width,
+        height,
+        SurfaceFormat::Bgra8,
+        SurfaceUsage::SAMPLED,
+        SurfaceTransportHandle::empty(),
+        SurfaceSyncState::default(),
+    );
+    let guard = adapter.acquire_write(&surface).map_err(|e| {
+        Error::GpuError(format!(
+            "CudaSurfaceAdapter::acquire_write: {e:?}"
+        ))
+    })?;
+    let view = guard.view();
+    // `vk::Buffer` displays as `Handle(0x<hex>)`; format via Debug
+    // to avoid pulling vulkanalia into the test-fixtures crate.
+    let vk_buffer_debug = format!("{:?}", view.vk_buffer());
+    if vk_buffer_debug.contains("0x0)") || vk_buffer_debug.ends_with("(0)") {
+        return Err(Error::GpuError(format!(
+            "vk_buffer() returned a null handle: {vk_buffer_debug}"
+        )));
+    }
+    drop(guard);
+    drop(adapter);
+    drop(timeline_arc);
+    drop(staging_arc);
+
+    Ok(SmokeOutcome::Ok(vk_buffer_debug))
 }

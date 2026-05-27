@@ -117,116 +117,122 @@ fn run_smoke(
     width: u32,
     height: u32,
 ) -> Result<()> {
-    ctx.gpu_limited_access().escalate(|full| {
-        // Step 1: allocate texture + exportable timeline (the resource
-        // pair both registration paths bind to).
-        let host_device = full.host_vulkan_device_arc()?;
-        let texture = full.acquire_render_target_dma_buf_image(
-            width,
-            height,
-            TextureFormat::Bgra8Unorm,
-        )?;
-        let timeline = HostVulkanTimelineSemaphore::new_exportable(
-            host_device.device(),
-            0,
+    // Manual-mode start() takes FullAccess directly; the engine
+    // wraps cdylib lifecycle dispatch in `with_cdylib_scope` (#1075),
+    // so `ctx.gpu_full_access()` is `ScopeToken`-flavored and
+    // dispatches through the FullAccess vtable transparently.
+    // Same coverage as the pre-#1075 escalate path; the wrap is the
+    // engine-side replacement for the explicit `.escalate(|full|...)`.
+    let full = ctx.gpu_full_access();
+
+    // Step 1: allocate texture + exportable timeline (the resource
+    // pair both registration paths bind to).
+    let host_device = full.host_vulkan_device_arc()?;
+    let texture = full.acquire_render_target_dma_buf_image(
+        width,
+        height,
+        TextureFormat::Bgra8Unorm,
+    )?;
+    let timeline = HostVulkanTimelineSemaphore::new_exportable(
+        host_device.device(),
+        0,
+    )
+    .map_err(|e| {
+        Error::GpuError(format!(
+            "HostVulkanTimelineSemaphore::new_exportable: {e}"
+        ))
+    })?;
+
+    // Step 2: register via the cross-process (surface-share daemon)
+    // channel.
+    let store = full
+        .surface_store()
+        .ok_or_else(|| Error::GpuError("surface_store unavailable".into()))?;
+    store
+        .register_texture(
+            surface_id,
+            &texture,
+            Some(&timeline),
+            VulkanLayout::UNDEFINED,
         )
         .map_err(|e| {
             Error::GpuError(format!(
-                "HostVulkanTimelineSemaphore::new_exportable: {e}"
+                "surface_store.register_texture: {e}"
             ))
         })?;
 
-        // Step 2: register via the cross-process (surface-share daemon)
-        // channel.
-        let store = full
-            .surface_store()
-            .ok_or_else(|| Error::GpuError("surface_store unavailable".into()))?;
-        store
-            .register_texture(
-                surface_id,
-                &texture,
-                Some(&timeline),
-                VulkanLayout::UNDEFINED,
-            )
-            .map_err(|e| {
-                Error::GpuError(format!(
-                    "surface_store.register_texture: {e}"
-                ))
-            })?;
+    // Step 3: dual-register via the in-process texture_cache
+    // channel so the Path-1 resolve below hits the fast path.
+    // Cloning the Texture β-shape bumps the underlying
+    // Arc<TextureInner> via the LimitedAccess `clone_texture` slot.
+    let texture_cache_clone = texture.clone();
+    full.register_texture_with_layout(
+        surface_id,
+        texture_cache_clone,
+        VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+    );
 
-        // Step 3: dual-register via the in-process texture_cache
-        // channel so the Path-1 resolve below hits the fast path.
-        // Cloning the Texture β-shape bumps the underlying
-        // Arc<TextureInner> via the LimitedAccess `clone_texture` slot.
-        let texture_cache_clone = texture.clone();
-        full.register_texture_with_layout(
+    // Step 4: resolve via the in-process / escalate-IPC path.
+    // Returns a TextureRegistration handle the cdylib never mutates;
+    // we just verify the call succeeds. `texture_layout=None`
+    // tells the resolver to read the producer's published layout
+    // from the registration rather than override per-frame.
+    let _registration = full
+        .resolve_texture_registration_by_surface_id(
             surface_id,
-            texture_cache_clone,
-            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
-        );
+            None,
+            width,
+            height,
+        )
+        .map_err(|e| {
+            Error::GpuError(format!(
+                "resolve_texture_registration_by_surface_id: {e}"
+            ))
+        })?;
 
-        // Step 4: resolve via the in-process / escalate-IPC path.
-        // Returns a TextureRegistration handle the cdylib never mutates;
-        // we just verify the call succeeds. `texture_layout=None`
-        // tells the resolver to read the producer's published layout
-        // from the registration rather than override per-frame.
-        let _registration = full
-            .resolve_texture_registration_by_surface_id(
-                surface_id,
-                None,
-                width,
-                height,
-            )
-            .map_err(|e| {
-                Error::GpuError(format!(
-                    "resolve_texture_registration_by_surface_id: {e}"
-                ))
-            })?;
+    // Step 5: look up via the cross-process (surface-share daemon)
+    // path. Returns a fresh Texture β-shape over the same imported
+    // VkImage. Both texture handles release on scope exit; the
+    // host-side Arcs drop in inverse-construction order.
+    let (looked_up_texture, looked_up_layout) =
+        store.lookup_texture(surface_id).map_err(|e| {
+            Error::GpuError(format!(
+                "surface_store.lookup_texture: {e}"
+            ))
+        })?;
+    // Sanity: the looked-up texture's dimensions must agree with
+    // the original — locks the dimensions half of the round-trip
+    // wire format.
+    if looked_up_texture.width() != width
+        || looked_up_texture.height() != height
+    {
+        return Err(Error::GpuError(format!(
+            "lookup_texture returned mismatched dimensions: \
+             expected {width}x{height}, got {}x{}",
+            looked_up_texture.width(),
+            looked_up_texture.height()
+        )));
+    }
+    // And the layout — locks the layout half of the wire format.
+    // The producer registered `VulkanLayout::UNDEFINED`; the
+    // daemon round-trips the raw `i32` enumerant through msgpack
+    // and the consumer-side wrapper decodes it back.
+    if looked_up_layout != VulkanLayout::UNDEFINED {
+        return Err(Error::GpuError(format!(
+            "lookup_texture returned mismatched layout: \
+             expected UNDEFINED (0), got {:?}",
+            looked_up_layout
+        )));
+    }
 
-        // Step 5: look up via the cross-process (surface-share daemon)
-        // path. Returns a fresh Texture β-shape over the same imported
-        // VkImage. Both texture handles release on scope exit; the
-        // host-side Arcs drop in inverse-construction order.
-        let (looked_up_texture, looked_up_layout) =
-            store.lookup_texture(surface_id).map_err(|e| {
-                Error::GpuError(format!(
-                    "surface_store.lookup_texture: {e}"
-                ))
-            })?;
-        // Sanity: the looked-up texture's dimensions must agree with
-        // the original — locks the dimensions half of the round-trip
-        // wire format.
-        if looked_up_texture.width() != width
-            || looked_up_texture.height() != height
-        {
-            return Err(Error::GpuError(format!(
-                "lookup_texture returned mismatched dimensions: \
-                 expected {width}x{height}, got {}x{}",
-                looked_up_texture.width(),
-                looked_up_texture.height()
-            )));
-        }
-        // And the layout — locks the layout half of the wire format.
-        // The producer registered `VulkanLayout::UNDEFINED`; the
-        // daemon round-trips the raw `i32` enumerant through msgpack
-        // and the consumer-side wrapper decodes it back.
-        if looked_up_layout != VulkanLayout::UNDEFINED {
-            return Err(Error::GpuError(format!(
-                "lookup_texture returned mismatched layout: \
-                 expected UNDEFINED (0), got {:?}",
-                looked_up_layout
-            )));
-        }
+    // All five legs succeeded. Drop everything explicitly so the
+    // host-side Arc refcounts drain before returning rather than at
+    // processor stop.
+    drop(looked_up_texture);
+    drop(_registration);
+    drop(texture);
+    drop(timeline);
+    drop(host_device);
 
-        // All five legs succeeded. Drop everything explicitly so the
-        // host-side Arc refcounts drain inside the escalate closure
-        // rather than at processor stop.
-        drop(looked_up_texture);
-        drop(_registration);
-        drop(texture);
-        drop(timeline);
-        drop(host_device);
-
-        Ok(())
-    })
+    Ok(())
 }
