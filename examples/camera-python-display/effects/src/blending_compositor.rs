@@ -16,15 +16,14 @@
 //!
 //! Layer order (bottom → top): video → lower_third → watermark → PiP.
 //!
-//! Linux-only. The pre-RHI macOS Metal path was removed in #485 when
-//! the compositor was rewritten on the graphics-kernel + texture-cache
-//! RHI; supporting it would have required parallel adapter machinery
-//! that does not exist outside the engine today.
+//! Linux-only. The macOS Metal path was retired when the compositor
+//! moved onto the graphics-kernel + texture-cache RHI; supporting it
+//! would have required parallel adapter machinery that does not exist
+//! outside the engine today.
 //!
 //! The kernel wrapper itself ([`SandboxedBlendingCompositor`]) lives
 //! in `blending_compositor_kernel.rs` — see that file's module-level
-//! doc for why it lives in the example and not the engine, and for
-//! the link to RDG (#631) which absorbs it when ready.
+//! doc for why it lives in the example and not the engine.
 
 #![cfg(target_os = "linux")]
 
@@ -50,8 +49,8 @@ use crate::_generated_::tatolab__core::color_info::{Matrix, Primaries, Range, Tr
 use crate::_generated_::{ColorInfo, VideoFrame};
 
 // Sandboxed kernel wrapper — see `blending_compositor_kernel.rs` for
-// the transitional rationale (this kernel previously lived in the
-// engine pre-#487, migrates into RDG (#631) when that lands).
+// the rationale (sandboxed scenario content rides the engine RHI's
+// cdylib-safe surfaces).
 use crate::blending_compositor_kernel::{
     BlendingCompositorInputs, BlendingLayer, BlendingOutput, SandboxedBlendingCompositor,
 };

@@ -11,14 +11,11 @@
 //! - Vignette (edge darkening)
 //! - Heavy animated film grain (moving noise)
 //!
-//! Pre-#487 this processor cross-compiled with a macOS Metal vertex+
-//! fragment path; the pre-#485 macOS pipeline could not consume the
-//! tiled DMA-BUF VkImages every modern producer in this example
-//! emits, so the macOS path was struck wholesale and the processor
-//! is now Linux-only. The kernel wrapper itself
-//! ([`SandboxedCrtFilmGrain`]) lives in `crt_film_grain_kernel.rs` —
-//! see that file's module-level doc for the transitional rationale
-//! and the migration path to RDG (#631).
+//! Linux-only — the tiled DMA-BUF `VkImage`s every modern producer in
+//! this example emits aren't consumable by a macOS Metal vertex+
+//! fragment path. The kernel wrapper itself ([`SandboxedCrtFilmGrain`])
+//! lives in `crt_film_grain_kernel.rs` — see that file's module-level
+//! doc for why it lives in the example and not the engine.
 
 #![cfg(target_os = "linux")]
 

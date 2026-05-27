@@ -8,13 +8,11 @@
 //!
 //! The two graphics-kernel wrappers in this crate
 //! (`blending_compositor.rs`, `crt_film_grain.rs`) are sandboxed
-//! scenario content for the camera-python-display demo. The wrappers
-//! hand-roll synchronous fence-blocked dispatch with internal
-//! layout-barrier management — a pattern the engine deliberately
-//! doesn't expose because it's wrong-shape for production hot-paths.
-//! When RDG ships and absorbs the wrappers into render-graph passes,
-//! this crate (along with the transitional `vulkanalia` dep and the
-//! boundary-check allowlist exception) goes away.
+//! scenario content for the camera-python-display demo. Each wrapper
+//! drives its dispatch through the engine RHI's cdylib-safe
+//! `VulkanGraphicsKernel::offscreen_render` + `RhiCommandRecorder`
+//! surfaces, so this crate stays inside the boundary-check rule —
+//! no `vulkanalia` dep, no allowlist exception.
 //!
 //! `lib.rs` embeds the resulting SPIR-V via
 //! `include_bytes!(concat!(env!("OUT_DIR"), …))`.

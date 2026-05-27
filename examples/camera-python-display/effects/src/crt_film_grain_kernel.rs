@@ -6,15 +6,14 @@
 //!
 //! ## Why this lives in the example, not the engine
 //!
-//! Pre-#487 this kernel and its compute shader (storage-buffer in/out,
-//! manual bilinear sampling, packed-BGRA uint addressing) lived in
-//! `libs/streamlib/src/vulkan/rhi/`. That placement encoded a single
-//! demo's app content (Blade Runner CRT vibe) into the engine. Real
-//! renderers use a render graph that schedules barriers across passes
-//! and lets the CPU race ahead 1–2 frames; the synchronous-blocking
-//! shape of a per-frame "dispatch" helper stalls the CPU every frame,
-//! which is why production engines (UE5, Bevy, Granite, wgpu)
-//! deliberately don't ship one.
+//! This kernel and its shaders are sandboxed scenario content — the
+//! Blade Runner CRT vibe is baked into the fragment shader, so it
+//! doesn't belong in the engine. Real renderers use a render graph
+//! that schedules barriers across passes and lets the CPU race
+//! ahead 1–2 frames; the synchronous-blocking shape of a per-frame
+//! "dispatch" helper stalls the CPU every frame, which is why
+//! production engines (UE5, Bevy, Granite, wgpu) deliberately don't
+//! ship one.
 //!
 //! ## Engine surfaces this rides
 //!
