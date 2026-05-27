@@ -539,15 +539,15 @@ pub const RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 ///   the asymmetry would force the next "first indexed-draw cdylib
 ///   consumer" to re-derive the same engine work mid-task. Same
 ///   wire shape as `record_draw` but takes a `DrawIndexedCallRepr`.
-/// - v5: #1065 — appends `submit` and `submit_and_wait` (siblings
-///   of v1 `submit_signaling_timeline`). `RhiToneMapper::apply_with_layouts`
+/// - v5: appends `submit` and `submit_and_wait` (siblings of v1
+///   `submit_signaling_timeline`). `RhiToneMapper::apply_with_layouts`
 ///   creates its own recorder + calls `submit_and_wait()`; when
 ///   engine SDK code that reaches the tone-mapper is compiled into
-///   a cdylib (the `camera-python-display-effects`
-///   `BlendingCompositor::normalize_layer` path is the first
-///   in-tree consumer), the bare-submit calls trip the recorder's
-///   `host_inner_mut()` panic guard. Same wire shape as
-///   `submit_signaling_timeline` minus the timeline parameters.
+///   a cdylib (the per-input working-space conversion path in
+///   graphics-kernel wrappers is the first in-tree consumer), the
+///   bare-submit calls trip the recorder's `host_inner_mut()`
+///   panic guard. Same wire shape as `submit_signaling_timeline`
+///   minus the timeline parameters.
 pub const RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 5;
 
 /// Layout version of [`OutputWriterVTable`].
@@ -6182,7 +6182,7 @@ mod layout_tests {
             offset_of!(RhiCommandRecorderMethodsVTable, record_draw_indexed),
             112
         );
-        // v5 entries (#1065).
+        // v5 entries.
         assert_eq!(
             offset_of!(RhiCommandRecorderMethodsVTable, submit),
             120

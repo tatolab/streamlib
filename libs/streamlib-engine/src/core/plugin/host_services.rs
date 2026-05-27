@@ -10092,26 +10092,6 @@ unsafe extern "C" fn host_graphics_kernel_offscreen_render(
     1
 }
 
-/// Host-side `VulkanGraphicsKernelMethodsVTable` populated with the
-/// v2 method slots (typed binding-method dispatch for the plugin
-/// handle's `set_storage_buffer_pixel` / `set_storage_buffer_storage`
-/// / `set_uniform_buffer` / `set_sampled_texture` /
-/// `set_storage_image` / `set_vertex_buffer` / `set_index_buffer` /
-/// `set_push_constants` / `offscreen_render` surface).
-///
-/// Raw-vulkanalia-handle slots `cmd_bind_and_draw` /
-/// `cmd_bind_and_draw_indexed` (v4) live below alongside the
-/// `bindings` v3 slot — they unblock cdylib graphics consumers
-/// that mint and manage their own `vk::CommandBuffer` (the
-/// `camera-python-display-effects` kernel wrappers, plus future
-/// pre-RDG cdylib pass authors per #1081). The wire shape mirrors
-/// the `VulkanComputeKernelMethodsVTable` v5 `record` slot:
-/// `command_buffer_handle: u64` carries `vk::CommandBuffer`'s
-/// `repr(transparent)` `usize` payload (lossless on 64-bit Linux,
-/// the only platform that ships); the draw call travels as the
-/// existing `DrawCallRepr` / `DrawIndexedCallRepr` shapes already
-/// wired for `offscreen_render`.
-///
 /// Read the graphics kernel's declared bindings into a caller-provided
 /// `[GraphicsBindingSpecRepr]` buffer. v3 (introspection).
 #[cfg(target_os = "linux")]
@@ -13045,9 +13025,10 @@ unsafe extern "C" fn host_command_recorder_record_draw_indexed(
 
 /// v5 — bare submit. Sibling of v1 `submit_signaling_timeline`
 /// without the timeline-semaphore parameters; used by
-/// `RhiToneMapper::apply_with_layouts`'s private recorder
-/// (the first in-tree cdylib consumer of this slot via the
-/// camera-python-display-effects path, #1065).
+/// `RhiToneMapper::apply_with_layouts`'s private recorder when
+/// reached from cdylib-resident processor code (the per-input
+/// tone-mapping normalization step in graphics-kernel wrappers
+/// is the first in-tree consumer).
 #[cfg(target_os = "linux")]
 unsafe extern "C" fn host_command_recorder_submit(
     recorder_handle: *const c_void,
@@ -13149,9 +13130,10 @@ unsafe extern "C" fn host_command_recorder_submit_and_wait(
 }
 
 /// Host-side `RhiCommandRecorderMethodsVTable` wired to the
-/// per-method wrappers above (Phase E sub-lift slice B — #984;
-/// v3 swapchain render-path slots — #1066; v5 bare-submit slots
-/// for `RhiToneMapper` cdylib consumers — #1065).
+/// per-method wrappers above. Covers the v1 record-then-submit
+/// slots, the v3 swapchain render-path slots used by the cdylib
+/// display, and the v5 bare-submit slots used by `RhiToneMapper`
+/// when reached from cdylib-resident processor code.
 pub static HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE:
     streamlib_plugin_abi::RhiCommandRecorderMethodsVTable =
     streamlib_plugin_abi::RhiCommandRecorderMethodsVTable {

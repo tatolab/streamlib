@@ -744,10 +744,11 @@ mod tests {
 
     #[test]
     fn dispatch_flags_vulkan_inner_in_method() {
-        // The actual #1065 bug shape — a kernel wrapper's dispatch
-        // method reaches `tex.vulkan_inner().image()` to grab the
-        // raw `VkImage`. Panics under the cdylib `host_callbacks()`
-        // guard at runtime.
+        // The original-shape bug this scan exists to catch — a
+        // kernel wrapper's dispatch method reaches
+        // `tex.vulkan_inner().image()` to grab the raw `VkImage`.
+        // Panics under the cdylib `host_callbacks()` guard at
+        // runtime; the scan flags it before the panic fires.
         let src = r#"
             impl SandboxedBlendingCompositor {
                 pub fn dispatch(&self, tex: &Texture) -> Result<()> {

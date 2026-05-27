@@ -1534,8 +1534,7 @@ impl RhiCommandRecorder {
     /// cdylib callers dispatch through the v5 `submit_and_wait` slot
     /// on [`RhiCommandRecorderMethodsVTable`](streamlib_plugin_abi::RhiCommandRecorderMethodsVTable).
     /// `RhiToneMapper::apply_with_layouts` is the first in-tree
-    /// cdylib consumer (reached from camera-python-display-effects'
-    /// `BlendingCompositor::normalize_layer` path, #1065).
+    /// cdylib consumer.
     pub fn submit_and_wait(&mut self) -> Result<()> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
             return self.dispatch_submit_and_wait_via_vtable();
