@@ -92,10 +92,21 @@ impl Iceoryx2Node {
     /// can buffer — resolved from the wire schema's `metadata.max_queued_messages` via
     /// [`crate::core::embedded_schemas::max_queued_messages_for_port_spec`], defaulting
     /// to [`crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES`].
+    ///
+    /// `enable_safe_overflow` derives from the destination input port's
+    /// declared overflow policy (see
+    /// [`crate::core::embedded_schemas::overflow_for_input_port`]). When
+    /// `true` (the realtime default — `Overflow::DropOldest`), the
+    /// subscriber buffer auto-evicts the oldest sample on overflow and
+    /// the publisher's `send()` never blocks. When `false`
+    /// (`Overflow::Block`), the producer blocks until the consumer
+    /// drains a slot — reserve for muxers / file writers that need
+    /// every sample in order.
     pub fn open_or_create_service(
         &self,
         service_name: &str,
         max_queued_messages: usize,
+        enable_safe_overflow: bool,
     ) -> Result<Iceoryx2Service> {
         let node = self.inner.lock();
         let service_name: ServiceName = service_name.try_into().map_err(|e| {
@@ -107,6 +118,7 @@ impl Iceoryx2Node {
             .publish_subscribe::<[u8]>()
             .max_publishers(MAX_FANIN_PER_DESTINATION)
             .subscriber_max_buffer_size(max_queued_messages)
+            .enable_safe_overflow(enable_safe_overflow)
             .open_or_create()
             .map_err(|e| Error::Runtime(format!("Failed to open/create service: {:?}", e)))?;
 
@@ -266,6 +278,208 @@ mod tests {
         );
     }
 
+    /// With `enable_safe_overflow(true)` (the engine-wide realtime
+    /// default), the iceoryx2 subscriber buffer auto-evicts the oldest
+    /// sample on overflow and the publisher's `send()` never blocks.
+    /// Sends `depth * 3` samples to a depth-N service whose subscriber
+    /// is attached but never drains; every publish must return promptly.
+    /// Attaching a non-draining subscriber is load-bearing — iceoryx2's
+    /// publisher only observes back-pressure once at least one
+    /// subscriber is present (without one, samples are dropped on the
+    /// floor at send time regardless of the overflow flag).
+    ///
+    /// Mentally-revert: drop the `.enable_safe_overflow(value)` line
+    /// in [`Iceoryx2Node::open_or_create_service`] and this test stays
+    /// green by accident (iceoryx2 0.8.1's static_config default is
+    /// also `true`). The companion test
+    /// [`overflow_disabled_publisher_back_pressures_on_full_buffer`]
+    /// is the load-bearing half — the false-path locks the contract.
+    #[test]
+    fn overflow_enabled_publisher_does_not_block_on_full_buffer() {
+        use std::time::{Duration, Instant};
+
+        let depth: usize = 4;
+        let node = Iceoryx2Node::new().expect("create iceoryx2 node");
+        let service = node
+            .open_or_create_service(
+                &unique_service_name("overflow_true"),
+                depth,
+                /* enable_safe_overflow */ true,
+            )
+            .expect("open service");
+        let publisher = service.create_publisher(64).expect("publisher");
+        // Subscriber attached but never read — the buffer fills against
+        // it. Required for the publisher to observe back-pressure at
+        // all (without a subscriber, sends silently no-op).
+        let _subscriber = service.create_subscriber().expect("subscriber");
+
+        let start = Instant::now();
+        for _ in 0..(depth * 3) {
+            let sample = publisher.loan_slice_uninit(8).expect("loan");
+            let sample = sample.write_from_slice(&[0u8; 8]);
+            sample.send().expect("send must succeed with overflow on");
+        }
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(200),
+            "overflow-on publisher must not block — sent {} samples to a depth-{} ring \
+             in {:?}, expected sub-200ms",
+            depth * 3,
+            depth,
+            elapsed,
+        );
+    }
+
+    /// With `enable_safe_overflow(false)`, the iceoryx2 service holds
+    /// the buffer at capacity and the publisher's send must observe
+    /// the back-pressure contract. iceoryx2's per-publisher default
+    /// `unable_to_deliver_strategy` may yield either a `Block` (send
+    /// blocks until consumer drains) or a non-`Ok` return; both honor
+    /// the "producer is not silently silently dropping under the
+    /// overflow-off contract" invariant we promise muxer / file-writer
+    /// callers. This test fills the buffer past depth and asserts the
+    /// (depth+1)th send is observably back-pressured — either it
+    /// errors out OR it does not complete promptly relative to the
+    /// trivially-completing overflow-on baseline.
+    ///
+    /// Mentally-revert: drop the `.enable_safe_overflow(value)` line
+    /// in [`Iceoryx2Node::open_or_create_service`] and this test
+    /// fails — the service falls back to iceoryx2's default
+    /// `enable_safe_overflow=true` and the (depth+1)th send returns
+    /// promptly via oldest-eviction, breaking the back-pressure
+    /// contract mp4-style sinks rely on.
+    #[test]
+    fn overflow_disabled_publisher_back_pressures_on_full_buffer() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let depth: usize = 4;
+        let node = Iceoryx2Node::new().expect("create iceoryx2 node");
+        let service_name = unique_service_name("overflow_false");
+
+        // Open with overflow disabled — back-pressure on.
+        let service_for_main = node
+            .open_or_create_service(
+                &service_name,
+                depth,
+                /* enable_safe_overflow */ false,
+            )
+            .expect("open service");
+        drop(service_for_main); // keep the service alive only via the
+                                // worker-side reopen; iceoryx2 services
+                                // are reference-counted.
+
+        // iceoryx2 Publishers hold `Rc<>` internally and aren't `Send`,
+        // so the publisher must be created on the worker thread. Pre-
+        // fill the buffer on the worker, then attempt one more send;
+        // the (depth+1)th send is the test signal.
+        let (filled_tx, filled_rx) = mpsc::channel::<()>();
+        let (result_tx, result_rx) = mpsc::channel::<std::result::Result<(), String>>();
+        let node_clone = node.clone();
+        let service_name_clone = service_name.clone();
+        let _worker = std::thread::Builder::new()
+            .name("overflow-test-publisher".into())
+            .spawn(move || {
+                let svc = match node_clone.open_or_create_service(
+                    &service_name_clone,
+                    depth,
+                    /* enable_safe_overflow */ false,
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        let _ = result_tx.send(Err(format!("reopen failed: {e:?}")));
+                        return;
+                    }
+                };
+                let publisher = match svc.create_publisher(64) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let _ = result_tx.send(Err(format!("publisher failed: {e:?}")));
+                        return;
+                    }
+                };
+                // Attach a never-draining subscriber so the publisher
+                // observes back-pressure on overflow. Without it,
+                // iceoryx2 drops samples on the floor at send time and
+                // the overflow flag never engages — same gotcha as the
+                // overflow-on companion test.
+                let _subscriber = match svc.create_subscriber() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        let _ = result_tx.send(Err(format!("subscriber failed: {e:?}")));
+                        return;
+                    }
+                };
+                for i in 0..depth {
+                    match publisher.loan_slice_uninit(8) {
+                        Ok(sample) => {
+                            let sample = sample.write_from_slice(&[0u8; 8]);
+                            if let Err(e) = sample.send() {
+                                let _ = result_tx.send(Err(format!(
+                                    "pre-fill send {i} failed: {e:?}"
+                                )));
+                                return;
+                            }
+                        }
+                        Err(e) => {
+                            let _ = result_tx.send(Err(format!(
+                                "pre-fill loan {i} failed: {e:?}"
+                            )));
+                            return;
+                        }
+                    }
+                }
+                // Buffer is now at `depth`. Signal main and attempt
+                // the (depth+1)th send — this is what the main thread
+                // observes for back-pressure.
+                let _ = filled_tx.send(());
+                let res = (|| -> std::result::Result<(), String> {
+                    let sample = publisher
+                        .loan_slice_uninit(8)
+                        .map_err(|e| format!("loan failed: {e:?}"))?;
+                    let sample = sample.write_from_slice(&[0u8; 8]);
+                    sample.send().map_err(|e| format!("send failed: {e:?}"))?;
+                    Ok(())
+                })();
+                let _ = result_tx.send(res);
+            })
+            .expect("spawn worker");
+
+        // Wait for the worker to finish pre-filling the buffer.
+        filled_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("worker should finish pre-filling within 2s");
+
+        // The (depth+1)th send is the test signal. Back-pressure
+        // honors either of:
+        //   - iceoryx2 Block strategy: send blocks, worker doesn't
+        //     send a result → timeout fires (test passes; worker is
+        //     leaked, dropped at process exit).
+        //   - iceoryx2 DiscardSample / explicit PublisherSendError:
+        //     worker delivers Err on result_tx (test passes — explicit
+        //     back-pressure signal).
+        // Silent Ok would mean overflow wasn't actually disabled.
+        match result_rx.recv_timeout(Duration::from_millis(400)) {
+            Ok(Ok(())) => {
+                panic!(
+                    "(depth+1)th publisher.send() completed successfully with \
+                     enable_safe_overflow(false) — back-pressure contract \
+                     violated: producer must block or surface an error, not \
+                     silently succeed."
+                );
+            }
+            Ok(Err(_back_pressure_signal)) => {
+                // Explicit error from iceoryx2 — test passes.
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Worker is blocking inside send() — test passes.
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("worker thread panicked unexpectedly");
+            }
+        }
+    }
+
     /// `Iceoryx2Service` stores the configured ring depth and exposes it
     /// via [`Iceoryx2Service::max_queued_messages`]. Reverting the
     /// field-storage path (e.g. ignoring the argument and hardcoding 16)
@@ -274,7 +488,7 @@ mod tests {
     fn data_service_records_configured_max_queued_messages() {
         let node = Iceoryx2Node::new().expect("create iceoryx2 node");
         let service = node
-            .open_or_create_service(&unique_service_name("mqm_recorded"), 42)
+            .open_or_create_service(&unique_service_name("mqm_recorded"), 42, true)
             .expect("open data service");
         assert_eq!(
             service.max_queued_messages(),
@@ -348,7 +562,7 @@ mod tests {
             let startup_p = startup.clone();
             let producer = std::thread::spawn(move || {
                 let svc = node_p
-                    .open_or_create_service(&s1_p, s1_depth)
+                    .open_or_create_service(&s1_p, s1_depth, true)
                     .expect("producer s1 open");
                 let publisher = svc.create_publisher(64).expect("publisher");
                 startup_p.wait();
@@ -379,10 +593,10 @@ mod tests {
             let startup_r = startup.clone();
             let relay = std::thread::spawn(move || {
                 let svc_in = node_r
-                    .open_or_create_service(&s1_r, s1_depth)
+                    .open_or_create_service(&s1_r, s1_depth, true)
                     .expect("relay s1 open");
                 let svc_out = node_r
-                    .open_or_create_service(&s2_r, s2_depth)
+                    .open_or_create_service(&s2_r, s2_depth, true)
                     .expect("relay s2 open");
                 let subscriber = svc_in.create_subscriber().expect("relay sub");
                 let publisher = svc_out.create_publisher(64).expect("relay pub");
@@ -441,7 +655,7 @@ mod tests {
             let startup_c = startup.clone();
             let consumer_handle = std::thread::spawn(move || {
                 let svc = node_c
-                    .open_or_create_service(&s2_c, s2_depth)
+                    .open_or_create_service(&s2_c, s2_depth, true)
                     .expect("consumer s2 open");
                 let subscriber = svc.create_subscriber().expect("consumer sub");
                 startup_c.wait();
@@ -511,7 +725,7 @@ mod tests {
         let send_count: usize = depth + 3; // 3 extra overwrites
         let node = Iceoryx2Node::new().expect("create iceoryx2 node");
         let service = node
-            .open_or_create_service(&unique_service_name("ring_overwrite"), depth)
+            .open_or_create_service(&unique_service_name("ring_overwrite"), depth, true)
             .expect("open data service");
 
         let max_payload = 64usize;

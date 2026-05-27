@@ -155,6 +155,54 @@ pub fn max_queued_messages_for_port_spec(
         .map(|opt| opt.unwrap_or(DEFAULT_MAX_QUEUED_MESSAGES))
 }
 
+/// Resolve the producer-side overflow policy for a destination input port.
+///
+/// Looks up the destination processor in [`PROCESSOR_REGISTRY`] and reads
+/// the named input port's declared `overflow` field. Falls back to
+/// [`Overflow::default()`] (`DropOldest` — the engine-wide realtime
+/// invariant) when:
+///
+/// - The destination processor type isn't registered (e.g. an in-tree
+///   compiler-op site that fires before registration completes — should
+///   never happen for a Wired link but the conservative fallback is
+///   correct).
+/// - The named port doesn't exist on the destination (shape-mismatched
+///   wiring; the compiler's other validators surface this distinctly).
+/// - The port exists but no `overflow:` is declared (the common case).
+///
+/// Returns [`Error::Configuration`] when the declared string is non-empty
+/// but unrecognized — typo at the manifest level is a wire-time error,
+/// not a silent default substitution.
+///
+/// [`PROCESSOR_REGISTRY`]: crate::core::processors::PROCESSOR_REGISTRY
+/// [`Overflow::default()`]: crate::iceoryx2::Overflow::default
+/// [`Error::Configuration`]: crate::core::error::Error::Configuration
+pub fn overflow_for_input_port(
+    processor_type: &streamlib_idents::SchemaIdent,
+    port_name: &str,
+) -> crate::core::error::Result<crate::iceoryx2::Overflow> {
+    use crate::iceoryx2::Overflow;
+
+    let Some((inputs, _outputs)) =
+        crate::core::processors::PROCESSOR_REGISTRY.port_info(processor_type)
+    else {
+        return Ok(Overflow::default());
+    };
+    let Some(port) = inputs.iter().find(|p| p.name == port_name) else {
+        return Ok(Overflow::default());
+    };
+    let Some(declared) = port.overflow.as_deref() else {
+        return Ok(Overflow::default());
+    };
+    Overflow::from_manifest_str(declared).map_err(|err| {
+        crate::core::error::Error::Configuration(format!(
+            "input port '{}' on '{}' declared {} — manifest must use one of \
+             'drop_oldest' or 'block'.",
+            port_name, processor_type, err
+        ))
+    })
+}
+
 /// Shared lookup helper for both port-spec metadata resolvers.
 ///
 /// `Any` → `Ok(None)` (caller substitutes default).
@@ -516,6 +564,141 @@ mod tests {
             SemVer::new(1, 0, 0),
         ));
         assert_eq!(max_queued_messages_for_port_spec(&spec).unwrap(), 64);
+    }
+
+    /// Locks the default-fallback path: a processor type that isn't
+    /// registered yields `Overflow::DropOldest` (the engine-wide
+    /// realtime invariant). Mentally reverting the fallback to
+    /// `Block` here would silently re-introduce producer-blocking
+    /// for unregistered (defensively-handled) cases — fail loudly
+    /// rather than ship that quietly.
+    #[test]
+    fn overflow_for_input_port_defaults_when_processor_unregistered() {
+        use crate::iceoryx2::Overflow;
+        let unknown = SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("does-not-exist-overflow").unwrap(),
+            TypeName::new("Nothing").unwrap(),
+            SemVer::new(1, 0, 0),
+        );
+        assert_eq!(
+            overflow_for_input_port(&unknown, "video_in").unwrap(),
+            Overflow::DropOldest
+        );
+    }
+
+    /// Manifest-declared `overflow: "block"` on an input port is
+    /// honored by the registry-side resolver. Built directly against
+    /// the registry helpers used by `register_descriptor_only` — the
+    /// subprocess registration path — so the assertion covers both
+    /// host and subprocess wirings.
+    #[test]
+    fn overflow_for_input_port_resolves_block_declaration() {
+        use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
+        use crate::core::processors::PROCESSOR_REGISTRY;
+        use crate::iceoryx2::Overflow;
+
+        let processor_type = SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("test-overflow-block").unwrap(),
+            TypeName::new("BlockSink").unwrap(),
+            SemVer::new(1, 0, 0),
+        );
+        let video_schema = PortSchemaSpec::Specific(SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("core").unwrap(),
+            TypeName::new("VideoFrame").unwrap(),
+            SemVer::new(1, 0, 0),
+        ));
+        let mut desc = ProcessorDescriptor::new(processor_type.clone(), "block-sink");
+        desc.inputs.push(
+            PortDescriptor::iceoryx2("video_in", "input", video_schema)
+                .with_overflow("block"),
+        );
+        PROCESSOR_REGISTRY
+            .register_descriptor_only(desc)
+            .expect("descriptor registration");
+
+        assert_eq!(
+            overflow_for_input_port(&processor_type, "video_in").unwrap(),
+            Overflow::Block
+        );
+    }
+
+    /// A registered input port without an explicit `overflow:`
+    /// declaration falls back to the engine-wide default. Symmetric to
+    /// the registry-miss test above — distinguishes "field absent" from
+    /// "processor absent" so a future refactor can't conflate them.
+    #[test]
+    fn overflow_for_input_port_defaults_when_field_absent() {
+        use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
+        use crate::core::processors::PROCESSOR_REGISTRY;
+        use crate::iceoryx2::Overflow;
+
+        let processor_type = SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("test-overflow-default").unwrap(),
+            TypeName::new("DefaultSink").unwrap(),
+            SemVer::new(1, 0, 0),
+        );
+        let video_schema = PortSchemaSpec::Specific(SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("core").unwrap(),
+            TypeName::new("VideoFrame").unwrap(),
+            SemVer::new(1, 0, 0),
+        ));
+        let mut desc =
+            ProcessorDescriptor::new(processor_type.clone(), "default-sink");
+        desc.inputs
+            .push(PortDescriptor::iceoryx2("video_in", "input", video_schema));
+        PROCESSOR_REGISTRY
+            .register_descriptor_only(desc)
+            .expect("descriptor registration");
+
+        assert_eq!(
+            overflow_for_input_port(&processor_type, "video_in").unwrap(),
+            Overflow::DropOldest
+        );
+    }
+
+    /// A typo at the manifest level surfaces as a typed configuration
+    /// error rather than a silent default fallback — wire-time rejection
+    /// of bad declarations is the actionable shape.
+    #[test]
+    fn overflow_for_input_port_rejects_unknown_string() {
+        use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
+        use crate::core::processors::PROCESSOR_REGISTRY;
+
+        let processor_type = SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("test-overflow-typo").unwrap(),
+            TypeName::new("TypoSink").unwrap(),
+            SemVer::new(1, 0, 0),
+        );
+        let video_schema = PortSchemaSpec::Specific(SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("core").unwrap(),
+            TypeName::new("VideoFrame").unwrap(),
+            SemVer::new(1, 0, 0),
+        ));
+        let mut desc = ProcessorDescriptor::new(processor_type.clone(), "typo-sink");
+        desc.inputs.push(
+            PortDescriptor::iceoryx2("video_in", "input", video_schema)
+                .with_overflow("drop-oldest"), // hyphen instead of underscore
+        );
+        PROCESSOR_REGISTRY
+            .register_descriptor_only(desc)
+            .expect("descriptor registration");
+
+        let err = overflow_for_input_port(&processor_type, "video_in")
+            .expect_err("unknown overflow string must error");
+        let msg = err.to_string();
+        assert!(msg.contains("drop_oldest"), "error must list valid values: {msg}");
+        assert!(msg.contains("block"), "error must list valid values: {msg}");
+        assert!(
+            matches!(err, crate::core::error::Error::Configuration(_)),
+            "must be Configuration error: {err:?}"
+        );
     }
 
     #[test]

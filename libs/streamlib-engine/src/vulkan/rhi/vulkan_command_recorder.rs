@@ -855,11 +855,21 @@ impl RhiCommandRecorderInner {
 impl Drop for RhiCommandRecorderInner {
     fn drop(&mut self) {
         unsafe {
-            // Wait for any in-flight submission to drain so command-buffer
-            // free is safe. Use device_wait_idle as a conservative fence —
-            // the completion fence may not have been signaled yet if a
-            // recording is in progress without submit.
-            let _ = self.device.device_wait_idle();
+            // Wait only for THIS recorder's own GPU work to drain before
+            // freeing its command-buffer / fence. `device_wait_idle()`
+            // would serialize the entire device — a classic Vulkan
+            // anti-pattern that wedges hot paths whose recorders drop
+            // at frame rate (the tone-mapper's `apply_with_layouts`
+            // creates a fresh recorder per dispatch). Wait the local
+            // fence iff a submission is actually in flight; otherwise
+            // the recorder either never submitted (no fence to wait on)
+            // or has already waited at `begin()` / `submit_and_wait()`
+            // time, and the fence is signaled.
+            if self.submission_in_flight {
+                let _ = self
+                    .device
+                    .wait_for_fences(&[self.completion_fence], true, u64::MAX);
+            }
             self.device.destroy_fence(self.completion_fence, None);
             self.device.destroy_command_pool(self.command_pool, None);
         }

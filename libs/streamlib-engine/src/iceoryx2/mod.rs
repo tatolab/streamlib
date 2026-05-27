@@ -7,6 +7,7 @@ mod input;
 mod mailbox;
 mod node;
 mod output;
+mod overflow;
 mod payload;
 mod read_mode;
 
@@ -14,6 +15,7 @@ pub use input::{InputMailboxes, InputMailboxesInner};
 pub use mailbox::PortMailbox;
 pub use node::{Iceoryx2EventService, Iceoryx2Node, Iceoryx2NotifyService, Iceoryx2Service};
 pub use output::{OutputWriter, OutputWriterInner};
+pub use overflow::Overflow;
 pub use payload::{
     EventPayload, FrameHeader, FramePayload, PortKey, SchemaIdentWire, SchemaIdentWireError,
     TopicKey, DEFAULT_MAX_QUEUED_MESSAGES, FRAME_HEADER_SIZE, MAX_EVENT_PAYLOAD_SIZE,
