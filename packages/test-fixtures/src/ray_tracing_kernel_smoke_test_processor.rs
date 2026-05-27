@@ -145,12 +145,18 @@ fn run_ray_tracing_kernel_smoke(ctx: &RuntimeContextFullAccess<'_>) -> Result<()
     ];
     let indices: Vec<u32> = vec![0, 1, 2];
 
+    // Manual-mode start() takes FullAccess directly; the engine
+    // wraps cdylib lifecycle dispatch in `with_cdylib_scope` (#1075),
+    // so `ctx.gpu_full_access()` is `ScopeToken`-flavored and
+    // dispatches through the FullAccess vtable transparently.
+    // Same coverage as the pre-#1075 escalate path; the wrap is the
+    // engine-side replacement for the explicit `.escalate(|full|...)`.
+    let full = ctx.gpu_full_access();
+
     // Probe RT capability first — on devices without
     // VK_KHR_ray_tracing_pipeline, the cdylib vtable round-trip
     // itself succeeded; per-platform RT support is a host concern.
-    let supports_rt = gpu_limited
-        .escalate(|full| Ok(full.supports_ray_tracing_pipeline()))
-        .map_err(|e| Error::Runtime(format!("supports_ray_tracing_pipeline probe: {e}")))?;
+    let supports_rt = full.supports_ray_tracing_pipeline();
     if !supports_rt {
         return Ok(());
     }
@@ -166,51 +172,50 @@ fn run_ray_tracing_kernel_smoke(ctx: &RuntimeContextFullAccess<'_>) -> Result<()
         .acquire_texture(&pool_descriptor)
         .map_err(|e| Error::Runtime(format!("acquire_texture: {e}")))?;
 
-    // Build BLAS + TLAS + kernel inside a single escalate so we
-    // only hop into FullAccess once for setup.
-    let (kernel, tlas) = gpu_limited
-        .escalate(|full| {
-            let blas = full
-                .build_triangles_blas("rt-smoke-blas", &vertices, &indices)?;
-            let instances = vec![TlasInstanceDesc::identity(blas)];
-            let tlas = full.build_tlas("rt-smoke-tlas", &instances)?;
+    // Build BLAS + TLAS + kernel — all FullAccess-privileged, all
+    // dispatch directly through the wrapped scope.
+    let (kernel, tlas) = (|| -> Result<_> {
+        let blas = full
+            .build_triangles_blas("rt-smoke-blas", &vertices, &indices)?;
+        let instances = vec![TlasInstanceDesc::identity(blas)];
+        let tlas = full.build_tlas("rt-smoke-tlas", &instances)?;
 
-            let stages = [
-                RayTracingStage::ray_gen(SMOKE_RGEN_SPV),
-                RayTracingStage::miss(SMOKE_RMISS_SPV),
-                RayTracingStage::closest_hit(SMOKE_RCHIT_SPV),
-            ];
-            let groups = [
-                RayTracingShaderGroup::General { general: 0 },
-                RayTracingShaderGroup::General { general: 1 },
-                RayTracingShaderGroup::TrianglesHit {
-                    closest_hit: Some(2),
-                    any_hit: None,
-                },
-            ];
-            let bindings = [
-                RayTracingBindingSpec::acceleration_structure(
-                    0,
-                    RayTracingShaderStageFlags::RAYGEN,
-                ),
-                RayTracingBindingSpec::storage_image(1, RayTracingShaderStageFlags::RAYGEN),
-            ];
-            let push_constants = RayTracingPushConstants {
-                size: std::mem::size_of::<u32>() as u32,
-                stages: RayTracingShaderStageFlags::RAYGEN,
-            };
-            let descriptor = RayTracingKernelDescriptor {
-                label: "ray_tracing_kernel_smoke",
-                stages: &stages,
-                groups: &groups,
-                bindings: &bindings,
-                push_constants,
-                max_recursion_depth: 1,
-            };
-            let kernel = full.create_ray_tracing_kernel(&descriptor)?;
-            Ok((kernel, tlas))
-        })
-        .map_err(|e| Error::Runtime(format!("create_ray_tracing_kernel setup: {e}")))?;
+        let stages = [
+            RayTracingStage::ray_gen(SMOKE_RGEN_SPV),
+            RayTracingStage::miss(SMOKE_RMISS_SPV),
+            RayTracingStage::closest_hit(SMOKE_RCHIT_SPV),
+        ];
+        let groups = [
+            RayTracingShaderGroup::General { general: 0 },
+            RayTracingShaderGroup::General { general: 1 },
+            RayTracingShaderGroup::TrianglesHit {
+                closest_hit: Some(2),
+                any_hit: None,
+            },
+        ];
+        let bindings = [
+            RayTracingBindingSpec::acceleration_structure(
+                0,
+                RayTracingShaderStageFlags::RAYGEN,
+            ),
+            RayTracingBindingSpec::storage_image(1, RayTracingShaderStageFlags::RAYGEN),
+        ];
+        let push_constants = RayTracingPushConstants {
+            size: std::mem::size_of::<u32>() as u32,
+            stages: RayTracingShaderStageFlags::RAYGEN,
+        };
+        let descriptor = RayTracingKernelDescriptor {
+            label: "ray_tracing_kernel_smoke",
+            stages: &stages,
+            groups: &groups,
+            bindings: &bindings,
+            push_constants,
+            max_recursion_depth: 1,
+        };
+        let kernel = full.create_ray_tracing_kernel(&descriptor)?;
+        Ok((kernel, tlas))
+    })()
+    .map_err(|e| Error::Runtime(format!("create_ray_tracing_kernel setup: {e}")))?;
 
     kernel
         .set_acceleration_structure(0, &tlas)

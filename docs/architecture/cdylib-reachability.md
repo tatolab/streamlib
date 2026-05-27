@@ -57,27 +57,35 @@ Cdylib code (or a workspace plugin's processor body) needs to call
 something on the host side.
 
   ┌──────────────────────────────────────────────────────────────┐
-  │ Q1: WHICH lifecycle stage is the call from?                  │
+  │ Q1: WHICH lifecycle context type is the body running under?  │
   └─────────────────┬────────────────────────────────────────────┘
                     │
        ┌────────────┴────────────────────┐
        │                                 │
-   setup() / teardown()              start() / stop() /
-   (RuntimeContextFullAccess)        process() (LimitedAccess)
+   FullAccess context:               LimitedAccess context:
+   setup() / teardown() /            process() / on_pause() /
+   Manual-mode start() / stop()      on_resume() /
+   (&RuntimeContextFullAccess)       Reactive start()
+                                     (&RuntimeContextLimitedAccess)
        │                                 │
        ▼                                 ▼
-   Pattern 1: direct                Q2: per-frame? privileged?
+   Pattern 1: direct                Q2: what kind of reach?
    ctx.gpu_full_access().X(),       (see below)
-   no escalate. setup() / teardown()
-   are already privileged via
-   `with_cdylib_scope`'s ScopeToken
-   wrap (#1072). DO NOT call
-   `.escalate(...)` here — gate is
-   already held, same-thread re-entry
-   panics with an actionable msg.
+   no escalate. ALL FullAccess
+   lifecycle methods are dispatched
+   under `with_cdylib_scope` for
+   cdylib-resident processors
+   (#1072 + #1075), so the body
+   sees a ScopeToken FullAccess
+   that routes through the
+   FullAccess vtable transparently.
+   DO NOT call `.escalate(...)` —
+   gate is held, same-thread
+   re-entry panics with an
+   actionable msg.
 
   ┌──────────────────────────────────────────────────────────────┐
-  │ Q2: From process() / start() / stop(), what kind of reach?   │
+  │ Q2: From a LimitedAccess context, what kind of reach?        │
   └─────────────────┬────────────────────────────────────────────┘
                     │
      ┌──────────────┼──────────────┬─────────────────────┐
@@ -96,13 +104,26 @@ something on the host side.
                  #1073)
 ```
 
+**Critical asymmetry**: Pattern 4 (escalate) only applies to
+LimitedAccess contexts. Reaching for it from a FullAccess context
+(setup/teardown/Manual-start/Manual-stop) is anti-pattern #1 — the
+gate is already held by the engine's lifecycle wrap, and re-entry
+panics at runtime. The xtask lint
+(`xtask check-no-escalate-in-lifecycle`) flags this statically; the
+runtime panic is the backstop.
+
 The five patterns:
 
 - **Pattern 1: lifecycle wrap** — `RuntimeContextFullAccess::with_cdylib_scope`
-  wraps cdylib `setup()` / `teardown()` dispatch in a fresh
-  ScopeToken FullAccess (#1072). The cdylib body calls
-  `ctx.gpu_full_access().X()` directly; methods that have FullAccess
-  vtable analogs dispatch through them.
+  wraps every FullAccess lifecycle method (`setup`, `teardown`,
+  Manual-mode `start`, `stop`) for cdylib-resident processors,
+  giving the body a fresh ScopeToken FullAccess (#1072 introduced
+  it for setup/teardown; #1075 extended to start/stop for
+  symmetry). The cdylib body calls `ctx.gpu_full_access().X()`
+  directly; methods that have FullAccess vtable analogs dispatch
+  through them. This restores the historical contract
+  ("`FullAccess` in signature → direct access in body") for every
+  runtime variant.
 - **Pattern 2: β-shape Arc-transit vtable slot** —
   `host_vulkan_device_arc`, `host_vulkan_texture_arc`,
   `host_vulkan_pixel_buffer_arc`, etc. Hands cdylib an
@@ -117,11 +138,15 @@ The five patterns:
   same shape on both sides. Use for hot-path binding work where the
   method args ARE cross-DSO-safe types.
 - **Pattern 4: escalate to FullAccess** — `gpu_limited_access().escalate(|full| ...)`
-  from `start()` / `process()` (the historical primitive). Used for
-  privileged work that needs to happen mid-flight. Acquires the
-  escalate gate + waits device idle; serializes against other
-  privileged work. **Do not call from setup()/teardown() — the gate
-  is already held.**
+  from a **LimitedAccess context** (`process()`, `on_pause()`,
+  `on_resume()`, Reactive `start()`). The historical primitive for
+  upgrading Limited → Full when you don't have FullAccess to start
+  with. Acquires the escalate gate + waits device idle; serializes
+  against other privileged work. **Never call from a FullAccess
+  context** — the engine's lifecycle wrap (Pattern 1) already
+  holds the gate, and re-entry panics with an actionable message
+  via `EscalateGate`'s same-thread re-entry detector. The xtask
+  lint `check-no-escalate-in-lifecycle` enforces this statically.
 - **Pattern 5: engine-SDK-internal reaches** (#1073 class) — when
   engine SDK code (`SimpleEncoder`, `SimpleDecoder`, etc.) reaches
   a `host_inner()`-only method on `VulkanComputeKernel` etc. via

@@ -120,18 +120,13 @@ impl streamlib::sdk::processors::ManualProcessor for LinuxDisplayProcessor::Proc
             .clone()
             .ok_or_else(|| Error::Configuration("GPU context not initialized".into()))?;
 
-        // Engine-bridge: reach the underlying `HostVulkanDevice` via
-        // `escalate(|full| ...)`, mirroring the pattern in
-        // `@tatolab/camera`'s `LinuxCameraProcessor`. The cdylib's
-        // `ctx.gpu_full_access()` proxy returns a host-Boxed handle
-        // whose `host_inner()`-bearing methods panic when called
-        // through the FFI; escalating routes the call to a true
-        // host-mode FullAccess where `host_vulkan_device_arc()` is
-        // safe.
-        let vulkan_device = ctx
-            .gpu_limited_access()
-            .clone()
-            .escalate(|full| full.host_vulkan_device_arc())?;
+        // Manual-mode start() takes FullAccess directly. For cdylib-
+        // resident processors the engine wraps lifecycle dispatch in
+        // `with_cdylib_scope` (#1072), so `ctx.gpu_full_access()`
+        // routes through the FullAccess vtable transparently — same
+        // contract as in-process. Calling `.escalate(...)` here would
+        // re-enter the gate held by the wrap and panic.
+        let vulkan_device = ctx.gpu_full_access().host_vulkan_device_arc()?;
 
         running.store(true, Ordering::Release);
 

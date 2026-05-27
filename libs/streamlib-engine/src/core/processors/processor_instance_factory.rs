@@ -195,7 +195,7 @@ impl ProcessorInstance {
     ///   privileged GPU work (same gate as in-process escalate)
     ///   and ends with `wait_device_idle`.
     /// - **`VTable { cdylib_resident: false }`** (in-process
-    ///   `register::<P>()`) and **`LegacyDyn`**: serialize via
+    ///   `register::<P>()`): serialize via
     ///   `gpu_limited_access().escalate(|_| ...)`, matching the
     ///   pre-#912 `processor_setup_lock` contract — the in-process
     ///   body uses the Boxed FullAccess on `ctx` directly (no
@@ -207,10 +207,23 @@ impl ProcessorInstance {
     ///   reaches `host_inner()` without first matching `handle_kind`
     ///   (e.g. `device()`) would execute UB instead of the expected
     ///   direct deref.
+    /// - **`LegacyDyn`** (subprocess host wrappers — Python /
+    ///   TypeScript via `register_dynamic`): pure passthrough, no
+    ///   gate wrap. Subprocess host setup does no host-side GPU
+    ///   work — it spawns the child, constructs the bridge, sends a
+    ///   `setup` lifecycle, then blocks on the subprocess's `ready`
+    ///   reply. Wrapping that IPC wait in escalate would hold the
+    ///   gate against every escalate the subprocess issues during
+    ///   its own init — the bridge-reader thread dispatches each
+    ///   `escalate_request` inline through `sandbox.escalate(|full|
+    ///   ...)` and would deadlock on the same gate. Per-call
+    ///   bridge-handler escalates still acquire the gate + wait
+    ///   device idle on their own, so GPU-resource serialization
+    ///   is preserved (#867).
     ///
-    /// Either way the escalate gate is held for exactly one
-    /// nesting depth across the setup body, so a setup body that
-    /// also tries to call `.escalate(...)` trips the gate's
+    /// For the wrapped variants the escalate gate is held for
+    /// exactly one nesting depth across the setup body, so a body
+    /// that itself calls `.escalate(...)` trips the gate's
     /// same-thread re-entry panic instead of silently deadlocking.
     pub fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         match self {
@@ -239,10 +252,7 @@ impl ProcessorInstance {
                     Self::vtable_call_full(instance_ptr, setup_fn, ctx, "setup")
                 })
             }
-            Self::LegacyDyn(inner) => {
-                let sandbox = ctx.gpu_limited_access().clone();
-                sandbox.escalate(|_full| inner.__generated_setup(ctx))
-            }
+            Self::LegacyDyn(inner) => inner.__generated_setup(ctx),
         }
     }
 
@@ -278,10 +288,7 @@ impl ProcessorInstance {
                     Self::vtable_call_full(instance_ptr, teardown_fn, ctx, "teardown")
                 })
             }
-            Self::LegacyDyn(inner) => {
-                let sandbox = ctx.gpu_limited_access().clone();
-                sandbox.escalate(|_full| inner.__generated_teardown(ctx))
-            }
+            Self::LegacyDyn(inner) => inner.__generated_teardown(ctx),
         }
     }
 
@@ -316,21 +323,72 @@ impl ProcessorInstance {
     }
 
     /// Start a Manual-mode processor.
+    ///
+    /// Variant-aware dispatch matching the historical "FullAccess
+    /// in signature → direct access in body" contract for every
+    /// runtime variant:
+    /// - **`VTable { cdylib_resident: true }`**: wraps in
+    ///   [`RuntimeContextFullAccess::with_cdylib_scope`] so cdylib
+    ///   bodies see a `ScopeToken` FullAccess (direct access
+    ///   becomes vtable dispatch — no `host_inner()` panic).
+    /// - **`VTable { cdylib_resident: false }`** (in-process
+    ///   `register::<P>()`) and **`LegacyDyn`** (subprocess hosts):
+    ///   pure passthrough. Historical: start/stop were never
+    ///   gate-wrapped (thread_runner calls them directly), so adding
+    ///   a wrap here would change semantics for in-process bodies
+    ///   that legitimately escalate or do their own thread spawning.
+    ///   In-process bodies use `ctx.gpu_full_access()` directly
+    ///   (Boxed deref, host-only); subprocess host bodies do their
+    ///   own per-call gate management via the bridge handlers (#867
+    ///   contract).
     pub fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         match self {
-            Self::VTable { instance_ptr, vtable, .. } => {
-                Self::vtable_call_full(*instance_ptr, vtable.start, ctx, "start")
+            Self::VTable {
+                instance_ptr,
+                vtable,
+                cdylib_resident: true,
+                ..
+            } => {
+                let instance_ptr = *instance_ptr;
+                let start_fn = vtable.start;
+                ctx.with_cdylib_scope(|cdylib_ctx| {
+                    Self::vtable_call_full(instance_ptr, start_fn, cdylib_ctx, "start")
+                })
             }
+            Self::VTable {
+                instance_ptr,
+                vtable,
+                cdylib_resident: false,
+                ..
+            } => Self::vtable_call_full(*instance_ptr, vtable.start, ctx, "start"),
             Self::LegacyDyn(inner) => inner.start(ctx),
         }
     }
 
     /// Stop a Manual-mode processor.
+    ///
+    /// Mirrors [`Self::start`]'s variant-aware dispatch — see that
+    /// doc for the rationale.
     pub fn stop(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         match self {
-            Self::VTable { instance_ptr, vtable, .. } => {
-                Self::vtable_call_full(*instance_ptr, vtable.stop, ctx, "stop")
+            Self::VTable {
+                instance_ptr,
+                vtable,
+                cdylib_resident: true,
+                ..
+            } => {
+                let instance_ptr = *instance_ptr;
+                let stop_fn = vtable.stop;
+                ctx.with_cdylib_scope(|cdylib_ctx| {
+                    Self::vtable_call_full(instance_ptr, stop_fn, cdylib_ctx, "stop")
+                })
             }
+            Self::VTable {
+                instance_ptr,
+                vtable,
+                cdylib_resident: false,
+                ..
+            } => Self::vtable_call_full(*instance_ptr, vtable.stop, ctx, "stop"),
             Self::LegacyDyn(inner) => inner.stop(ctx),
         }
     }

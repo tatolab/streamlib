@@ -148,22 +148,28 @@ fn run_compute_kernel_round_trip(
         .map_err(|e| Error::Runtime(format!("acquire output storage_buffer: {e}")))?;
 
     // Kernel construction is FullAccess-privileged (touches
-    // descriptor pools + pipeline cache + queue), so escalate to
-    // mint the kernel. The kernel plugin handle is returned out of
-    // the escalate scope and stays valid afterwards — its Clone/Drop
-    // route through the host's FullAccess parent vtable (#918's
-    // Phase D shape) and its per-method dispatch routes through the
-    // VulkanComputeKernelMethodsVTable installed in
-    // `install_host_services` (#907 PR 2/5 + #963's v3 method
+    // descriptor pools + pipeline cache + queue). Manual-mode
+    // start() takes FullAccess directly; the engine wraps cdylib
+    // lifecycle dispatch in `with_cdylib_scope` (#1075), so
+    // `ctx.gpu_full_access()` is `ScopeToken`-flavored and
+    // dispatches through the FullAccess vtable transparently.
+    // Same coverage as the pre-#1075 escalate path; the wrap is the
+    // engine-side replacement for the explicit `.escalate(|full|...)`.
+    // The kernel plugin handle is valid for the rest of this fn —
+    // its Clone/Drop route through the host's FullAccess parent
+    // vtable (#918's Phase D shape) and its per-method dispatch
+    // routes through the VulkanComputeKernelMethodsVTable installed
+    // in `install_host_services` (#907 PR 2/5 + #963's v3 method
     // slots).
-    let kernel = gpu_limited.escalate(|full| {
-        full.create_compute_kernel(&ComputeKernelDescriptor {
+    let full = ctx.gpu_full_access();
+    let kernel = full
+        .create_compute_kernel(&ComputeKernelDescriptor {
             label: "cpu_ref_doubler",
             spv: CPU_REF_DOUBLER_SPV,
             bindings: CPU_REF_DOUBLER_BINDINGS,
             push_constant_size: std::mem::size_of::<u32>() as u32,
         })
-    }).map_err(|e| Error::Runtime(format!("create_compute_kernel: {e}")))?;
+        .map_err(|e| Error::Runtime(format!("create_compute_kernel: {e}")))?;
 
     if input.mapped_ptr().is_null() {
         return Err(Error::Runtime(

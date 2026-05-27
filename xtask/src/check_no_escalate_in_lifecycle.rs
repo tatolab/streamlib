@@ -24,19 +24,30 @@
 //!
 //! Method bodies scanned:
 //! - Any `fn` whose **name** is `setup`, `teardown`, `setup_inner`,
-//!   or `teardown_inner` AND takes `&RuntimeContextFullAccess` in
-//!   its parameter list. The name-match scopes the lint to the
-//!   actual engine-side gate-wrap surface — `ProcessorInstance`
-//!   wraps `setup` / `teardown` dispatch, not `start` / `stop`
-//!   (Manual-mode processors take `RuntimeContextFullAccess` in
-//!   `start` but the engine does not hold the gate around it, so
-//!   `.escalate(...)` there is the legitimate Pattern 4 use case,
-//!   not the anti-pattern).
-//! - The `_inner` suffix variants cover delegation helpers (see the
-//!   `BlendingCompositor` / `CrtFilmGrain` / `CameraToCudaCopy`
-//!   shape) — a `fn setup` that immediately calls `self.setup_inner(ctx)`
-//!   leaks the dispatched body into the helper, which inherits the
-//!   gate-held semantic.
+//!   `teardown_inner`, `start`, `stop`, `start_inner`, or
+//!   `stop_inner` AND takes `&RuntimeContextFullAccess` in its
+//!   parameter list. The name-match scopes the lint to the
+//!   engine-side gate-wrap surface — `ProcessorInstance` wraps all
+//!   four FullAccess lifecycle methods (`setup` / `teardown` /
+//!   `start` / `stop`) in either `with_cdylib_scope` (cdylib-
+//!   resident processors) or `gpu_limited_access().escalate(|_|)`
+//!   (in-process register processors) since PR #1075 extended
+//!   #1072's wrap to symmetry across all four. The escalate gate
+//!   is therefore held for the entire body in every variant; inner
+//!   `.escalate(...)` re-enters on the same thread and trips the
+//!   gate's same-thread re-entry panic in
+//!   `EscalateGate::enter`.
+//! - The `_inner` suffix variants cover delegation helpers (see
+//!   the `BlendingCompositor` / `CrtFilmGrain` / `CameraToCudaCopy`
+//!   shape) — a `fn setup` that immediately calls
+//!   `self.setup_inner(ctx)` leaks the dispatched body into the
+//!   helper, which inherits the gate-held semantic.
+//!
+//! Note on Reactive `start` / `process` / `on_pause` / `on_resume`:
+//! these take `&RuntimeContextLimitedAccess` (not `FullAccess`), so
+//! the parameter-type filter naturally excludes them — `.escalate(...)`
+//! from a Reactive `start` body is the legitimate Pattern 4 use
+//! case and must not be flagged.
 //!
 //! Calls flagged inside those bodies:
 //! - `<expr>.escalate(...)` — any method call named `escalate` on
@@ -57,6 +68,28 @@ use walkdir::WalkDir;
 /// is scanned.
 const TARGET_DIRS: &[&str] = &["packages", "examples"];
 
+/// File-path-suffix allowlist. Files whose path ends with one of
+/// these strings are skipped. Each entry must come with a one-line
+/// rationale — the allowlist is a deliberate carve-out, not a
+/// silent suppression.
+const ALLOWLIST: &[(&str, &str)] = &[
+    // `concurrent_escalate_test_processor`'s purpose is testing
+    // gate serialization across N concurrent worker threads. Its
+    // spawn-then-join shape deadlocks under the with_cdylib_scope
+    // wrap (workers block on gate held by start). The integration
+    // test that drives it (`load_project_dylib_concurrent_escalate.rs`)
+    // is `#[ignore]`d as a result. Restructure to Reactive
+    // `process()` driven by external trigger frames is the
+    // documented follow-up; until then this fixture knowingly
+    // ships the pattern the lint exists to ban, with the runtime
+    // panic as the safety net if it's ever loaded.
+    (
+        "packages/test-fixtures/src/concurrent_escalate_test_processor.rs",
+        "intentional pattern that #1075's wrap deadlocks; \
+         integration test #[ignore]d, restructure deferred",
+    ),
+];
+
 /// Substring the function-parameter type-path must contain for the
 /// function body to be scanned. Matches both
 /// `&RuntimeContextFullAccess<'_>` and the fully-qualified
@@ -65,10 +98,20 @@ const LIFECYCLE_PARAM_MARKER: &str = "RuntimeContextFullAccess";
 
 /// Function names whose bodies are subject to the escalate ban
 /// when they also take `&RuntimeContextFullAccess`. Scoped to the
-/// engine-side gate-wrap surface (see
-/// `ProcessorInstance::setup` / `teardown`'s dispatch shape).
-const LIFECYCLE_FN_NAMES: &[&str] =
-    &["setup", "teardown", "setup_inner", "teardown_inner"];
+/// engine-side gate-wrap surface — `ProcessorInstance::setup`,
+/// `teardown`, `start` (Manual mode), and `stop` (Manual mode) all
+/// wrap cdylib-resident dispatch in `with_cdylib_scope` (which
+/// acquires the escalate gate) per PR #1075.
+const LIFECYCLE_FN_NAMES: &[&str] = &[
+    "setup",
+    "teardown",
+    "setup_inner",
+    "teardown_inner",
+    "start",
+    "stop",
+    "start_inner",
+    "stop_inner",
+];
 
 /// Method name flagged inside lifecycle bodies.
 const BANNED_METHOD: &str = "escalate";
@@ -85,8 +128,8 @@ pub fn run(workspace_root: &Path) -> Result<()> {
     if violations.is_empty() {
         println!(
             "✓ check-no-escalate-in-lifecycle: no `.escalate(...)` calls inside \
-             lifecycle bodies (setup / teardown / setup_inner / teardown_inner). \
-             Sandbox contract intact."
+             FullAccess lifecycle bodies (setup / teardown / start / stop and \
+             their _inner helpers). Sandbox contract intact."
         );
         return Ok(());
     }
@@ -147,6 +190,14 @@ pub fn scan_workspace(workspace_root: &Path) -> Result<Vec<Violation>> {
                 .strip_prefix(workspace_root)
                 .map(|p| p.to_path_buf())
                 .unwrap_or_else(|_| abs.to_path_buf());
+            // Allowlist check — relpath uses platform-native path
+            // separators; ALLOWLIST entries use `/` and we compare
+            // by ends_with on the to_string_lossy form to keep the
+            // table portable.
+            let relpath_str = relpath.to_string_lossy().replace('\\', "/");
+            if ALLOWLIST.iter().any(|(suffix, _)| relpath_str.ends_with(suffix)) {
+                continue;
+            }
             let src = fs::read_to_string(abs)
                 .with_context(|| format!("reading {}", abs.display()))?;
             let file = match syn::parse_file(&src) {
@@ -399,12 +450,11 @@ mod tests {
     }
 
     #[test]
-    fn allows_escalate_in_start_taking_full_access() {
-        // Manual-mode `start()` takes `&RuntimeContextFullAccess`
-        // but the engine does NOT hold the escalate gate around
-        // it (gate-wrap lives in ProcessorInstance::setup /
-        // teardown only). `.escalate(...)` from start() is the
-        // legitimate Pattern 4 use case, not the anti-pattern.
+    fn flags_escalate_in_manual_mode_start() {
+        // Per PR #1075, the engine wraps Manual-mode `start` in
+        // `with_cdylib_scope` for cdylib-resident processors —
+        // same gate-held semantic as setup/teardown. Inner
+        // escalate re-enters and panics.
         let src = r#"
             impl Proc {
                 fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
@@ -413,14 +463,35 @@ mod tests {
                 }
             }
         "#;
-        assert!(scan_source(src).is_empty());
+        let v = scan_source(src);
+        assert_eq!(v.len(), 1, "expected 1 violation, got: {v:?}");
+        assert_eq!(v[0].function, "start");
     }
 
     #[test]
-    fn allows_escalate_in_stop_taking_full_access() {
+    fn flags_escalate_in_manual_mode_stop() {
         let src = r#"
             impl Proc {
                 fn stop(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+                    let _ = ctx.gpu_limited_access().clone().escalate(|_| Ok::<(), ()>(()));
+                    Ok(())
+                }
+            }
+        "#;
+        let v = scan_source(src);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].function, "stop");
+    }
+
+    #[test]
+    fn allows_escalate_in_reactive_start_taking_limited_access() {
+        // Reactive `start()` takes `&RuntimeContextLimitedAccess`,
+        // not `FullAccess`. The engine does NOT hold the gate
+        // around Reactive start; `.escalate(...)` is the
+        // legitimate Pattern 4 use case there.
+        let src = r#"
+            impl Proc {
+                fn start(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
                     let _ = ctx.gpu_limited_access().clone().escalate(|_| Ok::<(), ()>(()));
                     Ok(())
                 }
@@ -431,9 +502,14 @@ mod tests {
 
     #[test]
     fn allows_escalate_in_arbitrarily_named_helper_with_full_access() {
-        // A helper called only from start() — not subject to the
-        // gate-wrap. Same body inside a fn named setup_inner
-        // would fire.
+        // Helpers with arbitrary names are not subject to the lint
+        // (the LIFECYCLE_FN_NAMES heuristic is name-driven). A
+        // helper called from a lifecycle hook inherits the
+        // gate-held semantic and would panic at runtime, but the
+        // lint can't catch every helper name — the panic guard is
+        // the backstop. Future refinement: extend to all fns
+        // taking FullAccess, but that over-fires on free-standing
+        // helpers in non-lifecycle code paths.
         let src = r#"
             impl Proc {
                 fn run_my_smoke(&self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {

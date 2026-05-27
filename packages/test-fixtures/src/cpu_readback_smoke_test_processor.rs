@@ -118,107 +118,113 @@ fn run_smoke<const W: u32, const H: u32>(
     ctx: &RuntimeContextFullAccess<'_>,
     surface_id: u64,
 ) -> Result<usize> {
-    ctx.gpu_limited_access().escalate(|full| {
-        // Step 1: extract Arc<HostVulkanDevice> via the v9 bridge.
-        let host_device = full.host_vulkan_device_arc()?;
+    // Manual-mode start() takes FullAccess directly; the engine
+    // wraps cdylib lifecycle dispatch in `with_cdylib_scope` (#1075),
+    // so `ctx.gpu_full_access()` is `ScopeToken`-flavored and
+    // dispatches through the FullAccess vtable transparently.
+    // Same coverage as the pre-#1075 escalate path; the wrap is the
+    // engine-side replacement for the explicit `.escalate(|full|...)`.
+    let full = ctx.gpu_full_access();
 
-        // Step 2: acquire a render-target DMA-BUF VkImage via the
-        // existing FullAccess vtable slot, then extract its underlying
-        // Arc<HostVulkanTexture> via the v10 host_vulkan_texture_arc
-        // bridge. The cpu-readback trigger requires a source VkImage.
-        let stream_texture =
-            full.acquire_render_target_dma_buf_image(W, H, TextureFormat::Bgra8Unorm)?;
-        let texture_arc = stream_texture.host_vulkan_texture_arc()?;
+    // Step 1: extract Arc<HostVulkanDevice> via the v9 bridge.
+    let host_device = full.host_vulkan_device_arc()?;
 
-        // Step 3: allocate HOST_VISIBLE staging VkBuffer through the
-        // cdylib-reachable constructor.
-        let staging_bytes = (W as u64) * (H as u64) * 4u64;
-        let staging = HostVulkanBuffer::new(&host_device, staging_bytes)
-            .map_err(|e| {
-                Error::GpuError(format!("HostVulkanBuffer::new: {e}"))
-            })?;
-        let staging_arc = Arc::new(staging);
+    // Step 2: acquire a render-target DMA-BUF VkImage via the
+    // existing FullAccess vtable slot, then extract its underlying
+    // Arc<HostVulkanTexture> via the v10 host_vulkan_texture_arc
+    // bridge. The cpu-readback trigger requires a source VkImage.
+    let stream_texture =
+        full.acquire_render_target_dma_buf_image(W, H, TextureFormat::Bgra8Unorm)?;
+    let texture_arc = stream_texture.host_vulkan_texture_arc()?;
 
-        // Step 4: allocate exportable timeline semaphore through the
-        // cdylib-reachable constructor.
-        let timeline = HostVulkanTimelineSemaphore::new_exportable(
-            host_device.device(),
-            0,
+    // Step 3: allocate HOST_VISIBLE staging VkBuffer through the
+    // cdylib-reachable constructor.
+    let staging_bytes = (W as u64) * (H as u64) * 4u64;
+    let staging = HostVulkanBuffer::new(&host_device, staging_bytes)
+        .map_err(|e| {
+            Error::GpuError(format!("HostVulkanBuffer::new: {e}"))
+        })?;
+    let staging_arc = Arc::new(staging);
+
+    // Step 4: allocate exportable timeline semaphore through the
+    // cdylib-reachable constructor.
+    let timeline = HostVulkanTimelineSemaphore::new_exportable(
+        host_device.device(),
+        0,
+    )
+    .map_err(|e| {
+        Error::GpuError(format!(
+            "HostVulkanTimelineSemaphore::new_exportable: {e}"
+        ))
+    })?;
+    let timeline_arc = Arc::new(timeline);
+
+    // Step 5: construct CpuReadbackSurfaceAdapter against the same
+    // device.
+    let trigger = Arc::new(InProcessCpuReadbackCopyTrigger::new(
+        Arc::clone(&host_device),
+    )) as Arc<dyn CpuReadbackCopyTrigger<HostMarker>>;
+    let adapter = Arc::new(CpuReadbackSurfaceAdapter::new(
+        Arc::clone(&host_device),
+        trigger,
+    ));
+
+    // Step 6: register the host surface with the adapter.
+    adapter
+        .register_host_surface(
+            surface_id,
+            HostSurfaceRegistration::<HostMarker> {
+                texture: Some(Arc::clone(&texture_arc)),
+                staging_planes: vec![Arc::clone(&staging_arc)],
+                timeline: Arc::clone(&timeline_arc),
+                initial_image_layout: VulkanLayout::UNDEFINED,
+                format: SurfaceFormat::Bgra8,
+                width: W,
+                height: H,
+            },
         )
         .map_err(|e| {
             Error::GpuError(format!(
-                "HostVulkanTimelineSemaphore::new_exportable: {e}"
+                "CpuReadbackSurfaceAdapter::register_host_surface: {e:?}"
             ))
         })?;
-        let timeline_arc = Arc::new(timeline);
 
-        // Step 5: construct CpuReadbackSurfaceAdapter against the same
-        // device.
-        let trigger = Arc::new(InProcessCpuReadbackCopyTrigger::new(
-            Arc::clone(&host_device),
-        )) as Arc<dyn CpuReadbackCopyTrigger<HostMarker>>;
-        let adapter = Arc::new(CpuReadbackSurfaceAdapter::new(
-            Arc::clone(&host_device),
-            trigger,
-        ));
+    // Step 7: acquire_write → view_mut → write sentinel → drop guard.
+    let surface = StreamlibSurface::new(
+        surface_id,
+        W,
+        H,
+        SurfaceFormat::Bgra8,
+        SurfaceUsage::CPU_READBACK,
+        SurfaceTransportHandle::empty(),
+        SurfaceSyncState::default(),
+    );
+    let mut guard = adapter.acquire_write(&surface).map_err(|e| {
+        Error::GpuError(format!(
+            "CpuReadbackSurfaceAdapter::acquire_write: {e:?}"
+        ))
+    })?;
+    let bytes_written = {
+        let view = guard.view_mut();
+        let plane = view.plane_mut(0);
+        let bytes = plane.bytes_mut();
+        if bytes.is_empty() {
+            return Err(Error::GpuError(
+                "plane.bytes_mut() returned empty slice".into(),
+            ));
+        }
+        bytes[0] = 0xAB;
+        1usize
+    };
+    drop(guard);
 
-        // Step 6: register the host surface with the adapter.
-        adapter
-            .register_host_surface(
-                surface_id,
-                HostSurfaceRegistration::<HostMarker> {
-                    texture: Some(Arc::clone(&texture_arc)),
-                    staging_planes: vec![Arc::clone(&staging_arc)],
-                    timeline: Arc::clone(&timeline_arc),
-                    initial_image_layout: VulkanLayout::UNDEFINED,
-                    format: SurfaceFormat::Bgra8,
-                    width: W,
-                    height: H,
-                },
-            )
-            .map_err(|e| {
-                Error::GpuError(format!(
-                    "CpuReadbackSurfaceAdapter::register_host_surface: {e:?}"
-                ))
-            })?;
+    // Drop adapter + Arcs explicitly; the staging buffer / timeline
+    // hold strong refs to the device_arc through their Drop impls
+    // so the device cleanup runs at scope exit.
+    drop(adapter);
+    drop(timeline_arc);
+    drop(staging_arc);
+    drop(texture_arc);
 
-        // Step 7: acquire_write → view_mut → write sentinel → drop guard.
-        let surface = StreamlibSurface::new(
-            surface_id,
-            W,
-            H,
-            SurfaceFormat::Bgra8,
-            SurfaceUsage::CPU_READBACK,
-            SurfaceTransportHandle::empty(),
-            SurfaceSyncState::default(),
-        );
-        let mut guard = adapter.acquire_write(&surface).map_err(|e| {
-            Error::GpuError(format!(
-                "CpuReadbackSurfaceAdapter::acquire_write: {e:?}"
-            ))
-        })?;
-        let bytes_written = {
-            let view = guard.view_mut();
-            let plane = view.plane_mut(0);
-            let bytes = plane.bytes_mut();
-            if bytes.is_empty() {
-                return Err(Error::GpuError(
-                    "plane.bytes_mut() returned empty slice".into(),
-                ));
-            }
-            bytes[0] = 0xAB;
-            1usize
-        };
-        drop(guard);
-
-        // Drop adapter + Arcs explicitly; the staging buffer / timeline
-        // hold strong refs to the device_arc through their Drop impls
-        // so the device cleanup runs at scope exit.
-        drop(adapter);
-        drop(timeline_arc);
-        drop(staging_arc);
-        drop(texture_arc);
-
-        Ok(bytes_written)
-    })
+    Ok(bytes_written)
 }
