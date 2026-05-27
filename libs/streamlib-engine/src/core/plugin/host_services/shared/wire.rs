@@ -50,6 +50,27 @@ pub(in crate::core::plugin::host_services) fn write_err(
     }
 }
 
+/// Companion to [`write_err`] used by the iceoryx2-transport
+/// wrappers (`OutputWriter`, `InputMailboxes`). Same shape with a
+/// stricter early-return — skips the write entirely if either
+/// `err_buf` or `err_len` is null.
+pub(in crate::core::plugin::host_services) fn write_extern_err(
+    msg: &str,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) {
+    if err_buf.is_null() || err_len.is_null() {
+        return;
+    }
+    let bytes = msg.as_bytes();
+    let n = bytes.len().min(err_buf_cap);
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), err_buf, n);
+        *err_len = n;
+    }
+}
+
 /// Write id bytes into a `(out_buf, out_buf_cap, out_len)` triple
 /// using the runtime-id / processor-id convention: write the smaller
 /// of `bytes.len()` and `out_buf_cap`, set `*out_len` to the number
