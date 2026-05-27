@@ -42,11 +42,7 @@ properties:
     type: uint32
   timestamp_ns:
     metadata:
-      description: "Monotonic timestamp in nanoseconds (int64 as string - parse to native int64)"
-    type: string
-  frame_index:
-    metadata:
-      description: "Sequential frame counter (uint64 as string - parse to native uint64)"
+      description: "Monotonic timestamp in nanoseconds (int64 as string - parse to native int64). The single ordering primitive in this schema — consumers that need 'frame N' semantics derive it from timestamps, never from a cross-processor counter. Cameras carry the source timecode here; downstream processors propagate. NOTE: a prior revision of this schema carried a `frame_index: string` field; it was removed because no legitimate cross-processor use case existed and every observed read of it was either diagnostic-only (replaceable by a processor-internal counter) or actively misused as a sync primitive (the camera→display timeline-wait path that caused #1085's residual wedge). Surface_id is the handoff contract; timestamp_ns is the ordering primitive; nothing else."
     type: string
 
 optionalProperties:

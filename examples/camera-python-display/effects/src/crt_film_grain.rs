@@ -207,7 +207,6 @@ impl streamlib::sdk::processors::ReactiveProcessor for CrtFilmGrainProcessor::Pr
             width: slot.texture.width(),
             height: slot.texture.height(),
             timestamp_ns: frame.timestamp_ns.clone(),
-            frame_index: frame.frame_index.clone(),
             fps: frame.fps,
             // Per-frame override is opt-in; the per-surface
             // `current_image_layout` published via surface-share is
@@ -325,7 +324,6 @@ fn synth_slot_videoframe(surface_id: &str, width: u32, height: u32) -> VideoFram
         width,
         height,
         timestamp_ns: "0".into(),
-        frame_index: "0".into(),
         fps: None,
         texture_layout: None,
         color_info: None,

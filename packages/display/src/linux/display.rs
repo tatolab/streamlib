@@ -749,11 +749,9 @@ impl DisplayEventLoopHandler {
 
         if let Some(ref dir) = self.png_sample_dir {
             if frame_idx % self.png_sample_every == 0 {
-                let input_frame_index: u64 =
-                    ipc_frame.frame_index.parse().unwrap_or(frame_idx);
                 let path = dir.join(format!(
-                    "display_{:03}_frame_{:06}_input_{:06}.png",
-                    self.window_id, frame_idx, input_frame_index
+                    "display_{:03}_frame_{:06}.png",
+                    self.window_id, frame_idx
                 ));
                 if let Ok(buf) = self.gpu_context.resolve_pixel_buffer_by_surface_id(&ipc_frame.surface_id) {
                     let mapped_ptr = buf.plane_base_address(0);
@@ -763,23 +761,22 @@ impl DisplayEventLoopHandler {
                             unsafe { std::slice::from_raw_parts(mapped_ptr, len) };
                         if let Err(e) = write_png_rgba(&path, src_width, src_height, rgba) {
                             tracing::warn!(
-                                "Display {}: PNG sample save failed for input frame {}: {}",
-                                self.window_id, input_frame_index, e
+                                "Display {}: PNG sample save failed at frame {}: {}",
+                                self.window_id, frame_idx, e
                             );
                         } else {
                             self.png_samples_saved += 1;
                             tracing::info!(
-                                "Display {}: saved PNG sample {:?} (input {}, displayed {}, total saved {})",
+                                "Display {}: saved PNG sample {:?} (displayed {}, total saved {})",
                                 self.window_id,
                                 path,
-                                input_frame_index,
                                 frame_idx,
                                 self.png_samples_saved
                             );
                         }
                     }
                 } else {
-                    self.sample_texture_to_png(&camera_texture, &path, frame_idx, input_frame_index);
+                    self.sample_texture_to_png(&camera_texture, &path, frame_idx);
                 }
             }
         }
@@ -790,7 +787,6 @@ impl DisplayEventLoopHandler {
         texture: &Texture,
         path: &std::path::Path,
         frame_idx: u64,
-        input_frame_index: u64,
     ) {
         let format = texture.format();
         let width = texture.width();
@@ -798,10 +794,10 @@ impl DisplayEventLoopHandler {
 
         if format.bytes_per_pixel() != 4 {
             tracing::warn!(
-                "Display {}: skip PNG sample for input frame {} — texture format {:?} \
+                "Display {}: skip PNG sample at frame {} — texture format {:?} \
                  (bpp={}) not supported by PNG writer",
                 self.window_id,
-                input_frame_index,
+                frame_idx,
                 format,
                 format.bytes_per_pixel()
             );
@@ -847,9 +843,9 @@ impl DisplayEventLoopHandler {
             Ok(t) => t,
             Err(e) => {
                 tracing::warn!(
-                    "Display {}: PNG texture-readback submit failed for input frame {}: {}",
+                    "Display {}: PNG texture-readback submit failed at frame {}: {}",
                     self.window_id,
-                    input_frame_index,
+                    frame_idx,
                     e
                 );
                 return;
@@ -864,27 +860,26 @@ impl DisplayEventLoopHandler {
                 self.png_samples_saved += 1;
                 tracing::info!(
                     "Display {}: saved PNG sample (texture path) {:?} \
-                     (input {}, displayed {}, total saved {})",
+                     (displayed {}, total saved {})",
                     self.window_id,
                     path,
-                    input_frame_index,
                     frame_idx,
                     self.png_samples_saved
                 );
             }
             Ok(Err(e)) => {
                 tracing::warn!(
-                    "Display {}: PNG sample (texture path) save failed for input frame {}: {}",
+                    "Display {}: PNG sample (texture path) save failed at frame {}: {}",
                     self.window_id,
-                    input_frame_index,
+                    frame_idx,
                     e
                 );
             }
             Err(e) => {
                 tracing::warn!(
-                    "Display {}: PNG texture-readback wait failed for input frame {}: {}",
+                    "Display {}: PNG texture-readback wait failed at frame {}: {}",
                     self.window_id,
-                    input_frame_index,
+                    frame_idx,
                     e
                 );
             }

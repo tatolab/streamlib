@@ -18,7 +18,7 @@ fn videoframe_texture_layout_serialization_round_trip() {
         width: 8,
         height: 8,
         timestamp_ns: "0".to_string(),
-        frame_index: "1".to_string(),
+
         fps: None,
         // SHADER_READ_ONLY_OPTIMAL = 5 per Vulkan spec.
         texture_layout: Some(5),
@@ -38,7 +38,7 @@ fn videoframe_texture_layout_serialization_round_trip() {
         width: 8,
         height: 8,
         timestamp_ns: "0".to_string(),
-        frame_index: "1".to_string(),
+
         fps: None,
         texture_layout: None,
         color_info: None,

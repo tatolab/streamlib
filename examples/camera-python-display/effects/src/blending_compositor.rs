@@ -688,7 +688,6 @@ fn compose_one_frame(
         width,
         height,
         timestamp_ns: timestamp_ns.to_string(),
-        frame_index: count.to_string(),
         fps: None,
         // Per-frame override is opt-in; the per-surface
         // `current_image_layout` published via surface-share / Path 1
@@ -981,7 +980,6 @@ fn slot_videoframe(surface_id: &str, width: u32, height: u32) -> VideoFrame {
         width,
         height,
         timestamp_ns: "0".into(),
-        frame_index: "0".into(),
         fps: None,
         texture_layout: None,
         color_info: None,
