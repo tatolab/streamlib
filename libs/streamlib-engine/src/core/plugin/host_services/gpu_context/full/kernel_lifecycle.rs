@@ -11,12 +11,16 @@
 //! host-compiled code so the cdylib never has to know the inner
 //! β-shape's layout.
 //!
-//! On non-Linux hosts the kernel types don't exist; mod.rs's vtable
-//! static keeps the slots cfg-gated for ABI-version stability.
+//! On non-Linux hosts the kernel types don't exist; each callback ships a
+//! `#[cfg(not(target_os = "linux"))]` defensive-no-op stub so the parent
+//! `HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE` static resolves on every platform
+//! (ABI-version stability — slot count + offsets unchanged).
 
 use std::ffi::c_void;
+#[cfg(target_os = "linux")]
 use std::sync::Arc;
 
+#[cfg(target_os = "linux")]
 use super::super::super::run_host_extern_c;
 
 // ---------------- Kernel Arc-handle lifecycle (Linux-only) ----------------

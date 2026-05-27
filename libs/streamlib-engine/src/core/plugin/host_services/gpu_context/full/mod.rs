@@ -19,19 +19,15 @@ use std::ffi::c_void;
 
 use super::super::run_host_extern_c;
 
-#[cfg(target_os = "linux")]
 mod kernel_construction;
-#[cfg(target_os = "linux")]
 mod kernel_lifecycle;
 mod methods;
 mod render_target;
 
-#[cfg(target_os = "linux")]
 pub(in crate::core::plugin::host_services) use kernel_construction::{
     host_gpu_full_create_compute_kernel, host_gpu_full_create_graphics_kernel,
     host_gpu_full_create_ray_tracing_kernel, host_gpu_full_create_texture_ring,
 };
-#[cfg(target_os = "linux")]
 pub(in crate::core::plugin::host_services) use kernel_lifecycle::{
     host_gpu_full_clone_acceleration_structure, host_gpu_full_clone_color_converter,
     host_gpu_full_clone_command_recorder, host_gpu_full_clone_compute_kernel,

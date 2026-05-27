@@ -22,7 +22,9 @@ use streamlib_plugin_abi::{
     ComputeKernelDescriptorRepr, GraphicsKernelDescriptorRepr, RayTracingKernelDescriptorRepr,
 };
 
+#[cfg(target_os = "linux")]
 use super::super::scope_token::with_full_scope_or_err;
+#[cfg(target_os = "linux")]
 use super::super::super::run_host_extern_c;
 use super::super::super::shared::wire::write_err;
 
