@@ -25,6 +25,10 @@ use super::host_callbacks;
 use super::run_host_extern_c;
 use super::shared::wire::{slice_from_raw, write_err, write_id_bytes};
 
+mod shared;
+
+use shared::{handle_as_gpu_context, pixel_format_from_raw};
+
 // pointers and reading nothing about layout.
 
 // ---------------- GpuContextLimitedAccess vtable ----------------
@@ -482,22 +486,6 @@ unsafe extern "C" fn host_gpu_lim_drop_pooled_texture_handle(handle: *const c_vo
 // -------------------------------------------------------------------------
 // Method dispatch — Texture-related (v4)
 // -------------------------------------------------------------------------
-
-/// Borrow a `&Arc<GpuContext>` from a `*const Arc<GpuContext>`-shaped
-/// host handle. Caller must guarantee `handle` came from
-/// [`crate::core::context::GpuContextLimitedAccess::new`] or
-/// [`host_gpu_lim_clone_handle`]; both produce
-/// `Box::into_raw(Box::new(Arc::new(...))) as *const c_void`.
-unsafe fn handle_as_gpu_context(
-    handle: *const c_void,
-) -> Option<&'static Arc<crate::core::context::GpuContext>> {
-    if handle.is_null() {
-        return None;
-    }
-    // SAFETY: caller-supplied contract; the Box keeps the Arc alive
-    // for the duration of the dispatch through the vtable.
-    unsafe { Some(&*(handle as *const Arc<crate::core::context::GpuContext>)) }
-}
 
 unsafe extern "C" fn host_gpu_lim_register_texture(
     handle: *const c_void,
@@ -2071,27 +2059,6 @@ unsafe extern "C" fn host_gpu_lim_check_out_surface(
 // -------------------------------------------------------------------------
 // PixelBuffer acquire / get / resolve method-dispatch
 // -------------------------------------------------------------------------
-
-#[inline]
-fn pixel_format_from_raw(raw: u32) -> Option<streamlib_consumer_rhi::PixelFormat> {
-    // Mirror of `PixelBuffer::format`'s reverse mapping. Each
-    // `#[repr(u32)]` discriminant maps back to its variant; unknown
-    // values return None (caller surfaces an error).
-    use streamlib_consumer_rhi::PixelFormat;
-    match raw {
-        0x42475241 => Some(PixelFormat::Bgra32),
-        0x52474241 => Some(PixelFormat::Rgba32),
-        0x00000020 => Some(PixelFormat::Argb32),
-        0x52476841 => Some(PixelFormat::Rgba64),
-        0x34323076 => Some(PixelFormat::Nv12VideoRange),
-        0x34323066 => Some(PixelFormat::Nv12FullRange),
-        0x32767579 => Some(PixelFormat::Uyvy422),
-        0x79757673 => Some(PixelFormat::Yuyv422),
-        0x4C303038 => Some(PixelFormat::Gray8),
-        0x00000000 => Some(PixelFormat::Unknown),
-        _ => None,
-    }
-}
 
 unsafe extern "C" fn host_gpu_lim_acquire_pixel_buffer(
     gpu_handle: *const c_void,
