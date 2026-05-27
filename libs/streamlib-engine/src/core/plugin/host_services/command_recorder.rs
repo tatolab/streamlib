@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use super::host_callbacks;
 use super::run_host_extern_c;
+#[cfg(target_os = "linux")]
 use super::shared::borrow::{
     make_compute_kernel_borrow, make_graphics_kernel_borrow, make_pixel_buffer_borrow,
     make_storage_buffer_borrow, make_texture_borrow,

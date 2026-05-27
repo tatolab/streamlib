@@ -224,7 +224,8 @@ pub(crate) unsafe extern "C" fn host_input_mailboxes_drop_arc(handle: *const c_v
 }
 
 /// Per-DSO host-side static InputMailboxes dispatch table.
-pub static HOST_INPUT_MAILBOXES_VTABLE: streamlib_plugin_abi::InputMailboxesVTable =
+pub(in crate::core::plugin::host_services) static HOST_INPUT_MAILBOXES_VTABLE:
+    streamlib_plugin_abi::InputMailboxesVTable =
     streamlib_plugin_abi::InputMailboxesVTable {
         layout_version: streamlib_plugin_abi::INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION,
         _reserved_padding: 0,

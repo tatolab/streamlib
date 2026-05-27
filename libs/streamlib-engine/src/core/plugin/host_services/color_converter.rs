@@ -18,6 +18,7 @@ use std::ffi::c_void;
 
 use super::host_callbacks;
 use super::run_host_extern_c;
+#[cfg(target_os = "linux")]
 use super::shared::borrow::{
     make_pixel_buffer_borrow, make_storage_buffer_borrow, make_texture_borrow,
 };

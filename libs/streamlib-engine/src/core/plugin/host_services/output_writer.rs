@@ -170,7 +170,8 @@ pub(crate) unsafe extern "C" fn host_output_writer_drop_arc(handle: *const c_voi
 }
 
 /// Per-DSO host-side static OutputWriter dispatch table.
-pub static HOST_OUTPUT_WRITER_VTABLE: streamlib_plugin_abi::OutputWriterVTable =
+pub(in crate::core::plugin::host_services) static HOST_OUTPUT_WRITER_VTABLE:
+    streamlib_plugin_abi::OutputWriterVTable =
     streamlib_plugin_abi::OutputWriterVTable {
         layout_version: streamlib_plugin_abi::OUTPUT_WRITER_VTABLE_LAYOUT_VERSION,
         _reserved_padding: 0,

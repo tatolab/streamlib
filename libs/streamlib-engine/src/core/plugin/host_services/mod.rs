@@ -107,8 +107,10 @@ pub use gpu_context::{
     host_gpu_context_full_access_vtable, host_gpu_context_limited_access_vtable,
     HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE, HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE,
 };
-pub use input_mailboxes::{host_input_mailboxes_vtable, HOST_INPUT_MAILBOXES_VTABLE};
-pub use output_writer::{host_output_writer_vtable, HOST_OUTPUT_WRITER_VTABLE};
+pub use input_mailboxes::host_input_mailboxes_vtable;
+use input_mailboxes::HOST_INPUT_MAILBOXES_VTABLE;
+pub use output_writer::host_output_writer_vtable;
+use output_writer::HOST_OUTPUT_WRITER_VTABLE;
 pub use runtime_context::{host_runtime_context_vtable, HOST_RUNTIME_CONTEXT_VTABLE};
 pub use runtime_ops::{
     host_runtime_ops_vtable, install_host_runtime_tokio_handle, HOST_RUNTIME_OPS_VTABLE,
