@@ -96,12 +96,13 @@ something on the host side.
      │              │              │                     │
      ▼              ▼              ▼                     ▼
    Pattern 4     Pattern 5      Pattern 3             Pattern 2
-   escalate +    (see "engine-  per-method            β-shape Arc-
-   FullAccess    SDK reach"     vtable slot           transit slot
-   work in       below — not    (set_storage_         (host_vulkan_
-   closure       a clean        buffer_pixel etc)    X_arc — #1066/
-                 pattern; see                          68/69/70/71)
-                 #1073)
+   escalate +    per-method     per-method            β-shape Arc-
+   FullAccess    vtable slot    vtable slot           transit slot
+   work in       w/ raw         (set_storage_         (host_vulkan_
+   closure       vulkanalia     buffer_pixel etc)    X_arc — #1066/
+                 handle wire                          68/69/70/71)
+                 (set_*_image_
+                  view, record)
 ```
 
 **Critical asymmetry**: Pattern 4 (escalate) only applies to
@@ -147,15 +148,23 @@ The five patterns:
   holds the gate, and re-entry panics with an actionable message
   via `EscalateGate`'s same-thread re-entry detector. The xtask
   lint `check-no-escalate-in-lifecycle` enforces this statically.
-- **Pattern 5: engine-SDK-internal reaches** (#1073 class) — when
-  engine SDK code (`SimpleEncoder`, `SimpleDecoder`, etc.) reaches
-  a `host_inner()`-only method on `VulkanComputeKernel` etc. via
-  intermediate types (the per-method vtable slots don't cover
-  these methods because they take raw `vk::*` handles). Three real
-  shapes: (A) lift the engine SDK boundary to escalate the
-  internal call; (B) build new ABI wire types for the raw
-  vulkanalia handles; (C) move the offending engine code to
-  host-only crates. See #1073's issue body for the live decision.
+- **Pattern 5: per-method vtable slot carrying a raw vulkanalia
+  handle** — `set_sampled_image_view`, `set_combined_image_sampler_view`,
+  `set_storage_image_view`, and `record` on `VulkanComputeKernel`.
+  Engine SDK code (`RgbToNv12Converter::convert`,
+  `Nv12ToRgbConverter::convert`) compiled into workspace plugin
+  cdylibs reaches these `pub(crate)` methods on the per-frame path.
+  The vtable slot carries the raw `vk::ImageView` / `vk::CommandBuffer`
+  as a `u64` wire value (vulkanalia's handle types are
+  `#[repr(transparent)]` over `u64` / `usize`); the host wrapper
+  reconstructs the typed handle via `Handle::from_raw` before
+  forwarding. Same structural shape as Pattern 3 — the asymmetry
+  is that the binding payload here is a raw vulkanalia integer
+  rather than an engine-public β-shape. The host method stays
+  `pub(crate)` because subprocess (Python/Deno) cdylibs don't
+  link the engine SDK code that reaches it; only workspace plugin
+  cdylibs (h264/h265/camera) hit this path. This pattern landed
+  via v5 of `VulkanComputeKernelMethodsVTable`.
 
 ## Constructor bridge sub-decision (was Pattern 2's sub-tree)
 
@@ -324,15 +333,17 @@ in this codebase before being caught.
    (Pattern 2 or 3) — the parallel HashMap goes stale the moment
    the host's source-of-truth changes.
 
-5. ❌ **Calling a host-only `pub(crate)` method from cdylib code
-   via a hand-built `vk::*` argument.** The `set_sampled_image_view`
-   / `set_storage_image_view` / `record` methods on
-   `VulkanComputeKernel` are `pub(crate)` precisely because cdylib
-   code can't construct raw vulkanalia handles. Reaching them via
-   `kernel.host_inner().set_*(...)` (bypassing the panic guard)
-   re-introduces UB — those methods read host-private memory.
-   **For this class of reach, see #1073 and Pattern 5 — none of
-   the existing patterns directly cover it; new design is needed.**
+5. ❌ **Bypassing the panic guard via
+   `kernel.host_inner().set_*(...)` to reach a `pub(crate)`
+   method.** The `set_sampled_image_view` /
+   `set_combined_image_sampler_view` / `set_storage_image_view` /
+   `record` methods on `VulkanComputeKernel` are now mode-routed
+   through the v5 `VulkanComputeKernelMethodsVTable` slots
+   (Pattern 5 — see the catalog above). Reaching them via
+   `host_inner()` instead skips the routing and reads host-private
+   memory from the cdylib's address space — UB. Always call the
+   public `pub(crate)` method (it picks the right path); never
+   `host_inner()`.
 
 ## Enforcement
 

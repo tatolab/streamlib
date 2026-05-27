@@ -8440,9 +8440,272 @@ unsafe extern "C" fn host_compute_kernel_bindings(
     1
 }
 
-/// Host-side `VulkanComputeKernelMethodsVTable` populated with v4
-/// method slots — v3's binding-method dispatch surface plus the v4
-/// `bindings` introspection slot.
+// ---- Raw-vulkanalia-handle slots (v5 — #1073) -----------------------------
+//
+// Engine SDK code (`RgbToNv12Converter::convert`,
+// `Nv12ToRgbConverter::convert`) reaches three `pub(crate)`
+// `VulkanComputeKernel` setter methods that take raw `vk::ImageView`
+// and one `record` method that takes raw `vk::CommandBuffer`. When
+// that engine SDK code is compiled into a cdylib (workspace plugin
+// packages with `crate-type = ["rlib", "cdylib"]` — h264, h265,
+// camera), the cdylib-compiled methods can't deref `host_inner()`
+// without tripping the panic guard. These callbacks let the cdylib
+// dispatch through the host's per-method vtable instead.
+//
+// Wire shape: `vk::ImageView` is `#[repr(transparent)] pub struct
+// ImageView(u64)` and `vk::CommandBuffer` is `#[repr(transparent)]
+// pub struct CommandBuffer(usize)` (vulkanalia-sys handles.rs). The
+// FFI carries the raw integer as `u64`; the host reconstructs via
+// `Handle::from_raw` before forwarding.
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_compute_kernel_set_sampled_image_view(
+    kernel_handle: *const c_void,
+    binding: u32,
+    image_view_handle: u64,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    use vulkanalia::vk::{self, Handle};
+    run_host_extern_c(
+        "host_compute_kernel_set_sampled_image_view",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_sampled_image_view: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            let view = vk::ImageView::from_raw(image_view_handle);
+            match kernel.set_sampled_image_view(binding, view) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("set_sampled_image_view: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_compute_kernel_set_combined_image_sampler_view(
+    kernel_handle: *const c_void,
+    binding: u32,
+    image_view_handle: u64,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    use vulkanalia::vk::{self, Handle};
+    run_host_extern_c(
+        "host_compute_kernel_set_combined_image_sampler_view",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_combined_image_sampler_view: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            let view = vk::ImageView::from_raw(image_view_handle);
+            match kernel.set_combined_image_sampler_view(binding, view) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("set_combined_image_sampler_view: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_compute_kernel_set_storage_image_view(
+    kernel_handle: *const c_void,
+    binding: u32,
+    image_view_handle: u64,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    use vulkanalia::vk::{self, Handle};
+    run_host_extern_c(
+        "host_compute_kernel_set_storage_image_view",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "set_storage_image_view: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            let view = vk::ImageView::from_raw(image_view_handle);
+            match kernel.set_storage_image_view(binding, view) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("set_storage_image_view: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_compute_kernel_record(
+    kernel_handle: *const c_void,
+    command_buffer_handle: u64,
+    group_x: u32,
+    group_y: u32,
+    group_z: u32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    use vulkanalia::vk::{self, Handle};
+    run_host_extern_c(
+        "host_compute_kernel_record",
+        || -> i32 {
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
+            else {
+                write_err(
+                    "record: null kernel handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            // vulkanalia's CommandBuffer wraps a usize; on every supported
+            // target usize == u64, so the cast is lossless.
+            let cb = vk::CommandBuffer::from_raw(command_buffer_handle as usize);
+            match kernel.record(cb, group_x, group_y, group_z) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(
+                        &format!("record: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+// ---- Non-Linux stubs for v5 raw-vulkanalia-handle slots --------------------
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_compute_kernel_set_sampled_image_view(
+    _kernel_handle: *const c_void,
+    _binding: u32,
+    _image_view_handle: u64,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_sampled_image_view: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_compute_kernel_set_combined_image_sampler_view(
+    _kernel_handle: *const c_void,
+    _binding: u32,
+    _image_view_handle: u64,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_combined_image_sampler_view: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_compute_kernel_set_storage_image_view(
+    _kernel_handle: *const c_void,
+    _binding: u32,
+    _image_view_handle: u64,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "set_storage_image_view: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_compute_kernel_record(
+    _kernel_handle: *const c_void,
+    _command_buffer_handle: u64,
+    _group_x: u32,
+    _group_y: u32,
+    _group_z: u32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "record: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+/// Host-side `VulkanComputeKernelMethodsVTable` populated with v5
+/// method slots — v4's surface plus the v5 raw-vulkanalia-handle
+/// slots needed by engine-SDK-internal converter code reaching out of
+/// cdylib-resident processors (#1073).
 pub static HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE:
     streamlib_plugin_abi::VulkanComputeKernelMethodsVTable =
     streamlib_plugin_abi::VulkanComputeKernelMethodsVTable {
@@ -8456,6 +8719,11 @@ pub static HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE:
         set_sampled_texture: host_compute_kernel_set_sampled_texture,
         set_storage_image: host_compute_kernel_set_storage_image,
         bindings: host_compute_kernel_bindings,
+        set_sampled_image_view: host_compute_kernel_set_sampled_image_view,
+        set_combined_image_sampler_view:
+            host_compute_kernel_set_combined_image_sampler_view,
+        set_storage_image_view: host_compute_kernel_set_storage_image_view,
+        record: host_compute_kernel_record,
     };
 
 /// Accessor for the host's static `VulkanComputeKernelMethodsVTable`
@@ -13789,6 +14057,104 @@ mod compute_kernel_methods_vtable_null_tests {
         assert!(
             err_buf_as_str(&buf, len)
                 .contains("set_storage_image: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    // ---- v5 raw-vulkanalia-handle slots (#1073) -----------------------------
+    //
+    // The null-kernel-handle case is the tier-1 reach: passing a real
+    // `vk::ImageView` / `vk::CommandBuffer` raw handle with a null
+    // kernel pointer must fail cleanly before any deref. Non-null but
+    // garbage kernel handles still trip the host_inner deref's pointer
+    // alignment / segfault — the same precedent the v3/v4 tests
+    // document.
+
+    #[test]
+    fn set_sampled_image_view_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE.set_sampled_image_view)(
+                std::ptr::null(),
+                0,
+                0,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("set_sampled_image_view: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn set_combined_image_sampler_view_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE
+                .set_combined_image_sampler_view)(
+                std::ptr::null(),
+                0,
+                0,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("set_combined_image_sampler_view: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn set_storage_image_view_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE.set_storage_image_view)(
+                std::ptr::null(),
+                0,
+                0,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("set_storage_image_view: null kernel handle"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    fn record_rejects_null_kernel_handle() {
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE.record)(
+                std::ptr::null(),
+                0,
+                1, 1, 1,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("record: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );

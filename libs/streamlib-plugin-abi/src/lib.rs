@@ -390,7 +390,19 @@ pub const TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 ///   in `out_specs_len`; callers reallocate and retry. Replaces the
 ///   β-shape's bare `host_inner().bindings()` call which panicked
 ///   from cdylib code.
-pub const VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 4;
+///
+/// - v5: appended four raw-vulkanalia-handle slots —
+///   `set_sampled_image_view`, `set_combined_image_sampler_view`,
+///   `set_storage_image_view`, `record`. Each carries the raw
+///   `vk::ImageView` / `vk::CommandBuffer` handle as a `u64`
+///   (vulkanalia's handles are `#[repr(transparent)] pub struct
+///   ImageView(u64)` / `CommandBuffer(usize)`, so the wire form is the
+///   raw integer the host reconstructs via `Handle::from_raw`).
+///   Replaces the β-shape's bare `host_inner().set_*_view(...)` /
+///   `host_inner().record(...)` calls that engine SDK code
+///   (`RgbToNv12Converter::convert`, `Nv12ToRgbConverter::convert`)
+///   reaches per-frame from cdylib-resident processor bodies (#1073).
+pub const VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 5;
 
 /// Layout version of [`VulkanGraphicsKernelMethodsVTable`].
 ///
@@ -3214,17 +3226,18 @@ unsafe impl Sync for TextureRingMethodsVTable {}
 /// **RHI Buffer Model Alignment** milestone and would simplify this
 /// vtable further; until then, per-type slots are the right shape.
 ///
-/// **Coverage today** (v3): `set_push_constants`, `dispatch`,
-/// `set_storage_buffer_pixel(&PixelBuffer)`,
-/// `set_storage_buffer_storage(&StorageBuffer)`,
-/// `set_uniform_buffer(&UniformBuffer)`,
-/// `set_sampled_texture(&Texture)`,
-/// `set_storage_image(&Texture)`.
-///
-/// The engine-only methods (`record(cmd_buf)`,
-/// `set_*_image_view(vk::ImageView)`, `bindings() -> Vec<ComputeBindingSpec>`)
-/// stay `host_inner`-routed — their parameter / return types are
-/// host-internal vulkanalia or allocator-crossing.
+/// **Coverage today** (v5): all v3 binding-method slots
+/// (`set_push_constants`, `dispatch`, `set_storage_buffer_pixel`,
+/// `set_storage_buffer_storage`, `set_uniform_buffer`,
+/// `set_sampled_texture`, `set_storage_image`), v4's `bindings`
+/// introspection slot, plus v5's four raw-vulkanalia-handle slots
+/// (`set_sampled_image_view`, `set_combined_image_sampler_view`,
+/// `set_storage_image_view`, `record`). The image-view-by-handle
+/// trio carries `vk::ImageView` as `u64`; the `record` slot carries
+/// `vk::CommandBuffer` as `u64`. Vulkanalia handles are
+/// `#[repr(transparent)]` wrappers over their raw `u64`/`usize`
+/// integer, so the wire form is the raw integer and the host
+/// reconstructs via `Handle::from_raw` before forwarding.
 #[repr(C)]
 pub struct VulkanComputeKernelMethodsVTable {
     /// Vtable layout version. Must equal
@@ -3341,6 +3354,66 @@ pub struct VulkanComputeKernelMethodsVTable {
         out_specs_buf: *mut ComputeBindingSpecRepr,
         out_specs_cap: usize,
         out_specs_len: *mut usize,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Bind a raw `vk::ImageView` to a sampled-image binding.
+    /// `image_view_handle` is the raw `u64` from
+    /// `vk::ImageView::as_raw()`; the host wrapper reconstructs the
+    /// vulkanalia handle via `vk::ImageView::from_raw` before
+    /// forwarding. Returns 0 on success; non-zero with UTF-8 message
+    /// in `err_buf` on declaration mismatch / null handle / unset
+    /// binding. v5.
+    pub set_sampled_image_view: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        binding: u32,
+        image_view_handle: u64,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Bind a raw `vk::ImageView` to a sampled-texture binding that
+    /// was declared with an immutable sampler (combined-image-sampler
+    /// shape, view-only write). v5. Same `u64`-handle wire shape as
+    /// [`Self::set_sampled_image_view`].
+    pub set_combined_image_sampler_view: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        binding: u32,
+        image_view_handle: u64,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Bind a raw `vk::ImageView` to a storage-image binding. v5.
+    /// Same `u64`-handle wire shape as [`Self::set_sampled_image_view`].
+    pub set_storage_image_view: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        binding: u32,
+        image_view_handle: u64,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Record bind + push-constants + dispatch into a caller-owned
+    /// command buffer. `command_buffer_handle` is the raw `u64` from
+    /// `vk::CommandBuffer::as_raw() as u64` (vulkanalia stores the
+    /// dispatchable handle as `usize`; on every supported target
+    /// `usize == u64`). The host wrapper reconstructs the vulkanalia
+    /// handle via `vk::CommandBuffer::from_raw(handle as usize)`
+    /// before forwarding. Returns 0 on success; non-zero with UTF-8
+    /// message in `err_buf` for null kernel handle / dispatch error.
+    /// v5.
+    pub record: unsafe extern "C" fn(
+        kernel_handle: *const c_void,
+        command_buffer_handle: u64,
+        group_x: u32,
+        group_y: u32,
+        group_z: u32,
         err_buf: *mut u8,
         err_buf_cap: usize,
         err_len: *mut usize,
@@ -5372,7 +5445,7 @@ mod layout_tests {
         assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 10);
         assert_eq!(TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION, 2);
-        assert_eq!(VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 4);
+        assert_eq!(VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 5);
         assert_eq!(VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 3);
         assert_eq!(VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 3);
         assert_eq!(VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION, 2);
@@ -5509,19 +5582,23 @@ mod layout_tests {
 
     #[test]
     fn vulkan_compute_kernel_methods_vtable_layout() {
-        // v4 (bindings introspection slot added):
-        //   layout_version              @ 0   (4 bytes, u32)
-        //   _reserved_padding           @ 4   (4 bytes, u32)
-        //   set_push_constants          @ 8   (8 bytes, fn pointer)
-        //   dispatch                    @ 16
-        //   set_storage_buffer_pixel    @ 24
-        //   set_storage_buffer_storage  @ 32
-        //   set_uniform_buffer          @ 40
-        //   set_sampled_texture         @ 48
-        //   set_storage_image           @ 56
-        //   bindings                    @ 64
-        // Total = 72 bytes, align = 8.
-        assert_eq!(size_of::<VulkanComputeKernelMethodsVTable>(), 72);
+        // v5 (raw-vulkanalia-handle slots appended for #1073):
+        //   layout_version                    @ 0   (4 bytes, u32)
+        //   _reserved_padding                 @ 4   (4 bytes, u32)
+        //   set_push_constants                @ 8   (8 bytes, fn pointer)
+        //   dispatch                          @ 16
+        //   set_storage_buffer_pixel          @ 24
+        //   set_storage_buffer_storage        @ 32
+        //   set_uniform_buffer                @ 40
+        //   set_sampled_texture               @ 48
+        //   set_storage_image                 @ 56
+        //   bindings                          @ 64
+        //   set_sampled_image_view            @ 72   (v5)
+        //   set_combined_image_sampler_view   @ 80   (v5)
+        //   set_storage_image_view            @ 88   (v5)
+        //   record                            @ 96   (v5)
+        // Total = 104 bytes, align = 8.
+        assert_eq!(size_of::<VulkanComputeKernelMethodsVTable>(), 104);
         assert_eq!(align_of::<VulkanComputeKernelMethodsVTable>(), 8);
         assert_eq!(
             offset_of!(VulkanComputeKernelMethodsVTable, layout_version),
@@ -5562,6 +5639,22 @@ mod layout_tests {
         assert_eq!(
             offset_of!(VulkanComputeKernelMethodsVTable, bindings),
             64
+        );
+        assert_eq!(
+            offset_of!(VulkanComputeKernelMethodsVTable, set_sampled_image_view),
+            72
+        );
+        assert_eq!(
+            offset_of!(VulkanComputeKernelMethodsVTable, set_combined_image_sampler_view),
+            80
+        );
+        assert_eq!(
+            offset_of!(VulkanComputeKernelMethodsVTable, set_storage_image_view),
+            88
+        );
+        assert_eq!(
+            offset_of!(VulkanComputeKernelMethodsVTable, record),
+            96
         );
     }
 
