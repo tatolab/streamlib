@@ -23,7 +23,7 @@ fn videoframe_color_metadata_round_trip() {
         width: 1920,
         height: 1080,
         timestamp_ns: "0".to_string(),
-        frame_index: "0".to_string(),
+
         fps: None,
         texture_layout: None,
         color_info: Some(ColorInfo {
@@ -85,7 +85,7 @@ fn videoframe_color_metadata_round_trip() {
         width: 1920,
         height: 1080,
         timestamp_ns: "0".to_string(),
-        frame_index: "0".to_string(),
+
         fps: None,
         texture_layout: None,
         color_info: None,

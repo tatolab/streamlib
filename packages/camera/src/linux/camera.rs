@@ -1200,7 +1200,6 @@ fn capture_thread_loop(
             width,
             height,
             timestamp_ns: timestamp_ns.to_string(),
-            frame_index: timeline_signal_value.to_string(),
             fps: capture_fps,
             // Per-frame override is opt-in; per-surface
             // `current_image_layout` from surface-share is the default.

@@ -11,14 +11,11 @@
 //! - Vignette (edge darkening)
 //! - Heavy animated film grain (moving noise)
 //!
-//! Pre-#487 this processor cross-compiled with a macOS Metal vertex+
-//! fragment path; the pre-#485 macOS pipeline could not consume the
-//! tiled DMA-BUF VkImages every modern producer in this example
-//! emits, so the macOS path was struck wholesale and the processor
-//! is now Linux-only. The kernel wrapper itself
-//! ([`SandboxedCrtFilmGrain`]) lives in `crt_film_grain_kernel.rs` —
-//! see that file's module-level doc for the transitional rationale
-//! and the migration path to RDG (#631).
+//! Linux-only — the tiled DMA-BUF `VkImage`s every modern producer in
+//! this example emits aren't consumable by a macOS Metal vertex+
+//! fragment path. The kernel wrapper itself ([`SandboxedCrtFilmGrain`])
+//! lives in `crt_film_grain_kernel.rs` — see that file's module-level
+//! doc for why it lives in the example and not the engine.
 
 #![cfg(target_os = "linux")]
 
@@ -165,9 +162,12 @@ impl streamlib::sdk::processors::ReactiveProcessor for CrtFilmGrainProcessor::Pr
         backend.next_slot = (slot_idx + 1) % backend.output_ring.len();
         let slot = &backend.output_ring[slot_idx];
 
-        // Read the slot's current_layout from its registration. After
-        // the kernel's dispatch this becomes SHADER_READ_ONLY_OPTIMAL;
-        // first dispatch reads UNDEFINED.
+        // Resolve the slot's registration so we can `update_layout`
+        // after the dispatch returns. The kernel's `offscreen_render`
+        // starts from `UNDEFINED` internally (content discard
+        // permitted, full-screen triangle overwrites every pixel), so
+        // it doesn't read the slot's prior layout — we just need the
+        // registration handle.
         let slot_videoframe = synth_slot_videoframe(
             &slot.surface_id,
             slot.texture.width(),
@@ -179,17 +179,13 @@ impl streamlib::sdk::processors::ReactiveProcessor for CrtFilmGrainProcessor::Pr
             slot_videoframe.width,
             slot_videoframe.height,
         )?;
-        let slot_current_layout = slot_registration.current_layout();
 
         backend.kernel.dispatch(CrtFilmGrainInputs {
             input: CrtFilmGrainInput {
                 texture: &input_texture,
                 current_layout: input_layout,
             },
-            output: CrtFilmGrainOutput {
-                texture: &slot.texture,
-                current_layout: slot_current_layout,
-            },
+            output: CrtFilmGrainOutput { texture: &slot.texture },
             time_seconds: elapsed,
             crt_curve: self.config.crt_curve,
             scanline_intensity: self.config.scanline_intensity,
@@ -211,7 +207,6 @@ impl streamlib::sdk::processors::ReactiveProcessor for CrtFilmGrainProcessor::Pr
             width: slot.texture.width(),
             height: slot.texture.height(),
             timestamp_ns: frame.timestamp_ns.clone(),
-            frame_index: frame.frame_index.clone(),
             fps: frame.fps,
             // Per-frame override is opt-in; the per-surface
             // `current_image_layout` published via surface-share is
@@ -329,7 +324,6 @@ fn synth_slot_videoframe(surface_id: &str, width: u32, height: u32) -> VideoFram
         width,
         height,
         timestamp_ns: "0".into(),
-        frame_index: "0".into(),
         fps: None,
         texture_layout: None,
         color_info: None,

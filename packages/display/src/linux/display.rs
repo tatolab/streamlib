@@ -614,12 +614,6 @@ impl DisplayEventLoopHandler {
         let src_width = camera_texture.width();
         let src_height = camera_texture.height();
 
-        // Producer timeline value parsed from frame_index — the producer
-        // signals this on writeback completion; we GPU-wait it at FRAGMENT_SHADER.
-        let video_source_timeline_wait_value: u64 = ipc_frame.frame_index.parse().unwrap_or(0);
-        let video_source_timeline =
-            self.gpu_context.host_video_source_timeline_arc();
-
         let scaling_mode = self.scaling_mode.clone();
         let kernel_for_draw = Arc::clone(&graphics_kernel);
         let window_id = self.window_id;
@@ -654,16 +648,28 @@ impl DisplayEventLoopHandler {
                 registration.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
             }
 
-            // GPU-wait on the producer's timeline for content-finished sync.
-            if let Some(ref timeline) = video_source_timeline {
-                if video_source_timeline_wait_value > 0 {
-                    frame.add_timeline_wait(
-                        timeline,
-                        video_source_timeline_wait_value,
-                        VulkanStage::FRAGMENT_SHADER,
-                    );
-                }
-            }
+            // No GPU-wait on a producer timeline here. Every in-tree
+            // producer drains its GPU work synchronously before
+            // sending the iceoryx2 VideoFrame (camera waits its own
+            // timeline at line 1173 of camera.rs; the
+            // graphics-kernel-based effects (BlendingCompositor,
+            // CrtFilmGrain) call `submit_and_wait` per dispatch;
+            // OpenGL adapters glFinish on `release_write`). So the
+            // iceoryx2 receipt itself is the "GPU writes are visible"
+            // signal — no separate timeline wait is required.
+            //
+            // Pre-decoupling this read a `host_video_source_timeline`
+            // shared global at `VideoFrame.frame_index` (parsed as
+            // u64). That made Display couple to the camera's timeline
+            // specifically; downstream processors that hand Display a
+            // VideoFrame with their own `frame_index` counter — none
+            // of which is the camera's signal value — would deadlock
+            // (the camera's timeline never reaches that value). Today
+            // every producer in tree is GPU-sync; a future async
+            // producer that genuinely needs Display-side timeline
+            // sync should carry an explicit (timeline_handle,
+            // wait_value) pair on the VideoFrame protocol, not
+            // overload `frame_index`. Until then, the wait is gone.
 
             // Compute aspect-ratio-aware scale per the configured mode.
             let src_aspect = src_width as f32 / src_height as f32;
@@ -743,11 +749,9 @@ impl DisplayEventLoopHandler {
 
         if let Some(ref dir) = self.png_sample_dir {
             if frame_idx % self.png_sample_every == 0 {
-                let input_frame_index: u64 =
-                    ipc_frame.frame_index.parse().unwrap_or(frame_idx);
                 let path = dir.join(format!(
-                    "display_{:03}_frame_{:06}_input_{:06}.png",
-                    self.window_id, frame_idx, input_frame_index
+                    "display_{:03}_frame_{:06}.png",
+                    self.window_id, frame_idx
                 ));
                 if let Ok(buf) = self.gpu_context.resolve_pixel_buffer_by_surface_id(&ipc_frame.surface_id) {
                     let mapped_ptr = buf.plane_base_address(0);
@@ -757,23 +761,22 @@ impl DisplayEventLoopHandler {
                             unsafe { std::slice::from_raw_parts(mapped_ptr, len) };
                         if let Err(e) = write_png_rgba(&path, src_width, src_height, rgba) {
                             tracing::warn!(
-                                "Display {}: PNG sample save failed for input frame {}: {}",
-                                self.window_id, input_frame_index, e
+                                "Display {}: PNG sample save failed at frame {}: {}",
+                                self.window_id, frame_idx, e
                             );
                         } else {
                             self.png_samples_saved += 1;
                             tracing::info!(
-                                "Display {}: saved PNG sample {:?} (input {}, displayed {}, total saved {})",
+                                "Display {}: saved PNG sample {:?} (displayed {}, total saved {})",
                                 self.window_id,
                                 path,
-                                input_frame_index,
                                 frame_idx,
                                 self.png_samples_saved
                             );
                         }
                     }
                 } else {
-                    self.sample_texture_to_png(&camera_texture, &path, frame_idx, input_frame_index);
+                    self.sample_texture_to_png(&camera_texture, &path, frame_idx);
                 }
             }
         }
@@ -784,7 +787,6 @@ impl DisplayEventLoopHandler {
         texture: &Texture,
         path: &std::path::Path,
         frame_idx: u64,
-        input_frame_index: u64,
     ) {
         let format = texture.format();
         let width = texture.width();
@@ -792,10 +794,10 @@ impl DisplayEventLoopHandler {
 
         if format.bytes_per_pixel() != 4 {
             tracing::warn!(
-                "Display {}: skip PNG sample for input frame {} — texture format {:?} \
+                "Display {}: skip PNG sample at frame {} — texture format {:?} \
                  (bpp={}) not supported by PNG writer",
                 self.window_id,
-                input_frame_index,
+                frame_idx,
                 format,
                 format.bytes_per_pixel()
             );
@@ -841,9 +843,9 @@ impl DisplayEventLoopHandler {
             Ok(t) => t,
             Err(e) => {
                 tracing::warn!(
-                    "Display {}: PNG texture-readback submit failed for input frame {}: {}",
+                    "Display {}: PNG texture-readback submit failed at frame {}: {}",
                     self.window_id,
-                    input_frame_index,
+                    frame_idx,
                     e
                 );
                 return;
@@ -858,27 +860,26 @@ impl DisplayEventLoopHandler {
                 self.png_samples_saved += 1;
                 tracing::info!(
                     "Display {}: saved PNG sample (texture path) {:?} \
-                     (input {}, displayed {}, total saved {})",
+                     (displayed {}, total saved {})",
                     self.window_id,
                     path,
-                    input_frame_index,
                     frame_idx,
                     self.png_samples_saved
                 );
             }
             Ok(Err(e)) => {
                 tracing::warn!(
-                    "Display {}: PNG sample (texture path) save failed for input frame {}: {}",
+                    "Display {}: PNG sample (texture path) save failed at frame {}: {}",
                     self.window_id,
-                    input_frame_index,
+                    frame_idx,
                     e
                 );
             }
             Err(e) => {
                 tracing::warn!(
-                    "Display {}: PNG texture-readback wait failed for input frame {}: {}",
+                    "Display {}: PNG texture-readback wait failed at frame {}: {}",
                     self.window_id,
-                    input_frame_index,
+                    frame_idx,
                     e
                 );
             }

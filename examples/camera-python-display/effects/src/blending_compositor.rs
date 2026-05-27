@@ -16,15 +16,14 @@
 //!
 //! Layer order (bottom → top): video → lower_third → watermark → PiP.
 //!
-//! Linux-only. The pre-RHI macOS Metal path was removed in #485 when
-//! the compositor was rewritten on the graphics-kernel + texture-cache
-//! RHI; supporting it would have required parallel adapter machinery
-//! that does not exist outside the engine today.
+//! Linux-only. The macOS Metal path was retired when the compositor
+//! moved onto the graphics-kernel + texture-cache RHI; supporting it
+//! would have required parallel adapter machinery that does not exist
+//! outside the engine today.
 //!
 //! The kernel wrapper itself ([`SandboxedBlendingCompositor`]) lives
 //! in `blending_compositor_kernel.rs` — see that file's module-level
-//! doc for why it lives in the example and not the engine, and for
-//! the link to RDG (#631) which absorbs it when ready.
+//! doc for why it lives in the example and not the engine.
 
 #![cfg(target_os = "linux")]
 
@@ -50,8 +49,8 @@ use crate::_generated_::tatolab__core::color_info::{Matrix, Primaries, Range, Tr
 use crate::_generated_::{ColorInfo, VideoFrame};
 
 // Sandboxed kernel wrapper — see `blending_compositor_kernel.rs` for
-// the transitional rationale (this kernel previously lived in the
-// engine pre-#487, migrates into RDG (#631) when that lands).
+// the rationale (sandboxed scenario content rides the engine RHI's
+// cdylib-safe surfaces).
 use crate::blending_compositor_kernel::{
     BlendingCompositorInputs, BlendingLayer, BlendingOutput, SandboxedBlendingCompositor,
 };
@@ -625,11 +624,11 @@ fn compose_one_frame(
     state.next_output_slot = (slot_idx + 1) % backend.output_ring.len();
     let slot = &backend.output_ring[slot_idx];
 
-    // Resolve the slot's current layout from its registration. The
-    // compositor's pre-render barrier reads from this layout; on the
-    // very first dispatch into a slot the layout is UNDEFINED (initial
-    // declaration); on subsequent cycles it is SHADER_READ_ONLY_OPTIMAL
-    // (left there by the prior render's post-barrier).
+    // Resolve the slot's registration so we can `update_layout` after
+    // the dispatch returns. The compositor's `offscreen_render` starts
+    // from `UNDEFINED` internally (content discard permitted, full-
+    // screen triangle overwrites every pixel), so it doesn't read the
+    // slot's prior layout — we just need the registration handle.
     let output_registration = {
         let synth = slot_videoframe(&slot.surface_id, width, height);
         gpu_ctx.resolve_texture_registration_by_surface_id(
@@ -639,7 +638,6 @@ fn compose_one_frame(
             synth.height,
         )?
     };
-    let output_current_layout = output_registration.current_layout();
 
     // Borrow each cached layer immutably for the dispatch — `state`
     // is no longer mutated past this point.
@@ -648,8 +646,9 @@ fn compose_one_frame(
     let watermark = state.last_watermark.as_ref();
     let pip = state.last_pip.as_ref();
 
-    // Dispatch — the compositor records input barriers + render +
-    // output barrier in one CB, submits, and waits before returning.
+    // Dispatch — the compositor records input barriers (when needed) +
+    // offscreen render + output post-barrier through the engine RHI,
+    // submits each, and waits before returning.
     backend.compositor.dispatch(BlendingCompositorInputs {
         video: video.map(|l| l.as_layer()),
         lower_third: lower_third.map(|l| l.as_layer()),
@@ -659,10 +658,7 @@ fn compose_one_frame(
         } else {
             None
         },
-        output: BlendingOutput {
-            texture: &slot.texture,
-            current_layout: output_current_layout,
-        },
+        output: BlendingOutput { texture: &slot.texture },
         pip_slide_progress,
     })?;
 
@@ -692,7 +688,6 @@ fn compose_one_frame(
         width,
         height,
         timestamp_ns: timestamp_ns.to_string(),
-        frame_index: count.to_string(),
         fps: None,
         // Per-frame override is opt-in; the per-surface
         // `current_image_layout` published via surface-share / Path 1
@@ -985,7 +980,6 @@ fn slot_videoframe(surface_id: &str, width: u32, height: u32) -> VideoFrame {
         width,
         height,
         timestamp_ns: "0".into(),
-        frame_index: "0".into(),
         fps: None,
         texture_layout: None,
         color_info: None,

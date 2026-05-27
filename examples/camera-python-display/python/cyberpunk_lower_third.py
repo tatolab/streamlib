@@ -537,7 +537,6 @@ class CyberpunkLowerThird:
         # Output VideoFrame referencing the pre-registered output UUID.
         timestamp_ns = int(elapsed * 1_000_000_000)
         ctx.outputs.write("video_out", {
-            "frame_index": str(self.frame_number),
             "height": self.height,
             "surface_id": self._uuid,
             "timestamp_ns": str(timestamp_ns),

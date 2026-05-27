@@ -169,15 +169,11 @@ impl streamlib::sdk::processors::ReactiveProcessor for H265DecoderProcessor::Pro
                 .map(|vui| h273_to_color_info(&vui))
                 .or_else(|| encoded.color_info.clone());
 
-            // Carry the encoder's input-frame index (`frame_number`) through to the
-            // decoded output so downstream consumers (PSNR rig, display PNG sampler)
-            // can pair each decoded frame with the reference input.
             let video_frame = VideoFrame {
                 surface_id,
                 width,
                 height,
                 timestamp_ns,
-                frame_index: encoded.frame_number.clone(),
                 fps: encoded.fps,
                 // Per-frame override is opt-in; per-surface
                 // `current_image_layout` from surface-share is the default.

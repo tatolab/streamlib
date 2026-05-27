@@ -99,7 +99,6 @@ impl streamlib::sdk::processors::ReactiveProcessor for JpegDecoderProcessor::Pro
             width: output.width,
             height: output.height,
             timestamp_ns: encoded.timestamp_ns.clone(),
-            frame_index: encoded.frame_number.clone(),
             fps: encoded.fps,
             // Per-frame override is opt-in; per-surface
             // `current_image_layout` from surface-share is the default.
