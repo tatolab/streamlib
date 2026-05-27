@@ -369,7 +369,20 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
                         ),
                     });
                 }
+                // Claim the signal_value atomically with `write_held`:
+                // advance `current_release_value` here, INSIDE the
+                // registry lock, so no other writer (host signal path
+                // or concurrent submit) can race on the value
+                // computation. The GPU submit at `signal_value`
+                // happens outside the lock; by then state.current is
+                // already the about-to-be-signaled value, so any
+                // concurrent `signal_host` path on the same timeline
+                // picks a strictly greater value. Closes the
+                // multi-writer race that surfaced as
+                // VUID-VkSemaphoreSignalInfo-value-03258 on the
+                // camera-python-display pipeline.
                 let signal_value = state.next_release_value();
+                state.current_release_value = signal_value;
                 Ok(HostCopySession {
                     timeline: Arc::clone(&state.timeline),
                     buffer: pixel_buffer.buffer(),
@@ -389,13 +402,16 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
             session.timeline.as_ref(),
             session.signal_value,
         ) {
+            // Submit failed; clear write_held. State.current_release_value
+            // stays advanced — monotonicity is preserved (the next
+            // attempt picks a higher value); only a single value-gap is
+            // left in the timeline sequence, which is harmless.
             self.surfaces.rollback_write(id);
             return Err(e);
         }
 
-        // GPU will signal at signal_value asynchronously; record the
-        // value under the registry lock and clear the write flag so
-        // subsequent `acquire_read` calls wait on the right value.
+        // GPU will signal at signal_value asynchronously. Clear the
+        // write flag so subsequent `acquire_read` calls can proceed.
         // `with_mut` returns `None` only if the surface raced an
         // unregister between our submit and now — extremely narrow,
         // but log it so the symptom is observable.
@@ -403,7 +419,6 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
             .surfaces
             .with_mut(id, |state| {
                 state.set_write_held(false);
-                state.current_release_value = session.signal_value;
             })
             .is_none()
         {

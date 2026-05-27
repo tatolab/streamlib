@@ -95,7 +95,28 @@ impl ConsumerVulkanTimelineSemaphore {
 
     /// Host-side signal: advance the counter to `value` directly from
     /// the CPU. `value` MUST be greater than the current counter.
+    ///
+    /// Emits a tracing warning when `value <= current_value()` to
+    /// surface signal-value-monotonicity regressions before they trip
+    /// `VUID-VkSemaphoreSignalInfo-value-03258` and silently wedge a
+    /// timeline-dependent consumer. The race class this warning
+    /// catches: an adapter that signals the same timeline from
+    /// multiple writers (GPU submit + host CPU) racing on the value
+    /// computation. See the cuda / vulkan / cpu-readback adapter
+    /// signal paths.
     pub fn signal_host(&self, value: u64) -> Result<()> {
+        if let Ok(current) = self.current_value() {
+            if value <= current {
+                tracing::warn!(
+                    target: "consumer_rhi::timeline",
+                    requested_value = value,
+                    current_value = current,
+                    "signal_host called with value <= current — vkSignalSemaphore \
+                     will fail (VUID-VkSemaphoreSignalInfo-value-03258). Likely a \
+                     multi-writer race on this timeline's value computation."
+                );
+            }
+        }
         let info = vk::SemaphoreSignalInfo::builder()
             .semaphore(self.semaphore)
             .value(value)
