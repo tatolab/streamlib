@@ -25,8 +25,10 @@ use super::host_callbacks;
 use super::run_host_extern_c;
 use super::shared::wire::{slice_from_raw, write_err, write_id_bytes};
 
+mod scope_token;
 mod shared;
 
+use scope_token::with_full_scope_or_err;
 use shared::{handle_as_gpu_context, pixel_format_from_raw};
 
 // pointers and reading nothing about layout.
@@ -2596,42 +2598,6 @@ unsafe extern "C" fn host_gpu_full_clone_command_recorder(_handle: *const c_void
 unsafe extern "C" fn host_gpu_full_drop_command_recorder(_handle: *const c_void) {}
 
 // ---------------- Kernel construction (Linux-only) ----------------
-
-/// Resolve a scope token to its bound `Arc<GpuContext>` and run the
-/// closure. On miss (null token, stale token, never-issued token)
-/// writes an "invalid escalate scope" message into `err_buf` and
-/// returns `None`. FullAccess vtable callback bodies use this in
-/// place of [`handle_as_gpu_context_full`] (which derefs a host-mode
-/// `Box<Arc<GpuContext>>` directly — never reached from cdylib code
-/// post-C3, kept for tier-1 wire-format tests until they migrate).
-fn with_full_scope_or_err<F, R>(
-    scope_token: *const c_void,
-    op: &str,
-    err_buf: *mut u8,
-    err_buf_cap: usize,
-    err_len: *mut usize,
-    f: F,
-) -> Option<R>
-where
-    F: FnOnce(&Arc<crate::core::context::GpuContext>) -> R,
-{
-    let token = scope_token as u64;
-    match crate::core::context::escalate_scope_registry::with_scope(token, f) {
-        Some(r) => Some(r),
-        None => {
-            write_err(
-                &format!(
-                    "{op}: invalid escalate scope (token stale, never-issued, \
-                     or null)"
-                ),
-                err_buf,
-                err_buf_cap,
-                err_len,
-            );
-            None
-        }
-    }
-}
 
 #[cfg(target_os = "linux")]
 unsafe extern "C" fn host_gpu_full_create_compute_kernel(
