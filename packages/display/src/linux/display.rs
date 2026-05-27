@@ -614,12 +614,6 @@ impl DisplayEventLoopHandler {
         let src_width = camera_texture.width();
         let src_height = camera_texture.height();
 
-        // Producer timeline value parsed from frame_index — the producer
-        // signals this on writeback completion; we GPU-wait it at FRAGMENT_SHADER.
-        let video_source_timeline_wait_value: u64 = ipc_frame.frame_index.parse().unwrap_or(0);
-        let video_source_timeline =
-            self.gpu_context.host_video_source_timeline_arc();
-
         let scaling_mode = self.scaling_mode.clone();
         let kernel_for_draw = Arc::clone(&graphics_kernel);
         let window_id = self.window_id;
@@ -654,16 +648,28 @@ impl DisplayEventLoopHandler {
                 registration.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
             }
 
-            // GPU-wait on the producer's timeline for content-finished sync.
-            if let Some(ref timeline) = video_source_timeline {
-                if video_source_timeline_wait_value > 0 {
-                    frame.add_timeline_wait(
-                        timeline,
-                        video_source_timeline_wait_value,
-                        VulkanStage::FRAGMENT_SHADER,
-                    );
-                }
-            }
+            // No GPU-wait on a producer timeline here. Every in-tree
+            // producer drains its GPU work synchronously before
+            // sending the iceoryx2 VideoFrame (camera waits its own
+            // timeline at line 1173 of camera.rs; the
+            // graphics-kernel-based effects (BlendingCompositor,
+            // CrtFilmGrain) call `submit_and_wait` per dispatch;
+            // OpenGL adapters glFinish on `release_write`). So the
+            // iceoryx2 receipt itself is the "GPU writes are visible"
+            // signal — no separate timeline wait is required.
+            //
+            // Pre-decoupling this read a `host_video_source_timeline`
+            // shared global at `VideoFrame.frame_index` (parsed as
+            // u64). That made Display couple to the camera's timeline
+            // specifically; downstream processors that hand Display a
+            // VideoFrame with their own `frame_index` counter — none
+            // of which is the camera's signal value — would deadlock
+            // (the camera's timeline never reaches that value). Today
+            // every producer in tree is GPU-sync; a future async
+            // producer that genuinely needs Display-side timeline
+            // sync should carry an explicit (timeline_handle,
+            // wait_value) pair on the VideoFrame protocol, not
+            // overload `frame_index`. Until then, the wait is gone.
 
             // Compute aspect-ratio-aware scale per the configured mode.
             let src_aspect = src_width as f32 / src_height as f32;
