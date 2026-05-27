@@ -1029,7 +1029,16 @@ impl VulkanComputeKernel {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
             panic!(
                 "VulkanComputeKernel::host_inner() reached from cdylib code; \
-                 this method must dispatch through the GpuContextFullAccessVTable."
+                 this method must dispatch through the GpuContextFullAccessVTable. \
+                 \
+                 Read docs/architecture/cdylib-reachability.md before workarounds. \
+                 If you reached here via SimpleEncoder / SimpleDecoder / similar \
+                 engine SDK code calling a `pub(crate)` ComputeKernel method that \
+                 takes raw vk::* args (set_sampled_image_view, set_storage_image_view, \
+                 record), this is #1073's class — none of the existing patterns \
+                 directly cover it. New design needed (escalate the SDK boundary, \
+                 OR build new ABI for raw vulkanalia handles, OR move the offending \
+                 engine code host-only)."
             );
         }
         unsafe { &*(self.handle as *const VulkanComputeKernelInner) }

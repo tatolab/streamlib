@@ -3,28 +3,142 @@
 > **Living document.** Validate, update, critique freely per
 > [CLAUDE.md's markdown editing rules](../../CLAUDE.md#editing-markdown-documentation).
 
-How to decide whether a new `Host*` Vulkan RHI primitive needs a
-FullAccess vtable slot, or can be reached directly from workspace
-plugin cdylib code through the existing v9 `host_vulkan_device_arc`
-bridge.
+How to expose host-side functionality to cdylib-resident processor
+code without tripping a `host_inner()` panic guard, a same-thread
+escalate-gate deadlock-panic, or worse.
+
+The document is structured around the five distinct patterns that
+have shipped in this codebase to bridge cdylib → host reaches. Each
+applies to a different class of "I'm in cdylib code and I need X."
+Picking the wrong one is the historical failure class: agents see a
+`host_inner()` panic, reach for the closest precedent without
+checking the lifecycle stage or the type shape, and ship a fix that
+either (a) works but introduces a new latent deadlock, (b) works for
+one case but doesn't generalize, or (c) silently breaks a sibling
+in-process registration path. This doc exists so the next agent
+picking up "cdylib can't reach X" has a single decision tree, not
+five disconnected precedents.
 
 ## Why this doc exists
 
-The cdylib boundary has a known trap: seeing a `host_inner()` panic
-on one `Host*` β-shape (e.g., `Texture::host_inner()`) and assuming
-by analogy that every other `Host*` constructor on the engine needs
-a bridge. That assumption is wrong by default — most `Host*`
-constructors take only `&Arc<HostVulkanDevice>` plus primitives and
-touch only `pub` accessors on the device. Workspace plugin cdylibs
-that hold the device Arc (via the v9 bridge) can call them directly,
-no new ABI surface needed.
+Two known traps:
 
-This doc captures the decision tree, the route-1 vs route-2 split,
-and the enforcement layers — so a future agent picking up "the cdylib
-can't reach X" doesn't file a defensive bridge before reading the
-constructor body.
+1. **Constructor-bridge trap.** Seeing a `host_inner()` panic on one
+   `Host*` β-shape (e.g., `Texture::host_inner()`) and assuming by
+   analogy that every other `Host*` constructor on the engine needs a
+   bridge. That assumption is wrong by default — most `Host*`
+   constructors take only `&Arc<HostVulkanDevice>` plus primitives
+   and touch only `pub` accessors on the device. Workspace plugin
+   cdylibs that hold the device Arc (via the v9 bridge) can call
+   them directly, no new ABI surface needed.
 
-## Decision tree
+2. **Workaround-pattern trap.** Seeing a `host_inner()` panic
+   somewhere on the cdylib path and reaching for the nearest
+   precedent (an `escalate(|full| ...)` wrap, a fresh Arc transit,
+   an underscore reach-through) without first asking "which of the
+   established patterns does this case belong in?" The historical
+   failure mode: three processors shipped a
+   `gpu_limited_access().escalate(|full| ...)`-from-setup
+   workaround for the panic-class #1072 fixed, recreating a
+   well-known deadlock the sandbox's `processor_setup_lock` has
+   forbidden since pre-#322. Nobody on the review side caught it
+   because no doc existed naming the patterns.
+
+This doc captures the full decision tree across every cdylib-reach
+pattern, the per-pattern enforcement layer, and the explicit ban on
+the workarounds that look like fixes but aren't — so a future agent
+picking up "the cdylib can't reach X" lands on the right pattern by
+checklist rather than precedent-hunting.
+
+## Decision tree — pick a pattern
+
+```
+Cdylib code (or a workspace plugin's processor body) needs to call
+something on the host side.
+
+  ┌──────────────────────────────────────────────────────────────┐
+  │ Q1: WHICH lifecycle stage is the call from?                  │
+  └─────────────────┬────────────────────────────────────────────┘
+                    │
+       ┌────────────┴────────────────────┐
+       │                                 │
+   setup() / teardown()              start() / stop() /
+   (RuntimeContextFullAccess)        process() (LimitedAccess)
+       │                                 │
+       ▼                                 ▼
+   Pattern 1: direct                Q2: per-frame? privileged?
+   ctx.gpu_full_access().X(),       (see below)
+   no escalate. setup() / teardown()
+   are already privileged via
+   `with_cdylib_scope`'s ScopeToken
+   wrap (#1072). DO NOT call
+   `.escalate(...)` here — gate is
+   already held, same-thread re-entry
+   panics with an actionable msg.
+
+  ┌──────────────────────────────────────────────────────────────┐
+  │ Q2: From process() / start() / stop(), what kind of reach?   │
+  └─────────────────┬────────────────────────────────────────────┘
+                    │
+     ┌──────────────┼──────────────┬─────────────────────┐
+     │              │              │                     │
+  one-time     per-frame      need a β-shape       need a host-Arc
+  privileged   hot-path       binding (set_X       (Arc<HostVulkanX>)
+  setup        binding/work   on compute kernel)
+     │              │              │                     │
+     ▼              ▼              ▼                     ▼
+   Pattern 4     Pattern 5      Pattern 3             Pattern 2
+   escalate +    (see "engine-  per-method            β-shape Arc-
+   FullAccess    SDK reach"     vtable slot           transit slot
+   work in       below — not    (set_storage_         (host_vulkan_
+   closure       a clean        buffer_pixel etc)    X_arc — #1066/
+                 pattern; see                          68/69/70/71)
+                 #1073)
+```
+
+The five patterns:
+
+- **Pattern 1: lifecycle wrap** — `RuntimeContextFullAccess::with_cdylib_scope`
+  wraps cdylib `setup()` / `teardown()` dispatch in a fresh
+  ScopeToken FullAccess (#1072). The cdylib body calls
+  `ctx.gpu_full_access().X()` directly; methods that have FullAccess
+  vtable analogs dispatch through them.
+- **Pattern 2: β-shape Arc-transit vtable slot** —
+  `host_vulkan_device_arc`, `host_vulkan_texture_arc`,
+  `host_vulkan_pixel_buffer_arc`, etc. Hands cdylib an
+  `Arc<HostVulkan*>` raw pointer it can call host-public accessors
+  on. Use for accessor returns where the engine-internal type can
+  cross the FFI as an Arc handle (#1066/68/69/70/71).
+- **Pattern 3: per-method vtable slot** — `set_storage_buffer_pixel`
+  and siblings on `VulkanComputeKernel` (and the equivalent on
+  `VulkanGraphicsKernel`, `VulkanRayTracingKernel`,
+  `RhiCommandRecorder`). Each binding/dispatch method that takes
+  engine-public β-shapes gets its own typed vtable slot with the
+  same shape on both sides. Use for hot-path binding work where the
+  method args ARE cross-DSO-safe types.
+- **Pattern 4: escalate to FullAccess** — `gpu_limited_access().escalate(|full| ...)`
+  from `start()` / `process()` (the historical primitive). Used for
+  privileged work that needs to happen mid-flight. Acquires the
+  escalate gate + waits device idle; serializes against other
+  privileged work. **Do not call from setup()/teardown() — the gate
+  is already held.**
+- **Pattern 5: engine-SDK-internal reaches** (#1073 class) — when
+  engine SDK code (`SimpleEncoder`, `SimpleDecoder`, etc.) reaches
+  a `host_inner()`-only method on `VulkanComputeKernel` etc. via
+  intermediate types (the per-method vtable slots don't cover
+  these methods because they take raw `vk::*` handles). Three real
+  shapes: (A) lift the engine SDK boundary to escalate the
+  internal call; (B) build new ABI wire types for the raw
+  vulkanalia handles; (C) move the offending engine code to
+  host-only crates. See #1073's issue body for the live decision.
+
+## Constructor bridge sub-decision (was Pattern 2's sub-tree)
+
+If you're adding or evaluating a `Host*` Vulkan RHI primitive
+constructor (`new` / `from_*` / `create_*`), the older sub-tree
+applies — it predates the broader pattern catalog above and is
+specifically about route-1 vs route-2 for constructor bodies. Keep
+the original decision intact:
 
 ```
 Workspace plugin cdylib needs Arc<HostX> (a new resource type, or a
@@ -140,6 +254,60 @@ Before filing a "bridge needed for X" issue:
 2. If no — route 2 already works. The right deliverable is a
    docstring update + a smoke test, not a new vtable slot.
 3. If yes — route 1 is needed, follow the checklist above.
+
+## Anti-patterns (cdylib-reach failure modes that look like fixes)
+
+These are the workarounds future agents tend to reach for instead
+of picking the right pattern. Each is real — at least one shipped
+in this codebase before being caught.
+
+1. ❌ **`gpu_limited_access().escalate(|full| ...)` from inside
+   `fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>)` or
+   `fn teardown(...)`.** The lifecycle dispatch already holds the
+   escalate gate around setup/teardown (via Pattern 1 for
+   cdylib-resident processors, via `gpu_limited_access().escalate`
+   for in-process VTable + LegacyDyn). Inner `.escalate(...)`
+   re-enters the gate on the same thread; pre-#912 this silently
+   deadlocked, post-#912 the gate has same-thread re-entry
+   detection and panics with an actionable message
+   ([`EscalateGate::enter`](../../libs/streamlib-engine/src/core/context/escalate_gate.rs)).
+   **The right pattern is Pattern 1 — direct
+   `ctx.gpu_full_access()` access from setup/teardown.**
+
+2. ❌ **Reaching through private underscore-prefixed attributes**
+   (`_lib`, `_handle_ptr`, `_internal_*`) on engine SDK types from
+   example or test code. The presence of underscore means the
+   field isn't part of the public surface — if you need it, the
+   right deliverable is a public accessor + a docstring update,
+   not a reach-through that future refactors will silently break.
+   Same shape as the `_lib._handle_ptr` reach pattern the
+   `feedback_examples_no_underscore_reachthrough` memory documents.
+
+3. ❌ **`unsafe { &*(handle as *const SomeHostType) }` from cdylib
+   code.** Cdylib code lives in a different DSO with a separately-
+   compiled (potentially different rustc-version) view of
+   `SomeHostType`'s layout. Even when the dlopen happens to share
+   layout today, a routine `cargo update` on either side breaks
+   it. The cdylib must dispatch via a typed vtable slot or hold an
+   `Arc<HostX>` whose accessors are exposed publicly — see
+   Patterns 2 and 3.
+
+4. ❌ **Working around `host_inner()` panics by mirroring host-
+   internal state on the cdylib side** (e.g., maintaining a
+   parallel `HashMap<surface_id, Texture>` in cdylib code). The
+   correct fix is to expose a vtable accessor on the host side
+   (Pattern 2 or 3) — the parallel HashMap goes stale the moment
+   the host's source-of-truth changes.
+
+5. ❌ **Calling a host-only `pub(crate)` method from cdylib code
+   via a hand-built `vk::*` argument.** The `set_sampled_image_view`
+   / `set_storage_image_view` / `record` methods on
+   `VulkanComputeKernel` are `pub(crate)` precisely because cdylib
+   code can't construct raw vulkanalia handles. Reaching them via
+   `kernel.host_inner().set_*(...)` (bypassing the panic guard)
+   re-introduces UB — those methods read host-private memory.
+   **For this class of reach, see #1073 and Pattern 5 — none of
+   the existing patterns directly cover it; new design is needed.**
 
 ## Enforcement
 
