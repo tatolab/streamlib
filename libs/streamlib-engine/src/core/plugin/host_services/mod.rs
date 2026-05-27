@@ -79,6 +79,10 @@ use crate::core::context::{RuntimeContext, SharedAudioClock};
 use crate::core::pubsub::Event;
 use crate::core::runtime::RuntimeOperations;
 
+mod shared;
+
+use shared::wire::{slice_from_raw, write_err, write_id_bytes};
+
 // =============================================================================
 // HostCallbacks — per-DSO cache of the host's fn pointers
 // =============================================================================
@@ -2311,28 +2315,6 @@ unsafe fn handle_as_gpu_context(
     // SAFETY: caller-supplied contract; the Box keeps the Arc alive
     // for the duration of the dispatch through the vtable.
     unsafe { Some(&*(handle as *const Arc<crate::core::context::GpuContext>)) }
-}
-
-unsafe fn slice_from_raw(ptr: *const u8, len: usize) -> &'static [u8] {
-    if ptr.is_null() || len == 0 {
-        return &[];
-    }
-    // SAFETY: caller-supplied UTF-8 byte slice; the lifetime is
-    // bounded by the dispatch (we never store the slice past return).
-    unsafe { std::slice::from_raw_parts(ptr, len) }
-}
-
-fn write_err(msg: &str, err_buf: *mut u8, err_buf_cap: usize, err_len: *mut usize) {
-    let bytes = msg.as_bytes();
-    let written = bytes.len().min(err_buf_cap);
-    if written > 0 && !err_buf.is_null() {
-        // SAFETY: caller-provided `err_buf` is writable for `err_buf_cap`.
-        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), err_buf, written) };
-    }
-    if !err_len.is_null() {
-        // SAFETY: caller-provided `err_len` is writable.
-        unsafe { *err_len = written };
-    }
 }
 
 unsafe extern "C" fn host_gpu_lim_register_texture(
@@ -6829,28 +6811,6 @@ pub fn host_gpu_context_limited_access_vtable() -> *const GpuContextLimitedAcces
         }
         _ => &HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE,
     }
-}
-
-// ---------------- Shared scratch-buffer helper ----------------
-
-fn write_id_bytes(
-    bytes: &[u8],
-    out_buf: *mut u8,
-    out_buf_cap: usize,
-    out_len: *mut usize,
-) -> usize {
-    let required = bytes.len();
-    let written = required.min(out_buf_cap);
-    if written > 0 && !out_buf.is_null() {
-        // SAFETY: caller guarantees `out_buf` is writable for
-        // `out_buf_cap` bytes; we only write `written` bytes.
-        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_buf, written) };
-    }
-    if !out_len.is_null() {
-        // SAFETY: caller guarantees `out_len` is writable.
-        unsafe { *out_len = written };
-    }
-    required
 }
 
 // =============================================================================
