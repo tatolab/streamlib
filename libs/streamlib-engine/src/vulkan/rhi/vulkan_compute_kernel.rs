@@ -643,6 +643,60 @@ impl VulkanComputeKernelInner {
         )
     }
 
+    // ---- Raw-handle entry points for the v5 cdylib vtable callbacks --------
+    //
+    // The four `*_raw` methods exist so the host-services callback layer
+    // (`core/plugin/host_services.rs`) can dispatch to the kernel without
+    // importing `vulkanalia` itself — that file isn't on the RHI vulkanalia
+    // allowlist by design (per `xtask check-boundaries`). Each shim
+    // reconstructs the typed vulkanalia handle via `Handle::from_raw` and
+    // forwards to the corresponding typed method above.
+
+    pub(crate) fn set_sampled_image_view_raw(
+        &self,
+        binding: u32,
+        image_view_handle: u64,
+    ) -> Result<()> {
+        use vulkanalia::vk::Handle;
+        self.set_sampled_image_view(binding, vk::ImageView::from_raw(image_view_handle))
+    }
+
+    pub(crate) fn set_combined_image_sampler_view_raw(
+        &self,
+        binding: u32,
+        image_view_handle: u64,
+    ) -> Result<()> {
+        use vulkanalia::vk::Handle;
+        self.set_combined_image_sampler_view(
+            binding,
+            vk::ImageView::from_raw(image_view_handle),
+        )
+    }
+
+    pub(crate) fn set_storage_image_view_raw(
+        &self,
+        binding: u32,
+        image_view_handle: u64,
+    ) -> Result<()> {
+        use vulkanalia::vk::Handle;
+        self.set_storage_image_view(binding, vk::ImageView::from_raw(image_view_handle))
+    }
+
+    pub(crate) fn record_raw(
+        &self,
+        command_buffer_handle: u64,
+        group_count_x: u32,
+        group_count_y: u32,
+        group_count_z: u32,
+    ) -> Result<()> {
+        use vulkanalia::vk::Handle;
+        // vulkanalia's CommandBuffer wraps a `usize`; on every supported
+        // target `usize == u64`, so the cast is lossless. The wire form
+        // is `u64` for ABI uniformity with the image-view slots.
+        let cb = vk::CommandBuffer::from_raw(command_buffer_handle as usize);
+        self.record(cb, group_count_x, group_count_y, group_count_z)
+    }
+
     fn drain_and_validate_pending(&self) -> Result<PendingState> {
         let pending = {
             let mut guard = self.pending.lock();
@@ -1032,13 +1086,15 @@ impl VulkanComputeKernel {
                  this method must dispatch through the GpuContextFullAccessVTable. \
                  \
                  Read docs/architecture/cdylib-reachability.md before workarounds. \
-                 If you reached here via SimpleEncoder / SimpleDecoder / similar \
-                 engine SDK code calling a `pub(crate)` ComputeKernel method that \
-                 takes raw vk::* args (set_sampled_image_view, set_storage_image_view, \
-                 record), this is #1073's class — none of the existing patterns \
-                 directly cover it. New design needed (escalate the SDK boundary, \
-                 OR build new ABI for raw vulkanalia handles, OR move the offending \
-                 engine code host-only)."
+                 The raw-vk::* methods (set_sampled_image_view, \
+                 set_combined_image_sampler_view, set_storage_image_view, \
+                 record) are mode-routed through the v5 \
+                 VulkanComputeKernelMethodsVTable slots; if you're reaching \
+                 host_inner() from one of those, the routing is broken — \
+                 check that host_callbacks() is installed and the methods \
+                 vtable pointer is non-null. Any other public method that \
+                 still routes through host_inner() in cdylib mode is a bug \
+                 — file a regression and route it through the methods vtable."
             );
         }
         unsafe { &*(self.handle as *const VulkanComputeKernelInner) }
@@ -1110,14 +1166,20 @@ impl VulkanComputeKernel {
     /// Bind a raw `vk::ImageView` to a [`ComputeBindingKind::SampledImage`]
     /// slot. See [`VulkanComputeKernelInner::set_sampled_image_view`].
     ///
-    /// Host-only: takes a raw `vk::ImageView` which cdylibs cannot construct
-    /// (no `vulkanalia` dep). Crate-private surface; engine-internal callers
-    /// only.
+    /// Crate-private surface; engine-internal callers only. Workspace
+    /// plugin cdylibs (h264 / h265 / camera) reach this via engine SDK
+    /// code (`RgbToNv12Converter::convert`) compiled into the cdylib;
+    /// the body is mode-routed through the v5 vtable slot so cdylib
+    /// dispatch avoids the `host_inner()` panic guard. The Python /
+    /// Deno consumer-rhi cdylibs don't link this code at all.
     pub(crate) fn set_sampled_image_view(
         &self,
         binding: u32,
         view: vk::ImageView,
     ) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_set_sampled_image_view_via_vtable(binding, view);
+        }
         self.host_inner().set_sampled_image_view(binding, view)
     }
 
@@ -1125,12 +1187,18 @@ impl VulkanComputeKernel {
     /// slot that was created with an immutable sampler. See
     /// [`VulkanComputeKernelInner::set_combined_image_sampler_view`].
     ///
-    /// Host-only; see [`Self::set_sampled_image_view`] for the rationale.
+    /// See [`Self::set_sampled_image_view`] for the cdylib-routing
+    /// rationale.
     pub(crate) fn set_combined_image_sampler_view(
         &self,
         binding: u32,
         view: vk::ImageView,
     ) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_set_combined_image_sampler_view_via_vtable(
+                binding, view,
+            );
+        }
         self.host_inner()
             .set_combined_image_sampler_view(binding, view)
     }
@@ -1138,12 +1206,16 @@ impl VulkanComputeKernel {
     /// Bind a raw `vk::ImageView` to a [`ComputeBindingKind::StorageImage`]
     /// slot. See [`VulkanComputeKernelInner::set_storage_image_view`].
     ///
-    /// Host-only; see [`Self::set_sampled_image_view`] for the rationale.
+    /// See [`Self::set_sampled_image_view`] for the cdylib-routing
+    /// rationale.
     pub(crate) fn set_storage_image_view(
         &self,
         binding: u32,
         view: vk::ImageView,
     ) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_set_storage_image_view_via_vtable(binding, view);
+        }
         self.host_inner().set_storage_image_view(binding, view)
     }
 
@@ -1417,10 +1489,163 @@ impl VulkanComputeKernel {
         }
     }
 
+    // ---- v5 raw-vulkanalia-handle dispatch helpers (#1073) ------------------
+    //
+    // Each helper takes the typed `vk::ImageView` / `vk::CommandBuffer`
+    // the cdylib-side engine SDK code is already holding, extracts the
+    // raw integer via vulkanalia's `Handle::as_raw`, and dispatches
+    // through the v5 vtable slot. The host's callback reconstructs the
+    // typed handle via `Handle::from_raw` before forwarding to
+    // `host_inner()`.
+
+    #[cfg(target_os = "linux")]
+    fn dispatch_set_sampled_image_view_via_vtable(
+        &self,
+        binding: u32,
+        view: vk::ImageView,
+    ) -> Result<()> {
+        use vulkanalia::vk::Handle;
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "set_sampled_image_view: kernel methods vtable is null".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).set_sampled_image_view)(
+                self.handle,
+                binding,
+                view.as_raw(),
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn dispatch_set_combined_image_sampler_view_via_vtable(
+        &self,
+        binding: u32,
+        view: vk::ImageView,
+    ) -> Result<()> {
+        use vulkanalia::vk::Handle;
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "set_combined_image_sampler_view: kernel methods vtable is null"
+                    .into(),
+            ));
+        }
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).set_combined_image_sampler_view)(
+                self.handle,
+                binding,
+                view.as_raw(),
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn dispatch_set_storage_image_view_via_vtable(
+        &self,
+        binding: u32,
+        view: vk::ImageView,
+    ) -> Result<()> {
+        use vulkanalia::vk::Handle;
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "set_storage_image_view: kernel methods vtable is null".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.methods_vtable).set_storage_image_view)(
+                self.handle,
+                binding,
+                view.as_raw(),
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn dispatch_record_via_vtable(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        group_x: u32,
+        group_y: u32,
+        group_z: u32,
+    ) -> Result<()> {
+        use vulkanalia::vk::Handle;
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(
+                "record: kernel methods vtable is null".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        // vulkanalia's CommandBuffer is `#[repr(transparent)] pub struct
+        // CommandBuffer(usize)`; `as_raw()` returns `usize` which casts
+        // losslessly to `u64` on every supported target.
+        let cb_raw: u64 = command_buffer.as_raw() as u64;
+        let status = unsafe {
+            ((*self.methods_vtable).record)(
+                self.handle,
+                cb_raw,
+                group_x,
+                group_y,
+                group_z,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
     /// Record bind + push-constants + dispatch into a caller-owned
-    /// command buffer. Host-only: takes a raw `vk::CommandBuffer`
-    /// which cdylibs cannot construct (no `vulkanalia` dep). Crate-
-    /// private surface; engine-internal callers only.
+    /// command buffer. Crate-private surface; engine-internal callers
+    /// only. See [`Self::set_sampled_image_view`] for the cdylib-
+    /// routing rationale — engine SDK code
+    /// (`RgbToNv12Converter::convert`, `Nv12ToRgbConverter::convert`)
+    /// compiled into workspace plugin cdylibs reaches this via the v5
+    /// vtable slot.
     pub(crate) fn record(
         &self,
         command_buffer: vk::CommandBuffer,
@@ -1428,6 +1653,11 @@ impl VulkanComputeKernel {
         group_y: u32,
         group_z: u32,
     ) -> Result<()> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            return self.dispatch_record_via_vtable(
+                command_buffer, group_x, group_y, group_z,
+            );
+        }
         self.host_inner().record(command_buffer, group_x, group_y, group_z)
     }
 
