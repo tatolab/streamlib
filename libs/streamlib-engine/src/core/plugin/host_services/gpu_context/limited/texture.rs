@@ -396,3 +396,32 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_unr
         (),
     )
 }
+
+#[cfg(test)]
+mod tier1_wire_format_tests {
+    //! Tier-1 wire-format test for the Phase F
+    //! `texture_native_dma_buf_fd` slot (#908 / #957). The slot is the
+    //! cross-DSO landing for `Texture::native_handle` on Linux and
+    //! returns the DMA-BUF FD widened to `i64`; sentinel `-1` encodes
+    //! the `Option::None` case. A null texture handle must be a clean
+    //! `-1` (no panic, no UB) — the wrapper short-circuits before any
+    //! cast through `*const TextureInner`.
+
+    use super::super::super::HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE;
+
+    #[test]
+    fn texture_native_dma_buf_fd_returns_minus_one_on_null_handle() {
+        // Null texture_handle is the cdylib-shaped "Texture wasn't
+        // minted yet / was already dropped" case. The slot returns
+        // `-1` (= `Option::None` in the Rust-side wrapper) without
+        // panicking and without touching the null pointer.
+        let fd = unsafe {
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE
+                .texture_native_dma_buf_fd)(std::ptr::null())
+        };
+        assert_eq!(
+            fd, -1,
+            "null texture_handle must produce -1 sentinel (None)"
+        );
+    }
+}

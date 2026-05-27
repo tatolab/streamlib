@@ -187,3 +187,73 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_hos
         std::ptr::null(),
     )
 }
+
+#[cfg(test)]
+mod tier1_wire_format_tests {
+    //! Tier-1 wire-format tests for the v12 (#958)
+    //! `set_video_source_timeline_semaphore` /
+    //! `clear_video_source_timeline_semaphore` slots. Each wrapper
+    //! must short-circuit on null gpu_handle (and `set` on null
+    //! timeline_handle) without panicking and without dereferencing
+    //! the null pointers.
+    //!
+    //! The non-null-handle path is exercised end-to-end by the
+    //! `load_project_dylib_camera_smoke` integration test (which
+    //! holds a real `Arc<HostVulkanTimelineSemaphore>` and is the
+    //! only place a Tier-1 with-handle test could reach without
+    //! constructing a real `GpuContext` here).
+    //!
+    //! Mental-revert: stub the wrapper bodies to
+    //! `unimplemented!()` and these tests trip the underlying
+    //! deref / panic — the wire-format claim regresses.
+
+    use super::super::super::HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE;
+
+    #[test]
+    fn set_video_source_timeline_is_noop_on_null_gpu_handle() {
+        unsafe {
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE
+                .set_video_source_timeline_semaphore)(
+                std::ptr::null(),
+                std::ptr::null(),
+            );
+        }
+    }
+
+    // Note: the timeline_handle null guard at
+    // host_gpu_lim_set_video_source_timeline_semaphore isn't reachable
+    // at tier-1: the first guard (handle_as_gpu_context) short-circuits
+    // on null gpu_handle, and a non-null garbage gpu_handle would
+    // UB-deref before reaching the timeline check. The guard is
+    // exercised end-to-end by load_project_dylib_camera_smoke (the
+    // cdylib camera passes a valid gpu_handle and a real Arc-borrow
+    // timeline_handle).
+
+    #[test]
+    fn clear_video_source_timeline_is_noop_on_null_gpu_handle() {
+        unsafe {
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE
+                .clear_video_source_timeline_semaphore)(std::ptr::null());
+        }
+    }
+
+    /// v14 slot (#1066): tier-1 wire-format guard. Null `gpu_handle`
+    /// must return null rather than dereferencing the pointer. The
+    /// non-null-handle "slot empty" → null and "slot populated" →
+    /// non-null Arc pointer paths are exercised end-to-end by the
+    /// camera-display cdylib reproducer; a tier-1 unit test for them
+    /// would need a real `GpuContext` instance, which this module
+    /// deliberately avoids constructing.
+    ///
+    /// Mental-revert: stub the wrapper to `unimplemented!()` and
+    /// this test trips the underlying panic — the null-guard
+    /// contract regresses.
+    #[test]
+    fn host_video_source_timeline_arc_returns_null_on_null_gpu_handle() {
+        let raw = unsafe {
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE
+                .host_video_source_timeline_arc)(std::ptr::null())
+        };
+        assert!(raw.is_null(), "expected null on null gpu_handle");
+    }
+}
