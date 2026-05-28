@@ -85,7 +85,9 @@ The principles:
 - **Bias toward supporting use-case classes, not single examples.** Real-time engines (Unreal, Bevy, Granite) serve classes — render targets, compute, video decode, audio, IPC. When designing or extending a core system, ask "what shape supports the *class* of use case this system is responsible for?", not "what's the smallest thing that makes the example in front of me work?".
 - **Observability is a design-time concern, not a retrofit.** `tracing::instrument` + metric hooks at trait birth is one line per method; added later it's a refactor across every implementor. Put hooks in when the trait is born.
 - **Concrete consumers are known requirements.** A future consumer is *hypothetical* only when unattested. A filed issue in the same milestone, a documented use case, an in-tree caller in a sibling file — these are *known*, and must be designed for now. The system-prompt's "don't design for hypothetical futures" rule still applies; it does *not* license under-shipping for known concrete futures.
+- **Foundational work without in-repo consumers is still real work.** Engine pieces are sometimes built ahead of any current example — substrate for the project's vision, often shaped by downstream users not yet in the codebase. The absence of a known consumer is not a reason to defer functionality, ship partial shapes, or hardcode placeholders. Build to the full contract the piece is meant to carry. When the contract itself is uncertain, surface the question rather than silently scope-cutting because nobody in-repo can complain yet.
 - **Engine-wide bugs get fixed at the engine layer, not in the consumer that surfaced them.** When debugging surfaces a defect in an engine primitive (RHI, `GpuContext`, runtime hooks, IPC surfaces, escalate ops) that *any* consumer of that primitive would hit — fix it at the engine layer, even when the symptom showed up in one example or processor. Examples are integration tests, not first-class consumers; an example-level bandaid removes the symptom for that example while leaving the bug in the engine for the next consumer (a future composition, a new processor, a third-party adapter) to rediscover. "I'll fix it for me; if you encounter it later, re-derive it" is a footgun. Lead recommendations with the engine-level fix; bandaids only appear when there is an explicit scope-cutting reason and the user gets the call. Restraint still applies (don't refactor neighboring systems just because the engine is now in scope), but the bar is: defect at engine layer ⇒ fix at engine layer.
+- **Ship complete; deferrals get tickets, not comments.** If a code path is required for the use-case class or foundational contract the engine work is shipping, make it work now. If something is genuinely blocked or scope-cut, file an issue with the unblock condition — don't bury the deferral as a code comment. Comments rot silently; tickets get triaged.
 
 What this means concretely when designing or extending a core system (RHI, IPC, processor model, public ABI, surface adapters, escalate ops):
 
@@ -98,29 +100,6 @@ What this means concretely when designing or extending a core system (RHI, IPC, 
 
 What stays the same as the system-prompt defaults:
 
-- Don't fabricate consumers *outside a filed issue*. "What if
-  someone wants X" is the kind of speculation that drifts into
-  parallel abstractions solving no filed problem. **A filed issue
-  in any open milestone is itself sufficient sanction**: the
-  ticket is the consumer attestation, and an engine-tier primitive
-  that anchors the use-case class the milestone exists to ship is
-  exactly what we want to land. Don't refuse to start sanctioned
-  work because no separate "concrete consumer" ticket exists, and
-  don't gate pickup on filing one — that turns the rule into a
-  development blocker, which it was never meant to be. The target
-  is a model going off-issue and inventing scope, not a sanctioned
-  engine build-out anchored by a real ticket.
-
-  > ~~Original wording: "Don't fabricate consumers. 'What if
-  > someone wants X' is hypothetical until X is filed, documented,
-  > or in-tree."~~ — Superseded 2026-05-03 during #610. The
-  > original framing was being applied as a gate on sanctioned
-  > engine work, blocking pickup until a separate "consumer"
-  > ticket existed alongside the engine ticket. That inverted the
-  > intent — the rule was meant to catch scope-creep outside an
-  > issue, not to second-guess a milestone's deliverables. Issue
-  > bodies that copied the same gate ("don't start until consumer
-  > filed") were updated in place at the same time.
 - Don't add validation for impossibilities. Type-system invariants don't need runtime checks.
 - Don't keep half-finished implementations or `todo!()` in library code.
 - Don't introduce abstractions that solve no problem the engine is responsible for ("just in case") — but DO introduce abstractions that solve the *class* of problem a core system addresses, when the class is documented.
