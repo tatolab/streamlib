@@ -49,9 +49,9 @@ impl BuildPolicy {
 }
 
 /// Where a [`BuildOrchestrator`] reads build inputs from. Constructed by
-/// the engine's source resolver; the orchestrator decides what to do
-/// with each arm (and may reject arms it doesn't support).
-#[non_exhaustive]
+/// the engine's source resolver; orchestrators match it exhaustively, so
+/// it is a closed set (a new source kind is a deliberate, breaking
+/// addition that every orchestrator must then handle).
 #[derive(Debug, Clone)]
 pub enum BuildSource {
     /// A package directory holding `streamlib.yaml` plus the per-language
@@ -66,8 +66,9 @@ pub enum BuildSource {
 }
 
 /// Everything a [`BuildOrchestrator`] needs to materialize a loadable
-/// staged package directory for one package.
-#[non_exhaustive]
+/// staged package directory for one package. Constructed by the engine;
+/// orchestrators (and their tests) read/build it, so it is a plain
+/// struct.
 #[derive(Debug, Clone)]
 pub struct BuildRequest {
     /// Canonical `@org/name` of the package being materialized.
@@ -81,8 +82,8 @@ pub struct BuildRequest {
     pub host_triple: String,
 }
 
-/// A successful [`BuildOrchestrator::materialize`] result.
-#[non_exhaustive]
+/// A successful [`BuildOrchestrator::materialize`] result. Constructed by
+/// orchestrator impls, so not `#[non_exhaustive]`.
 #[derive(Debug, Clone)]
 pub struct StagedArtifact {
     /// Directory the engine loads from — holds `streamlib.yaml`,

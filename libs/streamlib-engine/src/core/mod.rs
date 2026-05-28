@@ -67,4 +67,4 @@ pub use texture::*;
 // CLI tooling (`streamlib-cli`):
 pub use compiler::compiler_ops::ensure_processor_venv;
 pub use config::{InstalledPackageEntry, InstalledPackageManifest, ProjectConfig};
-pub use streamlib_home::get_cached_package_dir;
+pub use streamlib_home::{get_cached_package_dir, get_streamlib_home};

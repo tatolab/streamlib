@@ -94,6 +94,16 @@ pub mod sdk {
     pub use streamlib_engine::core::pubsub;
     pub use streamlib_engine::core::rhi;
     pub use streamlib_engine::core::runtime;
+
+    /// The default polyglot build orchestrator — available behind the
+    /// `auto-build` feature (on by default). Wire it so build-requiring
+    /// module loads materialize from source:
+    /// `Runner::new_with_orchestrator(PolyglotBuildOrchestrator::default())`.
+    /// A `--no-default-features` (frozen `.slpkg`-only) build excludes
+    /// this entirely.
+    #[cfg(feature = "auto-build")]
+    pub use streamlib_build_orchestrator::PolyglotBuildOrchestrator;
+
     pub use streamlib_engine::core::sync;
     pub use streamlib_engine::core::texture;
 
