@@ -93,8 +93,8 @@ fn unknown_processor_type_leaves_failed_node_in_graph_with_error_state() {
 
 #[test]
 #[serial]
-fn graph_file_validate_rejects_unknown_processor_type() {
-    use streamlib_engine::core::graph_file::GraphFileDefinition;
+fn graph_snapshot_validate_rejects_unknown_processor_type() {
+    use streamlib_engine::core::graph_snapshot::GraphSnapshot;
 
     let json = r#"{
         "processors": [
@@ -111,8 +111,8 @@ fn graph_file_validate_rejects_unknown_processor_type() {
         ]
     }"#;
 
-    let def = GraphFileDefinition::from_json_str(json).unwrap();
-    match def.validate() {
+    let snapshot = GraphSnapshot::from_json_str(json).unwrap();
+    match snapshot.validate() {
         Err(Error::UnknownProcessorType { ident }) => {
             assert_eq!(ident.r#type.as_str(), "DefinitelyNotARegisteredProcessor");
             assert_eq!(ident.package.as_str(), "ghost-package");

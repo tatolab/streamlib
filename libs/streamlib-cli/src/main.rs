@@ -90,9 +90,9 @@ enum Commands {
 
     /// Run the StreamLib runtime
     Run {
-        /// Pipeline graph file to load (JSON)
-        #[arg(value_name = "GRAPH_FILE")]
-        graph_file: Option<PathBuf>,
+        /// Pipeline graph snapshot to load (JSON)
+        #[arg(value_name = "SNAPSHOT")]
+        snapshot: Option<PathBuf>,
 
         /// Runtime name (auto-generated if not specified)
         #[arg(long)]
@@ -259,7 +259,7 @@ async fn async_main(cli: Cli) -> Result<()> {
             .await?
         }
         Some(Commands::Run {
-            graph_file,
+            snapshot,
             name,
             port,
             host,
@@ -267,7 +267,7 @@ async fn async_main(cli: Cli) -> Result<()> {
             plugin_dir,
             daemon,
         }) => {
-            commands::serve::run(host, port, graph_file, plugins, plugin_dir, name, daemon)?;
+            commands::serve::run(host, port, snapshot, plugins, plugin_dir, name, daemon)?;
         }
         Some(Commands::Setup { action }) => match action {
             SetupCommands::Shell { shell } => commands::setup::shell(shell.as_deref())?,

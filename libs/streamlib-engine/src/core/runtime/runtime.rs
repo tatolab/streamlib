@@ -108,6 +108,12 @@ pub struct Runner {
     /// construction needs the live GpuContext but whose registration
     /// must precede the first `process()` call. Drained on each `start()`.
     setup_hooks: Arc<Mutex<Vec<Box<dyn FnOnce(&GpuContext) -> Result<()> + Send>>>>,
+    /// Optional pipeline name carried across snapshot load → save.
+    /// Set by [`Self::load_graph_snapshot`] and read by
+    /// [`Self::save_graph_snapshot`] so a snapshot loaded from disk
+    /// can be re-saved with the same `name` without caller bookkeeping.
+    /// `None` when the graph was built imperatively without a name.
+    pipeline_name: Arc<Mutex<Option<String>>>,
 }
 
 impl Runner {
@@ -247,6 +253,7 @@ impl Runner {
             #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
             _logging_guard,
             setup_hooks: Arc::new(Mutex::new(Vec::new())),
+            pipeline_name: Arc::new(Mutex::new(None)),
         }))
     }
 
@@ -921,26 +928,29 @@ impl Runner {
     }
 
     // =========================================================================
-    // Graph File Loading
+    // Graph Snapshot Save / Load
     // =========================================================================
 
-    /// Load a graph from a file definition.
+    /// Load a graph snapshot into this runtime.
     ///
-    /// Processors are created first, building an alias → ID map. Then connections
-    /// are created by resolving aliases to runtime IDs.
-    pub fn load_graph_file(
+    /// Processors are created first, building an alias → ID map. Then
+    /// connections are created by resolving aliases to runtime IDs.
+    /// The snapshot's `name` is stashed on the runtime so a subsequent
+    /// [`Self::save_graph_snapshot`] re-emits it without caller
+    /// bookkeeping.
+    pub fn load_graph_snapshot(
         &self,
-        def: &crate::core::graph_file::GraphFileDefinition,
+        snapshot: &crate::core::graph_snapshot::GraphSnapshot,
     ) -> Result<()> {
         use std::collections::HashMap;
 
         // Validate before loading
-        def.validate()?;
+        snapshot.validate()?;
 
         // Phase 1: Create processors, build alias → ID map
         let mut alias_to_id: HashMap<String, ProcessorUniqueId> = HashMap::new();
 
-        for proc_def in &def.processors {
+        for proc_def in &snapshot.processors {
             let spec = proc_def.to_processor_spec();
             let id = self.add_processor(spec)?;
 
@@ -955,7 +965,7 @@ impl Runner {
         }
 
         // Phase 2: Create connections, resolving aliases
-        for conn_def in &def.connections {
+        for conn_def in &snapshot.connections {
             let from = conn_def.parse_from()?;
             let to = conn_def.parse_to()?;
 
@@ -980,26 +990,158 @@ impl Runner {
             );
         }
 
-        if let Some(name) = &def.name {
+        *self.pipeline_name.lock() = snapshot.name.clone();
+
+        if let Some(name) = &snapshot.name {
             tracing::info!("Loaded pipeline: {}", name);
         }
 
         Ok(())
     }
 
-    /// Load a graph from a JSON file path.
-    pub fn load_graph_file_path(&self, path: &std::path::Path) -> Result<()> {
-        let def = crate::core::graph_file::GraphFileDefinition::from_json_file(path)?;
+    /// Load a graph snapshot from a JSON file path.
+    pub fn load_graph_snapshot_from_path(&self, path: &std::path::Path) -> Result<()> {
+        let snapshot = crate::core::graph_snapshot::GraphSnapshot::from_json_file(path)?;
 
-        if let Some(name) = &def.name {
+        if let Some(name) = &snapshot.name {
             tracing::info!("Loading pipeline '{}' from {}", name, path.display());
         } else {
             tracing::info!("Loading pipeline from {}", path.display());
         }
 
-        self.load_graph_file(&def)
+        self.load_graph_snapshot(&snapshot)
     }
 
+    /// Snapshot the live graph as a [`GraphSnapshot`].
+    ///
+    /// Walks every processor node and link, regenerates per-node
+    /// aliases deterministically from each node's
+    /// PascalCase short name (with `_2`, `_3`, … on collision in
+    /// node-iteration order), and emits the structured snapshot the
+    /// load side accepts. The current `pipeline_name` is included
+    /// when present so `load → save` preserves it without caller
+    /// bookkeeping.
+    ///
+    /// `display_name` rides the snapshot only when the live node's
+    /// display name differs from its processor type's PascalCase
+    /// short name — i.e. only when a caller explicitly overrode the
+    /// default — so the user-intent distinction survives round-trips.
+    pub fn save_graph_snapshot(
+        &self,
+    ) -> Result<crate::core::graph_snapshot::GraphSnapshot> {
+        use std::collections::HashMap;
+
+        use crate::core::graph_snapshot::{
+            ConnectionDefinition, GraphSnapshot, ProcessorDefinition,
+        };
+
+        self.compiler.scope(|graph, _tx| {
+            // Deterministic aliasing — camelCase the type's PascalCase
+            // short name (e.g. CameraProcessor → cameraProcessor) and
+            // suffix `_2`, `_3` … on collision in node-iteration order.
+            let mut alias_counts: HashMap<String, u32> = HashMap::new();
+            let mut id_to_alias: HashMap<String, String> = HashMap::new();
+            let mut processors: Vec<ProcessorDefinition> = Vec::new();
+
+            for node in graph.traversal().v(()).iter() {
+                let short = node.processor_type.r#type.as_str();
+                let base = pascal_to_camel(short);
+
+                let count = alias_counts.entry(base.clone()).or_insert(0);
+                *count += 1;
+                let alias = if *count == 1 {
+                    base.clone()
+                } else {
+                    format!("{}_{}", base, count)
+                };
+
+                id_to_alias.insert(node.id.to_string(), alias.clone());
+
+                let display_name = (node.display_name.as_str() != short)
+                    .then(|| node.display_name.clone());
+
+                processors.push(ProcessorDefinition {
+                    alias,
+                    processor_type: node.processor_type.clone(),
+                    config: node.config.clone().unwrap_or(serde_json::Value::Null),
+                    display_name,
+                });
+            }
+
+            let mut connections: Vec<ConnectionDefinition> = Vec::new();
+            for link in graph.traversal().e(()).iter() {
+                let from_alias = id_to_alias
+                    .get(link.source.processor_id.as_str())
+                    .ok_or_else(|| {
+                        Error::GraphError(format!(
+                            "Link source processor '{}' missing from snapshot alias map",
+                            link.source.processor_id
+                        ))
+                    })?;
+                let to_alias = id_to_alias
+                    .get(link.target.processor_id.as_str())
+                    .ok_or_else(|| {
+                        Error::GraphError(format!(
+                            "Link target processor '{}' missing from snapshot alias map",
+                            link.target.processor_id
+                        ))
+                    })?;
+                connections.push(ConnectionDefinition {
+                    from: format!("{}.{}", from_alias, link.source.port_name),
+                    to: format!("{}.{}", to_alias, link.target.port_name),
+                });
+            }
+
+            Ok(GraphSnapshot {
+                name: self.pipeline_name.lock().clone(),
+                processors,
+                connections,
+            })
+        })
+    }
+
+    /// Snapshot the live graph and write it to a JSON file path.
+    pub fn save_graph_snapshot_to_path(&self, path: &std::path::Path) -> Result<()> {
+        let snapshot = self.save_graph_snapshot()?;
+        snapshot.to_json_file(path)?;
+        if let Some(name) = &snapshot.name {
+            tracing::info!("Saved pipeline '{}' to {}", name, path.display());
+        } else {
+            tracing::info!("Saved pipeline to {}", path.display());
+        }
+        Ok(())
+    }
+
+    /// Set or clear the pipeline name carried into the next
+    /// [`Self::save_graph_snapshot`]. Imperative-build callers use
+    /// this when they want their snapshots to round-trip with a
+    /// label; snapshot loaders set it automatically.
+    pub fn set_pipeline_name(&self, name: Option<String>) {
+        *self.pipeline_name.lock() = name;
+    }
+
+    /// Current pipeline name, if any. Set by
+    /// [`Self::load_graph_snapshot`] or [`Self::set_pipeline_name`].
+    pub fn pipeline_name(&self) -> Option<String> {
+        self.pipeline_name.lock().clone()
+    }
+
+}
+
+/// PascalCase → camelCase for snapshot alias generation.
+///
+/// `CameraProcessor → cameraProcessor`; `BGRAFileSource → bGRAFileSource`
+/// (only the first character is lowercased — the alias just needs to
+/// be deterministic and human-readable, not perfectly idiomatic). The
+/// alias is local to the snapshot and consumed by `to_processor_spec`
+/// on load; the actual processor identity rides the `processor_type`
+/// field.
+fn pascal_to_camel(short: &str) -> String {
+    let mut chars = short.chars();
+    match chars.next() {
+        Some(c) => c.to_lowercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 
