@@ -14,12 +14,17 @@ use core::ffi::c_void;
 ///   queries without consuming), plus the Arc lifecycle pair
 ///   (`clone_arc` / `drop_arc`) every Arc-handle β-shape on this
 ///   ABI carries for refcount accounting in host-compiled code.
-///   All other `InputMailboxesInner` methods (`add_port`,
-///   `set_subscriber`, `set_listener`, `listener_fd`,
-///   `drain_listener`, `receive_pending`, `route`,
-///   `any_port_has_data`) are host-side only and don't need
-///   vtable slots.
-pub const INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION: u32 = 1;
+/// - v2: appends `max_payload_for_port` so the cdylib can allocate
+///   exactly the schema-declared `metadata.max_payload_bytes` for
+///   each port up-front. The publisher side already honors this
+///   value (the iceoryx2 service is sized by it; the publisher
+///   can't loan a bigger slot), so the cdylib's read buffer is
+///   guaranteed sufficient by service-creation invariant — no
+///   truncation, no retry loop. Replaces the v1 4 KiB scratch +
+///   "resize and retry on truncation" dance that silently dropped
+///   every >4 KiB frame for ~4 days post-#894 (audio-mixer-demo
+///   silent-output bug).
+pub const INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION: u32 = 2;
 
 /// `extern "C" fn` dispatch table for the cdylib's `InputMailboxes`
 /// β-shape. Replaces the shared-Rust-type `&mut InputMailboxes`
@@ -47,11 +52,16 @@ pub const INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION: u32 = 1;
 /// On success, `*has_data` distinguishes "consumed a frame"
 /// (`true`) from "no frames queued" (`false`). When `*has_data ==
 /// true`, the callee writes the raw msgpack-encoded frame body to
-/// `out_buf` and the timestamp to `*out_timestamp`. Truncation is
-/// signaled by `*out_len > out_cap` and is treated as an error by
-/// the cdylib (it resizes the buffer and retries).
+/// `out_buf` and the timestamp to `*out_timestamp`. The cdylib is
+/// expected to size `out_buf` to the value returned by
+/// `max_payload_for_port` for the port — the iceoryx2 service is
+/// sized by the same schema-declared `metadata.max_payload_bytes`
+/// on the publisher side, so any actual frame body is guaranteed
+/// ≤ that bound by service-creation invariant. Truncation
+/// (`required > out_cap`) is now a protocol violation and surfaces
+/// as a non-zero return.
 ///
-/// `has_data` is infallible.
+/// `has_data` and `max_payload_for_port` are infallible.
 #[repr(C)]
 pub struct InputMailboxesVTable {
     /// Vtable layout version. Must equal
@@ -73,9 +83,11 @@ pub struct InputMailboxesVTable {
     ///   and the frame's monotonic timestamp to `*out_timestamp`.
     /// - `*has_data = false` if the mailbox was empty.
     ///
-    /// If the frame body is larger than `out_cap`, `*out_len` is
-    /// set to the **required** length and the data is not copied —
-    /// the cdylib resizes its buffer and retries.
+    /// The cdylib must size `out_buf` to the value returned by
+    /// `max_payload_for_port` for the port. If a frame body
+    /// exceeds `out_cap`, the call returns non-zero with an error
+    /// in `err_buf` — this indicates either a protocol violation
+    /// or a stale cached max from before a schema change.
     pub read_raw: unsafe extern "C" fn(
         handle: *const c_void,
         port_ptr: *const u8,
@@ -107,6 +119,25 @@ pub struct InputMailboxesVTable {
     /// Decrement the host-side `Arc<InputMailboxesInner>` strong
     /// count. Releases the inner when the count reaches zero.
     pub drop_arc: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Return the schema-declared `metadata.max_payload_bytes` for
+    /// the named port — the upper bound on serialized frame size
+    /// guaranteed by the iceoryx2 service's publisher-side
+    /// configuration. The cdylib allocates `out_buf` to this size
+    /// before calling `read_raw`; the publisher cannot loan a
+    /// bigger slot, so truncation is structurally impossible.
+    ///
+    /// Returns the engine-wide `MAX_PAYLOAD_SIZE` default (64 KiB)
+    /// for ports without a registered schema or without an
+    /// explicit `max_payload_bytes` declaration. Returns `0` for
+    /// unknown ports — caller must treat as a wiring error.
+    ///
+    /// v2 addition.
+    pub max_payload_for_port: unsafe extern "C" fn(
+        handle: *const c_void,
+        port_ptr: *const u8,
+        port_len: usize,
+    ) -> usize,
 }
 
 // Safety: every field is a primitive or an `extern "C" fn` pointer.
@@ -122,9 +153,9 @@ mod tests {
 
     #[test]
     fn input_mailboxes_vtable_layout() {
-        // header (u32 + u32) + 4 fn pointers @ 8 bytes each =
-        // 4 + 4 + 4 * 8 = 40 bytes.
-        assert_eq!(size_of::<InputMailboxesVTable>(), 40);
+        // header (u32 + u32) + 5 fn pointers @ 8 bytes each =
+        // 4 + 4 + 5 * 8 = 48 bytes (v2 appended max_payload_for_port).
+        assert_eq!(size_of::<InputMailboxesVTable>(), 48);
         assert_eq!(align_of::<InputMailboxesVTable>(), 8);
         assert_eq!(offset_of!(InputMailboxesVTable, layout_version), 0);
         assert_eq!(offset_of!(InputMailboxesVTable, _reserved_padding), 4);
@@ -132,5 +163,11 @@ mod tests {
         assert_eq!(offset_of!(InputMailboxesVTable, has_data), 16);
         assert_eq!(offset_of!(InputMailboxesVTable, clone_arc), 24);
         assert_eq!(offset_of!(InputMailboxesVTable, drop_arc), 32);
+        assert_eq!(offset_of!(InputMailboxesVTable, max_payload_for_port), 40);
+    }
+
+    #[test]
+    fn input_mailboxes_vtable_layout_version_pinned_at_two() {
+        assert_eq!(INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION, 2);
     }
 }

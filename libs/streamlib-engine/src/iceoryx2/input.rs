@@ -116,6 +116,17 @@ impl SendableListener {
 struct PortConfig {
     mailbox: PortMailbox,
     read_mode: ReadMode,
+    /// Schema-declared upper bound on serialized frame size for this
+    /// port — mirrors the value used by the publisher to size the
+    /// iceoryx2 service's slot. The cdylib's `read_raw` queries this
+    /// via the v2 `max_payload_for_port` vtable slot to allocate the
+    /// receive buffer exactly, eliminating the v1 4 KiB-then-retry
+    /// dance. Defaults to [`crate::iceoryx2::MAX_PAYLOAD_SIZE`] when
+    /// the port is added without an explicit max (test paths;
+    /// in-tree wire path overrides via
+    /// [`InputMailboxesInner::set_port_max_payload_bytes`] from the
+    /// compiler op).
+    max_payload_bytes: usize,
 }
 
 /// Host-side inner state for input mailboxes. Owns the per-port
@@ -147,7 +158,15 @@ impl InputMailboxesInner {
         self.ports.lock().contains_key(port)
     }
 
-    /// Add a mailbox for the given port with the specified buffer size and read mode.
+    /// Add a mailbox for the given port with the specified buffer
+    /// size and read mode.
+    ///
+    /// The port's `max_payload_bytes` is set to
+    /// [`crate::iceoryx2::MAX_PAYLOAD_SIZE`] by default — the
+    /// compiler op overrides it via
+    /// [`set_port_max_payload_bytes`] at wire time based on the
+    /// link's schema (`metadata.max_payload_bytes`). The cdylib's
+    /// v2 `max_payload_for_port` vtable slot reads this value.
     pub fn add_port(&self, port: &str, buffer_size: usize, read_mode: ReadMode) {
         tracing::debug!(
             port = port,
@@ -160,8 +179,32 @@ impl InputMailboxesInner {
             PortConfig {
                 mailbox: PortMailbox::new(buffer_size),
                 read_mode,
+                max_payload_bytes: crate::iceoryx2::MAX_PAYLOAD_SIZE,
             },
         );
+    }
+
+    /// Override the schema-declared `metadata.max_payload_bytes`
+    /// for a port that has already been added via [`add_port`].
+    /// Called by the compiler op at wire time after computing the
+    /// link's max via
+    /// `embedded_schemas::max_payload_bytes_for_port_spec`. The
+    /// cdylib's v2 `max_payload_for_port` vtable slot returns this
+    /// value so its `read_raw` allocates exactly.
+    ///
+    /// No-op for unknown ports (the compiler op calls this only
+    /// after [`add_port`] is known to have succeeded).
+    pub fn set_port_max_payload_bytes(&self, port: &str, max_payload_bytes: usize) {
+        if let Some(cfg) = self.ports.lock().get_mut(port) {
+            cfg.max_payload_bytes = max_payload_bytes;
+        }
+    }
+
+    /// Read the per-port `max_payload_bytes` set by the wire path.
+    /// Returns `None` for unknown ports (the v2 vtable callback
+    /// surfaces this as `0`, the caller's wiring-error sentinel).
+    pub fn max_payload_for_port(&self, port: &str) -> Option<usize> {
+        self.ports.lock().get(port).map(|cfg| cfg.max_payload_bytes)
     }
 
     /// Check if a subscriber has already been configured.
@@ -466,61 +509,82 @@ impl InputMailboxes {
     /// Read raw bytes and timestamp from the given port without
     /// deserialization. Returns `Ok(Some((data, timestamp_ns)))` on
     /// success, `Ok(None)` when the mailbox is empty.
+    ///
+    /// Allocates `out_buf` to the schema-declared
+    /// `metadata.max_payload_bytes` for the port (queried via the
+    /// v2 `max_payload_for_port` vtable slot). The iceoryx2 service
+    /// is sized by the same bound on the publisher side, so no
+    /// inbound frame can exceed `out_cap` — truncation is
+    /// structurally impossible and surfaces as a hard error
+    /// (protocol violation).
     pub fn read_raw(&self, port: &str) -> Result<Option<(Vec<u8>, i64)>> {
         if !self.is_configured() {
             return Ok(None);
         }
 
-        // Start with a buffer sized for typical frames (4 KiB —
-        // common audio/control payload size). On truncation we
-        // resize to the required size returned via `*out_len` and
-        // retry; iceoryx2's `MAX_PAYLOAD_SIZE` bounds the worst
-        // case.
-        let mut buf = vec![0u8; 4 * 1024];
-        loop {
-            let mut out_len = 0usize;
-            let mut out_timestamp = 0i64;
-            let mut has_data = false;
-            let mut err_buf = [0u8; 256];
-            let mut err_len = 0usize;
-            // SAFETY: vtable + handle are non-null per is_configured().
-            let rc = unsafe {
-                ((*self.vtable).read_raw)(
-                    self.handle,
-                    port.as_ptr(),
-                    port.len(),
-                    buf.as_mut_ptr(),
-                    buf.len(),
-                    &mut out_len as *mut usize,
-                    &mut out_timestamp as *mut i64,
-                    &mut has_data as *mut bool,
-                    err_buf.as_mut_ptr(),
-                    err_buf.len(),
-                    &mut err_len as *mut usize,
-                )
-            };
-            if rc != 0 {
-                let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                    .into_owned();
-                return Err(Error::Link(format!(
-                    "InputMailboxes::read_raw(port='{}') failed: {}",
-                    port, msg
-                )));
-            }
-            if !has_data {
-                return Ok(None);
-            }
-            if out_len > buf.len() {
-                // Caller's buffer too small; resize and retry. The
-                // host's `read_raw` host wrapper guarantees the
-                // frame is NOT consumed on truncation, so the retry
-                // sees the same frame.
-                buf = vec![0u8; out_len];
-                continue;
-            }
-            buf.truncate(out_len);
-            return Ok(Some((buf, out_timestamp)));
+        // SAFETY: vtable + handle are non-null per is_configured().
+        let max_payload = unsafe {
+            ((*self.vtable).max_payload_for_port)(self.handle, port.as_ptr(), port.len())
+        };
+        if max_payload == 0 {
+            return Err(Error::Link(format!(
+                "InputMailboxes::read_raw(port='{}'): max_payload_for_port \
+                 returned 0 — port is not registered (wiring error: was \
+                 add_port called on this side of the link?)",
+                port
+            )));
         }
+
+        let mut buf = vec![0u8; max_payload];
+        let mut out_len = 0usize;
+        let mut out_timestamp = 0i64;
+        let mut has_data = false;
+        let mut err_buf = [0u8; 256];
+        let mut err_len = 0usize;
+        // SAFETY: vtable + handle are non-null per is_configured().
+        let rc = unsafe {
+            ((*self.vtable).read_raw)(
+                self.handle,
+                port.as_ptr(),
+                port.len(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut out_len as *mut usize,
+                &mut out_timestamp as *mut i64,
+                &mut has_data as *mut bool,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if rc != 0 {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            return Err(Error::Link(format!(
+                "InputMailboxes::read_raw(port='{}') failed: {}",
+                port, msg
+            )));
+        }
+        if !has_data {
+            return Ok(None);
+        }
+        // Truncation is impossible by service-creation invariant
+        // (publisher can't loan slot > max_payload, and we sized
+        // our buffer to max_payload). Defensive check so a future
+        // protocol mismatch surfaces loudly rather than silently
+        // corrupting downstream deserialization.
+        if out_len > buf.len() {
+            return Err(Error::Link(format!(
+                "InputMailboxes::read_raw(port='{}'): host returned frame \
+                 of {} bytes exceeding the queried max_payload {} — \
+                 protocol violation",
+                port,
+                out_len,
+                buf.len()
+            )));
+        }
+        buf.truncate(out_len);
+        Ok(Some((buf, out_timestamp)))
     }
 
     /// Check if a port has any payloads available.
