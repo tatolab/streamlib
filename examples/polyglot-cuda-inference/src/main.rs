@@ -306,12 +306,20 @@ fn register_host_surface(
         PixelFormat::Bgra32,
     );
 
-    // 2. Allocate the exportable timeline semaphore (initial value 0).
-    //    First subprocess `acquire_*` will wait on 0 → satisfied
-    //    immediately; release advances to 1.
-    let timeline = Arc::new(
-        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-            .map_err(|e| format!("HostVulkanTimelineSemaphore::new_exportable: {e}"))?,
+    // 2. Allocate the exportable timeline semaphores (initial value 0)
+    //    — one per single-writer edge per
+    //    `docs/architecture/adapter-timeline-single-writer.md`. First
+    //    subprocess `acquire_*` waits on 0 → satisfied immediately;
+    //    each release advances the corresponding edge's counter by 1.
+    let produce_done = Arc::new(
+        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0).map_err(
+            |e| format!("HostVulkanTimelineSemaphore::new_exportable (produce_done): {e}"),
+        )?,
+    );
+    let consume_done = Arc::new(
+        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0).map_err(
+            |e| format!("HostVulkanTimelineSemaphore::new_exportable (consume_done): {e}"),
+        )?,
     );
 
     // 3. Pre-fill the buffer with a known sentinel pattern (all zeros)
@@ -341,8 +349,8 @@ fn register_host_surface(
         .register_pixel_buffer_with_timeline(
             &SCENARIO_SURFACE_ID.to_string(),
             &pixel_buffer_rhi,
-            Some(timeline.as_ref()),
-            None,
+            Some(produce_done.as_ref()),
+            Some(consume_done.as_ref()),
         )
         .map_err(|e| format!("register_pixel_buffer_with_timeline: {e}"))?;
 
@@ -352,7 +360,8 @@ fn register_host_surface(
             SCENARIO_SURFACE_ID,
             HostSurfaceRegistration::<HostMarker> {
                 pixel_buffer: pixel_buffer_arc,
-                timeline,
+                produce_done,
+                consume_done,
                 initial_layout: VulkanLayout::UNDEFINED,
             },
         )

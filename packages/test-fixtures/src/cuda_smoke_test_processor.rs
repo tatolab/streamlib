@@ -149,16 +149,26 @@ fn run_smoke(
     })?;
     let staging_arc = Arc::new(staging);
 
-    let timeline = HostVulkanTimelineSemaphore::new_exportable(
+    let produce_done = HostVulkanTimelineSemaphore::new_exportable(
         host_device.device(),
         0,
     )
     .map_err(|e| {
         Error::GpuError(format!(
-            "HostVulkanTimelineSemaphore::new_exportable: {e}"
+            "HostVulkanTimelineSemaphore::new_exportable (produce_done): {e}"
         ))
     })?;
-    let timeline_arc = Arc::new(timeline);
+    let produce_done_arc = Arc::new(produce_done);
+    let consume_done = HostVulkanTimelineSemaphore::new_exportable(
+        host_device.device(),
+        0,
+    )
+    .map_err(|e| {
+        Error::GpuError(format!(
+            "HostVulkanTimelineSemaphore::new_exportable (consume_done): {e}"
+        ))
+    })?;
+    let consume_done_arc = Arc::new(consume_done);
 
     let adapter = Arc::new(CudaSurfaceAdapter::new(Arc::clone(&host_device)));
     adapter
@@ -166,7 +176,8 @@ fn run_smoke(
             surface_id,
             HostSurfaceRegistration::<HostMarker> {
                 pixel_buffer: Arc::clone(&staging_arc),
-                timeline: Arc::clone(&timeline_arc),
+                produce_done: Arc::clone(&produce_done_arc),
+                consume_done: Arc::clone(&consume_done_arc),
                 initial_layout: VulkanLayout::UNDEFINED,
             },
         )
@@ -201,7 +212,8 @@ fn run_smoke(
     }
     drop(guard);
     drop(adapter);
-    drop(timeline_arc);
+    drop(produce_done_arc);
+    drop(consume_done_arc);
     drop(staging_arc);
 
     Ok(SmokeOutcome::Ok(vk_buffer_debug))

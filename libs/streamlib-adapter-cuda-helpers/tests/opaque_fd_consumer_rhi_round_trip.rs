@@ -114,13 +114,23 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
             return;
         }
     };
-    let host_timeline = match HostVulkanTimelineSemaphore::new_exportable(
+    let host_produce_done = match HostVulkanTimelineSemaphore::new_exportable(
         host_device.device(),
         0,
     ) {
         Ok(t) => Arc::new(t),
         Err(e) => {
-            println!("stage6: timeline new_exportable failed: {e} — skipping");
+            println!("stage6: produce_done new_exportable failed: {e} — skipping");
+            return;
+        }
+    };
+    let host_consume_done = match HostVulkanTimelineSemaphore::new_exportable(
+        host_device.device(),
+        0,
+    ) {
+        Ok(t) => Arc::new(t),
+        Err(e) => {
+            println!("stage6: consume_done new_exportable failed: {e} — skipping");
             return;
         }
     };
@@ -138,10 +148,12 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
             buffer_size,
         );
     }
-    // Signal timeline value 1 — represents "host has finished writing".
-    host_timeline
+    // Signal produce_done value 1 — represents "host has finished writing".
+    // produce_done is the producer-signaled timeline; consume_done stays at 0
+    // (no consumer has read yet).
+    host_produce_done
         .signal_host(1)
-        .expect("host_timeline.signal_host(1)");
+        .expect("host_produce_done.signal_host(1)");
 
     // ── Phase 2: stand up surface-share daemon ──────────────────────────
     let state = SurfaceShareState::new();
@@ -154,9 +166,12 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
     let memory_fd = host_buffer
         .export_opaque_fd_memory()
         .expect("export_opaque_fd_memory");
-    let timeline_fd = host_timeline
+    let produce_done_fd = host_produce_done
         .export_opaque_fd()
-        .expect("export_opaque_fd");
+        .expect("export_opaque_fd produce_done");
+    let consume_done_fd = host_consume_done
+        .export_opaque_fd()
+        .expect("export_opaque_fd consume_done");
 
     let host_stream =
         connect_to_surface_share_socket(&socket_path).expect("host connect");
@@ -172,15 +187,21 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
         "plane_sizes": [buffer_size as u64],
         "plane_offsets": [0u64],
         "plane_strides": [0u64],
-        "has_sync_fd": true,
+        "has_produce_done_fd": true,
+        "has_consume_done_fd": true,
     });
-    let (register_resp, _) =
-        send_request_with_fds(&host_stream, &register_req, &[memory_fd, timeline_fd], 0)
-            .expect("host register");
-    // Daemon dup'd both FDs — close the host's references.
+    let (register_resp, _) = send_request_with_fds(
+        &host_stream,
+        &register_req,
+        &[memory_fd, produce_done_fd, consume_done_fd],
+        0,
+    )
+    .expect("host register");
+    // Daemon dup'd all FDs — close the host's references.
     unsafe {
         libc::close(memory_fd);
-        libc::close(timeline_fd);
+        libc::close(produce_done_fd);
+        libc::close(consume_done_fd);
     }
     assert!(
         register_resp.get("error").is_none(),
@@ -199,7 +220,7 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
         &consumer_stream,
         &lookup_req,
         &[],
-        MAX_DMA_BUF_PLANES + 1, // +1 for the timeline OPAQUE_FD
+        MAX_DMA_BUF_PLANES + 2, // +2 for produce_done + consume_done OPAQUE_FDs
     )
     .expect("consumer lookup");
 
@@ -209,27 +230,35 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
         "Stage 4 wire-format: register/lookup must round-trip handle_type",
     );
     assert_eq!(
-        lookup_resp.get("has_sync_fd").and_then(|v| v.as_bool()),
+        lookup_resp.get("has_produce_done_fd").and_then(|v| v.as_bool()),
         Some(true),
-        "timeline FD must be advertised in the lookup response",
+        "produce_done FD must be advertised in the lookup response",
+    );
+    assert_eq!(
+        lookup_resp.get("has_consume_done_fd").and_then(|v| v.as_bool()),
+        Some(true),
+        "consume_done FD must be advertised in the lookup response",
     );
     assert_eq!(
         lookup_fds.len(),
-        2,
-        "lookup must deliver memory_fd + timeline_fd via SCM_RIGHTS"
+        3,
+        "lookup must deliver memory_fd + produce_done_fd + consume_done_fd via SCM_RIGHTS"
     );
 
-    // The daemon emits memory FDs first, then the optional sync FD.
+    // The daemon emits memory FDs first, then produce_done, then consume_done.
     let consumer_memory_fd: RawFd = lookup_fds[0];
-    let consumer_timeline_fd: RawFd = lookup_fds[1];
+    let consumer_produce_done_fd: RawFd = lookup_fds[1];
+    let consumer_consume_done_fd: RawFd = lookup_fds[2];
 
     // ── Phase 5: consumer side imports through consumer-rhi ────────────
     let consumer_device = match ConsumerVulkanDevice::new() {
         Ok(d) => Arc::new(d),
         Err(e) => {
+            // SAFETY: import paths haven't been called yet — close all FDs.
             unsafe {
                 libc::close(consumer_memory_fd);
-                libc::close(consumer_timeline_fd);
+                libc::close(consumer_produce_done_fd);
+                libc::close(consumer_consume_done_fd);
             }
             println!(
                 "stage6: ConsumerVulkanDevice::new failed: {e:?} — skipping \
@@ -248,21 +277,43 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
             // FD ownership did NOT transfer on error — close it.
             unsafe {
                 libc::close(consumer_memory_fd);
-                libc::close(consumer_timeline_fd);
+                libc::close(consumer_produce_done_fd);
+                libc::close(consumer_consume_done_fd);
             }
             panic!("ConsumerVulkanBuffer::from_opaque_fd failed: {e:?}");
         }
     };
 
-    let consumer_timeline = ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
+    let consumer_produce_done = ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
         &consumer_device,
-        consumer_timeline_fd,
+        consumer_produce_done_fd,
     );
-    let consumer_timeline = match consumer_timeline {
+    let consumer_produce_done = match consumer_produce_done {
         Ok(t) => Arc::new(t),
         Err(e) => {
-            unsafe { libc::close(consumer_timeline_fd) };
-            panic!("ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd failed: {e:?}");
+            unsafe {
+                libc::close(consumer_produce_done_fd);
+                libc::close(consumer_consume_done_fd);
+            }
+            panic!(
+                "ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd \
+                 (produce_done) failed: {e:?}"
+            );
+        }
+    };
+
+    let consumer_consume_done = ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
+        &consumer_device,
+        consumer_consume_done_fd,
+    );
+    let consumer_consume_done = match consumer_consume_done {
+        Ok(t) => Arc::new(t),
+        Err(e) => {
+            unsafe { libc::close(consumer_consume_done_fd) };
+            panic!(
+                "ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd \
+                 (consume_done) failed: {e:?}"
+            );
         }
     };
 
@@ -290,7 +341,8 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
             0xCDA0_0006,
             HostSurfaceRegistration {
                 pixel_buffer: Arc::clone(&consumer_buffer),
-                timeline: Arc::clone(&consumer_timeline),
+                produce_done: Arc::clone(&consumer_produce_done),
+                consume_done: Arc::clone(&consumer_consume_done),
                 initial_layout: VulkanLayout::UNDEFINED,
             },
         )

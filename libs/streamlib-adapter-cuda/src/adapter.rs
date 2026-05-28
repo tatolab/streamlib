@@ -144,11 +144,12 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
                 resource: SurfaceResource::Buffer {
                     pixel_buffer: registration.pixel_buffer,
                 },
-                timeline: registration.timeline,
+                produce_done: registration.produce_done,
+                consume_done: registration.consume_done,
                 current_layout: registration.initial_layout,
                 read_holders: 0,
                 write_held: false,
-                current_release_value: 0,
+                current_signal_value: 0,
             },
         );
         if !inserted {
@@ -198,11 +199,12 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
                 resource: SurfaceResource::Image {
                     texture: registration.texture,
                 },
-                timeline: registration.timeline,
+                produce_done: registration.produce_done,
+                consume_done: registration.consume_done,
                 current_layout: registration.initial_layout,
                 read_holders: 0,
                 write_held: false,
-                current_release_value: 0,
+                current_signal_value: 0,
             },
         );
         if !inserted {
@@ -261,16 +263,27 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
             .flatten()
     }
 
-    /// Power-user accessor: the registered timeline-semaphore Arc for
-    /// a surface (either flavor). Used by the carve-out test to call
+    /// Power-user accessor: the registered `produce_done` timeline Arc
+    /// for a surface (either flavor). Used by the carve-out test to call
     /// `export_opaque_fd()` on the underlying timeline; cdylib work
-    /// will route this through the surface-share service.
-    pub fn surface_timeline(
+    /// routes this through the surface-share service.
+    pub fn surface_produce_done(
         &self,
         id: SurfaceId,
     ) -> Option<Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>> {
         self.surfaces
-            .with(id, |state| Arc::clone(&state.timeline))
+            .with(id, |state| Arc::clone(&state.produce_done))
+    }
+
+    /// Power-user accessor: the registered `consume_done` timeline Arc
+    /// for a surface (either flavor). Symmetric counterpart to
+    /// [`Self::surface_produce_done`].
+    pub fn surface_consume_done(
+        &self,
+        id: SurfaceId,
+    ) -> Option<Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>> {
+        self.surfaces
+            .with(id, |state| Arc::clone(&state.consume_done))
     }
 
     /// Host-pipeline producer path: submit a `vkCmdCopyImageToBuffer`
@@ -370,21 +383,21 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
                     });
                 }
                 // Claim the signal_value atomically with `write_held`:
-                // advance `current_release_value` here, INSIDE the
-                // registry lock, so no other writer (host signal path
-                // or concurrent submit) can race on the value
-                // computation. The GPU submit at `signal_value`
-                // happens outside the lock; by then state.current is
-                // already the about-to-be-signaled value, so any
-                // concurrent `signal_host` path on the same timeline
-                // picks a strictly greater value. Closes the
-                // multi-writer race that surfaced as
-                // VUID-VkSemaphoreSignalInfo-value-03258 on the
-                // camera-python-display pipeline.
-                let signal_value = state.next_release_value();
-                state.current_release_value = signal_value;
+                // advance `current_signal_value` here, INSIDE the
+                // registry lock, so concurrent submits or
+                // `end_*_access` callers in the same process pick
+                // strictly greater values. The GPU submit at
+                // `signal_value` happens outside the lock; by then
+                // state.current is already the about-to-be-signaled
+                // value. Under single-writer-per-edge
+                // (`docs/architecture/adapter-timeline-single-writer.md`)
+                // this site is the producer signaling `produce_done`;
+                // the consumer's signals run on `consume_done` from a
+                // different process counter.
+                let signal_value = state.next_signal_value();
+                state.current_signal_value = signal_value;
                 Ok(HostCopySession {
-                    timeline: Arc::clone(&state.timeline),
+                    produce_done: Arc::clone(&state.produce_done),
                     buffer: pixel_buffer.buffer(),
                     signal_value,
                 })
@@ -399,7 +412,7 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
             image_layout.as_vk(),
             session.buffer,
             image_extent,
-            session.timeline.as_ref(),
+            session.produce_done.as_ref(),
             session.signal_value,
         ) {
             // Submit failed; clear write_held. State.current_release_value
@@ -438,9 +451,11 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
     ) -> Result<Option<ReadAcquired<D::Privilege>>, AdapterError> {
         let id = surface.id;
         self.surfaces.try_begin_read(id, |state| match &state.resource {
+            // Consumer-side acquire waits on `produce_done` — the
+            // peer-timeline's `current_value()` snapshot is taken inside
+            // `finalize_read` (outside the registry lock).
             SurfaceResource::Buffer { pixel_buffer } => Ok(ReadAcquired {
-                timeline: Arc::clone(&state.timeline),
-                wait_value: state.current_release_value,
+                peer_timeline: Arc::clone(&state.produce_done),
                 buffer: pixel_buffer.buffer(),
                 size: pixel_buffer.size(),
             }),
@@ -459,9 +474,10 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
     ) -> Result<Option<WriteAcquired<D::Privilege>>, AdapterError> {
         let id = surface.id;
         self.surfaces.try_begin_write(id, |state| match &state.resource {
+            // Producer-side acquire waits on `consume_done` — confirms
+            // the consumer has drained prior content before re-write.
             SurfaceResource::Buffer { pixel_buffer } => Ok(WriteAcquired {
-                timeline: Arc::clone(&state.timeline),
-                wait_value: state.current_release_value,
+                peer_timeline: Arc::clone(&state.consume_done),
                 buffer: pixel_buffer.buffer(),
                 size: pixel_buffer.size(),
             }),
@@ -487,8 +503,7 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
                     ),
                 })?;
                 Ok(ImageReadAcquired {
-                    timeline: Arc::clone(&state.timeline),
-                    wait_value: state.current_release_value,
+                    peer_timeline: Arc::clone(&state.produce_done),
                     image,
                     width: texture.width(),
                     height: texture.height(),
@@ -517,8 +532,7 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
                     ),
                 })?;
                 Ok(ImageWriteAcquired {
-                    timeline: Arc::clone(&state.timeline),
-                    wait_value: state.current_release_value,
+                    peer_timeline: Arc::clone(&state.consume_done),
                     image,
                     width: texture.width(),
                     height: texture.height(),
@@ -539,9 +553,18 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
         surface_id: SurfaceId,
         acquired: ImageReadAcquired<D::Privilege>,
     ) -> Result<CudaTextureView<'_>, AdapterError> {
+        // Wait for whatever value the peer (`produce_done`) has already
+        // been signaled to. The peer-timeline's kernel counter is the
+        // source of truth — no cross-process value publishing IPC
+        // needed for v1 (see
+        // `docs/architecture/adapter-timeline-single-writer.md`).
+        let wait_value = acquired
+            .peer_timeline
+            .current_value()
+            .unwrap_or(0);
         if acquired
-            .timeline
-            .wait(acquired.wait_value, self.acquire_timeout.as_nanos() as u64)
+            .peer_timeline
+            .wait(wait_value, self.acquire_timeout.as_nanos() as u64)
             .is_err()
         {
             self.surfaces.rollback_read(surface_id);
@@ -563,9 +586,15 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
         surface_id: SurfaceId,
         acquired: ImageWriteAcquired<D::Privilege>,
     ) -> Result<CudaSurfaceView<'_>, AdapterError> {
+        // Producer-side wait on `consume_done`'s current value — see
+        // `finalize_image_read` for the kernel-counter rationale.
+        let wait_value = acquired
+            .peer_timeline
+            .current_value()
+            .unwrap_or(0);
         if acquired
-            .timeline
-            .wait(acquired.wait_value, self.acquire_timeout.as_nanos() as u64)
+            .peer_timeline
+            .wait(wait_value, self.acquire_timeout.as_nanos() as u64)
             .is_err()
         {
             self.surfaces.rollback_write(surface_id);
@@ -672,9 +701,13 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
         surface_id: SurfaceId,
         acquired: ReadAcquired<D::Privilege>,
     ) -> Result<(vk::Buffer, vk::DeviceSize), AdapterError> {
+        let wait_value = acquired
+            .peer_timeline
+            .current_value()
+            .unwrap_or(0);
         if acquired
-            .timeline
-            .wait(acquired.wait_value, self.acquire_timeout.as_nanos() as u64)
+            .peer_timeline
+            .wait(wait_value, self.acquire_timeout.as_nanos() as u64)
             .is_err()
         {
             self.surfaces.rollback_read(surface_id);
@@ -690,9 +723,13 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
         surface_id: SurfaceId,
         acquired: WriteAcquired<D::Privilege>,
     ) -> Result<(vk::Buffer, vk::DeviceSize), AdapterError> {
+        let wait_value = acquired
+            .peer_timeline
+            .current_value()
+            .unwrap_or(0);
         if acquired
-            .timeline
-            .wait(acquired.wait_value, self.acquire_timeout.as_nanos() as u64)
+            .peer_timeline
+            .wait(wait_value, self.acquire_timeout.as_nanos() as u64)
             .is_err()
         {
             self.surfaces.rollback_write(surface_id);
@@ -706,8 +743,10 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
 
 /// Snapshot taken under the registry lock so the GPU submit can run
 /// unlocked. `write_held` is already set; the rollback path clears it.
+/// The producer signals `produce_done` at `signal_value` via the GPU
+/// submit's `pSignalSemaphoreInfos` slot per single-writer-per-edge.
 struct HostCopySession<P: DevicePrivilege> {
-    timeline: Arc<P::TimelineSemaphore>,
+    produce_done: Arc<P::TimelineSemaphore>,
     buffer: vk::Buffer,
     signal_value: u64,
 }
@@ -982,17 +1021,17 @@ fn build_color_image_barrier(
 
 /// Snapshot taken under the registry lock so the timeline wait can run
 /// unlocked. `read_holders` / `write_held` are already incremented;
-/// rollback paths decrement them on failure.
+/// rollback paths decrement them on failure. `peer_timeline` is the
+/// side this caller waits on (`produce_done` for read paths,
+/// `consume_done` for write paths) per single-writer-per-edge.
 struct ReadAcquired<P: DevicePrivilege> {
-    timeline: Arc<P::TimelineSemaphore>,
-    wait_value: u64,
+    peer_timeline: Arc<P::TimelineSemaphore>,
     buffer: vk::Buffer,
     size: vk::DeviceSize,
 }
 
 struct WriteAcquired<P: DevicePrivilege> {
-    timeline: Arc<P::TimelineSemaphore>,
-    wait_value: u64,
+    peer_timeline: Arc<P::TimelineSemaphore>,
     buffer: vk::Buffer,
     size: vk::DeviceSize,
 }
@@ -1002,8 +1041,7 @@ struct WriteAcquired<P: DevicePrivilege> {
 /// dimensions / format the cdylib needs to build a
 /// `cudaTextureObject_t`.
 struct ImageReadAcquired<P: DevicePrivilege> {
-    timeline: Arc<P::TimelineSemaphore>,
-    wait_value: u64,
+    peer_timeline: Arc<P::TimelineSemaphore>,
     image: vk::Image,
     width: u32,
     height: u32,
@@ -1013,8 +1051,7 @@ struct ImageReadAcquired<P: DevicePrivilege> {
 /// Image-flavored write snapshot — sibling of [`WriteAcquired`] for
 /// the `acquire_surface` path.
 struct ImageWriteAcquired<P: DevicePrivilege> {
-    timeline: Arc<P::TimelineSemaphore>,
-    wait_value: u64,
+    peer_timeline: Arc<P::TimelineSemaphore>,
     image: vk::Image,
     width: u32,
     height: u32,
@@ -1132,8 +1169,10 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CudaSurfaceAdapter<D> {
     }
 
     fn end_read_access(&self, surface_id: SurfaceId) {
-        // Inner Option: `None` means "not the last reader, skip signal".
-        // Outer Option: `None` means "surface raced an unregister".
+        // Consumer-side release: signal `consume_done` so the producer
+        // can wait on it before re-writing. Inner Option: `None` means
+        // "not the last reader, skip signal". Outer Option: `None`
+        // means "surface raced an unregister".
         let signal: Option<Option<(Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>, u64)>> =
             self.surfaces.with_mut(surface_id, |state| {
                 debug_assert!(state.read_holders > 0, "read release without acquire");
@@ -1141,9 +1180,9 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CudaSurfaceAdapter<D> {
                 if state.read_holders > 0 {
                     return None;
                 }
-                let next = state.next_release_value();
-                state.current_release_value = next;
-                Some((Arc::clone(&state.timeline), next))
+                let next = state.next_signal_value();
+                state.current_signal_value = next;
+                Some((Arc::clone(&state.consume_done), next))
             });
         let signal = match signal {
             Some(s) => s,
@@ -1155,23 +1194,25 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CudaSurfaceAdapter<D> {
                 return;
             }
         };
-        if let Some((timeline, value)) = signal {
-            if let Err(e) = timeline.signal_host(value) {
-                tracing::error!(?surface_id, %value, %e, "timeline signal failed on read release");
+        if let Some((consume_done, value)) = signal {
+            if let Err(e) = consume_done.signal_host(value) {
+                tracing::error!(?surface_id, %value, %e, "consume_done signal failed on read release");
             }
         }
     }
 
     fn end_write_access(&self, surface_id: SurfaceId) {
+        // Producer-side release: signal `produce_done` so the consumer
+        // can wait on it before reading.
         let signal: Option<(Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>, u64)> =
             self.surfaces.with_mut(surface_id, |state| {
                 debug_assert!(state.write_held, "write release without acquire");
                 state.set_write_held(false);
-                let next = state.next_release_value();
-                state.current_release_value = next;
-                (Arc::clone(&state.timeline), next)
+                let next = state.next_signal_value();
+                state.current_signal_value = next;
+                (Arc::clone(&state.produce_done), next)
             });
-        let (timeline, value) = match signal {
+        let (produce_done, value) = match signal {
             Some(s) => s,
             None => {
                 tracing::warn!(
@@ -1181,8 +1222,8 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CudaSurfaceAdapter<D> {
                 return;
             }
         };
-        if let Err(e) = timeline.signal_host(value) {
-            tracing::error!(?surface_id, %value, %e, "timeline signal failed on write release");
+        if let Err(e) = produce_done.signal_host(value) {
+            tracing::error!(?surface_id, %value, %e, "produce_done signal failed on write release");
         }
     }
 }

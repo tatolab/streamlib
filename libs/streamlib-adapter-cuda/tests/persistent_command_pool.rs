@@ -81,10 +81,23 @@ fn persistent_pool_count_stays_at_one_across_repeated_submits() {
             return;
         }
     };
-    let timeline = match HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0) {
+    let produce_done = match HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+    {
         Ok(s) => Arc::new(s),
         Err(e) => {
-            println!("cuda persistent_pool: new_exportable timeline failed: {e} — skipping");
+            println!(
+                "cuda persistent_pool: new_exportable produce_done failed: {e} — skipping"
+            );
+            return;
+        }
+    };
+    let consume_done = match HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+    {
+        Ok(s) => Arc::new(s),
+        Err(e) => {
+            println!(
+                "cuda persistent_pool: new_exportable consume_done failed: {e} — skipping"
+            );
             return;
         }
     };
@@ -110,7 +123,8 @@ fn persistent_pool_count_stays_at_one_across_repeated_submits() {
             SURFACE_ID,
             HostSurfaceRegistration {
                 pixel_buffer,
-                timeline,
+                produce_done,
+                consume_done,
                 initial_layout: VulkanLayout::UNDEFINED,
             },
         )

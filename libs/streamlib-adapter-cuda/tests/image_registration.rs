@@ -118,13 +118,15 @@ fn image_registration_round_trips_through_surface_texture_accessor() {
     let id: SurfaceId = 0x4001;
     let texture = make_image(&host_device, RhiTextureFormat::Rgba8Unorm)
         .expect("texture");
-    let timeline = make_timeline(&host_device).expect("timeline");
+    let produce_done = make_timeline(&host_device).expect("produce_done");
+    let consume_done = make_timeline(&host_device).expect("consume_done");
     adapter
         .register_host_image_surface(
             id,
             HostImageSurfaceRegistration {
                 texture: Arc::clone(&texture),
-                timeline: Arc::clone(&timeline),
+                produce_done: Arc::clone(&produce_done),
+                consume_done: Arc::clone(&consume_done),
                 initial_layout: VulkanLayout::GENERAL,
             },
         )
@@ -132,8 +134,20 @@ fn image_registration_round_trips_through_surface_texture_accessor() {
     assert_eq!(adapter.registered_count(), 1);
     let stored = adapter.surface_texture(id).expect("surface_texture Some");
     assert!(Arc::ptr_eq(&stored, &texture), "texture Arc round-trip");
-    let stored_tl = adapter.surface_timeline(id).expect("surface_timeline Some");
-    assert!(Arc::ptr_eq(&stored_tl, &timeline), "timeline Arc round-trip");
+    let stored_produce_done = adapter
+        .surface_produce_done(id)
+        .expect("surface_produce_done Some");
+    assert!(
+        Arc::ptr_eq(&stored_produce_done, &produce_done),
+        "produce_done Arc round-trip"
+    );
+    let stored_consume_done = adapter
+        .surface_consume_done(id)
+        .expect("surface_consume_done Some");
+    assert!(
+        Arc::ptr_eq(&stored_consume_done, &consume_done),
+        "consume_done Arc round-trip"
+    );
     // Buffer accessor must return None for image-flavored registrations.
     assert!(
         adapter.surface_pixel_buffer(id).is_none(),
@@ -172,13 +186,15 @@ fn image_registration_accepts_each_cuda_mappable_format() {
                 continue;
             }
         };
-        let timeline = make_timeline(&host_device).expect("timeline");
+        let produce_done = make_timeline(&host_device).expect("produce_done");
+        let consume_done = make_timeline(&host_device).expect("consume_done");
         adapter
             .register_host_image_surface(
                 id,
                 HostImageSurfaceRegistration {
                     texture,
-                    timeline,
+                    produce_done,
+                    consume_done,
                     initial_layout: VulkanLayout::UNDEFINED,
                 },
             )
@@ -198,24 +214,28 @@ fn buffer_then_image_registration_returns_surface_already_registered() {
     let adapter = CudaSurfaceAdapter::new(Arc::clone(&host_device));
     let id: SurfaceId = 0x6001;
     let buffer = make_buffer(&host_device).expect("buffer");
-    let timeline = make_timeline(&host_device).expect("timeline");
+    let produce_done = make_timeline(&host_device).expect("produce_done");
+    let consume_done = make_timeline(&host_device).expect("consume_done");
     adapter
         .register_host_surface(
             id,
             HostSurfaceRegistration {
                 pixel_buffer: buffer,
-                timeline,
+                produce_done,
+                consume_done,
                 initial_layout: VulkanLayout::UNDEFINED,
             },
         )
         .expect("register buffer");
     let image = make_image(&host_device, RhiTextureFormat::Rgba8Unorm).expect("image");
-    let timeline2 = make_timeline(&host_device).expect("timeline2");
+    let produce_done2 = make_timeline(&host_device).expect("produce_done2");
+    let consume_done2 = make_timeline(&host_device).expect("consume_done2");
     let result = adapter.register_host_image_surface(
         id,
         HostImageSurfaceRegistration {
             texture: image,
-            timeline: timeline2,
+            produce_done: produce_done2,
+            consume_done: consume_done2,
             initial_layout: VulkanLayout::GENERAL,
         },
     );
@@ -243,13 +263,15 @@ fn acquire_texture_returns_view_with_correct_handles_and_releases_on_drop() {
     let adapter = CudaSurfaceAdapter::new(Arc::clone(&host_device));
     let id: SurfaceId = 0x7001;
     let texture = make_image(&host_device, RhiTextureFormat::Rgba16Float).expect("texture");
-    let timeline = make_timeline(&host_device).expect("timeline");
+    let produce_done = make_timeline(&host_device).expect("produce_done");
+    let consume_done = make_timeline(&host_device).expect("consume_done");
     adapter
         .register_host_image_surface(
             id,
             HostImageSurfaceRegistration {
                 texture: Arc::clone(&texture),
-                timeline,
+                produce_done,
+                consume_done,
                 initial_layout: VulkanLayout::GENERAL,
             },
         )
@@ -282,13 +304,15 @@ fn acquire_surface_returns_view_with_correct_handles_and_releases_on_drop() {
     let adapter = CudaSurfaceAdapter::new(Arc::clone(&host_device));
     let id: SurfaceId = 0x7002;
     let texture = make_image(&host_device, RhiTextureFormat::Rgba32Float).expect("texture");
-    let timeline = make_timeline(&host_device).expect("timeline");
+    let produce_done = make_timeline(&host_device).expect("produce_done");
+    let consume_done = make_timeline(&host_device).expect("consume_done");
     adapter
         .register_host_image_surface(
             id,
             HostImageSurfaceRegistration {
                 texture: Arc::clone(&texture),
-                timeline,
+                produce_done,
+                consume_done,
                 initial_layout: VulkanLayout::GENERAL,
             },
         )
@@ -322,13 +346,15 @@ fn buffer_path_rejects_image_surface_with_usage_correction_hint() {
     let adapter = CudaSurfaceAdapter::new(Arc::clone(&host_device));
     let id: SurfaceId = 0x8001;
     let texture = make_image(&host_device, RhiTextureFormat::Rgba8Unorm).expect("texture");
-    let timeline = make_timeline(&host_device).expect("timeline");
+    let produce_done = make_timeline(&host_device).expect("produce_done");
+    let consume_done = make_timeline(&host_device).expect("consume_done");
     adapter
         .register_host_image_surface(
             id,
             HostImageSurfaceRegistration {
                 texture,
-                timeline,
+                produce_done,
+                consume_done,
                 initial_layout: VulkanLayout::GENERAL,
             },
         )
@@ -372,13 +398,15 @@ fn image_path_rejects_buffer_surface_with_usage_correction_hint() {
     let adapter = CudaSurfaceAdapter::new(Arc::clone(&host_device));
     let id: SurfaceId = 0x8101;
     let buffer = make_buffer(&host_device).expect("buffer");
-    let timeline = make_timeline(&host_device).expect("timeline");
+    let produce_done = make_timeline(&host_device).expect("produce_done");
+    let consume_done = make_timeline(&host_device).expect("consume_done");
     adapter
         .register_host_surface(
             id,
             HostSurfaceRegistration {
                 pixel_buffer: buffer,
-                timeline,
+                produce_done,
+                consume_done,
                 initial_layout: VulkanLayout::UNDEFINED,
             },
         )
@@ -417,13 +445,15 @@ fn try_acquire_surface_returns_none_on_reader_contention() {
     let adapter = CudaSurfaceAdapter::new(Arc::clone(&host_device));
     let id: SurfaceId = 0x9001;
     let texture = make_image(&host_device, RhiTextureFormat::Rgba8Unorm).expect("texture");
-    let timeline = make_timeline(&host_device).expect("timeline");
+    let produce_done = make_timeline(&host_device).expect("produce_done");
+    let consume_done = make_timeline(&host_device).expect("consume_done");
     adapter
         .register_host_image_surface(
             id,
             HostImageSurfaceRegistration {
                 texture,
-                timeline,
+                produce_done,
+                consume_done,
                 initial_layout: VulkanLayout::GENERAL,
             },
         )
@@ -450,13 +480,15 @@ fn try_acquire_texture_returns_none_on_writer_contention() {
     let adapter = CudaSurfaceAdapter::new(Arc::clone(&host_device));
     let id: SurfaceId = 0x9002;
     let texture = make_image(&host_device, RhiTextureFormat::Rgba8Unorm).expect("texture");
-    let timeline = make_timeline(&host_device).expect("timeline");
+    let produce_done = make_timeline(&host_device).expect("produce_done");
+    let consume_done = make_timeline(&host_device).expect("consume_done");
     adapter
         .register_host_image_surface(
             id,
             HostImageSurfaceRegistration {
                 texture,
-                timeline,
+                produce_done,
+                consume_done,
                 initial_layout: VulkanLayout::GENERAL,
             },
         )

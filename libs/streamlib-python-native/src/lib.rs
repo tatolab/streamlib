@@ -5290,6 +5290,11 @@ mod cuda {
         // references). Drop order: this struct's fields drop in
         // declaration order, so put CUDA imports first.
         ext_mem: sys::cudaExternalMemory_t,
+        /// CUDA-side import of `produce_done` — the timeline the
+        /// producer signals so cuda can wait on it via
+        /// `cudaWaitExternalSemaphoresAsync_v2`. CUDA does NOT import
+        /// `consume_done` (the consumer signals via host CPU
+        /// `signal_host` through the adapter's `end_read_access`).
         ext_sem: sys::cudaExternalSemaphore_t,
         stream: sys::cudaStream_t,
         device_ptr: u64,
@@ -5302,7 +5307,10 @@ mod cuda {
         // is belt-and-suspenders.
         #[allow(dead_code)] // Arc held for lifetime; never read after register.
         pixel_buffer: Arc<ConsumerVulkanBuffer>,
-        timeline: Arc<ConsumerVulkanTimelineSemaphore>,
+        #[allow(dead_code)] // Arc held for lifetime; never read after register.
+        produce_done: Arc<ConsumerVulkanTimelineSemaphore>,
+        #[allow(dead_code)] // Arc held for lifetime; never read after register.
+        consume_done: Arc<ConsumerVulkanTimelineSemaphore>,
     }
 
     // SAFETY: `cudaExternalMemory_t`, `cudaExternalSemaphore_t`, and
@@ -5502,12 +5510,15 @@ mod cuda {
             }
         };
 
-        // ── Step 2: import the timeline semaphore into Vulkan ───────────
+        // ── Step 2: import the `produce_done` timeline into Vulkan ──────
+        // Single-writer-per-edge
+        // (`docs/architecture/adapter-timeline-single-writer.md`): the
+        // producer (host) signals this timeline, cuda waits on it.
         let raw_sync_fd: RawFd = match gpu.produce_done_fd.take() {
             Some(fd) => fd,
             None => {
                 tracing::error!(
-                    "slpn_cuda_register_surface: surface '{}' has no sync_fd — \
+                    "slpn_cuda_register_surface: surface '{}' has no produce_done_fd — \
                      the host must register it with an exportable timeline semaphore \
                      so cross-API sync (Vulkan ↔ CUDA) is well-defined",
                     surface_id
@@ -5519,7 +5530,7 @@ mod cuda {
         let vk_sync_fd = unsafe { libc::dup(raw_sync_fd) };
         if vk_sync_fd < 0 {
             tracing::error!(
-                "slpn_cuda_register_surface: dup sync_fd failed: {}",
+                "slpn_cuda_register_surface: dup produce_done_fd failed: {}",
                 std::io::Error::last_os_error()
             );
             // Restore the original fd onto the handle so its Drop closes it.
@@ -5533,11 +5544,55 @@ mod cuda {
             Ok(s) => Arc::new(s),
             Err(e) => {
                 tracing::error!(
-                    "slpn_cuda_register_surface: timeline from_imported_opaque_fd: {}",
+                    "slpn_cuda_register_surface: produce_done from_imported_opaque_fd: {}",
                     e
                 );
                 unsafe { libc::close(vk_sync_fd) };
                 gpu.produce_done_fd = Some(raw_sync_fd);
+                return SLPN_CUDA_ERR;
+            }
+        };
+
+        // ── Step 2b: import the `consume_done` timeline into Vulkan ─────
+        // The consumer signals this timeline from the adapter's
+        // `end_read_access` (host CPU `signal_host`). CUDA does not
+        // import this side — it doesn't signal anything.
+        let raw_consume_fd: RawFd = match gpu.consume_done_fd.take() {
+            Some(fd) => fd,
+            None => {
+                tracing::error!(
+                    "slpn_cuda_register_surface: surface '{}' has no consume_done_fd — \
+                     the host must register both produce_done and consume_done timeline \
+                     fds per the single-writer-per-edge contract",
+                    surface_id
+                );
+                gpu.produce_done_fd = Some(raw_sync_fd);
+                return SLPN_CUDA_ERR;
+            }
+        };
+        let vk_consume_fd = unsafe { libc::dup(raw_consume_fd) };
+        if vk_consume_fd < 0 {
+            tracing::error!(
+                "slpn_cuda_register_surface: dup consume_done_fd failed: {}",
+                std::io::Error::last_os_error()
+            );
+            gpu.produce_done_fd = Some(raw_sync_fd);
+            gpu.consume_done_fd = Some(raw_consume_fd);
+            return SLPN_CUDA_ERR;
+        }
+        let consume_done = match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
+            &rt.device,
+            vk_consume_fd,
+        ) {
+            Ok(s) => Arc::new(s),
+            Err(e) => {
+                tracing::error!(
+                    "slpn_cuda_register_surface: consume_done from_imported_opaque_fd: {}",
+                    e
+                );
+                unsafe { libc::close(vk_consume_fd) };
+                gpu.produce_done_fd = Some(raw_sync_fd);
+                gpu.consume_done_fd = Some(raw_consume_fd);
                 return SLPN_CUDA_ERR;
             }
         };
@@ -5551,9 +5606,11 @@ mod cuda {
                 std::io::Error::last_os_error()
             );
             // Vulkan-side imports drop here via Arc — they own their own
-            // dups already. Restore sync_fd onto the handle so its Drop
-            // closes it (Vulkan timeline import owns its dup independently).
+            // dups already. Restore both timeline fds onto the handle so
+            // its Drop closes them (Vulkan timeline imports own their
+            // dups independently).
             gpu.produce_done_fd = Some(raw_sync_fd);
+            gpu.consume_done_fd = Some(raw_consume_fd);
             return SLPN_CUDA_ERR;
         }
         // SAFETY: `cudaImportExternalMemory` per CUDA docs:
@@ -5570,6 +5627,7 @@ mod cuda {
                     );
                     libc::close(cuda_mem_fd);
                     gpu.produce_done_fd = Some(raw_sync_fd);
+                    gpu.consume_done_fd = Some(raw_consume_fd);
                     return SLPN_CUDA_ERR;
                 }
             }
@@ -5589,6 +5647,7 @@ mod cuda {
                     );
                     let _ = external_memory::destroy_external_memory(ext_mem);
                     gpu.produce_done_fd = Some(raw_sync_fd);
+                    gpu.consume_done_fd = Some(raw_consume_fd);
                     return SLPN_CUDA_ERR;
                 }
             }
@@ -5612,6 +5671,7 @@ mod cuda {
                     );
                     let _ = external_memory::destroy_external_memory(ext_mem);
                     gpu.produce_done_fd = Some(raw_sync_fd);
+                    gpu.consume_done_fd = Some(raw_consume_fd);
                     return SLPN_CUDA_ERR;
                 }
             }
@@ -5628,11 +5688,16 @@ mod cuda {
                 );
                 let _ = unsafe { external_memory::destroy_external_memory(ext_mem) };
                 gpu.produce_done_fd = Some(raw_sync_fd);
+                gpu.consume_done_fd = Some(raw_consume_fd);
                 return SLPN_CUDA_ERR;
             }
         };
 
-        // ── Step 5: import the timeline semaphore into CUDA ─────────────
+        // ── Step 5: import the `produce_done` timeline semaphore into CUDA ─
+        // CUDA only imports produce_done — it waits on it via
+        // `cudaWaitExternalSemaphoresAsync_v2`. consume_done is held
+        // Vulkan-side only; the adapter's `end_read_access` signals it
+        // via host CPU `signal_host`.
         let cuda_sync_fd = unsafe { libc::dup(raw_sync_fd) };
         if cuda_sync_fd < 0 {
             tracing::error!(
@@ -5641,6 +5706,7 @@ mod cuda {
             );
             let _ = unsafe { external_memory::destroy_external_memory(ext_mem) };
             gpu.produce_done_fd = Some(raw_sync_fd);
+            gpu.consume_done_fd = Some(raw_consume_fd);
             return SLPN_CUDA_ERR;
         }
         // Same descriptor-construction story as the carve-out test:
@@ -5673,6 +5739,7 @@ mod cuda {
                     libc::close(cuda_sync_fd);
                     let _ = external_memory::destroy_external_memory(ext_mem);
                     gpu.produce_done_fd = Some(raw_sync_fd);
+                    gpu.consume_done_fd = Some(raw_consume_fd);
                     return SLPN_CUDA_ERR;
                 }
             }
@@ -5691,6 +5758,7 @@ mod cuda {
                     let _ = sys::cudaDestroyExternalSemaphore(ext_sem).result();
                     let _ = external_memory::destroy_external_memory(ext_mem);
                     gpu.produce_done_fd = Some(raw_sync_fd);
+                    gpu.consume_done_fd = Some(raw_consume_fd);
                     return SLPN_CUDA_ERR;
                 }
             }
@@ -5706,7 +5774,8 @@ mod cuda {
         // pass `UNDEFINED`.
         let registration = HostSurfaceRegistration {
             pixel_buffer: Arc::clone(&pixel_buffer),
-            timeline: Arc::clone(&timeline),
+            produce_done: Arc::clone(&timeline),
+            consume_done: Arc::clone(&consume_done),
             initial_layout: VulkanLayout::UNDEFINED,
         };
         if let Err(e) = rt.adapter.register_host_surface(surface_id, registration) {
@@ -5721,15 +5790,19 @@ mod cuda {
                 let _ = external_memory::destroy_external_memory(ext_mem);
             };
             gpu.produce_done_fd = Some(raw_sync_fd);
+            gpu.consume_done_fd = Some(raw_consume_fd);
             return SLPN_CUDA_ERR;
         }
 
         // The original `raw_sync_fd` is owned by the SurfaceHandle's drop
         // path. We've already dup'd it twice (Vulkan + CUDA timeline), so
-        // returning it to the handle's `sync_fd` slot is the canonical
-        // ownership recovery — same pattern as cpu-readback's
-        // register_surface error paths.
+        // returning it to the handle's `produce_done_fd` slot is the
+        // canonical ownership recovery — same pattern as cpu-readback's
+        // register_surface error paths. `raw_consume_fd` is owned by the
+        // SurfaceHandle the same way after the Vulkan-side
+        // consume_done dup; restore it too.
         gpu.produce_done_fd = Some(raw_sync_fd);
+        gpu.consume_done_fd = Some(raw_consume_fd);
 
         let entry = Arc::new(RegisteredCudaSurface {
             ext_mem,
@@ -5740,7 +5813,8 @@ mod cuda {
             device_type,
             cuda_device_ordinal: rt.cuda_device_ordinal,
             pixel_buffer,
-            timeline,
+            produce_done: timeline,
+            consume_done,
         });
         rt.registered
             .lock()
@@ -5811,8 +5885,12 @@ mod cuda {
     /// the timeline's current Vulkan-observed value, then synchronizes.
     /// Returns `Ok(())` on success.
     fn cuda_sync_after_acquire(entry: &RegisteredCudaSurface) -> Result<(), String> {
+        // CUDA waits on `produce_done` — the timeline the host
+        // producer signals. The kernel counter snapshot is the
+        // peer-timeline source of truth per
+        // `docs/architecture/adapter-timeline-single-writer.md`.
         let wait_value = entry
-            .timeline
+            .produce_done
             .current_value()
             .map_err(|e| format!("get_semaphore_counter_value: {e}"))?;
 
@@ -6243,7 +6321,10 @@ mod cuda {
         // Vulkan-side imports — held to outlive the CUDA imports above.
         #[allow(dead_code)] // Arc held for lifetime; never read after register.
         texture: Arc<ConsumerVulkanTexture>,
-        timeline: Arc<ConsumerVulkanTimelineSemaphore>,
+        #[allow(dead_code)] // Arc held for lifetime; never read after register.
+        produce_done: Arc<ConsumerVulkanTimelineSemaphore>,
+        #[allow(dead_code)] // Arc held for lifetime; never read after register.
+        consume_done: Arc<ConsumerVulkanTimelineSemaphore>,
     }
 
     // SAFETY: same rationale as [`RegisteredCudaSurface`] — CUDA Runtime
@@ -6406,12 +6487,14 @@ mod cuda {
             }
         };
 
-        // ── Step 2: import the timeline semaphore into Vulkan ───────────
+        // ── Step 2: import the `produce_done` timeline into Vulkan ──────
+        // Single-writer-per-edge per
+        // `docs/architecture/adapter-timeline-single-writer.md`.
         let raw_sync_fd: RawFd = match gpu.produce_done_fd.take() {
             Some(fd) => fd,
             None => {
                 tracing::error!(
-                    "slpn_cuda_register_image_surface: surface '{}' has no sync_fd — \
+                    "slpn_cuda_register_image_surface: surface '{}' has no produce_done_fd — \
                      the host must register an exportable timeline semaphore so \
                      cross-API sync (Vulkan ↔ CUDA) is well-defined",
                     surface_id
@@ -6422,7 +6505,7 @@ mod cuda {
         let vk_sync_fd = unsafe { libc::dup(raw_sync_fd) };
         if vk_sync_fd < 0 {
             tracing::error!(
-                "slpn_cuda_register_image_surface: dup sync_fd failed: {}",
+                "slpn_cuda_register_image_surface: dup produce_done_fd failed: {}",
                 std::io::Error::last_os_error()
             );
             gpu.produce_done_fd = Some(raw_sync_fd);
@@ -6435,11 +6518,50 @@ mod cuda {
             Ok(s) => Arc::new(s),
             Err(e) => {
                 tracing::error!(
-                    "slpn_cuda_register_image_surface: timeline from_imported_opaque_fd: {}",
+                    "slpn_cuda_register_image_surface: produce_done from_imported_opaque_fd: {}",
                     e
                 );
                 unsafe { libc::close(vk_sync_fd) };
                 gpu.produce_done_fd = Some(raw_sync_fd);
+                return SLPN_CUDA_ERR;
+            }
+        };
+
+        // ── Step 2b: import the `consume_done` timeline into Vulkan ─────
+        let raw_consume_fd: RawFd = match gpu.consume_done_fd.take() {
+            Some(fd) => fd,
+            None => {
+                tracing::error!(
+                    "slpn_cuda_register_image_surface: surface '{}' has no consume_done_fd",
+                    surface_id
+                );
+                gpu.produce_done_fd = Some(raw_sync_fd);
+                return SLPN_CUDA_ERR;
+            }
+        };
+        let vk_consume_fd = unsafe { libc::dup(raw_consume_fd) };
+        if vk_consume_fd < 0 {
+            tracing::error!(
+                "slpn_cuda_register_image_surface: dup consume_done_fd failed: {}",
+                std::io::Error::last_os_error()
+            );
+            gpu.produce_done_fd = Some(raw_sync_fd);
+            gpu.consume_done_fd = Some(raw_consume_fd);
+            return SLPN_CUDA_ERR;
+        }
+        let consume_done = match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
+            &rt.device,
+            vk_consume_fd,
+        ) {
+            Ok(s) => Arc::new(s),
+            Err(e) => {
+                tracing::error!(
+                    "slpn_cuda_register_image_surface: consume_done from_imported_opaque_fd: {}",
+                    e
+                );
+                unsafe { libc::close(vk_consume_fd) };
+                gpu.produce_done_fd = Some(raw_sync_fd);
+                gpu.consume_done_fd = Some(raw_consume_fd);
                 return SLPN_CUDA_ERR;
             }
         };
@@ -6452,6 +6574,7 @@ mod cuda {
                 std::io::Error::last_os_error()
             );
             gpu.produce_done_fd = Some(raw_sync_fd);
+            gpu.consume_done_fd = Some(raw_consume_fd);
             return SLPN_CUDA_ERR;
         }
         // SAFETY: see notes on the buffer path's import_external_memory_opaque_fd
@@ -6466,6 +6589,7 @@ mod cuda {
                     );
                     libc::close(cuda_mem_fd);
                     gpu.produce_done_fd = Some(raw_sync_fd);
+                    gpu.consume_done_fd = Some(raw_consume_fd);
                     return SLPN_CUDA_ERR;
                 }
             }
@@ -6509,12 +6633,16 @@ mod cuda {
                     );
                     let _ = external_memory::destroy_external_memory(ext_mem);
                     gpu.produce_done_fd = Some(raw_sync_fd);
+                    gpu.consume_done_fd = Some(raw_consume_fd);
                     return SLPN_CUDA_ERR;
                 }
             }
         };
 
-        // ── Step 5: import the timeline semaphore into CUDA ─────────────
+        // ── Step 5: import the `produce_done` timeline semaphore into CUDA ─
+        // CUDA only imports produce_done (waits via
+        // `cudaWaitExternalSemaphoresAsync_v2`); consume_done is held
+        // Vulkan-side and signaled by the adapter's `end_read_access`.
         let cuda_sync_fd = unsafe { libc::dup(raw_sync_fd) };
         if cuda_sync_fd < 0 {
             tracing::error!(
@@ -6526,6 +6654,7 @@ mod cuda {
                 let _ = external_memory::destroy_external_memory(ext_mem);
             };
             gpu.produce_done_fd = Some(raw_sync_fd);
+            gpu.consume_done_fd = Some(raw_consume_fd);
             return SLPN_CUDA_ERR;
         }
         let mut sem_desc = MaybeUninit::<sys::cudaExternalSemaphoreHandleDesc>::zeroed();
@@ -6553,6 +6682,7 @@ mod cuda {
                     let _ = sys::cudaFreeMipmappedArray(mipmapped_array).result();
                     let _ = external_memory::destroy_external_memory(ext_mem);
                     gpu.produce_done_fd = Some(raw_sync_fd);
+                    gpu.consume_done_fd = Some(raw_consume_fd);
                     return SLPN_CUDA_ERR;
                 }
             }
@@ -6572,6 +6702,7 @@ mod cuda {
                     let _ = sys::cudaFreeMipmappedArray(mipmapped_array).result();
                     let _ = external_memory::destroy_external_memory(ext_mem);
                     gpu.produce_done_fd = Some(raw_sync_fd);
+                    gpu.consume_done_fd = Some(raw_consume_fd);
                     return SLPN_CUDA_ERR;
                 }
             }
@@ -6580,7 +6711,8 @@ mod cuda {
         // ── Step 7: hand the registration to the Rust adapter ──────────
         let registration = HostImageSurfaceRegistration {
             texture: Arc::clone(&texture),
-            timeline: Arc::clone(&timeline),
+            produce_done: Arc::clone(&timeline),
+            consume_done: Arc::clone(&consume_done),
             initial_layout: VulkanLayout::UNDEFINED,
         };
         if let Err(e) = rt
@@ -6600,10 +6732,12 @@ mod cuda {
                 let _ = external_memory::destroy_external_memory(ext_mem);
             };
             gpu.produce_done_fd = Some(raw_sync_fd);
+            gpu.consume_done_fd = Some(raw_consume_fd);
             return SLPN_CUDA_ERR;
         }
 
         gpu.produce_done_fd = Some(raw_sync_fd);
+        gpu.consume_done_fd = Some(raw_consume_fd);
 
         let entry = Arc::new(RegisteredCudaImageSurface {
             ext_mem,
@@ -6616,7 +6750,8 @@ mod cuda {
             height: gpu.height,
             format: texture_format,
             texture,
-            timeline,
+            produce_done: timeline,
+            consume_done,
         });
         rt.registered_images
             .lock()
@@ -6781,8 +6916,10 @@ mod cuda {
     }
 
     fn cuda_sync_after_image_acquire(entry: &RegisteredCudaImageSurface) -> Result<(), String> {
+        // Wait on `produce_done` (the producer's edge) per single-writer-
+        // per-edge — same shape as `cuda_sync_after_acquire`.
         let wait_value = entry
-            .timeline
+            .produce_done
             .current_value()
             .map_err(|e| format!("get_semaphore_counter_value: {e}"))?;
 

@@ -48,11 +48,17 @@ pub struct HostSurfaceRegistration<P: DevicePrivilege> {
     /// `cudaPointerGetAttributes` so the adapter doesn't need to know.
     /// Host- or consumer-flavored per `P`.
     pub pixel_buffer: Arc<P::Buffer>,
-    /// Timeline semaphore — host- or consumer-flavored per `P`. Both
-    /// flavors implement
-    /// [`streamlib_consumer_rhi::VulkanTimelineSemaphoreLike`] so the
-    /// adapter's wait + signal calls work uniformly.
-    pub timeline: Arc<P::TimelineSemaphore>,
+    /// `produce_done` timeline — signaled exclusively by the producer
+    /// process when a write completes (host: GPU submit from
+    /// `submit_host_copy_image_to_buffer` or CPU signal from
+    /// `end_write_access`). The consumer waits on this timeline before
+    /// reading. Single-writer-per-edge per
+    /// `docs/architecture/adapter-timeline-single-writer.md`.
+    pub produce_done: Arc<P::TimelineSemaphore>,
+    /// `consume_done` timeline — signaled exclusively by the consumer
+    /// process when a read completes (`end_read_access`). The producer
+    /// waits on this timeline before re-writing.
+    pub consume_done: Arc<P::TimelineSemaphore>,
     /// Unused on the buffer path (buffers have no `VkImageLayout`); kept
     /// for shape parity with [`HostImageSurfaceRegistration`]. Pass
     /// [`VulkanLayout::UNDEFINED`].
@@ -73,9 +79,12 @@ pub struct HostImageSurfaceRegistration<P: DevicePrivilege> {
     /// OPAQUE_FD-exportable image — the resource CUDA imports as a
     /// tiled mipmapped array. Host- or consumer-flavored per `P`.
     pub texture: Arc<P::Texture>,
-    /// Timeline semaphore — same role and constraints as
-    /// [`HostSurfaceRegistration::timeline`].
-    pub timeline: Arc<P::TimelineSemaphore>,
+    /// `produce_done` timeline — same single-writer contract as
+    /// [`HostSurfaceRegistration::produce_done`].
+    pub produce_done: Arc<P::TimelineSemaphore>,
+    /// `consume_done` timeline — same single-writer contract as
+    /// [`HostSurfaceRegistration::consume_done`].
+    pub consume_done: Arc<P::TimelineSemaphore>,
     /// Vulkan image layout the image is in at registration time. The
     /// cross-process release path (a `CudaContext.release_for_cross_process`
     /// SDK shim that delegates to `VulkanSurfaceAdapter::release_to_foreign`,
@@ -117,7 +126,12 @@ pub(crate) struct SurfaceState<P: DevicePrivilege> {
     #[allow(dead_code)] // kept for tracing / debug output, not read in hot paths
     pub(crate) surface_id: SurfaceId,
     pub(crate) resource: SurfaceResource<P>,
-    pub(crate) timeline: Arc<P::TimelineSemaphore>,
+    /// `produce_done` timeline — see
+    /// [`HostSurfaceRegistration::produce_done`].
+    pub(crate) produce_done: Arc<P::TimelineSemaphore>,
+    /// `consume_done` timeline — see
+    /// [`HostSurfaceRegistration::consume_done`].
+    pub(crate) consume_done: Arc<P::TimelineSemaphore>,
     /// Vulkan image layout the resource is in. Load-bearing for image
     /// surfaces (consumed by the cross-process release shim that
     /// composes `VulkanSurfaceAdapter::release_to_foreign`); ignored on
@@ -126,15 +140,20 @@ pub(crate) struct SurfaceState<P: DevicePrivilege> {
     pub(crate) current_layout: VulkanLayout,
     pub(crate) read_holders: u64,
     pub(crate) write_held: bool,
-    /// The value `signal_host` was last advanced to. The next acquire
-    /// waits on this value (so any prior writer's GPU work has drained)
-    /// and the next release advances it by one.
-    pub(crate) current_release_value: u64,
+    /// Per-process monotonic signal counter. This adapter instance only
+    /// writes ONE side's timeline per the single-writer-per-edge rule
+    /// (host instantiation = producer signaling `produce_done`; cdylib
+    /// instantiation = consumer signaling `consume_done`). Same-process
+    /// test code that exercises both sides increments this counter for
+    /// every signal regardless of which timeline — produce_done and
+    /// consume_done each see strictly monotonic values from their
+    /// respective writer code paths, which is all VUID-03258 requires.
+    pub(crate) current_signal_value: u64,
 }
 
 impl<P: DevicePrivilege> SurfaceState<P> {
-    pub(crate) fn next_release_value(&self) -> u64 {
-        self.current_release_value + 1
+    pub(crate) fn next_signal_value(&self) -> u64 {
+        self.current_signal_value + 1
     }
 }
 
