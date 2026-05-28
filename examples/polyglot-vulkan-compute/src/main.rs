@@ -247,14 +247,17 @@ fn main() -> Result<()> {
     let texture_slot: Arc<
         Mutex<Option<streamlib::sdk::rhi::Texture>>,
     > = Arc::new(Mutex::new(None));
-    let timeline_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
+    let produce_done_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
+        Arc::new(Mutex::new(None));
+    let consume_done_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
         Arc::new(Mutex::new(None));
     let readback_slot: Arc<Mutex<Option<Arc<VulkanTextureReadback>>>> =
         Arc::new(Mutex::new(None));
 
     {
         let texture_slot = Arc::clone(&texture_slot);
-        let timeline_slot = Arc::clone(&timeline_slot);
+        let produce_done_slot = Arc::clone(&produce_done_slot);
+        let consume_done_slot = Arc::clone(&consume_done_slot);
         let readback_slot = Arc::clone(&readback_slot);
         runtime.install_setup_hook(move |gpu| {
             let texture = gpu.acquire_render_target_dma_buf_image(
@@ -263,15 +266,26 @@ fn main() -> Result<()> {
                 TextureFormat::Rgba8Unorm,
             )?;
             let host_device = Arc::clone(gpu.device().vulkan_device());
-            // The Vulkan adapter on the host needs a per-surface
-            // exportable timeline. The host signals it after the
-            // subprocess release; the subprocess waits on it before
-            // every acquire.
-            let timeline = Arc::new(
+            // The Vulkan adapter needs two per-surface exportable
+            // timelines — one per single-writer edge per
+            // `docs/architecture/adapter-timeline-single-writer.md`. The
+            // host signals `produce_done` after each write; the
+            // subprocess signals `consume_done` after each release.
+            let produce_done = Arc::new(
                 HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
                     .map_err(|e| {
                         Error::Configuration(format!(
-                            "HostVulkanTimelineSemaphore::new_exportable: {e}"
+                            "HostVulkanTimelineSemaphore::new_exportable \
+                             (produce_done): {e}"
+                        ))
+                    })?,
+            );
+            let consume_done = Arc::new(
+                HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+                    .map_err(|e| {
+                        Error::Configuration(format!(
+                            "HostVulkanTimelineSemaphore::new_exportable \
+                             (consume_done): {e}"
                         ))
                     })?,
             );
@@ -294,7 +308,8 @@ fn main() -> Result<()> {
                 .register_texture(
                     SCENARIO_SURFACE_UUID,
                     &texture,
-                    Some(timeline.as_ref()),
+                    Some(produce_done.as_ref()),
+                    Some(consume_done.as_ref()),
                     streamlib::sdk::rhi::VulkanLayout::GENERAL,
                 )
                 .map_err(|e| {
@@ -325,10 +340,11 @@ fn main() -> Result<()> {
             })?;
 
             *texture_slot.lock().unwrap() = Some(texture);
-            *timeline_slot.lock().unwrap() = Some(timeline);
+            *produce_done_slot.lock().unwrap() = Some(produce_done);
+            *consume_done_slot.lock().unwrap() = Some(consume_done);
             *readback_slot.lock().unwrap() = Some(readback);
             println!(
-                "✓ render-target DMA-BUF + timeline registered as '{}'",
+                "✓ render-target DMA-BUF + timelines registered as '{}'",
                 SCENARIO_SURFACE_UUID
             );
             Ok(())

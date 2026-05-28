@@ -48,14 +48,17 @@ fn register_one(
     let host_device = Arc::clone(adapter.device());
     let pixel_buffer = HostVulkanBuffer::new_opaque_fd_export(&host_device, (W as u64) * (H as u64) * (4 as u64))
     .map_err(|e| format!("HostVulkanBuffer::new_opaque_fd_export: {e}"))?;
-    let timeline = HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+    let produce_done = HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+        .map_err(|e| format!("HostVulkanTimelineSemaphore::new_exportable: {e}"))?;
+    let consume_done = HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
         .map_err(|e| format!("HostVulkanTimelineSemaphore::new_exportable: {e}"))?;
     adapter
         .register_host_surface(
             id,
             HostSurfaceRegistration {
                 pixel_buffer: Arc::new(pixel_buffer),
-                timeline: Arc::new(timeline),
+                produce_done: Arc::new(produce_done),
+                consume_done: Arc::new(consume_done),
                 initial_layout: VulkanLayout::UNDEFINED,
             },
         )
@@ -142,14 +145,18 @@ fn duplicate_registration_returns_surface_already_registered() {
     // `register_one` helper wraps errors in `String` for ergonomics).
     let pixel_buffer = HostVulkanBuffer::new_opaque_fd_export(&host_device, (W as u64) * (H as u64) * (4 as u64))
     .expect("second pixel buffer");
-    let timeline =
+    let produce_done =
         HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-            .expect("second timeline");
+            .expect("second produce_done");
+    let consume_done =
+        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+            .expect("second consume_done");
     let result = adapter.register_host_surface(
         id,
         streamlib_adapter_cuda::HostSurfaceRegistration {
             pixel_buffer: Arc::new(pixel_buffer),
-            timeline: Arc::new(timeline),
+            produce_done: Arc::new(produce_done),
+            consume_done: Arc::new(consume_done),
             initial_layout: VulkanLayout::UNDEFINED,
         },
     );

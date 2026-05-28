@@ -111,10 +111,19 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
             return;
         }
     };
-    let timeline = match HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0) {
+    let produce_done = match HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+    {
         Ok(s) => Arc::new(s),
         Err(e) => {
-            println!("cuda carve-out: timeline new_exportable failed: {e} — skipping");
+            println!("cuda carve-out: produce_done new_exportable failed: {e} — skipping");
+            return;
+        }
+    };
+    let consume_done = match HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+    {
+        Ok(s) => Arc::new(s),
+        Err(e) => {
+            println!("cuda carve-out: consume_done new_exportable failed: {e} — skipping");
             return;
         }
     };
@@ -134,7 +143,8 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
             SURFACE_ID,
             HostSurfaceRegistration {
                 pixel_buffer: Arc::clone(&pixel_buffer),
-                timeline: Arc::clone(&timeline),
+                produce_done: Arc::clone(&produce_done),
+                consume_done: Arc::clone(&consume_done),
                 initial_layout: VulkanLayout::UNDEFINED,
             },
         )
@@ -195,28 +205,38 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
     // ── Phase 3: export OPAQUE_FDs from the registered surface ─────
     // Round-trip through the adapter's registry accessors (rather than
     // the local Arcs) so this also exercises `surface_pixel_buffer` /
-    // `surface_timeline` — the production cdylib path will read FDs
-    // out of the registered surface, not from a local handle. Returning
-    // `None` here means the registry forgot the surface, which would be
-    // a regression in `register_host_surface`.
+    // `surface_produce_done` / `surface_consume_done` — the production
+    // cdylib path will read FDs out of the registered surface, not from
+    // a local handle. Returning `None` here means the registry forgot
+    // the surface, which would be a regression in `register_host_surface`.
     let registered_pixel_buffer = adapter
         .surface_pixel_buffer(SURFACE_ID)
         .expect("CudaSurfaceAdapter::surface_pixel_buffer must return registered buffer");
-    let registered_timeline = adapter
-        .surface_timeline(SURFACE_ID)
-        .expect("CudaSurfaceAdapter::surface_timeline must return registered timeline");
+    let registered_produce_done = adapter
+        .surface_produce_done(SURFACE_ID)
+        .expect("CudaSurfaceAdapter::surface_produce_done must return registered timeline");
+    let registered_consume_done = adapter
+        .surface_consume_done(SURFACE_ID)
+        .expect("CudaSurfaceAdapter::surface_consume_done must return registered timeline");
     assert!(
         Arc::ptr_eq(&registered_pixel_buffer, &pixel_buffer),
         "registry-returned pixel_buffer Arc must point at the originally-registered buffer"
     );
     assert!(
-        Arc::ptr_eq(&registered_timeline, &timeline),
-        "registry-returned timeline Arc must point at the originally-registered timeline"
+        Arc::ptr_eq(&registered_produce_done, &produce_done),
+        "registry-returned produce_done Arc must point at the originally-registered timeline"
+    );
+    assert!(
+        Arc::ptr_eq(&registered_consume_done, &consume_done),
+        "registry-returned consume_done Arc must point at the originally-registered timeline"
     );
     let memory_fd = registered_pixel_buffer
         .export_opaque_fd_memory()
         .expect("HostVulkanBuffer::export_opaque_fd_memory");
-    let timeline_fd = registered_timeline
+    // The CUDA carve-out below imports the producer-signaled timeline
+    // (`produce_done`) — the cdylib waits for the host's write to
+    // complete before reading.
+    let timeline_fd = registered_produce_done
         .export_opaque_fd()
         .expect("HostVulkanTimelineSemaphore::export_opaque_fd");
 

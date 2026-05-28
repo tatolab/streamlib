@@ -126,8 +126,13 @@ Examples that fit:
   frame.
 - ✓ `format`, `width`, `height` — could be hoisted from `Texture`
   for cheaper validation; arguably already covered by `texture`.
-- ✓ Exportable timeline-semaphore handle — for consumers that need to
-  GPU-wait without a side-channel.
+- ✓ Exportable timeline-semaphore handles — for consumers that need
+  to GPU-wait without a side-channel. Subprocess-wired adapter
+  surfaces today carry two timelines per surface (`produce_done` +
+  `consume_done`, one per direction of the producer ↔ consumer
+  edge); see
+  [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md)
+  for the single-writer-per-edge contract.
 
 ### Out: state that doesn't fit any one of the criteria
 
@@ -492,6 +497,11 @@ When a new field lands on `TextureRegistration`:
   adapter scope, **not** parallel maps to `texture_cache` — see the
   [Scope](#scope-this-record-vs-adapter-internal-surfacestatep)
   section.
+- **Adapter timeline contract**:
+  [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md)
+  — single-writer-per-edge contract for the `produce_done` +
+  `consume_done` timeline pair every subprocess-wired adapter
+  surface carries.
 - **External references**:
   - [Khronos `VK_EXT_external_memory_acquire_unmodified` proposal](https://docs.vulkan.org/features/latest/features/proposals/VK_EXT_external_memory_acquire_unmodified.html)
   - [Vulkan synchronization & queue-transfer chapter](https://docs.vulkan.org/spec/latest/chapters/synchronization.html)

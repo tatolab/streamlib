@@ -125,21 +125,32 @@ fn run_smoke(
     // engine-side replacement for the explicit `.escalate(|full|...)`.
     let full = ctx.gpu_full_access();
 
-    // Step 1: allocate texture + exportable timeline (the resource
-    // pair both registration paths bind to).
+    // Step 1: allocate texture + exportable timeline pair (the resource
+    // triple both registration paths bind to). Single-writer-per-edge:
+    // `produce_done` + `consume_done` per
+    // `docs/architecture/adapter-timeline-single-writer.md`.
     let host_device = full.host_vulkan_device_arc()?;
     let texture = full.acquire_render_target_dma_buf_image(
         width,
         height,
         TextureFormat::Bgra8Unorm,
     )?;
-    let timeline = HostVulkanTimelineSemaphore::new_exportable(
+    let produce_done = HostVulkanTimelineSemaphore::new_exportable(
         host_device.device(),
         0,
     )
     .map_err(|e| {
         Error::GpuError(format!(
-            "HostVulkanTimelineSemaphore::new_exportable: {e}"
+            "HostVulkanTimelineSemaphore::new_exportable (produce_done): {e}"
+        ))
+    })?;
+    let consume_done = HostVulkanTimelineSemaphore::new_exportable(
+        host_device.device(),
+        0,
+    )
+    .map_err(|e| {
+        Error::GpuError(format!(
+            "HostVulkanTimelineSemaphore::new_exportable (consume_done): {e}"
         ))
     })?;
 
@@ -152,7 +163,8 @@ fn run_smoke(
         .register_texture(
             surface_id,
             &texture,
-            Some(&timeline),
+            Some(&produce_done),
+            Some(&consume_done),
             VulkanLayout::UNDEFINED,
         )
         .map_err(|e| {
@@ -231,7 +243,8 @@ fn run_smoke(
     drop(looked_up_texture);
     drop(_registration);
     drop(texture);
-    drop(timeline);
+    drop(produce_done);
+    drop(consume_done);
     drop(host_device);
 
     Ok(())

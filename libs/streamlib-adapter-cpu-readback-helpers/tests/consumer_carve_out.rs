@@ -86,11 +86,15 @@ fn host_image_to_consumer_staging_byte_equal_round_trip() {
         .expect("HostVulkanBuffer::new");
     let staging_arc = Arc::new(staging);
 
-    // Allocate the exportable timeline. Keep our own Arc so we can
-    // export its OPAQUE_FD post-registration.
-    let timeline_arc = Arc::new(
+    // Allocate the exportable timelines. Keep our own Arcs so we can
+    // export their OPAQUE_FDs post-registration.
+    let produce_done_arc = Arc::new(
         HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-            .expect("HostVulkanTimelineSemaphore::new_exportable"),
+            .expect("HostVulkanTimelineSemaphore::new_exportable (produce_done)"),
+    );
+    let consume_done_arc = Arc::new(
+        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+            .expect("HostVulkanTimelineSemaphore::new_exportable (consume_done)"),
     );
 
     // Build the host adapter with the in-process trigger.
@@ -107,7 +111,8 @@ fn host_image_to_consumer_staging_byte_equal_round_trip() {
             HostSurfaceRegistration::<HostMarker> {
                 texture: Some(texture_arc),
                 staging_planes: vec![Arc::clone(&staging_arc)],
-                timeline: Arc::clone(&timeline_arc),
+                produce_done: Arc::clone(&produce_done_arc),
+                consume_done: Arc::clone(&consume_done_arc),
                 initial_image_layout: VulkanLayout::UNDEFINED,
                 format: SurfaceFormat::Bgra8,
                 width: W,
@@ -178,9 +183,14 @@ fn host_image_to_consumer_staging_byte_equal_round_trip() {
     let dma_buf_fd = staging_arc
         .export_dma_buf_fd()
         .expect("HostVulkanBuffer::export_dma_buf_fd");
-    let sync_fd = timeline_arc
+    let sync_fd = produce_done_arc
         .export_opaque_fd()
-        .expect("HostVulkanTimelineSemaphore::export_opaque_fd");
+        .expect("HostVulkanTimelineSemaphore::export_opaque_fd (produce_done)");
+    // Keep consume_done_arc alive across the test scope — the
+    // consumer-side test below only exercises produce_done's OPAQUE_FD
+    // import path; consume_done is part of the registration contract
+    // but isn't waited on here.
+    let _ = &consume_done_arc;
 
     let consumer = match ConsumerVulkanDevice::new() {
         Ok(d) => Arc::new(d),

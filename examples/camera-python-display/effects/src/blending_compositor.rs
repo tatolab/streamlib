@@ -33,7 +33,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use streamlib::sdk::engine::host_rhi::HostVulkanTexture;
+use streamlib::sdk::engine::host_rhi::{HostVulkanTexture, HostVulkanTimelineSemaphore};
 use streamlib::sdk::engine::{HostSurfaceStoreExt, HostTextureExt};
 
 use streamlib::sdk::color::TransferId;
@@ -161,6 +161,14 @@ impl Default for BlendingCompositorConfig {
 struct OutputSlot {
     surface_id: String,
     texture: Texture,
+    // Per-slot single-writer-per-edge timeline pair held on the host
+    // side so cross-process consumers reaching the slot via
+    // `surface_store.lookup` see live timeline FDs (the registration
+    // duplicated them via SCM_RIGHTS but the host-side Arcs must
+    // outlive the surface). See
+    // `docs/architecture/adapter-timeline-single-writer.md`.
+    _produce_done: Arc<HostVulkanTimelineSemaphore>,
+    _consume_done: Arc<HostVulkanTimelineSemaphore>,
 }
 
 /// GPU backend bundle owned by the processor and moved into the
@@ -385,6 +393,29 @@ impl BlendingCompositorProcessor::Processor {
         let mut output_ring: Vec<OutputSlot> = Vec::with_capacity(OUTPUT_RING_DEPTH);
         for (slot_idx, (surface_id, texture)) in ring_descriptors.into_iter().enumerate()
         {
+            // Per-slot single-writer-per-edge exportable timelines —
+            // `produce_done` signaled by the host-side compositor,
+            // `consume_done` signaled by cross-process consumers (Glitch
+            // Python subprocess). See
+            // `docs/architecture/adapter-timeline-single-writer.md`.
+            let produce_done = Arc::new(
+                HostVulkanTimelineSemaphore::new_exportable(vulkan_device.device(), 0)
+                    .map_err(|e| {
+                        Error::Configuration(format!(
+                            "BlendingCompositor: HostVulkanTimelineSemaphore::new_exportable \
+                             (produce_done) slot {slot_idx}: {e}"
+                        ))
+                    })?,
+            );
+            let consume_done = Arc::new(
+                HostVulkanTimelineSemaphore::new_exportable(vulkan_device.device(), 0)
+                    .map_err(|e| {
+                        Error::Configuration(format!(
+                            "BlendingCompositor: HostVulkanTimelineSemaphore::new_exportable \
+                             (consume_done) slot {slot_idx}: {e}"
+                        ))
+                    })?,
+            );
             gpu_context.register_texture_with_layout(
                 &surface_id,
                 texture.clone(),
@@ -401,7 +432,8 @@ impl BlendingCompositorProcessor::Processor {
                 .register_texture(
                     &surface_id,
                     &texture,
-                    None,
+                    Some(produce_done.as_ref()),
+                    Some(consume_done.as_ref()),
                     VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
                 )
                 .map_err(|e| {
@@ -410,7 +442,12 @@ impl BlendingCompositorProcessor::Processor {
                          slot {slot_idx}: {e}"
                     ))
                 })?;
-            output_ring.push(OutputSlot { surface_id, texture });
+            output_ring.push(OutputSlot {
+                surface_id,
+                texture,
+                _produce_done: produce_done,
+                _consume_done: consume_done,
+            });
         }
         tracing::info!(
             "BlendingCompositor: pre-allocated {OUTPUT_RING_DEPTH} output ring slots ({width}x{height} BGRA8)"

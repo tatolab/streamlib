@@ -2,9 +2,15 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! `streamlib_adapter_vulkan::tests::sync_correctness` — confirms that
-//! the adapter advances the timeline semaphore on guard drop and that
-//! a downstream consumer of the same timeline observes the post-release
-//! value.
+//! the adapter advances the appropriate timeline semaphore on guard
+//! drop and that downstream observers see the post-release value.
+//!
+//! Single-writer-per-edge per
+//! `docs/architecture/adapter-timeline-single-writer.md`: dropping a
+//! write guard signals `produce_done`; dropping the last read guard
+//! signals `consume_done`. Each timeline carries the shared
+//! `current_signal_value` counter, so signals across the two timelines
+//! advance the underlying counter in interleaving order.
 
 #![cfg(target_os = "linux")]
 
@@ -50,16 +56,21 @@ fn timeline_counter_advances_on_release_and_is_observable_by_next_acquire() {
         .acquire_render_target_dma_buf_image(64, 64, TextureFormat::Bgra8Unorm)
         .expect("acquire_render_target_dma_buf_image");
     let texture = stream_tex.vulkan_inner().clone();
-    let timeline = Arc::new(
+    let produce_done = Arc::new(
         HostVulkanTimelineSemaphore::new(adapter.device().device(), 0)
-            .expect("create timeline"),
+            .expect("create produce_done"),
+    );
+    let consume_done = Arc::new(
+        HostVulkanTimelineSemaphore::new(adapter.device().device(), 0)
+            .expect("create consume_done"),
     );
     adapter
         .register_host_surface(
             surface_id,
             HostSurfaceRegistration {
                 texture,
-                timeline: Arc::clone(&timeline),
+                produce_done: Arc::clone(&produce_done),
+                consume_done: Arc::clone(&consume_done),
                 initial_layout: VulkanLayout::UNDEFINED,
             },
         )
@@ -75,43 +86,71 @@ fn timeline_counter_advances_on_release_and_is_observable_by_next_acquire() {
         SurfaceSyncState::default(),
     );
 
-    // Initial counter is 0 and acquire/wait succeeds.
-    assert_eq!(timeline.current_value().unwrap(), 0);
+    // Initial counters are 0 and acquire/wait succeeds.
+    assert_eq!(produce_done.current_value().unwrap(), 0);
+    assert_eq!(consume_done.current_value().unwrap(), 0);
 
     {
         let _w = ctx.acquire_write(&descriptor).expect("acquire_write 1");
         assert_eq!(
-            timeline.current_value().unwrap(),
+            produce_done.current_value().unwrap(),
             0,
-            "no signal while guard is alive"
+            "no produce_done signal while write guard is alive"
         );
     }
-    assert_eq!(timeline.current_value().unwrap(), 1, "drop signals once");
+    // Write drop signals produce_done with the shared
+    // current_signal_value counter (now 1). consume_done is untouched.
+    assert_eq!(
+        produce_done.current_value().unwrap(),
+        1,
+        "write drop signals produce_done"
+    );
+    assert_eq!(
+        consume_done.current_value().unwrap(),
+        0,
+        "write drop does not touch consume_done"
+    );
 
     {
         let _r = ctx.acquire_read(&descriptor).expect("acquire_read after w1");
     }
-    assert_eq!(timeline.current_value().unwrap(), 2);
+    // Read drop signals consume_done with current_signal_value=2;
+    // produce_done is untouched.
+    assert_eq!(
+        consume_done.current_value().unwrap(),
+        2,
+        "read drop signals consume_done"
+    );
+    assert_eq!(
+        produce_done.current_value().unwrap(),
+        1,
+        "read drop does not touch produce_done"
+    );
 
-    // Two parallel readers share a release boundary — the counter
+    // Two parallel readers share a release boundary — consume_done
     // advances exactly once on the LAST reader's drop.
     let r1 = ctx.acquire_read(&descriptor).expect("acquire_read r1");
     let r2 = ctx.acquire_read(&descriptor).expect("acquire_read r2");
     assert_eq!(
-        timeline.current_value().unwrap(),
+        consume_done.current_value().unwrap(),
         2,
-        "no signal mid-concurrent-read"
+        "no consume_done signal mid-concurrent-read"
     );
     drop(r1);
     assert_eq!(
-        timeline.current_value().unwrap(),
+        consume_done.current_value().unwrap(),
         2,
         "first reader drop is silent"
     );
     drop(r2);
     assert_eq!(
-        timeline.current_value().unwrap(),
+        consume_done.current_value().unwrap(),
         3,
-        "last reader drop signals once"
+        "last reader drop signals consume_done once"
+    );
+    assert_eq!(
+        produce_done.current_value().unwrap(),
+        1,
+        "no read-path signal ever touched produce_done"
     );
 }

@@ -323,9 +323,13 @@ pub struct CudaSurfaceAdapterVTable {
     /// caller's `pixel_buffer_handle` Arc remains owned by the
     /// caller.
     ///
-    /// `timeline_handle` is an
+    /// `produce_done_handle` and `consume_done_handle` are
     /// `Arc::into_raw(Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>)`-shaped
-    /// opaque pointer with identical ownership semantics.
+    /// opaque pointers with identical ownership semantics. They are
+    /// the two single-writer-per-edge timeline semaphores documented
+    /// in `docs/architecture/adapter-timeline-single-writer.md`:
+    /// `produce_done` is signaled exclusively by the producer
+    /// process, `consume_done` exclusively by the consumer process.
     ///
     /// `initial_layout_raw` is the i32 `VkImageLayout` enumerant
     /// — unused on the buffer path (buffers have no layout), pass
@@ -339,7 +343,8 @@ pub struct CudaSurfaceAdapterVTable {
         handle: *const c_void,
         surface_id: u64,
         pixel_buffer_handle: *const c_void,
-        timeline_handle: *const c_void,
+        produce_done_handle: *const c_void,
+        consume_done_handle: *const c_void,
         initial_layout_raw: i32,
         err_buf: *mut u8,
         err_buf_cap: usize,
@@ -352,9 +357,10 @@ pub struct CudaSurfaceAdapterVTable {
     /// `Arc::into_raw(Arc<<D::Privilege as DevicePrivilege>::Texture>)`-shaped
     /// opaque pointer produced by the host (the host's
     /// `HostVulkanTexture::new_opaque_fd_export` output).
-    /// `timeline_handle` is an
+    /// `produce_done_handle` and `consume_done_handle` are
     /// `Arc::into_raw(Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>)`-shaped
-    /// opaque pointer.
+    /// opaque pointers — see [`Self::register_host_surface`] for the
+    /// single-writer-per-edge contract.
     ///
     /// `initial_layout_raw` is the i32 `VkImageLayout` enumerant
     /// the image is in at registration time. Load-bearing for the
@@ -363,7 +369,7 @@ pub struct CudaSurfaceAdapterVTable {
     /// itself does not issue Vulkan-side barriers on imported
     /// images (CUDA's sync runs pairwise via
     /// `cudaWaitExternalSemaphoresAsync` /
-    /// `cudaSignalExternalSemaphoresAsync` on the timeline).
+    /// `cudaSignalExternalSemaphoresAsync` on each timeline).
     ///
     /// Returns 0 on success, non-zero on failure (e.g. surface_id
     /// already registered, OR the texture's format is not in the
@@ -374,7 +380,8 @@ pub struct CudaSurfaceAdapterVTable {
         handle: *const c_void,
         surface_id: u64,
         texture_handle: *const c_void,
-        timeline_handle: *const c_void,
+        produce_done_handle: *const c_void,
+        consume_done_handle: *const c_void,
         initial_layout_raw: i32,
         err_buf: *mut u8,
         err_buf_cap: usize,

@@ -282,9 +282,14 @@ pub struct VulkanSurfaceAdapterVTable {
     /// stores a clone in the adapter's internal registry. The
     /// caller's `texture_handle` Arc remains owned by the caller.
     ///
-    /// `timeline_handle` is an
+    /// `produce_done_handle` and `consume_done_handle` are
     /// `Arc::into_raw(Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>)`-shaped
-    /// opaque pointer with identical ownership semantics.
+    /// opaque pointers with identical ownership semantics. They are
+    /// the two single-writer-per-edge timeline semaphores documented
+    /// in `docs/architecture/adapter-timeline-single-writer.md`:
+    /// `produce_done` is signaled exclusively by the producer
+    /// process (from `end_write_access`), `consume_done` exclusively
+    /// by the consumer process (from `end_read_access`).
     ///
     /// `initial_layout_raw` is the i32 `VkImageLayout` enumerant
     /// the texture is in at registration time.
@@ -296,7 +301,8 @@ pub struct VulkanSurfaceAdapterVTable {
         handle: *const c_void,
         surface_id: u64,
         texture_handle: *const c_void,
-        timeline_handle: *const c_void,
+        produce_done_handle: *const c_void,
+        consume_done_handle: *const c_void,
         initial_layout_raw: i32,
         err_buf: *mut u8,
         err_buf_cap: usize,

@@ -55,15 +55,30 @@ pub struct SurfaceMetadata {
     /// from the EGL `external_only=FALSE` set; otherwise consumer-side
     /// FBO completeness will fail on NVIDIA.
     pub drm_format_modifier: u64,
-    /// Optional OPAQUE_FD timeline-semaphore handle owned by the table.
-    /// Set when the host registers the surface with an exportable
-    /// `HostVulkanTimelineSemaphore` (#531). `check_out` / `lookup` `dup`s it
-    /// alongside the DMA-BUF plane fds so the subprocess Vulkan adapter
-    /// can call `HostVulkanTimelineSemaphore::from_imported_opaque_fd` and
-    /// reuse the host adapter's timeline-wait + signal path. `None` for
-    /// surfaces that don't need explicit Vulkan sync (the OpenGL adapter
-    /// path, CPU-readback, legacy `VkBuffer` pixel buffers).
-    pub sync_fd: Option<RawFd>,
+    /// Optional OPAQUE_FD timeline-semaphore handle for the `produce_done`
+    /// edge — signaled by the producer process when GPU writes complete,
+    /// waited on by the consumer before reading. The host always owns the
+    /// underlying `HostVulkanTimelineSemaphore`; consumers import the FD
+    /// via `ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd` (in
+    /// subprocess adapters) or `HostVulkanTimelineSemaphore::from_imported_opaque_fd`
+    /// (host adapters consuming a peer surface). `None` for surfaces that
+    /// don't need explicit Vulkan sync (the OpenGL adapter path, legacy
+    /// `VkBuffer` pixel buffers without dual-timeline coordination).
+    ///
+    /// Half of the single-writer-per-edge pair documented in
+    /// `docs/architecture/adapter-timeline-single-writer.md`; the
+    /// consumer-side companion lives in [`Self::consume_done_fd`].
+    pub produce_done_fd: Option<RawFd>,
+    /// Optional OPAQUE_FD timeline-semaphore handle for the `consume_done`
+    /// edge — signaled by the consumer process when consumption completes,
+    /// waited on by the producer before re-writing. Host-allocated like
+    /// [`Self::produce_done_fd`] (cdylib consumers can't allocate exportable
+    /// memory per the import-side carve-out); the consumer process imports
+    /// the FD and signals it via host-CPU `vkSignalSemaphore`. `None` for
+    /// surfaces that don't need the producer-side drain-wait — typically
+    /// the same surfaces that have `produce_done_fd = None`, but they're
+    /// independent options.
+    pub consume_done_fd: Option<RawFd>,
     pub checkout_count: u64,
     /// Cross-process Vulkan-image-layout (i32 per `VkImageLayout`), the
     /// **single source of truth for cross-process layout state** — same
@@ -132,7 +147,8 @@ impl Clone for SurfaceMetadata {
             resource_type: self.resource_type.clone(),
             handle_type: self.handle_type.clone(),
             drm_format_modifier: self.drm_format_modifier,
-            sync_fd: self.sync_fd,
+            produce_done_fd: self.produce_done_fd,
+            consume_done_fd: self.consume_done_fd,
             checkout_count: self.checkout_count,
             current_image_layout: AtomicI32::new(
                 self.current_image_layout.load(Ordering::Acquire),
@@ -190,11 +206,16 @@ pub struct SurfacePlaneCheckout {
     /// on this value: `"dma_buf"` → `from_dma_buf_fds`, `"opaque_fd"` →
     /// `from_opaque_fd`.
     pub handle_type: String,
-    /// Optional OPAQUE_FD for the surface's exportable timeline semaphore.
-    /// `None` for surfaces registered without one. The table-owned fd is
-    /// returned as-is; callers that hand it out via SCM_RIGHTS must `dup`
-    /// it first, just like the memory fds.
-    pub sync_fd: Option<RawFd>,
+    /// Optional OPAQUE_FD for the producer-side `produce_done` timeline
+    /// semaphore — see [`SurfaceMetadata::produce_done_fd`]. `None` for
+    /// surfaces registered without one. The table-owned fd is returned
+    /// as-is; callers that hand it out via SCM_RIGHTS must `dup` it
+    /// first, just like the memory fds.
+    pub produce_done_fd: Option<RawFd>,
+    /// Optional OPAQUE_FD for the consumer-side `consume_done` timeline
+    /// semaphore — see [`SurfaceMetadata::consume_done_fd`]. Same
+    /// table-owned-fd semantics as [`Self::produce_done_fd`].
+    pub consume_done_fd: Option<RawFd>,
     /// Snapshot of the surface's [`SurfaceMetadata::current_image_layout`]
     /// at lookup time (i32 per `VkImageLayout`). Consumers feed this into
     /// the source layout of their first QFOT acquire barrier. `0`
@@ -239,11 +260,19 @@ pub struct SurfaceRegistration<'a> {
     /// DRM format modifier of the underlying VkImage. See
     /// [`SurfaceMetadata::drm_format_modifier`].
     pub drm_format_modifier: u64,
-    /// Optional OPAQUE_FD timeline-semaphore handle exported by the host
-    /// (`HostVulkanTimelineSemaphore::export_opaque_fd`). The table takes
-    /// ownership on success and closes it on `release_surface`. `None`
-    /// for adapters that don't need explicit Vulkan sync.
-    pub sync_fd: Option<RawFd>,
+    /// Optional OPAQUE_FD timeline-semaphore handle for the producer-side
+    /// `produce_done` edge (`HostVulkanTimelineSemaphore::export_opaque_fd`).
+    /// The table takes ownership on success and closes it on
+    /// `release_surface`. `None` for adapters that don't need explicit
+    /// Vulkan sync. See [`SurfaceMetadata::produce_done_fd`] for the
+    /// full single-writer-per-edge contract.
+    pub produce_done_fd: Option<RawFd>,
+    /// Optional OPAQUE_FD timeline-semaphore handle for the consumer-side
+    /// `consume_done` edge. Same ownership semantics as
+    /// [`Self::produce_done_fd`]. `None` for surfaces that don't carry a
+    /// consumer-side signal channel (e.g. one-shot setup surfaces, or
+    /// pre-single-writer-lift legacy registrations).
+    pub consume_done_fd: Option<RawFd>,
     /// Initial `VkImageLayout` (i32) to seed
     /// [`SurfaceMetadata::current_image_layout`]. Producers that publish
     /// in a known steady-state layout (camera, OpenGL adapter wiring,
@@ -286,19 +315,20 @@ impl SurfaceShareState {
 
     /// Insert a surface into the table.
     ///
-    /// On rejection (duplicate surface_id), ownership of `dma_buf_fds` AND
-    /// the optional `sync_fd` is returned to the caller (the latter as the
-    /// `Err` tuple's second slot) so it can decide whether to close them or
-    /// hand them to the next attempt. On success, the table owns every fd
-    /// passed in and closes them on [`Self::release_surface`].
+    /// On rejection (duplicate surface_id), ownership of `dma_buf_fds`,
+    /// `produce_done_fd`, and `consume_done_fd` is returned to the caller
+    /// (the timeline FDs as the `Err` tuple's second and third slots) so
+    /// it can decide whether to close them or hand them to the next
+    /// attempt. On success, the table owns every fd passed in and closes
+    /// them on [`Self::release_surface`].
     pub fn register_surface(
         &self,
         reg: SurfaceRegistration<'_>,
-    ) -> Result<(), (Vec<RawFd>, Option<RawFd>)> {
+    ) -> Result<(), (Vec<RawFd>, Option<RawFd>, Option<RawFd>)> {
         let mut surfaces = self.inner.surfaces.write();
 
         if surfaces.contains_key(reg.surface_id) {
-            return Err((reg.dma_buf_fds, reg.sync_fd));
+            return Err((reg.dma_buf_fds, reg.produce_done_fd, reg.consume_done_fd));
         }
 
         self.inner.surface_counter.fetch_add(1, Ordering::Relaxed);
@@ -318,7 +348,8 @@ impl SurfaceShareState {
                 resource_type: reg.resource_type.to_string(),
                 handle_type: reg.handle_type.to_string(),
                 drm_format_modifier: reg.drm_format_modifier,
-                sync_fd: reg.sync_fd,
+                produce_done_fd: reg.produce_done_fd,
+                consume_done_fd: reg.consume_done_fd,
                 checkout_count: 0,
                 current_image_layout: AtomicI32::new(reg.current_image_layout),
                 vk_image_type: reg.vk_image_type,
@@ -371,7 +402,8 @@ impl SurfaceShareState {
                 plane_strides: metadata.plane_strides.clone(),
                 drm_format_modifier: metadata.drm_format_modifier,
                 handle_type: metadata.handle_type.clone(),
-                sync_fd: metadata.sync_fd,
+                produce_done_fd: metadata.produce_done_fd,
+                consume_done_fd: metadata.consume_done_fd,
                 current_image_layout: metadata
                     .current_image_layout
                     .load(Ordering::Acquire),
@@ -393,8 +425,11 @@ impl SurfaceShareState {
                 for fd in &metadata.dma_buf_fds {
                     unsafe { libc::close(*fd) };
                 }
-                if let Some(sync_fd) = metadata.sync_fd {
-                    unsafe { libc::close(sync_fd) };
+                if let Some(fd) = metadata.produce_done_fd {
+                    unsafe { libc::close(fd) };
+                }
+                if let Some(fd) = metadata.consume_done_fd {
+                    unsafe { libc::close(fd) };
                 }
                 surfaces.remove(surface_id);
                 return true;
@@ -438,7 +473,8 @@ mod tests {
             resource_type,
             handle_type: "dma_buf",
             drm_format_modifier: 0,
-            sync_fd: None,
+            produce_done_fd: None,
+            consume_done_fd: None,
             current_image_layout: 0,
             vk_image_type: VK_IMAGE_TYPE_DEFAULT,
             vk_image_mip_levels: VK_IMAGE_MIP_LEVELS_DEFAULT,
@@ -472,11 +508,12 @@ mod tests {
     fn duplicate_surface_id_rejected() {
         let state = SurfaceShareState::new();
         assert!(state.register_surface(reg("dup", "rt", "texture")).is_ok());
-        let (rejected_planes, rejected_sync) = state
+        let (rejected_planes, rejected_produce, rejected_consume) = state
             .register_surface(reg("dup", "rt", "texture"))
             .expect_err("duplicate must be rejected");
         assert_eq!(rejected_planes, vec![-1], "rejected plane fds returned to caller");
-        assert_eq!(rejected_sync, None, "no sync fd was registered, none returned");
+        assert_eq!(rejected_produce, None, "no produce_done fd was registered, none returned");
+        assert_eq!(rejected_consume, None, "no consume_done fd was registered, none returned");
     }
 
     /// The watchdog uses `surface_ids_by_runtime` to discover what to
@@ -587,7 +624,8 @@ mod tests {
                 resource_type: "texture",
                 handle_type: "opaque_fd",
                 drm_format_modifier: 0,
-                sync_fd: None,
+                produce_done_fd: None,
+            consume_done_fd: None,
                 current_image_layout: 0,
                 vk_image_type: 2,        // VK_IMAGE_TYPE_3D
                 vk_image_mip_levels: 9,  // 256 = 2^8, plus base = 9 levels
@@ -649,7 +687,8 @@ mod tests {
                 resource_type: "pixel_buffer",
                 handle_type: "dma_buf",
                 drm_format_modifier: 0,
-                sync_fd: None,
+                produce_done_fd: None,
+            consume_done_fd: None,
                 current_image_layout: 0,
                 vk_image_type: VK_IMAGE_TYPE_DEFAULT,
                 vk_image_mip_levels: VK_IMAGE_MIP_LEVELS_DEFAULT,

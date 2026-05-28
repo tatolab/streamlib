@@ -377,7 +377,8 @@ unsafe extern "C" fn host_ss_register_texture(
     id_ptr: *const u8,
     id_len: usize,
     texture: *const c_void,
-    timeline_handle: *const c_void,
+    produce_done_handle: *const c_void,
+    consume_done_handle: *const c_void,
     layout_raw: i32,
     err_buf: *mut u8,
     err_buf_cap: usize,
@@ -418,21 +419,34 @@ unsafe extern "C" fn host_ss_register_texture(
                     return 1;
                 }
             };
-            // SAFETY: timeline_handle, when non-null, points at the
-            // engine-owned `Arc<HostVulkanTimelineSemaphore>` (passed
-            // by `&Arc<...>` from engine code through `&*` cast).
-            let timeline = unsafe {
-                if timeline_handle.is_null() {
+            // SAFETY: produce_done_handle / consume_done_handle, when
+            // non-null, each point at the engine-owned
+            // `Arc<HostVulkanTimelineSemaphore>` (passed by `&Arc<...>`
+            // from engine code through `&*` cast). The
+            // single-writer-per-edge model is documented in
+            // `docs/architecture/adapter-timeline-single-writer.md`.
+            let produce_done = unsafe {
+                if produce_done_handle.is_null() {
                     None
                 } else {
                     Some(
-                        &*(timeline_handle
+                        &*(produce_done_handle
+                            as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore),
+                    )
+                }
+            };
+            let consume_done = unsafe {
+                if consume_done_handle.is_null() {
+                    None
+                } else {
+                    Some(
+                        &*(consume_done_handle
                             as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore),
                     )
                 }
             };
             let layout = streamlib_consumer_rhi::VulkanLayout(layout_raw);
-            match inner.register_texture(id_str, tex, timeline, layout) {
+            match inner.register_texture(id_str, tex, produce_done, consume_done, layout) {
                 Ok(()) => 0,
                 Err(e) => {
                     write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
@@ -450,7 +464,8 @@ unsafe extern "C" fn host_ss_register_texture(
     _id_ptr: *const u8,
     _id_len: usize,
     _texture: *const c_void,
-    _timeline_handle: *const c_void,
+    _produce_done_handle: *const c_void,
+    _consume_done_handle: *const c_void,
     _layout_raw: i32,
     err_buf: *mut u8,
     err_buf_cap: usize,
@@ -471,7 +486,8 @@ unsafe extern "C" fn host_ss_register_pixel_buffer_with_timeline(
     id_ptr: *const u8,
     id_len: usize,
     pixel_buffer: *const c_void,
-    timeline_handle: *const c_void,
+    produce_done_handle: *const c_void,
+    consume_done_handle: *const c_void,
     err_buf: *mut u8,
     err_buf_cap: usize,
     err_len: *mut usize,
@@ -511,17 +527,28 @@ unsafe extern "C" fn host_ss_register_pixel_buffer_with_timeline(
                     return 1;
                 }
             };
-            let timeline = unsafe {
-                if timeline_handle.is_null() {
+            let produce_done = unsafe {
+                if produce_done_handle.is_null() {
                     None
                 } else {
                     Some(
-                        &*(timeline_handle
+                        &*(produce_done_handle
                             as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore),
                     )
                 }
             };
-            match inner.register_pixel_buffer_with_timeline(id_str, pb, timeline) {
+            let consume_done = unsafe {
+                if consume_done_handle.is_null() {
+                    None
+                } else {
+                    Some(
+                        &*(consume_done_handle
+                            as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore),
+                    )
+                }
+            };
+            match inner.register_pixel_buffer_with_timeline(id_str, pb, produce_done, consume_done)
+            {
                 Ok(()) => 0,
                 Err(e) => {
                     write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
@@ -539,7 +566,8 @@ unsafe extern "C" fn host_ss_register_pixel_buffer_with_timeline(
     _id_ptr: *const u8,
     _id_len: usize,
     _pixel_buffer: *const c_void,
-    _timeline_handle: *const c_void,
+    _produce_done_handle: *const c_void,
+    _consume_done_handle: *const c_void,
     err_buf: *mut u8,
     err_buf_cap: usize,
     err_len: *mut usize,
@@ -951,6 +979,7 @@ mod surface_store_vtable_tier1_wire_format_tests {
                 id.len(),
                 std::ptr::null(),
                 std::ptr::null(),
+                std::ptr::null(),
                 0,
                 buf.as_mut_ptr(),
                 buf.len(),
@@ -973,6 +1002,7 @@ mod surface_store_vtable_tier1_wire_format_tests {
                 std::ptr::null(),
                 id.as_ptr(),
                 id.len(),
+                std::ptr::null(),
                 std::ptr::null(),
                 std::ptr::null(),
                 buf.as_mut_ptr(),

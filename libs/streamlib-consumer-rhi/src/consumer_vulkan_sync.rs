@@ -93,47 +93,21 @@ impl ConsumerVulkanTimelineSemaphore {
             })
     }
 
-    /// Host-side signal: advance the counter to **at least** `value`
-    /// from the CPU.
+    /// Host-side signal: advance the counter to `value` from the CPU.
     ///
-    /// Self-correcting against cross-process timeline advancement. If
-    /// the shared `vk::Semaphore` has been advanced past `value` by
-    /// another writer (e.g. a host-process producer signaling via
-    /// `VkSubmitInfo2::pSignalSemaphoreInfos`), this call signals at
-    /// `current_value() + 1` instead of `value` so the timeline
-    /// always advances and the spec's strictly-greater rule is met
-    /// (`VUID-VkSemaphoreSignalInfo-value-03258`). The semantic
-    /// contract — "the timeline is at least `value` after this
-    /// returns" — is preserved whether we signal at the requested
-    /// value or at a higher clamped value.
-    ///
-    /// Emits a tracing warning when clamping engages so adapter-level
-    /// state desync (per-process `state.current_release_value`
-    /// lagging the shared vk timeline) is observable. The right
-    /// long-term fix is single-writer timelines per producer/consumer
-    /// edge (Unreal / Granite shape); this clamp is the consumer-rhi
-    /// safety net.
+    /// Single-writer-per-edge per
+    /// `docs/architecture/adapter-timeline-single-writer.md`: only
+    /// one process ever signals a given timeline, so `value` is
+    /// strictly greater than the current value by construction and
+    /// VUID-VkSemaphoreSignalInfo-value-03258 holds without runtime
+    /// clamping.
     pub fn signal_host(&self, value: u64) -> Result<()> {
-        let current = self.current_value().unwrap_or(0);
-        let actual_value = std::cmp::max(value, current.saturating_add(1));
-        if actual_value != value {
-            tracing::warn!(
-                target: "consumer_rhi::timeline",
-                requested_value = value,
-                current_value = current,
-                actual_value,
-                "signal_host: clamping to actual_value > requested (cross-process \
-                 advancement of shared timeline OR adapter-state lag). Timeline is \
-                 advanced; caller's per-process `current_release_value` may diverge \
-                 from vk reality until the next clamp."
-            );
-        }
         let info = vk::SemaphoreSignalInfo::builder()
             .semaphore(self.semaphore)
-            .value(actual_value)
+            .value(value)
             .build();
         unsafe { self.vulkan_device.device().signal_semaphore(&info) }.map_err(|e| {
-            ConsumerRhiError::Gpu(format!("signal_semaphore(value={actual_value}): {e}"))
+            ConsumerRhiError::Gpu(format!("signal_semaphore(value={value}): {e}"))
         })
     }
 
@@ -169,6 +143,9 @@ impl VulkanTimelineSemaphoreLike for ConsumerVulkanTimelineSemaphore {
     }
     fn signal_host(&self, value: u64) -> Result<()> {
         ConsumerVulkanTimelineSemaphore::signal_host(self, value)
+    }
+    fn current_value(&self) -> Result<u64> {
+        ConsumerVulkanTimelineSemaphore::current_value(self)
     }
     fn semaphore(&self) -> vk::Semaphore {
         ConsumerVulkanTimelineSemaphore::semaphore(self)

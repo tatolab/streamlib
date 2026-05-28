@@ -128,20 +128,25 @@ class _SurfaceTransportHandleC(ctypes.Structure):
 class _SurfaceSyncStateC(ctypes.Structure):
     """Mirror of Rust `SurfaceSyncState`.
 
-    Subprocess adapters wait/signal via the imported `SYNC_FD`
-    (`vkImportSemaphoreFdKHR`) — they cannot dereference
-    `timeline_semaphore_handle` (a host-side `VkSemaphore`).
+    Carries the dual `produce_done` + `consume_done` timeline
+    semaphores per the single-writer-per-edge rule in
+    `docs/architecture/adapter-timeline-single-writer.md`. Subprocess
+    adapters wait/signal via the imported sync_fds
+    (`vkImportSemaphoreFdKHR`) — they cannot dereference the host-side
+    `VkSemaphore` handles.
     """
 
     _fields_ = [
-        ("timeline_semaphore_handle", ctypes.c_uint64),
-        ("timeline_semaphore_sync_fd", ctypes.c_int32),
+        ("produce_done_semaphore_handle", ctypes.c_uint64),
+        ("produce_done_semaphore_sync_fd", ctypes.c_int32),
         ("_pad_a", ctypes.c_uint32),
         ("last_acquire_value", ctypes.c_uint64),
         ("last_release_value", ctypes.c_uint64),
         ("current_image_layout", ctypes.c_int32),
         ("_pad_b", ctypes.c_uint32),
-        ("_reserved", ctypes.c_uint8 * 16),
+        ("consume_done_semaphore_handle", ctypes.c_uint64),
+        ("consume_done_semaphore_sync_fd", ctypes.c_int32),
+        ("_pad_c", ctypes.c_uint32),
     ]
 
 

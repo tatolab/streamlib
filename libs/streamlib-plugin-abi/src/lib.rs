@@ -699,8 +699,12 @@ mod layout_tests {
         // v1 (issue #894): initial shape — `write_raw`, `has_port`,
         // `clone_arc`, `drop_arc`.
         assert_eq!(OUTPUT_WRITER_VTABLE_LAYOUT_VERSION, 1);
-        // v1 (issue #894): initial shape — `read_raw`, `has_data`.
-        assert_eq!(INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION, 1);
+        // v2 (#1097 audio-mixer-demo silent-output fix): appends
+        // `max_payload_for_port` so cdylib `read_raw` allocates
+        // exactly the schema-declared `metadata.max_payload_bytes`
+        // and never truncates. Slots: `read_raw`, `has_data`,
+        // `clone_arc`, `drop_arc`, `max_payload_for_port`.
+        assert_eq!(INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION, 2);
     }
 
     #[test]

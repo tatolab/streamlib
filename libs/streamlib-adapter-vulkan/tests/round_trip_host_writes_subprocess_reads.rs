@@ -35,7 +35,7 @@ fn host_writes_subprocess_reads_round_trip() {
     let (mut child, parent_sock) = common::spawn_helper("read");
 
     // Host write scope: clear the image to a known color via the
-    // adapter, release. Adapter advances timeline value 0 → 1.
+    // adapter, release. Adapter advances produce_done 0 → 1.
     {
         let _w = host
             .ctx
@@ -52,22 +52,33 @@ fn host_writes_subprocess_reads_round_trip() {
             cmd_color,
         );
     }
-    assert_eq!(surface.timeline.current_value().unwrap(), 1);
+    assert_eq!(surface.produce_done.current_value().unwrap(), 1);
+    assert_eq!(surface.consume_done.current_value().unwrap(), 0);
 
-    // Export the host-allocated surface for the subprocess. Timeline
-    // sync-fd + DMA-BUF fd both transferred via SCM_RIGHTS.
+    // Export the host-allocated surface for the subprocess. Both
+    // single-writer timelines (`produce_done` + `consume_done`) plus
+    // the DMA-BUF fd ride via SCM_RIGHTS, in that order.
     let dma_buf_fd = surface
         .texture
         .vulkan_inner()
         .export_dma_buf_fd()
         .expect("export DMA-BUF");
-    let sync_fd = Arc::clone(&surface.timeline)
+    let produce_done_fd = Arc::clone(&surface.produce_done)
         .export_opaque_fd()
-        .expect("export sync_fd");
+        .expect("export produce_done_fd");
+    let consume_done_fd = Arc::clone(&surface.consume_done)
+        .export_opaque_fd()
+        .expect("export consume_done_fd");
 
     let req = common::helper_descriptor("read", &surface, 1, None);
-    common::send_helper_request(&parent_sock, &req, &[dma_buf_fd], sync_fd)
-        .expect("send helper request");
+    common::send_helper_request(
+        &parent_sock,
+        &req,
+        &[dma_buf_fd],
+        produce_done_fd,
+        consume_done_fd,
+    )
+    .expect("send helper request");
 
     let resp = common::recv_helper_response(&parent_sock);
     assert_eq!(resp["ok"], true, "helper failed: {}", resp["note"]);
@@ -96,7 +107,8 @@ fn host_writes_subprocess_reads_round_trip() {
         "subprocess read unexpected pixel: {mismatch:?}"
     );
 
-    assert!(surface.timeline.current_value().unwrap() >= 2);
+    // The subprocess (consumer) signaled consume_done after reading.
+    assert!(surface.consume_done.current_value().unwrap() >= 1);
 }
 
 fn host_clear_image(

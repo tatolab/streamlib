@@ -288,9 +288,15 @@ pub struct HostSurfaceRegistrationRepr {
     /// only on host-flavor registrations).
     pub texture_handle: u64,
     /// `Arc::into_raw(Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>)`-shaped
-    /// opaque handle for the cross-process timeline semaphore the
-    /// adapter waits / signals against. MUST be non-zero.
-    pub timeline_handle: u64,
+    /// opaque handle for the `produce_done` timeline (the producer
+    /// process signals it via the trigger's GPU submit). MUST be
+    /// non-zero. Single-writer-per-edge per
+    /// `docs/architecture/adapter-timeline-single-writer.md`.
+    pub produce_done_handle: u64,
+    /// `Arc::into_raw(Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>)`-shaped
+    /// opaque handle for the `consume_done` timeline (the consumer
+    /// process signals it from `end_read_access`). MUST be non-zero.
+    pub consume_done_handle: u64,
     /// `Arc::into_raw(Arc<<D::Privilege as DevicePrivilege>::Buffer>)`-shaped
     /// opaque handles for each per-plane staging buffer. Logical
     /// layout matches the format's planes in declaration order.
@@ -301,8 +307,9 @@ pub struct HostSurfaceRegistrationRepr {
 impl HostSurfaceRegistrationRepr {
     /// Construct a zero-initialised registration repr. Callers
     /// populate `format_raw`, `width`, `height`, `plane_count`,
-    /// `initial_layout_raw`, `timeline_handle`, and the leading
-    /// `plane_count` entries of `staging_handles` before dispatch.
+    /// `initial_layout_raw`, `produce_done_handle`,
+    /// `consume_done_handle`, and the leading `plane_count` entries
+    /// of `staging_handles` before dispatch.
     pub const fn zeroed() -> Self {
         Self {
             format_raw: 0,
@@ -312,7 +319,8 @@ impl HostSurfaceRegistrationRepr {
             initial_layout_raw: 0,
             _padding: 0,
             texture_handle: 0,
-            timeline_handle: 0,
+            produce_done_handle: 0,
+            consume_done_handle: 0,
             staging_handles: [0; MAX_PLANES],
         }
     }
@@ -593,8 +601,10 @@ mod tests {
     }
 
     /// `HostSurfaceRegistrationRepr` — packed manifest layout.
-    /// `u32×4 + i32 + u32 + u64×6` =
-    /// `4+4+4+4 + 4+4 + 8+8 + 32` = 72 bytes, align 8.
+    /// `u32×4 + i32 + u32 + u64×7` =
+    /// `4+4+4+4 + 4+4 + 8+8+8 + 32` = 80 bytes, align 8. Dual-timeline
+    /// (`produce_done` + `consume_done`) per
+    /// `docs/architecture/adapter-timeline-single-writer.md`.
     #[test]
     fn host_surface_registration_repr_layout() {
         assert_eq!(offset_of!(HostSurfaceRegistrationRepr, format_raw), 0);
@@ -604,9 +614,10 @@ mod tests {
         assert_eq!(offset_of!(HostSurfaceRegistrationRepr, initial_layout_raw), 16);
         assert_eq!(offset_of!(HostSurfaceRegistrationRepr, _padding), 20);
         assert_eq!(offset_of!(HostSurfaceRegistrationRepr, texture_handle), 24);
-        assert_eq!(offset_of!(HostSurfaceRegistrationRepr, timeline_handle), 32);
-        assert_eq!(offset_of!(HostSurfaceRegistrationRepr, staging_handles), 40);
-        assert_eq!(size_of::<HostSurfaceRegistrationRepr>(), 72);
+        assert_eq!(offset_of!(HostSurfaceRegistrationRepr, produce_done_handle), 32);
+        assert_eq!(offset_of!(HostSurfaceRegistrationRepr, consume_done_handle), 40);
+        assert_eq!(offset_of!(HostSurfaceRegistrationRepr, staging_handles), 48);
+        assert_eq!(size_of::<HostSurfaceRegistrationRepr>(), 80);
         assert_eq!(align_of::<HostSurfaceRegistrationRepr>(), 8);
     }
 
@@ -705,7 +716,8 @@ mod tests {
     fn host_surface_registration_repr_zeroed_clears_handles() {
         let r = HostSurfaceRegistrationRepr::zeroed();
         assert_eq!(r.texture_handle, 0);
-        assert_eq!(r.timeline_handle, 0);
+        assert_eq!(r.produce_done_handle, 0);
+        assert_eq!(r.consume_done_handle, 0);
         for h in &r.staging_handles {
             assert_eq!(*h, 0);
         }

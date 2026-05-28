@@ -78,20 +78,28 @@ Every surface adapter rides the same shape:
 - **Host setup** instantiates the adapter against a host-flavor device;
   pre-allocates whatever per-surface resources the adapter needs (an
   exportable `VkImage` for vulkan/opengl/skia; an exportable HOST_VISIBLE
-  staging `VkBuffer` + a timeline semaphore for cpu-readback; an
-  OPAQUE_FD HOST_VISIBLE `VkBuffer` for cuda) via the host RHI;
-  registers via surface-share.
+  staging `VkBuffer` for cpu-readback; an OPAQUE_FD HOST_VISIBLE
+  `VkBuffer` for cuda) plus **two exportable timeline semaphores**
+  (`produce_done` + `consume_done`, one per direction of the
+  producer ↔ consumer edge) via the host RHI; registers via
+  surface-share. See
+  [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md)
+  for the single-writer-per-edge contract that governs the two
+  timelines.
 - **Subprocess setup** looks the registration up via surface-share,
   imports the FDs through `ConsumerVulkanTexture` /
-  `ConsumerVulkanBuffer` / `ConsumerVulkanTimelineSemaphore`, and
+  `ConsumerVulkanBuffer` plus a pair of
+  `ConsumerVulkanTimelineSemaphore`s (one per edge), and
   instantiates the **same** adapter type against a consumer-flavor
   device. Same trait surface, same acquire/release shape.
 - **Per-acquire IPC**, if the adapter needs the host to do work
   (cpu-readback's `vkCmdCopyImageToBuffer`, escalated compute dispatch
   via `register_compute_kernel` + `run_compute_kernel`), is a **thin
-  trigger** — "do the work, signal this timeline value when done" — and
-  the subprocess waits on the imported timeline through the carve-out,
-  not on a fresh FD-passing payload.
+  trigger** — "do the work, signal `produce_done` when done" — and
+  the subprocess waits on the imported `produce_done` timeline through
+  the carve-out, not on a fresh FD-passing payload; the subprocess
+  signals `consume_done` from `end_read_access` when it finishes
+  reading.
 
 The single-pattern principle is the engine-model rule
 ([CLAUDE.md "The StreamLib Engine Model"](../../CLAUDE.md#the-streamlib-engine-model))
@@ -125,7 +133,7 @@ adapters.
 | `VulkanComputeKernel` SPIR-V reflection + dispatch | Escalate IPC | `register_compute_kernel` + `run_compute_kernel` |
 | Graphics-pipeline draw | Escalate IPC | `register_graphics_kernel` + `run_graphics_draw` |
 | Ray-tracing AS build + trace | Escalate IPC | `register_acceleration_structure_blas` / `_tlas` + `register_ray_tracing_kernel` + `run_ray_tracing_kernel` |
-| `vkCmdCopyImageToBuffer` for cpu-readback | Escalate IPC (thin trigger only; staging buffers + timeline pre-registered via surface-share) | Subprocess imports the staging buffer + timeline through `ConsumerVulkanBuffer` / `ConsumerVulkanTimelineSemaphore` once at registration, then per-acquire is `run_cpu_readback_copy(surface_id) → done(timeline_value)` plus a consumer-side wait |
+| `vkCmdCopyImageToBuffer` for cpu-readback | Escalate IPC (thin trigger only; staging buffers + `produce_done` / `consume_done` timelines pre-registered via surface-share) | Subprocess imports the staging buffer + both timelines through `ConsumerVulkanBuffer` / `ConsumerVulkanTimelineSemaphore` once at registration, then per-acquire is `run_cpu_readback_copy(surface_id) → done(produce_done_value)` plus a consumer-side wait; the subprocess signals `consume_done` in `end_read_access` |
 | Layout transitions / timeline waits beyond carve-out | Host-only | Adapter runs at acquire/release boundary |
 | Validation layers + tracing | Host-only | Subprocess uses `tracing::*!` macros via escalate `log` op |
 | Single `VkDevice` per process (NVIDIA dual-device crash) | Host has `FullAccess` device; subprocess has consumer-only device | Crash triggers on *concurrent submission*; subprocess submits nothing — provably safe ([learning](../learnings/nvidia-dual-vulkan-device-crash.md)) |
@@ -167,8 +175,9 @@ adapters.
 │  └───────┴──────┴────────┴──────┘                                    │
 │       ▲      ▲      ▲      ▲           Pre-registered surfaces via   │
 │       │ surface-share check_in (one-shot DMA-BUF / OPAQUE_FD +       │
-│       │ timeline FD passing); per-acquire IPC reduces to a thin      │
-│       │ trigger when host work is required.                          │
+│       │ paired produce_done + consume_done timeline FD passing);     │
+│       │ per-acquire IPC reduces to a thin trigger when host work     │
+│       │ is required.                                                 │
 │                                                                      │
 │  streamlib-adapter-skia is host-side only (composes on the OpenGL    │
 │  / Vulkan adapter per adapter-authoring's cross-process composition  │
@@ -217,6 +226,10 @@ Revisit when:
   *how* a subprocess obtains an adapter context.
 - [adapter-authoring.md](adapter-authoring.md) — implementation
   contract for new surface adapters.
+- [adapter-timeline-single-writer.md](adapter-timeline-single-writer.md)
+  — single-writer-per-edge contract for the `produce_done` +
+  `consume_done` timeline pair every subprocess-wired adapter
+  registers with surface-share.
 - [compute-kernel.md](compute-kernel.md) — host's `VulkanComputeKernel`.
 - [graphics-kernel.md](graphics-kernel.md) — host's
   `VulkanGraphicsKernel`.

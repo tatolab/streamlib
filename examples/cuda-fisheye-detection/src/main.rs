@@ -336,12 +336,22 @@ fn register_warped_host_surface(
     let texture: Texture = Texture::from_vulkan(host_texture);
     let texture_arc = Arc::clone(texture.vulkan_inner());
 
-    // 5. Exportable timeline. Initial value 0 — the first subprocess
-    //    `acquire_texture` waits on 0, which is satisfied immediately;
-    //    every release advances the counter by 1.
-    let timeline = Arc::new(
+    // 5. Exportable timelines — one per single-writer edge per
+    //    `docs/architecture/adapter-timeline-single-writer.md`. Initial
+    //    values 0; the first subprocess `acquire_texture` waits on 0,
+    //    which is satisfied immediately. Each release advances the
+    //    edge's writer-side counter by 1.
+    let produce_done = Arc::new(
         HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-            .map_err(|e| format!("HostVulkanTimelineSemaphore::new_exportable: {e}"))?,
+            .map_err(|e| {
+                format!("HostVulkanTimelineSemaphore::new_exportable (produce_done): {e}")
+            })?,
+    );
+    let consume_done = Arc::new(
+        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+            .map_err(|e| {
+                format!("HostVulkanTimelineSemaphore::new_exportable (consume_done): {e}")
+            })?,
     );
 
     // 6. One-shot upload + layout transition via the canonical
@@ -400,21 +410,23 @@ fn register_warped_host_surface(
         .register_texture(
             &SCENARIO_SURFACE_ID.to_string(),
             &texture,
-            Some(timeline.as_ref()),
+            Some(produce_done.as_ref()),
+            Some(consume_done.as_ref()),
             VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
         )
         .map_err(|e| format!("surface_store.register_texture: {e}"))?;
 
     // 8. Cuda adapter registration. The adapter owns the host-side
-    //    `Arc<HostVulkanTexture>` + `Arc<HostVulkanTimelineSemaphore>`
-    //    for the surface's lifetime so the underlying GPU memory
-    //    stays alive while CUDA references the imported handle.
+    //    `Arc<HostVulkanTexture>` + per-edge timeline `Arc`s for the
+    //    surface's lifetime so the underlying GPU memory stays alive
+    //    while CUDA references the imported handles.
     adapter
         .register_host_image_surface(
             SCENARIO_SURFACE_ID,
             HostImageSurfaceRegistration::<HostMarker> {
                 texture: texture_arc,
-                timeline,
+                produce_done,
+                consume_done,
                 initial_layout: VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
             },
         )

@@ -92,16 +92,21 @@ fn duplicate_registration_returns_surface_already_registered() {
         HostVulkanBuffer::new(fixture.adapter.device(), (64 as u64) * (64 as u64) * (4 as u64))
             .expect("staging plane"),
     );
-    let timeline = Arc::new(
+    let produce_done = Arc::new(
         HostVulkanTimelineSemaphore::new(fixture.adapter.device().device(), 0)
-            .expect("timeline"),
+            .expect("produce_done timeline"),
+    );
+    let consume_done = Arc::new(
+        HostVulkanTimelineSemaphore::new(fixture.adapter.device().device(), 0)
+            .expect("consume_done timeline"),
     );
     let result = fixture.adapter.register_host_surface(
         id,
         HostSurfaceRegistration::<HostMarker> {
             texture: Some(texture_arc),
             staging_planes: vec![staging],
-            timeline,
+            produce_done,
+            consume_done,
             initial_image_layout: VulkanLayout::UNDEFINED,
             format: SurfaceFormat::Bgra8,
             width: 64,

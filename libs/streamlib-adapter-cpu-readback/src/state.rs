@@ -45,10 +45,19 @@ pub struct HostSurfaceRegistration<P: DevicePrivilege> {
     /// One staging buffer per plane (1 for BGRA/RGBA, 2 for NV12).
     /// HOST_VISIBLE / HOST_COHERENT linear `VkBuffer` on both flavors.
     pub staging_planes: Vec<Arc<P::Buffer>>,
-    /// Shared timeline semaphore. Host owns the export side; consumer
-    /// imports via OPAQUE_FD. Both flavors `wait` and `signal_host`
-    /// against the same kernel object after import.
-    pub timeline: Arc<P::TimelineSemaphore>,
+    /// `produce_done` timeline — signaled exclusively by the producer
+    /// process via the trigger's `vkQueueSubmit2::pSignalSemaphoreInfos`
+    /// after `vkCmdCopyImageToBuffer` / `vkCmdCopyBufferToImage`
+    /// completes. Subprocess consumers import via OPAQUE_FD and wait
+    /// on it before reading the staging buffer. Single-writer-per-edge
+    /// per `docs/architecture/adapter-timeline-single-writer.md`.
+    pub produce_done: Arc<P::TimelineSemaphore>,
+    /// `consume_done` timeline — signaled exclusively by the consumer
+    /// process from `end_read_access` (CPU `signal_host`) after the
+    /// subprocess has finished reading the staging buffer. The host
+    /// producer waits on it before reusing the staging buffer for the
+    /// next frame.
+    pub consume_done: Arc<P::TimelineSemaphore>,
     /// Initial `VkImageLayout` the host left the source image in.
     /// Consumer-side this is informational — layout transitions are
     /// host-only. Use [`VulkanLayout::UNDEFINED`] for freshly-allocated
@@ -94,13 +103,21 @@ pub(crate) struct SurfaceState<P: DevicePrivilege> {
     pub(crate) surface_id: SurfaceId,
     pub(crate) texture: Option<Arc<P::Texture>>,
     pub(crate) planes: Vec<PlaneSlot<P>>,
-    pub(crate) timeline: Arc<P::TimelineSemaphore>,
+    /// `produce_done` timeline — see
+    /// [`HostSurfaceRegistration::produce_done`].
+    pub(crate) produce_done: Arc<P::TimelineSemaphore>,
+    /// `consume_done` timeline — see
+    /// [`HostSurfaceRegistration::consume_done`].
+    pub(crate) consume_done: Arc<P::TimelineSemaphore>,
     pub(crate) current_layout: VulkanLayout,
     pub(crate) read_holders: u64,
     pub(crate) write_held: bool,
-    /// Last timeline value either signaled (host) or returned by an IPC
-    /// trigger (consumer). Subsequent acquires advance from here.
-    pub(crate) current_release_value: u64,
+    /// Per-process monotonic signal counter for whichever side this
+    /// adapter instance signals. The producer trigger advances this on
+    /// every `vkCmdCopy*` submit (producer-side); the
+    /// consumer-flavored `end_read_access` advances this on each
+    /// `signal_host(consume_done)` call.
+    pub(crate) current_signal_value: u64,
     pub(crate) format: SurfaceFormat,
     pub(crate) width: u32,
     pub(crate) height: u32,

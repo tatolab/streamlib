@@ -162,9 +162,13 @@ impl HostFixture {
             staging_planes.push(Arc::new(pb));
         }
 
-        let timeline = Arc::new(
+        let produce_done = Arc::new(
             HostVulkanTimelineSemaphore::new(self.adapter.device().device(), 0)
-                .map_err(|e| Error::GpuError(format!("create timeline: {e}")))?,
+                .map_err(|e| Error::GpuError(format!("create produce_done timeline: {e}")))?,
+        );
+        let consume_done = Arc::new(
+            HostVulkanTimelineSemaphore::new(self.adapter.device().device(), 0)
+                .map_err(|e| Error::GpuError(format!("create consume_done timeline: {e}")))?,
         );
         self.adapter
             .register_host_surface(
@@ -172,7 +176,8 @@ impl HostFixture {
                 HostSurfaceRegistration::<HostMarker> {
                     texture: Some(texture_arc),
                     staging_planes,
-                    timeline,
+                    produce_done,
+                    consume_done,
                     initial_image_layout: VulkanLayout::UNDEFINED,
                     format: surface_format,
                     width,

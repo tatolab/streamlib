@@ -208,7 +208,8 @@ unsafe extern "C" fn host_register_host_surface<D: VulkanRhiDevice + 'static>(
     handle: *const c_void,
     surface_id: u64,
     texture_handle: *const c_void,
-    timeline_handle: *const c_void,
+    produce_done_handle: *const c_void,
+    consume_done_handle: *const c_void,
     initial_layout_raw: i32,
     err_buf: *mut u8,
     err_buf_cap: usize,
@@ -231,10 +232,14 @@ unsafe extern "C" fn host_register_host_surface<D: VulkanRhiDevice + 'static>(
                     return 1;
                 }
             };
-            if texture_handle.is_null() || timeline_handle.is_null() {
+            if texture_handle.is_null()
+                || produce_done_handle.is_null()
+                || consume_done_handle.is_null()
+            {
                 unsafe {
                     write_err(
-                        "register_host_surface: null texture or timeline handle",
+                        "register_host_surface: null texture, produce_done, \
+                         or consume_done handle",
                         err_buf,
                         err_buf_cap,
                         err_len,
@@ -245,7 +250,7 @@ unsafe extern "C" fn host_register_host_surface<D: VulkanRhiDevice + 'static>(
             // SAFETY: caller asserts the handles are
             // Arc::into_raw-shaped against the correct privilege
             // family for D. The host bumps the refcount and stashes
-            // a clone in the registry; the caller's Arcs remain
+            // clones in the registry; the caller's Arcs remain
             // owned by the caller.
             let texture: Arc<<D::Privilege as DevicePrivilege>::Texture> = unsafe {
                 Arc::increment_strong_count(
@@ -253,18 +258,30 @@ unsafe extern "C" fn host_register_host_surface<D: VulkanRhiDevice + 'static>(
                 );
                 Arc::from_raw(texture_handle as *const <D::Privilege as DevicePrivilege>::Texture)
             };
-            let timeline: Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore> = unsafe {
+            let produce_done: Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore> = unsafe {
                 Arc::increment_strong_count(
-                    timeline_handle as *const <D::Privilege as DevicePrivilege>::TimelineSemaphore,
+                    produce_done_handle
+                        as *const <D::Privilege as DevicePrivilege>::TimelineSemaphore,
                 );
                 Arc::from_raw(
-                    timeline_handle
+                    produce_done_handle
+                        as *const <D::Privilege as DevicePrivilege>::TimelineSemaphore,
+                )
+            };
+            let consume_done: Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore> = unsafe {
+                Arc::increment_strong_count(
+                    consume_done_handle
+                        as *const <D::Privilege as DevicePrivilege>::TimelineSemaphore,
+                );
+                Arc::from_raw(
+                    consume_done_handle
                         as *const <D::Privilege as DevicePrivilege>::TimelineSemaphore,
                 )
             };
             let registration = crate::state::HostSurfaceRegistration {
                 texture,
-                timeline,
+                produce_done,
+                consume_done,
                 initial_layout: VulkanLayout(initial_layout_raw),
             };
             match adapter.register_host_surface(surface_id, registration) {
@@ -876,6 +893,7 @@ mod tier1_null_handle_tests {
             (vtable().register_host_surface)(
                 core::ptr::null(),
                 42,
+                core::ptr::null(),
                 core::ptr::null(),
                 core::ptr::null(),
                 0,

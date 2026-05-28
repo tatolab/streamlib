@@ -434,6 +434,14 @@ fn open_iceoryx2_pubsub(
                 input_inner.add_port(dest_port, 1, Default::default());
             }
 
+            // Plumb the schema's `metadata.max_payload_bytes` to the
+            // destination port so the cdylib's v2
+            // `max_payload_for_port` vtable slot returns the same
+            // bound the publisher uses to size the iceoryx2 slot.
+            // The cdylib's read_raw then allocates exactly this
+            // size — no truncation, no retry, no silent drop.
+            input_inner.set_port_max_payload_bytes(dest_port, max_payload);
+
             // Only set subscriber+listener if this is the first connection to this destination
             // All subsequent connections reuse the same pair (max_listeners=1 enforces this).
             if !input_inner.has_subscriber() {
@@ -718,6 +726,13 @@ fn open_iceoryx2_subprocess_to_rust(
             if !input_inner.has_port(dest_port) {
                 input_inner.add_port(dest_port, 1, Default::default());
             }
+
+            // Plumb the schema's `metadata.max_payload_bytes` to the
+            // destination port so the cdylib's v2
+            // `max_payload_for_port` vtable slot honors the same
+            // bound the publisher uses. See the same call in the
+            // local-source branch above for full rationale.
+            input_inner.set_port_max_payload_bytes(dest_port, max_payload);
 
             if !input_inner.has_subscriber() {
                 let subscriber = service.create_subscriber()?;

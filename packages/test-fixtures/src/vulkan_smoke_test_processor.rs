@@ -127,11 +127,23 @@ fn run_smoke(
     )?;
     let texture_arc = stream_texture.host_vulkan_texture_arc()?;
 
-    let timeline = HostVulkanTimelineSemaphore::new(host_device.device(), 0)
-        .map_err(|e| {
-            Error::GpuError(format!("HostVulkanTimelineSemaphore::new: {e}"))
-        })?;
-    let timeline_arc = Arc::new(timeline);
+    // Single-writer-per-edge per
+    // `docs/architecture/adapter-timeline-single-writer.md`: two
+    // independent timelines, one per direction.
+    let produce_done = Arc::new(
+        HostVulkanTimelineSemaphore::new(host_device.device(), 0).map_err(|e| {
+            Error::GpuError(format!(
+                "HostVulkanTimelineSemaphore::new (produce_done): {e}"
+            ))
+        })?,
+    );
+    let consume_done = Arc::new(
+        HostVulkanTimelineSemaphore::new(host_device.device(), 0).map_err(|e| {
+            Error::GpuError(format!(
+                "HostVulkanTimelineSemaphore::new (consume_done): {e}"
+            ))
+        })?,
+    );
 
     let adapter = Arc::new(VulkanSurfaceAdapter::new(Arc::clone(&host_device)));
     adapter
@@ -139,7 +151,8 @@ fn run_smoke(
             surface_id,
             HostSurfaceRegistration {
                 texture: Arc::clone(&texture_arc),
-                timeline: Arc::clone(&timeline_arc),
+                produce_done: Arc::clone(&produce_done),
+                consume_done: Arc::clone(&consume_done),
                 initial_layout: VulkanLayout::UNDEFINED,
             },
         )
@@ -172,7 +185,8 @@ fn run_smoke(
     }
     drop(guard);
     drop(adapter);
-    drop(timeline_arc);
+    drop(produce_done);
+    drop(consume_done);
     drop(texture_arc);
 
     Ok(vk_image_raw)

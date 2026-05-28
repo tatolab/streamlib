@@ -44,15 +44,25 @@ fn register_one(
         .acquire_render_target_dma_buf_image(64, 64, TextureFormat::Bgra8Unorm)
         .expect("acquire_render_target_dma_buf_image");
     let texture = stream_tex.vulkan_inner().clone();
-    let timeline = Arc::new(
-        HostVulkanTimelineSemaphore::new(adapter.device().device(), 0).expect("timeline"),
+    // Single-writer-per-edge per
+    // `docs/architecture/adapter-timeline-single-writer.md`: two
+    // independent timelines, one per edge of the producer ↔ consumer
+    // pair.
+    let produce_done = Arc::new(
+        HostVulkanTimelineSemaphore::new(adapter.device().device(), 0)
+            .expect("produce_done timeline"),
+    );
+    let consume_done = Arc::new(
+        HostVulkanTimelineSemaphore::new(adapter.device().device(), 0)
+            .expect("consume_done timeline"),
     );
     adapter
         .register_host_surface(
             id,
             HostSurfaceRegistration {
                 texture,
-                timeline,
+                produce_done,
+                consume_done,
                 initial_layout: VulkanLayout::UNDEFINED,
             },
         )
@@ -124,14 +134,20 @@ fn duplicate_registration_returns_surface_already_registered() {
         .acquire_render_target_dma_buf_image(64, 64, TextureFormat::Bgra8Unorm)
         .expect("acquire_render_target_dma_buf_image");
     let texture = stream_tex.vulkan_inner().clone();
-    let timeline = Arc::new(
-        HostVulkanTimelineSemaphore::new(adapter.device().device(), 0).expect("timeline"),
+    let produce_done = Arc::new(
+        HostVulkanTimelineSemaphore::new(adapter.device().device(), 0)
+            .expect("produce_done timeline"),
+    );
+    let consume_done = Arc::new(
+        HostVulkanTimelineSemaphore::new(adapter.device().device(), 0)
+            .expect("consume_done timeline"),
     );
     let result = adapter.register_host_surface(
         id,
         HostSurfaceRegistration {
             texture,
-            timeline,
+            produce_done,
+            consume_done,
             initial_layout: VulkanLayout::UNDEFINED,
         },
     );

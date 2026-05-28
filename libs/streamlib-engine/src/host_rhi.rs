@@ -235,6 +235,7 @@ impl HostGpuDeviceExt for GpuDevice {
 ///     "id",
 ///     texture,
 ///     None,
+///     None,
 ///     streamlib::sdk::rhi::VulkanLayout::UNDEFINED,
 /// )?;
 /// # Ok(())
@@ -244,27 +245,28 @@ impl HostGpuDeviceExt for GpuDevice {
 /// [`SurfaceStore`]: crate::core::context::SurfaceStore
 #[cfg(target_os = "linux")]
 pub trait HostSurfaceStoreExt {
-    /// Register a texture for cross-process sharing with an optional
-    /// timeline-semaphore (host-side adapter `install_setup_hook`
-    /// path). See
-    /// [`crate::core::context::SurfaceStore`]'s former inherent
-    /// impl for the wire shape; the method body is unchanged, only
-    /// the visibility surface moved here.
+    /// Register a texture for cross-process sharing with the
+    /// single-writer-per-edge timeline pair (`produce_done` signaled
+    /// by the producer, `consume_done` signaled by the consumer).
+    /// See `docs/architecture/adapter-timeline-single-writer.md` for
+    /// the contract.
     fn register_texture(
         &self,
         surface_id: &str,
         texture: &Texture,
-        timeline: Option<&HostVulkanTimelineSemaphore>,
+        produce_done: Option<&HostVulkanTimelineSemaphore>,
+        consume_done: Option<&HostVulkanTimelineSemaphore>,
         current_image_layout: streamlib_consumer_rhi::VulkanLayout,
     ) -> crate::core::error::Result<()>;
 
-    /// Register a pixel buffer with an optional timeline-semaphore
-    /// (host-side adapter `install_setup_hook` path).
+    /// Register a pixel buffer with the single-writer-per-edge
+    /// timeline pair (host-side adapter `install_setup_hook` path).
     fn register_pixel_buffer_with_timeline(
         &self,
         surface_id: &str,
         pixel_buffer: &crate::core::rhi::PixelBuffer,
-        timeline: Option<&HostVulkanTimelineSemaphore>,
+        produce_done: Option<&HostVulkanTimelineSemaphore>,
+        consume_done: Option<&HostVulkanTimelineSemaphore>,
     ) -> crate::core::error::Result<()>;
 }
 
@@ -274,18 +276,31 @@ impl HostSurfaceStoreExt for crate::core::context::SurfaceStore {
         &self,
         surface_id: &str,
         texture: &Texture,
-        timeline: Option<&HostVulkanTimelineSemaphore>,
+        produce_done: Option<&HostVulkanTimelineSemaphore>,
+        consume_done: Option<&HostVulkanTimelineSemaphore>,
         current_image_layout: streamlib_consumer_rhi::VulkanLayout,
     ) -> crate::core::error::Result<()> {
-        self.host_register_texture(surface_id, texture, timeline, current_image_layout)
+        self.host_register_texture(
+            surface_id,
+            texture,
+            produce_done,
+            consume_done,
+            current_image_layout,
+        )
     }
 
     fn register_pixel_buffer_with_timeline(
         &self,
         surface_id: &str,
         pixel_buffer: &crate::core::rhi::PixelBuffer,
-        timeline: Option<&HostVulkanTimelineSemaphore>,
+        produce_done: Option<&HostVulkanTimelineSemaphore>,
+        consume_done: Option<&HostVulkanTimelineSemaphore>,
     ) -> crate::core::error::Result<()> {
-        self.host_register_pixel_buffer_with_timeline(surface_id, pixel_buffer, timeline)
+        self.host_register_pixel_buffer_with_timeline(
+            surface_id,
+            pixel_buffer,
+            produce_done,
+            consume_done,
+        )
     }
 }

@@ -152,14 +152,16 @@ export const SurfaceLayout = {
     Size: 56,
     Align: 8,
     Offsets: {
-      timelineSemaphoreHandle: 0,
-      timelineSemaphoreSyncFd: 8,
+      produceDoneSemaphoreHandle: 0,
+      produceDoneSemaphoreSyncFd: 8,
       padA: 12,
       lastAcquireValue: 16,
       lastReleaseValue: 24,
       currentImageLayout: 32,
       padB: 36,
-      reserved: 40,
+      consumeDoneSemaphoreHandle: 40,
+      consumeDoneSemaphoreSyncFd: 48,
+      padC: 52,
     },
   },
   /** StreamlibSurface (top-level) */
@@ -202,12 +204,16 @@ export interface SurfaceTransportHandle {
 }
 
 /**
- * Host-side timeline-semaphore + initial layout. Subprocess adapters
- * import `timelineSemaphoreSyncFd` via `vkImportSemaphoreFdKHR`.
+ * Host-side dual-timeline semaphores + initial layout. Subprocess
+ * adapters import the `produce_done` and `consume_done` sync-fds via
+ * `vkImportSemaphoreFdKHR` and wait/signal on whichever edge they own
+ * per `docs/architecture/adapter-timeline-single-writer.md`.
  */
 export interface SurfaceSyncState {
-  readonly timelineSemaphoreHandle: bigint;
-  readonly timelineSemaphoreSyncFd: number;
+  readonly produceDoneSemaphoreHandle: bigint;
+  readonly produceDoneSemaphoreSyncFd: number;
+  readonly consumeDoneSemaphoreHandle: bigint;
+  readonly consumeDoneSemaphoreSyncFd: number;
   readonly lastAcquireValue: bigint;
   readonly lastReleaseValue: bigint;
   readonly currentImageLayout: number;
@@ -296,8 +302,9 @@ export function readSurfaceTransportHandle(
 
 /**
  * Read the embedded `SurfaceSyncState` out of a `StreamlibSurface`
- * descriptor. Adapter implementations import the sync-fd to participate
- * in the host-side timeline.
+ * descriptor. Adapter implementations import the sync-fds to
+ * participate in the host-side dual-timeline (`produce_done` /
+ * `consume_done`).
  */
 export function readSurfaceSyncState(
   view: Deno.UnsafePointerView,
@@ -305,10 +312,18 @@ export function readSurfaceSyncState(
   const base = SurfaceLayout.Surface.Offsets.sync;
   const o = SurfaceLayout.SyncState.Offsets;
   return {
-    timelineSemaphoreHandle: view.getBigUint64(
-      base + o.timelineSemaphoreHandle,
+    produceDoneSemaphoreHandle: view.getBigUint64(
+      base + o.produceDoneSemaphoreHandle,
     ),
-    timelineSemaphoreSyncFd: view.getInt32(base + o.timelineSemaphoreSyncFd),
+    produceDoneSemaphoreSyncFd: view.getInt32(
+      base + o.produceDoneSemaphoreSyncFd,
+    ),
+    consumeDoneSemaphoreHandle: view.getBigUint64(
+      base + o.consumeDoneSemaphoreHandle,
+    ),
+    consumeDoneSemaphoreSyncFd: view.getInt32(
+      base + o.consumeDoneSemaphoreSyncFd,
+    ),
     lastAcquireValue: view.getBigUint64(base + o.lastAcquireValue),
     lastReleaseValue: view.getBigUint64(base + o.lastReleaseValue),
     currentImageLayout: view.getInt32(base + o.currentImageLayout),

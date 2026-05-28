@@ -188,14 +188,27 @@ impl CameraToCudaCopyProcessor::Processor {
             PixelFormat::Bgra32,
         );
 
-        // 2. Exportable timeline. The cdylib imports it as a CUDA
-        //    timeline external semaphore so `acquire_read` blocks on
-        //    the GPU signal this processor emits per frame.
-        let timeline = Arc::new(
+        // 2. Exportable timelines — one per single-writer edge per
+        //    `docs/architecture/adapter-timeline-single-writer.md`. The
+        //    cdylib imports them as CUDA timeline external semaphores
+        //    so `acquire_read` blocks on the producer's GPU signal
+        //    (`produce_done`) and the host's next write waits on the
+        //    consumer's signal (`consume_done`).
+        let produce_done = Arc::new(
             HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
                 .map_err(|e| {
                     Error::Configuration(format!(
-                        "CameraToCudaCopy: HostVulkanTimelineSemaphore::new_exportable: {e}"
+                        "CameraToCudaCopy: HostVulkanTimelineSemaphore::new_exportable \
+                         (produce_done): {e}"
+                    ))
+                })?,
+        );
+        let consume_done = Arc::new(
+            HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+                .map_err(|e| {
+                    Error::Configuration(format!(
+                        "CameraToCudaCopy: HostVulkanTimelineSemaphore::new_exportable \
+                         (consume_done): {e}"
                     ))
                 })?,
         );
@@ -217,7 +230,8 @@ impl CameraToCudaCopyProcessor::Processor {
             .register_pixel_buffer_with_timeline(
                 &surface_key,
                 &pixel_buffer_rhi,
-                Some(timeline.as_ref()),
+                Some(produce_done.as_ref()),
+                Some(consume_done.as_ref()),
             )
             .map_err(|e| {
                 Error::Configuration(format!(
@@ -237,7 +251,8 @@ impl CameraToCudaCopyProcessor::Processor {
                 CUDA_CAMERA_SURFACE_ID,
                 HostSurfaceRegistration::<HostMarker> {
                     pixel_buffer: pixel_buffer_arc,
-                    timeline,
+                    produce_done,
+                    consume_done,
                     initial_layout: VulkanLayout::UNDEFINED,
                 },
             )

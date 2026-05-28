@@ -361,21 +361,34 @@ fn handle_register(
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
 
-    // Peel off the optional trailing sync-FD (#531). The host signals its
-    // presence via the JSON `has_sync_fd: true` flag; the FD itself sits
-    // last in the SCM_RIGHTS list, after every DMA-BUF plane FD.
-    let has_sync_fd = request
-        .get("has_sync_fd")
+    // Peel off the optional trailing timeline FDs in the order the host
+    // attached them: plane FDs first, then `produce_done` (if present),
+    // then `consume_done` (if present). The wire signals each timeline's
+    // presence via a JSON boolean (`has_produce_done_fd`,
+    // `has_consume_done_fd`); the SCM_RIGHTS slot count matches the sum.
+    // The single-writer-per-edge model is documented in
+    // `docs/architecture/adapter-timeline-single-writer.md`.
+    let has_produce_done_fd = request
+        .get("has_produce_done_fd")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let plane_count = if has_sync_fd {
-        received_fds.len().saturating_sub(1)
-    } else {
-        received_fds.len()
-    };
+    let has_consume_done_fd = request
+        .get("has_consume_done_fd")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let trailing_fd_count = (has_produce_done_fd as usize) + (has_consume_done_fd as usize);
+    let plane_count = received_fds.len().saturating_sub(trailing_fd_count);
     let plane_fds: &[RawFd] = &received_fds[..plane_count];
-    let sync_src_fd: Option<RawFd> = if has_sync_fd {
-        received_fds.get(plane_count).copied()
+    let mut trailing_idx = plane_count;
+    let produce_done_src_fd: Option<RawFd> = if has_produce_done_fd {
+        let fd = received_fds.get(trailing_idx).copied();
+        trailing_idx += 1;
+        fd
+    } else {
+        None
+    };
+    let consume_done_src_fd: Option<RawFd> = if has_consume_done_fd {
+        received_fds.get(trailing_idx).copied()
     } else {
         None
     };
@@ -397,9 +410,19 @@ fn handle_register(
             Vec::new(),
         );
     }
-    if has_sync_fd && sync_src_fd.is_none() {
+    if has_produce_done_fd && produce_done_src_fd.is_none() {
         return (
-            serde_json::json!({"error": "has_sync_fd=true but no trailing sync FD attached"}),
+            serde_json::json!({
+                "error": "has_produce_done_fd=true but no trailing produce_done FD attached"
+            }),
+            Vec::new(),
+        );
+    }
+    if has_consume_done_fd && consume_done_src_fd.is_none() {
+        return (
+            serde_json::json!({
+                "error": "has_consume_done_fd=true but no trailing consume_done FD attached"
+            }),
             Vec::new(),
         );
     }
@@ -462,7 +485,7 @@ fn handle_register(
         dup_plane_fds.push(dup_fd);
     }
 
-    let dup_sync_fd: Option<RawFd> = match sync_src_fd {
+    let dup_produce_done_fd: Option<RawFd> = match produce_done_src_fd {
         Some(src) => {
             let dup = unsafe { libc::dup(src) };
             if dup < 0 {
@@ -470,7 +493,26 @@ fn handle_register(
                     unsafe { libc::close(*d) };
                 }
                 return (
-                    serde_json::json!({"error": "failed to dup sync FD"}),
+                    serde_json::json!({"error": "failed to dup produce_done FD"}),
+                    Vec::new(),
+                );
+            }
+            Some(dup)
+        }
+        None => None,
+    };
+    let dup_consume_done_fd: Option<RawFd> = match consume_done_src_fd {
+        Some(src) => {
+            let dup = unsafe { libc::dup(src) };
+            if dup < 0 {
+                for d in &dup_plane_fds {
+                    unsafe { libc::close(*d) };
+                }
+                if let Some(fd) = dup_produce_done_fd {
+                    unsafe { libc::close(fd) };
+                }
+                return (
+                    serde_json::json!({"error": "failed to dup consume_done FD"}),
                     Vec::new(),
                 );
             }
@@ -492,7 +534,8 @@ fn handle_register(
         resource_type,
         handle_type,
         drm_format_modifier,
-        sync_fd: dup_sync_fd,
+        produce_done_fd: dup_produce_done_fd,
+        consume_done_fd: dup_consume_done_fd,
         current_image_layout,
         vk_image_type: vk_image.vk_image_type,
         vk_image_mip_levels: vk_image.vk_image_mip_levels,
@@ -504,19 +547,24 @@ fn handle_register(
     }) {
         Ok(()) => {
             tracing::debug!(
-                "[Surface share] register: surface '{}' for runtime '{}' ({} plane(s), sync_fd={})",
+                "[Surface share] register: surface '{}' for runtime '{}' ({} plane(s), \
+                 produce_done={}, consume_done={})",
                 surface_id,
                 runtime_id,
                 plane_fds.len(),
-                has_sync_fd,
+                has_produce_done_fd,
+                has_consume_done_fd,
             );
             (serde_json::json!({"success": true}), Vec::new())
         }
-        Err((leftover_planes, leftover_sync)) => {
+        Err((leftover_planes, leftover_produce, leftover_consume)) => {
             for fd in &leftover_planes {
                 unsafe { libc::close(*fd) };
             }
-            if let Some(fd) = leftover_sync {
+            if let Some(fd) = leftover_produce {
+                unsafe { libc::close(fd) };
+            }
+            if let Some(fd) = leftover_consume {
                 unsafe { libc::close(fd) };
             }
             tracing::warn!(
@@ -545,7 +593,7 @@ fn handle_lookup(
     // Dup each stored fd so the kernel-delivered fds in the peer's table are
     // independent of the table's own copies. On partial failure, close every
     // dup we already took.
-    let mut dup_fds: Vec<RawFd> = Vec::with_capacity(checkout.dma_buf_fds.len() + 1);
+    let mut dup_fds: Vec<RawFd> = Vec::with_capacity(checkout.dma_buf_fds.len() + 2);
     for fd in &checkout.dma_buf_fds {
         let dup = unsafe { libc::dup(*fd) };
         if dup < 0 {
@@ -560,19 +608,35 @@ fn handle_lookup(
         dup_fds.push(dup);
     }
 
-    // Append a dup of the timeline-semaphore OPAQUE_FD when the surface
-    // was registered with one (#531). Subprocess clients detect its
-    // presence via `has_sync_fd` in the response JSON and peel the
-    // trailing FD off the SCM_RIGHTS list.
-    let has_sync_fd = checkout.sync_fd.is_some();
-    if let Some(src_sync) = checkout.sync_fd {
-        let dup = unsafe { libc::dup(src_sync) };
+    // Append dups of the producer-side `produce_done` and consumer-side
+    // `consume_done` timeline-semaphore OPAQUE_FDs in that order. Subprocess
+    // clients detect each one's presence via the matching boolean flag in
+    // the response JSON and peel the trailing FDs off the SCM_RIGHTS list
+    // in the same order. See
+    // `docs/architecture/adapter-timeline-single-writer.md`.
+    let has_produce_done_fd = checkout.produce_done_fd.is_some();
+    let has_consume_done_fd = checkout.consume_done_fd.is_some();
+    if let Some(src) = checkout.produce_done_fd {
+        let dup = unsafe { libc::dup(src) };
         if dup < 0 {
             for d in &dup_fds {
                 unsafe { libc::close(*d) };
             }
             return (
-                serde_json::json!({"error": "failed to dup sync FD"}),
+                serde_json::json!({"error": "failed to dup produce_done FD"}),
+                Vec::new(),
+            );
+        }
+        dup_fds.push(dup);
+    }
+    if let Some(src) = checkout.consume_done_fd {
+        let dup = unsafe { libc::dup(src) };
+        if dup < 0 {
+            for d in &dup_fds {
+                unsafe { libc::close(*d) };
+            }
+            return (
+                serde_json::json!({"error": "failed to dup consume_done FD"}),
                 Vec::new(),
             );
         }
@@ -597,7 +661,8 @@ fn handle_lookup(
             "plane_offsets": checkout.plane_offsets,
             "plane_strides": checkout.plane_strides,
             "drm_format_modifier": checkout.drm_format_modifier,
-            "has_sync_fd": has_sync_fd,
+            "has_produce_done_fd": has_produce_done_fd,
+            "has_consume_done_fd": has_consume_done_fd,
             "current_image_layout": checkout.current_image_layout,
             // VkImageCreateInfo round-trip for OPAQUE_FD VkImage
             // consumers. Always echoed; absent producers see the
@@ -741,40 +806,47 @@ fn handle_check_in(
         dup_fds.push(dup);
     }
 
-    if let Err((leftover_planes, leftover_sync)) = state.register_surface(SurfaceRegistration {
-        surface_id: &surface_id,
-        runtime_id,
-        dma_buf_fds: dup_fds,
-        plane_sizes,
-        plane_offsets,
-        plane_strides,
-        width,
-        height,
-        format,
-        resource_type,
-        handle_type,
-        drm_format_modifier,
-        // check_in is the subprocess-registers-pixel-buffer path used by
-        // CPU-readback / legacy DMA-BUF consumers. None of those need
-        // explicit Vulkan timeline sync — the wire format reserves the
-        // option for the host-registers-render-target-texture path.
-        sync_fd: None,
-        // check_in surfaces are pixel buffers — `VkBuffer`s have no
-        // image layout. Seed UNDEFINED; the field is unused for buffer
-        // surfaces but must be populated for the wire format.
-        current_image_layout: 0,
-        vk_image_type: vk_image.vk_image_type,
-        vk_image_mip_levels: vk_image.vk_image_mip_levels,
-        vk_image_array_layers: vk_image.vk_image_array_layers,
-        vk_image_samples: vk_image.vk_image_samples,
-        vk_image_tiling: vk_image.vk_image_tiling,
-        vk_image_usage: vk_image.vk_image_usage,
-        vk_image_allocation_size: vk_image.vk_image_allocation_size,
-    }) {
+    if let Err((leftover_planes, leftover_produce, leftover_consume)) =
+        state.register_surface(SurfaceRegistration {
+            surface_id: &surface_id,
+            runtime_id,
+            dma_buf_fds: dup_fds,
+            plane_sizes,
+            plane_offsets,
+            plane_strides,
+            width,
+            height,
+            format,
+            resource_type,
+            handle_type,
+            drm_format_modifier,
+            // check_in is the subprocess-registers-pixel-buffer path used by
+            // CPU-readback / legacy DMA-BUF consumers. None of those carry
+            // their own timelines through this op — host-registered
+            // render-target paths (`handle_register`) provide the
+            // single-writer-per-edge `produce_done` / `consume_done` FDs.
+            produce_done_fd: None,
+            consume_done_fd: None,
+            // check_in surfaces are pixel buffers — `VkBuffer`s have no
+            // image layout. Seed UNDEFINED; the field is unused for buffer
+            // surfaces but must be populated for the wire format.
+            current_image_layout: 0,
+            vk_image_type: vk_image.vk_image_type,
+            vk_image_mip_levels: vk_image.vk_image_mip_levels,
+            vk_image_array_layers: vk_image.vk_image_array_layers,
+            vk_image_samples: vk_image.vk_image_samples,
+            vk_image_tiling: vk_image.vk_image_tiling,
+            vk_image_usage: vk_image.vk_image_usage,
+            vk_image_allocation_size: vk_image.vk_image_allocation_size,
+        })
+    {
         for fd in &leftover_planes {
             unsafe { libc::close(*fd) };
         }
-        if let Some(fd) = leftover_sync {
+        if let Some(fd) = leftover_produce {
+            unsafe { libc::close(fd) };
+        }
+        if let Some(fd) = leftover_consume {
             unsafe { libc::close(fd) };
         }
     }
@@ -1344,7 +1416,8 @@ mod tests {
                     resource_type: "pixel_buffer",
                     handle_type: "dma_buf",
                     drm_format_modifier: 0,
-                    sync_fd: None,
+                    produce_done_fd: None,
+                    consume_done_fd: None,
                     current_image_layout: 0,
                     vk_image_type: VK_IMAGE_TYPE_DEFAULT,
                     vk_image_mip_levels: VK_IMAGE_MIP_LEVELS_DEFAULT,

@@ -94,6 +94,15 @@ pub trait VulkanTimelineSemaphoreLike {
     fn wait(&self, value: u64, timeout_ns: u64) -> Result<()>;
     /// Host-side signal: advance the counter to `value`.
     fn signal_host(&self, value: u64) -> Result<()>;
+    /// Read the timeline's current kernel-side counter via
+    /// `vkGetSemaphoreCounterValue`. Adapters under the
+    /// single-writer-per-edge model (`docs/architecture/adapter-timeline-single-writer.md`)
+    /// query this to learn the peer process's last-signaled value
+    /// without IPC — the consumer reads `produce_done.current_value()`
+    /// to know how much producer work is visible, the producer reads
+    /// `consume_done.current_value()` to know how much consumer work
+    /// has retired.
+    fn current_value(&self) -> Result<u64>;
     /// Raw `vk::Semaphore` handle for inclusion in
     /// `VkSubmitInfo2::pSignalSemaphoreInfos` /
     /// `pWaitSemaphoreInfos`. Surfaces that need to schedule

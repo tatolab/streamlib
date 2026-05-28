@@ -155,31 +155,36 @@ pub struct SurfaceStoreVTable {
     // error message.
 
     /// Register a texture for cross-process sharing. `texture` is a
-    /// `*const Texture` β-shape pointer; `timeline_handle` is an
-    /// opaque `Arc<HostVulkanTimelineSemaphore>` pointer (null for
-    /// "no timeline") — engine-only, cdylibs pass null. `layout_raw`
-    /// is the i32 `VkImageLayout` enumerant.
+    /// `*const Texture` β-shape pointer; `produce_done_handle` and
+    /// `consume_done_handle` are opaque `Arc<HostVulkanTimelineSemaphore>`
+    /// pointers (null for "no timeline") that carry the
+    /// single-writer-per-edge pair documented in
+    /// `docs/architecture/adapter-timeline-single-writer.md` — both
+    /// engine-only, cdylibs pass null. `layout_raw` is the i32
+    /// `VkImageLayout` enumerant.
     pub register_texture: unsafe extern "C" fn(
         handle: *const c_void,
         id_ptr: *const u8,
         id_len: usize,
         texture: *const c_void,
-        timeline_handle: *const c_void,
+        produce_done_handle: *const c_void,
+        consume_done_handle: *const c_void,
         layout_raw: i32,
         err_buf: *mut u8,
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32,
 
-    /// Register a pixel buffer with an optional timeline-semaphore
-    /// sidecar. Same `timeline_handle` shape as
-    /// [`Self::register_texture`].
+    /// Register a pixel buffer with optional `produce_done` and
+    /// `consume_done` timeline-semaphore sidecars. Same handle shape
+    /// as [`Self::register_texture`].
     pub register_pixel_buffer_with_timeline: unsafe extern "C" fn(
         handle: *const c_void,
         id_ptr: *const u8,
         id_len: usize,
         pixel_buffer: *const c_void,
-        timeline_handle: *const c_void,
+        produce_done_handle: *const c_void,
+        consume_done_handle: *const c_void,
         err_buf: *mut u8,
         err_buf_cap: usize,
         err_len: *mut usize,
