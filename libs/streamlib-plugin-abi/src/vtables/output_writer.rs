@@ -1,0 +1,118 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+//! `OutputWriterVTable` — extern "C" dispatch for the cdylib's `OutputWriter` β-shape.
+
+use core::ffi::c_void;
+
+/// Layout version of [`crate::OutputWriterVTable`].
+///
+/// - v1: ships the four slots a cdylib processor's `OutputWriter`
+///   β-shape needs to dispatch every public-API call through the
+///   host: `write_raw` (the per-frame hot-path emit), `has_port`
+///   (configuration query), `clone_arc` / `drop_arc`
+///   (refcount-managed handle lifetime so the cdylib-side β-shape
+///   can implement `Clone` + `Drop` without crossing the inner
+///   `Arc<OutputWriterInner>` source layout).
+pub const OUTPUT_WRITER_VTABLE_LAYOUT_VERSION: u32 = 1;
+
+/// `extern "C" fn` dispatch table for the cdylib's `OutputWriter`
+/// β-shape. Replaces the shared-Rust-type `Arc<OutputWriter>`
+/// crossing the cdylib used to expose to the host via
+/// `ProcessorVTable::get_iceoryx2_output_writer_arc`.
+///
+/// Today the host allocates an `Arc<OutputWriterInner>` and hands
+/// the cdylib a `(handle, vtable)` β-shape that delegates every
+/// public-API call through this vtable. Hot-path emits cross extern
+/// "C" once per `write` call; the bytes carry msgpack-encoded
+/// frames the cdylib serialized in its own DSO.
+///
+/// # Layout discipline
+///
+/// `layout_version` is pinned at offset 0. Older vtables loaded
+/// into newer hosts are rejected cleanly. New fields append after
+/// `drop_arc` and bump [`OUTPUT_WRITER_VTABLE_LAYOUT_VERSION`].
+///
+/// # Error convention
+///
+/// `write_raw` returns `0` on success, non-zero on failure. The
+/// caller-provided `err_buf` / `err_buf_cap` is a UTF-8 scratch
+/// buffer the callee writes a message into; `*err_len` receives
+/// the actual byte count written. Truncation is benign.
+///
+/// `clone_arc` / `drop_arc` are infallible — they bump / decrement
+/// the host-side `Arc<OutputWriterInner>` strong count. `clone_arc`
+/// returns the same opaque handle (the underlying inner is the same
+/// object); the cdylib pairs each `clone_arc` with exactly one
+/// `drop_arc` to keep refcount accounting balanced.
+#[repr(C)]
+pub struct OutputWriterVTable {
+    /// Vtable layout version. Must equal
+    /// [`OUTPUT_WRITER_VTABLE_LAYOUT_VERSION`].
+    pub layout_version: u32,
+
+    /// Reserved padding (keeps the following pointer naturally
+    /// aligned; zero today, never read).
+    pub _reserved_padding: u32,
+
+    /// Write a raw msgpack-encoded frame to the named output port at
+    /// the given timestamp. The cdylib serializes `T` to msgpack in
+    /// its own DSO and passes the bytes through; the host then runs
+    /// the underlying iceoryx2 publish + notify. Returns `0` on
+    /// success, non-zero on failure.
+    pub write_raw: unsafe extern "C" fn(
+        handle: *const c_void,
+        port_ptr: *const u8,
+        port_len: usize,
+        data_ptr: *const u8,
+        data_len: usize,
+        timestamp_ns: i64,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Check whether a port has been configured. Returns `true` if
+    /// the host's `OutputWriterInner` has at least one
+    /// `add_connection` entry for the named port.
+    pub has_port: unsafe extern "C" fn(
+        handle: *const c_void,
+        port_ptr: *const u8,
+        port_len: usize,
+    ) -> bool,
+
+    /// Bump the host-side `Arc<OutputWriterInner>` strong count.
+    /// Returns the same opaque handle (the cdylib uses the same
+    /// handle in subsequent calls). Pairs 1:1 with `drop_arc`.
+    pub clone_arc: unsafe extern "C" fn(handle: *const c_void) -> *const c_void,
+
+    /// Decrement the host-side `Arc<OutputWriterInner>` strong
+    /// count. Releases the inner when the count reaches zero.
+    pub drop_arc: unsafe extern "C" fn(handle: *const c_void),
+}
+
+// Safety: every field is a primitive or an `extern "C" fn` pointer.
+// The vtable's `&'static` storage outlives the cdylib's process
+// lifetime via the `LOADED_PLUGIN_LIBRARIES` pinning shape.
+unsafe impl Send for OutputWriterVTable {}
+unsafe impl Sync for OutputWriterVTable {}
+
+#[cfg(all(test, target_pointer_width = "64"))]
+mod tests {
+    use super::*;
+    use core::mem::{align_of, offset_of, size_of};
+
+    #[test]
+    fn output_writer_vtable_layout() {
+        // header (u32 + u32) + 4 fn pointers @ 8 bytes each =
+        // 4 + 4 + 4 * 8 = 40 bytes.
+        assert_eq!(size_of::<OutputWriterVTable>(), 40);
+        assert_eq!(align_of::<OutputWriterVTable>(), 8);
+        assert_eq!(offset_of!(OutputWriterVTable, layout_version), 0);
+        assert_eq!(offset_of!(OutputWriterVTable, _reserved_padding), 4);
+        assert_eq!(offset_of!(OutputWriterVTable, write_raw), 8);
+        assert_eq!(offset_of!(OutputWriterVTable, has_port), 16);
+        assert_eq!(offset_of!(OutputWriterVTable, clone_arc), 24);
+        assert_eq!(offset_of!(OutputWriterVTable, drop_arc), 32);
+    }
+}
