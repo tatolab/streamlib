@@ -349,10 +349,10 @@ unsafe extern "C" fn host_register_host_surface<D: VulkanRhiDevice + 'static>(
                 unsafe { write_err(&msg, err_buf, err_buf_cap, err_len) };
                 return 1;
             }
-            if r.timeline_handle == 0 {
+            if r.produce_done_handle == 0 || r.consume_done_handle == 0 {
                 unsafe {
                     write_err(
-                        "register_host_surface: null timeline handle",
+                        "register_host_surface: null produce_done or consume_done handle",
                         err_buf,
                         err_buf_cap,
                         err_len,
@@ -376,8 +376,14 @@ unsafe extern "C" fn host_register_host_surface<D: VulkanRhiDevice + 'static>(
                         Some(Arc::from_raw(ptr))
                     }
                 };
-            let timeline: Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore> = unsafe {
-                let ptr = r.timeline_handle
+            let produce_done: Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore> = unsafe {
+                let ptr = r.produce_done_handle
+                    as *const <D::Privilege as DevicePrivilege>::TimelineSemaphore;
+                Arc::increment_strong_count(ptr);
+                Arc::from_raw(ptr)
+            };
+            let consume_done: Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore> = unsafe {
+                let ptr = r.consume_done_handle
                     as *const <D::Privilege as DevicePrivilege>::TimelineSemaphore;
                 Arc::increment_strong_count(ptr);
                 Arc::from_raw(ptr)
@@ -402,7 +408,8 @@ unsafe extern "C" fn host_register_host_surface<D: VulkanRhiDevice + 'static>(
             let registration: HostSurfaceRegistration<D::Privilege> = HostSurfaceRegistration {
                 texture,
                 staging_planes,
-                timeline,
+                produce_done,
+                consume_done,
                 initial_image_layout: VulkanLayout(r.initial_layout_raw),
                 format,
                 width: r.width,
@@ -857,10 +864,10 @@ mod tier1_null_handle_tests {
     }
 
     /// Cross-crate sanity: `HostSurfaceRegistrationRepr` size/align
-    /// lock. 72 bytes.
+    /// lock. 80 bytes (dual-timeline: produce_done + consume_done).
     #[test]
     fn host_surface_registration_repr_size_align_locked() {
-        assert_eq!(size_of::<HostSurfaceRegistrationRepr>(), 72);
+        assert_eq!(size_of::<HostSurfaceRegistrationRepr>(), 80);
         assert_eq!(align_of::<HostSurfaceRegistrationRepr>(), 8);
     }
 

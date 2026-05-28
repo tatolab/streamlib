@@ -4705,13 +4705,17 @@ mod cpu_readback {
             staging_planes.push(pb);
         }
 
-        // Import the timeline semaphore. Required for every cpu-
-        // readback surface — the host triggers signal it on every copy.
+        // Import both timeline semaphores. Required for every cpu-
+        // readback surface — the host triggers signal `produce_done` on
+        // every image_to_buffer / buffer_to_image copy; the consumer's
+        // `end_read_access` signals `consume_done` via host CPU
+        // `signal_host`. Single-writer-per-edge per
+        // `docs/architecture/adapter-timeline-single-writer.md`.
         let raw_sync_fd: RawFd = match gpu.produce_done_fd.take() {
             Some(fd) => fd,
             None => {
                 tracing::error!(
-                    "slpn_cpu_readback_register_surface: surface '{}' has no sync_fd — \
+                    "slpn_cpu_readback_register_surface: surface '{}' has no produce_done_fd — \
                      the host must register it via SurfaceStore::register_pixel_buffer_with_timeline \
                      with an exportable HostVulkanTimelineSemaphore.",
                     surface_id
@@ -4719,15 +4723,44 @@ mod cpu_readback {
                 return SLPN_CPU_READBACK_ERR;
             }
         };
-        let timeline = match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
+        let raw_consume_fd: RawFd = match gpu.consume_done_fd.take() {
+            Some(fd) => fd,
+            None => {
+                tracing::error!(
+                    "slpn_cpu_readback_register_surface: surface '{}' has no consume_done_fd — \
+                     the host must register both produce_done and consume_done timeline fds \
+                     per the single-writer-per-edge contract",
+                    surface_id
+                );
+                gpu.produce_done_fd = Some(raw_sync_fd);
+                return SLPN_CPU_READBACK_ERR;
+            }
+        };
+        let produce_done = match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
             &rt.device,
             raw_sync_fd,
         ) {
             Ok(s) => Arc::new(s),
             Err(e) => {
                 gpu.produce_done_fd = Some(raw_sync_fd);
+                gpu.consume_done_fd = Some(raw_consume_fd);
                 tracing::error!(
-                    "slpn_cpu_readback_register_surface: from_imported_opaque_fd: {}",
+                    "slpn_cpu_readback_register_surface: produce_done from_imported_opaque_fd: {}",
+                    e
+                );
+                return SLPN_CPU_READBACK_ERR;
+            }
+        };
+        let consume_done = match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
+            &rt.device,
+            raw_consume_fd,
+        ) {
+            Ok(s) => Arc::new(s),
+            Err(e) => {
+                gpu.produce_done_fd = Some(raw_sync_fd);
+                gpu.consume_done_fd = Some(raw_consume_fd);
+                tracing::error!(
+                    "slpn_cpu_readback_register_surface: consume_done from_imported_opaque_fd: {}",
                     e
                 );
                 return SLPN_CPU_READBACK_ERR;
@@ -4755,11 +4788,13 @@ mod cpu_readback {
         let registration = HostSurfaceRegistration::<ConsumerMarker> {
             // Consumer-flavor cpu-readback surfaces don't import the
             // host's source VkImage — the host runs the copy on its
-            // own VkDevice and signals the shared timeline; the
-            // consumer only sees the staging buffers.
+            // own VkDevice and signals produce_done; the consumer
+            // only sees the staging buffers and signals consume_done
+            // via host CPU `signal_host` from end_read_access.
             texture: None,
             staging_planes,
-            timeline,
+            produce_done,
+            consume_done,
             initial_image_layout: VulkanLayout::GENERAL,
             format,
             width: surface_width,

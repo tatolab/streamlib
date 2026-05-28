@@ -82,11 +82,14 @@ pub struct CpuReadbackTriggerContext<'a, P: DevicePrivilege> {
     /// Pixel format. Drives the per-plane aspect masks and copy
     /// region geometry on the host side.
     pub format: SurfaceFormat,
-    /// Shared timeline semaphore (host-allocated as exportable;
-    /// consumer holds the imported handle). Both trigger flavors
-    /// signal a new value (host trigger via submit; subprocess
-    /// trigger via IPC) so the adapter's wait sees it.
-    pub timeline: &'a Arc<P::TimelineSemaphore>,
+    /// Producer's `produce_done` timeline — the host trigger signals
+    /// it via `vkQueueSubmit2::pSignalSemaphoreInfos` on the GPU copy
+    /// submit; the subprocess trigger signals it via the IPC bridge's
+    /// host-side counterpart. Consumer-flavor adapters wait on this
+    /// timeline post-trigger to confirm the copy completed before
+    /// reading the staging buffer. Single-writer-per-edge per
+    /// `docs/architecture/adapter-timeline-single-writer.md`.
+    pub produce_done: &'a Arc<P::TimelineSemaphore>,
     /// Per-plane staging buffer info. Trigger reads `buffer` and
     /// the geometry; mapped pointers are reached by the adapter
     /// when building the post-copy view.
@@ -243,11 +246,12 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
             surface_id: id,
             texture: registration.texture,
             planes,
-            timeline: registration.timeline,
+            produce_done: registration.produce_done,
+            consume_done: registration.consume_done,
             current_layout: registration.initial_image_layout,
             read_holders: 0,
             write_held: false,
-            current_release_value: 0,
+            current_signal_value: 0,
             format,
             width,
             height,
@@ -271,8 +275,9 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
     fn snapshot_for_acquire(
         state: &mut SurfaceState<D::Privilege>,
     ) -> AcquireSnapshot<D::Privilege> {
-        let timeline = Arc::clone(&state.timeline);
-        let wait_value = state.current_release_value;
+        let produce_done = Arc::clone(&state.produce_done);
+        let consume_done = Arc::clone(&state.consume_done);
+        let wait_value = state.current_signal_value;
         let image = state.texture.as_ref().and_then(|t| t.image());
         let from = state.current_layout;
         let format = state.format;
@@ -291,7 +296,8 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
             })
             .collect();
         AcquireSnapshot {
-            timeline,
+            produce_done,
+            consume_done,
             wait_value,
             image,
             from,
@@ -340,7 +346,7 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
             image: snap.image,
             from_layout: snap.from.as_vk(),
             format: snap.format,
-            timeline: &snap.timeline,
+            produce_done: &snap.produce_done,
             planes: trigger_planes,
             queue_family_index: self.device.queue_family_index(),
             suggested_signal_value,
@@ -428,7 +434,7 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
             BridgeDirection::BufferToImage => self.trigger.run_copy_buffer_to_image(&ctx)?,
         };
         self.surfaces.with_mut(surface_id, |state| {
-            state.current_release_value = signaled;
+            state.current_signal_value = signaled;
             state.current_layout = VulkanLayout::GENERAL;
         });
         Ok(signaled)
@@ -463,14 +469,22 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
         };
         self.log_acquire(surface_id, &snap, write);
 
-        // Wait for prior work to drain (last release-value the host
-        // signaled). Skipped on the first acquire since wait_value=0
-        // and a fresh timeline is already at counter 0.
-        if snap.wait_value > 0
-            && snap
-                .timeline
-                .wait(snap.wait_value, self.acquire_timeout.as_nanos() as u64)
-                .is_err()
+        // Pre-trigger wait: the producer trigger advances
+        // `produce_done`, so a read acquire confirms prior writes
+        // have drained on `produce_done`; a write acquire confirms
+        // prior reads have drained on `consume_done`. Both are no-ops
+        // on the first acquire (a fresh timeline is at value 0 and
+        // `wait(0)` returns immediately). Single-writer-per-edge per
+        // `docs/architecture/adapter-timeline-single-writer.md`.
+        let pre_wait_target = if write {
+            &snap.consume_done
+        } else {
+            &snap.produce_done
+        };
+        let pre_wait_value = pre_wait_target.current_value().unwrap_or(0);
+        if pre_wait_target
+            .wait(pre_wait_value, self.acquire_timeout.as_nanos() as u64)
+            .is_err()
         {
             self.rollback_acquire(surface_id, write);
             return Err(AdapterError::SyncTimeout {
@@ -499,9 +513,9 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
             }
         };
 
-        // Wait for the trigger's signaled value.
+        // Wait for the trigger's signaled `produce_done` value.
         if snap
-            .timeline
+            .produce_done
             .wait(signaled, self.acquire_timeout.as_nanos() as u64)
             .is_err()
         {
@@ -512,7 +526,7 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
         }
         self.surfaces.with_mut(surface_id, |state| {
             state.current_layout = VulkanLayout::GENERAL;
-            state.current_release_value = signaled;
+            state.current_signal_value = signaled;
         });
 
         Ok(Some(AcquireOutcome { snap }))
@@ -573,30 +587,40 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CpuReadbackSurfaceAdapter<
     }
 
     fn end_read_access(&self, surface_id: SurfaceId) {
-        // Read release just decrements the holder counter — no GPU
-        // work to flush, and no `signal_host` to issue. The timeline
-        // is already at `current_release_value` from the trigger
-        // that ran on acquire; future acquires read that same value
-        // as their `wait_value` and pass through immediately.
+        // Consumer-side release: signal `consume_done` so the
+        // producer can wait on it before reusing the staging buffer.
+        // Single-writer-per-edge per
+        // `docs/architecture/adapter-timeline-single-writer.md` — the
+        // consumer process is the only writer of `consume_done`; the
+        // producer signals `produce_done` through the trigger's GPU
+        // submit. No multi-writer race (the pre-#562 defang fixed a
+        // shared-timeline race that no longer exists under
+        // dual-timeline).
         //
-        // Pre-#562 the consumer-flavor adapter would also call
-        // `timeline.signal_host(current + 1)` here. That works for
-        // the host-only in-process case but is unsound cross-process:
-        // the host adapter advances the shared timeline through its
-        // trigger's `vkQueueSubmit2` signal, the consumer adapter
-        // tracks an INDEPENDENT local counter, and a host-side
-        // `vkSignalSemaphore` from the consumer flavor races the
-        // host's queue-submit signals against the same kernel object —
-        // monotonically-increasing values aren't preserved across the
-        // two writers, tripping VUID-VkSemaphoreSignalInfo-value-03259.
-        // Dropping the call is also a no-op for the host case
-        // because the trigger already covered the timeline advance.
-        let outcome = self.surfaces.with_mut(surface_id, |state| {
-            debug_assert!(state.read_holders > 0, "read release without acquire");
-            state.dec_read_holders();
-        });
-        if outcome.is_none() {
-            tracing::warn!(?surface_id, "end_read_access on unknown surface");
+        // Inner Option: `None` means "not the last reader, skip signal".
+        // Outer Option: `None` means "surface raced an unregister".
+        let signal: Option<Option<(Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>, u64)>> =
+            self.surfaces.with_mut(surface_id, |state| {
+                debug_assert!(state.read_holders > 0, "read release without acquire");
+                state.dec_read_holders();
+                if state.read_holders > 0 {
+                    return None;
+                }
+                let next = state.current_signal_value + 1;
+                state.current_signal_value = next;
+                Some((Arc::clone(&state.consume_done), next))
+            });
+        let signal = match signal {
+            Some(s) => s,
+            None => {
+                tracing::warn!(?surface_id, "end_read_access on unknown surface");
+                return;
+            }
+        };
+        if let Some((consume_done, value)) = signal {
+            if let Err(e) = consume_done.signal_host(value) {
+                tracing::error!(?surface_id, %value, %e, "consume_done signal failed on read release");
+            }
         }
     }
 
@@ -605,8 +629,9 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CpuReadbackSurfaceAdapter<
         // trigger unlocked.
         let snap = self.surfaces.with_mut(surface_id, |state| {
             debug_assert!(state.write_held, "write release without acquire");
-            let timeline = Arc::clone(&state.timeline);
-            let wait_value = state.current_release_value;
+            let produce_done = Arc::clone(&state.produce_done);
+            let consume_done = Arc::clone(&state.consume_done);
+            let wait_value = state.current_signal_value;
             let image = state.texture.as_ref().and_then(|t| t.image());
             let from = state.current_layout;
             let format = state.format;
@@ -623,7 +648,8 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CpuReadbackSurfaceAdapter<
                 })
                 .collect();
             AcquireSnapshot {
-                timeline,
+                produce_done,
+                consume_done,
                 wait_value,
                 image,
                 from,
@@ -664,11 +690,11 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CpuReadbackSurfaceAdapter<
             }
         };
         if snap
-            .timeline
+            .produce_done
             .wait(signaled, self.acquire_timeout.as_nanos() as u64)
             .is_err()
         {
-            tracing::error!(?surface_id, "timeline wait timed out on write flush");
+            tracing::error!(?surface_id, "produce_done wait timed out on write flush");
             self.surfaces.rollback_write(surface_id);
             return;
         }
@@ -676,7 +702,7 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CpuReadbackSurfaceAdapter<
         self.surfaces.with_mut(surface_id, |state| {
             state.set_write_held(false);
             state.current_layout = VulkanLayout::GENERAL;
-            state.current_release_value = signaled;
+            state.current_signal_value = signaled;
         });
     }
 }
@@ -940,7 +966,7 @@ impl<D: VulkanRhiDevice + 'static> InProcessCpuReadbackCopyTrigger<D> {
             .command_buffer(cmd)
             .build()];
         let signal_infos = [vk::SemaphoreSubmitInfo::builder()
-            .semaphore(ctx.timeline.semaphore())
+            .semaphore(ctx.produce_done.semaphore())
             .value(ctx.suggested_signal_value)
             .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
             .build()];
@@ -1082,7 +1108,16 @@ struct PlaneAcquireSlot {
 }
 
 struct AcquireSnapshot<P: DevicePrivilege> {
-    timeline: Arc<P::TimelineSemaphore>,
+    /// Producer's `produce_done` timeline — the trigger signals it
+    /// and the consumer waits on it. Single-writer-per-edge per
+    /// `docs/architecture/adapter-timeline-single-writer.md`.
+    produce_done: Arc<P::TimelineSemaphore>,
+    /// Consumer's `consume_done` timeline — signaled by
+    /// `end_read_access`. Snapshotted into the acquire path so the
+    /// producer's write-side waits can reach it.
+    consume_done: Arc<P::TimelineSemaphore>,
+    /// Snapshot of this process's monotonic counter; the trigger
+    /// derives `suggested_signal_value` as `wait_value + 1`.
     wait_value: u64,
     image: Option<vk::Image>,
     from: VulkanLayout,

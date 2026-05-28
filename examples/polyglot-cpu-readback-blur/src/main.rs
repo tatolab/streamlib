@@ -363,13 +363,23 @@ fn register_host_surface(
         PixelFormat::Bgra32,
     );
 
-    // 3. Allocate the exportable timeline semaphore.
-    let timeline = Arc::new(
+    // 3. Allocate the exportable timeline semaphores — one per
+    //    single-writer edge per
+    //    `docs/architecture/adapter-timeline-single-writer.md`.
+    let produce_done = Arc::new(
         HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-            .map_err(|e| format!("HostVulkanTimelineSemaphore::new_exportable: {e}"))?,
+            .map_err(|e| {
+                format!("HostVulkanTimelineSemaphore::new_exportable (produce_done): {e}")
+            })?,
+    );
+    let consume_done = Arc::new(
+        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+            .map_err(|e| {
+                format!("HostVulkanTimelineSemaphore::new_exportable (consume_done): {e}")
+            })?,
     );
 
-    // 4. Register staging + timeline with the surface-share service so
+    // 4. Register staging + timelines with the surface-share service so
     //    the subprocess can `check_out` the FDs in one shot.
     let surface_store = gpu
         .surface_store()
@@ -378,8 +388,8 @@ fn register_host_surface(
         .register_pixel_buffer_with_timeline(
             &SCENARIO_SURFACE_ID.to_string(),
             &staging_rhi,
-            Some(timeline.as_ref()),
-            None,
+            Some(produce_done.as_ref()),
+            Some(consume_done.as_ref()),
         )
         .map_err(|e| format!("register_pixel_buffer_with_timeline: {e}"))?;
 
@@ -390,7 +400,8 @@ fn register_host_surface(
             HostSurfaceRegistration::<HostMarker> {
                 texture: Some(texture_arc),
                 staging_planes: vec![staging_arc],
-                timeline,
+                produce_done,
+                consume_done,
                 initial_image_layout: VulkanLayout::UNDEFINED,
                 format: SurfaceFormat::Bgra8,
                 width: SURFACE_SIZE,

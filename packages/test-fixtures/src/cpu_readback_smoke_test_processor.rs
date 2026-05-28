@@ -146,18 +146,29 @@ fn run_smoke<const W: u32, const H: u32>(
         })?;
     let staging_arc = Arc::new(staging);
 
-    // Step 4: allocate exportable timeline semaphore through the
-    // cdylib-reachable constructor.
-    let timeline = HostVulkanTimelineSemaphore::new_exportable(
+    // Step 4: allocate two exportable timeline semaphores
+    // (produce_done + consume_done — single-writer-per-edge per
+    // `docs/architecture/adapter-timeline-single-writer.md`).
+    let produce_done = HostVulkanTimelineSemaphore::new_exportable(
         host_device.device(),
         0,
     )
     .map_err(|e| {
         Error::GpuError(format!(
-            "HostVulkanTimelineSemaphore::new_exportable: {e}"
+            "HostVulkanTimelineSemaphore::new_exportable (produce_done): {e}"
         ))
     })?;
-    let timeline_arc = Arc::new(timeline);
+    let produce_done_arc = Arc::new(produce_done);
+    let consume_done = HostVulkanTimelineSemaphore::new_exportable(
+        host_device.device(),
+        0,
+    )
+    .map_err(|e| {
+        Error::GpuError(format!(
+            "HostVulkanTimelineSemaphore::new_exportable (consume_done): {e}"
+        ))
+    })?;
+    let consume_done_arc = Arc::new(consume_done);
 
     // Step 5: construct CpuReadbackSurfaceAdapter against the same
     // device.
@@ -176,7 +187,8 @@ fn run_smoke<const W: u32, const H: u32>(
             HostSurfaceRegistration::<HostMarker> {
                 texture: Some(Arc::clone(&texture_arc)),
                 staging_planes: vec![Arc::clone(&staging_arc)],
-                timeline: Arc::clone(&timeline_arc),
+                produce_done: Arc::clone(&produce_done_arc),
+                consume_done: Arc::clone(&consume_done_arc),
                 initial_image_layout: VulkanLayout::UNDEFINED,
                 format: SurfaceFormat::Bgra8,
                 width: W,
@@ -218,11 +230,12 @@ fn run_smoke<const W: u32, const H: u32>(
     };
     drop(guard);
 
-    // Drop adapter + Arcs explicitly; the staging buffer / timeline
+    // Drop adapter + Arcs explicitly; the staging buffer / timelines
     // hold strong refs to the device_arc through their Drop impls
     // so the device cleanup runs at scope exit.
     drop(adapter);
-    drop(timeline_arc);
+    drop(produce_done_arc);
+    drop(consume_done_arc);
     drop(staging_arc);
     drop(texture_arc);
 
