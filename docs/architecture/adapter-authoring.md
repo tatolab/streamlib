@@ -42,32 +42,36 @@ The canonical recipe:
 2. **Host setup pre-allocates** whatever per-surface resources the
    adapter needs (an exportable `VkImage` for vulkan/opengl/skia,
    an exportable HOST_VISIBLE staging `VkBuffer` for cpu-readback,
-   an OPAQUE_FD-exportable `VkBuffer` for cuda) plus an exportable
-   timeline semaphore, and **registers them via surface-share**
-   under a UUID. The host RHI does the privileged work
-   (modifier discovery, VMA pool selection, cap-handling around
-   the swapchain).
+   an OPAQUE_FD-exportable `VkBuffer` for cuda) plus **two
+   exportable timeline semaphores** (`produce_done` + `consume_done`,
+   one per direction of the producer ↔ consumer edge — see
+   [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md)
+   for the single-writer-per-edge contract), and **registers them
+   via surface-share** under a UUID. The host RHI does the
+   privileged work (modifier discovery, VMA pool selection,
+   cap-handling around the swapchain).
 
 3. **Subprocess setup looks up the registration** via surface-share
    and **imports the FDs through `streamlib-consumer-rhi`** —
    `ConsumerVulkanTexture::from_dma_buf_fd`,
    `ConsumerVulkanBuffer::from_dma_buf_fd` (single-plane) /
    `from_dma_buf_fds` (multi-plane) / `from_opaque_fd` (cuda's
-   OPAQUE_FD path), and
+   OPAQUE_FD path), and a pair of
    `ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd`
-   (timeline semaphores cross processes via OPAQUE_FD only,
-   regardless of whether the data resource is DMA-BUF or
+   (one per edge; timeline semaphores cross processes via OPAQUE_FD
+   only, regardless of whether the data resource is DMA-BUF or
    OPAQUE_FD). Then instantiates the **same** adapter type against
    a `ConsumerVulkanDevice`.
 
-4. **Per-acquire is timeline-wait + layout-transition**. Both run
-   through traits the carve-out exposes — no privileged ops. If
+4. **Per-acquire is `produce_done`-wait + layout-transition**. Both
+   run through traits the carve-out exposes — no privileged ops. If
    the host has work to do per acquire (cpu-readback's
    `vkCmdCopyImageToBuffer`, escalated compute / graphics /
    ray-tracing dispatch), it's a **thin trigger** — IPC publishes
-   a timeline value, the subprocess waits on the imported
-   timeline through the carve-out. No fresh FD-passing payload
-   per acquire.
+   the next `produce_done` value, the subprocess waits on the
+   imported `produce_done` through the carve-out, then signals
+   `consume_done` from `end_read_access` once the read completes.
+   No fresh FD-passing payload per acquire.
 
 5. **Runtime wiring is a single `install_setup_hook` call** at app
    startup (see [Runtime wiring](#runtime-wiring) below). The hook
@@ -140,8 +144,10 @@ The pattern every in-tree adapter follows:
   `streamlib-adapter-abi`. Don't roll your own `Mutex<HashMap<SurfaceId, _>>`
   — `Registry` already encodes the read/write contention machine.
 - `try_begin_read` / `try_begin_write` snapshot under the registry
-  lock and return everything `finalize_*` needs unlocked (timeline
-  Arc, current layout, image handle).
+  lock and return everything `finalize_*` needs unlocked (the
+  relevant timeline Arc — `produce_done` for reads, `consume_done`
+  for writers waiting on prior consumers — current layout, image
+  handle).
 - `finalize_*` does the timeline wait + layout transition outside
   the lock, with a rollback path on failure.
 - `acquire_*` returns `AdapterError::WriteContended` (with a
@@ -149,8 +155,11 @@ The pattern every in-tree adapter follows:
   blocked read, the contender's role from a blocked write) when
   `try_begin_*` returns `Ok(None)`; `try_acquire_*` returns
   `Ok(None)` instead.
-- `end_read_access` / `end_write_access` (sealed methods called
-  from the guard's `Drop`) signal the next timeline value.
+- `end_read_access` (sealed method called from the guard's `Drop`)
+  signals the next `consume_done` value; `end_write_access` signals
+  the next `produce_done` value. See
+  [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md)
+  for the single-writer-per-edge contract.
 
 `streamlib-adapter-vulkan/src/adapter.rs` is the reference shape.
 Read it before you start.
@@ -396,12 +405,12 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for <Name>SurfaceAdapter<D> {
 
     fn end_read_access(&self, surface_id: SurfaceId) {
         // Decrement read_holders; if last reader, signal the next
-        // release timeline value.
+        // consume_done value.
         todo!()
     }
 
     fn end_write_access(&self, surface_id: SurfaceId) {
-        // Clear write_held; signal the next release timeline value.
+        // Clear write_held; signal the next produce_done value.
         todo!()
     }
 }
@@ -430,12 +439,18 @@ runtime.install_setup_hook(move |gpu| {
     let host_device = Arc::clone(gpu.device().vulkan_device());
     let adapter = Arc::new(<Name>SurfaceAdapter::new(Arc::clone(&host_device)));
 
-    // Allocate + register host surface(s) the adapter manages.
+    // Allocate + register host surface(s) the adapter manages, plus
+    // the two per-edge timelines (produce_done + consume_done) per
+    // adapter-timeline-single-writer.md.
     // For DMA-BUF GPU adapters: gpu.acquire_render_target_dma_buf_image
-    //   + gpu.surface_store().register_texture(uuid, &texture).
+    //   + gpu.surface_store().register_texture(uuid, &texture,
+    //     Some(produce_done.as_ref()), Some(consume_done.as_ref()),
+    //     current_image_layout).
     // For OPAQUE_FD (cuda): HostVulkanBuffer::new_opaque_fd_export
-    //   + register with handle_type: "opaque_fd".
-    // For cpu-readback: HOST_VISIBLE staging VkBuffer + timeline.
+    //   + register with handle_type: "opaque_fd" plus the two
+    //     OPAQUE_FD-exportable timelines.
+    // For cpu-readback: HOST_VISIBLE staging VkBuffer + the two
+    //   timelines via register_pixel_buffer_with_timeline.
 
     register_host_surface(&adapter, gpu)?;
 
@@ -532,19 +547,26 @@ when **all three** are true:
 ### Implementation pattern
 
 **Host setup hook** — register the surface with surface-share
-**including** an exportable `HostVulkanTimelineSemaphore`, even
-when the producer adapter doesn't use the timeline itself. The
-subprocess's `VulkanSurfaceAdapter::register_host_surface` requires
-a timeline; without it the dual-registration call fails:
+**including** the two exportable `HostVulkanTimelineSemaphore`s
+(`produce_done` + `consume_done`), even when the producer adapter
+doesn't drive them itself. The subprocess's
+`VulkanSurfaceAdapter::register_host_surface` requires both
+timelines; without them the dual-registration call fails. See
+[`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md)
+for the single-writer-per-edge contract.
 
 ```rust
-let timeline = Arc::new(
+let produce_done = Arc::new(
+    HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)?,
+);
+let consume_done = Arc::new(
     HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)?,
 );
 store.register_texture(
     SCENARIO_SURFACE_UUID,
     &texture,
-    Some(timeline.as_ref()),  // required for dual-registration
+    Some(produce_done.as_ref()),
+    Some(consume_done.as_ref()),
     VulkanLayout::GENERAL,    // the producer's post-write layout
 )?;
 ```
@@ -631,10 +653,10 @@ DLPack requires a flat `void*` device pointer, which forces
 `cudaExternalMemoryGetMappedBuffer`, which only accepts a
 `VkBuffer`. `VkBuffer`s have no `VkImageLayout`, so QFOT-for-layout
 is structurally meaningless. Cross-process correctness for this
-path is provided by the timeline-semaphore alone (the cuda.py
-docstring: *"there is no per-acquire IPC — the host's pipeline is
-expected to write into the OPAQUE_FD buffer and signal the shared
-timeline ambiently."*).
+path is provided by the `produce_done` + `consume_done` timeline
+pair alone (the host pipeline writes into the OPAQUE_FD buffer and
+signals `produce_done` ambiently; the cdylib waits on `produce_done`
+before reading and signals `consume_done` in `end_read_access`).
 
 **Tiled-image path (`VkImage`)** — inherits this dual-registration
 pattern. CUDA's
@@ -855,6 +877,10 @@ Read these, in this order, when authoring:
   — *how* a subprocess obtains an adapter context end-to-end;
   `install_setup_hook` mechanics; explicit-vs-Cargo-feature
   trade-off.
+- [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md)
+  — single-writer-per-edge contract for the `produce_done` +
+  `consume_done` timeline pair every subprocess-wired adapter
+  registers with surface-share.
 - [`compute-kernel.md`](compute-kernel.md) — host's
   `VulkanComputeKernel`, the dispatch primitive any adapter that
   needs compute reaches through (via escalate IPC from
