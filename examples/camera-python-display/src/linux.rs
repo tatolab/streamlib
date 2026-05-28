@@ -61,8 +61,13 @@
 
 use std::path::PathBuf;
 
+use std::sync::Arc;
+use std::sync::Mutex;
+
 use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::engine::HostSurfaceStoreExt;
+use streamlib::sdk::engine::HostGpuDeviceExt;
+use streamlib::sdk::engine::host_rhi::HostVulkanTimelineSemaphore;
 use streamlib::sdk::rhi::TextureFormat;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::error::Error;
@@ -159,8 +164,20 @@ pub fn main() -> Result<()> {
     // and dual-registered (surface-share for cross-process consumers,
     // GpuContext::texture_cache for in-process Path 1 fast path — the
     // BlendingCompositor reads all three via Path 1).
+    //
+    // Each surface also carries a `produce_done` + `consume_done`
+    // exportable timeline pair per the single-writer-per-edge model;
+    // the host-side Arcs must outlive the surface so consumers can
+    // `lookup` them.
+    type TimelinePair = (
+        Arc<HostVulkanTimelineSemaphore>,
+        Arc<HostVulkanTimelineSemaphore>,
+    );
+    let timeline_slots: Arc<Mutex<Vec<TimelinePair>>> =
+        Arc::new(Mutex::new(Vec::with_capacity(4)));
+    let timeline_slots_hook = Arc::clone(&timeline_slots);
     runtime.install_setup_hook(move |gpu| {
-        register_render_target_surface(
+        let avatar_timelines = register_render_target_surface(
             gpu,
             AVATAR_OUTPUT_SURFACE_UUID,
             "avatar mesh-render output",
@@ -173,7 +190,7 @@ pub fn main() -> Result<()> {
         println!(
             "✓ Avatar OpenGL DMA-BUF output surface registered: uuid={AVATAR_OUTPUT_SURFACE_UUID}"
         );
-        register_render_target_surface(
+        let lower_third_timelines = register_render_target_surface(
             gpu,
             LOWER_THIRD_OUTPUT_SURFACE_UUID,
             "lower-third Skia output",
@@ -186,7 +203,7 @@ pub fn main() -> Result<()> {
         println!(
             "✓ Lower-third Skia DMA-BUF output surface registered: uuid={LOWER_THIRD_OUTPUT_SURFACE_UUID}"
         );
-        register_render_target_surface(
+        let watermark_timelines = register_render_target_surface(
             gpu,
             WATERMARK_OUTPUT_SURFACE_UUID,
             "watermark Skia output",
@@ -199,7 +216,7 @@ pub fn main() -> Result<()> {
         println!(
             "✓ Watermark Skia DMA-BUF output surface registered: uuid={WATERMARK_OUTPUT_SURFACE_UUID}"
         );
-        register_render_target_surface(
+        let glitch_timelines = register_render_target_surface(
             gpu,
             GLITCH_OUTPUT_SURFACE_UUID,
             "glitch OpenGL output",
@@ -212,8 +229,15 @@ pub fn main() -> Result<()> {
         println!(
             "✓ Glitch OpenGL DMA-BUF output surface registered: uuid={GLITCH_OUTPUT_SURFACE_UUID}"
         );
+        let mut slots = timeline_slots_hook.lock().unwrap();
+        slots.push(avatar_timelines);
+        slots.push(lower_third_timelines);
+        slots.push(watermark_timelines);
+        slots.push(glitch_timelines);
         Ok(())
     });
+    // Keep the timelines alive for the lifetime of the runtime.
+    let _runtime_timeline_slots = timeline_slots;
 
     // Camera processor (V4L2 on Linux). The camera config doesn't
     // expose width/height — the camera processor picks based on the
@@ -509,12 +533,20 @@ fn stage_effects_cdylib(effects_dir: &std::path::Path) -> Result<()> {
 /// watermark Skia) and dual-register it under `uuid`. The Skia adapter
 /// composes on the OpenGL adapter, so the host pre-allocation side is
 /// identical for both — same `acquire_render_target_dma_buf_image` +
-/// surface-share registration with no explicit timeline.
+/// surface-share registration.
+///
+/// Returns the `produce_done` + `consume_done` exportable timelines
+/// for the caller to stash; the surface-share registration duplicates
+/// their FDs via SCM_RIGHTS but the host-side Arcs must outlive the
+/// surface so consumers can `lookup` them.
 fn register_render_target_surface(
     gpu: &GpuContext,
     uuid: &str,
     label: &str,
-) -> std::result::Result<(), String> {
+) -> std::result::Result<
+    (Arc<HostVulkanTimelineSemaphore>, Arc<HostVulkanTimelineSemaphore>),
+    String,
+> {
     // `acquire_render_target_dma_buf_image` picks a tiled DRM modifier
     // — required on NVIDIA where linear DMA-BUFs are sampler-only when
     // imported through EGL (per
@@ -527,22 +559,43 @@ fn register_render_target_surface(
         )
         .map_err(|e| format!("{label}: acquire_render_target_dma_buf_image: {e}"))?;
 
+    // Single-writer-per-edge — two exportable timelines per
+    // `docs/architecture/adapter-timeline-single-writer.md`. The
+    // OpenGL/Skia adapters today don't drive Vulkan timeline signals
+    // (they rely on `glFinish` + DMA-BUF kernel-fence semantics) but
+    // the subprocess can dual-register the same surface with its
+    // `VulkanSurfaceAdapter` for cross-process QFOT release publishing
+    // (#644). The Vulkan adapter's `register_host_surface` requires
+    // both timelines; allocating them here keeps the registration
+    // forward-compatible when OpenGL/Skia gain dual-timeline support.
+    let host_device = Arc::clone(gpu.device().vulkan_device());
+    let produce_done = Arc::new(
+        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+            .map_err(|e| format!(
+                "{label}: HostVulkanTimelineSemaphore::new_exportable (produce_done): {e}"
+            ))?,
+    );
+    let consume_done = Arc::new(
+        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+            .map_err(|e| format!(
+                "{label}: HostVulkanTimelineSemaphore::new_exportable (consume_done): {e}"
+            ))?,
+    );
+
     let surface_store = gpu
         .surface_store()
         .ok_or_else(|| format!("{label}: GpuContext has no surface_store"))?;
-    // OpenGL/Skia adapters don't need an explicit Vulkan timeline:
-    // `glFinish` on release plus DMA-BUF kernel-fence semantics carry
-    // visibility for downstream consumers. GL writes leave the
-    // underlying DMA-BUF in GENERAL from Vulkan's perspective.
-    // Declaring it here means cross-process consumers reaching the
-    // surface via Path 2 issue their first QFOT acquire barrier from
-    // GENERAL — same convention as `polyglot-opengl-fragment-shader`.
+    // GL writes leave the underlying DMA-BUF in GENERAL from Vulkan's
+    // perspective. Declaring it here means cross-process consumers
+    // reaching the surface via Path 2 issue their first QFOT acquire
+    // barrier from GENERAL — same convention as
+    // `polyglot-opengl-fragment-shader`.
     surface_store
         .register_texture(
             uuid,
             &texture,
-            None,
-            None,
+            Some(produce_done.as_ref()),
+            Some(consume_done.as_ref()),
             streamlib::sdk::rhi::VulkanLayout::GENERAL,
         )
         .map_err(|e| format!("{label}: surface_store.register_texture: {e}"))?;
@@ -567,5 +620,5 @@ fn register_render_target_surface(
         VulkanLayout::UNDEFINED,
     );
 
-    Ok(())
+    Ok((produce_done, consume_done))
 }

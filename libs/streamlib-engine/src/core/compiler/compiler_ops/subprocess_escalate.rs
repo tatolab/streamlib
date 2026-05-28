@@ -125,11 +125,34 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
 /// at startup and the subprocess imports them once via
 /// `streamlib-consumer-rhi`; per-acquire IPC reduces to a thin
 /// `run_cpu_readback_copy` trigger that returns a timeline value.
+///
+/// Timeline Arcs (when present) keep the per-edge single-writer
+/// timelines alive for the registration's lifetime — surface-share
+/// duplicates the FDs at register-time via SCM_RIGHTS, but the
+/// host-side `Arc<HostVulkanTimelineSemaphore>` must outlive the
+/// registration so the kernel objects backing the FDs aren't
+/// destroyed. See `docs/architecture/adapter-timeline-single-writer.md`.
 pub(crate) enum RegisteredHandle {
     #[allow(dead_code)]
     PixelBuffer(PixelBuffer),
     #[allow(dead_code)]
-    Texture(PooledTextureHandle),
+    Texture {
+        texture: PooledTextureHandle,
+        #[cfg(target_os = "linux")]
+        produce_done: Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>>,
+        #[cfg(target_os = "linux")]
+        consume_done: Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>>,
+    },
+    /// Render-target image handed out via `AcquireImage`. The texture
+    /// itself returns to its pool when the variant drops; the
+    /// timelines keep their FDs alive for surface-share consumers.
+    #[cfg(target_os = "linux")]
+    #[allow(dead_code)]
+    Image {
+        texture: crate::core::rhi::Texture,
+        produce_done: Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+        consume_done: Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+    },
 }
 
 /// Tracks resources acquired on behalf of a subprocess so `release_handle` —
@@ -153,9 +176,48 @@ impl EscalateHandleRegistry {
         map.insert(handle_id, RegisteredHandle::PixelBuffer(buffer));
     }
 
+    #[cfg(target_os = "linux")]
+    pub(crate) fn insert_texture(
+        &self,
+        handle_id: String,
+        texture: PooledTextureHandle,
+        produce_done: Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>>,
+        consume_done: Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>>,
+    ) {
+        let mut map = self.handles.lock().expect("poisoned");
+        map.insert(
+            handle_id,
+            RegisteredHandle::Texture {
+                texture,
+                produce_done,
+                consume_done,
+            },
+        );
+    }
+
+    #[cfg(not(target_os = "linux"))]
     pub(crate) fn insert_texture(&self, handle_id: String, texture: PooledTextureHandle) {
         let mut map = self.handles.lock().expect("poisoned");
-        map.insert(handle_id, RegisteredHandle::Texture(texture));
+        map.insert(handle_id, RegisteredHandle::Texture { texture });
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn insert_image(
+        &self,
+        handle_id: String,
+        texture: crate::core::rhi::Texture,
+        produce_done: Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+        consume_done: Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+    ) {
+        let mut map = self.handles.lock().expect("poisoned");
+        map.insert(
+            handle_id,
+            RegisteredHandle::Image {
+                texture,
+                produce_done,
+                consume_done,
+            },
+        );
     }
 
     /// Remove a handle by id. Returns `true` when an entry was found
@@ -261,12 +323,39 @@ pub(crate) fn handle_escalate_op(
             };
             let desc = TexturePoolDescriptor::new(width, height, parsed_format)
                 .with_usage(parsed_usage);
+            #[cfg(target_os = "linux")]
             let acquired = sandbox.escalate(|full| {
                 let texture = full.acquire_texture(&desc)?;
-                let handle_id = assign_texture_handle_id(full, &texture)?;
+                let (handle_id, produce_done, consume_done) =
+                    assign_texture_handle_id(full, &texture)?;
+                Ok((handle_id, texture, produce_done, consume_done))
+            });
+            #[cfg(not(target_os = "linux"))]
+            let acquired = sandbox.escalate(|full| {
+                let texture = full.acquire_texture(&desc)?;
+                let (handle_id,) = assign_texture_handle_id(full, &texture)?;
                 Ok((handle_id, texture))
             });
             Some(match acquired {
+                #[cfg(target_os = "linux")]
+                Ok((handle_id, texture, produce_done, consume_done)) => {
+                    registry.insert_texture(
+                        handle_id.clone(),
+                        texture,
+                        produce_done,
+                        consume_done,
+                    );
+                    EscalateResponse::Ok(EscalateResponseOk {
+                        request_id: rid,
+                        handle_id,
+                        width: Some(width),
+                        height: Some(height),
+                        format: Some(texture_format_to_wire(parsed_format).to_string()),
+                        usage: Some(texture_usages_to_wire(parsed_usage)),
+                        timeline_value: None,
+                    })
+                }
+                #[cfg(not(target_os = "linux"))]
                 Ok((handle_id, texture)) => {
                     registry.insert_texture(handle_id.clone(), texture);
                     EscalateResponse::Ok(EscalateResponseOk {
@@ -313,23 +402,35 @@ pub(crate) fn handle_escalate_op(
                         height,
                         parsed_format,
                     )?;
-                    let handle_id = assign_image_handle_id(full, &texture)?;
-                    Ok((handle_id, texture))
+                    let (handle_id, produce_done, consume_done) =
+                        assign_image_handle_id(full, &texture)?;
+                    Ok((handle_id, texture, produce_done, consume_done))
                 });
                 Some(match acquired {
-                    Ok((handle_id, _texture)) => EscalateResponse::Ok(EscalateResponseOk {
-                        request_id: rid,
-                        handle_id,
-                        width: Some(width),
-                        height: Some(height),
-                        format: Some(texture_format_to_wire(parsed_format).to_string()),
-                        usage: Some(vec![
-                            "render_attachment".to_string(),
-                            "texture_binding".to_string(),
-                            "copy_src".to_string(),
-                        ]),
-                        timeline_value: None,
-                    }),
+                    Ok((handle_id, texture, produce_done, consume_done)) => {
+                        // Stash the texture + timeline pair in the
+                        // registry so the FDs handed to surface-share
+                        // stay valid for the registration's lifetime.
+                        registry.insert_image(
+                            handle_id.clone(),
+                            texture,
+                            produce_done,
+                            consume_done,
+                        );
+                        EscalateResponse::Ok(EscalateResponseOk {
+                            request_id: rid,
+                            handle_id,
+                            width: Some(width),
+                            height: Some(height),
+                            format: Some(texture_format_to_wire(parsed_format).to_string()),
+                            usage: Some(vec![
+                                "render_attachment".to_string(),
+                                "texture_binding".to_string(),
+                                "copy_src".to_string(),
+                            ]),
+                            timeline_value: None,
+                        })
+                    }
                     Err(e) => EscalateResponse::Err(EscalateResponseErr {
                         request_id: rid,
                         message: format!("acquire_image failed: {e}"),
@@ -650,35 +751,79 @@ fn assign_buffer_handle_id(
 ///
 /// On Linux, register the texture's DMA-BUF with the surface-share service under a fresh UUID
 /// so the subprocess can `check_out` it; on other platforms just mint a UUID.
-#[allow(unused_variables)]
+///
+/// On Linux, also allocates and registers a single-writer-per-edge
+/// timeline pair (`produce_done` + `consume_done` per
+/// `docs/architecture/adapter-timeline-single-writer.md`). The
+/// timelines are returned so the caller can stash them in the
+/// [`EscalateHandleRegistry`]; the surface-share registration
+/// duplicates the FDs via SCM_RIGHTS but the host-side Arcs must
+/// outlive the registration.
+#[cfg(target_os = "linux")]
 fn assign_texture_handle_id(
     full: &crate::core::context::GpuContextFullAccess,
     texture: &PooledTextureHandle,
-) -> crate::core::error::Result<String> {
+) -> crate::core::error::Result<(
+    String,
+    Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>>,
+    Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>>,
+)> {
     let handle_id = Uuid::new_v4().to_string();
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(store) = full.surface_store() {
-            // No timeline semaphore — escalate-IPC consumers (CPU-readback
-            // bridge) handle sync via the per-acquire response, not via a
-            // shared host timeline.
-            //
-            // UNDEFINED at registration: pooled textures sit in the
-            // texture pool unowned until the first acquire. The host
-            // adapter or escalate-IPC bridge transitions to its
-            // workload-specific layout on first use; subsequent
-            // releases publish the post-release layout via
-            // `update_image_layout`.
-            store.register_texture(
-                &handle_id,
-                texture.texture(),
-                None,
-                None,
-                streamlib_consumer_rhi::VulkanLayout::UNDEFINED,
-            )?;
-        }
+    if let Some(store) = full.surface_store() {
+        let host_device = full.host_vulkan_device_arc()?;
+        // Single-writer-per-edge timelines. Escalate-IPC consumers
+        // (CPU-readback bridge today) handle sync via the
+        // per-acquire response and don't drive these timelines,
+        // but the surface-share IPC delivers both FDs to the
+        // cdylib so future consumers riding the dual-timeline
+        // contract see them.
+        let produce_done = Arc::new(
+            crate::vulkan::rhi::HostVulkanTimelineSemaphore::new_exportable(
+                host_device.device(),
+                0,
+            )
+            .map_err(|e| {
+                crate::core::error::Error::GpuError(format!(
+                    "assign_texture_handle_id: new_exportable (produce_done): {e}"
+                ))
+            })?,
+        );
+        let consume_done = Arc::new(
+            crate::vulkan::rhi::HostVulkanTimelineSemaphore::new_exportable(
+                host_device.device(),
+                0,
+            )
+            .map_err(|e| {
+                crate::core::error::Error::GpuError(format!(
+                    "assign_texture_handle_id: new_exportable (consume_done): {e}"
+                ))
+            })?,
+        );
+        // UNDEFINED at registration: pooled textures sit in the
+        // texture pool unowned until the first acquire. The host
+        // adapter or escalate-IPC bridge transitions to its
+        // workload-specific layout on first use; subsequent
+        // releases publish the post-release layout via
+        // `update_image_layout`.
+        store.register_texture(
+            &handle_id,
+            texture.texture(),
+            Some(produce_done.as_ref()),
+            Some(consume_done.as_ref()),
+            streamlib_consumer_rhi::VulkanLayout::UNDEFINED,
+        )?;
+        Ok((handle_id, Some(produce_done), Some(consume_done)))
+    } else {
+        Ok((handle_id, None, None))
     }
-    Ok(handle_id)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn assign_texture_handle_id(
+    _full: &crate::core::context::GpuContextFullAccess,
+    _texture: &PooledTextureHandle,
+) -> crate::core::error::Result<(String,)> {
+    Ok((Uuid::new_v4().to_string(),))
 }
 
 /// Resolve the `handle_id` for a render-target DMA-BUF image.
@@ -687,12 +832,43 @@ fn assign_texture_handle_id(
 /// per-plane row pitches) with the surface-share service under a fresh UUID
 /// so the subprocess can `check_out` it; the surface-share registration
 /// carries the modifier and strides the consumer-side EGL import requires.
+///
+/// Also allocates a single-writer-per-edge timeline pair and registers
+/// it with surface-share. Returns the timelines so the caller can
+/// stash them in the [`EscalateHandleRegistry`].
 #[cfg(target_os = "linux")]
 fn assign_image_handle_id(
     full: &crate::core::context::GpuContextFullAccess,
     texture: &crate::core::rhi::Texture,
-) -> crate::core::error::Result<String> {
+) -> crate::core::error::Result<(
+    String,
+    Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+    Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+)> {
     let handle_id = Uuid::new_v4().to_string();
+    let host_device = full.host_vulkan_device_arc()?;
+    let produce_done = Arc::new(
+        crate::vulkan::rhi::HostVulkanTimelineSemaphore::new_exportable(
+            host_device.device(),
+            0,
+        )
+        .map_err(|e| {
+            crate::core::error::Error::GpuError(format!(
+                "assign_image_handle_id: new_exportable (produce_done): {e}"
+            ))
+        })?,
+    );
+    let consume_done = Arc::new(
+        crate::vulkan::rhi::HostVulkanTimelineSemaphore::new_exportable(
+            host_device.device(),
+            0,
+        )
+        .map_err(|e| {
+            crate::core::error::Error::GpuError(format!(
+                "assign_image_handle_id: new_exportable (consume_done): {e}"
+            ))
+        })?,
+    );
     if let Some(store) = full.surface_store() {
         // Render-target images are freshly allocated and unwritten at
         // registration time — declare UNDEFINED and let the first
@@ -702,12 +878,12 @@ fn assign_image_handle_id(
         store.register_texture(
             &handle_id,
             texture,
-            None,
-            None,
+            Some(produce_done.as_ref()),
+            Some(consume_done.as_ref()),
             streamlib_consumer_rhi::VulkanLayout::UNDEFINED,
         )?;
     }
-    Ok(handle_id)
+    Ok((handle_id, produce_done, consume_done))
 }
 
 /// Map a wire-format `run_cpu_readback_copy` request through the

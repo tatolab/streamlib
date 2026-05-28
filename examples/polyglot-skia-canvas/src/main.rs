@@ -99,14 +99,17 @@ fn main() -> Result<()> {
     let texture_slot: Arc<
         Mutex<Option<streamlib::sdk::rhi::Texture>>,
     > = Arc::new(Mutex::new(None));
-    let timeline_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
+    let produce_done_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
+        Arc::new(Mutex::new(None));
+    let consume_done_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
         Arc::new(Mutex::new(None));
     let readback_slot: Arc<Mutex<Option<Arc<VulkanTextureReadback>>>> =
         Arc::new(Mutex::new(None));
 
     {
         let texture_slot = Arc::clone(&texture_slot);
-        let timeline_slot = Arc::clone(&timeline_slot);
+        let produce_done_slot = Arc::clone(&produce_done_slot);
+        let consume_done_slot = Arc::clone(&consume_done_slot);
         let readback_slot = Arc::clone(&readback_slot);
         runtime.install_setup_hook(move |gpu| {
             // BGRA8: the EGL DMA-BUF importer hands the subprocess a
@@ -120,14 +123,27 @@ fn main() -> Result<()> {
                 SURFACE_SIZE,
                 TextureFormat::Bgra8Unorm,
             )?;
-            let timeline = Arc::new(
+            let produce_done = Arc::new(
                 HostVulkanTimelineSemaphore::new_exportable(
                     gpu.device().vulkan_device().device(),
                     0,
                 )
                 .map_err(|e| {
                     Error::Configuration(format!(
-                        "HostVulkanTimelineSemaphore::new_exportable: {e}"
+                        "HostVulkanTimelineSemaphore::new_exportable \
+                         (produce_done): {e}"
+                    ))
+                })?,
+            );
+            let consume_done = Arc::new(
+                HostVulkanTimelineSemaphore::new_exportable(
+                    gpu.device().vulkan_device().device(),
+                    0,
+                )
+                .map_err(|e| {
+                    Error::Configuration(format!(
+                        "HostVulkanTimelineSemaphore::new_exportable \
+                         (consume_done): {e}"
                     ))
                 })?,
             );
@@ -147,8 +163,8 @@ fn main() -> Result<()> {
                 .register_texture(
                     SCENARIO_SURFACE_UUID,
                     &texture,
-                    Some(timeline.as_ref()),
-                    None,
+                    Some(produce_done.as_ref()),
+                    Some(consume_done.as_ref()),
                     VulkanLayout::GENERAL,
                 )
                 .map_err(|e| {
@@ -170,10 +186,11 @@ fn main() -> Result<()> {
             })?;
 
             *texture_slot.lock().unwrap() = Some(texture);
-            *timeline_slot.lock().unwrap() = Some(timeline);
+            *produce_done_slot.lock().unwrap() = Some(produce_done);
+            *consume_done_slot.lock().unwrap() = Some(consume_done);
             *readback_slot.lock().unwrap() = Some(readback);
             println!(
-                "✓ render-target DMA-BUF + timeline registered as '{}'",
+                "✓ render-target DMA-BUF + timelines registered as '{}'",
                 SCENARIO_SURFACE_UUID
             );
             Ok(())

@@ -122,14 +122,17 @@ fn main() -> Result<()> {
     let texture_slot: Arc<
         Mutex<Option<streamlib::sdk::rhi::Texture>>,
     > = Arc::new(Mutex::new(None));
-    let timeline_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
+    let produce_done_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
+        Arc::new(Mutex::new(None));
+    let consume_done_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
         Arc::new(Mutex::new(None));
     let readback_slot: Arc<Mutex<Option<Arc<VulkanTextureReadback>>>> =
         Arc::new(Mutex::new(None));
 
     {
         let texture_slot = Arc::clone(&texture_slot);
-        let timeline_slot = Arc::clone(&timeline_slot);
+        let produce_done_slot = Arc::clone(&produce_done_slot);
+        let consume_done_slot = Arc::clone(&consume_done_slot);
         let readback_slot = Arc::clone(&readback_slot);
         runtime.install_setup_hook(move |gpu| {
             let texture = gpu.acquire_render_target_dma_buf_image(
@@ -152,23 +155,38 @@ fn main() -> Result<()> {
             // The OpenGL adapter itself doesn't need a Vulkan timeline:
             // `glFinish` on release plus DMA-BUF kernel-fence semantics
             // carry visibility for the host's pre-stop readback. We
-            // register one anyway so the subprocess can dual-register
-            // the same surface with its `VulkanSurfaceAdapter` (#644)
-            // for producer-side QFOT release publishing — the engine-
-            // model answer for cross-process content preservation per
+            // register two (single-writer-per-edge per
+            // `docs/architecture/adapter-timeline-single-writer.md`)
+            // anyway so the subprocess can dual-register the same
+            // surface with its `VulkanSurfaceAdapter` (#644) for
+            // producer-side QFOT release publishing — the engine-model
+            // answer for cross-process content preservation per
             // `docs/architecture/adapter-authoring.md`. The Vulkan
-            // adapter's `register_host_surface` requires a timeline,
-            // so the host must allocate one even when the producer is
+            // adapter's `register_host_surface` requires both timelines,
+            // so the host must allocate both even when the producer is
             // OpenGL-only.
             let host_device = Arc::clone(gpu.device().vulkan_device());
-            let timeline = Arc::new(
+            let produce_done = Arc::new(
                 HostVulkanTimelineSemaphore::new_exportable(
                     host_device.device(),
                     0,
                 )
                 .map_err(|e| {
                     Error::Configuration(format!(
-                        "HostVulkanTimelineSemaphore::new_exportable: {e}"
+                        "HostVulkanTimelineSemaphore::new_exportable \
+                         (produce_done): {e}"
+                    ))
+                })?,
+            );
+            let consume_done = Arc::new(
+                HostVulkanTimelineSemaphore::new_exportable(
+                    host_device.device(),
+                    0,
+                )
+                .map_err(|e| {
+                    Error::Configuration(format!(
+                        "HostVulkanTimelineSemaphore::new_exportable \
+                         (consume_done): {e}"
                     ))
                 })?,
             );
@@ -188,8 +206,8 @@ fn main() -> Result<()> {
                 .register_texture(
                     SCENARIO_SURFACE_UUID,
                     &texture,
-                    Some(timeline.as_ref()),
-                    None,
+                    Some(produce_done.as_ref()),
+                    Some(consume_done.as_ref()),
                     streamlib::sdk::rhi::VulkanLayout::GENERAL,
                 )
                 .map_err(|e| {
@@ -209,10 +227,11 @@ fn main() -> Result<()> {
             })?;
 
             *texture_slot.lock().unwrap() = Some(texture);
-            *timeline_slot.lock().unwrap() = Some(timeline);
+            *produce_done_slot.lock().unwrap() = Some(produce_done);
+            *consume_done_slot.lock().unwrap() = Some(consume_done);
             *readback_slot.lock().unwrap() = Some(readback);
             println!(
-                "✓ render-target DMA-BUF + timeline registered as '{}'",
+                "✓ render-target DMA-BUF + timelines registered as '{}'",
                 SCENARIO_SURFACE_UUID
             );
             Ok(())
