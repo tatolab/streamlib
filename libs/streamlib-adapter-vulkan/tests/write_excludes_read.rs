@@ -54,15 +54,23 @@ fn live_write_guard_blocks_acquire_read_until_dropped() {
         .acquire_render_target_dma_buf_image(64, 64, TextureFormat::Bgra8Unorm)
         .expect("acquire_render_target_dma_buf_image");
     let texture = stream_tex.vulkan_inner().clone();
-    let timeline = Arc::new(
-        HostVulkanTimelineSemaphore::new(adapter.device().device(), 0).expect("timeline"),
+    // Single-writer-per-edge per
+    // `docs/architecture/adapter-timeline-single-writer.md`.
+    let produce_done = Arc::new(
+        HostVulkanTimelineSemaphore::new(adapter.device().device(), 0)
+            .expect("produce_done timeline"),
+    );
+    let consume_done = Arc::new(
+        HostVulkanTimelineSemaphore::new(adapter.device().device(), 0)
+            .expect("consume_done timeline"),
     );
     adapter
         .register_host_surface(
             surface_id,
             HostSurfaceRegistration {
                 texture,
-                timeline,
+                produce_done,
+                consume_done,
                 initial_layout: VulkanLayout::UNDEFINED,
             },
         )

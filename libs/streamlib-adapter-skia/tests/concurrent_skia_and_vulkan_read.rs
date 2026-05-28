@@ -66,8 +66,15 @@ fn skia_read_and_vulkan_read_share_surface() {
         .acquire_render_target_dma_buf_image(W, H, TextureFormat::Bgra8Unorm)
         .expect("acquire_render_target_dma_buf_image");
     let texture = stream_tex.vulkan_inner().clone();
-    let timeline = Arc::new(
-        HostVulkanTimelineSemaphore::new(host_device.device(), 0).expect("timeline"),
+    // Single-writer-per-edge per
+    // `docs/architecture/adapter-timeline-single-writer.md`.
+    let produce_done = Arc::new(
+        HostVulkanTimelineSemaphore::new(host_device.device(), 0)
+            .expect("produce_done timeline"),
+    );
+    let consume_done = Arc::new(
+        HostVulkanTimelineSemaphore::new(host_device.device(), 0)
+            .expect("consume_done timeline"),
     );
     let surface_id = 0xdada_dada;
     inner
@@ -75,7 +82,8 @@ fn skia_read_and_vulkan_read_share_surface() {
             surface_id,
             HostSurfaceRegistration {
                 texture: texture.clone(),
-                timeline: Arc::clone(&timeline),
+                produce_done,
+                consume_done,
                 initial_layout: VulkanLayout::UNDEFINED,
             },
         )

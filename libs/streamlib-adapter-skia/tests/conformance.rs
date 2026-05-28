@@ -64,15 +64,23 @@ fn register_one(
     let raw_tex = HostVulkanTexture::new_device_local(inner.device(), &desc)
         .expect("HostVulkanTexture::new_device_local");
     let texture = Arc::new(raw_tex);
-    let timeline = Arc::new(
-        HostVulkanTimelineSemaphore::new(inner.device().device(), 0).expect("timeline"),
+    // Single-writer-per-edge per
+    // `docs/architecture/adapter-timeline-single-writer.md`.
+    let produce_done = Arc::new(
+        HostVulkanTimelineSemaphore::new(inner.device().device(), 0)
+            .expect("produce_done timeline"),
+    );
+    let consume_done = Arc::new(
+        HostVulkanTimelineSemaphore::new(inner.device().device(), 0)
+            .expect("consume_done timeline"),
     );
     inner
         .register_host_surface(
             id,
             HostSurfaceRegistration {
                 texture,
-                timeline,
+                produce_done,
+                consume_done,
                 initial_layout: VulkanLayout::UNDEFINED,
             },
         )

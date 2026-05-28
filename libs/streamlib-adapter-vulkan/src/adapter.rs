@@ -126,12 +126,13 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
             SurfaceState {
                 surface_id: id,
                 texture: registration.texture,
-                timeline: registration.timeline,
+                produce_done: registration.produce_done,
+                consume_done: registration.consume_done,
                 current_layout: registration.initial_layout,
                 read_holders: 0,
                 write_held: false,
                 last_acquire_value: 0,
-                current_release_value: 0,
+                current_signal_value: 0,
             },
         );
         if !inserted {
@@ -395,18 +396,20 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
     ) -> Result<Option<ReadAcquired<D::Privilege>>, AdapterError> {
         let id = surface.id;
         self.surfaces.try_begin_read(id, |state| {
-            let timeline = Arc::clone(&state.timeline);
-            let wait_value = state.current_release_value;
+            // Consumer-side acquire waits on `produce_done` — the
+            // peer-timeline's kernel `current_value()` snapshot is
+            // taken inside `finalize_read` (outside the registry
+            // lock) per
+            // `docs/architecture/adapter-timeline-single-writer.md`.
+            let peer_timeline = Arc::clone(&state.produce_done);
             let image = state
                 .texture
                 .image()
                 .ok_or(AdapterError::SurfaceNotFound { surface_id: id })?;
             let from = state.current_layout;
-            state.last_acquire_value = wait_value;
             let info = self.make_image_info(&state.texture);
             Ok(ReadAcquired {
-                timeline,
-                wait_value,
+                peer_timeline,
                 image,
                 from,
                 info,
@@ -420,18 +423,17 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
     ) -> Result<Option<WriteAcquired<D::Privilege>>, AdapterError> {
         let id = surface.id;
         self.surfaces.try_begin_write(id, |state| {
-            let timeline = Arc::clone(&state.timeline);
-            let wait_value = state.current_release_value;
+            // Producer-side acquire waits on `consume_done` — confirms
+            // the consumer has drained prior content before re-write.
+            let peer_timeline = Arc::clone(&state.consume_done);
             let image = state
                 .texture
                 .image()
                 .ok_or(AdapterError::SurfaceNotFound { surface_id: id })?;
             let from = state.current_layout;
-            state.last_acquire_value = wait_value;
             let info = self.make_image_info(&state.texture);
             Ok(WriteAcquired {
-                timeline,
-                wait_value,
+                peer_timeline,
                 image,
                 from,
                 info,
@@ -445,9 +447,13 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
         surface_id: SurfaceId,
         acquired: ReadAcquired<D::Privilege>,
     ) -> Result<vk::ImageLayout, AdapterError> {
+        let wait_value = acquired
+            .peer_timeline
+            .current_value()
+            .unwrap_or(0);
         if acquired
-            .timeline
-            .wait(acquired.wait_value, self.acquire_timeout.as_nanos() as u64)
+            .peer_timeline
+            .wait(wait_value, self.acquire_timeout.as_nanos() as u64)
             .is_err()
         {
             // Roll back: the acquire had bumped read_holders; undo it.
@@ -456,6 +462,9 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
                 duration: self.acquire_timeout,
             });
         }
+        self.surfaces.with_mut(surface_id, |state| {
+            state.last_acquire_value = wait_value;
+        });
 
         let to = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
         if let Err(err) = self.transition_layout_sync(acquired.image, acquired.from.as_vk(), to) {
@@ -473,9 +482,13 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
         surface_id: SurfaceId,
         acquired: WriteAcquired<D::Privilege>,
     ) -> Result<vk::ImageLayout, AdapterError> {
+        let wait_value = acquired
+            .peer_timeline
+            .current_value()
+            .unwrap_or(0);
         if acquired
-            .timeline
-            .wait(acquired.wait_value, self.acquire_timeout.as_nanos() as u64)
+            .peer_timeline
+            .wait(wait_value, self.acquire_timeout.as_nanos() as u64)
             .is_err()
         {
             self.surfaces.rollback_write(surface_id);
@@ -483,6 +496,9 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
                 duration: self.acquire_timeout,
             });
         }
+        self.surfaces.with_mut(surface_id, |state| {
+            state.last_acquire_value = wait_value;
+        });
 
         // GENERAL covers compute, transfer, and color-attachment writes.
         // Picking COLOR_ATTACHMENT_OPTIMAL would force a re-transition
@@ -503,17 +519,18 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
 /// Snapshot taken under the registry lock so the timeline wait + layout
 /// transition can run unlocked. `read_holders` / `write_held` are
 /// already incremented; rollback paths decrement them on failure.
+/// `peer_timeline` is the side this caller waits on (`produce_done` for
+/// read paths, `consume_done` for write paths) per
+/// single-writer-per-edge.
 struct ReadAcquired<P: DevicePrivilege> {
-    timeline: Arc<P::TimelineSemaphore>,
-    wait_value: u64,
+    peer_timeline: Arc<P::TimelineSemaphore>,
     image: vk::Image,
     from: VulkanLayout,
     info: VkImageInfo,
 }
 
 struct WriteAcquired<P: DevicePrivilege> {
-    timeline: Arc<P::TimelineSemaphore>,
-    wait_value: u64,
+    peer_timeline: Arc<P::TimelineSemaphore>,
     image: vk::Image,
     from: VulkanLayout,
     info: VkImageInfo,
@@ -626,8 +643,10 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for VulkanSurfaceAdapter<D> {
     }
 
     fn end_read_access(&self, surface_id: SurfaceId) {
-        // Inner Option: `None` means "not the last reader, skip signal".
-        // Outer Option: `None` means "surface raced an unregister".
+        // Consumer-side release: signal `consume_done` so the producer
+        // can wait on it before re-writing. Inner Option: `None` means
+        // "not the last reader, skip signal". Outer Option: `None`
+        // means "surface raced an unregister".
         let signal: Option<Option<(Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>, u64)>> =
             self.surfaces.with_mut(surface_id, |state| {
                 debug_assert!(state.read_holders > 0, "read release without acquire");
@@ -635,9 +654,9 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for VulkanSurfaceAdapter<D> {
                 if state.read_holders > 0 {
                     return None;
                 }
-                let next = state.next_release_value();
-                state.current_release_value = next;
-                Some((Arc::clone(&state.timeline), next))
+                let next = state.next_signal_value();
+                state.current_signal_value = next;
+                Some((Arc::clone(&state.consume_done), next))
             });
         let signal = match signal {
             Some(s) => s,
@@ -649,23 +668,25 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for VulkanSurfaceAdapter<D> {
                 return;
             }
         };
-        if let Some((timeline, value)) = signal {
-            if let Err(e) = timeline.signal_host(value) {
-                tracing::error!(?surface_id, %value, %e, "timeline signal failed on read release");
+        if let Some((consume_done, value)) = signal {
+            if let Err(e) = consume_done.signal_host(value) {
+                tracing::error!(?surface_id, %value, %e, "consume_done signal failed on read release");
             }
         }
     }
 
     fn end_write_access(&self, surface_id: SurfaceId) {
+        // Producer-side release: signal `produce_done` so the consumer
+        // can wait on it before reading.
         let signal: Option<(Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>, u64)> =
             self.surfaces.with_mut(surface_id, |state| {
                 debug_assert!(state.write_held, "write release without acquire");
                 state.set_write_held(false);
-                let next = state.next_release_value();
-                state.current_release_value = next;
-                (Arc::clone(&state.timeline), next)
+                let next = state.next_signal_value();
+                state.current_signal_value = next;
+                (Arc::clone(&state.produce_done), next)
             });
-        let (timeline, value) = match signal {
+        let (produce_done, value) = match signal {
             Some(s) => s,
             None => {
                 tracing::warn!(
@@ -675,8 +696,8 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for VulkanSurfaceAdapter<D> {
                 return;
             }
         };
-        if let Err(e) = timeline.signal_host(value) {
-            tracing::error!(?surface_id, %value, %e, "timeline signal failed on write release");
+        if let Err(e) = produce_done.signal_host(value) {
+            tracing::error!(?surface_id, %value, %e, "produce_done signal failed on write release");
         }
     }
 }

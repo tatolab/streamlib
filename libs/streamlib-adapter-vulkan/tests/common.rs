@@ -81,16 +81,26 @@ impl HostFixture {
             .gpu
             .acquire_render_target_dma_buf_image(width, height, TextureFormat::Bgra8Unorm)
             .expect("acquire_render_target_dma_buf_image");
-        let timeline = Arc::new(
+        // Single-writer-per-edge: each timeline has exactly one writer
+        // process. produce_done is signaled by the producer side
+        // (end_write_access); consume_done is signaled by the consumer
+        // side (end_read_access). See
+        // docs/architecture/adapter-timeline-single-writer.md.
+        let produce_done = Arc::new(
             HostVulkanTimelineSemaphore::new_exportable(self.adapter.device().device(), 0)
-                .expect("exportable timeline"),
+                .expect("exportable produce_done timeline"),
+        );
+        let consume_done = Arc::new(
+            HostVulkanTimelineSemaphore::new_exportable(self.adapter.device().device(), 0)
+                .expect("exportable consume_done timeline"),
         );
         self.adapter
             .register_host_surface(
                 surface_id,
                 HostSurfaceRegistration {
                     texture: texture.vulkan_inner().clone(),
-                    timeline: Arc::clone(&timeline),
+                    produce_done: Arc::clone(&produce_done),
+                    consume_done: Arc::clone(&consume_done),
                     initial_layout: VulkanLayout::UNDEFINED,
                 },
             )
@@ -107,7 +117,8 @@ impl HostFixture {
         RegisteredSurface {
             descriptor,
             texture,
-            timeline,
+            produce_done,
+            consume_done,
             width,
             height,
         }
@@ -117,7 +128,12 @@ impl HostFixture {
 pub struct RegisteredSurface {
     pub descriptor: StreamlibSurface,
     pub texture: Texture,
-    pub timeline: Arc<HostVulkanTimelineSemaphore>,
+    /// `produce_done` timeline — signaled by the producer side
+    /// (host's `end_write_access` or subprocess's write helper).
+    pub produce_done: Arc<HostVulkanTimelineSemaphore>,
+    /// `consume_done` timeline — signaled by the consumer side
+    /// (host's `end_read_access` or subprocess's read helper).
+    pub consume_done: Arc<HostVulkanTimelineSemaphore>,
     pub width: u32,
     pub height: u32,
 }
@@ -149,18 +165,24 @@ pub fn spawn_helper(role: &str) -> (Child, UnixStream) {
     (child_proc, parent)
 }
 
-/// Send the helper its descriptor + DMA-BUF fds + timeline sync_fd via
-/// SCM_RIGHTS. The fds passed in are dup'd by the kernel; the caller
-/// retains ownership of their copies (close after send).
+/// Send the helper its descriptor + DMA-BUF fds + dual timeline FDs
+/// (produce_done first, then consume_done) via SCM_RIGHTS. The fds
+/// passed in are dup'd by the kernel; the caller retains ownership of
+/// their copies (close after send). Single-writer-per-edge per
+/// `docs/architecture/adapter-timeline-single-writer.md`: the helper
+/// imports both timelines; whether it signals produce_done or
+/// consume_done depends on its role.
 pub fn send_helper_request(
     parent: &UnixStream,
     descriptor: &serde_json::Value,
     dma_buf_fds: &[RawFd],
-    sync_fd: RawFd,
+    produce_done_fd: RawFd,
+    consume_done_fd: RawFd,
 ) -> std::io::Result<()> {
     let body = serde_json::to_vec(descriptor).expect("serialize");
     let mut all_fds: Vec<RawFd> = dma_buf_fds.to_vec();
-    all_fds.push(sync_fd);
+    all_fds.push(produce_done_fd);
+    all_fds.push(consume_done_fd);
     // `send_message_with_fds` already prefixes with a 4-byte BE length;
     // the helper reads the prefix, then `recv_message_with_fds` for the
     // payload.

@@ -67,16 +67,25 @@ fn subprocess_crash_mid_write_does_not_break_host_adapter() {
         .vulkan_inner()
         .export_dma_buf_fd()
         .expect("export DMA-BUF");
-    let sync_fd = Arc::clone(&surface.timeline)
+    let produce_done_fd = Arc::clone(&surface.produce_done)
         .export_opaque_fd()
-        .expect("export sync_fd");
+        .expect("export produce_done_fd");
+    let consume_done_fd = Arc::clone(&surface.consume_done)
+        .export_opaque_fd()
+        .expect("export consume_done_fd");
     let req = common::helper_descriptor("crash-mid-write", &surface, 1, None);
 
     // Pre-send the request before the harness spawns; libc::sendmsg on
     // a socketpair is non-blocking under default buffer sizes for this
     // payload size.
-    common::send_helper_request(&parent_sock, &req, &[dma_buf_fd], sync_fd)
-        .expect("send helper request");
+    common::send_helper_request(
+        &parent_sock,
+        &req,
+        &[dma_buf_fd],
+        produce_done_fd,
+        consume_done_fd,
+    )
+    .expect("send helper request");
 
     let observed_disconnect = Arc::new(AtomicBool::new(false));
     let parent_fd = parent_sock.as_raw_fd();
@@ -128,19 +137,19 @@ fn subprocess_crash_mid_write_does_not_break_host_adapter() {
         outcome.cleanup_latency
     );
 
-    // The host's adapter should still function. The previous timeline
-    // value is whatever the host warmed up to (1); a fresh write
-    // advances it by one.
-    let before = surface.timeline.current_value().unwrap();
+    // The host's adapter should still function. The previous
+    // produce_done value is whatever the host warmed up to (1); a
+    // fresh write advances it by one.
+    let before = surface.produce_done.current_value().unwrap();
     {
         let _w = host
             .ctx
             .acquire_write(&surface.descriptor)
             .expect("post-crash acquire_write");
     }
-    let after = surface.timeline.current_value().unwrap();
+    let after = surface.produce_done.current_value().unwrap();
     assert!(
         after > before,
-        "timeline should advance after crash; before={before} after={after}"
+        "produce_done should advance after crash; before={before} after={after}"
     );
 }

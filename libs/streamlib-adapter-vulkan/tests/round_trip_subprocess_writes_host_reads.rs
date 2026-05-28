@@ -36,7 +36,7 @@ fn subprocess_writes_host_reads_round_trip() {
             .acquire_write(&surface.descriptor)
             .expect("host warm-up acquire_write");
     }
-    assert_eq!(surface.timeline.current_value().unwrap(), 1);
+    assert_eq!(surface.produce_done.current_value().unwrap(), 1);
 
     let (mut child, parent_sock) = common::spawn_helper("write");
     let dma_buf_fd = surface
@@ -44,14 +44,23 @@ fn subprocess_writes_host_reads_round_trip() {
         .vulkan_inner()
         .export_dma_buf_fd()
         .expect("export DMA-BUF");
-    let sync_fd = Arc::clone(&surface.timeline)
+    let produce_done_fd = Arc::clone(&surface.produce_done)
         .export_opaque_fd()
-        .expect("export sync_fd");
+        .expect("export produce_done_fd");
+    let consume_done_fd = Arc::clone(&surface.consume_done)
+        .export_opaque_fd()
+        .expect("export consume_done_fd");
 
     let clear_color = [0.9_f32, 0.1, 0.4, 1.0];
     let req = common::helper_descriptor("write", &surface, 1, Some(clear_color));
-    common::send_helper_request(&parent_sock, &req, &[dma_buf_fd], sync_fd)
-        .expect("send helper request");
+    common::send_helper_request(
+        &parent_sock,
+        &req,
+        &[dma_buf_fd],
+        produce_done_fd,
+        consume_done_fd,
+    )
+    .expect("send helper request");
 
     let resp = common::recv_helper_response(&parent_sock);
     assert_eq!(resp["ok"], true, "helper failed: {}", resp["note"]);

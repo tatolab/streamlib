@@ -3,24 +3,38 @@
 
 //! Subprocess test helper for round-trip and crash-mid-write tests.
 //!
-//! Receives DMA-BUF fds + a timeline-semaphore opaque-fd via SCM_RIGHTS
-//! over a socketpair the parent passed in `STREAMLIB_HELPER_SOCKET_FD`.
-//! Imports both into a fresh `VkDevice` (this process's own — sidestepping
-//! the dual-VkDevice crash because no GPU work is active in the parent
-//! when the subprocess starts), then performs the role specified in
-//! argv[1]:
+//! Receives DMA-BUF fds + two timeline-semaphore opaque-fds
+//! (`produce_done` first, then `consume_done` — per the
+//! single-writer-per-edge contract in
+//! `docs/architecture/adapter-timeline-single-writer.md`) via
+//! SCM_RIGHTS over a socketpair the parent passed in
+//! `STREAMLIB_HELPER_SOCKET_FD`. Imports both into a fresh `VkDevice`
+//! (this process's own — sidestepping the dual-VkDevice crash because
+//! no GPU work is active in the parent when the subprocess starts),
+//! then performs the role specified in argv[1].
 //!
-//! - `read`        — wait on timeline `wait_value`, vkCmdCopyImageToBuffer
-//!                   into a staging VkBuffer, send the bytes back over
-//!                   the socketpair, signal `wait_value + 1`.
-//! - `write`       — wait on `wait_value`, vkCmdClearColorImage with the
-//!                   provided RGBA tuple, signal `wait_value + 1`.
-//! - `wait-only`   — wait, signal +1, exit. Used by the concurrent-reads
-//!                   test (no GPU work, just contention shape).
-//! - `crash-mid-write` — begin a write (acquire timeline value + start
-//!                   command submission), then `abort()` mid-flight.
-//!                   Verifies host-side cleanup via the EPOLLHUP
-//!                   watchdog or `SubprocessCrashHarness`.
+//! Per the v1 single-writer-per-edge model, each role waits on the
+//! peer's timeline's kernel `current_value()` and signals its own
+//! edge:
+//!
+//! - `read`        — CONSUMER side: wait on
+//!                   `produce_done.current_value()`,
+//!                   vkCmdCopyImageToBuffer into a staging VkBuffer,
+//!                   send the bytes back, signal `consume_done` at
+//!                   its next monotonic value.
+//! - `write`       — PRODUCER side: wait on
+//!                   `consume_done.current_value()`,
+//!                   vkCmdClearColorImage with the provided RGBA
+//!                   tuple, signal `produce_done` at its next
+//!                   monotonic value.
+//! - `wait-only`   — CONSUMER-flavored: wait on `produce_done`,
+//!                   signal `consume_done`, exit. Used by contention-
+//!                   shape tests.
+//! - `crash-mid-write` — PRODUCER side: begin a write (acquire
+//!                   timeline value + start command submission), then
+//!                   `abort()` mid-flight. Verifies host-side cleanup
+//!                   via the EPOLLHUP watchdog or
+//!                   `SubprocessCrashHarness`.
 
 #![cfg(target_os = "linux")]
 
@@ -44,7 +58,14 @@ struct HelperRequest {
     plane_offsets: Vec<u64>,
     plane_strides: Vec<u64>,
     allocation_size: u64,
-    /// Timeline value the helper waits on.
+    /// Optional wait-target hint kept for compatibility; the helper
+    /// now derives wait targets from the peer timeline's kernel
+    /// `current_value()` per the v1 single-writer-per-edge model so
+    /// this field is effectively ignored. Tests still set it (often
+    /// to `1`) so the JSON payload remains stable across the
+    /// migration.
+    #[allow(dead_code)]
+    #[serde(default)]
     wait_value: u64,
     /// For `write`: 4 bytes of clear color.
     clear_color: Option<[f32; 4]>,
@@ -104,7 +125,7 @@ fn run() -> ExitCode {
     let (payload, fds) = match streamlib_surface_client::recv_message_with_fds(
         &socket,
         msg_len,
-        streamlib_surface_client::MAX_DMA_BUF_PLANES + 1,
+        streamlib_surface_client::MAX_DMA_BUF_PLANES + 2,
     ) {
         Ok(p) => p,
         Err(e) => return die(Some(&socket), format!("recv_message_with_fds: {e}")),
@@ -115,14 +136,21 @@ fn run() -> ExitCode {
         Err(e) => return die(Some(&socket), format!("parse request: {e}")),
     };
 
-    if fds.len() < 2 {
+    // Wire layout: [...dma_buf_fds, produce_done_fd, consume_done_fd]
+    // — the last two slots are the two single-writer timelines per
+    // `docs/architecture/adapter-timeline-single-writer.md`.
+    if fds.len() < 3 {
         return die(
             Some(&socket),
-            format!("expected ≥2 fds (DMA-BUF + sync), got {}", fds.len()),
+            format!(
+                "expected ≥3 fds (DMA-BUF + produce_done + consume_done), got {}",
+                fds.len()
+            ),
         );
     }
-    let sync_fd = *fds.last().unwrap();
-    let dma_buf_fds: Vec<RawFd> = fds[..fds.len() - 1].to_vec();
+    let consume_done_fd = fds[fds.len() - 1];
+    let produce_done_fd = fds[fds.len() - 2];
+    let dma_buf_fds: Vec<RawFd> = fds[..fds.len() - 2].to_vec();
 
     // Build our own VkDevice. The parent has no GPU work in flight when
     // it spawns us, so the dual-VkDevice crash on NVIDIA does not apply.
@@ -147,18 +175,31 @@ fn run() -> ExitCode {
         Err(e) => return die(Some(&socket), format!("import_render_target_dma_buf: {e}")),
     };
 
-    // Import the timeline semaphore. Vulkan takes ownership of `sync_fd`
-    // on success; we close every other fd.
-    let timeline = match HostVulkanTimelineSemaphore::from_imported_opaque_fd(
+    // Import both timeline semaphores. Vulkan takes ownership of each
+    // fd on success; we close every other fd ourselves.
+    let produce_done = match HostVulkanTimelineSemaphore::from_imported_opaque_fd(
         device.device(),
-        sync_fd,
+        produce_done_fd,
     ) {
         Ok(t) => t,
         Err(e) => {
             for f in &dma_buf_fds {
                 unsafe { libc::close(*f) };
             }
-            return die(Some(&socket), format!("import sync_fd: {e}"));
+            unsafe { libc::close(consume_done_fd) };
+            return die(Some(&socket), format!("import produce_done_fd: {e}"));
+        }
+    };
+    let consume_done = match HostVulkanTimelineSemaphore::from_imported_opaque_fd(
+        device.device(),
+        consume_done_fd,
+    ) {
+        Ok(t) => t,
+        Err(e) => {
+            for f in &dma_buf_fds {
+                unsafe { libc::close(*f) };
+            }
+            return die(Some(&socket), format!("import consume_done_fd: {e}"));
         }
     };
 
@@ -170,19 +211,26 @@ fn run() -> ExitCode {
         unsafe { libc::close(*f) };
     }
 
-    // Wait for the parent to finish writing / hand off.
-    if let Err(e) = timeline.wait(req.wait_value, 5_000_000_000u64) {
-        return die(
-            Some(&socket),
-            format!("timeline.wait({}): {e}", req.wait_value),
-        );
-    }
-
     let response = match role.as_str() {
         "wait-only" => {
-            // Just signal the next value and exit. Used by contention tests.
-            if let Err(e) = timeline.signal_host(req.wait_value + 1) {
-                return die(Some(&socket), format!("signal_host: {e}"));
+            // CONSUMER-flavored: wait on the producer's edge, signal
+            // the consumer's. Used by contention tests.
+            let wait_target = match produce_done.current_value() {
+                Ok(v) => v,
+                Err(e) => return die(Some(&socket), format!("produce_done.current_value: {e}")),
+            };
+            if let Err(e) = produce_done.wait(wait_target, 5_000_000_000u64) {
+                return die(
+                    Some(&socket),
+                    format!("produce_done.wait({wait_target}): {e}"),
+                );
+            }
+            let signal_value = match consume_done.current_value() {
+                Ok(v) => v.saturating_add(1),
+                Err(e) => return die(Some(&socket), format!("consume_done.current_value: {e}")),
+            };
+            if let Err(e) = consume_done.signal_host(signal_value) {
+                return die(Some(&socket), format!("consume_done.signal_host: {e}"));
             }
             HelperResponse {
                 ok: true,
@@ -191,6 +239,18 @@ fn run() -> ExitCode {
             }
         }
         "write" => {
+            // PRODUCER side: wait on consume_done (so we don't stomp
+            // a live reader), do the write, signal produce_done.
+            let wait_target = match consume_done.current_value() {
+                Ok(v) => v,
+                Err(e) => return die(Some(&socket), format!("consume_done.current_value: {e}")),
+            };
+            if let Err(e) = consume_done.wait(wait_target, 5_000_000_000u64) {
+                return die(
+                    Some(&socket),
+                    format!("consume_done.wait({wait_target}): {e}"),
+                );
+            }
             let color = req.clear_color.unwrap_or([1.0, 0.5, 0.25, 1.0]);
             if let Err(e) = subprocess_clear_image(
                 &device,
@@ -199,8 +259,15 @@ fn run() -> ExitCode {
             ) {
                 return die(Some(&socket), format!("subprocess_clear_image: {e}"));
             }
-            if let Err(e) = timeline.signal_host(req.wait_value + 1) {
-                return die(Some(&socket), format!("signal_host post-write: {e}"));
+            let signal_value = match produce_done.current_value() {
+                Ok(v) => v.saturating_add(1),
+                Err(e) => return die(Some(&socket), format!("produce_done.current_value: {e}")),
+            };
+            if let Err(e) = produce_done.signal_host(signal_value) {
+                return die(
+                    Some(&socket),
+                    format!("produce_done.signal_host: {e}"),
+                );
             }
             HelperResponse {
                 ok: true,
@@ -209,6 +276,18 @@ fn run() -> ExitCode {
             }
         }
         "read" => {
+            // CONSUMER side: wait on produce_done, read, signal
+            // consume_done.
+            let wait_target = match produce_done.current_value() {
+                Ok(v) => v,
+                Err(e) => return die(Some(&socket), format!("produce_done.current_value: {e}")),
+            };
+            if let Err(e) = produce_done.wait(wait_target, 5_000_000_000u64) {
+                return die(
+                    Some(&socket),
+                    format!("produce_done.wait({wait_target}): {e}"),
+                );
+            }
             let bytes = match subprocess_readback_image(
                 &device,
                 texture.image().expect("imported image"),
@@ -218,8 +297,15 @@ fn run() -> ExitCode {
                 Ok(b) => b,
                 Err(e) => return die(Some(&socket), format!("subprocess_readback_image: {e}")),
             };
-            if let Err(e) = timeline.signal_host(req.wait_value + 1) {
-                return die(Some(&socket), format!("signal_host post-read: {e}"));
+            let signal_value = match consume_done.current_value() {
+                Ok(v) => v.saturating_add(1),
+                Err(e) => return die(Some(&socket), format!("consume_done.current_value: {e}")),
+            };
+            if let Err(e) = consume_done.signal_host(signal_value) {
+                return die(
+                    Some(&socket),
+                    format!("consume_done.signal_host: {e}"),
+                );
             }
             HelperResponse {
                 ok: true,
@@ -228,7 +314,11 @@ fn run() -> ExitCode {
             }
         }
         "crash-mid-write" => {
-            // Spec'd to crash mid-flight; never reach the response send.
+            // PRODUCER side, spec'd to crash mid-flight; never reach
+            // the response send. Keep the imports alive until abort to
+            // exercise the host's epoll-hup cleanup against fully-
+            // imported state.
+            let _ = (&produce_done, &consume_done);
             std::process::abort();
         }
         other => {

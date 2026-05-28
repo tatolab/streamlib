@@ -3932,22 +3932,26 @@ mod vulkan {
                 return -1;
             }
         };
-        // Import the host's timeline semaphore. The OPAQUE_FD on the
-        // SurfaceHandle is `take`n: Vulkan owns it on success.
+        // Import the host's `produce_done` timeline semaphore.
+        // Single-writer-per-edge per
+        // `docs/architecture/adapter-timeline-single-writer.md`: the
+        // producer signals this timeline; the consumer (us) waits on it
+        // before reading. The OPAQUE_FD on the SurfaceHandle is `take`n;
+        // Vulkan owns it on success.
         let raw_sync_fd: RawFd = match gpu.produce_done_fd.take() {
             Some(fd) => fd,
             None => {
                 tracing::error!(
-                    "slpn_vulkan_register_surface: surface '{}' has no sync_fd — \
+                    "slpn_vulkan_register_surface: surface '{}' has no produce_done_fd — \
                      the host must register the texture with an exportable \
                      `ConsumerVulkanTimelineSemaphore` (see SurfaceStore::register_texture's \
-                     `timeline` argument).",
+                     `produce_done` argument).",
                     surface_id
                 );
                 return -1;
             }
         };
-        let timeline = match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
+        let produce_done = match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
             &rt.device,
             raw_sync_fd,
         ) {
@@ -3957,7 +3961,39 @@ mod vulkan {
                 // SurfaceHandle's slot so the caller can still close it.
                 gpu.produce_done_fd = Some(raw_sync_fd);
                 tracing::error!(
-                    "slpn_vulkan_register_surface: from_imported_opaque_fd: {}",
+                    "slpn_vulkan_register_surface: produce_done from_imported_opaque_fd: {}",
+                    e
+                );
+                return -1;
+            }
+        };
+
+        // Import the host's `consume_done` timeline. We (the consumer
+        // process) signal this timeline from `end_read_access` via host
+        // CPU `signal_host`; the producer waits on it before re-writing.
+        let raw_consume_fd: RawFd = match gpu.consume_done_fd.take() {
+            Some(fd) => fd,
+            None => {
+                tracing::error!(
+                    "slpn_vulkan_register_surface: surface '{}' has no consume_done_fd — \
+                     the host must register both produce_done and consume_done timeline \
+                     fds per the single-writer-per-edge contract",
+                    surface_id
+                );
+                gpu.produce_done_fd = Some(raw_sync_fd);
+                return -1;
+            }
+        };
+        let consume_done = match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
+            &rt.device,
+            raw_consume_fd,
+        ) {
+            Ok(s) => Arc::new(s),
+            Err(e) => {
+                gpu.produce_done_fd = Some(raw_sync_fd);
+                gpu.consume_done_fd = Some(raw_consume_fd);
+                tracing::error!(
+                    "slpn_vulkan_register_surface: consume_done from_imported_opaque_fd: {}",
                     e
                 );
                 return -1;
@@ -3979,7 +4015,8 @@ mod vulkan {
         // the adapter owns the imported VkImage's lifetime end-to-end.
         let registration = HostSurfaceRegistration::<ConsumerMarker> {
             texture: Arc::new(texture),
-            timeline,
+            produce_done,
+            consume_done,
             initial_layout: VulkanLayout(gpu.current_image_layout),
         };
 

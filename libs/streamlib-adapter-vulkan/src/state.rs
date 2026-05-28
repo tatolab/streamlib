@@ -27,11 +27,17 @@ use streamlib_adapter_abi::{SurfaceId, SurfaceRegistration};
 pub struct HostSurfaceRegistration<P: DevicePrivilege> {
     /// Texture wrapper — host- or consumer-flavored per `P`.
     pub texture: Arc<P::Texture>,
-    /// Timeline semaphore — host- or consumer-flavored per `P`. Both
-    /// flavors implement
-    /// [`streamlib_consumer_rhi::VulkanTimelineSemaphoreLike`] so
-    /// the adapter's wait + signal calls work uniformly.
-    pub timeline: Arc<P::TimelineSemaphore>,
+    /// `produce_done` timeline — signaled exclusively by the producer
+    /// process when a write completes (CPU `signal_host` from
+    /// `end_write_access`). The consumer waits on this timeline before
+    /// reading. Single-writer-per-edge per
+    /// `docs/architecture/adapter-timeline-single-writer.md`.
+    pub produce_done: Arc<P::TimelineSemaphore>,
+    /// `consume_done` timeline — signaled exclusively by the consumer
+    /// process when a read completes (CPU `signal_host` from
+    /// `end_read_access`). The producer waits on this timeline before
+    /// re-writing.
+    pub consume_done: Arc<P::TimelineSemaphore>,
     /// Initial layout the texture is in at registration time. The first
     /// `acquire_*` will transition from here. For freshly-allocated
     /// images this is typically [`VulkanLayout::UNDEFINED`].
@@ -49,23 +55,32 @@ pub(crate) struct SurfaceState<P: DevicePrivilege> {
     #[allow(dead_code)] // kept for tracing / debug output, not read in hot paths
     pub(crate) surface_id: SurfaceId,
     pub(crate) texture: Arc<P::Texture>,
-    pub(crate) timeline: Arc<P::TimelineSemaphore>,
+    /// `produce_done` timeline — see
+    /// [`HostSurfaceRegistration::produce_done`].
+    pub(crate) produce_done: Arc<P::TimelineSemaphore>,
+    /// `consume_done` timeline — see
+    /// [`HostSurfaceRegistration::consume_done`].
+    pub(crate) consume_done: Arc<P::TimelineSemaphore>,
     pub(crate) current_layout: VulkanLayout,
     pub(crate) read_holders: u64,
     pub(crate) write_held: bool,
-    /// Last value the host *waited on* before handing access out. Used
-    /// only for telemetry; the canonical wait value is recomputed every
-    /// acquire from `current_release_value`.
+    /// Last peer-timeline value the adapter waited on before handing
+    /// access out. Telemetry only; the canonical wait value is the
+    /// peer-timeline's kernel `current_value()` taken at finalize time.
     pub(crate) last_acquire_value: u64,
-    /// The value `signal_host` was last advanced to. The next acquire
-    /// waits on this value (so any prior writer's GPU work has drained)
-    /// and the next release advances it by one.
-    pub(crate) current_release_value: u64,
+    /// Per-process monotonic signal counter. This adapter instance
+    /// only writes ONE side's timeline per acquire/release cycle
+    /// (`end_read_access` signals `consume_done`,
+    /// `end_write_access` signals `produce_done`). The counter
+    /// advances on every signal regardless of side — each timeline
+    /// sees strictly monotonic values from its respective writer code
+    /// path, which is all VUID-03258 requires.
+    pub(crate) current_signal_value: u64,
 }
 
 impl<P: DevicePrivilege> SurfaceState<P> {
-    pub(crate) fn next_release_value(&self) -> u64 {
-        self.current_release_value + 1
+    pub(crate) fn next_signal_value(&self) -> u64 {
+        self.current_signal_value + 1
     }
 }
 
