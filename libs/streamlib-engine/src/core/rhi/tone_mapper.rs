@@ -201,6 +201,18 @@ impl RhiToneMapper {
     /// engine-owned command buffer; submits and waits before returning.
     /// Both `src` and `dst` are left in `SHADER_READ_ONLY_OPTIMAL` on
     /// success.
+    ///
+    /// Caller contract:
+    /// - `src` and `dst` must reference **distinct VkImages**. In-place
+    ///   tone-map is not supported — the kernel binds src + dst as two
+    ///   storage images, and the 4-barrier sequence would emit
+    ///   conflicting layout claims on the same image. Passing the same
+    ///   handle for both returns `Err`.
+    /// - This helper does **not** read or write
+    ///   [`crate::core::context::TextureRegistration`]. The caller is
+    ///   responsible for `update_layout`ing any associated registration
+    ///   after the call (the helper leaves both textures in
+    ///   `SHADER_READ_ONLY_OPTIMAL`, so the writeback is a constant).
     #[cfg(target_os = "linux")]
     pub fn apply_with_layouts(
         &self,

@@ -19,7 +19,8 @@ use crate::core::rhi::{
     ComputeBindingSpec, ComputeKernelDescriptor, Texture, ToneMapperPushConstants, VulkanLayout,
     TONE_MAPPER_PUSH_CONSTANT_SIZE,
 };
-use crate::core::Result;
+use crate::core::{Error, Result};
+use crate::host_rhi::HostTextureExt;
 
 use super::{
     HostVulkanDevice, RhiCommandRecorder, VulkanAccess, VulkanComputeKernel, VulkanStage,
@@ -100,6 +101,14 @@ impl VulkanToneMapper {
     /// already own a surrounding [`RhiCommandRecorder`] but do need
     /// honest layout management around the dispatch.
     ///
+    /// Caller contract:
+    /// - `src` and `dst` must reference distinct VkImages — in-place
+    ///   tone-map is not supported; passing the same handle returns
+    ///   `Err(Error::Configuration)`.
+    /// - The helper does not touch
+    ///   [`crate::core::context::TextureRegistration`]; the caller
+    ///   updates any associated registration after the call.
+    ///
     /// For consumers that already drive their own recorder, prefer
     /// [`Self::prepare`] + their recorder's `record_image_barrier` +
     /// `record_dispatch` to avoid the extra submit/wait round-trip.
@@ -111,6 +120,24 @@ impl VulkanToneMapper {
         dst_current_layout: VulkanLayout,
         push: &ToneMapperPushConstants,
     ) -> Result<()> {
+        // Reject in-place tone-map. The kernel binds src + dst as
+        // distinct storage images and the barrier sequence (src →
+        // GENERAL, dst → GENERAL, dispatch, src → SROO, dst → SROO)
+        // emits conflicting layout claims on the same VkImage when
+        // the caller passes the same handle for both, which trips
+        // VUID-VkImageMemoryBarrier2-oldLayout-01197 twice per submit.
+        // Catch the misuse here rather than as validation noise 60
+        // frames downstream.
+        if let (Some(src_image), Some(dst_image)) =
+            (src.vulkan_inner().image(), dst.vulkan_inner().image())
+        {
+            if src_image == dst_image {
+                return Err(Error::Configuration(
+                    "VulkanToneMapper::apply_with_layouts: src and dst must be distinct VkImages (in-place tone-map is not supported)".into(),
+                ));
+            }
+        }
+
         let kernel = self.prepare(src, dst, push)?;
         let dispatch_x = push.width.div_ceil(TONE_MAPPER_WORKGROUP_SIZE);
         let dispatch_y = push.height.div_ceil(TONE_MAPPER_WORKGROUP_SIZE);
@@ -545,5 +572,45 @@ mod tests {
         assert_eq!(byte, 255, "round-trip should land at byte 255");
         // Suppress unused-import warnings if the GPU test is skipped.
         let _ = srgb_to_linear(0.5);
+    }
+
+    /// `apply_with_layouts` rejects `src == dst` with an `Err`. Catches
+    /// the caller-side cache-reuse bug class (a layer's `texture`
+    /// referring to the same VkImage as the per-port intermediate)
+    /// directly, instead of surfacing it as VUID-01197 validation
+    /// noise on every per-frame submit downstream. Mentally revert
+    /// the new precondition check at the top of
+    /// `VulkanToneMapper::apply_with_layouts` and this test fails.
+    #[test]
+    #[ignore = "hardware integration — requires a working Vulkan device + queue"]
+    fn apply_with_layouts_rejects_same_image_for_src_and_dst() {
+        let Some(device) = try_vulkan_device() else { return };
+        let texture = make_general_texture(&device, 8, 8, |_, _| [0; 4]);
+        let push = ToneMapperPushConstants::new(
+            8,
+            8,
+            TransferId::Pq,
+            TransferId::Srgb,
+            ToneCurveId::Bt2390,
+            1000.0,
+            100.0,
+        );
+        let mapper = VulkanToneMapper::new(&device);
+        let result = mapper.apply_with_layouts(
+            &texture,
+            VulkanLayout::GENERAL,
+            &texture, // same VkImage handle as src
+            VulkanLayout::GENERAL,
+            &push,
+        );
+        match result {
+            Err(crate::core::Error::Configuration(msg)) => {
+                assert!(
+                    msg.contains("distinct VkImages"),
+                    "expected distinct-VkImages diagnostic, got: {msg}"
+                );
+            }
+            other => panic!("expected Err(Configuration), got {other:?}"),
+        }
     }
 }

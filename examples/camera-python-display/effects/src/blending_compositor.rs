@@ -876,6 +876,19 @@ fn normalize_layer(
         return Ok(());
     }
 
+    // Already-normalized short-circuit. `refresh_layer` resets
+    // `normalized_layout` to `None` whenever a fresh upstream frame
+    // lands; if it's still `Some` here, the per-port intermediate
+    // already holds tone-mapped content for the current source frame
+    // (BlendingCompositor ticks faster than upstream producers, so
+    // many ticks reuse the cached layer). Re-running the tone-mapper
+    // on the same source would call `apply_with_layouts(intermediate,
+    // intermediate)` — src == dst — which trips VUID-01197 twice per
+    // submit on the 4-barrier sequence.
+    if layer.normalized_layout.is_some() {
+        return Ok(());
+    }
+
     let width = layer.texture.width();
     let height = layer.texture.height();
 
