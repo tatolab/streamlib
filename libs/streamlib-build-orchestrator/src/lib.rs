@@ -332,9 +332,14 @@ fn stage_into(
 ) -> anyhow::Result<()> {
     use anyhow::Context;
 
-    // streamlib.yaml (always).
-    std::fs::copy(pkg_dir.join("streamlib.yaml"), dest.join("streamlib.yaml"))
-        .with_context(|| "copy streamlib.yaml")?;
+    // streamlib.yaml — rewritten so relative `path:` deps/patches point
+    // at their ORIGINAL source (absolute), not at a sibling of the cache
+    // slot. The package is relocated into the build cache, so a
+    // `path: ../core` that resolved against `packages/<pkg>` would
+    // otherwise break; rewriting to the absolute source path keeps the
+    // engine's transitive-dep walk resolving each dep to its real source
+    // (where the orchestrator can build it).
+    stage_manifest_with_absolute_path_deps(pkg_dir, dest)?;
 
     // schemas/ (always, if present).
     copy_dir_if_exists(&pkg_dir.join("schemas"), &dest.join("schemas"))?;
@@ -354,6 +359,40 @@ fn stage_into(
             .ok_or_else(|| anyhow::anyhow!("built cdylib has no filename"))?;
         std::fs::copy(cdylib, triple_dir.join(filename)).with_context(|| "copy cdylib")?;
     }
+    Ok(())
+}
+
+/// Copy `streamlib.yaml` into `dest`, rewriting every relative `path:`
+/// entry in `dependencies` / `patch` to an absolute path anchored at the
+/// original `pkg_dir`. Registry / git entries pass through unchanged.
+fn stage_manifest_with_absolute_path_deps(pkg_dir: &Path, dest: &Path) -> anyhow::Result<()> {
+    use anyhow::Context;
+    use streamlib_idents::DependencySpec;
+
+    let yaml = std::fs::read_to_string(pkg_dir.join("streamlib.yaml"))
+        .with_context(|| "read streamlib.yaml")?;
+    let mut manifest: streamlib_processor_schema::StreamlibYaml =
+        serde_yaml::from_str(&yaml).with_context(|| "parse streamlib.yaml")?;
+
+    let abs_pkg = std::fs::canonicalize(pkg_dir).unwrap_or_else(|_| pkg_dir.to_path_buf());
+    let rewrite = |map: &mut std::collections::BTreeMap<
+        streamlib_idents::PackageRef,
+        DependencySpec,
+    >| {
+        for spec in map.values_mut() {
+            if let DependencySpec::Path(pd) = spec {
+                if pd.path.is_relative() {
+                    let joined = abs_pkg.join(&pd.path);
+                    pd.path = std::fs::canonicalize(&joined).unwrap_or(joined);
+                }
+            }
+        }
+    };
+    rewrite(&mut manifest.dependencies);
+    rewrite(&mut manifest.patch);
+
+    let out = serde_yaml::to_string(&manifest).with_context(|| "serialize streamlib.yaml")?;
+    std::fs::write(dest.join("streamlib.yaml"), out).with_context(|| "write streamlib.yaml")?;
     Ok(())
 }
 

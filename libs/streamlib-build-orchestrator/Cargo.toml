@@ -13,6 +13,7 @@ repository.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 tracing = { workspace = true }
+serde_yaml = { workspace = true }
 streamlib-engine = { path = "../streamlib-engine" }
 streamlib-cargo-build = { path = "../streamlib-cargo-build" }
 streamlib-idents = { path = "../streamlib-idents" }
