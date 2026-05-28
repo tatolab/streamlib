@@ -506,6 +506,86 @@ mod tests {
         }
     }
 
+    /// THE trap-regression proof: editing a Rust package's source and
+    /// re-materializing under `IfStale` produces a different staged
+    /// cdylib — i.e. staleness is decided by cargo's fingerprint, which
+    /// rebuilds on a source change. If a future refactor reintroduced an
+    /// mtime shortcut (or skipped the build), the two staged artifacts
+    /// would be byte-identical and this fails.
+    ///
+    /// `#[ignore]` because it shells out to `cargo build` (compiles a
+    /// trivial standalone cdylib twice) — too heavy for the CI
+    /// `--lib` run; invoke explicitly with `cargo test -- --ignored`.
+    #[test]
+    #[ignore = "shells to cargo build twice; run explicitly via --ignored"]
+    fn ifstale_rebuilds_after_source_edit() {
+        let home = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("STREAMLIB_HOME", home.path());
+        }
+
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(
+            src.path().join("streamlib.yaml"),
+            concat!(
+                "package:\n  org: tatolab\n  name: orch-rebuild\n  version: \"0.1.0\"\n",
+                "processors:\n  - name: P\n    version: 1.0.0\n    description: x\n",
+                "    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n",
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            src.path().join("Cargo.toml"),
+            concat!(
+                "[package]\nname = \"orch-rebuild-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+                "[lib]\ncrate-type = [\"cdylib\"]\n",
+            ),
+        )
+        .unwrap();
+        std::fs::create_dir(src.path().join("src")).unwrap();
+        let lib_rs = src.path().join("src/lib.rs");
+        std::fs::write(&lib_rs, "#[no_mangle]\npub extern \"C\" fn answer() -> u32 { 1 }\n").unwrap();
+
+        let request = BuildRequest {
+            package: streamlib_idents::PackageRef::new(
+                streamlib_idents::Org::new("tatolab").unwrap(),
+                streamlib_idents::Package::new("orch-rebuild").unwrap(),
+            ),
+            source: BuildSource::PackageDir(src.path().to_path_buf()),
+            policy: streamlib_engine::core::runtime::BuildPolicy::IfStale,
+            host_triple: build::host_target_triple().to_string(),
+        };
+        let orch = PolyglotBuildOrchestrator::default();
+
+        let read_cdylib = |dir: &Path| -> Vec<u8> {
+            let triple_dir = dir.join("lib").join(build::host_target_triple());
+            let entry = std::fs::read_dir(&triple_dir)
+                .unwrap()
+                .flatten()
+                .find(|e| e.path().extension().is_some_and(|x| x == build::host_dylib_extension()))
+                .expect("staged cdylib present");
+            std::fs::read(entry.path()).unwrap()
+        };
+
+        let staged1 = orch.materialize(&request, &NullSink).expect("first materialize");
+        let bytes1 = read_cdylib(&staged1.staged_dir);
+
+        // Edit the source — change the function body.
+        std::fs::write(&lib_rs, "#[no_mangle]\npub extern \"C\" fn answer() -> u32 { 2 }\n").unwrap();
+
+        let staged2 = orch.materialize(&request, &NullSink).expect("second materialize");
+        let bytes2 = read_cdylib(&staged2.staged_dir);
+
+        assert_ne!(
+            bytes1, bytes2,
+            "editing source must produce a different cdylib — IfStale delegated to cargo's fingerprint and rebuilt"
+        );
+
+        unsafe {
+            std::env::remove_var("STREAMLIB_HOME");
+        }
+    }
+
     /// `Remote` / `SlpkgArchive` sources are rejected by the in-process
     /// builder (a build-service / the engine handle those respectively).
     #[test]
