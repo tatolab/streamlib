@@ -1272,15 +1272,25 @@ mod gpu_surface {
         /// per plane, keyed by plane index; single-plane surfaces carry a
         /// one-element vec. Mirrors the Python-native twin.
         pub fds: Vec<RawFd>,
-        /// Optional OPAQUE_FD timeline-semaphore handle the host attached
-        /// when registering the surface (#531). Routed into the Vulkan
-        /// adapter's `ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd` so
-        /// the subprocess reuses the host adapter's timeline-wait + signal
-        /// path. `None` for surfaces without explicit Vulkan sync (OpenGL
-        /// adapter, CPU-readback, legacy DMA-BUF consumer flows). The fd is
-        /// closed when the handle is dropped, unless the import has taken
-        /// ownership.
-        pub sync_fd: Option<RawFd>,
+        /// Optional OPAQUE_FD `produce_done` timeline-semaphore handle the
+        /// host attached when registering the surface. Single-writer-per-
+        /// edge: the producer process signals this timeline, the consumer
+        /// waits before reading. The cdylib's `sldn_*_register_surface`
+        /// entry points import this FD via
+        /// `ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd` so
+        /// the subprocess reuses the host adapter's timeline-wait path.
+        /// `None` for surfaces without explicit Vulkan sync. The fd is
+        /// closed when the handle is dropped unless the import has taken
+        /// ownership (Vulkan import takes ownership on success). See
+        /// `docs/architecture/adapter-timeline-single-writer.md`.
+        pub produce_done_fd: Option<RawFd>,
+        /// Optional OPAQUE_FD `consume_done` timeline-semaphore handle.
+        /// Single-writer-per-edge: the consumer process signals this
+        /// timeline from its `end_read_access` path so the producer can
+        /// wait before re-writing. Same lifetime rules as
+        /// `produce_done_fd`. `None` until each per-adapter
+        /// `sldn_*_register_surface` migration claims it.
+        pub consume_done_fd: Option<RawFd>,
         pub plane_sizes: Vec<u64>,
         pub plane_offsets: Vec<u64>,
         /// Per-plane row pitch in bytes (source-of-truth from the host's
@@ -1360,11 +1370,18 @@ mod gpu_surface {
                     unsafe { libc::close(*fd) };
                 }
             }
-            // Close the sync FD if the Vulkan adapter import didn't take
-            // ownership. The adapter's `register_surface` takes the fd by
-            // value via `take_sync_fd` so a successful import zeros out
-            // this slot before drop runs.
-            if let Some(fd) = self.sync_fd {
+            // Close both timeline FDs if the per-adapter
+            // `sldn_*_register_surface` paths didn't take ownership. The
+            // adapter's register entry points `.take()` whichever slots
+            // they consume; a successful import zeroes the slot before
+            // drop runs. See
+            // `docs/architecture/adapter-timeline-single-writer.md`.
+            if let Some(fd) = self.produce_done_fd {
+                if fd >= 0 {
+                    unsafe { libc::close(fd) };
+                }
+            }
+            if let Some(fd) = self.consume_done_fd {
                 if fd >= 0 {
                     unsafe { libc::close(fd) };
                 }
@@ -2255,10 +2272,14 @@ mod surface_client {
         /// `SurfaceHandle` without another wire roundtrip.
         current_image_layout: i32,
         format: String,
-        /// Optional OPAQUE_FD timeline-semaphore handle the host attached at
-        /// register time. Stored so cache hits can hand a fresh dup to each
-        /// new `SurfaceHandle`; closed with the cache entry.
-        sync_fd: Option<RawFd>,
+        /// Optional OPAQUE_FD `produce_done` timeline-semaphore handle the
+        /// host attached at register time. Stored so cache hits can hand
+        /// a fresh dup to each new `SurfaceHandle`; closed with the cache
+        /// entry.
+        produce_done_fd: Option<RawFd>,
+        /// Optional OPAQUE_FD `consume_done` timeline-semaphore handle.
+        /// Same lifetime rules as `produce_done_fd`.
+        consume_done_fd: Option<RawFd>,
     }
 
     impl Drop for CachedSurface {
@@ -2268,7 +2289,12 @@ mod surface_client {
                     unsafe { libc::close(*fd) };
                 }
             }
-            if let Some(fd) = self.sync_fd {
+            if let Some(fd) = self.produce_done_fd {
+                if fd >= 0 {
+                    unsafe { libc::close(fd) };
+                }
+            }
+            if let Some(fd) = self.consume_done_fd {
                 if fd >= 0 {
                     unsafe { libc::close(fd) };
                 }
@@ -2446,28 +2472,51 @@ mod surface_client {
                     }
                     return std::ptr::null_mut();
                 }
-                let cached_sync_dup: Option<RawFd> = match cached.sync_fd {
-                    Some(src) => {
-                        let dup = unsafe { libc::dup(src) };
-                        if dup < 0 {
-                            tracing::error!(
-                                "surface_resolve_surface: dup cached sync_fd failed for '{}': {}",
-                                pool_id_str,
-                                std::io::Error::last_os_error()
-                            );
-                            for fd in &dup_fds {
-                                unsafe { libc::close(*fd) };
+                let dup_timeline = |src: Option<RawFd>, label: &str| -> Result<Option<RawFd>, ()> {
+                    match src {
+                        Some(s) => {
+                            let dup = unsafe { libc::dup(s) };
+                            if dup < 0 {
+                                tracing::error!(
+                                    "surface_resolve_surface: dup cached {} failed for '{}': {}",
+                                    label,
+                                    pool_id_str,
+                                    std::io::Error::last_os_error()
+                                );
+                                Err(())
+                            } else {
+                                Ok(Some(dup))
                             }
-                            return std::ptr::null_mut();
                         }
-                        Some(dup)
+                        None => Ok(None),
                     }
-                    None => None,
+                };
+                let cached_produce_dup = match dup_timeline(cached.produce_done_fd, "produce_done_fd") {
+                    Ok(o) => o,
+                    Err(_) => {
+                        for fd in &dup_fds {
+                            unsafe { libc::close(*fd) };
+                        }
+                        return std::ptr::null_mut();
+                    }
+                };
+                let cached_consume_dup = match dup_timeline(cached.consume_done_fd, "consume_done_fd") {
+                    Ok(o) => o,
+                    Err(_) => {
+                        for fd in &dup_fds {
+                            unsafe { libc::close(*fd) };
+                        }
+                        if let Some(fd) = cached_produce_dup {
+                            unsafe { libc::close(fd) };
+                        }
+                        return std::ptr::null_mut();
+                    }
                 };
                 let n_planes = dup_fds.len();
                 return Box::into_raw(Box::new(SurfaceHandle {
                     fds: dup_fds,
-                    sync_fd: cached_sync_dup,
+                    produce_done_fd: cached_produce_dup,
+                    consume_done_fd: cached_consume_dup,
                     plane_sizes: cached.plane_sizes.clone(),
                     plane_offsets: cached.plane_offsets.clone(),
                     plane_strides: cached.plane_strides.clone(),
@@ -2540,15 +2589,13 @@ mod surface_client {
             return std::ptr::null_mut();
         }
 
-        // Peel off the optional trailing producer-side `produce_done`
-        // timeline FD — same single-writer-per-edge wire shape as the
-        // Python-native twin (see
-        // `docs/architecture/adapter-timeline-single-writer.md`). The
-        // host signals each timeline's presence via
-        // `has_produce_done_fd` / `has_consume_done_fd`; FDs are
-        // appended in that order. Pre-migration: consume_done is
-        // closed here and the per-adapter migrations will reclaim it
-        // through a new wire hook.
+        // Peel off the trailing per-edge timeline FDs — same wire shape
+        // as the Python-native twin. The host signals each timeline's
+        // presence via `has_produce_done_fd` / `has_consume_done_fd`;
+        // FDs appear in that order so the subprocess can route each
+        // into the matching `ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd`.
+        // Single-writer-per-edge is documented in
+        // `docs/architecture/adapter-timeline-single-writer.md`.
         let has_produce_done_fd = response
             .get("has_produce_done_fd")
             .and_then(|v| v.as_bool())
@@ -2559,29 +2606,31 @@ mod surface_client {
             .unwrap_or(false);
         let trailing_count =
             (has_produce_done_fd as usize) + (has_consume_done_fd as usize);
-        let (received_fds, sync_fd): (Vec<RawFd>, Option<RawFd>) = if trailing_count > 0
-            && received_fds.len() >= trailing_count
-        {
+        let (received_fds, produce_done_fd, consume_done_fd): (
+            Vec<RawFd>,
+            Option<RawFd>,
+            Option<RawFd>,
+        ) = if trailing_count > 0 && received_fds.len() >= trailing_count {
             let split_at = received_fds.len() - trailing_count;
             let mut all = received_fds;
             let trailing: Vec<RawFd> = all.split_off(split_at);
             let mut iter = trailing.into_iter();
             let produce_fd = if has_produce_done_fd { iter.next() } else { None };
             let consume_fd = if has_consume_done_fd { iter.next() } else { None };
-            if let Some(fd) = consume_fd {
-                unsafe { libc::close(fd) };
-            }
-            (all, produce_fd)
+            (all, produce_fd, consume_fd)
         } else {
-            (received_fds, None)
+            (received_fds, None, None)
         };
 
         if received_fds.is_empty() {
             tracing::error!(
-                "surface_resolve_surface: no plane fds for '{}' after peeling sync_fd",
+                "surface_resolve_surface: no plane fds for '{}' after peeling timeline fds",
                 pool_id_str
             );
-            if let Some(s) = sync_fd {
+            if let Some(s) = produce_done_fd {
+                unsafe { libc::close(s) };
+            }
+            if let Some(s) = consume_done_fd {
                 unsafe { libc::close(s) };
             }
             return std::ptr::null_mut();
@@ -2651,18 +2700,22 @@ mod surface_client {
             }
             cache_fds.push(dup);
         }
-        let cache_sync_fd: Option<RawFd> = match sync_fd {
-            Some(src) if cache_dup_ok => {
-                let dup = unsafe { libc::dup(src) };
-                if dup < 0 {
-                    cache_dup_ok = false;
-                    None
-                } else {
-                    Some(dup)
+        let dup_for_cache = |src: Option<RawFd>, ok: &mut bool| -> Option<RawFd> {
+            match src {
+                Some(s) if *ok => {
+                    let dup = unsafe { libc::dup(s) };
+                    if dup < 0 {
+                        *ok = false;
+                        None
+                    } else {
+                        Some(dup)
+                    }
                 }
+                _ => None,
             }
-            _ => None,
         };
+        let cache_produce_done_fd = dup_for_cache(produce_done_fd, &mut cache_dup_ok);
+        let cache_consume_done_fd = dup_for_cache(consume_done_fd, &mut cache_dup_ok);
         if cache_dup_ok {
             let mut cache = handle.resolve_cache.lock().expect("poisoned");
             if cache.len() >= MAX_RESOLVE_CACHE {
@@ -2686,14 +2739,18 @@ mod surface_client {
                     drm_format_modifier,
                     current_image_layout,
                     format: format_str.to_string(),
-                    sync_fd: cache_sync_fd,
+                    produce_done_fd: cache_produce_done_fd,
+                    consume_done_fd: cache_consume_done_fd,
                 },
             );
         } else {
             for fd in &cache_fds {
                 unsafe { libc::close(*fd) };
             }
-            if let Some(fd) = cache_sync_fd {
+            if let Some(fd) = cache_produce_done_fd {
+                unsafe { libc::close(fd) };
+            }
+            if let Some(fd) = cache_consume_done_fd {
                 unsafe { libc::close(fd) };
             }
         }
@@ -2701,7 +2758,8 @@ mod surface_client {
         let n_planes = received_fds.len();
         Box::into_raw(Box::new(SurfaceHandle {
             fds: received_fds,
-            sync_fd,
+            produce_done_fd,
+            consume_done_fd,
             plane_sizes,
             plane_offsets,
             plane_strides,
@@ -3559,7 +3617,7 @@ mod vulkan {
                 return -1;
             }
         };
-        let raw_sync_fd: RawFd = match gpu.sync_fd.take() {
+        let raw_sync_fd: RawFd = match gpu.produce_done_fd.take() {
             Some(fd) => fd,
             None => {
                 tracing::error!(
@@ -3577,7 +3635,7 @@ mod vulkan {
         ) {
             Ok(s) => Arc::new(s),
             Err(e) => {
-                gpu.sync_fd = Some(raw_sync_fd);
+                gpu.produce_done_fd = Some(raw_sync_fd);
                 tracing::error!(
                     "sldn_vulkan_register_surface: from_imported_opaque_fd: {}",
                     e
@@ -4154,7 +4212,7 @@ mod cpu_readback {
             staging_planes.push(pb);
         }
 
-        let raw_sync_fd: RawFd = match gpu.sync_fd.take() {
+        let raw_sync_fd: RawFd = match gpu.produce_done_fd.take() {
             Some(fd) => fd,
             None => {
                 tracing::error!(
@@ -4172,7 +4230,7 @@ mod cpu_readback {
         ) {
             Ok(s) => Arc::new(s),
             Err(e) => {
-                gpu.sync_fd = Some(raw_sync_fd);
+                gpu.produce_done_fd = Some(raw_sync_fd);
                 tracing::error!(
                     "sldn_cpu_readback_register_surface: from_imported_opaque_fd: {}",
                     e
@@ -4982,7 +5040,7 @@ mod cuda {
         };
 
         // ── Step 2: import the timeline semaphore into Vulkan ───────────
-        let raw_sync_fd: RawFd = match gpu.sync_fd.take() {
+        let raw_sync_fd: RawFd = match gpu.produce_done_fd.take() {
             Some(fd) => fd,
             None => {
                 tracing::error!(
@@ -5002,7 +5060,7 @@ mod cuda {
                 std::io::Error::last_os_error()
             );
             // Restore the original fd onto the handle so its Drop closes it.
-            gpu.sync_fd = Some(raw_sync_fd);
+            gpu.produce_done_fd = Some(raw_sync_fd);
             return SLDN_CUDA_ERR;
         }
         let timeline = match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
@@ -5016,7 +5074,7 @@ mod cuda {
                     e
                 );
                 unsafe { libc::close(vk_sync_fd) };
-                gpu.sync_fd = Some(raw_sync_fd);
+                gpu.produce_done_fd = Some(raw_sync_fd);
                 return SLDN_CUDA_ERR;
             }
         };
@@ -5032,7 +5090,7 @@ mod cuda {
             // Vulkan-side imports drop here via Arc — they own their own
             // dups already. Restore sync_fd onto the handle so its Drop
             // closes it (Vulkan timeline import owns its dup independently).
-            gpu.sync_fd = Some(raw_sync_fd);
+            gpu.produce_done_fd = Some(raw_sync_fd);
             return SLDN_CUDA_ERR;
         }
         // SAFETY: `cudaImportExternalMemory` per CUDA docs:
@@ -5048,7 +5106,7 @@ mod cuda {
                         e
                     );
                     libc::close(cuda_mem_fd);
-                    gpu.sync_fd = Some(raw_sync_fd);
+                    gpu.produce_done_fd = Some(raw_sync_fd);
                     return SLDN_CUDA_ERR;
                 }
             }
@@ -5067,7 +5125,7 @@ mod cuda {
                         e
                     );
                     let _ = external_memory::destroy_external_memory(ext_mem);
-                    gpu.sync_fd = Some(raw_sync_fd);
+                    gpu.produce_done_fd = Some(raw_sync_fd);
                     return SLDN_CUDA_ERR;
                 }
             }
@@ -5090,7 +5148,7 @@ mod cuda {
                         e
                     );
                     let _ = external_memory::destroy_external_memory(ext_mem);
-                    gpu.sync_fd = Some(raw_sync_fd);
+                    gpu.produce_done_fd = Some(raw_sync_fd);
                     return SLDN_CUDA_ERR;
                 }
             }
@@ -5106,7 +5164,7 @@ mod cuda {
                     other
                 );
                 let _ = unsafe { external_memory::destroy_external_memory(ext_mem) };
-                gpu.sync_fd = Some(raw_sync_fd);
+                gpu.produce_done_fd = Some(raw_sync_fd);
                 return SLDN_CUDA_ERR;
             }
         };
@@ -5119,7 +5177,7 @@ mod cuda {
                 std::io::Error::last_os_error()
             );
             let _ = unsafe { external_memory::destroy_external_memory(ext_mem) };
-            gpu.sync_fd = Some(raw_sync_fd);
+            gpu.produce_done_fd = Some(raw_sync_fd);
             return SLDN_CUDA_ERR;
         }
         // Same descriptor-construction story as the carve-out test:
@@ -5151,7 +5209,7 @@ mod cuda {
                     );
                     libc::close(cuda_sync_fd);
                     let _ = external_memory::destroy_external_memory(ext_mem);
-                    gpu.sync_fd = Some(raw_sync_fd);
+                    gpu.produce_done_fd = Some(raw_sync_fd);
                     return SLDN_CUDA_ERR;
                 }
             }
@@ -5169,7 +5227,7 @@ mod cuda {
                     );
                     let _ = sys::cudaDestroyExternalSemaphore(ext_sem).result();
                     let _ = external_memory::destroy_external_memory(ext_mem);
-                    gpu.sync_fd = Some(raw_sync_fd);
+                    gpu.produce_done_fd = Some(raw_sync_fd);
                     return SLDN_CUDA_ERR;
                 }
             }
@@ -5199,7 +5257,7 @@ mod cuda {
                 let _ = sys::cudaDestroyExternalSemaphore(ext_sem).result();
                 let _ = external_memory::destroy_external_memory(ext_mem);
             };
-            gpu.sync_fd = Some(raw_sync_fd);
+            gpu.produce_done_fd = Some(raw_sync_fd);
             return SLDN_CUDA_ERR;
         }
 
@@ -5208,7 +5266,7 @@ mod cuda {
         // returning it to the handle's `sync_fd` slot is the canonical
         // ownership recovery — same pattern as cpu-readback's
         // register_surface error paths.
-        gpu.sync_fd = Some(raw_sync_fd);
+        gpu.produce_done_fd = Some(raw_sync_fd);
 
         let entry = Arc::new(RegisteredCudaSurface {
             ext_mem,
@@ -5885,7 +5943,7 @@ mod cuda {
         };
 
         // ── Step 2: import the timeline semaphore into Vulkan ───────────
-        let raw_sync_fd: RawFd = match gpu.sync_fd.take() {
+        let raw_sync_fd: RawFd = match gpu.produce_done_fd.take() {
             Some(fd) => fd,
             None => {
                 tracing::error!(
@@ -5903,7 +5961,7 @@ mod cuda {
                 "sldn_cuda_register_image_surface: dup sync_fd failed: {}",
                 std::io::Error::last_os_error()
             );
-            gpu.sync_fd = Some(raw_sync_fd);
+            gpu.produce_done_fd = Some(raw_sync_fd);
             return SLDN_CUDA_ERR;
         }
         let timeline = match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
@@ -5917,7 +5975,7 @@ mod cuda {
                     e
                 );
                 unsafe { libc::close(vk_sync_fd) };
-                gpu.sync_fd = Some(raw_sync_fd);
+                gpu.produce_done_fd = Some(raw_sync_fd);
                 return SLDN_CUDA_ERR;
             }
         };
@@ -5929,7 +5987,7 @@ mod cuda {
                 "sldn_cuda_register_image_surface: dup cuda_mem_fd failed: {}",
                 std::io::Error::last_os_error()
             );
-            gpu.sync_fd = Some(raw_sync_fd);
+            gpu.produce_done_fd = Some(raw_sync_fd);
             return SLDN_CUDA_ERR;
         }
         // SAFETY: see notes on the buffer path's import_external_memory_opaque_fd
@@ -5943,7 +6001,7 @@ mod cuda {
                         e
                     );
                     libc::close(cuda_mem_fd);
-                    gpu.sync_fd = Some(raw_sync_fd);
+                    gpu.produce_done_fd = Some(raw_sync_fd);
                     return SLDN_CUDA_ERR;
                 }
             }
@@ -5986,7 +6044,7 @@ mod cuda {
                         e
                     );
                     let _ = external_memory::destroy_external_memory(ext_mem);
-                    gpu.sync_fd = Some(raw_sync_fd);
+                    gpu.produce_done_fd = Some(raw_sync_fd);
                     return SLDN_CUDA_ERR;
                 }
             }
@@ -6003,7 +6061,7 @@ mod cuda {
                 let _ = sys::cudaFreeMipmappedArray(mipmapped_array).result();
                 let _ = external_memory::destroy_external_memory(ext_mem);
             };
-            gpu.sync_fd = Some(raw_sync_fd);
+            gpu.produce_done_fd = Some(raw_sync_fd);
             return SLDN_CUDA_ERR;
         }
         let mut sem_desc = MaybeUninit::<sys::cudaExternalSemaphoreHandleDesc>::zeroed();
@@ -6030,7 +6088,7 @@ mod cuda {
                     libc::close(cuda_sync_fd);
                     let _ = sys::cudaFreeMipmappedArray(mipmapped_array).result();
                     let _ = external_memory::destroy_external_memory(ext_mem);
-                    gpu.sync_fd = Some(raw_sync_fd);
+                    gpu.produce_done_fd = Some(raw_sync_fd);
                     return SLDN_CUDA_ERR;
                 }
             }
@@ -6049,7 +6107,7 @@ mod cuda {
                     let _ = sys::cudaDestroyExternalSemaphore(ext_sem).result();
                     let _ = sys::cudaFreeMipmappedArray(mipmapped_array).result();
                     let _ = external_memory::destroy_external_memory(ext_mem);
-                    gpu.sync_fd = Some(raw_sync_fd);
+                    gpu.produce_done_fd = Some(raw_sync_fd);
                     return SLDN_CUDA_ERR;
                 }
             }
@@ -6077,11 +6135,11 @@ mod cuda {
                 let _ = sys::cudaFreeMipmappedArray(mipmapped_array).result();
                 let _ = external_memory::destroy_external_memory(ext_mem);
             };
-            gpu.sync_fd = Some(raw_sync_fd);
+            gpu.produce_done_fd = Some(raw_sync_fd);
             return SLDN_CUDA_ERR;
         }
 
-        gpu.sync_fd = Some(raw_sync_fd);
+        gpu.produce_done_fd = Some(raw_sync_fd);
 
         let entry = Arc::new(RegisteredCudaImageSurface {
             ext_mem,
