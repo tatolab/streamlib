@@ -106,24 +106,28 @@ Deno.test("SurfaceTransportHandle layout matches Rust", () => {
 });
 
 Deno.test("SurfaceSyncState layout matches Rust", () => {
-  // timeline_semaphore_handle: u64 @ 0
-  // timeline_semaphore_sync_fd: i32 @ 8
+  // produce_done_semaphore_handle: u64 @ 0
+  // produce_done_semaphore_sync_fd: i32 @ 8
   // _pad_a: u32 @ 12
   // last_acquire_value: u64 @ 16
   // last_release_value: u64 @ 24
   // current_image_layout: i32 @ 32
   // _pad_b: u32 @ 36
-  // _reserved: [u8; 16] @ 40
+  // consume_done_semaphore_handle: u64 @ 40
+  // consume_done_semaphore_sync_fd: i32 @ 48
+  // _pad_c: u32 @ 52
   // total: 56, align 8
   const s = SurfaceLayout.SyncState;
-  assertEquals(s.Offsets.timelineSemaphoreHandle, 0);
-  assertEquals(s.Offsets.timelineSemaphoreSyncFd, 8);
+  assertEquals(s.Offsets.produceDoneSemaphoreHandle, 0);
+  assertEquals(s.Offsets.produceDoneSemaphoreSyncFd, 8);
   assertEquals(s.Offsets.padA, 12);
   assertEquals(s.Offsets.lastAcquireValue, 16);
   assertEquals(s.Offsets.lastReleaseValue, 24);
   assertEquals(s.Offsets.currentImageLayout, 32);
   assertEquals(s.Offsets.padB, 36);
-  assertEquals(s.Offsets.reserved, 40);
+  assertEquals(s.Offsets.consumeDoneSemaphoreHandle, 40);
+  assertEquals(s.Offsets.consumeDoneSemaphoreSyncFd, 48);
+  assertEquals(s.Offsets.padC, 52);
   assertEquals(s.Size, 56);
   assertEquals(s.Align, 8);
 });

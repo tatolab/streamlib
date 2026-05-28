@@ -108,23 +108,27 @@ def test_surface_transport_handle_layout():
 
 
 def test_surface_sync_state_layout():
-    # timeline_semaphore_handle: u64 @ 0
-    # timeline_semaphore_sync_fd: i32 @ 8
+    # produce_done_semaphore_handle: u64 @ 0
+    # produce_done_semaphore_sync_fd: i32 @ 8
     # _pad_a: u32 @ 12
     # last_acquire_value: u64 @ 16
     # last_release_value: u64 @ 24
     # current_image_layout: i32 @ 32
     # _pad_b: u32 @ 36
-    # _reserved: [u8; 16] @ 40
+    # consume_done_semaphore_handle: u64 @ 40
+    # consume_done_semaphore_sync_fd: i32 @ 48
+    # _pad_c: u32 @ 52
     # total: 56, align 8
-    assert _SurfaceSyncStateC.timeline_semaphore_handle.offset == 0
-    assert _SurfaceSyncStateC.timeline_semaphore_sync_fd.offset == 8
+    assert _SurfaceSyncStateC.produce_done_semaphore_handle.offset == 0
+    assert _SurfaceSyncStateC.produce_done_semaphore_sync_fd.offset == 8
     assert _SurfaceSyncStateC._pad_a.offset == 12
     assert _SurfaceSyncStateC.last_acquire_value.offset == 16
     assert _SurfaceSyncStateC.last_release_value.offset == 24
     assert _SurfaceSyncStateC.current_image_layout.offset == 32
     assert _SurfaceSyncStateC._pad_b.offset == 36
-    assert _SurfaceSyncStateC._reserved.offset == 40
+    assert _SurfaceSyncStateC.consume_done_semaphore_handle.offset == 40
+    assert _SurfaceSyncStateC.consume_done_semaphore_sync_fd.offset == 48
+    assert _SurfaceSyncStateC._pad_c.offset == 52
     assert ctypes.sizeof(_SurfaceSyncStateC) == 56
     assert ctypes.alignment(_SurfaceSyncStateC) == 8
 

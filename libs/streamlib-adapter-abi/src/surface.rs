@@ -190,73 +190,89 @@ impl SurfaceTransportHandle {
     }
 }
 
-/// Adapter-internal: timeline-semaphore handles, counters, and the
+/// Adapter-internal: dual-timeline semaphore handles, counters, and the
 /// current image layout.
 ///
-/// The release-side semaphore value advances inside `acquire_*` /
-/// `end_*_access` (sealed adapter methods called by guard `Drop`).
-/// Customers never touch these fields.
+/// Every subprocess-wired surface adapter (cuda, vulkan, cpu-readback)
+/// carries **two** timeline semaphores per surface — `produce_done`
+/// (signaled by the producer process, waited by the consumer before
+/// reading) and `consume_done` (signaled by the consumer process,
+/// waited by the producer before re-writing). See
+/// `docs/architecture/adapter-timeline-single-writer.md` for the
+/// single-writer-per-edge rule.
 ///
-/// Subprocess adapters cannot dereference `timeline_semaphore_handle`
-/// directly — it's a host-side `VkSemaphore`. They import
-/// `timeline_semaphore_sync_fd` via `vkImportSemaphoreFdKHR` to wait
-/// or signal on the same timeline. Host-Rust adapters typically use
-/// the handle and ignore the fd.
-///
-/// `_reserved` is 16 bytes of zeroed space for additive ABI extensions
-/// before the next major bump (additional fds, opaque per-vendor sync
-/// state, etc.).
+/// Subprocess adapters cannot dereference either `*_semaphore_handle`
+/// directly — those are host-side `VkSemaphore`s. They import
+/// `*_semaphore_sync_fd` via `vkImportSemaphoreFdKHR` to wait
+/// or signal on the same timeline kernel object. Host-Rust adapters
+/// typically use the handles and ignore the fds.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SurfaceSyncState {
-    /// Opaque host-side `VkSemaphore` handle.
-    pub(crate) timeline_semaphore_handle: u64,
-    /// Sync-fd exported via `vkGetSemaphoreFdKHR`; -1 when unset.
-    pub(crate) timeline_semaphore_sync_fd: i32,
+    /// Opaque host-side `VkSemaphore` handle for the `produce_done` timeline.
+    pub(crate) produce_done_semaphore_handle: u64,
+    /// `produce_done` sync-fd exported via `vkGetSemaphoreFdKHR`; -1 when unset.
+    pub(crate) produce_done_semaphore_sync_fd: i32,
     pub(crate) _pad_a: u32,
-    /// Last acquire-side wait value the host signaled.
+    /// Last `produce_done` value the consumer waited for.
     pub(crate) last_acquire_value: u64,
-    /// Last release-side signal value the host saw.
+    /// Last `produce_done` value the producer signaled.
     pub(crate) last_release_value: u64,
     /// Current `VkImageLayout` (i32 per Vulkan spec).
     pub(crate) current_image_layout: i32,
     pub(crate) _pad_b: u32,
-    /// Reserved bytes for additive ABI extensions. MUST be zeroed.
-    pub(crate) _reserved: [u8; 16],
+    /// Opaque host-side `VkSemaphore` handle for the `consume_done` timeline.
+    pub(crate) consume_done_semaphore_handle: u64,
+    /// `consume_done` sync-fd exported via `vkGetSemaphoreFdKHR`; -1 when unset.
+    pub(crate) consume_done_semaphore_sync_fd: i32,
+    pub(crate) _pad_c: u32,
 }
 
 impl SurfaceSyncState {
-    /// Construct from the host-side semaphore + sync-fd + initial layout.
+    /// Construct from both timeline handles + sync-fds + last
+    /// acquire/release snapshots + initial layout.
     ///
     /// Subprocess consumer adapters never call this — they receive the
     /// state in a [`StreamlibSurface`] over IPC and read fields via the
     /// accessors below. Only the host-side surface-share registration
     /// path constructs from raw values.
     pub const fn new(
-        timeline_semaphore_handle: u64,
-        timeline_semaphore_sync_fd: i32,
+        produce_done_semaphore_handle: u64,
+        produce_done_semaphore_sync_fd: i32,
         last_acquire_value: u64,
         last_release_value: u64,
         current_image_layout: i32,
+        consume_done_semaphore_handle: u64,
+        consume_done_semaphore_sync_fd: i32,
     ) -> Self {
         Self {
-            timeline_semaphore_handle,
-            timeline_semaphore_sync_fd,
+            produce_done_semaphore_handle,
+            produce_done_semaphore_sync_fd,
             _pad_a: 0,
             last_acquire_value,
             last_release_value,
             current_image_layout,
             _pad_b: 0,
-            _reserved: [0; 16],
+            consume_done_semaphore_handle,
+            consume_done_semaphore_sync_fd,
+            _pad_c: 0,
         }
     }
 
-    pub const fn timeline_semaphore_handle(&self) -> u64 {
-        self.timeline_semaphore_handle
+    pub const fn produce_done_semaphore_handle(&self) -> u64 {
+        self.produce_done_semaphore_handle
     }
 
-    pub const fn timeline_semaphore_sync_fd(&self) -> i32 {
-        self.timeline_semaphore_sync_fd
+    pub const fn produce_done_semaphore_sync_fd(&self) -> i32 {
+        self.produce_done_semaphore_sync_fd
+    }
+
+    pub const fn consume_done_semaphore_handle(&self) -> u64 {
+        self.consume_done_semaphore_handle
+    }
+
+    pub const fn consume_done_semaphore_sync_fd(&self) -> i32 {
+        self.consume_done_semaphore_sync_fd
     }
 
     pub const fn last_acquire_value(&self) -> u64 {
@@ -327,12 +343,14 @@ impl StreamlibSurface {
         &self.transport
     }
 
-    /// Adapter-facing: the host-side timeline-semaphore + initial layout.
+    /// Adapter-facing: the host-side dual-timeline semaphores + initial layout.
     ///
-    /// Subprocess adapters import `timeline_semaphore_sync_fd` via
-    /// `vkImportSemaphoreFdKHR` and wait/signal the same timeline values
-    /// the host advances; the opaque `timeline_semaphore_handle` is
-    /// host-only and not dereferenceable in another address space.
+    /// Subprocess adapters import the `produce_done` and `consume_done`
+    /// sync-fds via `vkImportSemaphoreFdKHR` and wait / signal on whichever
+    /// edge they own per the single-writer rule
+    /// (`docs/architecture/adapter-timeline-single-writer.md`). The
+    /// opaque semaphore handles are host-only and not dereferenceable in
+    /// another address space.
     pub const fn sync(&self) -> &SurfaceSyncState {
         &self.sync
     }
@@ -441,18 +459,23 @@ mod tests {
 
     #[test]
     fn surface_sync_state_layout() {
-        // timeline_semaphore_handle: u64 @ 0
-        // timeline_semaphore_sync_fd: i32 @ 8
+        // produce_done_semaphore_handle: u64 @ 0
+        // produce_done_semaphore_sync_fd: i32 @ 8
         // _pad_a: u32 @ 12
         // last_acquire_value: u64 @ 16
         // last_release_value: u64 @ 24
         // current_image_layout: i32 @ 32
         // _pad_b: u32 @ 36
-        // _reserved: [u8; 16] @ 40
+        // consume_done_semaphore_handle: u64 @ 40
+        // consume_done_semaphore_sync_fd: i32 @ 48
+        // _pad_c: u32 @ 52
         // total: 56 bytes, align 8
-        assert_eq!(offset_of!(SurfaceSyncState, timeline_semaphore_handle), 0);
         assert_eq!(
-            offset_of!(SurfaceSyncState, timeline_semaphore_sync_fd),
+            offset_of!(SurfaceSyncState, produce_done_semaphore_handle),
+            0
+        );
+        assert_eq!(
+            offset_of!(SurfaceSyncState, produce_done_semaphore_sync_fd),
             8
         );
         assert_eq!(offset_of!(SurfaceSyncState, _pad_a), 12);
@@ -460,7 +483,15 @@ mod tests {
         assert_eq!(offset_of!(SurfaceSyncState, last_release_value), 24);
         assert_eq!(offset_of!(SurfaceSyncState, current_image_layout), 32);
         assert_eq!(offset_of!(SurfaceSyncState, _pad_b), 36);
-        assert_eq!(offset_of!(SurfaceSyncState, _reserved), 40);
+        assert_eq!(
+            offset_of!(SurfaceSyncState, consume_done_semaphore_handle),
+            40
+        );
+        assert_eq!(
+            offset_of!(SurfaceSyncState, consume_done_semaphore_sync_fd),
+            48
+        );
+        assert_eq!(offset_of!(SurfaceSyncState, _pad_c), 52);
         assert_eq!(size_of::<SurfaceSyncState>(), 56);
         assert_eq!(align_of::<SurfaceSyncState>(), 8);
     }
@@ -484,9 +515,11 @@ mod tests {
         assert_eq!(transport.plane_strides(), &[1920, 1920, 0, 0]);
         assert_eq!(transport.drm_format_modifier(), 0x123_4567_89ab_cdef);
 
-        let sync = SurfaceSyncState::new(0xdead_beef, 42, 7, 5, 1);
-        assert_eq!(sync.timeline_semaphore_handle(), 0xdead_beef);
-        assert_eq!(sync.timeline_semaphore_sync_fd(), 42);
+        let sync = SurfaceSyncState::new(0xdead_beef, 42, 7, 5, 1, 0xcafe_d00d, 43);
+        assert_eq!(sync.produce_done_semaphore_handle(), 0xdead_beef);
+        assert_eq!(sync.produce_done_semaphore_sync_fd(), 42);
+        assert_eq!(sync.consume_done_semaphore_handle(), 0xcafe_d00d);
+        assert_eq!(sync.consume_done_semaphore_sync_fd(), 43);
         assert_eq!(sync.last_acquire_value(), 7);
         assert_eq!(sync.last_release_value(), 5);
         assert_eq!(sync.current_image_layout(), 1);
@@ -502,7 +535,8 @@ mod tests {
         );
         assert_eq!(surface.id, 99);
         assert_eq!(surface.transport().plane_count(), 2);
-        assert_eq!(surface.sync().timeline_semaphore_sync_fd(), 42);
+        assert_eq!(surface.sync().produce_done_semaphore_sync_fd(), 42);
+        assert_eq!(surface.sync().consume_done_semaphore_sync_fd(), 43);
     }
 
     #[test]
