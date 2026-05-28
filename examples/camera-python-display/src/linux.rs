@@ -48,7 +48,7 @@
 //! processors that live in the sibling `effects/` package. The runner
 //! stages that cdylib at `effects/lib/<host_triple>/` and registers
 //! the package via `runtime.add_module_with_blocking(...,
-//! Strategy::ManifestDirectory)`. Their graphics-kernel
+//! Strategy::Path)`. Their graphics-kernel
 //! wrappers hand-roll synchronous fence-blocked dispatch with internal
 //! layout-barrier management — a pattern the engine deliberately
 //! doesn't expose because it's wrong-shape for production hot-paths.
@@ -126,10 +126,10 @@ pub fn main() -> Result<()> {
     let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
 
     // Stage the sibling effects cdylib at `effects/lib/<host_triple>/`
-    // so `Strategy::ManifestDirectory` picks it up via
+    // so `Strategy::Path` picks it up via
     // the same triple-keyed convention `streamlib pack` produces.
     // The effects package is example-local (not a workspace-staged
-    // package), so the canonical `the build orchestrator (automatic)` doesn't
+    // package), so the canonical `the build orchestrator` doesn't
     // stage it; the runner handles its own copy step. The user is
     // expected to have run `cargo build -p camera-python-display-effects`
     // beforehand.
@@ -138,8 +138,8 @@ pub fn main() -> Result<()> {
     stage_effects_cdylib(&effects_dir)?;
 
     // Load packages: `@tatolab/camera` + `@tatolab/display` via the
-    // canonical workspace-staged path (`the build orchestrator (automatic)
-    // --package @tatolab/camera --package @tatolab/display` must have
+    // canonical package source (`the build orchestrator
+    //` must have
     // run first). The example-local effects + Python sub-packages
     // resolve via their manifest directories.
     runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/camera"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
@@ -456,10 +456,10 @@ pub fn main() -> Result<()> {
 }
 
 /// Copy the sibling effects cdylib into `effects/lib/<host_triple>/`
-/// so the `ManifestDirectory` resolver picks it up via the same
+/// so the `Path` resolver picks it up via the same
 /// triple-keyed convention `streamlib pack` produces. The effects
 /// package is example-local (not a workspace-staged package); the
-/// canonical `the build orchestrator (automatic)` doesn't stage it, so the
+/// canonical `the build orchestrator` doesn't stage it, so the
 /// runner does its own copy. Mirror of the camera-rust-plugin
 /// stage step.
 fn stage_effects_cdylib(effects_dir: &std::path::Path) -> Result<()> {

@@ -174,7 +174,7 @@ fn run() -> Result<SinkReport> {
     // Stage the counting-sink plugin's cdylib into `./plugin/lib/`
     // before loading the plugin sub-package. The plugin lives in the
     // sibling `plugin/` sub-package with its own `streamlib.yaml`;
-    // `add_module_with(..., ManifestDirectory)` will look for the
+    // `add_module_with(..., Path)` will look for the
     // staged `*.so` in `plugin/lib/`. Mirrors the camera-rust-plugin
     // pattern.
     let plugin_dir = manifest_dir.join("plugin");
@@ -239,7 +239,7 @@ fn run() -> Result<SinkReport> {
 
 /// Locate the built plugin cdylib in the workspace target dir and copy
 /// it under `plugin/lib/` so the plugin sub-package's
-/// `add_module_with(..., ManifestDirectory)` load finds it. Mirrors
+/// `add_module_with(..., Path)` load finds it. Mirrors
 /// the `camera-rust-plugin` example.
 fn stage_plugin_dylib(plugin_dir: &std::path::Path) -> Result<()> {
     let lib_dir = plugin_dir.join("lib");

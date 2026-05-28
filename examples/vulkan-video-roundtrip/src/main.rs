@@ -14,7 +14,7 @@
 //!   cargo run -p vulkan-video-roundtrip -- h265 /dev/video2 10
 //!
 //! Packages build automatically on `cargo run` via the build orchestrator.
-//! --package @tatolab/display --package @tatolab/h264 --package @tatolab/h265`
+//!`
 //! so the runtime can find each cdylib at load time.
 
 use streamlib::sdk::error::Result;

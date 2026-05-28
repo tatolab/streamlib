@@ -26,8 +26,8 @@ fn main() -> Result<()> {
     let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
 
     // 1) Load @tatolab/audio (and any deps it walks via patch:) from
-    //    the workspace-staged location. `the build orchestrator (automatic)`
-    //    must have run first.
+    //    the package source. `the build orchestrator`
+    //   .
     runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "audio"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/audio"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
     println!("+ @tatolab/audio loaded from target/streamlib-plugins/\n");
 

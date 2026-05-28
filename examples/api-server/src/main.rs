@@ -38,7 +38,7 @@ async fn main() -> streamlib::sdk::error::Result<()> {
     let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
 
     // Imperative module load — the runtime resolves the ident
-    // against the workspace stage dir or installed-package cache,
+    // from its package source (built on demand by the orchestrator),
     // verifies the semver range, then drives the internal
     // module-loading machinery.
     runtime.add_module_with(module_ident!("tatolab", "api-server", "^1.0.0"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/api-server"), build: streamlib::sdk::runtime::BuildPolicy::IfStale }).await?;

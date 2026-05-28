@@ -12,7 +12,7 @@
 //!   jpeg-psnr <jpeg-path> <width> <height> <fps> <frame-count>
 //!
 //! Packages build automatically on `cargo run` via the build orchestrator.
-//! --package @tatolab/jpeg --package @tatolab/display` so the runtime can
+//!` so the runtime can
 //! resolve each cdylib at load time.
 
 use streamlib::sdk::error::Result;

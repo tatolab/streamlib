@@ -19,8 +19,8 @@
 //! namespace.
 //!
 //! Packages build automatically on `cargo run` via the build orchestrator.
-//! --package @tatolab/camera --package @tatolab/display --package @tatolab/h264
-//! --package @tatolab/moq --package @tatolab/opus` so the runtime can resolve
+//!
+//!` so the runtime can resolve
 //! each cdylib at load time.
 
 use streamlib::sdk::error::Result;

@@ -19,7 +19,7 @@
 //! `VkBuffer` flat-tensor path). The Rust runner sits at the example
 //! root and the Python processor lives in a sibling `python/`
 //! sub-package with its own `streamlib.yaml`; the runner calls
-//! `Runner::add_module_with(..., Strategy::ManifestDirectory)`
+//! `Runner::add_module_with(..., Strategy::Path)`
 //! at startup to register the Python processor against its
 //! manifest directory.
 //!

@@ -3,7 +3,7 @@
 
 //! Camera-python-display effects package — Rust-backed processors
 //! loaded as a cdylib via `runtime.add_module_with_blocking(...,
-//! Strategy::ManifestDirectory)` against this crate's
+//! Strategy::Path)` against this crate's
 //! `streamlib.yaml`.
 
 #[allow(non_snake_case, unused_imports, dead_code, clippy::all)]

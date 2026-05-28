@@ -3,7 +3,7 @@
 # Sibling Rust-impl package carrying camera-python-display's
 # Rust-backed effect processors (CrtFilmGrain + BlendingCompositor)
 # and the schemas they read/write. The runner loads this package via
-# `runtime.add_module_with(..., ModuleResolverStrategy::ManifestDirectory)`
+# `runtime.add_module_with(..., Strategy::Path)`
 # pointed at this directory; the cdylib's `STREAMLIB_PLUGIN` callback
 # registers both processors with the host registry.
 

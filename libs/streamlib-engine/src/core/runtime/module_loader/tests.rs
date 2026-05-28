@@ -1206,6 +1206,59 @@ mod add_module_tests {
         );
     }
 
+    /// `start()` must refuse to run the graph while a module load is
+    /// still in flight. The loading set is `pub(crate)` and is populated
+    /// by `add_module_with` at call time; simulating an in-flight entry
+    /// directly tests the guard deterministically (no spawn/race).
+    /// Reverting the guard (the `pending_module_loads` check at the top
+    /// of `start`) makes `start()` proceed and this `expect_err` fails.
+    #[test]
+    #[serial]
+    fn start_refuses_while_a_module_is_still_loading() {
+        let runtime = Runner::new().expect("Runner::new");
+        let pkg = streamlib_idents::PackageRef::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("guard-pkg").unwrap(),
+        );
+        let ident =
+            ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new("guard-pkg").unwrap());
+        runtime.loading_modules.lock().insert(pkg, ident);
+
+        let err = runtime
+            .start()
+            .expect_err("start() must refuse while a module is still loading");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("guard-pkg") && msg.to_lowercase().contains("still loading"),
+            "expected a ModulesStillLoading error naming guard-pkg, got: {msg}"
+        );
+
+        runtime.loading_modules.lock().clear();
+    }
+
+    /// `add_module_blocking` from inside a tokio runtime must return a
+    /// typed `BlockingCallFromAsyncContext` error — NEVER panic (a naive
+    /// `block_on` would). Locks the `ExternalTokioHandle` variant guard.
+    #[test]
+    fn add_module_blocking_in_tokio_context_returns_typed_error() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            // Inside block_on, Runner::new auto-detects the external tokio
+            // handle.
+            let runtime = Runner::new().expect("Runner::new");
+            let err = runtime
+                .add_module_blocking(ModuleIdent::any(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("blocking-in-async").unwrap(),
+                ))
+                .expect_err("blocking load from async context must error, not panic");
+            assert!(
+                matches!(err, AddModuleError::BlockingCallFromAsyncContext { .. }),
+                "expected BlockingCallFromAsyncContext, got: {err:?}",
+            );
+        });
+    }
+
     #[test]
     fn remove_module_returns_hot_reload_lifecycle_deferral() {
         let runtime = Runner::new().expect("Runner::new");

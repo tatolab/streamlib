@@ -8,7 +8,7 @@
 //! API on `http://127.0.0.1:9000`.
 //!
 //! Packages build automatically on `cargo run` via the build orchestrator.
-//! --package @tatolab/display --package @tatolab/api-server` so the
+//!` so the
 //! runtime can resolve each cdylib at load time.
 
 use streamlib::sdk::error::Result;

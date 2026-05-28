@@ -12,7 +12,7 @@
 //!   vulkan-video-psnr <h264|h265> <bgra-path> <width> <height> <fps> <frame-count>
 //!
 //! Packages build automatically on `cargo run` via the build orchestrator.
-//! --package @tatolab/display --package @tatolab/h264 --package @tatolab/h265`
+//!`
 //! so the runtime can resolve each cdylib at load time.
 
 use streamlib::sdk::error::Result;
