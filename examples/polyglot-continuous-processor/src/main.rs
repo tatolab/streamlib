@@ -45,6 +45,7 @@ use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::RunnerAutoBuild;
 
 const RUN_DURATION: Duration = Duration::from_secs(2);
 /// Manifest-declared interval. Must match the YAML in
@@ -164,7 +165,7 @@ fn run() -> Result<TickReport> {
     println!("Nominal interval:  {NOMINAL_INTERVAL_MS}ms");
     println!("Run length:        {:?}", RUN_DURATION);
 
-    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
+    let runtime = Runner::with_auto_build()?;
     // Load the polyglot processors via explicit add_module_with calls.
     // The Python and Deno sub-packages are example-local (siblings of
     // this example crate) and not workspace-staged, so each is

@@ -75,6 +75,7 @@ use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::schema_ident;
 use streamlib_adapter_abi::SurfaceId;
 use streamlib_consumer_rhi::VulkanLayout;
@@ -123,7 +124,7 @@ const BYTES_PER_PIXEL: u32 = 4;
 pub fn main() -> Result<()> {
     println!("=== AvatarCharacter (Linux, cuda + opengl + skia adapters) ===\n");
 
-    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
+    let runtime = Runner::with_auto_build()?;
 
     // Stage the sibling effects cdylib at `effects/lib/<host_triple>/`
     // so `Strategy::Path` picks it up via

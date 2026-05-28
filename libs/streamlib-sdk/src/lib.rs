@@ -96,13 +96,38 @@ pub mod sdk {
     pub use streamlib_engine::core::runtime;
 
     /// The default polyglot build orchestrator — available behind the
-    /// `auto-build` feature (on by default). Wire it so build-requiring
-    /// module loads materialize from source:
-    /// `Runner::new_with_orchestrator(PolyglotBuildOrchestrator::default())`.
-    /// A `--no-default-features` (frozen `.slpkg`-only) build excludes
-    /// this entirely.
+    /// `auto-build` feature (on by default). For most callers prefer the
+    /// [`RunnerAutoBuild::with_auto_build`] convenience over wiring this
+    /// by hand. A `--no-default-features` (frozen `.slpkg`-only) build
+    /// excludes this (and the trait below) entirely.
     #[cfg(feature = "auto-build")]
     pub use streamlib_build_orchestrator::PolyglotBuildOrchestrator;
+
+    /// Extension constructor (behind the `auto-build` feature) that builds
+    /// a [`runtime::Runner`] with the default [`PolyglotBuildOrchestrator`]
+    /// already wired — the common dev / runtime-authoring path. The engine
+    /// crate can't provide this itself (the orchestrator lives downstream
+    /// of the engine), so it's an SDK extension trait. Import it to call
+    /// `Runner::with_auto_build()`.
+    ///
+    /// `Runner::new()` stays orchestrator-free for frozen `.slpkg`-only /
+    /// custom-orchestrator deployments.
+    #[cfg(feature = "auto-build")]
+    pub trait RunnerAutoBuild {
+        /// A `Runner` with the default polyglot build orchestrator wired,
+        /// so build-requiring module loads (`Strategy::Path`/`Git` +
+        /// `IfStale`/`AlwaysBuild`) materialize from source on demand.
+        fn with_auto_build(
+        ) -> streamlib_engine::core::error::Result<std::sync::Arc<runtime::Runner>>;
+    }
+
+    #[cfg(feature = "auto-build")]
+    impl RunnerAutoBuild for runtime::Runner {
+        fn with_auto_build(
+        ) -> streamlib_engine::core::error::Result<std::sync::Arc<runtime::Runner>> {
+            runtime::Runner::new_with_orchestrator(PolyglotBuildOrchestrator::default())
+        }
+    }
 
     pub use streamlib_engine::core::sync;
     pub use streamlib_engine::core::texture;

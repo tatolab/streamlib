@@ -81,6 +81,7 @@ use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::schema_ident;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::RunnerAutoBuild;
 
 /// Compiled SPIR-V for the ray-generation shader.
 const SCENE_RGEN_SPV: &[u8] =
@@ -548,7 +549,7 @@ fn main() -> Result<()> {
     println!("Output PNG:  {}", output_png.display());
     println!();
 
-    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
+    let runtime = Runner::with_auto_build()?;
 
     let texture_slot: Arc<Mutex<Option<Texture>>> = Arc::new(Mutex::new(None));
     let readback_slot: Arc<Mutex<Option<Arc<VulkanTextureReadback>>>> =

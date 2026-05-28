@@ -49,6 +49,7 @@ use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::rhi::{StorageBuffer, Texture, TextureDescriptor, TextureFormat, VulkanLayout};
 use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib_adapter_abi::SurfaceId;
 use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostImageSurfaceRegistration};
 use streamlib_debug_utilities::BgraFileSourceProcessor;
@@ -119,7 +120,7 @@ fn main() -> Result<()> {
     println!("Timeout:     {timeout_secs}s");
     println!();
 
-    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
+    let runtime = Runner::with_auto_build()?;
 
     // Setup-hook captures keep the adapter `Arc` alive across start
     // → stop. The CUDA adapter has no per-acquire host work (no

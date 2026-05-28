@@ -25,10 +25,11 @@ use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
-    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
+    let runtime = Runner::with_auto_build()?;
 
     // 1. Load `@tatolab/camera` and `@tatolab/display` from the
     //    package source — built on demand by the orchestrator.

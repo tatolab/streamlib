@@ -20,6 +20,7 @@ use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
@@ -39,7 +40,7 @@ fn main() -> Result<()> {
     println!("Fixture: {bgra_path}");
     println!("Format:  {width}x{height} @ {fps}fps, {frame_count} frames\n");
 
-    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
+    let runtime = Runner::with_auto_build()?;
 
     runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "debug-utilities"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/debug-utilities"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
     runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "display"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/display"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;

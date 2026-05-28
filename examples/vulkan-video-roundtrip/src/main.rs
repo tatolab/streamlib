@@ -22,6 +22,7 @@ use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
@@ -35,7 +36,7 @@ fn main() -> Result<()> {
     println!("Camera:   {device}");
     println!("Duration: {duration_secs}s\n");
 
-    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
+    let runtime = Runner::with_auto_build()?;
 
     // Load all four processor packages at runtime. `@tatolab/core` is
     // pulled in transitively by each — its wire-vocabulary schemas

@@ -60,6 +60,7 @@ use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::schema_ident;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::RunnerAutoBuild;
 
 const SCENARIO_SURFACE_UUID: &str = "00000000-0000-0000-0000-000000005c1a";
 const SURFACE_SIZE: u32 = 512;
@@ -94,7 +95,7 @@ fn main() -> Result<()> {
     println!("Hero PNG:   {} (frame {HERO_FRAME_INDEX})", hero_path.display());
     println!();
 
-    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
+    let runtime = Runner::with_auto_build()?;
 
     let texture_slot: Arc<
         Mutex<Option<streamlib::sdk::rhi::Texture>>,

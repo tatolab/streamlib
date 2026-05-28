@@ -56,6 +56,7 @@ use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::schema_ident;
 
 /// Compiled SPIR-V for the Mandelbrot compute shader. Built by
@@ -242,7 +243,7 @@ fn main() -> Result<()> {
     println!("Output PNG:  {}", output_png.display());
     println!();
 
-    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
+    let runtime = Runner::with_auto_build()?;
 
     let texture_slot: Arc<
         Mutex<Option<streamlib::sdk::rhi::Texture>>,

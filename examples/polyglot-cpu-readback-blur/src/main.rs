@@ -60,6 +60,7 @@ use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::schema_ident;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib_adapter_abi::{StreamlibSurface, SurfaceFormat, SurfaceId};
 use streamlib_adapter_cpu_readback::{
     CpuReadbackCopyTrigger, CpuReadbackSurfaceAdapter, HostSurfaceRegistration,
@@ -151,7 +152,7 @@ fn main() -> Result<()> {
     println!("Output PNG:  {}", output_png.display());
     println!();
 
-    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
+    let runtime = Runner::with_auto_build()?;
 
     // Slot the setup hook will populate with the cpu-readback adapter
     // it constructs — main.rs reuses this Arc post-stop to read the

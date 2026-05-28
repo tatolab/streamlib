@@ -38,6 +38,7 @@ use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::schema_ident;
 
 /// UUID the host registers the render-target surface under. The
@@ -113,7 +114,7 @@ fn main() -> Result<()> {
     println!("Output PNG:  {}", output_png.display());
     println!();
 
-    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
+    let runtime = Runner::with_auto_build()?;
 
     // Slots the setup hook populates so main.rs can read the surface
     // back post-stop and write the output PNG. We can't keep the

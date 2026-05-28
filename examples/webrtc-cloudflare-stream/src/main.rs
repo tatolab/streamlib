@@ -31,6 +31,7 @@ use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 #[cfg(target_os = "linux")]
 use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::RunnerAutoBuild;
 #[cfg(target_os = "linux")]
 use streamlib::sdk::processors::ProcessorSpec;
 #[cfg(target_os = "linux")]
@@ -63,7 +64,7 @@ fn main() -> Result<()> {
 
     println!("=== WebRTC WHIP Streaming to Cloudflare Stream ===\n");
 
-    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
+    let runtime = Runner::with_auto_build()?;
 
     runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "audio"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/audio"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
     runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/camera"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;

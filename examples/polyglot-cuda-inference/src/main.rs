@@ -63,6 +63,7 @@ use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::schema_ident;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib_adapter_abi::SurfaceId;
 use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
 
@@ -148,7 +149,7 @@ fn main() -> Result<()> {
     println!("Timeout:     {timeout_secs}s");
     println!();
 
-    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
+    let runtime = Runner::with_auto_build()?;
 
     // Slot the setup hook will populate with the cuda adapter so it
     // (and the host-side `Arc`s it holds) outlives the runtime's start

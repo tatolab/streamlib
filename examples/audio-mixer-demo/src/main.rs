@@ -17,13 +17,14 @@ use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
     println!("\n🎵 Audio Mixer Demo - Mixing Multiple Tones\n");
 
     println!("🎛️  Creating audio runtime...");
-    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
+    let runtime = Runner::with_auto_build()?;
 
     // 1) Load @tatolab/audio (and any deps it walks via patch:) from
     //    the package source. `the build orchestrator`

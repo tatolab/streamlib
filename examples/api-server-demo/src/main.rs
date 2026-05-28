@@ -11,6 +11,7 @@ use std::sync::Arc;
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::schema_ident;
 
 use streamlib::sdk::error::Result;
@@ -24,8 +25,8 @@ const WS_URL: &str = "ws://127.0.0.1:9000/ws/events";
 async fn main() -> Result<()> {
     println!("=== API Server Processor Demo ===\n");
 
-    // Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default()) auto-detects tokio context and uses the current handle
-    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
+    // Runner::with_auto_build() auto-detects tokio context and uses the current handle
+    let runtime = Runner::with_auto_build()?;
 
     // Load `@tatolab/api-server` and `@tatolab/debug-utilities` at runtime.
     // SimplePassthrough lives in debug-utilities — the demo POSTs

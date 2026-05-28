@@ -56,9 +56,16 @@ deployment chooses to wire (or not).
         └───────────────────────────────────────────────────────┘
 ```
 
-The SDK re-exports `PolyglotBuildOrchestrator` behind the `auto-build`
-feature (on by default). `cargo build --no-default-features` excludes
-the orchestrator crate from the dependency graph entirely, so a frozen
+The SDK wires this behind the `auto-build` feature (on by default).
+Because `Runner` lives in the engine and the default orchestrator lives
+downstream (the engine can't depend on it — it shells out to cargo), the
+SDK provides the wiring, not the engine: the common path is
+`Runner::with_auto_build()` (an SDK extension trait, `RunnerAutoBuild`,
+that calls `Runner::new_with_orchestrator(PolyglotBuildOrchestrator::default())`).
+`Runner::new()` stays orchestrator-free for frozen / custom deployments;
+`new_with_orchestrator(impl)` injects a non-default builder (e.g. a future
+IPC build-service). `cargo build --no-default-features` excludes the
+orchestrator crate from the dependency graph entirely, so a frozen
 deployment is **provably compiler-free** (`cargo tree` shows zero build
 tooling), not merely "doesn't call cargo at runtime."
 

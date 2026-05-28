@@ -44,6 +44,7 @@ use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::RunnerAutoBuild;
 
 const RUN_DURATION: Duration = Duration::from_secs(2);
 const INTERVAL_MS: u32 = 33;
@@ -167,7 +168,7 @@ fn run() -> Result<SinkReport> {
     println!("Tick rate:         {INTERVAL_MS}ms");
     println!("Run length:        {:?}", RUN_DURATION);
 
-    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
+    let runtime = Runner::with_auto_build()?;
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 

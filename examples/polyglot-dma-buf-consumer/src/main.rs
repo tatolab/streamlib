@@ -31,6 +31,7 @@ use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::schema_ident;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -114,7 +115,7 @@ fn main() -> Result<()> {
     );
     println!();
 
-    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
+    let runtime = Runner::with_auto_build()?;
 
     // Load `@tatolab/camera` and `@tatolab/display` via the default
     // resolver chain . Both must

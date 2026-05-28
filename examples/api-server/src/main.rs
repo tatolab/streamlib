@@ -31,11 +31,12 @@
 use streamlib::sdk::module_ident;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::schema_ident;
 
 #[tokio::main]
 async fn main() -> streamlib::sdk::error::Result<()> {
-    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
+    let runtime = Runner::with_auto_build()?;
 
     // Imperative module load — the runtime resolves the ident
     // from its package source (built on demand by the orchestrator),
