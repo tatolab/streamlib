@@ -170,6 +170,9 @@ impl VulkanTimelineSemaphoreLike for ConsumerVulkanTimelineSemaphore {
     fn signal_host(&self, value: u64) -> Result<()> {
         ConsumerVulkanTimelineSemaphore::signal_host(self, value)
     }
+    fn current_value(&self) -> Result<u64> {
+        ConsumerVulkanTimelineSemaphore::current_value(self)
+    }
     fn semaphore(&self) -> vk::Semaphore {
         ConsumerVulkanTimelineSemaphore::semaphore(self)
     }

@@ -66,6 +66,9 @@ mod placeholder {
         fn signal_host(&self, _value: u64) -> streamlib_consumer_rhi::Result<()> {
             match *self {}
         }
+        fn current_value(&self) -> streamlib_consumer_rhi::Result<u64> {
+            match *self {}
+        }
         fn semaphore(&self) -> vulkanalia::vk::Semaphore {
             match *self {}
         }

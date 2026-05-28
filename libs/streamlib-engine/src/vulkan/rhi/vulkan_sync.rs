@@ -528,6 +528,10 @@ impl super::VulkanTimelineSemaphoreLike for HostVulkanTimelineSemaphore {
         HostVulkanTimelineSemaphore::signal_host(self, value)
             .map_err(|e| streamlib_consumer_rhi::ConsumerRhiError::Gpu(e.to_string()))
     }
+    fn current_value(&self) -> streamlib_consumer_rhi::Result<u64> {
+        HostVulkanTimelineSemaphore::current_value(self)
+            .map_err(|e| streamlib_consumer_rhi::ConsumerRhiError::Gpu(e.to_string()))
+    }
     fn semaphore(&self) -> vulkanalia::vk::Semaphore {
         HostVulkanTimelineSemaphore::semaphore(self)
     }
