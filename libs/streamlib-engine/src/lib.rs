@@ -75,7 +75,7 @@ pub use core::{
     GlContext,
     GlTextureBinding,
     GpuContext,
-    GraphFileDefinition,
+    GraphSnapshot,
     InputPortMarker,
     ManualProcessor,
     NativeTextureHandle,
@@ -230,7 +230,7 @@ pub mod sdk {
     pub use crate::core::error;
     pub use crate::core::execution;
     pub use crate::core::graph;
-    pub use crate::core::graph_file;
+    pub use crate::core::graph_snapshot;
     pub use crate::core::json_schema;
     pub use crate::core::media_clock;
     pub use crate::core::plugin;

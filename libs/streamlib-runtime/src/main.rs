@@ -38,9 +38,9 @@ struct Args {
     #[arg(long)]
     name: Option<String>,
 
-    /// Pipeline graph file to load (JSON)
-    #[arg(long = "graph-file", value_name = "PATH")]
-    graph_file: Option<PathBuf>,
+    /// Pipeline graph snapshot to load (JSON)
+    #[arg(long = "snapshot", value_name = "PATH")]
+    snapshot: Option<PathBuf>,
 
     /// Plugin libraries to load (can be specified multiple times)
     #[arg(long = "plugin", value_name = "PATH")]
@@ -353,14 +353,14 @@ async fn run(args: Args) -> Result<()> {
     };
     runtime.add_processor(ApiServerProcessor::node(config))?;
 
-    if let Some(ref path) = args.graph_file {
+    if let Some(ref path) = args.snapshot {
         println!("Loading pipeline: {}", path.display());
-        runtime.load_graph_file_path(path)?;
+        runtime.load_graph_snapshot_from_path(path)?;
     }
 
     runtime.start()?;
 
-    if args.graph_file.is_none() {
+    if args.snapshot.is_none() {
         println!("Empty graph ready - use API to add processors");
     }
 

@@ -1,15 +1,14 @@
 {
   "name": "cyberpunk-pipeline",
-  "description": "Camera → Cyberpunk Pipeline (Breaking News PiP) - Full pipeline with custom Rust processors (requires dynamic loading)",
   "processors": [
     {
       "alias": "camera",
-      "type": "CameraProcessor",
+      "type": { "org": "tatolab", "package": "streamlib-camera", "type": "CameraProcessor", "version": "1.0.0" },
       "config": {}
     },
     {
       "alias": "avatar",
-      "type": "PythonContinuousHostProcessor",
+      "type": { "org": "tatolab", "package": "streamlib-python-host", "type": "PythonContinuousHostProcessor", "version": "1.0.0" },
       "config": {
         "project_path": "examples/camera-python-display/python",
         "class_name": "AvatarCharacter",
@@ -18,12 +17,12 @@
     },
     {
       "alias": "blending",
-      "type": "BlendingCompositorProcessor",
+      "type": { "org": "tatolab", "package": "streamlib-blending", "type": "BlendingCompositorProcessor", "version": "1.0.0" },
       "config": {}
     },
     {
       "alias": "lower_third",
-      "type": "PythonContinuousHostProcessor",
+      "type": { "org": "tatolab", "package": "streamlib-python-host", "type": "PythonContinuousHostProcessor", "version": "1.0.0" },
       "config": {
         "project_path": "examples/camera-python-display/python",
         "class_name": "CyberpunkLowerThird",
@@ -32,7 +31,7 @@
     },
     {
       "alias": "watermark",
-      "type": "PythonContinuousHostProcessor",
+      "type": { "org": "tatolab", "package": "streamlib-python-host", "type": "PythonContinuousHostProcessor", "version": "1.0.0" },
       "config": {
         "project_path": "examples/camera-python-display/python",
         "class_name": "CyberpunkWatermark",
@@ -41,12 +40,12 @@
     },
     {
       "alias": "crt_film_grain",
-      "type": "CrtFilmGrainProcessor",
+      "type": { "org": "tatolab", "package": "streamlib-effects", "type": "CrtFilmGrainProcessor", "version": "1.0.0" },
       "config": {}
     },
     {
       "alias": "glitch",
-      "type": "PythonContinuousHostProcessor",
+      "type": { "org": "tatolab", "package": "streamlib-python-host", "type": "PythonContinuousHostProcessor", "version": "1.0.0" },
       "config": {
         "project_path": "examples/camera-python-display/python",
         "class_name": "CyberpunkGlitch",
@@ -55,7 +54,7 @@
     },
     {
       "alias": "display",
-      "type": "DisplayProcessor",
+      "type": { "org": "tatolab", "package": "streamlib-display", "type": "DisplayProcessor", "version": "1.0.0" },
       "config": {
         "width": 1920,
         "height": 1080,

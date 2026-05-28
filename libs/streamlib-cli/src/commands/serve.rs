@@ -75,7 +75,7 @@ fn find_runtime_binary() -> Result<PathBuf> {
 pub fn run(
     host: String,
     port: u16,
-    graph_file: Option<PathBuf>,
+    snapshot: Option<PathBuf>,
     plugins: Vec<PathBuf>,
     plugin_dir: Option<PathBuf>,
     name: Option<String>,
@@ -93,8 +93,8 @@ pub fn run(
         cmd.arg("--name").arg(n);
     }
 
-    if let Some(ref path) = graph_file {
-        cmd.arg("--graph-file").arg(path);
+    if let Some(ref path) = snapshot {
+        cmd.arg("--snapshot").arg(path);
     }
 
     for plugin in &plugins {

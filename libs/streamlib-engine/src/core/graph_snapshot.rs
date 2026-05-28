@@ -1,19 +1,35 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Declarative graph file format for loading pipelines from JSON/YAML.
+//! Declarative graph snapshot format for round-tripping a runtime's
+//! graph through JSON.
 //!
-//! This module defines the schema for graph files that can be loaded by
-//! `streamlib-cli` or programmatically via [`Runner::load_graph_file`].
+//! A snapshot is the typed wire shape behind
+//! [`Runner::load_graph_snapshot`](crate::core::runtime::Runner::load_graph_snapshot)
+//! and
+//! [`Runner::save_graph_snapshot`](crate::core::runtime::Runner::save_graph_snapshot):
+//! save walks the live graph and emits one of these, load applies it
+//! to an empty runtime. The shape is symmetric — load(save(g)) yields
+//! a graph that, when saved, byte-equals the first save.
 //!
-//! # Example Graph File
+//! # Example snapshot
 //!
 //! ```json
 //! {
 //!   "name": "camera-display",
 //!   "processors": [
-//!     { "alias": "camera", "type": "CameraProcessor", "config": {} },
-//!     { "alias": "display", "type": "DisplayProcessor", "config": { "width": 1920, "height": 1080 } }
+//!     {
+//!       "alias": "camera",
+//!       "type": { "org": "tatolab", "package": "streamlib",
+//!                 "type": "CameraProcessor", "version": "1.0.0" },
+//!       "config": {}
+//!     },
+//!     {
+//!       "alias": "display",
+//!       "type": { "org": "tatolab", "package": "streamlib",
+//!                 "type": "DisplayProcessor", "version": "1.0.0" },
+//!       "config": { "width": 1920, "height": 1080 }
+//!     }
 //!   ],
 //!   "connections": [
 //!     { "from": "camera.video", "to": "display.video" }
@@ -26,37 +42,39 @@ use serde::{Deserialize, Serialize};
 use crate::core::descriptors::SchemaIdent;
 use crate::core::{ProcessorSpec, Result, Error};
 
-/// Declarative graph definition loaded from JSON/YAML files.
+/// Round-trippable JSON shape for a runtime's graph.
 ///
-/// Processors are identified by local aliases within the file. These aliases
-/// are resolved to runtime-generated processor IDs during loading.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GraphFileDefinition {
+/// Processors are identified by local aliases within the snapshot.
+/// These aliases are resolved to runtime-generated processor IDs on
+/// load and regenerated deterministically on save.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GraphSnapshot {
     /// Optional pipeline name for display/logging.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 
     /// Processor definitions with local aliases.
     pub processors: Vec<ProcessorDefinition>,
 
     /// Connections between processors using aliases.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub connections: Vec<ConnectionDefinition>,
 }
 
-/// A processor definition in the graph file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A processor definition in the snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProcessorDefinition {
     /// Local alias for referencing in connections.
     ///
-    /// Must be unique within the graph file. Used in connection definitions
-    /// as `"alias.port_name"`.
+    /// Must be unique within the snapshot. Used in connection
+    /// definitions as `"alias.port_name"`.
     pub alias: String,
 
-    /// Structured processor identity — `@org/package/Type@version` rendered
-    /// as four typed fields. The structured-everywhere rule applies on the
-    /// graph-file wire format too — bare strings like `"CameraProcessor"`
-    /// are rejected at deserialize time (no parser shim).
+    /// Structured processor identity — `@org/package/Type@version`
+    /// rendered as four typed fields. The structured-everywhere rule
+    /// applies on the snapshot wire format too — bare strings like
+    /// `"CameraProcessor"` are rejected at deserialize time (no
+    /// parser shim).
     #[serde(rename = "type")]
     pub processor_type: SchemaIdent,
 
@@ -65,10 +83,17 @@ pub struct ProcessorDefinition {
     /// Must match the config schema for the processor type.
     #[serde(default)]
     pub config: serde_json::Value,
+
+    /// Optional display-name override. Absent ↔ default to the
+    /// processor's PascalCase short name. Save side omits this field
+    /// when the live node's display name equals the auto-default, so
+    /// the user-intent distinction round-trips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
 }
 
 /// A connection definition using aliases.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ConnectionDefinition {
     /// Source output port: `"alias.port_name"`
     pub from: String,
@@ -112,18 +137,22 @@ fn parse_port_ref(s: &str) -> Result<ParsedPortRef<'_>> {
 }
 
 impl ProcessorDefinition {
-    /// Convert to a ProcessorSpec for runtime instantiation.
+    /// Convert to a [`ProcessorSpec`] for runtime instantiation.
     pub fn to_processor_spec(&self) -> ProcessorSpec {
-        ProcessorSpec::new(self.processor_type.clone(), self.config.clone())
+        let mut spec = ProcessorSpec::new(self.processor_type.clone(), self.config.clone());
+        if let Some(name) = &self.display_name {
+            spec = spec.with_display_name(name.clone());
+        }
+        spec
     }
 }
 
-impl GraphFileDefinition {
-    /// Load from a JSON file path.
+impl GraphSnapshot {
+    /// Load a snapshot from a JSON file path.
     pub fn from_json_file(path: &std::path::Path) -> Result<Self> {
         let file = std::fs::File::open(path).map_err(|e| {
             Error::GraphError(format!(
-                "Failed to open graph file '{}': {}",
+                "Failed to open snapshot file '{}': {}",
                 path.display(),
                 e
             ))
@@ -131,20 +160,38 @@ impl GraphFileDefinition {
 
         serde_json::from_reader(file).map_err(|e| {
             Error::GraphError(format!(
-                "Failed to parse graph file '{}': {}",
+                "Failed to parse snapshot file '{}': {}",
                 path.display(),
                 e
             ))
         })
     }
 
-    /// Load from a JSON string.
+    /// Load a snapshot from a JSON string.
     pub fn from_json_str(json: &str) -> Result<Self> {
         serde_json::from_str(json)
-            .map_err(|e| Error::GraphError(format!("Failed to parse graph JSON: {}", e)))
+            .map_err(|e| Error::GraphError(format!("Failed to parse snapshot JSON: {}", e)))
     }
 
-    /// Validate the graph definition without loading it.
+    /// Serialize this snapshot as a pretty-printed JSON string.
+    pub fn to_json_string(&self) -> Result<String> {
+        serde_json::to_string_pretty(self)
+            .map_err(|e| Error::GraphError(format!("Failed to serialize snapshot: {}", e)))
+    }
+
+    /// Serialize this snapshot to a JSON file path.
+    pub fn to_json_file(&self, path: &std::path::Path) -> Result<()> {
+        let body = self.to_json_string()?;
+        std::fs::write(path, body).map_err(|e| {
+            Error::GraphError(format!(
+                "Failed to write snapshot file '{}': {}",
+                path.display(),
+                e
+            ))
+        })
+    }
+
+    /// Validate the snapshot without loading it.
     ///
     /// Checks:
     /// - All aliases are unique
@@ -186,8 +233,8 @@ impl GraphFileDefinition {
         }
 
         // Check all processor types resolve through the runtime registry.
-        // Bails on the first miss — matches the behavior of the surrounding
-        // alias / connection checks above.
+        // Bails on the first miss — matches the behavior of the
+        // surrounding alias / connection checks above.
         for proc in &self.processors {
             if PROCESSOR_REGISTRY.port_info(&proc.processor_type).is_none() {
                 return Err(Error::UnknownProcessorType {
@@ -215,7 +262,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_simple_graph() {
+    fn test_parse_simple_snapshot() {
         let json = format!(
             r#"{{
                 "name": "test-pipeline",
@@ -231,20 +278,21 @@ mod tests {
             structured_type("DisplayProcessor"),
         );
 
-        let def = GraphFileDefinition::from_json_str(&json).unwrap();
+        let snap = GraphSnapshot::from_json_str(&json).unwrap();
 
-        assert_eq!(def.name, Some("test-pipeline".to_string()));
-        assert_eq!(def.processors.len(), 2);
-        assert_eq!(def.processors[0].alias, "camera");
+        assert_eq!(snap.name, Some("test-pipeline".to_string()));
+        assert_eq!(snap.processors.len(), 2);
+        assert_eq!(snap.processors[0].alias, "camera");
         assert_eq!(
-            def.processors[0].processor_type.r#type.as_str(),
+            snap.processors[0].processor_type.r#type.as_str(),
             "CameraProcessor"
         );
-        assert_eq!(def.processors[0].processor_type.org.as_str(), "tatolab");
-        assert_eq!(def.processors[1].alias, "display");
-        assert_eq!(def.connections.len(), 1);
-        assert_eq!(def.connections[0].from, "camera.video");
-        assert_eq!(def.connections[0].to, "display.video");
+        assert_eq!(snap.processors[0].processor_type.org.as_str(), "tatolab");
+        assert!(snap.processors[0].display_name.is_none());
+        assert_eq!(snap.processors[1].alias, "display");
+        assert_eq!(snap.connections.len(), 1);
+        assert_eq!(snap.connections[0].from, "camera.video");
+        assert_eq!(snap.connections[0].to, "display.video");
     }
 
     #[test]
@@ -257,8 +305,8 @@ mod tests {
             }}"#,
             structured_type("CameraProcessor"),
         );
-        let def = GraphFileDefinition::from_json_str(&json).unwrap();
-        let back = serde_json::to_value(&def).unwrap();
+        let snap = GraphSnapshot::from_json_str(&json).unwrap();
+        let back = serde_json::to_value(&snap).unwrap();
         let proc_type = &back["processors"][0]["type"];
         assert!(
             proc_type.is_object(),
@@ -281,8 +329,71 @@ mod tests {
                 { "alias": "camera", "type": "CameraProcessor", "config": {} }
             ]
         }"#;
-        let res = GraphFileDefinition::from_json_str(json);
+        let res = GraphSnapshot::from_json_str(json);
         assert!(res.is_err(), "bare string processor_type must be rejected");
+    }
+
+    #[test]
+    fn test_display_name_optional_field_round_trips() {
+        let json = format!(
+            r#"{{
+                "processors": [
+                    {{ "alias": "cam_a", "type": {}, "config": {{}},
+                       "display_name": "Camera A" }}
+                ]
+            }}"#,
+            structured_type("CameraProcessor"),
+        );
+        let snap = GraphSnapshot::from_json_str(&json).unwrap();
+        assert_eq!(
+            snap.processors[0].display_name.as_deref(),
+            Some("Camera A")
+        );
+        let spec = snap.processors[0].to_processor_spec();
+        assert_eq!(spec.display_name.as_deref(), Some("Camera A"));
+
+        // Re-serialize and confirm the field survives.
+        let back: serde_json::Value = serde_json::to_value(&snap).unwrap();
+        assert_eq!(back["processors"][0]["display_name"], "Camera A");
+    }
+
+    #[test]
+    fn test_to_json_string_round_trip() {
+        let json_in = format!(
+            r#"{{
+                "name": "rt",
+                "processors": [
+                    {{ "alias": "camera", "type": {}, "config": {{}} }}
+                ],
+                "connections": []
+            }}"#,
+            structured_type("CameraProcessor"),
+        );
+        let snap = GraphSnapshot::from_json_str(&json_in).unwrap();
+        let json_out = snap.to_json_string().unwrap();
+        let snap_back = GraphSnapshot::from_json_str(&json_out).unwrap();
+        assert_eq!(snap, snap_back);
+    }
+
+    #[test]
+    fn test_to_json_file_round_trip() {
+        let json_in = format!(
+            r#"{{
+                "processors": [
+                    {{ "alias": "camera", "type": {}, "config": {{ "n": 7 }} }}
+                ]
+            }}"#,
+            structured_type("CameraProcessor"),
+        );
+        let snap = GraphSnapshot::from_json_str(&json_in).unwrap();
+        let tmp = std::env::temp_dir().join(format!(
+            "streamlib-graph-snapshot-test-{}.json",
+            std::process::id()
+        ));
+        snap.to_json_file(&tmp).unwrap();
+        let snap_back = GraphSnapshot::from_json_file(&tmp).unwrap();
+        std::fs::remove_file(&tmp).ok();
+        assert_eq!(snap, snap_back);
     }
 
     #[test]
@@ -315,8 +426,8 @@ mod tests {
             structured_type("DisplayProcessor"),
         );
 
-        let def = GraphFileDefinition::from_json_str(&json).unwrap();
-        assert!(def.validate().is_err());
+        let snap = GraphSnapshot::from_json_str(&json).unwrap();
+        assert!(snap.validate().is_err());
     }
 
     #[test]
@@ -333,18 +444,18 @@ mod tests {
             structured_type("CameraProcessor"),
         );
 
-        let def = GraphFileDefinition::from_json_str(&json).unwrap();
-        assert!(def.validate().is_err());
+        let snap = GraphSnapshot::from_json_str(&json).unwrap();
+        assert!(snap.validate().is_err());
     }
 
     #[test]
-    fn test_minimal_graph() {
+    fn test_minimal_snapshot() {
         let json = r#"{ "processors": [] }"#;
-        let def = GraphFileDefinition::from_json_str(json).unwrap();
-        assert!(def.name.is_none());
-        assert!(def.processors.is_empty());
-        assert!(def.connections.is_empty());
-        assert!(def.validate().is_ok());
+        let snap = GraphSnapshot::from_json_str(json).unwrap();
+        assert!(snap.name.is_none());
+        assert!(snap.processors.is_empty());
+        assert!(snap.connections.is_empty());
+        assert!(snap.validate().is_ok());
     }
 
     /// `validate()` checks every processor type against the global registry
@@ -365,8 +476,8 @@ mod tests {
             unknown_type,
         );
 
-        let def = GraphFileDefinition::from_json_str(&json).unwrap();
-        match def.validate() {
+        let snap = GraphSnapshot::from_json_str(&json).unwrap();
+        match snap.validate() {
             Err(Error::UnknownProcessorType { ident }) => {
                 assert_eq!(ident.r#type.as_str(), "DefinitelyNotARegisteredProcessor");
             }
