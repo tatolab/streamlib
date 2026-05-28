@@ -24,8 +24,8 @@ const WS_URL: &str = "ws://127.0.0.1:9000/ws/events";
 async fn main() -> Result<()> {
     println!("=== API Server Processor Demo ===\n");
 
-    // Runner::new() auto-detects tokio context and uses the current handle
-    let runtime = Runner::new()?;
+    // Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default()) auto-detects tokio context and uses the current handle
+    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
 
     // Load `@tatolab/api-server` and `@tatolab/debug-utilities` at runtime.
     // SimplePassthrough lives in debug-utilities — the demo POSTs
@@ -33,8 +33,8 @@ async fn main() -> Result<()> {
     // server's dynamic-registry endpoint and that resolution only
     // succeeds if the processor is present in PROCESSOR_REGISTRY,
     // which add_module populates via the cdylib registration.
-    runtime.add_module(module_ident_any_version!("tatolab", "api-server")).await?;
-    runtime.add_module(module_ident_any_version!("tatolab", "debug-utilities")).await?;
+    runtime.add_module_with(module_ident_any_version!("tatolab", "api-server"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/api-server"), build: streamlib::sdk::runtime::BuildPolicy::IfStale }).await?;
+    runtime.add_module_with(module_ident_any_version!("tatolab", "debug-utilities"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/debug-utilities"), build: streamlib::sdk::runtime::BuildPolicy::IfStale }).await?;
 
     // Add the API server processor
     println!("Adding API server processor...");

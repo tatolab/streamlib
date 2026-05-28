@@ -39,12 +39,12 @@ fn main() -> Result<()> {
     println!("Fixture: {bgra_path}");
     println!("Format:  {width}x{height} @ {fps}fps, {frame_count} frames\n");
 
-    let runtime = Runner::new()?;
+    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
 
-    runtime.add_module_blocking(module_ident_any_version!("tatolab", "debug-utilities"))?;
-    runtime.add_module_blocking(module_ident_any_version!("tatolab", "display"))?;
-    runtime.add_module_blocking(module_ident_any_version!("tatolab", "h264"))?;
-    runtime.add_module_blocking(module_ident_any_version!("tatolab", "h265"))?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "debug-utilities"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/debug-utilities"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "display"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/display"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h264"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/h264"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h265"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/h265"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
 
     let source = runtime.add_processor(ProcessorSpec::new(
         schema_ident!("tatolab", "debug-utilities", "BgraFileSource", "1.0.0"),

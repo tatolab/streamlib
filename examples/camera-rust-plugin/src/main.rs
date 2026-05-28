@@ -40,13 +40,13 @@ use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
 use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
-    let runtime = Runner::new()?;
+    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
 
     // 1. Load `@tatolab/camera` and `@tatolab/display` via the canonical
     //    workspace-staged path. `cargo xtask build-plugins --package
     //    @tatolab/camera --package @tatolab/display` must have run first.
-    runtime.add_module_blocking(module_ident_any_version!("tatolab", "camera"))?;
-    runtime.add_module_blocking(module_ident_any_version!("tatolab", "display"))?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/camera"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "display"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/display"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
 
     // 2. Stage the example-local grayscale plugin cdylib at
     //    `plugin/lib/<triple>/` so the explicit `ManifestDirectory`
@@ -117,7 +117,7 @@ fn main() -> Result<()> {
     //    and registers the local plugin's processors + schemas.
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "camera-rust-plugin"),
-        Strategy::Path { path: plugin_dir.clone(), build: BuildPolicy::NeverBuild },
+        Strategy::Path { path: plugin_dir.clone(), build: BuildPolicy::IfStale },
     )?;
 
     // 4. Add processors

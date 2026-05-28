@@ -35,16 +35,16 @@ fn main() -> Result<()> {
     println!("Camera:   {device}");
     println!("Duration: {duration_secs}s\n");
 
-    let runtime = Runner::new()?;
+    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
 
     // Load all four processor packages at runtime. `@tatolab/core` is
     // pulled in transitively by each — its wire-vocabulary schemas
     // (`EncodedVideoFrame.max_payload_bytes` in particular) are
     // load-bearing for iceoryx2 publisher sizing.
-    runtime.add_module_blocking(module_ident_any_version!("tatolab", "camera"))?;
-    runtime.add_module_blocking(module_ident_any_version!("tatolab", "display"))?;
-    runtime.add_module_blocking(module_ident_any_version!("tatolab", "h264"))?;
-    runtime.add_module_blocking(module_ident_any_version!("tatolab", "h265"))?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/camera"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "display"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/display"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h264"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/h264"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h265"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/h265"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
 
     // --- Camera ---
     // STREAMLIB_CAMERA_MAX_WIDTH / STREAMLIB_CAMERA_MAX_HEIGHT cap V4L2

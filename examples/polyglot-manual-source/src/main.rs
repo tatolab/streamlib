@@ -167,7 +167,7 @@ fn run() -> Result<SinkReport> {
     println!("Tick rate:         {INTERVAL_MS}ms");
     println!("Run length:        {:?}", RUN_DURATION);
 
-    let runtime = Runner::new()?;
+    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
@@ -186,15 +186,15 @@ fn run() -> Result<SinkReport> {
     // on `--runtime`.
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-manual-source-counting-sink"),
-        Strategy::Path { path: plugin_dir.clone(), build: BuildPolicy::NeverBuild },
+        Strategy::Path { path: plugin_dir.clone(), build: BuildPolicy::IfStale },
     )?;
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-manual-source"),
-        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::NeverBuild },
+        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::IfStale },
     )?;
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-manual-source-deno"),
-        Strategy::Path { path: manifest_dir.join("deno"), build: BuildPolicy::NeverBuild },
+        Strategy::Path { path: manifest_dir.join("deno"), build: BuildPolicy::IfStale },
     )?;
 
     // 3. Add processors.

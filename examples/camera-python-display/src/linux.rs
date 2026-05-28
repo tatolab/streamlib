@@ -123,7 +123,7 @@ const BYTES_PER_PIXEL: u32 = 4;
 pub fn main() -> Result<()> {
     println!("=== AvatarCharacter (Linux, cuda + opengl + skia adapters) ===\n");
 
-    let runtime = Runner::new()?;
+    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
 
     // Stage the sibling effects cdylib at `effects/lib/<host_triple>/`
     // so `Strategy::ManifestDirectory` picks it up via
@@ -142,15 +142,15 @@ pub fn main() -> Result<()> {
     // --package @tatolab/camera --package @tatolab/display` must have
     // run first). The example-local effects + Python sub-packages
     // resolve via their manifest directories.
-    runtime.add_module_blocking(module_ident_any_version!("tatolab", "camera"))?;
-    runtime.add_module_blocking(module_ident_any_version!("tatolab", "display"))?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/camera"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "display"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/display"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "camera-python-display-effects"),
-        Strategy::Path { path: effects_dir.clone(), build: BuildPolicy::NeverBuild },
+        Strategy::Path { path: effects_dir.clone(), build: BuildPolicy::IfStale },
     )?;
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "cyberpunk-processor"),
-        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::NeverBuild },
+        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::IfStale },
     )?;
     println!("✓ Loaded packages (camera, display, effects, cyberpunk-processor)\n");
 

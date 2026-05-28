@@ -164,7 +164,7 @@ fn run() -> Result<TickReport> {
     println!("Nominal interval:  {NOMINAL_INTERVAL_MS}ms");
     println!("Run length:        {:?}", RUN_DURATION);
 
-    let runtime = Runner::new()?;
+    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
     // Load the polyglot processors via explicit add_module_with calls.
     // The Python and Deno sub-packages are example-local (siblings of
     // this example crate) and not workspace-staged, so each is
@@ -175,11 +175,11 @@ fn run() -> Result<TickReport> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-continuous-processor"),
-        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::NeverBuild },
+        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::IfStale },
     )?;
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-continuous-processor-deno"),
-        Strategy::Path { path: manifest_dir.join("deno"), build: BuildPolicy::NeverBuild },
+        Strategy::Path { path: manifest_dir.join("deno"), build: BuildPolicy::IfStale },
     )?;
 
     let processor = runtime.add_processor(ProcessorSpec::new(

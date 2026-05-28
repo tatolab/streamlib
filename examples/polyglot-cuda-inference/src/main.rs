@@ -148,7 +148,7 @@ fn main() -> Result<()> {
     println!("Timeout:     {timeout_secs}s");
     println!();
 
-    let runtime = Runner::new()?;
+    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
 
     // Slot the setup hook will populate with the cuda adapter so it
     // (and the host-side `Arc`s it holds) outlives the runtime's start
@@ -184,7 +184,7 @@ fn main() -> Result<()> {
     // via the default resolver chain (workspace stage → installed
     // cache). `cargo xtask build-plugins --package @tatolab/debug-utilities`
     // must have run first.
-    runtime.add_module_blocking(module_ident_any_version!("tatolab", "debug-utilities"))?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "debug-utilities"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/debug-utilities"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
 
     // Load the polyglot processors via explicit add_module_with calls.
     // The Python and Deno sub-packages are example-local (siblings of
@@ -196,11 +196,11 @@ fn main() -> Result<()> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-cuda-inference"),
-        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::NeverBuild },
+        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::IfStale },
     )?;
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-cuda-inference-deno"),
-        Strategy::Path { path: manifest_dir.join("deno"), build: BuildPolicy::NeverBuild },
+        Strategy::Path { path: manifest_dir.join("deno"), build: BuildPolicy::IfStale },
     )?;
 
     // Trigger source: a tiny BGRA fixture that drives Videoframes

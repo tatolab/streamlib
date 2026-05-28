@@ -113,7 +113,7 @@ fn main() -> Result<()> {
     println!("Output PNG:  {}", output_png.display());
     println!();
 
-    let runtime = Runner::new()?;
+    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
 
     // Slots the setup hook populates so main.rs can read the surface
     // back post-stop and write the output PNG. We can't keep the
@@ -242,7 +242,7 @@ fn main() -> Result<()> {
     // via the default resolver chain (workspace stage → installed
     // cache). `cargo xtask build-plugins --package @tatolab/debug-utilities`
     // must have run first.
-    runtime.add_module_blocking(module_ident_any_version!("tatolab", "debug-utilities"))?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "debug-utilities"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/debug-utilities"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
 
     // Load the polyglot processors via explicit add_module_with calls.
     // The Python and Deno sub-packages are example-local (siblings of
@@ -254,11 +254,11 @@ fn main() -> Result<()> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-opengl-fragment-shader"),
-        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::NeverBuild },
+        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::IfStale },
     )?;
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-opengl-fragment-shader-deno"),
-        Strategy::Path { path: manifest_dir.join("deno"), build: BuildPolicy::NeverBuild },
+        Strategy::Path { path: manifest_dir.join("deno"), build: BuildPolicy::IfStale },
     )?;
 
     // Trigger source: BgraFileSource emits a few `VideoFrame`s so the

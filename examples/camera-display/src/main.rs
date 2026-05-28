@@ -21,11 +21,11 @@ use streamlib::sdk::schema_ident;
 fn main() -> Result<()> {
     println!("=== Camera → Display Pipeline ===\n");
 
-    let runtime = Runner::new()?;
+    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
 
-    runtime.add_module_blocking(module_ident_any_version!("tatolab", "camera"))?;
-    runtime.add_module_blocking(module_ident_any_version!("tatolab", "display"))?;
-    runtime.add_module_blocking(module_ident_any_version!("tatolab", "api-server"))?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/camera"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "display"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/display"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "api-server"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/api-server"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
 
     println!("📷 Adding camera processor...");
     let device_id = std::env::var("STREAMLIB_CAMERA_DEVICE").ok();

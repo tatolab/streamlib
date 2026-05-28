@@ -24,12 +24,12 @@ fn main() -> Result<()> {
     println!("\n🎵 Audio Mixer Demo - Mixing Multiple Tones\n");
 
     println!("🎛️  Creating audio runtime...");
-    let runtime = Runner::new()?;
+    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
 
     // 1) Load @tatolab/audio (and any deps it walks via patch:) from
     //    the workspace-staged location. `cargo xtask build-plugins`
     //    must have run first.
-    runtime.add_module_blocking(module_ident_any_version!("tatolab", "audio"))?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "audio"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/audio"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
     println!("+ @tatolab/audio loaded from target/streamlib-plugins/\n");
 
     // 2) Chord generator — addressed by structured schema_ident,

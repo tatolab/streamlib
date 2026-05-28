@@ -22,15 +22,15 @@ use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
 use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
-    let runtime = Runner::new()?;
+    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
 
     // 1. Load `@tatolab/camera` and `@tatolab/display` from the
     //    workspace-staged location via the default resolver chain
     //    (workspace stage → installed cache). `cargo xtask build-plugins
     //    --package @tatolab/camera --package @tatolab/display` must
     //    have run first.
-    runtime.add_module_blocking(module_ident_any_version!("tatolab", "camera"))?;
-    runtime.add_module_blocking(module_ident_any_version!("tatolab", "display"))?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/camera"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "display"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/display"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
 
     // 2. Load the sibling Python sub-package — it lives at `./python`
     //    relative to this example, isn't workspace-staged, so we
@@ -39,7 +39,7 @@ fn main() -> Result<()> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "camera-python-subprocess"),
-        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::NeverBuild },
+        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::IfStale },
     )?;
 
     // 3. Add processors

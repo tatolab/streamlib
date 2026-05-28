@@ -94,7 +94,7 @@ fn main() -> Result<()> {
     println!("Hero PNG:   {} (frame {HERO_FRAME_INDEX})", hero_path.display());
     println!();
 
-    let runtime = Runner::new()?;
+    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
 
     let texture_slot: Arc<
         Mutex<Option<streamlib::sdk::rhi::Texture>>,
@@ -201,7 +201,7 @@ fn main() -> Result<()> {
     // via the default resolver chain (workspace stage → installed
     // cache). `cargo xtask build-plugins --package @tatolab/debug-utilities`
     // must have run first.
-    runtime.add_module_blocking(module_ident_any_version!("tatolab", "debug-utilities"))?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "debug-utilities"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/debug-utilities"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
 
     // Load the polyglot processor via an explicit add_module_with
     // call. The Python sub-package is example-local (sibling of this
@@ -212,7 +212,7 @@ fn main() -> Result<()> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-skia-canvas"),
-        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::NeverBuild },
+        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::IfStale },
     )?;
 
     let fixture_path =

@@ -119,7 +119,7 @@ fn main() -> Result<()> {
     println!("Timeout:     {timeout_secs}s");
     println!();
 
-    let runtime = Runner::new()?;
+    let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
 
     // Setup-hook captures keep the adapter `Arc` alive across start
     // → stop. The CUDA adapter has no per-acquire host work (no
@@ -157,7 +157,7 @@ fn main() -> Result<()> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "cuda-fisheye-python"),
-        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::NeverBuild },
+        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::IfStale },
     )?;
 
     // Trigger source — emits a tiny BGRA fixture frame whose contents
