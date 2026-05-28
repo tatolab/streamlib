@@ -542,6 +542,7 @@ fn register_render_target_surface(
             uuid,
             &texture,
             None,
+            None,
             streamlib::sdk::rhi::VulkanLayout::GENERAL,
         )
         .map_err(|e| format!("{label}: surface_store.register_texture: {e}"))?;

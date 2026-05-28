@@ -823,6 +823,7 @@ fn capture_thread_loop(
                 texture_id,
                 stream_texture,
                 None,
+                None,
                 VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
             ) {
                 tracing::warn!(

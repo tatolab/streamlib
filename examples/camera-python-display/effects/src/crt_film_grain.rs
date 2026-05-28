@@ -288,6 +288,7 @@ impl CrtFilmGrainProcessor::Processor {
                     &surface_id,
                     &texture,
                     None,
+                    None,
                     VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
                 )
                 .map_err(|e| {

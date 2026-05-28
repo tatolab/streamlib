@@ -1104,7 +1104,8 @@ impl SurfaceStoreInner {
         &self,
         surface_id: &str,
         texture: &crate::core::rhi::Texture,
-        timeline: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+        produce_done: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+        consume_done: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
         current_image_layout: streamlib_consumer_rhi::VulkanLayout,
     ) -> Result<()> {
         let is_opaque_fd = texture.vulkan_inner().is_opaque_fd_export();
@@ -1120,16 +1121,36 @@ impl SurfaceStoreInner {
             texture.vulkan_inner().export_dma_buf_fd()?
         };
 
-        // Optionally export the timeline-semaphore as an OPAQUE_FD. The host
-        // retains ownership of the semaphore object; this fd is duplicated by
-        // the kernel during SCM_RIGHTS and we close our copy after send.
-        let sync_fd: Option<std::os::unix::io::RawFd> = match timeline {
+        // Optionally export the producer-side `produce_done` and
+        // consumer-side `consume_done` timeline-semaphores as
+        // OPAQUE_FDs (single-writer-per-edge model — see
+        // `docs/architecture/adapter-timeline-single-writer.md`). The
+        // host retains ownership of both semaphore objects; the FDs are
+        // duplicated by the kernel during SCM_RIGHTS and we close our
+        // copies after send.
+        let produce_done_fd: Option<std::os::unix::io::RawFd> = match produce_done {
             Some(t) => match t.export_opaque_fd() {
                 Ok(f) => Some(f),
                 Err(e) => {
                     unsafe { libc::close(fd) };
                     return Err(Error::Configuration(format!(
-                        "register_texture: failed to export timeline opaque fd: {}",
+                        "register_texture: failed to export produce_done opaque fd: {}",
+                        e
+                    )));
+                }
+            },
+            None => None,
+        };
+        let consume_done_fd: Option<std::os::unix::io::RawFd> = match consume_done {
+            Some(t) => match t.export_opaque_fd() {
+                Ok(f) => Some(f),
+                Err(e) => {
+                    unsafe { libc::close(fd) };
+                    if let Some(p) = produce_done_fd {
+                        unsafe { libc::close(p) };
+                    }
+                    return Err(Error::Configuration(format!(
+                        "register_texture: failed to export consume_done opaque fd: {}",
                         e
                     )));
                 }
@@ -1171,8 +1192,8 @@ impl SurfaceStoreInner {
                 "plane_offsets": [0u64],
                 "plane_strides": [0u64],
                 "drm_format_modifier": 0u64,
-                "has_produce_done_fd": sync_fd.is_some(),
-                "has_consume_done_fd": false,
+                "has_produce_done_fd": produce_done_fd.is_some(),
+                "has_consume_done_fd": consume_done_fd.is_some(),
                 "current_image_layout": current_image_layout.as_vk().as_raw(),
                 "vk_image_type": VK_IMAGE_TYPE_2D,
                 "vk_image_mip_levels": 1u32,
@@ -1211,9 +1232,9 @@ impl SurfaceStoreInner {
                 "plane_offsets": plane_offsets,
                 "plane_strides": plane_strides,
                 "drm_format_modifier": drm_format_modifier,
-                "has_produce_done_fd": sync_fd.is_some(),
-                "has_consume_done_fd": false,
-                // The producer's declared `VkImageLayout` (#633): the
+                "has_produce_done_fd": produce_done_fd.is_some(),
+                "has_consume_done_fd": consume_done_fd.is_some(),
+                // The producer's declared `VkImageLayout`: the
                 // layout the texture lives in immediately after
                 // registration, fed to host consumers as the source
                 // layout of their first QFOT acquire barrier. Encoded
@@ -1228,7 +1249,10 @@ impl SurfaceStoreInner {
         })?;
 
         let mut fds: Vec<std::os::unix::io::RawFd> = vec![fd];
-        if let Some(s) = sync_fd {
+        if let Some(s) = produce_done_fd {
+            fds.push(s);
+        }
+        if let Some(s) = consume_done_fd {
             fds.push(s);
         }
         let send_result =
@@ -1251,9 +1275,10 @@ impl SurfaceStoreInner {
         }
 
         tracing::debug!(
-            "SurfaceStore: Registered texture '{}' (sync_fd={})",
+            "SurfaceStore: Registered texture '{}' (produce_done={}, consume_done={})",
             surface_id,
-            timeline.is_some(),
+            produce_done.is_some(),
+            consume_done.is_some(),
         );
         Ok(())
     }
@@ -1280,7 +1305,8 @@ impl SurfaceStoreInner {
         &self,
         surface_id: &str,
         pixel_buffer: &PixelBuffer,
-        timeline: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+        produce_done: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+        consume_done: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
     ) -> Result<()> {
         use crate::core::rhi::RhiPixelBufferExport;
 
@@ -1307,11 +1333,12 @@ impl SurfaceStoreInner {
             plane_offsets.push(0);
         }
 
-        // Optionally export the timeline as an OPAQUE_FD. Same
-        // SCM_RIGHTS-trailing-FD shape `register_texture` uses so the
-        // surface-share daemon's existing `has_sync_fd` parsing applies
-        // unchanged.
-        let sync_fd: Option<std::os::unix::io::RawFd> = match timeline {
+        // Export `produce_done` + `consume_done` as OPAQUE_FDs (the
+        // single-writer-per-edge pair documented in
+        // `docs/architecture/adapter-timeline-single-writer.md`). The
+        // surface-share daemon's wire format peels both trailing FDs
+        // in the published order.
+        let produce_done_fd: Option<std::os::unix::io::RawFd> = match produce_done {
             Some(t) => match t.export_opaque_fd() {
                 Ok(f) => Some(f),
                 Err(e) => {
@@ -1319,7 +1346,25 @@ impl SurfaceStoreInner {
                         unsafe { libc::close(*fd) };
                     }
                     return Err(Error::Configuration(format!(
-                        "register_pixel_buffer_with_timeline: failed to export timeline opaque fd: {}",
+                        "register_pixel_buffer_with_timeline: failed to export produce_done opaque fd: {}",
+                        e
+                    )));
+                }
+            },
+            None => None,
+        };
+        let consume_done_fd: Option<std::os::unix::io::RawFd> = match consume_done {
+            Some(t) => match t.export_opaque_fd() {
+                Ok(f) => Some(f),
+                Err(e) => {
+                    for fd in &plane_fds {
+                        unsafe { libc::close(*fd) };
+                    }
+                    if let Some(p) = produce_done_fd {
+                        unsafe { libc::close(p) };
+                    }
+                    return Err(Error::Configuration(format!(
+                        "register_pixel_buffer_with_timeline: failed to export consume_done opaque fd: {}",
                         e
                     )));
                 }
@@ -1338,7 +1383,8 @@ impl SurfaceStoreInner {
             "handle_type": handle_type,
             "plane_sizes": plane_sizes,
             "plane_offsets": plane_offsets,
-            "has_sync_fd": sync_fd.is_some(),
+            "has_produce_done_fd": produce_done_fd.is_some(),
+            "has_consume_done_fd": consume_done_fd.is_some(),
         });
 
         let connection = self.connection.lock();
@@ -1347,7 +1393,10 @@ impl SurfaceStoreInner {
         })?;
 
         let mut fds: Vec<std::os::unix::io::RawFd> = plane_fds.clone();
-        if let Some(s) = sync_fd {
+        if let Some(s) = produce_done_fd {
+            fds.push(s);
+        }
+        if let Some(s) = consume_done_fd {
             fds.push(s);
         }
         let send_result =
@@ -1373,10 +1422,11 @@ impl SurfaceStoreInner {
         }
 
         tracing::debug!(
-            "SurfaceStore: Registered pixel buffer '{}' ({} plane(s), sync_fd={})",
+            "SurfaceStore: Registered pixel buffer '{}' ({} plane(s), produce_done={}, consume_done={})",
             surface_id,
             plane_sizes.len(),
-            timeline.is_some(),
+            produce_done.is_some(),
+            consume_done.is_some(),
         );
         Ok(())
     }
@@ -2117,7 +2167,8 @@ impl SurfaceStore {
         &self,
         surface_id: &str,
         texture: &crate::core::rhi::Texture,
-        timeline: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+        produce_done: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+        consume_done: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
         current_image_layout: streamlib_consumer_rhi::VulkanLayout,
     ) -> Result<()> {
         if self.is_none() {
@@ -2127,10 +2178,13 @@ impl SurfaceStore {
         }
         let mut err_buf = [0u8; 512];
         let mut err_len: usize = 0;
-        // timeline is an engine-only Arc; we pass the raw pointer to
-        // the underlying type. The host-side callback re-borrows it
-        // as `Option<&Arc<HostVulkanTimelineSemaphore>>`.
-        let timeline_ptr: *const ss_c_void = timeline
+        // produce_done / consume_done are engine-only references; we
+        // pass raw pointers to the underlying type. The host-side
+        // callback re-borrows them.
+        let produce_done_ptr: *const ss_c_void = produce_done
+            .map(|t| t as *const _ as *const ss_c_void)
+            .unwrap_or(std::ptr::null());
+        let consume_done_ptr: *const ss_c_void = consume_done
             .map(|t| t as *const _ as *const ss_c_void)
             .unwrap_or(std::ptr::null());
         let status = unsafe {
@@ -2139,7 +2193,8 @@ impl SurfaceStore {
                 surface_id.as_ptr(),
                 surface_id.len(),
                 texture as *const crate::core::rhi::Texture as *const ss_c_void,
-                timeline_ptr,
+                produce_done_ptr,
+                consume_done_ptr,
                 current_image_layout.0,
                 err_buf.as_mut_ptr(),
                 err_buf.len(),
@@ -2164,7 +2219,8 @@ impl SurfaceStore {
         &self,
         surface_id: &str,
         pixel_buffer: &PixelBuffer,
-        timeline: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+        produce_done: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+        consume_done: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
     ) -> Result<()> {
         if self.is_none() {
             return Err(Error::Configuration(
@@ -2173,7 +2229,10 @@ impl SurfaceStore {
         }
         let mut err_buf = [0u8; 512];
         let mut err_len: usize = 0;
-        let timeline_ptr: *const ss_c_void = timeline
+        let produce_done_ptr: *const ss_c_void = produce_done
+            .map(|t| t as *const _ as *const ss_c_void)
+            .unwrap_or(std::ptr::null());
+        let consume_done_ptr: *const ss_c_void = consume_done
             .map(|t| t as *const _ as *const ss_c_void)
             .unwrap_or(std::ptr::null());
         let status = unsafe {
@@ -2182,7 +2241,8 @@ impl SurfaceStore {
                 surface_id.as_ptr(),
                 surface_id.len(),
                 pixel_buffer as *const PixelBuffer as *const ss_c_void,
-                timeline_ptr,
+                produce_done_ptr,
+                consume_done_ptr,
                 err_buf.as_mut_ptr(),
                 err_buf.len(),
                 &mut err_len as *mut usize,

@@ -218,6 +218,7 @@ impl CameraToCudaCopyProcessor::Processor {
                 &surface_key,
                 &pixel_buffer_rhi,
                 Some(timeline.as_ref()),
+                None,
             )
             .map_err(|e| {
                 Error::Configuration(format!(

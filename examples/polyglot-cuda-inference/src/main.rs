@@ -342,6 +342,7 @@ fn register_host_surface(
             &SCENARIO_SURFACE_ID.to_string(),
             &pixel_buffer_rhi,
             Some(timeline.as_ref()),
+            None,
         )
         .map_err(|e| format!("register_pixel_buffer_with_timeline: {e}"))?;
 

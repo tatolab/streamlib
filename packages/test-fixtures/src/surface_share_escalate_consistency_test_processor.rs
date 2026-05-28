@@ -153,6 +153,7 @@ fn run_smoke(
             surface_id,
             &texture,
             Some(&timeline),
+            None,
             VulkanLayout::UNDEFINED,
         )
         .map_err(|e| {

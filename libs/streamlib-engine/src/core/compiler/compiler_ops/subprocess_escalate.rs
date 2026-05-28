@@ -673,6 +673,7 @@ fn assign_texture_handle_id(
                 &handle_id,
                 texture.texture(),
                 None,
+                None,
                 streamlib_consumer_rhi::VulkanLayout::UNDEFINED,
             )?;
         }
@@ -701,6 +702,7 @@ fn assign_image_handle_id(
         store.register_texture(
             &handle_id,
             texture,
+            None,
             None,
             streamlib_consumer_rhi::VulkanLayout::UNDEFINED,
         )?;

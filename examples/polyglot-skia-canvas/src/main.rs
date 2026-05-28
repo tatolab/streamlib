@@ -148,6 +148,7 @@ fn main() -> Result<()> {
                     SCENARIO_SURFACE_UUID,
                     &texture,
                     Some(timeline.as_ref()),
+                    None,
                     VulkanLayout::GENERAL,
                 )
                 .map_err(|e| {

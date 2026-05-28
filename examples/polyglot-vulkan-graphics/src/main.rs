@@ -626,6 +626,7 @@ fn main() -> Result<()> {
                     SCENARIO_SURFACE_UUID,
                     &texture,
                     Some(timeline.as_ref()),
+                    None,
                     streamlib::sdk::rhi::VulkanLayout::COLOR_ATTACHMENT_OPTIMAL,
                 )
                 .map_err(|e| {

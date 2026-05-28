@@ -295,6 +295,7 @@ fn main() -> Result<()> {
                     SCENARIO_SURFACE_UUID,
                     &texture,
                     Some(timeline.as_ref()),
+                    None,
                     streamlib::sdk::rhi::VulkanLayout::GENERAL,
                 )
                 .map_err(|e| {

@@ -401,6 +401,7 @@ fn register_warped_host_surface(
             &SCENARIO_SURFACE_ID.to_string(),
             &texture,
             Some(timeline.as_ref()),
+            None,
             VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
         )
         .map_err(|e| format!("surface_store.register_texture: {e}"))?;
