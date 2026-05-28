@@ -16,7 +16,7 @@
 //! - DELETE /api/connections/:id - Remove a connection
 //! - WS /ws/events - WebSocket event stream
 //!
-//! Run prerequisite: `cargo xtask build-plugins --package @tatolab/api-server`
+//! Packages build automatically on `cargo run` via the build orchestrator.
 //! so the runtime can find the staged cdylib at
 //! `target/streamlib-plugins/tatolab__api-server/`.
 //!

@@ -11,7 +11,7 @@
 //! Usage:
 //!   vulkan-video-psnr <h264|h265> <bgra-path> <width> <height> <fps> <frame-count>
 //!
-//! Run prerequisite: `cargo xtask build-plugins --package @tatolab/debug-utilities
+//! Packages build automatically on `cargo run` via the build orchestrator.
 //! --package @tatolab/display --package @tatolab/h264 --package @tatolab/h265`
 //! so the runtime can resolve each cdylib at load time.
 

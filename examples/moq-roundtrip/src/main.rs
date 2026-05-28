@@ -18,7 +18,7 @@
 //! All MoQ config is automatic — Cloudflare draft-14 relay, auto-generated
 //! namespace.
 //!
-//! Run prerequisite: `cargo xtask build-plugins --package @tatolab/audio
+//! Packages build automatically on `cargo run` via the build orchestrator.
 //! --package @tatolab/camera --package @tatolab/display --package @tatolab/h264
 //! --package @tatolab/moq --package @tatolab/opus` so the runtime can resolve
 //! each cdylib at load time.

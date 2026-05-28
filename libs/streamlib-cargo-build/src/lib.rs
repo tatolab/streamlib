@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Cargo-build orchestration helpers used by `streamlib pack` and
-//! `cargo xtask build-plugins`.
+//! `streamlib-build-orchestrator`.
 //!
 //! The two callers need the same battle-tested cdylib-discovery /
 //! target-triple-staging logic — host target triple probe, dylib
@@ -24,7 +24,7 @@ pub use streamlib_processor_schema::{ProcessorLanguage, ProjectConfigMinimal};
 /// `streamlib-engine`'s `core::runtime::host_target_triple()` carries
 /// the same value via its own `build.rs`. The duplication is
 /// deliberate: this crate intentionally has zero engine deps so
-/// `cargo xtask build-plugins` can pull it in without dragging the
+/// `streamlib-build-orchestrator` can pull it in without dragging the
 /// full RHI / IPC / runtime layers. Both copies read the same cargo
 /// `TARGET` env var at compile time and therefore agree by
 /// construction.
@@ -98,7 +98,7 @@ pub fn read_cargo_package_name(package_dir: &Path) -> Result<String> {
 ///
 /// `Release` is the production-distribution shape (`streamlib pack`
 /// uses it). `Dev` skips optimization for a faster inner loop
-/// (`cargo xtask build-plugins` defaults to it).
+/// (`streamlib-build-orchestrator` defaults to it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CargoProfile {
     Dev,
@@ -279,7 +279,7 @@ pub fn read_minimal_project_config(package_dir: &Path) -> Result<Option<ProjectC
 }
 
 /// Whether a parsed manifest declares at least one Rust runtime
-/// processor — the predicate `cargo xtask build-plugins` uses to
+/// processor — the predicate `streamlib-build-orchestrator` uses to
 /// decide which packages need a `cargo build`.
 pub fn has_rust_runtime_processors(config: &ProjectConfigMinimal) -> bool {
     config
@@ -317,7 +317,7 @@ pub fn discover_package_dirs(roots: &[&Path]) -> Result<Vec<PathBuf>> {
 
 /// Filter `roots` to the package directories whose `streamlib.yaml`
 /// declares at least one Rust runtime processor. The set
-/// `cargo xtask build-plugins` iterates over.
+/// `streamlib-build-orchestrator` iterates over.
 pub fn discover_rust_impl_packages(roots: &[&Path]) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     for dir in discover_package_dirs(roots)? {
@@ -335,7 +335,7 @@ pub fn discover_rust_impl_packages(roots: &[&Path]) -> Result<Vec<PathBuf>> {
 /// no `@` literal so the path is filesystem-safe across every
 /// supported host. The corresponding wire-form id is `@<org>/<name>`.
 ///
-/// `cargo xtask build-plugins` and the runtime's
+/// `streamlib-build-orchestrator` and the runtime's
 /// `ModuleResolverStrategy::WorkspaceStaged` resolver MUST agree on
 /// this format — keep the conversion in one place.
 pub fn staged_package_dir_name(org: &str, name: &str) -> String {
@@ -737,7 +737,7 @@ not-json-at-all
     fn discover_rust_impl_packages_filters_by_runtime_language() {
         // Mixed workspace: one Rust-runtime package, one Python-runtime
         // package, one schemas-only package. Only the Rust one is
-        // returned — `cargo xtask build-plugins` doesn't build Python
+        // returned — `streamlib-build-orchestrator` doesn't build Python
         // or schemas-only packages.
         let root = tempdir().unwrap();
         let rust_pkg = root.path().join("rust-pkg");

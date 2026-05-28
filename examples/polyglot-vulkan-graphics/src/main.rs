@@ -675,7 +675,7 @@ fn main() -> Result<()> {
 
     // Load the BgraFileSource processor from `@tatolab/debug-utilities`
     // via the default resolver chain (workspace stage → installed
-    // cache). `cargo xtask build-plugins --package @tatolab/debug-utilities`
+    // cache). `the build orchestrator (automatic) --package @tatolab/debug-utilities`
     // must have run first.
     runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "debug-utilities"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/debug-utilities"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
 

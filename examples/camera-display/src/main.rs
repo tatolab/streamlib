@@ -7,7 +7,7 @@
 //! at runtime, wires camera → display, and exposes the runtime's REST
 //! API on `http://127.0.0.1:9000`.
 //!
-//! Run prerequisite: `cargo xtask build-plugins --package @tatolab/camera
+//! Packages build automatically on `cargo run` via the build orchestrator.
 //! --package @tatolab/display --package @tatolab/api-server` so the
 //! runtime can resolve each cdylib at load time.
 

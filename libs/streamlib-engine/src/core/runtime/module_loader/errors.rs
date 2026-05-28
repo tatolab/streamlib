@@ -8,15 +8,16 @@ use crate::core::Error;
 /// [`Runner::add_module`]: super::super::Runner::add_module
 #[derive(Debug, thiserror::Error)]
 pub enum AddModuleError {
-    /// No workspace stage dir AND no installed-package cache entry
-    /// matches `@org/name`. Surface the canonical ref so callers can
-    /// suggest `streamlib pkg install`, `cargo xtask build-plugins`,
-    /// or a typo fix.
+    /// No installed-package cache entry matches `@org/name`. Bare
+    /// [`add_module`] resolves cache-only; load from source instead, or
+    /// install the package.
+    ///
+    /// [`add_module`]: super::super::Runner::add_module
     #[error(
-        "Module '{package}' not found — no workspace stage dir at \
-         `target/streamlib-plugins/<org>__<name>/` and no installed-cache \
-         entry. Run `cargo xtask build-plugins --package {package}` (dev) \
-         or `streamlib pkg install <slpkg>` (distribution)."
+        "Module '{package}' not found in the installed-package cache. \
+         Load it from source with `add_module_with(_, Strategy::Path {{ build: \
+         BuildPolicy::IfStale, .. }})` (dev / runtime-authoring), or install it \
+         with `streamlib pkg install <slpkg>` (distribution)."
     )]
     ModuleNotFound {
         package: streamlib_idents::PackageRef,
@@ -34,13 +35,13 @@ pub enum AddModuleError {
         detail: String,
     },
 
-    /// Workspace stage dir was found but its `streamlib.yaml`'s
-    /// `package: { org, name }` doesn't match the requested ident
-    /// (manual clobbering, stale rename, wrong dir).
+    /// The resolved source's `streamlib.yaml` `package: { org, name }`
+    /// doesn't match the requested ident (wrong path, stale rename,
+    /// clobbered cache).
     #[error(
         "Module '{module}' identity mismatch at {}: \
-         staged manifest declares `{actual}`. \
-         Re-run `cargo xtask build-plugins` to regenerate.",
+         the manifest declares `{actual}`. \
+         Point the strategy at the correct package source.",
         source_path.display()
     )]
     ManifestIdentityMismatch {

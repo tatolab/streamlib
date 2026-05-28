@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-cargo-build"
-description = "Cargo-build orchestration helpers shared between `streamlib pack` and `cargo xtask build-plugins` — host target triple probe, cdylib JSON-artifact parser, package-directory discovery, per-package staging"
+description = "Cargo-build orchestration helpers shared between `streamlib pack` and `streamlib-build-orchestrator` — host target triple probe, cdylib JSON-artifact parser, package-directory discovery, per-package staging"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

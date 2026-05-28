@@ -9,7 +9,7 @@
 //! into `plugin/lib/<host_triple>/` before calling
 //! `runtime.add_module_with_blocking(..., Strategy::ManifestDirectory)`
 //! to register it. This is the "build from source + load from path"
-//! shape, distinct from the `cargo xtask build-plugins` +
+//! shape, distinct from the `the build orchestrator (automatic)` +
 //! `runtime.add_module_blocking(...)` flow that the other examples use for
 //! canonical workspace packages.
 //!
@@ -22,7 +22,7 @@
 //! Build the plugin cdylib + stage the canonical packages:
 //! ```bash
 //! cargo build -p grayscale-plugin
-//! cargo xtask build-plugins --package @tatolab/camera --package @tatolab/display
+//! the build orchestrator (automatic) --package @tatolab/camera --package @tatolab/display
 //! ```
 //!
 //! ## Usage
@@ -43,7 +43,7 @@ fn main() -> Result<()> {
     let runtime = Runner::new_with_orchestrator(streamlib::sdk::PolyglotBuildOrchestrator::default())?;
 
     // 1. Load `@tatolab/camera` and `@tatolab/display` via the canonical
-    //    workspace-staged path. `cargo xtask build-plugins --package
+    //    workspace-staged path. `the build orchestrator (automatic) --package
     //    @tatolab/camera --package @tatolab/display` must have run first.
     runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/camera"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
     runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "display"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/display"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;

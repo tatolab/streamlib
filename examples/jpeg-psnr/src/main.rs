@@ -11,7 +11,7 @@
 //! Usage:
 //!   jpeg-psnr <jpeg-path> <width> <height> <fps> <frame-count>
 //!
-//! Run prerequisite: `cargo xtask build-plugins --package @tatolab/debug-utilities
+//! Packages build automatically on `cargo run` via the build orchestrator.
 //! --package @tatolab/jpeg --package @tatolab/display` so the runtime can
 //! resolve each cdylib at load time.
 

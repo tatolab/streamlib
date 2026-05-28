@@ -15,12 +15,6 @@ streamlib-jtd-codegen = { path = "../libs/streamlib-jtd-codegen" }
 # `schemars::schema_for!(StreamlibYaml)` from this crate (#714).
 streamlib-processor-schema = { path = "../libs/streamlib-processor-schema" }
 
-# Cargo-build orchestration helpers — `cargo xtask build-plugins` reuses
-# the discovery / cargo-invocation / staging primitives shared with
-# `streamlib pack` so the dev inner loop and distribution path stay
-# in lockstep.
-streamlib-cargo-build = { path = "../libs/streamlib-cargo-build" }
-
 # Logging — needed to surface tracing::info! output from streamlib-jtd-codegen.
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -15,7 +15,7 @@
 //!   cargo run -p vulkan-video-roundtrip-cdylib-camera -- h264 [device] [seconds]
 //!   cargo run -p vulkan-video-roundtrip-cdylib-camera -- h265 /dev/video0 10
 //!
-//! Run prerequisite: `cargo xtask build-plugins --package @tatolab/camera
+//! Packages build automatically on `cargo run` via the build orchestrator.
 //! --package @tatolab/display --package @tatolab/h264 --package @tatolab/h265`
 //! so the runtime can resolve each cdylib at load time.
 

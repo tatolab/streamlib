@@ -129,7 +129,7 @@ pub fn main() -> Result<()> {
     // so `Strategy::ManifestDirectory` picks it up via
     // the same triple-keyed convention `streamlib pack` produces.
     // The effects package is example-local (not a workspace-staged
-    // package), so the canonical `cargo xtask build-plugins` doesn't
+    // package), so the canonical `the build orchestrator (automatic)` doesn't
     // stage it; the runner handles its own copy step. The user is
     // expected to have run `cargo build -p camera-python-display-effects`
     // beforehand.
@@ -138,7 +138,7 @@ pub fn main() -> Result<()> {
     stage_effects_cdylib(&effects_dir)?;
 
     // Load packages: `@tatolab/camera` + `@tatolab/display` via the
-    // canonical workspace-staged path (`cargo xtask build-plugins
+    // canonical workspace-staged path (`the build orchestrator (automatic)
     // --package @tatolab/camera --package @tatolab/display` must have
     // run first). The example-local effects + Python sub-packages
     // resolve via their manifest directories.
@@ -459,7 +459,7 @@ pub fn main() -> Result<()> {
 /// so the `ManifestDirectory` resolver picks it up via the same
 /// triple-keyed convention `streamlib pack` produces. The effects
 /// package is example-local (not a workspace-staged package); the
-/// canonical `cargo xtask build-plugins` doesn't stage it, so the
+/// canonical `the build orchestrator (automatic)` doesn't stage it, so the
 /// runner does its own copy. Mirror of the camera-rust-plugin
 /// stage step.
 fn stage_effects_cdylib(effects_dir: &std::path::Path) -> Result<()> {
