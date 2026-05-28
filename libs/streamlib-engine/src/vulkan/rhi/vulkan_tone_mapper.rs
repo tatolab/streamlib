@@ -128,9 +128,20 @@ impl VulkanToneMapper {
         // VUID-VkImageMemoryBarrier2-oldLayout-01197 twice per submit.
         // Catch the misuse here rather than as validation noise 60
         // frames downstream.
-        if let (Some(src_image), Some(dst_image)) =
-            (src.vulkan_inner().image(), dst.vulkan_inner().image())
-        {
+        //
+        // `vulkan_inner()` routes through `Texture::host_inner()`,
+        // which panics in cdylib mode by design — the host owns the
+        // RHI and cdylib code must reach `HostVulkanTexture` through
+        // the FullAccess vtable. `host_vulkan_texture_arc()` is the
+        // documented cdylib-safe accessor: in host mode it
+        // `Arc::clone`s the inner directly; in cdylib mode it
+        // dispatches through the v10 FullAccess vtable slot so the
+        // host returns its own `Arc<HostVulkanTexture>` and the
+        // `VkImage` compare runs against the real host-side handles.
+        if let (Some(src_image), Some(dst_image)) = (
+            src.host_vulkan_texture_arc()?.image(),
+            dst.host_vulkan_texture_arc()?.image(),
+        ) {
             if src_image == dst_image {
                 return Err(Error::Configuration(
                     "VulkanToneMapper::apply_with_layouts: src and dst must be distinct VkImages (in-place tone-map is not supported)".into(),
