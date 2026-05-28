@@ -326,29 +326,49 @@ fn dylib_filename(path: &Path) -> Result<String> {
         .into_owned())
 }
 
-/// Recursively collect a package's source files (relative archive path,
-/// absolute source path), excluding build artifacts (`target/`, the
-/// staged `lib/`), VCS (`.git`), caches (`node_modules`, `__pycache__`),
-/// the build sidecar, and any `.slpkg`. Used to ship a Python package as
-/// SOURCE: every `.py` + data / asset / model file travels, so what's
-/// importable matches the artifact exactly.
-fn collect_source_tree(pkg_dir: &Path, files: &mut Vec<(String, PathBuf)>) -> Result<()> {
-    fn excluded(name: &std::ffi::OsStr) -> bool {
-        match name.to_str() {
-            Some("target" | ".git" | "lib" | "node_modules" | "__pycache__"
-                | ".streamlib-build.json") => true,
-            Some(s) => s.ends_with(".slpkg"),
-            None => false,
-        }
+/// Whether a directory-entry name is a build artifact / dev-only file
+/// that must NEVER ship as package source — VCS, language caches, build
+/// outputs, and (critically) developer-local virtual environments. A
+/// `.venv` left in a Python package dir during dev is the canonical trap:
+/// it's huge, machine-specific, and full of symlinks, and shipping it
+/// both bloats the artifact and breaks a plain file copy.
+///
+/// Shared by [`collect_source_tree`] and the orchestrator's source
+/// fingerprint so "what counts as source" has one definition.
+pub fn is_non_source_artifact(name: &std::ffi::OsStr) -> bool {
+    match name.to_str() {
+        Some(
+            "target" | "lib" | ".git" | "node_modules" | "__pycache__"
+            | ".streamlib-build.json" | ".venv" | "venv" | ".mypy_cache"
+            | ".pytest_cache" | ".ruff_cache" | ".tox" | ".DS_Store",
+        ) => true,
+        Some(s) => s.ends_with(".slpkg") || s.ends_with(".egg-info") || s.ends_with(".pyc"),
+        None => false,
     }
+}
+
+/// Recursively collect a package's source files (relative archive path,
+/// absolute source path), excluding build artifacts / VCS / caches /
+/// dev venvs (see [`is_non_source_artifact`]) and symlinks (a source
+/// package's content is its real files, not machine-specific links).
+/// Used to ship a Python package as SOURCE: every `.py` + data / asset /
+/// model file travels, so what's importable matches the artifact exactly.
+fn collect_source_tree(pkg_dir: &Path, files: &mut Vec<(String, PathBuf)>) -> Result<()> {
     fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, PathBuf)>) -> Result<()> {
         for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
-            if excluded(&entry.file_name()) {
+            if is_non_source_artifact(&entry.file_name()) {
+                continue;
+            }
+            let ft = entry.file_type()?;
+            if ft.is_symlink() {
+                // Skip symlinks: a distributed source package shouldn't
+                // depend on machine-specific links, and `std::fs::copy`
+                // would follow (and choke on) a broken / dir target.
                 continue;
             }
             let path = entry.path();
-            if entry.file_type()?.is_dir() {
+            if ft.is_dir() {
                 walk(&path, root, out)?;
             } else {
                 let rel = path
@@ -765,6 +785,47 @@ mod tests {
         assert!(
             !entries.iter().any(|e| e.ends_with(".whl")),
             "no wheel should be produced, got {entries:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn slpkg_python_excludes_dev_venv_and_tolerates_symlinks() {
+        // Regression lock: a Python package dir often carries a dev-local
+        // `.venv/` (machine-specific, symlink-laden) and stray symlinks.
+        // Assembly must NOT ship `.venv/` and must NOT choke copying a
+        // symlink (a dangling one would make `std::fs::copy` error).
+        // Mentally revert either the `.venv` exclude or the symlink skip
+        // and this either ships a huge venv or fails to assemble.
+        use std::os::unix::fs::symlink;
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: py\n  version: 0.1.0\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: python\n    execution: manual\n    entrypoint: \"p:P\"\n    inputs: []\n    outputs: []\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("pyproject.toml"), b"[project]\nname='py'\nversion='0.1.0'\n").unwrap();
+        std::fs::write(dir.path().join("p.py"), b"# real source").unwrap();
+        // Dev venv with a regular file and a symlink (mirrors `lib64 -> lib`).
+        let venv = dir.path().join(".venv");
+        std::fs::create_dir_all(venv.join("lib")).unwrap();
+        std::fs::write(venv.join("pyvenv.cfg"), b"home = /usr").unwrap();
+        symlink("lib", venv.join("lib64")).unwrap();
+        // A dangling top-level symlink — the exact shape that broke a copy.
+        symlink("does-not-exist", dir.path().join("dangling-link")).unwrap();
+
+        let out = dir.path().join("o.slpkg");
+        assemble_artifact(dir.path(), &AssembleTarget::Slpkg(out.clone()), &slpkg_opts(false), &())
+            .expect("assembly must tolerate .venv + dangling symlinks");
+        let entries = zip_entries(&out);
+        assert!(entries.contains(&"p.py".to_string()), "real source must ship");
+        assert!(
+            !entries.iter().any(|e| e.starts_with(".venv/")),
+            "dev .venv must not ship, got {entries:?}"
+        );
+        assert!(
+            !entries.iter().any(|e| e.contains("dangling")),
+            "symlinks must be skipped, got {entries:?}"
         );
     }
 

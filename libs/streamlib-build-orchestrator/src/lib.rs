@@ -305,21 +305,20 @@ fn read_sidecar(staged_dir: &Path) -> Option<Sidecar> {
 fn compute_inputs_hash(pkg_dir: &Path) -> anyhow::Result<String> {
     use std::hash::{Hash, Hasher};
 
-    fn is_excluded(name: &std::ffi::OsStr) -> bool {
-        matches!(
-            name.to_str(),
-            Some("target" | ".git" | "lib" | "node_modules" | "__pycache__" | ".streamlib-build.json")
-        )
-    }
-
     fn collect(dir: &Path, root: &Path, out: &mut Vec<(String, Vec<u8>)>) -> std::io::Result<()> {
         for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
-            if is_excluded(&entry.file_name()) {
+            // Same "what is source" definition the staging copy uses, so
+            // the fingerprint tracks exactly the files that get staged —
+            // and never recurses into a dev `.venv` (huge, symlink-laden).
+            if streamlib_pack::is_non_source_artifact(&entry.file_name()) {
                 continue;
             }
             let ft = entry.file_type()?;
+            if ft.is_symlink() {
+                continue;
+            }
             if ft.is_dir() {
                 collect(&path, root, out)?;
             } else if ft.is_file() {
