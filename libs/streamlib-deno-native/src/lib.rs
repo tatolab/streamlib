@@ -2540,18 +2540,38 @@ mod surface_client {
             return std::ptr::null_mut();
         }
 
-        // Peel off the optional trailing sync-FD (#531) — same wire shape
-        // as the Python-native twin.
-        let has_sync_fd = response
-            .get("has_sync_fd")
+        // Peel off the optional trailing producer-side `produce_done`
+        // timeline FD — same single-writer-per-edge wire shape as the
+        // Python-native twin (see
+        // `docs/architecture/adapter-timeline-single-writer.md`). The
+        // host signals each timeline's presence via
+        // `has_produce_done_fd` / `has_consume_done_fd`; FDs are
+        // appended in that order. Pre-migration: consume_done is
+        // closed here and the per-adapter migrations will reclaim it
+        // through a new wire hook.
+        let has_produce_done_fd = response
+            .get("has_produce_done_fd")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let (received_fds, sync_fd): (Vec<RawFd>, Option<RawFd>) = if has_sync_fd
-            && !received_fds.is_empty()
+        let has_consume_done_fd = response
+            .get("has_consume_done_fd")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let trailing_count =
+            (has_produce_done_fd as usize) + (has_consume_done_fd as usize);
+        let (received_fds, sync_fd): (Vec<RawFd>, Option<RawFd>) = if trailing_count > 0
+            && received_fds.len() >= trailing_count
         {
+            let split_at = received_fds.len() - trailing_count;
             let mut all = received_fds;
-            let sync = all.pop();
-            (all, sync)
+            let trailing: Vec<RawFd> = all.split_off(split_at);
+            let mut iter = trailing.into_iter();
+            let produce_fd = if has_produce_done_fd { iter.next() } else { None };
+            let consume_fd = if has_consume_done_fd { iter.next() } else { None };
+            if let Some(fd) = consume_fd {
+                unsafe { libc::close(fd) };
+            }
+            (all, produce_fd)
         } else {
             (received_fds, None)
         };

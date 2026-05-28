@@ -2702,21 +2702,48 @@ mod surface_client {
             return std::ptr::null_mut();
         }
 
-        // Peel off the optional trailing sync-FD when the response carries
-        // one. The host's surface-share service appends it to SCM_RIGHTS
-        // after the DMA-BUF plane FDs and signals its presence with
-        // `has_sync_fd: true` so subprocess code can route it into the
-        // Vulkan adapter's timeline-semaphore import (#531).
-        let has_sync_fd = response
-            .get("has_sync_fd")
+        // Peel off the optional trailing producer-side `produce_done`
+        // timeline FD when the response carries one. The host's
+        // surface-share service appends it to SCM_RIGHTS after the
+        // DMA-BUF plane FDs and signals its presence with
+        // `has_produce_done_fd: true` so subprocess code can route it
+        // into the adapter's timeline-semaphore import. The
+        // single-writer-per-edge model is documented in
+        // `docs/architecture/adapter-timeline-single-writer.md`. The
+        // consumer-side `consume_done` FD travels through the same
+        // wire shape but lands in per-adapter state, not on the
+        // generic SurfaceHandle (each adapter migration claims it).
+        let has_produce_done_fd = response
+            .get("has_produce_done_fd")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let (received_fds, sync_fd): (Vec<RawFd>, Option<RawFd>) = if has_sync_fd
-            && !received_fds.is_empty()
+        let has_consume_done_fd = response
+            .get("has_consume_done_fd")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        // Peel trailing FDs in the order the host attached them:
+        // produce_done first, then consume_done. consume_done is closed
+        // here — per-adapter migrations will reclaim it through the
+        // wire-format hooks they add.
+        let trailing_count =
+            (has_produce_done_fd as usize) + (has_consume_done_fd as usize);
+        let (received_fds, sync_fd): (Vec<RawFd>, Option<RawFd>) = if trailing_count > 0
+            && received_fds.len() >= trailing_count
         {
+            let split_at = received_fds.len() - trailing_count;
             let mut all = received_fds;
-            let sync = all.pop();
-            (all, sync)
+            let trailing: Vec<RawFd> = all.split_off(split_at);
+            // trailing[0] = produce_done (if has_produce_done_fd), then
+            // trailing[1] = consume_done (if has_consume_done_fd).
+            let mut iter = trailing.into_iter();
+            let produce_fd = if has_produce_done_fd { iter.next() } else { None };
+            let consume_fd = if has_consume_done_fd { iter.next() } else { None };
+            // Pre-migration: close consume_done here. Per-adapter
+            // migration will claim it through a new wire hook.
+            if let Some(fd) = consume_fd {
+                unsafe { libc::close(fd) };
+            }
+            (all, produce_fd)
         } else {
             (received_fds, None)
         };

@@ -1171,7 +1171,8 @@ impl SurfaceStoreInner {
                 "plane_offsets": [0u64],
                 "plane_strides": [0u64],
                 "drm_format_modifier": 0u64,
-                "has_sync_fd": sync_fd.is_some(),
+                "has_produce_done_fd": sync_fd.is_some(),
+                "has_consume_done_fd": false,
                 "current_image_layout": current_image_layout.as_vk().as_raw(),
                 "vk_image_type": VK_IMAGE_TYPE_2D,
                 "vk_image_mip_levels": 1u32,
@@ -1210,7 +1211,8 @@ impl SurfaceStoreInner {
                 "plane_offsets": plane_offsets,
                 "plane_strides": plane_strides,
                 "drm_format_modifier": drm_format_modifier,
-                "has_sync_fd": sync_fd.is_some(),
+                "has_produce_done_fd": sync_fd.is_some(),
+                "has_consume_done_fd": false,
                 // The producer's declared `VkImageLayout` (#633): the
                 // layout the texture lives in immediately after
                 // registration, fed to host consumers as the source
