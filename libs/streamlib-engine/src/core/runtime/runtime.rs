@@ -114,6 +114,25 @@ pub struct Runner {
     /// can be re-saved with the same `name` without caller bookkeeping.
     /// `None` when the graph was built imperatively without a name.
     pipeline_name: Arc<Mutex<Option<String>>>,
+    /// Injected build seam. `None` by construction
+    /// ([`Runner::new`]) — the engine never shells out to a toolchain.
+    /// A [`BuildPolicy`] requiring a (re)build fails loud when this is
+    /// absent. Wired via [`Runner::new_with_orchestrator`] /
+    /// [`Runner::set_build_orchestrator`] (or the SDK `auto-build`
+    /// feature). Mirrors the [`setup_hooks`] injection shape.
+    ///
+    /// [`BuildPolicy`]: crate::core::runtime::module_loader::BuildPolicy
+    /// [`setup_hooks`]: Self::setup_hooks
+    pub(crate) build_orchestrator: Arc<
+        Mutex<Option<Arc<dyn crate::core::runtime::module_loader::BuildOrchestrator>>>,
+    >,
+    /// Modules whose loads have not yet settled, keyed by canonical
+    /// `@org/name`. Inserted when [`Runner::add_module`] spawns a load,
+    /// removed when the load task finishes. [`Runner::start`] refuses to
+    /// run the graph while any entry remains.
+    pub(crate) loading_modules: Arc<
+        Mutex<std::collections::HashMap<streamlib_idents::PackageRef, streamlib_idents::ModuleIdent>>,
+    >,
 }
 
 impl Runner {
@@ -254,7 +273,41 @@ impl Runner {
             _logging_guard,
             setup_hooks: Arc::new(Mutex::new(Vec::new())),
             pipeline_name: Arc::new(Mutex::new(None)),
+            build_orchestrator: Arc::new(Mutex::new(None)),
+            loading_modules: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }))
+    }
+
+    /// Construct a runtime with a [`BuildOrchestrator`] wired so that
+    /// build-requiring module loads ([`Strategy::Path`] /
+    /// [`Strategy::Git`] with a non-`NeverBuild` [`BuildPolicy`]) can
+    /// materialize from source. The conventional construction for dev
+    /// loops, runtime-authoring hosts (AI agents, CLIs, daemons), and CI
+    /// — the SDK's `auto-build` feature wires the default polyglot
+    /// orchestrator here for you.
+    ///
+    /// [`BuildOrchestrator`]: crate::core::runtime::module_loader::BuildOrchestrator
+    /// [`Strategy::Path`]: crate::core::runtime::module_loader::Strategy::Path
+    /// [`Strategy::Git`]: crate::core::runtime::module_loader::Strategy::Git
+    /// [`BuildPolicy`]: crate::core::runtime::module_loader::BuildPolicy
+    pub fn new_with_orchestrator(
+        orchestrator: impl crate::core::runtime::module_loader::BuildOrchestrator,
+    ) -> Result<Arc<Self>> {
+        let runner = Self::new()?;
+        runner.set_build_orchestrator(orchestrator);
+        Ok(runner)
+    }
+
+    /// Wire (or replace) the [`BuildOrchestrator`] after construction.
+    /// Frozen `.slpkg`-only deployments never call this and are
+    /// therefore compiler-free by construction.
+    ///
+    /// [`BuildOrchestrator`]: crate::core::runtime::module_loader::BuildOrchestrator
+    pub fn set_build_orchestrator(
+        &self,
+        orchestrator: impl crate::core::runtime::module_loader::BuildOrchestrator,
+    ) {
+        *self.build_orchestrator.lock() = Some(Arc::new(orchestrator));
     }
 
     /// Register a one-shot hook to run during [`Self::start`], after the
@@ -359,6 +412,17 @@ impl Runner {
     /// Processors can then call runtime operations directly without indirection.
     #[tracing::instrument(name = "runtime.start", skip_all)]
     pub fn start(self: &Arc<Self>) -> Result<()> {
+        // Hard barrier: refuse to run the graph while any module load is
+        // still in flight (its processor types may not be registered
+        // yet). Await pending loads — e.g. via `await_modules` — first.
+        let pending = self.pending_module_loads();
+        if !pending.is_empty() {
+            return Err(crate::core::runtime::module_loader::AddModuleError::ModulesStillLoading {
+                idents: pending,
+            }
+            .into());
+        }
+
         *self.status.lock() = RuntimeStatus::Starting;
         tracing::info!("[start] Starting runtime");
         PUBSUB.publish(

@@ -29,7 +29,7 @@ fn main() -> Result<()> {
     // 1) Load @tatolab/audio (and any deps it walks via patch:) from
     //    the workspace-staged location. `cargo xtask build-plugins`
     //    must have run first.
-    runtime.add_module(module_ident_any_version!("tatolab", "audio"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "audio"))?;
     println!("+ @tatolab/audio loaded from target/streamlib-plugins/\n");
 
     // 2) Chord generator — addressed by structured schema_ident,

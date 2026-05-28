@@ -33,8 +33,8 @@ async fn main() -> Result<()> {
     // server's dynamic-registry endpoint and that resolution only
     // succeeds if the processor is present in PROCESSOR_REGISTRY,
     // which add_module populates via the cdylib registration.
-    runtime.add_module(module_ident_any_version!("tatolab", "api-server"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "debug-utilities"))?;
+    runtime.add_module(module_ident_any_version!("tatolab", "api-server")).await?;
+    runtime.add_module(module_ident_any_version!("tatolab", "debug-utilities")).await?;
 
     // Add the API server processor
     println!("Adding API server processor...");

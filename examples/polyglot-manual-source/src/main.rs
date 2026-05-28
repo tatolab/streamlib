@@ -43,7 +43,7 @@ use streamlib::sdk::error::Error;
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
+use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
 
 const RUN_DURATION: Duration = Duration::from_secs(2);
 const INTERVAL_MS: u32 = 33;
@@ -184,23 +184,17 @@ fn run() -> Result<SinkReport> {
     // explicit add_module_with calls. The runner picks which polyglot
     // processor to instantiate via `schema_ident_any_version!` based
     // on `--runtime`.
-    runtime.add_module_with(
+    runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-manual-source-counting-sink"),
-        ModuleResolverStrategy::ManifestDirectory {
-            path: plugin_dir.clone(),
-        },
+        Strategy::Path { path: plugin_dir.clone(), build: BuildPolicy::NeverBuild },
     )?;
-    runtime.add_module_with(
+    runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-manual-source"),
-        ModuleResolverStrategy::ManifestDirectory {
-            path: manifest_dir.join("python"),
-        },
+        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::NeverBuild },
     )?;
-    runtime.add_module_with(
+    runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-manual-source-deno"),
-        ModuleResolverStrategy::ManifestDirectory {
-            path: manifest_dir.join("deno"),
-        },
+        Strategy::Path { path: manifest_dir.join("deno"), build: BuildPolicy::NeverBuild },
     )?;
 
     // 3. Add processors.

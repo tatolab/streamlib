@@ -59,7 +59,7 @@ use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::schema_ident;
 use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
+use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
 
 const SCENARIO_SURFACE_UUID: &str = "00000000-0000-0000-0000-000000005c1a";
 const SURFACE_SIZE: u32 = 512;
@@ -201,7 +201,7 @@ fn main() -> Result<()> {
     // via the default resolver chain (workspace stage → installed
     // cache). `cargo xtask build-plugins --package @tatolab/debug-utilities`
     // must have run first.
-    runtime.add_module(module_ident_any_version!("tatolab", "debug-utilities"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "debug-utilities"))?;
 
     // Load the polyglot processor via an explicit add_module_with
     // call. The Python sub-package is example-local (sibling of this
@@ -210,11 +210,9 @@ fn main() -> Result<()> {
     // sub-package's own dependencies. Python is the only runtime
     // today — skia-python wraps the Skia C API.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    runtime.add_module_with(
+    runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-skia-canvas"),
-        ModuleResolverStrategy::ManifestDirectory {
-            path: manifest_dir.join("python"),
-        },
+        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::NeverBuild },
     )?;
 
     let fixture_path =

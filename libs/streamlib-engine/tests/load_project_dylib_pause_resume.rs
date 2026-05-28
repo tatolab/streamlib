@@ -24,7 +24,7 @@ use serde_json::json;
 use serial_test::serial;
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
+use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
 use streamlib::sdk::schema_ident;
 use streamlib_engine::core::runtime::host_target_triple;
 
@@ -124,11 +124,9 @@ fn dlopen_processor_pause_resume_hooks_fire_through_vtable() {
 
     let runtime = Runner::new().unwrap();
     runtime
-        .add_module_with(
+        .add_module_with_blocking(
             module_ident_any_version!("tatolab", "test-fixtures"),
-            ModuleResolverStrategy::ManifestDirectory {
-                path: fixtures_dst.clone(),
-            },
+            Strategy::Path { path: fixtures_dst.clone(), build: BuildPolicy::NeverBuild },
         )
         .expect("add_module_with ManifestDirectory");
 

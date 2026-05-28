@@ -30,7 +30,7 @@ use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
+use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
 use streamlib::sdk::schema_ident;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -120,8 +120,8 @@ fn main() -> Result<()> {
     // resolver chain (workspace stage → installed cache). Both must
     // have been staged via `cargo xtask build-plugins
     // --package @tatolab/camera --package @tatolab/display` first.
-    runtime.add_module(module_ident_any_version!("tatolab", "camera"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "display"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "camera"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "display"))?;
 
     // Load the polyglot processors via explicit add_module_with calls.
     // The Python and Deno sub-packages are example-local (siblings of
@@ -131,17 +131,13 @@ fn main() -> Result<()> {
     // which one to instantiate via `schema_ident_any_version!` based
     // on `--runtime`.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    runtime.add_module_with(
+    runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-dma-buf-consumer"),
-        ModuleResolverStrategy::ManifestDirectory {
-            path: manifest_dir.join("python"),
-        },
+        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::NeverBuild },
     )?;
-    runtime.add_module_with(
+    runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-dma-buf-consumer-deno"),
-        ModuleResolverStrategy::ManifestDirectory {
-            path: manifest_dir.join("deno"),
-        },
+        Strategy::Path { path: manifest_dir.join("deno"), build: BuildPolicy::NeverBuild },
     )?;
 
     let camera = runtime.add_processor(ProcessorSpec::new(

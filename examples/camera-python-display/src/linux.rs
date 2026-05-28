@@ -47,8 +47,8 @@
 //! `CrtFilmGrain` and `BlendingCompositor` are in-process Rust
 //! processors that live in the sibling `effects/` package. The runner
 //! stages that cdylib at `effects/lib/<host_triple>/` and registers
-//! the package via `runtime.add_module_with(...,
-//! ModuleResolverStrategy::ManifestDirectory)`. Their graphics-kernel
+//! the package via `runtime.add_module_with_blocking(...,
+//! Strategy::ManifestDirectory)`. Their graphics-kernel
 //! wrappers hand-roll synchronous fence-blocked dispatch with internal
 //! layout-barrier management — a pattern the engine deliberately
 //! doesn't expose because it's wrong-shape for production hot-paths.
@@ -74,7 +74,7 @@ use streamlib::sdk::error::Error;
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
+use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
 use streamlib::sdk::schema_ident;
 use streamlib_adapter_abi::SurfaceId;
 use streamlib_consumer_rhi::VulkanLayout;
@@ -126,7 +126,7 @@ pub fn main() -> Result<()> {
     let runtime = Runner::new()?;
 
     // Stage the sibling effects cdylib at `effects/lib/<host_triple>/`
-    // so `ModuleResolverStrategy::ManifestDirectory` picks it up via
+    // so `Strategy::ManifestDirectory` picks it up via
     // the same triple-keyed convention `streamlib pack` produces.
     // The effects package is example-local (not a workspace-staged
     // package), so the canonical `cargo xtask build-plugins` doesn't
@@ -142,19 +142,15 @@ pub fn main() -> Result<()> {
     // --package @tatolab/camera --package @tatolab/display` must have
     // run first). The example-local effects + Python sub-packages
     // resolve via their manifest directories.
-    runtime.add_module(module_ident_any_version!("tatolab", "camera"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "display"))?;
-    runtime.add_module_with(
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "camera"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "display"))?;
+    runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "camera-python-display-effects"),
-        ModuleResolverStrategy::ManifestDirectory {
-            path: effects_dir.clone(),
-        },
+        Strategy::Path { path: effects_dir.clone(), build: BuildPolicy::NeverBuild },
     )?;
-    runtime.add_module_with(
+    runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "cyberpunk-processor"),
-        ModuleResolverStrategy::ManifestDirectory {
-            path: manifest_dir.join("python"),
-        },
+        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::NeverBuild },
     )?;
     println!("✓ Loaded packages (camera, display, effects, cyberpunk-processor)\n");
 

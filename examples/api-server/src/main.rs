@@ -41,7 +41,7 @@ async fn main() -> streamlib::sdk::error::Result<()> {
     // against the workspace stage dir or installed-package cache,
     // verifies the semver range, then drives the internal
     // module-loading machinery.
-    runtime.add_module(module_ident!("tatolab", "api-server", "^1.0.0"))?;
+    runtime.add_module(module_ident!("tatolab", "api-server", "^1.0.0")).await?;
 
     let config = serde_json::json!({
         "host": "127.0.0.1",

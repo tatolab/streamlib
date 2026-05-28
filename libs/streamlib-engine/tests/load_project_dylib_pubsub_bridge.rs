@@ -31,7 +31,7 @@ use parking_lot::Mutex;
 use serial_test::serial;
 use streamlib::sdk::pubsub::{topics, Event, EventListener, RuntimeEvent, PUBSUB};
 use streamlib::sdk::module_ident_any_version;
-use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
+use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
 use streamlib_engine::core::runtime::host_target_triple;
 
 fn copy_dir_contents(src: &Path, dst: &Path) {
@@ -149,11 +149,9 @@ fn plugin_register_pubsub_event_reaches_host_subscriber() {
     std::thread::sleep(Duration::from_millis(200));
 
     runtime
-        .add_module_with(
+        .add_module_with_blocking(
             module_ident_any_version!("tatolab", "test-fixtures"),
-            ModuleResolverStrategy::ManifestDirectory {
-                path: fixtures_dst.clone(),
-            },
+            Strategy::Path { path: fixtures_dst.clone(), build: BuildPolicy::NeverBuild },
         )
         .expect("add_module_with must succeed");
 

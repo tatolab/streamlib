@@ -1,61 +1,38 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Module-loading tests. Runner-lifecycle tests stay in
-//! `runtime.rs`'s `tests` module; everything else (strategy
-//! resolver, resolve_workspace_root, list_available_triples,
-//! `add_module` / `add_module_with` dep-walker fixtures, every
-//! [`ModuleResolverStrategy`] variant's resolver behavior, recursive
-//! dep walking, cycle detection, and `remove_module` deferral)
-//! lives here.
+//! Module-loading tests. Runner-lifecycle tests stay in `runtime.rs`'s
+//! `tests` module; everything else lives here: `list_available_triples`,
+//! the [`Strategy`] source resolver + dep-walker fixtures, recursive dep
+//! walking, cycle detection, the [`BuildPolicy`] no-orchestrator
+//! semantics, and `remove_module` deferral.
 
 use super::processor_registration::{host_target_triple, list_available_triples};
-use super::workspace::resolve_workspace_root;
 use super::*;
 use serial_test::serial;
 
-// =========================================================================
-// resolve_workspace_root
-// =========================================================================
-
-#[test]
-#[serial]
-fn resolve_workspace_root_honors_streamlib_workspace_root_env_var() {
-    // Test fixture: tempdir set via STREAMLIB_WORKSPACE_ROOT must
-    // win over the cargo-locate-project fallback.
-    let tmp = tempfile::tempdir().unwrap();
-    let key = "STREAMLIB_WORKSPACE_ROOT";
-    let prev = std::env::var_os(key);
-    // SAFETY: protected by `#[serial]` against parallel test mutation.
-    unsafe {
-        std::env::set_var(key, tmp.path());
-    }
-    let resolved = resolve_workspace_root().unwrap();
-    unsafe {
-        match prev {
-            Some(v) => std::env::set_var(key, v),
-            None => std::env::remove_var(key),
+/// Minimal [`BuildOrchestrator`] for tests: "materializes" a
+/// `PackageDir` source by loading it in place (no toolchain invocation).
+/// Doubles as proof the injected build seam works, and lets path/git-dep
+/// fixtures — whose transitive deps derive [`BuildPolicy::IfStale`] —
+/// load without a real builder. Build-requiring loads with NO
+/// orchestrator wired fail loud (`BuildRequiredButNoOrchestrator`); these
+/// tests opt in to this no-op loader to exercise the recursion instead.
+struct LoadAsIsOrchestrator;
+impl BuildOrchestrator for LoadAsIsOrchestrator {
+    fn materialize(
+        &self,
+        request: &BuildRequest,
+        _sink: &dyn BuildEventSink,
+    ) -> std::result::Result<StagedArtifact, BuildError> {
+        match &request.source {
+            BuildSource::PackageDir(dir) => Ok(StagedArtifact {
+                staged_dir: dir.clone(),
+                rebuilt: false,
+            }),
+            other => Err(BuildError::UnsupportedSource(format!("{other:?}"))),
         }
     }
-    assert_eq!(resolved, tmp.path());
-}
-
-#[test]
-#[serial]
-fn resolve_workspace_root_errors_when_env_var_path_does_not_exist() {
-    let key = "STREAMLIB_WORKSPACE_ROOT";
-    let prev = std::env::var_os(key);
-    unsafe {
-        std::env::set_var(key, "/nonexistent/path/that/does/not/exist");
-    }
-    let err = resolve_workspace_root().unwrap_err();
-    unsafe {
-        match prev {
-            Some(v) => std::env::set_var(key, v),
-            None => std::env::remove_var(key),
-        }
-    }
-    assert!(matches!(err, AddModuleError::WorkspaceRootInvalid { .. }));
 }
 
 // =========================================================================
@@ -86,54 +63,16 @@ fn list_available_triples_filters_to_subdirs_and_sorts() {
 }
 
 // =========================================================================
-// add_module_with(WorkspaceStaged)
+// Strategy::Path dep walker (loads an explicit directory; recurses)
 // =========================================================================
 
-/// Workspace stage dir missing for the requested package surfaces as
-/// the typed [`AddModuleError::WorkspaceStageMiss`] with the expected
-/// path the resolver looked at.
+/// Path-style dep recursion: `add_module_with(Path(A))` must walk into
+/// `B` (declared as `path: ../b`) and parse its manifest.
 #[test]
 #[serial]
-fn add_module_with_workspace_staged_reports_stage_miss_when_dir_missing() {
-    let tmp = tempfile::tempdir().unwrap();
-    let key = "STREAMLIB_WORKSPACE_ROOT";
-    let prev = std::env::var_os(key);
-    unsafe {
-        std::env::set_var(key, tmp.path());
-    }
-    let runtime = Runner::new().expect("Runner::new");
-    let ident = streamlib_idents::ModuleIdent::any(
-        streamlib_idents::Org::new("tatolab").unwrap(),
-        streamlib_idents::Package::new("camera").unwrap(),
-    );
-    let err = runtime
-        .add_module_with(ident, ModuleResolverStrategy::WorkspaceStaged)
-        .unwrap_err();
-    unsafe {
-        match prev {
-            Some(v) => std::env::set_var(key, v),
-            None => std::env::remove_var(key),
-        }
-    }
-    assert!(matches!(
-        err,
-        AddModuleError::WorkspaceStageMiss { ref package, ref expected_path }
-            if package.org.as_str() == "tatolab"
-            && package.name.as_str() == "camera"
-            && expected_path.ends_with("tatolab__camera")
-    ));
-}
-
-// =========================================================================
-// add_module_with(ManifestDirectory) dep walker
-// =========================================================================
-
-/// Path-style dep recursion: `add_module_with(ManifestDirectory(A))`
-/// must walk into `B` (declared as `path: ../b`) and parse its manifest.
-#[test]
-#[serial]
-fn test_add_module_with_manifest_directory_recurses_into_path_dep() {
+fn path_strategy_recurses_into_path_dep() {
     let runtime = Runner::new().unwrap();
+    runtime.set_build_orchestrator(LoadAsIsOrchestrator);
     let tmp = tempfile::tempdir().unwrap();
 
     let a = tmp.path().join("a");
@@ -166,19 +105,22 @@ package:
     .unwrap();
 
     runtime
-        .add_module_with(
+        .add_module_with_blocking(
             streamlib_idents::ModuleIdent::any(
                 streamlib_idents::Org::new("tatolab").unwrap(),
                 streamlib_idents::Package::new("a").unwrap(),
             ),
-            ModuleResolverStrategy::ManifestDirectory { path: a.clone() },
+            Strategy::Path {
+                path: a.clone(),
+                build: BuildPolicy::NeverBuild,
+            },
         )
         .expect("add_module_with should recurse into path dep without error");
 }
 
 #[test]
 #[serial]
-fn test_add_module_with_manifest_directory_registers_package_schemas_for_runtime_lookup() {
+fn path_strategy_registers_package_schemas_for_runtime_lookup() {
     let runtime = Runner::new().unwrap();
     let tmp = tempfile::tempdir().unwrap();
 
@@ -205,8 +147,7 @@ schemas:
     )
     .unwrap();
 
-    let canonical =
-        "@tatolab/test-load-project-registers-schemas/MyTestConfig";
+    let canonical = "@tatolab/test-load-project-registers-schemas/MyTestConfig";
 
     assert!(
         crate::core::embedded_schemas::get_embedded_schema_definition(canonical).is_none(),
@@ -214,12 +155,15 @@ schemas:
     );
 
     runtime
-        .add_module_with(
+        .add_module_with_blocking(
             streamlib_idents::ModuleIdent::any(
                 streamlib_idents::Org::new("tatolab").unwrap(),
                 streamlib_idents::Package::new("test-load-project-registers-schemas").unwrap(),
             ),
-            ModuleResolverStrategy::ManifestDirectory { path: pkg.clone() },
+            Strategy::Path {
+                path: pkg.clone(),
+                build: BuildPolicy::NeverBuild,
+            },
         )
         .expect("add_module_with must succeed for schemas-only package");
 
@@ -229,10 +173,7 @@ schemas:
     let port_spec = streamlib_processor_schema::PortSchemaSpec::Specific(
         streamlib_idents::SchemaIdent::new(
             streamlib_idents::Org::new("tatolab").unwrap(),
-            streamlib_idents::Package::new(
-                "test-load-project-registers-schemas",
-            )
-            .unwrap(),
+            streamlib_idents::Package::new("test-load-project-registers-schemas").unwrap(),
             streamlib_idents::TypeName::new("MyTestConfig").unwrap(),
             streamlib_idents::SemVer::new(1, 0, 0),
         ),
@@ -246,7 +187,7 @@ schemas:
 
 #[test]
 #[serial]
-fn test_add_module_with_manifest_directory_path_dep_missing_manifest_propagates_error() {
+fn path_strategy_path_dep_missing_manifest_propagates_error() {
     let runtime = Runner::new().unwrap();
     let tmp = tempfile::tempdir().unwrap();
 
@@ -266,12 +207,15 @@ dependencies:
     )
     .unwrap();
 
-    let result = runtime.add_module_with(
+    let result = runtime.add_module_with_blocking(
         streamlib_idents::ModuleIdent::any(
             streamlib_idents::Org::new("tatolab").unwrap(),
             streamlib_idents::Package::new("a").unwrap(),
         ),
-        ModuleResolverStrategy::ManifestDirectory { path: a.clone() },
+        Strategy::Path {
+            path: a.clone(),
+            build: BuildPolicy::NeverBuild,
+        },
     );
     assert!(
         result.is_err(),
@@ -281,8 +225,9 @@ dependencies:
 
 #[test]
 #[serial]
-fn test_add_module_with_manifest_directory_resolves_registry_dep_via_consumer_patch() {
+fn path_strategy_resolves_registry_dep_via_consumer_patch() {
     let runtime = Runner::new().unwrap();
+    runtime.set_build_orchestrator(LoadAsIsOrchestrator);
     let tmp = tempfile::tempdir().unwrap();
 
     let b = tmp.path().join("b");
@@ -312,19 +257,22 @@ patch:
     .unwrap();
 
     runtime
-        .add_module_with(
+        .add_module_with_blocking(
             streamlib_idents::ModuleIdent::any(
                 streamlib_idents::Org::new("tatolab").unwrap(),
                 streamlib_idents::Package::new("a").unwrap(),
             ),
-            ModuleResolverStrategy::ManifestDirectory { path: a.clone() },
+            Strategy::Path {
+                path: a.clone(),
+                build: BuildPolicy::NeverBuild,
+            },
         )
         .expect("consumer-scoped patch must resolve the registry dep to ../b/");
 }
 
 #[test]
 #[serial]
-fn test_add_module_with_manifest_directory_resolves_git_patch_via_shared_helper() {
+fn path_strategy_resolves_git_patch_via_shared_helper() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("b-repo");
     std::fs::create_dir(&repo).unwrap();
@@ -384,15 +332,20 @@ patch:
     )
     .unwrap();
 
+    // No orchestrator wired: the git dep derives `IfStale`, which
+    // degrades to load-the-fetched-checkout-as-is. The schemas-only
+    // checkout loads cleanly.
     let runtime = Runner::new().unwrap();
+    runtime.set_build_orchestrator(LoadAsIsOrchestrator);
     runtime
-        .add_module_with(
+        .add_module_with_blocking(
             streamlib_idents::ModuleIdent::any(
                 streamlib_idents::Org::new("tatolab").unwrap(),
                 streamlib_idents::Package::new("consumer").unwrap(),
             ),
-            ModuleResolverStrategy::ManifestDirectory {
+            Strategy::Path {
                 path: consumer.path().to_path_buf(),
+                build: BuildPolicy::NeverBuild,
             },
         )
         .expect("git patch must clone the local repo and recurse into it");
@@ -400,7 +353,7 @@ patch:
 
 #[test]
 #[serial]
-fn test_add_module_with_manifest_directory_strict_errors_on_missing_patch_path() {
+fn path_strategy_strict_errors_on_missing_patch_path() {
     let runtime = Runner::new().unwrap();
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -420,13 +373,14 @@ patch:
     .unwrap();
 
     let err = runtime
-        .add_module_with(
+        .add_module_with_blocking(
             streamlib_idents::ModuleIdent::any(
                 streamlib_idents::Org::new("tatolab").unwrap(),
                 streamlib_idents::Package::new("a").unwrap(),
             ),
-            ModuleResolverStrategy::ManifestDirectory {
+            Strategy::Path {
                 path: tmp.path().to_path_buf(),
+                build: BuildPolicy::NeverBuild,
             },
         )
         .expect_err("missing patch path must error strictly");
@@ -441,14 +395,13 @@ patch:
     );
 }
 
-/// Drops a previously-saved `STREAMLIB_HOME` environment variable
-/// state when the test scope ends, so a sandboxed `STREAMLIB_HOME`
-/// override doesn't leak into the next `#[serial]` test.
+/// Drops a previously-saved `STREAMLIB_HOME` environment variable state
+/// when the test scope ends, so a sandboxed `STREAMLIB_HOME` override
+/// doesn't leak into the next `#[serial]` test.
 struct StreamlibHomeRestore(Option<std::ffi::OsString>);
 impl Drop for StreamlibHomeRestore {
     fn drop(&mut self) {
-        // SAFETY: `#[serial]` makes every test in this module
-        // exclusive — no concurrent reader of `STREAMLIB_HOME`.
+        // SAFETY: `#[serial]` makes every test in this module exclusive.
         unsafe {
             match self.0.take() {
                 Some(v) => std::env::set_var("STREAMLIB_HOME", v),
@@ -460,7 +413,7 @@ impl Drop for StreamlibHomeRestore {
 
 #[test]
 #[serial]
-fn test_add_module_with_manifest_directory_resolves_registry_dep_via_installed_cache() {
+fn path_strategy_resolves_registry_dep_via_installed_cache() {
     let sandbox = tempfile::tempdir().unwrap();
     let prev_home = std::env::var_os("STREAMLIB_HOME");
     unsafe {
@@ -508,13 +461,14 @@ dependencies:
 
     let runtime = Runner::new().unwrap();
     runtime
-        .add_module_with(
+        .add_module_with_blocking(
             streamlib_idents::ModuleIdent::any(
                 streamlib_idents::Org::new("tatolab").unwrap(),
                 streamlib_idents::Package::new("consumer").unwrap(),
             ),
-            ModuleResolverStrategy::ManifestDirectory {
+            Strategy::Path {
                 path: consumer.path().to_path_buf(),
+                build: BuildPolicy::NeverBuild,
             },
         )
         .expect("registry dep must resolve via installed-package cache");
@@ -522,7 +476,7 @@ dependencies:
 
 #[test]
 #[serial]
-fn test_add_module_with_manifest_directory_unresolvable_registry_dep_errors_actionably() {
+fn path_strategy_unresolvable_registry_dep_errors_actionably() {
     let runtime = Runner::new().unwrap();
     let tmp = tempfile::tempdir().unwrap();
 
@@ -542,12 +496,15 @@ dependencies:
     .unwrap();
 
     let err = runtime
-        .add_module_with(
+        .add_module_with_blocking(
             streamlib_idents::ModuleIdent::any(
                 streamlib_idents::Org::new("tatolab").unwrap(),
                 streamlib_idents::Package::new("a").unwrap(),
             ),
-            ModuleResolverStrategy::ManifestDirectory { path: a.clone() },
+            Strategy::Path {
+                path: a.clone(),
+                build: BuildPolicy::NeverBuild,
+            },
         )
         .expect_err("unresolvable registry dep must error");
     let msg = format!("{}", err);
@@ -555,15 +512,11 @@ dependencies:
         msg.contains("@tatolab/missing"),
         "error must surface the canonical `@org/name` key, got: {msg}"
     );
-    assert!(
-        msg.contains("streamlib pkg install") || msg.contains("workspace"),
-        "error must point at the resolution paths the user can act on, got: {msg}"
-    );
 }
 
 #[test]
 #[serial]
-fn test_add_module_with_manifest_directory_rust_dylib_missing_host_triple_surfaces_available_triples() {
+fn path_strategy_rust_dylib_missing_host_triple_surfaces_available_triples() {
     let runtime = Runner::new().unwrap();
     let tmp = tempfile::tempdir().unwrap();
 
@@ -598,12 +551,15 @@ processors:
     std::fs::write(wrong_dir.join("libfake.so"), b"not-a-real-dylib").unwrap();
 
     let err = runtime
-        .add_module_with(
+        .add_module_with_blocking(
             streamlib_idents::ModuleIdent::any(
                 streamlib_idents::Org::new("tatolab").unwrap(),
                 streamlib_idents::Package::new("triple-mismatch-pkg").unwrap(),
             ),
-            ModuleResolverStrategy::ManifestDirectory { path: pkg.clone() },
+            Strategy::Path {
+                path: pkg.clone(),
+                build: BuildPolicy::NeverBuild,
+            },
         )
         .expect_err("missing host-triple subdir must error");
     let msg = format!("{}", err);
@@ -613,13 +569,13 @@ processors:
     );
     assert!(
         msg.contains(wrong_triple),
-        "error must list the triples that ARE present so the user sees what the slpkg was packed for, got: {msg}"
+        "error must list the triples that ARE present, got: {msg}"
     );
 }
 
 #[test]
 #[serial]
-fn test_add_module_with_manifest_directory_rust_dylib_resolves_host_triple_then_dlopens() {
+fn path_strategy_rust_dylib_resolves_host_triple_then_dlopens() {
     let runtime = Runner::new().unwrap();
     let tmp = tempfile::tempdir().unwrap();
 
@@ -661,12 +617,15 @@ processors:
     std::fs::write(&dylib_path, b"not-a-real-dylib").unwrap();
 
     let err = runtime
-        .add_module_with(
+        .add_module_with_blocking(
             streamlib_idents::ModuleIdent::any(
                 streamlib_idents::Org::new("tatolab").unwrap(),
                 streamlib_idents::Package::new("triple-match-pkg").unwrap(),
             ),
-            ModuleResolverStrategy::ManifestDirectory { path: pkg.clone() },
+            Strategy::Path {
+                path: pkg.clone(),
+                build: BuildPolicy::NeverBuild,
+            },
         )
         .expect_err("junk dylib must fail at dlopen, not at path resolution");
     let msg = format!("{}", err);
@@ -678,13 +637,13 @@ processors:
         !msg.contains("No .so file found")
             && !msg.contains("No .dylib file found")
             && !msg.contains("No .dll file found"),
-        "error must NOT be the 'no dylib found' variant (path resolution succeeded), got: {msg}"
+        "error must NOT be the 'no dylib found' variant, got: {msg}"
     );
 }
 
 #[test]
 #[serial]
-fn test_add_module_with_manifest_directory_schemas_only_skips_lib_lookup() {
+fn path_strategy_schemas_only_skips_lib_lookup() {
     let runtime = Runner::new().unwrap();
     let tmp = tempfile::tempdir().unwrap();
 
@@ -702,54 +661,47 @@ package:
     .unwrap();
 
     runtime
-        .add_module_with(
+        .add_module_with_blocking(
             streamlib_idents::ModuleIdent::any(
                 streamlib_idents::Org::new("tatolab").unwrap(),
                 streamlib_idents::Package::new("schemas-only-pkg").unwrap(),
             ),
-            ModuleResolverStrategy::ManifestDirectory { path: pkg.clone() },
+            Strategy::Path {
+                path: pkg.clone(),
+                build: BuildPolicy::NeverBuild,
+            },
         )
         .expect("schemas-only package must load without touching lib/");
 }
 
 // =========================================================================
-// add_module / remove_module — imperative module API
+// add_module / add_module_with — imperative module API + BuildPolicy
 // =========================================================================
 
 mod add_module_tests {
     use super::*;
     use streamlib_idents::{ModuleIdent, Org, Package, SemVer, SemVerRange};
 
-    /// RAII guard that restores `STREAMLIB_WORKSPACE_ROOT` and
-    /// `STREAMLIB_HOME` to their pre-test values on drop. Every
-    /// `add_module` test isolates both env vars to a tempdir to
-    /// keep the host's real workspace / installed cache out of the
-    /// test surface (per the side-effect-cleanup discipline in
-    /// `docs/testing.md` — flag tests that mutate global state).
-    struct AddModuleEnvGuard {
-        workspace_prev: Option<std::ffi::OsString>,
+    /// RAII guard that restores `STREAMLIB_HOME` to its pre-test value on
+    /// drop. Every cache-backed test isolates the installed-package cache
+    /// to a tempdir to keep the host's real cache out of the test surface.
+    struct HomeGuard {
         home_prev: Option<std::ffi::OsString>,
     }
 
-    impl AddModuleEnvGuard {
-        fn install(workspace_root: &std::path::Path, home_root: &std::path::Path) -> Self {
-            let workspace_prev = std::env::var_os("STREAMLIB_WORKSPACE_ROOT");
+    impl HomeGuard {
+        fn install(home_root: &std::path::Path) -> Self {
             let home_prev = std::env::var_os("STREAMLIB_HOME");
             unsafe {
-                std::env::set_var("STREAMLIB_WORKSPACE_ROOT", workspace_root);
                 std::env::set_var("STREAMLIB_HOME", home_root);
             }
-            Self { workspace_prev, home_prev }
+            Self { home_prev }
         }
     }
 
-    impl Drop for AddModuleEnvGuard {
+    impl Drop for HomeGuard {
         fn drop(&mut self) {
             unsafe {
-                match self.workspace_prev.take() {
-                    Some(v) => std::env::set_var("STREAMLIB_WORKSPACE_ROOT", v),
-                    None => std::env::remove_var("STREAMLIB_WORKSPACE_ROOT"),
-                }
                 match self.home_prev.take() {
                     Some(v) => std::env::set_var("STREAMLIB_HOME", v),
                     None => std::env::remove_var("STREAMLIB_HOME"),
@@ -758,17 +710,9 @@ mod add_module_tests {
         }
     }
 
-    /// Build a schemas-only `streamlib.yaml` at `dir` with the
-    /// given org/name/version. Schemas-only avoids the dylib-
-    /// loading branch — `add_module` resolution + version-range
-    /// matching is what we want to lock here, not the cdylib
-    /// mechanics that the dlopen smoke tests already cover.
-    ///
-    /// When `schema` is provided, emits a `schemas:` block plus
-    /// the named schema YAML under `schemas/<type_snake>.yaml`
-    /// so post-load callers can verify the schema actually
-    /// registered (locks "the loader ran" — not just "resolver
-    /// + range check ran").
+    /// Write a schemas-only `streamlib.yaml` at `dir`. When `schema` is
+    /// provided, emits a `schemas:` block plus the named schema YAML so
+    /// post-load callers can verify the schema actually registered.
     fn write_schemas_only_manifest(
         dir: &std::path::Path,
         org: &str,
@@ -781,9 +725,7 @@ mod add_module_tests {
             std::fs::create_dir_all(dir.join("schemas")).unwrap();
             std::fs::write(
                 dir.join("schemas").join(format!("{stem}.yaml")),
-                format!(
-                    "metadata:\n  type: {type_name}\n  max_payload_bytes: 4096\n"
-                ),
+                format!("metadata:\n  type: {type_name}\n  max_payload_bytes: 4096\n"),
             )
             .unwrap();
             format!(
@@ -791,128 +733,83 @@ mod add_module_tests {
                  schemas:\n  {type_name}:\n    file: schemas/{stem}.yaml\n"
             )
         } else {
-            format!(
-                "package:\n  org: {org}\n  name: {name}\n  version: \"{version}\"\n"
-            )
+            format!("package:\n  org: {org}\n  name: {name}\n  version: \"{version}\"\n")
         };
-        std::fs::write(dir.join("streamlib.yaml"), body)
-            .expect("write streamlib.yaml");
+        std::fs::write(dir.join("streamlib.yaml"), body).expect("write streamlib.yaml");
     }
 
-    /// Stage a package under
-    /// `<workspace>/target/streamlib-plugins/<org>__<name>/`
-    /// and return the staged dir. Mirrors what
-    /// `cargo xtask build-plugins` produces.
-    fn stage_workspace_package(
-        workspace_root: &std::path::Path,
+    /// Install a schemas-only package into the sandboxed installed-package
+    /// cache so bare `add_module` (which resolves cache-only) can find it.
+    fn install_cached_package(
+        home_root: &std::path::Path,
         org: &str,
         name: &str,
         version: &str,
         schema: Option<&str>,
-    ) -> std::path::PathBuf {
-        let staged = workspace_root
-            .join("target")
-            .join("streamlib-plugins")
-            .join(format!("{org}__{name}"));
-        std::fs::create_dir_all(&staged).expect("mkdir staged");
-        write_schemas_only_manifest(&staged, org, name, version, schema);
-        staged
+    ) {
+        let cache_dir_name = format!("{name}-{version}");
+        let dep_cache_dir = home_root.join("cache/packages").join(&cache_dir_name);
+        std::fs::create_dir_all(&dep_cache_dir).unwrap();
+        write_schemas_only_manifest(&dep_cache_dir, org, name, version, schema);
+
+        let (maj, min, pat) = {
+            let mut it = version.split('.').map(|p| p.parse::<u32>().unwrap());
+            (it.next().unwrap(), it.next().unwrap(), it.next().unwrap())
+        };
+        let mut installed = crate::core::config::InstalledPackageManifest::default();
+        installed.add(crate::core::config::InstalledPackageEntry {
+            name: streamlib_idents::PackageRef::new(
+                Org::new(org).unwrap(),
+                Package::new(name).unwrap(),
+            ),
+            version: SemVer::new(maj, min, pat),
+            description: None,
+            installed_from: "test".into(),
+            installed_at: "1970-01-01T00:00:00Z".into(),
+            cache_dir: cache_dir_name,
+        });
+        installed.save().unwrap();
     }
 
     #[test]
     #[serial]
-    fn add_module_resolves_workspace_stage_and_loads() {
-        const TYPE_NAME: &str = "AddModuleResolvesStageSchema";
-        let tmp = tempfile::tempdir().unwrap();
+    fn add_module_loads_from_installed_cache() {
+        const TYPE_NAME: &str = "AddModuleCacheSchema";
         let home = tempfile::tempdir().unwrap();
-        let _staged = stage_workspace_package(
-            tmp.path(),
-            "tatolab",
-            "add-module-stage",
-            "1.2.3",
-            Some(TYPE_NAME),
-        );
+        let _guard = HomeGuard::install(home.path());
+        install_cached_package(home.path(), "tatolab", "add-module-cache", "1.2.3", Some(TYPE_NAME));
 
-        let _guard = AddModuleEnvGuard::install(tmp.path(), home.path());
         let runtime = Runner::new().expect("Runner::new");
-
-        let canonical = format!("@tatolab/add-module-stage/{TYPE_NAME}");
+        let canonical = format!("@tatolab/add-module-cache/{TYPE_NAME}");
         assert!(
-            crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
-                .is_none(),
+            crate::core::embedded_schemas::get_embedded_schema_definition(&canonical).is_none(),
             "schema must not exist before add_module"
         );
 
         runtime
-            .add_module(ModuleIdent::new(
+            .add_module_blocking(ModuleIdent::new(
                 Org::new("tatolab").unwrap(),
-                Package::new("add-module-stage").unwrap(),
+                Package::new("add-module-cache").unwrap(),
                 SemVerRange::Caret(SemVer::new(1, 0, 0)),
             ))
-            .expect("workspace-staged add_module must succeed");
+            .expect("cache-backed add_module must succeed");
 
         assert!(
-            crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
-                .is_some(),
+            crate::core::embedded_schemas::get_embedded_schema_definition(&canonical).is_some(),
             "schema must be registered after add_module — the loader did not run if this fails"
         );
     }
 
     #[test]
     #[serial]
-    fn add_module_any_version_succeeds_against_staged_v1() {
-        const TYPE_NAME: &str = "AddModuleAnyVersionSchema";
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let _staged = stage_workspace_package(
-            tmp.path(),
-            "tatolab",
-            "add-module-any",
-            "0.4.0",
-            Some(TYPE_NAME),
-        );
-
-        let _guard = AddModuleEnvGuard::install(tmp.path(), home.path());
-        let runtime = Runner::new().expect("Runner::new");
-
-        let canonical = format!("@tatolab/add-module-any/{TYPE_NAME}");
-        assert!(
-            crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
-                .is_none(),
-            "schema must not exist before add_module"
-        );
-
-        runtime
-            .add_module(ModuleIdent::any(
-                Org::new("tatolab").unwrap(),
-                Package::new("add-module-any").unwrap(),
-            ))
-            .expect("any-version add_module must succeed against staged 0.4.0");
-
-        assert!(
-            crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
-                .is_some(),
-            "any-version add_module must invoke the loader; schema registry is the witness",
-        );
-    }
-
-    #[test]
-    #[serial]
     fn add_module_rejects_version_range_mismatch() {
-        let tmp = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
-        let _staged = stage_workspace_package(
-            tmp.path(),
-            "tatolab",
-            "add-module-range",
-            "1.0.0",
-            None,
-        );
+        let _guard = HomeGuard::install(home.path());
+        install_cached_package(home.path(), "tatolab", "add-module-range", "1.0.0", None);
 
-        let _guard = AddModuleEnvGuard::install(tmp.path(), home.path());
         let runtime = Runner::new().expect("Runner::new");
         let err = runtime
-            .add_module(ModuleIdent::new(
+            .add_module_blocking(ModuleIdent::new(
                 Org::new("tatolab").unwrap(),
                 Package::new("add-module-range").unwrap(),
                 SemVerRange::Caret(SemVer::new(2, 0, 0)),
@@ -927,25 +824,35 @@ mod add_module_tests {
 
     #[test]
     #[serial]
-    fn add_module_rejects_identity_mismatch_on_staged_yaml() {
-        let tmp = tempfile::tempdir().unwrap();
+    fn add_module_rejects_identity_mismatch_on_cached_yaml() {
         let home = tempfile::tempdir().unwrap();
-        let staged = tmp
-            .path()
-            .join("target")
-            .join("streamlib-plugins")
-            .join("tatolab__add-module-identity");
-        std::fs::create_dir_all(&staged).unwrap();
-        write_schemas_only_manifest(&staged, "vendor", "other", "1.0.0", None);
+        let _guard = HomeGuard::install(home.path());
+        // Cache entry keyed @tatolab/add-module-identity but the on-disk
+        // manifest declares a different identity (clobbered cache).
+        let dep_cache_dir = home.path().join("cache/packages").join("add-module-identity-1.0.0");
+        std::fs::create_dir_all(&dep_cache_dir).unwrap();
+        write_schemas_only_manifest(&dep_cache_dir, "vendor", "other", "1.0.0", None);
+        let mut installed = crate::core::config::InstalledPackageManifest::default();
+        installed.add(crate::core::config::InstalledPackageEntry {
+            name: streamlib_idents::PackageRef::new(
+                Org::new("tatolab").unwrap(),
+                Package::new("add-module-identity").unwrap(),
+            ),
+            version: SemVer::new(1, 0, 0),
+            description: None,
+            installed_from: "test".into(),
+            installed_at: "1970-01-01T00:00:00Z".into(),
+            cache_dir: "add-module-identity-1.0.0".to_string(),
+        });
+        installed.save().unwrap();
 
-        let _guard = AddModuleEnvGuard::install(tmp.path(), home.path());
         let runtime = Runner::new().expect("Runner::new");
         let err = runtime
-            .add_module(ModuleIdent::any(
+            .add_module_blocking(ModuleIdent::any(
                 Org::new("tatolab").unwrap(),
                 Package::new("add-module-identity").unwrap(),
             ))
-            .expect_err("clobbered staged manifest must error");
+            .expect_err("clobbered cached manifest must error");
 
         assert!(
             matches!(err, AddModuleError::ManifestIdentityMismatch { ref actual, .. } if actual == "@vendor/other"),
@@ -955,14 +862,13 @@ mod add_module_tests {
 
     #[test]
     #[serial]
-    fn add_module_reports_module_not_found_when_unstaged_and_uncached() {
-        let tmp = tempfile::tempdir().unwrap();
+    fn add_module_reports_module_not_found_when_uncached() {
         let home = tempfile::tempdir().unwrap();
-        let _guard = AddModuleEnvGuard::install(tmp.path(), home.path());
+        let _guard = HomeGuard::install(home.path());
 
         let runtime = Runner::new().expect("Runner::new");
         let err = runtime
-            .add_module(ModuleIdent::any(
+            .add_module_blocking(ModuleIdent::any(
                 Org::new("tatolab").unwrap(),
                 Package::new("add-module-missing").unwrap(),
             ))
@@ -974,257 +880,63 @@ mod add_module_tests {
         );
     }
 
-    #[test]
-    #[serial]
-    fn add_module_surfaces_workspace_root_typo() {
-        let home = tempfile::tempdir().unwrap();
-        let placeholder_workspace = tempfile::tempdir().unwrap();
-        let _guard =
-            AddModuleEnvGuard::install(placeholder_workspace.path(), home.path());
-        unsafe {
-            std::env::set_var(
-                "STREAMLIB_WORKSPACE_ROOT",
-                "/nonexistent/path/that/does/not/exist",
-            );
-        }
-
-        let runtime = Runner::new().expect("Runner::new");
-        let err = runtime
-            .add_module(ModuleIdent::any(
-                Org::new("tatolab").unwrap(),
-                Package::new("add-module-typo-canary").unwrap(),
-            ))
-            .expect_err("typo'd env var must error");
-
-        assert!(
-            matches!(err, AddModuleError::WorkspaceRootInvalid { ref env_value } if env_value == "/nonexistent/path/that/does/not/exist"),
-            "expected WorkspaceRootInvalid, got: {err:?}",
-        );
-    }
-
     // =====================================================================
-    // ModuleResolverStrategy conformance — one test per variant.
+    // Strategy / BuildPolicy conformance
     // =====================================================================
 
     #[test]
     #[serial]
-    fn add_module_with_default_chain_falls_through_workspace_to_installed_cache() {
-        const TYPE_NAME: &str = "DefaultChainFallsThroughSchema";
-        let workspace = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
-
-        let cache_root = home.path().join("cache/packages");
-        std::fs::create_dir_all(&cache_root).unwrap();
-        let dep_cache_dir = cache_root.join("dc-fallthrough-0.1.0");
-        std::fs::create_dir(&dep_cache_dir).unwrap();
-        write_schemas_only_manifest(
-            &dep_cache_dir,
-            "tatolab",
-            "dc-fallthrough",
-            "0.1.0",
-            Some(TYPE_NAME),
-        );
-        let mut installed =
-            crate::core::config::InstalledPackageManifest::default();
-        installed.add(crate::core::config::InstalledPackageEntry {
-            name: streamlib_idents::PackageRef::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("dc-fallthrough").unwrap(),
-            ),
-            version: SemVer::new(0, 1, 0),
-            description: None,
-            installed_from: "test".into(),
-            installed_at: "1970-01-01T00:00:00Z".into(),
-            cache_dir: "dc-fallthrough-0.1.0".to_string(),
-        });
-        installed.save().unwrap();
-
-        let runtime = Runner::new().expect("Runner::new");
-        let canonical = format!("@tatolab/dc-fallthrough/{TYPE_NAME}");
-        assert!(
-            crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
-                .is_none()
-        );
-
-        runtime
-            .add_module_with(
-                ModuleIdent::any(
-                    Org::new("tatolab").unwrap(),
-                    Package::new("dc-fallthrough").unwrap(),
-                ),
-                ModuleResolverStrategy::DefaultChain,
-            )
-            .expect("DefaultChain must reach installed cache when workspace has no stage");
-
-        assert!(
-            crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
-                .is_some(),
-            "DefaultChain's installed-cache tier did not actually run load",
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn add_module_with_workspace_staged_strategy_hits_stage_dir_only() {
-        const TYPE_NAME: &str = "WorkspaceStagedOnlySchema";
-        let workspace = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let _staged = stage_workspace_package(
-            workspace.path(),
-            "tatolab",
-            "ws-only",
-            "1.0.0",
-            Some(TYPE_NAME),
-        );
-        let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
-        let runtime = Runner::new().expect("Runner::new");
-        let canonical = format!("@tatolab/ws-only/{TYPE_NAME}");
-        assert!(
-            crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
-                .is_none()
-        );
-        runtime
-            .add_module_with(
-                ModuleIdent::any(
-                    Org::new("tatolab").unwrap(),
-                    Package::new("ws-only").unwrap(),
-                ),
-                ModuleResolverStrategy::WorkspaceStaged,
-            )
-            .expect("WorkspaceStaged must hit the stage dir");
-        assert!(
-            crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
-                .is_some()
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn add_module_with_workspace_staged_strategy_surfaces_miss() {
-        let workspace = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
-        let runtime = Runner::new().expect("Runner::new");
-        let err = runtime
-            .add_module_with(
-                ModuleIdent::any(
-                    Org::new("tatolab").unwrap(),
-                    Package::new("ws-only-miss").unwrap(),
-                ),
-                ModuleResolverStrategy::WorkspaceStaged,
-            )
-            .expect_err("missing stage dir must error");
-        assert!(
-            matches!(
-                err,
-                AddModuleError::WorkspaceStageMiss { ref package, ref expected_path }
-                    if package.name.as_str() == "ws-only-miss"
-                        && expected_path.ends_with("tatolab__ws-only-miss")
-            ),
-            "expected WorkspaceStageMiss, got: {err:?}",
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn add_module_with_installed_cache_strategy_hits_cache_only() {
+    fn installed_cache_strategy_hits_cache() {
         const TYPE_NAME: &str = "InstalledCacheOnlySchema";
-        let workspace = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
-        let cache_root = home.path().join("cache/packages");
-        std::fs::create_dir_all(&cache_root).unwrap();
-        let dep_cache_dir = cache_root.join("ic-only-1.0.0");
-        std::fs::create_dir(&dep_cache_dir).unwrap();
-        write_schemas_only_manifest(
-            &dep_cache_dir,
-            "tatolab",
-            "ic-only",
-            "1.0.0",
-            Some(TYPE_NAME),
-        );
-        let mut installed =
-            crate::core::config::InstalledPackageManifest::default();
-        installed.add(crate::core::config::InstalledPackageEntry {
-            name: streamlib_idents::PackageRef::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("ic-only").unwrap(),
-            ),
-            version: SemVer::new(1, 0, 0),
-            description: None,
-            installed_from: "test".into(),
-            installed_at: "1970-01-01T00:00:00Z".into(),
-            cache_dir: "ic-only-1.0.0".to_string(),
-        });
-        let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
-        installed.save().unwrap();
+        let _guard = HomeGuard::install(home.path());
+        install_cached_package(home.path(), "tatolab", "ic-only", "1.0.0", Some(TYPE_NAME));
 
         let runtime = Runner::new().expect("Runner::new");
         let canonical = format!("@tatolab/ic-only/{TYPE_NAME}");
         runtime
-            .add_module_with(
-                ModuleIdent::any(
-                    Org::new("tatolab").unwrap(),
-                    Package::new("ic-only").unwrap(),
-                ),
-                ModuleResolverStrategy::InstalledCache,
+            .add_module_with_blocking(
+                ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new("ic-only").unwrap()),
+                Strategy::InstalledCache,
             )
             .expect("InstalledCache strategy must hit the cache");
-        assert!(
-            crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
-                .is_some()
-        );
+        assert!(crate::core::embedded_schemas::get_embedded_schema_definition(&canonical).is_some());
     }
 
     #[test]
     #[serial]
-    fn add_module_with_manifest_directory_loads_arbitrary_dir() {
-        const TYPE_NAME: &str = "ManifestDirectorySchema";
-        let workspace = tempfile::tempdir().unwrap();
+    fn path_strategy_loads_arbitrary_dir() {
+        const TYPE_NAME: &str = "PathStrategySchema";
         let home = tempfile::tempdir().unwrap();
         let arbitrary = tempfile::tempdir().unwrap();
-        write_schemas_only_manifest(
-            arbitrary.path(),
-            "tatolab",
-            "md-arbitrary",
-            "0.7.2",
-            Some(TYPE_NAME),
-        );
-        let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
+        write_schemas_only_manifest(arbitrary.path(), "tatolab", "md-arbitrary", "0.7.2", Some(TYPE_NAME));
+        let _guard = HomeGuard::install(home.path());
         let runtime = Runner::new().expect("Runner::new");
         let canonical = format!("@tatolab/md-arbitrary/{TYPE_NAME}");
         runtime
-            .add_module_with(
-                ModuleIdent::any(
-                    Org::new("tatolab").unwrap(),
-                    Package::new("md-arbitrary").unwrap(),
-                ),
-                ModuleResolverStrategy::ManifestDirectory {
+            .add_module_with_blocking(
+                ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new("md-arbitrary").unwrap()),
+                Strategy::Path {
                     path: arbitrary.path().to_path_buf(),
+                    build: BuildPolicy::NeverBuild,
                 },
             )
-            .expect("ManifestDirectory must load the arbitrary dir");
-        assert!(
-            crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
-                .is_some()
-        );
+            .expect("Path strategy must load the arbitrary dir");
+        assert!(crate::core::embedded_schemas::get_embedded_schema_definition(&canonical).is_some());
     }
 
     #[test]
     #[serial]
-    fn add_module_with_manifest_directory_surfaces_missing_dir() {
-        let workspace = tempfile::tempdir().unwrap();
+    fn path_strategy_surfaces_missing_dir() {
         let home = tempfile::tempdir().unwrap();
-        let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
+        let _guard = HomeGuard::install(home.path());
         let runtime = Runner::new().expect("Runner::new");
         let err = runtime
-            .add_module_with(
-                ModuleIdent::any(
-                    Org::new("tatolab").unwrap(),
-                    Package::new("md-missing").unwrap(),
-                ),
-                ModuleResolverStrategy::ManifestDirectory {
+            .add_module_with_blocking(
+                ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new("md-missing").unwrap()),
+                Strategy::Path {
                     path: std::path::PathBuf::from("/nonexistent/does-not-exist"),
+                    build: BuildPolicy::NeverBuild,
                 },
             )
             .expect_err("missing manifest dir must error");
@@ -1234,65 +946,69 @@ mod add_module_tests {
         );
     }
 
+    /// `AlwaysBuild` with no orchestrator wired is the strict policy: it
+    /// demanded a build, so it fails loud rather than silently loading a
+    /// possibly-stale artifact.
     #[test]
     #[serial]
-    fn add_module_with_explicit_strategy_overrides_default_chain() {
-        const TYPE_NAME: &str = "PerCallOverrideSchema";
-        let workspace = tempfile::tempdir().unwrap();
+    fn always_build_without_orchestrator_fails_loud() {
         let home = tempfile::tempdir().unwrap();
-
-        let _staged = stage_workspace_package(
-            workspace.path(),
-            "tatolab",
-            "per-call-override",
-            "0.1.0",
-            None,
-        );
-
-        let overridden = tempfile::tempdir().unwrap();
-        write_schemas_only_manifest(
-            overridden.path(),
-            "tatolab",
-            "per-call-override",
-            "9.0.0",
-            Some(TYPE_NAME),
-        );
-
-        let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
+        let arbitrary = tempfile::tempdir().unwrap();
+        write_schemas_only_manifest(arbitrary.path(), "tatolab", "ab-no-orch", "0.1.0", None);
+        let _guard = HomeGuard::install(home.path());
         let runtime = Runner::new().expect("Runner::new");
-
-        runtime
-            .add_module_with(
-                ModuleIdent::any(
-                    Org::new("tatolab").unwrap(),
-                    Package::new("per-call-override").unwrap(),
-                ),
-                ModuleResolverStrategy::ManifestDirectory {
-                    path: overridden.path().to_path_buf(),
+        let err = runtime
+            .add_module_with_blocking(
+                ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new("ab-no-orch").unwrap()),
+                Strategy::Path {
+                    path: arbitrary.path().to_path_buf(),
+                    build: BuildPolicy::AlwaysBuild,
                 },
             )
-            .expect("explicit override must reach the resolver");
-
-        let canonical = format!("@tatolab/per-call-override/{TYPE_NAME}");
+            .expect_err("AlwaysBuild without an orchestrator must fail loud");
         assert!(
-            crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
-                .is_some(),
-            "explicit strategy didn't actually divert the resolver — schema from \
-             overridden path is missing",
+            matches!(err, AddModuleError::BuildRequiredButNoOrchestrator { .. }),
+            "expected BuildRequiredButNoOrchestrator, got: {err:?}",
+        );
+    }
+
+    /// `IfStale` with no orchestrator fails loud — same as `AlwaysBuild`.
+    /// No branching on package shape; a build-requiring policy without a
+    /// builder is always an error, so future agents get a clear signal
+    /// instead of a silently-loaded (possibly stale) artifact.
+    #[test]
+    #[serial]
+    fn if_stale_without_orchestrator_fails_loud() {
+        let home = tempfile::tempdir().unwrap();
+        let arbitrary = tempfile::tempdir().unwrap();
+        write_schemas_only_manifest(arbitrary.path(), "tatolab", "ifstale-no-orch", "0.1.0", None);
+        let _guard = HomeGuard::install(home.path());
+        let runtime = Runner::new().expect("Runner::new");
+        let err = runtime
+            .add_module_with_blocking(
+                ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new("ifstale-no-orch").unwrap()),
+                Strategy::Path {
+                    path: arbitrary.path().to_path_buf(),
+                    build: BuildPolicy::IfStale,
+                },
+            )
+            .expect_err("IfStale without an orchestrator must fail loud");
+        assert!(
+            matches!(err, AddModuleError::BuildRequiredButNoOrchestrator { .. }),
+            "expected BuildRequiredButNoOrchestrator, got: {err:?}",
         );
     }
 
     // =====================================================================
-    // Recursive dep walker
+    // Recursive dep walker + cycle detection
     // =====================================================================
 
     #[test]
     #[serial]
-    fn add_module_recurses_through_add_module_with_for_each_dep() {
+    fn dep_walker_recurses_through_each_dep() {
         const TYPE_A: &str = "DepWalkAllThreeASchema";
         const TYPE_B: &str = "DepWalkAllThreeBSchema";
         const TYPE_C: &str = "DepWalkAllThreeCSchema";
-        let workspace = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let pkg_root = tempfile::tempdir().unwrap();
 
@@ -1347,26 +1063,22 @@ mod add_module_tests {
         )
         .unwrap();
 
-        let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
+        let _guard = HomeGuard::install(home.path());
         let runtime = Runner::new().expect("Runner::new");
+        runtime.set_build_orchestrator(LoadAsIsOrchestrator);
         runtime
-            .add_module_with(
-                ModuleIdent::any(
-                    Org::new("tatolab").unwrap(),
-                    Package::new("dwa-a").unwrap(),
-                ),
-                ModuleResolverStrategy::ManifestDirectory { path: a.clone() },
+            .add_module_with_blocking(
+                ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new("dwa-a").unwrap()),
+                Strategy::Path {
+                    path: a.clone(),
+                    build: BuildPolicy::NeverBuild,
+                },
             )
             .expect("dep walker must succeed end-to-end");
-        for (pkg, ty) in [
-            ("dwa-a", TYPE_A),
-            ("dwa-b", TYPE_B),
-            ("dwa-c", TYPE_C),
-        ] {
+        for (pkg, ty) in [("dwa-a", TYPE_A), ("dwa-b", TYPE_B), ("dwa-c", TYPE_C)] {
             let canonical = format!("@tatolab/{pkg}/{ty}");
             assert!(
-                crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
-                    .is_some(),
+                crate::core::embedded_schemas::get_embedded_schema_definition(&canonical).is_some(),
                 "expected schema {canonical} registered after dep walk",
             );
         }
@@ -1374,8 +1086,7 @@ mod add_module_tests {
 
     #[test]
     #[serial]
-    fn add_module_detects_self_referential_cycle() {
-        let workspace = tempfile::tempdir().unwrap();
+    fn dep_walker_detects_self_referential_cycle() {
         let home = tempfile::tempdir().unwrap();
         let pkg = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -1384,16 +1095,14 @@ mod add_module_tests {
              dependencies:\n  \"@tatolab/cycle-self\":\n    path: .\n",
         )
         .unwrap();
-        let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
+        let _guard = HomeGuard::install(home.path());
         let runtime = Runner::new().expect("Runner::new");
         let err = runtime
-            .add_module_with(
-                ModuleIdent::any(
-                    Org::new("tatolab").unwrap(),
-                    Package::new("cycle-self").unwrap(),
-                ),
-                ModuleResolverStrategy::ManifestDirectory {
+            .add_module_with_blocking(
+                ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new("cycle-self").unwrap()),
+                Strategy::Path {
                     path: pkg.path().to_path_buf(),
+                    build: BuildPolicy::NeverBuild,
                 },
             )
             .expect_err("self-referential cycle must error");
@@ -1412,8 +1121,7 @@ mod add_module_tests {
 
     #[test]
     #[serial]
-    fn add_module_detects_mutual_cycle_a_to_b_to_a() {
-        let workspace = tempfile::tempdir().unwrap();
+    fn dep_walker_detects_mutual_cycle_a_to_b_to_a() {
         let home = tempfile::tempdir().unwrap();
         let pkg_root = tempfile::tempdir().unwrap();
         let a = pkg_root.path().join("a");
@@ -1432,15 +1140,16 @@ mod add_module_tests {
              dependencies:\n  \"@tatolab/cycle-a\":\n    path: ../a\n",
         )
         .unwrap();
-        let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
+        let _guard = HomeGuard::install(home.path());
         let runtime = Runner::new().expect("Runner::new");
+        runtime.set_build_orchestrator(LoadAsIsOrchestrator);
         let err = runtime
-            .add_module_with(
-                ModuleIdent::any(
-                    Org::new("tatolab").unwrap(),
-                    Package::new("cycle-a").unwrap(),
-                ),
-                ModuleResolverStrategy::ManifestDirectory { path: a.clone() },
+            .add_module_with_blocking(
+                ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new("cycle-a").unwrap()),
+                Strategy::Path {
+                    path: a.clone(),
+                    build: BuildPolicy::NeverBuild,
+                },
             )
             .expect_err("mutual cycle must error");
         match err {
@@ -1459,8 +1168,7 @@ mod add_module_tests {
 
     #[test]
     #[serial]
-    fn add_module_surfaces_version_mismatch_propagating_from_dep() {
-        let workspace = tempfile::tempdir().unwrap();
+    fn dep_walker_surfaces_version_mismatch_from_dep() {
         let home = tempfile::tempdir().unwrap();
         let pkg_root = tempfile::tempdir().unwrap();
         let a = pkg_root.path().join("a");
@@ -1479,49 +1187,22 @@ mod add_module_tests {
             "package:\n  org: tatolab\n  name: vmm-b\n  version: \"1.0.0\"\n",
         )
         .unwrap();
-        let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
+        let _guard = HomeGuard::install(home.path());
         let runtime = Runner::new().expect("Runner::new");
+        runtime.set_build_orchestrator(LoadAsIsOrchestrator);
         let err = runtime
-            .add_module_with(
-                ModuleIdent::any(
-                    Org::new("tatolab").unwrap(),
-                    Package::new("vmm-a").unwrap(),
-                ),
-                ModuleResolverStrategy::ManifestDirectory { path: a.clone() },
+            .add_module_with_blocking(
+                ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new("vmm-a").unwrap()),
+                Strategy::Path {
+                    path: a.clone(),
+                    build: BuildPolicy::NeverBuild,
+                },
             )
             .expect_err("version mismatch from dep must propagate");
         assert!(
             matches!(err, AddModuleError::VersionRangeUnsatisfied { ref module, found, .. }
                 if module.name.as_str() == "vmm-b" && found == SemVer::new(1, 0, 0)),
             "expected VersionRangeUnsatisfied for vmm-b@1.0.0, got: {err:?}",
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn add_module_default_path_keeps_default_chain_when_no_override() {
-        const TYPE_NAME: &str = "DefaultChainStaysSchema";
-        let workspace = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let _staged = stage_workspace_package(
-            workspace.path(),
-            "tatolab",
-            "default-chain-stays",
-            "1.0.0",
-            Some(TYPE_NAME),
-        );
-        let _guard = AddModuleEnvGuard::install(workspace.path(), home.path());
-        let runtime = Runner::new().expect("Runner::new");
-        runtime
-            .add_module(ModuleIdent::any(
-                Org::new("tatolab").unwrap(),
-                Package::new("default-chain-stays").unwrap(),
-            ))
-            .expect("bare add_module must keep DefaultChain behavior");
-        let canonical = format!("@tatolab/default-chain-stays/{TYPE_NAME}");
-        assert!(
-            crate::core::embedded_schemas::get_embedded_schema_definition(&canonical)
-                .is_some()
         );
     }
 

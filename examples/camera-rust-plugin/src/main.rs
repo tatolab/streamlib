@@ -7,10 +7,10 @@
 //! sibling `plugin/` crate that builds as a cdylib carrying the
 //! `GrayscaleRust` processor, and the host manually stages that cdylib
 //! into `plugin/lib/<host_triple>/` before calling
-//! `runtime.add_module_with(..., ModuleResolverStrategy::ManifestDirectory)`
+//! `runtime.add_module_with_blocking(..., Strategy::ManifestDirectory)`
 //! to register it. This is the "build from source + load from path"
 //! shape, distinct from the `cargo xtask build-plugins` +
-//! `runtime.add_module(...)` flow that the other examples use for
+//! `runtime.add_module_blocking(...)` flow that the other examples use for
 //! canonical workspace packages.
 //!
 //! `@tatolab/camera` and `@tatolab/display` themselves load via
@@ -36,7 +36,7 @@ use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
+use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
 use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
@@ -45,8 +45,8 @@ fn main() -> Result<()> {
     // 1. Load `@tatolab/camera` and `@tatolab/display` via the canonical
     //    workspace-staged path. `cargo xtask build-plugins --package
     //    @tatolab/camera --package @tatolab/display` must have run first.
-    runtime.add_module(module_ident_any_version!("tatolab", "camera"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "display"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "camera"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "display"))?;
 
     // 2. Stage the example-local grayscale plugin cdylib at
     //    `plugin/lib/<triple>/` so the explicit `ManifestDirectory`
@@ -115,11 +115,9 @@ fn main() -> Result<()> {
     //    dep-walker shape — it reads `plugin/streamlib.yaml`, walks
     //    declared deps (`@tatolab/core` patched to a workspace path),
     //    and registers the local plugin's processors + schemas.
-    runtime.add_module_with(
+    runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "camera-rust-plugin"),
-        ModuleResolverStrategy::ManifestDirectory {
-            path: plugin_dir.clone(),
-        },
+        Strategy::Path { path: plugin_dir.clone(), build: BuildPolicy::NeverBuild },
     )?;
 
     // 4. Add processors

@@ -41,10 +41,10 @@ fn main() -> Result<()> {
 
     let runtime = Runner::new()?;
 
-    runtime.add_module(module_ident_any_version!("tatolab", "debug-utilities"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "display"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "h264"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "h265"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "debug-utilities"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "display"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "h264"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "h265"))?;
 
     let source = runtime.add_processor(ProcessorSpec::new(
         schema_ident!("tatolab", "debug-utilities", "BgraFileSource", "1.0.0"),

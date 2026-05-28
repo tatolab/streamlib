@@ -11,8 +11,9 @@ mod runtime_unique_id;
 mod status;
 
 pub use module_loader::{
-    extract_slpkg_to_cache, host_target_triple, AddModuleError, ModuleResolverStrategy,
-    RemoveModuleError,
+    extract_slpkg_to_cache, host_target_triple, AddModuleError, AddedModule, BuildError,
+    BuildEvent, BuildEventSink, BuildOrchestrator, BuildPolicy, BuildRequest, BuildSource,
+    BuildStream, LoadedModule, ModuleLoadEvent, RemoveModuleError, StagedArtifact, Strategy,
 };
 pub use operations::{BoxFuture, RuntimeOperations};
 pub use runtime::Runner;

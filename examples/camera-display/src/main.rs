@@ -23,9 +23,9 @@ fn main() -> Result<()> {
 
     let runtime = Runner::new()?;
 
-    runtime.add_module(module_ident_any_version!("tatolab", "camera"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "display"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "api-server"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "camera"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "display"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "api-server"))?;
 
     println!("📷 Adding camera processor...");
     let device_id = std::env::var("STREAMLIB_CAMERA_DEVICE").ok();

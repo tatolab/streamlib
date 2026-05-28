@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! End-to-end gate for the `streamlib pack` →
-//! `Runner::add_module_with(_, ModuleResolverStrategy::SlpkgArchive)`
+//! `Runner::add_module_with(_, Strategy::Slpkg)`
 //! chain: pack a real workspace package into a `.slpkg`, hand the
 //! bundle back to a fresh `Runner`, and assert the loaded artifacts
 //! (processors for Rust-impl packages, schemas for the canonical
@@ -50,7 +50,7 @@ use std::process::Command;
 use serial_test::serial;
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
-use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
+use streamlib::sdk::runtime::{Strategy, Runner};
 use streamlib_engine::core::runtime::host_target_triple;
 use streamlib_engine::schemas::current_schema_definition;
 
@@ -199,9 +199,9 @@ fn pack_then_load_rust_package_registers_processors() {
 
     let runtime = Runner::new().unwrap();
     runtime
-        .add_module_with(
+        .add_module_with_blocking(
             module_ident_any_version!("tatolab", "network"),
-            ModuleResolverStrategy::SlpkgArchive { path: slpkg.clone() },
+            Strategy::Slpkg { path: slpkg.clone() },
         )
         .expect("add_module_with SlpkgArchive against a freshly-packed Rust slpkg must succeed");
 
@@ -263,9 +263,9 @@ fn pack_then_load_schemas_only_package_registers_schemas() {
 
     let runtime = Runner::new().unwrap();
     runtime
-        .add_module_with(
+        .add_module_with_blocking(
             module_ident_any_version!("tatolab", "core"),
-            ModuleResolverStrategy::SlpkgArchive { path: slpkg.clone() },
+            Strategy::Slpkg { path: slpkg.clone() },
         )
         .expect("add_module_with SlpkgArchive against a schemas-only slpkg must succeed");
 
@@ -290,12 +290,12 @@ fn add_module_with_slpkg_archive_missing_file_errors_cleanly() {
     let runtime = Runner::new().unwrap();
     let missing = std::path::PathBuf::from("/nonexistent/path/missing.slpkg");
     let err = runtime
-        .add_module_with(
+        .add_module_with_blocking(
             // Any ident — the strategy resolver errors during extraction
             // before the ident is checked against the (non-existent)
             // archive's manifest.
             module_ident_any_version!("tatolab", "core"),
-            ModuleResolverStrategy::SlpkgArchive {
+            Strategy::Slpkg {
                 path: missing.clone(),
             },
         )
@@ -361,9 +361,9 @@ processors:
 
     let runtime = Runner::new().unwrap();
     let err = runtime
-        .add_module_with(
+        .add_module_with_blocking(
             module_ident_any_version!("tatolab", "foreign-triple-fixture"),
-            ModuleResolverStrategy::SlpkgArchive { path: slpkg.clone() },
+            Strategy::Slpkg { path: slpkg.clone() },
         )
         .expect_err("add_module_with SlpkgArchive against a foreign-triple-only slpkg must error");
     let msg = format!("{err}");

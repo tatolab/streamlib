@@ -44,7 +44,7 @@ use streamlib::sdk::error::Error;
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
+use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
 
 const RUN_DURATION: Duration = Duration::from_secs(2);
 /// Manifest-declared interval. Must match the YAML in
@@ -173,17 +173,13 @@ fn run() -> Result<TickReport> {
     // which one to instantiate via `schema_ident_any_version!` based
     // on `--runtime`.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    runtime.add_module_with(
+    runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-continuous-processor"),
-        ModuleResolverStrategy::ManifestDirectory {
-            path: manifest_dir.join("python"),
-        },
+        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::NeverBuild },
     )?;
-    runtime.add_module_with(
+    runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-continuous-processor-deno"),
-        ModuleResolverStrategy::ManifestDirectory {
-            path: manifest_dir.join("deno"),
-        },
+        Strategy::Path { path: manifest_dir.join("deno"), build: BuildPolicy::NeverBuild },
     )?;
 
     let processor = runtime.add_processor(ProcessorSpec::new(

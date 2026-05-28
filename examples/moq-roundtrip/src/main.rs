@@ -41,12 +41,12 @@ fn main() -> Result<()> {
 
     let runtime = Runner::new()?;
 
-    runtime.add_module(module_ident_any_version!("tatolab", "audio"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "camera"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "display"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "h264"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "moq"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "opus"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "audio"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "camera"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "display"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "h264"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "moq"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "opus"))?;
 
     // ---- PUBLISH SIDE ----
 

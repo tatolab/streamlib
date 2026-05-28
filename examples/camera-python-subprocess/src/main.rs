@@ -18,7 +18,7 @@ use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
+use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
 use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
@@ -29,19 +29,17 @@ fn main() -> Result<()> {
     //    (workspace stage → installed cache). `cargo xtask build-plugins
     //    --package @tatolab/camera --package @tatolab/display` must
     //    have run first.
-    runtime.add_module(module_ident_any_version!("tatolab", "camera"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "display"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "camera"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "display"))?;
 
     // 2. Load the sibling Python sub-package — it lives at `./python`
     //    relative to this example, isn't workspace-staged, so we
     //    resolve it by its manifest directory. The recursive dep
     //    walker follows its own dependencies.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    runtime.add_module_with(
+    runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "camera-python-subprocess"),
-        ModuleResolverStrategy::ManifestDirectory {
-            path: manifest_dir.join("python"),
-        },
+        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::NeverBuild },
     )?;
 
     // 3. Add processors

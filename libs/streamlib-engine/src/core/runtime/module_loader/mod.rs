@@ -1,142 +1,338 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Module-loading subsystem: typed [`ModuleResolverStrategy`] enum
-//! covering every loader behavior as a named variant, plus the
-//! [`Runner::add_module`] / [`Runner::add_module_with`] public API
-//! surface.
+//! Module-loading subsystem: the [`Strategy`] source enum, the injected
+//! [`BuildOrchestrator`] build seam, and the eager-async
+//! [`Runner::add_module`] / [`Runner::add_module_with`] /
+//! [`Runner::await_modules`] public API surface.
+//!
+//! The engine resolves *where* a package's source lives and *loads* the
+//! staged result; it never invokes a toolchain. A [`BuildPolicy`] that
+//! requires a (re)build is handed to the injected [`BuildOrchestrator`],
+//! which lives outside the engine. Loads run eagerly on the runtime's
+//! existing tokio handle and surface as [`AddedModule`] futures.
 //!
 //! Files in this directory:
 //!
 //! - [`errors`] — `AddModuleError`, `RemoveModuleError` typed enums.
-//! - [`strategy`] — the [`ModuleResolverStrategy`] enum + the
-//!   `(strategy, package_ref) → (manifest_dir, version)` resolver.
-//! - [`recursive_walker`] — the recursive dep walker, cycle
-//!   detection, and the dep-spec → strategy derivation.
-//! - [`processor_registration`] — manifest-driven processor
-//!   registration (Python venv prep, Rust cdylib dlopen,
-//!   `PROCESSOR_REGISTRY.register_dynamic`).
-//! - [`schema_registration`] — manifest-driven schema registration
-//!   + bare-name config-schema resolution.
+//! - [`source`] — the [`Strategy`] enum + source resolver.
+//! - [`build_orchestrator`] — the injected [`BuildOrchestrator`] trait
+//!   and its request/result/event types.
+//! - [`added_module`] — the eager [`AddedModule`] future +
+//!   [`ModuleLoadEvent`].
+//! - [`recursive_walker`] — recursive transitive-dep walk, cycle
+//!   detection, per-dep strategy derivation, and the materialize step.
+//! - [`processor_registration`] — manifest-driven processor registration.
+//! - [`schema_registration`] — manifest-driven schema registration.
 //! - [`slpkg`] — `.slpkg` archive extraction.
-//! - [`workspace`] — workspace-root resolution.
 //!
 //! [`Runner::add_module`]: super::Runner::add_module
 //! [`Runner::add_module_with`]: super::Runner::add_module_with
+//! [`Runner::await_modules`]: super::Runner::await_modules
 
 use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::Instant;
 
+use tokio::sync::{broadcast, mpsc};
+
+use super::runtime::TokioRuntimeVariant;
 use super::Runner;
+use crate::iceoryx2::Iceoryx2Node;
 
+mod added_module;
+mod build_orchestrator;
 mod errors;
 mod processor_registration;
 mod recursive_walker;
 mod schema_registration;
 mod slpkg;
-mod strategy;
-mod workspace;
+mod source;
 
 #[cfg(test)]
 mod tests;
 
+pub use added_module::{AddedModule, LoadedModule, ModuleLoadEvent};
+pub use build_orchestrator::{
+    BuildError, BuildEvent, BuildEventSink, BuildOrchestrator, BuildPolicy, BuildRequest,
+    BuildSource, BuildStream, StagedArtifact,
+};
 pub use errors::{AddModuleError, RemoveModuleError};
 pub use processor_registration::host_target_triple;
 pub use slpkg::extract_slpkg_to_cache;
-pub use strategy::ModuleResolverStrategy;
+pub use source::Strategy;
+
+use added_module::MODULE_EVENT_CHANNEL_CAPACITY;
+
+/// Engine-side [`BuildEventSink`] that re-emits a [`BuildOrchestrator`]'s
+/// build diagnostics as [`ModuleLoadEvent`]s on the load's broadcast
+/// channel AND through `tracing` — never to `stdout`.
+struct ModuleEventSink {
+    ident: streamlib_idents::ModuleIdent,
+    events: broadcast::Sender<ModuleLoadEvent>,
+}
+
+impl BuildEventSink for ModuleEventSink {
+    fn emit(&self, event: BuildEvent) {
+        match event {
+            BuildEvent::Started { language } => {
+                tracing::info!(module = %self.ident, language, "module build started");
+                let _ = self.events.send(ModuleLoadEvent::Building {
+                    ident: self.ident.clone(),
+                    language,
+                });
+            }
+            BuildEvent::Line { stream, line } => {
+                match stream {
+                    BuildStream::Stderr => {
+                        tracing::debug!(module = %self.ident, build_log = %line)
+                    }
+                    BuildStream::Stdout => {
+                        tracing::trace!(module = %self.ident, build_log = %line)
+                    }
+                };
+                let _ = self.events.send(ModuleLoadEvent::BuildLog {
+                    ident: self.ident.clone(),
+                    line,
+                });
+            }
+            BuildEvent::Finished { language } => {
+                tracing::debug!(module = %self.ident, language, "module build finished");
+            }
+        }
+    }
+}
+
+/// The blocking body of a single module load. Runs on `spawn_blocking`:
+/// it resolves the strategy, materializes via the orchestrator when a
+/// build is required (blocking), recursively loads transitive deps, and
+/// registers schemas + processors. Emits terminal events on `events`.
+fn run_module_load(
+    iceoryx2_node: Iceoryx2Node,
+    orchestrator: Option<Arc<dyn BuildOrchestrator>>,
+    module: streamlib_idents::ModuleIdent,
+    strategy: Strategy,
+    events: broadcast::Sender<ModuleLoadEvent>,
+) -> std::result::Result<LoadedModule, AddModuleError> {
+    let start = Instant::now();
+    let _ = events.send(ModuleLoadEvent::Started {
+        ident: module.clone(),
+    });
+    let sink = ModuleEventSink {
+        ident: module.clone(),
+        events: events.clone(),
+    };
+    let mut seen: HashSet<streamlib_idents::PackageRef> = HashSet::new();
+    let mut path: Vec<streamlib_idents::PackageRef> = Vec::new();
+    let result = recursive_walker::add_module_recursively(
+        &iceoryx2_node,
+        orchestrator.as_ref(),
+        &sink,
+        module.clone(),
+        strategy,
+        &mut seen,
+        &mut path,
+    );
+    match result {
+        Ok(()) => {
+            let _ = events.send(ModuleLoadEvent::Completed {
+                ident: module.clone(),
+                took: start.elapsed(),
+            });
+            Ok(LoadedModule { ident: module })
+        }
+        Err(e) => {
+            let _ = events.send(ModuleLoadEvent::Failed {
+                ident: module.clone(),
+                error: e.to_string(),
+            });
+            Err(e)
+        }
+    }
+}
 
 impl Runner {
     // =========================================================================
     // Module Loading — public API surface
     // =========================================================================
-    //
-    // Every module-loading entry point on `Runner` routes through
-    // `add_module_with(ident, strategy)`. The default
-    // [`Runner::add_module`] form is the bare-ident path that
-    // dispatches through [`ModuleResolverStrategy::DefaultChain`]
-    // (workspace stage → installed-package cache); the
-    // [`Runner::add_module_with`] form lets callers pin a strategy
-    // explicitly, which is the in-code equivalent of the manifest's
-    // `patch:` table.
 
     /// Load a `streamlib.yaml`-packaged module by typed
-    /// [`streamlib_idents::ModuleIdent`]. Routes through the default
-    /// resolver chain (workspace stage → installed-package cache).
+    /// [`streamlib_idents::ModuleIdent`] from the installed-package
+    /// cache. Conservative: never builds, fails loud if the package is
+    /// not in the cache. Returns an [`AddedModule`] (a [`Future`] whose
+    /// work is already running); a cache hit resolves almost immediately.
     ///
-    /// Imperative complement to the yaml-driven path: both this and
-    /// the manifest's `dependencies:` table drive into the same
-    /// internal module-loading machinery; the yaml form is for
-    /// declarative deployment manifests, the imperative form is for
-    /// REST endpoints, hot-reload tools, test setup, and
-    /// composition-library wrapping.
+    /// For workspace dev, runtime-authored packages, or git sources —
+    /// anything rebuildable from source — use [`Runner::add_module_with`]
+    /// with an explicit [`Strategy`] + [`BuildPolicy`].
     ///
-    /// Transitive dependencies declared in the loaded module's
-    /// `streamlib.yaml` are recursively routed through the same flow,
-    /// each picking the dep's appropriate strategy (declared `path:` →
-    /// [`ModuleResolverStrategy::ManifestDirectory`]; consumer `patch:`
-    /// override of any kind likewise; bare registry/git declarations →
-    /// [`ModuleResolverStrategy::DefaultChain`]). Cycles are detected
-    /// per-call and surfaced as
-    /// [`AddModuleError::DependencyCycleDetected`].
-    ///
-    /// Calls are idempotent at the registry layer: re-loading a module
-    /// whose processors / schemas are already registered surfaces no
-    /// error and re-runs the dylib's plugin callback (which the engine
-    /// already tolerates per `register_dynamic`'s dedup semantics).
-    pub fn add_module(
-        &self,
-        module: streamlib_idents::ModuleIdent,
-    ) -> std::result::Result<(), AddModuleError> {
-        self.add_module_with(module, ModuleResolverStrategy::DefaultChain)
+    /// [`Future`]: std::future::Future
+    #[must_use = "the returned AddedModule cancels on drop — await it or pass it to await_modules"]
+    pub fn add_module(&self, module: streamlib_idents::ModuleIdent) -> AddedModule {
+        self.add_module_with(module, Strategy::InstalledCache)
     }
 
-    /// Load a module via an explicit [`ModuleResolverStrategy`].
+    /// Load a module via an explicit [`Strategy`]. The work is spawned
+    /// eagerly onto the runtime's tokio handle; the returned
+    /// [`AddedModule`] is a [`Future`] you `.await` (or drive via
+    /// [`Runner::await_modules`]).
     ///
-    /// In-code equivalent of the manifest's `patch:` table — callers
-    /// can pin a dep to a workspace path, a `.slpkg` archive, or a
-    /// specific resolver tier without editing yaml. See
-    /// [`ModuleResolverStrategy`] for the variant catalog.
-    #[tracing::instrument(name = "runtime.add_module_with", skip(self), fields(module = %module, strategy = ?strategy))]
+    /// Transitive dependencies declared in the loaded module's
+    /// `streamlib.yaml` are recursively routed through the same flow.
+    /// Cycles surface as [`AddModuleError::DependencyCycleDetected`].
+    ///
+    /// [`Future`]: std::future::Future
+    #[must_use = "the returned AddedModule cancels on drop — await it or pass it to await_modules"]
     pub fn add_module_with(
         &self,
         module: streamlib_idents::ModuleIdent,
-        strategy: ModuleResolverStrategy,
+        strategy: Strategy,
+    ) -> AddedModule {
+        let pkg_ref = module.package_ref();
+        // Subscribe BEFORE spawning so a driver can't miss early events.
+        let (tx, initial_rx) = broadcast::channel(MODULE_EVENT_CHANNEL_CAPACITY);
+
+        // Mark in-flight so `start()` can refuse to run the graph while
+        // loads are pending.
+        self.loading_modules
+            .lock()
+            .insert(pkg_ref.clone(), module.clone());
+
+        let node = self.iceoryx2_node.clone();
+        let orchestrator = self.build_orchestrator.lock().clone();
+        let loading = Arc::clone(&self.loading_modules);
+        let events = tx.clone();
+        let module_for_task = module.clone();
+        let pkg_for_task = pkg_ref;
+
+        let join = self.tokio_runtime_variant.handle().spawn_blocking(move || {
+            let result =
+                run_module_load(node, orchestrator, module_for_task, strategy, events);
+            loading.lock().remove(&pkg_for_task);
+            result
+        });
+
+        AddedModule::new(module, join, tx, initial_rx)
+    }
+
+    /// Synchronous convenience: drive a single cache-only load to
+    /// completion. For simple `fn main` examples and tests. Returns
+    /// [`AddModuleError::BlockingCallFromAsyncContext`] (never panics)
+    /// when called from inside a tokio runtime — use the async surface
+    /// there.
+    pub fn add_module_blocking(
+        &self,
+        module: streamlib_idents::ModuleIdent,
     ) -> std::result::Result<(), AddModuleError> {
-        // Two collections threaded through the recursion:
-        // - `seen` is O(1) cycle membership lookup
-        // - `path` preserves insertion order so cycle errors carry the
-        //   full recursion edge (`A → B → A` rather than just `A`)
-        let mut seen: HashSet<streamlib_idents::PackageRef> = HashSet::new();
-        let mut path: Vec<streamlib_idents::PackageRef> = Vec::new();
-        recursive_walker::add_module_recursively(
-            &self.iceoryx2_node,
-            module,
-            strategy,
-            &mut seen,
-            &mut path,
-        )
+        self.add_module_with_blocking(module, Strategy::InstalledCache)
+    }
+
+    /// Synchronous convenience for [`Runner::add_module_with`]. See
+    /// [`Runner::add_module_blocking`] for the async-context caveat.
+    pub fn add_module_with_blocking(
+        &self,
+        module: streamlib_idents::ModuleIdent,
+        strategy: Strategy,
+    ) -> std::result::Result<(), AddModuleError> {
+        // Refuse before spawning: block_on from a tokio worker panics.
+        if matches!(
+            self.tokio_runtime_variant,
+            TokioRuntimeVariant::ExternalTokioHandle(_)
+        ) {
+            return Err(AddModuleError::BlockingCallFromAsyncContext { module });
+        }
+        let added = self.add_module_with(module, strategy);
+        match &self.tokio_runtime_variant {
+            TokioRuntimeVariant::OwnedTokioRuntime(rt) => rt.block_on(added).map(|_| ()),
+            // Guarded above — the external arm returned already.
+            TokioRuntimeVariant::ExternalTokioHandle(_) => unreachable!(),
+        }
+    }
+
+    /// Drive a batch of [`AddedModule`] loads concurrently, invoking
+    /// `on_event` for every [`ModuleLoadEvent`] from every module as it
+    /// happens (interleaved — not one module at a time). Returns the
+    /// first load error if any module failed; every failure is also
+    /// surfaced through `on_event` as [`ModuleLoadEvent::Failed`].
+    pub async fn await_modules<I, F>(
+        &self,
+        modules: I,
+        mut on_event: F,
+    ) -> std::result::Result<(), AddModuleError>
+    where
+        I: IntoIterator<Item = AddedModule>,
+        F: FnMut(ModuleLoadEvent),
+    {
+        let handle = self.tokio_runtime_variant.handle();
+        let (ev_tx, mut ev_rx) = mpsc::unbounded_channel::<ModuleLoadEvent>();
+        let (res_tx, mut res_rx) = mpsc::unbounded_channel::<AddModuleError>();
+
+        for mut added in modules {
+            // Forward this module's progress events into the shared sink.
+            if let Some(mut rx) = added.take_event_receiver() {
+                let etx = ev_tx.clone();
+                handle.spawn(async move {
+                    loop {
+                        match rx.recv().await {
+                            Ok(ev) => {
+                                if etx.send(ev).is_err() {
+                                    break;
+                                }
+                            }
+                            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(broadcast::error::RecvError::Closed) => break,
+                        }
+                    }
+                });
+            }
+            // Await this module's terminal result.
+            let rtx = res_tx.clone();
+            handle.spawn(async move {
+                if let Err(e) = added.await {
+                    let _ = rtx.send(e);
+                }
+            });
+        }
+        drop(ev_tx);
+        drop(res_tx);
+
+        let mut first_err: Option<AddModuleError> = None;
+        loop {
+            tokio::select! {
+                Some(ev) = ev_rx.recv() => on_event(ev),
+                Some(err) = res_rx.recv() => {
+                    if first_err.is_none() {
+                        first_err = Some(err);
+                    }
+                }
+                else => break,
+            }
+        }
+
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     /// Unload a previously-added module.
     ///
-    /// **Not yet implemented.** Module-level unload requires the
-    /// hot-reload lifecycle work that's explicitly out of scope for
-    /// the current All-Dynamic Package Loading milestone — see the
-    /// milestone's "Explicitly out of scope (deferred to later
-    /// milestones)" section ("`unload_package` / hot-reload
-    /// lifecycle. Load-only, runtime-lifetime registration this
-    /// milestone."). The method exists as an explicit boundary
-    /// marker (rather than being absent) so AI agents and other
-    /// callers reaching for it from the `add_module` counterpart get
-    /// a typed error pointing at the milestone gap instead of a
-    /// `method not found` diagnostic.
-    ///
-    /// Calling this returns
+    /// **Not yet implemented** — module-level unload requires the
+    /// hot-reload lifecycle work that's out of scope for the current
+    /// All-Dynamic Package Loading milestone. Returns
     /// [`RemoveModuleError::HotReloadLifecycleNotYetImplemented`]
-    /// without altering any runtime state.
+    /// without altering runtime state.
     pub fn remove_module(
         &self,
         module: streamlib_idents::ModuleIdent,
     ) -> std::result::Result<(), RemoveModuleError> {
         Err(RemoveModuleError::HotReloadLifecycleNotYetImplemented { module })
+    }
+
+    /// The set of modules whose loads have not yet settled. Used by
+    /// [`Runner::start`] to refuse running the graph while loads are
+    /// pending.
+    pub(crate) fn pending_module_loads(&self) -> Vec<streamlib_idents::ModuleIdent> {
+        self.loading_modules.lock().values().cloned().collect()
     }
 }

@@ -22,7 +22,7 @@ use std::path::Path;
 use serial_test::serial;
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::{ProcessorInstance, PROCESSOR_REGISTRY};
-use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
+use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
 use streamlib_engine::core::graph::ProcessorNode;
 use streamlib_engine::core::runtime::host_target_triple;
 
@@ -101,11 +101,9 @@ fn dylib_processor_create_and_drop_round_trips_through_vtable() {
 
     let runtime = Runner::new().unwrap();
     runtime
-        .add_module_with(
+        .add_module_with_blocking(
             module_ident_any_version!("tatolab", "test-fixtures"),
-            ModuleResolverStrategy::ManifestDirectory {
-                path: fixtures_dst.clone(),
-            },
+            Strategy::Path { path: fixtures_dst.clone(), build: BuildPolicy::NeverBuild },
         )
         .expect("add_module_with must succeed against a real test-fixtures cdylib");
 

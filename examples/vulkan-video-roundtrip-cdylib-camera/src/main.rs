@@ -4,7 +4,7 @@
 //! Vulkan Video Encode/Decode Roundtrip Pipeline — camera-as-cdylib variant.
 //!
 //! Sibling of `examples/vulkan-video-roundtrip` that loads every
-//! processor as a cdylib via `runtime.add_module(...)`.
+//! processor as a cdylib via `runtime.add_module_blocking(...)`.
 //! Exists to exercise the cdylib FFI surface (Phase E
 //! `RhiColorConverterMethodsVTable` + `RhiCommandRecorderMethodsVTable`)
 //! end-to-end through the encode → decode → display pipeline.
@@ -42,10 +42,10 @@ fn main() -> Result<()> {
 
     let runtime = Runner::new()?;
 
-    runtime.add_module(module_ident_any_version!("tatolab", "camera"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "display"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "h264"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "h265"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "camera"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "display"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "h264"))?;
+    runtime.add_module_blocking(module_ident_any_version!("tatolab", "h265"))?;
     println!("+ Camera / Display / H264 / H265 loaded from target/streamlib-plugins/");
     println!("+ Wire vocabulary registered (via @tatolab/core dep walk)\n");
 
