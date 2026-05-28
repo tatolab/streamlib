@@ -17,7 +17,7 @@ pub enum ComputeBindingKindRepr {
 }
 
 /// GPU capability snapshot returned by
-/// [`GpuContextFullAccessVTable::gpu_capabilities`]. Layout-stable
+/// [`crate::GpuContextFullAccessVTable::gpu_capabilities`]. Layout-stable
 /// `#[repr(C)]` so cdylibs can read the fields cross-rustc-version
 /// without dep-graph coupling.
 ///

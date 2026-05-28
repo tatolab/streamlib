@@ -7,7 +7,7 @@ use core::ffi::c_void;
 
 use crate::{InputMailboxesVTable, OutputWriterVTable};
 
-/// Layout version of the [`ProcessorVTable`] struct. Read by the
+/// Layout version of the [`crate::ProcessorVTable`] struct. Read by the
 /// host's `processor_register` impl before dereferencing any vtable
 /// entry; mismatching versions abort the registration cleanly.
 ///
@@ -22,7 +22,7 @@ use crate::{InputMailboxesVTable, OutputWriterVTable};
 ///   `OutputWriterInner` and `InputMailboxesInner` and hands the
 ///   cdylib `(handle, vtable)` β-shapes via the new slot; the
 ///   per-frame `write_raw` / `read_raw` calls dispatch through
-///   [`OutputWriterVTable`] / [`InputMailboxesVTable`]. **ABI-
+///   [`crate::OutputWriterVTable`] / [`crate::InputMailboxesVTable`]. **ABI-
 ///   breaking** — plugins built against v1 are not load-compatible
 ///   with a v2 host (the slot count and offsets differ).
 pub const PROCESSOR_VTABLE_LAYOUT_VERSION: u32 = 2;
@@ -38,7 +38,7 @@ pub const PROCESSOR_VTABLE_LAYOUT_VERSION: u32 = 2;
 /// and config-IO methods compiler ops invoke on every processor.
 /// Methods bodies receive `&RuntimeContext*Access` shims whose
 /// public method surface is implemented entirely in terms of the
-/// callback tables on [`HostServices`] — no Rust trait-object or
+/// callback tables on [`crate::HostServices`] — no Rust trait-object or
 /// shared-struct-layout crossing at the host/cdylib boundary.
 ///
 /// # Layout discipline
@@ -188,7 +188,7 @@ pub struct ProcessorVTable {
     // cdylib opaque `(handle, vtable)` β-shapes via
     // `set_iceoryx2_resources`. Per-frame `write_raw` / `read_raw`
     // dispatch through the new
-    // [`OutputWriterVTable`] / [`InputMailboxesVTable`] slots.
+    // [`crate::OutputWriterVTable`] / [`crate::InputMailboxesVTable`] slots.
     // -------------------------------------------------------------------------
 
     pub has_iceoryx2_outputs: unsafe extern "C" fn(instance: *const c_void) -> bool,
@@ -217,8 +217,8 @@ pub struct ProcessorVTable {
     ///
     /// `output_writer_vtable` / `input_mailboxes_vtable` are
     /// `&'static` pointers to the host's vtables (sourced from
-    /// [`HostServices::output_writer_vtable`] /
-    /// [`HostServices::input_mailboxes_vtable`]). Layout-versions on
+    /// [`crate::HostServices::output_writer_vtable`] /
+    /// [`crate::HostServices::input_mailboxes_vtable`]). Layout-versions on
     /// both vtables are validated at install time so the cdylib can
     /// dereference without re-checking.
     ///

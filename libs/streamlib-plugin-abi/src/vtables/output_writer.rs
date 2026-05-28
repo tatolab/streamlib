@@ -5,7 +5,7 @@
 
 use core::ffi::c_void;
 
-/// Layout version of [`OutputWriterVTable`].
+/// Layout version of [`crate::OutputWriterVTable`].
 ///
 /// - v1: ships the four slots a cdylib processor's `OutputWriter`
 ///   β-shape needs to dispatch every public-API call through the

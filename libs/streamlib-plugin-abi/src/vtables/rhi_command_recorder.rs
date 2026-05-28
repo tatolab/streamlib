@@ -7,7 +7,7 @@ use core::ffi::c_void;
 
 use crate::repr::{DrawCallRepr, DrawIndexedCallRepr, ImageCopyRegionRepr, SemaphoreSubmitInfoRepr};
 
-/// Layout version of [`RhiCommandRecorderMethodsVTable`].
+/// Layout version of [`crate::RhiCommandRecorderMethodsVTable`].
 ///
 /// - v1: ships six method slots a cdylib camera processor needs
 ///   to drive the host-owned `RhiCommandRecorder` per frame —
@@ -69,7 +69,7 @@ pub const RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 5;
 ///
 /// `RhiCommandRecorder` keeps `clone_command_recorder` /
 /// `drop_command_recorder` dispatch on the parent
-/// [`GpuContextFullAccessVTable`]; this vtable carries per-method
+/// [`crate::GpuContextFullAccessVTable`]; this vtable carries per-method
 /// slots for the six camera-hot-path methods cdylib code needs to
 /// dispatch through (`begin`, `record_image_barrier`,
 /// `record_buffer_barrier`, `record_dispatch`,
@@ -197,7 +197,7 @@ pub struct RhiCommandRecorderMethodsVTable {
     ///   `Arc::into_raw(Arc<HostVulkanBufferInner>)`-shaped from the
     ///   destination `StorageBuffer` β-shape's `handle` field
     ///   (borrowed).
-    /// - `region` points at an [`ImageCopyRegionRepr`] the host
+    /// - `region` points at an [`crate::ImageCopyRegionRepr`] the host
     ///   reads once at call time.
     pub record_copy_image_to_buffer: unsafe extern "C" fn(
         recorder_handle: *const c_void,
@@ -259,7 +259,7 @@ pub struct RhiCommandRecorderMethodsVTable {
     ///   `Arc::into_raw(Arc<PixelBufferRef>)`-shaped from the
     ///   destination `PixelBuffer` β-shape's `handle` field
     ///   (borrowed).
-    /// - `region` points at an [`ImageCopyRegionRepr`] the host
+    /// - `region` points at an [`crate::ImageCopyRegionRepr`] the host
     ///   reads once at call time.
     pub record_copy_image_to_pixel_buffer: unsafe extern "C" fn(
         recorder_handle: *const c_void,
@@ -348,7 +348,7 @@ pub struct RhiCommandRecorderMethodsVTable {
     ///
     /// - `waits_ptr` / `waits_count` and `signals_ptr` /
     ///   `signals_count` describe two arrays of
-    ///   [`SemaphoreSubmitInfoRepr`]. Empty arrays are valid
+    ///   [`crate::SemaphoreSubmitInfoRepr`]. Empty arrays are valid
     ///   (`*_ptr` may be null when `*_count == 0`).
     pub submit_with_semaphores: unsafe extern "C" fn(
         recorder_handle: *const c_void,
@@ -370,7 +370,7 @@ pub struct RhiCommandRecorderMethodsVTable {
     /// - `kernel_handle` is the
     ///   `Arc::into_raw(Arc<VulkanGraphicsKernelInner>)` pointer
     ///   from the kernel β-shape's `handle` field (borrowed).
-    /// - `draw` points at a [`DrawCallRepr`] the host reads once
+    /// - `draw` points at a [`crate::DrawCallRepr`] the host reads once
     ///   at call time.
     pub record_draw: unsafe extern "C" fn(
         recorder_handle: *const c_void,
@@ -385,7 +385,7 @@ pub struct RhiCommandRecorderMethodsVTable {
     /// Indexed-draw sibling of [`Self::record_draw`]. Caller must
     /// have bound an index buffer for `frame_index` via the kernel's
     /// `set_index_buffer` before this call. Same wire convention as
-    /// `record_draw`; `draw` points at a [`DrawIndexedCallRepr`].
+    /// `record_draw`; `draw` points at a [`crate::DrawIndexedCallRepr`].
     pub record_draw_indexed: unsafe extern "C" fn(
         recorder_handle: *const c_void,
         kernel_handle: *const c_void,

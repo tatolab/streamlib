@@ -10,14 +10,14 @@ use crate::repr::{
     RayTracingKernelDescriptorRepr,
 };
 
-/// Layout version of [`GpuContextFullAccessVTable`].
+/// Layout version of [`crate::GpuContextFullAccessVTable`].
 ///
 /// The FullAccess vtable carries the privileged kernel-construction
 /// surface (compute / graphics / ray-tracing) plus `create_texture_ring`
 /// and `acquire_render_target_dma_buf_image`. Each kernel-construction
 /// callback consumes a `#[repr(C)]` descriptor mirror
-/// ([`ComputeKernelDescriptorRepr`], [`GraphicsKernelDescriptorRepr`],
-/// [`RayTracingKernelDescriptorRepr`]) and returns an Arc-handle β-shape
+/// ([`crate::ComputeKernelDescriptorRepr`], [`crate::GraphicsKernelDescriptorRepr`],
+/// [`crate::RayTracingKernelDescriptorRepr`]) and returns an Arc-handle β-shape
 /// for the resulting kernel; the matching Arc-lifecycle pairs
 /// (`clone_*` / `drop_*`) live on this vtable.
 ///
@@ -103,7 +103,7 @@ pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 10;
 /// obtains a handle inside an `escalate(|full| ...)` scope (via the
 /// `escalate_begin` / `escalate_end` callbacks landing in C3) and
 /// reads the static vtable from
-/// [`HostServices::gpu_context_full_access_vtable`].
+/// [`crate::HostServices::gpu_context_full_access_vtable`].
 ///
 /// C2 lands the descriptor wire format + host-side dispatch + cdylib-
 /// side β-shape. C3 wires the `escalate_begin` / `escalate_end` scope-
@@ -476,7 +476,7 @@ pub struct GpuContextFullAccessVTable {
     // v5 (#914): GPU capability query — read-once-at-setup struct
     // -------------------------------------------------------------------------
 
-    /// Populate a [`GpuCapabilitiesRepr`] with vendor name + capability
+    /// Populate a [`crate::GpuCapabilitiesRepr`] with vendor name + capability
     /// bools. Read-once-at-setup pattern: cdylibs (camera, future
     /// plugins) need device-vendor branching and external-memory /
     /// cross-device-DMA-BUF probe checks at processor setup time;

@@ -5,7 +5,7 @@
 
 use core::ffi::c_void;
 
-/// Layout version of [`TextureRingMethodsVTable`].
+/// Layout version of [`crate::TextureRingMethodsVTable`].
 ///
 /// - v1: empty shell — pointer plumbing only.
 /// - v2: `TextureRingSlot` β-shape lands (fixed-size POD
@@ -22,7 +22,7 @@ pub const TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 /// (issue #907 Phase E + #947 slot β-shape + method dispatch).
 ///
 /// `TextureRing` keeps `clone_*` / `drop_*` dispatch on the parent
-/// [`GpuContextFullAccessVTable`] (PR #918's Phase D shape); this
+/// [`crate::GpuContextFullAccessVTable`] (PR #918's Phase D shape); this
 /// vtable adds per-method slots for everything *else* the β-shape
 /// exposes — `acquire_next`, `copy_pixel_buffer_to_slot`, `slot`.
 /// POD getters (`len`, `is_empty`, `width`, `height`, `format`) are
@@ -34,7 +34,7 @@ pub const TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 /// `Texture`, plus `out_surface_id_bytes` + `out_surface_id_len` +
 /// `out_slot_index`). The slot's `Texture` β-shape itself manages
 /// its Arc lifetime through the parent
-/// [`GpuContextLimitedAccessVTable`]'s `clone_texture` /
+/// [`crate::GpuContextLimitedAccessVTable`]'s `clone_texture` /
 /// `drop_texture` slots — when the host wrapper hands a cloned
 /// `Texture` handle back, the cdylib's `Texture::Drop` will fire
 /// `drop_texture` to balance the clone. Surface IDs travel inline

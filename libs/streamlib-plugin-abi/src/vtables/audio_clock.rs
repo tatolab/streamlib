@@ -6,7 +6,7 @@
 
 use core::ffi::c_void;
 
-/// Layout version of [`AudioClockVTable`].
+/// Layout version of [`crate::AudioClockVTable`].
 pub const AUDIO_CLOCK_VTABLE_LAYOUT_VERSION: u32 = 1;
 
 /// FFI-compatible mirror of `AudioTickContext` carried into
@@ -23,8 +23,8 @@ pub struct AudioTickContextRepr {
 }
 
 /// Dispatch table for the host's audio clock. The cdylib obtains a
-/// handle via [`RuntimeContextVTable::audio_clock_handle`] and reads
-/// the static vtable from [`HostServices::audio_clock_vtable`].
+/// handle via [`crate::RuntimeContextVTable::audio_clock_handle`] and reads
+/// the static vtable from [`crate::HostServices::audio_clock_vtable`].
 #[repr(C)]
 pub struct AudioClockVTable {
     pub layout_version: u32,

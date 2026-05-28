@@ -60,7 +60,7 @@ pub struct RayTracingPushConstantsRepr {
     pub stages: u32,
 }
 
-/// Discriminant for the [`RayTracingShaderGroupRepr::kind`] tagged union.
+/// Discriminant for the [`crate::RayTracingShaderGroupRepr::kind`] tagged union.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RayTracingShaderGroupKindRepr {

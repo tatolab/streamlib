@@ -9,7 +9,7 @@ use crate::repr::{
     DrawCallRepr, DrawIndexedCallRepr, GraphicsBindingSpecRepr, OffscreenDrawRepr,
 };
 
-/// Layout version of [`VulkanGraphicsKernelMethodsVTable`].
+/// Layout version of [`crate::VulkanGraphicsKernelMethodsVTable`].
 ///
 /// - v1: empty shell — pointer plumbing only.
 /// - v2: appended typed binding-method slots
@@ -36,7 +36,7 @@ use crate::repr::{
 ///   `command_buffer_handle: u64` wraps `vk::CommandBuffer`'s
 ///   `repr(transparent)` `usize` payload (lossless on 64-bit Linux,
 ///   the only platform that ships); the draw call travels as the
-///   existing [`DrawCallRepr`] / [`DrawIndexedCallRepr`] shapes
+///   existing [`crate::DrawCallRepr`] / [`crate::DrawIndexedCallRepr`] shapes
 ///   already wired for `offscreen_render`.
 pub const VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 4;
 
@@ -44,7 +44,7 @@ pub const VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 4;
 /// β-shape (issue #907 Phase E PR 3/5 + #951 method-dispatch slice).
 ///
 /// `VulkanGraphicsKernel` keeps `clone_*` / `drop_*` dispatch on the
-/// parent [`GpuContextFullAccessVTable`] (PR #918's Phase D shape);
+/// parent [`crate::GpuContextFullAccessVTable`] (PR #918's Phase D shape);
 /// this vtable carries per-method slots for the plugin handle's
 /// binding + draw surface that cdylib code needs to dispatch through.
 ///
@@ -168,7 +168,7 @@ pub struct VulkanGraphicsKernelMethodsVTable {
 
     /// Bind an index buffer at `frame_index`. `index_buffer_handle`
     /// is the raw `Arc::into_raw(Arc<HostVulkanBuffer>)` pointer.
-    /// `index_type` is the [`IndexTypeRepr`] discriminant.
+    /// `index_type` is the [`crate::IndexTypeRepr`] discriminant.
     pub set_index_buffer: unsafe extern "C" fn(
         kernel_handle: *const c_void,
         frame_index: u32,
@@ -207,7 +207,7 @@ pub struct VulkanGraphicsKernelMethodsVTable {
     /// - `color_clear_values`: RGBA float clear color per
     ///   attachment; read only when the matching present flag is `1`.
     ///
-    /// `draw` is the [`OffscreenDrawRepr`] tagged union (only the
+    /// `draw` is the [`crate::OffscreenDrawRepr`] tagged union (only the
     /// `kind`-matched payload is read on the host side).
     pub offscreen_render: unsafe extern "C" fn(
         kernel_handle: *const c_void,
@@ -225,8 +225,8 @@ pub struct VulkanGraphicsKernelMethodsVTable {
     ) -> i32,
 
     /// Read the kernel's binding declarations into `out_specs_buf`.
-    /// Same shape as [`VulkanComputeKernelMethodsVTable::bindings`];
-    /// writes [`GraphicsBindingSpecRepr`] entries. (Available since v3.)
+    /// Same shape as [`crate::VulkanComputeKernelMethodsVTable::bindings`];
+    /// writes [`crate::GraphicsBindingSpecRepr`] entries. (Available since v3.)
     pub bindings: unsafe extern "C" fn(
         kernel_handle: *const c_void,
         out_specs_buf: *mut GraphicsBindingSpecRepr,
@@ -240,7 +240,7 @@ pub struct VulkanGraphicsKernelMethodsVTable {
     /// Record bind + push + draw into a caller-owned command buffer.
     /// `command_buffer_handle` carries `vk::CommandBuffer`'s
     /// `repr(transparent)` `usize` payload as a `u64` (lossless on
-    /// 64-bit Linux). `draw` is the [`DrawCallRepr`] mirror of
+    /// 64-bit Linux). `draw` is the [`crate::DrawCallRepr`] mirror of
     /// `streamlib::core::rhi::DrawCall` already wired for
     /// `offscreen_render`. Returns 0 on success; non-zero with UTF-8
     /// message in `err_buf` on failure. (Available since v4.)

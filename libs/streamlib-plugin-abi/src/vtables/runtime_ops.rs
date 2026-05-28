@@ -6,7 +6,7 @@
 
 use core::ffi::c_void;
 
-/// Layout version of [`RuntimeOpsVTable`].
+/// Layout version of [`crate::RuntimeOpsVTable`].
 ///
 /// - v1: 5 submit-with-completion ops (`add_processor` /
 ///   `remove_processor` / `connect` / `disconnect` / `to_json`). Handle
@@ -39,8 +39,8 @@ pub type RuntimeOpCompletionCallback = unsafe extern "C" fn(
 
 /// Dispatch table for the host's graph-mutation operations
 /// (`add_processor`, `connect`, etc.). The cdylib obtains a handle
-/// via [`RuntimeContextVTable::runtime_ops_handle`] and reads the
-/// static vtable from [`HostServices::runtime_ops_vtable`].
+/// via [`crate::RuntimeContextVTable::runtime_ops_handle`] and reads the
+/// static vtable from [`crate::HostServices::runtime_ops_vtable`].
 ///
 /// All methods are submit-with-completion: the host fires
 /// `completion(user_data, status, result_ptr, result_len)` once
@@ -114,7 +114,7 @@ pub struct RuntimeOpsVTable {
     // v2 additions: owning-Arc handle lifetime management.
 
     /// Take a (borrowed) handle returned from
-    /// [`RuntimeContextVTable::runtime_ops_handle`] and return a new
+    /// [`crate::RuntimeContextVTable::runtime_ops_handle`] and return a new
     /// owned handle with an Arc refcount bump on the underlying
     /// `Arc<dyn RuntimeOperations>`. The owned handle remains valid
     /// even after the originating `RuntimeContext` is dropped, and

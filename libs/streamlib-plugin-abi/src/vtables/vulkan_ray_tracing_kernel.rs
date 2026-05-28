@@ -7,7 +7,7 @@ use core::ffi::c_void;
 
 use crate::repr::RayTracingBindingSpecRepr;
 
-/// Layout version of [`VulkanRayTracingKernelMethodsVTable`].
+/// Layout version of [`crate::VulkanRayTracingKernelMethodsVTable`].
 ///
 /// - v1: empty shell — pointer plumbing only.
 /// - v2: appended typed binding-method slots
@@ -160,8 +160,8 @@ pub struct VulkanRayTracingKernelMethodsVTable {
     ) -> i32,
 
     /// Read the kernel's binding declarations into `out_specs_buf`.
-    /// Same shape as [`VulkanComputeKernelMethodsVTable::bindings`];
-    /// writes [`RayTracingBindingSpecRepr`] entries. (Available since v3.)
+    /// Same shape as [`crate::VulkanComputeKernelMethodsVTable::bindings`];
+    /// writes [`crate::RayTracingBindingSpecRepr`] entries. (Available since v3.)
     pub bindings: unsafe extern "C" fn(
         kernel_handle: *const c_void,
         out_specs_buf: *mut RayTracingBindingSpecRepr,

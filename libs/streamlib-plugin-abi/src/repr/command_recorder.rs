@@ -29,7 +29,7 @@ pub struct SourceLayoutInfoRepr {
 ///
 /// Buffer↔image copy region — single mip level, single array layer,
 /// color aspect, full image. Used by
-/// [`RhiCommandRecorderMethodsVTable::record_copy_image_to_buffer`]
+/// [`crate::RhiCommandRecorderMethodsVTable::record_copy_image_to_buffer`]
 /// to cross the cdylib boundary without dragging callers through
 /// `vulkanalia` imports. Layout-locked by the regression test in
 /// `layout_tests`.

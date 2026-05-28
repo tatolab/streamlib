@@ -5,7 +5,7 @@
 
 use core::ffi::c_void;
 
-/// Layout version of [`InputMailboxesVTable`].
+/// Layout version of [`crate::InputMailboxesVTable`].
 ///
 /// - v1: ships four slots — the two cdylib processor's
 ///   `InputMailboxes` β-shape needs from inside `process()`

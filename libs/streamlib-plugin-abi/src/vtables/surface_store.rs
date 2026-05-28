@@ -5,15 +5,15 @@
 
 use core::ffi::c_void;
 
-/// Layout version of [`SurfaceStoreVTable`].
+/// Layout version of [`crate::SurfaceStoreVTable`].
 pub const SURFACE_STORE_VTABLE_LAYOUT_VERSION: u32 = 1;
 
 /// Dispatch table for the host's `SurfaceStore`. The cdylib obtains a
-/// handle via [`GpuContextLimitedAccessVTable::surface_store`] and
-/// reads the static vtable from [`HostServices::surface_store_vtable`].
+/// handle via [`crate::GpuContextLimitedAccessVTable::surface_store`] and
+/// reads the static vtable from [`crate::HostServices::surface_store_vtable`].
 ///
 /// Lives in its own vtable (not folded into
-/// [`GpuContextLimitedAccessVTable`]) for two reasons:
+/// [`crate::GpuContextLimitedAccessVTable`]) for two reasons:
 /// 1. **Surface-area discipline** — `SurfaceStore`'s public method
 ///    surface is large (~10 methods, mixing cross-platform and
 ///    Linux-only operations) and conceptually distinct from the GPU
@@ -23,7 +23,7 @@ pub const SURFACE_STORE_VTABLE_LAYOUT_VERSION: u32 = 1;
 /// 2. **Separate-vtable-per-subsystem precedent** — `AudioClockVTable`
 ///    already lives outside `RuntimeContextVTable` at the
 ///    `HostServices` level (via
-///    [`HostServices::audio_clock_vtable`]); the same shape
+///    [`crate::HostServices::audio_clock_vtable`]); the same shape
 ///    applies here.
 ///
 /// # Handle lifetime

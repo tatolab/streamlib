@@ -5,7 +5,7 @@
 
 use core::ffi::c_void;
 
-/// Layout version of [`RuntimeContextVTable`]. Pinned at offset 0;
+/// Layout version of [`crate::RuntimeContextVTable`]. Pinned at offset 0;
 /// newer fields append to the end and bump this constant.
 pub const RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION: u32 = 1;
 
@@ -24,13 +24,13 @@ pub const RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION: u32 = 1;
 /// # Opaque-handle returns
 ///
 /// `gpu_full_access` / `gpu_limited_access` return `*const c_void`
-/// opaque handles paired with [`GpuContextLimitedAccessVTable`] for
+/// opaque handles paired with [`crate::GpuContextLimitedAccessVTable`] for
 /// method dispatch.
 ///
 /// `audio_clock_handle` and `runtime_ops_handle` return opaque per-
-/// instance handles paired with the static vtables on [`HostServices`]
-/// ([`HostServices::audio_clock_vtable`],
-/// [`HostServices::runtime_ops_vtable`]).
+/// instance handles paired with the static vtables on [`crate::HostServices`]
+/// ([`crate::HostServices::audio_clock_vtable`],
+/// [`crate::HostServices::runtime_ops_vtable`]).
 #[repr(C)]
 pub struct RuntimeContextVTable {
     /// Vtable layout version. Must equal
@@ -81,13 +81,13 @@ pub struct RuntimeContextVTable {
     /// Returns an opaque handle to the privileged [`GpuContextFullAccess`].
     /// Pointer is valid for the lifetime of the surrounding
     /// `RuntimeContextFullAccess` shim. Paired with the methods
-    /// reached via [`HostServices::gpu_context_limited_access_vtable`]
+    /// reached via [`crate::HostServices::gpu_context_limited_access_vtable`]
     /// for the limited-access surface (FullAccess is engine-only
     /// today; cross-DSO FullAccess wiring is future-phase work).
     pub gpu_full_access: unsafe extern "C" fn(ctx: *const c_void) -> *const c_void,
 
     /// Returns an opaque handle to the restricted [`GpuContextLimitedAccess`].
-    /// Paired with [`HostServices::gpu_context_limited_access_vtable`]
+    /// Paired with [`crate::HostServices::gpu_context_limited_access_vtable`]
     /// for method dispatch.
     pub gpu_limited_access: unsafe extern "C" fn(ctx: *const c_void) -> *const c_void,
 
@@ -96,12 +96,12 @@ pub struct RuntimeContextVTable {
     // -------------------------------------------------------------------------
 
     /// Opaque handle to the runtime's audio clock. Pair with
-    /// [`HostServices::audio_clock_vtable`] to call methods on it.
+    /// [`crate::HostServices::audio_clock_vtable`] to call methods on it.
     /// The handle remains valid for the lifetime of the runtime.
     pub audio_clock_handle: unsafe extern "C" fn(ctx: *const c_void) -> *const c_void,
 
     /// Opaque handle to the runtime's graph-mutation operations.
-    /// Pair with [`HostServices::runtime_ops_vtable`] to invoke
+    /// Pair with [`crate::HostServices::runtime_ops_vtable`] to invoke
     /// methods. The handle remains valid for the lifetime of the
     /// runtime.
     pub runtime_ops_handle: unsafe extern "C" fn(ctx: *const c_void) -> *const c_void,

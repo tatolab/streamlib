@@ -7,7 +7,7 @@ use core::ffi::c_void;
 
 use crate::repr::ComputeBindingSpecRepr;
 
-/// Layout version of [`VulkanComputeKernelMethodsVTable`].
+/// Layout version of [`crate::VulkanComputeKernelMethodsVTable`].
 ///
 /// - v1: empty shell — pointer plumbing only.
 /// - v2: appended `set_push_constants` / `dispatch` slots (primitive
@@ -46,7 +46,7 @@ pub const VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 5;
 /// β-shape (issue #907 Phase E + #949 method-dispatch first slice).
 ///
 /// `VulkanComputeKernel` keeps `clone_*` / `drop_*` dispatch on the
-/// parent [`GpuContextFullAccessVTable`] (PR #918's Phase D shape);
+/// parent [`crate::GpuContextFullAccessVTable`] (PR #918's Phase D shape);
 /// this vtable carries per-method slots for everything the plugin
 /// handle exposes that cdylib code needs to dispatch through.
 ///

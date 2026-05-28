@@ -6,7 +6,7 @@
 
 use core::ffi::c_void;
 
-/// Layout version of [`GpuContextLimitedAccessVTable`].
+/// Layout version of [`crate::GpuContextLimitedAccessVTable`].
 ///
 /// Every Arc-holding return type on the cdylib-facing surface
 /// (`PixelBuffer`, `Texture`, `PooledTextureHandle`, 4 Linux-only
@@ -88,12 +88,12 @@ pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 14;
 
 /// Dispatch table for the host's `GpuContextLimitedAccess`. The
 /// cdylib obtains a handle via
-/// [`RuntimeContextVTable::gpu_limited_access`] and reads the static
-/// vtable from [`HostServices::gpu_context_limited_access_vtable`].
+/// [`crate::RuntimeContextVTable::gpu_limited_access`] and reads the static
+/// vtable from [`crate::HostServices::gpu_context_limited_access_vtable`].
 ///
 /// # Handle lifetime
 ///
-/// `clone_handle` / `drop_handle` mirror [`RuntimeOpsVTable`] v2:
+/// `clone_handle` / `drop_handle` mirror [`crate::RuntimeOpsVTable`] v2:
 /// `clone_handle(borrowed) -> owned` bumps the host's
 /// `Arc<GpuContext>` refcount; `drop_handle(owned)` releases. The
 /// owned handle remains valid even after the originating
@@ -122,7 +122,7 @@ pub struct GpuContextLimitedAccessVTable {
     // -------------------------------------------------------------------------
 
     /// Take a borrowed handle returned from
-    /// [`RuntimeContextVTable::gpu_limited_access`] and return a new
+    /// [`crate::RuntimeContextVTable::gpu_limited_access`] and return a new
     /// owned handle with an Arc refcount bump on the underlying
     /// `Arc<GpuContext>`. The owned handle remains valid even after
     /// the originating `RuntimeContext` is dropped, and MUST be

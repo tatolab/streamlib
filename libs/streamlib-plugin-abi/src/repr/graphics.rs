@@ -382,8 +382,8 @@ pub struct GraphicsKernelDescriptorRepr {
 
 /// `#[repr(u32)]` mirror of `streamlib::core::rhi::IndexType`.
 ///
-/// Discriminant carried on [`DrawIndexedCallRepr`]'s sibling index-buffer
-/// binding slot ([`VulkanGraphicsKernelMethodsVTable::set_index_buffer`]).
+/// Discriminant carried on [`crate::DrawIndexedCallRepr`]'s sibling index-buffer
+/// binding slot ([`crate::VulkanGraphicsKernelMethodsVTable::set_index_buffer`]).
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum IndexTypeRepr {
@@ -454,7 +454,7 @@ pub struct DrawIndexedCallRepr {
     pub scissor: ScissorRectRepr,
 }
 
-/// Discriminant for the [`OffscreenDrawRepr::kind`] tagged union.
+/// Discriminant for the [`crate::OffscreenDrawRepr::kind`] tagged union.
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum OffscreenDrawKindRepr {
@@ -474,7 +474,7 @@ pub enum OffscreenDrawKindRepr {
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct OffscreenDrawRepr {
-    /// [`OffscreenDrawKindRepr`] discriminant.
+    /// [`crate::OffscreenDrawKindRepr`] discriminant.
     pub kind: u32,
     pub _reserved_padding: u32,
     pub draw_call: DrawCallRepr,

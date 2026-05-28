@@ -5,7 +5,7 @@
 
 use core::ffi::c_void;
 
-/// Layout version of [`VulkanAccelerationStructureMethodsVTable`].
+/// Layout version of [`crate::VulkanAccelerationStructureMethodsVTable`].
 ///
 /// - v1: empty shell — pointer plumbing only (issue #907 Phase E
 ///   PR 5/5).
@@ -18,7 +18,7 @@ use core::ffi::c_void;
 ///   version coupling, and no in-tree cdylib consumer reads it.
 ///   The POD getters (`device_address`, `storage_size`, `kind`)
 ///   are populated at mint time via the v8
-///   [`GpuContextFullAccessVTable::build_triangles_blas`] /
+///   [`crate::GpuContextFullAccessVTable::build_triangles_blas`] /
 ///   `build_tlas` out-params and don't need vtable slots.
 pub const VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 
@@ -28,7 +28,7 @@ pub const VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 ///
 /// Mirrors the kernel methods-vtable shape. POD getters
 /// (`device_address`, `kind`, `storage_size`) are populated at mint
-/// time via the v8 [`GpuContextFullAccessVTable::build_triangles_blas`]
+/// time via the v8 [`crate::GpuContextFullAccessVTable::build_triangles_blas`]
 /// / `build_tlas` out-params and don't need vtable slots — the
 /// cached values on the β-shape struct are always real, never
 /// placeholder zeros.

@@ -7,7 +7,7 @@ use core::ffi::c_void;
 
 use crate::repr::{ResolvedColorInfoRepr, SourceLayoutInfoRepr};
 
-/// Layout version of [`RhiColorConverterMethodsVTable`].
+/// Layout version of [`crate::RhiColorConverterMethodsVTable`].
 ///
 /// - v1: ships the `prepare_buffer_to_image_storage` slot — the
 ///   minimum surface a cdylib camera processor needs to dispatch
@@ -32,7 +32,7 @@ pub const RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 ///
 /// `RhiColorConverter` keeps `clone_color_converter` /
 /// `drop_color_converter` dispatch on the parent
-/// [`GpuContextFullAccessVTable`]; this vtable carries the
+/// [`crate::GpuContextFullAccessVTable`]; this vtable carries the
 /// `prepare_buffer_to_image_storage` slot so cdylib camera processors
 /// can prepare the host's cached buffer→image kernel without tripping
 /// the β-shape's host-mode-only `host_inner()` access. The slot
