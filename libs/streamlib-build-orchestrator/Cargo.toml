@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-build-orchestrator"
-description = "Default polyglot BuildOrchestrator impl — runtime materialization of source packages (Rust cdylib via cargo, Python/Deno/schemas via staging) into the streamlib build cache. Depends on streamlib-engine for the BuildOrchestrator trait and streamlib-cargo-build for the build/stage primitives."
+description = "Default polyglot BuildOrchestrator impl — runtime materialization of source packages into the streamlib package cache. Assembles the same complete artifact `streamlib pack` produces (via streamlib-pack) and stages it as an extracted directory, identical to extracting a .slpkg / installing from GitHub. Depends on streamlib-engine for the BuildOrchestrator trait."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -13,17 +13,16 @@ repository.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 tracing = { workspace = true }
-serde_yaml = { workspace = true }
 serde_json = { workspace = true }
 streamlib-engine = { path = "../streamlib-engine" }
 streamlib-cargo-build = { path = "../streamlib-cargo-build" }
-streamlib-idents = { path = "../streamlib-idents" }
-streamlib-processor-schema = { path = "../streamlib-processor-schema" }
+streamlib-pack = { path = "../streamlib-pack" }
 streamlib-plugin-abi = { path = "../streamlib-plugin-abi" }
 
 [dev-dependencies]
 tempfile = "3.14"
 serial_test = "3.2"
+streamlib-idents = { path = "../streamlib-idents" }
 
 [lints]
 workspace = true

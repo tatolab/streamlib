@@ -1,0 +1,26 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-pack"
+description = "Package-artifact assembly shared between `streamlib pack` (CLI) and `streamlib-build-orchestrator` (runtime). One routine assembles a complete package artifact per language (Rust cdylib via cargo, Python as full source, Deno bundle, schemas) and emits it either as a compressed .slpkg or as an extracted staged directory."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+tracing = { workspace = true }
+serde_yaml = { workspace = true }
+zip = "2.2"
+streamlib-cargo-build = { path = "../streamlib-cargo-build" }
+streamlib-processor-schema = { path = "../streamlib-processor-schema" }
+streamlib-idents = { path = "../streamlib-idents" }
+
+[dev-dependencies]
+tempfile = "3.14"
+
+[lints]
+workspace = true

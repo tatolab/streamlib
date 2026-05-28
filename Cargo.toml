@@ -7,6 +7,7 @@ members = [
     "libs/streamlib-surface-client", # Wire-format helpers for the per-runtime surface-sharing socket (Linux)
     "libs/streamlib-cli",       # Command-line interface for StreamLib runtime
     "libs/streamlib-cargo-build", # Cargo-build orchestration helpers shared between `streamlib pack` and `streamlib-build-orchestrator`
+    "libs/streamlib-pack",      # Package-artifact assembly shared between `streamlib pack` (CLI) and `streamlib-build-orchestrator` (runtime) — emits a .slpkg or an extracted staged dir
     "libs/streamlib-build-orchestrator", # Default polyglot BuildOrchestrator impl — runtime materialization of source packages (depends on engine for the trait + cargo-build for the helpers)
     "libs/streamlib-runtime",   # Standalone runtime binary (spawned by CLI)
     "libs/streamlib-processor-schema", # Processor schema types + YAML parser shared between streamlib runtime and streamlib-macros

@@ -29,6 +29,7 @@ streamlib-idents = { path = "../streamlib-idents" }
 # routes through this crate so the same logic is reused by
 # `streamlib-build-orchestrator` without dragging in the full CLI surface.
 streamlib-cargo-build = { path = "../streamlib-cargo-build" }
+streamlib-pack = { path = "../streamlib-pack" }
 
 # JTD-codegen pipeline (drives `streamlib generate`)
 streamlib-jtd-codegen = { path = "../streamlib-jtd-codegen" }
