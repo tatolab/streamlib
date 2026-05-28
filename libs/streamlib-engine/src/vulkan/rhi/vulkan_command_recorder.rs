@@ -1802,8 +1802,8 @@ impl RhiCommandRecorder {
                 old_layout.as_raw(),
                 new_layout.as_raw(),
                 src_stage.bits() as i64,
-                src_access.bits() as i64,
                 dst_stage.bits() as i64,
+                src_access.bits() as i64,
                 dst_access.bits() as i64,
                 err_buf.as_mut_ptr(),
                 err_buf.len(),
@@ -2153,6 +2153,194 @@ mod tests {
         // Second begin should pick up the now-Idle state.
         rec.begin().expect("begin 2");
         rec.submit_and_wait().expect("submit_and_wait 2");
+    }
+
+    // ----- Vulkan-free: dispatcher argument-ordering regression test (#1089) -----
+    //
+    // The plugin-ABI vtable's `record_swapchain_image_barrier` slot
+    // groups parameters by kind: (from_stage, to_stage, from_access,
+    // to_access). The dispatcher in `dispatch_record_swapchain_image_barrier_via_vtable`
+    // received them as a (src_stage, src_access, dst_stage, dst_access)
+    // tuple from the caller and must reorder them onto the wire. Issue
+    // #1089 was a regression where the dispatcher passed them in
+    // (src_stage, src_access, dst_stage, dst_access) order on the wire —
+    // misaligned by one slot — so the host wrapper interpreted the
+    // caller's dst_stage bits as src_access (and vice versa). The bit
+    // values collide on real Vulkan flag layouts
+    // (`COLOR_ATTACHMENT_OUTPUT` stage = `DEPTH_STENCIL_ATTACHMENT_WRITE`
+    // access = 0x400), which is what made the validation layer flag a
+    // missing-stage error rather than a bogus-bits error.
+    //
+    // Mentally reverting the swap reproduces #1089's exact symptom in
+    // this test: each captured slot would contain the wrong caller-side
+    // value.
+
+    use std::cell::Cell;
+    use std::ffi::c_void;
+
+    thread_local! {
+        static CAPTURED_BARRIER_ARGS:
+            Cell<Option<[i64; 4]>> = const { Cell::new(None) };
+    }
+
+    unsafe extern "C" fn capture_record_swapchain_image_barrier(
+        _recorder_handle: *const c_void,
+        _image_raw: u64,
+        _from_layout_raw: i32,
+        _to_layout_raw: i32,
+        from_stage_raw: i64,
+        to_stage_raw: i64,
+        from_access_raw: i64,
+        to_access_raw: i64,
+        _err_buf: *mut u8,
+        _err_buf_cap: usize,
+        _err_len: *mut usize,
+    ) -> i32 {
+        CAPTURED_BARRIER_ARGS.with(|c| {
+            c.set(Some([
+                from_stage_raw,
+                to_stage_raw,
+                from_access_raw,
+                to_access_raw,
+            ]));
+        });
+        0
+    }
+
+    // Fill the remaining slots with stub functions that just return 0;
+    // the test only exercises the swapchain-barrier slot.
+    macro_rules! stub_zero {
+        ($name:ident($($arg:ident: $ty:ty),* $(,)?)) => {
+            unsafe extern "C" fn $name($($arg: $ty),*) -> i32 {
+                $(let _ = $arg;)*
+                0
+            }
+        };
+    }
+    stub_zero!(stub_begin(a: *const c_void, b: *mut u8, c: usize, d: *mut usize));
+    stub_zero!(stub_image_barrier(
+        a: *const c_void, b: *const c_void, c: i32, d: i32, e: i64, f: i64, g: i64, h: i64,
+        i: *mut u8, j: usize, k: *mut usize,
+    ));
+    stub_zero!(stub_buffer_barrier(
+        a: *const c_void, b: *const c_void, c: i64, d: i64, e: i64, f: i64,
+        g: *mut u8, h: usize, i: *mut usize,
+    ));
+    stub_zero!(stub_dispatch(
+        a: *const c_void, b: *const c_void, c: u32, d: u32, e: u32,
+        f: *mut u8, g: usize, h: *mut usize,
+    ));
+    stub_zero!(stub_copy_image_to_buffer(
+        a: *const c_void, b: *const c_void, c: i32, d: *const c_void,
+        e: *const streamlib_plugin_abi::ImageCopyRegionRepr,
+        f: *mut u8, g: usize, h: *mut usize,
+    ));
+    stub_zero!(stub_submit_signaling_timeline(
+        a: *const c_void, b: *const c_void, c: u64, d: *mut u8, e: usize, f: *mut usize,
+    ));
+    stub_zero!(stub_begin_dynamic_rendering(
+        a: *const c_void, b: u64, c: u32, d: u32, e: u32,
+        f: f32, g: f32, h: f32, i: f32, j: *mut u8, k: usize, l: *mut usize,
+    ));
+    stub_zero!(stub_end_dynamic_rendering(a: *const c_void, b: *mut u8, c: usize, d: *mut usize));
+    stub_zero!(stub_submit_with_semaphores(
+        a: *const c_void,
+        b: *const streamlib_plugin_abi::SemaphoreSubmitInfoRepr, c: usize,
+        d: *const streamlib_plugin_abi::SemaphoreSubmitInfoRepr, e: usize,
+        f: *mut u8, g: usize, h: *mut usize,
+    ));
+    stub_zero!(stub_record_draw(
+        a: *const c_void, b: *const c_void, c: u32,
+        d: *const streamlib_plugin_abi::DrawCallRepr,
+        e: *mut u8, f: usize, g: *mut usize,
+    ));
+    stub_zero!(stub_record_draw_indexed(
+        a: *const c_void, b: *const c_void, c: u32,
+        d: *const streamlib_plugin_abi::DrawIndexedCallRepr,
+        e: *mut u8, f: usize, g: *mut usize,
+    ));
+    stub_zero!(stub_submit(a: *const c_void, b: *mut u8, c: usize, d: *mut usize));
+    stub_zero!(stub_submit_and_wait(a: *const c_void, b: *mut u8, c: usize, d: *mut usize));
+
+    #[test]
+    fn dispatch_swapchain_barrier_passes_args_in_vtable_slot_order() {
+        // Use distinctive non-colliding bit patterns for each role so a
+        // misaligned wire reordering would produce visibly wrong slots.
+        let src_stage = vk::PipelineStageFlags2::COMPUTE_SHADER; // bit 11 (0x800)
+        let dst_stage = vk::PipelineStageFlags2::FRAGMENT_SHADER; // bit 7 (0x80)
+        let src_access = vk::AccessFlags2::SHADER_STORAGE_READ; // bit 33 (0x200000000)
+        let dst_access = vk::AccessFlags2::SHADER_SAMPLED_READ; // bit 32 (0x100000000)
+
+        // Fake methods vtable with our capture function in the swapchain slot.
+        let fake_vtable = streamlib_plugin_abi::RhiCommandRecorderMethodsVTable {
+            layout_version:
+                streamlib_plugin_abi::RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION,
+            _reserved_padding: 0,
+            begin: stub_begin,
+            record_image_barrier: stub_image_barrier,
+            record_buffer_barrier: stub_buffer_barrier,
+            record_dispatch: stub_dispatch,
+            record_copy_image_to_buffer: stub_copy_image_to_buffer,
+            submit_signaling_timeline: stub_submit_signaling_timeline,
+            record_pixel_buffer_barrier: stub_buffer_barrier,
+            record_copy_image_to_pixel_buffer: stub_copy_image_to_buffer,
+            record_swapchain_image_barrier: capture_record_swapchain_image_barrier,
+            cmd_begin_dynamic_rendering: stub_begin_dynamic_rendering,
+            cmd_end_dynamic_rendering: stub_end_dynamic_rendering,
+            submit_with_semaphores: stub_submit_with_semaphores,
+            record_draw: stub_record_draw,
+            record_draw_indexed: stub_record_draw_indexed,
+            submit: stub_submit,
+            submit_and_wait: stub_submit_and_wait,
+        };
+
+        // Synthetic β-shape with our fake vtable. handle/vtable can stay null
+        // because the capture function never dereferences them.
+        let beta = RhiCommandRecorder {
+            handle: std::ptr::null(),
+            vtable: std::ptr::null(),
+            methods_vtable: &fake_vtable,
+        };
+
+        CAPTURED_BARRIER_ARGS.with(|c| c.set(None));
+        let rc = beta.dispatch_record_swapchain_image_barrier_via_vtable(
+            vk::Image::null(),
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            src_stage,
+            src_access,
+            dst_stage,
+            dst_access,
+        );
+        assert!(rc.is_ok(), "dispatcher returned error: {:?}", rc);
+
+        let captured = CAPTURED_BARRIER_ARGS
+            .with(|c| c.get())
+            .expect("vtable slot did not fire");
+
+        // The vtable signature names these parameters (in order):
+        // from_stage_raw, to_stage_raw, from_access_raw, to_access_raw.
+        // The caller's (src_stage, src_access, dst_stage, dst_access)
+        // must therefore reach the vtable as (src, dst, src, dst) —
+        // src→from, dst→to. Mentally reverting the dispatcher's swap
+        // makes this assertion fail with src_access in the to_stage
+        // slot (#1089's exact failure mode).
+        assert_eq!(
+            captured[0], src_stage.bits() as i64,
+            "from_stage_raw must receive caller's src_stage"
+        );
+        assert_eq!(
+            captured[1], dst_stage.bits() as i64,
+            "to_stage_raw must receive caller's dst_stage (#1089: was src_access)"
+        );
+        assert_eq!(
+            captured[2], src_access.bits() as i64,
+            "from_access_raw must receive caller's src_access (#1089: was dst_stage)"
+        );
+        assert_eq!(
+            captured[3], dst_access.bits() as i64,
+            "to_access_raw must receive caller's dst_access"
+        );
     }
 
     // ----- Integration test: real compute kernel + timeline-signaling submit -----
