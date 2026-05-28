@@ -84,20 +84,30 @@ two-timelines-one-writer-each is the conventional answer.
 ```
 
 **Per-process `SurfaceState<P>` fields** (the per-adapter state
-record):
+record). The v1 implementation chooses a single per-process signal
+counter — within ONE adapter instance, signals to `produce_done` and
+`consume_done` come from disjoint code paths (write-release vs.
+read-release) so a unified monotonic counter is sufficient. Each
+timeline still sees strictly monotonic values from its own writer
+site, which is all VUID-03258 requires:
 
 ```rust
 produce_done: Arc<P::TimelineSemaphore>,
 consume_done: Arc<P::TimelineSemaphore>,
 
-// Writer-side state. Only the writer process advances these.
-next_produce_value: u64,     // producer side
-next_consume_value: u64,     // consumer side
-
-// Reader-side state. The waiter records what value to wait for.
-last_produce_value_observed: u64,   // consumer waits >= this on read
-last_consume_value_observed: u64,   // producer waits >= this on reuse
+// Per-process monotonic counter — advanced on every signal
+// regardless of which timeline gets it (see comment above).
+current_signal_value: u64,
 ```
+
+Read-side wait targets are derived from the peer-timeline's
+`current_value()` at acquire time (see [Consumer rules](#consumer-rules)
+/ [Producer rules](#producer-rules) below), not from a separate
+locally-tracked field. Split counters (`next_produce_value` /
+`next_consume_value`) become useful if a future shape ever needs
+both edges to advance concurrently within the same adapter
+instance; the v1 single-counter shape locks correctness for the
+in-tree usage where the writer code paths are disjoint.
 
 The two timelines are independent kernel objects. The producer
 process owns the `produce_done` exportable handle and constructs the
@@ -179,10 +189,21 @@ consumer attests to needing it; don't pre-design.
    per-process.** Never read or write the producer's
    `next_produce_value`.
 
-2. **Wait on `produce_done` before reading.** The producer publishes
-   the `produce_done` value alongside the read-side data (typically
-   in the `VideoFrame` IPC payload or the adapter's acquire-acquired
-   record). The consumer waits on that value before issuing any read.
+2. **Wait on `produce_done` before reading.** Under v1 the consumer
+   reads `produce_done.current_value()` at acquire time and waits on
+   that snapshot — the peer-timeline's kernel counter is the source
+   of truth, no cross-process per-frame value publishing is required.
+   That covers steady-state ordering (each completed producer signal
+   advances `current_value()` so the next consumer's wait sees it).
+   If a future use case needs strict per-frame value publishing
+   (e.g. the consumer wants to wait for a specific future frame
+   that's already been queued but not yet signaled), the producer
+   publishes the `produce_done` value alongside the read-side data
+   (typically on the `VideoFrame` IPC payload or the adapter's
+   acquire-acquired record) and the consumer waits on that value
+   instead of `current_value()`. v1 deliberately doesn't ship that
+   IPC plumbing — the kernel-counter snapshot is good enough for
+   every in-tree consumer today.
 
 3. **Signal `consume_done` from exactly one site per release.** For
    subprocess consumers (cuda + cpu-readback), the signal site is
@@ -242,18 +263,25 @@ workaround that future agents would attempt without this doc.
 
 ## Cross-process coordination
 
-The producer publishes `produce_done` values to the consumer
-alongside the per-frame work item — typically as a field on the
-`VideoFrame` IPC payload or the adapter's per-acquire record. The
-consumer's wait is `produce_done.wait(published_value)`.
+Under v1, each side derives the wait value from the peer-timeline's
+kernel counter (`vkGetSemaphoreCounterValue`, exposed on consumer-rhi
+as `VulkanTimelineSemaphoreLike::current_value()`) at acquire time
+and waits on that snapshot. Steady-state ordering holds: a completed
+producer signal advances `current_value()`, so the next consumer's
+wait sees it; symmetric for `consume_done`.
 
-The consumer publishes `consume_done` values back to the producer
-the same way, when the producer needs to wait on consumer drain
-before re-writing.
+If a future use case needs strict per-frame value publishing — e.g.
+a consumer that wants to wait for a specific future frame the
+producer has already queued but not yet signaled — the producer
+publishes the `produce_done` value alongside the per-frame work item
+(a field on the `VideoFrame` IPC payload or the adapter's
+per-acquire record) and the consumer waits on that value instead of
+`current_value()`. v1 deliberately doesn't ship that IPC plumbing —
+no in-tree consumer needs it today.
 
-No shared-memory state is needed. Each side's wait reads the
-remote-published value once, waits on the local imported timeline,
-and proceeds.
+No shared-memory state is needed in either shape. Each side's wait
+reads the value (kernel counter or remote-published, depending on
+shape), waits on the local imported timeline, and proceeds.
 
 ## Race model
 
