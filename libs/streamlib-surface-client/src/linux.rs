@@ -16,11 +16,13 @@ use std::path::Path;
 pub const MAX_DMA_BUF_PLANES: usize = 4;
 
 /// Total SCM_RIGHTS fd budget for a single surface-share message:
-/// [`MAX_DMA_BUF_PLANES`] + 1 trailing slot for an optional timeline-semaphore
-/// OPAQUE_FD (host → subprocess Vulkan-adapter sync handoff, #531). Wire
-/// helpers validate against this ceiling; senders that aren't passing a sync
-/// FD simply leave the slot unused.
-pub const MAX_SCM_RIGHTS_FDS: usize = MAX_DMA_BUF_PLANES + 1;
+/// [`MAX_DMA_BUF_PLANES`] plane fds + 2 trailing slots for the optional
+/// `produce_done` and `consume_done` timeline-semaphore OPAQUE_FDs (the
+/// single-writer-per-edge model in
+/// `docs/architecture/adapter-timeline-single-writer.md`). Wire helpers
+/// validate against this ceiling; senders that aren't passing both
+/// timelines simply leave the trailing slots unused.
+pub const MAX_SCM_RIGHTS_FDS: usize = MAX_DMA_BUF_PLANES + 2;
 
 /// Connect to the per-runtime surface-share Unix socket.
 pub fn connect_to_surface_share_socket(socket_path: &Path) -> std::io::Result<UnixStream> {
@@ -82,9 +84,14 @@ pub fn send_message_with_fds(
     msg.msg_iov = &mut iov;
     msg.msg_iovlen = 1;
 
-    // Size the control buffer for the worst case we allow, so a late-arriving
-    // receiver that probed a smaller cap still parses our messages.
-    let cmsg_space = cmsg_space_for(MAX_DMA_BUF_PLANES);
+    // Size the control buffer for the worst case the wire allows
+    // ([`MAX_SCM_RIGHTS_FDS`]) so a sender that fills every plane slot plus
+    // both timeline-semaphore slots doesn't overrun `cmsg_buf`. The
+    // kernel reads `msg.msg_controllen` bytes from `cmsg_buf.as_mut_ptr()`
+    // during `sendmsg`; that count is computed from `fds.len()` below, so
+    // the buffer must always be large enough for the maximum allowed
+    // count even when the actual send is shorter.
+    let cmsg_space = cmsg_space_for(MAX_SCM_RIGHTS_FDS);
     let mut cmsg_buf = vec![0u8; cmsg_space];
 
     if !fds.is_empty() {
@@ -126,12 +133,14 @@ pub fn send_message_with_fds(
 /// response, or directly by the server's connection loop for each request).
 ///
 /// `max_fds` sizes the `cmsg` buffer allocated for the `recvmsg` call. It
-/// MUST be at least as large as the greatest plane count any peer will send
+/// MUST be at least as large as the greatest fd count any peer will send
 /// on this connection — if the kernel delivers more fds than the buffer
 /// holds, `MSG_CTRUNC` is set and **the surplus fds are silently leaked into
-/// the peer's table**; this helper treats that condition as an error. Callers
-/// that expect single-plane traffic can pass `1`; callers that accept
-/// multi-plane should pass `MAX_DMA_BUF_PLANES`.
+/// the peer's table**; this helper treats that condition as an error.
+/// Callers that expect single-plane traffic can pass `1`; callers that
+/// accept multi-plane should pass `MAX_DMA_BUF_PLANES`; callers that also
+/// receive trailing timeline-semaphore FDs (`produce_done` / `consume_done`)
+/// should pass [`MAX_SCM_RIGHTS_FDS`].
 ///
 /// On any failure all received fds (if any) are closed before the error is
 /// returned.
@@ -140,7 +149,7 @@ pub fn recv_message_with_fds(
     msg_len: usize,
     max_fds: usize,
 ) -> std::io::Result<(Vec<u8>, Vec<RawFd>)> {
-    let cap = max_fds.min(MAX_DMA_BUF_PLANES);
+    let cap = max_fds.min(MAX_SCM_RIGHTS_FDS);
     let cmsg_space = cmsg_space_for(cap.max(1));
     let mut cmsg_buf = vec![0u8; cmsg_space];
 
@@ -562,6 +571,75 @@ mod tests {
         assert_eq!(read_all_from_fd(response_fds[1]), b"reply-plane-1");
 
         server.join().expect("server thread");
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    /// Round-trip exactly [`MAX_SCM_RIGHTS_FDS`] fds in a single SCM_RIGHTS
+    /// record. Exercises the new dual-timeline cap — every plane fd plus
+    /// both `produce_done` and `consume_done` OPAQUE_FD slots filled —
+    /// against the cmsg-buffer sizing on both send and recv. Mentally
+    /// revert either `cmsg_space = cmsg_space_for(MAX_SCM_RIGHTS_FDS)`
+    /// in `send_message_with_fds` or `cap = max_fds.min(MAX_SCM_RIGHTS_FDS)`
+    /// in `recv_message_with_fds` and this test fails on the last fd
+    /// (buffer overrun on send, `MSG_CTRUNC` error on recv).
+    #[test]
+    fn send_recv_round_trip_at_max_scm_rights_cap() {
+        let socket_path = tmp_socket_path("cap-edge");
+        let listener = UnixListener::bind(&socket_path).expect("bind");
+
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            let mut len_buf = [0u8; 4];
+            let mut total = 0;
+            while total < 4 {
+                let n = unsafe {
+                    libc::read(
+                        stream.as_raw_fd(),
+                        len_buf[total..].as_mut_ptr() as *mut libc::c_void,
+                        4 - total,
+                    )
+                };
+                assert!(n > 0, "server read len");
+                total += n as usize;
+            }
+            let payload_len = u32::from_be_bytes(len_buf) as usize;
+            recv_message_with_fds(&stream, payload_len, MAX_SCM_RIGHTS_FDS).expect("recv")
+        });
+
+        // Distinct contents per slot so a reordering or truncation regression
+        // is visible against an exact byte assert.
+        let patterns: Vec<Vec<u8>> = (0..MAX_SCM_RIGHTS_FDS)
+            .map(|i| format!("cap-edge-slot-{}", i).into_bytes())
+            .collect();
+        let send_fds: Vec<RawFd> = patterns
+            .iter()
+            .map(|p| make_memfd_with(p.as_slice()))
+            .collect();
+        let client = UnixStream::connect(&socket_path).expect("connect");
+        let payload = br#"{"op":"cap-edge"}"#;
+        send_message_with_fds(&client, payload, &send_fds).expect("send");
+        for fd in &send_fds {
+            unsafe { libc::close(*fd) };
+        }
+        drop(client);
+
+        let (received_payload, received_fds) = server.join().expect("server thread");
+        assert_eq!(received_payload, payload);
+        assert_eq!(
+            received_fds.len(),
+            MAX_SCM_RIGHTS_FDS,
+            "every slot delivered (no MSG_CTRUNC, no send-side buffer overrun)",
+        );
+        for (i, fd) in received_fds.iter().enumerate() {
+            assert!(*fd >= 0);
+            assert_eq!(
+                read_all_from_fd(*fd),
+                patterns[i],
+                "slot {} content preserved",
+                i
+            );
+        }
+
         let _ = std::fs::remove_file(&socket_path);
     }
 }
