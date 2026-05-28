@@ -30,9 +30,64 @@ use crate::core::error::{Result, Error};
 ///   (editable source-install, runs the package's declared build backend on the
 ///   install machine). Fallback for dev-tree iteration where the slpkg wasn't
 ///   produced via `streamlib pack`.
-pub fn ensure_processor_venv(processor_id: &str, project_path: &Path) -> Result<String> {
+/// Compute the venv cache key for a processor's install source. Three
+/// branches that match what we'll actually install: the wheel CONTENTS,
+/// the `pyproject.toml` contents, or the bare `processor_id` as a last
+/// resort. Wheel and source installs hash into different buckets
+/// (distinct domain prefixes) — re-installing the same package via a
+/// different shape gets its own venv rather than colliding.
+///
+/// The wheel branch hashes the wheel BYTES, not just its filename: a
+/// rebuilt same-version package keeps the same wheel filename
+/// (`pkg-0.1.0-py3-none-any.whl`), so a filename-keyed venv would hit a
+/// stale install and silently run the OLD code after a source edit — the
+/// exact stale-artifact trap the runtime-build subsystem exists to close,
+/// one layer up. Hashing content guarantees a rebuilt wheel reinstalls.
+fn compute_venv_cache_key(
+    prebuilt_wheel: Option<&Path>,
+    pyproject_path: Option<&Path>,
+    project_path: &Path,
+    processor_id: &str,
+) -> Result<String> {
     use sha2::{Digest, Sha256};
 
+    let canonical = |hasher: &mut Sha256| -> Result<()> {
+        let c = project_path.canonicalize().map_err(|e| {
+            Error::Runtime(format!(
+                "Failed to canonicalize project_path '{}': {}",
+                project_path.display(),
+                e
+            ))
+        })?;
+        hasher.update(c.to_string_lossy().as_bytes());
+        Ok(())
+    };
+
+    if let Some(wheel) = prebuilt_wheel {
+        let wheel_bytes = std::fs::read(wheel).map_err(|e| {
+            Error::Runtime(format!("Failed to read wheel '{}': {}", wheel.display(), e))
+        })?;
+        let mut hasher = Sha256::new();
+        hasher.update(b"wheel:");
+        hasher.update(&wheel_bytes);
+        canonical(&mut hasher)?;
+        Ok(format!("{:x}", hasher.finalize()))
+    } else if let Some(pyproject) = pyproject_path {
+        let contents = std::fs::read_to_string(pyproject)
+            .map_err(|e| Error::Runtime(format!("Failed to read pyproject.toml: {}", e)))?;
+        let mut hasher = Sha256::new();
+        hasher.update(b"source:");
+        hasher.update(contents.as_bytes());
+        canonical(&mut hasher)?;
+        Ok(format!("{:x}", hasher.finalize()))
+    } else {
+        let mut hasher = Sha256::new();
+        hasher.update(processor_id.as_bytes());
+        Ok(format!("{:x}", hasher.finalize()))
+    }
+}
+
+pub fn ensure_processor_venv(processor_id: &str, project_path: &Path) -> Result<String> {
     let uv_cache_dir = crate::core::streamlib_home::get_uv_cache_dir();
 
     let prebuilt_wheel = if project_path.as_os_str().is_empty() {
@@ -52,49 +107,12 @@ pub fn ensure_processor_venv(processor_id: &str, project_path: &Path) -> Result<
         None
     };
 
-    // Compute hash for cache key. Three branches that match what we'll
-    // actually install: the wheel filename (which encodes name + version
-    // + Python ABI + platform tags), the pyproject.toml contents, or the
-    // bare processor_id as a last resort. Wheel and source installs hash
-    // into different cache buckets — re-installing the same package via
-    // a different shape gets its own venv rather than colliding.
-    let hash_hex = if let Some(ref wheel) = prebuilt_wheel {
-        let wheel_name = wheel
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let canonical = project_path.canonicalize().map_err(|e| {
-            Error::Runtime(format!(
-                "Failed to canonicalize project_path '{}': {}",
-                project_path.display(),
-                e
-            ))
-        })?;
-        let mut hasher = Sha256::new();
-        hasher.update(b"wheel:");
-        hasher.update(wheel_name.as_bytes());
-        hasher.update(canonical.to_string_lossy().as_bytes());
-        format!("{:x}", hasher.finalize())
-    } else if let Some(ref pyproject) = pyproject_path {
-        let contents = std::fs::read_to_string(pyproject)
-            .map_err(|e| Error::Runtime(format!("Failed to read pyproject.toml: {}", e)))?;
-        let canonical = project_path.canonicalize().map_err(|e| {
-            Error::Runtime(format!(
-                "Failed to canonicalize project_path '{}': {}",
-                project_path.display(),
-                e
-            ))
-        })?;
-        let mut hasher = Sha256::new();
-        hasher.update(b"source:");
-        hasher.update(contents.as_bytes());
-        hasher.update(canonical.to_string_lossy().as_bytes());
-        format!("{:x}", hasher.finalize())
-    } else {
-        let mut hasher = Sha256::new();
-        hasher.update(processor_id.as_bytes());
-        format!("{:x}", hasher.finalize())
-    };
+    let hash_hex = compute_venv_cache_key(
+        prebuilt_wheel.as_deref(),
+        pyproject_path.as_deref(),
+        project_path,
+        processor_id,
+    )?;
 
     let venv_dir = crate::core::streamlib_home::get_cached_venv_dir(&hash_hex);
 
@@ -288,6 +306,60 @@ mod tests {
         let wheels = dir.path().join("python").join("wheels");
         let found = find_first_wheel(&wheels).unwrap();
         assert!(found.is_none(), "missing wheels dir must return None, got: {:?}", found);
+    }
+
+    #[test]
+    fn venv_cache_key_changes_when_wheel_bytes_change_same_filename() {
+        // Regression: a rebuilt same-version package keeps the SAME wheel
+        // filename. The cache key must track wheel CONTENT, not the
+        // filename — else a source edit silently runs stale code from a
+        // cache-hit venv. Mentally revert to filename-hashing and key_a
+        // == key_b here, re-opening the stale-artifact trap.
+        let dir = tempdir().unwrap();
+        let wheels = dir.path().join("python").join("wheels");
+        std::fs::create_dir_all(&wheels).unwrap();
+        let wheel = wheels.join("pkg-0.1.0-py3-none-any.whl");
+
+        std::fs::write(&wheel, b"PK\x03\x04 first build").unwrap();
+        let key_a = compute_venv_cache_key(Some(&wheel), None, dir.path(), "P").unwrap();
+
+        // Same filename, different bytes — a rebuild after a source edit.
+        std::fs::write(&wheel, b"PK\x03\x04 second build, edited source").unwrap();
+        let key_b = compute_venv_cache_key(Some(&wheel), None, dir.path(), "P").unwrap();
+        assert_ne!(
+            key_a, key_b,
+            "same-filename wheel with new bytes must produce a new venv key"
+        );
+
+        // Identical bytes → identical key (cache hit is correct when unchanged).
+        std::fs::write(&wheel, b"PK\x03\x04 first build").unwrap();
+        let key_c = compute_venv_cache_key(Some(&wheel), None, dir.path(), "P").unwrap();
+        assert_eq!(key_a, key_c, "identical wheel bytes must reuse the venv");
+    }
+
+    #[test]
+    fn venv_cache_key_wheel_and_source_are_distinct_domains() {
+        // A wheel install and a source (`-e pyproject`) install of the
+        // same package must not collide — they install differently, so a
+        // shared venv would be wrong. The domain prefix (`wheel:` vs
+        // `source:`) keeps them in separate buckets even with identical
+        // hashed bytes.
+        let dir = tempdir().unwrap();
+        let wheels = dir.path().join("python").join("wheels");
+        std::fs::create_dir_all(&wheels).unwrap();
+        let wheel = wheels.join("pkg-0.1.0-py3-none-any.whl");
+        std::fs::write(&wheel, b"same-bytes").unwrap();
+        let pyproject = dir.path().join("pyproject.toml");
+        std::fs::write(&pyproject, b"same-bytes").unwrap();
+
+        let wheel_key =
+            compute_venv_cache_key(Some(&wheel), Some(&pyproject), dir.path(), "P").unwrap();
+        let source_key =
+            compute_venv_cache_key(None, Some(&pyproject), dir.path(), "P").unwrap();
+        assert_ne!(
+            wheel_key, source_key,
+            "wheel and source installs must hash into different buckets"
+        );
     }
 
     #[test]
