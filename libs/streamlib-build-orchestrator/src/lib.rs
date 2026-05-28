@@ -41,8 +41,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use streamlib_cargo_build as build;
 use streamlib_engine::core::runtime::{
-    BuildError, BuildEvent, BuildEventSink, BuildOrchestrator, BuildRequest, BuildSource,
-    BuildStream, StagedArtifact,
+    BuildError, BuildEvent, BuildEventSink, BuildOrchestrator, BuildPolicy, BuildRequest,
+    BuildSource, BuildStream, StagedArtifact,
 };
 use streamlib_processor_schema::ProcessorLanguage;
 
@@ -136,11 +136,49 @@ impl PolyglotBuildOrchestrator {
             .map_err(|e| other(&pkg_label, format!("reading streamlib.yaml: {e}")))?
             .ok_or_else(|| other(&pkg_label, "no streamlib.yaml at source dir".into()))?;
 
+        let has_rust = build::has_rust_runtime_processors(&config);
         let triple = &request.host_triple;
-        let dylib_ext = build::host_dylib_extension();
+        let cache_slot = self.cache_slot(package);
 
-        // ---- per-language build (Rust is the only real compile) ----
-        let built_cdylib: Option<PathBuf> = if build::has_rust_runtime_processors(&config) {
+        // ---- staleness: the orchestrator's OWN language-agnostic input
+        // fingerprint (NOT cargo's) — covers Rust src, python/, ts/,
+        // schemas/, and the manifests. Works for any standalone package
+        // repo; pure Python/Deno/schema packages never touch cargo.
+        let inputs_hash = compute_inputs_hash(pkg_dir)
+            .map_err(|e| other(&pkg_label, format!("hashing package inputs: {e}")))?;
+
+        // IfStale + no Rust: if the staged artifact already matches
+        // (inputs + ABI + triple + profile), it's up to date — skip.
+        // Rust packages always fall through to `cargo build` below,
+        // because a package-local hash can't see out-of-package /
+        // transitive changes a Rust cdylib links (the #1072 case); cargo's
+        // own fingerprint catches those and short-circuits cheaply.
+        if matches!(request.policy, BuildPolicy::IfStale) && !has_rust {
+            if let Some(prev) = read_sidecar(&cache_slot) {
+                if prev.inputs_hash == inputs_hash
+                    && prev.abi_version == streamlib_plugin_abi::STREAMLIB_ABI_VERSION
+                    && prev.triple == *triple
+                    && prev.profile == self.profile.label()
+                    && cache_slot.join("streamlib.yaml").exists()
+                {
+                    tracing::debug!(
+                        package = %pkg_label,
+                        "inputs unchanged — staged artifact is up to date, skipping build"
+                    );
+                    return Ok(StagedArtifact {
+                        staged_dir: cache_slot,
+                        rebuilt: false,
+                    });
+                }
+            }
+        }
+
+        // ---- per-language build (Rust is the only real compile today) ----
+        let dylib_ext = build::host_dylib_extension();
+        let built_cdylib: Option<PathBuf> = if has_rust {
+            // Fast-fail before attempting the build if the toolchain is
+            // absent (clear message rather than a raw spawn error).
+            ensure_tool("cargo", "rust", "install the Rust toolchain — https://rustup.rs")?;
             sink.emit(BuildEvent::Started { language: "rust" });
             let cargo_name = build::read_cargo_package_name(pkg_dir)
                 .map_err(|e| other(&pkg_label, format!("resolving cargo crate name: {e}")))?;
@@ -162,7 +200,6 @@ impl PolyglotBuildOrchestrator {
         }
 
         // ---- stage into the build cache (temp + atomic rename) ----
-        let cache_slot = self.cache_slot(package);
         let temp_dir = stage_temp_dir(&cache_slot);
         // Clean any prior temp residue from an interrupted build.
         let _ = std::fs::remove_dir_all(&temp_dir);
@@ -171,7 +208,7 @@ impl PolyglotBuildOrchestrator {
 
         stage_into(pkg_dir, &temp_dir, built_cdylib.as_deref(), triple, dylib_ext)
             .map_err(|e| other(&pkg_label, format!("staging: {e}")))?;
-        write_sidecar(&temp_dir, triple, self.profile)
+        write_sidecar(&temp_dir, triple, self.profile, &inputs_hash)
             .map_err(|e| other(&pkg_label, format!("writing build sidecar: {e}")))?;
 
         atomic_swap(&temp_dir, &cache_slot)
@@ -396,19 +433,122 @@ fn stage_manifest_with_absolute_path_deps(pkg_dir: &Path, dest: &Path) -> anyhow
     Ok(())
 }
 
-/// Sidecar recording the toolchain context of the staged artifact —
-/// defense-in-depth atop the runtime `PluginDeclaration.abi_version`
-/// handshake, so a cached artifact built against a stale plugin ABI is
-/// detectable before dlopen.
-fn write_sidecar(dest: &Path, triple: &str, profile: build::CargoProfile) -> anyhow::Result<()> {
-    let body = format!(
-        "{{\n  \"abi_version\": {},\n  \"triple\": \"{}\",\n  \"profile\": \"{}\"\n}}\n",
-        streamlib_plugin_abi::STREAMLIB_ABI_VERSION,
-        triple,
-        profile.label(),
-    );
-    std::fs::write(dest.join(".streamlib-build.json"), body)?;
+/// Parsed `.streamlib-build.json` sidecar contents.
+struct Sidecar {
+    abi_version: u32,
+    triple: String,
+    profile: String,
+    inputs_hash: String,
+}
+
+const SIDECAR_NAME: &str = ".streamlib-build.json";
+
+/// Sidecar recording the staged artifact's toolchain context + the input
+/// fingerprint it was built from. The fingerprint drives `IfStale`
+/// staleness (language-agnostic — see [`compute_inputs_hash`]); the
+/// abi/triple/profile are defense-in-depth atop the runtime
+/// `PluginDeclaration.abi_version` handshake.
+fn write_sidecar(
+    dest: &Path,
+    triple: &str,
+    profile: build::CargoProfile,
+    inputs_hash: &str,
+) -> anyhow::Result<()> {
+    let body = serde_json::to_string_pretty(&serde_json::json!({
+        "abi_version": streamlib_plugin_abi::STREAMLIB_ABI_VERSION,
+        "triple": triple,
+        "profile": profile.label(),
+        "inputs_hash": inputs_hash,
+    }))?;
+    std::fs::write(dest.join(SIDECAR_NAME), body)?;
     Ok(())
+}
+
+/// Read + parse the sidecar from a staged dir. `None` if absent or
+/// unparseable (treated as "needs rebuild").
+fn read_sidecar(staged_dir: &Path) -> Option<Sidecar> {
+    let body = std::fs::read_to_string(staged_dir.join(SIDECAR_NAME)).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&body).ok()?;
+    Some(Sidecar {
+        abi_version: u32::try_from(v.get("abi_version")?.as_u64()?).ok()?,
+        triple: v.get("triple")?.as_str()?.to_string(),
+        profile: v.get("profile")?.as_str()?.to_string(),
+        inputs_hash: v.get("inputs_hash")?.as_str()?.to_string(),
+    })
+}
+
+/// Language-agnostic content fingerprint of a package's build inputs:
+/// every source file under `pkg_dir` (Rust `src/`, `python/`, `ts/`,
+/// `schemas/`, manifests), excluding build artifacts (`target/`, staged
+/// `lib/`), VCS, and caches. Paths are sorted so the digest is stable.
+/// This is the orchestrator's OWN staleness oracle — it does not depend
+/// on cargo, so it works for Python / Deno / schemas-only packages and
+/// for any standalone package repo.
+fn compute_inputs_hash(pkg_dir: &Path) -> anyhow::Result<String> {
+    use std::hash::{Hash, Hasher};
+
+    fn is_excluded(name: &std::ffi::OsStr) -> bool {
+        matches!(
+            name.to_str(),
+            Some("target" | ".git" | "lib" | "node_modules" | "__pycache__" | ".streamlib-build.json")
+        )
+    }
+
+    fn collect(dir: &Path, root: &Path, out: &mut Vec<(String, Vec<u8>)>) -> std::io::Result<()> {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let file_name = entry.file_name();
+            if is_excluded(&file_name) {
+                continue;
+            }
+            let ft = entry.file_type()?;
+            if ft.is_dir() {
+                collect(&path, root, out)?;
+            } else if ft.is_file() {
+                let rel = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .to_string();
+                out.push((rel, std::fs::read(&path)?));
+            }
+        }
+        Ok(())
+    }
+
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    collect(pkg_dir, pkg_dir, &mut files)?;
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for (rel, bytes) in &files {
+        rel.hash(&mut hasher);
+        bytes.hash(&mut hasher);
+    }
+    Ok(format!("{:016x}", hasher.finish()))
+}
+
+/// Fast-fail preflight: confirm a build tool is on `PATH` before
+/// attempting a build, so a missing toolchain surfaces as a clear
+/// [`BuildError::ToolNotAvailable`] rather than a raw spawn error.
+fn ensure_tool(tool: &str, language: &str, hint: &str) -> Result<(), BuildError> {
+    let ok = Command::new(tool)
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if ok {
+        Ok(())
+    } else {
+        Err(BuildError::ToolNotAvailable {
+            tool: tool.to_string(),
+            language: language.to_string(),
+            hint: hint.to_string(),
+        })
+    }
 }
 
 /// Replace `final_path` with `temp` atomically (best-effort): remove any
@@ -478,6 +618,7 @@ fn build_failed(package: &str, detail: String) -> BuildError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use streamlib_engine::core::runtime::BuildPolicy;
 
     /// A `BuildEventSink` that discards events (the materialize path
@@ -493,6 +634,7 @@ mod tests {
     /// a toolchain. Reverting `stage_into`/`write_sidecar` would drop the
     /// manifest or sidecar and fail the assertions.
     #[test]
+    #[serial]
     fn materializes_schemas_only_package_into_build_cache() {
         let home = tempfile::tempdir().unwrap();
         // SAFETY: single-threaded test; STREAMLIB_HOME read by build_cache_root.
@@ -556,6 +698,7 @@ mod tests {
     /// trivial standalone cdylib twice) — too heavy for the CI
     /// `--lib` run; invoke explicitly with `cargo test -- --ignored`.
     #[test]
+    #[serial]
     #[ignore = "shells to cargo build twice; run explicitly via --ignored"]
     fn ifstale_rebuilds_after_source_edit() {
         let home = tempfile::tempdir().unwrap();
@@ -623,6 +766,72 @@ mod tests {
         unsafe {
             std::env::remove_var("STREAMLIB_HOME");
         }
+    }
+
+    /// IfStale skips when the package's inputs are unchanged
+    /// (`rebuilt == false`) and rebuilds once a source file changes — the
+    /// language-agnostic fingerprint gate, no cargo involved (schemas-only
+    /// package). Reverting the hash check makes the second call rebuild
+    /// and the assertion fails.
+    #[test]
+    #[serial]
+    fn ifstale_skips_unchanged_then_rebuilds_on_edit_schemas_only() {
+        let home = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("STREAMLIB_HOME", home.path());
+        }
+
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(
+            src.path().join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: orch-stale\n  version: \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir(src.path().join("schemas")).unwrap();
+        let schema = src.path().join("schemas/foo.yaml");
+        std::fs::write(&schema, "metadata:\n  type: Foo\n").unwrap();
+
+        let request = BuildRequest {
+            package: streamlib_idents::PackageRef::new(
+                streamlib_idents::Org::new("tatolab").unwrap(),
+                streamlib_idents::Package::new("orch-stale").unwrap(),
+            ),
+            source: BuildSource::PackageDir(src.path().to_path_buf()),
+            policy: BuildPolicy::IfStale,
+            host_triple: build::host_target_triple().to_string(),
+        };
+        let orch = PolyglotBuildOrchestrator::default();
+
+        let first = orch.materialize(&request, &NullSink).expect("first materialize");
+        assert!(first.rebuilt, "first materialize must build");
+
+        let second = orch.materialize(&request, &NullSink).expect("second materialize");
+        assert!(
+            !second.rebuilt,
+            "unchanged inputs must skip the rebuild (IfStale fingerprint gate)"
+        );
+
+        // Edit a schema file → inputs fingerprint changes → rebuild.
+        std::fs::write(&schema, "metadata:\n  type: Foo\n  max_payload_bytes: 4096\n").unwrap();
+        let third = orch.materialize(&request, &NullSink).expect("third materialize");
+        assert!(third.rebuilt, "an edited schema must trigger a rebuild");
+
+        unsafe {
+            std::env::remove_var("STREAMLIB_HOME");
+        }
+    }
+
+    /// `ensure_tool` fast-fails with `ToolNotAvailable` for a missing tool
+    /// and succeeds for a present one — the preflight that stops a build
+    /// before a raw spawn error when the toolchain isn't installed.
+    #[test]
+    fn ensure_tool_detects_missing_toolchain() {
+        let err = ensure_tool("streamlib-no-such-tool-xyz", "rust", "install it")
+            .expect_err("a nonexistent tool must fail loud");
+        assert!(matches!(err, BuildError::ToolNotAvailable { .. }), "got: {err:?}");
+        // cargo is present in any environment that can run `cargo test`.
+        ensure_tool("cargo", "rust", "install the Rust toolchain")
+            .expect("cargo must be present in the test environment");
     }
 
     /// `Remote` / `SlpkgArchive` sources are rejected by the in-process

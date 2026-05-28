@@ -90,25 +90,49 @@ so a stale artifact can never be silently loaded.
 `BuildPolicy`:
 
 - `NeverBuild` — load the staged artifact as-is; never invoke a builder.
-- `IfStale` — (re)build iff the build tool's own fingerprint reports
-  changed inputs (near-instant when clean). The dev / runtime-authoring
-  default.
-- `AlwaysBuild` — invoke the tool unconditionally (the tool may still
-  short-circuit its compilation).
+- `IfStale` — (re)build iff inputs changed (see staleness below). The
+  dev / runtime-authoring default.
+- `AlwaysBuild` — build unconditionally (each tool may still short-circuit
+  its own compilation).
 
-### Staleness is the build tool's fingerprint — never mtime
+### Staleness — language-agnostic, never mtime
 
-This is the load-bearing correctness rule. The original trap was a
-staleness bug whose triggering edit lived in a **transitive dependency**
-of the cdylib (an engine-reachability change), not the package's own
-source. An mtime check (`source newer than .so?`) misses exactly that
-edit class and would re-ship the bug. cargo's own fingerprint already
-tracks the full transitive dep graph + features + rustflags + rustc
-version, so `IfStale` is implemented by **always invoking the tool and
-letting it short-circuit** — there is no engine-side staleness predicate
-to be wrong. Editing `streamlib-plugin-abi` (the FFI vtable contract)
-rebuilds every dependent plugin on next load for the same reason: cargo
-sees the dep graph changed.
+`IfStale` staleness is the orchestrator's **own content fingerprint of the
+package's source inputs** — every source file under the package dir (Rust
+`src/`, `python/`, `ts/`, `schemas/`, the manifests), excluding build
+artifacts (`target/`, staged `lib/`), VCS, and caches; recorded in the
+staged `.streamlib-build.json` sidecar. On the next load the orchestrator
+recomputes it: unchanged (+ matching ABI/triple/profile) → skip; changed →
+rebuild + re-stage. This is **not** cargo-specific — a Python-only,
+Deno-only, or schemas-only package never touches cargo, and the same gate
+works for a standalone package repo with no enclosing workspace.
+
+The one place cargo stays involved is **Rust packages only**: a Rust
+cdylib can link code *outside* the package dir (the engine, in a dev
+workspace) that a package-local fingerprint can't see — the original
+trap's triggering edit was exactly such a transitive change. So a package
+that contains Rust **always** runs `cargo build` (its own fingerprint
+catches own + transitive changes, incl. `streamlib-plugin-abi` edits, and
+short-circuits cheaply when clean); the package-local fingerprint gates
+the non-Rust languages and the overall skip decision. mtime is never used.
+
+### Fast-fail on missing tooling
+
+Before invoking a language's builder, the orchestrator preflights it
+(Rust → `cargo`/`rustc`; future Python → `uv`/`maturin`; Deno → `deno`).
+A missing toolchain surfaces as `BuildError::ToolNotAvailable { tool,
+language, hint }` *before* any build attempt — a clear, actionable error
+rather than a raw spawn failure mid-build.
+
+### No-orchestrator behavior: fail loud, no branching
+
+If a build-requiring policy (`IfStale` or `AlwaysBuild`) is reached with
+**no** orchestrator wired, the load fails loud
+(`BuildRequiredButNoOrchestrator`) — consistently, with no branching on
+package shape. Future agents get a clear signal instead of a
+silently-loaded, possibly-stale artifact. A no-build deployment uses
+`NeverBuild` / `InstalledCache` / `.slpkg`; a building one wires an
+orchestrator (`Runner::with_auto_build()`).
 
 ### No-orchestrator behavior: fail loud, no branching
 

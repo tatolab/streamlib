@@ -135,6 +135,17 @@ pub enum BuildError {
     #[error("build orchestrator does not support source: {0}")]
     UnsupportedSource(String),
 
+    /// A required build tool isn't installed / on `PATH`. Surfaced by a
+    /// preflight check before any build is attempted, so a missing
+    /// toolchain fails fast with an actionable message rather than a raw
+    /// spawn error mid-build.
+    #[error("build tool '{tool}' (needed for {language}) not found: {hint}")]
+    ToolNotAvailable {
+        tool: String,
+        language: String,
+        hint: String,
+    },
+
     /// A build tool exited non-zero. `detail` carries the actionable
     /// tail of the tool's output.
     #[error("{tool} build failed for '{package}': {detail}")]
