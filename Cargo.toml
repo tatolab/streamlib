@@ -131,6 +131,12 @@ rmp-serde = "1.3"
 # Hashing
 sha2 = "0.10"
 
+# Blocking HTTP client — used by the engine module-loader resolver to
+# fetch a remote `.slpkg` for `Strategy::Url`. Blocking (not async) by
+# design: the resolver runs on `spawn_blocking`, where a runtime-aware
+# client (reqwest::blocking) would panic on the ambient tokio context.
+ureq = "2"
+
 # Typed bitflags (used by streamlib-adapter-abi)
 bitflags = "2.6"
 

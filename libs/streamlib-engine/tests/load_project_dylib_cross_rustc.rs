@@ -62,6 +62,7 @@ use serial_test::serial;
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::schema_ident;
 use streamlib_engine::core::runtime::host_target_triple;
 
@@ -243,7 +244,7 @@ fn dlopen_cross_rustc_fixture_round_trips_every_beta_shape() {
     let output_path = tmp.path().join("beta_shape_round_trip.txt");
     let output_path_str = output_path.to_string_lossy().to_string();
 
-    let runtime = Runner::new().unwrap();
+    let runtime = Runner::with_auto_build().unwrap();
     runtime
         .add_module_with_blocking(
             module_ident_any_version!("tatolab", "cross-rustc-fixture"),

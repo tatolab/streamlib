@@ -87,16 +87,41 @@ pub enum AddModuleError {
     #[error("Manifest directory has no streamlib.yaml at {}", path.display())]
     ManifestDirectoryMissing { path: std::path::PathBuf },
 
-    /// A [`Strategy::Git`] / [`Strategy::Url`] source's git fetch failed
-    /// (network, auth, bad rev, etc.).
+    /// A [`Strategy::Git`] source's git fetch failed (network, auth, bad
+    /// rev, etc.).
     ///
     /// [`Strategy::Git`]: super::Strategy::Git
-    /// [`Strategy::Url`]: super::Strategy::Url
     #[error("Git fetch failed for '{package}' from {url}@{rev}: {detail}")]
     GitFetchFailed {
         package: streamlib_idents::PackageRef,
         url: String,
         rev: String,
+        detail: String,
+    },
+
+    /// A [`Strategy::Url`] source's remote `.slpkg` fetch failed —
+    /// unreadable `file://` path, HTTP error, unsupported scheme, or a
+    /// cache I/O failure. Network-only; mirrors [`Self::GitFetchFailed`].
+    ///
+    /// [`Strategy::Url`]: super::Strategy::Url
+    #[error("Remote .slpkg fetch failed for '{package}' from {url}: {detail}")]
+    UrlFetchFailed {
+        package: streamlib_idents::PackageRef,
+        url: String,
+        detail: String,
+    },
+
+    /// A [`Strategy::Url`] fetch produced bytes whose digest didn't match
+    /// the caller-supplied [`ArtifactChecksum`]. Fail-loud — never load an
+    /// artifact that doesn't match its integrity pin. `detail` names the
+    /// algorithm and the expected-vs-actual digests.
+    ///
+    /// [`Strategy::Url`]: super::Strategy::Url
+    /// [`ArtifactChecksum`]: super::ArtifactChecksum
+    #[error("Integrity check failed for '{package}' from {url}: {detail}")]
+    IntegrityCheckFailed {
+        package: streamlib_idents::PackageRef,
+        url: String,
         detail: String,
     },
 

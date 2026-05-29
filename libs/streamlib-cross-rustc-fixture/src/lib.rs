@@ -101,17 +101,20 @@ pub struct BetaShapeRoundTrip {}
 #[cfg(target_os = "linux")]
 fn run_beta_shape_round_trip(ctx: &RuntimeContextFullAccess<'_>) -> Result<String> {
     let gpu_limited = ctx.gpu_limited_access();
-    let ring = gpu_limited.escalate(|full| {
-        full.create_texture_ring(
-            64,
-            64,
-            TextureFormat::Rgba8Unorm,
-            TextureUsages::COPY_DST
-                | TextureUsages::TEXTURE_BINDING
-                | TextureUsages::STORAGE_BINDING,
-            2,
-        )
-    })?;
+    // FullAccess lifecycle bodies (this runs from Manual `start()`) already
+    // hold the escalate gate via the cdylib spawn-op scope (#1072/#1075), so
+    // an inner `escalate(...)` would re-enter the gate on the same thread and
+    // panic. Call the FullAccess vtable directly instead (cdylib-safe).
+    let full = ctx.gpu_full_access();
+    let ring = full.create_texture_ring(
+        64,
+        64,
+        TextureFormat::Rgba8Unorm,
+        TextureUsages::COPY_DST
+            | TextureUsages::TEXTURE_BINDING
+            | TextureUsages::STORAGE_BINDING,
+        2,
+    )?;
 
     // -------- TextureRing slot β-shape end-to-end (#947) --------
     //
@@ -182,9 +185,7 @@ fn run_beta_shape_round_trip(ctx: &RuntimeContextFullAccess<'_>) -> Result<Strin
     // without one, record SKIPPED_NO_DMA_BUF the same way RT-kernel
     // construction records SKIPPED_NO_RT_SUPPORT.
     let native_handle_summary =
-        match gpu_limited.escalate(|full| {
-            full.acquire_render_target_dma_buf_image(64, 64, TextureFormat::Bgra8Unorm)
-        }) {
+        match full.acquire_render_target_dma_buf_image(64, 64, TextureFormat::Bgra8Unorm) {
             Ok(dma_buf_texture) => {
                 match dma_buf_texture.native_handle() {
                     Some(NativeTextureHandle::DmaBuf { fd }) if fd >= 0 => {
@@ -214,7 +215,7 @@ fn run_beta_shape_round_trip(ctx: &RuntimeContextFullAccess<'_>) -> Result<Strin
             Err(_) => "Texture::native_handle:SKIPPED_NO_DMA_BUF\n",
         };
 
-    gpu_limited.escalate(|full| {
+    {
         let mut summary = String::new();
         summary.push_str("TextureRing:OK\n");
         summary.push_str(native_handle_summary);
@@ -463,7 +464,7 @@ fn run_beta_shape_round_trip(ctx: &RuntimeContextFullAccess<'_>) -> Result<Strin
         }
 
         Ok(summary)
-    })
+    }
 }
 
 impl ManualProcessor for BetaShapeRoundTrip::Processor {

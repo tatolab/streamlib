@@ -411,6 +411,128 @@ impl Drop for StreamlibHomeRestore {
     }
 }
 
+/// Assemble a minimal schemas-only `.slpkg` (a ZIP with `streamlib.yaml`
+/// plus one schema file) at `out`, returning the SHA-256 hex of the
+/// archive bytes for an integrity-pin assertion.
+fn write_schemas_only_slpkg(out: &std::path::Path, name: &str, type_name: &str) -> String {
+    use std::io::Write;
+    let stem = type_name.to_ascii_lowercase();
+    let manifest = format!(
+        "package:\n  org: tatolab\n  name: {name}\n  version: \"0.1.0\"\n\
+         schemas:\n  {type_name}:\n    file: schemas/{stem}.yaml\n"
+    );
+    let schema = format!("metadata:\n  type: {type_name}\n  max_payload_bytes: 4096\n");
+
+    let mut buf = Vec::new();
+    {
+        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+        let opts: zip::write::FileOptions<()> =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zw.start_file("streamlib.yaml", opts).unwrap();
+        zw.write_all(manifest.as_bytes()).unwrap();
+        zw.start_file(format!("schemas/{stem}.yaml"), opts).unwrap();
+        zw.write_all(schema.as_bytes()).unwrap();
+        zw.finish().unwrap();
+    }
+    std::fs::write(out, &buf).unwrap();
+
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(&buf);
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// End-to-end: `Strategy::Url` against a `file://` URL fetches the
+/// `.slpkg`, verifies the integrity pin, extracts, resolves (schemas-only
+/// → load-as-is), and registers the schema — proving the full
+/// fetch→verify→extract→resolve→register path. Locks exit criteria 1 & 2.
+#[test]
+#[serial]
+fn url_strategy_fetches_extracts_and_registers_schema() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let prev_home = std::env::var_os("STREAMLIB_HOME");
+    unsafe {
+        std::env::set_var("STREAMLIB_HOME", sandbox.path());
+    }
+    let _restore = StreamlibHomeRestore(prev_home);
+
+    let src = tempfile::tempdir().unwrap();
+    let slpkg = src.path().join("url-pkg.slpkg");
+    let sha = write_schemas_only_slpkg(&slpkg, "url-fetch-pkg", "UrlFetchSchema");
+    let url = format!("file://{}", slpkg.display());
+
+    let canonical = "@tatolab/url-fetch-pkg/UrlFetchSchema";
+    assert!(
+        crate::core::embedded_schemas::get_embedded_schema_definition(canonical).is_none(),
+        "schema must not exist before the URL load"
+    );
+
+    let runtime = Runner::new().unwrap();
+    runtime
+        .add_module_with_blocking(
+            streamlib_idents::ModuleIdent::any(
+                streamlib_idents::Org::new("tatolab").unwrap(),
+                streamlib_idents::Package::new("url-fetch-pkg").unwrap(),
+            ),
+            Strategy::Url {
+                url,
+                build: BuildPolicy::NeverBuild,
+                checksum: Some(ArtifactChecksum::Sha256(sha)),
+            },
+        )
+        .expect("Strategy::Url must fetch, verify, extract, resolve, and register");
+
+    assert!(
+        crate::core::embedded_schemas::get_embedded_schema_definition(canonical).is_some(),
+        "schema must be registered after the URL load — the full path did not run if this fails"
+    );
+}
+
+/// A wrong integrity pin must fail the whole load loud — never register a
+/// package whose bytes don't match the pin. Locks exit criterion 2's
+/// negative path through the public runtime surface.
+#[test]
+#[serial]
+fn url_strategy_rejects_checksum_mismatch() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let prev_home = std::env::var_os("STREAMLIB_HOME");
+    unsafe {
+        std::env::set_var("STREAMLIB_HOME", sandbox.path());
+    }
+    let _restore = StreamlibHomeRestore(prev_home);
+
+    let src = tempfile::tempdir().unwrap();
+    let slpkg = src.path().join("url-pkg.slpkg");
+    write_schemas_only_slpkg(&slpkg, "url-bad-pkg", "UrlBadSchema");
+    let url = format!("file://{}", slpkg.display());
+
+    let runtime = Runner::new().unwrap();
+    let err = runtime
+        .add_module_with_blocking(
+            streamlib_idents::ModuleIdent::any(
+                streamlib_idents::Org::new("tatolab").unwrap(),
+                streamlib_idents::Package::new("url-bad-pkg").unwrap(),
+            ),
+            Strategy::Url {
+                url,
+                build: BuildPolicy::NeverBuild,
+                checksum: Some(ArtifactChecksum::Sha256("00".repeat(32))),
+            },
+        )
+        .expect_err("a mismatched integrity pin must fail the load");
+    assert!(
+        matches!(err, AddModuleError::IntegrityCheckFailed { .. }),
+        "expected IntegrityCheckFailed, got: {err:?}"
+    );
+    assert!(
+        crate::core::embedded_schemas::get_embedded_schema_definition(
+            "@tatolab/url-bad-pkg/UrlBadSchema"
+        )
+        .is_none(),
+        "no schema may register when the integrity check fails"
+    );
+}
+
 #[test]
 #[serial]
 fn path_strategy_resolves_registry_dep_via_installed_cache() {
