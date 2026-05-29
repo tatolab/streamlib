@@ -13,7 +13,7 @@ use core::ffi::c_void;
 /// buffer types, `TextureRegistration`, `RhiCommandQueue`,
 /// `CommandBuffer`, `SurfaceStore`) carries its own clone/drop
 /// callback pair so refcount accounting runs in host-compiled
-/// code regardless of caller DSO. Method-dispatch callbacks
+/// code regardless of caller plugin. Method-dispatch callbacks
 /// cover every cdylib-callable inherent method on
 /// `GpuContextLimitedAccess`.
 ///
@@ -73,7 +73,7 @@ use core::ffi::c_void;
 ///   read-side counterpart of v12's `set_/clear_` pair: cdylib
 ///   consumers (the in-tree consumer is `LinuxDisplayProcessor`'s
 ///   render loop) clone the host's published
-///   `Arc<HostVulkanTimelineSemaphore>` across the FFI to GPU-wait
+///   `Arc<HostVulkanTimelineSemaphore>` across the plugin ABI to GPU-wait
 ///   on the producer's writeback timeline. Mirrors the v9
 ///   `host_vulkan_device_arc` FullAccess pattern: the host callback
 ///   `Arc::into_raw`s a fresh clone (or returns null when no
@@ -162,7 +162,7 @@ pub struct GpuContextLimitedAccessVTable {
     pub drop_pixel_buffer: unsafe extern "C" fn(handle: *const c_void),
 
     // -------------------------------------------------------------------------
-    // PixelBuffer method-dispatch (eliminates cross-DSO Arc::from_raw)
+    // PixelBuffer method-dispatch (eliminates plugin ABI Arc::from_raw)
     // -------------------------------------------------------------------------
     //
     // The remaining non-cached `PixelBuffer` methods dispatch through
@@ -178,7 +178,7 @@ pub struct GpuContextLimitedAccessVTable {
     /// locking. Cdylib callers technically can call it through the
     /// vtable today, but the engine restricts the cdylib-facing
     /// `PixelBuffer::strong_count` API to `pub(crate)` so the
-    /// cross-DSO path is host-only by visibility. Calling on a null
+    /// plugin ABI path is host-only by visibility. Calling on a null
     /// pointer returns `0`.
     pub strong_count_pixel_buffer: unsafe extern "C" fn(handle: *const c_void) -> usize,
 
@@ -507,7 +507,7 @@ pub struct GpuContextLimitedAccessVTable {
     pub drop_rhi_command_queue: unsafe extern "C" fn(handle: *const c_void),
 
     /// Create a new `CommandBuffer` from a queue. On success writes a
-    /// fresh `CommandBuffer` (Box-handle β-shape) into `*out_cb` and
+    /// fresh `CommandBuffer` (Box-handle PluginAbiObject) into `*out_cb` and
     /// returns 0; on failure writes a UTF-8 error message into
     /// `err_buf` and returns non-zero.
     pub create_command_buffer_from_queue: unsafe extern "C" fn(
@@ -560,7 +560,7 @@ pub struct GpuContextLimitedAccessVTable {
     /// Return an owned `RhiCommandQueue` view of the host's shared
     /// command queue (refcount bumped on the underlying
     /// `Arc<RhiCommandQueueInner>`). Cdylib's caller releases via
-    /// `drop_rhi_command_queue`. Writes the β-shape into
+    /// `drop_rhi_command_queue`. Writes the PluginAbiObject into
     /// `*out_queue`; returns 0 on success, non-zero on internal
     /// failure (e.g. null gpu handle).
     pub command_queue: unsafe extern "C" fn(
@@ -587,7 +587,7 @@ pub struct GpuContextLimitedAccessVTable {
     /// Copy a host-visible pixel buffer's contents into a
     /// pre-allocated device-local texture. Linux-only on the host
     /// side; non-Linux stubs return non-zero. `pixel_buffer` and
-    /// `texture` are `*const PixelBuffer` / `*const Texture` β-shape
+    /// `texture` are `*const PixelBuffer` / `*const Texture` PluginAbiObject
     /// pointers.
     pub copy_pixel_buffer_to_texture: unsafe extern "C" fn(
         gpu_handle: *const c_void,
@@ -635,10 +635,10 @@ pub struct GpuContextLimitedAccessVTable {
     // SurfaceStoreVTable; these two callbacks bridge from
     // GpuContextLimitedAccess to that subsystem.
 
-    /// Return an owned [`SurfaceStore`] β-shape if the host has one,
-    /// or a null-handle β-shape ("None") otherwise. Always returns 0;
+    /// Return an owned [`SurfaceStore`] PluginAbiObject if the host has one,
+    /// or a null-handle PluginAbiObject ("None") otherwise. Always returns 0;
     /// callers branch on whether the written `SurfaceStore`'s handle
-    /// is null. Writes a fresh β-shape (Arc refcount bumped) into
+    /// is null. Writes a fresh PluginAbiObject (Arc refcount bumped) into
     /// `*out_store`.
     pub surface_store: unsafe extern "C" fn(
         gpu_handle: *const c_void,
@@ -647,7 +647,7 @@ pub struct GpuContextLimitedAccessVTable {
 
     /// Convenience method: check out a surface from the engine's
     /// `SurfaceStore` by `surface_id` (assumes the store exists).
-    /// Writes a fresh `PixelBuffer` β-shape into `*out_pixel_buffer`
+    /// Writes a fresh `PixelBuffer` PluginAbiObject into `*out_pixel_buffer`
     /// on success.
     pub check_out_surface: unsafe extern "C" fn(
         gpu_handle: *const c_void,
@@ -669,7 +669,7 @@ pub struct GpuContextLimitedAccessVTable {
     /// `PixelBufferPoolId`'s string bytes (capped at
     /// `out_pool_id_cap`; `*out_pool_id_len` receives the actual
     /// length, truncated to fit). `*out_pixel_buffer` receives a
-    /// fresh `PixelBuffer` β-shape on success.
+    /// fresh `PixelBuffer` PluginAbiObject on success.
     ///
     /// `format_raw` is the `#[repr(u32)]` discriminant of
     /// [`streamlib_consumer_rhi::PixelFormat`].
@@ -831,10 +831,10 @@ pub struct GpuContextLimitedAccessVTable {
     /// Mirrors the Arc-borrow-+-strong-count-bump pattern
     /// [`Self::register_texture`] uses for `Arc<TextureInner>`.
     ///
-    /// **Arc-raw-pointer transit** — not a layout-stable β-shape.
+    /// **Arc-raw-pointer transit** — not a layout-stable PluginAbiObject.
     /// In-tree consumers (camera) ride this freely because they're
     /// built in the same workspace as the engine. Cross-repo plugin
-    /// distribution will need a β-shape lift for
+    /// distribution will need a PluginAbiObject lift for
     /// `HostVulkanTimelineSemaphore`; tracked as a future follow-up
     /// alongside `create_timeline_semaphore`'s identical caveat.
     ///
@@ -913,7 +913,7 @@ pub struct GpuContextLimitedAccessVTable {
     /// independent strong count.
     ///
     /// Returns `*const c_void` carrying the leaked Arc pointer (a
-    /// `*const HostVulkanTimelineSemaphore` widened to the FFI
+    /// `*const HostVulkanTimelineSemaphore` widened to the plugin ABI
     /// type), or null when no producer has published a timeline
     /// yet, when the slot was cleared via
     /// [`Self::clear_video_source_timeline_semaphore`], when
@@ -924,7 +924,7 @@ pub struct GpuContextLimitedAccessVTable {
     /// `HostVulkanTimelineSemaphore` is not `#[repr(C)]`; in-tree
     /// workspace plugin cdylibs share the host's rustc + dep graph
     /// and ride this freely. Cross-repo plugin distribution awaits
-    /// a β-shape lift of `HostVulkanTimelineSemaphore` (the same
+    /// a PluginAbiObject lift of `HostVulkanTimelineSemaphore` (the same
     /// dormant work the v12 set/clear pair flagged).
     ///
     /// Linux-only on the host side; non-Linux stubs return null.

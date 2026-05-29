@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Cross-DSO host-services callback table.
+//! Plugin ABI host-services callback table.
 //!
 //! Companion to `streamlib-plugin-abi`'s [`HostServices`] ABI
 //! contract. This module owns:
@@ -14,7 +14,7 @@
 //!   `STREAMLIB_PLUGIN.register` callback.
 //! - **Cdylib-side `install_host_services` helper** that the cdylib's
 //!   `export_plugin!` macro calls at register time. The helper
-//!   validates layout, stores the callback table in a per-DSO
+//!   validates layout, stores the callback table in a per-plugin
 //!   [`HOST_CALLBACKS`] static, caches the host's tokio handle in
 //!   [`HOST_TOKIO_HANDLE`] for cdylib-side async-lifecycle wrappers,
 //!   installs the cdylib's tracing `ForwardingSubscriber` and
@@ -27,8 +27,8 @@
 //! copy of streamlib-engine (host binary, every dlopen'd cdylib) has
 //! its own [`PUBSUB`], its own schema registry, its own
 //! `tracing-core::GLOBAL_DISPATCH`, its own `iceoryx2_log::LOGGER`.
-//! Passing `&'static T` references across the FFI would couple
-//! every consumer to byte-identical type layouts across DSOs,
+//! Passing `&'static T` references across the plugin ABI would couple
+//! every consumer to byte-identical type layouts across plugins,
 //! breaking streamlib's multi-builder deployment model.
 //!
 //! The callback-table shape removes that coupling: only `extern "C"
@@ -37,7 +37,7 @@
 //! paths through them (`PUBSUB.publish`, `register_schema`,
 //! `get_embedded_schema_definition`, `tracing::*!`,
 //! `iceoryx2_log::*`) route through the host's fn pointers instead
-//! of through the local DSO's state.
+//! of through the local plugin's state.
 //!
 //! Processor registration follows the same shape: cdylib's
 //! `RegisterHelper::register::<P>()` monomorphizes a [`ProcessorVTable`]
@@ -125,7 +125,7 @@ pub use vulkan_kernels::{
 };
 
 // =============================================================================
-// HostCallbacks — per-DSO cache of the host's fn pointers
+// HostCallbacks — per-plugin cache of the host's fn pointers
 // =============================================================================
 
 /// Cached copy of the host's callback table, stored in
@@ -278,7 +278,7 @@ pub struct HostCallbacks {
         *const streamlib_plugin_abi::RhiCommandRecorderMethodsVTable,
     /// Host-installed [`OutputWriterVTable`] pointer. May be null
     /// when the host doesn't wire iceoryx2 transport; cdylib's
-    /// `OutputWriter` β-shape methods short-circuit cleanly when
+    /// `OutputWriter` PluginAbiObject methods short-circuit cleanly when
     /// the vtable is null. Sourced from
     /// [`HostServices::output_writer_vtable`] at install time
     /// (issue #894).
@@ -286,7 +286,7 @@ pub struct HostCallbacks {
         *const streamlib_plugin_abi::OutputWriterVTable,
     /// Host-installed [`InputMailboxesVTable`] pointer. May be
     /// null when the host doesn't wire iceoryx2 transport; cdylib's
-    /// `InputMailboxes` β-shape methods short-circuit cleanly when
+    /// `InputMailboxes` PluginAbiObject methods short-circuit cleanly when
     /// the vtable is null. Sourced from
     /// [`HostServices::input_mailboxes_vtable`] at install time
     /// (issue #894).
@@ -299,16 +299,16 @@ pub struct HostCallbacks {
 unsafe impl Send for HostCallbacks {}
 unsafe impl Sync for HostCallbacks {}
 
-/// Per-DSO cache of the host's callback table. `OnceLock` semantics:
+/// Per-plugin cache of the host's callback table. `OnceLock` semantics:
 /// the cdylib's `install_host_services` writes once at register
 /// time; subsequent reads from `PUBSUB.publish`, `register_schema`,
 /// the tracing `ForwardingSubscriber`, and the iceoryx2 forwarder
-/// retrieve the same value. **The host's DSO never populates this**
+/// retrieve the same value. **The host binary never populates this**
 /// — host-side code reads its local statics directly, bypassing the
 /// callback table.
 static HOST_CALLBACKS: OnceLock<HostCallbacks> = OnceLock::new();
 
-/// Returns this DSO's callback table if a cdylib's
+/// Returns this plugin's callback table if a cdylib's
 /// `install_host_services` has populated it. `None` in the host
 /// binary; `Some(_)` in any cdylib that has registered.
 pub fn host_callbacks() -> Option<&'static HostCallbacks> {
@@ -319,14 +319,14 @@ pub fn host_callbacks() -> Option<&'static HostCallbacks> {
 // install_host_services — cdylib entry point
 // =============================================================================
 
-/// Wire the host's services into this DSO. Called by a plugin
+/// Wire the host's services into this plugin. Called by a plugin
 /// cdylib's `STREAMLIB_PLUGIN.register` callback via the
 /// [`streamlib_plugin_abi::export_plugin!`] macro.
 ///
 /// Validates [`HostServices::abi_layout_version`] against
 /// [`HOST_SERVICES_LAYOUT_VERSION`], stores the callback table in
 /// [`HOST_CALLBACKS`], installs the cdylib's tracing
-/// [`ForwardingSubscriber`] as the per-DSO `GLOBAL_DISPATCH`,
+/// [`ForwardingSubscriber`] as the per-plugin `GLOBAL_DISPATCH`,
 /// installs the cdylib's iceoryx2 `Log` forwarder, and returns a
 /// [`RegisterHelper`] the macro uses to register processor types
 /// with the host's registry.
@@ -606,12 +606,12 @@ impl RegisterHelper {
         // process (where this code path also runs when a processor
         // is registered inline via `PROCESSOR_REGISTRY.register::<P>()`),
         // `HOST_CALLBACKS` is empty — the host-static path bypasses
-        // FFI and registers directly with the factory.
+        // the plugin ABI and registers directly with the factory.
         if let Some(callbacks) = host_callbacks() {
             register_via_callback::<P>(callbacks);
         } else {
             // Host-static path: same vtable shape, but registered
-            // directly with the in-process factory (no FFI hop).
+            // directly with the in-process factory (no plugin ABI hop).
             crate::core::processors::PROCESSOR_REGISTRY.register::<P>();
         }
     }
@@ -649,7 +649,7 @@ where
 
     let vtable = crate::core::plugin::processor_vtable::vtable_for::<P>();
 
-    // SAFETY: msgpack bytes and vtable pointer live in this DSO's
+    // SAFETY: msgpack bytes and vtable pointer live in this plugin's
     // process address space for the duration of the call. The host's
     // implementation copies any data it needs to retain (the
     // descriptor is decoded into a `ProcessorDescriptor`; the vtable
@@ -695,7 +695,7 @@ unsafe impl Sync for HostServiceImpls {}
 // Every host-side callback below routes its body through
 // [`run_host_extern_c`] so a panic in host code is caught and
 // converted to a logged error plus a sensible default return value
-// at the FFI boundary, instead of corrupting the cdylib's stack.
+// at the plugin ABI, instead of corrupting the cdylib's stack.
 //
 // The default-on-panic value per callback type:
 //   - void                  → `()`
@@ -707,14 +707,14 @@ unsafe impl Sync for HostServiceImpls {}
 //   - `*const c_void` / `*mut u8` / `*const ProcessorVTable` → `null` / `null_mut`
 
 /// Run an extern "C" callback body inside [`std::panic::catch_unwind`].
-/// Panics are logged and converted to `default_on_panic` so the FFI
-/// boundary stays sound. `callback_name` is included in the error
+/// Panics are logged and converted to `default_on_panic` so the plugin
+/// ABI stays sound. `callback_name` is included in the error
 /// log to make the source obvious in mixed-callback traces.
 ///
 /// Uses [`std::panic::AssertUnwindSafe`] internally because callback
 /// bodies routinely touch raw pointers and `*mut` outputs that aren't
 /// `UnwindSafe` by default — the pointer dereferences are sound under
-/// the FFI contract regardless of unwinding.
+/// the plugin ABI contract regardless of unwinding.
 ///
 /// Re-export of the canonical panic-safety helper in
 /// [`streamlib_adapter_abi::ffi`]. Every extern "C" boundary
@@ -740,7 +740,7 @@ unsafe extern "C" fn host_tracing_register_callsite(
             // every event reaches `host_tracing_emit`, where the
             // host's filter actually decides.
             //
-            // Trade-off: cdylib pays for the FFI hop even on
+            // Trade-off: cdylib pays for the plugin ABI hop even on
             // filtered-out events, plus a string copy of the
             // message. A future refinement could push a (target,
             // level)-keyed pre-filter here; the current ABI shape
@@ -1028,7 +1028,7 @@ unsafe extern "C" fn host_processor_register(
 }
 
 // =============================================================================
-// FFI conversions
+// Plugin ABI conversions
 // =============================================================================
 
 pub(crate) fn tracing_level_to_host(level: tracing::Level) -> HostLogLevel {
@@ -1133,7 +1133,7 @@ fn emit_via_host_dispatch(
 
 /// Host-facing helpers used by `Runner::add_module` (and the
 /// `streamlib-runtime` binary's plugin loader) to assemble a
-/// [`HostServices`] payload pointing at this DSO's callback
+/// [`HostServices`] payload pointing at this plugin's callback
 /// implementations.
 pub mod runtime_facing {
     use super::{

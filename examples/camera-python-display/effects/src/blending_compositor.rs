@@ -792,7 +792,7 @@ fn color_info_matches_working_space(input: Option<&ColorInfo>, working: &ColorIn
 
 /// One resolved input layer — texture + the registration its
 /// `current_layout` came from. Holding the [`TextureRegistration`]
-/// (β-shape, cheap Clone via vtable refcount bump) lets the
+/// (PluginAbiObject, cheap Clone via vtable refcount bump) lets the
 /// compositor update layout state via
 /// [`TextureRegistration::update_layout`] after the render submit
 /// completes.

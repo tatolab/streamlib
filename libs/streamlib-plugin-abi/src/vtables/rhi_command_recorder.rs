@@ -13,7 +13,7 @@ use crate::repr::{DrawCallRepr, DrawIndexedCallRepr, ImageCopyRegionRepr, Semaph
 ///   to drive the host-owned `RhiCommandRecorder` per frame —
 ///   `begin`, `record_image_barrier`, `record_buffer_barrier`,
 ///   `record_dispatch`, `record_copy_image_to_buffer`,
-///   `submit_signaling_timeline`. Without these the β-shape's
+///   `submit_signaling_timeline`. Without these the PluginAbiObject's
 ///   `host_inner()` / `host_inner_mut()` panic-guards fire from
 ///   cdylib code on every per-frame call.
 /// - v2: appends two PixelBuffer-flavored sibling slots —
@@ -33,7 +33,7 @@ use crate::repr::{DrawCallRepr, DrawIndexedCallRepr, ImageCopyRegionRepr, Semaph
 ///   `vulkan_device_ref()` / `host_inner_mut()` directly:
 ///   `record_swapchain_image_barrier` (raw `VkImage` layout
 ///   transitions on swapchain images — distinct from the v1
-///   `record_image_barrier` which takes a `Texture` β-shape),
+///   `record_image_barrier` which takes a `Texture` PluginAbiObject),
 ///   `cmd_begin_dynamic_rendering` and `cmd_end_dynamic_rendering`
 ///   (dynamic-rendering pass bracketing against a caller-owned
 ///   `VkImageView` — no `VkRenderPass` / `VkFramebuffer` needed),
@@ -65,7 +65,7 @@ use crate::repr::{DrawCallRepr, DrawIndexedCallRepr, ImageCopyRegionRepr, Semaph
 pub const RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 5;
 
 /// Per-type method-dispatch vtable for the `RhiCommandRecorder`
-/// β-shape (Phase E sub-lift slice B — #984).
+/// PluginAbiObject (Phase E sub-lift slice B — #984).
 ///
 /// `RhiCommandRecorder` keeps `clone_command_recorder` /
 /// `drop_command_recorder` dispatch on the parent
@@ -74,7 +74,7 @@ pub const RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 5;
 /// dispatch through (`begin`, `record_image_barrier`,
 /// `record_buffer_barrier`, `record_dispatch`,
 /// `record_copy_image_to_buffer`, `submit_signaling_timeline`).
-/// Without these the β-shape's `host_inner_mut()` / `host_inner()`
+/// Without these the PluginAbiObject's `host_inner_mut()` / `host_inner()`
 /// panic-guards fire from cdylib code on every per-frame call.
 ///
 /// v3 (#1066) appends `record_swapchain_image_barrier`,
@@ -112,7 +112,7 @@ pub struct RhiCommandRecorderMethodsVTable {
 
     /// Begin a new recording. `recorder_handle` is the
     /// `Box::into_raw(Box<RhiCommandRecorderInner>)` pointer from
-    /// the β-shape's `handle` field. Returns 0 on success; non-zero
+    /// the PluginAbiObject's `handle` field. Returns 0 on success; non-zero
     /// with UTF-8 message in `err_buf` on failure. Linux-only on the
     /// host side; non-Linux stubs return non-zero.
     pub begin: unsafe extern "C" fn(
@@ -133,7 +133,7 @@ pub struct RhiCommandRecorderMethodsVTable {
     ///   `Box::into_raw(Box<RhiCommandRecorderInner>)` pointer.
     /// - `texture_handle` is
     ///   `Arc::into_raw(Arc<TextureInner>)`-shaped from the
-    ///   `Texture` β-shape's `handle` field (borrowed).
+    ///   `Texture` PluginAbiObject's `handle` field (borrowed).
     pub record_image_barrier: unsafe extern "C" fn(
         recorder_handle: *const c_void,
         texture_handle: *const c_void,
@@ -158,7 +158,7 @@ pub struct RhiCommandRecorderMethodsVTable {
     ///
     /// - `storage_buffer_handle` is
     ///   `Arc::into_raw(Arc<HostVulkanBufferInner>)`-shaped from
-    ///   the `StorageBuffer` β-shape's `handle` field (borrowed).
+    ///   the `StorageBuffer` PluginAbiObject's `handle` field (borrowed).
     pub record_buffer_barrier: unsafe extern "C" fn(
         recorder_handle: *const c_void,
         storage_buffer_handle: *const c_void,
@@ -174,7 +174,7 @@ pub struct RhiCommandRecorderMethodsVTable {
     /// Record a compute dispatch via
     /// `VulkanComputeKernel::record`. `kernel_handle` is the
     /// `Arc::into_raw(Arc<VulkanComputeKernelInner>)` pointer from
-    /// the kernel β-shape's `handle` field (borrowed).
+    /// the kernel PluginAbiObject's `handle` field (borrowed).
     pub record_dispatch: unsafe extern "C" fn(
         recorder_handle: *const c_void,
         kernel_handle: *const c_void,
@@ -192,10 +192,10 @@ pub struct RhiCommandRecorderMethodsVTable {
     ///
     /// - `src_texture_handle` is
     ///   `Arc::into_raw(Arc<TextureInner>)`-shaped from the source
-    ///   `Texture` β-shape's `handle` field (borrowed).
+    ///   `Texture` PluginAbiObject's `handle` field (borrowed).
     /// - `dst_storage_buffer_handle` is
     ///   `Arc::into_raw(Arc<HostVulkanBufferInner>)`-shaped from the
-    ///   destination `StorageBuffer` β-shape's `handle` field
+    ///   destination `StorageBuffer` PluginAbiObject's `handle` field
     ///   (borrowed).
     /// - `region` points at an [`crate::ImageCopyRegionRepr`] the host
     ///   reads once at call time.
@@ -233,7 +233,7 @@ pub struct RhiCommandRecorderMethodsVTable {
     ///
     /// - `pixel_buffer_handle` is
     ///   `Arc::into_raw(Arc<PixelBufferRef>)`-shaped from the
-    ///   `PixelBuffer` β-shape's `handle` field (borrowed).
+    ///   `PixelBuffer` PluginAbiObject's `handle` field (borrowed).
     pub record_pixel_buffer_barrier: unsafe extern "C" fn(
         recorder_handle: *const c_void,
         pixel_buffer_handle: *const c_void,
@@ -254,10 +254,10 @@ pub struct RhiCommandRecorderMethodsVTable {
     ///
     /// - `src_texture_handle` is
     ///   `Arc::into_raw(Arc<TextureInner>)`-shaped from the source
-    ///   `Texture` β-shape's `handle` field (borrowed).
+    ///   `Texture` PluginAbiObject's `handle` field (borrowed).
     /// - `dst_pixel_buffer_handle` is
     ///   `Arc::into_raw(Arc<PixelBufferRef>)`-shaped from the
-    ///   destination `PixelBuffer` β-shape's `handle` field
+    ///   destination `PixelBuffer` PluginAbiObject's `handle` field
     ///   (borrowed).
     /// - `region` points at an [`crate::ImageCopyRegionRepr`] the host
     ///   reads once at call time.
@@ -278,7 +278,7 @@ pub struct RhiCommandRecorderMethodsVTable {
 
     /// Record a layout transition on a raw `VkImage` handle —
     /// distinct from v1 [`Self::record_image_barrier`] which takes
-    /// a `Texture` β-shape. Used by `VulkanPresentTarget` to
+    /// a `Texture` PluginAbiObject. Used by `VulkanPresentTarget` to
     /// transition swapchain images (UNDEFINED →
     /// COLOR_ATTACHMENT_OPTIMAL and COLOR_ATTACHMENT_OPTIMAL →
     /// PRESENT_SRC_KHR) between cdylib-driven render-frame
@@ -369,7 +369,7 @@ pub struct RhiCommandRecorderMethodsVTable {
     ///
     /// - `kernel_handle` is the
     ///   `Arc::into_raw(Arc<VulkanGraphicsKernelInner>)` pointer
-    ///   from the kernel β-shape's `handle` field (borrowed).
+    ///   from the kernel PluginAbiObject's `handle` field (borrowed).
     /// - `draw` points at a [`crate::DrawCallRepr`] the host reads once
     ///   at call time.
     pub record_draw: unsafe extern "C" fn(

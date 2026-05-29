@@ -10,7 +10,7 @@
 //! same `make_*_borrow` ManuallyDrop pattern the compute / graphics
 //! kernel wrappers use, decodes the typed integer enum payloads
 //! (`VulkanLayout` / `VulkanStage` / `VulkanAccess`), runs the inner
-//! method, and converts the `Result<()>` into the FFI's `i32 +
+//! method, and converts the `Result<()>` into the plugin ABI's `i32 +
 //! err_buf` shape. All bodies wrapped in `run_host_extern_c` so a
 //! panic in the inner method becomes a non-zero return.
 
@@ -35,13 +35,13 @@ use super::shared::wire::write_err;
 // same `make_*_borrow` ManuallyDrop pattern the compute / graphics
 // kernel wrappers use, decodes the typed integer enum payloads
 // (`VulkanLayout` / `VulkanStage` / `VulkanAccess`), runs the inner
-// method, and converts the `Result<()>` into the FFI's `i32 +
+// method, and converts the `Result<()>` into the plugin ABI's `i32 +
 // err_buf` shape. All bodies are wrapped in `run_host_extern_c` so a
 // panic in the inner method becomes a non-zero return.
 // =============================================================================
 
 /// SAFETY: caller must hand a `handle` that came from
-/// `Box::into_raw(Box<RhiCommandRecorderInner>)` (the β-shape's
+/// `Box::into_raw(Box<RhiCommandRecorderInner>)` (the PluginAbiObject's
 /// `handle` field). The host borrows mutably for the call's duration;
 /// the cdylib retains ownership and the next `Drop` runs
 /// `Box::from_raw + drop` via the parent vtable's
@@ -58,7 +58,7 @@ unsafe fn handle_as_command_recorder_mut(
     })
 }
 
-/// Reconstruct a stack-allocated `VulkanComputeKernel` β-shape
+/// Reconstruct a stack-allocated `VulkanComputeKernel` PluginAbiObject
 /// borrow from an `Arc::into_raw(Arc<VulkanComputeKernelInner>)`
 /// handle. Same ManuallyDrop contract as `make_storage_buffer_borrow`
 /// / `make_texture_borrow` — the borrow's Drop must NOT run, or it
@@ -728,7 +728,7 @@ unsafe extern "C" fn host_command_recorder_submit_signaling_timeline(
             // the cdylib's
             // `RhiCommandRecorder::dispatch_submit_signaling_timeline_via_vtable`
             // (which gets it via `self as *const Self` on the
-            // β-shape's outer `HostVulkanTimelineSemaphore` borrow,
+            // PluginAbiObject's outer `HostVulkanTimelineSemaphore` borrow,
             // same convention as the v13
             // `wait_timeline_semaphore` slot). The borrow lasts
             // only for the duration of this call.
@@ -1447,11 +1447,11 @@ pub static HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE:
 
 /// Accessor for the host's static `RhiCommandRecorderMethodsVTable`
 /// — used by `RhiCommandRecorder::from_inner` to populate the
-/// β-shape's `methods_vtable` field.
+/// PluginAbiObject's `methods_vtable` field.
 ///
 /// See [`host_vulkan_compute_kernel_methods_vtable`] for the routing
-/// rationale — cdylib β-shape constructors must store the host's
-/// vtable pointer so dispatches actually cross DSO boundaries.
+/// rationale — cdylib PluginAbiObject constructors must store the host's
+/// vtable pointer so dispatches actually cross the plugin ABI.
 pub fn host_rhi_command_recorder_methods_vtable(
 ) -> *const streamlib_plugin_abi::RhiCommandRecorderMethodsVTable {
     match host_callbacks() {

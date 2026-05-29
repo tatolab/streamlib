@@ -4,7 +4,7 @@
 //! Engine-wide per-surface texture registration record.
 //!
 //! Layout-stable `(handle, vtable)` shape so the type crosses the
-//! cdylib DSO boundary. The handle is
+//! plugin ABI. The handle is
 //! `Arc::into_raw(Arc<TextureRegistrationInner>)`; the vtable's
 //! `clone_texture_registration` / `drop_texture_registration`
 //! callbacks manage the Arc refcount in host-compiled code.
@@ -37,7 +37,7 @@ use streamlib_consumer_rhi::VulkanLayout;
 
 /// Host-only rich data backing a [`TextureRegistration`]. Cdylib code
 /// never sees this type; it reaches the public [`TextureRegistration`]
-/// surface through the `(handle, vtable)` β-shape.
+/// surface through the `(handle, vtable)` PluginAbiObject.
 pub(crate) struct TextureRegistrationInner {
     pub(crate) texture: Texture,
     /// Last-known Vulkan image layout. Producers update after their
@@ -62,13 +62,13 @@ pub(crate) struct TextureRegistrationInner {
 /// through `drop_texture_registration`. Cheap to clone — the same
 /// shape as `Arc::clone` semantically, just with the refcount
 /// bookkeeping running in host-compiled code regardless of caller
-/// DSO.
+/// plugin.
 #[repr(C)]
 pub struct TextureRegistration {
     /// Opaque handle to the host's `Arc<TextureRegistrationInner>`
     /// (produced by `Arc::into_raw`).
     pub(crate) handle: *const c_void,
-    /// Vtable for cross-DSO Clone/Drop and method dispatch.
+    /// Vtable for plugin ABI Clone/Drop and method dispatch.
     pub(crate) vtable: *const GpuContextLimitedAccessVTable,
 }
 
@@ -100,7 +100,7 @@ impl TextureRegistration {
 
     /// Internal helper: leak an initial Arc strong count via
     /// `Arc::into_raw`, resolve the host-mode vtable, and assemble
-    /// the cross-DSO shape.
+    /// the plugin ABI shape.
     pub(crate) fn from_arc_into_raw(arc: Arc<TextureRegistrationInner>) -> Self {
         let handle = Arc::into_raw(arc) as *const c_void;
         let vtable = crate::core::plugin::host_services::host_gpu_context_limited_access_vtable();
@@ -114,7 +114,7 @@ impl TextureRegistration {
             panic!(
                 "TextureRegistration::host_inner() reached from cdylib code; this \
                  method must dispatch through the GpuContextLimitedAccessVTable. \
-                 The panic is caught by run_host_extern_c at the FFI boundary."
+                 The panic is caught by run_host_extern_c at the plugin ABI."
             );
         }
         // SAFETY: `self.handle` is `Arc::into_raw(Arc<TextureRegistrationInner>)`.
@@ -138,7 +138,7 @@ impl TextureRegistration {
         }
         // SAFETY: vtable + handle were paired at construction; the
         // callback returns a `*const Texture` pointer (typed as
-        // `*const c_void` at the FFI boundary) into the Arc's heap
+        // `*const c_void` at the plugin ABI) into the Arc's heap
         // allocation. The pointer is alive as long as `self` is —
         // the Arc's strong count keeps the inner alive. `Texture` is
         // a layout-stable `#[repr(C)]` value (locked by the

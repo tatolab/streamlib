@@ -175,7 +175,7 @@ fn run_smoke(
 
     // Step 3: dual-register via the in-process texture_cache
     // channel so the Path-1 resolve below hits the fast path.
-    // Cloning the Texture β-shape bumps the underlying
+    // Cloning the Texture PluginAbiObject bumps the underlying
     // Arc<TextureInner> via the LimitedAccess `clone_texture` slot.
     let texture_cache_clone = texture.clone();
     full.register_texture_with_layout(
@@ -203,7 +203,7 @@ fn run_smoke(
         })?;
 
     // Step 5: look up via the cross-process (surface-share daemon)
-    // path. Returns a fresh Texture β-shape over the same imported
+    // path. Returns a fresh Texture PluginAbiObject over the same imported
     // VkImage. Both texture handles release on scope exit; the
     // host-side Arcs drop in inverse-construction order.
     let (looked_up_texture, looked_up_layout) =

@@ -83,7 +83,7 @@ pub struct RuntimeContextVTable {
     /// `RuntimeContextFullAccess` shim. Paired with the methods
     /// reached via [`crate::HostServices::gpu_context_limited_access_vtable`]
     /// for the limited-access surface (FullAccess is engine-only
-    /// today; cross-DSO FullAccess wiring is future-phase work).
+    /// today; plugin ABI FullAccess wiring is future-phase work).
     pub gpu_full_access: unsafe extern "C" fn(ctx: *const c_void) -> *const c_void,
 
     /// Returns an opaque handle to the restricted [`GpuContextLimitedAccess`].

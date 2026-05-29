@@ -67,7 +67,7 @@ pub trait GeneratedProcessor: Send + 'static {
     /// Called by the host once after `from_config` returns and
     /// before any connections are wired. Default impl is a no-op
     /// for processors that declare no input/output ports; the macro
-    /// emits an override that writes the β-shapes into `self.outputs`
+    /// emits an override that writes the PluginAbiObjects into `self.outputs`
     /// / `self.inputs` for processors that do.
     fn set_iceoryx2_resources(
         &mut self,
@@ -78,13 +78,13 @@ pub trait GeneratedProcessor: Send + 'static {
     }
 
     /// Borrow the (now host-side) `OutputWriterInner` Arc the
-    /// processor's β-shape is wired to, if any. Default `None`;
+    /// processor's PluginAbiObject is wired to, if any. Default `None`;
     /// the macro emits an override for processors with outputs.
     ///
     /// Used by the host's connection-wiring path to mutate the
     /// inner directly (add_connection, etc.) without crossing
-    /// the cdylib boundary. The returned Arc is cloned from the
-    /// β-shape's stored Arc, so it's safe to retain.
+    /// the plugin ABI. The returned Arc is cloned from the
+    /// PluginAbiObject's stored Arc, so it's safe to retain.
     fn iceoryx2_output_writer_inner(
         &self,
     ) -> Option<std::sync::Arc<crate::iceoryx2::OutputWriterInner>> {
@@ -92,7 +92,7 @@ pub trait GeneratedProcessor: Send + 'static {
     }
 
     /// Borrow the (now host-side) `InputMailboxesInner` Arc the
-    /// processor's β-shape is wired to, if any. Default `None`;
+    /// processor's PluginAbiObject is wired to, if any. Default `None`;
     /// the macro emits an override for processors with inputs.
     fn iceoryx2_input_mailboxes_inner(
         &self,

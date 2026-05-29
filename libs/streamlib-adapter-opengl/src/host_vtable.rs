@@ -9,14 +9,14 @@
 //! 1. Construct an `Arc<OpenGlSurfaceAdapter>` on the host side
 //!    (allocate the EglRuntime, register surfaces, install setup
 //!    hook — same as today).
-//! 2. Hand the cdylib a `(handle, vtable)` β-shape pair where:
+//! 2. Hand the cdylib a `(handle, vtable)` PluginAbiObject pair where:
 //!    - `handle = Arc::into_raw(arc.clone())`
 //!    - `vtable = host_opengl_surface_adapter_vtable()`
 //! 3. The cdylib invokes the vtable methods exactly as if it held
 //!    a Rust `&OpenGlSurfaceAdapter` — every method dispatches
 //!    through host-compiled code, so layout drift between
 //!    rustc-minor versions and divergent dep graphs is contained
-//!    inside the host DSO.
+//!    inside the host plugin.
 //!
 //! `OpenGlSurfaceAdapter` is not generic over a `DevicePrivilege`
 //! type the way `VulkanSurfaceAdapter<D>` is — the OpenGL adapter
@@ -26,7 +26,7 @@
 //!
 //! Panic guards inside each fn body mirror the
 //! `streamlib-plugin-abi` `run_host_extern_c` shape: any panic in
-//! host code is caught at the FFI boundary and converted to a
+//! host code is caught at the plugin ABI and converted to a
 //! clean error return instead of corrupting the cdylib's stack.
 //! Tier-1 null-handle tests next to this module verify the guards
 //! fire correctly without an actual `Arc<OpenGlSurfaceAdapter>`.
@@ -70,7 +70,7 @@ static HOST_VTABLE: OpenGlSurfaceAdapterVTable = OpenGlSurfaceAdapterVTable {
 };
 
 // =============================================================================
-// FFI helpers — error buffer writer + panic guard
+// Plugin ABI helpers — error buffer writer + panic guard
 // =============================================================================
 
 // Panic-safety net wrapping every `host_*` extern "C" callback is the

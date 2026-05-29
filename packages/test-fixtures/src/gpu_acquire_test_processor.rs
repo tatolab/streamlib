@@ -12,7 +12,7 @@
 //!   2. `start()` — acquires a `PixelBuffer` via the stashed
 //!      `GpuContextLimitedAccess::acquire_pixel_buffer`. Exercises
 //!      `acquire_pixel_buffer` (paired-out-param tuple return). Reads
-//!      the cached `width`/`height` (POD; no cross-DSO dispatch).
+//!      the cached `width`/`height` (POD; no plugin ABI dispatch).
 //!      Calls `plane_base_address(0)` — exercises
 //!      `plane_base_address_pixel_buffer`. Writes a sentinel byte
 //!      through the returned pointer to prove the host-allocated
@@ -38,12 +38,12 @@ pub struct GpuAcquireTest {
 
 impl ManualProcessor for GpuAcquireTest::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        // Clone the GpuContextLimitedAccess across the cdylib DSO
-        // boundary. The `Clone` impl dispatches through the
+        // Clone the GpuContextLimitedAccess across the plugin ABI.
+        // The `Clone` impl dispatches through the
         // `clone_handle` vtable callback (Arc refcount bump on
         // `Arc<GpuContext>`); dropping the clone in `teardown()`
         // fires `drop_handle`. Both refcount ops run in host-compiled
-        // code regardless of caller DSO.
+        // code regardless of caller plugin.
         self.gpu = Some(ctx.gpu_limited_access().clone());
         Ok(())
     }
@@ -64,7 +64,7 @@ impl ManualProcessor for GpuAcquireTest::Processor {
                 gpu.acquire_pixel_buffer(width, height, PixelFormat::Bgra32)?;
 
             // Read the cached POD width/height (pure field reads,
-            // no cross-DSO dispatch).
+            // no plugin ABI dispatch).
             let observed_w = pixel_buffer.width;
             let observed_h = pixel_buffer.height;
 

@@ -65,7 +65,7 @@ pub const PIPELINE_CACHE_DIR_ENV: &str = "STREAMLIB_PIPELINE_CACHE_DIR";
 
 /// Host-only rich data backing a [`VulkanGraphicsKernel`]. Cdylib code
 /// never sees this type; it reaches the public surface through the
-/// `(handle, vtable)` β-shape.
+/// `(handle, vtable)` PluginAbiObject.
 pub struct VulkanGraphicsKernelInner {
     label: String,
     vulkan_device: Arc<HostVulkanDevice>,
@@ -1265,19 +1265,19 @@ impl std::fmt::Debug for VulkanGraphicsKernelInner {
 }
 
 // =============================================================================
-// β-shape implementation (#917)
+// PluginAbiObject implementation (#917)
 // =============================================================================
 
-/// Graphics kernel — layout-stable `#[repr(C)]` β-shape (#907 Phase
+/// Graphics kernel — layout-stable `#[repr(C)]` PluginAbiObject (#907 Phase
 /// E PR 3/5). Mirrors `VulkanComputeKernel`'s shape: handle + parent
 /// vtable + per-type methods vtable + cached PODs.
 #[repr(C)]
 pub struct VulkanGraphicsKernel {
     /// Opaque handle to the host's `Arc<VulkanGraphicsKernelInner>`.
     pub(crate) handle: *const c_void,
-    /// Parent vtable for cross-DSO Clone/Drop dispatch (#918 Phase D).
+    /// Parent vtable for plugin ABI Clone/Drop dispatch (#918 Phase D).
     pub(crate) vtable: *const GpuContextFullAccessVTable,
-    /// Per-type vtable for cross-DSO method dispatch (#907 Phase E).
+    /// Per-type vtable for plugin ABI method dispatch (#907 Phase E).
     pub(crate) methods_vtable:
         *const streamlib_plugin_abi::VulkanGraphicsKernelMethodsVTable,
     /// Cached push-constant size in bytes. Set at construction.
@@ -1328,7 +1328,7 @@ impl VulkanGraphicsKernel {
     /// Kernel's declared binding shape. Mode-routed: host-mode reads
     /// directly from `host_inner`; cdylib-mode dispatches through the
     /// v3 `bindings` slot on the per-type methods vtable. On cdylib-
-    /// side FFI errors the method emits a `tracing::warn` and returns
+    /// side plugin ABI errors the method emits a `tracing::warn` and returns
     /// an empty Vec.
     pub fn bindings(&self) -> Vec<GraphicsBindingSpec> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
@@ -1416,12 +1416,12 @@ impl VulkanGraphicsKernel {
             .collect()
     }
 
-    /// Push-constant range size in bytes. Cached POD — no FFI hop.
+    /// Push-constant range size in bytes. Cached POD — no plugin ABI hop.
     pub fn push_constant_size(&self) -> u32 {
         self.cached_push_constant_size
     }
 
-    /// Descriptor-set ring depth. Cached POD — no FFI hop.
+    /// Descriptor-set ring depth. Cached POD — no plugin ABI hop.
     pub fn descriptor_sets_in_flight(&self) -> u32 {
         self.cached_descriptor_sets_in_flight
     }
@@ -1445,7 +1445,7 @@ impl VulkanGraphicsKernel {
     /// Bind a [`crate::core::rhi::PixelBuffer`]-shaped storage
     /// buffer (SSBO) at `(frame_index, binding)`. Per-input-type
     /// concrete shape (no generic) so the cdylib path can dispatch
-    /// via the matching typed FFI slot
+    /// via the matching typed plugin ABI slot
     /// (`set_storage_buffer_pixel`) without a kind discriminator.
     /// Mirrors `VulkanComputeKernel::set_storage_buffer_pixel`.
     pub fn set_storage_buffer_pixel(
@@ -1532,7 +1532,7 @@ impl VulkanGraphicsKernel {
     ) -> Result<()> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
             // SAFETY: T is Copy + Sized — the byte view is read-only
-            // and consumed inside the FFI call. Caller is responsible
+            // and consumed inside the plugin ABI call. Caller is responsible
             // for ensuring T is POD (no padding holding `uninit`
             // bytes, no internal references, no Drop) since the
             // push-constant slot the bytes land in is read verbatim
@@ -1949,7 +1949,7 @@ impl VulkanGraphicsKernel {
             ));
         }
 
-        // Marshal color targets into the FFI's parallel-array shape.
+        // Marshal color targets into the plugin ABI's parallel-array shape.
         let mut handles: Vec<*const c_void> = Vec::with_capacity(color_targets.len());
         let mut present_flags: Vec<u32> = Vec::with_capacity(color_targets.len());
         let mut clear_values: Vec<[f32; 4]> = Vec::with_capacity(color_targets.len());
@@ -2298,13 +2298,13 @@ impl std::fmt::Debug for VulkanGraphicsKernel {
 }
 
 #[cfg(all(test, target_pointer_width = "64"))]
-mod beta_shape_layout_tests {
+mod plugin_abi_object_layout_tests {
     use super::*;
     use core::mem::{align_of, offset_of, size_of};
 
     #[test]
     fn vulkan_graphics_kernel_layout() {
-        // β-shape struct as of #907 PR 3/5:
+        // PluginAbiObject struct as of #907 PR 3/5:
         //   handle                              @ 0  (8 bytes, *const c_void)
         //   vtable                              @ 8  (8 bytes, *const GpuContextFullAccessVTable)
         //   methods_vtable                      @ 16 (8 bytes, *const VulkanGraphicsKernelMethodsVTable)

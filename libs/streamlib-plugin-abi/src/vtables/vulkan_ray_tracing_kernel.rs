@@ -29,7 +29,7 @@ use crate::repr::RayTracingBindingSpecRepr;
 pub const VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 3;
 
 /// Per-type method-dispatch vtable for the `VulkanRayTracingKernel`
-/// β-shape.
+/// PluginAbiObject.
 ///
 /// Mirrors the compute-kernel vtable shape (serial dispatch — one
 /// command buffer + fence owned by the kernel, no `frame_index`

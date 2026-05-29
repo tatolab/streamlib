@@ -3,8 +3,8 @@
 
 //! Phase C3 + Phase D dlopen-cdylib escalate smoke test fixture.
 //!
-//! Proves the scope-token machinery fires end-to-end through the FFI
-//! boundary AND that representative `GpuContextFullAccess` vtable
+//! Proves the scope-token machinery fires end-to-end through the
+//! plugin ABI AND that representative `GpuContextFullAccess` vtable
 //! slots — both Phase D Bucket B (new FullAccess slots) and Bucket C
 //! (Option B Limited-vtable inheritance) — dispatch correctly from
 //! cdylib code. The processor's `start()` runs an escalate scope that
@@ -20,7 +20,7 @@
 //!        `with_full_scope_or_err`.
 //!      - `full.acquire_pixel_buffer(...)` — Phase D Bucket C
 //!        (Option B inherited LimitedAccess vtable dispatch).
-//!        Returns a `PixelBuffer` β-shape through the FFI.
+//!        Returns a `PixelBuffer` PluginAbiObject through the plugin ABI.
 //!      - `full.acquire_output_texture(...)` — Phase D Bucket B
 //!        (new FullAccess vtable slot returning `(String, Texture)`).
 //!      - `full.register_texture_with_layout(...)` — Phase D Bucket C

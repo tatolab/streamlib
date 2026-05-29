@@ -39,7 +39,7 @@ pub enum AccelerationStructureKind {
 /// the hit shader can read via `gl_InstanceCustomIndexEXT`, a visibility
 /// mask, an SBT record offset, and the BLAS this instance points to.
 ///
-/// The BLAS reference is by `VulkanAccelerationStructure` β-shape so the
+/// The BLAS reference is by `VulkanAccelerationStructure` PluginAbiObject so the
 /// lifetime contract is "the TLAS holds a strong reference to every
 /// referenced BLAS for as long as the TLAS lives."
 #[derive(Clone)]
@@ -87,7 +87,7 @@ pub const IDENTITY_TRANSFORM: [[f32; 4]; 3] = [
 
 /// Host-only rich data backing a [`VulkanAccelerationStructure`].
 /// Cdylib code never sees this type; it reaches the public surface
-/// through the `(handle, vtable)` β-shape.
+/// through the `(handle, vtable)` PluginAbiObject.
 pub(crate) struct VulkanAccelerationStructureInner {
     label: String,
     kind: AccelerationStructureKind,
@@ -120,9 +120,9 @@ pub(crate) struct VulkanAccelerationStructureInner {
 pub struct VulkanAccelerationStructure {
     /// Opaque handle to the host's `Arc<VulkanAccelerationStructureInner>`.
     pub(crate) handle: *const c_void,
-    /// Parent vtable for cross-DSO Clone/Drop dispatch (#918 Phase D).
+    /// Parent vtable for plugin ABI Clone/Drop dispatch (#918 Phase D).
     pub(crate) vtable: *const GpuContextFullAccessVTable,
-    /// Per-type vtable for cross-DSO method dispatch (#907 Phase E).
+    /// Per-type vtable for plugin ABI method dispatch (#907 Phase E).
     pub(crate) methods_vtable:
         *const streamlib_plugin_abi::VulkanAccelerationStructureMethodsVTable,
     /// Cached AS kind discriminant (0 = BottomLevel, 1 = TopLevel).
@@ -515,8 +515,8 @@ impl VulkanAccelerationStructureInner {
             }
 
             // vulkanalia's `cmd_build_acceleration_structures_khr` wrapper has
-            // a Rust→C ABI mismatch: it accepts `&[&[T]]` (slice of fat-pointer
-            // slots, 16 bytes each on 64-bit) where the C signature is
+            // a Rust→C ABI mismatch: it accepts `&[&[T]]` (slice of two-word
+            // slice-reference slots, 16 bytes each on 64-bit) where the C signature is
             // `*const *const T` (array of thin pointers, 8 bytes each), and
             // casts the Rust slice pointer directly without rebuilding the
             // thin-pointer array. Workaround: build the thin-pointer array by
@@ -677,13 +677,13 @@ impl std::fmt::Debug for VulkanAccelerationStructureInner {
 }
 
 // =============================================================================
-// β-shape implementation
+// PluginAbiObject implementation
 // =============================================================================
 
 impl VulkanAccelerationStructure {
     /// Internal helper: leak an initial Arc strong count via
     /// `Arc::into_raw`, resolve the host-mode FullAccess vtable, and
-    /// assemble the cross-DSO shape.
+    /// assemble the plugin ABI shape.
     pub(crate) fn from_arc_into_raw(arc: Arc<VulkanAccelerationStructureInner>) -> Self {
         let cached_kind = match arc.kind() {
             AccelerationStructureKind::BottomLevel => 0u32,
@@ -751,7 +751,7 @@ impl VulkanAccelerationStructure {
 
     /// `VkAccelerationStructureKHR` handle. **Engine-internal** — the
     /// vulkanalia handle layout couples to the vulkanalia minor
-    /// version and isn't safe to surface across a DSO boundary.
+    /// version and isn't safe to surface across the plugin ABI.
     /// There is no in-tree cdylib consumer that reads this; every
     /// binding flows through the ray-tracing kernel's
     /// `set_acceleration_structure` slot, which dereferences the AS
@@ -883,7 +883,7 @@ mod layout_tests {
 
     #[test]
     fn vulkan_acceleration_structure_layout() {
-        // β-shape struct as of #907 PR 5/5:
+        // PluginAbiObject struct as of #907 PR 5/5:
         //   handle                @ 0  (8 bytes, *const c_void)
         //   vtable                @ 8  (8 bytes, *const GpuContextFullAccessVTable)
         //   methods_vtable        @ 16 (8 bytes, *const VulkanAccelerationStructureMethodsVTable)

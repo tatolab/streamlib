@@ -4,8 +4,8 @@
 // Minimal compute shader: one storage buffer binding, single-threaded
 // workgroup, no-op body. Just enough for SPIR-V reflection to discover
 // a real descriptor and validate the kernel binding declaration —
-// enough to round-trip a `VulkanComputeKernel` β-shape through Create
-// + Clone + Drop across the cdylib boundary.
+// enough to round-trip a `VulkanComputeKernel` PluginAbiObject through
+// Create + Clone + Drop across the plugin ABI.
 
 #version 450
 

@@ -4,7 +4,7 @@
 #![allow(clippy::disallowed_macros)] // build.rs uses println!/eprintln! for `cargo:` directives
 
 //! Builds the JTD config dataclass shim and (on Linux) compiles every
-//! shader the fixture's β-shape round-trip needs via the system
+//! shader the fixture's PluginAbiObject round-trip needs via the system
 //! `glslc`. Matches the streamlib-engine crate's own build.rs shader
 //! pipeline so the fixture compiles in the same toolchain shape
 //! consumers see.

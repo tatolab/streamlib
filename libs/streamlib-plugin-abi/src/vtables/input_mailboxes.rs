@@ -1,18 +1,18 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `InputMailboxesVTable` — extern "C" dispatch for the cdylib's `InputMailboxes` β-shape.
+//! `InputMailboxesVTable` — extern "C" dispatch for the cdylib's `InputMailboxes` PluginAbiObject.
 
 use core::ffi::c_void;
 
 /// Layout version of [`crate::InputMailboxesVTable`].
 ///
 /// - v1: ships four slots — the two cdylib processor's
-///   `InputMailboxes` β-shape needs from inside `process()`
+///   `InputMailboxes` PluginAbiObject needs from inside `process()`
 ///   (`read_raw` returns the next raw frame for a port with
 ///   `has_data` distinguishing "no data" from "error"; `has_data`
 ///   queries without consuming), plus the Arc lifecycle pair
-///   (`clone_arc` / `drop_arc`) every Arc-handle β-shape on this
+///   (`clone_arc` / `drop_arc`) every Arc-handle PluginAbiObject on this
 ///   ABI carries for refcount accounting in host-compiled code.
 /// - v2: appends `max_payload_for_port` so the cdylib can allocate
 ///   exactly the schema-declared `metadata.max_payload_bytes` for
@@ -27,7 +27,7 @@ use core::ffi::c_void;
 pub const INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION: u32 = 2;
 
 /// `extern "C" fn` dispatch table for the cdylib's `InputMailboxes`
-/// β-shape. Replaces the shared-Rust-type `&mut InputMailboxes`
+/// PluginAbiObject. Replaces the shared-Rust-type `&mut InputMailboxes`
 /// crossing the cdylib used to expose to the host via
 /// `ProcessorVTable::get_iceoryx2_input_mailboxes_mut`.
 ///

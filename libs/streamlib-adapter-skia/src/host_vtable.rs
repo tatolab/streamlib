@@ -11,7 +11,7 @@
 //! 1. Construct an `Arc<SkiaSurfaceAdapter<D>>` or
 //!    `Arc<SkiaGlSurfaceAdapter>` on the host side (compose on the
 //!    inner Vulkan / OpenGL adapter — same as today).
-//! 2. Hand the cdylib a `(handle, vtable)` β-shape pair where:
+//! 2. Hand the cdylib a `(handle, vtable)` PluginAbiObject pair where:
 //!    - `handle = Arc::into_raw(arc.clone())`
 //!    - `vtable = host_skia_surface_adapter_vtable::<D>()` (Vulkan
 //!      flavor) or `host_skia_gl_surface_adapter_vtable()` (GL
@@ -20,7 +20,7 @@
 //!    a Rust `&SkiaSurfaceAdapter<D>` — every method dispatches
 //!    through host-compiled code, so layout drift between
 //!    rustc-minor versions and divergent dep graphs is contained
-//!    inside the host DSO.
+//!    inside the host plugin.
 //!
 //! The Vulkan-flavor wiring is generic over
 //! `D: VulkanRhiDevice + 'static` so the same vtable works whether
@@ -34,7 +34,7 @@
 //!
 //! Panic guards inside each fn body mirror the
 //! `streamlib-plugin-abi` `run_host_extern_c` shape: any panic in
-//! host code is caught at the FFI boundary and converted to a
+//! host code is caught at the plugin ABI and converted to a
 //! clean error return instead of corrupting the cdylib's stack.
 //! Tier-1 null-handle tests next to this module verify the guards
 //! fire correctly without an actual `Arc<SkiaSurfaceAdapter>`.
@@ -53,7 +53,7 @@
 //! `RCHandle<…>` types are tied to the host's `skia-safe` version
 //! and single-thread-affine `GrDirectContext`; projecting them
 //! through an extern "C" boundary would defeat the purpose of this
-//! ABI. Future cross-DSO Skia draw support is its own design
+//! ABI. Future plugin ABI Skia draw support is its own design
 //! problem (e.g. the msgpack display-list pattern recorded on
 //! issue #889's body, a per-method canvas vtable, etc.).
 
@@ -148,7 +148,7 @@ static GL_VTABLE: SkiaGlSurfaceAdapterVTable = SkiaGlSurfaceAdapterVTable {
 };
 
 // =============================================================================
-// FFI helpers — error buffer writer + panic guard
+// Plugin ABI helpers — error buffer writer + panic guard
 // =============================================================================
 
 // Panic-safety net wrapping every `host_*` extern "C" callback is the
@@ -281,7 +281,7 @@ unsafe extern "C" fn host_vk_registered_count<D: VulkanRhiDevice + 'static>(
 ///                                never produce Ok(None))
 ///   - `Err(msg)`               → status 1, error message written
 ///
-/// Skia's view types are not cross-DSO-safe (see module docs), so
+/// Skia's view types are not safe to expose across the plugin ABI (see module docs), so
 /// the returned view payload only carries `surface_id` + width +
 /// height — the host's actual `WriteGuard` is dropped at the end
 /// of the host-side acquire callback (the scope is the callback
@@ -398,7 +398,7 @@ fn run_skia_vk_write_scope<D: VulkanRhiDevice + 'static>(
     let guard = adapter.acquire_write(surface)?;
     let surface_id = guard.surface_id();
     // Drop the guard explicitly so the flush + inner release runs
-    // synchronously inside the FFI scope. The cdylib customer's
+    // synchronously inside the plugin ABI scope. The cdylib customer's
     // SurfaceAdapter trait contract guarantees that on `Ok` return
     // the surface has been written (and synchronized) — same as a
     // synchronous Rust-side `acquire_write` followed by drop.

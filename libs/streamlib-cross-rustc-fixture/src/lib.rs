@@ -3,8 +3,8 @@
 
 //! Cross-rustc / cross-dep-graph dlopen fixture for issue #927.
 //!
-//! Companion to PR #918's β-shape Phase D work. The fixture builds in
-//! a standalone Cargo workspace (own `[workspace]` table → own
+//! Companion to PR #918's PluginAbiObject Phase D work. The fixture
+//! builds in a standalone Cargo workspace (own `[workspace]` table → own
 //! `Cargo.lock`) with `=`-pinned older `serde` / `tracing` transitive
 //! deps, so cargo resolves the cdylib against a deliberately
 //! divergent crate graph from the host streamlib workspace.
@@ -18,20 +18,20 @@
 //!   with the host.
 //! - **Load-level**: `Runner::add_module_with(...)` dlopens that `.so`
 //!   and the host's `STREAMLIB_PLUGIN` ABI accepts the cdylib's
-//!   exported symbol shape — proves the FFI surface from #918 is
+//!   exported symbol shape — proves the plugin ABI from #918 is
 //!   layout-stable across the divergent compiles.
-//! - **Dispatch-level**: each #918 β-shape return type
+//! - **Dispatch-level**: each #918 PluginAbiObject return type
 //!   (`VulkanComputeKernel`, `VulkanGraphicsKernel`,
 //!   `VulkanRayTracingKernel`, `TextureRing`, `RhiColorConverter`,
 //!   `VulkanAccelerationStructure`, `RhiCommandRecorder`) is
 //!   constructed via the FullAccess vtable inside an escalate scope,
-//!   cloned (or — for the Box-handle `RhiCommandRecorder` β-shape —
-//!   only dropped, since the type is `!Clone`), and dropped from
-//!   cdylib code. Every Create / Clone / Drop transits through the
-//!   per-type host-installed `clone_<type>` / `drop_<type>` vtable
-//!   slot. A FFI-boundary panic surfaces as `ERR:` in the result
-//!   file; correct dispatch surfaces as `OK` + a per-type status
-//!   line.
+//!   cloned (or — for the Box-handle `RhiCommandRecorder`
+//!   PluginAbiObject — only dropped, since the type is `!Clone`), and
+//!   dropped from cdylib code. Every Create / Clone / Drop transits
+//!   through the per-type host-installed `clone_<type>` /
+//!   `drop_<type>` vtable slot. A plugin ABI panic surfaces as `ERR:`
+//!   in the result file; correct dispatch surfaces as `OK` + a
+//!   per-type status line.
 //!
 //! What this test does NOT prove on its own — these are locked
 //! elsewhere:
@@ -88,18 +88,19 @@ const TRIVIAL_RCHIT_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/trivi
 const TRIVIAL_COMPUTE_BINDINGS: &[ComputeBindingSpec] =
     &[ComputeBindingSpec::storage_buffer(0)];
 
-#[streamlib::sdk::processor("BetaShapeRoundTripProcessor")]
-pub struct BetaShapeRoundTrip {}
+#[streamlib::sdk::processor("PluginAbiObjectRoundTripProcessor")]
+pub struct PluginAbiObjectRoundTrip {}
 
-/// Run a Create+Clone+Drop sweep over every #918 β-shape return type
-/// inside an escalate scope so FullAccess methods route through the
-/// FFI vtable (not the in-process `Boxed` handle). Called once from
+/// Run a Create+Clone+Drop sweep over every #918 PluginAbiObject
+/// return type inside an escalate scope so FullAccess methods route
+/// through the plugin vtable (not the in-process `Boxed` handle).
+/// Called once from
 /// `start()` — setup() leaves the sweep alone because the FullAccess
 /// vtable instance is the same across both lifecycles, and BLAS +
 /// RT-kernel construction make doubling the sweep expensive without
 /// adding distinct vtable-surface coverage.
 #[cfg(target_os = "linux")]
-fn run_beta_shape_round_trip(ctx: &RuntimeContextFullAccess<'_>) -> Result<String> {
+fn run_plugin_abi_object_round_trip(ctx: &RuntimeContextFullAccess<'_>) -> Result<String> {
     let gpu_limited = ctx.gpu_limited_access();
     // FullAccess lifecycle bodies (this runs from Manual `start()`) already
     // hold the escalate gate via the cdylib spawn-op scope (#1072/#1075), so
@@ -116,9 +117,9 @@ fn run_beta_shape_round_trip(ctx: &RuntimeContextFullAccess<'_>) -> Result<Strin
         2,
     )?;
 
-    // -------- TextureRing slot β-shape end-to-end (#947) --------
+    // -------- TextureRing slot PluginAbiObject end-to-end (#947) --------
     //
-    // The slot β-shape's per-method dispatch (acquire_next /
+    // The slot PluginAbiObject's per-method dispatch (acquire_next /
     // copy_pixel_buffer_to_slot / slot) routes through the per-type
     // TextureRingMethodsVTable in cdylib mode. This block exercises
     // every slot from cdylib code, asserts cached POD fields round-
@@ -281,13 +282,13 @@ fn run_beta_shape_round_trip(ctx: &RuntimeContextFullAccess<'_>) -> Result<Strin
         // Both ride the same `VK_KHR_ray_tracing_pipeline` /
         // `VK_KHR_acceleration_structure` feature gate. On hosts that
         // lack RT (or where the engine's RT probe declined to enable
-        // it), record SKIP without failing — the structural β-shape
+        // it), record SKIP without failing — the structural PluginAbiObject
         // argument from #918 is identical for these types as for
         // VulkanComputeKernel which IS exercised on every host.
         if full.supports_ray_tracing_pipeline() {
             // VulkanAccelerationStructure: trivial single-triangle BLAS.
             // Exercises the #955 v8 build_triangles_blas out-params:
-            // the cdylib-minted β-shape must carry real device_address,
+            // the cdylib-minted PluginAbiObject must carry real device_address,
             // storage_size, and kind (no placeholder zeros), and its
             // label() method must round-trip through the new
             // VulkanAccelerationStructureMethodsVTable::label slot.
@@ -387,7 +388,7 @@ fn run_beta_shape_round_trip(ctx: &RuntimeContextFullAccess<'_>) -> Result<Strin
         // -------- streamlib-consumer-rhi POD round-trip (#1039) --------
         //
         // The POD types in consumer-rhi (TextureFormat / TextureUsages /
-        // PixelFormat / VulkanLayout) cross the plugin FFI boundary as
+        // PixelFormat / VulkanLayout) cross the plugin ABI as
         // bare scalars: adapter and FullAccess vtables carry `u32` /
         // `i32` payloads that get reconstituted on the receiving side
         // via the type's `as`/`from_bits_truncate`/`VulkanLayout(raw)`
@@ -467,17 +468,17 @@ fn run_beta_shape_round_trip(ctx: &RuntimeContextFullAccess<'_>) -> Result<Strin
     }
 }
 
-impl ManualProcessor for BetaShapeRoundTrip::Processor {
+impl ManualProcessor for PluginAbiObjectRoundTrip::Processor {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        // Setup intentionally empty. Running the full β-shape sweep
+        // Setup intentionally empty. Running the full PluginAbiObject sweep
         // here too would double the GPU work (BLAS build + RT
         // kernel pipeline construction each take real time) and
         // duplicate coverage that doesn't differ between lifecycles —
         // the `RuntimeContextFullAccess` handed to setup() and start()
-        // wrap the same `GpuContextFullAccess` β-shape with the same
+        // wrap the same `GpuContextFullAccess` PluginAbiObject with the same
         // host-side vtable instance. The single sweep in `start()` is
         // sufficient to exercise the FullAccess vtable surface and
-        // the per-β-shape clone/drop slots.
+        // the per-PluginAbiObject clone/drop slots.
         Ok(())
     }
 
@@ -487,7 +488,7 @@ impl ManualProcessor for BetaShapeRoundTrip::Processor {
         let start_result: Result<String> = (|| {
             #[cfg(target_os = "linux")]
             {
-                run_beta_shape_round_trip(ctx)
+                run_plugin_abi_object_round_trip(ctx)
             }
             #[cfg(not(target_os = "linux"))]
             {
@@ -502,7 +503,7 @@ impl ManualProcessor for BetaShapeRoundTrip::Processor {
         };
         std::fs::write(&output_path, &body).map_err(|e| {
             Error::Runtime(format!(
-                "BetaShapeRoundTripProcessor: write {output_path}: {e}"
+                "PluginAbiObjectRoundTripProcessor: write {output_path}: {e}"
             ))
         })?;
         Ok(())
@@ -525,4 +526,4 @@ impl ManualProcessor for BetaShapeRoundTrip::Processor {
     }
 }
 
-streamlib_plugin_abi::export_plugin!(crate::BetaShapeRoundTrip::Processor);
+streamlib_plugin_abi::export_plugin!(crate::PluginAbiObjectRoundTrip::Processor);

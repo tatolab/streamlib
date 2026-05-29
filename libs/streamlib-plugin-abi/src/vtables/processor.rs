@@ -20,7 +20,7 @@ use crate::{InputMailboxesVTable, OutputWriterVTable};
 ///   `get_iceoryx2_*` slots are removed and a single
 ///   `set_iceoryx2_resources` slot is added. The host now allocates
 ///   `OutputWriterInner` and `InputMailboxesInner` and hands the
-///   cdylib `(handle, vtable)` β-shapes via the new slot; the
+///   cdylib `(handle, vtable)` PluginAbiObjects via the new slot; the
 ///   per-frame `write_raw` / `read_raw` calls dispatch through
 ///   [`crate::OutputWriterVTable`] / [`crate::InputMailboxesVTable`]. **ABI-
 ///   breaking** — plugins built against v1 are not load-compatible
@@ -185,7 +185,7 @@ pub struct ProcessorVTable {
     // The shared-Rust-type crossings (`Arc<OutputWriter>` /
     // `&mut InputMailboxes`) are retired. The host allocates the
     // `OutputWriterInner` and `InputMailboxesInner` and hands the
-    // cdylib opaque `(handle, vtable)` β-shapes via
+    // cdylib opaque `(handle, vtable)` PluginAbiObjects via
     // `set_iceoryx2_resources`. Per-frame `write_raw` / `read_raw`
     // dispatch through the new
     // [`crate::OutputWriterVTable`] / [`crate::InputMailboxesVTable`] slots.
@@ -195,12 +195,12 @@ pub struct ProcessorVTable {
     pub has_iceoryx2_inputs: unsafe extern "C" fn(instance: *const c_void) -> bool,
 
     /// Install host-allocated `OutputWriter` and `InputMailboxes`
-    /// β-shape handles into the cdylib's processor instance.
+    /// PluginAbiObject handles into the cdylib's processor instance.
     ///
     /// Called by the host once per processor instance after
     /// `construct` returns and before any port connections are
     /// wired. The cdylib's `from_config` initializes its `outputs`
-    /// / `inputs` β-shape fields with null `handle` + null `vtable`;
+    /// / `inputs` PluginAbiObject fields with null `handle` + null `vtable`;
     /// this callback patches in the host-allocated handles so the
     /// per-frame `write_raw` / `read_raw` calls in `process()` see
     /// non-null handles.
@@ -209,7 +209,7 @@ pub struct ProcessorVTable {
     /// opaque pointer; the cdylib owns one strong reference and
     /// balances it via `OutputWriterVTable::drop_arc` on Drop. Null
     /// when the processor has no outputs (the cdylib then keeps
-    /// the field's null β-shape and never dispatches through it).
+    /// the field's null PluginAbiObject and never dispatches through it).
     ///
     /// `input_mailboxes_handle` is an `Arc::into_raw(Arc<InputMailboxesInner>)`
     /// opaque pointer with the same lifetime contract. Null when

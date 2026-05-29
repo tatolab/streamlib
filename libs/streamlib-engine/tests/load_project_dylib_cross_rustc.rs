@@ -4,7 +4,7 @@
 //! Cross-rustc-version / cross-dep-graph dlopen integration test for
 //! issue #927.
 //!
-//! Companion to PR #918's β-shape Phase D work. The fixture under
+//! Companion to PR #918's PluginAbiObject Phase D work. The fixture under
 //! `libs/streamlib-cross-rustc-fixture/` is a standalone Cargo
 //! workspace (own `[workspace]` table, own `Cargo.lock`) that pins
 //! older transitive `serde` / `tracing` than the host workspace
@@ -19,19 +19,19 @@
 //! - `cargo build` against that fixture produces a `.so`.
 //! - `Runner::add_module_with(...)` accepts the `STREAMLIB_PLUGIN`
 //!   symbol from the divergently-compiled cdylib.
-//! - Each #918 β-shape return type (`TextureRing`,
+//! - Each #918 PluginAbiObject return type (`TextureRing`,
 //!   `RhiColorConverter`, `RhiCommandRecorder`, `VulkanComputeKernel`,
 //!   `VulkanGraphicsKernel`, plus `VulkanAccelerationStructure` and
 //!   `VulkanRayTracingKernel` when the host supports ray tracing) is
 //!   constructed, cloned (where applicable — `RhiCommandRecorder` is
 //!   the Box-handle `!Clone` shape), and dropped from cdylib code
-//!   without panic — running through the FFI vtable, not the
+//!   without panic — running through the plugin vtable, not the
 //!   in-process Boxed path, by wrapping the sweep in
 //!   `gpu_limited_access().escalate(...)`.
 //! - The sweep runs once in `start()`. `setup()` is intentionally
 //!   empty: both lifecycles wrap the same `GpuContextFullAccess`
-//!   β-shape with the same host-vtable instance, so doubling the
-//!   sweep adds ~15s of BLAS + RT-kernel construction without
+//!   PluginAbiObject with the same host-vtable instance, so doubling
+//!   the sweep adds ~15s of BLAS + RT-kernel construction without
 //!   exercising a distinct vtable surface.
 //!
 //! What this test does NOT lock on its own — these are guarded
@@ -153,7 +153,7 @@ fn assert_dep_graph_divergence(workspace_root: &Path, fixture_lock: &Path) {
 
 #[test]
 #[serial]
-fn dlopen_cross_rustc_fixture_round_trips_every_beta_shape() {
+fn dlopen_cross_rustc_fixture_round_trips_every_plugin_abi_object() {
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -241,7 +241,7 @@ fn dlopen_cross_rustc_fixture_round_trips_every_beta_shape() {
     std::fs::create_dir_all(&triple_dir).unwrap();
     std::fs::copy(&built_dylib, triple_dir.join(&dylib_name)).unwrap();
 
-    let output_path = tmp.path().join("beta_shape_round_trip.txt");
+    let output_path = tmp.path().join("plugin_abi_object_round_trip.txt");
     let output_path_str = output_path.to_string_lossy().to_string();
 
     let runtime = Runner::with_auto_build().unwrap();
@@ -255,7 +255,7 @@ fn dlopen_cross_rustc_fixture_round_trips_every_beta_shape() {
     let ident = schema_ident!(
         "tatolab",
         "cross-rustc-fixture",
-        "BetaShapeRoundTripProcessor",
+        "PluginAbiObjectRoundTripProcessor",
         "1.0.0"
     );
 
@@ -264,13 +264,13 @@ fn dlopen_cross_rustc_fixture_round_trips_every_beta_shape() {
             ident,
             json!({ "output_path": output_path_str }),
         ))
-        .expect("add_processor must succeed for the dlopened BetaShapeRoundTripProcessor");
+        .expect("add_processor must succeed for the dlopened PluginAbiObjectRoundTripProcessor");
 
     runtime
         .start()
         .expect("runtime.start() must succeed (requires Vulkan device on this host)");
 
-    // Manual-processor `setup()` runs the first β-shape sweep; the
+    // Manual-processor `setup()` runs the first PluginAbiObject sweep; the
     // result is stashed on the processor instance and combined with
     // `start()`'s sweep into the output file. Poll briefly for the
     // file to absorb scheduling jitter.
@@ -283,23 +283,23 @@ fn dlopen_cross_rustc_fixture_round_trips_every_beta_shape() {
 
     assert!(
         output_path.exists(),
-        "BetaShapeRoundTripProcessor did not write {} within 15s — \
+        "PluginAbiObjectRoundTripProcessor did not write {} within 15s — \
          either the cdylib's setup/start lifecycle didn't fire, or the \
-         β-shape Create/Clone/Drop path panicked at the FFI boundary",
+         PluginAbiObject Create/Clone/Drop path panicked at the plugin ABI",
         output_path.display()
     );
 
     let contents = std::fs::read_to_string(&output_path).unwrap();
     assert!(
         !contents.starts_with("ERR:"),
-        "BetaShapeRoundTripProcessor reported an error from the β-shape round-trip:\n{contents}"
+        "PluginAbiObjectRoundTripProcessor reported an error from the PluginAbiObject round-trip:\n{contents}"
     );
     assert!(
         contents.starts_with("OK\n"),
         "first line must be 'OK', got: {contents}"
     );
 
-    // The five unconditional β-shapes run on every test host.
+    // The five unconditional PluginAbiObjects run on every test host.
     for ty in [
         "TextureRing",
         "RhiColorConverter",
@@ -310,7 +310,7 @@ fn dlopen_cross_rustc_fixture_round_trips_every_beta_shape() {
         let needle = format!("{ty}:OK");
         assert!(
             contents.contains(&needle),
-            "missing β-shape round-trip line {needle:?} — full body:\n{contents}"
+            "missing PluginAbiObject round-trip line {needle:?} — full body:\n{contents}"
         );
     }
 
@@ -345,7 +345,7 @@ fn dlopen_cross_rustc_fixture_round_trips_every_beta_shape() {
         let skipped = "Texture::native_handle:SKIPPED_NO_DMA_BUF";
         assert!(
             contents.contains(ok) || contents.contains(skipped),
-            "missing β-shape round-trip line for Texture::native_handle: \
+            "missing PluginAbiObject round-trip line for Texture::native_handle: \
              expected one of {ok:?} or {skipped:?} — full body:\n{contents}"
         );
     }
@@ -358,7 +358,7 @@ fn dlopen_cross_rustc_fixture_round_trips_every_beta_shape() {
         let skipped = format!("{ty}:SKIPPED_NO_RT_SUPPORT");
         assert!(
             contents.contains(&ok) || contents.contains(&skipped),
-            "missing β-shape round-trip line for {ty}: expected one of \
+            "missing PluginAbiObject round-trip line for {ty}: expected one of \
              {ok:?} or {skipped:?} — full body:\n{contents}"
         );
     }

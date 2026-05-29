@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Cross-DSO callback table for `streamlib-adapter-opengl`.
+//! Plugin ABI callback table for `streamlib-adapter-opengl`.
 //!
 //! Sibling of [`streamlib-plugin-abi`]'s
 //! `GpuContextLimitedAccessVTable` (issue #886) and
@@ -15,15 +15,15 @@
 //! exposes its `OpenGlSurfaceAdapter` to a cdylib plugin without
 //! sharing any Rust types beyond `#[repr(C)]` payloads and
 //! `unsafe extern "C" fn` pointers. The cdylib carries a
-//! `(handle, vtable)` β-shape; the host dispatches every method
+//! `(handle, vtable)` PluginAbiObject; the host dispatches every method
 //! through host-compiled code so layout drift between rustc-minor
 //! versions and divergent dep graphs is contained inside the host
-//! DSO.
+//! plugin.
 //!
 //! Dep posture mirrors [`streamlib-plugin-abi`]: zero streamlib
 //! crates pulled, zero EGL/GL bindings, zero rustc-version-coupled
 //! types. This keeps layout regression tests trivially runnable on
-//! any host and the crate cross-DSO-safe.
+//! any host and the crate safe across the plugin ABI.
 //!
 //! # Audited cdylib-callable surface
 //!
@@ -52,13 +52,13 @@
 //! `OpenGlContext` is a thin Clone-able convenience wrapper around
 //! `Arc<OpenGlSurfaceAdapter>` — every method forwards to the same
 //! adapter trait methods covered above. The vtable's handle is the
-//! adapter Arc directly; the cdylib's `OpenGlContext` β-shape holds
+//! adapter Arc directly; the cdylib's `OpenGlContext` PluginAbiObject holds
 //! the `(handle, vtable)` pair without an extra indirection.
 //!
 //! The `EglRuntime` accessor (`OpenGlSurfaceAdapter::runtime`) is
 //! NOT cdylib-callable — every subprocess constructs its own
 //! `EglRuntime` (the runtime owns thread-bound OpenGL contexts and
-//! cannot meaningfully cross a DSO boundary even within one
+//! cannot meaningfully cross the plugin ABI even within one
 //! process). No slot.
 
 #![no_std]
@@ -92,7 +92,7 @@ pub const OPENGL_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION: u32 = 1;
 ///
 /// Carries the live GL texture id and the binding target
 /// (`GL_TEXTURE_2D` or `GL_TEXTURE_EXTERNAL_OES`). The cdylib's
-/// `OpenGlReadView` / `OpenGlWriteView` β-shapes deref these
+/// `OpenGlReadView` / `OpenGlWriteView` PluginAbiObjects deref these
 /// fields directly as POD reads (mirrors the cached-fields pattern
 /// on `Texture` / `PixelBuffer` from `streamlib-plugin-abi` and
 /// `VulkanViewRepr` from `streamlib-adapter-vulkan-abi`).
@@ -152,7 +152,7 @@ pub struct HostSurfaceRegistrationRepr {
 /// The cdylib holds an opaque `*const c_void` handle (an
 /// `Arc::into_raw(Arc<OpenGlSurfaceAdapter>)`-shaped pointer produced
 /// by the host) plus a `*const OpenGlSurfaceAdapterVTable` it reads
-/// from the `HostServices` payload when the cdylib β-shape lift
+/// from the `HostServices` payload when the cdylib PluginAbiObject lift
 /// lands (sibling slice to this trunk PR). Method-dispatch callbacks
 /// cover every cdylib-callable inherent method on
 /// `OpenGlSurfaceAdapter` plus the `SurfaceAdapter` trait methods.
@@ -206,7 +206,7 @@ pub struct OpenGlSurfaceAdapterVTable {
 
     /// Take a borrowed handle (typically minted by the host's
     /// runtime context when wiring the cdylib-side `OpenGlContext`
-    /// β-shape) and return a new owned handle with an Arc refcount
+    /// PluginAbiObject) and return a new owned handle with an Arc refcount
     /// bump on the underlying `Arc<OpenGlSurfaceAdapter>`. The
     /// owned handle remains valid even after the originating
     /// context is dropped and MUST be released exactly once via
@@ -379,7 +379,7 @@ mod tests {
     use core::mem::{align_of, offset_of, size_of};
 
     /// `OpenGlViewRepr` carries (`gl_texture_id: u32`, `target: u32`).
-    /// 8 bytes, align 4 — the smallest cross-DSO view payload in the
+    /// 8 bytes, align 4 — the smallest plugin ABI view payload in the
     /// adapter family.
     #[test]
     fn opengl_view_repr_layout() {

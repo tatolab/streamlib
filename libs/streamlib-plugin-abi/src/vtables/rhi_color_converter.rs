@@ -12,11 +12,11 @@ use crate::repr::{ResolvedColorInfoRepr, SourceLayoutInfoRepr};
 /// - v1: ships the `prepare_buffer_to_image_storage` slot — the
 ///   minimum surface a cdylib camera processor needs to dispatch
 ///   YCbCr→RGBA conversion through the host's cached buffer→image
-///   kernel without panicking at the β-shape's host-mode-only
+///   kernel without panicking at the PluginAbiObject's host-mode-only
 ///   `host_inner()` access. Out-params return an opaque
 ///   `Arc<VulkanComputeKernelInner>`-shaped handle plus the kernel's
 ///   `push_constant_size` POD so the cdylib can reconstruct a
-///   `VulkanComputeKernel` β-shape via the parent FullAccess vtable's
+///   `VulkanComputeKernel` PluginAbiObject via the parent FullAccess vtable's
 ///   per-type methods vtable lookup.
 ///
 /// - v2: appends three sibling slots completing the Phase E sub-lift —
@@ -28,17 +28,17 @@ use crate::repr::{ResolvedColorInfoRepr, SourceLayoutInfoRepr};
 pub const RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 
 /// Per-type method-dispatch vtable for the `RhiColorConverter`
-/// β-shape (Phase E sub-lift slice A).
+/// PluginAbiObject (Phase E sub-lift slice A).
 ///
 /// `RhiColorConverter` keeps `clone_color_converter` /
 /// `drop_color_converter` dispatch on the parent
 /// [`crate::GpuContextFullAccessVTable`]; this vtable carries the
 /// `prepare_buffer_to_image_storage` slot so cdylib camera processors
 /// can prepare the host's cached buffer→image kernel without tripping
-/// the β-shape's host-mode-only `host_inner()` access. The slot
+/// the PluginAbiObject's host-mode-only `host_inner()` access. The slot
 /// returns an opaque `Arc<VulkanComputeKernelInner>`-shaped handle
 /// plus the kernel's `push_constant_size`; the cdylib reconstructs a
-/// `VulkanComputeKernel` β-shape via the host_callbacks() per-type
+/// `VulkanComputeKernel` PluginAbiObject via the host_callbacks() per-type
 /// methods vtable lookup.
 #[repr(C)]
 pub struct RhiColorConverterMethodsVTable {
@@ -53,7 +53,7 @@ pub struct RhiColorConverterMethodsVTable {
     /// Bind source / destination / push-constants on the converter's
     /// buffer→image kernel and return a fresh
     /// `Arc<VulkanComputeKernelInner>`-shaped opaque handle the cdylib
-    /// wraps into its `VulkanComputeKernel` β-shape via the
+    /// wraps into its `VulkanComputeKernel` PluginAbiObject via the
     /// `host_callbacks().vulkan_compute_kernel_methods_vtable` lookup.
     ///
     /// - `converter_handle` is
@@ -61,11 +61,11 @@ pub struct RhiColorConverterMethodsVTable {
     ///   the host does not bump the converter's refcount).
     /// - `src_buffer_handle` is
     ///   `Arc::into_raw(Arc<HostVulkanBufferInner>)`-shaped from the
-    ///   `StorageBuffer` β-shape's `handle` field (borrowed; the
+    ///   `StorageBuffer` PluginAbiObject's `handle` field (borrowed; the
     ///   cdylib retains ownership).
     /// - `dst_texture_handle` is
     ///   `Arc::into_raw(Arc<TextureInner>)`-shaped from the `Texture`
-    ///   β-shape's `handle` field (borrowed; the cdylib retains
+    ///   PluginAbiObject's `handle` field (borrowed; the cdylib retains
     ///   ownership).
     /// - `dst_transfer_raw` is the `#[repr(u32)]` discriminant of
     ///   `streamlib::core::color::TransferId`.
@@ -95,7 +95,7 @@ pub struct RhiColorConverterMethodsVTable {
     /// `PixelBuffer`-shape source variant of
     /// [`Self::prepare_buffer_to_image_storage`]. Identical contract;
     /// `src_buffer_handle` is `Arc::into_raw(Arc<HostVulkanBufferInner>)`-
-    /// shaped from a `PixelBuffer` β-shape's `handle` field (borrowed;
+    /// shaped from a `PixelBuffer` PluginAbiObject's `handle` field (borrowed;
     /// the cdylib retains ownership). v2 (Phase E sub-lift completion).
     pub prepare_buffer_to_image_pixel: unsafe extern "C" fn(
         converter_handle: *const c_void,

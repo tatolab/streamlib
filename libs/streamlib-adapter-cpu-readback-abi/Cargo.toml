@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-adapter-cpu-readback-abi"
-description = "Cross-DSO callback table for streamlib-adapter-cpu-readback. Sibling of streamlib-adapter-vulkan-abi: pure extern \"C\" vtable + #[repr(C)] payloads consumed by host wiring (delegating to CpuReadbackSurfaceAdapter) and cdylib shims. No runtime Rust types cross the DSO boundary on the cdylib-callable surface."
+description = "Plugin ABI callback table for streamlib-adapter-cpu-readback. Sibling of streamlib-adapter-vulkan-abi: pure extern \"C\" vtable + #[repr(C)] payloads consumed by host wiring (delegating to CpuReadbackSurfaceAdapter) and cdylib shims. No runtime Rust types cross the plugin ABI on the cdylib-callable surface."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -17,7 +17,7 @@ path = "src/lib.rs"
 # Pure ABI crate — same dep posture as streamlib-adapter-vulkan-abi:
 # no streamlib-engine, no vulkanalia, no streamlib-adapter-cpu-readback,
 # no tokio. Keeps layout regression tests trivially runnable on any
-# host and the crate cross-DSO-safe.
+# host and the crate safe across the plugin ABI.
 [dependencies]
 
 [lints]

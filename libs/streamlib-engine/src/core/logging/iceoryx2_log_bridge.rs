@@ -15,15 +15,15 @@
 //! - Plugin cdylib-side: the cdylib's `STREAMLIB_PLUGIN` register
 //!   callback receives the host's `&'static dyn Log` pointer via
 //!   [`crate::core::plugin::HostServices::iceoryx2_logger`] and
-//!   installs it in the cdylib's `iceoryx2-log` static. Each DSO has
-//!   its own `iceoryx2-log` static; both end up pointing at the same
-//!   bridge value living in host memory.
+//!   installs it in the cdylib's `iceoryx2-log` static. The host and
+//!   each plugin have their own `iceoryx2-log` static; both end up
+//!   pointing at the same bridge value living in host memory.
 //!
-//! Cross-DSO safety: both DSOs link the same `iceoryx2-log-types`
-//! version (workspace pin), so the `&'static dyn Log` fat pointer's
-//! vtable is layout-compatible on both sides. Logging through the
-//! pointer dispatches through the host's vtable, which calls back
-//! into the host's tracing pipeline.
+//! Plugin ABI safety: the host and the plugin link the same
+//! `iceoryx2-log-types` version (workspace pin), so the
+//! `&'static dyn Log` trait object's vtable is layout-compatible
+//! on both sides. Logging through the pointer dispatches through the
+//! host's vtable, which calls back into the host's tracing pipeline.
 
 use iceoryx2_log::Log;
 use iceoryx2_log::LogLevel;
@@ -66,26 +66,26 @@ impl Log for IceoryxLogBridge {
 }
 
 /// Process-wide bridge value. Lives in `.rodata` (zero-sized) per
-/// DSO; the host's copy is the one shared with plugin cdylibs via
+/// loaded artifact; the host's copy is the one shared with plugin cdylibs via
 /// [`crate::core::plugin::HostServices::iceoryx2_logger`]. Both
 /// host's and cdylib's copies impl `Log` against the same workspace-
 /// pinned `iceoryx2-log-types::Log` vtable.
 pub static HOST_BRIDGE: IceoryxLogBridge = IceoryxLogBridge;
 
-/// Install [`HOST_BRIDGE`] as this DSO's iceoryx2 process-wide
+/// Install [`HOST_BRIDGE`] as this artifact's iceoryx2 process-wide
 /// logger. Idempotent — `iceoryx2_log::set_logger` is `Once`-guarded
 /// and returns false on subsequent calls, which we treat as success.
 pub fn install_iceoryx2_log_bridge_for_self() {
     let _ = iceoryx2_log::set_logger(&HOST_BRIDGE);
 }
 
-/// Install a foreign `&'static dyn Log` into this DSO's iceoryx2
+/// Install a foreign `&'static dyn Log` into this plugin's iceoryx2
 /// process-wide logger. Used by plugin cdylibs receiving the host's
 /// bridge pointer through `HostServices`.
 ///
 /// # Safety
 ///
-/// `logger` must remain valid for the lifetime of this DSO. The
+/// `logger` must remain valid for the lifetime of this plugin. The
 /// host's [`HOST_BRIDGE`] is `'static` by construction, so passing
 /// `&HOST_BRIDGE` from the host satisfies this.
 pub unsafe fn install_foreign_iceoryx2_logger(logger: &'static dyn Log) {

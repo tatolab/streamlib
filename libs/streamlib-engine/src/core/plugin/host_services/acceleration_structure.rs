@@ -6,7 +6,7 @@
 //!
 //! The per-type vtable currently carries one method slot (`label`).
 //! POD getters (`device_address`, `storage_size`, `kind`) are
-//! served from cached fields populated at β-shape construction
+//! served from cached fields populated at PluginAbiObject construction
 //! time and never round-trip through the vtable.
 
 use std::ffi::c_void;
@@ -23,7 +23,7 @@ use super::shared::wire::{slice_from_raw, write_err};
 // because:
 //   * POD getters (`device_address`, `storage_size`, `kind`) are
 //     populated at mint time via the v8 build_triangles_blas /
-//     build_tlas out-params; the β-shape's cached fields are always
+//     build_tlas out-params; the PluginAbiObject's cached fields are always
 //     real values, no vtable dispatch needed.
 //   * `vk_handle` stays host-only (vulkanalia handle layout couples
 //     to vulkanalia minor version; no in-tree cdylib consumer reads
@@ -137,7 +137,7 @@ pub static HOST_VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE:
 /// Accessor for the host's static
 /// `VulkanAccelerationStructureMethodsVTable` — used by
 /// `VulkanAccelerationStructure::from_arc_into_raw` to populate the
-/// β-shape's `methods_vtable` field.
+/// PluginAbiObject's `methods_vtable` field.
 pub fn host_vulkan_acceleration_structure_methods_vtable(
 ) -> *const streamlib_plugin_abi::VulkanAccelerationStructureMethodsVTable {
     &HOST_VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE

@@ -8,7 +8,7 @@
 //! through the engine's privileged
 //! `GpuContext::acquire_render_target_dma_buf_image` path: picks a
 //! tiled DRM modifier via the EGL probe and runs the host RHI's
-//! exportable allocator. The resulting `Texture` β-shape is written
+//! exportable allocator. The resulting `Texture` PluginAbiObject is written
 //! into `*out_texture` so the cdylib can take ownership.
 
 use std::ffi::c_void;
@@ -24,7 +24,7 @@ use super::super::super::shared::wire::write_err;
 /// [`crate::core::context::GpuContext::acquire_render_target_dma_buf_image`]
 /// (which picks a tiled DRM modifier via the EGL probe and allocates
 /// through the privileged RHI path), and writes the resulting
-/// `Texture` β-shape into `*out_texture` on success.
+/// `Texture` PluginAbiObject into `*out_texture` on success.
 #[cfg(target_os = "linux")]
 pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_acquire_render_target_dma_buf_image(
     scope_token: *const c_void,

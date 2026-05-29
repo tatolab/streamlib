@@ -273,7 +273,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_com
             }
             // `gpu.command_queue()` returns `&RhiCommandQueue` (a borrow
             // from GpuContext's stored field). Clone into a fresh owned
-            // β-shape for the caller — the Clone impl runs the host's
+            // PluginAbiObject for the caller — the Clone impl runs the host's
             // `clone_rhi_command_queue` callback (Arc refcount bump).
             let owned = gpu.command_queue().clone();
             // SAFETY: out_queue points at caller-allocated stack storage.
@@ -372,7 +372,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_cop
                 );
                 return 1;
             }
-            // SAFETY: pixel_buffer / texture point at β-shape values
+            // SAFETY: pixel_buffer / texture point at PluginAbiObject values
             // whose layouts are locked by per-type regression tests.
             let pb = unsafe { &*(pixel_buffer as *const crate::core::rhi::PixelBuffer) };
             let tex = unsafe { &*(texture as *const crate::core::rhi::Texture) };
@@ -442,7 +442,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_bli
                 write_err("blit_copy: null src or dst", err_buf, err_buf_cap, err_len);
                 return 1;
             }
-            // SAFETY: src / dst point at β-shape PixelBuffer values.
+            // SAFETY: src / dst point at PluginAbiObject PixelBuffer values.
             let src_pb = unsafe { &*(src as *const crate::core::rhi::PixelBuffer) };
             let dst_pb = unsafe { &*(dst as *const crate::core::rhi::PixelBuffer) };
             match gpu.blit_copy(src_pb, dst_pb) {

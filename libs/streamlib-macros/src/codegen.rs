@@ -392,10 +392,10 @@ fn generate_processor_struct_from_schema(
         quote! { pub #name: Config, }
     });
 
-    // Generate iceoryx2 β-shape fields if ports are defined.
+    // Generate iceoryx2 PluginAbiObject fields if ports are defined.
     // Issue #894 retires the shared-Rust-type crossings — the
     // processor's `outputs` / `inputs` fields are now layout-stable
-    // `#[repr(C)] { handle, vtable }` β-shapes; the host patches
+    // `#[repr(C)] { handle, vtable }` PluginAbiObjects; the host patches
     // them up via `ProcessorVTable::set_iceoryx2_resources` after
     // `from_config` returns.
     let ipc_input_field = if !schema.inputs.is_empty() {
@@ -685,7 +685,7 @@ fn generate_from_config_from_schema(
     custom_fields: &[CustomField],
 ) -> TokenStream {
     // Issue #894: host-allocates iceoryx2 inner Arcs. The macro
-    // emits empty β-shapes; the host's
+    // emits empty PluginAbiObjects; the host's
     // `ProcessorInstance::install_iceoryx2_resources` patches in
     // real handles via `ProcessorVTable::set_iceoryx2_resources`
     // immediately after `from_config` returns. Per-port read_mode
@@ -874,7 +874,7 @@ fn generate_iceoryx2_accessors_from_schema(schema: &ProcessorSchema) -> TokenStr
     };
 
     // Issue #894: emit `set_iceoryx2_resources` to receive host-
-    // allocated β-shapes + the `iceoryx2_output_writer_inner` /
+    // allocated PluginAbiObjects + the `iceoryx2_output_writer_inner` /
     // `iceoryx2_input_mailboxes_inner` accessors so the host's
     // wiring path can mutate the inner Arc directly.
     let add_port_calls: Vec<TokenStream> = if has_iceoryx2_inputs {

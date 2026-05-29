@@ -6,8 +6,8 @@
 //!
 //! Each wrapper reconstructs the kernel borrow from the raw `Arc`
 //! handle the cdylib passes (`Arc::into_raw(Arc<VulkanComputeKernelInner>)`
-//! per the β-shape's `from_arc_into_raw`), runs the inner method,
-//! and converts the `Result<()>` into the FFI's `i32 + err_buf`
+//! per the PluginAbiObject's `from_arc_into_raw`), runs the inner method,
+//! and converts the `Result<()>` into the plugin ABI's `i32 + err_buf`
 //! shape. All bodies wrapped in `run_host_extern_c` so a panic in
 //! the inner method becomes a non-zero return.
 
@@ -28,15 +28,15 @@ use super::shared::wire::{slice_from_raw, write_err};
 //
 // Each wrapper reconstructs the kernel borrow from the raw `Arc`
 // handle the cdylib passes (`Arc::into_raw(Arc<VulkanComputeKernelInner>)`
-// per the β-shape's `from_arc_into_raw`), runs the inner method,
-// and converts the `Result<()>` into the FFI's `i32 + err_buf`
+// per the PluginAbiObject's `from_arc_into_raw`), runs the inner method,
+// and converts the `Result<()>` into the plugin ABI's `i32 + err_buf`
 // shape. All bodies are wrapped in `run_host_extern_c` so a panic
 // in the inner method becomes a non-zero return.
 //
 // First slice (this PR): `set_push_constants` + `dispatch`. The
 // buffer/texture-input variants need a small trait redesign (the
 // inner method's `B: VulkanStorageBindable` generic can't cross the
-// FFI as-is — concrete β-shape inputs need a separate accessor on
+// plugin ABI as-is — concrete PluginAbiObject inputs need a separate accessor on
 // the trait) and land in a follow-up sub-issue.
 
 /// SAFETY: caller must hand a `handle` that came from
@@ -635,7 +635,7 @@ unsafe extern "C" fn host_compute_kernel_bindings(
 // Wire shape: `vk::ImageView` is `#[repr(transparent)] pub struct
 // ImageView(u64)` and `vk::CommandBuffer` is `#[repr(transparent)]
 // pub struct CommandBuffer(usize)` (vulkanalia-sys handles.rs). The
-// FFI carries the raw integer as `u64`; the host reconstructs via
+// plugin ABI carries the raw integer as `u64`; the host reconstructs via
 // `Handle::from_raw` before forwarding.
 
 // The four callbacks below dispatch through `*_raw` shim methods on
@@ -910,17 +910,17 @@ pub static HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE:
 
 /// Accessor for the host's static `VulkanComputeKernelMethodsVTable`
 /// — used by `VulkanComputeKernel::from_arc_into_raw` to populate
-/// the β-shape's `methods_vtable` field.
+/// the PluginAbiObject's `methods_vtable` field.
 pub fn host_vulkan_compute_kernel_methods_vtable(
 ) -> *const streamlib_plugin_abi::VulkanComputeKernelMethodsVTable {
     // Same routing as `host_gpu_context_limited_access_vtable`:
-    // cdylib β-shape constructors must store the host's vtable
+    // cdylib PluginAbiObject constructors must store the host's vtable
     // pointer so dispatches actually cross to host code (whose
     // `host_callbacks()` returns `None`). Without this routing, the
-    // β-shape stored the cdylib's local static and dispatched to the
+    // PluginAbiObject stored the cdylib's local static and dispatched to the
     // cdylib's own copy of the wrapper — where `host_callbacks()`
     // returns `Some` and any reach through `Texture::host_inner()` or
-    // sibling β-shape `host_inner()` accessors panics.
+    // sibling PluginAbiObject `host_inner()` accessors panics.
     match host_callbacks() {
         Some(c) if !c.vulkan_compute_kernel_methods_vtable.is_null() => {
             c.vulkan_compute_kernel_methods_vtable

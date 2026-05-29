@@ -222,7 +222,7 @@ impl TexturePoolInner {
 /// `Arc<TexturePoolInner>` reference plus the `PoolSlotId` so Drop
 /// can release the slot exactly once. Cdylib code never sees this
 /// type; it reaches `PooledTextureHandle` through the
-/// `(handle, vtable, Texture, POD)` β-shape.
+/// `(handle, vtable, Texture, POD)` PluginAbiObject.
 pub(crate) struct PooledTextureHandleInner {
     pub(crate) pool_inner: Arc<TexturePoolInner>,
     pub(crate) slot_id: PoolSlotId,
@@ -249,9 +249,9 @@ impl Drop for PooledTextureHandleInner {
 pub struct PooledTextureHandle {
     /// Opaque host handle (`Box::into_raw(Box<PooledTextureHandleInner>)`).
     pub(crate) handle: *const c_void,
-    /// Vtable for cross-DSO Drop dispatch.
+    /// Vtable for plugin ABI Drop dispatch.
     pub(crate) vtable: *const GpuContextLimitedAccessVTable,
-    /// The pooled texture. Already β-shape (`#[repr(C)]`, 32 bytes);
+    /// The pooled texture. Already PluginAbiObject (`#[repr(C)]`, 32 bytes);
     /// embedding by value keeps the wire ABI flat without an
     /// indirection through another `Arc`.
     pub(crate) texture: Texture,
@@ -278,7 +278,7 @@ impl PooledTextureHandle {
     /// Constructor for non-macOS platforms (Linux/Windows). The
     /// host's pool allocator builds a `PooledTextureHandleInner`,
     /// leaks it via `Box::into_raw`, resolves the host-mode vtable,
-    /// and assembles the cross-DSO shape.
+    /// and assembles the plugin ABI shape.
     ///
     /// On macOS, handles are created via
     /// `texture_pool_macos::allocate_iosurface_slot`.
@@ -610,7 +610,7 @@ impl std::fmt::Debug for TexturePool {
 // Layout regression tests
 // =============================================================================
 //
-// `PooledTextureHandle` crosses the cdylib DSO boundary as a
+// `PooledTextureHandle` crosses the plugin ABI as a
 // `#[repr(C)]` struct. Drift in its byte-level shape would silently
 // corrupt every `acquire_texture` return-path: the cdylib's Drop
 // impl reads `vtable` and `handle` at fixed offsets to call

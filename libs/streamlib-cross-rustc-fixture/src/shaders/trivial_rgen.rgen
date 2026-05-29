@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // Minimal ray-generation shader for the `VulkanRayTracingKernel`
-// β-shape Create+Clone+Drop round-trip. Declares the AS + storage-
+// PluginAbiObject Create+Clone+Drop round-trip. Declares the AS + storage-
 // image bindings the test's `RayTracingKernelDescriptor` mirrors so
 // SPIR-V reflection at kernel-construction time succeeds. The kernel
 // is never dispatched in the fixture.

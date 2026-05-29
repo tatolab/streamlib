@@ -3,13 +3,13 @@
 
 //! `GpuContextFullAccessVTable` kernel Arc-handle lifecycle (Linux-only).
 //!
-//! `clone_*` / `drop_*` pairs for each kernel β-shape the cdylib
+//! `clone_*` / `drop_*` pairs for each kernel PluginAbiObject the cdylib
 //! carries: compute kernel, graphics kernel, ray-tracing kernel,
 //! texture ring, color converter (v4 #917), acceleration structure
 //! (v4 #917), command recorder (v5 #984). Each pair routes
 //! `Arc::increment_strong_count` / `decrement_strong_count` through
 //! host-compiled code so the cdylib never has to know the inner
-//! β-shape's layout.
+//! PluginAbiObject's layout.
 //!
 //! On non-Linux hosts the kernel types don't exist; each callback ships a
 //! `#[cfg(not(target_os = "linux"))]` defensive-no-op stub so the parent
@@ -171,10 +171,10 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_dr
     )
 }
 
-// β-shape v4 (#917) lifecycle callbacks. The handle is
+// PluginAbiObject v4 (#917) lifecycle callbacks. The handle is
 // `Arc::into_raw(Arc<<Type>Inner>)`-shaped on the host side; cdylib
 // code never sees the Inner layout, only the opaque handle paired
-// with its β-shape vtable. Increment/decrement runs in host-compiled
+// with its PluginAbiObject vtable. Increment/decrement runs in host-compiled
 // code where the Inner layout is known statically.
 
 #[cfg(target_os = "linux")]

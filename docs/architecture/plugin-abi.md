@@ -37,7 +37,7 @@ coupling leak.
 | `streamlib-plugin-abi` | Pure `#[repr(C)]` wire shapes + ABI version constants. No methods, no engine internals. Layout regression tests pin every struct's byte layout. | Host engine AND every cdylib. |
 | `streamlib-consumer-rhi` | Consumer-side carve-out of the Vulkan RHI. Holds `ConsumerVulkanDevice`, `ConsumerVulkanTexture`, `ConsumerVulkanBuffer`, `ConsumerVulkanTimelineSemaphore`, `VulkanLayout`, `TextureFormat`, `TextureUsages`, `PixelFormat`, and the `VulkanRhiDevice` / `DevicePrivilege` / `VulkanTextureLike` / `VulkanTimelineSemaphoreLike` trait machinery. | Host engine AND every cdylib that touches GPU. |
 | `streamlib-engine` (host-side) | Privileged engine internals: `HostVulkanDevice`, VMA pools, queue mutex, modifier probe, kernel construction, swapchain. Plus the host implementations of every vtable callback (in `core/plugin/host_services.rs`). | Host process only. Cdylibs CANNOT Cargo-dep this. |
-| `streamlib-sdk` | Thin re-export façade. Cdylibs Cargo-dep `streamlib = "..."` and get the β-shape types, the `processor` macro, the lifecycle traits — without reaching `HostVulkanDevice` etc. | Host AND cdylibs (re-exports the safe surface from `streamlib-engine`). |
+| `streamlib-sdk` | Thin re-export façade. Cdylibs Cargo-dep `streamlib = "..."` and get the PluginAbiObject types, the `processor` macro, the lifecycle traits — without reaching `HostVulkanDevice` etc. | Host AND cdylibs (re-exports the safe surface from `streamlib-engine`). |
 
 The capability boundary is enforced by the type system: a cdylib's
 `cargo tree` excludes `streamlib-engine` and therefore physically
@@ -47,7 +47,7 @@ returns 0 — that's the lock.
 
 ## The vtable catalog
 
-Every cross-DSO call dispatches through a `#[repr(C)]` vtable whose
+Every plugin ABI call dispatches through a `#[repr(C)]` vtable whose
 layout is pinned by a regression test in `streamlib-plugin-abi`. To
 the best of our current knowledge the in-tree set as of this doc is:
 
@@ -108,10 +108,10 @@ the best of our current knowledge the in-tree set as of this doc is:
   (register, lookup, update layout, unregister) for cdylibs that own
   publishable surfaces.
 
-### β-shape methods vtables
+### PluginAbiObject methods vtables
 
 Per-type vtables that carry the method dispatch for an Arc-handle
-β-shape (the `(handle, vtable, methods_vtable, cached POD)` layout):
+PluginAbiObject (the `(handle, vtable, methods_vtable, cached POD)` layout):
 
 - **`TextureRingMethodsVTable`** — `acquire_next`, slot accessor.
 - **`VulkanComputeKernelMethodsVTable`** — `bindings`, the various
@@ -145,27 +145,27 @@ wrapper. Adapter ABI is its own audit boundary — see
 [`adapter-runtime-integration.md`](adapter-runtime-integration.md)
 for the runtime integration shape.
 
-## β-shape pattern
+## PluginAbiObject pattern
 
-Every Arc-holding type that crosses the cdylib boundary has the same
+Every Arc-holding type that crosses the plugin ABI has the same
 shape: a fixed `(handle, vtable)` prefix for clone/drop dispatch
-plus cached POD fields read by `&self` getters with no FFI hop.
+plus cached POD fields read by `&self` getters with no plugin ABI hop.
 Types that expose methods beyond POD getters (the kernel +
-recorder + color converter β-shapes) carry an additional
+recorder + color converter PluginAbiObjects) carry an additional
 `methods_vtable` pointer between the parent vtable and the cached
-POD; pure resource-handle β-shapes (`Texture`, `PixelBuffer`,
+POD; pure resource-handle PluginAbiObjects (`Texture`, `PixelBuffer`,
 buffer types, `TextureRegistration`) skip it.
 
-Reference layout for a POD-only β-shape (no methods_vtable):
+Reference layout for a POD-only PluginAbiObject (no methods_vtable):
 
 ```rust
 #[repr(C)]
 pub struct Texture {
     /// Opaque handle to host's `Arc<TextureInner>::into_raw()`.
     handle: *const c_void,
-    /// Vtable for cross-DSO clone/drop dispatch.
+    /// Vtable for plugin ABI clone/drop dispatch.
     vtable: *const GpuContextLimitedAccessVTable,
-    /// Cached POD fields read by `&self` getters with no FFI hop.
+    /// Cached POD fields read by `&self` getters with no plugin ABI hop.
     width_cached: u32,
     height_cached: u32,
     format_raw: u32,
@@ -173,18 +173,18 @@ pub struct Texture {
 }
 ```
 
-Reference layout for a method-bearing β-shape (has methods_vtable):
+Reference layout for a method-bearing PluginAbiObject (has methods_vtable):
 
 ```rust
 #[repr(C)]
 pub struct VulkanComputeKernel {
     /// Opaque handle to host's `Arc<VulkanComputeKernelInner>`.
     handle: *const c_void,
-    /// Parent vtable for cross-DSO clone/drop dispatch.
+    /// Parent vtable for plugin ABI clone/drop dispatch.
     vtable: *const GpuContextFullAccessVTable,
     /// Per-type vtable for method dispatch.
     methods_vtable: *const VulkanComputeKernelMethodsVTable,
-    /// Cached POD fields read by `&self` getters with no FFI hop.
+    /// Cached POD fields read by `&self` getters with no plugin ABI hop.
     cached_push_constant_size: u32,
     _reserved_padding: u32,
 }
@@ -198,21 +198,21 @@ Three invariants the pattern locks:
    host's `Arc` directly. Both slots short-circuit cleanly on null
    handles.
 2. **POD getters read from cached fields.** `texture.width()` returns
-   `self.width_cached` with no FFI hop; this is what makes the
+   `self.width_cached` with no plugin ABI hop; this is what makes the
    per-frame hot path cheap. The cached fields are populated at
    construction by `from_arc_into_raw` and never mutate over the
    handle's lifetime (the underlying resource is immutable in size /
    format).
-3. **Methods dispatch through `methods_vtable`** when the β-shape
+3. **Methods dispatch through `methods_vtable`** when the PluginAbiObject
    exposes more than just POD getters. A consumer-side `&self` method
-   either reads a cached field (no FFI) or calls
-   `(*methods_vtable).slot(handle, args...)` (one FFI hop). The
+   either reads a cached field (no plugin ABI hop) or calls
+   `(*methods_vtable).slot(handle, args...)` (one plugin ABI hop). The
    host-mode and cdylib-mode codepaths produce identical observable
    behavior.
 
 ## Mode routing — host vs cdylib
 
-The same β-shape struct serves both host and cdylib callers. The
+The same PluginAbiObject struct serves both host and cdylib callers. The
 deciding factor at runtime is:
 
 ```rust
@@ -272,9 +272,9 @@ layout (via the guarded `host_inner` family), ONE way to call into
 host code from cdylib (via vtable dispatch), and the guards make
 the second always visible at compile time when violated.
 
-## The cross-DSO refcount contract
+## The plugin ABI refcount contract
 
-When the host hands a β-shape across the FFI boundary, the wire
+When the host hands a PluginAbiObject across the plugin ABI, the wire
 encoding is `Arc::into_raw(inner) as *const c_void`. The cdylib
 holds the resulting opaque `handle` and uses it for:
 
@@ -291,7 +291,7 @@ inner. The host owns Arc lifecycle end-to-end.
 ### The `make_*_borrow` trap
 
 The host-side vtable callbacks routinely need to reconstruct a
-`ManuallyDrop<β-shape>` from a `*const c_void` handle the cdylib
+`ManuallyDrop<PluginAbiObject>` from a `*const c_void` handle the cdylib
 passed back to invoke a method on. The `make_*_borrow(handle)`
 helpers in `host_services.rs` build that borrow.
 
@@ -330,7 +330,7 @@ The `make_borrow_cached_field_regression_tests` module in
 host-side resource of known dimensions, constructs the borrow, and
 asserts the borrow's POD getters return the real values.
 
-## Cross-DSO contracts the ABI commits to
+## Plugin ABI contracts the ABI commits to
 
 ### Wire constants
 
@@ -384,7 +384,7 @@ which catches Rust panics with `catch_unwind` and converts them into
 a clean error to the cdylib caller — typed by the slot's return
 shape (`-2` for `i32` returns, a default-`""` for `&str` returns,
 etc.). A panic in a host-side vtable implementation NEVER unwinds
-across the FFI boundary; that would be undefined behavior since the
+across the plugin ABI; that would be undefined behavior since the
 cdylib was compiled with a potentially different panic strategy.
 
 The wrapper itself is locked by the
@@ -470,15 +470,15 @@ Revisit this doc and the structural decisions when:
    placement starts to matter; consider whether a field belongs on
    the struct or behind a pointer.
 4. **A new vtable would have more than ~30 slots.** Either group
-   into per-domain vtables (see the `*MethodsVTable` per-β-shape
-   split) or reconsider whether all slots really need separate FFI
+   into per-domain vtables (see the `*MethodsVTable` per-PluginAbiObject
+   split) or reconsider whether all slots really need separate plugin ABI
    crossings.
 5. **A `make_*_borrow` helper is added.** Mirror the two-step dance
    from the existing helpers (read inner via minimal borrow, then
    construct final borrow with cached fields populated) and add a
    matching test in `make_borrow_cached_field_regression_tests`.
 6. **A non-Linux platform grows real cdylib coverage.** The current
-   ABI is Linux-rich; macOS / Windows variants of several β-shape
+   ABI is Linux-rich; macOS / Windows variants of several PluginAbiObject
    methods (Metal command buffer, IOSurface texture, etc.) ship
    stubs to keep the vtable layout unconditional. When a real
    non-Linux consumer arrives, those stubs need to grow real
@@ -495,7 +495,7 @@ Revisit this doc and the structural decisions when:
   `run_host_extern_c` panic safety net, the
   `make_borrow_cached_field_regression_tests` module.
 - **Cdylib-side dispatch shims**: `libs/streamlib-engine/src/core/`
-  for the β-shapes (`rhi/texture.rs`, `rhi/pixel_buffer.rs`,
+  for the PluginAbiObjects (`rhi/texture.rs`, `rhi/pixel_buffer.rs`,
   `rhi/storage_buffer.rs`, etc.) and per-type method dispatch
   (`vulkan/rhi/vulkan_compute_kernel.rs`,
   `vulkan/rhi/vulkan_graphics_kernel.rs`, etc.). Each carries the

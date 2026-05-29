@@ -17,7 +17,7 @@ use crate::repr::{
 /// and `acquire_render_target_dma_buf_image`. Each kernel-construction
 /// callback consumes a `#[repr(C)]` descriptor mirror
 /// ([`crate::ComputeKernelDescriptorRepr`], [`crate::GraphicsKernelDescriptorRepr`],
-/// [`crate::RayTracingKernelDescriptorRepr`]) and returns an Arc-handle β-shape
+/// [`crate::RayTracingKernelDescriptorRepr`]) and returns an Arc-handle PluginAbiObject
 /// for the resulting kernel; the matching Arc-lifecycle pairs
 /// (`clone_*` / `drop_*`) live on this vtable.
 ///
@@ -47,11 +47,11 @@ use crate::repr::{
 ///   inherit through the originating LimitedAccess vtable per the
 ///   `inherited_lim_*` fields on `GpuContextFullAccess` — they do
 ///   not get parallel slots here.
-/// - v4: β-shape Phase D return types (`RhiColorConverter`,
+/// - v4: PluginAbiObject Phase D return types (`RhiColorConverter`,
 ///   `VulkanAccelerationStructure`, `RhiCommandRecorder`) gain
 ///   `clone_*` / `drop_*` slot pairs alongside the existing kernel +
 ///   texture-ring pairs. The slots activate the layout-stable
-///   `(handle, vtable)` β-shape pattern so cdylibs can hold +
+///   `(handle, vtable)` PluginAbiObject pattern so cdylibs can hold +
 ///   refcount + drop these handles without rustc-version coupling.
 /// - v5: `gpu_capabilities` slot returning a `#[repr(C)]`
 ///   `GpuCapabilitiesRepr` struct (vendor name + capability bools
@@ -61,22 +61,22 @@ use crate::repr::{
 ///   amortizes better than per-method slots.
 /// - v6: `create_timeline_semaphore(initial_value)` slot returning
 ///   an `Arc::into_raw(Arc<HostVulkanTimelineSemaphore>)` opaque
-///   handle (Arc-raw-pointer transit, NOT β-shape — the timeline
-///   semaphore's β-shape is its own future lift). Camera processor
+///   handle (Arc-raw-pointer transit, NOT PluginAbiObject — the timeline
+///   semaphore's PluginAbiObject is its own future lift). Camera processor
 ///   needs this to drop the `full.device().vulkan_device().device()`
 ///   reach-through for `HostVulkanTimelineSemaphore::new(...)`.
 /// - v7: `import_dma_buf_storage_buffer(fd, byte_size)` slot writing
-///   a `StorageBuffer` β-shape (already layout-stable from C1)
+///   a `StorageBuffer` PluginAbiObject (already layout-stable from C1)
 ///   into `*out_buffer`. Camera processor's V4L2 zero-copy path
 ///   uses this; the host consumes the fd on success.
 /// - v8: `build_triangles_blas` and `build_tlas` signatures extended
 ///   with three new out-params each (`out_device_address: *mut u64`,
 ///   `out_storage_size: *mut u64`, `out_kind: *mut u32`). Prior to
 ///   v8 cdylib mint paths populated the `VulkanAccelerationStructure`
-///   β-shape's cached POD fields with placeholder zeros; the β-shape
+///   PluginAbiObject's cached POD fields with placeholder zeros; the PluginAbiObject
 ///   getters (`device_address()`, `storage_size()`, `kind()`) then
 ///   fell back to `host_inner()` which panics in cdylib mode. v8
-///   surfaces the real values across the FFI so the cached fields
+///   surfaces the real values across the plugin ABI so the cached fields
 ///   are populated correctly at mint time. **ABI-breaking** — plugins
 ///   built against v7 are not load-compatible with a v8 host (the fn
 ///   pointer signatures differ).
@@ -90,7 +90,7 @@ use crate::repr::{
 ///   `Arc::into_raw(Arc<HostVulkanTexture>)` raw pointer. Second
 ///   bridge of the cdylib-side adapter-construction chain — gives
 ///   workspace plugin cdylibs a non-panicking path to
-///   `Arc<HostVulkanTexture>` from a `Texture` β-shape (the existing
+///   `Arc<HostVulkanTexture>` from a `Texture` PluginAbiObject (the existing
 ///   `Texture::host_inner()` and `HostTextureExt::vulkan_inner()`
 ///   panic in cdylib mode). Same rustc-version-coupling caveat as
 ///   v9: `HostVulkanTexture` is not `#[repr(C)]`, so the Arc-raw
@@ -106,7 +106,7 @@ pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 10;
 /// [`crate::HostServices::gpu_context_full_access_vtable`].
 ///
 /// C2 lands the descriptor wire format + host-side dispatch + cdylib-
-/// side β-shape. C3 wires the `escalate_begin` / `escalate_end` scope-
+/// side PluginAbiObject. C3 wires the `escalate_begin` / `escalate_end` scope-
 /// token machinery that makes the methods reachable from cdylib
 /// `escalate(|full| { ... })` call sites.
 ///
@@ -147,14 +147,14 @@ pub struct GpuContextFullAccessVTable {
     // VulkanComputeKernel return-type lifetime
     // -------------------------------------------------------------------------
 
-    /// Bump the refcount on a `VulkanComputeKernel` β-shape handle.
+    /// Bump the refcount on a `VulkanComputeKernel` PluginAbiObject handle.
     /// Called by the cdylib's `Clone for VulkanComputeKernel`. Host
     /// runs `Arc::increment_strong_count(handle as *const VulkanComputeKernelInner)`
     /// against the host-internal Inner type — cdylib never sees the
     /// Inner layout.
     pub clone_compute_kernel: unsafe extern "C" fn(handle: *const c_void),
 
-    /// Decrement the refcount on a `VulkanComputeKernel` β-shape handle.
+    /// Decrement the refcount on a `VulkanComputeKernel` PluginAbiObject handle.
     /// Host runs `Arc::decrement_strong_count` against the Inner type.
     pub drop_compute_kernel: unsafe extern "C" fn(handle: *const c_void),
 
@@ -162,33 +162,33 @@ pub struct GpuContextFullAccessVTable {
     // VulkanGraphicsKernel return-type lifetime
     // -------------------------------------------------------------------------
 
-    /// Bump the refcount on a `VulkanGraphicsKernel` β-shape handle.
+    /// Bump the refcount on a `VulkanGraphicsKernel` PluginAbiObject handle.
     /// Host runs `Arc::increment_strong_count(handle as *const VulkanGraphicsKernelInner)`.
     pub clone_graphics_kernel: unsafe extern "C" fn(handle: *const c_void),
 
-    /// Decrement the refcount on a `VulkanGraphicsKernel` β-shape handle.
+    /// Decrement the refcount on a `VulkanGraphicsKernel` PluginAbiObject handle.
     pub drop_graphics_kernel: unsafe extern "C" fn(handle: *const c_void),
 
     // -------------------------------------------------------------------------
     // VulkanRayTracingKernel return-type lifetime
     // -------------------------------------------------------------------------
 
-    /// Bump the refcount on a `VulkanRayTracingKernel` β-shape handle.
+    /// Bump the refcount on a `VulkanRayTracingKernel` PluginAbiObject handle.
     /// Host runs `Arc::increment_strong_count(handle as *const VulkanRayTracingKernelInner)`.
     pub clone_ray_tracing_kernel: unsafe extern "C" fn(handle: *const c_void),
 
-    /// Decrement the refcount on a `VulkanRayTracingKernel` β-shape handle.
+    /// Decrement the refcount on a `VulkanRayTracingKernel` PluginAbiObject handle.
     pub drop_ray_tracing_kernel: unsafe extern "C" fn(handle: *const c_void),
 
     // -------------------------------------------------------------------------
     // TextureRing return-type lifetime
     // -------------------------------------------------------------------------
 
-    /// Bump the refcount on a `TextureRing` β-shape handle.
+    /// Bump the refcount on a `TextureRing` PluginAbiObject handle.
     /// Host runs `Arc::increment_strong_count(handle as *const TextureRingInner)`.
     pub clone_texture_ring: unsafe extern "C" fn(handle: *const c_void),
 
-    /// Decrement the refcount on a `TextureRing` β-shape handle.
+    /// Decrement the refcount on a `TextureRing` PluginAbiObject handle.
     pub drop_texture_ring: unsafe extern "C" fn(handle: *const c_void),
 
     // -------------------------------------------------------------------------
@@ -298,7 +298,7 @@ pub struct GpuContextFullAccessVTable {
     /// dispatches through this slot inside an active escalate scope;
     /// the host picks a tiled DRM modifier via the EGL probe, runs the
     /// allocation through the RHI's render-target pool, and writes a
-    /// fresh `Texture` β-shape into `*out_texture` on success.
+    /// fresh `Texture` PluginAbiObject into `*out_texture` on success.
     ///
     /// `format_raw` is the `#[repr(u32)]` discriminant of
     /// `streamlib_consumer_rhi::TextureFormat`. Linux-only; non-Linux
@@ -336,7 +336,7 @@ pub struct GpuContextFullAccessVTable {
     /// register the texture in the same-process texture cache, and
     /// return both. `out_id_buf` receives the UTF-8 surface id (
     /// `out_id_len` records the byte count; truncation is an error);
-    /// `out_texture` receives the [`crate::Texture`] β-shape.
+    /// `out_texture` receives the [`crate::Texture`] PluginAbiObject.
     pub acquire_output_texture: unsafe extern "C" fn(
         gpu_handle: *const c_void,
         width: u32,
@@ -399,7 +399,7 @@ pub struct GpuContextFullAccessVTable {
     /// from CPU-side vertex + index data. Writes an
     /// `Arc::into_raw(Arc<VulkanAccelerationStructure>)` raw pointer
     /// into `*out_blas` on success, plus the cached POD descriptors
-    /// the cdylib's `VulkanAccelerationStructure` β-shape carries:
+    /// the cdylib's `VulkanAccelerationStructure` PluginAbiObject carries:
     /// `*out_device_address` (BLAS device address — used as the
     /// `accelerationStructureReference` when wiring into a TLAS),
     /// `*out_storage_size` (build-time storage allocation), and
@@ -429,7 +429,7 @@ pub struct GpuContextFullAccessVTable {
     /// `Arc::into_raw(Arc<VulkanAccelerationStructure>)` raw pointer
     /// into `*out_tlas` on success, plus the cached POD descriptors
     /// (`*out_device_address`, `*out_storage_size`, `*out_kind`) the
-    /// cdylib's β-shape carries — same shape as
+    /// cdylib's PluginAbiObject carries — same shape as
     /// `build_triangles_blas`; `*out_kind` is always 1 (`TopLevel`)
     /// for `build_tlas`. Linux-only.
     pub build_tlas: unsafe extern "C" fn(
@@ -500,10 +500,10 @@ pub struct GpuContextFullAccessVTable {
     /// `Arc::into_raw(Arc<HostVulkanTimelineSemaphore>)` into
     /// `*out_handle` and returns 0.
     ///
-    /// **Arc-raw-pointer transit** — not a layout-stable β-shape.
+    /// **Arc-raw-pointer transit** — not a layout-stable PluginAbiObject.
     /// In-tree consumers (camera, display) ride this freely because
     /// they're built in the same workspace as the engine. Cross-repo
-    /// plugin distribution will need a β-shape lift for
+    /// plugin distribution will need a PluginAbiObject lift for
     /// `HostVulkanTimelineSemaphore`; tracked as a future follow-up.
     /// Linux-only on the host side; non-Linux stubs return non-zero.
     pub create_timeline_semaphore: unsafe extern "C" fn(
@@ -521,7 +521,7 @@ pub struct GpuContextFullAccessVTable {
 
     /// Import a V4L2 (or otherwise externally-allocated) DMA-BUF FD
     /// as a `StorageBuffer` (SSBO-shaped). On success writes the
-    /// `StorageBuffer` β-shape struct (32 bytes, layout-stable from
+    /// `StorageBuffer` PluginAbiObject struct (32 bytes, layout-stable from
     /// C1) into `*out_buffer` and returns 0.
     ///
     /// **The host consumes `fd` on success** (`vkImportMemoryFdInfoKHR`
@@ -568,7 +568,7 @@ pub struct GpuContextFullAccessVTable {
     /// `acquire_write` → `view_mut` → release path. Production
     /// processor code shouldn't reach for this — the higher-level
     /// FullAccess vtable methods (kernel construction, buffer/texture
-    /// allocation) cover the supported cross-DSO surface.
+    /// allocation) cover the supported plugin ABI surface.
     pub host_vulkan_device_arc:
         unsafe extern "C" fn(gpu_handle: *const c_void) -> *const c_void,
 
@@ -577,10 +577,10 @@ pub struct GpuContextFullAccessVTable {
     // -------------------------------------------------------------------------
 
     /// Clone the host's `Arc<HostVulkanTexture>` backing a `Texture`
-    /// β-shape and return the raw `Arc::into_raw` pointer on success.
+    /// PluginAbiObject and return the raw `Arc::into_raw` pointer on success.
     ///
     /// `texture_handle` is the same opaque `Arc::into_raw(Arc<TextureInner>)`
-    /// pointer cached on the `Texture` β-shape's `handle` field; the
+    /// pointer cached on the `Texture` PluginAbiObject's `handle` field; the
     /// host dereferences it without taking ownership, clones the
     /// inner `Arc<HostVulkanTexture>`, and returns its raw pointer
     /// with the strong count bumped by 1. The caller is responsible
@@ -617,7 +617,7 @@ mod tests {
         // pointers (8 bytes each) = 4 + 4 + 272 = 280 bytes, align = 8.
         //
         // 34 entries = 1 drop_handle + 7 clone/drop pairs (14 fn
-        // pointers for the 7 β-shape return types: compute / graphics /
+        // pointers for the 7 PluginAbiObject return types: compute / graphics /
         // ray-tracing kernels, texture ring, color converter,
         // acceleration structure, command recorder) + 4 create_* method
         // callbacks (compute / graphics / ray-tracing / texture_ring)
@@ -666,7 +666,7 @@ mod tests {
             offset_of!(GpuContextFullAccessVTable, drop_texture_ring),
             72
         );
-        // v4-added β-shape clone/drop pairs (#917).
+        // v4-added PluginAbiObject clone/drop pairs (#917).
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, clone_color_converter),
             80

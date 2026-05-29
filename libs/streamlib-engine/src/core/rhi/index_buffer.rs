@@ -25,7 +25,7 @@ use streamlib_plugin_abi::GpuContextLimitedAccessVTable;
 pub struct IndexBuffer {
     /// Opaque handle to the host's `Arc<HostVulkanBuffer>`.
     pub(crate) handle: *const c_void,
-    /// Vtable for cross-DSO Clone/Drop dispatch.
+    /// Vtable for plugin ABI Clone/Drop dispatch.
     pub(crate) vtable: *const GpuContextLimitedAccessVTable,
     /// Cached byte size.
     pub(crate) byte_size_cached: u64,

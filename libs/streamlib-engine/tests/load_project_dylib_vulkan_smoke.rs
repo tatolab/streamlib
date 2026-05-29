@@ -10,7 +10,7 @@
 //!   1. `host_vulkan_device_arc()` (v9 bridge) →
 //!      `Arc<HostVulkanDevice>`.
 //!   2. `acquire_render_target_dma_buf_image()` →
-//!      `Texture` β-shape; `host_vulkan_texture_arc()` (v10) →
+//!      `Texture` PluginAbiObject; `host_vulkan_texture_arc()` (v10) →
 //!      `Arc<HostVulkanTexture>`.
 //!   3. `HostVulkanTimelineSemaphore::new(device_arc.device(), 0)` —
 //!      cdylib-reachable direct constructor.

@@ -99,11 +99,11 @@ pub trait HostTextureExt {
     /// in host mode reaches `vulkan_inner()` directly. Used by
     /// workspace plugin cdylibs that need to call
     /// `XxxSurfaceAdapter::register_host_surface` with a real
-    /// `Arc<HostVulkanTexture>` from a `Texture` β-shape (the
+    /// `Arc<HostVulkanTexture>` from a `Texture` PluginAbiObject (the
     /// `host_inner()` path panics in cdylib mode).
     ///
     /// **Rustc-version coupling.** `HostVulkanTexture` is not
-    /// `#[repr(C)]`; the cross-DSO Arc transit is safe only when the
+    /// `#[repr(C)]`; the plugin ABI Arc transit is safe only when the
     /// cdylib shares the host's rustc version and the engine's dep
     /// graph (workspace plugin cdylibs do; subprocess cdylibs
     /// — `streamlib-python-native`, `streamlib-deno-native` — don't
@@ -221,7 +221,7 @@ impl HostGpuDeviceExt for GpuDevice {
 /// # Boundary lock
 ///
 /// Without the trait in scope, the privileged accessors are
-/// unreachable from the [`SurfaceStore`] β-shape's inherent impl:
+/// unreachable from the [`SurfaceStore`] PluginAbiObject's inherent impl:
 ///
 /// ```compile_fail
 /// # #[cfg(target_os = "linux")]

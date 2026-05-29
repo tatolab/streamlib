@@ -18,13 +18,13 @@ use vulkanalia::vk;
 /// without depending on `vulkanalia`.
 ///
 /// `#[repr(transparent)]` so the newtype is byte-equivalent to its
-/// inner `i32` across the plugin FFI boundary — adapter vtables (see
+/// inner `i32` across the plugin ABI — adapter vtables (see
 /// `streamlib-adapter-{vulkan,cuda,cpu-readback}`) carry
 /// `initial_layout_raw: i32` / `post_release_layout_raw: i32` fields
 /// that get reconstituted as `VulkanLayout(raw)` on the receiving
 /// side. Pinning the repr means a cdylib compiled with a different
 /// rustc / dep-graph than the host still observes the same byte
-/// layout for any cross-DSO traffic.
+/// layout for any plugin ABI traffic.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 #[repr(transparent)]
 pub struct VulkanLayout(pub i32);
@@ -51,7 +51,7 @@ impl VulkanLayout {
 
 #[cfg(test)]
 mod layout_tests {
-    //! Layout regression tests for the FFI-crossing layout primitive.
+    //! Layout regression tests for the plugin-ABI-crossing layout primitive.
     //!
     //! `#[repr(transparent)]` over the `i32` `VkImageLayout` value, so
     //! the newtype is byte-equivalent to its inner field — adapter

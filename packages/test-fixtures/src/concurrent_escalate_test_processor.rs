@@ -21,7 +21,7 @@
 //! Mirrors the in-process `test_escalate_serializes_concurrent_callers`
 //! test (`libs/streamlib-engine/src/core/context/gpu_context.rs`) but
 //! drives the cdylib path through `escalate_via_vtable` — the
-//! cross-DSO contract the audit flagged as previously uncovered.
+//! plugin ABI contract the audit flagged as previously uncovered.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;

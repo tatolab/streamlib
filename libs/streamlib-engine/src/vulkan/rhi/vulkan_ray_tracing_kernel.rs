@@ -44,7 +44,7 @@ use super::{HostVulkanDevice, VulkanAccelerationStructure};
 
 /// Host-only rich data backing a [`VulkanRayTracingKernel`]. Cdylib code
 /// never sees this type; it reaches the public surface through the
-/// `(handle, vtable)` β-shape.
+/// `(handle, vtable)` PluginAbiObject.
 pub struct VulkanRayTracingKernelInner {
     label: String,
     vulkan_device: Arc<HostVulkanDevice>,
@@ -100,8 +100,8 @@ enum BindingResource {
     },
     AccelerationStructure {
         handle: vk::AccelerationStructureKHR,
-        // The β-shape clone keeps the AS alive while bound (β-shape's
-        // Clone bumps the underlying Arc strong count via vtable).
+        // The PluginAbiObject clone keeps the AS alive while bound (the
+        // PluginAbiObject's Clone bumps the underlying Arc strong count via vtable).
         _keep_alive: VulkanAccelerationStructure,
     },
 }
@@ -909,18 +909,18 @@ impl std::fmt::Debug for VulkanRayTracingKernelInner {
 }
 
 // =============================================================================
-// β-shape implementation (#917)
+// PluginAbiObject implementation (#917)
 // =============================================================================
 
-/// Ray-tracing kernel — layout-stable `#[repr(C)]` β-shape (#907
+/// Ray-tracing kernel — layout-stable `#[repr(C)]` PluginAbiObject (#907
 /// Phase E PR 4/5). Mirrors the compute kernel shape.
 #[repr(C)]
 pub struct VulkanRayTracingKernel {
     /// Opaque handle to the host's `Arc<VulkanRayTracingKernelInner>`.
     pub(crate) handle: *const c_void,
-    /// Parent vtable for cross-DSO Clone/Drop dispatch (#918 Phase D).
+    /// Parent vtable for plugin ABI Clone/Drop dispatch (#918 Phase D).
     pub(crate) vtable: *const GpuContextFullAccessVTable,
-    /// Per-type vtable for cross-DSO method dispatch (#907 Phase E).
+    /// Per-type vtable for plugin ABI method dispatch (#907 Phase E).
     pub(crate) methods_vtable:
         *const streamlib_plugin_abi::VulkanRayTracingKernelMethodsVTable,
     /// Cached push-constant size in bytes. Set at construction.
@@ -982,7 +982,7 @@ impl VulkanRayTracingKernel {
     /// Bind a [`crate::core::rhi::PixelBuffer`]-shaped storage
     /// buffer (SSBO) at `binding`. Per-input-type concrete shape
     /// (no generic) so the cdylib path can dispatch via the
-    /// matching typed FFI slot (`set_storage_buffer_pixel`)
+    /// matching typed plugin ABI slot (`set_storage_buffer_pixel`)
     /// without a kind discriminator. Mirrors
     /// `VulkanComputeKernel::set_storage_buffer_pixel`.
     pub fn set_storage_buffer_pixel(
@@ -1048,7 +1048,7 @@ impl VulkanRayTracingKernel {
     pub fn set_push_constants_value<T: Copy>(&self, value: &T) -> Result<()> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
             // SAFETY: T is Copy + Sized so its layout is stable; the
-            // byte view is read-only and consumed inside the FFI call.
+            // byte view is read-only and consumed inside the plugin ABI call.
             let bytes = unsafe {
                 std::slice::from_raw_parts(
                     value as *const T as *const u8,
@@ -1070,7 +1070,7 @@ impl VulkanRayTracingKernel {
     /// Kernel's declared binding shape. Mode-routed: host-mode reads
     /// directly from `host_inner`; cdylib-mode dispatches through the
     /// v3 `bindings` slot on the per-type methods vtable. On cdylib-
-    /// side FFI errors the method emits a `tracing::warn` and returns
+    /// side plugin ABI errors the method emits a `tracing::warn` and returns
     /// an empty Vec.
     pub fn bindings(&self) -> Vec<RayTracingBindingSpec> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
@@ -1157,7 +1157,7 @@ impl VulkanRayTracingKernel {
             .collect()
     }
 
-    /// Push-constant range size in bytes. Cached POD — no FFI hop.
+    /// Push-constant range size in bytes. Cached POD — no plugin ABI hop.
     pub fn push_constant_size(&self) -> u32 {
         self.cached_push_constant_size
     }
@@ -1451,13 +1451,13 @@ impl std::fmt::Debug for VulkanRayTracingKernel {
 }
 
 #[cfg(all(test, target_pointer_width = "64"))]
-mod beta_shape_layout_tests {
+mod plugin_abi_object_layout_tests {
     use super::*;
     use core::mem::{align_of, offset_of, size_of};
 
     #[test]
     fn vulkan_ray_tracing_kernel_layout() {
-        // β-shape struct as of #907 PR 4/5:
+        // PluginAbiObject struct as of #907 PR 4/5:
         //   handle                       @ 0  (8 bytes, *const c_void)
         //   vtable                       @ 8  (8 bytes, *const GpuContextFullAccessVTable)
         //   methods_vtable               @ 16 (8 bytes, *const VulkanRayTracingKernelMethodsVTable)

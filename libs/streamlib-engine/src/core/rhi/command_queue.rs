@@ -22,7 +22,7 @@ use super::CommandBuffer;
 
 /// Host-only rich data backing a [`RhiCommandQueue`]. Cdylib code
 /// never sees this type; it reaches the public [`RhiCommandQueue`]
-/// surface through the `(handle, vtable)` β-shape.
+/// surface through the `(handle, vtable)` PluginAbiObject.
 pub(crate) struct RhiCommandQueueInner {
     // Metal backend: explicit feature OR macOS/iOS default (when vulkan not requested)
     #[cfg(all(
@@ -64,7 +64,7 @@ pub(crate) struct RhiCommandQueueInner {
 pub struct RhiCommandQueue {
     /// Opaque handle to the host's `Arc<RhiCommandQueueInner>`.
     pub(crate) handle: *const c_void,
-    /// Vtable for cross-DSO Clone/Drop and method dispatch.
+    /// Vtable for plugin ABI Clone/Drop and method dispatch.
     pub(crate) vtable: *const GpuContextLimitedAccessVTable,
 }
 
@@ -78,7 +78,7 @@ unsafe impl Sync for RhiCommandQueue {}
 impl RhiCommandQueue {
     /// Internal helper: leak an initial Arc strong count via
     /// `Arc::into_raw`, resolve the host-mode vtable, and assemble
-    /// the cross-DSO shape.
+    /// the plugin ABI shape.
     pub(crate) fn from_arc_into_raw(arc: std::sync::Arc<RhiCommandQueueInner>) -> Self {
         let handle = std::sync::Arc::into_raw(arc) as *const c_void;
         let vtable = crate::core::plugin::host_services::host_gpu_context_limited_access_vtable();
@@ -104,7 +104,7 @@ impl RhiCommandQueue {
     /// Command buffers are single-use: create, record commands, commit.
     /// This is the standard pattern for GPU work submission.
     ///
-    /// Dispatches through the cross-DSO vtable's
+    /// Dispatches through the plugin ABI vtable's
     /// `create_command_buffer_from_queue` callback.
     pub fn create_command_buffer(&self) -> Result<CommandBuffer> {
         if self.handle.is_null() || self.vtable.is_null() {

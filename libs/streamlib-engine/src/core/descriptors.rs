@@ -10,7 +10,7 @@ pub use streamlib_processor_schema::{
 };
 
 /// Lossless wire-format mirror of [`PortSchemaSpec`] used at the cdylib
-/// FFI msgpack boundary.
+/// plugin ABI msgpack boundary.
 ///
 /// `PortSchemaSpec`'s default serde impl
 /// (`streamlib_processor_schema::PortSchemaSpec`) is intentionally
@@ -23,7 +23,7 @@ pub use streamlib_processor_schema::{
 /// `Named → Specific` against the enclosing manifest's `schemas:` map.
 ///
 /// It does NOT hold when [`ProcessorDescriptor`] crosses the cdylib
-/// dlopen FFI seam via `rmp_serde`. The proc-macro pre-resolves
+/// dlopen plugin ABI seam via `rmp_serde`. The proc-macro pre-resolves
 /// `Named → Specific` at the cdylib's compile time and embeds the
 /// fully-qualified [`SchemaIdent`] in the cdylib's `descriptor()`
 /// constant. When `host_processor_register` deserializes the msgpack
@@ -133,7 +133,7 @@ pub struct PortDescriptor {
     /// Structured schema spec — `Any` (wildcard for MoQ-style ports) or a
     /// fully-qualified [`SchemaIdent`].
     ///
-    /// Serialized via [`port_schema_spec_wire`] so the cdylib FFI msgpack
+    /// Serialized via [`port_schema_spec_wire`] so the cdylib plugin ABI msgpack
     /// boundary preserves `Specific(SchemaIdent)` round-trip. The default
     /// `PortSchemaSpec` serde impl is YAML-shaped (lossy on `Specific`)
     /// and stays in place for `streamlib.yaml` manifest parsing where
@@ -355,10 +355,10 @@ mod tests {
     use super::*;
 
     /// `PortDescriptor::schema` must round-trip every `PortSchemaSpec`
-    /// variant losslessly through `rmp_serde` — that's the cdylib FFI
+    /// variant losslessly through `rmp_serde` — that's the cdylib plugin ABI
     /// wire format. A regression here would silently degrade
-    /// `Specific(SchemaIdent)` to `Named(bare_type)` at the host /
-    /// plugin boundary; the WIRE phase would then panic at
+    /// `Specific(SchemaIdent)` to `Named(bare_type)` at the
+    /// plugin ABI; the WIRE phase would then panic at
     /// `open_iceoryx2_service_op::schema_ident_wire_for_producer`.
     /// Mentally revert the `#[serde(with = "port_schema_spec_wire")]`
     /// attribute on `PortDescriptor::schema` and this test fails on
@@ -389,7 +389,7 @@ mod tests {
             }
             other => panic!(
                 "Specific(SchemaIdent) downgraded to {:?} on msgpack round-trip — the \
-                 cdylib FFI is silently destroying schema identity",
+                 cdylib plugin ABI is silently destroying schema identity",
                 other
             ),
         }
@@ -397,7 +397,7 @@ mod tests {
 
     /// `Named` variant must also round-trip — exercised by the YAML
     /// parser path that produces unresolved `Named` for in-process
-    /// `ProjectConfig::load` consumers; if the cdylib FFI hop ever
+    /// `ProjectConfig::load` consumers; if the cdylib plugin ABI hop ever
     /// hands a `Named` across, it stays `Named`.
     #[test]
     fn port_descriptor_schema_msgpack_round_trip_preserves_named() {
@@ -432,9 +432,9 @@ mod tests {
     }
 
     /// End-to-end through `ProcessorDescriptor` — the actual envelope
-    /// that crosses the cdylib FFI boundary at
+    /// that crosses the cdylib plugin ABI at
     /// `register_via_callback` / `host_processor_register`. Locks the
-    /// invariant at the type the FFI actually serializes, not just
+    /// invariant at the type the plugin ABI actually serializes, not just
     /// the inner port descriptor.
     #[test]
     fn processor_descriptor_msgpack_round_trip_preserves_port_specific() {
@@ -464,7 +464,7 @@ mod tests {
                 assert_eq!(round_tripped, &ident);
             }
             other => panic!(
-                "ProcessorDescriptor.outputs[0].schema downgraded to {:?} on FFI \
+                "ProcessorDescriptor.outputs[0].schema downgraded to {:?} on plugin ABI \
                  msgpack round-trip — cdylib registration silently destroying identity",
                 other
             ),

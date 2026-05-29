@@ -1,31 +1,31 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `OutputWriterVTable` — extern "C" dispatch for the cdylib's `OutputWriter` β-shape.
+//! `OutputWriterVTable` — extern "C" dispatch for the cdylib's `OutputWriter` PluginAbiObject.
 
 use core::ffi::c_void;
 
 /// Layout version of [`crate::OutputWriterVTable`].
 ///
 /// - v1: ships the four slots a cdylib processor's `OutputWriter`
-///   β-shape needs to dispatch every public-API call through the
+///   PluginAbiObject needs to dispatch every public-API call through the
 ///   host: `write_raw` (the per-frame hot-path emit), `has_port`
 ///   (configuration query), `clone_arc` / `drop_arc`
-///   (refcount-managed handle lifetime so the cdylib-side β-shape
+///   (refcount-managed handle lifetime so the cdylib-side PluginAbiObject
 ///   can implement `Clone` + `Drop` without crossing the inner
 ///   `Arc<OutputWriterInner>` source layout).
 pub const OUTPUT_WRITER_VTABLE_LAYOUT_VERSION: u32 = 1;
 
 /// `extern "C" fn` dispatch table for the cdylib's `OutputWriter`
-/// β-shape. Replaces the shared-Rust-type `Arc<OutputWriter>`
+/// PluginAbiObject. Replaces the shared-Rust-type `Arc<OutputWriter>`
 /// crossing the cdylib used to expose to the host via
 /// `ProcessorVTable::get_iceoryx2_output_writer_arc`.
 ///
 /// Today the host allocates an `Arc<OutputWriterInner>` and hands
-/// the cdylib a `(handle, vtable)` β-shape that delegates every
+/// the cdylib a `(handle, vtable)` PluginAbiObject that delegates every
 /// public-API call through this vtable. Hot-path emits cross extern
 /// "C" once per `write` call; the bytes carry msgpack-encoded
-/// frames the cdylib serialized in its own DSO.
+/// frames the cdylib serialized in its own plugin.
 ///
 /// # Layout discipline
 ///
@@ -57,7 +57,7 @@ pub struct OutputWriterVTable {
 
     /// Write a raw msgpack-encoded frame to the named output port at
     /// the given timestamp. The cdylib serializes `T` to msgpack in
-    /// its own DSO and passes the bytes through; the host then runs
+    /// its own plugin and passes the bytes through; the host then runs
     /// the underlying iceoryx2 publish + notify. Returns `0` on
     /// success, non-zero on failure.
     pub write_raw: unsafe extern "C" fn(

@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Host-side `TextureRingMethodsVTable` callbacks + static vtable +
-//! accessor (issue #947 — slot β-shape + method dispatch).
+//! accessor (issue #947 — slot PluginAbiObject + method dispatch).
 //!
 //! Each wrapper reconstructs the ring borrow from the raw
 //! `Arc::into_raw(Arc<TextureRingInner>)` handle the cdylib passes,
-//! runs the inner method, and serializes the result into the FFI's
+//! runs the inner method, and serializes the result into the plugin ABI's
 //! out-parameter buffers + `i32 + err_buf` shape. All bodies wrapped
 //! in `run_host_extern_c` so a panic in the inner method becomes a
 //! non-zero return.
@@ -21,10 +21,10 @@ use super::shared::wire::write_err;
 
 
 // =============================================================================
-// TextureRingMethodsVTable wrappers (issue #947 — slot β-shape + method
+// TextureRingMethodsVTable wrappers (issue #947 — slot PluginAbiObject + method
 // dispatch). Each wrapper reconstructs the ring borrow from the raw
 // `Arc::into_raw(Arc<TextureRingInner>)` handle the cdylib passes,
-// runs the inner method, and serializes the result into the FFI's
+// runs the inner method, and serializes the result into the plugin ABI's
 // out-parameter buffers + `i32 + err_buf` shape. All bodies are
 // wrapped in `run_host_extern_c` so a panic in the inner method
 // becomes a non-zero return.
@@ -46,7 +46,7 @@ unsafe fn handle_as_texture_ring(
 /// Write the slot's POD identity bytes into the caller-provided
 /// out-parameter buffers. The texture handle is bumped through the
 /// host's limited-access `clone_texture` slot so the resulting
-/// cdylib-side `Texture` β-shape owns the matching `Drop`-side
+/// cdylib-side `Texture` PluginAbiObject owns the matching `Drop`-side
 /// decrement.
 #[cfg(target_os = "linux")]
 unsafe fn write_slot_out_params(
@@ -60,9 +60,9 @@ unsafe fn write_slot_out_params(
     out_slot_index: *mut u32,
 ) {
     // Bump the texture's Arc through the parent limited-access
-    // vtable's `clone_texture` slot — same contract every cross-DSO
-    // Texture-bearing FFI return uses. The cdylib-side `Texture`
-    // β-shape's `Drop` will fire `drop_texture` to balance.
+    // vtable's `clone_texture` slot — same contract every plugin ABI
+    // Texture-bearing return uses. The cdylib-side `Texture`
+    // PluginAbiObject's `Drop` will fire `drop_texture` to balance.
     if !slot.texture.handle.is_null() && !slot.texture.vtable.is_null() {
         unsafe {
             ((*slot.texture.vtable).clone_texture)(slot.texture.handle);
@@ -376,7 +376,7 @@ unsafe extern "C" fn host_texture_ring_slot(
 }
 
 /// Host-side `TextureRingMethodsVTable` wired to the per-method
-/// wrappers above (issue #947 — `TextureRingSlot` β-shape +
+/// wrappers above (issue #947 — `TextureRingSlot` PluginAbiObject +
 /// method dispatch).
 pub static HOST_TEXTURE_RING_METHODS_VTABLE: streamlib_plugin_abi::TextureRingMethodsVTable =
     streamlib_plugin_abi::TextureRingMethodsVTable {
@@ -388,7 +388,7 @@ pub static HOST_TEXTURE_RING_METHODS_VTABLE: streamlib_plugin_abi::TextureRingMe
     };
 
 /// Accessor for the host's static `TextureRingMethodsVTable` — used
-/// by `TextureRing::from_arc_into_raw` to populate the β-shape's
+/// by `TextureRing::from_arc_into_raw` to populate the PluginAbiObject's
 /// `methods_vtable` field.
 pub fn host_texture_ring_methods_vtable() -> *const streamlib_plugin_abi::TextureRingMethodsVTable {
     &HOST_TEXTURE_RING_METHODS_VTABLE

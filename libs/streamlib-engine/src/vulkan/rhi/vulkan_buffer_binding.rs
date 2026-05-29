@@ -37,9 +37,9 @@ pub trait VulkanBufferLike {
     fn vk_buffer_size(&self) -> vk::DeviceSize;
 
     /// Cdylib-mode handle accessor: if this buffer flavor is
-    /// reachable as a [`crate::core::rhi::StorageBuffer`] β-shape,
+    /// reachable as a [`crate::core::rhi::StorageBuffer`] PluginAbiObject,
     /// return the underlying `Arc::into_raw(Arc<HostVulkanBufferInner>)`
-    /// pointer for cross-DSO dispatch (Phase E sub-lift slice B —
+    /// pointer for plugin ABI dispatch (Phase E sub-lift slice B —
     /// #984). Default is `None`; only [`crate::core::rhi::StorageBuffer`]
     /// overrides today. The cdylib-side
     /// [`crate::vulkan::rhi::RhiCommandRecorder::record_buffer_barrier`]
@@ -49,7 +49,7 @@ pub trait VulkanBufferLike {
         None
     }
 
-    /// Cdylib-mode handle accessor for the [`PixelBuffer`] β-shape
+    /// Cdylib-mode handle accessor for the [`PixelBuffer`] PluginAbiObject
     /// (issue #988 sibling-slot extension of Phase E sub-lift slice
     /// B). Returns the underlying
     /// `Arc::into_raw(Arc<PixelBufferRef>)` pointer when this buffer

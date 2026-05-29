@@ -3,7 +3,7 @@
 
 // Minimal vertex shader: fullscreen triangle from gl_VertexIndex, no
 // vertex inputs, no descriptor bindings. Paired with trivial_frag.frag
-// to construct a `VulkanGraphicsKernel` for the cross-rustc β-shape
+// to construct a `VulkanGraphicsKernel` for the cross-rustc PluginAbiObject
 // Create+Clone+Drop round-trip — kernel construction is what we
 // exercise; the pipeline is never actually drawn from.
 

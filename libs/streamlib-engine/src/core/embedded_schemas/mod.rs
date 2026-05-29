@@ -31,14 +31,14 @@ pub type SchemaRegistryStorage = RwLock<HashMap<String, Arc<str>>>;
 
 /// Process-wide schema registry.
 ///
-/// **Per-DSO instance.** Same shape as [`crate::core::pubsub::PUBSUB`]
+/// **Per-loaded-artifact instance.** Same shape as [`crate::core::pubsub::PUBSUB`]
 /// — each linked copy of streamlib-engine has its own
-/// `LazyLock<SchemaRegistryStorage>`. Cross-DSO bridging happens
-/// inside the public functions below: when this DSO is a plugin
+/// `LazyLock<SchemaRegistryStorage>`. Plugin ABI bridging happens
+/// inside the public functions below: when this artifact is a plugin
 /// cdylib whose `install_host_services` has run,
 /// [`register_schema`] and [`get_embedded_schema_definition`] route
 /// through the host's `schema_register` / `schema_lookup` fn
-/// pointers; otherwise they read/write the local DSO's instance
+/// pointers; otherwise they read/write the local artifact's instance
 /// directly.
 static SCHEMA_REGISTRY: LazyLock<SchemaRegistryStorage> =
     LazyLock::new(|| RwLock::new(HashMap::new()));

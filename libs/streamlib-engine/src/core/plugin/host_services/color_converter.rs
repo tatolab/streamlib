@@ -9,7 +9,7 @@
 //! passes, reconstructs the buffer + texture borrows via the same
 //! `make_*_borrow` ManuallyDrop pattern the compute / graphics
 //! kernel wrappers use, runs the inner method, and converts the
-//! `Result<Arc<VulkanComputeKernel>>` into the FFI's `i32 + out
+//! `Result<Arc<VulkanComputeKernel>>` into the plugin ABI's `i32 + out
 //! param + err_buf` shape. All bodies wrapped in
 //! `run_host_extern_c` so a panic in the inner method becomes a
 //! non-zero return.
@@ -32,7 +32,7 @@ use super::shared::wire::write_err;
 // reconstructs the buffer + texture borrows via the same
 // `make_*_borrow` ManuallyDrop pattern the compute / graphics kernel
 // wrappers use, runs the inner method, and converts the
-// `Result<Arc<VulkanComputeKernel>>` into the FFI's `i32 + out
+// `Result<Arc<VulkanComputeKernel>>` into the plugin ABI's `i32 + out
 // param + err_buf` shape. All bodies are wrapped in
 // `run_host_extern_c` so a panic in the inner method becomes a
 // non-zero return.
@@ -289,14 +289,14 @@ unsafe extern "C" fn host_color_converter_prepare_buffer_to_image_storage(
             ) {
                 Ok(arc_kernel) => {
                     // `arc_kernel.handle` is the inner Arc-into-raw'd
-                    // pointer baked into the β-shape at construction.
+                    // pointer baked into the PluginAbiObject at construction.
                     // The cdylib needs its own strong count on the
-                    // inner Arc so its β-shape can outlive our return
+                    // inner Arc so its PluginAbiObject can outlive our return
                     // (the converter's kernel cache + the inner Arc
                     // chain it sits behind keep their own strong
                     // counts). Bump the inner refcount by 1; the
                     // returned `Arc<VulkanComputeKernel>` drops
-                    // naturally at end-of-block — its β-shape's Drop
+                    // naturally at end-of-block — its PluginAbiObject's Drop
                     // decrements the inner by 1, but only if this Arc
                     // was the last strong ref, which it isn't because
                     // the converter cache still holds one. Net effect:
@@ -960,7 +960,7 @@ pub static HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE:
 
 /// Accessor for the host's static `RhiColorConverterMethodsVTable` —
 /// used by `RhiColorConverter::from_arc_into_raw` to populate the
-/// β-shape's `methods_vtable` field.
+/// PluginAbiObject's `methods_vtable` field.
 pub fn host_rhi_color_converter_methods_vtable(
 ) -> *const streamlib_plugin_abi::RhiColorConverterMethodsVTable {
     &HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE
@@ -1188,7 +1188,7 @@ mod rhi_color_converter_methods_vtable_tier1_wire_format_tests {
         let mut out_size: u32 = 0;
         // Use a non-null fake converter handle so we reach the
         // out-ptr null check. Casting a stack reference to *const
-        // is safe here because the FFI wrapper only reaches handle_as_*
+        // is safe here because the plugin ABI wrapper only reaches handle_as_*
         // (a transmute) if other null-checks pass — the out_kernel
         // check runs after the converter null-check but before the
         // handle deref.
