@@ -59,9 +59,17 @@ pub enum BuildSource {
     PackageDir(PathBuf),
     /// A `.slpkg` archive. No compiler involved — extract only.
     SlpkgArchive(PathBuf),
-    /// A remote URL a build service fetches then materializes. The
-    /// in-process default orchestrator rejects this; a daemon impl
-    /// handles it.
+    /// A remote URL a build-service orchestrator fetches **and builds**.
+    /// Reserved seam for a future build daemon (`streamlibd`): the
+    /// in-process default orchestrator rejects it. No in-tree [`Strategy`]
+    /// emits this today — [`Strategy::Url`] fetches its `.slpkg` in the
+    /// engine resolver (network-only) and routes the extracted directory
+    /// through [`BuildSource::PackageDir`], so the engine never asks an
+    /// orchestrator to fetch. This arm exists for the daemon case where
+    /// fetching and building are one remote operation.
+    ///
+    /// [`Strategy`]: super::Strategy
+    /// [`Strategy::Url`]: super::Strategy::Url
     Remote(String),
 }
 

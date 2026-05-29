@@ -31,7 +31,7 @@ deployment chooses to wire (or not).
 ┌──────────────────────── streamlib-engine (RESOLUTION + LOAD) ─────────────────────────┐
 │  Pure filesystem / cache / git — NEVER cargo/pip/deno.                                 │
 │    Strategy { InstalledCache | Path{path,build} | Slpkg{path}                          │
-│               | Git{url,rev,build} | Url{url,build} }                                  │
+│               | Git{url,rev,build} | Url{url,build,checksum} }                          │
 │    resolve → ResolvedSource::Ready(dir)            (no build needed)                    │
 │            → ResolvedSource::NeedsBuild(BuildRequest)  (build required)                 │
 │    recursive transitive-dep walk (cycle-detected), identity + semver validation,       │
@@ -115,7 +115,7 @@ comes from:
 | `Path { path, build }` | a directory with `streamlib.yaml` | per `build` |
 | `Slpkg { path }` | a `.slpkg` archive (engine extracts) | only if Rust source + no matching prebuilt |
 | `Git { url, rev, build }` | a git checkout (engine fetches) | per `build` |
-| `Url { url, build }` | a remote archive | per `build` (orchestrator fetches) |
+| `Url { url, build, checksum }` | a remote `.slpkg` (engine fetches `file://`/`http(s)://`, optional checksum pin) | prefer-prebuilt, else per `build` |
 
 `add_module(ident)` is the conservative default — `Strategy::InstalledCache`.
 Anything rebuildable-from-source via `Path`/`Git` is requested
@@ -279,6 +279,7 @@ Engine ↔ plugin stay in lock-step on two complementary layers:
 | Frozen container, prebuilt `.slpkg` for its triple | no orchestrator wired (`--no-default-features`); `Slpkg`/`InstalledCache` finds the matching prebuilt cdylib and loads it; provably compiler-free |
 | `.slpkg` from another platform (or source-only) on a fresh triple | extract → no matching prebuilt → orchestrator `cargo build`s the bundled source for this host → load. One artifact, every platform |
 | "point at this GitHub repo for @org/pkg" | `Strategy::Git { url, rev, build }` — engine fetches the checkout, orchestrator builds it |
+| "install this `.slpkg` from a URL" | `Strategy::Url { url, build, checksum }` — engine fetches the archive (`file://`/`http(s)://`) into the resolver cache, verifies the optional checksum, extracts, then resolves prefer-prebuilt-else-build like a local `.slpkg`. Re-fetch of the same URL skips the download |
 | Mixed (local + installed + slpkg) | each top-level call and each transitive dep derives its own `Strategy`; `await_modules` runs them concurrently |
 | CI cold cache | orchestrator wired; cold builds run (and parallelize across languages) |
 

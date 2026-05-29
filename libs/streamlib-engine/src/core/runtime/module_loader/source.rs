@@ -59,19 +59,44 @@ pub enum Strategy {
         build: BuildPolicy,
     },
 
-    /// A remote archive/dir fetched over the wire. The engine performs
-    /// no HTTP itself — the URL is handed to the orchestrator's
-    /// [`BuildSource::Remote`] arm (a daemon / build-service impl
-    /// handles it; the in-process default rejects it).
+    /// A remote `.slpkg` fetched over the wire (`file://`, `http://`, or
+    /// `https://`). The engine resolver fetches the archive into its cache
+    /// as network-only I/O (no build), optionally verifies it against
+    /// `checksum`, then resolves it exactly like [`Strategy::Slpkg`]:
+    /// prefer a matching prebuilt cdylib, else build the bundled source
+    /// per `build`. A cached prior fetch of the same URL skips the
+    /// download.
     Url {
         url: String,
+        /// Governs the build fallback when the fetched box has no matching
+        /// prebuilt for this host: [`BuildPolicy::IfStale`] is the
+        /// prefer-prebuilt-else-build default (identical to
+        /// [`Strategy::Slpkg`]); [`BuildPolicy::NeverBuild`] loads the
+        /// staged artifact as-is (a source-only box then fails loud at
+        /// dlopen); [`BuildPolicy::AlwaysBuild`] rebuilds the bundled
+        /// source even when a prebuilt is present.
         build: BuildPolicy,
+        /// Optional integrity pin for the fetched bytes. When `Some`, the
+        /// download (or cache hit) must match or the load fails with
+        /// [`AddModuleError::IntegrityCheckFailed`]. Signature/trust
+        /// verification is a separate concern.
+        checksum: Option<ArtifactChecksum>,
     },
+}
+
+/// Integrity pin for a fetched [`Strategy::Url`] artifact. Only a content
+/// digest today; cryptographic-signature verification is deferred to the
+/// trust work and would add a variant here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArtifactChecksum {
+    /// Lowercase or uppercase hex-encoded SHA-256 of the fetched bytes.
+    Sha256(String),
 }
 
 /// Outcome of resolving a [`Strategy`]: either a directory the engine
 /// can load immediately, or a [`BuildRequest`] the orchestrator must
 /// materialize first.
+#[derive(Debug)]
 pub(super) enum ResolvedSource {
     /// A ready-to-load manifest directory (no build needed).
     Ready(PathBuf),
@@ -116,18 +141,21 @@ pub(super) fn resolve_strategy_to_source(
             let checkout = fetch_git_checkout(pkg_ref, url, rev)?;
             Ok(source_for_dir(pkg_ref, checkout, *build))
         }
-        Strategy::Url { url, build } => {
-            // The engine never performs HTTP itself (marketplace fetch
-            // is deferred, and engine resolution must stay on the local
-            // filesystem). Hand the URL to the orchestrator's Remote
-            // arm; the in-process default rejects it, a build-service
-            // impl handles it.
-            Ok(ResolvedSource::NeedsBuild(BuildRequest {
-                package: pkg_ref.clone(),
-                source: BuildSource::Remote(url.clone()),
-                policy: *build,
-                host_triple: host_target_triple().to_string(),
-            }))
+        Strategy::Url { url, build, checksum } => {
+            // Network-only fetch in the resolver (the same shape as
+            // `fetch_git_checkout` for `Strategy::Git`): download the
+            // `.slpkg` into the resolver cache, verify integrity, then
+            // route it through the SAME extract + prefer-prebuilt-else-
+            // build path a local `.slpkg` takes. No build happens here —
+            // any build is deferred to the injected orchestrator.
+            let slpkg = fetch_remote_slpkg(pkg_ref, url, checksum.as_ref())?;
+            let extracted = extract_slpkg_to_cache(&slpkg).map_err(|e| {
+                AddModuleError::SlpkgExtractionFailed {
+                    archive: slpkg.clone(),
+                    detail: e.to_string(),
+                }
+            })?;
+            Ok(source_for_fetched_slpkg(pkg_ref, extracted, *build))
         }
     }
 }
@@ -176,17 +204,56 @@ fn source_for_resolved_dir(
     }
 }
 
+/// Resolve a fetched-and-extracted `.slpkg` ([`Strategy::Url`]) honoring
+/// the caller's [`BuildPolicy`] on top of the prefer-prebuilt-else-build
+/// model. A `.slpkg` is the crates.io / pip / npm-shaped box: source plus
+/// (optionally) a matching prebuilt. The policy decides the build
+/// fallback:
+///
+/// - [`BuildPolicy::NeverBuild`] — load the staged dir as-is. A matching
+///   prebuilt loads compiler-free; a source-only box fails loud at dlopen.
+/// - [`BuildPolicy::IfStale`] — prefer a matching prebuilt, else build the
+///   bundled source. Identical to how a local [`Strategy::Slpkg`] resolves.
+/// - [`BuildPolicy::AlwaysBuild`] — rebuild the bundled source even when a
+///   prebuilt is present (no-op when there's nothing to build).
+fn source_for_fetched_slpkg(
+    pkg_ref: &streamlib_idents::PackageRef,
+    dir: PathBuf,
+    build: BuildPolicy,
+) -> ResolvedSource {
+    match build {
+        BuildPolicy::NeverBuild => ResolvedSource::Ready(dir),
+        BuildPolicy::IfStale => source_for_resolved_dir(pkg_ref, dir),
+        BuildPolicy::AlwaysBuild => {
+            if has_buildable_rust_source(&dir) {
+                ResolvedSource::NeedsBuild(BuildRequest {
+                    package: pkg_ref.clone(),
+                    source: BuildSource::PackageDir(dir),
+                    policy: BuildPolicy::AlwaysBuild,
+                    host_triple: host_target_triple().to_string(),
+                })
+            } else {
+                ResolvedSource::Ready(dir)
+            }
+        }
+    }
+}
+
 /// Whether a resolved package dir needs an on-host Rust build before it
-/// can load: it declares Rust processors, has **no** prebuilt cdylib for
-/// this host triple, and carries `Cargo.toml` to build from. A package
-/// with a matching prebuilt (or no Rust at all) loads as-is; a Rust
-/// package with neither prebuilt nor source loads as-is and fails loud at
-/// dlopen (no artifact, nothing to build).
+/// can load: it has buildable Rust source but **no** prebuilt cdylib for
+/// this host triple. A package with a matching prebuilt (or no Rust at
+/// all) loads as-is; a Rust package with neither prebuilt nor source loads
+/// as-is and fails loud at dlopen (no artifact, nothing to build).
 fn needs_host_build(dir: &std::path::Path) -> bool {
+    has_buildable_rust_source(dir) && !has_matching_prebuilt(dir)
+}
+
+/// Whether `dir` declares Rust processors AND carries a `Cargo.toml` to
+/// build them from. An unreadable / malformed manifest is treated as
+/// "nothing to build here" — the loader's own manifest read surfaces the
+/// parse error with a clear message rather than a build failure.
+fn has_buildable_rust_source(dir: &std::path::Path) -> bool {
     use streamlib_processor_schema::ProcessorLanguage;
-    // An unreadable / malformed manifest → don't trigger a build here;
-    // load-as-is, and the loader's own manifest read (registration) surfaces
-    // the parse error with a clear message rather than a build failure.
     let config = match crate::core::config::ProjectConfig::load(dir) {
         Ok(c) => c,
         Err(_) => return false,
@@ -195,20 +262,153 @@ fn needs_host_build(dir: &std::path::Path) -> bool {
         .processors
         .iter()
         .any(|p| matches!(p.runtime.language, ProcessorLanguage::Rust));
-    if !has_rust {
-        return false;
-    }
+    has_rust && dir.join("Cargo.toml").exists()
+}
+
+/// Whether `dir` carries a prebuilt cdylib for this host triple under
+/// `lib/<triple>/`.
+fn has_matching_prebuilt(dir: &std::path::Path) -> bool {
     let triple_dir = dir.join("lib").join(host_target_triple());
-    let has_prebuilt = std::fs::read_dir(&triple_dir)
+    std::fs::read_dir(&triple_dir)
         .map(|it| {
             it.flatten()
                 .any(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
         })
-        .unwrap_or(false);
-    if has_prebuilt {
-        return false;
+        .unwrap_or(false)
+}
+
+/// Fetch (or reuse a cached) remote `.slpkg` for `pkg_ref` from `url` into
+/// `~/.streamlib/resolver-cache/url/`. Network I/O only — no build. When
+/// `checksum` is `Some`, the bytes must match or the load fails loud. A
+/// prior fetch of the same URL is reused (the download is skipped); a
+/// cache hit is re-verified against `checksum` to catch a corrupted cache.
+fn fetch_remote_slpkg(
+    pkg_ref: &streamlib_idents::PackageRef,
+    url: &str,
+    checksum: Option<&ArtifactChecksum>,
+) -> std::result::Result<PathBuf, AddModuleError> {
+    let cache_dir = crate::core::streamlib_home::get_streamlib_home()
+        .join("resolver-cache")
+        .join("url");
+    // Content-stable cache key derived from the URL (mirrors the git
+    // checkout cache's URL sanitization).
+    let safe: String = url
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect();
+    let target = cache_dir.join(format!("{safe}.slpkg"));
+
+    if target.exists() {
+        // Cache hit — re-verify integrity (cheap, catches a corrupted
+        // cache entry) and skip the download.
+        if let Some(expected) = checksum {
+            let bytes = std::fs::read(&target).map_err(|e| AddModuleError::UrlFetchFailed {
+                package: pkg_ref.clone(),
+                url: url.to_string(),
+                detail: format!("reading cached artifact {}: {e}", target.display()),
+            })?;
+            verify_artifact_checksum(pkg_ref, url, &bytes, expected)?;
+        }
+        return Ok(target);
     }
-    dir.join("Cargo.toml").exists()
+
+    std::fs::create_dir_all(&cache_dir).map_err(|e| AddModuleError::UrlFetchFailed {
+        package: pkg_ref.clone(),
+        url: url.to_string(),
+        detail: format!("creating resolver cache dir {}: {e}", cache_dir.display()),
+    })?;
+
+    let bytes = download_url_bytes(pkg_ref, url)?;
+
+    if let Some(expected) = checksum {
+        verify_artifact_checksum(pkg_ref, url, &bytes, expected)?;
+    }
+
+    // Atomic publish: write a temp sibling then rename, so an interrupted
+    // download never leaves a half-written file a later run treats as a
+    // cache hit.
+    let tmp = cache_dir.join(format!("{safe}.slpkg.partial"));
+    std::fs::write(&tmp, &bytes).map_err(|e| AddModuleError::UrlFetchFailed {
+        package: pkg_ref.clone(),
+        url: url.to_string(),
+        detail: format!("writing fetched artifact: {e}"),
+    })?;
+    std::fs::rename(&tmp, &target).map_err(|e| AddModuleError::UrlFetchFailed {
+        package: pkg_ref.clone(),
+        url: url.to_string(),
+        detail: format!("publishing fetched artifact to cache: {e}"),
+    })?;
+    Ok(target)
+}
+
+/// Download the raw bytes of `url`. `file://` reads from disk (the
+/// hermetic path used by tests and local mirrors); `http(s)://` performs a
+/// blocking HTTP GET. Any other scheme is rejected loud.
+fn download_url_bytes(
+    pkg_ref: &streamlib_idents::PackageRef,
+    url: &str,
+) -> std::result::Result<Vec<u8>, AddModuleError> {
+    let fetch_err = |detail: String| AddModuleError::UrlFetchFailed {
+        package: pkg_ref.clone(),
+        url: url.to_string(),
+        detail,
+    };
+
+    if let Some(path) = url.strip_prefix("file://") {
+        // `file:///abs/path` → `/abs/path`; an authority (`file://host/…`)
+        // is uncommon for local artifacts and not supported here.
+        return std::fs::read(path).map_err(|e| fetch_err(format!("reading {path}: {e}")));
+    }
+
+    if url.starts_with("http://") || url.starts_with("https://") {
+        let response = ureq::get(url)
+            .call()
+            .map_err(|e| fetch_err(format!("HTTP request failed: {e}")))?;
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut response.into_reader(), &mut bytes)
+            .map_err(|e| fetch_err(format!("reading HTTP response body: {e}")))?;
+        return Ok(bytes);
+    }
+
+    Err(fetch_err(
+        "unsupported URL scheme (expected file://, http://, or https://)".to_string(),
+    ))
+}
+
+/// Verify `bytes` against the expected [`ArtifactChecksum`], returning
+/// [`AddModuleError::IntegrityCheckFailed`] on mismatch.
+fn verify_artifact_checksum(
+    pkg_ref: &streamlib_idents::PackageRef,
+    url: &str,
+    bytes: &[u8],
+    expected: &ArtifactChecksum,
+) -> std::result::Result<(), AddModuleError> {
+    match expected {
+        ArtifactChecksum::Sha256(hex) => {
+            let actual = sha256_hex(bytes);
+            if actual.eq_ignore_ascii_case(hex.trim()) {
+                Ok(())
+            } else {
+                Err(AddModuleError::IntegrityCheckFailed {
+                    package: pkg_ref.clone(),
+                    url: url.to_string(),
+                    detail: format!("sha256 expected {}, got {actual}", hex.trim()),
+                })
+            }
+        }
+    }
+}
+
+/// Lowercase hex-encoded SHA-256 of `bytes`.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// Fetch (or reuse a cached) git checkout for `pkg_ref` at `url`@`rev`
@@ -329,5 +529,222 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         manifest(dir.path(), RUST_YAML);
         assert!(!needs_host_build(dir.path()));
+    }
+
+    // =====================================================================
+    // source_for_fetched_slpkg — Strategy::Url policy-aware resolution
+    // =====================================================================
+
+    fn pkg_ref() -> streamlib_idents::PackageRef {
+        streamlib_idents::PackageRef::new(
+            streamlib_idents::Org::new("tatolab").unwrap(),
+            streamlib_idents::Package::new("rp").unwrap(),
+        )
+    }
+
+    /// A Rust box carrying source but no matching prebuilt: `NeverBuild`
+    /// must load it as-is (the prebuilt-only / frozen posture — dlopen
+    /// then fails loud), NOT request a build. Revert the `NeverBuild` arm
+    /// and this would wrongly emit a build request.
+    #[test]
+    fn fetched_slpkg_never_build_loads_as_is_even_when_source_only() {
+        let dir = tempfile::tempdir().unwrap();
+        manifest(dir.path(), RUST_YAML);
+        std::fs::write(dir.path().join("Cargo.toml"), b"[package]\nname='rp'\n").unwrap();
+        let resolved =
+            source_for_fetched_slpkg(&pkg_ref(), dir.path().to_path_buf(), BuildPolicy::NeverBuild);
+        assert!(matches!(resolved, ResolvedSource::Ready(_)));
+    }
+
+    /// `IfStale` mirrors `Strategy::Slpkg`: a source-only Rust box builds.
+    #[test]
+    fn fetched_slpkg_if_stale_builds_source_only_box() {
+        let dir = tempfile::tempdir().unwrap();
+        manifest(dir.path(), RUST_YAML);
+        std::fs::write(dir.path().join("Cargo.toml"), b"[package]\nname='rp'\n").unwrap();
+        let resolved =
+            source_for_fetched_slpkg(&pkg_ref(), dir.path().to_path_buf(), BuildPolicy::IfStale);
+        assert!(matches!(resolved, ResolvedSource::NeedsBuild(_)));
+    }
+
+    /// `IfStale` prefers a matching prebuilt — compiler-free load.
+    #[test]
+    fn fetched_slpkg_if_stale_prefers_matching_prebuilt() {
+        let dir = tempfile::tempdir().unwrap();
+        manifest(dir.path(), RUST_YAML);
+        std::fs::write(dir.path().join("Cargo.toml"), b"[package]\nname='rp'\n").unwrap();
+        let triple_dir = dir.path().join("lib").join(host_target_triple());
+        std::fs::create_dir_all(&triple_dir).unwrap();
+        std::fs::write(triple_dir.join("librp.so"), b"prebuilt").unwrap();
+        let resolved =
+            source_for_fetched_slpkg(&pkg_ref(), dir.path().to_path_buf(), BuildPolicy::IfStale);
+        assert!(matches!(resolved, ResolvedSource::Ready(_)));
+    }
+
+    /// `AlwaysBuild` rebuilds the bundled source even when a matching
+    /// prebuilt is present. Revert the `AlwaysBuild` arm (fall through to
+    /// `source_for_resolved_dir`) and the present prebuilt would short-
+    /// circuit to `Ready`, defeating the "distrust the prebuilt" intent.
+    #[test]
+    fn fetched_slpkg_always_build_rebuilds_even_with_prebuilt() {
+        let dir = tempfile::tempdir().unwrap();
+        manifest(dir.path(), RUST_YAML);
+        std::fs::write(dir.path().join("Cargo.toml"), b"[package]\nname='rp'\n").unwrap();
+        let triple_dir = dir.path().join("lib").join(host_target_triple());
+        std::fs::create_dir_all(&triple_dir).unwrap();
+        std::fs::write(triple_dir.join("librp.so"), b"prebuilt").unwrap();
+        let resolved = source_for_fetched_slpkg(
+            &pkg_ref(),
+            dir.path().to_path_buf(),
+            BuildPolicy::AlwaysBuild,
+        );
+        match resolved {
+            ResolvedSource::NeedsBuild(req) => assert_eq!(req.policy, BuildPolicy::AlwaysBuild),
+            other => panic!("expected NeedsBuild(AlwaysBuild), got {other:?}"),
+        }
+    }
+
+    /// `AlwaysBuild` on a non-buildable box (no Rust source) is a no-op →
+    /// load as-is.
+    #[test]
+    fn fetched_slpkg_always_build_noop_without_rust_source() {
+        let dir = tempfile::tempdir().unwrap();
+        manifest(dir.path(), PY_YAML);
+        let resolved = source_for_fetched_slpkg(
+            &pkg_ref(),
+            dir.path().to_path_buf(),
+            BuildPolicy::AlwaysBuild,
+        );
+        assert!(matches!(resolved, ResolvedSource::Ready(_)));
+    }
+
+    // =====================================================================
+    // fetch_remote_slpkg — fetch, integrity check, cache reuse
+    // =====================================================================
+
+    /// Restores `STREAMLIB_HOME` on drop so a sandboxed override doesn't
+    /// leak across `#[serial]` tests.
+    struct HomeGuard(Option<std::ffi::OsString>);
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            // SAFETY: `#[serial]` makes these tests mutually exclusive.
+            unsafe {
+                match self.0.take() {
+                    Some(v) => std::env::set_var("STREAMLIB_HOME", v),
+                    None => std::env::remove_var("STREAMLIB_HOME"),
+                }
+            }
+        }
+    }
+    fn sandbox_home(dir: &std::path::Path) -> HomeGuard {
+        let prev = std::env::var_os("STREAMLIB_HOME");
+        unsafe {
+            std::env::set_var("STREAMLIB_HOME", dir);
+        }
+        HomeGuard(prev)
+    }
+
+    fn file_url(path: &std::path::Path) -> String {
+        format!("file://{}", path.display())
+    }
+
+    /// A `file://` fetch lands the bytes in the resolver cache, and a
+    /// second fetch of the same URL reuses the cache even after the source
+    /// disappears — proving the download is skipped. Revert the
+    /// `target.exists()` early-return and the second fetch would try to
+    /// re-read the deleted source and fail.
+    #[test]
+    #[serial_test::serial]
+    fn fetch_file_url_caches_and_skips_redownload() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = sandbox_home(home.path());
+        let src = tempfile::tempdir().unwrap();
+        let slpkg = src.path().join("pkg.slpkg");
+        std::fs::write(&slpkg, b"slpkg-bytes").unwrap();
+
+        let url = file_url(&slpkg);
+        let cached =
+            fetch_remote_slpkg(&pkg_ref(), &url, None).expect("first fetch must succeed");
+        assert_eq!(std::fs::read(&cached).unwrap(), b"slpkg-bytes");
+
+        // Source gone — a cache hit must still resolve.
+        std::fs::remove_file(&slpkg).unwrap();
+        let cached2 = fetch_remote_slpkg(&pkg_ref(), &url, None)
+            .expect("second fetch must hit the cache, not re-read the source");
+        assert_eq!(cached, cached2);
+        assert_eq!(std::fs::read(&cached2).unwrap(), b"slpkg-bytes");
+    }
+
+    /// A matching checksum passes; a mismatch fails loud with
+    /// `IntegrityCheckFailed`. Revert the verify call and the mismatch
+    /// would load silently.
+    #[test]
+    #[serial_test::serial]
+    fn fetch_verifies_checksum_match_and_mismatch() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = sandbox_home(home.path());
+        let src = tempfile::tempdir().unwrap();
+
+        let good = src.path().join("good.slpkg");
+        std::fs::write(&good, b"payload").unwrap();
+        let good_sum = ArtifactChecksum::Sha256(sha256_hex(b"payload"));
+        fetch_remote_slpkg(&pkg_ref(), &file_url(&good), Some(&good_sum))
+            .expect("matching checksum must pass");
+
+        let bad = src.path().join("bad.slpkg");
+        std::fs::write(&bad, b"payload").unwrap();
+        let wrong = ArtifactChecksum::Sha256("00".repeat(32));
+        let err = fetch_remote_slpkg(&pkg_ref(), &file_url(&bad), Some(&wrong))
+            .expect_err("mismatched checksum must fail loud");
+        assert!(
+            matches!(err, AddModuleError::IntegrityCheckFailed { .. }),
+            "expected IntegrityCheckFailed, got {err:?}"
+        );
+    }
+
+    /// An unsupported scheme fails loud rather than silently doing nothing.
+    #[test]
+    #[serial_test::serial]
+    fn fetch_rejects_unsupported_scheme() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = sandbox_home(home.path());
+        let err = fetch_remote_slpkg(&pkg_ref(), "ftp://example.com/x.slpkg", None)
+            .expect_err("ftp scheme must be rejected");
+        assert!(matches!(err, AddModuleError::UrlFetchFailed { .. }));
+    }
+
+    /// The blocking `http://` path downloads the bytes from a one-shot
+    /// localhost server. Locks the ureq GET path end-to-end.
+    #[test]
+    #[serial_test::serial]
+    fn fetch_http_url_downloads_bytes() {
+        use std::io::{Read, Write};
+
+        let home = tempfile::tempdir().unwrap();
+        let _guard = sandbox_home(home.path());
+
+        let body = b"http-slpkg-bytes".to_vec();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let body_for_server = body.clone();
+        let server = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                // Drain the request headers (up to the blank line).
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body_for_server.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.write_all(&body_for_server);
+                let _ = stream.flush();
+            }
+        });
+
+        let url = format!("http://127.0.0.1:{port}/pkg.slpkg");
+        let cached = fetch_remote_slpkg(&pkg_ref(), &url, None).expect("http fetch must succeed");
+        assert_eq!(std::fs::read(&cached).unwrap(), body);
+        server.join().unwrap();
     }
 }

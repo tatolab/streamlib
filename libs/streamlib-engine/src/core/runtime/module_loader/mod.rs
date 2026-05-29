@@ -60,7 +60,7 @@ pub use build_orchestrator::{
 pub use errors::{AddModuleError, RemoveModuleError};
 pub use processor_registration::host_target_triple;
 pub use slpkg::extract_slpkg_to_cache;
-pub use source::Strategy;
+pub use source::{ArtifactChecksum, Strategy};
 
 use added_module::MODULE_EVENT_CHANNEL_CAPACITY;
 
