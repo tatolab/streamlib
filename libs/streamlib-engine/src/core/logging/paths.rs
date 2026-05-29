@@ -1,20 +1,20 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! XDG state directory resolution for JSONL log files.
+//! JSONL log directory resolution — collocated in the install's
+//! generated working tree.
 
 use std::path::PathBuf;
 
-/// Base directory for JSONL log files:
-/// `$XDG_STATE_HOME/streamlib/logs/`, falling back to
-/// `~/.local/state/streamlib/logs/` when the env var is unset or empty.
+/// Base directory for JSONL log files: `<STREAMLIB_HOME>/.streamlib/logs/`.
+/// Collocated in the install's generated working tree
+/// ([`get_streamlib_data_dir`]) so logs live in the same self-contained
+/// folder as the rest of a runtime's state, and honor the `STREAMLIB_HOME`
+/// override.
+///
+/// [`get_streamlib_data_dir`]: crate::core::streamlib_home::get_streamlib_data_dir
 pub fn log_dir() -> PathBuf {
-    let base = std::env::var_os("XDG_STATE_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|h| h.join(".local").join("state")))
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.join("streamlib").join("logs")
+    crate::core::streamlib_home::get_streamlib_data_dir().join("logs")
 }
 
 /// Path of the JSONL file for one runtime instance, using
@@ -26,14 +26,25 @@ pub fn runtime_log_path(runtime_id: &str, started_at_millis: u128) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
-    fn log_dir_uses_xdg_when_set() {
-        // SAFETY: test modifies env; tests using this key must run serialized.
-        unsafe { std::env::set_var("XDG_STATE_HOME", "/tmp/xdg-logging-test") };
-        let dir = log_dir();
-        assert!(dir.starts_with("/tmp/xdg-logging-test/streamlib/logs"));
-        unsafe { std::env::remove_var("XDG_STATE_HOME") };
+    #[serial]
+    fn log_dir_under_streamlib_home() {
+        // SAFETY: test modifies env; `#[serial]` keeps it off the other
+        // STREAMLIB_HOME-mutating tests.
+        let prev = std::env::var_os("STREAMLIB_HOME");
+        unsafe { std::env::set_var("STREAMLIB_HOME", "/tmp/slh-logging-test") };
+        assert_eq!(
+            log_dir(),
+            PathBuf::from("/tmp/slh-logging-test/.streamlib/logs")
+        );
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("STREAMLIB_HOME", v),
+                None => std::env::remove_var("STREAMLIB_HOME"),
+            }
+        }
     }
 
     #[test]

@@ -28,13 +28,13 @@ use std::path::PathBuf;
 ///     │   ├── packages/                 # built / extracted package artifacts
 ///     │   ├── uv/                        # uv PyPI cache      (Python packages only)
 ///     │   └── venvs/{sha256_hex}/        # per-dep-closure venvs (Python only)
+///     ├── logs/<runtime_id>-<ts>.jsonl  # per-runtime JSONL logs
 ///     ├── resolver-cache/               # git / URL checkouts (Strategy::Git / Url)
 ///     └── packages.yaml                 # installed-packages manifest (streamlib pkg install)
 /// ```
 ///
 /// Each subdir is created on demand by its consumer — an all-Rust,
-/// `Strategy::Path` graph only populates `cache/packages/`. Runtime JSONL
-/// logs are NOT here; they live under `$XDG_STATE_HOME/streamlib/logs/`.
+/// `Strategy::Path` graph populates `cache/packages/` and `logs/`.
 pub fn get_streamlib_home() -> PathBuf {
     if let Ok(home) = std::env::var("STREAMLIB_HOME") {
         return PathBuf::from(home);

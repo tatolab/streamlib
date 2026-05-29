@@ -187,7 +187,7 @@ impl Runner {
         // Stand up the runtime's unified logging pathway: `tracing` →
         // bounded lossy channel → drain worker → line-buffered pretty
         // stdout + batched JSONL file at
-        // `$XDG_STATE_HOME/streamlib/logs/<runtime_id>-<started_at>.jsonl`.
+        // `<STREAMLIB_HOME>/.streamlib/logs/<runtime_id>-<started_at>.jsonl`.
         // See `docs/logging-schema.md` for the schema (the durable
         // interface contract) and `streamlib::sdk::logging` for the
         // implementation.
