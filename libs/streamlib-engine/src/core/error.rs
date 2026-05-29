@@ -6,6 +6,9 @@ pub enum Error {
     #[error("GPU operation failed: {0}")]
     GpuError(String),
 
+    #[error("No display surface available: {0}")]
+    DisplaySurfaceUnavailable(String),
+
     #[error("Shader compilation failed: {0}")]
     ShaderCompilation(String),
 

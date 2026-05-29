@@ -132,7 +132,9 @@ impl VulkanPresentTarget {
         let instance = device.instance();
         let surface = unsafe { vulkanalia::window::create_surface(instance, window, window) }
             .map_err(|e| {
-                Error::GpuError(format!("VulkanPresentTarget: create_surface failed: {e}"))
+                Error::DisplaySurfaceUnavailable(format!(
+                    "VulkanPresentTarget: create_surface failed: {e}"
+                ))
             })?;
 
         let physical_device = device.physical_device();
@@ -151,7 +153,7 @@ impl VulkanPresentTarget {
         })?;
         if !surface_supported {
             unsafe { instance.destroy_surface_khr(surface, None) };
-            return Err(Error::GpuError(
+            return Err(Error::DisplaySurfaceUnavailable(
                 "VulkanPresentTarget: graphics queue family does not support presentation".into(),
             ));
         }
