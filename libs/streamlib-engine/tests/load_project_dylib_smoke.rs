@@ -16,6 +16,7 @@ use serial_test::serial;
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib_engine::core::runtime::host_target_triple;
 
 fn copy_dir_contents(src: &Path, dst: &Path) {
@@ -103,7 +104,7 @@ fn load_project_real_dylib_registers_processor_via_export_plugin() {
     std::fs::create_dir_all(&triple_dir).unwrap();
     std::fs::copy(&built_dylib, triple_dir.join(&dylib_name)).unwrap();
 
-    let runtime = Runner::new().unwrap();
+    let runtime = Runner::with_auto_build().unwrap();
     runtime
         .add_module_with_blocking(
             module_ident_any_version!("tatolab", "test-fixtures"),

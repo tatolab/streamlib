@@ -23,6 +23,7 @@ use serial_test::serial;
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::{ProcessorInstance, PROCESSOR_REGISTRY};
 use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib_engine::core::graph::ProcessorNode;
 use streamlib_engine::core::runtime::host_target_triple;
 
@@ -99,7 +100,7 @@ fn dylib_processor_create_and_drop_round_trips_through_vtable() {
     std::fs::create_dir_all(&triple_dir).unwrap();
     std::fs::copy(&built_dylib, triple_dir.join(&dylib_name)).unwrap();
 
-    let runtime = Runner::new().unwrap();
+    let runtime = Runner::with_auto_build().unwrap();
     runtime
         .add_module_with_blocking(
             module_ident_any_version!("tatolab", "test-fixtures"),

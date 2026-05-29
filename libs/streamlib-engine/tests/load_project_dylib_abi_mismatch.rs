@@ -30,6 +30,7 @@ use serial_test::serial;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib_engine::core::runtime::host_target_triple;
 
 fn copy_dir_contents(src: &Path, dst: &Path) {
@@ -120,7 +121,7 @@ fn stage_project(tmp: &Path, source_dylib: &Path) -> std::path::PathBuf {
 }
 
 fn assert_abi_mismatch_rejected(project_dir: &Path) {
-    let runtime = Runner::new().expect("Runner::new");
+    let runtime = Runner::with_auto_build().expect("Runner::new");
     let err: Error = runtime
         .add_module_with_blocking(
             module_ident_any_version!("tatolab", "test-fixtures-abi-mismatch"),

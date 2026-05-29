@@ -32,6 +32,7 @@ use serial_test::serial;
 use streamlib::sdk::pubsub::{topics, Event, EventListener, RuntimeEvent, PUBSUB};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib_engine::core::runtime::host_target_triple;
 
 fn copy_dir_contents(src: &Path, dst: &Path) {
@@ -134,7 +135,7 @@ impl EventListener for CountingListener {
 fn plugin_register_pubsub_event_reaches_host_subscriber() {
     let (_tmp, fixtures_dst) = build_and_stage_test_fixtures_dylib();
 
-    let runtime = Runner::new().unwrap();
+    let runtime = Runner::with_auto_build().unwrap();
 
     // Subscribe BEFORE add_module_with so the cdylib's register-time
     // publish has somewhere to land. Sleep ~200 ms so the subscriber
