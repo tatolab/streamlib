@@ -31,18 +31,8 @@ tokio.workspace = true
 # Logging
 tracing.workspace = true
 
-# Home directory detection
-dirs = "6.0"
-
-# Random name generation for runtimes
-fastrand = "2.0"
-
 # Runtime ID generation
 cuid2 = "0.1"
 
 # Error handling
 anyhow.workspace = true
-
-# Daemonization (Unix-only)
-[target.'cfg(unix)'.dependencies]
-daemonize = "0.5"
