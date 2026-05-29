@@ -29,7 +29,7 @@
 //!   against.
 //!
 //! Cache scope: the `SlpkgArchive` strategy extracts every slpkg into
-//! the process-global `~/.streamlib/cache/packages/<name>-<version>/`
+//! the process-global `<STREAMLIB_HOME>/.streamlib/cache/packages/<name>-<version>/`
 //! cache. This test therefore writes to the *real* `network-1.0.0`
 //! and `core-1.0.0` cache entries on the host running the test. The
 //! extract is idempotent (`extract_slpkg_to_cache` clears the dir

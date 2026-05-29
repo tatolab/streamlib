@@ -53,7 +53,7 @@ deployment chooses to wire (or not).
         │              pyproject + uv.lock) — NO wheel               │
         │     deno   → entrypoint under deno/                        │
         │     always → streamlib.yaml + schemas/                     │
-        │  → <STREAMLIB_HOME>/cache/packages/<name>-<version>/       │
+        │  → <STREAMLIB_HOME>/.streamlib/cache/packages/<name>-<ver>/│
         │    (build-to-temp + atomic rename + .streamlib-build       │
         │     sidecar: abi_version, triple, profile, inputs_hash)    │
         │    — byte-identical to extracting a .slpkg / GitHub install│
@@ -111,7 +111,7 @@ comes from:
 
 | Variant | Source | Builds? |
 |---|---|---|
-| `InstalledCache` | `~/.streamlib/cache/packages/…` | only if Rust source + no matching prebuilt |
+| `InstalledCache` | `<STREAMLIB_HOME>/.streamlib/cache/packages/…` | only if Rust source + no matching prebuilt |
 | `Path { path, build }` | a directory with `streamlib.yaml` | per `build` |
 | `Slpkg { path }` | a `.slpkg` archive (engine extracts) | only if Rust source + no matching prebuilt |
 | `Git { url, rev, build }` | a git checkout (engine fetches) | per `build` |

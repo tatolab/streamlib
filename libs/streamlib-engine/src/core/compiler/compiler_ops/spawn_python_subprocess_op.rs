@@ -12,7 +12,7 @@ use crate::core::error::{Result, Error};
 
 /// Ensure a hash-keyed cached venv exists, install deps on miss, and return the python path.
 ///
-/// Venv location: `~/.streamlib/cache/venvs/{sha256_hex}/`
+/// Venv location: `<STREAMLIB_HOME>/.streamlib/cache/venvs/{sha256_hex}/`
 /// Cache key: SHA-256 of `(install-source contents + canonical project_path)`,
 /// where the install source is the first wheel under `python/wheels/`
 /// when present (`streamlib pack` populates this from `uv build --wheel`)

@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 use streamlib_idents::{PackageRef, SemVer};
 
-use crate::core::streamlib_home::get_streamlib_home;
+use crate::core::streamlib_home::get_streamlib_data_dir;
 use crate::core::{Result, Error};
 
 /// Format-version of the on-disk installed-package manifest. Bumped when the
@@ -48,7 +48,7 @@ impl InstalledPackageManifest {
     ///   pre-#717 manifest with bare-name keys).
     ///
     /// In the latter two cases a warning is emitted; the on-disk slpkg
-    /// caches under `~/.streamlib/cache/` are preserved, so reinstalling
+    /// caches under `<STREAMLIB_HOME>/.streamlib/cache/` are preserved, so reinstalling
     /// the relevant packages with `streamlib pkg install` repopulates the
     /// manifest cleanly.
     pub fn load() -> Result<Self> {
@@ -66,7 +66,7 @@ impl InstalledPackageManifest {
             Ok(other) => {
                 tracing::warn!(
                     "Installed-package manifest at {} has format_version={} but expected {}. \
-                     Resetting (existing slpkg caches under ~/.streamlib/cache/ are preserved; \
+                     Resetting (existing slpkg caches under <STREAMLIB_HOME>/.streamlib/cache/ are preserved; \
                      reinstall packages with `streamlib pkg install` to repopulate).",
                     path.display(),
                     other.format_version,
@@ -78,7 +78,7 @@ impl InstalledPackageManifest {
                 tracing::warn!(
                     "Installed-package manifest at {} could not be parsed against the \
                      current shape (likely a pre-#717 format with bare-name entries): {}. \
-                     Resetting (existing slpkg caches under ~/.streamlib/cache/ are preserved; \
+                     Resetting (existing slpkg caches under <STREAMLIB_HOME>/.streamlib/cache/ are preserved; \
                      reinstall packages with `streamlib pkg install` to repopulate).",
                     path.display(),
                     e,
@@ -138,7 +138,7 @@ impl InstalledPackageManifest {
 
 /// Get the path to the installed packages manifest file.
 pub fn get_installed_packages_manifest_path() -> std::path::PathBuf {
-    get_streamlib_home().join("packages.yaml")
+    get_streamlib_data_dir().join("packages.yaml")
 }
 
 #[cfg(test)]

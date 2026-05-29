@@ -16,7 +16,7 @@
 //! `streamlib pack` uses: Rust cdylib via cargo + crate source, Python as
 //! full source, Deno bundle, schemas) and stage it as an extracted
 //! directory into the package cache
-//! (`<STREAMLIB_HOME>/cache/packages/<name>-<version>/`).
+//! (`<STREAMLIB_HOME>/.streamlib/cache/packages/<name>-<version>/`).
 //! A runtime-built staged dir is byte-identical to what extracting the
 //! corresponding `.slpkg` would produce — dev, release, and
 //! install-from-anywhere share the shape, so a package that loads in dev

@@ -33,7 +33,7 @@ use super::slpkg::extract_slpkg_to_cache;
 /// [`Runner::add_module`]: super::super::Runner::add_module
 #[derive(Debug, Clone)]
 pub enum Strategy {
-    /// Installed-package cache (`~/.streamlib/cache/packages/...`) only.
+    /// Installed-package cache (`<STREAMLIB_HOME>/.streamlib/cache/packages/...`) only.
     /// Never builds. The default for bare [`Runner::add_module`] and for
     /// transitive registry-flavored deps.
     ///
@@ -287,7 +287,7 @@ fn fetch_remote_slpkg(
     url: &str,
     checksum: Option<&ArtifactChecksum>,
 ) -> std::result::Result<PathBuf, AddModuleError> {
-    let cache_dir = crate::core::streamlib_home::get_streamlib_home()
+    let cache_dir = crate::core::streamlib_home::get_streamlib_data_dir()
         .join("resolver-cache")
         .join("url");
     // Content-stable cache key derived from the URL (mirrors the git
@@ -418,7 +418,7 @@ fn fetch_git_checkout(
     url: &str,
     rev: &str,
 ) -> std::result::Result<PathBuf, AddModuleError> {
-    let cache_dir = crate::core::streamlib_home::get_streamlib_home().join("resolver-cache");
+    let cache_dir = crate::core::streamlib_home::get_streamlib_data_dir().join("resolver-cache");
     streamlib_idents::fetch_git(&pkg_ref.to_string(), url, rev, &cache_dir).map_err(|e| {
         AddModuleError::GitFetchFailed {
             package: pkg_ref.clone(),
