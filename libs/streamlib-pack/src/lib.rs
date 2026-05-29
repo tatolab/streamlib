@@ -6,11 +6,14 @@
 //! One routine — [`assemble_artifact`] — turns a package source
 //! directory into a *complete* loadable artifact, per language:
 //!
-//! - **Rust** — `cargo build [--release] -p <crate>` → cdylib at
-//!   `lib/<triple>/`.
-//! - **Python** — `uv build --wheel` (or a pre-built wheel) →
-//!   `python/wheels/*.whl`; the wheel carries every module + declared
-//!   package-data, so the install side never needs the toolchain.
+//! - **Rust** — `cargo build [--release] -p <crate>` → prebuilt cdylib
+//!   at `lib/<triple>/`, plus the crate source (`Cargo.toml` + `src/` …)
+//!   so a host on another triple can rebuild ("sdist + one-triple wheel").
+//! - **Python** — the full source tree (every `.py` + data / assets /
+//!   models + `pyproject.toml` + `uv.lock`). No wheel is built: the engine
+//!   runs a Python processor from its source dir, so only its dependencies
+//!   are installed at load time, and shipping identical source in dev and
+//!   in the artifact removes the editable-vs-wheel packaging skew.
 //! - **Deno** — entrypoint `.ts` under `deno/`.
 //! - **always** — `streamlib.yaml` + `schemas/`.
 //!
@@ -349,6 +352,12 @@ fn dylib_filename(path: &Path) -> Result<String> {
 ///
 /// Shared by [`collect_source_tree`] and the orchestrator's source
 /// fingerprint so "what counts as source" has one definition.
+///
+/// These directory names are **reserved**: a package must not use
+/// `target` / `lib` / `venv` / `.venv` / `node_modules` / `__pycache__`
+/// (etc.) as its own source directories, because they're stripped from
+/// the shipped source. This matches the ignore conventions of cargo /
+/// pip / npm and is an accepted packaging constraint.
 pub fn is_non_source_artifact(name: &std::ffi::OsStr) -> bool {
     match name.to_str() {
         Some(

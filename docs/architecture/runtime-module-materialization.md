@@ -77,11 +77,13 @@ its source dir (`PYTHONPATH = <staged package dir>`), never from a
 pip-installed copy — so the engine only needs the package's
 *dependencies* installed, not the package itself wheel-packed. Assembly
 therefore bundles the **full source tree** (every `.py` + data / assets /
-models + `pyproject.toml` + `uv.lock`) and builds no wheel. The install
-side caches a dependency venv keyed by the dependency closure
-(`pyproject.toml` contents), so editing a `.py` reuses the venv (deps
-install once — never a per-edit reinstall) and the edited source is read
-directly. Shipping identical source in dev and in the `.slpkg` also means
+models + `pyproject.toml`, and `uv.lock` if present) and builds no wheel.
+The install side runs `uv pip install -e <staged dir>`, which resolves
+dependencies from `pyproject.toml` (not the lockfile — `uv pip install`
+doesn't consume `uv.lock`; it's bundled to travel with the package). The
+dependency venv is therefore keyed by `pyproject.toml` contents, so
+editing a `.py` reuses the venv (deps install once — never a per-edit
+reinstall) and the edited source is read directly from `PYTHONPATH`. Shipping identical source in dev and in the `.slpkg` also means
 there is no "imports in dev, missing from the wheel" packaging skew. (A
 package that pre-ships `python/wheels/*.whl` keeps it — the full-source
 copy includes it and the install side may prefer it — but assembly never

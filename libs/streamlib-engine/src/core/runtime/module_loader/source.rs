@@ -184,6 +184,9 @@ fn source_for_resolved_dir(
 /// dlopen (no artifact, nothing to build).
 fn needs_host_build(dir: &std::path::Path) -> bool {
     use streamlib_processor_schema::ProcessorLanguage;
+    // An unreadable / malformed manifest → don't trigger a build here;
+    // load-as-is, and the loader's own manifest read (registration) surfaces
+    // the parse error with a clear message rather than a build failure.
     let config = match crate::core::config::ProjectConfig::load(dir) {
         Ok(c) => c,
         Err(_) => return false,
