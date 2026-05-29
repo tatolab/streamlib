@@ -43,20 +43,18 @@ struct Args {
 }
 
 /// Resolve the `packages/` directory that ships the core module sources,
-/// independent of where the binary is invoked from. The binary sits
-/// alongside `packages/` in both supported layouts — a cargo workspace
-/// (`<workspace>/target/<profile>/streamlib-runtime`) and an installed
-/// app folder (`<prefix>/bin/streamlib-runtime`, reached through a PATH
-/// symlink that `current_exe()` resolves to its real location) — so
-/// walking up from the binary to the first ancestor containing a
-/// `packages/` directory finds the root either way. `STREAMLIB_PACKAGES_DIR`
-/// overrides the search. Whether a given module exists under the resolved
-/// directory is the module loader's concern, not this function's.
+/// from the binary's own location. streamlib packages are source that is
+/// compiled locally (like cargo / npm / pip — a prebuilt may ride along to
+/// speed loading, but the source is always present and rebuilt to track ABI
+/// changes), and an install is always a full clone of the repo, so
+/// `packages/` sits at the install root alongside the binary. Walk up from
+/// `current_exe()` — which resolves a PATH symlink to its real location —
+/// to the first ancestor containing a `packages/` directory: the install
+/// root for an installed binary, the workspace root under `cargo run`.
+/// Resolution is from the binary alone; there is no env override, because
+/// the install layout is fixed by construction. Whether a given module
+/// exists under the resolved directory is the module loader's concern.
 fn resolve_packages_dir() -> Result<PathBuf> {
-    if let Ok(dir) = std::env::var("STREAMLIB_PACKAGES_DIR") {
-        return Ok(PathBuf::from(dir));
-    }
-
     let exe = std::env::current_exe().context("could not determine the running executable path")?;
     let mut ancestor = exe.parent();
     while let Some(dir) = ancestor {
@@ -69,7 +67,8 @@ fn resolve_packages_dir() -> Result<PathBuf> {
 
     bail!(
         "could not locate the streamlib `packages/` directory by walking up from {}. \
-         Set STREAMLIB_PACKAGES_DIR to the install root's packages directory.",
+         The runtime must run from within a streamlib install (a clone of the repo with \
+         a `packages/` directory at its root).",
         exe.display()
     )
 }

@@ -11,11 +11,12 @@
 //! The boot test builds the `@tatolab/api-server` cdylib via the injected
 //! orchestrator and starts a full runtime (GPU init included), so it is a
 //! local integration test (the workspace CI runs `cargo test --lib`,
-//! which does not pick up `tests/`).
+//! which does not pick up `tests/`). It relies on the runtime resolving
+//! `packages/` from the test binary's own location (`target/<profile>/`
+//! walks up to the workspace root), exercising the real resolver.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -27,13 +28,6 @@ impl Drop for ChildGuard {
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
-}
-
-/// The workspace `packages/` directory, where the core module sources
-/// live. Handed to the binary via `STREAMLIB_PACKAGES_DIR` so it resolves
-/// the API server source without depending on the binary's install layout.
-fn workspace_packages_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages")
 }
 
 /// Grab an ephemeral port the OS reports free, then release it. The
@@ -88,7 +82,6 @@ fn bare_runtime_boots_and_serves_health() {
         .arg("--port")
         .arg(base_port.to_string())
         .env("STREAMLIB_HOME", &temp_home)
-        .env("STREAMLIB_PACKAGES_DIR", workspace_packages_dir())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
