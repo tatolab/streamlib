@@ -279,8 +279,22 @@ pub fn assemble_artifact(
         .any(|p| matches!(p.runtime.language, ProcessorLanguage::Python));
     let mut python_wheels = 0usize;
     if has_python {
-        collect_source_tree(pkg_dir, &mut files)?;
         python_wheels = collect_wheels_in_dir(&pkg_dir.join("python").join("wheels"))?.len();
+    }
+
+    // Bundle the source tree when the package ships code that's run or
+    // built FROM source:
+    //   - Python → the engine runs it from source (see above).
+    //   - Rust   → so a host on a different triple (or one given a
+    //     source-only box) can `cargo build` the cdylib itself. The
+    //     prebuilt cdylib for the packing host is already in `files`
+    //     (lib/<triple>/), and `collect_source_tree` excludes `lib/`, so
+    //     the two don't collide — the box becomes "sdist + one-triple
+    //     wheel". A package whose Cargo deps are path/workspace-only only
+    //     builds where those resolve (same constraint crates.io has); it
+    //     relies on the bundled prebuilt for its own triple.
+    if has_python || has_rust {
+        collect_source_tree(pkg_dir, &mut files)?;
     }
 
     // Manifest bytes (possibly rewritten).
@@ -728,6 +742,41 @@ mod tests {
         assert!(!outcome.rebuilt, "prebuilt lib must not trigger a build");
         let entries = zip_entries(&out);
         assert!(entries.contains(&format!("lib/{}/{}", host_target_triple(), dylib)));
+    }
+
+    #[test]
+    fn slpkg_rust_bundles_source_alongside_prebuilt() {
+        // The box is "sdist + one-triple wheel": a Rust package ships both
+        // its prebuilt cdylib (for the packing host) AND its crate source,
+        // so a host on a different triple can rebuild from the box. Revert
+        // the source-bundle step and the .slpkg carries only the
+        // host-specific binary — unusable on any other platform.
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: rp\n  version: 0.1.0\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), b"[package]\nname='rp'\n").unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), b"// crate source").unwrap();
+        let triple_dir = dir.path().join("lib").join(host_target_triple());
+        std::fs::create_dir_all(&triple_dir).unwrap();
+        let dylib = format!("librp.{}", host_dylib_extension());
+        std::fs::write(triple_dir.join(&dylib), b"prebuilt").unwrap();
+
+        let out = dir.path().join("o.slpkg");
+        let outcome =
+            assemble_artifact(dir.path(), &AssembleTarget::Slpkg(out.clone()), &slpkg_opts(false), &())
+                .unwrap();
+        assert!(!outcome.rebuilt, "prebuilt present → no build");
+        let entries = zip_entries(&out);
+        assert!(
+            entries.contains(&format!("lib/{}/{}", host_target_triple(), dylib)),
+            "prebuilt cdylib must ship, got {entries:?}"
+        );
+        assert!(entries.contains(&"Cargo.toml".to_string()), "crate manifest must ship");
+        assert!(entries.contains(&"src/lib.rs".to_string()), "crate source must ship");
     }
 
     #[test]

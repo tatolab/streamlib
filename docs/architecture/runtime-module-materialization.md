@@ -109,16 +109,44 @@ comes from:
 
 | Variant | Source | Builds? |
 |---|---|---|
-| `InstalledCache` | `~/.streamlib/cache/packages/…` | never |
+| `InstalledCache` | `~/.streamlib/cache/packages/…` | only if Rust source + no matching prebuilt |
 | `Path { path, build }` | a directory with `streamlib.yaml` | per `build` |
-| `Slpkg { path }` | a `.slpkg` archive (engine extracts) | never |
+| `Slpkg { path }` | a `.slpkg` archive (engine extracts) | only if Rust source + no matching prebuilt |
 | `Git { url, rev, build }` | a git checkout (engine fetches) | per `build` |
 | `Url { url, build }` | a remote archive | per `build` (orchestrator fetches) |
 
-`add_module(ident)` is the conservative default — `Strategy::InstalledCache`,
-never builds, fails loud (`ModuleNotFound`) if absent. Anything
-rebuildable-from-source is requested **explicitly** through `Path`/`Git`,
-so a stale artifact can never be silently loaded.
+`add_module(ident)` is the conservative default — `Strategy::InstalledCache`.
+Anything rebuildable-from-source via `Path`/`Git` is requested
+**explicitly** with a `BuildPolicy`, so a stale artifact can't be silently
+loaded.
+
+### A `.slpkg` carries source and/or a prebuilt — host prefers prebuilt, else builds
+
+A `.slpkg` (and an `InstalledCache` entry) is a box that can hold **source
+and/or a prebuilt cdylib**, like a pip package shipping both a wheel and an
+sdist. `assemble_artifact` bundles, for a Rust package, *both* the crate
+source (`Cargo.toml` + `src/` …) and the prebuilt cdylib for the packing
+host's triple. On load, the resolver (`source_for_resolved_dir`) decides:
+
+```
+manifest has Rust processors?
+  no  → load as-is (Python/Deno/schema run from source)
+  yes → lib/<this-host-triple>/*.so present?
+          yes → load it           (compiler-free, instant)
+          no  → Cargo.toml present?
+                  yes → build it on this host → cdylib
+                  no  → load as-is → dlopen fails loud (no artifact, no source)
+```
+
+So one artifact runs everywhere: a host on the packing triple uses the
+prebuilt with **no compiler**; a host on a different triple (or one handed
+a source-only box) compiles the bundled source for itself. The
+compiler-free frozen deployment is preserved — it just requires the box to
+carry a prebuilt for its triple; a source-only box on a host with no
+orchestrator fails loud (`BuildRequiredButNoOrchestrator`). A Rust crate
+whose Cargo deps are path/workspace-only builds only where those resolve
+(the same constraint crates.io enforces) and relies on its bundled
+prebuilt for its own triple.
 
 `BuildPolicy`:
 
@@ -246,7 +274,8 @@ Engine ↔ plugin stay in lock-step on two complementary layers:
 |---|---|
 | Local dev edit→run | runner wires `PolyglotBuildOrchestrator`; `Strategy::Path { build: IfStale }` rebuilds changed packages (incl. transitive) via cargo's fingerprint |
 | AI agent / CLI / daemon authoring a package at runtime | same: write source → `add_module_with(Path/Git, IfStale)` → orchestrator builds → load. This is production, not a dev convenience |
-| Frozen `.slpkg`-only container | no orchestrator wired (`--no-default-features`); loads `InstalledCache` / `Slpkg` only; provably compiler-free |
+| Frozen container, prebuilt `.slpkg` for its triple | no orchestrator wired (`--no-default-features`); `Slpkg`/`InstalledCache` finds the matching prebuilt cdylib and loads it; provably compiler-free |
+| `.slpkg` from another platform (or source-only) on a fresh triple | extract → no matching prebuilt → orchestrator `cargo build`s the bundled source for this host → load. One artifact, every platform |
 | "point at this GitHub repo for @org/pkg" | `Strategy::Git { url, rev, build }` — engine fetches the checkout, orchestrator builds it |
 | Mixed (local + installed + slpkg) | each top-level call and each transitive dep derives its own `Strategy`; `await_modules` runs them concurrently |
 | CI cold cache | orchestrator wired; cold builds run (and parallelize across languages) |
