@@ -196,31 +196,18 @@ streamlib/
 
 ## Development Setup
 
-StreamLib uses [direnv](https://direnv.net/) to manage environment variables for development.
+Clone the repo and build with cargo — there is no setup script. The
+runtime and packages live in the checkout, and `streamlib-runtime`
+resolves the `packages/` directory from its own location.
 
-**1. Install direnv:**
-```bash
-brew install direnv
-```
+Optionally use [direnv](https://direnv.net/) to load development
+environment variables (e.g. `RUST_LOG`):
 
-**2. Add the hook to your shell** (add to `~/.zshrc` or `~/.bashrc`):
 ```bash
+# install direnv, then add its hook to your shell rc:
 eval "$(direnv hook zsh)"  # or bash
-```
-
-**3. Run the dev setup script:**
-```bash
-./scripts/dev-setup.sh
-```
-
-**4. Allow direnv to load the environment:**
-```bash
 direnv allow
 ```
-
-This sets up:
-- StreamLib runtime service (per-runtime surface-share socket; runs in background via launchd)
-- Development environment variables
 
 See `.envrc.example` for the environment variables used.
 

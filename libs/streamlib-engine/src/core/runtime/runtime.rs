@@ -178,7 +178,7 @@ impl Runner {
             tokio_runtime_variant.handle(),
         );
 
-        // Load .env file (dev-setup.sh-style overrides: RUST_LOG, etc.)
+        // Load a local .env if present (RUST_LOG and other dev overrides).
         let _ = dotenvy::dotenv();
 
         // Generate runtime ID first — used as service_name for telemetry.
