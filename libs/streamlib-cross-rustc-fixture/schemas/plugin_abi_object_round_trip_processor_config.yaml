@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: BUSL-1.1
 
 metadata:
-  type: BetaShapeRoundTripProcessorConfig
+  type: PluginAbiObjectRoundTripProcessorConfig
   description: "Config schema for the #927 cross-rustc dlopen fixture."
 
 properties:
   output_path:
     metadata:
-      description: "Filesystem path where the processor writes its result. Format: 'OK\\n<summary>' on success, 'ERR:<message>' on first-failing β-shape."
+      description: "Filesystem path where the processor writes its result. Format: 'OK\\n<summary>' on success, 'ERR:<message>' on first-failing PluginAbiObject."
     type: string

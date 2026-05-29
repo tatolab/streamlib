@@ -381,7 +381,7 @@ impl PixelBufferPoolManager {
 /// [`GpuContextFullAccess::gpu_capabilities`].
 ///
 /// Plain owned data — the cdylib bridge populates this from the
-/// [`streamlib_plugin_abi::GpuCapabilitiesRepr`] FFI struct (decoding
+/// [`streamlib_plugin_abi::GpuCapabilitiesRepr`] plugin ABI struct (decoding
 /// the fixed-size device_name byte buffer into an owned `String`).
 /// In-process callers get it directly from the host-side getters.
 #[cfg(target_os = "linux")]
@@ -444,14 +444,14 @@ pub struct GpuContext {
     /// Serializes [`GpuContextLimitedAccess::escalate`] scopes across
     /// threads (and across the in-process and vtable dispatch paths —
     /// engine-internal callers using `host_inner` direct dispatch and
-    /// cdylib plugin callers using vtable FFI dispatch serialize
+    /// cdylib plugin callers using vtable plugin ABI dispatch serialize
     /// against each other) so concurrent GPU resource creation (video
     /// sessions, DPB images, swapchain) can't race on the device. The
     /// compiler acquires this during Phase 4 of spawn_processor and
     /// releases it after waiting for the device to go idle. Replaces
     /// the older `std::sync::Mutex<()>`-based `processor_setup_lock`
     /// — a [`Mutex`] guard can't cross thread boundaries (the cdylib
-    /// FFI escalate_begin / escalate_end pair may run on different
+    /// plugin ABI escalate_begin / escalate_end pair may run on different
     /// threads), so this gate uses a flag + Condvar that enter and
     /// exit can hit independently.
     escalate_gate: Arc<super::escalate_gate::EscalateGate>,
@@ -554,11 +554,11 @@ impl GpuContext {
     /// dispatch paths — engine-internal in-process escalate (the
     /// host-mode caller; uses
     /// [`super::escalate_gate::EscalateGate::enter_scoped`] for RAII
-    /// release) and cdylib FFI-dispatched escalate (the plugin
+    /// release) and cdylib plugin-ABI-dispatched escalate (the plugin
     /// caller; uses bare `enter` / `exit` through
     /// [`super::escalate_scope_registry::begin_escalate_scope`] /
     /// [`super::escalate_scope_registry::end_escalate_scope`] because
-    /// the FFI boundary precludes RAII across it).
+    /// the plugin ABI precludes RAII across it).
     pub(crate) fn escalate_gate(&self) -> &super::escalate_gate::EscalateGate {
         &self.escalate_gate
     }
@@ -1340,7 +1340,7 @@ impl GpuContext {
         dst: PixelFormat,
     ) -> Result<RhiColorConverter> {
         // Fast path: read lock; cache stores Arc<Inner> so we can build
-        // a fresh β-shape via from_arc_into_raw per request.
+        // a fresh PluginAbiObject via from_arc_into_raw per request.
         {
             let cache = self.color_converter_cache.read().unwrap();
             if let Some(c) = cache.get(&(src, dst)) {
@@ -2037,7 +2037,7 @@ impl std::fmt::Debug for GpuContext {
 /// operations; heavier work must go through [`GpuContextLimitedAccess::escalate`].
 ///
 /// Restricted GPU capability shim with ABI-stable `(handle, vtable)`
-/// shape. Both fields cross the cdylib DSO boundary unchanged:
+/// shape. Both fields cross the plugin ABI unchanged:
 ///
 /// - `handle`: opaque `*const c_void` pointing at a host-leaked
 ///   `Box<Arc<GpuContext>>`. Cdylib code passes this pointer to
@@ -2067,13 +2067,13 @@ pub struct GpuContextLimitedAccess {
 // fields are themselves Send + Sync via their Arc wrappers). The
 // vtable pointer is `&'static` and pinned for the host's lifetime.
 // Every method (engine and cdylib) reaches the GpuContext through
-// the handle, gated on DSO mode by `host_inner()`'s `host_callbacks()`
+// the handle, gated on plugin mode by `host_inner()`'s `host_callbacks()`
 // check.
 unsafe impl Send for GpuContextLimitedAccess {}
 unsafe impl Sync for GpuContextLimitedAccess {}
 
 impl Clone for GpuContextLimitedAccess {
-    /// Cross-DSO-safe Clone. Dispatches through
+    /// plugin-ABI-safe Clone. Dispatches through
     /// [`GpuContextLimitedAccessVTable::clone_handle`] to bump the
     /// host's `Arc<GpuContext>` refcount.
     fn clone(&self) -> Self {
@@ -2130,7 +2130,7 @@ impl Drop for GpuContextLimitedAccess {
 /// # In-process vs vtable dispatch (Phase C3)
 ///
 /// Two construction paths populate this struct depending on which
-/// side of the FFI boundary the caller lives on; the same surface
+/// side of the plugin ABI the caller lives on; the same surface
 /// methods work from either:
 ///
 /// - **In-process dispatch** ([`Self::new`], `pub(in
@@ -2139,7 +2139,7 @@ impl Drop for GpuContextLimitedAccess {
 ///   can construct it). `handle` is a host-allocated
 ///   `Box<Arc<GpuContext>>` and `handle_kind` is
 ///   [`HandleKind::Boxed`]. Every method routes through
-///   [`Self::host_inner`] for direct dispatch — no FFI hop, no
+///   [`Self::host_inner`] for direct dispatch — no plugin ABI hop, no
 ///   scope-registry lookup. Drop runs
 ///   [`std::boxed::Box::from_raw`] on the boxed Arc.
 /// - **Vtable dispatch** ([`Self::from_scope_token`], reached from
@@ -2209,7 +2209,7 @@ pub(crate) enum HandleKind {
     /// Handle is a host-allocated `Box<Arc<GpuContext>>` from
     /// [`GpuContextFullAccess::new`]. Methods on the cdylib-facing
     /// `GpuContextFullAccess` surface dispatch through `host_inner`
-    /// directly (no FFI hop). Used by engine-internal escalate
+    /// directly (no plugin ABI hop). Used by engine-internal escalate
     /// scopes.
     Boxed = 0,
     /// Handle is an opaque scope token from the host's
@@ -2238,7 +2238,7 @@ impl Drop for GpuContextFullAccess {
     ///
     /// - [`HandleKind::Boxed`] (in-process dispatch shape): runs
     ///   `Box::from_raw` on the boxed `Arc<GpuContext>` directly,
-    ///   without going through the vtable. No FFI hop;
+    ///   without going through the vtable. No plugin ABI hop;
     ///   engine-internal cleanup.
     /// - [`HandleKind::ScopeToken`] (vtable-dispatched shape):
     ///   no-op. The cdylib's escalate wrapper that constructed this
@@ -2279,7 +2279,7 @@ impl GpuContextLimitedAccess {
     /// `Box<Arc<GpuContext>>` as the opaque handle, then resolves
     /// the vtable through
     /// [`crate::core::plugin::host_services::host_gpu_context_limited_access_vtable`]
-    /// (DSO-routed: host static in host mode, cdylib-installed
+    /// (plugin-ABI-routed: host static in host mode, cdylib-installed
     /// pointer in cdylib mode).
     pub(crate) fn new(inner: GpuContext) -> Self {
         // Leak a fresh `Arc<GpuContext>` to back the opaque handle.
@@ -2308,7 +2308,7 @@ impl GpuContextLimitedAccess {
     /// instead — every cdylib-callable method on
     /// [`GpuContextLimitedAccess`] is wired through the vtable.
     ///
-    /// The panic is caught by `run_host_extern_c` at the FFI
+    /// The panic is caught by `run_host_extern_c` at the plugin ABI
     /// boundary (host extern "C" callbacks all route through
     /// `catch_unwind`), so a misconfigured cdylib path gets a clean
     /// "callback panicked" log entry instead of UB.
@@ -2319,7 +2319,7 @@ impl GpuContextLimitedAccess {
             panic!(
                 "GpuContextLimitedAccess::host_inner() reached from cdylib code; \
                  this method must dispatch through the GpuContextLimitedAccessVTable. \
-                 The panic is caught by run_host_extern_c at the FFI boundary."
+                 The panic is caught by run_host_extern_c at the plugin ABI."
             );
         }
         // SAFETY: `self.handle` was produced by `Self::new` or
@@ -2360,7 +2360,7 @@ impl GpuContextLimitedAccess {
     /// - **In-process dispatch** (engine-internal callers): acquires
     ///   the gate directly, constructs [`GpuContextFullAccess::new`]
     ///   (Boxed), runs the closure with method dispatch via
-    ///   [`GpuContextFullAccess::host_inner`] (no FFI hop), then
+    ///   [`GpuContextFullAccess::host_inner`] (no plugin ABI hop), then
     ///   waits device idle and releases the gate.
     /// - **Vtable dispatch** (cdylib callers): dispatches through
     ///   the [`GpuContextLimitedAccessVTable`]'s `escalate_begin` /
@@ -2392,7 +2392,7 @@ impl GpuContextLimitedAccess {
     }
 
     /// Engine-internal escalate path. Direct in-process dispatch —
-    /// no FFI hop. See [`Self::escalate`] for the mode router.
+    /// no plugin ABI hop. See [`Self::escalate`] for the mode router.
     fn escalate_in_process<F, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce(&GpuContextFullAccess) -> Result<T>,
@@ -2434,7 +2434,7 @@ impl GpuContextLimitedAccess {
     /// Cdylib escalate path. Dispatches through the LimitedAccess
     /// vtable's `escalate_begin` / `escalate_end` pair; constructs
     /// `GpuContextFullAccess::from_scope_token` so the closure's
-    /// FullAccess method calls cross the FFI boundary through the
+    /// FullAccess method calls cross the plugin ABI through the
     /// FullAccess vtable. See [`Self::escalate`] for the mode router.
     fn escalate_via_vtable<F, T>(&self, f: F) -> Result<T>
     where
@@ -2629,7 +2629,7 @@ impl GpuContextFullAccess {
     /// `escalate_begin` callback) as a full-access capability whose
     /// methods route through the
     /// [`GpuContextFullAccessVTable`](streamlib_plugin_abi::GpuContextFullAccessVTable)
-    /// for cross-DSO dispatch.
+    /// for plugin ABI dispatch.
     ///
     /// Used by the cdylib-mode path of
     /// [`GpuContextLimitedAccess::escalate`]; the matching cleanup
@@ -2669,20 +2669,20 @@ impl GpuContextFullAccess {
     /// [`GpuContextLimitedAccess::host_inner`]'s contract: cdylib code
     /// must dispatch through the
     /// [`GpuContextFullAccessVTable`](streamlib_plugin_abi::GpuContextFullAccessVTable)
-    /// instead. The panic is caught by `run_host_extern_c` at the FFI
+    /// instead. The panic is caught by `run_host_extern_c` at the plugin ABI
     /// boundary.
     pub(crate) fn host_inner(&self) -> &GpuContext {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
             panic!(
                 "GpuContextFullAccess::host_inner() reached from cdylib code; \
                  this method must dispatch through the GpuContextFullAccessVTable. \
-                 The panic is caught by run_host_extern_c at the FFI boundary. \
+                 The panic is caught by run_host_extern_c at the plugin ABI. \
                  \
                  Read docs/architecture/cdylib-reachability.md before workarounds — \
                  the right pattern depends on the lifecycle stage and the type \
                  shape. For setup()/teardown() bodies, ctx.gpu_full_access() now \
                  dispatches through the vtable (Pattern 1, #1072). For accessor \
-                 returns, see β-shape Arc-transit slots (Pattern 2). For per- \
+                 returns, see PluginAbiObject Arc-transit slots (Pattern 2). For per- \
                  method binding work, see per-method vtable slots (Pattern 3). \
                  DO NOT call gpu_limited_access().escalate(...) from setup() / \
                  teardown() — the gate is already held and re-entry panics."
@@ -2818,11 +2818,11 @@ impl GpuContextLimitedAccess {
     /// allocates — nonzero sustained rates will fire the escalation-rate
     /// warning, indicating a pre-reservation gap.
     ///
-    /// Dispatches through the cross-DSO vtable's
+    /// Dispatches through the plugin ABI vtable's
     /// `acquire_pixel_buffer` callback. The tuple return is encoded
     /// via paired out-params: the pool id's string bytes land in a
     /// fixed-size stack buffer (1 KiB; UUID strings are well under
-    /// 128 bytes), and the β-shape PixelBuffer goes into a
+    /// 128 bytes), and the PluginAbiObject PixelBuffer goes into a
     /// MaybeUninit slot.
     pub fn acquire_pixel_buffer(
         &self,
@@ -2873,7 +2873,7 @@ impl GpuContextLimitedAccess {
     /// Acquire a HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
     /// See [`GpuContext::acquire_storage_buffer`].
     ///
-    /// Dispatches through the cross-DSO vtable's
+    /// Dispatches through the plugin ABI vtable's
     /// `acquire_storage_buffer` callback.
     #[cfg(target_os = "linux")]
     pub fn acquire_storage_buffer(
@@ -2891,7 +2891,7 @@ impl GpuContextLimitedAccess {
     /// Acquire a HOST_VISIBLE uniform buffer.
     /// See [`GpuContext::acquire_uniform_buffer`].
     ///
-    /// Dispatches through the cross-DSO vtable's
+    /// Dispatches through the plugin ABI vtable's
     /// `acquire_uniform_buffer` callback.
     #[cfg(target_os = "linux")]
     pub fn acquire_uniform_buffer(
@@ -2909,7 +2909,7 @@ impl GpuContextLimitedAccess {
     /// Acquire a HOST_VISIBLE vertex buffer.
     /// See [`GpuContext::acquire_vertex_buffer`].
     ///
-    /// Dispatches through the cross-DSO vtable's
+    /// Dispatches through the plugin ABI vtable's
     /// `acquire_vertex_buffer` callback.
     #[cfg(target_os = "linux")]
     pub fn acquire_vertex_buffer(
@@ -2927,7 +2927,7 @@ impl GpuContextLimitedAccess {
     /// Acquire a HOST_VISIBLE index buffer.
     /// See [`GpuContext::acquire_index_buffer`].
     ///
-    /// Dispatches through the cross-DSO vtable's
+    /// Dispatches through the plugin ABI vtable's
     /// `acquire_index_buffer` callback.
     #[cfg(target_os = "linux")]
     pub fn acquire_index_buffer(
@@ -2944,7 +2944,7 @@ impl GpuContextLimitedAccess {
 
     /// Get a pixel buffer by its pool id (Split: local cache).
     ///
-    /// Dispatches through the cross-DSO vtable's `get_pixel_buffer`
+    /// Dispatches through the plugin ABI vtable's `get_pixel_buffer`
     /// callback.
     pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<PixelBuffer> {
         if self.handle.is_null() || self.vtable.is_null() {
@@ -2978,7 +2978,7 @@ impl GpuContextLimitedAccess {
 
     /// Resolve a VideoFrame's buffer from its surface_id.
     ///
-    /// Dispatches through the cross-DSO vtable's
+    /// Dispatches through the plugin ABI vtable's
     /// `resolve_pixel_buffer_by_surface_id` callback.
     pub fn resolve_pixel_buffer_by_surface_id(&self, surface_id: &str) -> Result<PixelBuffer> {
         if self.handle.is_null() || self.vtable.is_null() {
@@ -3011,7 +3011,7 @@ impl GpuContextLimitedAccess {
 
     /// Register a texture in the same-process texture cache.
     ///
-    /// Dispatches through the cross-DSO
+    /// Dispatches through the plugin ABI
     /// [`GpuContextLimitedAccessVTable::register_texture`](streamlib_plugin_abi::GpuContextLimitedAccessVTable::register_texture)
     /// callback. The host-side impl bumps the
     /// `Arc<TextureInner>` refcount before stashing a clone in the
@@ -3037,7 +3037,7 @@ impl GpuContextLimitedAccess {
     /// Register a texture with a declared initial Vulkan image layout.
     /// See [`GpuContext::register_texture_with_layout`].
     ///
-    /// Dispatches through the cross-DSO vtable's `register_texture`
+    /// Dispatches through the plugin ABI vtable's `register_texture`
     /// callback with the layout's `i32` enumerant.
     #[cfg(target_os = "linux")]
     pub fn register_texture_with_layout(
@@ -3065,7 +3065,7 @@ impl GpuContextLimitedAccess {
     /// Update a registered texture's tracked layout after a transition.
     /// See [`GpuContext::update_texture_registration_layout`].
     ///
-    /// Dispatches through the cross-DSO vtable's
+    /// Dispatches through the plugin ABI vtable's
     /// `update_texture_registration_layout` callback.
     #[cfg(target_os = "linux")]
     pub fn update_texture_registration_layout(&self, id: &str, layout: VulkanLayout) {
@@ -3085,7 +3085,7 @@ impl GpuContextLimitedAccess {
 
     /// Resolve a VideoFrame's full registration record (texture + layout).
     ///
-    /// Dispatches through the cross-DSO vtable's
+    /// Dispatches through the plugin ABI vtable's
     /// `resolve_texture_registration_by_surface_id` callback. Returns
     /// a β-reshaped [`TextureRegistration`] value (handle + vtable);
     /// Clone is cheap (refcount bump via vtable), Drop releases the
@@ -3141,7 +3141,7 @@ impl GpuContextLimitedAccess {
 
     /// Resolve a VideoFrame's texture (Split: cache hit).
     ///
-    /// Dispatches through the cross-DSO vtable's
+    /// Dispatches through the plugin ABI vtable's
     /// `resolve_texture_by_surface_id` callback.
     pub fn resolve_texture_by_surface_id(
         &self,
@@ -3194,7 +3194,7 @@ impl GpuContextLimitedAccess {
 
     /// See [`GpuContext::set_video_source_timeline_semaphore`].
     ///
-    /// Dispatches through the cross-DSO
+    /// Dispatches through the plugin ABI
     /// [`GpuContextLimitedAccessVTable::set_video_source_timeline_semaphore`](streamlib_plugin_abi::GpuContextLimitedAccessVTable::set_video_source_timeline_semaphore)
     /// callback. The cdylib passes
     /// `Arc::as_ptr(timeline) as *const c_void` — a **borrowed**
@@ -3209,7 +3209,7 @@ impl GpuContextLimitedAccess {
     /// [`GpuContextFullAccess::create_timeline_semaphore`]'s docs on
     /// the same rustc-version-coupling caveat. In-tree consumers
     /// (camera, display) ride this freely; cross-repo distribution
-    /// awaits a β-shape lift of `HostVulkanTimelineSemaphore`.
+    /// awaits a PluginAbiObject lift of `HostVulkanTimelineSemaphore`.
     #[cfg(target_os = "linux")]
     pub fn set_video_source_timeline_semaphore(
         &self,
@@ -3234,7 +3234,7 @@ impl GpuContextLimitedAccess {
 
     /// See [`GpuContext::clear_video_source_timeline_semaphore`].
     ///
-    /// Dispatches through the cross-DSO
+    /// Dispatches through the plugin ABI
     /// [`GpuContextLimitedAccessVTable::clear_video_source_timeline_semaphore`](streamlib_plugin_abi::GpuContextLimitedAccessVTable::clear_video_source_timeline_semaphore)
     /// callback. Pairs with
     /// [`Self::set_video_source_timeline_semaphore`].
@@ -3253,7 +3253,7 @@ impl GpuContextLimitedAccess {
     ///
     /// **Engine-only** — return type
     /// `Option<Arc<HostVulkanTimelineSemaphore>>` borrows into
-    /// host-private state, so the borrow can't cross the FFI
+    /// host-private state, so the borrow can't cross the plugin ABI
     /// boundary. Calling from a cdylib panics at the explicit guard
     /// below. **Cdylib callers** must use
     /// [`Self::host_video_source_timeline_arc`] instead — it returns
@@ -3271,7 +3271,7 @@ impl GpuContextLimitedAccess {
                  `host_video_source_timeline_arc()` instead. The legacy method \
                  returns `Option<Arc<HostVulkanTimelineSemaphore>>` from \
                  `host_inner()` which borrows host-private state and cannot \
-                 cross the FFI boundary."
+                 cross the plugin ABI."
             );
         }
         self.host_inner().video_source_timeline_semaphore()
@@ -3329,7 +3329,7 @@ impl GpuContextLimitedAccess {
     /// because allocating a new RT-capable image is a privileged op
     /// that goes through escalate.
     ///
-    /// Dispatches through the cross-DSO vtable's `acquire_texture`
+    /// Dispatches through the plugin ABI vtable's `acquire_texture`
     /// callback. The descriptor's `label` field is currently dropped
     /// on the wire (debugging-only, never load-bearing).
     pub fn acquire_texture(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
@@ -3377,7 +3377,7 @@ impl GpuContextLimitedAccess {
     /// See [`GpuContext::copy_pixel_buffer_to_texture`] for the full
     /// contract.
     ///
-    /// Dispatches through the cross-DSO vtable's
+    /// Dispatches through the plugin ABI vtable's
     /// `copy_pixel_buffer_to_texture` callback.
     #[cfg(target_os = "linux")]
     pub fn copy_pixel_buffer_to_texture(
@@ -3420,7 +3420,7 @@ impl GpuContextLimitedAccess {
 
     /// See [`GpuContext::unregister_texture`].
     ///
-    /// Dispatches through the cross-DSO vtable's `unregister_texture`
+    /// Dispatches through the plugin ABI vtable's `unregister_texture`
     /// callback.
     pub fn unregister_texture(&self, id: &str) {
         if self.handle.is_null() || self.vtable.is_null() {
@@ -3438,12 +3438,12 @@ impl GpuContextLimitedAccess {
     /// images/buffers a Sandbox caller can construct are pool-backed and
     /// pre-reserved. See design doc §8 Q5.
     ///
-    /// Dispatches through the cross-DSO vtable's `command_queue`
-    /// callback. Returns an owned [`RhiCommandQueue`] β-shape with the
+    /// Dispatches through the plugin ABI vtable's `command_queue`
+    /// callback. Returns an owned [`RhiCommandQueue`] PluginAbiObject with the
     /// host's `Arc<RhiCommandQueueInner>` refcount bumped.
     pub fn command_queue(&self) -> RhiCommandQueue {
         if self.handle.is_null() || self.vtable.is_null() {
-            // Construct a null-handle β-shape that's safe to Drop
+            // Construct a null-handle PluginAbiObject that's safe to Drop
             // (Drop short-circuits on null). Caller's subsequent
             // method calls on the queue will fail cleanly.
             return RhiCommandQueue {
@@ -3457,7 +3457,7 @@ impl GpuContextLimitedAccess {
         let mut err_len: usize = 0;
         // SAFETY: handle + vtable were paired at construction. The
         // host writes a valid RhiCommandQueue into `out_q` on success.
-        // On failure we still produce a null-handle β-shape so the
+        // On failure we still produce a null-handle PluginAbiObject so the
         // method's signature stays infallible.
         let status = unsafe {
             ((*self.vtable).command_queue)(
@@ -3481,7 +3481,7 @@ impl GpuContextLimitedAccess {
 
     /// Create a CPU-side command buffer from the shared queue.
     ///
-    /// Dispatches through the cross-DSO vtable's
+    /// Dispatches through the plugin ABI vtable's
     /// `create_command_buffer` callback.
     pub fn create_command_buffer(&self) -> Result<CommandBuffer> {
         if self.handle.is_null() || self.vtable.is_null() {
@@ -3512,7 +3512,7 @@ impl GpuContextLimitedAccess {
 
     /// Copy pixels between same-format, same-size buffers (Split: cache hit).
     ///
-    /// Dispatches through the cross-DSO vtable's `blit_copy` callback.
+    /// Dispatches through the plugin ABI vtable's `blit_copy` callback.
     pub fn blit_copy(&self, src: &PixelBuffer, dest: &PixelBuffer) -> Result<()> {
         if self.handle.is_null() || self.vtable.is_null() {
             return Err(Error::GpuError(
@@ -3546,7 +3546,7 @@ impl GpuContextLimitedAccess {
     /// - `src` must be a valid IOSurfaceRef pointer
     /// - The IOSurface must remain valid for the duration of the blit
     ///
-    /// Dispatches through the cross-DSO vtable's `blit_copy_iosurface`
+    /// Dispatches through the plugin ABI vtable's `blit_copy_iosurface`
     /// callback. macOS-only; non-macOS hosts return an error.
     #[cfg(target_os = "macos")]
     pub unsafe fn blit_copy_iosurface(
@@ -3587,9 +3587,9 @@ impl GpuContextLimitedAccess {
 
     /// Get the surface store, if initialized.
     ///
-    /// Dispatches through the cross-DSO vtable's `surface_store`
-    /// callback. Returns `Some(SurfaceStore)` (β-shape, refcount
-    /// bumped) when the host has one, else `None`. The β-shape's
+    /// Dispatches through the plugin ABI vtable's `surface_store`
+    /// callback. Returns `Some(SurfaceStore)` (PluginAbiObject, refcount
+    /// bumped) when the host has one, else `None`. The PluginAbiObject's
     /// own Clone/Drop dispatch through the
     /// [`streamlib_plugin_abi::SurfaceStoreVTable`] reached via
     /// [`HostServices::surface_store_vtable`].
@@ -3601,18 +3601,18 @@ impl GpuContextLimitedAccess {
             std::mem::MaybeUninit::uninit();
         // SAFETY: handle + vtable were paired at construction. The
         // callback always writes a SurfaceStore — either a real
-        // β-shape (Some) or a null-handle β-shape (None sentinel).
+        // PluginAbiObject (Some) or a null-handle PluginAbiObject (None sentinel).
         unsafe {
             ((*self.vtable).surface_store)(
                 self.handle,
                 out_store.as_mut_ptr() as *mut std::ffi::c_void,
             );
         }
-        // SAFETY: the callback wrote either a real β-shape or a
-        // null-handle β-shape; either way `out_store` is initialized.
+        // SAFETY: the callback wrote either a real PluginAbiObject or a
+        // null-handle PluginAbiObject; either way `out_store` is initialized.
         let store = unsafe { out_store.assume_init() };
         if store.is_none() {
-            // Null-handle β-shape — Drop is a no-op (short-circuits
+            // Null-handle PluginAbiObject — Drop is a no-op (short-circuits
             // on null), so we can safely drop here without affecting
             // any Arc refcount.
             drop(store);
@@ -3624,7 +3624,7 @@ impl GpuContextLimitedAccess {
 
     /// Check out a surface by ID (Split: cache hit).
     ///
-    /// Dispatches through the cross-DSO vtable's `check_out_surface`
+    /// Dispatches through the plugin ABI vtable's `check_out_surface`
     /// callback.
     pub fn check_out_surface(&self, surface_id: &str) -> Result<PixelBuffer> {
         if self.handle.is_null() || self.vtable.is_null() {
@@ -4152,13 +4152,13 @@ impl GpuContextFullAccess {
                                 .into(),
                         ));
                     }
-                    // β-shape: bundle the raw handle
+                    // PluginAbiObject: bundle the raw handle
                     // (`Arc::into_raw(Arc<TextureRingInner>)`-shaped)
                     // with the host vtables + cached POD descriptors.
                     // The cached values come from the caller's own
                     // inputs (we know `width` / `height` / `format` /
                     // `count` — these are the args we just passed
-                    // through the FFI), avoiding an extra round-trip
+                    // through the plugin ABI), avoiding an extra round-trip
                     // for the getters. Cross-rustc-version safe because
                     // cdylib never derefs the Inner layout.
                     let methods_vtable =
@@ -4200,7 +4200,7 @@ impl GpuContextFullAccess {
     /// **Engine-only** — parameter is `&Arc<HostVulkanTimelineSemaphore>`
     /// (host-internal type from `crate::vulkan::rhi`). Calling from a
     /// cdylib panics inside [`Self::host_inner`]; the panic is caught by
-    /// `run_host_extern_c` at the FFI boundary, so it surfaces as a
+    /// `run_host_extern_c` at the plugin ABI, so it surfaces as a
     /// clean "callback panicked" log rather than UB.
     #[cfg(target_os = "linux")]
     pub fn set_video_source_timeline_semaphore(
@@ -4211,7 +4211,7 @@ impl GpuContextFullAccess {
             panic!(
                 "GpuContextFullAccess::set_video_source_timeline_semaphore(): \
                  parameter `&Arc<HostVulkanTimelineSemaphore>` is host-internal \
-                 (crate::vulkan::rhi) and cannot cross the FFI boundary; this \
+                 (crate::vulkan::rhi) and cannot cross the plugin ABI; this \
                  method is engine-only and cdylib code must not call it."
             );
         }
@@ -4250,7 +4250,7 @@ impl GpuContextFullAccess {
             panic!(
                 "GpuContextFullAccess::video_source_timeline_semaphore(): \
                  return type `Option<Arc<HostVulkanTimelineSemaphore>>` is \
-                 host-internal (crate::vulkan::rhi) and cannot cross the FFI \
+                 host-internal (crate::vulkan::rhi) and cannot cross the plugin ABI \
                  boundary; engine-only — cdylib code must not call it."
             );
         }
@@ -4261,7 +4261,7 @@ impl GpuContextFullAccess {
     ///
     /// **Engine-only** — returns `&Arc<GpuDevice>` which borrows into
     /// host-private state (the `Box<Arc<GpuContext>>` behind the
-    /// handle). The borrow can't cross the FFI boundary; cdylib code
+    /// handle). The borrow can't cross the plugin ABI; cdylib code
     /// that needs GPU device capabilities should use the higher-level
     /// FullAccess methods (kernel construction, buffer/texture
     /// allocation, etc.) which dispatch through the vtable. Calling
@@ -4270,7 +4270,7 @@ impl GpuContextFullAccess {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
             panic!(
                 "GpuContextFullAccess::device(): return type `&Arc<GpuDevice>` \
-                 borrows into host-private state and cannot cross the FFI \
+                 borrows into host-private state and cannot cross the plugin ABI \
                  boundary; engine-only. Cdylib code that needs GPU device \
                  capabilities must use higher-level FullAccess methods (kernel \
                  construction, buffer/texture allocation) which dispatch \
@@ -4292,7 +4292,7 @@ impl GpuContextFullAccess {
     /// caller's `Drop` decrements the host's count.
     ///
     /// **Rustc-version coupling.** `HostVulkanDevice` is not
-    /// `#[repr(C)]` — the cross-DSO Arc transit is safe only when the
+    /// `#[repr(C)]` — the plugin ABI Arc transit is safe only when the
     /// cdylib shares the host's rustc version and the engine's dep
     /// graph (workspace plugin cdylibs do; subprocess cdylibs
     /// — `streamlib-python-native`, `streamlib-deno-native` — don't dep
@@ -4346,7 +4346,7 @@ impl GpuContextFullAccess {
             panic!(
                 "GpuContextFullAccess::texture_pool(): return type \
                  `&TexturePool` borrows into host-private state and cannot \
-                 cross the FFI boundary; engine-only. Cdylib code uses \
+                 cross the plugin ABI; engine-only. Cdylib code uses \
                  acquire_texture() which dispatches through the FullAccess \
                  vtable."
             );
@@ -4369,11 +4369,11 @@ impl GpuContextFullAccess {
 
     /// Get the shared command queue.
     ///
-    /// Phase D adopts the owned β-shape return that matches
+    /// Phase D adopts the owned PluginAbiObject return that matches
     /// [`GpuContextLimitedAccess::command_queue`] — borrowed
-    /// references can't cross the FFI boundary, so a cdylib-callable
+    /// references can't cross the plugin ABI, so a cdylib-callable
     /// `command_queue` must hand out a refcount-bumped owned
-    /// [`RhiCommandQueue`] regardless of mode. The β-shape's Drop
+    /// [`RhiCommandQueue`] regardless of mode. The PluginAbiObject's Drop
     /// dispatches through the LimitedAccess vtable's
     /// `drop_rhi_command_queue` callback.
     pub fn command_queue(&self) -> RhiCommandQueue {
@@ -4432,7 +4432,7 @@ impl GpuContextFullAccess {
                             "color_converter: host signaled success but out_converter is null".into(),
                         ));
                     }
-                    // β-shape: bundle the raw handle with the parent
+                    // PluginAbiObject: bundle the raw handle with the parent
                     // vtable + per-type methods vtable (Phase E sub-
                     // lift slice A). The methods vtable comes from
                     // `host_callbacks()` — populated at plugin
@@ -4509,14 +4509,14 @@ impl GpuContextFullAccess {
                             "create_compute_kernel: host signaled success but out_kernel is null".into(),
                         ));
                     }
-                    // β-shape: bundle the raw handle (an
+                    // PluginAbiObject: bundle the raw handle (an
                     // `Arc::into_raw(Arc<VulkanComputeKernelInner>)`
                     // pointer host-side, opaque to the cdylib) with
                     // the host's parent vtable + per-type methods
                     // vtable + cached `push_constant_size` POD
                     // (#907 PR 2/5). The cached value comes from the
                     // descriptor input the cdylib just handed across
-                    // — we know it without needing an FFI round-trip
+                    // — we know it without needing a plugin ABI round-trip
                     // to read it back.
                     let methods_vtable =
                         crate::core::plugin::host_services::host_callbacks()
@@ -4756,9 +4756,9 @@ impl GpuContextFullAccess {
                             "create_graphics_kernel: host signaled success but out_kernel is null".into(),
                         ));
                     }
-                    // β-shape: see compute_kernel above. Cached PODs
+                    // PluginAbiObject: see compute_kernel above. Cached PODs
                     // come from the caller's descriptor — we know
-                    // them without an FFI round-trip (#907 PR 3/5).
+                    // them without a plugin ABI round-trip (#907 PR 3/5).
                     let methods_vtable =
                         crate::core::plugin::host_services::host_callbacks()
                             .map(|c| c.vulkan_graphics_kernel_methods_vtable)
@@ -4823,7 +4823,7 @@ impl GpuContextFullAccess {
                             "create_ray_tracing_kernel: host signaled success but out_kernel is null".into(),
                         ));
                     }
-                    // β-shape: see compute_kernel above. Cached PODs
+                    // PluginAbiObject: see compute_kernel above. Cached PODs
                     // come from the caller's descriptor (#907 PR 4/5).
                     let methods_vtable =
                         crate::core::plugin::host_services::host_callbacks()
@@ -4896,10 +4896,10 @@ impl GpuContextFullAccess {
                             "build_triangles_blas: host signaled success but out_blas is null".into(),
                         ));
                     }
-                    // β-shape: bundle the raw handle (`Arc::into_raw(Arc<Inner>)`-shaped)
+                    // PluginAbiObject: bundle the raw handle (`Arc::into_raw(Arc<Inner>)`-shaped)
                     // with the host vtables. The cached POD descriptors
                     // (`device_address`, `storage_size`, `kind`) come
-                    // from the host's β-shape post-mint (see
+                    // from the host's PluginAbiObject post-mint (see
                     // `host_gpu_full_build_triangles_blas`); they are
                     // always real values, never placeholder zeros.
                     let methods_vtable =
@@ -4969,8 +4969,8 @@ impl GpuContextFullAccess {
                             "build_tlas: host signaled success but out_tlas is null".into(),
                         ));
                     }
-                    // β-shape: see build_triangles_blas above. Cached
-                    // PODs come from the host's β-shape post-mint via
+                    // PluginAbiObject: see build_triangles_blas above. Cached
+                    // PODs come from the host's PluginAbiObject post-mint via
                     // the v8 out-params; always real values.
                     let methods_vtable =
                         crate::core::plugin::host_services::host_callbacks()
@@ -5022,7 +5022,7 @@ impl GpuContextFullAccess {
         }
     }
 
-    /// Import a DMA-BUF FD as a `StorageBuffer` (β-shape). Camera
+    /// Import a DMA-BUF FD as a `StorageBuffer` (PluginAbiObject). Camera
     /// V4L2 zero-copy path. **Consumes `fd` on success** — on success
     /// the host's `vkImportMemoryFdInfoKHR` takes ownership of the
     /// kernel-side fd transfer; on failure the caller retains the fd
@@ -5061,7 +5061,7 @@ impl GpuContextFullAccess {
                 };
                 if status == 0 {
                     // SAFETY: host signaled success and wrote the
-                    // StorageBuffer β-shape struct into the slot.
+                    // StorageBuffer PluginAbiObject struct into the slot.
                     Ok(unsafe { out_buffer.assume_init() })
                 } else {
                     let msg = String::from_utf8_lossy(
@@ -5083,10 +5083,10 @@ impl GpuContextFullAccess {
     ///
     /// **Note**: this slot transits `Arc<HostVulkanTimelineSemaphore>`
     /// via Arc-raw-pointer pattern — same hazard as the kernel paths
-    /// pre-#917 Phase 8. Arc internals leak across DSO for now.
+    /// pre-#917 Phase 8. Arc internals leak across the plugin ABI for now.
     /// In-tree consumers (camera, display) are built in the same
     /// workspace as engine; the layout matches by construction.
-    /// Cross-repo plugin distribution will need a β-shape lift for
+    /// Cross-repo plugin distribution will need a PluginAbiObject lift for
     /// `HostVulkanTimelineSemaphore` — tracked as a future follow-up.
     #[cfg(target_os = "linux")]
     pub fn create_timeline_semaphore(
@@ -5143,7 +5143,7 @@ impl GpuContextFullAccess {
     /// Read-once GPU capability snapshot. Backs the camera processor's
     /// vendor-name / external-memory / cross-device-DMA-BUF-probe
     /// branching without exposing host-internal `HostVulkanDevice`
-    /// across the FFI. Mode-routed: host-mode dispatches through
+    /// across the plugin ABI. Mode-routed: host-mode dispatches through
     /// `host_inner()`; cdylib-mode reads a `#[repr(C)]`
     /// [`GpuCapabilitiesRepr`](streamlib_plugin_abi::GpuCapabilitiesRepr)
     /// via the vtable's `gpu_capabilities` slot and decodes the
@@ -5158,7 +5158,7 @@ impl GpuContextFullAccess {
                         "gpu_capabilities: GpuContextFullAccess has null vtable".into(),
                     ));
                 }
-                // Stack-allocate the FFI repr; the host populates it
+                // Stack-allocate the plugin ABI repr; the host populates it
                 // via *out_caps. We then decode into an owned snapshot.
                 let mut out: std::mem::MaybeUninit<
                     streamlib_plugin_abi::GpuCapabilitiesRepr,
@@ -5327,7 +5327,7 @@ impl GpuContextFullAccess {
     ///
     /// **Engine-only** — return type is `Option<Arc<dyn CpuReadbackBridge>>`,
     /// a trait object whose vtable layout is rustc-private (no `#[repr(C)]`
-    /// shape that crosses the FFI boundary). The bridge is registered by
+    /// shape that crosses the plugin ABI). The bridge is registered by
     /// host code via `set_cpu_readback_bridge` and read by host adapter
     /// machinery; cdylib code doesn't need to read it. Calling from a
     /// cdylib panics at the explicit guard below.
@@ -5337,7 +5337,7 @@ impl GpuContextFullAccess {
             panic!(
                 "GpuContextFullAccess::cpu_readback_bridge(): return type \
                  `Option<Arc<dyn CpuReadbackBridge>>` is a trait object whose \
-                 vtable layout is rustc-private and cannot cross the FFI \
+                 vtable layout is rustc-private and cannot cross the plugin ABI \
                  boundary; engine-only — cdylib code must not call it."
             );
         }
@@ -5355,7 +5355,7 @@ impl GpuContextFullAccess {
             panic!(
                 "GpuContextFullAccess::compute_kernel_bridge(): return type \
                  `Option<Arc<dyn ComputeKernelBridge>>` is a trait object whose \
-                 vtable layout is rustc-private and cannot cross the FFI \
+                 vtable layout is rustc-private and cannot cross the plugin ABI \
                  boundary; engine-only — cdylib code must not call it."
             );
         }
@@ -5373,7 +5373,7 @@ impl GpuContextFullAccess {
             panic!(
                 "GpuContextFullAccess::graphics_kernel_bridge(): return type \
                  `Option<Arc<dyn GraphicsKernelBridge>>` is a trait object \
-                 whose vtable layout is rustc-private and cannot cross the FFI \
+                 whose vtable layout is rustc-private and cannot cross the plugin ABI \
                  boundary; engine-only — cdylib code must not call it."
             );
         }
@@ -5391,7 +5391,7 @@ impl GpuContextFullAccess {
             panic!(
                 "GpuContextFullAccess::ray_tracing_kernel_bridge(): return type \
                  `Option<Arc<dyn RayTracingKernelBridge>>` is a trait object \
-                 whose vtable layout is rustc-private and cannot cross the FFI \
+                 whose vtable layout is rustc-private and cannot cross the plugin ABI \
                  boundary; engine-only — cdylib code must not call it."
             );
         }
@@ -5857,7 +5857,7 @@ mod tests {
     ///
     /// A kernel constructed inside `escalate(|full| ...)` and returned
     /// out of the closure must Drop cleanly after the scope ends. The
-    /// kernel β-shape's Drop dispatches through its own per-vtable
+    /// kernel PluginAbiObject's Drop dispatches through its own per-vtable
     /// `drop_compute_kernel` callback — independent of any active
     /// escalate scope (the scope token only validates FullAccess CALL
     /// dispatch; drop is a refcount decrement on an opaque handle).

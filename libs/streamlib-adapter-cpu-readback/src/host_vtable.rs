@@ -11,14 +11,14 @@
 //!    side (wire the in-process trigger, allocate the per-plane
 //!    staging buffers + timeline, register surfaces — same as
 //!    today).
-//! 2. Hand the cdylib a `(handle, vtable)` β-shape pair where:
+//! 2. Hand the cdylib a `(handle, vtable)` PluginAbiObject pair where:
 //!    - `handle = Arc::into_raw(arc.clone())`
 //!    - `vtable = host_cpu_readback_surface_adapter_vtable::<D>()`
 //! 3. The cdylib invokes the vtable methods exactly as if it held
 //!    a Rust `&CpuReadbackSurfaceAdapter<D>` — every method
 //!    dispatches through host-compiled code, so layout drift
 //!    between rustc-minor versions and divergent dep graphs is
-//!    contained inside the host DSO.
+//!    contained inside the host plugin.
 //!
 //! Generic over `D: VulkanRhiDevice + 'static` so the same wiring
 //! works whether the host is exposing a host-flavor or
@@ -40,7 +40,7 @@
 //!
 //! Panic guards inside each fn body mirror the
 //! `streamlib-plugin-abi` `run_host_extern_c` shape: any panic in
-//! host code is caught at the FFI boundary and converted to a
+//! host code is caught at the plugin ABI and converted to a
 //! clean error return instead of corrupting the cdylib's stack.
 //! Tier-1 null-handle tests next to this module verify the guards
 //! fire correctly without an actual
@@ -105,7 +105,7 @@ impl<D: VulkanRhiDevice + 'static> MonoVTable<D> {
 }
 
 // =============================================================================
-// FFI helpers — error buffer writer + panic guard
+// Plugin ABI helpers — error buffer writer + panic guard
 // =============================================================================
 
 // Panic-safety net wrapping every `host_*` extern "C" callback is the

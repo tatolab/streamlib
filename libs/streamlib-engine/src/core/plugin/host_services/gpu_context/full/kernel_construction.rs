@@ -67,11 +67,11 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cr
             );
             match result {
                 Some(Ok(kernel)) => {
-                    // `kernel` is the β-shape; its `handle` is the
+                    // `kernel` is the PluginAbiObject; its `handle` is the
                     // `Arc::into_raw(Arc<<Type>Inner>)` raw pointer
-                    // already. Forget the β-shape so the strong ref
+                    // already. Forget the PluginAbiObject so the strong ref
                     // transfers to cdylib; the cdylib reconstructs its
-                    // own β-shape from { handle: raw, vtable } and
+                    // own PluginAbiObject from { handle: raw, vtable } and
                     // never sees the `Arc<X>` internal layout.
                     let raw = kernel.handle;
                     std::mem::forget(kernel);
@@ -126,11 +126,11 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cr
             );
             match result {
                 Some(Ok(kernel)) => {
-                    // β-shape: extract the opaque handle (which is
+                    // PluginAbiObject: extract the opaque handle (which is
                     // already `Arc::into_raw(Arc<<Type>Inner>)`-shaped)
                     // and `mem::forget` the wrapper so the strong ref
                     // transfers to cdylib. The cdylib reconstructs a
-                    // fresh β-shape from { handle, vtable } and never
+                    // fresh PluginAbiObject from { handle, vtable } and never
                     // sees the host's `Arc<X>` allocation header.
                     let raw = kernel.handle;
                     std::mem::forget(kernel);
@@ -185,11 +185,11 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cr
             );
             match result {
                 Some(Ok(kernel)) => {
-                    // β-shape: extract the opaque handle (which is
+                    // PluginAbiObject: extract the opaque handle (which is
                     // already `Arc::into_raw(Arc<<Type>Inner>)`-shaped)
                     // and `mem::forget` the wrapper so the strong ref
                     // transfers to cdylib. The cdylib reconstructs a
-                    // fresh β-shape from { handle, vtable } and never
+                    // fresh PluginAbiObject from { handle, vtable } and never
                     // sees the host's `Arc<X>` allocation header.
                     let raw = kernel.handle;
                     std::mem::forget(kernel);
@@ -262,7 +262,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cr
             );
             match result {
                 Some(Ok(ring)) => {
-                    // `ring` is the β-shape; its handle is
+                    // `ring` is the PluginAbiObject; its handle is
                     // `Arc::into_raw(Arc<TextureRingInner>)`-shaped.
                     let raw = ring.handle;
                     std::mem::forget(ring);

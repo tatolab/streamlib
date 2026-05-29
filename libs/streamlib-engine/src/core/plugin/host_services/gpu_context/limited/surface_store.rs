@@ -4,7 +4,7 @@
 //! `GpuContextLimitedAccessVTable` surface_store accessors.
 //!
 //! - `surface_store` returns the host's `SurfaceStore` `Arc::into_raw`
-//!   pointer (the cdylib reconstitutes into a borrow), or a null β-shape
+//!   pointer (the cdylib reconstitutes into a borrow), or a null PluginAbiObject
 //!   when no store is registered.
 //! - `check_out_surface` resolves a surface_id via the store, packaging
 //!   the resulting FD-bearing record for the cdylib's
@@ -27,7 +27,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_sur
     run_host_extern_c(
         "host_gpu_lim_surface_store",
         || {
-            // Always-clear: write a null-handle β-shape first so the
+            // Always-clear: write a null-handle PluginAbiObject first so the
             // caller has a defined state even on error paths.
             if !out_store.is_null() {
                 unsafe {
@@ -44,7 +44,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_sur
                 return;
             }
             // `gpu.surface_store()` returns `Option<SurfaceStore>` —
-            // a fresh β-shape with Arc refcount already bumped when
+            // a fresh PluginAbiObject with Arc refcount already bumped when
             // Some. We write it into the out-param; the caller (cdylib
             // or host) takes ownership.
             if let Some(store) = gpu.surface_store() {
@@ -55,7 +55,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_sur
                     );
                 }
             }
-            // else: out_store already holds the null-handle β-shape.
+            // else: out_store already holds the null-handle PluginAbiObject.
         },
         (),
     )

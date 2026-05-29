@@ -3,30 +3,30 @@
 
 //! Output writer for sending frames to downstream processors.
 //!
-//! # Two-type split: β-shape vs. inner
+//! # Two-type split: PluginAbiObject vs. inner
 //!
-//! Issue #894 retires the last shared-Rust-type plugin-ABI crossing
+//! Issue #894 retires the last shared-Rust-type plugin ABI crossing
 //! by splitting this module's public surface into two types:
 //!
 //! - [`OutputWriterInner`] holds the actual state — the
 //!   `Mutex<HashMap<port, Vec<DownstreamConnection>>>` and the
 //!   iceoryx2 publish + notify logic. It runs entirely in the
-//!   host DSO; cdylib code never references this type directly.
+//!   host; cdylib code never references this type directly.
 //! - [`OutputWriter`] is the public `#[repr(C)] { handle, vtable }`
-//!   β-shape that processor structs hold via the macro-emitted
+//!   PluginAbiObject that processor structs hold via the macro-emitted
 //!   `outputs: OutputWriter` field. In host mode the vtable
 //!   resolves to the host's static
 //!   `HOST_OUTPUT_WRITER_VTABLE`; in cdylib mode it points at the
 //!   host-installed pointer from
 //!   `HostServices::output_writer_vtable`. Either way the methods
-//!   on the β-shape (`write`, `write_raw`, `has_port`, `clone`,
+//!   on the PluginAbiObject (`write`, `write_raw`, `has_port`, `clone`,
 //!   `drop`) dispatch through the vtable to the host-allocated
 //!   inner.
 //!
 //! Host-side code that needs to mutate the inner (e.g. compiler ops
 //! adding downstream connections at wiring time) operates on
 //! `Arc<OutputWriterInner>` directly via
-//! [`OutputWriterInner::add_connection`] — no β-shape, no FFI hop.
+//! [`OutputWriterInner::add_connection`] — no PluginAbiObject, no plugin ABI hop.
 //! The cdylib's per-frame `write` calls cross extern "C" exactly
 //! once per emit (sub-microsecond on amd64; see the PR microbench
 //! for issue #894).
@@ -61,8 +61,8 @@ struct DownstreamConnection {
 /// per-port-name `HashMap` and the iceoryx2 publishers and
 /// notifiers; all per-frame publish + notify work runs here.
 ///
-/// Never crosses the cdylib boundary. Held by the host via
-/// `Arc<OutputWriterInner>`; the cdylib's [`OutputWriter`] β-shape
+/// Never crosses the plugin ABI. Held by the host via
+/// `Arc<OutputWriterInner>`; the cdylib's [`OutputWriter`] PluginAbiObject
 /// stores a separate `Arc::into_raw`-encoded strong reference to
 /// the same inner.
 pub struct OutputWriterInner {
@@ -116,7 +116,7 @@ impl OutputWriterInner {
     /// Write raw bytes to the specified output port without serialization.
     ///
     /// The data is assumed to be pre-serialized (e.g., msgpack from a
-    /// subprocess bridge OR the β-shape's serialize-then-FFI path).
+    /// subprocess bridge OR the PluginAbiObject's serialize-then-plugin-ABI path).
     pub fn write_raw(&self, port: &str, data: &[u8], timestamp_ns: i64) -> Result<()> {
         let connections = self.connections.lock();
         let port_connections = connections
@@ -175,10 +175,10 @@ impl Default for OutputWriterInner {
 }
 
 // =============================================================================
-// OutputWriter β-shape
+// OutputWriter PluginAbiObject
 // =============================================================================
 
-/// Public output writer β-shape. The macro emits
+/// Public output writer PluginAbiObject. The macro emits
 /// `pub outputs: OutputWriter` on every processor struct that
 /// declares output ports.
 ///
@@ -189,7 +189,7 @@ impl Default for OutputWriterInner {
 /// `Clone` bumps the host-side `Arc<OutputWriterInner>` strong
 /// count via [`OutputWriterVTable::clone_arc`]; `Drop` decrements
 /// via [`OutputWriterVTable::drop_arc`]. Both run in host-compiled
-/// code regardless of which DSO holds this β-shape.
+/// code regardless of which artifact holds this PluginAbiObject.
 #[repr(C)]
 pub struct OutputWriter {
     /// Opaque handle. In host mode: `Arc::into_raw(Arc<OutputWriterInner>)`.
@@ -210,15 +210,15 @@ pub struct OutputWriter {
 
 // SAFETY: `handle` points at an `Arc<OutputWriterInner>` whose
 // interior is Send+Sync (OutputWriterInner declares both above).
-// Refcount management crosses the cdylib boundary through the
+// Refcount management crosses the plugin ABI through the
 // vtable but the underlying Arc bookkeeping runs in host-compiled
 // code regardless.
 unsafe impl Send for OutputWriter {}
 unsafe impl Sync for OutputWriter {}
 
 impl OutputWriter {
-    /// Build a host-mode β-shape from an `Arc<OutputWriterInner>`.
-    /// The strong reference is consumed; the β-shape owns it for
+    /// Build a host-mode PluginAbiObject from an `Arc<OutputWriterInner>`.
+    /// The strong reference is consumed; the PluginAbiObject owns it for
     /// its lifetime and releases on Drop.
     ///
     /// Engine-only — used by the host's processor wiring path
@@ -231,11 +231,11 @@ impl OutputWriter {
         Self { handle, vtable }
     }
 
-    /// Build an empty pre-wiring β-shape with null handle and
+    /// Build an empty pre-wiring PluginAbiObject with null handle and
     /// null vtable. The host patches in real values via
     /// `ProcessorVTable::set_iceoryx2_resources` before any
     /// downstream connection wiring runs. Method calls on the
-    /// empty β-shape return cleanly with no-op semantics
+    /// empty PluginAbiObject return cleanly with no-op semantics
     /// (matches today's pre-wiring behaviour of an empty
     /// `OutputWriter::new()`).
     pub fn empty() -> Self {
@@ -247,7 +247,7 @@ impl OutputWriter {
 
     /// Raw-pointer construction used by
     /// `ProcessorVTable::set_iceoryx2_resources` host wiring to
-    /// patch an existing β-shape's fields without owning a typed
+    /// patch an existing PluginAbiObject's fields without owning a typed
     /// `Arc<OutputWriterInner>`.
     pub(crate) fn from_raw_parts(
         handle: *const c_void,
@@ -256,14 +256,14 @@ impl OutputWriter {
         Self { handle, vtable }
     }
 
-    /// Returns true iff this β-shape has been wired to a real
+    /// Returns true iff this PluginAbiObject has been wired to a real
     /// host-allocated inner.
     pub fn is_configured(&self) -> bool {
         !self.handle.is_null() && !self.vtable.is_null()
     }
 
-    /// Borrow the host-side `Arc<OutputWriterInner>` this β-shape
-    /// points at. Returns `None` for unwired β-shapes. Bumps the
+    /// Borrow the host-side `Arc<OutputWriterInner>` this PluginAbiObject
+    /// points at. Returns `None` for unwired PluginAbiObjects. Bumps the
     /// strong count via the vtable's `clone_arc`; the returned
     /// Arc balances with one Drop on the inner.
     ///
@@ -291,7 +291,7 @@ impl OutputWriter {
     /// Write a frame to the specified output port.
     ///
     /// Source-compatible with the pre-#894 `OutputWriter::write` —
-    /// the cdylib serializes `T` to msgpack in its own DSO then
+    /// the cdylib serializes `T` to msgpack in its own plugin then
     /// crosses extern "C" once with the bytes. Thread-safe.
     pub fn write<T: Serialize>(&self, port: &str, value: &T) -> Result<()> {
         let timestamp_ns = MediaClock::now().as_nanos() as i64;
@@ -388,7 +388,7 @@ impl Drop for OutputWriter {
         // SAFETY: vtable + handle are non-null per is_configured().
         // After dispatch, null out the local fields so a double-
         // drop becomes a no-op (mirrors the Texture / PixelBuffer
-        // β-shape pattern).
+        // PluginAbiObject pattern).
         unsafe {
             ((*self.vtable).drop_arc)(self.handle);
         }

@@ -401,7 +401,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_unr
 mod tier1_wire_format_tests {
     //! Tier-1 wire-format test for the Phase F
     //! `texture_native_dma_buf_fd` slot (#908 / #957). The slot is the
-    //! cross-DSO landing for `Texture::native_handle` on Linux and
+    //! plugin ABI landing for `Texture::native_handle` on Linux and
     //! returns the DMA-BUF FD widened to `i64`; sentinel `-1` encodes
     //! the `Option::None` case. A null texture handle must be a clean
     //! `-1` (no panic, no UB) — the wrapper short-circuits before any

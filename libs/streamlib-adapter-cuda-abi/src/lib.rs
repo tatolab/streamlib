@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Cross-DSO callback table for `streamlib-adapter-cuda`.
+//! Plugin ABI callback table for `streamlib-adapter-cuda`.
 //!
 //! Sibling of `streamlib-adapter-vulkan-abi` (#887) following the same
 //! shape mechanically. Per-adapter sibling of the umbrella callback-
@@ -13,16 +13,16 @@
 //! exposes its `CudaSurfaceAdapter` to a cdylib plugin without sharing
 //! any Rust types beyond `#[repr(C)]` payloads and
 //! `unsafe extern "C" fn` pointers. The cdylib carries a
-//! `(handle, vtable)` β-shape; the host dispatches every method
+//! `(handle, vtable)` PluginAbiObject; the host dispatches every method
 //! through host-compiled code so layout drift between rustc-minor
 //! versions and divergent dep graphs is contained inside the host
-//! DSO.
+//! plugin.
 //!
 //! Dep posture mirrors [`streamlib-plugin-abi`] and
 //! `streamlib-adapter-vulkan-abi`: zero streamlib crates pulled, zero
 //! vulkanalia, zero cudarc, zero dlpark, zero rustc-version-coupled
 //! types. This keeps layout regression tests trivially runnable on
-//! any host and the crate cross-DSO-safe.
+//! any host and the crate safe across the plugin ABI.
 //!
 //! # Audited cdylib-callable surface
 //!
@@ -174,7 +174,7 @@ pub struct TextureFormatRepr(pub u32);
 /// `cudaImportExternalMemory(OPAQUE_FD)` +
 /// `cudaExternalMemoryGetMappedBuffer` and construct a DLPack
 /// `ManagedTensor` over the resulting flat device pointer. The
-/// cdylib's `CudaReadView` / `CudaWriteView` β-shapes deref these
+/// cdylib's `CudaReadView` / `CudaWriteView` PluginAbiObjects deref these
 /// fields directly as POD reads.
 ///
 /// Lifetime: valid for the duration of the matching acquire scope
@@ -200,7 +200,7 @@ pub struct CudaBufferViewRepr {
 /// `cudaExternalMemoryGetMappedMipmappedArray` and construct a
 /// `cudaTextureObject_t` (read-only) or `cudaSurfaceObject_t`
 /// (read-write). The cdylib's `CudaTextureView` / `CudaSurfaceView`
-/// β-shapes deref these fields directly as POD reads.
+/// PluginAbiObjects deref these fields directly as POD reads.
 ///
 /// `format` is the [`TextureFormatRepr`] enumerant; the adapter
 /// guarantees it's in the CUDA-mappable subset (`Rgba8Unorm`,
@@ -231,7 +231,7 @@ pub struct CudaImageViewRepr {
 /// The cdylib holds an opaque `*const c_void` handle (an
 /// `Arc::into_raw(Arc<CudaSurfaceAdapter<D>>)`-shaped pointer
 /// produced by the host) plus a `*const CudaSurfaceAdapterVTable`
-/// it reads from the `HostServices` payload when the cdylib β-shape
+/// it reads from the `HostServices` payload when the cdylib PluginAbiObject
 /// lift lands (sibling slice to this trunk PR). Method-dispatch
 /// callbacks cover every cdylib-callable inherent method on
 /// `CudaSurfaceAdapter` plus the `SurfaceAdapter` trait methods.
@@ -295,7 +295,7 @@ pub struct CudaSurfaceAdapterVTable {
 
     /// Take a borrowed handle (typically minted by the host's
     /// runtime context when wiring the cdylib-side `CudaContext`
-    /// β-shape) and return a new owned handle with an Arc refcount
+    /// PluginAbiObject) and return a new owned handle with an Arc refcount
     /// bump on the underlying `Arc<CudaSurfaceAdapter<D>>`. The
     /// owned handle remains valid even after the originating
     /// context is dropped and MUST be released exactly once via

@@ -14,7 +14,7 @@ use core::ffi::c_void;
 ///   `TextureRingSlot.surface_id` from #947 — `String` layout
 ///   isn't cdylib-safe). `vk_handle` stays host-only — the
 ///   `vk::AccelerationStructureKHR` is a vulkanalia handle that
-///   can't safely cross a DSO boundary without vulkanalia
+///   can't safely cross the plugin ABI without vulkanalia
 ///   version coupling, and no in-tree cdylib consumer reads it.
 ///   The POD getters (`device_address`, `storage_size`, `kind`)
 ///   are populated at mint time via the v8
@@ -23,14 +23,14 @@ use core::ffi::c_void;
 pub const VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION: u32 = 2;
 
 /// Per-type method-dispatch vtable for the
-/// `VulkanAccelerationStructure` β-shape (issue #907 Phase E PR 5/5
+/// `VulkanAccelerationStructure` PluginAbiObject (issue #907 Phase E PR 5/5
 /// + #955 method dispatch).
 ///
 /// Mirrors the kernel methods-vtable shape. POD getters
 /// (`device_address`, `kind`, `storage_size`) are populated at mint
 /// time via the v8 [`crate::GpuContextFullAccessVTable::build_triangles_blas`]
 /// / `build_tlas` out-params and don't need vtable slots — the
-/// cached values on the β-shape struct are always real, never
+/// cached values on the PluginAbiObject struct are always real, never
 /// placeholder zeros.
 ///
 /// The single vtable slot is `label`, which uses the same byte-

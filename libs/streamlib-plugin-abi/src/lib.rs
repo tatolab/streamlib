@@ -123,10 +123,10 @@ pub const STREAMLIB_ABI_VERSION: u32 = 4;
 ///   check before dispatching). Reachable from cdylib code only
 ///   inside an `escalate(|full| ...)` scope (the scope-token
 ///   machinery lands in C3 — Phase C2 ships the vtable layout +
-///   host wiring + cdylib β-shape, locking the wire format before
+///   host wiring + cdylib PluginAbiObject, locking the wire format before
 ///   the scope machinery turns it on).
 /// - v12: [`RhiColorConverterMethodsVTable`] reference appended.
-///   The cdylib-side `RhiColorConverter` β-shape's `methods_vtable`
+///   The cdylib-side `RhiColorConverter` PluginAbiObject's `methods_vtable`
 ///   field sources its pointer from this field. Non-null for hosts
 ///   that ship a GpuContext; null otherwise (cdylib code must check
 ///   before dispatching). Phase E sub-lift slice A wires the
@@ -134,7 +134,7 @@ pub const STREAMLIB_ABI_VERSION: u32 = 4;
 ///   camera processors can prepare a color-conversion kernel without
 ///   tripping the host-mode-only `host_inner()` panic.
 /// - v13: [`RhiCommandRecorderMethodsVTable`] reference appended.
-///   The cdylib-side `RhiCommandRecorder` β-shape's `methods_vtable`
+///   The cdylib-side `RhiCommandRecorder` PluginAbiObject's `methods_vtable`
 ///   field sources its pointer from this field. Non-null for hosts
 ///   that ship a GpuContext; null otherwise (cdylib code must check
 ///   before dispatching). Phase E sub-lift slice B wires the six
@@ -146,7 +146,7 @@ pub const STREAMLIB_ABI_VERSION: u32 = 4;
 ///   host-mode-only `host_inner_mut()` panic.
 /// - v14: [`OutputWriterVTable`] + [`InputMailboxesVTable`]
 ///   references appended (issue #894 — LAST shared-Rust-type
-///   crossings in the plugin ABI). The cdylib's β-shape
+///   crossings in the plugin ABI). The cdylib's PluginAbiObject
 ///   `OutputWriter` / `InputMailboxes` field types source their
 ///   vtable pointers from these slots; per-frame `write_raw` /
 ///   `read_raw` dispatch through them. Paired with the
@@ -238,7 +238,7 @@ pub struct HostServices {
     /// Publish a serialized `Event` to a topic. The event is encoded
     /// the same way `PubSub::publish` encodes today (msgpack-named
     /// via `rmp_serde::to_vec_named`), so host-side
-    /// deserialization is identical regardless of caller DSO.
+    /// deserialization is identical regardless of caller plugin.
     ///
     /// Subscribe is intentionally absent: cdylib code does not
     /// currently subscribe; if a future plugin shape needs it, add a
@@ -382,7 +382,7 @@ pub struct HostServices {
     /// callback returns. Set once at install time; non-null for hosts
     /// that ship a GpuContext, null otherwise (cdylib must check
     /// before dispatching). Phase C2 lands the layout + host wiring +
-    /// cdylib β-shape; Phase C3 wires the scope-token machinery that
+    /// cdylib PluginAbiObject; Phase C3 wires the scope-token machinery that
     /// makes the methods reachable from `escalate(|full| ...)` call
     /// sites.
     pub gpu_context_full_access_vtable: *const GpuContextFullAccessVTable,
@@ -391,9 +391,9 @@ pub struct HostServices {
     // TextureRingMethodsVTable surface (v7 — issue #907 Phase E PR 1/5)
     // -------------------------------------------------------------------------
 
-    /// Static dispatch table for `TextureRing` β-shape method
+    /// Static dispatch table for `TextureRing` PluginAbiObject method
     /// dispatch. Paired with the per-`TextureRing` handle the
-    /// cdylib carries on its β-shape struct (`methods_vtable`
+    /// cdylib carries on its PluginAbiObject struct (`methods_vtable`
     /// field). Set once at install time; non-null for hosts that
     /// ship a GpuContext, null otherwise (cdylib must check before
     /// dispatching). PR 1 of issue #907 lands the empty-shell
@@ -405,9 +405,9 @@ pub struct HostServices {
     // VulkanComputeKernelMethodsVTable surface (v8 — issue #907 Phase E PR 2/5)
     // -------------------------------------------------------------------------
 
-    /// Static dispatch table for `VulkanComputeKernel` β-shape
+    /// Static dispatch table for `VulkanComputeKernel` PluginAbiObject
     /// method dispatch. Paired with the per-`VulkanComputeKernel`
-    /// handle the cdylib carries on its β-shape struct
+    /// handle the cdylib carries on its PluginAbiObject struct
     /// (`methods_vtable` field). Set once at install time; non-null
     /// for hosts that ship a GpuContext, null otherwise (cdylib
     /// must check before dispatching). PR 2 of issue #907 lands the
@@ -419,9 +419,9 @@ pub struct HostServices {
     // VulkanGraphicsKernelMethodsVTable surface (v9 — issue #907 Phase E PR 3/5)
     // -------------------------------------------------------------------------
 
-    /// Static dispatch table for `VulkanGraphicsKernel` β-shape
+    /// Static dispatch table for `VulkanGraphicsKernel` PluginAbiObject
     /// method dispatch. Paired with the per-`VulkanGraphicsKernel`
-    /// handle the cdylib carries on its β-shape struct
+    /// handle the cdylib carries on its PluginAbiObject struct
     /// (`methods_vtable` field). Set once at install time; non-null
     /// for hosts that ship a GpuContext, null otherwise (cdylib
     /// must check before dispatching). PR 3 of issue #907 lands the
@@ -433,9 +433,9 @@ pub struct HostServices {
     // VulkanRayTracingKernelMethodsVTable surface (v10 — issue #907 Phase E PR 4/5)
     // -------------------------------------------------------------------------
 
-    /// Static dispatch table for `VulkanRayTracingKernel` β-shape
+    /// Static dispatch table for `VulkanRayTracingKernel` PluginAbiObject
     /// method dispatch. Paired with the per-`VulkanRayTracingKernel`
-    /// handle the cdylib carries on its β-shape struct
+    /// handle the cdylib carries on its PluginAbiObject struct
     /// (`methods_vtable` field). Set once at install time; non-null
     /// for hosts that ship a GpuContext, null otherwise (cdylib
     /// must check before dispatching). PR 4 of issue #907 lands the
@@ -449,7 +449,7 @@ pub struct HostServices {
     // -------------------------------------------------------------------------
 
     /// Static dispatch table for `VulkanAccelerationStructure`
-    /// β-shape method dispatch. Set once at install time; non-null
+    /// PluginAbiObject method dispatch. Set once at install time; non-null
     /// for hosts that ship a GpuContext, null otherwise. PR 5 of
     /// issue #907 lands the empty-shell vtable + pointer plumbing;
     /// follow-up PRs append the actual method slots.
@@ -460,15 +460,15 @@ pub struct HostServices {
     // RhiColorConverterMethodsVTable surface (v12 — Phase E sub-lift slice A)
     // -------------------------------------------------------------------------
 
-    /// Static dispatch table for `RhiColorConverter` β-shape method
+    /// Static dispatch table for `RhiColorConverter` PluginAbiObject method
     /// dispatch. Paired with the per-`RhiColorConverter` handle the
-    /// cdylib carries on its β-shape struct (`methods_vtable` field).
+    /// cdylib carries on its PluginAbiObject struct (`methods_vtable` field).
     /// Set once at install time; non-null for hosts that ship a
     /// GpuContext, null otherwise (cdylib must check before
     /// dispatching). Phase E sub-lift slice A lands the
     /// `prepare_buffer_to_image_storage` slot so cdylib camera
     /// processors can prepare color-conversion kernels without
-    /// tripping the β-shape's host-mode-only `host_inner()` panic.
+    /// tripping the PluginAbiObject's host-mode-only `host_inner()` panic.
     pub rhi_color_converter_methods_vtable:
         *const RhiColorConverterMethodsVTable,
 
@@ -476,9 +476,9 @@ pub struct HostServices {
     // RhiCommandRecorderMethodsVTable surface (v13 — Phase E sub-lift slice B)
     // -------------------------------------------------------------------------
 
-    /// Static dispatch table for `RhiCommandRecorder` β-shape
+    /// Static dispatch table for `RhiCommandRecorder` PluginAbiObject
     /// method dispatch. Paired with the per-`RhiCommandRecorder`
-    /// handle the cdylib carries on its β-shape struct
+    /// handle the cdylib carries on its PluginAbiObject struct
     /// (`methods_vtable` field). Set once at install time; non-null
     /// for hosts that ship a GpuContext, null otherwise (cdylib
     /// must check before dispatching). Phase E sub-lift slice B
@@ -487,7 +487,7 @@ pub struct HostServices {
     /// `record_dispatch`, `record_copy_image_to_buffer`,
     /// `submit_signaling_timeline`) so cdylib camera processors
     /// can drive the host-owned recorder per frame without
-    /// tripping the β-shape's host-mode-only `host_inner_mut()`
+    /// tripping the PluginAbiObject's host-mode-only `host_inner_mut()`
     /// panic.
     pub rhi_command_recorder_methods_vtable:
         *const RhiCommandRecorderMethodsVTable,
@@ -496,7 +496,7 @@ pub struct HostServices {
     // OutputWriterVTable + InputMailboxesVTable references (v14 — issue #894)
     // -------------------------------------------------------------------------
 
-    /// Static dispatch table for the cdylib's `OutputWriter` β-shape
+    /// Static dispatch table for the cdylib's `OutputWriter` PluginAbiObject
     /// method dispatch. Paired with the per-instance opaque handle
     /// the cdylib stores on its `outputs` field after the host
     /// invokes `ProcessorVTable::set_iceoryx2_resources`. Non-null
@@ -507,7 +507,7 @@ pub struct HostServices {
     pub output_writer_vtable: *const OutputWriterVTable,
 
     /// Static dispatch table for the cdylib's `InputMailboxes`
-    /// β-shape method dispatch. Paired with the per-instance opaque
+    /// PluginAbiObject method dispatch. Paired with the per-instance opaque
     /// handle the cdylib stores on its `inputs` field after the host
     /// invokes `ProcessorVTable::set_iceoryx2_resources`. Non-null
     /// for every host that wires processors with input ports.
@@ -562,7 +562,7 @@ pub struct PluginDeclaration {
     pub abi_version: u32,
 
     /// Register callback. Receives the host-services pointer; the
-    /// cdylib's macro expansion uses it to install every per-DSO
+    /// cdylib's macro expansion uses it to install every per-plugin
     /// static's forwarder before registering processors.
     pub register: PluginRegisterFn,
 }

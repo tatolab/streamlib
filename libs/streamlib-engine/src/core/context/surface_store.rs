@@ -117,11 +117,11 @@ impl CheckedInSurfaces {
 /// Caches resolved surfaces locally to minimize XPC round-trips.
 /// Host-only rich data backing a [`SurfaceStore`]. Cdylib code never
 /// sees this type; it reaches the public [`SurfaceStore`] surface
-/// through the `(handle, vtable)` β-shape.
+/// through the `(handle, vtable)` PluginAbiObject.
 ///
 /// All cross-platform and Linux-specific surface-share IPC methods
 /// (`connect`, `check_in`, `check_out`, `register_texture`, etc.)
-/// live on this type. The β-shape `SurfaceStore` dispatches each
+/// live on this type. The PluginAbiObject `SurfaceStore` dispatches each
 /// method through the [`streamlib_plugin_abi::SurfaceStoreVTable`].
 pub(crate) struct SurfaceStoreInner {
     /// XPC connection to the surface-share service (macOS only).
@@ -148,7 +148,7 @@ pub(crate) struct SurfaceStoreInner {
 impl SurfaceStoreInner {
     /// Create a new surface store (not yet connected). Returns an
     /// `Arc<SurfaceStoreInner>` so the engine can store it directly
-    /// and hand β-shape [`SurfaceStore`] wrappers to consumers on
+    /// and hand PluginAbiObject [`SurfaceStore`] wrappers to consumers on
     /// demand.
     pub fn new(service_name: String, runtime_id: String) -> Arc<Self> {
         Arc::new(SurfaceStoreInner {
@@ -1866,7 +1866,7 @@ impl std::fmt::Debug for SurfaceStoreInner {
 }
 
 // =============================================================================
-// β-shape `SurfaceStore`
+// PluginAbiObject `SurfaceStore`
 // =============================================================================
 //
 // Cdylib-facing layout-stable wrapper around
@@ -1888,7 +1888,7 @@ use streamlib_plugin_abi::SurfaceStoreVTable;
 pub struct SurfaceStore {
     /// Opaque handle to the host's `Arc<SurfaceStoreInner>`.
     pub(crate) handle: *const ss_c_void,
-    /// Vtable for cross-DSO Clone/Drop and method dispatch.
+    /// Vtable for plugin ABI Clone/Drop and method dispatch.
     pub(crate) vtable: *const SurfaceStoreVTable,
 }
 
@@ -1900,9 +1900,9 @@ unsafe impl Send for SurfaceStore {}
 unsafe impl Sync for SurfaceStore {}
 
 impl SurfaceStore {
-    /// Create a new SurfaceStore β-shape (not yet connected). The
+    /// Create a new SurfaceStore PluginAbiObject (not yet connected). The
     /// underlying [`SurfaceStoreInner`] is allocated as an
-    /// `Arc<SurfaceStoreInner>` and wrapped in the β-shape with a
+    /// `Arc<SurfaceStoreInner>` and wrapped in the PluginAbiObject with a
     /// freshly-resolved host-mode vtable. Engine and integration
     /// tests use this; the runtime's `start()` path uses the
     /// `from_arc_into_raw` helper directly so it can share the Arc
@@ -1913,14 +1913,14 @@ impl SurfaceStore {
 
     /// Internal helper: leak an initial Arc strong count via
     /// `Arc::into_raw`, resolve the host-mode vtable, and assemble
-    /// the cross-DSO shape.
+    /// the plugin ABI shape.
     pub(crate) fn from_arc_into_raw(arc: Arc<SurfaceStoreInner>) -> Self {
         let handle = Arc::into_raw(arc) as *const ss_c_void;
         let vtable = crate::core::plugin::host_services::host_surface_store_vtable();
         Self { handle, vtable }
     }
 
-    /// Build a null-handle β-shape ("None" sentinel) for the
+    /// Build a null-handle PluginAbiObject ("None" sentinel) for the
     /// `GpuContext::surface_store()` API's `Option<SurfaceStore>`
     /// shape. The cdylib's `SurfaceStore::is_none()` returns `true`
     /// for such a value and `Drop` short-circuits on null handle.
@@ -1931,7 +1931,7 @@ impl SurfaceStore {
         }
     }
 
-    /// Whether this is a null-handle β-shape (the "None" branch of
+    /// Whether this is a null-handle PluginAbiObject (the "None" branch of
     /// the `Option<SurfaceStore>` return shape).
     pub(crate) fn is_none(&self) -> bool {
         self.handle.is_null() || self.vtable.is_null()

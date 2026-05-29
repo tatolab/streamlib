@@ -100,7 +100,7 @@ pub struct SurfaceStoreVTable {
     ) -> i32,
 
     /// Check out a surface by its `surface_id`. On success writes a
-    /// `PixelBuffer` β-shape into `*out_pixel_buffer` and returns 0.
+    /// `PixelBuffer` PluginAbiObject into `*out_pixel_buffer` and returns 0.
     pub check_out: unsafe extern "C" fn(
         handle: *const c_void,
         id_ptr: *const u8,
@@ -123,7 +123,7 @@ pub struct SurfaceStoreVTable {
     ) -> i32,
 
     /// Look up a previously-registered buffer by its pool id. Writes
-    /// a `PixelBuffer` β-shape into `*out_pixel_buffer` on success.
+    /// a `PixelBuffer` PluginAbiObject into `*out_pixel_buffer` on success.
     pub lookup_buffer: unsafe extern "C" fn(
         handle: *const c_void,
         pool_id_ptr: *const u8,
@@ -155,7 +155,7 @@ pub struct SurfaceStoreVTable {
     // error message.
 
     /// Register a texture for cross-process sharing. `texture` is a
-    /// `*const Texture` β-shape pointer; `produce_done_handle` and
+    /// `*const Texture` PluginAbiObject pointer; `produce_done_handle` and
     /// `consume_done_handle` are opaque `Arc<HostVulkanTimelineSemaphore>`
     /// pointers (null for "no timeline") that carry the
     /// single-writer-per-edge pair documented in
@@ -191,7 +191,7 @@ pub struct SurfaceStoreVTable {
     ) -> i32,
 
     /// Look up a registered texture by `surface_id`. Writes a
-    /// `Texture` β-shape into `*out_texture` and the producer's
+    /// `Texture` PluginAbiObject into `*out_texture` and the producer's
     /// last-published `VkImageLayout` (raw i32) into `*out_layout_raw`.
     pub lookup_texture: unsafe extern "C" fn(
         handle: *const c_void,

@@ -9,14 +9,14 @@
 //! 1. Construct an `Arc<CudaSurfaceAdapter<D>>` on the host side
 //!    (allocate OPAQUE_FD-exportable buffers / images, register
 //!    surfaces, install setup hook — same as today).
-//! 2. Hand the cdylib a `(handle, vtable)` β-shape pair where:
+//! 2. Hand the cdylib a `(handle, vtable)` PluginAbiObject pair where:
 //!    - `handle = Arc::into_raw(arc.clone())`
 //!    - `vtable = host_cuda_surface_adapter_vtable::<D>()`
 //! 3. The cdylib invokes the vtable methods exactly as if it held
 //!    a Rust `&CudaSurfaceAdapter<D>` — every method dispatches
 //!    through host-compiled code, so layout drift between
 //!    rustc-minor versions and divergent dep graphs is contained
-//!    inside the host DSO.
+//!    inside the host plugin.
 //!
 //! Generic over `D: VulkanRhiDevice + 'static` so the same wiring
 //! works whether the host is exposing a
@@ -29,7 +29,7 @@
 //!
 //! Panic guards inside each fn body mirror the
 //! `streamlib-plugin-abi` `run_host_extern_c` shape: any panic in
-//! host code is caught at the FFI boundary and converted to a
+//! host code is caught at the plugin ABI and converted to a
 //! clean error return instead of corrupting the cdylib's stack.
 //! Tier-1 null-handle tests next to this module verify the guards
 //! fire correctly without an actual `Arc<CudaSurfaceAdapter>`.
@@ -93,7 +93,7 @@ impl<D: VulkanRhiDevice + 'static> MonoVTable<D> {
 }
 
 // =============================================================================
-// FFI helpers — error buffer writer + panic guard
+// Plugin ABI helpers — error buffer writer + panic guard
 // =============================================================================
 
 // Panic-safety net wrapping every `host_*` extern "C" callback is the
@@ -578,7 +578,7 @@ where
 /// and `mem::forget` the guard so the cdylib's mirror RAII fires
 /// `end_read_access` / `end_write_access` itself.
 ///
-/// Calling Drop here would double-signal — the cdylib's β-shape
+/// Calling Drop here would double-signal — the cdylib's PluginAbiObject
 /// guard will issue the release through the vtable's
 /// `end_*_access` slot when it's dropped.
 fn read_guard_to_buffer_repr<D: VulkanRhiDevice + 'static>(

@@ -1,12 +1,12 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Host-side helpers that reconstruct borrowed β-shapes from the raw
+//! Host-side helpers that reconstruct borrowed PluginAbiObjects from the raw
 //! handle pointers that cross the vtable.
 //!
 //! Each `make_*_borrow` populates the cached POD fields on the
-//! reconstructed β-shape from the host-side inner we hold via
-//! `handle`. Cdylib β-shapes carry these cached for free-on-deref
+//! reconstructed PluginAbiObject from the host-side inner we hold via
+//! `handle`. Cdylib PluginAbiObjects carry these cached for free-on-deref
 //! POD getters (`width()`, `height()`, `mapped_ptr()`, etc.); when
 //! the host reconstructs a borrow inside a vtable callback for code
 //! that reads those getters host-side, the borrow's cached fields
@@ -98,7 +98,7 @@ pub(in crate::core::plugin::host_services) fn make_texture_borrow(
     handle: *const c_void,
 ) -> std::mem::ManuallyDrop<crate::core::rhi::Texture> {
     // Populate the cached POD fields from the host-side TextureInner
-    // we already have via `handle`. Cdylib β-shapes carry these cached
+    // we already have via `handle`. Cdylib PluginAbiObjects carry these cached
     // for free-on-deref POD getters (`Texture::width()`, etc.); when
     // the host reconstructs a borrow inside a vtable callback for
     // host-side code that reads `Texture::width()` / `height()`, the
@@ -171,7 +171,7 @@ pub(in crate::core::plugin::host_services) fn make_acceleration_structure_borrow
     handle: *const c_void,
 ) -> std::mem::ManuallyDrop<crate::vulkan::rhi::VulkanAccelerationStructure> {
     // Read the cached POD descriptors directly from the host-internal
-    // Inner. With #955 the β-shape's `kind()` / `device_address()` /
+    // Inner. With #955 the PluginAbiObject's `kind()` / `device_address()` /
     // `storage_size()` getters read the cached fields (no host_inner()
     // fallback), so the borrow MUST carry real values — the
     // ray-tracing kernel's `set_acceleration_structure` check reads
@@ -206,7 +206,7 @@ pub(in crate::core::plugin::host_services) fn make_acceleration_structure_borrow
     })
 }
 
-/// Reconstruct a borrowed `VulkanComputeKernel` β-shape from its
+/// Reconstruct a borrowed `VulkanComputeKernel` PluginAbiObject from its
 /// `Arc::into_raw`-shaped handle. Cached POD fields are populated by
 /// reading the host-side inner.
 ///
@@ -235,7 +235,7 @@ pub(in crate::core::plugin::host_services) fn make_compute_kernel_borrow(
     })
 }
 
-/// Reconstruct a borrowed `VulkanGraphicsKernel` β-shape from its
+/// Reconstruct a borrowed `VulkanGraphicsKernel` PluginAbiObject from its
 /// `Arc::into_raw`-shaped handle. Same pattern as
 /// `make_compute_kernel_borrow` — cached POD fields are populated by
 /// reading the host-side inner.
@@ -263,7 +263,7 @@ pub(in crate::core::plugin::host_services) fn make_graphics_kernel_borrow(
 #[cfg(all(test, target_os = "linux"))]
 mod make_borrow_cached_field_regression_tests {
     //! Locks the issue #988 bug: `make_*_borrow` helpers MUST populate
-    //! the β-shape's cached POD fields from the host-side inner —
+    //! the PluginAbiObject's cached POD fields from the host-side inner —
     //! NOT leave them zeroed. Reverting any `make_*_borrow` to
     //! `width_cached: 0` / `byte_size_cached: 0` / etc. trips these
     //! assertions.

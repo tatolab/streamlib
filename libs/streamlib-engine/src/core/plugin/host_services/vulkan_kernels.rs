@@ -9,7 +9,7 @@
 //! Linux callback bodies and the non-Linux platform stubs are
 //! interleaved in the source layout. Both share the same shape:
 //! reconstruct the kernel borrow from `Arc::into_raw(Arc<...Inner>)`,
-//! run the inner method, convert `Result<()>` into the FFI's
+//! run the inner method, convert `Result<()>` into the plugin ABI's
 //! `i32 + err_buf` shape, with `run_host_extern_c` catching any
 //! panic in the inner method.
 
@@ -30,8 +30,8 @@ use super::shared::wire::{slice_from_raw, write_err};
 //
 // Each wrapper reconstructs the kernel borrow from the raw `Arc`
 // handle the cdylib passes (`Arc::into_raw(Arc<VulkanGraphicsKernelInner>)`
-// per the β-shape's `from_arc_into_raw`), runs the inner method,
-// and converts the `Result<()>` into the FFI's `i32 + err_buf`
+// per the PluginAbiObject's `from_arc_into_raw`), runs the inner method,
+// and converts the `Result<()>` into the plugin ABI's `i32 + err_buf`
 // shape. All bodies are wrapped in `run_host_extern_c` so a panic
 // in the inner method becomes a non-zero return.
 //
@@ -692,8 +692,8 @@ unsafe extern "C" fn host_graphics_kernel_offscreen_render(
 //
 // Each wrapper reconstructs the kernel borrow from the raw `Arc`
 // handle the cdylib passes (`Arc::into_raw(Arc<VulkanRayTracingKernelInner>)`
-// per the β-shape's `from_arc_into_raw`), runs the inner method,
-// and converts the `Result<()>` into the FFI's `i32 + err_buf`
+// per the PluginAbiObject's `from_arc_into_raw`), runs the inner method,
+// and converts the `Result<()>` into the plugin ABI's `i32 + err_buf`
 // shape. All bodies are wrapped in `run_host_extern_c` so a panic
 // in the inner method becomes a non-zero return.
 //
@@ -706,7 +706,7 @@ unsafe extern "C" fn host_graphics_kernel_offscreen_render(
 //
 // The AS-binding wrapper reconstructs an AS borrow via
 // `make_acceleration_structure_borrow` — same `ManuallyDrop` shape
-// as the buffer/texture helpers. The β-shape's `kind()` /
+// as the buffer/texture helpers. The PluginAbiObject's `kind()` /
 // `device_address()` / `storage_size()` getters read the cached
 // fields on the borrow directly (no vtable dispatch); the helper
 // populates those fields at construction time from the host-internal
@@ -1548,12 +1548,12 @@ pub static HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE:
 
 /// Accessor for the host's static `VulkanGraphicsKernelMethodsVTable`
 /// — used by `VulkanGraphicsKernel::from_arc_into_raw` to populate
-/// the β-shape's `methods_vtable` field.
+/// the PluginAbiObject's `methods_vtable` field.
 pub fn host_vulkan_graphics_kernel_methods_vtable(
 ) -> *const streamlib_plugin_abi::VulkanGraphicsKernelMethodsVTable {
     // See [`host_vulkan_compute_kernel_methods_vtable`] for the routing
-    // rationale — cdylib β-shape constructors must store the host's
-    // vtable pointer so dispatches actually cross DSO boundaries.
+    // rationale — cdylib PluginAbiObject constructors must store the host's
+    // vtable pointer so dispatches actually cross the plugin ABI.
     match host_callbacks() {
         Some(c) if !c.vulkan_graphics_kernel_methods_vtable.is_null() => {
             c.vulkan_graphics_kernel_methods_vtable
@@ -1818,7 +1818,7 @@ pub static HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE:
 /// Accessor for the host's static
 /// `VulkanRayTracingKernelMethodsVTable` — used by
 /// `VulkanRayTracingKernel::from_arc_into_raw` to populate the
-/// β-shape's `methods_vtable` field.
+/// PluginAbiObject's `methods_vtable` field.
 pub fn host_vulkan_ray_tracing_kernel_methods_vtable(
 ) -> *const streamlib_plugin_abi::VulkanRayTracingKernelMethodsVTable {
     &HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE

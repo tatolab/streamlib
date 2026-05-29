@@ -165,7 +165,7 @@ impl Default for HostVkImageMeta {
 ///    use):** call
 ///    `GpuContextFullAccess::acquire_render_target_dma_buf_image(w, h, format)`
 ///    — backed by the FullAccess `acquire_render_target_dma_buf_image`
-///    vtable slot. Returns a `Texture` β-shape. Extract the underlying
+///    vtable slot. Returns a `Texture` PluginAbiObject. Extract the underlying
 ///    `Arc<HostVulkanTexture>` via the v10 `host_vulkan_texture_arc`
 ///    bridge (`HostTextureExt::host_vulkan_texture_arc`). The slot's
 ///    host-side body does FOURCC mapping, queries the device's RT-capable
@@ -188,7 +188,7 @@ impl Default for HostVkImageMeta {
 ///    `HostVulkanTexture::new_render_target_dma_buf(device_arc.device(), &desc, &modifiers)`
 ///    directly. The constructor body uses only `pub` accessors on
 ///    `HostVulkanDevice` (`allocator`, `dma_buf_image_pool_tiled`, …)
-///    plus `vulkanalia-vma` — no `host_inner()`, no β-shape deref.
+///    plus `vulkanalia-vma` — no `host_inner()`, no PluginAbiObject deref.
 ///
 /// Adding a `host_inner()` or `host_callbacks()` guard inside any of
 /// the `new*` constructor bodies (`new`, `new_render_target_dma_buf`,

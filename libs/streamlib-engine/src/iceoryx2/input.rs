@@ -3,28 +3,28 @@
 
 //! Input mailboxes for receiving frames from upstream processors.
 //!
-//! # Two-type split: β-shape vs. inner
+//! # Two-type split: PluginAbiObject vs. inner
 //!
-//! Issue #894 retires the last shared-Rust-type plugin-ABI crossing
+//! Issue #894 retires the last shared-Rust-type plugin ABI crossing
 //! by splitting this module's public surface into two types:
 //!
 //! - [`InputMailboxesInner`] holds the actual state — the
 //!   `HashMap<port, PortConfig>` of per-port mailboxes plus the
 //!   thread-local `Subscriber` and `Listener` wrappers. All
 //!   per-frame `receive_pending` + mailbox push/pop work runs
-//!   here; only the host DSO references this type directly.
+//!   here; only the host references this type directly.
 //! - [`InputMailboxes`] is the public `#[repr(C)] { handle, vtable }`
-//!   β-shape that processor structs hold via the macro-emitted
+//!   PluginAbiObject that processor structs hold via the macro-emitted
 //!   `inputs: InputMailboxes` field. From inside `process()` the
 //!   cdylib reaches input data exclusively through `read` /
-//!   `read_raw` / `has_data` on this β-shape; the vtable dispatches
+//!   `read_raw` / `has_data` on this PluginAbiObject; the vtable dispatches
 //!   to the host-allocated inner.
 //!
 //! Host-side wiring code that needs to mutate the inner
 //! (`add_port`, `set_subscriber`, `set_listener`, `listener_fd`,
 //! `drain_listener`, etc.) operates on `Arc<InputMailboxesInner>`
 //! directly via the methods declared on the inner type — no
-//! β-shape, no FFI hop.
+//! PluginAbiObject, no plugin ABI hop.
 
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
@@ -133,9 +133,9 @@ struct PortConfig {
 /// mailbox map plus the per-thread subscriber + listener. All
 /// per-frame `receive_pending` + queue-pop work runs here.
 ///
-/// Never crosses the cdylib boundary. Held by the host via
+/// Never crosses the plugin ABI. Held by the host via
 /// `Arc<InputMailboxesInner>`; the cdylib's [`InputMailboxes`]
-/// β-shape stores a separate `Arc::into_raw`-encoded strong
+/// PluginAbiObject stores a separate `Arc::into_raw`-encoded strong
 /// reference to the same inner.
 pub struct InputMailboxesInner {
     ports: parking_lot::Mutex<HashMap<String, PortConfig>>,
@@ -395,10 +395,10 @@ impl Default for InputMailboxesInner {
 }
 
 // =============================================================================
-// InputMailboxes β-shape
+// InputMailboxes PluginAbiObject
 // =============================================================================
 
-/// Public input mailboxes β-shape. The macro emits
+/// Public input mailboxes PluginAbiObject. The macro emits
 /// `pub inputs: InputMailboxes` on every processor struct that
 /// declares input ports.
 ///
@@ -409,7 +409,7 @@ impl Default for InputMailboxesInner {
 /// `Clone` bumps the host-side `Arc<InputMailboxesInner>` strong
 /// count via [`InputMailboxesVTable::clone_arc`]; `Drop` decrements
 /// via [`InputMailboxesVTable::drop_arc`]. Both run in host-
-/// compiled code regardless of which DSO holds this β-shape.
+/// compiled code regardless of which artifact holds this PluginAbiObject.
 #[repr(C)]
 pub struct InputMailboxes {
     /// Opaque handle. In host mode: `Arc::into_raw(Arc<InputMailboxesInner>)`.
@@ -430,15 +430,15 @@ pub struct InputMailboxes {
 // SAFETY: `handle` points at an `Arc<InputMailboxesInner>` whose
 // interior is Send+Sync (the inner uses parking_lot::Mutex for
 // `ports` and the SendableSubscriber/SendableListener wrappers
-// declare Send+Sync above). Refcount management crosses the cdylib
-// boundary through the host-installed refcount fn pointers; the
+// declare Send+Sync above). Refcount management crosses the plugin
+// ABI through the host-installed refcount fn pointers; the
 // underlying Arc bookkeeping runs in host-compiled code.
 unsafe impl Send for InputMailboxes {}
 unsafe impl Sync for InputMailboxes {}
 
 impl InputMailboxes {
-    /// Build a host-mode β-shape from an `Arc<InputMailboxesInner>`.
-    /// The strong reference is consumed; the β-shape owns it for
+    /// Build a host-mode PluginAbiObject from an `Arc<InputMailboxesInner>`.
+    /// The strong reference is consumed; the PluginAbiObject owns it for
     /// its lifetime and releases on Drop.
     pub fn from_inner_arc(inner: Arc<InputMailboxesInner>) -> Self {
         let handle = Arc::into_raw(inner) as *const c_void;
@@ -446,7 +446,7 @@ impl InputMailboxes {
         Self { handle, vtable }
     }
 
-    /// Build an empty pre-wiring β-shape with null handle and
+    /// Build an empty pre-wiring PluginAbiObject with null handle and
     /// null vtable. The host patches in real values via
     /// `ProcessorVTable::set_iceoryx2_resources`.
     pub fn empty() -> Self {
@@ -465,14 +465,14 @@ impl InputMailboxes {
         Self { handle, vtable }
     }
 
-    /// Returns true iff this β-shape has been wired to a real
+    /// Returns true iff this PluginAbiObject has been wired to a real
     /// host-allocated inner.
     pub fn is_configured(&self) -> bool {
         !self.handle.is_null() && !self.vtable.is_null()
     }
 
     /// Borrow the host-side `Arc<InputMailboxesInner>` this
-    /// β-shape points at. Returns `None` for unwired β-shapes.
+    /// PluginAbiObject points at. Returns `None` for unwired PluginAbiObjects.
     /// Bumps the strong count via the vtable's `clone_arc`; the
     /// returned Arc balances with one Drop on the inner.
     pub fn inner_arc(&self) -> Option<Arc<InputMailboxesInner>> {
@@ -771,7 +771,7 @@ mod tests {
         );
     }
 
-    /// Empty (unwired) β-shape should return Ok(None) from read_raw
+    /// Empty (unwired) PluginAbiObject should return Ok(None) from read_raw
     /// rather than crash. Mentally revert the is_configured guard
     /// and the test panics dereferencing a null vtable.
     #[test]

@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Cross-DSO callback table for `streamlib-adapter-cpu-readback`.
+//! Plugin ABI callback table for `streamlib-adapter-cpu-readback`.
 //!
 //! Sibling of [`streamlib-adapter-vulkan-abi`]'s
 //! `VulkanSurfaceAdapterVTable` (issue #887) — same shape applied to
@@ -14,10 +14,10 @@
 //! `CpuReadbackSurfaceAdapter<D>` to a cdylib plugin without sharing
 //! any Rust types beyond `#[repr(C)]` payloads and
 //! `unsafe extern "C" fn` pointers. The cdylib carries a
-//! `(handle, vtable)` β-shape; the host dispatches every method
+//! `(handle, vtable)` PluginAbiObject; the host dispatches every method
 //! through host-compiled code so layout drift between rustc-minor
 //! versions and divergent dep graphs is contained inside the host
-//! DSO.
+//! plugin.
 //!
 //! Dep posture mirrors [`streamlib-plugin-abi`] /
 //! [`streamlib-adapter-vulkan-abi`]: zero streamlib crates pulled,
@@ -136,7 +136,7 @@ pub const MAX_PLANES: usize = 4;
 /// into a `#[repr(C)]` record. The `mapped_ptr` is the host's
 /// staging-buffer `vk::DeviceMemory` mapped address — for cpu-
 /// readback this is HOST_VISIBLE / HOST_COHERENT, so the cdylib
-/// reads / writes the bytes directly without any further FFI hop.
+/// reads / writes the bytes directly without any further plugin ABI hop.
 /// `byte_size` is `width * height * bytes_per_pixel`, the tightly-
 /// packed plane byte count.
 ///
@@ -188,7 +188,7 @@ impl CpuReadbackPlaneRepr {
 /// `[CpuReadbackPlaneRepr; MAX_PLANES]` array of per-plane records,
 /// with the live plane count in `plane_count`. Slots beyond
 /// `plane_count` MUST be left zeroed by the host. The cdylib's
-/// `CpuReadbackReadView` / `CpuReadbackWriteView` β-shapes deref
+/// `CpuReadbackReadView` / `CpuReadbackWriteView` PluginAbiObjects deref
 /// these fields directly as POD reads.
 ///
 /// Lifetime: valid for the duration of the matching acquire scope —
@@ -336,7 +336,7 @@ impl HostSurfaceRegistrationRepr {
 /// `Arc::into_raw(Arc<CpuReadbackSurfaceAdapter<D>>)`-shaped pointer
 /// produced by the host) plus a
 /// `*const CpuReadbackSurfaceAdapterVTable` it reads from the
-/// `HostServices` payload when the cdylib β-shape lift lands
+/// `HostServices` payload when the cdylib PluginAbiObject lift lands
 /// (sibling slice to this trunk PR — see scope note below).
 /// Method-dispatch callbacks cover every cdylib-callable inherent
 /// method on `CpuReadbackSurfaceAdapter` plus the `SurfaceAdapter`
@@ -390,7 +390,7 @@ pub struct CpuReadbackSurfaceAdapterVTable {
 
     /// Take a borrowed handle (typically minted by the host's
     /// runtime context when wiring the cdylib-side
-    /// `CpuReadbackContext` β-shape) and return a new owned handle
+    /// `CpuReadbackContext` PluginAbiObject) and return a new owned handle
     /// with an Arc refcount bump on the underlying
     /// `Arc<CpuReadbackSurfaceAdapter<D>>`. The owned handle
     /// remains valid even after the originating context is

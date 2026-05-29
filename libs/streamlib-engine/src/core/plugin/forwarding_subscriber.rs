@@ -5,8 +5,8 @@
 //! the host via [`HostCallbacks::tracing_emit`].
 //!
 //! Loosely mirrors the `tracing-ext-ffi-subscriber` pattern: rather
-//! than passing the host's `Dispatch` across the FFI (which doesn't
-//! reach the host's subscriber chain cross-DSO — empirically
+//! than passing the host's `Dispatch` across the plugin ABI (which doesn't
+//! reach the host's subscriber chain across the plugin ABI — empirically
 //! verified during #877's pickup), the cdylib installs a thin
 //! `Subscriber` impl whose `event` method serializes the event's
 //! target / level / message / fields into primitive payloads and
@@ -32,7 +32,7 @@ use super::host_services::{
     host_callbacks, host_interest_to_tracing, tracing_level_to_host,
 };
 
-/// Forwarding subscriber installed in cdylib-linked DSOs at
+/// Forwarding subscriber installed in cdylib-linked plugins at
 /// `install_host_services` time.
 pub struct ForwardingSubscriber {
     /// Monotonic span-id source. Spans aren't bridged today; the id
@@ -176,7 +176,7 @@ fn strip_debug_quotes(s: String) -> String {
     }
 }
 
-/// Install the forwarding subscriber as this DSO's global tracing
+/// Install the forwarding subscriber as this plugin's global tracing
 /// dispatcher. Called by `install_host_services` after the callback
 /// table is cached. The cdylib's `set_global_default` succeeds on
 /// first call; subsequent calls are silent no-ops.

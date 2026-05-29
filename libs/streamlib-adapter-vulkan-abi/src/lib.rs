@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Cross-DSO callback table for `streamlib-adapter-vulkan`.
+//! Plugin ABI callback table for `streamlib-adapter-vulkan`.
 //!
 //! Trunk piece of the per-adapter vtable lift kicked off by
 //! [`streamlib-plugin-abi`]'s `GpuContextLimitedAccessVTable`
@@ -14,15 +14,15 @@
 //! exposes its `VulkanSurfaceAdapter` to a cdylib plugin without
 //! sharing any Rust types beyond `#[repr(C)]` payloads and
 //! `unsafe extern "C" fn` pointers. The cdylib carries a
-//! `(handle, vtable)` β-shape; the host dispatches every method
+//! `(handle, vtable)` PluginAbiObject; the host dispatches every method
 //! through host-compiled code so layout drift between rustc-minor
 //! versions and divergent dep graphs is contained inside the host
-//! DSO.
+//! plugin.
 //!
 //! Dep posture mirrors [`streamlib-plugin-abi`]: zero streamlib
 //! crates pulled, zero vulkanalia, zero rustc-version-coupled
 //! types. This keeps layout regression tests trivially runnable on
-//! any host and the crate cross-DSO-safe.
+//! any host and the crate safe across the plugin ABI.
 //!
 //! # Audited cdylib-callable surface
 //!
@@ -98,7 +98,7 @@ pub struct VkImageLayoutValueRepr(pub i32);
 /// Layout MUST match `VkImageInfo` byte-for-byte — the host
 /// implementation populates this struct directly from the existing
 /// adapter and the cdylib reads the same offsets through its
-/// β-shape view payload. Adding fields requires a coordinated bump
+/// PluginAbiObject view payload. Adding fields requires a coordinated bump
 /// in both this crate AND `streamlib-adapter-abi`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -137,7 +137,7 @@ pub struct VkImageInfoRepr {
 /// Carries the live `VkImage` handle, the post-transition layout
 /// the adapter left the image in, and the per-image
 /// [`VkImageInfoRepr`] descriptor. The cdylib's `VulkanReadView`
-/// / `VulkanWriteView` β-shapes deref these fields directly as
+/// / `VulkanWriteView` PluginAbiObjects deref these fields directly as
 /// POD reads (mirrors the cached-fields pattern on `Texture` /
 /// `PixelBuffer` from `streamlib-plugin-abi`).
 ///
@@ -202,7 +202,7 @@ pub struct RawVulkanHandlesRepr {
 /// The cdylib holds an opaque `*const c_void` handle (an
 /// `Arc::into_raw(Arc<VulkanSurfaceAdapter<D>>)`-shaped pointer
 /// produced by the host) plus a `*const VulkanSurfaceAdapterVTable`
-/// it reads from the `HostServices` payload when the cdylib β-shape
+/// it reads from the `HostServices` payload when the cdylib PluginAbiObject
 /// lift lands (sibling slice to this trunk PR). Method-dispatch
 /// callbacks cover every cdylib-callable inherent method on
 /// `VulkanSurfaceAdapter` plus the `SurfaceAdapter` trait methods.
@@ -255,7 +255,7 @@ pub struct VulkanSurfaceAdapterVTable {
 
     /// Take a borrowed handle (typically minted by the host's
     /// runtime context when wiring the cdylib-side `VulkanContext`
-    /// β-shape) and return a new owned handle with an Arc refcount
+    /// PluginAbiObject) and return a new owned handle with an Arc refcount
     /// bump on the underlying `Arc<VulkanSurfaceAdapter<D>>`. The
     /// owned handle remains valid even after the originating
     /// context is dropped and MUST be released exactly once via
@@ -462,7 +462,7 @@ mod tests {
     use core::mem::{align_of, offset_of, size_of};
 
     /// `VkImageInfoRepr` mirrors `streamlib_adapter_abi::VkImageInfo`
-    /// byte-for-byte. Locks the contract one of the four cross-DSO
+    /// byte-for-byte. Locks the contract one of the four plugin ABI
     /// payloads in this crate rides on.
     #[test]
     fn vk_image_info_repr_layout() {

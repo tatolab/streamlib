@@ -22,7 +22,7 @@
 //! (`RegisterHelper::register::<P>()` in `host_services`) and the
 //! host-static path (`ProcessorInstanceFactory::register::<P>()`)
 //! call [`vtable_for::<P>()`] — the resulting vtable lives in the
-//! DSO of the caller, but the shape is identical.
+//! caller's binary, but the shape is identical.
 
 use std::any::TypeId;
 use std::collections::HashMap;
@@ -37,7 +37,7 @@ use crate::core::processors::{Config, GeneratedProcessor};
 
 /// Map from `TypeId::of::<P>()` to the leaked `&'static
 /// ProcessorVTable` for that P. One vtable per processor type in
-/// the DSO's process address space; rebuilt only on the first
+/// the caller's binary process address space; rebuilt only on the first
 /// `vtable_for::<P>()` call (subsequent calls hit the cache).
 static VTABLES: OnceLock<Mutex<HashMap<TypeId, &'static ProcessorVTable>>> = OnceLock::new();
 
@@ -148,7 +148,7 @@ where
             || {
                 if !instance.is_null() {
                     // SAFETY: instance was produced by Box::into_raw above on this
-                    // DSO's heap. Box::from_raw + drop releases on the same heap.
+                    // binary's heap. Box::from_raw + drop releases on the same heap.
                     unsafe {
                         drop(Box::from_raw(instance as *mut P));
                     }
@@ -383,7 +383,7 @@ where
             "ProcessorWrappers::set_iceoryx2_resources",
             || {
                 let processor = unsafe { &mut *(instance as *mut P) };
-                // Reconstruct β-shapes from the (handle, vtable)
+                // Reconstruct PluginAbiObjects from the (handle, vtable)
                 // pairs the host hands us. Null handle/vtable =
                 // "this processor has no outputs/inputs" — pass
                 // None to the trait method.

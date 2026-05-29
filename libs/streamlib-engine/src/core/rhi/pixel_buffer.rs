@@ -5,7 +5,7 @@
 //!
 //! Layout-stable `(handle, vtable, cached POD)` shape: every field
 //! is either a primitive or an opaque pointer, so the type
-//! round-trips across the cdylib DSO boundary unchanged. The
+//! round-trips across the plugin ABI unchanged. The
 //! handle is `Arc::into_raw(Arc<PixelBufferRef>)` produced by host
 //! code; the vtable's `clone_pixel_buffer` / `drop_pixel_buffer`
 //! callbacks manage the Arc refcount in host-compiled code, so
@@ -43,7 +43,7 @@ pub struct PixelBuffer {
     /// `*const PixelBufferRef` via [`PixelBuffer::buffer_ref`];
     /// cdylib callers treat it as opaque.
     pub(crate) handle: *const c_void,
-    /// Vtable for cross-DSO Clone/Drop dispatch. In host mode this
+    /// Vtable for plugin ABI Clone/Drop dispatch. In host mode this
     /// points at `&HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE`; in
     /// cdylib mode it's the host-installed pointer from
     /// `HostServices::gpu_context_limited_access_vtable`.
@@ -146,7 +146,7 @@ impl PixelBuffer {
     }
 
     /// Cached pixel format. Captured at construction; pure field
-    /// read with no cross-DSO dispatch.
+    /// read with no plugin ABI dispatch.
     pub fn format(&self) -> PixelFormat {
         // SAFETY: `format_raw` is the `#[repr(u32)]` discriminant of
         // a `PixelFormat` value that was alive at construction time
@@ -187,7 +187,7 @@ impl PixelBuffer {
             panic!(
                 "PixelBuffer::buffer_ref() reached from cdylib code; \
                  PixelBufferRef is a host-internal type and its layout \
-                 is not cross-DSO safe. Cdylibs reach platform-specific \
+                 is not plugin ABI safe. Cdylibs reach platform-specific \
                  data through vtable callbacks (plane_base_address, \
                  plane_size, plane_count, format)."
             );
@@ -203,7 +203,7 @@ impl PixelBuffer {
 
     /// Number of DMA-BUF planes backing this pixel buffer. Always `>= 1`.
     /// Mirror of `slpn_gpu_surface_plane_count` on the polyglot shims.
-    /// Cached at construction; pure field read with no cross-DSO
+    /// Cached at construction; pure field read with no plugin ABI
     /// dispatch.
     pub fn plane_count(&self) -> u32 {
         self.plane_count_cached
@@ -259,7 +259,7 @@ impl PixelBuffer {
     /// Dispatches through the vtable's
     /// [`strong_count_pixel_buffer`](GpuContextLimitedAccessVTable::strong_count_pixel_buffer)
     /// callback so the host's `Arc<PixelBufferRef>` accounting runs
-    /// in host-compiled code regardless of caller DSO.
+    /// in host-compiled code regardless of caller plugin.
     pub(crate) fn strong_count(&self) -> usize {
         if self.handle.is_null() || self.vtable.is_null() {
             return 0;
@@ -323,7 +323,7 @@ impl std::fmt::Debug for PixelBuffer {
 // =============================================================================
 //
 // `PixelBuffer` is the load-bearing β-reshape type that crosses the
-// cdylib DSO boundary. A drift in its `#[repr(C)]` layout would
+// plugin ABI. A drift in its `#[repr(C)]` layout would
 // silently corrupt every `acquire_pixel_buffer` / `release_pixel_buffer`
 // / `resolve_pixel_buffer_by_surface_id` round-trip — the host's
 // pixel-buffer accessors would read the cdylib's stale field offsets.
@@ -342,7 +342,7 @@ mod layout_tests {
 
     #[test]
     fn pixel_buffer_layout() {
-        // Pin the byte-level shape of the cross-DSO `PixelBuffer`. Fields:
+        // Pin the byte-level shape of the plugin ABI `PixelBuffer`. Fields:
         //   handle              : *const c_void  → offset 0,  size 8
         //   vtable              : *const VTable  → offset 8,  size 8
         //   width               : u32            → offset 16, size 4

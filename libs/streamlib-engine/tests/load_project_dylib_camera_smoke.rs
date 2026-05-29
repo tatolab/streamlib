@@ -35,7 +35,7 @@
 //! What this test does NOT lock — guarded separately:
 //!
 //! > ~~End-to-end per-frame capture through the color converter +
-//! > command recorder. Those β-shape return-type methods
+//! > command recorder. Those PluginAbiObject return-type methods
 //! > (`RhiColorConverter::prepare_buffer_to_image_storage`,
 //! > `RhiCommandRecorder::record_*` / `submit_*`,
 //! > `HostVulkanTimelineSemaphore::wait`) still panic in cdylib mode

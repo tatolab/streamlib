@@ -48,7 +48,7 @@ use super::HostVulkanDevice;
 /// this abstraction targets.
 /// Host-only rich data backing a [`VulkanComputeKernel`]. Cdylib code
 /// never sees this type; it reaches the public surface through the
-/// `(handle, vtable)` β-shape.
+/// `(handle, vtable)` PluginAbiObject.
 pub struct VulkanComputeKernelInner {
     label: String,
     vulkan_device: Arc<HostVulkanDevice>,
@@ -992,17 +992,17 @@ impl std::fmt::Debug for VulkanComputeKernelInner {
 }
 
 // =============================================================================
-// β-shape implementation (#917)
+// PluginAbiObject implementation (#917)
 // =============================================================================
 
-/// Compute kernel — layout-stable `#[repr(C)]` β-shape so cdylibs
+/// Compute kernel — layout-stable `#[repr(C)]` PluginAbiObject so cdylibs
 /// can hold, refcount, drop, and read POD descriptors without
 /// sharing rustc-version or dep-graph with the host.
 ///
 /// The opaque handle points at an `Arc<VulkanComputeKernelInner>`;
 /// lifecycle (Clone / Drop) dispatches through the host-installed
 /// parent [`GpuContextFullAccessVTable`]'s `clone_compute_kernel` /
-/// `drop_compute_kernel` callbacks (locked by PR #918's β-shape
+/// `drop_compute_kernel` callbacks (locked by PR #918's PluginAbiObject
 /// Phase D work). Per-method dispatch is reached through the
 /// dedicated
 /// [`streamlib_plugin_abi::VulkanComputeKernelMethodsVTable`] pointed
@@ -1013,16 +1013,16 @@ impl std::fmt::Debug for VulkanComputeKernelInner {
 /// test.
 ///
 /// The `push_constant_size()` POD getter reads from the cached
-/// field — no FFI hop. The value is captured by
+/// field — no plugin ABI hop. The value is captured by
 /// [`Self::from_arc_into_raw`] at construction and never mutates
 /// over the kernel's lifetime.
 #[repr(C)]
 pub struct VulkanComputeKernel {
     /// Opaque handle to the host's `Arc<VulkanComputeKernelInner>`.
     pub(crate) handle: *const c_void,
-    /// Parent vtable for cross-DSO Clone/Drop dispatch (#918 Phase D).
+    /// Parent vtable for plugin ABI Clone/Drop dispatch (#918 Phase D).
     pub(crate) vtable: *const GpuContextFullAccessVTable,
-    /// Per-type vtable for cross-DSO method dispatch (#907 Phase E).
+    /// Per-type vtable for plugin ABI method dispatch (#907 Phase E).
     pub(crate) methods_vtable:
         *const streamlib_plugin_abi::VulkanComputeKernelMethodsVTable,
     /// Cached push-constant size in bytes. Set at construction; fixed
@@ -1105,9 +1105,9 @@ impl VulkanComputeKernel {
     /// buffer allocations carry `STORAGE_BUFFER` usage from birth.
     ///
     /// Per-input-type concrete shape (no generic) so the cdylib path
-    /// can dispatch via the matching typed FFI slot
+    /// can dispatch via the matching typed plugin ABI slot
     /// (`set_storage_buffer_pixel`) without a kind discriminator.
-    /// Mirrors the production cross-DSO pattern in Dawn / WebGPU
+    /// Mirrors the production plugin ABI pattern in Dawn / WebGPU
     /// (`wgpuComputePassEncoderSetBindGroup` family) and Unreal RHI
     /// (typed `SetShaderResourceViewParameter`).
     pub fn set_storage_buffer_pixel(
@@ -1235,7 +1235,7 @@ impl VulkanComputeKernel {
     pub fn set_push_constants_value<T: Copy>(&self, value: &T) -> Result<()> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
             // SAFETY: T is Copy + Sized so its layout is stable; the
-            // byte view is read-only and consumed inside the FFI call.
+            // byte view is read-only and consumed inside the plugin ABI call.
             let bytes = unsafe {
                 std::slice::from_raw_parts(
                     value as *const T as *const u8,
@@ -1664,7 +1664,7 @@ impl VulkanComputeKernel {
     /// Kernel's declared binding shape. Mode-routed: host-mode reads
     /// directly from `host_inner`; cdylib-mode dispatches through the
     /// v4 `bindings` slot on the per-type methods vtable. On cdylib-
-    /// side FFI errors (null vtable, malformed err_buf, host panic) the
+    /// side plugin ABI errors (null vtable, malformed err_buf, host panic) the
     /// method emits a `tracing::warn` and returns an empty Vec — the
     /// public signature predates the introspection vtable and isn't
     /// fallible at the type level.
@@ -1757,7 +1757,7 @@ impl VulkanComputeKernel {
             .collect()
     }
 
-    /// Push-constant range size in bytes. Cached POD — no FFI hop.
+    /// Push-constant range size in bytes. Cached POD — no plugin ABI hop.
     pub fn push_constant_size(&self) -> u32 {
         self.cached_push_constant_size
     }
@@ -1797,13 +1797,13 @@ impl std::fmt::Debug for VulkanComputeKernel {
 }
 
 #[cfg(all(test, target_pointer_width = "64"))]
-mod beta_shape_layout_tests {
+mod plugin_abi_object_layout_tests {
     use super::*;
     use core::mem::{align_of, offset_of, size_of};
 
     #[test]
     fn vulkan_compute_kernel_layout() {
-        // β-shape struct as of #907 PR 2/5:
+        // PluginAbiObject struct as of #907 PR 2/5:
         //   handle                       @ 0  (8 bytes, *const c_void)
         //   vtable                       @ 8  (8 bytes, *const GpuContextFullAccessVTable)
         //   methods_vtable               @ 16 (8 bytes, *const VulkanComputeKernelMethodsVTable)

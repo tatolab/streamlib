@@ -8,7 +8,7 @@
 //!   1. Cdylib's `start()` enters `gpu.escalate(|full| ...)`.
 //!   2. `host_vulkan_device_arc()` (v9) → `Arc<HostVulkanDevice>`.
 //!   3. `full.acquire_render_target_dma_buf_image()` → `Texture`
-//!      β-shape; `host_vulkan_texture_arc()` (v10) →
+//!      PluginAbiObject; `host_vulkan_texture_arc()` (v10) →
 //!      `Arc<HostVulkanTexture>`.
 //!   4. Pub methods on the texture Arc — `export_dma_buf_fd()`,
 //!      `dma_buf_plane_layout()`, `chosen_drm_format_modifier()` —

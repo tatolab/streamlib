@@ -1,14 +1,14 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Cross-DSO plugin bridging.
+//! Plugin ABI bridging.
 //!
 //! Rust plugin cdylibs loaded via `Runner::add_module` (or the
 //! standalone `streamlib-runtime` binary's `--plugin` flag)
 //! statically embed their entire transitive
 //! dep tree. Without bridging, every process-wide static the engine
 //! relies on (tracing dispatch, [`PUBSUB`], the schema registry,
-//! iceoryx2's logger) exists as a per-DSO copy with no
+//! iceoryx2's logger) exists as a per-plugin copy with no
 //! dynamic-linker dedup — Rust mangled statics aren't in the dynsym
 //! table.
 //!

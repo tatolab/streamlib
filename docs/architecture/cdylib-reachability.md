@@ -24,7 +24,7 @@ five disconnected precedents.
 Two known traps:
 
 1. **Constructor-bridge trap.** Seeing a `host_inner()` panic on one
-   `Host*` β-shape (e.g., `Texture::host_inner()`) and assuming by
+   `Host*` PluginAbiObject (e.g., `Texture::host_inner()`) and assuming by
    analogy that every other `Host*` constructor on the engine needs a
    bridge. That assumption is wrong by default — most `Host*`
    constructors take only `&Arc<HostVulkanDevice>` plus primitives
@@ -90,14 +90,15 @@ something on the host side.
                     │
      ┌──────────────┼──────────────┬─────────────────────┐
      │              │              │                     │
-  one-time     per-frame      need a β-shape       need a host-Arc
-  privileged   hot-path       binding (set_X       (Arc<HostVulkanX>)
-  setup        binding/work   on compute kernel)
+  one-time     per-frame      need a              need a host-Arc
+  privileged   hot-path       PluginAbiObject     (Arc<HostVulkanX>)
+  setup        binding/work   binding (set_X
+                              on compute kernel)
      │              │              │                     │
      ▼              ▼              ▼                     ▼
    Pattern 4     Pattern 5      Pattern 3             Pattern 2
-   escalate +    per-method     per-method            β-shape Arc-
-   FullAccess    vtable slot    vtable slot           transit slot
+   escalate +    per-method     per-method            PluginAbiObject
+   FullAccess    vtable slot    vtable slot           Arc-transit slot
    work in       w/ raw         (set_storage_         (host_vulkan_
    closure       vulkanalia     buffer_pixel etc)    X_arc — #1066/
                  handle wire                          68/69/70/71)
@@ -125,19 +126,19 @@ The five patterns:
   through them. This restores the historical contract
   ("`FullAccess` in signature → direct access in body") for every
   runtime variant.
-- **Pattern 2: β-shape Arc-transit vtable slot** —
+- **Pattern 2: PluginAbiObject Arc-transit vtable slot** —
   `host_vulkan_device_arc`, `host_vulkan_texture_arc`,
   `host_vulkan_pixel_buffer_arc`, etc. Hands cdylib an
   `Arc<HostVulkan*>` raw pointer it can call host-public accessors
   on. Use for accessor returns where the engine-internal type can
-  cross the FFI as an Arc handle (#1066/68/69/70/71).
+  cross the plugin ABI as an Arc handle (#1066/68/69/70/71).
 - **Pattern 3: per-method vtable slot** — `set_storage_buffer_pixel`
   and siblings on `VulkanComputeKernel` (and the equivalent on
   `VulkanGraphicsKernel`, `VulkanRayTracingKernel`,
   `RhiCommandRecorder`). Each binding/dispatch method that takes
-  engine-public β-shapes gets its own typed vtable slot with the
+  engine-public PluginAbiObjects gets its own typed vtable slot with the
   same shape on both sides. Use for hot-path binding work where the
-  method args ARE cross-DSO-safe types.
+  method args ARE plugin-ABI-safe types.
 - **Pattern 4: escalate to FullAccess** — `gpu_limited_access().escalate(|full| ...)`
   from a **LimitedAccess context** (`process()`, `on_pause()`,
   `on_resume()`, Reactive `start()`). The historical primitive for
@@ -160,7 +161,7 @@ The five patterns:
   reconstructs the typed handle via `Handle::from_raw` before
   forwarding. Same structural shape as Pattern 3 — the asymmetry
   is that the binding payload here is a raw vulkanalia integer
-  rather than an engine-public β-shape. The host method stays
+  rather than an engine-public PluginAbiObject. The host method stays
   `pub(crate)` because subprocess (Python/Deno) cdylibs don't
   link the engine SDK code that reaches it; only workspace plugin
   cdylibs (h264/h265/camera) hit this path. This pattern landed
@@ -180,7 +181,7 @@ new constructor on an existing type).
 
   ┌─────────────────────────────────────────────────────────┐
   │ Q1: Does the constructor / extractor body reach for     │
-  │     `host_inner()` (β-shape deref) or                   │
+  │     `host_inner()` (PluginAbiObject deref) or           │
   │     `host_callbacks()` (cdylib-mode guard)?             │
   └───────────────┬─────────────────────────────────────────┘
                   │
@@ -203,7 +204,7 @@ Applies when:
   `dma_buf_image_pool*`, `opaque_fd_buffer_pool*`,
   `opaque_fd_image_pool*`, `drm_modifier_table`, etc.) plus
   `vulkanalia-vma`.
-- No `host_inner()` deref, no `host_callbacks()` check, no β-shape
+- No `host_inner()` deref, no `host_callbacks()` check, no PluginAbiObject
   indirection.
 
 Cdylib path:
@@ -245,9 +246,9 @@ The existing route-2 paths today (verified at the docstring sites):
 Applies when:
 
 - The constructor / extractor must touch host-private state
-  (`host_inner()` for β-shape deref, host-only registries, etc.).
-- Or: the resource crosses the FFI as a non-`Arc` opaque handle
-  (β-shape with `(handle, vtable, POD)` layout, like `Texture` /
+  (`host_inner()` for PluginAbiObject deref, host-only registries, etc.).
+- Or: the resource crosses the plugin ABI as a non-`Arc` opaque handle
+  (PluginAbiObject with `(handle, vtable, POD)` layout, like `Texture` /
   `PixelBuffer` / `StorageBuffer`).
 
 Existing route-1 bridges:
@@ -255,7 +256,7 @@ Existing route-1 bridges:
 - **v9 `host_vulkan_device_arc`** — hands a cloned
   `Arc<HostVulkanDevice>` raw pointer to the cdylib.
 - **v10 `host_vulkan_texture_arc`** — extracts an
-  `Arc<HostVulkanTexture>` from a `Texture` β-shape (the β-shape's
+  `Arc<HostVulkanTexture>` from a `Texture` PluginAbiObject (the PluginAbiObject's
   `host_inner()` panics in cdylib mode, hence the bridge).
 
 When adding a new slot:
@@ -278,7 +279,7 @@ whether the constructor bodies actually need bridges. To the best
 of our current knowledge, the historical case that motivated this
 doc had three of four "bridges" proposed defensively turn out to
 be already-working via route 2 — only one extractor (the
-`Texture` β-shape's `host_inner()` deref) needed a real bridge.
+`Texture` PluginAbiObject's `host_inner()` deref) needed a real bridge.
 
 Before filing a "bridge needed for X" issue:
 
@@ -318,7 +319,7 @@ in this codebase before being caught.
    `feedback_examples_no_underscore_reachthrough` memory documents.
 
 3. ❌ **`unsafe { &*(handle as *const SomeHostType) }` from cdylib
-   code.** Cdylib code lives in a different DSO with a separately-
+   code.** Cdylib code lives in a different plugin with a separately-
    compiled (potentially different rustc-version) view of
    `SomeHostType`'s layout. Even when the dlopen happens to share
    layout today, a routine `cargo update` on either side breaks

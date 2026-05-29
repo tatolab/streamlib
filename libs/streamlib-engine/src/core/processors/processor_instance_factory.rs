@@ -31,7 +31,7 @@ const VTABLE_ERR_BUF_CAP: usize = 512;
 /// the dyn-trait crossing class); legacy non-generic registrations
 /// (subprocess host wrappers via [`ProcessorInstanceFactory::register_dynamic`])
 /// land in [`Self::LegacyDyn`] (dispatch via Rust trait-object
-/// methods, host-DSO-only).
+/// methods, host-only).
 ///
 /// # Iceoryx2 resource ownership (issue #894)
 ///
@@ -39,16 +39,16 @@ const VTABLE_ERR_BUF_CAP: usize = 512;
 /// `InputMailboxesInner` Arcs at instance-construction time and
 /// retains them on the `VTable` variant via the
 /// `iceoryx2_output_writer_inner` / `iceoryx2_input_mailboxes_inner`
-/// fields. The cdylib's `outputs` / `inputs` β-shape fields receive
+/// fields. The cdylib's `outputs` / `inputs` PluginAbiObject fields receive
 /// `Arc::into_raw`-cloned handles via `set_iceoryx2_resources`.
 /// Connection-wiring code on the host operates on the inner Arc
-/// directly (no FFI hop).
+/// directly (no plugin ABI hop).
 pub enum ProcessorInstance {
     /// Vtable-dispatched processor — cdylib registrations (via
     /// `STREAMLIB_PLUGIN`) and in-process `register::<P>()` calls
     /// both land here. `instance_ptr` is a
     /// `Box::into_raw(Box::<P>::new(...))` allocation on the
-    /// registering DSO's heap (cdylib for cross-DSO loads, host for
+    /// registering artifact's heap (cdylib for plugin loads, host for
     /// in-process registration). Dropped via `vtable.destroy`.
     ///
     /// `any_placeholder` is a ZST anchor whose `&mut` reference
@@ -81,12 +81,12 @@ pub enum ProcessorInstance {
     /// Host-static dyn-trait registration. Used by subprocess host
     /// wrappers (Python / Deno) that register a `Box<dyn Fn>`
     /// constructor via [`ProcessorInstanceFactory::register_dynamic`].
-    /// No cross-DSO crossing — these live in the host's DSO and
+    /// No plugin ABI crossing — these live in the host and
     /// dispatch via standard Rust trait objects.
     LegacyDyn(Box<dyn DynGeneratedProcessor + Send>),
 }
 
-// Safety: VTable's `*mut c_void` is bound to the registering DSO's
+// Safety: VTable's `*mut c_void` is bound to the registering artifact's
 // process address space, which lives for the process lifetime
 // (cdylibs are pinned via `LOADED_PLUGIN_LIBRARIES`). LegacyDyn's
 // inner Box<dyn ... + Send> is already Send.
@@ -101,9 +101,9 @@ impl Drop for ProcessorInstance {
         } = self
         {
             if !instance_ptr.is_null() {
-                // SAFETY: instance_ptr came from the same DSO's
+                // SAFETY: instance_ptr came from the same artifact's
                 // Box::into_raw via vtable.construct; destroy
-                // performs Box::from_raw + drop on that DSO's heap.
+                // performs Box::from_raw + drop on that artifact's heap.
                 unsafe {
                     (vtable.destroy)(*instance_ptr);
                 }
@@ -463,7 +463,7 @@ impl ProcessorInstance {
     /// Used by the host's connection-wiring path (compiler ops) to
     /// mutate the inner directly via
     /// [`crate::iceoryx2::OutputWriterInner::add_connection`] —
-    /// no FFI hop to the cdylib.
+    /// no plugin ABI hop to the cdylib.
     pub fn iceoryx2_output_writer_inner(
         &self,
     ) -> Option<Arc<crate::iceoryx2::OutputWriterInner>> {
@@ -483,7 +483,7 @@ impl ProcessorInstance {
     /// Used by the host's wiring + scheduler paths to call
     /// `add_port`, `set_subscriber`, `set_listener`, `listener_fd`,
     /// `drain_listener`, `any_port_has_data`, etc. directly — all
-    /// host-side, no FFI hop to the cdylib.
+    /// host-side, no plugin ABI hop to the cdylib.
     pub fn iceoryx2_input_mailboxes_inner(
         &self,
     ) -> Option<Arc<crate::iceoryx2::InputMailboxesInner>> {
@@ -756,9 +756,9 @@ pub type DynamicProcessorConstructorFn = Box<
 /// Per-type registration entry the factory stores.
 enum RegistrationKind {
     /// VTable-based dispatch. Used by both cdylib registrations
-    /// (extern "C" wrappers landing in the cdylib's DSO) and
+    /// (extern "C" wrappers landing in the cdylib's address space) and
     /// inventory-registered host processors (extern "C" wrappers
-    /// landing in the host's DSO).
+    /// landing in the host's address space).
     ///
     /// `cdylib_resident` distinguishes the two — `true` when the
     /// vtable's function pointers target a cdylib's address space
@@ -851,7 +851,7 @@ impl ProcessorInstanceFactory {
 
         // In-process registration — vtable's function pointers
         // target the host's address space; lifecycle dispatch uses
-        // the Boxed FullAccess directly (no FFI hop).
+        // the Boxed FullAccess directly (no plugin ABI hop).
         if let Err(e) = self.register_via_vtable(descriptor, vtable, /* cdylib_resident */ false) {
             tracing::warn!(
                 "Processor registration for {} failed: {}",
@@ -1161,7 +1161,7 @@ impl ProcessorInstanceFactory {
                     cdylib_resident: *cdylib_resident,
                 };
                 // Issue #894: host-allocates iceoryx2 inner Arcs +
-                // hands the cdylib opaque (handle, vtable) β-shapes
+                // hands the cdylib opaque (handle, vtable) PluginAbiObjects
                 // via the new `set_iceoryx2_resources` slot.
                 instance.install_iceoryx2_resources()?;
                 Ok(instance)

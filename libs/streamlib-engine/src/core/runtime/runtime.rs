@@ -219,8 +219,8 @@ impl Runner {
         // construction time lands in the unified JSONL pipeline. The
         // host's bridge value is the same `&'static dyn Log` that
         // [`crate::core::plugin::host_services`] hands to plugin cdylibs
-        // via `HostServices.iceoryx2_logger_ptr` so every DSO converges
-        // on a single logger.
+        // via `HostServices.iceoryx2_logger_ptr` so the host and every
+        // plugin converge on a single logger.
         crate::core::logging::iceoryx2_log_bridge::install_iceoryx2_log_bridge_for_self();
 
         // Create iceoryx2 Node early so PUBSUB can initialize before start().
@@ -479,7 +479,7 @@ impl Runner {
                 "[start] Initializing SurfaceStore against runtime-internal Unix socket '{}'...",
                 socket_path
             );
-            // `SurfaceStore::new` constructs the β-shape from a fresh
+            // `SurfaceStore::new` constructs the PluginAbiObject from a fresh
             // `Arc<SurfaceStoreInner>`. Method dispatch goes through
             // the host's `SurfaceStoreVTable`.
             let surface_store = SurfaceStore::new(

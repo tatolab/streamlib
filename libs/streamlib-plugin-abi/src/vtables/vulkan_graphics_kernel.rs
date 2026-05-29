@@ -41,7 +41,7 @@ use crate::repr::{
 pub const VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 4;
 
 /// Per-type method-dispatch vtable for the `VulkanGraphicsKernel`
-/// β-shape (issue #907 Phase E PR 3/5 + #951 method-dispatch slice).
+/// PluginAbiObject (issue #907 Phase E PR 3/5 + #951 method-dispatch slice).
 ///
 /// `VulkanGraphicsKernel` keeps `clone_*` / `drop_*` dispatch on the
 /// parent [`crate::GpuContextFullAccessVTable`] (PR #918's Phase D shape);
@@ -51,7 +51,7 @@ pub const VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 4;
 /// **Binding-method shape:** typed-by-input-wrapper (one slot per
 /// kernel-method × buffer-or-texture wrapper). Mirrors the
 /// `VulkanComputeKernelMethodsVTable` v3 shape and the production
-/// cross-DSO patterns in Dawn / WebGPU + Unreal RHI.
+/// plugin ABI patterns in Dawn / WebGPU + Unreal RHI.
 ///
 /// **Coverage today** (v4):
 /// - Binding slots: `set_storage_buffer_pixel`,

@@ -5,7 +5,7 @@
 //!
 //! Layout-stable `(handle, vtable, cached POD)` shape: every field
 //! is either a primitive or an opaque pointer, so the type
-//! round-trips across the cdylib DSO boundary unchanged. The
+//! round-trips across the plugin ABI unchanged. The
 //! handle is `Arc::into_raw(Arc<TextureInner>)` produced by host
 //! code; the vtable's `clone_texture` / `drop_texture` callbacks
 //! manage the Arc refcount in host-compiled code, so Clone/Drop
@@ -91,7 +91,7 @@ impl<'a> TextureDescriptor<'a> {
 
 /// Host-only rich data backing a [`Texture`]. Cdylib code never sees
 /// this type; it reaches the public [`Texture`] surface through the
-/// `(handle, vtable, POD)` β-shape.
+/// `(handle, vtable, POD)` PluginAbiObject.
 ///
 /// Holds the platform-specific Arc(s) the engine RHI and surface
 /// adapters need (raw `VkImage`, `MTLTexture`, IOSurface, etc.).
@@ -161,14 +161,14 @@ impl TextureInner {
 /// Clone bumps the host's `Arc<TextureInner>` strong count via
 /// [`GpuContextLimitedAccessVTable::clone_texture`]; Drop decrements
 /// via [`GpuContextLimitedAccessVTable::drop_texture`]. Both run in
-/// host-compiled code regardless of the calling DSO.
+/// host-compiled code regardless of the calling plugin.
 #[repr(C)]
 pub struct Texture {
     /// Opaque handle to the host's `Arc<TextureInner>` (produced by
     /// `Arc::into_raw`).
     pub(crate) handle: *const c_void,
-    /// Vtable for cross-DSO Clone/Drop dispatch. Resolved through the
-    /// DSO-routed accessor at construction; host mode points at
+    /// Vtable for plugin ABI Clone/Drop dispatch. Resolved through the
+    /// plugin-ABI-routed accessor at construction; host mode points at
     /// `&HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE`, cdylib mode at the
     /// host-installed pointer from
     /// `HostServices::gpu_context_limited_access_vtable`.
@@ -228,17 +228,17 @@ impl Texture {
         }
     }
 
-    /// Assemble a [`Texture`] β-shape from a raw `Arc::into_raw`-
+    /// Assemble a [`Texture`] PluginAbiObject from a raw `Arc::into_raw`-
     /// shaped handle plus cached POD bytes. Used by cdylib-side
     /// dispatch paths that receive a freshly-cloned handle through
-    /// an FFI out-parameter (e.g.
+    /// a plugin ABI out-parameter (e.g.
     /// [`crate::core::context::TextureRing::acquire_next`] in cdylib
     /// mode) — the host wrapper bumped the texture's Arc through
     /// the limited-access vtable's `clone_texture` slot, and the
     /// returned [`Texture`] owns the matching `Drop`-side decrement
     /// when it falls out of scope.
     ///
-    /// The vtable pointer is resolved through the DSO-routed
+    /// The vtable pointer is resolved through the plugin-ABI-routed
     /// accessor [`crate::core::plugin::host_services::host_gpu_context_limited_access_vtable`]
     /// so cdylib code reaches the host's pointer (matching the
     /// `clone_texture` slot used to mint the handle) and host code
@@ -279,7 +279,7 @@ impl Texture {
     /// `TextureInner`'s layout, which is UB under the deployment model
     /// the plugin ABI supports.
     ///
-    /// The panic is caught by `run_host_extern_c` at the FFI boundary
+    /// The panic is caught by `run_host_extern_c` at the plugin ABI
     /// (host extern "C" callbacks all route through `catch_unwind`),
     /// so a misconfigured cdylib reaching this method gets a clean
     /// "callback panicked" log entry instead of UB.
@@ -288,7 +288,7 @@ impl Texture {
             panic!(
                 "Texture::host_inner() reached from cdylib code; this method must \
                  dispatch through the GpuContextLimitedAccessVTable. The panic is \
-                 caught by run_host_extern_c at the FFI boundary."
+                 caught by run_host_extern_c at the plugin ABI."
             );
         }
         // SAFETY: `self.handle` is `Arc::into_raw(Arc<TextureInner>)`
@@ -298,19 +298,19 @@ impl Texture {
     }
 
     /// Texture width in pixels. Cached at construction; pure field
-    /// read with no cross-DSO dispatch.
+    /// read with no plugin ABI dispatch.
     pub fn width(&self) -> u32 {
         self.width_cached
     }
 
     /// Texture height in pixels. Cached at construction; pure field
-    /// read with no cross-DSO dispatch.
+    /// read with no plugin ABI dispatch.
     pub fn height(&self) -> u32 {
         self.height_cached
     }
 
     /// Texture format. Cached at construction; pure field read with
-    /// no cross-DSO dispatch.
+    /// no plugin ABI dispatch.
     pub fn format(&self) -> TextureFormat {
         // SAFETY: `format_raw` is the `#[repr(u32)]` discriminant of a
         // `TextureFormat` value captured at construction. The mapping
@@ -338,7 +338,7 @@ impl Texture {
     /// Engine-internal: reads the host's `TextureInner` directly; cdylib
     /// callers reach this through future per-method vtable callbacks
     /// (not wired today — `host_inner()` panics with `catch_unwind` at
-    /// the FFI boundary).
+    /// the plugin ABI).
     pub fn iosurface_id(&self) -> Option<u32> {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
@@ -357,7 +357,7 @@ impl Texture {
     ///
     /// Returns the appropriate handle type for the current platform:
     /// - macOS/iOS: `IOSurface { id }`
-    /// - Linux: `DmaBuf { fd }` (cross-DSO safe — dispatches through
+    /// - Linux: `DmaBuf { fd }` (plugin ABI safe — dispatches through
     ///   [`GpuContextLimitedAccessVTable::texture_native_dma_buf_fd`]
     ///   so cdylib subprocess adapters can export DMA-BUF FDs to a
     ///   different GPU API — CUDA, OpenGL, downstream IPC — without
@@ -373,7 +373,7 @@ impl Texture {
             // macOS cdylib adapter work resumes (#908 deferred list).
             // `host_inner()` panics in cdylib mode; the panic
             // propagates through the cdylib's Rust stack until it
-            // crosses the next FFI boundary (the plugin entry point
+            // crosses the next plugin ABI (the plugin entry point
             // or any host vtable callback the cdylib calls), where
             // `catch_unwind` converts it to a "callback panicked"
             // log entry instead of UB.
@@ -385,7 +385,7 @@ impl Texture {
         }
         #[cfg(target_os = "linux")]
         {
-            // Linux DMA-BUF export is cross-DSO safe: the slot returns
+            // Linux DMA-BUF export is plugin ABI safe: the slot returns
             // the FD as a primitive `i64` (sentinel `-1` encodes
             // `None`), which never crosses an Arc<TextureInner>
             // layout boundary. Host mode resolves the slot pointer
@@ -541,7 +541,7 @@ mod layout_tests {
 
     #[test]
     fn texture_layout() {
-        // Pin the byte-level shape of the cross-DSO
+        // Pin the byte-level shape of the plugin ABI
         // `Texture`. Fields:
         //   handle       : *const c_void  → offset 0,  size 8
         //   vtable       : *const VTable  → offset 8,  size 8

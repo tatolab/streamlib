@@ -597,7 +597,7 @@ impl RuntimeContext {
 
 // Shim shape: `(handle, vtable)`-driven dispatch. The shim stores the
 // raw host pointer + the [`RuntimeContextVTable`] reference, and every
-// accessor calls through the vtable. This matches the cross-DSO ABI
+// accessor calls through the vtable. This matches the plugin ABI
 // the cdylib uses.
 //
 // Host-internal compiler ops that still need direct access to the
@@ -718,7 +718,7 @@ impl<'a> RuntimeContextFullAccess<'a> {
         unsafe { ((*self.vtable).should_process)(self.handle) }
     }
 
-    /// Host-owned audio clock as a typed FFI shim. Backed by the
+    /// Host-owned audio clock as a typed plugin ABI shim. Backed by the
     /// per-RuntimeContext audio-clock handle returned from
     /// [`RuntimeContextVTable::audio_clock_handle`] paired with the
     /// host's [`AudioClockVTable`](streamlib_plugin_abi::AudioClockVTable)
@@ -736,7 +736,7 @@ impl<'a> RuntimeContextFullAccess<'a> {
         AudioClockShim::from_ffi(handle, acv)
     }
 
-    /// Host-owned runtime operations as a typed FFI shim. Implements
+    /// Host-owned runtime operations as a typed plugin ABI shim. Implements
     /// [`RuntimeOperations`] so existing call sites
     /// (`ctx.runtime().add_processor_async(...).await`) keep working
     /// transparently against a plugin-owned tokio runtime.
@@ -762,7 +762,7 @@ impl<'a> RuntimeContextFullAccess<'a> {
     ///
     /// The cdylib-shaped sibling's
     /// [`GpuContextFullAccess`] methods dispatch through the
-    /// FullAccess vtable (cross-DSO via fn pointers in cdylib
+    /// FullAccess vtable (plugin ABI via fn pointers in cdylib
     /// address space, direct via host callbacks in host address
     /// space) instead of the host-only direct-deref `host_inner`
     /// path the Boxed shape uses. That makes `ctx.gpu_full_access()`
@@ -925,7 +925,7 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
         unsafe { ((*self.vtable).should_process)(self.handle) }
     }
 
-    /// Host-owned audio clock as a typed FFI shim. See
+    /// Host-owned audio clock as a typed plugin ABI shim. See
     /// [`RuntimeContextFullAccess::audio_clock`].
     pub fn audio_clock(&self) -> AudioClockShim<'a> {
         let handle = unsafe { ((*self.vtable).audio_clock_handle)(self.handle) };
@@ -933,7 +933,7 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
         AudioClockShim::from_ffi(handle, acv)
     }
 
-    /// Host-owned runtime operations as a typed FFI shim. See
+    /// Host-owned runtime operations as a typed plugin ABI shim. See
     /// [`RuntimeContextFullAccess::runtime`].
     pub fn runtime(&self) -> Arc<dyn RuntimeOperations> {
         let borrowed_handle = unsafe { ((*self.vtable).runtime_ops_handle)(self.handle) };

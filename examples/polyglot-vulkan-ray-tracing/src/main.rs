@@ -152,7 +152,7 @@ impl RuntimeKind {
 /// Holds three caches:
 /// - UUID → `Texture` for resolving non-AS run-time bindings to
 ///   host-side images (storage_image, sampled_texture).
-/// - `as_id` → `VulkanAccelerationStructure` (β-shape) for resolving AS
+/// - `as_id` → `VulkanAccelerationStructure` (PluginAbiObject) for resolving AS
 ///   bindings AND for chaining BLAS → TLAS construction (TLAS instance
 ///   `blas_id` lookup).
 /// - SHA-256 over canonical kernel descriptor bytes →

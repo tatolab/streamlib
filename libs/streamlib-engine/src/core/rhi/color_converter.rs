@@ -201,7 +201,7 @@ pub fn pixel_format_color_kind(format: PixelFormat) -> ColorSpaceKind {
 
 /// Host-only rich data backing a [`RhiColorConverter`]. Cdylib code
 /// never sees this type; it reaches the public surface through the
-/// `(handle, vtable)` β-shape.
+/// `(handle, vtable)` PluginAbiObject.
 pub struct RhiColorConverterInner {
     #[cfg(target_os = "linux")]
     pub(crate) inner: crate::vulkan::rhi::VulkanColorConverter,
@@ -329,7 +329,7 @@ impl std::fmt::Debug for RhiColorConverterInner {
 }
 
 // =============================================================================
-// β-shape implementation
+// PluginAbiObject implementation
 // =============================================================================
 
 /// Stateless color converter — a `(src, dst)`-keyed handle that knows
@@ -349,15 +349,15 @@ impl std::fmt::Debug for RhiColorConverterInner {
 pub struct RhiColorConverter {
     /// Opaque handle to the host's `Arc<RhiColorConverterInner>`.
     pub(crate) handle: *const std::ffi::c_void,
-    /// Parent vtable for cross-DSO Clone/Drop dispatch.
+    /// Parent vtable for plugin ABI Clone/Drop dispatch.
     pub(crate) vtable: *const streamlib_plugin_abi::GpuContextFullAccessVTable,
-    /// Per-type vtable for cross-DSO method dispatch.
+    /// Per-type vtable for plugin ABI method dispatch.
     pub(crate) methods_vtable:
         *const streamlib_plugin_abi::RhiColorConverterMethodsVTable,
     /// Cached `#[repr(u32)]` `PixelFormat` discriminant for the source
     /// format. Set at construction; fixed for the converter's lifetime.
     /// Mirrors `Texture::format_raw` so the cdylib's `src_format()`
-    /// getter is a pure field read with no FFI hop.
+    /// getter is a pure field read with no plugin ABI hop.
     pub(crate) cached_src_format_raw: u32,
     /// Cached `#[repr(u32)]` `PixelFormat` discriminant for the
     /// destination format. Same shape as `cached_src_format_raw`.
@@ -373,7 +373,7 @@ unsafe impl Sync for RhiColorConverter {}
 impl RhiColorConverter {
     /// Internal helper: leak an initial Arc strong count via
     /// `Arc::into_raw`, resolve the host-mode FullAccess vtable +
-    /// per-type methods vtable, and assemble the cross-DSO shape.
+    /// per-type methods vtable, and assemble the plugin ABI shape.
     pub(crate) fn from_arc_into_raw(arc: std::sync::Arc<RhiColorConverterInner>) -> Self {
         let cached_src_format_raw = arc.src_format() as u32;
         let cached_dst_format_raw = arc.dst_format() as u32;
@@ -451,7 +451,7 @@ impl RhiColorConverter {
     /// Mode-routed: in-process callers dispatch through `host_inner`;
     /// cdylib callers dispatch through the per-type methods vtable
     /// (Phase E sub-lift slice A). The cdylib-side return reconstructs
-    /// a `VulkanComputeKernel` β-shape from the host-handed-out
+    /// a `VulkanComputeKernel` PluginAbiObject from the host-handed-out
     /// `Arc<VulkanComputeKernelInner>`-shaped opaque handle + cached
     /// `push_constant_size`, sourcing the parent / per-type vtables
     /// from `host_callbacks()`.
@@ -495,7 +495,7 @@ impl RhiColorConverter {
         }
         // The cdylib needs the parent FullAccess vtable and the per-
         // type VulkanComputeKernel methods vtable to assemble its own
-        // β-shape from the host-returned inner handle. Both come from
+        // PluginAbiObject from the host-returned inner handle. Both come from
         // `host_callbacks()` — populated at plugin install time.
         let callbacks =
             crate::core::plugin::host_services::host_callbacks().ok_or_else(|| {
@@ -559,12 +559,12 @@ impl RhiColorConverter {
                     .into(),
             ));
         }
-        // β-shape: bundle the raw handle (an
+        // PluginAbiObject: bundle the raw handle (an
         // `Arc::into_raw(Arc<VulkanComputeKernelInner>)` pointer host-
         // side, opaque to the cdylib) with the parent vtable + per-
         // type methods vtable + cached `push_constant_size` POD. The
         // cdylib owns the inner Arc strong count the host bumped
-        // before returning; the β-shape's Drop releases it via
+        // before returning; the PluginAbiObject's Drop releases it via
         // `drop_compute_kernel`.
         let kernel = crate::vulkan::rhi::VulkanComputeKernel {
             handle: out_kernel,
@@ -801,7 +801,7 @@ impl RhiColorConverter {
     }
 
     /// Source pixel format this converter accepts. Cached POD —
-    /// no FFI hop. The value is captured by [`Self::from_arc_into_raw`]
+    /// no plugin ABI hop. The value is captured by [`Self::from_arc_into_raw`]
     /// (host-mode) or the FullAccess `color_converter` slot (cdylib-
     /// mode) at construction and never mutates.
     pub fn src_format(&self) -> PixelFormat {
@@ -899,7 +899,7 @@ mod layout_tests {
         // The cached `cached_*_format_raw` fields mirror the
         // `Texture::format_raw` cached POD pattern so the cdylib's
         // `src_format()` / `dst_format()` getters are pure field reads
-        // with no FFI hop.
+        // with no plugin ABI hop.
         assert_eq!(size_of::<RhiColorConverter>(), 32);
         assert_eq!(align_of::<RhiColorConverter>(), 8);
         assert_eq!(offset_of!(RhiColorConverter, handle), 0);

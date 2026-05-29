@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-adapter-skia-abi"
-description = "Cross-DSO callback table for streamlib-adapter-skia. Sibling of streamlib-plugin-abi / streamlib-adapter-vulkan-abi: pure extern \"C\" vtable + #[repr(C)] payloads consumed by host wiring (delegating to SkiaSurfaceAdapter / SkiaGlSurfaceAdapter) and cdylib shims. Skia is host-side-only — its view types (skia_safe::Surface / Image) cannot cross DSO, so the vtable surface covers only the SurfaceAdapter trait scoping contract."
+description = "Plugin ABI callback table for streamlib-adapter-skia. Sibling of streamlib-plugin-abi / streamlib-adapter-vulkan-abi: pure extern \"C\" vtable + #[repr(C)] payloads consumed by host wiring (delegating to SkiaSurfaceAdapter / SkiaGlSurfaceAdapter) and cdylib shims. Skia is host-side-only — its view types (skia_safe::Surface / Image) cannot cross the plugin ABI, so the vtable surface covers only the SurfaceAdapter trait scoping contract."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -18,7 +18,7 @@ path = "src/lib.rs"
 # streamlib-adapter-vulkan-abi: no streamlib-engine, no vulkanalia,
 # no skia-safe, no streamlib-adapter-skia, no tokio. Keeps layout
 # regression tests trivially runnable on any host and the crate
-# cross-DSO-safe.
+# safe across the plugin ABI.
 [dependencies]
 
 [lints]

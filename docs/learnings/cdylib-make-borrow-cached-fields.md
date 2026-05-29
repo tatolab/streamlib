@@ -1,4 +1,4 @@
-# Cdylib β-shape `make_*_borrow` MUST populate cached POD fields
+# PluginAbiObject `make_*_borrow` MUST populate cached POD fields
 
 ## Symptom
 
@@ -18,9 +18,9 @@ that surfaces the bug.
 ## Trigger condition
 
 You added a new cdylib-callable code path that hands a host-side
-β-shape resource (`Texture`, `PixelBuffer`, `StorageBuffer`,
+PluginAbiObject resource (`Texture`, `PixelBuffer`, `StorageBuffer`,
 `UniformBuffer`) back through a vtable callback. The host wrapper
-constructs a borrowed β-shape via one of the
+constructs a borrowed PluginAbiObject via one of the
 `make_*_borrow(handle: *const c_void)` helpers in
 `libs/streamlib-engine/src/core/plugin/host_services.rs` and passes
 that borrow to host-side code (e.g. a recorder method, a kernel
@@ -30,14 +30,14 @@ borrow.
 
 ## Root cause
 
-The cdylib β-shape carries cached POD fields (`width_cached`,
+The cdylib PluginAbiObject carries cached POD fields (`width_cached`,
 `height_cached`, `format_raw`, `byte_size_cached`,
 `mapped_ptr_cached`, `plane_count_cached`, ...) so the cdylib's
-public POD getters resolve as pure field reads with no FFI hop. The
+public POD getters resolve as pure field reads with no plugin ABI hop. The
 fields are populated at construction time via `from_arc_into_raw`
 from the underlying inner.
 
-A `make_*_borrow` helper reconstructs a `ManuallyDrop<β-shape>`
+A `make_*_borrow` helper reconstructs a `ManuallyDrop<PluginAbiObject>`
 that wraps the SAME inner via `handle`. The deref still works for
 methods that route through `host_inner()` / `buffer_ref()` /
 `vulkan_inner()` — but the **cached POD fields are zero-initialized
@@ -136,6 +136,6 @@ on the cached-field reads, with no error path firing.
 - Regression tests: `make_borrow_cached_field_regression_tests` in
   the same file. Covers all four borrow helpers (texture,
   pixel_buffer, storage_buffer, uniform_buffer).
-- The cdylib β-shape's `from_arc_into_raw` constructors populate
+- The cdylib PluginAbiObject's `from_arc_into_raw` constructors populate
   cached fields at construction — the borrow helpers must mirror
   that contract.

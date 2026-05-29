@@ -107,7 +107,7 @@ enum RecorderState {
 /// in-flight slot.
 /// Host-only rich data backing a [`RhiCommandRecorder`]. Cdylib code
 /// never sees this type; it reaches the public surface through the
-/// `(handle, vtable)` β-shape.
+/// `(handle, vtable)` PluginAbiObject.
 pub struct RhiCommandRecorderInner {
     label: String,
     vulkan_device: Arc<HostVulkanDevice>,
@@ -650,7 +650,7 @@ impl RhiCommandRecorderInner {
 
     /// Record a layout transition on a raw `VkImage` handle.
     /// Distinct from [`Self::record_image_barrier`] which takes a
-    /// `Texture` β-shape; this variant is used by
+    /// `Texture` PluginAbiObject; this variant is used by
     /// [`VulkanPresentTarget`](super::vulkan_present_target::VulkanPresentTarget)
     /// for swapchain images (which are never wrapped in a `Texture`).
     /// COLOR aspect, single mip / single layer, QUEUE_FAMILY_IGNORED
@@ -893,12 +893,12 @@ impl std::fmt::Debug for RhiCommandRecorderInner {
 }
 
 // =============================================================================
-// β-shape implementation
+// PluginAbiObject implementation
 // =============================================================================
 
 /// Multi-step command-buffer recorder.
 ///
-/// Layout-stable `#[repr(C)] (handle, vtable)` β-shape. The opaque
+/// Layout-stable `#[repr(C)] (handle, vtable)` PluginAbiObject. The opaque
 /// handle points at a `Box<RhiCommandRecorderInner>`; lifecycle
 /// dispatches through the host-installed FullAccess vtable's
 /// `drop_command_recorder` callback (Box::from_raw + drop host-side).
@@ -907,7 +907,7 @@ impl std::fmt::Debug for RhiCommandRecorderInner {
 /// mutable state (`begin()` → `record_*(&mut self)` → `submit_*(&mut
 /// self)`) that doesn't survive duplication. The
 /// `clone_command_recorder` vtable slot is reserved but never invoked
-/// — calling `.clone()` on the public β-shape is a compile error,
+/// — calling `.clone()` on the public PluginAbiObject is a compile error,
 /// locked by the `compile_fail` doctest below:
 ///
 /// ```compile_fail
@@ -937,9 +937,9 @@ impl std::fmt::Debug for RhiCommandRecorderInner {
 pub struct RhiCommandRecorder {
     /// Opaque handle to the host's `Box<RhiCommandRecorderInner>`.
     pub(crate) handle: *const c_void,
-    /// Parent vtable for cross-DSO Drop dispatch.
+    /// Parent vtable for plugin ABI Drop dispatch.
     pub(crate) vtable: *const GpuContextFullAccessVTable,
-    /// Per-type vtable for cross-DSO method dispatch (Phase E
+    /// Per-type vtable for plugin ABI method dispatch (Phase E
     /// sub-lift slice B — #984). Null in host mode; populated by
     /// [`Self::from_inner`] via
     /// [`crate::core::plugin::host_services::host_rhi_command_recorder_methods_vtable`].
@@ -1976,9 +1976,9 @@ mod layout_tests {
     #[test]
     fn rhi_command_recorder_layout() {
         // Phase E sub-lift slice B (#984) appended `methods_vtable`
-        // (16 → 24 bytes); the β-shape now mirrors the
+        // (16 → 24 bytes); the PluginAbiObject now mirrors the
         // `(handle, vtable, methods_vtable)` triple used by every
-        // per-type kernel β-shape and `RhiColorConverter`.
+        // per-type kernel PluginAbiObject and `RhiColorConverter`.
         assert_eq!(size_of::<RhiCommandRecorder>(), 24);
         assert_eq!(align_of::<RhiCommandRecorder>(), 8);
         assert_eq!(offset_of!(RhiCommandRecorder, handle), 0);
@@ -2294,7 +2294,7 @@ mod tests {
             submit_and_wait: stub_submit_and_wait,
         };
 
-        // Synthetic β-shape with our fake vtable. handle/vtable can stay null
+        // Synthetic PluginAbiObject with our fake vtable. handle/vtable can stay null
         // because the capture function never dereferences them.
         let beta = RhiCommandRecorder {
             handle: std::ptr::null(),

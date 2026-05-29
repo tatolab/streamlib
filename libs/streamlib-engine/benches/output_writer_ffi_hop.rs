@@ -1,10 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Microbench for the issue #894 `OutputWriter::write_raw` FFI hop.
+//! Microbench for the issue #894 `OutputWriter::write_raw` plugin ABI hop.
 //!
 //! Two arms compare the per-call cost of the pre-#894 direct-method
-//! shape against the post-#894 vtable-dispatch β-shape. A third bench
+//! shape against the post-#894 vtable-dispatch PluginAbiObject. A third bench
 //! varies payload size so the report shows how the hop cost scales
 //! with the data length:
 //!
@@ -12,18 +12,18 @@
 //!   called directly (pre-#894 shape from the cdylib's perspective:
 //!   the cdylib's struct held `Arc<OutputWriter>` and called methods
 //!   on it via direct Rust dispatch, with `OutputWriter` being the
-//!   real impl, not a β-shape). Includes the full iceoryx2 publish
+//!   real impl, not a PluginAbiObject). Includes the full iceoryx2 publish
 //!   + notify step.
-//! - `vtable_dispatch` — `OutputWriter::write_raw` on the β-shape,
+//! - `vtable_dispatch` — `OutputWriter::write_raw` on the PluginAbiObject,
 //!   which dispatches through the host-installed vtable to the
 //!   host-side `OutputWriterInner::write_raw`. In host mode (this
-//!   bench) the fn pointer resolves to the same DSO; in cdylib mode
-//!   it resolves to the host's DSO via the same fn pointer planted
+//!   bench) the fn pointer resolves to the same plugin; in cdylib mode
+//!   it resolves to the host via the same fn pointer planted
 //!   by `HostServices`. The PER-CALL machine cost is identical
 //!   between the two modes — both pay the indirect-call overhead;
 //!   neither pays any extra marshaling beyond pointer + length pairs
 //!   on the stack. The delta vs `baseline_direct_inner` is the cost
-//!   of the FFI hop the #894 design adds.
+//!   of the plugin ABI hop the #894 design adds.
 //! - `payload_sweep_vtable` — vtable-dispatch arm at 64 B / 256 B /
 //!   1 KiB / 8 KiB / 64 KiB payloads. Tells the reader whether the
 //!   hop's per-call cost is dominated by the fixed overhead (call
@@ -165,7 +165,7 @@ fn bench_vtable_dispatch(c: &mut Criterion) {
     });
 }
 
-/// Vary payload size to characterize how the FFI hop cost scales
+/// Vary payload size to characterize how the plugin ABI hop cost scales
 /// with the data length. Useful for the drone-racing JPEG path
 /// (typical 30-100 KB JPEG payloads per frame) vs the control-path
 /// (sub-100 byte messages).

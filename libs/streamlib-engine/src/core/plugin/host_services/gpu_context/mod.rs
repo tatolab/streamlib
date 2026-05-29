@@ -174,7 +174,7 @@ pub static HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE: GpuContextFullAccessVTable =
         drop_ray_tracing_kernel: host_gpu_full_drop_ray_tracing_kernel,
         clone_texture_ring: host_gpu_full_clone_texture_ring,
         drop_texture_ring: host_gpu_full_drop_texture_ring,
-        // v4 β-shape lifecycle slots (#917).
+        // v4 PluginAbiObject lifecycle slots (#917).
         clone_color_converter: host_gpu_full_clone_color_converter,
         drop_color_converter: host_gpu_full_drop_color_converter,
         clone_acceleration_structure: host_gpu_full_clone_acceleration_structure,
@@ -204,8 +204,8 @@ pub static HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE: GpuContextFullAccessVTable =
         host_vulkan_texture_arc: host_gpu_full_host_vulkan_texture_arc,
     };
 
-/// Pointer to the [`GpuContextFullAccessVTable`] this DSO should
-/// dispatch through. Same DSO-routing rule as
+/// Pointer to the [`GpuContextFullAccessVTable`] this plugin should
+/// dispatch through. Same plugin-routing rule as
 /// [`host_gpu_context_limited_access_vtable`]: host mode resolves to
 /// the local `&HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE` static, cdylib
 /// mode resolves to the host-installed pointer cached on
@@ -286,8 +286,8 @@ pub static HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE: GpuContextLimitedAccessVTable
             host_gpu_lim_host_video_source_timeline_arc,
     };
 
-/// Pointer to the [`GpuContextLimitedAccessVTable`] this DSO should
-/// dispatch through. Same DSO-routing rule as
+/// Pointer to the [`GpuContextLimitedAccessVTable`] this plugin should
+/// dispatch through. Same plugin-routing rule as
 /// [`host_runtime_context_vtable`].
 pub fn host_gpu_context_limited_access_vtable() -> *const GpuContextLimitedAccessVTable {
     match host_callbacks() {
@@ -314,7 +314,7 @@ mod gpu_lim_tier1_wire_format_tests {
     //!   `command_queue`, `create_command_buffer*`, `blit_copy*`, ...)
     //!   return rc=1 with a callback-prefixed UTF-8 error in `err_buf`
     //!   and leave their out-slot unwritten.
-    //! - `surface_store` writes a null-handle β-shape (the "None"
+    //! - `surface_store` writes a null-handle PluginAbiObject (the "None"
     //!   sentinel) regardless of input.
     //!
     //! `escalate_begin` / `escalate_end` are covered by
@@ -538,12 +538,12 @@ mod gpu_lim_tier1_wire_format_tests {
     }
 
     // ------------------------------------------------------------------
-    // surface_store — always writes a defined β-shape; null gpu_handle
+    // surface_store — always writes a defined PluginAbiObject; null gpu_handle
     // yields the "None" sentinel (null handle + null vtable)
     // ------------------------------------------------------------------
 
     #[test]
-    fn surface_store_writes_null_beta_shape_on_null_gpu_handle() {
+    fn surface_store_writes_null_plugin_abi_object_on_null_gpu_handle() {
         // SAFETY: SurfaceStore is `#[repr(C)] (handle, vtable)`; the
         // callback always writes through the out-pointer first, so a
         // zero-init landing slot is safe to read after the call.
@@ -554,7 +554,7 @@ mod gpu_lim_tier1_wire_format_tests {
                 &mut out as *mut _ as *mut c_void,
             );
         }
-        assert!(out.is_none(), "null gpu_handle must produce a None β-shape");
+        assert!(out.is_none(), "null gpu_handle must produce a None PluginAbiObject");
     }
 
     #[test]

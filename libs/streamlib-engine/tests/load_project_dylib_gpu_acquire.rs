@@ -10,7 +10,7 @@
 //!   2. Acquires a `PixelBuffer` — exercises `acquire_pixel_buffer`
 //!      (paired-out-param tuple).
 //!   3. Reads `pixel_buffer.width` / `.height` — cached POD reads,
-//!      no cross-DSO dispatch.
+//!      no plugin ABI dispatch.
 //!   4. Reads `plane_base_address(0)` — exercises
 //!      `plane_base_address_pixel_buffer`.
 //!   5. Writes a sentinel byte through the returned pointer — proves
@@ -184,7 +184,7 @@ fn dlopen_processor_round_trips_gpu_vtable_callbacks() {
     // Parse the three-line "OK\n<w>x<h>\nsentinel_addr=0x<hex>" body
     // and verify the cached width/height match the configured values
     // (proves the POD-read path from the cdylib's `PixelBuffer`
-    // β-shape is intact).
+    // PluginAbiObject is intact).
     let mut lines = contents.lines();
     let first = lines.next().unwrap_or("");
     assert_eq!(
@@ -194,7 +194,7 @@ fn dlopen_processor_round_trips_gpu_vtable_callbacks() {
     let dims = lines.next().unwrap_or("");
     assert_eq!(
         dims, "64x64",
-        "cached width/height must round-trip from the cdylib's PixelBuffer β-shape, got {dims:?}"
+        "cached width/height must round-trip from the cdylib's PixelBuffer PluginAbiObject, got {dims:?}"
     );
     let addr_line = lines.next().unwrap_or("");
     assert!(

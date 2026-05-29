@@ -6,7 +6,7 @@ package:
   org: tatolab
   name: cross-rustc-fixture
   version: 1.0.0
-  description: "Cross-rustc / cross-dep-graph dlopen fixture for #927 (#917 β-shape gate)"
+  description: "Cross-rustc / cross-dep-graph dlopen fixture for #927 (#917 PluginAbiObject gate)"
 
 dependencies:
   "@tatolab/core": "^1.0.0"
@@ -18,14 +18,14 @@ patch:
     path: ../../packages/core
 
 schemas:
-  BetaShapeRoundTripProcessorConfig:
-    file: schemas/beta_shape_round_trip_processor_config.yaml
+  PluginAbiObjectRoundTripProcessorConfig:
+    file: schemas/plugin_abi_object_round_trip_processor_config.yaml
 
 processors:
-  - name: BetaShapeRoundTripProcessor
+  - name: PluginAbiObjectRoundTripProcessor
     version: 1.0.0
-    description: "Cdylib processor that creates + clones + drops every #917 β-shape return type and writes a sentinel result file. Locks the cross-rustc-version FFI contract end-to-end."
+    description: "Cdylib processor that creates + clones + drops every #917 PluginAbiObject return type and writes a sentinel result file. Locks the cross-rustc-version plugin ABI contract end-to-end."
     execution: manual
     config:
       name: config
-      schema: BetaShapeRoundTripProcessorConfig
+      schema: PluginAbiObjectRoundTripProcessorConfig

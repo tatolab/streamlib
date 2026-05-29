@@ -26,7 +26,7 @@ use crate::repr::ComputeBindingSpecRepr;
 ///   `[ComputeBindingSpecRepr]` buffer and reports the actual count.
 ///   Status code 2 signals "buffer too small" with the required count
 ///   in `out_specs_len`; callers reallocate and retry. Replaces the
-///   β-shape's bare `host_inner().bindings()` call which panicked
+///   PluginAbiObject's bare `host_inner().bindings()` call which panicked
 ///   from cdylib code.
 ///
 /// - v5: appended four raw-vulkanalia-handle slots —
@@ -36,14 +36,14 @@ use crate::repr::ComputeBindingSpecRepr;
 ///   (vulkanalia's handles are `#[repr(transparent)] pub struct
 ///   ImageView(u64)` / `CommandBuffer(usize)`, so the wire form is the
 ///   raw integer the host reconstructs via `Handle::from_raw`).
-///   Replaces the β-shape's bare `host_inner().set_*_view(...)` /
+///   Replaces the PluginAbiObject's bare `host_inner().set_*_view(...)` /
 ///   `host_inner().record(...)` calls that engine SDK code
 ///   (`RgbToNv12Converter::convert`, `Nv12ToRgbConverter::convert`)
 ///   reaches per-frame from cdylib-resident processor bodies (#1073).
 pub const VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 5;
 
 /// Per-type method-dispatch vtable for the `VulkanComputeKernel`
-/// β-shape (issue #907 Phase E + #949 method-dispatch first slice).
+/// PluginAbiObject (issue #907 Phase E + #949 method-dispatch first slice).
 ///
 /// `VulkanComputeKernel` keeps `clone_*` / `drop_*` dispatch on the
 /// parent [`crate::GpuContextFullAccessVTable`] (PR #918's Phase D shape);
@@ -52,7 +52,7 @@ pub const VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION: u32 = 5;
 ///
 /// **Binding-method shape:** typed-by-input-wrapper (one slot per
 /// kernel-method × buffer-or-texture wrapper). This mirrors the
-/// production cross-DSO pattern used by Dawn / WebGPU (`WGPUBuffer`
+/// production plugin ABI pattern used by Dawn / WebGPU (`WGPUBuffer`
 /// + per-binding-kind method) and Unreal RHI (typed
 /// `SetShaderResourceViewParameter` methods) while honoring
 /// streamlib's existing typed-wrapper allocation layer (separate

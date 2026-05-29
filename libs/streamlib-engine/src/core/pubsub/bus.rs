@@ -25,16 +25,16 @@ thread_local! {
 
 /// Process-wide pub/sub handle.
 ///
-/// **Per-DSO instance.** Each linked copy of streamlib-engine (host
+/// **Per-loaded-artifact instance.** Each linked copy of streamlib-engine (host
 /// binary + every dlopen'd cdylib plugin) gets its own `LazyLock<PubSub>`
 /// — Rust mangled statics aren't in the dynsym table, the dynamic
 /// linker doesn't dedupe them, and trying to share the same `PubSub`
-/// reference across DSOs would couple the cdylib to byte-identical
+/// reference across the host and plugins would couple the cdylib to byte-identical
 /// internal layouts of `Iceoryx2Node`, parking_lot::Mutex, etc.
 ///
-/// Cross-DSO bridging happens **inside the methods**: when
+/// Plugin ABI bridging happens **inside the methods**: when
 /// `crate::core::plugin::host_services::host_callbacks()` returns
-/// `Some` (i.e. this DSO is a plugin cdylib whose
+/// `Some` (i.e. this artifact is a plugin cdylib whose
 /// `install_host_services` has run), `publish` serializes the event
 /// and forwards it through the host's `pubsub_publish` fn pointer.
 /// The host's installed `PUBSUB` performs the actual iceoryx2 work,
@@ -204,7 +204,7 @@ impl PubSub {
     /// In a plugin cdylib whose `install_host_services` has run,
     /// short-circuits to the host's `pubsub_publish` callback —
     /// the event is serialized once and the host's `PUBSUB`
-    /// performs the actual iceoryx2 work. In the host DSO,
+    /// performs the actual iceoryx2 work. In the host,
     /// runs the local iceoryx2 path below.
     ///
     /// Events are dispatched to:
@@ -217,7 +217,7 @@ impl PubSub {
             let bytes = match rmp_serde::to_vec_named(event) {
                 Ok(b) => b,
                 Err(e) => {
-                    tracing::warn!("Failed to serialize event for FFI forwarding: {}", e);
+                    tracing::warn!("Failed to serialize event for plugin ABI forwarding: {}", e);
                     return;
                 }
             };

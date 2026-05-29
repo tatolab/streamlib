@@ -9,9 +9,10 @@
 # graph diverges from the host's by construction.
 #
 # This is the empirical fixture for issue #927: the add_module
-# dlopen integration test exercises that the layout-stable β-shape
-# FFI established in #917 is sufficient for cross-rustc-version /
-# cross-dep-graph plugin distribution. Plugin authors building in a
+# dlopen integration test exercises that the layout-stable
+# PluginAbiObject plugin ABI established in #917 is sufficient for
+# cross-rustc-version / cross-dep-graph plugin distribution. Plugin
+# authors building in a
 # separate repo with a different Cargo dep graph should produce a
 # .slpkg that loads cleanly into any streamlib host depending on the
 # same `streamlib-plugin-abi` + `streamlib-consumer-rhi` versions.
@@ -25,7 +26,7 @@ name = "streamlib-cross-rustc-fixture"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "Cross-rustc-version / cross-dep-graph dlopen fixture for issue #927 (#917 β-shape gate)"
+description = "Cross-rustc-version / cross-dep-graph dlopen fixture for issue #927 (#917 PluginAbiObject gate)"
 
 [lib]
 name = "streamlib_cross_rustc_fixture"
@@ -35,8 +36,9 @@ crate-type = ["cdylib"]
 streamlib-jtd-codegen = { path = "../streamlib-jtd-codegen" }
 
 [dependencies]
-# Engine substrate — runtime context, processor traits, β-shape
-# return types under `streamlib::sdk::*`. Path-dep so the fixture
+# Engine substrate — runtime context, processor traits,
+# PluginAbiObject return types under `streamlib::sdk::*`. Path-dep so
+# the fixture
 # rebuilds the SDK against THIS workspace's resolver pass, not the
 # host workspace's. Same source, different transitive resolution.
 streamlib = { path = "../streamlib-sdk" }
@@ -54,9 +56,10 @@ streamlib-plugin-abi = { path = "../streamlib-plugin-abi" }
 # Cargo.lock). The pin forces this sibling workspace to compile
 # streamlib-sdk against demonstrably-different transitive versions —
 # net effect is at least two divergent crates between this fixture's
-# Cargo.lock and the host's. The β-shape FFI never traffics serde or
-# tracing types across the DSO boundary, so the test proves
-# layout-stable interop survives divergent transitive resolutions.
+# Cargo.lock and the host's. The PluginAbiObject plugin ABI never
+# traffics serde or tracing types across the plugin ABI, so the test
+# proves layout-stable interop survives divergent transitive
+# resolutions.
 #
 # 1.0.225 is the minimum compatible with iceoryx2 0.8.1's transitive
 # `serde_core ^1.0.225`; older pins fail resolution.

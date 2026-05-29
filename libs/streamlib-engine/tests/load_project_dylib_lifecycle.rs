@@ -8,7 +8,7 @@
 //! registered `TestConfiguredProcessor` through `factory.create(&node)`
 //! to confirm the cdylib-side `extern "C" fn construct(...)` wrapper
 //! returns a non-null instance pointer, then drops it to exercise
-//! `extern "C" fn destroy(...)` — the cross-DSO heap dance that the
+//! `extern "C" fn destroy(...)` — the plugin ABI heap dance that the
 //! vtable shape introduces.
 //!
 //! Mentally revert the `Drop` impl in

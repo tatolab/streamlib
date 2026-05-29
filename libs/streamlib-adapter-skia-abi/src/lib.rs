@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Cross-DSO callback table for `streamlib-adapter-skia`.
+//! Plugin ABI callback table for `streamlib-adapter-skia`.
 //!
 //! Sibling of [`streamlib-adapter-vulkan-abi`] and
 //! [`streamlib-plugin-abi`] in the per-adapter vtable lift family
@@ -64,7 +64,7 @@
 //!   single-thread-affine `GrDirectContext`. Their internal layout
 //!   is **rustc-version-coupled and skia-safe-version-coupled** —
 //!   crossing them through an extern "C" boundary would defeat the
-//!   purpose of this ABI. Adding cross-DSO Skia view access is
+//!   purpose of this ABI. Adding Skia view access across the plugin ABI is
 //!   future work (the Option C msgpack display-list shape recorded
 //!   on issue #889's body is a candidate; a per-method canvas
 //!   vtable is another).
@@ -77,8 +77,8 @@
 //! # What this vtable does cover
 //!
 //! The scoping contract — acquire / release on a `StreamlibSurface`
-//! — is identical across every surface adapter and IS cross-DSO
-//! safe via the `surface_id`-only [`SkiaViewRepr`] payload. The
+//! — is identical across every surface adapter and IS safe across
+//! the plugin ABI via the `surface_id`-only [`SkiaViewRepr`] payload. The
 //! vtable carries the trunk-pattern `clone_handle` /
 //! `drop_handle` lifetime slots plus all 6 `SurfaceAdapter` trait
 //! methods plus the informational `registered_count` projection.
@@ -172,7 +172,7 @@ pub struct SkiaViewRepr {
 /// `Arc::into_raw(Arc<SkiaSurfaceAdapter<D>>)`-shaped pointer
 /// produced by the host) plus a
 /// `*const SkiaSurfaceAdapterVTable` it reads from the
-/// `HostServices` payload when the cdylib β-shape lift lands
+/// `HostServices` payload when the cdylib PluginAbiObject lift lands
 /// (sibling slice to this trunk PR). Method-dispatch callbacks
 /// cover every cdylib-callable `SurfaceAdapter` trait method.
 ///

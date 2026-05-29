@@ -127,7 +127,7 @@ unsafe extern "C" fn host_rcv_gpu_full_access(_ctx: *const c_void) -> *const c_v
             // shim embeds `GpuContextFullAccess` by value alongside
             // its handle/vtable pair, so the cdylib never reaches
             // through this callback. Returns null until a future
-            // phase wires cross-DSO FullAccess dispatch.
+            // phase wires plugin ABI FullAccess dispatch.
             std::ptr::null()
         },
         std::ptr::null(),
@@ -199,7 +199,7 @@ pub static HOST_RUNTIME_CONTEXT_VTABLE: RuntimeContextVTable = RuntimeContextVTa
     runtime_ops_handle: host_rcv_runtime_ops_handle,
 };
 
-/// Pointer to the [`RuntimeContextVTable`] this DSO should dispatch
+/// Pointer to the [`RuntimeContextVTable`] this plugin should dispatch
 /// through. In the host process this returns the host's local
 /// `&HOST_RUNTIME_CONTEXT_VTABLE` static (the canonical vtable). In
 /// a cdylib `install_host_services` has populated the cached pointer
@@ -281,7 +281,7 @@ mod runtime_context_vtable_null_handle_guards {
 
     /// Locks the documented placeholder behaviour of
     /// `gpu_full_access`: the wrapper ignores `ctx` and returns null
-    /// unconditionally because cross-DSO FullAccess wiring lives on
+    /// unconditionally because plugin ABI FullAccess wiring lives on
     /// the inline-by-value shim today, not through this callback.
     /// This is NOT a null-handle-guard lock (no guard to revert);
     /// it's a placeholder-shape lock — if a future change wires

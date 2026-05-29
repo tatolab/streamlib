@@ -298,7 +298,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_co
             );
             match result {
                 Some(Ok(converter)) => {
-                    // `converter` is the β-shape; its `handle` is the
+                    // `converter` is the PluginAbiObject; its `handle` is the
                     // `Arc::into_raw(Arc<RhiColorConverterInner>)` pointer.
                     let raw = converter.handle;
                     std::mem::forget(converter);
@@ -381,7 +381,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cr
             );
             match result {
                 Some(Ok(recorder)) => {
-                    // SAFETY: `recorder` is the β-shape — a
+                    // SAFETY: `recorder` is the PluginAbiObject — a
                     // `#[repr(C)] { handle: *const c_void, vtable: *const VTable }`
                     // 16-byte POD. Layout is byte-identical
                     // by `#[repr(C)]` invariant, not by rustc-version
@@ -496,15 +496,15 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_bu
             );
             match result {
                 Some(Ok(blas)) => {
-                    // `blas` is the β-shape — its `handle` is already
+                    // `blas` is the PluginAbiObject — its `handle` is already
                     // `Arc::into_raw(Arc<VulkanAccelerationStructureInner>)`-shaped
                     // and its cached POD fields were populated by
                     // `VulkanAccelerationStructure::from_arc_into_raw`
                     // (host-mode mint path). Write them through the
-                    // out-params so the cdylib's β-shape carries the
+                    // out-params so the cdylib's PluginAbiObject carries the
                     // real values instead of placeholder zeros. Forget
-                    // the β-shape to keep the Arc strong count bumped;
-                    // cdylib reconstructs its own β-shape from the
+                    // the PluginAbiObject to keep the Arc strong count bumped;
+                    // cdylib reconstructs its own PluginAbiObject from the
                     // handle + vtable + cached PODs.
                     let raw = blas.handle;
                     let device_address = blas.cached_device_address;
@@ -629,10 +629,10 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_bu
             match result {
                 Some(Ok(tlas)) => {
                     // Same shape as `host_gpu_full_build_triangles_blas`:
-                    // the β-shape's cached PODs are real (populated by
+                    // the PluginAbiObject's cached PODs are real (populated by
                     // `from_arc_into_raw` host-side); write them
                     // through the out-params so the cdylib's reassembled
-                    // β-shape carries real values.
+                    // PluginAbiObject carries real values.
                     let raw = tlas.handle;
                     let device_address = tlas.cached_device_address;
                     let storage_size = tlas.cached_storage_size;
@@ -1033,7 +1033,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_ho
 }
 
 /// Clone the host's `Arc<HostVulkanTexture>` backing a `Texture`
-/// β-shape and return the raw `Arc::into_raw` pointer. Second bridge
+/// PluginAbiObject and return the raw `Arc::into_raw` pointer. Second bridge
 /// of the cdylib-side adapter-construction chain: cdylibs can't
 /// reach `Texture::host_inner()` (panics in cdylib mode), so they
 /// dispatch through this slot to obtain a real
@@ -1052,10 +1052,10 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_ho
             }
             // SAFETY: `texture_handle` is the same opaque
             // `Arc::into_raw(Arc<TextureInner>)` pointer cached on the
-            // `Texture` β-shape's `handle` field (see
+            // `Texture` PluginAbiObject's `handle` field (see
             // `Texture::from_arc_into_raw`). The leaked strong count
             // keeps the `TextureInner` alive at least until the
-            // β-shape's `Drop` runs. We borrow without taking
+            // PluginAbiObject's `Drop` runs. We borrow without taking
             // ownership, clone the inner `Arc<HostVulkanTexture>`, and
             // return its raw pointer with the strong count bumped by 1.
             let inner = unsafe {

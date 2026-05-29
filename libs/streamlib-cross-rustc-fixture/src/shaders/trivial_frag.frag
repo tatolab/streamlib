@@ -3,7 +3,7 @@
 
 // Minimal fragment shader: outputs constant color. No bindings, no
 // push constants. Pairs with trivial_vert.vert for the
-// `VulkanGraphicsKernel` β-shape Create+Clone+Drop round-trip.
+// `VulkanGraphicsKernel` PluginAbiObject Create+Clone+Drop round-trip.
 
 #version 450
 

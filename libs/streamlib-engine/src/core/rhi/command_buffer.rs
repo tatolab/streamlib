@@ -23,7 +23,7 @@ use super::texture::Texture;
 
 /// Host-only rich data backing a [`CommandBuffer`]. Cdylib code
 /// never sees this type; it reaches the public [`CommandBuffer`]
-/// surface through the `(handle, vtable)` β-shape.
+/// surface through the `(handle, vtable)` PluginAbiObject.
 ///
 /// Holds the platform-specific command buffer by value (no Arc —
 /// command buffers are single-use, not shared).
@@ -67,7 +67,7 @@ pub(crate) struct CommandBufferInner {
 pub struct CommandBuffer {
     /// Opaque handle to the host's `Box<CommandBufferInner>`.
     pub(crate) handle: *const c_void,
-    /// Vtable for cross-DSO Drop and method dispatch.
+    /// Vtable for plugin ABI Drop and method dispatch.
     pub(crate) vtable: *const GpuContextLimitedAccessVTable,
 }
 
@@ -104,7 +104,7 @@ impl CommandBuffer {
 
     /// Copy one texture to another.
     ///
-    /// Dispatches through the cross-DSO vtable's
+    /// Dispatches through the plugin ABI vtable's
     /// `copy_texture_command_buffer` callback.
     pub fn copy_texture(&mut self, src: &Texture, dst: &Texture) {
         if self.handle.is_null() || self.vtable.is_null() {
@@ -125,7 +125,7 @@ impl CommandBuffer {
 
     /// Commit the command buffer for execution.
     ///
-    /// Dispatches through the cross-DSO vtable's
+    /// Dispatches through the plugin ABI vtable's
     /// `commit_command_buffer` callback. The host's impl runs
     /// `Box::from_raw + commit + drop` so the underlying platform
     /// resources are committed exactly once. The cdylib's local
@@ -150,7 +150,7 @@ impl CommandBuffer {
 
     /// Commit and wait for completion.
     ///
-    /// Dispatches through the cross-DSO vtable's
+    /// Dispatches through the plugin ABI vtable's
     /// `commit_and_wait_command_buffer` callback. Same lifetime
     /// contract as [`Self::commit`].
     pub fn commit_and_wait(mut self) {

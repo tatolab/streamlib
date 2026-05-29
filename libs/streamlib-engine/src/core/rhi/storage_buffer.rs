@@ -37,7 +37,7 @@ pub struct StorageBuffer {
     /// Opaque handle to the host's `Arc<HostVulkanBuffer>` (produced
     /// by `Arc::into_raw`).
     pub(crate) handle: *const c_void,
-    /// Vtable for cross-DSO Clone/Drop dispatch.
+    /// Vtable for plugin ABI Clone/Drop dispatch.
     pub(crate) vtable: *const GpuContextLimitedAccessVTable,
     /// Cached byte size (captured at construction).
     pub(crate) byte_size_cached: u64,
@@ -99,7 +99,7 @@ impl StorageBuffer {
             panic!(
                 "StorageBuffer::host_inner() reached from cdylib code; this method \
                  must dispatch through the GpuContextLimitedAccessVTable. The panic \
-                 is caught by run_host_extern_c at the FFI boundary."
+                 is caught by run_host_extern_c at the plugin ABI."
             );
         }
         // SAFETY: `self.handle` is `Arc::into_raw(Arc<HostVulkanBuffer>)`
@@ -109,13 +109,13 @@ impl StorageBuffer {
     }
 
     /// Total buffer size in bytes. Cached at construction; pure POD
-    /// read with no cross-DSO dispatch.
+    /// read with no plugin ABI dispatch.
     pub fn byte_size(&self) -> u64 {
         self.byte_size_cached
     }
 
     /// Persistently mapped CPU pointer for HOST_VISIBLE allocations.
-    /// Cached at construction; pure POD read with no cross-DSO
+    /// Cached at construction; pure POD read with no plugin ABI
     /// dispatch. Returns null for DEVICE_LOCAL imports (DMA-BUF
     /// without HOST_VISIBLE).
     pub fn mapped_ptr(&self) -> *mut u8 {
@@ -127,7 +127,7 @@ impl StorageBuffer {
     /// cdylib-mode dispatch paths
     /// (`RhiCommandRecorder::record_buffer_barrier` /
     /// `record_copy_image_to_buffer`) that need to forward the
-    /// underlying Arc-shaped pointer across the FFI without
+    /// underlying Arc-shaped pointer across the plugin ABI without
     /// reaching for `self.handle` directly.
     pub(crate) fn cdylib_handle(&self) -> *const c_void {
         self.handle
