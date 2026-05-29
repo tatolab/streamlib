@@ -15,16 +15,15 @@ name = "streamlib-runtime"
 path = "src/main.rs"
 
 [dependencies]
-# Core library (bundles all Rust processors)
+# Engine + SDK. The API server (and every other processor) is loaded at
+# runtime through the all-dynamic module loader, not linked here.
 streamlib = { path = "../streamlib-sdk" }
-streamlib-api-server = { path = "../../packages/api-server" }
-
-# Dynamic plugin loading
-libloading = "0.8"
-streamlib-plugin-abi = { path = "../streamlib-plugin-abi" }
 
 # CLI argument parsing
 clap = { version = "4.5", features = ["derive"] }
+
+# JSON config for module-loaded processors (ProcessorSpec)
+serde_json = "1"
 
 # Async runtime
 tokio.workspace = true
@@ -32,18 +31,8 @@ tokio.workspace = true
 # Logging
 tracing.workspace = true
 
-# Home directory detection
-dirs = "6.0"
-
-# Random name generation for runtimes
-fastrand = "2.0"
-
 # Runtime ID generation
 cuid2 = "0.1"
 
 # Error handling
 anyhow.workspace = true
-
-# Daemonization (Unix-only)
-[target.'cfg(unix)'.dependencies]
-daemonize = "0.5"

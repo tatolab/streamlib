@@ -20,14 +20,14 @@ use crate::core::logging::{
 };
 use crate::core::runtime::RuntimeUniqueId;
 
-fn set_xdg_state_home(tmp: &TempDir) {
+fn set_streamlib_home(tmp: &TempDir) {
     unsafe {
-        std::env::set_var("XDG_STATE_HOME", tmp.path());
+        std::env::set_var("STREAMLIB_HOME", tmp.path());
     }
 }
 
-fn clear_xdg_state_home() {
-    unsafe { std::env::remove_var("XDG_STATE_HOME") };
+fn clear_streamlib_home() {
+    unsafe { std::env::remove_var("STREAMLIB_HOME") };
 }
 
 fn clear_quiet() {
@@ -54,7 +54,7 @@ fn reset_for_test() {
 fn jsonl_file_created_on_runtime_new() {
     reset_for_test();
     let tmp = TempDir::new().unwrap();
-    set_xdg_state_home(&tmp);
+    set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("Rtest1"));
     let config =
@@ -82,7 +82,7 @@ fn jsonl_file_created_on_runtime_new() {
         "expected record with runtime_id + pipeline_id + processor_id; got {:#?}",
         events
     );
-    clear_xdg_state_home();
+    clear_streamlib_home();
 }
 
 #[test]
@@ -91,7 +91,7 @@ fn stdout_mirror_suppressed_by_quiet_env_keeps_jsonl() {
     reset_for_test();
     unsafe { std::env::set_var("STREAMLIB_QUIET", "1") };
     let tmp = TempDir::new().unwrap();
-    set_xdg_state_home(&tmp);
+    set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RtestQ"));
     let config = StreamlibLoggingConfig::for_runtime("test", runtime_id);
@@ -109,7 +109,7 @@ fn stdout_mirror_suppressed_by_quiet_env_keeps_jsonl() {
     );
 
     clear_quiet();
-    clear_xdg_state_home();
+    clear_streamlib_home();
 }
 
 #[test]
@@ -117,7 +117,7 @@ fn stdout_mirror_suppressed_by_quiet_env_keeps_jsonl() {
 fn drop_triggers_flush_and_persists() {
     reset_for_test();
     let tmp = TempDir::new().unwrap();
-    set_xdg_state_home(&tmp);
+    set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RtestDrop"));
     let config = StreamlibLoggingConfig::for_runtime("test", Arc::clone(&runtime_id));
@@ -140,7 +140,7 @@ fn drop_triggers_flush_and_persists() {
         "expected at least 50 info events, got {}",
         info_events.len()
     );
-    clear_xdg_state_home();
+    clear_streamlib_home();
 }
 
 #[test]
@@ -148,7 +148,7 @@ fn drop_triggers_flush_and_persists() {
 fn time_triggered_flush_writes_without_size_trigger() {
     reset_for_test();
     let tmp = TempDir::new().unwrap();
-    set_xdg_state_home(&tmp);
+    set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RtestTime"));
     let config = StreamlibLoggingConfig {
@@ -178,7 +178,7 @@ fn time_triggered_flush_writes_without_size_trigger() {
         contents_before_drop
     );
     drop(guard);
-    clear_xdg_state_home();
+    clear_streamlib_home();
 }
 
 #[test]
@@ -188,7 +188,7 @@ fn concurrent_runtime_paths_do_not_collide() {
     // confirms two distinct runtime ids resolve to distinct files in
     // the shared log directory.
     let tmp = TempDir::new().unwrap();
-    set_xdg_state_home(&tmp);
+    set_streamlib_home(&tmp);
 
     let dir = log_dir();
     let p1 = runtime_log_path("RtestA", 111);
@@ -201,7 +201,7 @@ fn concurrent_runtime_paths_do_not_collide() {
     assert!(p2.starts_with(&dir));
     assert!(p3.starts_with(&dir));
 
-    clear_xdg_state_home();
+    clear_streamlib_home();
 }
 
 #[test]
@@ -209,7 +209,7 @@ fn concurrent_runtime_paths_do_not_collide() {
 fn origin_fields_round_trip_via_event_fields() {
     reset_for_test();
     let tmp = TempDir::new().unwrap();
-    set_xdg_state_home(&tmp);
+    set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RtestOrigin"));
     let config = StreamlibLoggingConfig::for_runtime("test", Arc::clone(&runtime_id));
@@ -242,7 +242,7 @@ fn origin_fields_round_trip_via_event_fields() {
         Some(&serde_json::Value::Number(123.into()))
     );
 
-    clear_xdg_state_home();
+    clear_streamlib_home();
 }
 
 #[test]
@@ -255,7 +255,7 @@ fn panic_hook_best_effort_flush() {
     // the hook routes a flush through the doorbell.
     reset_for_test();
     let tmp = TempDir::new().unwrap();
-    set_xdg_state_home(&tmp);
+    set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RtestPanic"));
     let config = StreamlibLoggingConfig {
@@ -287,7 +287,7 @@ fn panic_hook_best_effort_flush() {
         contents
     );
     drop(guard);
-    clear_xdg_state_home();
+    clear_streamlib_home();
 }
 
 /// Coarse latency check. The #430 target is p50 <1µs / p99 <5µs on a
@@ -300,7 +300,7 @@ fn panic_hook_best_effort_flush() {
 fn hot_path_is_not_blocked_on_io() {
     reset_for_test();
     let tmp = TempDir::new().unwrap();
-    set_xdg_state_home(&tmp);
+    set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RtestHot"));
     let config = StreamlibLoggingConfig {
@@ -336,7 +336,7 @@ fn hot_path_is_not_blocked_on_io() {
         per_call_ns
     );
 
-    clear_xdg_state_home();
+    clear_streamlib_home();
 }
 
 /// Cargo's libtest installs a thread-local `OUTPUT_CAPTURE` hook
@@ -357,7 +357,7 @@ fn rust_println_captured_via_fd_redirect() {
 
     reset_for_test();
     let tmp = TempDir::new().unwrap();
-    set_xdg_state_home(&tmp);
+    set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFdPrint"));
     let config = StreamlibLoggingConfig {
@@ -394,7 +394,7 @@ fn rust_println_captured_via_fd_redirect() {
         events
     );
 
-    clear_xdg_state_home();
+    clear_streamlib_home();
 }
 
 /// `libc::write(1, ...)` bypasses stdlib / libtest entirely and hits
@@ -405,7 +405,7 @@ fn rust_println_captured_via_fd_redirect() {
 fn rust_c_printf_via_libc_captured() {
     reset_for_test();
     let tmp = TempDir::new().unwrap();
-    set_xdg_state_home(&tmp);
+    set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFdLibc"));
     let config = StreamlibLoggingConfig {
@@ -443,7 +443,7 @@ fn rust_c_printf_via_libc_captured() {
         events
     );
 
-    clear_xdg_state_home();
+    clear_streamlib_home();
 }
 
 /// With `intercept_stdio: false`, `libc::write(1, ...)` reaches the
@@ -455,7 +455,7 @@ fn rust_c_printf_via_libc_captured() {
 fn intercept_stdio_off_in_tests() {
     reset_for_test();
     let tmp = TempDir::new().unwrap();
-    set_xdg_state_home(&tmp);
+    set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFdOff"));
     let config = StreamlibLoggingConfig {
@@ -491,7 +491,7 @@ fn intercept_stdio_off_in_tests() {
         events
     );
 
-    clear_xdg_state_home();
+    clear_streamlib_home();
 }
 
 /// Writes to fd 2 land in JSONL with `channel: "fd2"`.
@@ -501,7 +501,7 @@ fn intercept_stdio_off_in_tests() {
 fn intercepted_fd2_uses_channel_fd2() {
     reset_for_test();
     let tmp = TempDir::new().unwrap();
-    set_xdg_state_home(&tmp);
+    set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFd2"));
     let config = StreamlibLoggingConfig {
@@ -537,7 +537,7 @@ fn intercepted_fd2_uses_channel_fd2() {
         events
     );
 
-    clear_xdg_state_home();
+    clear_streamlib_home();
 }
 
 /// With both the pretty-mirror and the interceptor on, the mirror
@@ -551,7 +551,7 @@ fn intercepted_fd2_uses_channel_fd2() {
 fn no_redirect_loop_when_mirror_enabled() {
     reset_for_test();
     let tmp = TempDir::new().unwrap();
-    set_xdg_state_home(&tmp);
+    set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFdLoop"));
     let config = StreamlibLoggingConfig {
@@ -589,7 +589,7 @@ fn no_redirect_loop_when_mirror_enabled() {
         matching[0]
     );
 
-    clear_xdg_state_home();
+    clear_streamlib_home();
 }
 
 /// Dropping the guard restores fds 1/2, closes the pipe write ends,
@@ -601,7 +601,7 @@ fn no_redirect_loop_when_mirror_enabled() {
 fn reader_thread_shuts_down_on_runtime_drop() {
     reset_for_test();
     let tmp = TempDir::new().unwrap();
-    set_xdg_state_home(&tmp);
+    set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFdShut"));
     let config = StreamlibLoggingConfig {
@@ -636,7 +636,7 @@ fn reader_thread_shuts_down_on_runtime_drop() {
         elapsed
     );
 
-    clear_xdg_state_home();
+    clear_streamlib_home();
 }
 
 /// Workspace default pins `tracing/release_max_level_debug`. Verify the
@@ -652,7 +652,7 @@ fn trace_compiled_out_in_release() {
     // survives the compile-time strip reaches the JSONL.
     unsafe { std::env::set_var("RUST_LOG", "trace") };
     let tmp = TempDir::new().unwrap();
-    set_xdg_state_home(&tmp);
+    set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RtestTraceStrip"));
     let config = StreamlibLoggingConfig::for_runtime("test", runtime_id);
@@ -698,7 +698,7 @@ fn trace_compiled_out_in_release() {
         );
     }
 
-    clear_xdg_state_home();
+    clear_streamlib_home();
 }
 
 /// Without the opt-in feature, `debug!` produces a JSONL record under
@@ -709,7 +709,7 @@ fn trace_compiled_out_in_release() {
 fn debug_lives_in_release_default() {
     reset_for_test();
     let tmp = TempDir::new().unwrap();
-    set_xdg_state_home(&tmp);
+    set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RtestDebugLive"));
     let config = StreamlibLoggingConfig::for_runtime("test", runtime_id);
@@ -729,7 +729,7 @@ fn debug_lives_in_release_default() {
         events
     );
 
-    clear_xdg_state_home();
+    clear_streamlib_home();
 }
 
 /// With `--features streamlib/strip_debug_logging`, release builds
@@ -742,7 +742,7 @@ fn strip_debug_logging_feature_strips_debug() {
     reset_for_test();
     unsafe { std::env::set_var("RUST_LOG", "trace") };
     let tmp = TempDir::new().unwrap();
-    set_xdg_state_home(&tmp);
+    set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RtestDebugStrip"));
     let config = StreamlibLoggingConfig::for_runtime("test", runtime_id);
@@ -786,7 +786,7 @@ fn strip_debug_logging_feature_strips_debug() {
         assert_eq!(info_count, 1, "info! must survive strip_debug_logging");
     }
 
-    clear_xdg_state_home();
+    clear_streamlib_home();
 }
 
 /// `warn!` and `error!` must always reach the JSONL. No feature combo
@@ -796,7 +796,7 @@ fn strip_debug_logging_feature_strips_debug() {
 fn warn_and_error_never_stripped() {
     reset_for_test();
     let tmp = TempDir::new().unwrap();
-    set_xdg_state_home(&tmp);
+    set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RtestWarnErr"));
     let config = StreamlibLoggingConfig::for_runtime("test", runtime_id);
@@ -830,7 +830,7 @@ fn warn_and_error_never_stripped() {
         tracing::level_filters::STATIC_MAX_LEVEL
     );
 
-    clear_xdg_state_home();
+    clear_streamlib_home();
 }
 
 #[test]
@@ -838,7 +838,7 @@ fn warn_and_error_never_stripped() {
 fn burst_surfaces_dropped_counter_record() {
     reset_for_test();
     let tmp = TempDir::new().unwrap();
-    set_xdg_state_home(&tmp);
+    set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RtestBurst"));
     let config = StreamlibLoggingConfig {
@@ -875,5 +875,5 @@ fn burst_surfaces_dropped_counter_record() {
         "expected at least one synthetic dropped=N record in the JSONL"
     );
 
-    clear_xdg_state_home();
+    clear_streamlib_home();
 }

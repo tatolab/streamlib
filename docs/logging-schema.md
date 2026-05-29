@@ -2,7 +2,7 @@
 
 This is the **durable interface contract** for logs emitted by the
 StreamLib runtime. Every line in
-`$XDG_STATE_HOME/streamlib/logs/<runtime_id>-<started_at>.jsonl` is one
+`<STREAMLIB_HOME>/.streamlib/logs/<runtime_id>-<started_at>.jsonl` is one
 serialized [`RuntimeLogEvent`][rs]. Downstream consumers — `streamlib-cli
 logs`, polyglot SDKs, the future orchestrator — depend on this shape.
 

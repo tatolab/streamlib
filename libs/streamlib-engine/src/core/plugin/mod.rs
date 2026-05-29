@@ -3,8 +3,7 @@
 
 //! Plugin ABI bridging.
 //!
-//! Rust plugin cdylibs loaded via `Runner::add_module` (or the
-//! standalone `streamlib-runtime` binary's `--plugin` flag)
+//! Rust plugin cdylibs loaded via `Runner::add_module`
 //! statically embed their entire transitive
 //! dep tree. Without bridging, every process-wide static the engine
 //! relies on (tracing dispatch, [`PUBSUB`], the schema registry,

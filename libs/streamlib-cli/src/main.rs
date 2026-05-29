@@ -88,37 +88,6 @@ enum Commands {
         since: Option<String>,
     },
 
-    /// Run the StreamLib runtime
-    Run {
-        /// Pipeline graph snapshot to load (JSON)
-        #[arg(value_name = "SNAPSHOT")]
-        snapshot: Option<PathBuf>,
-
-        /// Runtime name (auto-generated if not specified)
-        #[arg(long)]
-        name: Option<String>,
-
-        /// Port for the API server (default: 9000)
-        #[arg(short, long, default_value = "9000")]
-        port: u16,
-
-        /// Host address to bind to (default: 127.0.0.1)
-        #[arg(long, default_value = "127.0.0.1")]
-        host: String,
-
-        /// Plugin libraries to load (can be specified multiple times)
-        #[arg(long = "plugin", value_name = "PATH")]
-        plugins: Vec<PathBuf>,
-
-        /// Directory containing plugin libraries
-        #[arg(long = "plugin-dir", value_name = "DIR")]
-        plugin_dir: Option<PathBuf>,
-
-        /// Run as a background daemon
-        #[arg(short = 'd', long)]
-        daemon: bool,
-    },
-
     /// Setup commands
     Setup {
         #[command(subcommand)]
@@ -257,17 +226,6 @@ async fn async_main(cli: Cli) -> Result<()> {
                 since: since.as_deref(),
             })
             .await?
-        }
-        Some(Commands::Run {
-            snapshot,
-            name,
-            port,
-            host,
-            plugins,
-            plugin_dir,
-            daemon,
-        }) => {
-            commands::serve::run(host, port, snapshot, plugins, plugin_dir, name, daemon)?;
         }
         Some(Commands::Setup { action }) => match action {
             SetupCommands::Shell { shell } => commands::setup::shell(shell.as_deref())?,

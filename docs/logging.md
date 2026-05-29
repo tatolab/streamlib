@@ -13,7 +13,8 @@ keep everyone on the same path.
 | Deno SDK    | `streamlib.log.{trace,debug,info,warn,error}(message, attrs)`   |
 
 Both polyglot SDKs and the Rust host subscribe produce the same unified JSONL
-stream on disk (`~/.streamlib/logs/<runtime>.log`) and mirror to stdout. The
+stream on disk (`<STREAMLIB_HOME>/.streamlib/logs/<runtime_id>-<started_at>.jsonl`)
+and mirror to stdout. The
 subprocess-side interceptors capture anything that slips through
 (`print()`, `console.log`, raw writes to fd1/fd2) and tag it
 `intercepted=true`. The host handler (escalate IPC `{op:"log"}`) forwards

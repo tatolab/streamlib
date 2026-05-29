@@ -178,7 +178,7 @@ impl Runner {
             tokio_runtime_variant.handle(),
         );
 
-        // Load .env file (dev-setup.sh-style overrides: RUST_LOG, etc.)
+        // Load a local .env if present (RUST_LOG and other dev overrides).
         let _ = dotenvy::dotenv();
 
         // Generate runtime ID first — used as service_name for telemetry.
@@ -187,7 +187,7 @@ impl Runner {
         // Stand up the runtime's unified logging pathway: `tracing` →
         // bounded lossy channel → drain worker → line-buffered pretty
         // stdout + batched JSONL file at
-        // `$XDG_STATE_HOME/streamlib/logs/<runtime_id>-<started_at>.jsonl`.
+        // `<STREAMLIB_HOME>/.streamlib/logs/<runtime_id>-<started_at>.jsonl`.
         // See `docs/logging-schema.md` for the schema (the durable
         // interface contract) and `streamlib::sdk::logging` for the
         // implementation.
@@ -345,8 +345,8 @@ impl Runner {
     }
 
     /// This runtime's iceoryx2 node. Exposed so external loaders
-    /// (`streamlib-runtime`'s `--plugin` flag, embedding apps that
-    /// `dlopen` a cdylib outside `add_module`) can hand it to
+    /// (embedding apps that `dlopen` a cdylib outside `add_module`)
+    /// can hand it to
     /// [`crate::core::plugin::host_services::runtime_facing::host_services_for_self`]
     /// when assembling the `HostServices` payload for a plugin
     /// register callback.
