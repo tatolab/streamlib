@@ -136,110 +136,152 @@ impl streamlib::sdk::processors::ManualProcessor for LinuxDisplayProcessor::Proc
             .spawn(move || {
                 tracing::debug!("Display {}: Render thread started", window_id);
 
-                let event_loop = match {
-                    use winit::platform::x11::EventLoopBuilderExtX11;
-                    EventLoop::builder().with_any_thread(true).build()
-                } {
-                    Ok(el) => el,
-                    Err(e) => {
-                        tracing::error!(
-                            "Display {}: Failed to create event loop: {}",
-                            window_id,
-                            e
-                        );
-                        return;
-                    }
-                };
-
-                event_loop_proxy.set(event_loop.create_proxy()).ok();
-
+                // Headless degradation seam. A graph may include a display
+                // processor on a box with no display server (a headless
+                // drone, a CI container). Rather than failing, the display
+                // degrades to a drain: it keeps consuming its wired input
+                // and discards every frame, presenting nothing, so the same
+                // graph runs unchanged on a desktop and a headless host.
+                //
+                // `STREAMLIB_DISPLAY_FORCE_HEADLESS=1` forces this path even
+                // when a display IS available — a test hook and an ops
+                // override for containers that should never open a window.
+                let force_headless = std::env::var("STREAMLIB_DISPLAY_FORCE_HEADLESS")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false);
                 let frame_limit = std::env::var("STREAMLIB_DISPLAY_FRAME_LIMIT")
                     .ok()
                     .and_then(|s| s.parse::<u64>().ok());
-                let png_sample_dir = std::env::var("STREAMLIB_DISPLAY_PNG_SAMPLE_DIR")
-                    .ok()
-                    .map(std::path::PathBuf::from);
-                let png_sample_every = std::env::var("STREAMLIB_DISPLAY_PNG_SAMPLE_EVERY")
-                    .ok()
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .unwrap_or(30);
-                // Test-only: when set, the render closure deliberately
-                // returns `Err` at the given frame counter, exercising
-                // `VulkanPresentTarget`'s error-path drain (consumes the
-                // `image_available_semaphore` so the next slot reuse
-                // doesn't trip `VUID-vkQueueSubmit2-semaphore-03868`).
-                // Run with `VK_LOADER_LAYERS_ENABLE=*validation*` to
-                // surface any drain bug as a VUID at the next acquire.
-                let inject_error_at_frame =
-                    std::env::var("STREAMLIB_DISPLAY_INJECT_ERROR_AT_FRAME")
-                        .ok()
-                        .and_then(|s| s.parse::<u64>().ok());
 
-                if let Some(ref dir) = png_sample_dir {
-                    if let Err(e) = std::fs::create_dir_all(dir) {
-                        tracing::warn!(
-                            "Display {}: failed to create PNG sample dir {:?}: {}",
-                            window_id, dir, e
-                        );
-                    } else {
-                        tracing::info!(
-                            "Display {}: PNG sampling enabled — saving every {} frames to {:?}",
-                            window_id, png_sample_every, dir
-                        );
-                    }
-                }
-                if let Some(limit) = frame_limit {
-                    tracing::info!(
-                        "Display {}: frame limit enabled — will exit after {} frames",
-                        window_id, limit
+                let event_loop = if force_headless {
+                    tracing::warn!(
+                        "Display {}: STREAMLIB_DISPLAY_FORCE_HEADLESS set — entering headless drain mode",
+                        window_id
                     );
-                }
-
-                let mut app = DisplayEventLoopHandler {
-                    window: None,
-                    vulkan_device,
-                    gpu_context,
-                    inputs,
-                    running,
-                    frame_counter,
-                    window_id,
-                    width,
-                    height,
-                    window_title,
-                    vsync,
-                    scaling_mode,
-                    present_target: None,
-                    graphics_kernel: None,
-                    current_frame_color_info: None,
-                    frame_limit,
-                    png_sample_dir,
-                    png_sample_every,
-                    png_samples_saved: 0,
-                    png_texture_readback: None,
-                    inject_error_at_frame,
+                    None
+                } else {
+                    match {
+                        use winit::platform::x11::EventLoopBuilderExtX11;
+                        EventLoop::builder().with_any_thread(true).build()
+                    } {
+                        Ok(el) => Some(el),
+                        Err(e) => {
+                            // No display server (no X11/Wayland) — the common
+                            // headless case. Degrade to a drain, don't die.
+                            tracing::warn!(
+                                "Display {}: no display server available ({}) — degrading to headless drain mode",
+                                window_id,
+                                e
+                            );
+                            None
+                        }
+                    }
                 };
 
-                if let Err(e) = event_loop.run_app(&mut app) {
-                    tracing::error!("Display {}: Event loop error: {}", window_id, e);
+                match event_loop {
+                    None => {
+                        run_headless_drain_loop(
+                            &inputs,
+                            &running,
+                            &frame_counter,
+                            frame_limit,
+                            window_id,
+                        );
+                    }
+                    Some(event_loop) => {
+                        event_loop_proxy.set(event_loop.create_proxy()).ok();
+
+                        let png_sample_dir = std::env::var("STREAMLIB_DISPLAY_PNG_SAMPLE_DIR")
+                            .ok()
+                            .map(std::path::PathBuf::from);
+                        let png_sample_every = std::env::var("STREAMLIB_DISPLAY_PNG_SAMPLE_EVERY")
+                            .ok()
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .unwrap_or(30);
+                        // Test-only: when set, the render closure deliberately
+                        // returns `Err` at the given frame counter, exercising
+                        // `VulkanPresentTarget`'s error-path drain (consumes the
+                        // `image_available_semaphore` so the next slot reuse
+                        // doesn't trip `VUID-vkQueueSubmit2-semaphore-03868`).
+                        // Run with `VK_LOADER_LAYERS_ENABLE=*validation*` to
+                        // surface any drain bug as a VUID at the next acquire.
+                        let inject_error_at_frame =
+                            std::env::var("STREAMLIB_DISPLAY_INJECT_ERROR_AT_FRAME")
+                                .ok()
+                                .and_then(|s| s.parse::<u64>().ok());
+
+                        if let Some(ref dir) = png_sample_dir {
+                            if let Err(e) = std::fs::create_dir_all(dir) {
+                                tracing::warn!(
+                                    "Display {}: failed to create PNG sample dir {:?}: {}",
+                                    window_id, dir, e
+                                );
+                            } else {
+                                tracing::info!(
+                                    "Display {}: PNG sampling enabled — saving every {} frames to {:?}",
+                                    window_id, png_sample_every, dir
+                                );
+                            }
+                        }
+                        if let Some(limit) = frame_limit {
+                            tracing::info!(
+                                "Display {}: frame limit enabled — will exit after {} frames",
+                                window_id, limit
+                            );
+                        }
+
+                        let mut app = DisplayEventLoopHandler {
+                            window: None,
+                            vulkan_device,
+                            gpu_context,
+                            inputs,
+                            running,
+                            frame_counter,
+                            window_id,
+                            width,
+                            height,
+                            window_title,
+                            vsync,
+                            scaling_mode,
+                            present_target: None,
+                            graphics_kernel: None,
+                            current_frame_color_info: None,
+                            inactive: false,
+                            frame_limit,
+                            png_sample_dir,
+                            png_sample_every,
+                            png_samples_saved: 0,
+                            png_texture_readback: None,
+                            inject_error_at_frame,
+                        };
+
+                        if let Err(e) = event_loop.run_app(&mut app) {
+                            tracing::error!("Display {}: Event loop error: {}", window_id, e);
+                        }
+
+                        // Present target + kernel drop in reverse construction
+                        // order via App field destruction; both clean up their
+                        // GPU resources.
+                        drop(app);
+                    }
                 }
 
-                // If the loop exited on its own (frame_limit, close, error),
-                // publish RuntimeShutdown so the runtime stops. Skip when stop()
-                // triggered the exit — the runtime is already tearing down.
+                // If the render thread exited on its own (frame_limit, window
+                // close, error, or a headless drain reaching its frame limit),
+                // publish RuntimeShutdown so the runtime stops. Skip when
+                // stop() triggered the exit — the runtime is already tearing
+                // down. A headless drain with no frame limit only reaches here
+                // via stop(), so it won't spuriously shut the runtime down.
                 if !stop_called.load(Ordering::Acquire) {
                     use streamlib::sdk::pubsub::{Event, RuntimeEvent, PUBSUB};
                     tracing::info!(
-                        "Display {}: Event loop exited, requesting runtime shutdown",
+                        "Display {}: render thread exited, requesting runtime shutdown",
                         window_id
                     );
                     let shutdown_event =
                         Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown);
                     PUBSUB.publish(&shutdown_event.topic(), &shutdown_event);
                 }
-
-                // Present target + kernel drop in reverse construction order via
-                // App field destruction; both clean up their GPU resources.
-                drop(app);
 
                 tracing::debug!("Display {}: Render thread exiting", window_id);
             })
@@ -323,6 +365,11 @@ struct DisplayEventLoopHandler {
     /// covers both "no frame seen yet" and "every frame so far has had
     /// `color_info: None`" — both stay on the legacy SDR pick.
     current_frame_color_info: Option<crate::_generated_::ColorInfo>,
+    /// Set when no display surface could be created (window or
+    /// `VulkanPresentTarget` creation failed) even though the event loop
+    /// built. The handler keeps running purely to drain its input —
+    /// every tick reads and discards queued frames, presents nothing.
+    inactive: bool,
     frame_limit: Option<u64>,
     png_sample_dir: Option<std::path::PathBuf>,
     png_sample_every: u64,
@@ -347,12 +394,16 @@ impl ApplicationHandler for DisplayEventLoopHandler {
         let window = match event_loop.create_window(attrs) {
             Ok(w) => w,
             Err(e) => {
-                tracing::error!(
-                    "Display {}: Failed to create window: {}",
+                // No display surface — degrade to a drain rather than tear
+                // the runtime down. `about_to_wait` keeps reading and
+                // discarding frames; the event loop stays alive without a
+                // window.
+                tracing::warn!(
+                    "Display {}: no display surface (window creation failed: {}) — degrading to headless drain mode",
                     self.window_id,
                     e
                 );
-                event_loop.exit();
+                self.inactive = true;
                 return;
             }
         };
@@ -371,12 +422,17 @@ impl ApplicationHandler for DisplayEventLoopHandler {
         ) {
             Ok(pt) => pt,
             Err(e) => {
-                tracing::error!(
-                    "Display {}: Failed to construct VulkanPresentTarget: {}",
+                // `VulkanPresentTarget::new` surfaces a missing surface as
+                // `Error::DisplaySurfaceUnavailable`; any other failure is
+                // an unexpected GPU error. Either way the display degrades
+                // to a drain rather than crashing the runtime — the window
+                // local drops here, closing it.
+                tracing::warn!(
+                    "Display {}: no display surface (present target: {}) — degrading to headless drain mode",
                     self.window_id,
                     e
                 );
-                event_loop.exit();
+                self.inactive = true;
                 return;
             }
         };
@@ -385,12 +441,16 @@ impl ApplicationHandler for DisplayEventLoopHandler {
         let kernel = match build_display_kernel(&self.vulkan_device, color_format) {
             Ok(k) => Arc::new(k),
             Err(e) => {
+                // Surface succeeded but the blit pipeline didn't — an
+                // unexpected GPU failure, not a benign headless box. Still
+                // degrade to a drain rather than taking the runtime down;
+                // the present target + window locals drop here.
                 tracing::error!(
-                    "Display {}: Failed to construct display graphics kernel: {}",
+                    "Display {}: failed to construct display graphics kernel ({}) — degrading to headless drain mode",
                     self.window_id,
                     e
                 );
-                event_loop.exit();
+                self.inactive = true;
                 return;
             }
         };
@@ -481,6 +541,22 @@ impl ApplicationHandler for DisplayEventLoopHandler {
                 event_loop.exit();
                 return;
             }
+        }
+
+        // Degraded path: a surface couldn't be created, so there's no
+        // window to present into. Keep draining the input every tick and
+        // discard the frames — the display behaves as a sink so upstream
+        // sees a live consumer. `frame_counter` advances per drained frame
+        // so a configured frame limit still self-terminates the run.
+        if self.inactive {
+            let drained = drain_and_discard_video(&self.inputs);
+            if drained > 0 {
+                self.frame_counter.fetch_add(drained, Ordering::Relaxed);
+            }
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+                Instant::now() + Duration::from_millis(2),
+            ));
+            return;
         }
 
         if let Some(ref window) = self.window {
@@ -887,6 +963,59 @@ impl DisplayEventLoopHandler {
     }
 }
 
+/// Drain and discard every queued frame on the display's `"video"`
+/// input, returning the number drained. Used by the headless / inactive
+/// degradation path: the display still owns a wired input it must
+/// consume, but produces no presentation. `read_raw` pulls pending
+/// iceoryx2 samples into the mailbox and pops it (no msgpack decode);
+/// for the `video` port's `SkipToLatest` read mode one call empties the
+/// buffer, but the loop keeps the helper correct for any read mode.
+fn drain_and_discard_video(inputs: &streamlib::sdk::iceoryx2::InputMailboxes) -> u64 {
+    let mut drained = 0u64;
+    while let Ok(Some(_)) = inputs.read_raw("video") {
+        drained += 1;
+    }
+    drained
+}
+
+/// Headless drain loop — runs in place of the winit event loop when no
+/// display server is available (or `STREAMLIB_DISPLAY_FORCE_HEADLESS` is
+/// set). Reads and discards frames every tick so the display behaves as
+/// a live sink, and honors `frame_limit` so automated runs still
+/// self-terminate. With no frame limit it runs until `stop()` clears
+/// `running`. The fixed ~2 ms tick bounds the wasted work while staying
+/// responsive to `stop()` (which waits up to 2 s for this thread).
+fn run_headless_drain_loop(
+    inputs: &streamlib::sdk::iceoryx2::InputMailboxes,
+    running: &Arc<AtomicBool>,
+    frame_counter: &Arc<AtomicU64>,
+    frame_limit: Option<u64>,
+    window_id: u64,
+) {
+    tracing::info!(
+        "Display {}: headless drain mode active — reading and discarding frames, presenting nothing",
+        window_id
+    );
+    while running.load(Ordering::Acquire) {
+        if let Some(limit) = frame_limit {
+            if frame_counter.load(Ordering::Relaxed) >= limit {
+                tracing::info!(
+                    "Display {}: frame limit ({}) reached in headless mode — exiting",
+                    window_id, limit
+                );
+                running.store(false, Ordering::Release);
+                break;
+            }
+        }
+        let drained = drain_and_discard_video(inputs);
+        if drained > 0 {
+            frame_counter.fetch_add(drained, Ordering::Relaxed);
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    tracing::debug!("Display {}: headless drain loop exiting", window_id);
+}
+
 /// Project this package's `_generated_::ColorInfo` into the engine's
 /// [`ColorTraits`] pair. Engine accepts only its own primitive types in
 /// public method signatures, so each consumer translates its own
@@ -1157,5 +1286,84 @@ mod tests {
         let out = maybe_swizzle_bgra_to_rgba(TextureFormat::Rgba8Unorm, &bgra_bytes);
         assert_eq!(&*out, &bgra_bytes);
         assert_ne!(&*out, &[0x00, 0x00, 0xFF, 0xFF]);
+    }
+
+    // --- headless drain-and-drop (#1104) ---
+
+    use super::drain_and_discard_video;
+    use std::sync::Arc;
+    use streamlib::sdk::iceoryx2::{
+        FrameHeader, InputMailboxes, InputMailboxesInner, ReadMode, SchemaIdentWire,
+        FRAME_HEADER_SIZE,
+    };
+
+    /// Build a minimal valid framed payload for the given port — header +
+    /// 4-byte body — routed directly into a mailbox (bypasses iceoryx2).
+    /// The drain path never deserializes the body, so its content is
+    /// arbitrary.
+    fn make_video_frame(port: &str) -> Vec<u8> {
+        let schema =
+            SchemaIdentWire::from_segments("tatolab", "test", "HeadlessDrain", 1, 0, 0)
+                .expect("schema ident");
+        let mut buf = vec![0u8; FRAME_HEADER_SIZE + 4];
+        let header = FrameHeader::new(port, schema, 0, 4);
+        header.write_to_slice(&mut buf);
+        buf[FRAME_HEADER_SIZE..].copy_from_slice(&[1, 2, 3, 4]);
+        buf
+    }
+
+    /// The drain helper must pop EVERY queued frame and leave the input
+    /// empty. With `ReadNextInOrder` the per-frame count is exact, so a
+    /// reverted helper that read only once would return 1 (not 3) and
+    /// leave the mailbox non-empty — both asserts would fail.
+    #[test]
+    fn drain_discards_all_queued_video_frames() {
+        let inner = InputMailboxesInner::new();
+        inner.add_port("video", 64, ReadMode::ReadNextInOrder);
+        for _ in 0..3 {
+            assert!(inner.route(make_video_frame("video")));
+        }
+        let inputs = InputMailboxes::from_inner_arc(Arc::new(inner));
+
+        assert!(inputs.has_data("video"), "three frames queued before drain");
+        let drained = drain_and_discard_video(&inputs);
+        assert_eq!(drained, 3, "FIFO drain must pop every queued frame");
+        assert!(
+            !inputs.has_data("video"),
+            "input must be empty after draining"
+        );
+        assert_eq!(
+            drain_and_discard_video(&inputs),
+            0,
+            "a second drain on the now-empty input yields nothing"
+        );
+    }
+
+    /// `SkipToLatest` (the display's actual read mode) collapses the
+    /// buffer to the newest frame on a single pop, but the helper must
+    /// still report at least one drained and leave the input empty.
+    #[test]
+    fn drain_empties_skip_to_latest_input() {
+        let inner = InputMailboxesInner::new();
+        inner.add_port("video", 4, ReadMode::SkipToLatest);
+        for _ in 0..3 {
+            assert!(inner.route(make_video_frame("video")));
+        }
+        let inputs = InputMailboxes::from_inner_arc(Arc::new(inner));
+
+        let drained = drain_and_discard_video(&inputs);
+        assert!(drained >= 1, "skip-to-latest yields at least the newest frame");
+        assert!(!inputs.has_data("video"), "input must be empty after draining");
+    }
+
+    /// Draining an empty input is a clean no-op returning zero — locks
+    /// that the `while let Ok(Some(_))` loop terminates on `Ok(None)`
+    /// rather than spinning.
+    #[test]
+    fn drain_on_empty_input_returns_zero() {
+        let inner = InputMailboxesInner::new();
+        inner.add_port("video", 4, ReadMode::SkipToLatest);
+        let inputs = InputMailboxes::from_inner_arc(Arc::new(inner));
+        assert_eq!(drain_and_discard_video(&inputs), 0);
     }
 }
