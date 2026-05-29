@@ -16,7 +16,7 @@
 //! - DELETE /api/connections/:id - Remove a connection
 //! - WS /ws/events - WebSocket event stream
 //!
-//! Run prerequisite: `cargo xtask build-plugins --package @tatolab/api-server`
+//! Packages build automatically on `cargo run` via the build orchestrator.
 //! so the runtime can find the staged cdylib at
 //! `target/streamlib-plugins/tatolab__api-server/`.
 //!
@@ -31,17 +31,18 @@
 use streamlib::sdk::module_ident;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::schema_ident;
 
 #[tokio::main]
 async fn main() -> streamlib::sdk::error::Result<()> {
-    let runtime = Runner::new()?;
+    let runtime = Runner::with_auto_build()?;
 
     // Imperative module load — the runtime resolves the ident
-    // against the workspace stage dir or installed-package cache,
+    // from its package source (built on demand by the orchestrator),
     // verifies the semver range, then drives the internal
     // module-loading machinery.
-    runtime.add_module(module_ident!("tatolab", "api-server", "^1.0.0"))?;
+    runtime.add_module_with(module_ident!("tatolab", "api-server", "^1.0.0"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/api-server"), build: streamlib::sdk::runtime::BuildPolicy::IfStale }).await?;
 
     let config = serde_json::json!({
         "host": "127.0.0.1",

@@ -9,8 +9,7 @@
 //! its processors via structured `schema_ident!` + JSON config +
 //! string-named ports.
 //!
-//! Run prerequisite: `cargo xtask build-plugins --package @tatolab/audio`
-//! (or `cargo xtask build-plugins` with no filter) so the runtime can
+//! Packages build automatically on `cargo run` via the build orchestrator.
 //! find the staged cdylib at `target/streamlib-plugins/tatolab__audio/`.
 
 use streamlib::sdk::error::Result;
@@ -18,18 +17,19 @@ use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
     println!("\n🎵 Audio Mixer Demo - Mixing Multiple Tones\n");
 
     println!("🎛️  Creating audio runtime...");
-    let runtime = Runner::new()?;
+    let runtime = Runner::with_auto_build()?;
 
     // 1) Load @tatolab/audio (and any deps it walks via patch:) from
-    //    the workspace-staged location. `cargo xtask build-plugins`
-    //    must have run first.
-    runtime.add_module(module_ident_any_version!("tatolab", "audio"))?;
+    //    the package source. `the build orchestrator`
+    //   .
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "audio"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/audio"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
     println!("+ @tatolab/audio loaded from target/streamlib-plugins/\n");
 
     // 2) Chord generator — addressed by structured schema_ident,

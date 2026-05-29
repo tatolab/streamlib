@@ -1,0 +1,28 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-build-orchestrator"
+description = "Default polyglot BuildOrchestrator impl — runtime materialization of source packages into the streamlib package cache. Assembles the same complete artifact `streamlib pack` produces (via streamlib-pack) and stages it as an extracted directory, identical to extracting a .slpkg / installing from GitHub. Depends on streamlib-engine for the BuildOrchestrator trait."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+tracing = { workspace = true }
+serde_json = { workspace = true }
+streamlib-engine = { path = "../streamlib-engine" }
+streamlib-cargo-build = { path = "../streamlib-cargo-build" }
+streamlib-pack = { path = "../streamlib-pack" }
+streamlib-plugin-abi = { path = "../streamlib-plugin-abi" }
+
+[dev-dependencies]
+tempfile = "3.14"
+serial_test = "3.2"
+streamlib-idents = { path = "../streamlib-idents" }
+
+[lints]
+workspace = true

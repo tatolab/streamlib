@@ -17,7 +17,14 @@ name = "streamlib"
 crate-type = ["rlib"]
 
 [features]
-default = []
+# `auto-build` is on by default: it pulls in `PolyglotBuildOrchestrator`
+# so build-requiring module loads (`Strategy::Path`/`Git` +
+# `IfStale`/`AlwaysBuild`) can materialize from source at runtime — the
+# dev / runtime-authoring posture. A frozen `.slpkg`-only deployment
+# builds with `--no-default-features`, which physically excludes the
+# build tooling from the dependency graph (provably compiler-free).
+default = ["auto-build"]
+auto-build = ["dep:streamlib-build-orchestrator"]
 # Forwarded engine features. Customer apps that need a non-default engine
 # configuration enable the matching SDK feature; the SDK forwards it to
 # the engine dep.
@@ -28,3 +35,4 @@ hardware-tests = ["streamlib-engine/hardware-tests"]
 
 [dependencies]
 streamlib-engine = { path = "../streamlib-engine" }
+streamlib-build-orchestrator = { path = "../streamlib-build-orchestrator", optional = true }

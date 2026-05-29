@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Cargo-build orchestration helpers used by `streamlib pack` and
-//! `cargo xtask build-plugins`.
+//! `streamlib-build-orchestrator`.
 //!
 //! The two callers need the same battle-tested cdylib-discovery /
 //! target-triple-staging logic — host target triple probe, dylib
@@ -24,7 +24,7 @@ pub use streamlib_processor_schema::{ProcessorLanguage, ProjectConfigMinimal};
 /// `streamlib-engine`'s `core::runtime::host_target_triple()` carries
 /// the same value via its own `build.rs`. The duplication is
 /// deliberate: this crate intentionally has zero engine deps so
-/// `cargo xtask build-plugins` can pull it in without dragging the
+/// `streamlib-build-orchestrator` can pull it in without dragging the
 /// full RHI / IPC / runtime layers. Both copies read the same cargo
 /// `TARGET` env var at compile time and therefore agree by
 /// construction.
@@ -98,7 +98,7 @@ pub fn read_cargo_package_name(package_dir: &Path) -> Result<String> {
 ///
 /// `Release` is the production-distribution shape (`streamlib pack`
 /// uses it). `Dev` skips optimization for a faster inner loop
-/// (`cargo xtask build-plugins` defaults to it).
+/// (`streamlib-build-orchestrator` defaults to it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CargoProfile {
     Dev,
@@ -279,7 +279,7 @@ pub fn read_minimal_project_config(package_dir: &Path) -> Result<Option<ProjectC
 }
 
 /// Whether a parsed manifest declares at least one Rust runtime
-/// processor — the predicate `cargo xtask build-plugins` uses to
+/// processor — the predicate `streamlib-build-orchestrator` uses to
 /// decide which packages need a `cargo build`.
 pub fn has_rust_runtime_processors(config: &ProjectConfigMinimal) -> bool {
     config
@@ -288,223 +288,22 @@ pub fn has_rust_runtime_processors(config: &ProjectConfigMinimal) -> bool {
         .any(|p| matches!(p.runtime.language, ProcessorLanguage::Rust))
 }
 
-/// Walk the immediate children of each root directory looking for
-/// `streamlib.yaml` files. Returns the parent directories that own
-/// one. Used to find `packages/<name>/`-shape packages in the
-/// workspace.
-pub fn discover_package_dirs(roots: &[&Path]) -> Result<Vec<PathBuf>> {
-    let mut found = Vec::new();
-    for root in roots {
-        if !root.is_dir() {
-            continue;
-        }
-        for entry in std::fs::read_dir(root)
-            .with_context(|| format!("Failed to read {}", root.display()))?
-        {
-            let entry = entry?;
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            if path.join("streamlib.yaml").exists() {
-                found.push(path);
-            }
-        }
-    }
-    found.sort();
-    Ok(found)
-}
 
-/// Filter `roots` to the package directories whose `streamlib.yaml`
-/// declares at least one Rust runtime processor. The set
-/// `cargo xtask build-plugins` iterates over.
-pub fn discover_rust_impl_packages(roots: &[&Path]) -> Result<Vec<PathBuf>> {
-    let mut out = Vec::new();
-    for dir in discover_package_dirs(roots)? {
-        let Some(config) = read_minimal_project_config(&dir)? else {
-            continue;
-        };
-        if has_rust_runtime_processors(&config) {
-            out.push(dir);
-        }
-    }
-    Ok(out)
-}
 
 /// Canonical staged-directory name for a package: `<org>__<name>` with
 /// no `@` literal so the path is filesystem-safe across every
 /// supported host. The corresponding wire-form id is `@<org>/<name>`.
 ///
-/// `cargo xtask build-plugins` and the runtime's
+/// `streamlib-build-orchestrator` and the runtime's
 /// `ModuleResolverStrategy::WorkspaceStaged` resolver MUST agree on
 /// this format — keep the conversion in one place.
 pub fn staged_package_dir_name(org: &str, name: &str) -> String {
     format!("{}__{}", org, name)
 }
 
-/// Stage a workspace package into `staged_root/<org>__<name>/` so the
-/// runtime's `ModuleResolverStrategy::WorkspaceStaged` resolver can
-/// find it without depending on the original `packages/` layout.
-///
-/// Copies the package's `streamlib.yaml` and `schemas/` directory into
-/// the staged dir, rewriting every `patch:` entry's path so it
-/// resolves to a sibling staged dir (`../<dep_org>__<dep_name>`)
-/// rather than the source-tree path. When `built_cdylib` is
-/// `Some(path)`, the cdylib is staged into
-/// `<staged_dir>/lib/<host_triple>/<filename>` matching the runtime's
-/// triple-keyed cdylib lookup convention. Schemas-only packages pass
-/// `None`.
-///
-/// Returns the staged package directory (absolute path).
-pub fn stage_package_for_dev_load(
-    package_dir: &Path,
-    staged_root: &Path,
-    built_cdylib: Option<&Path>,
-    host_triple: &str,
-) -> Result<PathBuf> {
-    use streamlib_idents::Manifest;
-    use streamlib_processor_schema::StreamlibYaml;
 
-    let manifest_path = package_dir.join(Manifest::FILE_NAME);
-    let manifest_body = std::fs::read_to_string(&manifest_path)
-        .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
-    // Parse as the full `StreamlibYaml` schema (not the slimmer
-    // `streamlib_idents::Manifest`) so the `processors:` list survives
-    // the re-serialize step. Dropping that list during staging silently
-    // turns a Rust-impl package into a schemas-only one and the
-    // runtime never registers the cdylib's processors.
-    let mut manifest: StreamlibYaml = serde_yaml::from_str(&manifest_body)
-        .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
-    let package = manifest.package.as_ref().ok_or_else(|| {
-        anyhow::anyhow!(
-            "{} has no [package] section — cannot determine staged dir name",
-            manifest_path.display()
-        )
-    })?;
-    let org = package.org.as_str().to_string();
-    let name = package.name.as_str().to_string();
 
-    // Rewrite every `patch:` entry to resolve to a sibling staged dir
-    // (`../<dep_org>__<dep_name>`). Same for path-flavor `dependencies:`
-    // entries (rare but legal). Registry / git entries pass through
-    // unchanged.
-    rewrite_patches_to_staged_siblings(&mut manifest.patch);
-    rewrite_patches_to_staged_siblings(&mut manifest.dependencies);
 
-    let staged_dir = staged_root.join(staged_package_dir_name(&org, &name));
-    // Wipe the staged dir before re-staging so removed schemas / renamed
-    // patches don't linger. Hermetic regeneration is the contract — if
-    // a user clobbers files into staged_dir manually, they lose them on
-    // the next stage.
-    if staged_dir.exists() {
-        std::fs::remove_dir_all(&staged_dir).with_context(|| {
-            format!(
-                "Failed to clear stale staged dir {}",
-                staged_dir.display()
-            )
-        })?;
-    }
-    std::fs::create_dir_all(&staged_dir)
-        .with_context(|| format!("Failed to create {}", staged_dir.display()))?;
-
-    // Write the rewritten manifest into the staged dir.
-    let rewritten_yaml = serde_yaml::to_string(&manifest)
-        .with_context(|| format!("Failed to serialize rewritten {}", Manifest::FILE_NAME))?;
-    std::fs::write(staged_dir.join(Manifest::FILE_NAME), rewritten_yaml)
-        .with_context(|| format!("Failed to write staged {}", Manifest::FILE_NAME))?;
-
-    // Copy schemas/ if it exists.
-    let src_schemas = package_dir.join("schemas");
-    if src_schemas.is_dir() {
-        let dst_schemas = staged_dir.join("schemas");
-        copy_dir_recursive(&src_schemas, &dst_schemas)?;
-    }
-
-    // Stage the cdylib if provided. Schemas-only packages skip this.
-    if let Some(cdylib_src) = built_cdylib {
-        stage_built_cdylib(&staged_dir, cdylib_src, host_triple)?;
-    }
-
-    Ok(staged_dir)
-}
-
-fn rewrite_patches_to_staged_siblings(
-    entries: &mut std::collections::BTreeMap<
-        streamlib_idents::PackageRef,
-        streamlib_idents::DependencySpec,
-    >,
-) {
-    use streamlib_idents::{DependencySpec, PathDependency};
-    for (dep_ref, spec) in entries.iter_mut() {
-        if let DependencySpec::Path(_) = spec {
-            let sibling = PathBuf::from("..").join(staged_package_dir_name(
-                dep_ref.org.as_str(),
-                dep_ref.name.as_str(),
-            ));
-            *spec = DependencySpec::Path(PathDependency { path: sibling });
-        }
-    }
-}
-
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
-    std::fs::create_dir_all(dst)
-        .with_context(|| format!("Failed to create {}", dst.display()))?;
-    for entry in std::fs::read_dir(src)
-        .with_context(|| format!("Failed to read {}", src.display()))?
-    {
-        let entry = entry?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else {
-            std::fs::copy(&src_path, &dst_path).with_context(|| {
-                format!(
-                    "Failed to copy {} → {}",
-                    src_path.display(),
-                    dst_path.display()
-                )
-            })?;
-        }
-    }
-    Ok(())
-}
-
-/// Stage a freshly-built cdylib at `<package_dir>/lib/<host_triple>/<filename>`
-/// so the runtime's `Runner::add_module` flow can resolve it by the
-/// triple-keyed convention. Creates the directory as needed. Returns
-/// the staged destination path. Copies (not symlinks) so a subsequent
-/// `cargo clean` doesn't invalidate the staged artifact.
-pub fn stage_built_cdylib(
-    package_dir: &Path,
-    built_cdylib: &Path,
-    host_triple: &str,
-) -> Result<PathBuf> {
-    let triple_dir = package_dir.join("lib").join(host_triple);
-    std::fs::create_dir_all(&triple_dir).with_context(|| {
-        format!(
-            "Failed to create staging directory {}",
-            triple_dir.display()
-        )
-    })?;
-    let filename = built_cdylib
-        .file_name()
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Built cdylib path {} has no filename component",
-                built_cdylib.display()
-            )
-        })?;
-    let dest = triple_dir.join(filename);
-    std::fs::copy(built_cdylib, &dest).with_context(|| {
-        format!(
-            "Failed to stage {} to {}",
-            built_cdylib.display(),
-            dest.display()
-        )
-    })?;
-    Ok(dest)
-}
 
 #[cfg(test)]
 mod tests {
@@ -706,127 +505,8 @@ not-json-at-all
         assert_eq!(found, Some(PathBuf::from("/tmp/libgrayscale_plugin.so")));
     }
 
-    #[test]
-    fn discover_package_dirs_finds_packages_with_streamlib_yaml() {
-        // Walk pattern: each direct child of root that owns a
-        // streamlib.yaml is a package. Children without the yaml
-        // are skipped — they're unrelated source dirs (Rust crates
-        // without a manifest, README dirs, etc.).
-        let root = tempdir().unwrap();
-        let pkg_a = root.path().join("alpha");
-        let pkg_b = root.path().join("beta");
-        let not_pkg = root.path().join("readme");
-        std::fs::create_dir(&pkg_a).unwrap();
-        std::fs::create_dir(&pkg_b).unwrap();
-        std::fs::create_dir(&not_pkg).unwrap();
-        std::fs::write(pkg_a.join("streamlib.yaml"), "package:\n  name: alpha\n").unwrap();
-        std::fs::write(pkg_b.join("streamlib.yaml"), "package:\n  name: beta\n").unwrap();
-        std::fs::write(not_pkg.join("README.md"), "no manifest").unwrap();
 
-        let found = discover_package_dirs(&[root.path()]).unwrap();
-        assert_eq!(found.len(), 2, "expected 2 packages, got: {:?}", found);
-        assert!(found.iter().any(|p| p.ends_with("alpha")));
-        assert!(found.iter().any(|p| p.ends_with("beta")));
-        assert!(
-            !found.iter().any(|p| p.ends_with("readme")),
-            "discover_package_dirs must skip directories without streamlib.yaml"
-        );
-    }
 
-    #[test]
-    fn discover_rust_impl_packages_filters_by_runtime_language() {
-        // Mixed workspace: one Rust-runtime package, one Python-runtime
-        // package, one schemas-only package. Only the Rust one is
-        // returned — `cargo xtask build-plugins` doesn't build Python
-        // or schemas-only packages.
-        let root = tempdir().unwrap();
-        let rust_pkg = root.path().join("rust-pkg");
-        let py_pkg = root.path().join("py-pkg");
-        let schema_pkg = root.path().join("schema-pkg");
-        for p in [&rust_pkg, &py_pkg, &schema_pkg] {
-            std::fs::create_dir(p).unwrap();
-        }
-        std::fs::write(
-            rust_pkg.join("streamlib.yaml"),
-            r#"
-package:
-  org: tatolab
-  name: rust-pkg
-  version: 0.1.0
-processors:
-  - name: RustProc
-    version: 1.0.0
-    description: "rust"
-    runtime: rust
-    execution: manual
-    inputs: []
-    outputs: []
-"#,
-        )
-        .unwrap();
-        std::fs::write(
-            py_pkg.join("streamlib.yaml"),
-            r#"
-package:
-  org: tatolab
-  name: py-pkg
-  version: 0.1.0
-processors:
-  - name: PyProc
-    version: 1.0.0
-    description: "py"
-    runtime: python
-    execution: manual
-    entrypoint: "py_proc:PyProc"
-    inputs: []
-    outputs: []
-"#,
-        )
-        .unwrap();
-        std::fs::write(
-            schema_pkg.join("streamlib.yaml"),
-            r#"
-package:
-  org: tatolab
-  name: schema-pkg
-  version: 0.1.0
-"#,
-        )
-        .unwrap();
-
-        let found = discover_rust_impl_packages(&[root.path()]).unwrap();
-        assert_eq!(found.len(), 1, "expected only rust-pkg, got: {:?}", found);
-        assert!(found[0].ends_with("rust-pkg"));
-    }
-
-    #[test]
-    fn stage_built_cdylib_copies_into_triple_keyed_dir() {
-        // The staged path must land at
-        // `<package_dir>/lib/<host_triple>/<filename>` because that's
-        // the convention the runtime's add_module flow resolves against.
-        // Reverting the `create_dir_all` would error when the triple
-        // subdir is missing on a fresh workspace — the test covers
-        // that path by intentionally not pre-creating the destination.
-        let dir = tempdir().unwrap();
-        let built = dir.path().join("target-release-libfoo.so");
-        std::fs::write(&built, b"cdylib-bytes").unwrap();
-
-        let triple = "x86_64-unknown-linux-gnu";
-        let staged = stage_built_cdylib(dir.path(), &built, triple).unwrap();
-
-        let expected = dir
-            .path()
-            .join("lib")
-            .join(triple)
-            .join("target-release-libfoo.so");
-        assert_eq!(staged, expected);
-        assert!(expected.exists(), "staged artifact missing at {}", expected.display());
-        let staged_bytes = std::fs::read(&expected).unwrap();
-        assert_eq!(staged_bytes, b"cdylib-bytes");
-        // Source is preserved — staging copies, never moves; a
-        // subsequent `cargo clean` mustn't invalidate the staged copy.
-        assert!(built.exists(), "source artifact must remain after staging");
-    }
 
     #[test]
     fn staged_package_dir_name_uses_double_underscore_no_at_literal() {
@@ -842,213 +522,9 @@ package:
         );
     }
 
-    fn write_minimal_manifest(dir: &Path, org: &str, name: &str, body: &str) {
-        let yaml = format!(
-            "package:\n  org: {org}\n  name: {name}\n  version: 1.0.0\n{body}"
-        );
-        std::fs::write(dir.join("streamlib.yaml"), yaml).unwrap();
-    }
 
-    #[test]
-    fn stage_package_for_dev_load_schemas_only_copies_yaml_and_schemas_no_lib() {
-        // Schemas-only packages — like `@tatolab/core` — must stage
-        // cleanly without a `lib/` directory. Reverting the
-        // `if let Some(cdylib_src) = built_cdylib` gate would either
-        // panic (cdylib_src is None) or silently create an empty
-        // lib/ — both shapes are wrong and the WorkspaceStaged resolver
-        // would mis-resolve.
-        let src = tempdir().unwrap();
-        write_minimal_manifest(src.path(), "tatolab", "core", "");
-        let schemas_dir = src.path().join("schemas");
-        std::fs::create_dir(&schemas_dir).unwrap();
-        std::fs::write(
-            schemas_dir.join("video_frame.yaml"),
-            "metadata:\n  type: VideoFrame\n",
-        )
-        .unwrap();
 
-        let staged_root = tempdir().unwrap();
-        let staged = stage_package_for_dev_load(
-            src.path(),
-            staged_root.path(),
-            None, /* schemas-only */
-            "x86_64-unknown-linux-gnu",
-        )
-        .unwrap();
 
-        assert_eq!(staged, staged_root.path().join("tatolab__core"));
-        assert!(staged.join("streamlib.yaml").exists());
-        assert!(staged.join("schemas/video_frame.yaml").exists());
-        assert!(!staged.join("lib").exists(), "schemas-only stage must not create lib/");
-    }
 
-    #[test]
-    fn stage_package_for_dev_load_with_cdylib_lands_under_triple_keyed_lib() {
-        // Rust-impl packages stage both the yaml/schemas AND the cdylib
-        // (under `lib/<host_triple>/<filename>`). The staged dir is the
-        // self-contained mini-project the WorkspaceStaged resolver
-        // points at.
-        let src = tempdir().unwrap();
-        write_minimal_manifest(src.path(), "tatolab", "camera", "");
-        let cdylib = src.path().join("libstreamlib_camera.so");
-        std::fs::write(&cdylib, b"camera-cdylib-bytes").unwrap();
 
-        let staged_root = tempdir().unwrap();
-        let staged = stage_package_for_dev_load(
-            src.path(),
-            staged_root.path(),
-            Some(&cdylib),
-            "x86_64-unknown-linux-gnu",
-        )
-        .unwrap();
-
-        assert_eq!(staged, staged_root.path().join("tatolab__camera"));
-        let staged_cdylib = staged
-            .join("lib")
-            .join("x86_64-unknown-linux-gnu")
-            .join("libstreamlib_camera.so");
-        assert!(staged_cdylib.exists(), "expected staged cdylib at {}", staged_cdylib.display());
-        let bytes = std::fs::read(&staged_cdylib).unwrap();
-        assert_eq!(bytes, b"camera-cdylib-bytes");
-    }
-
-    #[test]
-    fn stage_package_for_dev_load_rewrites_patches_to_sibling_staged_dirs() {
-        // The whole point of staging is that the staged manifest's
-        // `patch:` entries resolve to sibling staged dirs, not back
-        // into the workspace source tree. Mentally reverting the
-        // rewrite step would leave `path: ../core` in the staged yaml
-        // and the WorkspaceStaged resolver would either find the wrong
-        // package (the source tree one, missing its built cdylib) or
-        // fail outright.
-        let src = tempdir().unwrap();
-        write_minimal_manifest(
-            src.path(),
-            "tatolab",
-            "camera",
-            r#"dependencies:
-  "@tatolab/core": "^1.0.0"
-patch:
-  "@tatolab/core":
-    path: ../core
-"#,
-        );
-
-        let staged_root = tempdir().unwrap();
-        let staged = stage_package_for_dev_load(
-            src.path(),
-            staged_root.path(),
-            None,
-            "x86_64-unknown-linux-gnu",
-        )
-        .unwrap();
-
-        // Re-parse the staged yaml and assert the patch path is the
-        // sibling-staged-dir form.
-        let body = std::fs::read_to_string(staged.join("streamlib.yaml")).unwrap();
-        let restaged: streamlib_idents::Manifest = serde_yaml::from_str(&body).unwrap();
-        let core_ref = restaged
-            .patch
-            .keys()
-            .find(|k| k.org.as_str() == "tatolab" && k.name.as_str() == "core")
-            .expect("patch must retain the @tatolab/core key");
-        match &restaged.patch[core_ref] {
-            streamlib_idents::DependencySpec::Path(p) => {
-                assert_eq!(
-                    p.path,
-                    PathBuf::from("..").join("tatolab__core"),
-                    "patch path must be rewritten to sibling staged dir, got: {}",
-                    p.path.display()
-                );
-            }
-            other => panic!("expected Path-flavor patch, got: {:?}", other),
-        }
-    }
-
-    #[test]
-    fn stage_package_for_dev_load_preserves_processors_and_env_lists() {
-        // Regression: staging must NOT drop the `processors:` list or
-        // any other field outside `streamlib_idents::Manifest`'s slim
-        // schema. Earlier shape parsed-and-reserialized via
-        // `streamlib_idents::Manifest` which has no `processors` field
-        // (nor `env`) — the round-trip silently turned every Rust-impl
-        // package into a schemas-only one and the runtime saw zero
-        // processors to register. Mentally reverting to parsing as
-        // Manifest would re-emit a yaml without `processors:`, and
-        // the WorkspaceStaged resolver would proceed without ever
-        // dlopening the cdylib's processor registrations, surfacing
-        // as `UnknownProcessorType` at the first `add_processor`
-        // call. Asserting on BOTH `processors` and `env` widens the
-        // regression net — any future intermediate struct that
-        // captures one but not the other would fail this test.
-        let src = tempdir().unwrap();
-        write_minimal_manifest(
-            src.path(),
-            "tatolab",
-            "demo",
-            r#"processors:
-  - name: DemoProcessor
-    version: 1.0.0
-    description: "demo"
-    runtime:
-      language: rust
-    execution: manual
-    inputs: []
-    outputs: []
-env:
-  DEMO_KEY: "demo-value"
-"#,
-        );
-
-        let staged_root = tempdir().unwrap();
-        let staged = stage_package_for_dev_load(
-            src.path(),
-            staged_root.path(),
-            None,
-            "x86_64-unknown-linux-gnu",
-        )
-        .unwrap();
-
-        let body = std::fs::read_to_string(staged.join("streamlib.yaml")).unwrap();
-        let restaged: streamlib_processor_schema::StreamlibYaml =
-            serde_yaml::from_str(&body).unwrap();
-        assert_eq!(restaged.processors.len(), 1, "processors list must round-trip");
-        assert_eq!(restaged.processors[0].name, "DemoProcessor");
-        assert_eq!(
-            restaged.env.get("DEMO_KEY").map(String::as_str),
-            Some("demo-value"),
-            "env map must round-trip"
-        );
-    }
-
-    #[test]
-    fn stage_package_for_dev_load_wipes_stale_files_on_restage() {
-        // Hermetic restaging — a file present in the previous staged
-        // dir but absent in the current source must disappear. Without
-        // the `remove_dir_all` step, removed schemas or renamed
-        // patches linger and the WorkspaceStaged resolver resolves
-        // stale content. Reverting the wipe would let stale_file
-        // survive here.
-        let src = tempdir().unwrap();
-        write_minimal_manifest(src.path(), "tatolab", "stub", "");
-        let staged_root = tempdir().unwrap();
-        let staged_dir = staged_root.path().join("tatolab__stub");
-        std::fs::create_dir(&staged_dir).unwrap();
-        std::fs::write(staged_dir.join("stale.txt"), b"residue from a prior stage").unwrap();
-
-        let staged = stage_package_for_dev_load(
-            src.path(),
-            staged_root.path(),
-            None,
-            "x86_64-unknown-linux-gnu",
-        )
-        .unwrap();
-
-        assert_eq!(staged, staged_dir);
-        assert!(
-            !staged_dir.join("stale.txt").exists(),
-            "stage must wipe stale files left over from a prior stage"
-        );
-        assert!(staged_dir.join("streamlib.yaml").exists());
-    }
 }

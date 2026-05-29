@@ -18,9 +18,9 @@
 //! All MoQ config is automatic — Cloudflare draft-14 relay, auto-generated
 //! namespace.
 //!
-//! Run prerequisite: `cargo xtask build-plugins --package @tatolab/audio
-//! --package @tatolab/camera --package @tatolab/display --package @tatolab/h264
-//! --package @tatolab/moq --package @tatolab/opus` so the runtime can resolve
+//! Packages build automatically on `cargo run` via the build orchestrator.
+//!
+//!` so the runtime can resolve
 //! each cdylib at load time.
 
 use streamlib::sdk::error::Result;
@@ -28,6 +28,7 @@ use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
@@ -39,14 +40,14 @@ fn main() -> Result<()> {
     tracing::info!("Publishing: camera (H.264) + audio (Opus) + sensor data");
     tracing::info!("Subscribing: video → display, audio → speaker, sensor → log");
 
-    let runtime = Runner::new()?;
+    let runtime = Runner::with_auto_build()?;
 
-    runtime.add_module(module_ident_any_version!("tatolab", "audio"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "camera"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "display"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "h264"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "moq"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "opus"))?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "audio"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/audio"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/camera"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "display"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/display"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h264"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/h264"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "moq"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/moq"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "opus"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/opus"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
 
     // ---- PUBLISH SIDE ----
 

@@ -6,7 +6,7 @@ edition = "2024"
 # Canonical reference for the All-Dynamic Package Loading milestone:
 # the only streamlib-* Cargo dep is `streamlib` (the SDK). The
 # `@tatolab/audio` package is loaded at runtime via
-# `Runner::add_module` against `cargo xtask build-plugins`
+# `Runner::add_module_with` against the build orchestrator
 # output — no compile-time link.
 [dependencies]
 streamlib = { path = "../../libs/streamlib-sdk" }

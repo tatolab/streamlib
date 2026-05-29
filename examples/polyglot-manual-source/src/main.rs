@@ -43,7 +43,8 @@ use streamlib::sdk::error::Error;
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
+use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::RunnerAutoBuild;
 
 const RUN_DURATION: Duration = Duration::from_secs(2);
 const INTERVAL_MS: u32 = 33;
@@ -167,14 +168,14 @@ fn run() -> Result<SinkReport> {
     println!("Tick rate:         {INTERVAL_MS}ms");
     println!("Run length:        {:?}", RUN_DURATION);
 
-    let runtime = Runner::new()?;
+    let runtime = Runner::with_auto_build()?;
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     // Stage the counting-sink plugin's cdylib into `./plugin/lib/`
     // before loading the plugin sub-package. The plugin lives in the
     // sibling `plugin/` sub-package with its own `streamlib.yaml`;
-    // `add_module_with(..., ManifestDirectory)` will look for the
+    // `add_module_with(..., Path)` will look for the
     // staged `*.so` in `plugin/lib/`. Mirrors the camera-rust-plugin
     // pattern.
     let plugin_dir = manifest_dir.join("plugin");
@@ -184,23 +185,17 @@ fn run() -> Result<SinkReport> {
     // explicit add_module_with calls. The runner picks which polyglot
     // processor to instantiate via `schema_ident_any_version!` based
     // on `--runtime`.
-    runtime.add_module_with(
+    runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-manual-source-counting-sink"),
-        ModuleResolverStrategy::ManifestDirectory {
-            path: plugin_dir.clone(),
-        },
+        Strategy::Path { path: plugin_dir.clone(), build: BuildPolicy::IfStale },
     )?;
-    runtime.add_module_with(
+    runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-manual-source"),
-        ModuleResolverStrategy::ManifestDirectory {
-            path: manifest_dir.join("python"),
-        },
+        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::IfStale },
     )?;
-    runtime.add_module_with(
+    runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-manual-source-deno"),
-        ModuleResolverStrategy::ManifestDirectory {
-            path: manifest_dir.join("deno"),
-        },
+        Strategy::Path { path: manifest_dir.join("deno"), build: BuildPolicy::IfStale },
     )?;
 
     // 3. Add processors.
@@ -245,7 +240,7 @@ fn run() -> Result<SinkReport> {
 
 /// Locate the built plugin cdylib in the workspace target dir and copy
 /// it under `plugin/lib/` so the plugin sub-package's
-/// `add_module_with(..., ManifestDirectory)` load finds it. Mirrors
+/// `add_module_with(..., Path)` load finds it. Mirrors
 /// the `camera-rust-plugin` example.
 fn stage_plugin_dylib(plugin_dir: &std::path::Path) -> Result<()> {
     let lib_dir = plugin_dir.join("lib");

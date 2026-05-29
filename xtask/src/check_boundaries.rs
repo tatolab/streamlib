@@ -657,6 +657,11 @@ const STREAMLIB_ENGINE_ALLOWLIST: &[AllowEntry] = &[
         kind: AllowKind::ExactFile,
         rationale: "SDK facade — pub uses items from engine to expose via streamlib::*",
     },
+    AllowEntry {
+        path: "libs/streamlib-build-orchestrator/",
+        kind: AllowKind::PathPrefix,
+        rationale: "default BuildOrchestrator impl — implements the engine's BuildOrchestrator trait and calls engine package-cache APIs (get_cached_package_dir); it is engine-tier infrastructure, not consumer code, and CANNOT route through the streamlib::* SDK facade because the SDK depends on it (the auto-build feature) — that would be a dependency cycle. Direct streamlib_engine::* is unavoidable here",
+    },
 ];
 
 // ---------------------------------------------------------------------------

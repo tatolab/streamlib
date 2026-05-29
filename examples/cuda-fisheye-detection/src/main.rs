@@ -19,7 +19,7 @@
 //! `VkBuffer` flat-tensor path). The Rust runner sits at the example
 //! root and the Python processor lives in a sibling `python/`
 //! sub-package with its own `streamlib.yaml`; the runner calls
-//! `Runner::add_module_with(..., ModuleResolverStrategy::ManifestDirectory)`
+//! `Runner::add_module_with(..., Strategy::Path)`
 //! at startup to register the Python processor against its
 //! manifest directory.
 //!
@@ -48,7 +48,8 @@ use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::rhi::{StorageBuffer, Texture, TextureDescriptor, TextureFormat, VulkanLayout};
-use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
+use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib_adapter_abi::SurfaceId;
 use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostImageSurfaceRegistration};
 use streamlib_debug_utilities::BgraFileSourceProcessor;
@@ -119,7 +120,7 @@ fn main() -> Result<()> {
     println!("Timeout:     {timeout_secs}s");
     println!();
 
-    let runtime = Runner::new()?;
+    let runtime = Runner::with_auto_build()?;
 
     // Setup-hook captures keep the adapter `Arc` alive across start
     // → stop. The CUDA adapter has no per-acquire host work (no
@@ -155,11 +156,9 @@ fn main() -> Result<()> {
     // sub-package's own dependencies (`@tatolab/core` patched to
     // `../../../packages/core`).
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    runtime.add_module_with(
+    runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "cuda-fisheye-python"),
-        ModuleResolverStrategy::ManifestDirectory {
-            path: manifest_dir.join("python"),
-        },
+        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::IfStale },
     )?;
 
     // Trigger source — emits a tiny BGRA fixture frame whose contents

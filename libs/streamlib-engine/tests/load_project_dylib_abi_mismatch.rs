@@ -7,7 +7,7 @@
 //! mismatch direction (`tamper-too-low` → `abi_version = 0`;
 //! `tamper-too-high` → `abi_version = u32::MAX`), assembles a minimal
 //! project directory, calls
-//! `runtime.add_module_with(_, ModuleResolverStrategy::ManifestDirectory)`,
+//! `runtime.add_module_with_blocking(_, Strategy::ManifestDirectory)`,
 //! and asserts the returned error is `Error::Configuration` with the
 //! documented "ABI version mismatch" prefix.
 //!
@@ -29,7 +29,7 @@ use std::path::Path;
 use serial_test::serial;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::module_ident_any_version;
-use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
+use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
 use streamlib_engine::core::runtime::host_target_triple;
 
 fn copy_dir_contents(src: &Path, dst: &Path) {
@@ -122,11 +122,9 @@ fn stage_project(tmp: &Path, source_dylib: &Path) -> std::path::PathBuf {
 fn assert_abi_mismatch_rejected(project_dir: &Path) {
     let runtime = Runner::new().expect("Runner::new");
     let err: Error = runtime
-        .add_module_with(
+        .add_module_with_blocking(
             module_ident_any_version!("tatolab", "test-fixtures-abi-mismatch"),
-            ModuleResolverStrategy::ManifestDirectory {
-                path: project_dir.to_path_buf(),
-            },
+            Strategy::Path { path: project_dir.to_path_buf(), build: BuildPolicy::NeverBuild },
         )
         .expect_err("add_module_with must REJECT a tampered abi_version")
         .into();

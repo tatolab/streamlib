@@ -8,15 +8,16 @@ use crate::core::Error;
 /// [`Runner::add_module`]: super::super::Runner::add_module
 #[derive(Debug, thiserror::Error)]
 pub enum AddModuleError {
-    /// No workspace stage dir AND no installed-package cache entry
-    /// matches `@org/name`. Surface the canonical ref so callers can
-    /// suggest `streamlib pkg install`, `cargo xtask build-plugins`,
-    /// or a typo fix.
+    /// No installed-package cache entry matches `@org/name`. Bare
+    /// [`add_module`] resolves cache-only; load from source instead, or
+    /// install the package.
+    ///
+    /// [`add_module`]: super::super::Runner::add_module
     #[error(
-        "Module '{package}' not found — no workspace stage dir at \
-         `target/streamlib-plugins/<org>__<name>/` and no installed-cache \
-         entry. Run `cargo xtask build-plugins --package {package}` (dev) \
-         or `streamlib pkg install <slpkg>` (distribution)."
+        "Module '{package}' not found in the installed-package cache. \
+         Load it from source with `add_module_with(_, Strategy::Path {{ build: \
+         BuildPolicy::IfStale, .. }})` (dev / runtime-authoring), or install it \
+         with `streamlib pkg install <slpkg>` (distribution)."
     )]
     ModuleNotFound {
         package: streamlib_idents::PackageRef,
@@ -34,13 +35,13 @@ pub enum AddModuleError {
         detail: String,
     },
 
-    /// Workspace stage dir was found but its `streamlib.yaml`'s
-    /// `package: { org, name }` doesn't match the requested ident
-    /// (manual clobbering, stale rename, wrong dir).
+    /// The resolved source's `streamlib.yaml` `package: { org, name }`
+    /// doesn't match the requested ident (wrong path, stale rename,
+    /// clobbered cache).
     #[error(
         "Module '{module}' identity mismatch at {}: \
-         staged manifest declares `{actual}`. \
-         Re-run `cargo xtask build-plugins` to regenerate.",
+         the manifest declares `{actual}`. \
+         Point the strategy at the correct package source.",
         source_path.display()
     )]
     ManifestIdentityMismatch {
@@ -69,17 +70,6 @@ pub enum AddModuleError {
     #[error("Failed to load installed-package cache: {detail}")]
     InstalledCacheLoadFailed { detail: String },
 
-    /// `STREAMLIB_WORKSPACE_ROOT` was set but its value isn't a
-    /// directory. Treats the env var as the user's stated intent —
-    /// don't silently fall through to the installed cache when the
-    /// override is broken.
-    #[error(
-        "STREAMLIB_WORKSPACE_ROOT is set to `{env_value}` but that path \
-         is not a directory. Fix the env var or unset it (in which case \
-         the resolver falls through to the installed-package cache)."
-    )]
-    WorkspaceRootInvalid { env_value: String },
-
     /// The recursive dep walker (or the strategy resolver under it)
     /// rejected the resolved source path. Wraps the underlying engine
     /// [`Error`] so callers can introspect.
@@ -90,60 +80,106 @@ pub enum AddModuleError {
         source: Box<Error>,
     },
 
-    /// `Runner::add_module_with` was called with
-    /// [`ModuleResolverStrategy::WorkspaceStaged`] but no streamlib.yaml
-    /// exists at the workspace stage dir. Surface the expected path so
-    /// callers see exactly where the resolver looked.
+    /// [`Strategy::Path`] (or a path-flavored dep / patch) pointed at a
+    /// directory that does not contain a `streamlib.yaml`.
     ///
-    /// [`Runner::add_module_with`]: super::super::Runner::add_module_with
-    /// [`ModuleResolverStrategy::WorkspaceStaged`]: super::ModuleResolverStrategy::WorkspaceStaged
-    #[error(
-        "Module '{package}' not staged under target/streamlib-plugins. \
-         Expected `streamlib.yaml` at {expected_path}. \
-         Run `cargo xtask build-plugins --package {package}` first."
-    )]
-    WorkspaceStageMiss {
-        package: streamlib_idents::PackageRef,
-        expected_path: std::path::PathBuf,
-    },
-
-    /// Workspace stage dir resolution requires a workspace root but
-    /// neither `STREAMLIB_WORKSPACE_ROOT` nor `cargo locate-project`
-    /// returned one. Distinct from
-    /// [`Self::WorkspaceRootInvalid`] (set-but-broken env var).
-    #[error(
-        "Workspace root not found — set STREAMLIB_WORKSPACE_ROOT or run \
-         from within a Cargo workspace"
-    )]
-    WorkspaceRootNotFound,
-
-    /// A `Rust`-impl workspace-staged package has no cdylib at
-    /// `lib/<host_triple>/`. The staged manifest declares Rust
-    /// processors but `cargo xtask build-plugins` either was never
-    /// run or produced no artifact for this host triple.
-    #[error(
-        "Cdylib missing for Rust-impl package '{package}' — expected at \
-         {expected_path}. Re-run `cargo xtask build-plugins` to rebuild."
-    )]
-    CdylibMissingForRustImpl {
-        package: streamlib_idents::PackageRef,
-        expected_path: std::path::PathBuf,
-    },
-
-    /// [`ModuleResolverStrategy::ManifestDirectory`] pointed at a
-    /// directory that does not contain a `streamlib.yaml`. Catches
-    /// the `add_module_with(_, ManifestDirectory { path: "./does-not-exist" })`
-    /// and patch-points-at-missing-path cases at the strategy layer.
-    ///
-    /// [`ModuleResolverStrategy::ManifestDirectory`]: super::ModuleResolverStrategy::ManifestDirectory
+    /// [`Strategy::Path`]: super::Strategy::Path
     #[error("Manifest directory has no streamlib.yaml at {}", path.display())]
     ManifestDirectoryMissing { path: std::path::PathBuf },
 
-    /// Strategy was [`ModuleResolverStrategy::SlpkgArchive`] and the
-    /// extraction step failed (I/O, malformed ZIP, missing embedded
-    /// manifest, etc.).
+    /// A [`Strategy::Git`] / [`Strategy::Url`] source's git fetch failed
+    /// (network, auth, bad rev, etc.).
     ///
-    /// [`ModuleResolverStrategy::SlpkgArchive`]: super::ModuleResolverStrategy::SlpkgArchive
+    /// [`Strategy::Git`]: super::Strategy::Git
+    /// [`Strategy::Url`]: super::Strategy::Url
+    #[error("Git fetch failed for '{package}' from {url}@{rev}: {detail}")]
+    GitFetchFailed {
+        package: streamlib_idents::PackageRef,
+        url: String,
+        rev: String,
+        detail: String,
+    },
+
+    /// A [`BuildPolicy`] required a (re)build but no
+    /// [`BuildOrchestrator`] is wired on the [`Runner`]. The conservative
+    /// posture — never silently load a stale or absent artifact. Wire one
+    /// via [`Runner::new_with_orchestrator`] / [`Runner::set_build_orchestrator`],
+    /// or enable the SDK's `auto-build` feature.
+    ///
+    /// [`BuildPolicy`]: super::BuildPolicy
+    /// [`BuildOrchestrator`]: super::BuildOrchestrator
+    /// [`Runner`]: super::super::Runner
+    /// [`Runner::new_with_orchestrator`]: super::super::Runner::new_with_orchestrator
+    /// [`Runner::set_build_orchestrator`]: super::super::Runner::set_build_orchestrator
+    #[error(
+        "Module '{package}' needs a build ({policy:?}) but no BuildOrchestrator \
+         is wired. Construct the runtime via `Runner::new_with_orchestrator(...)` \
+         (or enable the SDK `auto-build` feature), or load a prebuilt artifact \
+         with a `NeverBuild` strategy / `.slpkg`."
+    )]
+    BuildRequiredButNoOrchestrator {
+        package: streamlib_idents::PackageRef,
+        policy: super::BuildPolicy,
+    },
+
+    /// The wired [`BuildOrchestrator`] failed to materialize the package.
+    ///
+    /// [`BuildOrchestrator`]: super::BuildOrchestrator
+    #[error("Build orchestrator failed to materialize '{package}': {detail}")]
+    MaterializeFailed {
+        package: streamlib_idents::PackageRef,
+        detail: String,
+    },
+
+    /// A graph-mutating call ([`Runner::add_processor`] / `connect` /
+    /// `start`) ran while one or more modules were still loading. Await
+    /// the pending loads (e.g. via [`Runner::await_modules`]) before
+    /// building the graph.
+    ///
+    /// [`Runner::add_processor`]: crate::core::runtime::RuntimeOperations::add_processor
+    /// [`Runner::await_modules`]: super::super::Runner::await_modules
+    #[error(
+        "{} module(s) still loading: {}. Await them before mutating the graph.",
+        idents.len(),
+        idents.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ")
+    )]
+    ModulesStillLoading {
+        idents: Vec<streamlib_idents::ModuleIdent>,
+    },
+
+    /// The load was cancelled (the [`AddedModule`] handle was dropped or
+    /// `cancel()`ed before it resolved).
+    ///
+    /// [`AddedModule`]: super::AddedModule
+    #[error("Module load for '{module}' was cancelled")]
+    LoadCancelled {
+        module: streamlib_idents::ModuleIdent,
+    },
+
+    /// The spawned load task panicked or was otherwise lost.
+    #[error("Module load task for '{module}' failed: {detail}")]
+    LoadTaskPanicked {
+        module: streamlib_idents::ModuleIdent,
+        detail: String,
+    },
+
+    /// [`Runner::add_module_blocking`] was called from within a tokio
+    /// runtime (external-handle mode), where blocking would deadlock /
+    /// panic. Use the async `.await` surface instead.
+    ///
+    /// [`Runner::add_module_blocking`]: super::super::Runner::add_module_blocking
+    #[error(
+        "add_module_blocking('{module}') called from inside a tokio runtime — \
+         block_on would panic. Await the AddedModule future instead."
+    )]
+    BlockingCallFromAsyncContext {
+        module: streamlib_idents::ModuleIdent,
+    },
+
+    /// Strategy was [`Strategy::Slpkg`] and the extraction step failed
+    /// (I/O, malformed ZIP, missing embedded manifest, etc.).
+    ///
+    /// [`Strategy::Slpkg`]: super::Strategy::Slpkg
     #[error(
         "Failed to extract .slpkg archive at {}: {detail}",
         archive.display()
@@ -167,23 +203,6 @@ pub enum AddModuleError {
         source_path: std::path::PathBuf,
         detail: String,
     },
-
-    /// Strategy was ident-keyed
-    /// ([`ModuleResolverStrategy::DefaultChain`] /
-    /// [`ModuleResolverStrategy::WorkspaceStaged`] /
-    /// [`ModuleResolverStrategy::InstalledCache`]) but no
-    /// [`PackageRef`] was supplied. Internal invariant — callers route
-    /// through `Runner::add_module_with` which always supplies the ref.
-    ///
-    /// [`ModuleResolverStrategy::DefaultChain`]: super::ModuleResolverStrategy::DefaultChain
-    /// [`ModuleResolverStrategy::WorkspaceStaged`]: super::ModuleResolverStrategy::WorkspaceStaged
-    /// [`ModuleResolverStrategy::InstalledCache`]: super::ModuleResolverStrategy::InstalledCache
-    /// [`PackageRef`]: streamlib_idents::PackageRef
-    #[error(
-        "Strategy '{strategy}' requires a PackageRef but none was supplied — \
-         internal invariant violation"
-    )]
-    StrategyNeedsPackageRef { strategy: String },
 
     /// A dependency cycle was detected during recursive dep walking.
     /// `cycle` lists the full recursion path — the first and last

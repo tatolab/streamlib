@@ -87,7 +87,8 @@ use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::schema_ident;
 use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::{ModuleResolverStrategy, Runner};
+use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::RunnerAutoBuild;
 
 /// Compiled SPIR-V for the triangle vertex shader.
 const TRIANGLE_VERT_SPV: &[u8] =
@@ -582,7 +583,7 @@ fn main() -> Result<()> {
     println!("Output PNG:  {}", output_png.display());
     println!();
 
-    let runtime = Runner::new()?;
+    let runtime = Runner::with_auto_build()?;
 
     let texture_slot: Arc<Mutex<Option<Texture>>> = Arc::new(Mutex::new(None));
     let produce_done_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
@@ -674,10 +675,8 @@ fn main() -> Result<()> {
     }
 
     // Load the BgraFileSource processor from `@tatolab/debug-utilities`
-    // via the default resolver chain (workspace stage → installed
-    // cache). `cargo xtask build-plugins --package @tatolab/debug-utilities`
-    // must have run first.
-    runtime.add_module(module_ident_any_version!("tatolab", "debug-utilities"))?;
+    // built on demand from source by the orchestrator.
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "debug-utilities"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/debug-utilities"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
 
     // Load the polyglot processors via explicit add_module_with calls.
     // The Python and Deno sub-packages are example-local (siblings of
@@ -687,17 +686,13 @@ fn main() -> Result<()> {
     // which one to instantiate via `schema_ident_any_version!` based
     // on `--runtime`.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    runtime.add_module_with(
+    runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-vulkan-graphics"),
-        ModuleResolverStrategy::ManifestDirectory {
-            path: manifest_dir.join("python"),
-        },
+        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::IfStale },
     )?;
-    runtime.add_module_with(
+    runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-vulkan-graphics-deno"),
-        ModuleResolverStrategy::ManifestDirectory {
-            path: manifest_dir.join("deno"),
-        },
+        Strategy::Path { path: manifest_dir.join("deno"), build: BuildPolicy::IfStale },
     )?;
 
     let fixture_path = write_trigger_fixture()

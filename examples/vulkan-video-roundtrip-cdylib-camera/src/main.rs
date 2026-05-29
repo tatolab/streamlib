@@ -4,7 +4,7 @@
 //! Vulkan Video Encode/Decode Roundtrip Pipeline — camera-as-cdylib variant.
 //!
 //! Sibling of `examples/vulkan-video-roundtrip` that loads every
-//! processor as a cdylib via `runtime.add_module(...)`.
+//! processor as a cdylib via `runtime.add_module_blocking(...)`.
 //! Exists to exercise the cdylib FFI surface (Phase E
 //! `RhiColorConverterMethodsVTable` + `RhiCommandRecorderMethodsVTable`)
 //! end-to-end through the encode → decode → display pipeline.
@@ -15,8 +15,8 @@
 //!   cargo run -p vulkan-video-roundtrip-cdylib-camera -- h264 [device] [seconds]
 //!   cargo run -p vulkan-video-roundtrip-cdylib-camera -- h265 /dev/video0 10
 //!
-//! Run prerequisite: `cargo xtask build-plugins --package @tatolab/camera
-//! --package @tatolab/display --package @tatolab/h264 --package @tatolab/h265`
+//! Packages build automatically on `cargo run` via the build orchestrator.
+//!`
 //! so the runtime can resolve each cdylib at load time.
 
 use streamlib::sdk::error::Result;
@@ -24,6 +24,7 @@ use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
@@ -40,12 +41,12 @@ fn main() -> Result<()> {
     println!("Camera:   {device} (loaded as cdylib via add_module)");
     println!("Duration: {duration_secs}s\n");
 
-    let runtime = Runner::new()?;
+    let runtime = Runner::with_auto_build()?;
 
-    runtime.add_module(module_ident_any_version!("tatolab", "camera"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "display"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "h264"))?;
-    runtime.add_module(module_ident_any_version!("tatolab", "h265"))?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/camera"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "display"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/display"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h264"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/h264"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h265"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/h265"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
     println!("+ Camera / Display / H264 / H265 loaded from target/streamlib-plugins/");
     println!("+ Wire vocabulary registered (via @tatolab/core dep walk)\n");
 
