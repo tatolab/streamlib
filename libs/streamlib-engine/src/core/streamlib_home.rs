@@ -22,13 +22,19 @@ use std::path::PathBuf;
 ///
 /// ```text
 /// <streamlib-home>/                     ← app root (install / clone)
-/// ├── packages/                         # read-only source (NOT under home's .streamlib)
+/// ├── packages/                         # read-only source (NOT under .streamlib)
 /// └── .streamlib/                       # generated working tree — get_streamlib_data_dir()
-///     ├── cache/{packages,uv,venvs,wheels}/
-///     ├── runtimes/{runtime_id}/        # per-runtime data + JSONL logs
-///     ├── resolver-cache/               # git checkouts for Strategy::Git
-///     └── packages.yaml                 # installed-packages manifest
+///     ├── cache/
+///     │   ├── packages/                 # built / extracted package artifacts
+///     │   ├── uv/                        # uv PyPI cache      (Python packages only)
+///     │   └── venvs/{sha256_hex}/        # per-dep-closure venvs (Python only)
+///     ├── resolver-cache/               # git / URL checkouts (Strategy::Git / Url)
+///     └── packages.yaml                 # installed-packages manifest (streamlib pkg install)
 /// ```
+///
+/// Each subdir is created on demand by its consumer — an all-Rust,
+/// `Strategy::Path` graph only populates `cache/packages/`. Runtime JSONL
+/// logs are NOT here; they live under `$XDG_STATE_HOME/streamlib/logs/`.
 pub fn get_streamlib_home() -> PathBuf {
     if let Ok(home) = std::env::var("STREAMLIB_HOME") {
         return PathBuf::from(home);
