@@ -1131,8 +1131,7 @@ fn emit_via_host_dispatch(
 // runtime_facing — host-side payload builder
 // =============================================================================
 
-/// Host-facing helpers used by `Runner::add_module` (and the
-/// `streamlib-runtime` binary's plugin loader) to assemble a
+/// Host-facing helpers used by `Runner::add_module` to assemble a
 /// [`HostServices`] payload pointing at this plugin's callback
 /// implementations.
 pub mod runtime_facing {

@@ -76,8 +76,6 @@ pub fn run(
     host: String,
     port: u16,
     snapshot: Option<PathBuf>,
-    plugins: Vec<PathBuf>,
-    plugin_dir: Option<PathBuf>,
     name: Option<String>,
     daemon: bool,
 ) -> Result<()> {
@@ -95,14 +93,6 @@ pub fn run(
 
     if let Some(ref path) = snapshot {
         cmd.arg("--snapshot").arg(path);
-    }
-
-    for plugin in &plugins {
-        cmd.arg("--plugin").arg(plugin);
-    }
-
-    if let Some(ref dir) = plugin_dir {
-        cmd.arg("--plugin-dir").arg(dir);
     }
 
     if daemon {

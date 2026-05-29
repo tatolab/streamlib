@@ -345,8 +345,8 @@ impl Runner {
     }
 
     /// This runtime's iceoryx2 node. Exposed so external loaders
-    /// (`streamlib-runtime`'s `--plugin` flag, embedding apps that
-    /// `dlopen` a cdylib outside `add_module`) can hand it to
+    /// (embedding apps that `dlopen` a cdylib outside `add_module`)
+    /// can hand it to
     /// [`crate::core::plugin::host_services::runtime_facing::host_services_for_self`]
     /// when assembling the `HostServices` payload for a plugin
     /// register callback.
