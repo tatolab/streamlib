@@ -57,7 +57,6 @@ pub(super) fn register_manifest_processors(
     use super::schema_registration::resolve_config_schema_canonical_id;
     use crate::core::compiler::compiler_ops::create_deno_subprocess_host_constructor;
     use crate::core::compiler::compiler_ops::create_python_native_subprocess_host_constructor;
-    use crate::core::compiler::compiler_ops::ensure_processor_venv;
     use crate::core::compiler::compiler_ops::resolve_python_native_lib_path;
     use crate::core::config::ProjectConfig;
     use crate::core::descriptors::{PortDescriptor, ProcessorRuntime};
@@ -71,24 +70,6 @@ pub(super) fn register_manifest_processors(
             project_path.display()
         );
         return Ok(());
-    }
-
-    // Eagerly create venv for Python packages so processors don't race at spawn time
-    let has_python_processors = config.processors.iter().any(|p| {
-        matches!(
-            p.runtime.language,
-            streamlib_processor_schema::ProcessorLanguage::Python
-        )
-    });
-
-    if has_python_processors {
-        let package_label = config
-            .package
-            .as_ref()
-            .map(|p| p.name.as_str())
-            .unwrap_or("unknown");
-        tracing::info!("Pre-creating Python venv for package '{}'", package_label);
-        ensure_processor_venv(package_label, project_path)?;
     }
 
     let mut registered_count = 0usize;
@@ -402,10 +383,24 @@ pub(super) fn register_manifest_processors(
         let constructor = match runtime {
             ProcessorRuntime::Python => {
                 let native_lib_path = resolve_python_native_lib_path()?;
+                // The build orchestrator provisions the package's venv at
+                // `{staged_package_dir}/.venv/bin/python` (Unix) /
+                // `.venv/Scripts/python.exe` (Windows) as the tail of
+                // `materialize`. `project_path` is that staged dir, so the
+                // interpreter is a pure path join — no venv creation here.
+                #[cfg(unix)]
+                let python_executable =
+                    project_path.join(".venv").join("bin").join("python");
+                #[cfg(windows)]
+                let python_executable = project_path
+                    .join(".venv")
+                    .join("Scripts")
+                    .join("python.exe");
                 create_python_native_subprocess_host_constructor(
                     &descriptor,
                     execution_config,
                     project_path.to_path_buf(),
+                    python_executable,
                     native_lib_path,
                 )
             }

@@ -26,8 +26,9 @@ use std::path::PathBuf;
 /// └── .streamlib/                       # generated working tree — get_streamlib_data_dir()
 ///     ├── cache/
 ///     │   ├── packages/                 # built / extracted package artifacts
-///     │   ├── uv/                        # uv PyPI cache      (Python packages only)
-///     │   └── venvs/{sha256_hex}/        # per-dep-closure venvs (Python only)
+///     │   │                             #   (each Python package carries its own
+///     │   │                             #   `.venv/`, provisioned by the orchestrator)
+///     │   └── uv/                        # uv PyPI cache      (Python packages only)
 ///     ├── logs/<runtime_id>-<ts>.jsonl  # per-runtime JSONL logs
 ///     ├── resolver-cache/               # git / URL checkouts (Strategy::Git / Url)
 ///     └── packages.yaml                 # installed-packages manifest (streamlib pkg install)
@@ -94,7 +95,6 @@ pub fn ensure_streamlib_home() -> std::io::Result<PathBuf> {
 
     std::fs::create_dir_all(data.join("cache/wheels"))?;
     std::fs::create_dir_all(data.join("cache/uv"))?;
-    std::fs::create_dir_all(data.join("cache/venvs"))?;
     std::fs::create_dir_all(data.join("cache/packages"))?;
     std::fs::create_dir_all(data.join("runtimes"))?;
 
@@ -104,11 +104,6 @@ pub fn ensure_streamlib_home() -> std::io::Result<PathBuf> {
 /// Get the path to the uv cache directory.
 pub fn get_uv_cache_dir() -> PathBuf {
     get_streamlib_data_dir().join("cache/uv")
-}
-
-/// Get the path to a hash-keyed cached venv directory.
-pub fn get_cached_venv_dir(hash: &str) -> PathBuf {
-    get_streamlib_data_dir().join("cache/venvs").join(hash)
 }
 
 /// Get the path to a cached extracted package directory.
