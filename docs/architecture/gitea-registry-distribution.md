@@ -129,11 +129,13 @@ halves, mirroring cargo:
 
 1. **Consume side:** `streamlib-idents`' resolver implements the `Registry`
    arm — list → select-highest-in-range → fetch + `extract_slpkg` → load. The
-   registry base URL threads through `ResolverOptions::registry`, falling back
-   to `STREAMLIB_REGISTRY_URL` / `GITEA_URL` so build-script codegen picks it
-   up transparently; `file://` is the hermetic local-mirror / test transport.
-   A `Registry` dep with no registry configured fails loud with
-   `RegistryNotConfigured`.
+   registry base URL is carried on `ResolverOptions::registry`; `resolve_with`
+   is pure (it never reads the process environment). The codegen boundary —
+   build scripts and `streamlib generate` — populates it via
+   `ResolverOptions::from_env`, which reads `STREAMLIB_REGISTRY_URL` /
+   `GITEA_URL` (plus optional `STREAMLIB_REGISTRY_TOKEN`); `file://` is the
+   hermetic local-mirror / test transport. A `Registry` dep with no registry
+   configured fails loud with `RegistryNotConfigured`.
 2. **Publish side:** a crate's bundled `streamlib.yaml` must be path-free so a
    registry-cached consumer hits the `Registry` arm (not a dangling
    `../../packages/...` path patch). `streamlib_pack::strip_path_patches`

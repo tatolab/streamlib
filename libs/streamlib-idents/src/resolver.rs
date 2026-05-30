@@ -127,12 +127,28 @@ pub struct ResolverOptions {
     /// `None` falls back to `$HOME/.streamlib/resolver-cache/`.
     pub cache_dir: Option<PathBuf>,
     /// Gitea generic-registry configuration for resolving `Registry` schema
-    /// dependencies. `None` falls back to [`RegistryConfig::from_env`], so a
-    /// build script using `ResolverOptions::default()` transparently picks up
-    /// `STREAMLIB_REGISTRY_URL` / `GITEA_URL` when set. When neither the
-    /// field nor the environment configures a registry, a `Registry`
-    /// dependency surfaces [`ResolverError::RegistryNotConfigured`].
+    /// dependencies. `None` means no registry is configured — a `Registry`
+    /// dependency then surfaces [`ResolverError::RegistryNotConfigured`].
+    /// [`resolve_with`] reads this field only; it never consults the process
+    /// environment. Codegen entry points (build scripts, `streamlib
+    /// generate`) populate it via [`ResolverOptions::from_env`].
     pub registry: Option<RegistryConfig>,
+}
+
+impl ResolverOptions {
+    /// Options with the registry config read from the environment
+    /// (`STREAMLIB_REGISTRY_URL` / `GITEA_URL`, optional
+    /// `STREAMLIB_REGISTRY_TOKEN`) and the default cache dir. This is the
+    /// codegen-boundary constructor — build scripts and `streamlib generate`
+    /// use it so a registry-cached crate resolves its schema deps from the
+    /// configured registry. Unit tests construct [`ResolverOptions`] directly
+    /// to stay hermetic.
+    pub fn from_env() -> Self {
+        Self {
+            cache_dir: None,
+            registry: RegistryConfig::from_env(),
+        }
+    }
 }
 
 /// Resolve a `streamlib.yaml` at `root_dir` and every transitive dependency
@@ -154,14 +170,14 @@ pub fn resolve_with(
         None => default_cache_dir()?,
     };
 
-    // Effective registry config: explicit option wins; otherwise read the
-    // environment so default callers (build scripts) pick up a configured
-    // registry. `None` means "no registry" — a `Registry` dep then fails
-    // loud with `RegistryNotConfigured`.
-    let registry = options
-        .registry
-        .clone()
-        .or_else(RegistryConfig::from_env);
+    // `resolve_with` is pure: it reads the registry config from `options`
+    // only, never from the process environment. The env read lives at the
+    // codegen boundary (`ResolverOptions::from_env`, used by build scripts
+    // and `streamlib generate`) so unit tests fully control resolution and
+    // a stray `GITEA_URL` in the shell can't redirect a resolve into a live
+    // fetch. `None` means "no registry" — a `Registry` dep then fails loud
+    // with `RegistryNotConfigured`.
+    let registry = options.registry.as_ref();
 
     let root = build_resolved_package(
         root_manifest,
@@ -217,7 +233,7 @@ pub fn resolve_with(
                 &spec,
                 &patch,
                 &cache_dir,
-                registry.as_ref(),
+                registry,
             )?;
 
             check_resolved_id_matches(&resolved, &dep_id, &consumer_dir)?;
@@ -897,9 +913,11 @@ dependencies:
 
     #[test]
     fn registry_dependency_without_config_errors() {
-        // A bare registry range with no registry configured (no option, no
-        // env) fails loud with RegistryNotConfigured — the actionable
-        // successor to the old RegistryNotImplemented.
+        // A bare registry range with `registry: None` fails loud with
+        // RegistryNotConfigured — the actionable successor to the old
+        // RegistryNotImplemented. `resolve_with` is pure (it never reads the
+        // process env), so this is deterministic regardless of any ambient
+        // STREAMLIB_REGISTRY_URL / GITEA_URL in the shell.
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("project");
         write_streamlib_yaml(
@@ -909,21 +927,15 @@ dependencies:
   "@tatolab/core": "^1.0.0"
 "#,
         );
-        // Explicit empty options + no env override. (If the ambient env sets
-        // STREAMLIB_REGISTRY_URL/GITEA_URL this would instead attempt a
-        // fetch; the CI/dev shell does not set them for unit-test runs.)
         let opts = ResolverOptions {
             cache_dir: Some(tmp.path().join("cache")),
             registry: None,
         };
-        match resolve_with(&root, &opts) {
-            Err(ResolverError::RegistryNotConfigured { .. }) => {}
-            // Tolerate an ambient registry env by accepting a fetch failure
-            // too — either way the not-implemented path is gone.
-            Err(ResolverError::RegistryFetchFailed { .. })
-            | Err(ResolverError::RegistryNoMatchingVersion { .. }) => {}
-            other => panic!("expected RegistryNotConfigured, got {other:?}"),
-        }
+        let err = resolve_with(&root, &opts).unwrap_err();
+        assert!(
+            matches!(err, ResolverError::RegistryNotConfigured { .. }),
+            "expected RegistryNotConfigured, got {err:?}"
+        );
     }
 
     /// End-to-end registry resolution over the hermetic `file://` mirror:
