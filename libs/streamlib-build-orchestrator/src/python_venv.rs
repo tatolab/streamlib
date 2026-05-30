@@ -57,7 +57,7 @@ pub fn provision_python_venv(temp_dir: &Path, package_label: &str) -> Result<(),
     // against the package's pyproject.toml is the dev-tree fallback. Both are
     // staged into `temp_dir` by `assemble_artifact` (full Python source tree,
     // wheels included).
-    let prebuilt_wheel = find_first_wheel(&temp_dir.join("python").join("wheels"))?;
+    let prebuilt_wheel = find_first_wheel(&temp_dir.join("python").join("wheels"), package_label)?;
     let pyproject_path = {
         let p = temp_dir.join("pyproject.toml");
         if p.exists() {
@@ -249,14 +249,14 @@ fn precompile_venv(
 
 /// Enumerate `*.whl` files in `wheels_dir` and return the first one
 /// (sorted), or `None` when the dir is missing or empty.
-fn find_first_wheel(wheels_dir: &Path) -> Result<Option<PathBuf>, BuildError> {
+fn find_first_wheel(wheels_dir: &Path, package_label: &str) -> Result<Option<PathBuf>, BuildError> {
     if !wheels_dir.is_dir() {
         return Ok(None);
     }
     let mut wheels: Vec<PathBuf> = std::fs::read_dir(wheels_dir)
         .map_err(|e| {
             BuildError::Other {
-                package: String::new(),
+                package: package_label.to_string(),
                 detail: format!("failed to read wheels directory {}: {e}", wheels_dir.display()),
             }
         })?
@@ -332,6 +332,45 @@ packages = ["python"]
             ),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn find_first_wheel_returns_none_for_missing_or_empty_dir() {
+        // No wheels dir at all -> None (the common case: source-only package).
+        let temp = tempfile::tempdir().unwrap();
+        let missing = temp.path().join("nope");
+        assert_eq!(find_first_wheel(&missing, "pkg").unwrap(), None);
+
+        // Present but empty -> None.
+        let empty = temp.path().join("wheels");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert_eq!(find_first_wheel(&empty, "pkg").unwrap(), None);
+    }
+
+    #[test]
+    fn find_first_wheel_ignores_non_whl_files() {
+        // Only non-wheel files present -> None. Reverting the `.whl`
+        // extension filter would pick up the sdist/readme and return Some.
+        let temp = tempfile::tempdir().unwrap();
+        let wheels = temp.path().join("wheels");
+        std::fs::create_dir_all(&wheels).unwrap();
+        std::fs::write(wheels.join("pkg-0.1.0.tar.gz"), b"").unwrap();
+        std::fs::write(wheels.join("README.md"), b"").unwrap();
+        assert_eq!(find_first_wheel(&wheels, "pkg").unwrap(), None);
+    }
+
+    #[test]
+    fn find_first_wheel_picks_sorted_first_deterministically() {
+        // Multiple wheels -> the lexicographically-first, regardless of
+        // creation order. Reverting the `wheels.sort()` would make the
+        // result depend on readdir order (non-deterministic).
+        let temp = tempfile::tempdir().unwrap();
+        let wheels = temp.path().join("wheels");
+        std::fs::create_dir_all(&wheels).unwrap();
+        std::fs::write(wheels.join("zeta-9.0.0-py3-none-any.whl"), b"").unwrap();
+        std::fs::write(wheels.join("alpha-1.0.0-py3-none-any.whl"), b"").unwrap();
+        let picked = find_first_wheel(&wheels, "pkg").unwrap().unwrap();
+        assert_eq!(picked.file_name().unwrap(), "alpha-1.0.0-py3-none-any.whl");
     }
 
     #[test]

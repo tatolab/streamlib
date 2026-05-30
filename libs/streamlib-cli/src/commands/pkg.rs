@@ -114,7 +114,11 @@ pub async fn install(source: &str) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to materialize package: {}", e))?;
     // The orchestrator stages into the package cache slot
     // (`cache/packages/<name>-<version>/`), the same slot
-    // `extract_slpkg_to_cache` wrote to — keep using the staged path below.
+    // `extract_slpkg_to_cache` wrote to. This is order-safe: `materialize`
+    // fully reads the source (assemble into a temp dir + provision the venv
+    // there) before its closing `atomic_swap` wipes-and-replaces the slot,
+    // so the extracted source is consumed before it's overwritten. Keep
+    // using the returned staged path below.
     let cache_dir = staged.staged_dir;
 
     // Add to installed packages manifest. Identity is the canonical

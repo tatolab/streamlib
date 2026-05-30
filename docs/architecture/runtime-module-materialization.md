@@ -295,8 +295,11 @@ Engine ↔ plugin stay in lock-step on two complementary layers:
 - Shared assembly: `libs/streamlib-pack/` (`assemble_artifact` —
   emits a `.slpkg` for `streamlib pack` or an extracted `StagedDir` for
   the orchestrator).
-- Python venv (wheel-bytes cache key):
-  `libs/streamlib-engine/src/core/compiler/compiler_ops/spawn_python_subprocess_op.rs`.
+- Python venv provisioning (the tail of `materialize`: `uv venv` →
+  `uv pip install` → `streamlib/_generated_` codegen → `compileall`,
+  produced into the staged `{name}-{version}/.venv` under the
+  orchestrator's single fingerprint):
+  `libs/streamlib-build-orchestrator/src/python_venv.rs`.
 - SDK wiring: `libs/streamlib-sdk/` (`auto-build` feature).
 - Plugin ABI + load-time handshake: `libs/streamlib-plugin-abi/`
   (`STREAMLIB_ABI_VERSION`, `PluginDeclaration.abi_version`).
