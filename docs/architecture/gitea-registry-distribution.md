@@ -87,12 +87,25 @@ streamlib-engine = { path = "../streamlib-engine", version = "0.4.30", registry 
 - The repo `.cargo/config.toml` declares `[registries.gitea]`; read is
   anonymous (publish needs a token).
 
-### Python (finalized in #1117) / Deno (finalized in #1118)
+### Python (shipped) / Deno (finalized in #1118)
 
-- Python: `import streamlib` resolves the SDK from Gitea's pypi index via
-  container-level `UV_INDEX` / `pip.conf` — no editable/path installs.
+- Python: a package **declares** `streamlib` like any dependency; the
+  per-processor venv installs it from Gitea's pypi index by version
+  (container-level `UV_INDEX` / `pip.conf`) — no editable/path install, and no
+  PYTHONPATH injection of a workspace copy. The published SDK is **source-only**
+  (its `_generated_/` is a build artifact excluded from the distribution, like a
+  crate's `target/`); the engine regenerates the SDK's wire vocabulary
+  (`streamlib/_generated_`) into the venv after install via in-process JTD
+  codegen, with schema deps (`@tatolab/core`, `@tatolab/escalate`) resolved from
+  the generic registry. Engine and SDK agree on a monotonic, language-agnostic
+  **subprocess protocol version** (`STREAMLIB_SUBPROCESS_PROTOCOL_VERSION` ↔
+  `streamlib.PROTOCOL_VERSION`), handshaken at subprocess startup and fail-loud
+  on mismatch — the replacement for the old compatibility-by-injection
+  guarantee. The engine satisfies a range (`MIN..=CURRENT`), so a newer engine
+  keeps accepting SDKs that speak an older-but-supported protocol.
 - Deno: a stable bare `import "streamlib"` resolves from Gitea's npm registry
   (`.npmrc`) or a container-level import map — no relative `../../../libs/...`.
+  The same protocol-version handshake coordinate applies to the Deno SDK.
 
 ### vulkanalia fork
 
@@ -226,7 +239,7 @@ Notes the scripts encode:
 | schema-package registry resolution (resolver `Registry` arm) + `strip_path_patches` capability | ✅ shipped | #1116 |
 | cargo-publish manifest path-strip *wiring* (dev-publish script + manifest migration) | ✅ shipped | #1105 |
 | full-engine codegen consumer build (engine `build.rs` resolves `@tatolab/escalate` from the generic registry) | ✅ shipped | #1105 |
-| Python SDK publish | ⏳ | #1117 |
+| Python SDK publish (source-only) + declare/install-from-registry, protocol-version handshake, codegen-into-venv | ✅ shipped | #1117 |
 | Deno SDK publish | ⏳ | #1118 |
 | packages as source-only `.slpkg` + `streamlib pack` source-only | ⏳ | #1119 |
 | repo migration committed (`{ path, version, registry }`, `.cargo/config`, dev-publish script) | ✅ shipped | #1105 |
