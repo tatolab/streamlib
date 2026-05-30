@@ -1,74 +1,68 @@
-# yaml-language-server: $schema=../../schemas/streamlib.schema.json
-# Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
-
-# @tatolab/camera — camera capture processor cluster carved out of
-# the streamlib engine substrate. Owns:
-#  - the Camera processor (Linux V4L2 + macOS AVFoundation behind a
-#    single platform-aliased name)
-#  - the CameraToCudaCopy host-pipeline processor (Linux-only) for
-#    consumers that want the camera frame as a GPU-resident CUDA
-#    tensor (PyTorch / JAX / cuDNN / OptiX) with zero CPU staging
-#    on the inference path
 package:
   org: tatolab
   name: camera
   version: 1.0.0
-  description: "Camera capture processor — V4L2 on Linux, AVFoundation on macOS/iOS"
-
+  description: Camera capture processor — V4L2 on Linux, AVFoundation on macOS/iOS
 dependencies:
-  "@tatolab/core": "^1.0.0"
-
-# Dev-time path override; `streamlib pack` rejects this.
-patch:
-  "@tatolab/core":
-    path: ../core
-
+  '@tatolab/core':
+    version: ^1.0.0
 schemas:
-  # Wire types imported from @tatolab/core.
-  ColorInfo:
-    package: "@tatolab/core"
-  ContentLight:
-    package: "@tatolab/core"
-  MasteringDisplay:
-    package: "@tatolab/core"
-  VideoFrame:
-    package: "@tatolab/core"
-  # Local config schemas this package owns.
   CameraConfig:
     file: schemas/camera_config.yaml
   CameraToCudaCopyConfig:
     file: schemas/camera_to_cuda_copy_config.yaml
-
+  ColorInfo:
+    package: '@tatolab/core'
+  ContentLight:
+    package: '@tatolab/core'
+  MasteringDisplay:
+    package: '@tatolab/core'
+  VideoFrame:
+    package: '@tatolab/core'
 processors:
-  - name: Camera
-    version: 1.0.0
-    description: "Captures video from cameras (V4L2 on Linux, AVFoundation on macOS/iOS)"
-    execution: manual
-    scheduling:
-      priority: high
-    config:
-      name: config
-      schema: CameraConfig
-    outputs:
-      - name: video
-        schema: VideoFrame
-        description: Live video frames from the camera
-
-  - name: CameraToCudaCopy
-    version: 1.0.0
-    description: "Host-pipeline producer: camera VkImage -> cuda OPAQUE_FD VkBuffer with timeline signal for cross-API CUDA interop. Linux-only (CUDA is Linux-only on the in-tree adapter set)."
-    execution: reactive
-    scheduling:
-      priority: high
-    config:
-      name: config
-      schema: CameraToCudaCopyConfig
-    inputs:
-      - name: video_in
-        schema: VideoFrame
-        description: "Camera ring texture (RGBA8 DMA-BUF) frame metadata"
-    outputs:
-      - name: video_out
-        schema: VideoFrame
-        description: "Camera frame forwarded verbatim; cuda surface side-effect happens during process()"
+- name: Camera
+  version: 1.0.0
+  description: Captures video from cameras (V4L2 on Linux, AVFoundation on macOS/iOS)
+  runtime: rust
+  entrypoint: null
+  execution: manual
+  scheduling:
+    priority: high
+  config:
+    name: config
+    schema: CameraConfig
+  state: []
+  inputs: []
+  outputs:
+  - name: video
+    schema: VideoFrame
+    description: Live video frames from the camera
+    read_mode: null
+    overflow: null
+    buffer_size: null
+- name: CameraToCudaCopy
+  version: 1.0.0
+  description: 'Host-pipeline producer: camera VkImage -> cuda OPAQUE_FD VkBuffer with timeline signal for cross-API CUDA interop. Linux-only (CUDA is Linux-only on the in-tree adapter set).'
+  runtime: rust
+  entrypoint: null
+  execution: reactive
+  scheduling:
+    priority: high
+  config:
+    name: config
+    schema: CameraToCudaCopyConfig
+  state: []
+  inputs:
+  - name: video_in
+    schema: VideoFrame
+    description: Camera ring texture (RGBA8 DMA-BUF) frame metadata
+    read_mode: null
+    overflow: null
+    buffer_size: null
+  outputs:
+  - name: video_out
+    schema: VideoFrame
+    description: Camera frame forwarded verbatim; cuda surface side-effect happens during process()
+    read_mode: null
+    overflow: null
+    buffer_size: null

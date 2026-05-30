@@ -1,62 +1,60 @@
-# yaml-language-server: $schema=../../schemas/streamlib.schema.json
-# Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
-
 package:
   org: tatolab
   name: moq
   version: 1.0.0
-  description: "MoQ (Media over QUIC) publish/subscribe track processors (IETF moq-transport draft-14)"
-
+  description: MoQ (Media over QUIC) publish/subscribe track processors (IETF moq-transport draft-14)
 dependencies:
-  "@tatolab/core": "^1.0.0"
-
-# Dev-time path override; `streamlib pack` rejects this.
-patch:
-  "@tatolab/core":
-    path: ../core
-
+  '@tatolab/core':
+    version: ^1.0.0
 schemas:
-  # Wire types imported from @tatolab/core.
   ColorInfo:
-    package: "@tatolab/core"
+    package: '@tatolab/core'
   ContentLight:
-    package: "@tatolab/core"
+    package: '@tatolab/core'
   EncodedVideoFrame:
-    package: "@tatolab/core"
+    package: '@tatolab/core'
   MasteringDisplay:
-    package: "@tatolab/core"
-  # Local config schemas this package owns.
+    package: '@tatolab/core'
   MoqPublishTrackConfig:
     file: schemas/moq_publish_track_config.yaml
   MoqSubscribeTrackConfig:
     file: schemas/moq_subscribe_track_config.yaml
-
 processors:
-  - name: MoqPublishTrack
-    version: 1.0.0
-    description: "Publishes raw bytes from a single graph input to a named MoQ track"
-    execution: reactive
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: MoqPublishTrackConfig
-    inputs:
-      - name: data_in
-        schema: any
-        description: Input data to publish to MoQ track (any serialized type)
-
-  - name: MoqSubscribeTrack
-    version: 1.0.0
-    description: "Subscribes to a named MoQ track and outputs raw bytes to the graph"
-    execution: manual
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: MoqSubscribeTrackConfig
-    outputs:
-      - name: data_out
-        schema: any
-        description: Received data from MoQ track subscription (any serialized type)
+- name: MoqPublishTrack
+  version: 1.0.0
+  description: Publishes raw bytes from a single graph input to a named MoQ track
+  runtime: rust
+  entrypoint: null
+  execution: reactive
+  scheduling: null
+  config:
+    name: config
+    schema: MoqPublishTrackConfig
+  state: []
+  inputs:
+  - name: data_in
+    schema: any
+    description: Input data to publish to MoQ track (any serialized type)
+    read_mode: null
+    overflow: null
+    buffer_size: null
+  outputs: []
+- name: MoqSubscribeTrack
+  version: 1.0.0
+  description: Subscribes to a named MoQ track and outputs raw bytes to the graph
+  runtime: rust
+  entrypoint: null
+  execution: manual
+  scheduling: null
+  config:
+    name: config
+    schema: MoqSubscribeTrackConfig
+  state: []
+  inputs: []
+  outputs:
+  - name: data_out
+    schema: any
+    description: Received data from MoQ track subscription (any serialized type)
+    read_mode: null
+    overflow: null
+    buffer_size: null

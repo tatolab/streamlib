@@ -1,111 +1,112 @@
-# yaml-language-server: $schema=../../schemas/streamlib.schema.json
-# Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
-
-# @tatolab/debug-utilities — utility processors for development, demos,
-# and rigorous-input testing. Consumed by real examples (the fixture
-# PSNR rig, the polyglot scenario binaries, api-server-demo's dynamic-
-# registry POST) — distinct from @tatolab/test-fixtures which carries
-# the attribute-macro contract test fixture.
 package:
   org: tatolab
   name: debug-utilities
   version: 1.0.0
-  description: "Utility processors for development, demos, and rigorous-input testing"
-
+  description: Utility processors for development, demos, and rigorous-input testing
 dependencies:
-  "@tatolab/core": "^1.0.0"
-  "@tatolab/jpeg": "^1.0.0"
-
-# Dev-time path override; `streamlib pack` rejects this.
-patch:
-  "@tatolab/core":
-    path: ../core
-  "@tatolab/jpeg":
-    path: ../jpeg
-
+  '@tatolab/core':
+    version: ^1.0.0
+  '@tatolab/jpeg':
+    version: ^1.0.0
 schemas:
-  # Wire types imported from @tatolab/core.
-  ColorInfo:
-    package: "@tatolab/core"
-  ContentLight:
-    package: "@tatolab/core"
-  MasteringDisplay:
-    package: "@tatolab/core"
-  VideoFrame:
-    package: "@tatolab/core"
-  # Wire types imported from @tatolab/jpeg.
-  EncodedJpegFrame:
-    package: "@tatolab/jpeg"
-  # Local config schemas this package owns.
   BgraFileSourceConfig:
     file: schemas/bgra_file_source_config.yaml
+  ColorInfo:
+    package: '@tatolab/core'
+  ContentLight:
+    package: '@tatolab/core'
+  EncodedJpegFrame:
+    package: '@tatolab/jpeg'
   JpegBytesSourceConfig:
     file: schemas/jpeg_bytes_source_config.yaml
+  MasteringDisplay:
+    package: '@tatolab/core'
   SimplePassthroughConfig:
     file: schemas/simple_passthrough_config.yaml
+  VideoFrame:
+    package: '@tatolab/core'
   VideoFrameCounterConfig:
     file: schemas/video_frame_counter_config.yaml
-
 processors:
-  - name: SimplePassthrough
-    version: 1.0.0
-    description: "Passes video frames through unchanged (for testing)"
-    execution: manual
-    config:
-      name: config
-      schema: SimplePassthroughConfig
-    inputs:
-      - name: input
-        schema: VideoFrame
-        description: Video frame input
-        read_mode: skip_to_latest
-        buffer_size: 4
-    outputs:
-      - name: output
-        schema: VideoFrame
-        description: Video frame output (unchanged)
-
-  - name: BgraFileSource
-    version: 1.0.0
-    description: "Streams raw BGRA frames from a file as Videoframes"
-    execution: manual
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: BgraFileSourceConfig
-    outputs:
-      - name: video
-        schema: VideoFrame
-        description: Video frames read from the BGRA file
-
-  - name: JpegBytesSource
-    version: 1.0.0
-    description: "Loads a JPEG file from disk at setup time and republishes it as EncodedJpegFrame on a paced background thread (for testing the JPEG decoder pipeline)"
-    execution: manual
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: JpegBytesSourceConfig
-    outputs:
-      - name: encoded_jpeg
-        schema: EncodedJpegFrame
-        description: JPEG-encoded bytes wrapped in an EncodedJpegFrame
-
-  - name: VideoFrameCounter
-    version: 1.0.0
-    description: "Counts incoming VideoFrames into process-global atomics so integration tests can assert on frame count + first-frame dimensions after runtime.stop()"
-    execution: reactive
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: VideoFrameCounterConfig
-    inputs:
-      - name: input
-        schema: VideoFrame
-        description: VideoFrame stream to observe
-        read_mode: read_next_in_order
-        buffer_size: 16
+- name: SimplePassthrough
+  version: 1.0.0
+  description: Passes video frames through unchanged (for testing)
+  runtime: rust
+  entrypoint: null
+  execution: manual
+  scheduling: null
+  config:
+    name: config
+    schema: SimplePassthroughConfig
+  state: []
+  inputs:
+  - name: input
+    schema: VideoFrame
+    description: Video frame input
+    read_mode: skip_to_latest
+    overflow: null
+    buffer_size: 4
+  outputs:
+  - name: output
+    schema: VideoFrame
+    description: Video frame output (unchanged)
+    read_mode: null
+    overflow: null
+    buffer_size: null
+- name: BgraFileSource
+  version: 1.0.0
+  description: Streams raw BGRA frames from a file as Videoframes
+  runtime: rust
+  entrypoint: null
+  execution: manual
+  scheduling: null
+  config:
+    name: config
+    schema: BgraFileSourceConfig
+  state: []
+  inputs: []
+  outputs:
+  - name: video
+    schema: VideoFrame
+    description: Video frames read from the BGRA file
+    read_mode: null
+    overflow: null
+    buffer_size: null
+- name: JpegBytesSource
+  version: 1.0.0
+  description: Loads a JPEG file from disk at setup time and republishes it as EncodedJpegFrame on a paced background thread (for testing the JPEG decoder pipeline)
+  runtime: rust
+  entrypoint: null
+  execution: manual
+  scheduling: null
+  config:
+    name: config
+    schema: JpegBytesSourceConfig
+  state: []
+  inputs: []
+  outputs:
+  - name: encoded_jpeg
+    schema: EncodedJpegFrame
+    description: JPEG-encoded bytes wrapped in an EncodedJpegFrame
+    read_mode: null
+    overflow: null
+    buffer_size: null
+- name: VideoFrameCounter
+  version: 1.0.0
+  description: Counts incoming VideoFrames into process-global atomics so integration tests can assert on frame count + first-frame dimensions after runtime.stop()
+  runtime: rust
+  entrypoint: null
+  execution: reactive
+  scheduling: null
+  config:
+    name: config
+    schema: VideoFrameCounterConfig
+  state: []
+  inputs:
+  - name: input
+    schema: VideoFrame
+    description: VideoFrame stream to observe
+    read_mode: read_next_in_order
+    overflow: null
+    buffer_size: 16
+  outputs: []

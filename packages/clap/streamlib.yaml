@@ -1,48 +1,39 @@
-# yaml-language-server: $schema=../../schemas/streamlib.schema.json
-# Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
-
-# @tatolab/clap — CLAP audio plugin host processor for streamlib.
-# Apple-only today (macOS / iOS); Linux CLAP support is a future ticket.
 package:
   org: tatolab
   name: clap
   version: 1.0.0
-  description: "CLAP audio plugin host processor for streamlib (macOS / iOS)"
-
+  description: CLAP audio plugin host processor for streamlib (macOS / iOS)
 dependencies:
-  "@tatolab/core": "^1.0.0"
-
-# Dev-time path override; `streamlib pack` rejects this.
-patch:
-  "@tatolab/core":
-    path: ../core
-
+  '@tatolab/core':
+    version: ^1.0.0
 schemas:
-  # Wire types imported from @tatolab/core.
   AudioFrame:
-    package: "@tatolab/core"
-  # Local config schemas this package owns.
+    package: '@tatolab/core'
   ClapEffectConfig:
     file: schemas/clap_effect_config.yaml
-
 processors:
-  - name: ClapEffect
-    version: 1.0.0
-    description: "CLAP audio plugin processor with parameter control and automation"
-    execution: manual
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: ClapEffectConfig
-    inputs:
-      - name: audio_in
-        schema: AudioFrame
-        description: Stereo audio frame to process through CLAP plugin (2 channels)
-        read_mode: read_next_in_order
-        buffer_size: 32
-    outputs:
-      - name: audio_out
-        schema: AudioFrame
-        description: Processed stereo audio frame from CLAP plugin (2 channels)
+- name: ClapEffect
+  version: 1.0.0
+  description: CLAP audio plugin processor with parameter control and automation
+  runtime: rust
+  entrypoint: null
+  execution: manual
+  scheduling: null
+  config:
+    name: config
+    schema: ClapEffectConfig
+  state: []
+  inputs:
+  - name: audio_in
+    schema: AudioFrame
+    description: Stereo audio frame to process through CLAP plugin (2 channels)
+    read_mode: read_next_in_order
+    overflow: null
+    buffer_size: 32
+  outputs:
+  - name: audio_out
+    schema: AudioFrame
+    description: Processed stereo audio frame from CLAP plugin (2 channels)
+    read_mode: null
+    overflow: null
+    buffer_size: null

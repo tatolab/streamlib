@@ -1,48 +1,47 @@
 [package]
 name = "streamlib-h265"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license-file.workspace = true
-repository.workspace = true
+version = "0.4.30"
+edition = "2024"
+authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "H.265 encoder + decoder processors for streamlib, via Vulkan Video. Linux-only today; macOS VideoToolbox is a future addition."
 keywords = ["h265", "hevc", "video", "encoder", "vulkan-video"]
 categories = ["multimedia::video", "multimedia"]
+repository = "https://github.com/tato123/streamlib"
+license = "BUSL-1.1"
 
 [lib]
 name = "streamlib_h265"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen", version = "0.4.30", registry = "gitea" }
+streamlib-jtd-codegen = {version = "0.4.30", registry = "gitea"}
 
 [dependencies]
 # Engine substrate — runtime context, processor traits, generated config
 # types under `crate::_generated_::tatolab__h265::*`, EncodedVideoFrame /
 # VideoFrame wire types, host RHI bridge for queue handles + allocator.
-streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
+streamlib = {version = "0.4.30", registry = "gitea"}
 
 # Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = { path = "../../libs/streamlib-macros", version = "0.4.30", registry = "gitea" }
+streamlib-macros = {version = "0.4.30", registry = "gitea"}
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = { path = "../../libs/streamlib-plugin-abi", version = "0.4.30", registry = "gitea" }
+streamlib-plugin-abi = {version = "0.4.30", registry = "gitea"}
 
 # Serialization (config dataclasses ship as serde-derived).
-serde.workspace = true
 # Generated `EncodedVideoFrame.data` carries `#[serde(with = "serde_bytes")]`
 # so msgpack encoder/decoder I/O writes `bin` (1× wire) instead of array.
-serde_bytes.workspace = true
+serde = {version = "1.0", features = ["derive"]}
 
 # Logging.
-tracing.workspace = true
+serde_bytes = {version = "0.11"}
 
 # H.265 encode/decode primitives reach through the SDK's tier-2
 # `streamlib::sdk::engine::video::*` namespace — the codec layer lives
 # inside `streamlib-engine` (folded from the former `libs/vulkan-video`
 # crate). No Linux-specific Cargo dep needed beyond `streamlib`.
+tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 
-[lints]
-workspace = true
+[workspace]

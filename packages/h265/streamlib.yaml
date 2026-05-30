@@ -1,83 +1,76 @@
-# yaml-language-server: $schema=../../schemas/streamlib.schema.json
-# Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
-
-# @tatolab/h265 — H.265 encoder + decoder processors via Vulkan Video.
-# Linux-only today; macOS VideoToolbox is a future cross-platform
-# addition.
 package:
   org: tatolab
   name: h265
   version: 1.0.0
-  description: "H.265 encoder + decoder processors via Vulkan Video"
-
+  description: H.265 encoder + decoder processors via Vulkan Video
 dependencies:
-  "@tatolab/core": "^1.0.0"
-
-# Dev-time path override; `streamlib pack` rejects this.
-patch:
-  "@tatolab/core":
-    path: ../core
-
+  '@tatolab/core':
+    version: ^1.0.0
 schemas:
-  # Wire types imported from @tatolab/core.
   ColorInfo:
-    package: "@tatolab/core"
+    package: '@tatolab/core'
   ContentLight:
-    package: "@tatolab/core"
+    package: '@tatolab/core'
   EncodedVideoFrame:
-    package: "@tatolab/core"
-  MasteringDisplay:
-    package: "@tatolab/core"
-  VideoFrame:
-    package: "@tatolab/core"
-  # Local config schemas this package owns.
+    package: '@tatolab/core'
   H265DecoderConfig:
     file: schemas/h265_decoder_config.yaml
   H265EncoderConfig:
     file: schemas/h265_encoder_config.yaml
-
+  MasteringDisplay:
+    package: '@tatolab/core'
+  VideoFrame:
+    package: '@tatolab/core'
 processors:
-  - name: H265Encoder
-    version: 1.0.0
-    description: "Encodes VideoFrame to EncodedVideoFrame (H.265) via Vulkan Video"
-    execution: reactive
-    scheduling:
-      priority: high
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: H265EncoderConfig
-    inputs:
-      - name: video_in
-        schema: VideoFrame
-        description: Raw video frames to encode
-        read_mode: read_next_in_order
-        buffer_size: 8
-    outputs:
-      - name: encoded_video_out
-        schema: EncodedVideoFrame
-        description: H.265 encoded video frames
-
-  - name: H265Decoder
-    version: 1.0.0
-    description: "Decodes EncodedVideoFrame (H.265) to VideoFrame via Vulkan Video"
-    execution: reactive
-    scheduling:
-      priority: high
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: H265DecoderConfig
-    inputs:
-      - name: encoded_video_in
-        schema: EncodedVideoFrame
-        description: H.265 encoded video frames to decode
-        read_mode: read_next_in_order
-        buffer_size: 16
-    outputs:
-      - name: video_out
-        schema: VideoFrame
-        description: Decoded video frames
+- name: H265Encoder
+  version: 1.0.0
+  description: Encodes VideoFrame to EncodedVideoFrame (H.265) via Vulkan Video
+  runtime: rust
+  entrypoint: null
+  execution: reactive
+  scheduling:
+    priority: high
+  config:
+    name: config
+    schema: H265EncoderConfig
+  state: []
+  inputs:
+  - name: video_in
+    schema: VideoFrame
+    description: Raw video frames to encode
+    read_mode: read_next_in_order
+    overflow: null
+    buffer_size: 8
+  outputs:
+  - name: encoded_video_out
+    schema: EncodedVideoFrame
+    description: H.265 encoded video frames
+    read_mode: null
+    overflow: null
+    buffer_size: null
+- name: H265Decoder
+  version: 1.0.0
+  description: Decodes EncodedVideoFrame (H.265) to VideoFrame via Vulkan Video
+  runtime: rust
+  entrypoint: null
+  execution: reactive
+  scheduling:
+    priority: high
+  config:
+    name: config
+    schema: H265DecoderConfig
+  state: []
+  inputs:
+  - name: encoded_video_in
+    schema: EncodedVideoFrame
+    description: H.265 encoded video frames to decode
+    read_mode: read_next_in_order
+    overflow: null
+    buffer_size: 16
+  outputs:
+  - name: video_out
+    schema: VideoFrame
+    description: Decoded video frames
+    read_mode: null
+    overflow: null
+    buffer_size: null

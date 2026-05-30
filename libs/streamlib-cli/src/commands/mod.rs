@@ -3,7 +3,6 @@
 
 pub mod generate;
 pub mod logs;
-pub mod pack;
 pub mod pkg;
 pub mod schema;
 pub mod setup;

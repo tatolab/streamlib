@@ -125,6 +125,36 @@ pub enum AddModuleError {
         detail: String,
     },
 
+    /// A [`Strategy::Registry`] resolution found no usable registry
+    /// endpoint: neither `STREAMLIB_REGISTRY_URL` nor its `GITEA_URL`
+    /// fallback is set. Point one at the Gitea base URL (e.g.
+    /// `http://localhost:3300`) so the generic registry is reachable.
+    /// Fail-loud — never silently fall back to a local source for a
+    /// dependency the caller asked to resolve from the registry.
+    ///
+    /// [`Strategy::Registry`]: super::Strategy::Registry
+    #[error(
+        "Registry not configured for '{package}': set {env} (e.g. \
+         http://localhost:3300) to resolve from the Gitea generic registry"
+    )]
+    RegistryNotConfigured {
+        package: streamlib_idents::PackageRef,
+        env: String,
+    },
+
+    /// A [`Strategy::Registry`] source failed while listing the package's
+    /// published versions, selecting one for the requested
+    /// [`SemVerRange`], downloading the resolved `.slpkg`, or caching the
+    /// downloaded bytes. `detail` names the failing step.
+    ///
+    /// [`Strategy::Registry`]: super::Strategy::Registry
+    /// [`SemVerRange`]: streamlib_idents::SemVerRange
+    #[error("Registry resolution failed for '{package}': {detail}")]
+    RegistryResolutionFailed {
+        package: streamlib_idents::PackageRef,
+        detail: String,
+    },
+
     /// A [`BuildPolicy`] required a (re)build but no
     /// [`BuildOrchestrator`] is wired on the [`Runner`]. The conservative
     /// posture — never silently load a stale or absent artifact. Wire one

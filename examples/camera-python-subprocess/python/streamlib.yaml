@@ -8,11 +8,6 @@ package:
 dependencies:
   "@tatolab/core": "^1.0.0"
 
-# Dev-time path override; `streamlib pack` rejects this (#717).
-patch:
-  "@tatolab/core":
-    path: ../../../packages/core
-
 schemas:
   # Wire types imported from @tatolab/core (#767).
   ColorInfo:

@@ -15,10 +15,18 @@
 
 use std::path::PathBuf;
 
+use streamlib_idents::{RegistryClient, RegistryConfig};
+
 use super::build_orchestrator::{BuildPolicy, BuildRequest, BuildSource};
 use super::errors::AddModuleError;
 use super::processor_registration::host_target_triple;
 use super::slpkg::extract_slpkg_to_cache;
+
+/// Semver requirement carried by [`Strategy::Registry`]. Re-exported from
+/// `streamlib-idents` so callers can name it next to [`Strategy`] without a
+/// separate dependency — it's the same range type a `streamlib.yaml`
+/// `Registry` dependency declares.
+pub use streamlib_idents::SemVerRange;
 
 /// How [`Runner::add_module_with`] should source a module — the in-code
 /// equivalent of the manifest's `dependencies:` / `patch:` declarations.
@@ -81,6 +89,32 @@ pub enum Strategy {
         /// [`AddModuleError::IntegrityCheckFailed`]. Signature/trust
         /// verification is a separate concern.
         checksum: Option<ArtifactChecksum>,
+    },
+
+    /// Resolve from the configured Gitea **generic** registry by semver
+    /// requirement — the cross-repo consumer path. Lists the package's
+    /// published versions (`GET /api/v1/packages/{org}?type=generic`),
+    /// selects the highest satisfying `version_req` (cargo/npm semantics),
+    /// downloads that version's `.slpkg`, then resolves it exactly like
+    /// [`Strategy::Url`]: prefer a matching prebuilt, else build the bundled
+    /// source per `build`.
+    ///
+    /// The registry endpoint + optional read token come from the
+    /// environment (`STREAMLIB_REGISTRY_URL`, falling back to `GITEA_URL`;
+    /// optional `STREAMLIB_REGISTRY_TOKEN`) — the same config the engine's
+    /// schema codegen reads, via [`RegistryConfig::from_env`]. The package
+    /// org + name come from the requested module ident. Absent registry
+    /// config fails loud with [`AddModuleError::RegistryNotConfigured`]
+    /// rather than silently falling back to a local source.
+    ///
+    /// [`RegistryConfig::from_env`]: streamlib_idents::RegistryConfig::from_env
+    Registry {
+        /// Semver requirement matched against the registry's published
+        /// versions. [`SemVerRange::Any`] (`*`) accepts the latest.
+        version_req: SemVerRange,
+        /// Build fallback when the resolved `.slpkg` carries no prebuilt
+        /// matching this host triple. Same semantics as [`Strategy::Url`].
+        build: BuildPolicy,
     },
 }
 
@@ -152,6 +186,52 @@ pub(super) fn resolve_strategy_to_source(
             let extracted = extract_slpkg_to_cache(&slpkg).map_err(|e| {
                 AddModuleError::SlpkgExtractionFailed {
                     archive: slpkg.clone(),
+                    detail: e.to_string(),
+                }
+            })?;
+            Ok(source_for_fetched_slpkg(pkg_ref, extracted, *build))
+        }
+        Strategy::Registry { version_req, build } => {
+            // Same resolve shape as `Strategy::Url`, except the download URL
+            // is derived from the registry's published versions instead of
+            // being supplied by the caller. The `streamlib-idents` registry
+            // client is reused verbatim — list + semver-select + token-aware
+            // download — so engine schema codegen and runtime module loading
+            // share one resolver rather than maintaining parallel ones.
+            let config = RegistryConfig::from_env().ok_or_else(|| {
+                AddModuleError::RegistryNotConfigured {
+                    package: pkg_ref.clone(),
+                    env: streamlib_idents::REGISTRY_URL_ENV.to_string(),
+                }
+            })?;
+            let client = RegistryClient::new(&config);
+            let available = client.list_versions(pkg_ref).map_err(|e| {
+                AddModuleError::RegistryResolutionFailed {
+                    package: pkg_ref.clone(),
+                    detail: format!("listing versions: {e}"),
+                }
+            })?;
+            let selected = streamlib_idents::select_version(pkg_ref, version_req, &available)
+                .map_err(|e| AddModuleError::RegistryResolutionFailed {
+                    package: pkg_ref.clone(),
+                    detail: e.to_string(),
+                })?;
+            let (bytes, url) = client.download_slpkg(pkg_ref, selected).map_err(|e| {
+                AddModuleError::RegistryResolutionFailed {
+                    package: pkg_ref.clone(),
+                    detail: format!("downloading {selected}: {e}"),
+                }
+            })?;
+            tracing::debug!(
+                package = %pkg_ref,
+                version = %selected,
+                %url,
+                "resolved module from Gitea generic registry"
+            );
+            let archive = persist_registry_slpkg(pkg_ref, &url, &bytes)?;
+            let extracted = extract_slpkg_to_cache(&archive).map_err(|e| {
+                AddModuleError::SlpkgExtractionFailed {
+                    archive: archive.clone(),
                     detail: e.to_string(),
                 }
             })?;
@@ -338,6 +418,41 @@ fn fetch_remote_slpkg(
         url: url.to_string(),
         detail: format!("publishing fetched artifact to cache: {e}"),
     })?;
+    Ok(target)
+}
+
+/// Persist already-downloaded registry `.slpkg` bytes into the resolver
+/// cache so [`extract_slpkg_to_cache`] can read them. Keyed by the canonical
+/// download URL (which embeds the package name + concrete version), with an
+/// atomic temp-then-rename publish so an interrupted write never leaves a
+/// half-file a later run treats as complete. This is the
+/// [`fetch_remote_slpkg`] write path minus the download — the bytes are
+/// already in hand from [`RegistryClient::download_slpkg`], which (unlike the
+/// `Strategy::Url` fetch) carries the registry auth token.
+fn persist_registry_slpkg(
+    pkg_ref: &streamlib_idents::PackageRef,
+    url: &str,
+    bytes: &[u8],
+) -> std::result::Result<PathBuf, AddModuleError> {
+    let cache_dir = crate::core::streamlib_home::get_streamlib_data_dir()
+        .join("resolver-cache")
+        .join("registry");
+    let safe: String = url
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect();
+    let target = cache_dir.join(format!("{safe}.slpkg"));
+
+    let persist_err = |detail: String| AddModuleError::RegistryResolutionFailed {
+        package: pkg_ref.clone(),
+        detail,
+    };
+    std::fs::create_dir_all(&cache_dir)
+        .map_err(|e| persist_err(format!("creating resolver cache dir {}: {e}", cache_dir.display())))?;
+    let tmp = cache_dir.join(format!("{safe}.slpkg.partial"));
+    std::fs::write(&tmp, bytes).map_err(|e| persist_err(format!("writing fetched artifact: {e}")))?;
+    std::fs::rename(&tmp, &target)
+        .map_err(|e| persist_err(format!("publishing fetched artifact to cache: {e}")))?;
     Ok(target)
 }
 

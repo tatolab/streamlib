@@ -1,63 +1,44 @@
-# yaml-language-server: $schema=../../schemas/streamlib.schema.json
-# Copyright (c) 2026 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
-
-# @tatolab/vadr-vision — Anduril AI Grand Prix VADR-TS-002 §4.6 vision-
-# stream depayloader. Consumes NetworkPacket from @tatolab/network's
-# UdpSource (default port 5600), parses the 24-byte little-endian
-# chunked-JPEG header, reassembles chunks indexed by (frame_id, chunk_id),
-# drops incomplete frames on timeout, and emits EncodedJpegFrame to
-# @tatolab/jpeg's JpegDecoder.
 package:
   org: tatolab
   name: vadr-vision
   version: 1.0.0
-  description: "VADR-TS-002 §4.6 vision-stream depayloader — UDP chunk reassembly for AGP simulator vision"
-
+  description: VADR-TS-002 §4.6 vision-stream depayloader — UDP chunk reassembly for AGP simulator vision
 dependencies:
-  "@tatolab/network": "^1.0.0"
-  "@tatolab/jpeg": "^1.0.0"
-
-# Dev-time path overrides; `streamlib pack` rejects these.
-patch:
-  "@tatolab/network":
-    path: ../network
-  "@tatolab/jpeg":
-    path: ../jpeg
-
+  '@tatolab/jpeg':
+    version: ^1.0.0
+  '@tatolab/network':
+    version: ^1.0.0
 schemas:
-  # Wire type imported from @tatolab/network — input to the depayloader
-  # (one UDP datagram per NetworkPacket; the 24-byte header is the first
-  # 24 bytes of `payload`).
-  NetworkPacket:
-    package: "@tatolab/network"
-  # Wire type imported from @tatolab/jpeg — output from the depayloader
-  # (one self-contained JPEG byte blob per reassembled frame).
   EncodedJpegFrame:
-    package: "@tatolab/jpeg"
-  # Local schema this package owns.
+    package: '@tatolab/jpeg'
+  NetworkPacket:
+    package: '@tatolab/network'
   VadrVisionDepayloaderConfig:
     file: schemas/vadr_vision_depayloader_config.yaml
-
 processors:
-  - name: VadrVisionDepayloader
-    version: 1.0.0
-    description: "Parses VADR-TS-002 §4.6 24-byte LE headers, reassembles JPEG frames from NetworkPacket chunks, drops incomplete frames on timeout."
-    execution: reactive
-    scheduling:
-      priority: high
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: VadrVisionDepayloaderConfig
-    inputs:
-      - name: chunks_in
-        schema: NetworkPacket
-        description: Inbound UDP datagrams carrying VADR-TS-002 §4.6 chunked-JPEG frames
-        read_mode: read_next_in_order
-        buffer_size: 64
-    outputs:
-      - name: jpeg_out
-        schema: EncodedJpegFrame
-        description: Reassembled JPEG byte blobs — one per complete frame, in arrival-completion order
+- name: VadrVisionDepayloader
+  version: 1.0.0
+  description: Parses VADR-TS-002 §4.6 24-byte LE headers, reassembles JPEG frames from NetworkPacket chunks, drops incomplete frames on timeout.
+  runtime: rust
+  entrypoint: null
+  execution: reactive
+  scheduling:
+    priority: high
+  config:
+    name: config
+    schema: VadrVisionDepayloaderConfig
+  state: []
+  inputs:
+  - name: chunks_in
+    schema: NetworkPacket
+    description: Inbound UDP datagrams carrying VADR-TS-002 §4.6 chunked-JPEG frames
+    read_mode: read_next_in_order
+    overflow: null
+    buffer_size: 64
+  outputs:
+  - name: jpeg_out
+    schema: EncodedJpegFrame
+    description: Reassembled JPEG byte blobs — one per complete frame, in arrival-completion order
+    read_mode: null
+    overflow: null
+    buffer_size: null

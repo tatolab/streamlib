@@ -1,36 +1,30 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
+# Member of the standalone `camera-python-display` workspace — inherits its
+# `[workspace.package]` fields and resolves every dependency from the registry
+# via `[workspace.dependencies]`. No path deps.
 [package]
 name = "camera-python-display-effects"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-license-file.workspace = true
+license.workspace = true
 publish = false
 
 [lib]
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = { path = "../../../libs/streamlib-jtd-codegen", version = "0.4.30", registry = "gitea" }
+streamlib-jtd-codegen = { workspace = true }
 
 [dependencies]
-streamlib = { path = "../../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
-streamlib-plugin-abi = { path = "../../../libs/streamlib-plugin-abi", version = "0.4.30", registry = "gitea" }
+streamlib = { workspace = true }
+streamlib-plugin-abi = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-# `png` for the kernel-wrapper visual-smoke test (writes a synthetic
-# CRT post-effect output to PNG for human review). Test-only.
-png = "0.17"
-
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib-adapter-abi = { path = "../../../libs/streamlib-adapter-abi", version = "0.4.30", registry = "gitea" }
-# `VulkanLayout` newtype used by the BlendingCompositor / CrtFilmGrain
-# wrappers when issuing layout barriers via the `RhiCommandRecorder`.
-# Goes through the typed consumer-rhi interop type rather than reaching
-# for `vulkanalia::vk::ImageLayout` directly.
-streamlib-consumer-rhi = { path = "../../../libs/streamlib-consumer-rhi", version = "0.4.30", registry = "gitea" }
+streamlib-adapter-abi = { workspace = true }
+streamlib-consumer-rhi = { workspace = true }

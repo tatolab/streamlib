@@ -1,33 +1,18 @@
-# yaml-language-server: $schema=../../schemas/streamlib.schema.json
-# Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
-
-# @tatolab/audio — audio processor cluster carved out of the streamlib
-# engine substrate. Owns the seven processor configs and seven
-# processor declarations.
 package:
   org: tatolab
   name: audio
   version: 1.0.0
-  description: "Audio processors — capture, output, mixer, channel converter, resampler, buffer rechunker, chord generator"
-
+  description: Audio processors — capture, output, mixer, channel converter, resampler, buffer rechunker, chord generator
 dependencies:
-  "@tatolab/core": "^1.0.0"
-
-# Dev-time path override; `streamlib pack` rejects this.
-patch:
-  "@tatolab/core":
-    path: ../core
-
+  '@tatolab/core':
+    version: ^1.0.0
 schemas:
-  # Wire types imported from @tatolab/core (#767).
-  AudioFrame:
-    package: "@tatolab/core"
-  # Local config schemas this package owns.
   AudioCaptureConfig:
     file: schemas/audio_capture_config.yaml
   AudioChannelConverterConfig:
     file: schemas/audio_channel_converter_config.yaml
+  AudioFrame:
+    package: '@tatolab/core'
   AudioMixerConfig:
     file: schemas/audio_mixer_config.yaml
   AudioOutputConfig:
@@ -38,147 +23,184 @@ schemas:
     file: schemas/buffer_rechunker_config.yaml
   ChordGeneratorConfig:
     file: schemas/chord_generator_config.yaml
-
 processors:
-  - name: AudioCapture
-    version: 1.0.0
-    description: "Captures mono audio from microphones in device-native format (CoreAudio on macOS, ALSA on Linux)"
-    execution: manual
-    scheduling:
-      priority: realtime
-    runtime:
-      language: rust
-      options:
-        unsafe_send: true
-    config:
-      name: config
-      schema: AudioCaptureConfig
-    outputs:
-      - name: audio
-        schema: AudioFrame
-        description: Captured mono audio frames in device-native sample rate
-
-  - name: AudioOutput
-    version: 1.0.0
-    description: "Plays audio through speakers/headphones (CoreAudio on macOS, ALSA on Linux)"
-    execution: manual
-    scheduling:
-      priority: realtime
-    runtime:
-      language: rust
-      options:
-        unsafe_send: true
-    config:
-      name: config
-      schema: AudioOutputConfig
-    inputs:
-      - name: audio
-        schema: AudioFrame
-        description: Stereo audio frame to play through speakers
-        read_mode: read_next_in_order
-        buffer_size: 32
-
-  - name: AudioMixer
-    version: 1.0.0
-    description: "Mixes two mono audio signals into a single stereo signal"
-    execution: reactive
-    scheduling:
-      priority: realtime
-    config:
-      name: config
-      schema: AudioMixerConfig
-    inputs:
-      - name: left
-        schema: AudioFrame
-        description: Left channel mono audio frame
-        read_mode: read_next_in_order
-        buffer_size: 32
-      - name: right
-        schema: AudioFrame
-        description: Right channel mono audio frame
-        read_mode: read_next_in_order
-        buffer_size: 32
-    outputs:
-      - name: audio
-        schema: AudioFrame
-        description: Mixed stereo audio frame
-
-  - name: AudioChannelConverter
-    version: 1.0.0
-    description: "Converts mono audio to N-channel audio according to the configured mode"
-    execution: reactive
-    scheduling:
-      priority: realtime
-    config:
-      name: config
-      schema: AudioChannelConverterConfig
-    inputs:
-      - name: audio_in
-        schema: AudioFrame
-        description: Mono audio frame
-        read_mode: read_next_in_order
-        buffer_size: 32
-    outputs:
-      - name: audio_out
-        schema: AudioFrame
-        description: Multi-channel audio frame
-
-  - name: AudioResampler
-    version: 1.0.0
-    description: "Resamples audio between sample rates"
-    execution: reactive
-    scheduling:
-      priority: realtime
-    config:
-      name: config
-      schema: AudioResamplerConfig
-    inputs:
-      - name: audio_in
-        schema: AudioFrame
-        description: Audio frame to resample
-        read_mode: read_next_in_order
-        buffer_size: 32
-    outputs:
-      - name: audio_out
-        schema: AudioFrame
-        description: Resampled audio frame
-
-  - name: BufferRechunker
-    version: 1.0.0
-    description: "Rechunks audio buffers to a fixed sample count"
-    execution: reactive
-    # Sits on the audio path between capture and downstream consumers —
-    # same realtime constraint as AudioMixer/AudioResampler. The
-    # pre-#722 substring heuristic missed this (short name has no
-    # `Audio`); the migration corrects it.
-    scheduling:
-      priority: realtime
-    config:
-      name: config
-      schema: BufferRechunkerConfig
-    inputs:
-      - name: audio_in
-        schema: AudioFrame
-        description: Variable-size audio frame
-        read_mode: read_next_in_order
-        buffer_size: 32
-    outputs:
-      - name: audio_out
-        schema: AudioFrame
-        description: Fixed-size audio frame
-
-  - name: ChordGenerator
-    version: 1.0.0
-    description: "Generates a C major chord (C4 + E4 + G4) driven by the runtime audio clock"
-    execution: manual
-    # Synth driven by the audio clock — realtime audio path. Heuristic
-    # missed this on the same `Audio`-substring grounds as BufferRechunker.
-    scheduling:
-      priority: realtime
-    config:
-      name: config
-      schema: ChordGeneratorConfig
-    outputs:
-      - name: chord
-        schema: AudioFrame
-        description: Stereo chord audio frame
+- name: AudioCapture
+  version: 1.0.0
+  description: Captures mono audio from microphones in device-native format (CoreAudio on macOS, ALSA on Linux)
+  runtime:
+    language: rust
+    options:
+      unsafe_send: true
+      python_version: null
+    env: {}
+  entrypoint: null
+  execution: manual
+  scheduling:
+    priority: realtime
+  config:
+    name: config
+    schema: AudioCaptureConfig
+  state: []
+  inputs: []
+  outputs:
+  - name: audio
+    schema: AudioFrame
+    description: Captured mono audio frames in device-native sample rate
+    read_mode: null
+    overflow: null
+    buffer_size: null
+- name: AudioOutput
+  version: 1.0.0
+  description: Plays audio through speakers/headphones (CoreAudio on macOS, ALSA on Linux)
+  runtime:
+    language: rust
+    options:
+      unsafe_send: true
+      python_version: null
+    env: {}
+  entrypoint: null
+  execution: manual
+  scheduling:
+    priority: realtime
+  config:
+    name: config
+    schema: AudioOutputConfig
+  state: []
+  inputs:
+  - name: audio
+    schema: AudioFrame
+    description: Stereo audio frame to play through speakers
+    read_mode: read_next_in_order
+    overflow: null
+    buffer_size: 32
+  outputs: []
+- name: AudioMixer
+  version: 1.0.0
+  description: Mixes two mono audio signals into a single stereo signal
+  runtime: rust
+  entrypoint: null
+  execution: reactive
+  scheduling:
+    priority: realtime
+  config:
+    name: config
+    schema: AudioMixerConfig
+  state: []
+  inputs:
+  - name: left
+    schema: AudioFrame
+    description: Left channel mono audio frame
+    read_mode: read_next_in_order
+    overflow: null
+    buffer_size: 32
+  - name: right
+    schema: AudioFrame
+    description: Right channel mono audio frame
+    read_mode: read_next_in_order
+    overflow: null
+    buffer_size: 32
+  outputs:
+  - name: audio
+    schema: AudioFrame
+    description: Mixed stereo audio frame
+    read_mode: null
+    overflow: null
+    buffer_size: null
+- name: AudioChannelConverter
+  version: 1.0.0
+  description: Converts mono audio to N-channel audio according to the configured mode
+  runtime: rust
+  entrypoint: null
+  execution: reactive
+  scheduling:
+    priority: realtime
+  config:
+    name: config
+    schema: AudioChannelConverterConfig
+  state: []
+  inputs:
+  - name: audio_in
+    schema: AudioFrame
+    description: Mono audio frame
+    read_mode: read_next_in_order
+    overflow: null
+    buffer_size: 32
+  outputs:
+  - name: audio_out
+    schema: AudioFrame
+    description: Multi-channel audio frame
+    read_mode: null
+    overflow: null
+    buffer_size: null
+- name: AudioResampler
+  version: 1.0.0
+  description: Resamples audio between sample rates
+  runtime: rust
+  entrypoint: null
+  execution: reactive
+  scheduling:
+    priority: realtime
+  config:
+    name: config
+    schema: AudioResamplerConfig
+  state: []
+  inputs:
+  - name: audio_in
+    schema: AudioFrame
+    description: Audio frame to resample
+    read_mode: read_next_in_order
+    overflow: null
+    buffer_size: 32
+  outputs:
+  - name: audio_out
+    schema: AudioFrame
+    description: Resampled audio frame
+    read_mode: null
+    overflow: null
+    buffer_size: null
+- name: BufferRechunker
+  version: 1.0.0
+  description: Rechunks audio buffers to a fixed sample count
+  runtime: rust
+  entrypoint: null
+  execution: reactive
+  scheduling:
+    priority: realtime
+  config:
+    name: config
+    schema: BufferRechunkerConfig
+  state: []
+  inputs:
+  - name: audio_in
+    schema: AudioFrame
+    description: Variable-size audio frame
+    read_mode: read_next_in_order
+    overflow: null
+    buffer_size: 32
+  outputs:
+  - name: audio_out
+    schema: AudioFrame
+    description: Fixed-size audio frame
+    read_mode: null
+    overflow: null
+    buffer_size: null
+- name: ChordGenerator
+  version: 1.0.0
+  description: Generates a C major chord (C4 + E4 + G4) driven by the runtime audio clock
+  runtime: rust
+  entrypoint: null
+  execution: manual
+  scheduling:
+    priority: realtime
+  config:
+    name: config
+    schema: ChordGeneratorConfig
+  state: []
+  inputs: []
+  outputs:
+  - name: chord
+    schema: AudioFrame
+    description: Stereo chord audio frame
+    read_mode: null
+    overflow: null
+    buffer_size: null

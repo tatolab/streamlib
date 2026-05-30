@@ -248,15 +248,23 @@ fn derive_dep_strategy_and_ident(
             rev: g.rev.clone(),
             build: BuildPolicy::IfStale,
         },
-        DependencySpec::Registry(_) => {
+        DependencySpec::Registry(r) => {
             if is_patch {
                 return Err(Error::Configuration(format!(
-                    "patch entry for '{dep_ref}' is registry-flavored. The v1 \
-                     resolver doesn't ship a registry — declare a `path:` or \
-                     `git:` patch, or rely on the installed-package cache.",
+                    "patch entry for '{dep_ref}' is registry-flavored — a patch \
+                     must redirect a dependency to a `path:` or `git:` source, \
+                     not another registry range.",
                 )));
             }
-            Strategy::InstalledCache
+            // A registry-version dependency resolves from the configured Gitea
+            // generic registry by version: pull the `.slpkg` and build it from
+            // source on the host (IfStale prefers a matching prebuilt). The
+            // registry endpoint comes from the environment
+            // (STREAMLIB_REGISTRY_URL / GITEA_URL).
+            Strategy::Registry {
+                version_req: r.version.clone(),
+                build: BuildPolicy::IfStale,
+            }
         }
     };
 

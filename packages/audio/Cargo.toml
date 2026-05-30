@@ -1,43 +1,43 @@
 [package]
 name = "streamlib-audio"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license-file.workspace = true
-repository.workspace = true
+version = "0.4.30"
+edition = "2024"
+authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "Audio processors carved out of the streamlib engine — capture, output, mixer, channel converter, resampler, buffer rechunker, chord generator"
 keywords = ["audio", "streaming", "real-time"]
 categories = ["multimedia::audio", "multimedia"]
+repository = "https://github.com/tato123/streamlib"
+license = "BUSL-1.1"
 
 [lib]
 name = "streamlib_audio"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen", version = "0.4.30", registry = "gitea" }
+streamlib-jtd-codegen = {version = "0.4.30", registry = "gitea"}
 
 [dependencies]
 # Engine substrate — runtime context, processor traits, generated config
 # types under `crate::_generated_::tatolab__audio::*`, AudioFrame
 # wire type, audio utilities (resample, channel/format conversion).
-streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
+streamlib = {version = "0.4.30", registry = "gitea"}
 
 # Procedural macros — `#[streamlib::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = { path = "../../libs/streamlib-macros", version = "0.4.30", registry = "gitea" }
+streamlib-macros = {version = "0.4.30", registry = "gitea"}
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = { path = "../../libs/streamlib-plugin-abi", version = "0.4.30", registry = "gitea" }
+streamlib-plugin-abi = {version = "0.4.30", registry = "gitea"}
 
 # Cross-platform deps used by every audio processor.
 parking_lot = "0.12"
 rtrb = "0.3.2"
 rubato = "0.16"  # SincFixedIn resampler powering ProcessorAudioConverter / AudioResamplerProcessor
-tracing.workspace = true
 
 # Serialization (config dataclasses ship as serde-derived).
-serde.workspace = true
+tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
+serde = {version = "1.0", features = ["derive"]}
 
 [target.'cfg(target_os = "linux")'.dependencies]
 cpal = "0.15"  # ALSA backend on Linux
@@ -45,5 +45,5 @@ cpal = "0.15"  # ALSA backend on Linux
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 cpal = "0.15"  # CoreAudio backend on macOS
 
-[lints]
-workspace = true
+
+[workspace]

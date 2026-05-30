@@ -1,65 +1,43 @@
 [package]
 name = "streamlib-vadr-vision"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license-file.workspace = true
-repository.workspace = true
+version = "0.4.30"
+edition = "2024"
+authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "VADR-TS-002 §4.6 vision-stream depayloader — parses the 24-byte AGP chunk header, reassembles JPEG frames, drops incomplete frames on timeout, emits EncodedJpegFrame to @tatolab/jpeg."
 keywords = ["agp", "vadr", "drone", "jpeg", "streamlib"]
 categories = ["aerospace::drones", "encoding", "multimedia"]
+repository = "https://github.com/tato123/streamlib"
+license = "BUSL-1.1"
 
 [lib]
 name = "streamlib_vadr_vision"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen", version = "0.4.30", registry = "gitea" }
+streamlib-jtd-codegen = {version = "0.4.30", registry = "gitea"}
 
 [dependencies]
 # Engine substrate — runtime context, processor traits, generated wire
 # types under `crate::_generated_::*` (NetworkPacket imported from
 # @tatolab/network; EncodedJpegFrame imported from @tatolab/jpeg;
 # VadrVisionDepayloaderConfig defined locally).
-streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
+streamlib = {version = "0.4.30", registry = "gitea"}
 
 # Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = { path = "../../libs/streamlib-macros", version = "0.4.30", registry = "gitea" }
+streamlib-macros = {version = "0.4.30", registry = "gitea"}
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = { path = "../../libs/streamlib-plugin-abi", version = "0.4.30", registry = "gitea" }
+streamlib-plugin-abi = {version = "0.4.30", registry = "gitea"}
 
 # Serialization (config dataclasses ship as serde-derived).
-serde.workspace = true
 # Generated `NetworkPacket.payload` / `EncodedJpegFrame.data` ride msgpack
 # `bin` (1× wire) instead of array.
-serde_bytes.workspace = true
+serde = {version = "1.0", features = ["derive"]}
 
 # Logging.
-tracing.workspace = true
+serde_bytes = {version = "0.11"}
+tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 
-[dev-dependencies]
-# Integration tests spin up a Runner and exercise the full vision
-# pipeline: UdpSource → VadrVisionDepayloader → JpegDecoder →
-# VideoFrameCounter. Tests reference each upstream / downstream
-# crate's typed `Processor` types via explicit
-# `PROCESSOR_REGISTRY.register::<P>()` calls in setup, which both
-# pulls the rlib into the link line and makes registration explicit.
-streamlib = { path = "../../libs/streamlib-sdk" }
-streamlib-network = { path = "../network" }
-streamlib-jpeg = { path = "../jpeg" }
-streamlib-debug-utilities = { path = "../debug-utilities" }
-# Example-only: `examples/jpeg_pipeline_demo.rs` wires the depayloader
-# all the way to a winit-backed display window that owns the PNG
-# sampler hooks (STREAMLIB_DISPLAY_PNG_SAMPLE_*). Display isn't part
-# of the depayloader's normal runtime dependency graph; it's a
-# downstream consumer the demo binary uses to validate the full
-# pipeline emits a recognizable image.
-streamlib-display = { path = "../display" }
-serde_json.workspace = true
-serial_test = "3.1"
-
-[lints]
-workspace = true
+[workspace]

@@ -147,6 +147,16 @@ pub fn assemble_artifact(
         );
     }
 
+    // Distribution artifacts are standalone: a published `.slpkg` resolves
+    // every dependency from the registry, never a path. Refuse to ship one
+    // that still carries a path-flavored Cargo dep or a streamlib.yaml path
+    // `patch:` (dev-only monorepo affordances). The orchestrator's
+    // `StagedDir` materialization is exempt — it builds in place under the
+    // `RewriteRelativeToAbsolute` policy, which is the dev-resolution path.
+    if matches!(target, AssembleTarget::Slpkg(_)) {
+        ensure_no_path_artifacts(pkg_dir)?;
+    }
+
     // (archive_path, source_path) pairs for every file EXCEPT the
     // manifest, which is handled separately (its bytes may be rewritten).
     let mut files: Vec<(String, PathBuf)> = Vec::new();
@@ -214,7 +224,13 @@ pub fn assemble_artifact(
         .processors
         .iter()
         .any(|p| matches!(p.runtime.language, ProcessorLanguage::Rust));
-    if has_rust {
+    // A source-only `.slpkg` (the distribution artifact `streamlib pkg build`
+    // / `publish` ships) carries NO prebuilt cdylib and NO local compilation —
+    // the consumer builds it from the bundled source on their own host
+    // (`pkg install` / `Strategy::Registry`, AlwaysBuild), resolving every dep
+    // from the registry. Only the runtime orchestrator's `StagedDir` target
+    // compiles the cdylib here, because that materialization IS the host build.
+    if has_rust && matches!(target, AssembleTarget::StagedDir(_)) {
         let host_triple = streamlib_cargo_build::host_target_triple();
         let dylib_ext = streamlib_cargo_build::host_dylib_extension();
         let triple_dir = pkg_dir.join("lib").join(host_triple);
@@ -343,6 +359,93 @@ fn dylib_filename(path: &Path) -> Result<String> {
         .into_owned())
 }
 
+/// Enforce the standalone, registry-only contract for a published `.slpkg`:
+/// fail if the package carries anything path-flavored — a `path = …` Cargo
+/// dependency or a streamlib.yaml `patch:` entry. Both are dev-only monorepo
+/// affordances; a distributed source package must resolve every artifact from
+/// the registry, so a stray path would ship and break the consumer's off-tree
+/// build. Called only for the `Slpkg` target (`pkg build` / `pkg publish`).
+fn ensure_no_path_artifacts(pkg_dir: &Path) -> Result<()> {
+    let manifest_path = pkg_dir.join(Manifest::FILE_NAME);
+    if manifest_path.exists() {
+        let body = std::fs::read_to_string(&manifest_path)
+            .with_context(|| format!("read {}", manifest_path.display()))?;
+        let manifest: streamlib_processor_schema::StreamlibYaml =
+            serde_yaml::from_str(&body).context("parse streamlib.yaml")?;
+        let path_patches: Vec<String> = manifest
+            .patch
+            .iter()
+            .filter(|(_, spec)| matches!(spec, DependencySpec::Path(_)))
+            .map(|(dep, _)| dep.to_string())
+            .collect();
+        if !path_patches.is_empty() {
+            anyhow::bail!(
+                "{} carries path `patch:` override(s) for [{}] — a published package \
+                 must be standalone (registry-only). Remove the `patch:` block; each \
+                 dependency resolves from the registry by the version in `dependencies:`.",
+                manifest_path.display(),
+                path_patches.join(", "),
+            );
+        }
+    }
+
+    let cargo_path = pkg_dir.join("Cargo.toml");
+    if cargo_path.exists() {
+        let body = std::fs::read_to_string(&cargo_path)
+            .with_context(|| format!("read {}", cargo_path.display()))?;
+        let doc: toml::Value =
+            toml::from_str(&body).with_context(|| format!("parse {}", cargo_path.display()))?;
+        let offenders = cargo_path_dep_names(&doc);
+        if !offenders.is_empty() {
+            anyhow::bail!(
+                "{} declares path dependenc(ies) [{}] — a published package must be \
+                 standalone (registry-only). Replace each with \
+                 `{{ version = \"…\", registry = \"gitea\" }}` so the crate resolves \
+                 from the registry.",
+                cargo_path.display(),
+                offenders.join(", "),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Names of dependencies carrying a `path` key across every dependency table
+/// in a parsed `Cargo.toml` — `[dependencies]`, `[build-dependencies]`,
+/// `[dev-dependencies]`, and their `[target.<cfg>.…]` variants.
+fn cargo_path_dep_names(doc: &toml::Value) -> Vec<String> {
+    fn scan_dep_table(table: &toml::value::Table, out: &mut Vec<String>) {
+        for (name, spec) in table {
+            if let toml::Value::Table(t) = spec {
+                if t.contains_key("path") {
+                    out.push(name.clone());
+                }
+            }
+        }
+    }
+    fn scan_section(root: &toml::value::Table, out: &mut Vec<String>) {
+        for key in ["dependencies", "build-dependencies", "dev-dependencies"] {
+            if let Some(toml::Value::Table(t)) = root.get(key) {
+                scan_dep_table(t, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    if let toml::Value::Table(root) = doc {
+        scan_section(root, &mut out);
+        if let Some(toml::Value::Table(targets)) = root.get("target") {
+            for (_cfg, tbl) in targets.iter() {
+                if let toml::Value::Table(t) = tbl {
+                    scan_section(t, &mut out);
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// Whether a directory-entry name is a build artifact / dev-only file
 /// that must NEVER ship as package source — VCS, language caches, build
 /// outputs, and (critically) developer-local virtual environments. A
@@ -355,15 +458,19 @@ fn dylib_filename(path: &Path) -> Result<String> {
 ///
 /// These directory names are **reserved**: a package must not use
 /// `target` / `lib` / `venv` / `.venv` / `node_modules` / `__pycache__`
-/// (etc.) as its own source directories, because they're stripped from
-/// the shipped source. This matches the ignore conventions of cargo /
-/// pip / npm and is an accepted packaging constraint.
+/// / `_generated_` (etc.) as its own source directories, because they're
+/// stripped from the shipped source. This matches the ignore conventions
+/// of cargo / pip / npm and is an accepted packaging constraint.
+///
+/// `_generated_` is the JTD-codegen wire vocabulary (Python
+/// `<pkg>/_generated_/`): a build artifact regenerated per-consumer at
+/// install time from the package's schemas, never shipped as source.
 pub fn is_non_source_artifact(name: &std::ffi::OsStr) -> bool {
     match name.to_str() {
         Some(
             "target" | "lib" | ".git" | "node_modules" | "__pycache__"
-            | ".streamlib-build.json" | ".venv" | "venv" | ".mypy_cache"
-            | ".pytest_cache" | ".ruff_cache" | ".tox" | ".DS_Store",
+            | "_generated_" | ".streamlib-build.json" | ".venv" | "venv"
+            | ".mypy_cache" | ".pytest_cache" | ".ruff_cache" | ".tox" | ".DS_Store",
         ) => true,
         Some(s) => s.ends_with(".slpkg") || s.ends_with(".egg-info") || s.ends_with(".pyc"),
         None => false,
@@ -773,36 +880,12 @@ mod tests {
     }
 
     #[test]
-    fn slpkg_rust_prebuilt_lib_bundles_triple_keyed_no_cargo() {
-        // Pre-populated lib/<triple>/ → bundled as-is. No Cargo.toml, so a
-        // stray cargo invocation would fail — passing proves cargo never ran.
-        let dir = tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("streamlib.yaml"),
-            "package:\n  org: tatolab\n  name: rp\n  version: 0.1.0\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n",
-        )
-        .unwrap();
-        let triple_dir = dir.path().join("lib").join(host_target_triple());
-        std::fs::create_dir_all(&triple_dir).unwrap();
-        let dylib = format!("librp.{}", host_dylib_extension());
-        std::fs::write(triple_dir.join(&dylib), b"fake").unwrap();
-
-        let out = dir.path().join("o.slpkg");
-        let outcome =
-            assemble_artifact(dir.path(), &AssembleTarget::Slpkg(out.clone()), &slpkg_opts(false), &())
-                .unwrap();
-        assert!(!outcome.rebuilt, "prebuilt lib must not trigger a build");
-        let entries = zip_entries(&out);
-        assert!(entries.contains(&format!("lib/{}/{}", host_target_triple(), dylib)));
-    }
-
-    #[test]
-    fn slpkg_rust_bundles_source_alongside_prebuilt() {
-        // The box is "sdist + one-triple wheel": a Rust package ships both
-        // its prebuilt cdylib (for the packing host) AND its crate source,
-        // so a host on a different triple can rebuild from the box. Revert
-        // the source-bundle step and the .slpkg carries only the
-        // host-specific binary — unusable on any other platform.
+    fn slpkg_rust_is_source_only_ignores_prebuilt_lib() {
+        // Source-only contract: a distributed `.slpkg` carries NO prebuilt
+        // cdylib — the consumer builds from source on their host. Even when a
+        // `lib/<triple>/` is pre-populated, the `Slpkg` target must NOT bundle
+        // it. Revert the `StagedDir`-only build gate and the host-specific
+        // binary leaks into the distribution artifact.
         let dir = tempdir().unwrap();
         std::fs::write(
             dir.path().join("streamlib.yaml"),
@@ -815,40 +898,111 @@ mod tests {
         let triple_dir = dir.path().join("lib").join(host_target_triple());
         std::fs::create_dir_all(&triple_dir).unwrap();
         let dylib = format!("librp.{}", host_dylib_extension());
-        std::fs::write(triple_dir.join(&dylib), b"prebuilt").unwrap();
+        std::fs::write(triple_dir.join(&dylib), b"prebuilt-should-be-ignored").unwrap();
 
         let out = dir.path().join("o.slpkg");
         let outcome =
             assemble_artifact(dir.path(), &AssembleTarget::Slpkg(out.clone()), &slpkg_opts(false), &())
                 .unwrap();
-        assert!(!outcome.rebuilt, "prebuilt present → no build");
+        assert!(!outcome.rebuilt, "source-only pack never compiles");
         let entries = zip_entries(&out);
-        assert!(
-            entries.contains(&format!("lib/{}/{}", host_target_triple(), dylib)),
-            "prebuilt cdylib must ship, got {entries:?}"
-        );
+        // Crate SOURCE ships so the consumer can build.
         assert!(entries.contains(&"Cargo.toml".to_string()), "crate manifest must ship");
         assert!(entries.contains(&"src/lib.rs".to_string()), "crate source must ship");
+        // The prebuilt cdylib does NOT — source-only.
+        assert!(
+            !entries.iter().any(|e| e.starts_with("lib/")),
+            "source-only .slpkg must not carry a prebuilt cdylib, got {entries:?}"
+        );
     }
 
     #[test]
-    fn slpkg_no_build_empty_lib_errors_actionably() {
+    fn slpkg_rejects_path_cargo_dependency() {
+        // The no-path gate: a published package must be standalone
+        // (registry-only). A `path = …` Cargo dep is refused so a
+        // non-standalone package can never ship. Revert the gate and a
+        // dangling `../foo` path would break the consumer's off-tree build.
         let dir = tempdir().unwrap();
         std::fs::write(
             dir.path().join("streamlib.yaml"),
             "package:\n  org: tatolab\n  name: rp\n  version: 0.1.0\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n",
         )
         .unwrap();
-        std::fs::create_dir_all(dir.path().join("lib").join(host_target_triple())).unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            b"[package]\nname='rp'\nversion='0.1.0'\n[dependencies]\nfoo = { path = \"../foo\", version = \"1.0\" }\n",
+        )
+        .unwrap();
         let err = assemble_artifact(
             dir.path(),
             &AssembleTarget::Slpkg(dir.path().join("o.slpkg")),
-            &slpkg_opts(true),
+            &slpkg_opts(false),
             &(),
         )
-        .expect_err("no_build + empty lib must error");
+        .expect_err("a path Cargo dependency must be refused for a published package");
         let msg = format!("{err}");
-        assert!(msg.contains("--no-build") && msg.contains(host_target_triple()));
+        assert!(
+            msg.contains("foo") && msg.contains("path") && msg.contains("standalone"),
+            "error must name the offending path dep and the standalone contract, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn slpkg_rejects_path_patch() {
+        // The no-path gate also refuses a streamlib.yaml path `patch:` — the
+        // dev-only monorepo override must never ship in a distribution artifact.
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: rp\n  version: 0.1.0\nschemas:\n  T:\n    file: schemas/t.yaml\ndependencies:\n  \"@tatolab/core\": \"^1.0.0\"\npatch:\n  \"@tatolab/core\":\n    path: ../core\n",
+        )
+        .unwrap();
+        std::fs::create_dir(dir.path().join("schemas")).unwrap();
+        std::fs::write(
+            dir.path().join("schemas/t.yaml"),
+            "metadata:\n  type: T\n  max_payload_bytes: 16\n",
+        )
+        .unwrap();
+        let err = assemble_artifact(
+            dir.path(),
+            &AssembleTarget::Slpkg(dir.path().join("o.slpkg")),
+            &slpkg_opts(false),
+            &(),
+        )
+        .expect_err("a path patch must be refused for a published package");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("@tatolab/core") && msg.contains("patch") && msg.contains("standalone"),
+            "error must name the offending path patch and the standalone contract, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn slpkg_python_strips_generated_wire_vocabulary() {
+        // `_generated_/` is the JTD-codegen wire vocabulary — a build artifact
+        // regenerated per-consumer at install time, never shipped as source.
+        // Revert the `is_non_source_artifact` entry and stale generated bindings
+        // leak into the distribution, shadowing the consumer's regenerated set.
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: py\n  version: 0.1.0\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: python\n    execution: manual\n    entrypoint: \"p:P\"\n    inputs: []\n    outputs: []\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("pyproject.toml"), b"[project]\nname='py'\nversion='0.1.0'\n").unwrap();
+        std::fs::write(dir.path().join("p.py"), b"# entrypoint").unwrap();
+        std::fs::create_dir(dir.path().join("_generated_")).unwrap();
+        std::fs::write(dir.path().join("_generated_/tatolab__py.py"), b"# generated").unwrap();
+
+        let out = dir.path().join("o.slpkg");
+        assemble_artifact(dir.path(), &AssembleTarget::Slpkg(out.clone()), &slpkg_opts(false), &())
+            .unwrap();
+        let entries = zip_entries(&out);
+        assert!(entries.contains(&"p.py".to_string()), "entrypoint module must ship");
+        assert!(
+            !entries.iter().any(|e| e.contains("_generated_")),
+            "generated wire vocabulary must be stripped, got {entries:?}"
+        );
     }
 
     #[test]
@@ -990,9 +1144,11 @@ mod tests {
             &slpkg_opts(false),
             &(),
         )
-        .expect_err("RejectPathPatches must reject a path-flavor patch");
+        .expect_err("a path-flavor patch must be rejected for a published package");
         let msg = format!("{err}");
-        assert!(msg.contains("@tatolab/core") && msg.contains("not publishable"));
+        // The no-path gate intercepts before the manifest-write policy, with
+        // the standalone-contract message.
+        assert!(msg.contains("@tatolab/core") && msg.contains("standalone"));
     }
 
     #[test]

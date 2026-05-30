@@ -33,63 +33,13 @@ members = [
     "libs/streamlib-deno-native", # FFI cdylib for Deno subprocess iceoryx2 access
     "libs/streamlib-python-native", # FFI cdylib for Python subprocess iceoryx2 access
     "libs/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC
-    "packages/core",             # @tatolab/core — wire vocabulary (schemas-only at slpkg-pack time); a tiny Cargo crate hosts integration tests for the generated Rust types
-    "packages/audio",            # @tatolab/audio — audio processors carved out of the streamlib engine (#672)
-    "packages/camera",           # @tatolab/camera — camera capture processor carved out of the streamlib engine (#673)
-    "packages/display",          # @tatolab/display — display processor carved out of the streamlib engine (#674)
-    "packages/h264",             # @tatolab/h264 — H.264 encoder + decoder via Vulkan Video carved out of the streamlib engine (#675)
-    "packages/h265",             # @tatolab/h265 — H.265 encoder + decoder via Vulkan Video carved out of the streamlib engine (#676)
-    "packages/jpeg",             # @tatolab/jpeg — JPEG decoder processor wrapping libs/vulkan-jpeg::SimpleJpegDecoder (GPU compute / nvJPEG)
-    "packages/opus",             # @tatolab/opus — Opus audio encoder + decoder via libopus carved out of the streamlib engine (#677)
-    "packages/api-server",       # @tatolab/api-server — HTTP control-plane processor carved out of the streamlib engine (#681)
-    "packages/mp4",              # @tatolab/mp4 — MP4 writer processors
-    "packages/webrtc",           # @tatolab/webrtc — WebRTC WHIP/WHEP transport processors
-    "packages/moq",              # @tatolab/moq — MoQ publish/subscribe track processors carved out of the streamlib engine (#680)
-    "packages/clap",             # @tatolab/clap — CLAP audio plugin host processor (Apple-only)
-    "packages/screen-capture",   # @tatolab/screen-capture — screen capture processor (Apple-only today; Linux follows in #374)
-    "packages/test-fixtures",    # @tatolab/test-fixtures — attribute-macro test fixtures (TestConfiguredProcessor)
-    "packages/test-fixtures-abi-mismatch", # @tatolab/test-fixtures-abi-mismatch — hand-crafted STREAMLIB_PLUGIN with tampered abi_version for the load_project rejection test
-    "packages/debug-utilities",  # @tatolab/debug-utilities — utility processors for development, demos, and rigorous-input testing (BgraFileSource, SimplePassthrough)
-    "packages/network",          # @tatolab/network — generic UDP source/sink processors (byte-level transport)
-    "packages/mavlink",          # @tatolab/mavlink — MAVLink2 encoder + decoder processors (rust-mavlink wrapper)
-    "packages/vadr-vision",      # @tatolab/vadr-vision — VADR-TS-002 §4.6 vision-stream depayloader (AGP chunked JPEG-over-UDP)
-    # Disabled examples blocked on Apple codec/display impls parked in `_apple_impl_pending_/`:
-    #   - camera-audio-recorder, screen-recorder, runtime-graph-json-demo (Apple Mp4WriterProcessor)
-    #   - whep-player (Apple VideoToolbox + DisplayProcessor)
-    "examples/camera-display",  # Example: Camera capture and display (uses CameraProcessor, DisplayProcessor)
-    "examples/microphone-reverb-speaker", # Example: Audio processing with CLAP (uses audio capture, clap, audio output)
-    "examples/audio-mixer-demo", # Example: Mixing multiple audio streams (uses AudioOutputProcessor)
-    "examples/webrtc-cloudflare-stream", # Example: WebRTC streaming to Cloudflare (uses WebRTC WHIP)
-    "examples/moq-roundtrip",             # Example: MoQ camera/audio/sensor roundtrip — canonical E2E for @tatolab/moq
-    "examples/api-server",                # Example: Minimal API server (runtime + wait_for_signal)
-    "examples/api-server-demo",           # Example: API server processor demo
-    "examples/tokio-integration",         # Example: StreamRuntime with existing tokio runtime
-    "examples/camera-python-display",             # Example: Camera → Python → Display pipeline (runner)
-    "examples/camera-python-display/effects",     # Rust cdylib plugin for camera-python-display: CrtFilmGrain + BlendingCompositor processors
-    "examples/camera-python-subprocess",  # Example: Camera → Python subprocess → Display pipeline
-    "examples/camera-deno-subprocess",   # Example: Camera → Deno subprocess → Display pipeline
-    "examples/polyglot-dma-buf-consumer", # Example: Camera → Python DMA-BUF consumer → Display (Linux polyglot E2E)
-    "examples/polyglot-cpu-readback-blur", # Example: Polyglot cpu-readback adapter — Python cv2 / Deno hand-rolled Gaussian blur (#529)
-    "examples/polyglot-manual-source",       # Example: Polyglot manual source — Python/Deno worker thread paced by MonotonicTimer (#542)
-    "examples/polyglot-manual-source/plugin", # Counting-sink Rust dylib plugin for polyglot-manual-source (#604)
-    "examples/polyglot-continuous-processor", # Example: Polyglot continuous processor — Python/Deno process() driven by monotonic-clock timerfd (#542)
-    "examples/polyglot-venv-isolation", # Example: Per-package Python venv isolation — two packages pin conflicting numpy versions, each resolved into its own orchestrator-provisioned venv
-    "examples/polyglot-opengl-fragment-shader", # Example: Polyglot OpenGL adapter — Python Mandelbrot / Deno plasma fragment shader rendered into a host DMA-BUF (#530)
-    "examples/polyglot-vulkan-compute",   # Example: Polyglot Vulkan adapter — Python/Deno Mandelbrot compute kernel dispatched against a host DMA-BUF VkImage (#531)
-    "examples/polyglot-vulkan-graphics",  # Example: Polyglot Vulkan adapter — Python/Deno triangle vertex/fragment graphics kernel rendered into a host DMA-BUF VkImage (#656)
-    "examples/polyglot-vulkan-ray-tracing", # Example: Polyglot Vulkan adapter — Python/Deno ray-traced cube via host VulkanRayTracingKernel + AS escalate IPC (#667)
-    "examples/polyglot-skia-canvas",      # Example: Polyglot Skia adapter — Python skia-python draws into a host DMA-BUF VkImage via composing on the Vulkan adapter (#513)
-    "examples/polyglot-cuda-inference",   # Example: Polyglot CUDA adapter — Python YOLO inference / Deno DLPack capsule validation against a host OPAQUE_FD VkBuffer (#591)
-    "examples/cuda-fisheye-detection", # Example: Polyglot CUDA adapter image path — host fisheye-warps bus.jpg into an OPAQUE_FD VkImage, Python undistorts via cupy.RawKernel hardware bilinear + YOLOv8n detection
-    "examples/camera-rust-plugin",       # Example: Camera → Rust dylib plugin → Display pipeline
-    "examples/camera-rust-plugin/plugin", # Grayscale plugin cdylib for camera-rust-plugin example
-    "examples/raytracing-showcase",       # Example: VulkanRayTracingKernel rotating-cube showcase (#610)
-    "examples/vulkan-video-roundtrip",    # Example: Vulkan Video encode roundtrip (BgraFileSource → Encoder → MP4Writer)
-    "examples/vulkan-video-roundtrip-cdylib-camera",  # Example: same pipeline but camera loaded via runtime.load_project (cdylib)
-    "examples/vulkan-video-psnr",         # Example: fixture-driven encode/decode PSNR rig (#305)
-    "examples/jpeg-psnr",                 # Example: fixture-driven JPEG decode PSNR rig
-    "tests/iceoryx2-cross-language",      # Test: Cross-language iceoryx2 validation (Rust ↔ Python)
-    # libs/vulkan-video folded into libs/streamlib-engine/src/vulkan/video/ — codec layer of the engine RHI (#915).
+    # `examples/*` and `packages/*` are NOT workspace members. They are
+    # standalone, registry-only units (each headed to its own repo): every
+    # dependency — the streamlib SDK, package crates, adapters — resolves
+    # from the Gitea registry by version, and each carries its own
+    # `[workspace]` self-root. Only `libs/*` + `xtask` form this workspace.
+    # Build a package/example with `cd <dir> && cargo build`, or via
+    # `streamlib pkg install` / runtime `Strategy::Registry` for packages.
     "libs/vulkan-jpeg",                   # JPEG decoder: CPU parser + Huffman entropy decode + GPU compute kernel (compute kernel ships in a follow-up issue)
 ]
 

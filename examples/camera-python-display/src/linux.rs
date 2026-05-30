@@ -74,7 +74,7 @@ use streamlib::sdk::error::Error;
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::runtime::{BuildPolicy, Runner, SemVerRange, Strategy};
 use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::schema_ident;
 use streamlib_adapter_abi::SurfaceId;
@@ -138,13 +138,22 @@ pub fn main() -> Result<()> {
     let effects_dir = manifest_dir.join("effects");
     stage_effects_cdylib(&effects_dir)?;
 
-    // Load packages: `@tatolab/camera` + `@tatolab/display` via the
-    // canonical package source (`the build orchestrator
-    //` must have
-    // run first). The example-local effects + Python sub-packages
-    // resolve via their manifest directories.
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/camera"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "display"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/display"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    // Resolve `@tatolab/camera` + `@tatolab/display` from the Gitea generic
+    // registry by version — the cross-repo consumer path. The orchestrator
+    // downloads each `.slpkg` and prefers a matching prebuilt or builds the
+    // bundled source on the host. Endpoint comes from `STREAMLIB_REGISTRY_URL`
+    // (or `GITEA_URL`); run with e.g.
+    // `STREAMLIB_REGISTRY_URL=http://localhost:3300`. The example-local
+    // effects + Python sub-packages stay path-resolved (they aren't
+    // published — they're this example's own code).
+    runtime.add_module_with_blocking(
+        module_ident_any_version!("tatolab", "camera"),
+        Strategy::Registry { version_req: SemVerRange::Any, build: BuildPolicy::IfStale },
+    )?;
+    runtime.add_module_with_blocking(
+        module_ident_any_version!("tatolab", "display"),
+        Strategy::Registry { version_req: SemVerRange::Any, build: BuildPolicy::IfStale },
+    )?;
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "camera-python-display-effects"),
         Strategy::Path { path: effects_dir.clone(), build: BuildPolicy::IfStale },

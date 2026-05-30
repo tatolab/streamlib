@@ -1,74 +1,74 @@
-# yaml-language-server: $schema=../../schemas/streamlib.schema.json
-# Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
-
 package:
   org: tatolab
   name: webrtc
   version: 1.0.0
-  description: "WebRTC WHIP/WHEP transport processors (RFC 9725 + IETF WHEP)"
-
+  description: WebRTC WHIP/WHEP transport processors (RFC 9725 + IETF WHEP)
 dependencies:
-  "@tatolab/core": "^1.0.0"
-
-# Dev-time path override; `streamlib pack` rejects this.
-patch:
-  "@tatolab/core":
-    path: ../core
-
+  '@tatolab/core':
+    version: ^1.0.0
 schemas:
-  # Wire types imported from @tatolab/core.
   ColorInfo:
-    package: "@tatolab/core"
+    package: '@tatolab/core'
   ContentLight:
-    package: "@tatolab/core"
+    package: '@tatolab/core'
   EncodedAudioFrame:
-    package: "@tatolab/core"
+    package: '@tatolab/core'
   EncodedVideoFrame:
-    package: "@tatolab/core"
+    package: '@tatolab/core'
   MasteringDisplay:
-    package: "@tatolab/core"
-  # Local config schemas this package owns.
+    package: '@tatolab/core'
   WebrtcWhepConfig:
     file: schemas/webrtc_whep_config.yaml
   WebrtcWhipConfig:
     file: schemas/webrtc_whip_config.yaml
-
 processors:
-  - name: WebrtcWhep
-    version: 1.0.0
-    description: "Receives encoded video and audio from a WHEP endpoint (WebRTC egress)"
-    execution: manual
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: WebrtcWhepConfig
-    outputs:
-      - name: encoded_video_out
-        schema: EncodedVideoFrame
-        description: H.264 encoded video frames from WHEP stream
-      - name: encoded_audio_out
-        schema: EncodedAudioFrame
-        description: Opus encoded audio frames from WHEP stream
-
-  - name: WebrtcWhip
-    version: 1.0.0
-    description: "Streams pre-encoded video and audio to a WHIP endpoint (WebRTC ingress)"
-    execution: reactive
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: WebrtcWhipConfig
-    inputs:
-      - name: encoded_video_in
-        schema: EncodedVideoFrame
-        description: H.264 encoded video frames to stream
-        read_mode: read_next_in_order
-        buffer_size: 16
-      - name: encoded_audio_in
-        schema: EncodedAudioFrame
-        description: Opus encoded audio frames to stream
-        read_mode: skip_to_latest
-        buffer_size: 8
+- name: WebrtcWhep
+  version: 1.0.0
+  description: Receives encoded video and audio from a WHEP endpoint (WebRTC egress)
+  runtime: rust
+  entrypoint: null
+  execution: manual
+  scheduling: null
+  config:
+    name: config
+    schema: WebrtcWhepConfig
+  state: []
+  inputs: []
+  outputs:
+  - name: encoded_video_out
+    schema: EncodedVideoFrame
+    description: H.264 encoded video frames from WHEP stream
+    read_mode: null
+    overflow: null
+    buffer_size: null
+  - name: encoded_audio_out
+    schema: EncodedAudioFrame
+    description: Opus encoded audio frames from WHEP stream
+    read_mode: null
+    overflow: null
+    buffer_size: null
+- name: WebrtcWhip
+  version: 1.0.0
+  description: Streams pre-encoded video and audio to a WHIP endpoint (WebRTC ingress)
+  runtime: rust
+  entrypoint: null
+  execution: reactive
+  scheduling: null
+  config:
+    name: config
+    schema: WebrtcWhipConfig
+  state: []
+  inputs:
+  - name: encoded_video_in
+    schema: EncodedVideoFrame
+    description: H.264 encoded video frames to stream
+    read_mode: read_next_in_order
+    overflow: null
+    buffer_size: 16
+  - name: encoded_audio_in
+    schema: EncodedAudioFrame
+    description: Opus encoded audio frames to stream
+    read_mode: skip_to_latest
+    overflow: null
+    buffer_size: 8
+  outputs: []

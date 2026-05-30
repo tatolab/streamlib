@@ -1,13 +1,13 @@
 [package]
 name = "streamlib-api-server"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license-file.workspace = true
-repository.workspace = true
+version = "0.4.30"
+edition = "2024"
+authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "HTTP control-plane processor for streamlib runtimes — graph mutation, registry browsing, WebSocket event streaming, OpenAPI spec."
 keywords = ["api-server", "http", "websocket", "openapi", "streamlib"]
 categories = ["multimedia", "web-programming::http-server"]
+repository = "https://github.com/tato123/streamlib"
+license = "BUSL-1.1"
 
 [lib]
 name = "streamlib_api_server"
@@ -22,29 +22,28 @@ default = []
 moq = ["dep:streamlib-moq"]
 
 [build-dependencies]
-streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen", version = "0.4.30", registry = "gitea" }
+streamlib-jtd-codegen = {version = "0.4.30", registry = "gitea"}
 
 [dependencies]
-streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
-streamlib-macros = { path = "../../libs/streamlib-macros", version = "0.4.30", registry = "gitea" }
-streamlib-plugin-abi = { path = "../../libs/streamlib-plugin-abi", version = "0.4.30", registry = "gitea" }
-streamlib-moq = { path = "../moq", version = "0.4.30", registry = "gitea", optional = true }
+streamlib = {version = "0.4.30", registry = "gitea"}
+streamlib-macros = {version = "0.4.30", registry = "gitea"}
+streamlib-plugin-abi = {version = "0.4.30", registry = "gitea"}
+streamlib-moq = {version = "0.4.30", registry = "gitea", optional = true}
 
-axum.workspace = true
 tower-http = { version = "0.6", features = ["trace"] }
 futures-util = "0.3"
 
 utoipa = { version = "5.3", features = ["axum_extras"] }
 utoipa-axum = "0.2"
 
-serde.workspace = true
-serde_json.workspace = true
+axum = {version = "0.8.8", features = ["ws"]}
+serde = {version = "1.0", features = ["derive"]}
 
-tokio = { workspace = true, features = ["rt-multi-thread", "net", "sync"] }
+tokio = {version = "1.48.0", features = ["full", "rt-multi-thread", "net", "sync"]}
 parking_lot = "0.12"
 
-anyhow.workspace = true
-tracing.workspace = true
+serde_json = {version = "1.0", features = ["preserve_order"]}
+anyhow = {version = "1.0.100"}
+tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 
-[lints]
-workspace = true
+[workspace]
