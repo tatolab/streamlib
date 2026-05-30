@@ -129,7 +129,7 @@ pub fn provision_python_venv(temp_dir: &Path, package_label: &str) -> Result<(),
 /// from the staged tree itself: a `python/` source directory (the layout
 /// `streamlib pack` / `assemble_artifact` stages Python source into) or a
 /// `pyproject.toml` at the package root.
-fn staged_package_has_python(temp_dir: &Path) -> bool {
+pub(crate) fn staged_package_has_python(temp_dir: &Path) -> bool {
     temp_dir.join("python").is_dir() || temp_dir.join("pyproject.toml").is_file()
 }
 

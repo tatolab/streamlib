@@ -130,6 +130,12 @@ impl BuildOrchestrator for PolyglotBuildOrchestrator {
     }
 }
 
+/// A fingerprint-matched cache slot is reusable only if a Python package
+/// also has its provisioned venv present; otherwise it must re-materialize.
+fn cache_slot_is_reusable(has_python: bool, venv_python_exists: bool) -> bool {
+    !has_python || venv_python_exists
+}
+
 impl PolyglotBuildOrchestrator {
     fn materialize_package_dir(
         &self,
@@ -170,10 +176,16 @@ impl PolyglotBuildOrchestrator {
         // and it short-circuits cheaply when clean.
         if matches!(request.policy, BuildPolicy::IfStale) && !has_rust && cache_slot.is_dir() {
             if let Some(side) = read_sidecar(&cache_slot) {
+                let venv_python_exists =
+                    cache_slot.join(".venv").join("bin").join("python").exists();
                 if side.abi_version == streamlib_plugin_abi::STREAMLIB_ABI_VERSION
                     && side.triple == *triple
                     && side.profile == self.profile.label()
                     && side.inputs_hash == fingerprint
+                    && cache_slot_is_reusable(
+                        python_venv::staged_package_has_python(&cache_slot),
+                        venv_python_exists,
+                    )
                 {
                     tracing::debug!(package = %pkg_label, staged = %cache_slot.display(), "up to date — skipping rebuild");
                     return Ok(StagedArtifact {
@@ -412,6 +424,19 @@ mod tests {
 
     fn pkg_ref(org: &str, name: &str) -> PackageRef {
         PackageRef::new(Org::new(org).unwrap(), Package::new(name).unwrap())
+    }
+
+    // Mentally-revert check: a constant-`true` impl of `cache_slot_is_reusable`
+    // would fail the `(true, false)` case below (the warm-cache venv-less bug).
+    #[test]
+    fn cache_slot_is_reusable_requires_venv_only_for_python() {
+        // Non-Python slot: always reusable, venv irrelevant.
+        assert!(cache_slot_is_reusable(false, false));
+        assert!(cache_slot_is_reusable(false, true));
+        // Python slot without a provisioned venv: must re-materialize (the bug).
+        assert!(!cache_slot_is_reusable(true, false));
+        // Python slot with its venv present: reusable.
+        assert!(cache_slot_is_reusable(true, true));
     }
 
     /// No-op engine event sink for tests that don't assert on build logs.
