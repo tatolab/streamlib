@@ -85,3 +85,9 @@ TASK-*.md
 # build hook for the Python SDK; `deno task setup` for Deno projects).
 # See docs/architecture/schema-identity-and-packaging.md.
 _generated_/
+
+# Local-only operator override files (scripts + runbooks): machine-specific
+# values, private deployment targets, secrets. Convention is <name>.local.<ext>
+# sitting next to a committed generic <name>.<ext>. Never part of a PR.
+*.local.sh
+*.local.md

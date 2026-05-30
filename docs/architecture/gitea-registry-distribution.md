@@ -45,7 +45,7 @@ The distinction is load-bearing: SDK libraries are versioned registry
 dependencies; packages are **source-only `.slpkg`s** in the generic registry
 whose code resolves the SDK libraries by version when built on the host.
 
-## Namespace — the `tatolab` org (finalized in #1115)
+## Namespace — the `tatolab` org
 
 Everything lives under a Gitea **org** named `tatolab`, matching the
 `@tatolab/...` package naming:
@@ -55,11 +55,15 @@ Everything lives under a Gitea **org** named `tatolab`, matching the
 - npm: scope `@tatolab` → `/api/packages/tatolab/npm`
 - generic (`.slpkg`): `/api/packages/tatolab/generic/<name>/<version>/<file>`
 
-> The validating POC published under a Gitea *user* named `streamlib` by
-> mistake (`streamlib/_cargo-index`). `_cargo-index` is Gitea's internal
-> per-owner sparse-index repo — normal mechanism; under the org it becomes
-> `tatolab/_cargo-index`. #1115 stands up the org, re-publishes under it, and
-> removes the POC artifacts.
+The org is owned by a dedicated admin user; all four registries are reachable
+as soon as the org exists and Gitea's package feature is on. The cargo
+registry uses the **sparse** protocol
+(`sparse+.../api/packages/tatolab/cargo/`) — Gitea serves the index from its
+package database, so there is **no `_cargo-index` repo to create and no
+web-session "initialize" step**: the registry is reachable immediately and
+the first `cargo publish` populates the DB-backed index. Standing the
+namespace up is scripted and idempotent — see
+[Operational notes](#operational-notes).
 
 ## Resolution: by version, never paths
 
@@ -139,14 +143,40 @@ publish a dev version and bump — there is no relative-path escape hatch by
 design (that "purity" is what makes splitting crates into their own repos a
 no-op later).
 
-## Operational notes (carry into #1115 runbook)
+## Operational notes
+
+Standing up / verifying a registry namespace is scripted and idempotent. The
+committed scripts are generic — configure the org / admin / URL via the
+environment, so the same tooling provisions the central registry and any
+self-hosted instance:
+
+- `scripts/gitea/provision-registry.sh` — ensures the admin owner + `GITEA_ORG`
+  exist and that cargo/pypi/npm/generic are reachable. API mode
+  (`GITEA_ADMIN_TOKEN=…`) targets any Gitea — local container or a hosted
+  backend — unchanged; bootstrap mode creates the admin via the local
+  container CLI when no token exists yet.
+- `scripts/gitea/smoke-test-registry.sh` — publishes a throwaway crate,
+  resolves it by version, removes it, and round-trips the generic registry;
+  self-cleaning, safe to re-run against a live registry.
+
+Notes the scripts encode:
 
 - One Gitea container hosts all four registries (cargo/pypi/npm/generic) — a
   single lightweight Go binary, no JVM. Local dev registry today; lifts to a
   cloud Gitea for the hosted/centralized backend unchanged.
-- cargo gotchas: token stored `Bearer <token>` in `credentials.toml`
-  (`cargo login` stores it bare → 401); cargo index needs a one-time
-  web-session init (`/user/settings/packages/cargo/initialize`).
+- cargo token must be stored as `Bearer <token>` in `credentials.toml`
+  (`cargo login` stores it bare → 401).
+- The **sparse** cargo index needs no setup: the registry is reachable once
+  the org exists and the first publish populates the DB-backed index.
+
+  > ~~cargo index needs a one-time web-session init
+  > (`/user/settings/packages/cargo/initialize`).~~ — Superseded 2026-05-29.
+  > That step belongs to Gitea's older **git-based** cargo index. The
+  > committed shape uses the sparse protocol (`sparse+…`), which Gitea serves
+  > from the package DB with no `_cargo-index` repo and no initialize call.
+- The generic registry (the `.slpkg` home) requires a **raw** request body on
+  upload (`curl --upload-file`); a urlencoded body (`curl --data`) is rejected
+  with HTTP 500.
 - `cargo publish --no-verify` publishes source without compiling — the lever
   that makes the heavy engine chain tractable; consumers verify by building.
 - Submodule-vendored crates (`vulkanalia-vma`'s VMA/Vulkan-Headers) must be
@@ -163,7 +193,7 @@ no-op later).
 |---|---|---|
 | cargo publish → resolve-by-version (real SDK chain + vulkanalia/VMA) | ✅ validated (POC) | #1105 |
 | `.slpkg` round-trip through the generic registry | ✅ validated (POC) | #1119 |
-| `tatolab` org namespace + POC cleanup | ⏳ | #1115 |
+| `tatolab` org namespace + POC cleanup | ✅ shipped | #1115 |
 | schema-package registry resolution + cargo-publish path-strip | ⏳ | #1116 |
 | Python SDK publish | ⏳ | #1117 |
 | Deno SDK publish | ⏳ | #1118 |
