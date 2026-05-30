@@ -56,11 +56,28 @@ target_version="$base_version"
 [ -n "$DEV_N" ] && target_version="${base_version}.dev${DEV_N}"
 log "publishing streamlib==$target_version to $GITEA_ORG on $GITEA_URL"
 
-# --- rewrite pyproject version in place, restore on exit ----------------------
+# --- snapshot the files we rewrite; restore all on exit -----------------------
+# Two in-place rewrites (both restored): pyproject version, and stripping the
+# dev `path:` patches from streamlib.yaml so a registry consumer resolves the
+# SDK's schema deps (@tatolab/core, @tatolab/escalate) from the registry rather
+# than a dangling ../../packages path. The stripped manifest is what `build_py`
+# stages into the installed package, so the runtime-layer codegen resolves from
+# the registry. `out` is filled in below.
 pyproject="$PROJECT/pyproject.toml"
-backup="$(mktemp)"
-cp -p "$pyproject" "$backup"
-trap 'cp -p "$backup" "$pyproject"; rm -f "$backup"' EXIT
+manifest="$PROJECT/streamlib.yaml"
+pyproject_bak="$(mktemp)"; cp -p "$pyproject" "$pyproject_bak"
+manifest_bak="$(mktemp)"; cp -p "$manifest" "$manifest_bak"
+out=""
+restore() {
+  cp -p "$pyproject_bak" "$pyproject"; cp -p "$manifest_bak" "$manifest"
+  rm -f "$pyproject_bak" "$manifest_bak"; [ -n "$out" ] && rm -rf "$out"
+}
+trap restore EXIT
+
+log "stripping dev path: patches from streamlib.yaml"
+( cd "$ROOT" && cargo run -q -p xtask -- strip-publish-manifest --dir "$PROJECT" ) \
+  >/dev/null 2>&1 || fail "strip-publish-manifest failed"
+
 TARGET="$target_version" "$PY" - "$pyproject" <<'PY'
 import os, re, sys
 path = sys.argv[1]
@@ -82,7 +99,6 @@ PY
 # published — building one in the monorepo would bake the locally-generated
 # `_generated_/` into it, defeating the source-only contract.
 out="$(mktemp -d)"
-trap 'cp -p "$backup" "$pyproject"; rm -f "$backup"; rm -rf "$out"' EXIT
 log "building sdist (source only)"
 ( cd "$PROJECT" && uv build --sdist --out-dir "$out" ) >/dev/null 2>&1 \
   || fail "uv build --sdist failed"

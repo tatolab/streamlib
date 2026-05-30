@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::core::error::{Result, Error};
@@ -245,7 +245,91 @@ pub fn ensure_processor_venv(processor_id: &str, project_path: &Path) -> Result<
         }
     }
 
+    // Populate the SDK's wire vocabulary inside the freshly-created venv. The
+    // published `streamlib` is source-only; the runtime layer generates
+    // `streamlib/_generated_` after install. Runs once per venv (the cached
+    // venv keeps the generated tree). On a cache hit this function isn't
+    // reached — the early returns above hand back the existing venv with its
+    // `_generated_` already in place.
+    ensure_streamlib_generated_in_venv(&venv_python, processor_id)?;
+
     Ok(venv_python.to_string_lossy().to_string())
+}
+
+/// Populate the SDK's wire-vocabulary package (`streamlib/_generated_`) inside
+/// the venv via the in-process JTD codegen.
+///
+/// The published `streamlib` SDK ships source only — its `_generated_/` is a
+/// build artifact excluded from the distribution (like a crate's `target/`).
+/// The runtime layer regenerates it here: resolve the installed `streamlib`
+/// package directory through the venv interpreter, then run codegen against
+/// the SDK's shipped `streamlib.yaml`. Schema dependencies (`@tatolab/core`,
+/// `@tatolab/escalate`) resolve via [`ResolverOptions::from_env`] — the same
+/// registry config every other codegen boundary reads.
+///
+/// Fails loud when `streamlib` isn't importable in the venv: now that the SDK
+/// is resolved from a registry by version (not injected from the workspace), a
+/// Python package MUST declare `streamlib` as a dependency.
+fn ensure_streamlib_generated_in_venv(venv_python: &Path, processor_id: &str) -> Result<()> {
+    let probe = Command::new(venv_python)
+        .args([
+            "-c",
+            "import streamlib, os; print(os.path.dirname(streamlib.__file__))",
+        ])
+        .output()
+        .map_err(|e| {
+            Error::Runtime(format!(
+                "[{processor_id}] failed to probe streamlib in the processor venv: {e}"
+            ))
+        })?;
+    if !probe.status.success() {
+        return Err(Error::Runtime(format!(
+            "[{processor_id}] streamlib is not installed in the processor venv. \
+             A Python package must declare `streamlib` as a dependency — it is \
+             resolved from the registry by version, not injected. Add `streamlib` \
+             to the package's pyproject.toml. ({})",
+            String::from_utf8_lossy(&probe.stderr).trim()
+        )));
+    }
+    let streamlib_dir = PathBuf::from(String::from_utf8_lossy(&probe.stdout).trim().to_string());
+
+    let generated = streamlib_dir.join("_generated_");
+    let already = generated
+        .read_dir()
+        .map(|mut d| d.next().is_some())
+        .unwrap_or(false);
+    if already {
+        return Ok(());
+    }
+
+    let manifest = streamlib_dir.join("streamlib.yaml");
+    if !manifest.exists() {
+        return Err(Error::Runtime(format!(
+            "[{processor_id}] the installed streamlib is missing streamlib.yaml, so \
+             its wire vocabulary can't be generated. The streamlib version is too \
+             old for this engine, or the distribution is malformed."
+        )));
+    }
+
+    tracing::info!(
+        "[{}] generating streamlib wire vocabulary into venv: {}",
+        processor_id,
+        generated.display()
+    );
+    streamlib_jtd_codegen::generate(streamlib_jtd_codegen::GenerateOptions {
+        runtime: streamlib_jtd_codegen::RuntimeTarget::Python,
+        output: generated,
+        project_dir: Some(streamlib_dir.clone()),
+        schema_file: None,
+        schema_dir: None,
+        workspace_root: streamlib_dir,
+        write_lockfile: false,
+    })
+    .map_err(|e| {
+        Error::Runtime(format!(
+            "[{processor_id}] failed to generate streamlib wire vocabulary in venv: {e}"
+        ))
+    })
 }
 
 /// Enumerate `*.whl` files in `wheels_dir` and return the first one

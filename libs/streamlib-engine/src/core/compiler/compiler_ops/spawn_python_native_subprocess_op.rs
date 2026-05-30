@@ -88,16 +88,13 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
             // Create venv and get python executable path (reuse existing function)
             let python_executable = ensure_processor_venv(&self.processor_id, &project_path)?;
 
-            // Build PYTHONPATH for the subprocess.
-            let streamlib_python_source =
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../streamlib-python/python");
-
+            // Build PYTHONPATH for the subprocess. `streamlib` is NOT injected
+            // here — it is installed into the per-processor venv from the
+            // registry by version (the package declares it), and the venv's
+            // own site-packages puts it on `sys.path`. PYTHONPATH carries only
+            // the processor's project dir (its own modules) plus any inherited
+            // value. This is the de-magic: no compile-time workspace path.
             let mut python_path_parts: Vec<String> = Vec::new();
-            if streamlib_python_source.exists() {
-                if let Ok(canonical) = streamlib_python_source.canonicalize() {
-                    python_path_parts.push(canonical.to_string_lossy().to_string());
-                }
-            }
             if !project_path.as_os_str().is_empty() {
                 python_path_parts.push(project_path.to_string_lossy().to_string());
             }

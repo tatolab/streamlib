@@ -89,10 +89,29 @@ def regenerate():
     )
 
 
+def _stage_manifest_into_package(build_lib):
+    """Copy `streamlib.yaml` into the built `streamlib` package.
+
+    The runtime layer regenerates `_generated_/` from the SDK's own
+    `streamlib.yaml`, so the installed package must carry it (the source keeps
+    it at the project root, beside `streamlib.lock`). Staging it into the build
+    output lands it at `site-packages/streamlib/streamlib.yaml` for the engine
+    to drive codegen from after install. Best-effort: absent in some ad-hoc
+    builds, and the runtime layer fails loud if it's genuinely needed and
+    missing."""
+    src = ROOT / "streamlib.yaml"
+    if not src.exists():
+        return
+    dst_dir = Path(build_lib) / "streamlib"
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dst_dir / "streamlib.yaml")
+
+
 class BuildPy(build_py):
     def run(self):
         regenerate()
         super().run()
+        _stage_manifest_into_package(self.build_lib)
 
 
 class Develop(develop):

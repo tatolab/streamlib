@@ -43,6 +43,10 @@ streamlib-processor-schema = { path = "../streamlib-processor-schema", version =
 # Schema identity + manifest types (one source of truth for the
 # structured `dependencies:` shape consumed at runtime).
 streamlib-idents = { path = "../streamlib-idents", version = "0.4.30", registry = "gitea" }
+# Runtime-layer codegen: the engine regenerates the source-only Python SDK's
+# wire vocabulary (`streamlib/_generated_`) into each processor venv after
+# install. Same codegen the build script uses; needed at runtime here too.
+streamlib-jtd-codegen = { path = "../streamlib-jtd-codegen", version = "0.4.30", registry = "gitea" }
 
 # Procedural macros
 streamlib-macros = { path = "../streamlib-macros", version = "0.4.30", registry = "gitea" }
