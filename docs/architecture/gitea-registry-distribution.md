@@ -89,15 +89,21 @@ streamlib-engine = { path = "../streamlib-engine", version = "0.4.30", registry 
 
 ### Python (shipped) / Deno (finalized in #1118)
 
-- Python: a package **declares** `streamlib` like any dependency; the
-  per-processor venv installs it from Gitea's pypi index by version
-  (container-level `UV_INDEX` / `pip.conf`) — no editable/path install, and no
-  PYTHONPATH injection of a workspace copy. The published SDK is **source-only**
-  (its `_generated_/` is a build artifact excluded from the distribution, like a
-  crate's `target/`); the engine regenerates the SDK's wire vocabulary
-  (`streamlib/_generated_`) into the venv after install via in-process JTD
-  codegen, with schema deps (`@tatolab/core`, `@tatolab/escalate`) resolved from
-  the generic registry. Engine and SDK agree on a monotonic, language-agnostic
+- Python: a package **declares** `streamlib` like any dependency; the build
+  orchestrator provisions a **per-package venv** as the tail of `materialize`
+  (once per package, alongside the cdylib) and installs `streamlib` into it
+  from Gitea's pypi index by version (container-level `UV_INDEX` / `pip.conf`) —
+  no editable/path install, and no PYTHONPATH injection of a workspace copy. The
+  published SDK is **source-only** (its `_generated_/` is a build artifact
+  excluded from the distribution, like a crate's `target/`); the orchestrator
+  regenerates the SDK's wire vocabulary (`streamlib/_generated_`) into the venv
+  after install via in-process JTD codegen, with schema deps (`@tatolab/core`,
+  `@tatolab/escalate`) resolved from the generic registry. Running an example or
+  `streamlib pkg install` therefore needs **both** registry env channels set
+  (`UV_INDEX` for the pypi install; `STREAMLIB_REGISTRY_URL` +
+  `STREAMLIB_REGISTRY_TOKEN` for the codegen's generic-registry resolution) —
+  see [`../learnings/polyglot-venv-gitea-registry-env.md`](../learnings/polyglot-venv-gitea-registry-env.md)
+  for the failure symptoms when they're missing. Engine and SDK agree on a monotonic, language-agnostic
   **subprocess protocol version** (`STREAMLIB_SUBPROCESS_PROTOCOL_VERSION` ↔
   `streamlib.PROTOCOL_VERSION`), handshaken at subprocess startup and fail-loud
   on mismatch — the replacement for the old compatibility-by-injection
