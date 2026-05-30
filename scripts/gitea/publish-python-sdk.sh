@@ -13,6 +13,15 @@
 # closure. NOTE the grammar difference: cargo prereleases are `<base>-dev.N`
 # (semver); PEP 440 spells the same thing `<base>.devN`. This script emits the
 # PEP 440 form so pip/uv accept it; the two are semantically the same dev train.
+#
+# CONSUMING a `--dev N` publish: PEP 440 final-release specifiers like
+# `streamlib>=0.4,<0.5` (what the in-repo examples declare) do NOT match a
+# `.devN` prerelease unless prereleases are allowed. So a dev-train publish is
+# only resolvable by a consumer that opts in — set `UV_PRERELEASE=allow` (or
+# `uv pip install --prerelease=allow`) in the dev environment, the same way
+# `UV_INDEX` is set as container-level config. The base (non-dev) publish needs
+# no such opt-in. This mirrors publish-crates.sh's analogous cargo caveat (a
+# plain `<base>` req is `^<base>` and won't match a `-dev.N` prerelease).
 # pyproject's committed `version` is rewritten in place from the workspace
 # version and restored on exit (mirrors publish-crates.sh's in-place rewrite).
 #

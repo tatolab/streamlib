@@ -6,6 +6,8 @@ use std::process::Command;
 
 use crate::core::error::{Result, Error};
 
+use super::subprocess_bridge::STREAMLIB_SUBPROCESS_PROTOCOL_VERSION;
+
 // ============================================================================
 // Venv management
 // ============================================================================
@@ -51,6 +53,16 @@ fn compute_venv_cache_key(
 ) -> Result<String> {
     use sha2::{Digest, Sha256};
 
+    // Bind the venv to the engine's subprocess protocol version. A protocol
+    // bump (or this de-magic landing) changes the key, so venvs built for an
+    // older engine — including pre-de-magic venvs that never had
+    // `streamlib/_generated_` populated — are invalidated and rebuilt with the
+    // current install + codegen flow rather than silently reused stale.
+    let proto = |hasher: &mut Sha256| {
+        hasher.update(b"proto:");
+        hasher.update(STREAMLIB_SUBPROCESS_PROTOCOL_VERSION.to_le_bytes());
+    };
+
     let canonical = |hasher: &mut Sha256| -> Result<()> {
         let c = project_path.canonicalize().map_err(|e| {
             Error::Runtime(format!(
@@ -69,6 +81,7 @@ fn compute_venv_cache_key(
         })?;
         let mut hasher = Sha256::new();
         hasher.update(b"wheel:");
+        proto(&mut hasher);
         hasher.update(&wheel_bytes);
         canonical(&mut hasher)?;
         Ok(format!("{:x}", hasher.finalize()))
@@ -77,12 +90,14 @@ fn compute_venv_cache_key(
             .map_err(|e| Error::Runtime(format!("Failed to read pyproject.toml: {}", e)))?;
         let mut hasher = Sha256::new();
         hasher.update(b"source:");
+        proto(&mut hasher);
         hasher.update(contents.as_bytes());
         canonical(&mut hasher)?;
         Ok(format!("{:x}", hasher.finalize()))
     } else {
         let mut hasher = Sha256::new();
         hasher.update(processor_id.as_bytes());
+        proto(&mut hasher);
         Ok(format!("{:x}", hasher.finalize()))
     }
 }

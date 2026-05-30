@@ -37,6 +37,10 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["python"]
+# The published distribution is the SDK, not its test suite. Tests run from the
+# source tree; shipping them as an importable `streamlib.tests` subpackage is
+# just artifact noise.
+exclude = ["streamlib.tests*"]
 
 # Ship the PEP 561 inline-type marker so type checkers / LSP resolve completion
 # against an installed `streamlib` (the declared-dependency half of the
