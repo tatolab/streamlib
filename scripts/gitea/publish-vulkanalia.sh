@@ -62,28 +62,28 @@ scratch = sys.argv[1]
 reg = os.environ["REGISTRY"]
 def annotate(manifest, dep_names):
     doc = tomlkit.parse(open(manifest).read())
-    deps = doc.get("dependencies", {})
     changed = False
-    for name in dep_names:
-        d = deps.get(name)
-        if d is None:
-            continue
-        new = tomlkit.inline_table()
-        # keep version, drop dev-only path, force the fork's registry
-        if "version" in d:
-            new["version"] = d["version"]
-        else:
-            new["version"] = "*"
-        new["registry"] = reg
-        for k, v in d.items():
-            if k in ("version", "registry", "path"):
+    # cover normal + build deps so an inter-crate dep in either resolves the
+    # fork's sibling from Gitea, not crates.io (which would pull upstream).
+    for sec in ("dependencies", "build-dependencies"):
+        deps = doc.get(sec, {})
+        for name in dep_names:
+            d = deps.get(name)
+            if d is None:
                 continue
-            new[k] = v
-        deps[name] = new
-        changed = True
+            new = tomlkit.inline_table()
+            # keep version, drop dev-only path, force the fork's registry
+            new["version"] = d["version"] if "version" in d else "*"
+            new["registry"] = reg
+            for k, v in d.items():
+                if k in ("version", "registry", "path"):
+                    continue
+                new[k] = v
+            deps[name] = new
+            changed = True
+            print(f"  annotated [{sec}] {name} in {manifest}")
     if changed:
         open(manifest, "w").write(tomlkit.dumps(doc))
-        print(f"  annotated {dep_names} in {manifest}")
 annotate(f"{scratch}/vulkanalia/Cargo.toml", ["vulkanalia-sys"])
 annotate(f"{scratch}/ext/vma/Cargo.toml", ["vulkanalia"])
 PY

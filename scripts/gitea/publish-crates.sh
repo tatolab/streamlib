@@ -96,10 +96,13 @@ log "publishing version: $target_version"
 # --- back up every file we rewrite, restore on exit --------------------------
 backup_dir="$(mktemp -d)"
 declare -a TOUCHED=()
-trap 'for f in "${TOUCHED[@]}"; do cp -p "$backup_dir/$(echo "$f" | tr / _)" "$f"; done; rm -rf "$backup_dir"' EXIT
-snapshot() {  # snapshot a file so the EXIT trap restores it verbatim
+# Restore verbatim on exit. Backups mirror the relative path under $backup_dir
+# (not a flattened key) so no two snapshotted paths can ever collide.
+trap 'for f in "${TOUCHED[@]}"; do cp -p "$backup_dir/$f" "$f"; done; rm -rf "$backup_dir"' EXIT
+snapshot() {
   local f="$1"
-  cp -p "$f" "$backup_dir/$(echo "$f" | tr / _)"
+  mkdir -p "$backup_dir/$(dirname "$f")"
+  cp -p "$f" "$backup_dir/$f"
   TOUCHED+=("$f")
 }
 

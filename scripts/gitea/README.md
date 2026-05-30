@@ -79,6 +79,12 @@ curl -X PUT -H "Authorization: token <token>" --upload-file /tmp/escalate.slpkg 
   http://localhost:3300/api/packages/tatolab/generic/escalate/1.0.0/escalate.slpkg
 ```
 
+Note the two distinct Gitea auth schemes: the **generic** registry (and the
+package-management API) takes `Authorization: token <token>`, whereas **cargo
+publish** requires the token stored as `Bearer <token>` (see above). Don't
+conflate them. Gitea's generic upload also needs a raw body (`--upload-file`,
+not `--data`).
+
 (Generalizing schema/processor `.slpkg` publishing across all `packages/*` is
 the source-only-`.slpkg` work tracked separately.)
 
