@@ -35,6 +35,8 @@
 //! [`Strategy::Git`]: streamlib_engine::core::runtime::Strategy::Git
 //! [`BuildPolicy`]: streamlib_engine::core::runtime::BuildPolicy
 
+mod python_venv;
+
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -204,6 +206,15 @@ impl PolyglotBuildOrchestrator {
         .map_err(|e| {
             let _ = std::fs::remove_dir_all(&temp_dir);
             build_failed(&pkg_label, format!("{e}"))
+        })?;
+
+        // Provision the package's Python venv inside the staged temp dir
+        // (no-op when the package has no Python runtime). Building it into
+        // `temp_dir` means the atomic rename below carries the venv into
+        // place — no second rename. On failure, drop the half-staged temp.
+        python_venv::provision_python_venv(&temp_dir, &pkg_label).map_err(|e| {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            e
         })?;
 
         write_sidecar(&temp_dir, triple, self.profile, &fingerprint)

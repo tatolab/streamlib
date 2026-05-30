@@ -1,0 +1,475 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+//! Python venv provisioning tail for the build orchestrator.
+//!
+//! When a package's staged artifact carries a Python runtime, the
+//! orchestrator provisions a self-contained virtual environment INSIDE the
+//! staged directory at build time — `{staged_dir}/.venv` — so the runtime
+//! spawn site never has to create or mutate a venv. Building the venv into
+//! the orchestrator's build-to-temp directory means the existing atomic
+//! rename ([`crate::atomic_swap`]) carries the venv into place atomically;
+//! no second rename is added here.
+//!
+//! This relocates the venv-creation logic that previously lived in the
+//! engine's `spawn_python_subprocess_op` (per-spawn, cache-keyed) to a
+//! single build-time provision. The shape of the work is identical:
+//! `uv venv` → `uv pip install` (pre-built wheel when present, editable
+//! source install otherwise) → populate the SDK's generated wire
+//! vocabulary via in-process JTD codegen → pre-warm `.pyc` via
+//! `python -m compileall`.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use streamlib_engine::core::runtime::BuildError;
+
+/// Provision a Python virtual environment inside `temp_dir` (the
+/// orchestrator's build-to-temp staging directory) when the staged package
+/// carries a Python runtime.
+///
+/// On success the venv lives at `{temp_dir}/.venv` with its interpreter at
+/// `{temp_dir}/.venv/bin/python` (Unix) / `{temp_dir}/.venv/Scripts/python.exe`
+/// (Windows) — so that after the orchestrator's atomic rename it lands at
+/// `{staged_package_dir}/.venv/bin/python`.
+///
+/// No-op (returns `Ok(())`) when the staged package has no Python runtime.
+#[tracing::instrument(skip(temp_dir), fields(temp_dir = %temp_dir.display(), package = %package_label))]
+pub fn provision_python_venv(temp_dir: &Path, package_label: &str) -> Result<(), BuildError> {
+    if !staged_package_has_python(temp_dir) {
+        tracing::debug!("no Python runtime in staged package — skipping venv provisioning");
+        return Ok(());
+    }
+
+    tracing::info!("provisioning Python venv inside staged package");
+
+    let uv_cache_dir = streamlib_engine::core::get_uv_cache_dir();
+
+    let venv_dir = temp_dir.join(".venv");
+
+    #[cfg(unix)]
+    let venv_python = venv_dir.join("bin").join("python");
+    #[cfg(windows)]
+    let venv_python = venv_dir.join("Scripts").join("python.exe");
+
+    // The pre-built wheel (binary install, no build backend at install time)
+    // is the load-bearing path for container deploys; editable source install
+    // against the package's pyproject.toml is the dev-tree fallback. Both are
+    // staged into `temp_dir` by `assemble_artifact` (full Python source tree,
+    // wheels included).
+    let prebuilt_wheel = find_first_wheel(&temp_dir.join("python").join("wheels"))?;
+    let pyproject_path = {
+        let p = temp_dir.join("pyproject.toml");
+        if p.exists() {
+            Some(p)
+        } else {
+            None
+        }
+    };
+
+    // ---- uv venv ----
+    let venv_dir_str = path_to_str(&venv_dir, package_label)?;
+    let output = run_uv(&["venv", &venv_dir_str, "--python", "3.12"], &uv_cache_dir)
+        .map_err(|detail| build_failed(package_label, detail))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(build_failed(
+            package_label,
+            format!("uv venv failed: {stderr}"),
+        ));
+    }
+    tracing::info!(venv = %venv_dir.display(), "venv created");
+
+    // ---- uv pip install ----
+    let venv_python_str = path_to_str(&venv_python, package_label)?;
+    if let Some(ref wheel) = prebuilt_wheel {
+        tracing::info!(wheel = %wheel.display(), "installing pre-built wheel");
+        let wheel_str = path_to_str(wheel, package_label)?;
+        let output = run_uv(
+            &["pip", "install", &wheel_str, "--python", &venv_python_str],
+            &uv_cache_dir,
+        )
+        .map_err(|detail| build_failed(package_label, detail))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(build_failed(
+                package_label,
+                format!("uv pip install (wheel) failed: {stderr}"),
+            ));
+        }
+    } else if let Some(ref pyproject) = pyproject_path {
+        tracing::info!(project = %temp_dir.display(), "installing project deps from source");
+        let _ = pyproject; // presence-gated; install targets the project dir
+        let project_str = path_to_str(temp_dir, package_label)?;
+        let output = run_uv(
+            &["pip", "install", "-e", &project_str, "--python", &venv_python_str],
+            &uv_cache_dir,
+        )
+        .map_err(|detail| build_failed(package_label, detail))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(build_failed(
+                package_label,
+                format!("uv pip install (source) failed: {stderr}"),
+            ));
+        }
+    }
+
+    // ---- codegen: populate streamlib/_generated_ in the venv ----
+    ensure_streamlib_generated_in_venv(&venv_python, package_label)?;
+
+    // ---- compileall: pre-warm .pyc ----
+    precompile_venv(&venv_python, &venv_dir, package_label)?;
+
+    tracing::info!("Python venv provisioned");
+    Ok(())
+}
+
+/// Whether the staged package directory carries a Python runtime. Detected
+/// from the staged tree itself: a `python/` source directory (the layout
+/// `streamlib pack` / `assemble_artifact` stages Python source into) or a
+/// `pyproject.toml` at the package root.
+fn staged_package_has_python(temp_dir: &Path) -> bool {
+    temp_dir.join("python").is_dir() || temp_dir.join("pyproject.toml").is_file()
+}
+
+/// Populate the SDK's wire-vocabulary package (`streamlib/_generated_`) inside
+/// the venv via the in-process JTD codegen.
+///
+/// The published `streamlib` SDK ships source only — its `_generated_/` is a
+/// build artifact excluded from the distribution. Resolve the installed
+/// `streamlib` package directory through the venv interpreter, then run
+/// codegen against the SDK's shipped `streamlib.yaml`. Skips when
+/// `_generated_` is already populated. Fails loud when `streamlib` isn't
+/// importable in the venv: the SDK is resolved from a registry by version
+/// (not injected), so a Python package MUST declare `streamlib` as a
+/// dependency.
+fn ensure_streamlib_generated_in_venv(
+    venv_python: &Path,
+    package_label: &str,
+) -> Result<(), BuildError> {
+    let probe = Command::new(venv_python)
+        .args([
+            "-c",
+            "import streamlib, os; print(os.path.dirname(streamlib.__file__))",
+        ])
+        .output()
+        .map_err(|e| {
+            build_failed(
+                package_label,
+                format!("failed to probe streamlib in the processor venv: {e}"),
+            )
+        })?;
+    if !probe.status.success() {
+        return Err(build_failed(
+            package_label,
+            format!(
+                "streamlib is not installed in the processor venv. A Python package \
+                 must declare `streamlib` as a dependency — it is resolved from the \
+                 registry by version, not injected. Add `streamlib` to the package's \
+                 pyproject.toml. ({})",
+                String::from_utf8_lossy(&probe.stderr).trim()
+            ),
+        ));
+    }
+    let streamlib_dir = PathBuf::from(String::from_utf8_lossy(&probe.stdout).trim().to_string());
+
+    let generated = streamlib_dir.join("_generated_");
+    let already = generated
+        .read_dir()
+        .map(|mut d| {
+            // An empty `_generated_/` (or one carrying only `__init__.py`)
+            // is treated as unpopulated — codegen must still run.
+            d.any(|entry| {
+                entry
+                    .ok()
+                    .map(|e| e.file_name() != "__init__.py")
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false);
+    if already {
+        tracing::debug!(generated = %generated.display(), "streamlib wire vocabulary already populated — skipping codegen");
+        return Ok(());
+    }
+
+    let manifest = streamlib_dir.join("streamlib.yaml");
+    if !manifest.exists() {
+        return Err(build_failed(
+            package_label,
+            "the installed streamlib is missing streamlib.yaml, so its wire vocabulary \
+             can't be generated. The streamlib version is too old for this engine, or \
+             the distribution is malformed."
+                .to_string(),
+        ));
+    }
+
+    tracing::info!(generated = %generated.display(), "generating streamlib wire vocabulary into venv");
+    streamlib_jtd_codegen::generate(streamlib_jtd_codegen::GenerateOptions {
+        runtime: streamlib_jtd_codegen::RuntimeTarget::Python,
+        output: generated,
+        project_dir: Some(streamlib_dir.clone()),
+        schema_file: None,
+        schema_dir: None,
+        workspace_root: streamlib_dir,
+        write_lockfile: false,
+    })
+    .map_err(|e| {
+        build_failed(
+            package_label,
+            format!("failed to generate streamlib wire vocabulary in venv: {e}"),
+        )
+    })
+}
+
+/// Pre-warm `.pyc` files across the venv via `python -m compileall` so the
+/// first runtime import doesn't pay the bytecode-compile cost. Uses the
+/// venv's own interpreter. A non-success exit is treated as fatal — a venv
+/// that can't compile its own modules is a broken provision.
+fn precompile_venv(
+    venv_python: &Path,
+    venv_dir: &Path,
+    package_label: &str,
+) -> Result<(), BuildError> {
+    let venv_dir_str = path_to_str(venv_dir, package_label)?;
+    tracing::info!(venv = %venv_dir.display(), "pre-warming venv bytecode (compileall)");
+    let output = Command::new(venv_python)
+        .args(["-m", "compileall", "-q", &venv_dir_str])
+        .output()
+        .map_err(|e| build_failed(package_label, format!("failed to run compileall: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(build_failed(
+            package_label,
+            format!("compileall failed: {stderr}"),
+        ));
+    }
+    Ok(())
+}
+
+/// Enumerate `*.whl` files in `wheels_dir` and return the first one
+/// (sorted), or `None` when the dir is missing or empty.
+fn find_first_wheel(wheels_dir: &Path) -> Result<Option<PathBuf>, BuildError> {
+    if !wheels_dir.is_dir() {
+        return Ok(None);
+    }
+    let mut wheels: Vec<PathBuf> = std::fs::read_dir(wheels_dir)
+        .map_err(|e| {
+            BuildError::Other {
+                package: String::new(),
+                detail: format!("failed to read wheels directory {}: {e}", wheels_dir.display()),
+            }
+        })?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|p| p.extension().is_some_and(|ext| ext == "whl"))
+        .collect();
+    wheels.sort();
+    Ok(wheels.into_iter().next())
+}
+
+/// Run a `uv` command with the given args and cache directory. Returns the
+/// raw process output (caller inspects `status`); the `Err` arm covers only
+/// the failure to spawn `uv` at all.
+fn run_uv(args: &[&str], uv_cache_dir: &Path) -> Result<std::process::Output, String> {
+    Command::new("uv")
+        .args(args)
+        .env("UV_CACHE_DIR", uv_cache_dir.to_str().unwrap_or(""))
+        .output()
+        .map_err(|e| {
+            format!(
+                "failed to run uv (is uv installed?): {e}. Install with: \
+                 curl -LsSf https://astral.sh/uv/install.sh | sh"
+            )
+        })
+}
+
+fn path_to_str(path: &Path, package_label: &str) -> Result<String, BuildError> {
+    path.to_str().map(|s| s.to_string()).ok_or_else(|| {
+        build_failed(
+            package_label,
+            format!("path is not valid UTF-8: {}", path.display()),
+        )
+    })
+}
+
+fn build_failed(package: &str, detail: String) -> BuildError {
+    BuildError::BuildFailed {
+        tool: "venv".to_string(),
+        package: package.to_string(),
+        detail,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a self-contained, OFFLINE-installable fixture `streamlib` SDK
+    /// package under `root/sdk`: ships `streamlib.yaml` + one trivial,
+    /// dependency-free schema + an empty `_generated_/`, installable via uv
+    /// from local path with no network. Returns the SDK dir.
+    ///
+    /// This stands in for the real registry-resolved SDK. The real SDK
+    /// install pulls `streamlib` from the Gitea registry (network); a
+    /// fixture SDK keeps the test fully offline while still exercising the
+    /// exact provision flow: install → probe `import streamlib` → codegen
+    /// against the installed `streamlib.yaml` → compileall.
+    fn write_fixture_streamlib_sdk(root: &Path) -> PathBuf {
+        let sdk = root.join("sdk");
+        let pkg = sdk.join("src").join("streamlib");
+        std::fs::create_dir_all(pkg.join("_generated_")).unwrap();
+        std::fs::create_dir_all(pkg.join("schemas")).unwrap();
+        std::fs::write(
+            sdk.join("pyproject.toml"),
+            r#"[project]
+name = "streamlib"
+version = "0.1.0"
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+[tool.hatch.build.targets.wheel]
+packages = ["src/streamlib"]
+[tool.hatch.build.targets.wheel.force-include]
+"src/streamlib/streamlib.yaml" = "streamlib/streamlib.yaml"
+"src/streamlib/schemas" = "streamlib/schemas"
+"#,
+        )
+        .unwrap();
+        std::fs::write(pkg.join("__init__.py"), "").unwrap();
+        std::fs::write(pkg.join("_generated_").join("__init__.py"), "").unwrap();
+        std::fs::write(
+            pkg.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: streamlib\n  version: 0.1.0\nschemas:\n  TestSchema:\n    file: schemas/test_schema.yaml\n",
+        )
+        .unwrap();
+        std::fs::write(
+            pkg.join("schemas").join("test_schema.yaml"),
+            "metadata:\n  type: TestSchema\n  max_payload_bytes: 1024\nproperties:\n  value:\n    type: uint32\n",
+        )
+        .unwrap();
+        sdk
+    }
+
+    /// Stage a temp package dir that carries a Python runtime and
+    /// path-depends on the fixture SDK (so the `import streamlib` probe +
+    /// codegen run fully offline). Mirrors what `assemble_artifact` stages:
+    /// a `python/` source dir + a `pyproject.toml`.
+    fn write_staged_python_package(temp_dir: &Path, sdk: &Path) {
+        std::fs::create_dir_all(temp_dir.join("python")).unwrap();
+        std::fs::write(temp_dir.join("python").join("__init__.py"), "").unwrap();
+        std::fs::write(
+            temp_dir.join("pyproject.toml"),
+            format!(
+                r#"[project]
+name = "mypkg"
+version = "0.1.0"
+dependencies = ["streamlib"]
+[tool.uv.sources]
+streamlib = {{ path = "{sdk}", editable = true }}
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+[tool.hatch.build.targets.wheel]
+packages = ["python"]
+"#,
+                sdk = sdk.display()
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn no_python_runtime_is_a_noop() {
+        // A staged package with neither a python/ dir nor a pyproject.toml
+        // gets no venv — the tail must not create one. Mentally reverting
+        // the detection guard would create a venv (and fail / no-op) for a
+        // schemas-only or Rust-only package.
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("streamlib.yaml"), "package:\n  name: x\n").unwrap();
+        provision_python_venv(temp.path(), "tatolab/x").expect("no-python must be a no-op");
+        assert!(
+            !temp.path().join(".venv").exists(),
+            "no venv must be created for a non-Python staged package"
+        );
+    }
+
+    #[test]
+    fn provisions_venv_codegen_and_pyc_offline() {
+        // End-to-end provision against an OFFLINE fixture SDK: proves the
+        // tail yields {temp_dir}/.venv/bin/python, a populated
+        // streamlib/_generated_ (codegen ran), and at least one .pyc
+        // (compileall ran). Requires `uv` + a system Python 3.12 on PATH;
+        // skips (does not fail) when `uv` is absent so the suite stays
+        // green on a box without it.
+        if which_uv().is_none() {
+            eprintln!("skipping: `uv` not on PATH");
+            return;
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let sdk = write_fixture_streamlib_sdk(root.path());
+
+        let temp = tempfile::tempdir().unwrap();
+        write_staged_python_package(temp.path(), &sdk);
+
+        provision_python_venv(temp.path(), "tatolab/mypkg")
+            .expect("provision must succeed offline against the fixture SDK");
+
+        // Contract: interpreter at exactly {temp_dir}/.venv/bin/python.
+        let venv_python = temp.path().join(".venv").join("bin").join("python");
+        assert!(
+            venv_python.exists(),
+            "venv interpreter must exist at {}",
+            venv_python.display()
+        );
+
+        // Codegen: the installed (editable) streamlib's _generated_ must be
+        // populated beyond its __init__.py.
+        let generated = sdk.join("src").join("streamlib").join("_generated_");
+        let populated = generated
+            .read_dir()
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name() != "__init__.py");
+        assert!(
+            populated,
+            "streamlib/_generated_ must be populated by codegen at {}",
+            generated.display()
+        );
+
+        // compileall: at least one .pyc somewhere under the venv.
+        let has_pyc = find_any_pyc(&temp.path().join(".venv"));
+        assert!(has_pyc, "compileall must have produced at least one .pyc in the venv");
+    }
+
+    fn which_uv() -> Option<()> {
+        Command::new("uv")
+            .arg("--version")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|_| ())
+    }
+
+    fn find_any_pyc(dir: &Path) -> bool {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return false;
+        };
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            let ft = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+            if ft.is_dir() {
+                if find_any_pyc(&path) {
+                    return true;
+                }
+            } else if path.extension().is_some_and(|e| e == "pyc") {
+                return true;
+            }
+        }
+        false
+    }
+}
