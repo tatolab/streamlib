@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.31](https://github.com/tatolab/streamlib/compare/v0.4.30...v0.4.31) (2026-05-30)
+
+
+### Features
+
+* **display:** graceful headless degradation — drain-and-drop when no surface ([#1112](https://github.com/tatolab/streamlib/issues/1112)) ([8abf1c4](https://github.com/tatolab/streamlib/commit/8abf1c4f707a4c11cd1971f1b55c31335624e39f))
+* **gitea:** resolve Rust SDK + vulkanalia by version from the Gitea registry ([#1123](https://github.com/tatolab/streamlib/issues/1123)) ([55f639d](https://github.com/tatolab/streamlib/commit/55f639dcd0d352375bae4aa7b6f4d6f0bad28743))
+* **idents:** schema-package registry resolution + cargo-publish manifest strip capability ([#1122](https://github.com/tatolab/streamlib/issues/1122)) ([7a23126](https://github.com/tatolab/streamlib/commit/7a231269de684b0618fb694ac31a79e22a8fe8aa))
+* **python:** publish SDK to Gitea + declare/install/handshake, de-magic PYTHONPATH ([#1125](https://github.com/tatolab/streamlib/issues/1125)) ([421ac6f](https://github.com/tatolab/streamlib/commit/421ac6fd41598390a1207d720c0bb4c4f5398b96))
+
 ## [0.4.30](https://github.com/tatolab/streamlib/compare/v0.4.29...v0.4.30) (2026-05-29)
 
 
