@@ -7,7 +7,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "streamlib"
-version = "0.1.0"
+# Tracks the workspace [workspace.package].version in Cargo.toml. The publish
+# script (scripts/gitea/publish-python-sdk.sh) is authoritative: it rewrites
+# this from the workspace version (+ optional -dev.N) at publish time and
+# restores it, mirroring scripts/gitea/publish-crates.sh. Keep it in sync with
+# the workspace on release so a bare local `uv build` produces a sane version.
+version = "0.4.30"
 description = "Python subprocess SDK for StreamLib real-time streaming framework"
 requires-python = ">=3.10"
 license = { text = "BUSL-1.1" }
@@ -22,10 +27,22 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
-dependencies = []
+# msgpack is the only core runtime dependency (processor_context.py imports it
+# at module load for the iceoryx2 wire). numpy / skia / OpenGL / torch etc. are
+# lazy-imported inside the adapters and stay optional — users bring their own
+# versions (engine rule: adapters must not pin user libraries).
+dependencies = [
+    "msgpack>=1.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["python"]
+
+# Ship the PEP 561 inline-type marker so type checkers / LSP resolve completion
+# against an installed `streamlib` (the declared-dependency half of the
+# declare-and-inject contract).
+[tool.setuptools.package-data]
+streamlib = ["py.typed"]
 
 [project.optional-dependencies]
 dev = [
