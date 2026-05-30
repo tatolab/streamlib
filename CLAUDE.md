@@ -332,6 +332,36 @@ Run `cargo doc -p streamlib --no-deps` - fix any unresolved link warnings.
 ### Dependencies
 - **Git dependencies must be pinned** with `rev = "<commit sha>"` (or `tag = "..."`). Never use a bare `git = "..."` or `branch = "..."` — Cargo resolves those against the remote's current HEAD, so fresh clones drift out of sync with the lockfile and stop compiling. This applies to every `Cargo.toml` in the workspace, including `[patch.crates-io]` entries.
 
+### Dependency resolution & distribution — unified Gitea registry
+
+**Decided architecture, validated by POC, in active migration** (the "Gitea
+Package Registry" milestone). Documented ahead of full implementation on
+purpose — follow it; do **not** reimplement resolution a different way. Full
+model + which issue finalizes each piece: @docs/architecture/gitea-registry-distribution.md.
+
+Every StreamLib-authored **or customized** artifact is published to a single
+self-hosted **Gitea** instance under the **`tatolab`** org and resolved **by
+version** — never by relative `path` or git `[patch]` in anything a consumer
+sees:
+
+- **SDK libraries** (rust `streamlib` crate chain, python pkg, deno module) →
+  Gitea's cargo / pypi / npm registries.
+- **Packages** (polyglot streamlib packages) → **source-only `.slpkg`** via
+  `streamlib pack` → Gitea's generic registry.
+- **`streamlib.yaml` schema deps** (e.g. `@tatolab/escalate`) → resolved from
+  the generic registry (schema-package `.slpkg`), not a dev path patch.
+- **Truly-external untouched deps** (serde, tokio, …) keep resolving from
+  their normal public registries.
+
+Rust internal cross-crate deps use `{ path = "../foo", version = "x.y",
+registry = "gitea" }` — the `path` is a dev-only affordance cargo strips from
+the published manifest (standard workspace-publish pattern); `registry =
+"gitea"` is required or cargo defaults to crates.io. A local engine change is
+published as a `0.4.x-dev.N` version the consumer bumps to — **never** a new
+relative-path dep or `[patch]`. Don't introduce new relative-path / git-`[patch]`
+cross-crate deps. The monorepo still builds itself in-place (the dev `path`
+wins locally); publishing is a release step.
+
 ### Vulkan RHI Boundary — ABSOLUTE RULE
 
 **NOTHING outside the RHI may touch Vulkan APIs directly.** "The RHI" here means `libs/streamlib-engine/src/vulkan/rhi/` (host-side) and `libs/streamlib-consumer-rhi/` (consumer-side carve-out, #560) — together they own every `vulkanalia` call in the workspace. No processor, utility, codec wrapper, or any other code may call `vulkanalia::Device`, `vkAllocateMemory`, `vkCreateImage`, or any Vulkan function without going through one of those two crates. This is non-negotiable. (`ash` is fully removed from the workspace per #252; never reintroduce it.)
