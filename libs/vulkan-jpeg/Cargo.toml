@@ -13,7 +13,7 @@ tracing = { workspace = true }
 bytemuck = { version = "1.16", features = ["derive"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib = { path = "../streamlib-sdk" }
+streamlib = { path = "../streamlib-sdk", version = "0.4.30", registry = "gitea" }
 # Dynamic loading for libnvjpeg.so.12. nvJPEG is NVIDIA-only and not
 # always installed; resolving at runtime keeps the workspace building
 # cleanly on hosts without the CUDA Toolkit. See

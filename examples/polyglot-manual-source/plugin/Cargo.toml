@@ -11,11 +11,11 @@ publish = false
 crate-type = ["cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = { path = "../../../libs/streamlib-jtd-codegen" }
+streamlib-jtd-codegen = { path = "../../../libs/streamlib-jtd-codegen", version = "0.4.30", registry = "gitea" }
 
 [dependencies]
-streamlib = { path = "../../../libs/streamlib-sdk" }
-streamlib-plugin-abi = { path = "../../../libs/streamlib-plugin-abi" }
+streamlib = { path = "../../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
+streamlib-plugin-abi = { path = "../../../libs/streamlib-plugin-abi", version = "0.4.30", registry = "gitea" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = "0.1"

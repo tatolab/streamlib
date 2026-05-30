@@ -14,21 +14,21 @@ name = "streamlib_jpeg"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen" }
+streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen", version = "0.4.30", registry = "gitea" }
 
 [dependencies]
 # Engine substrate — runtime context, processor traits, generated config
 # types under `crate::_generated_::tatolab__jpeg::*`, VideoFrame wire
 # type, RHI texture / color primitives.
-streamlib = { path = "../../libs/streamlib-sdk" }
+streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
 
 # Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = { path = "../../libs/streamlib-macros" }
+streamlib-macros = { path = "../../libs/streamlib-macros", version = "0.4.30", registry = "gitea" }
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = { path = "../../libs/streamlib-plugin-abi" }
+streamlib-plugin-abi = { path = "../../libs/streamlib-plugin-abi", version = "0.4.30", registry = "gitea" }
 
 # Serialization (config dataclasses ship as serde-derived).
 serde.workspace = true
@@ -43,7 +43,7 @@ tracing.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 # GPU JPEG decode primitive — fused Vulkan compute kernel + optional
 # nvJPEG fast path behind SimpleJpegDecoder. Owns its own texture ring.
-vulkan-jpeg = { path = "../../libs/vulkan-jpeg" }
+vulkan-jpeg = { path = "../../libs/vulkan-jpeg", version = "0.4.30", registry = "gitea" }
 
 [dev-dependencies]
 # Wire-shape regression test serializes generated `EncodedJpegFrame` through

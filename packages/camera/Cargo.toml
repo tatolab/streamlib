@@ -14,21 +14,21 @@ name = "streamlib_camera"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen" }
+streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen", version = "0.4.30", registry = "gitea" }
 
 [dependencies]
 # Engine substrate — runtime context, processor traits, generated config
 # types under `crate::_generated_::tatolab__camera::*`, VideoFrame
 # wire type, RHI primitives.
-streamlib = { path = "../../libs/streamlib-sdk" }
+streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
 
 # Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = { path = "../../libs/streamlib-macros" }
+streamlib-macros = { path = "../../libs/streamlib-macros", version = "0.4.30", registry = "gitea" }
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = { path = "../../libs/streamlib-plugin-abi" }
+streamlib-plugin-abi = { path = "../../libs/streamlib-plugin-abi", version = "0.4.30", registry = "gitea" }
 
 # Cross-platform deps used by the camera processor.
 parking_lot = "0.12"
@@ -51,17 +51,17 @@ libc.workspace = true
 # anything else from consumer-rhi (no `ConsumerVulkanDevice`, no imports);
 # this is the typed-layout interop type shared between the host RHI's
 # `RhiCommandRecorder` and the cross-process surface-share schema.
-streamlib-consumer-rhi = { path = "../../libs/streamlib-consumer-rhi" }
+streamlib-consumer-rhi = { path = "../../libs/streamlib-consumer-rhi", version = "0.4.30", registry = "gitea" }
 # CUDA host-side surface adapter — the `CameraToCudaCopy` processor
 # allocates a DEVICE_LOCAL OPAQUE_FD VkBuffer + exportable timeline
 # and runs the host-side `vkCmdCopyImageToBuffer` per frame for
 # cross-API CUDA interop. The adapter crate itself stays cudarc-free
 # (`cudarc` integration happens in the cdylib consumer); this dep
 # does NOT pull `libcuda.so` into the camera package's link surface.
-streamlib-adapter-cuda = { path = "../../libs/streamlib-adapter-cuda" }
+streamlib-adapter-cuda = { path = "../../libs/streamlib-adapter-cuda", version = "0.4.30", registry = "gitea" }
 # Adapter ABI — provides `SurfaceId` and `AdapterError` types the
 # CUDA adapter surface uses in its public API.
-streamlib-adapter-abi = { path = "../../libs/streamlib-adapter-abi" }
+streamlib-adapter-abi = { path = "../../libs/streamlib-adapter-abi", version = "0.4.30", registry = "gitea" }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 # Objective-C interop and Apple framework bindings.

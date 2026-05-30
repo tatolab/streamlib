@@ -70,7 +70,7 @@ namespace up is scripted and idempotent — see
 No consumer ever sees a relative `path` dep or a git `[patch]`. Each language
 uses its native resolution, pointed at Gitea via container-level config:
 
-### Rust (finalized in #1105)
+### Rust
 
 Internal cross-crate deps use the standard cargo "publish a workspace" form:
 
@@ -94,7 +94,7 @@ streamlib-engine = { path = "../streamlib-engine", version = "0.4.30", registry 
 - Deno: a stable bare `import "streamlib"` resolves from Gitea's npm registry
   (`.npmrc`) or a container-level import map — no relative `../../../libs/...`.
 
-### vulkanalia fork (finalized in #1105)
+### vulkanalia fork
 
 The `tatolab/vulkanalia` fork (`vulkanalia` / `-sys` / `-vma`) is published to
 Gitea and resolved by `{ version, registry = "gitea" }`. The workspace's
@@ -115,7 +115,7 @@ Gitea by version.
 > on the consuming host to build the rust cdylib — weigh against the
 > compiler-free-deployment goal.
 
-## Schema-package resolution (resolver + strip capability shipped in #1116; cargo-publish wiring in #1105)
+## Schema-package resolution (resolver + strip capability + cargo-publish wiring shipped)
 
 `streamlib.yaml` schema dependencies (e.g. `@tatolab/escalate`) are themselves
 packages — they resolve from Gitea's **generic** registry: list the schema
@@ -141,10 +141,15 @@ halves, mirroring cargo:
    `../../packages/...` path patch). `streamlib_pack::strip_path_patches`
    drops dev path-flavor `patch:` entries, exposed as `xtask
    strip-publish-manifest --dir <crate-dir>`. Because **`cargo publish`
-   bundles `streamlib.yaml` verbatim** with no file-rewrite hook, the strip
-   runs against a scratch copy before publish — that wiring (plus the
-   ~28-crate manifest migration and the out-of-repo build) lands with the
-   dev-publish script in #1105.
+   bundles `streamlib.yaml` verbatim** with no file-rewrite hook,
+   `scripts/gitea/publish-crates.sh` runs the strip immediately before each
+   affected crate's publish and restores the tree afterward (today only
+   `streamlib-engine` →`@tatolab/escalate` carries a `patch:`); the companion
+   `scripts/gitea/publish-vulkanalia.sh` does the equivalent on a non-git
+   scratch copy of the fork. Verified end to end: an out-of-repo consumer
+   deps `streamlib` by version, and `streamlib-engine`'s `build.rs` codegen
+   resolves `@tatolab/escalate` from the generic registry (the schema package
+   published as a source `.slpkg`) and the engine compiles.
 
    > ~~`streamlib pack`'s `RejectPathPatches` strips the dev `path:` patch.~~
    > — Corrected 2026-05-30 (#1116): `RejectPathPatches` *rejects* a path
@@ -215,15 +220,16 @@ Notes the scripts encode:
 
 | Piece | Status | Issue |
 |---|---|---|
-| cargo publish → resolve-by-version (real SDK chain + vulkanalia/VMA) | ✅ validated (POC) | #1105 |
+| cargo publish → resolve-by-version (real SDK chain + vulkanalia/VMA) | ✅ shipped | #1105 |
 | `.slpkg` round-trip through the generic registry | ✅ validated (POC) | #1119 |
 | `tatolab` org namespace + POC cleanup | ✅ shipped | #1115 |
 | schema-package registry resolution (resolver `Registry` arm) + `strip_path_patches` capability | ✅ shipped | #1116 |
-| cargo-publish manifest path-strip *wiring* (dev-publish script + manifest migration) | ⏳ | #1105 |
+| cargo-publish manifest path-strip *wiring* (dev-publish script + manifest migration) | ✅ shipped | #1105 |
+| full-engine codegen consumer build (engine `build.rs` resolves `@tatolab/escalate` from the generic registry) | ✅ shipped | #1105 |
 | Python SDK publish | ⏳ | #1117 |
 | Deno SDK publish | ⏳ | #1118 |
 | packages as source-only `.slpkg` + `streamlib pack` source-only | ⏳ | #1119 |
-| repo migration committed (`{ path, version, registry }`, `.cargo/config`, dev-publish script) | ⏳ | #1105 |
+| repo migration committed (`{ path, version, registry }`, `.cargo/config`, dev-publish script) | ✅ shipped | #1105 |
 
 ## Reference
 

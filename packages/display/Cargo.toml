@@ -14,7 +14,7 @@ name = "streamlib_display"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen" }
+streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen", version = "0.4.30", registry = "gitea" }
 
 [dependencies]
 # Engine substrate — runtime context, processor traits, generated config
@@ -22,15 +22,15 @@ streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen" }
 # wire type, host RHI types (HostVulkanDevice, VulkanGraphicsKernel,
 # VulkanPresentTarget, RhiCommandRecorder, OffscreenColorTarget,
 # TextureFormat).
-streamlib = { path = "../../libs/streamlib-sdk" }
+streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
 
 # Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = { path = "../../libs/streamlib-macros" }
+streamlib-macros = { path = "../../libs/streamlib-macros", version = "0.4.30", registry = "gitea" }
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = { path = "../../libs/streamlib-plugin-abi" }
+streamlib-plugin-abi = { path = "../../libs/streamlib-plugin-abi", version = "0.4.30", registry = "gitea" }
 
 tracing.workspace = true
 serde.workspace = true
@@ -45,7 +45,7 @@ raw-window-handle = "0.6"
 # Consumer-side RHI carve-out — typed `VulkanLayout` enum used in
 # producer/consumer surface-share interop. Camera uses the same dep
 # for the same reason.
-streamlib-consumer-rhi = { path = "../../libs/streamlib-consumer-rhi" }
+streamlib-consumer-rhi = { path = "../../libs/streamlib-consumer-rhi", version = "0.4.30", registry = "gitea" }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 # Apple module is ported into this package but DISABLED in `lib.rs` —

@@ -14,10 +14,10 @@ repository.workspace = true
 anyhow = { workspace = true }
 tracing = { workspace = true }
 serde_json = { workspace = true }
-streamlib-engine = { path = "../streamlib-engine" }
-streamlib-cargo-build = { path = "../streamlib-cargo-build" }
-streamlib-pack = { path = "../streamlib-pack" }
-streamlib-plugin-abi = { path = "../streamlib-plugin-abi" }
+streamlib-engine = { path = "../streamlib-engine", version = "0.4.30", registry = "gitea" }
+streamlib-cargo-build = { path = "../streamlib-cargo-build", version = "0.4.30", registry = "gitea" }
+streamlib-pack = { path = "../streamlib-pack", version = "0.4.30", registry = "gitea" }
+streamlib-plugin-abi = { path = "../streamlib-plugin-abi", version = "0.4.30", registry = "gitea" }
 
 [dev-dependencies]
 tempfile = "3.14"

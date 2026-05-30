@@ -5,5 +5,5 @@ edition = "2024"
 publish = false
 
 [dependencies]
-streamlib = { path = "../../libs/streamlib-sdk" }
+streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
 tokio = { version = "1", features = ["full"] }
