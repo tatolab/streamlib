@@ -1121,6 +1121,67 @@ mod add_module_tests {
         );
     }
 
+    /// A source-only Python package (declares a `python` runtime processor,
+    /// so resolution requires a build to materialize its `.venv` + generated
+    /// vocabulary) loaded with `IfStale` and NO orchestrator wired must fail
+    /// loud with `BuildRequiredButNoOrchestrator` — never silently load an
+    /// unbuilt source tree. Confirms the no-orchestrator guard is
+    /// package-shape-agnostic: it fires before manifest content is even read,
+    /// so a Python-runtime package hits the same error as a schemas-only one.
+    ///
+    /// Mentally-revert: if the `None` arm of the orchestrator match in the
+    /// walker were changed to fall through and load-as-is, this `expect_err`
+    /// would instead succeed (or fail with a downstream Python error), and
+    /// the `BuildRequiredButNoOrchestrator` match would fail.
+    #[test]
+    #[serial]
+    fn python_source_package_without_orchestrator_fails_loud() {
+        let home = tempfile::tempdir().unwrap();
+        let pkg = tempfile::tempdir().unwrap();
+        std::fs::write(
+            pkg.path().join("streamlib.yaml"),
+            r#"
+package:
+  org: tatolab
+  name: py-no-orch
+  version: "0.1.0"
+processors:
+  - name: PyProc
+    version: 1.0.0
+    description: "source-only python processor"
+    runtime: python
+    execution: manual
+    entrypoint: "pyproc:PyProc"
+    inputs:
+      - name: in0
+        schema: any
+    outputs:
+      - name: out0
+        schema: any
+"#,
+        )
+        .unwrap();
+        std::fs::write(pkg.path().join("pyproc.py"), "class PyProc:\n    pass\n").unwrap();
+        let _guard = HomeGuard::install(home.path());
+        let runtime = Runner::new().expect("Runner::new");
+        // No orchestrator wired. A path dep derives IfStale, which requires
+        // a build for a runtime-bearing package.
+        let err = runtime
+            .add_module_with_blocking(
+                ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new("py-no-orch").unwrap()),
+                Strategy::Path {
+                    path: pkg.path().to_path_buf(),
+                    build: BuildPolicy::IfStale,
+                },
+            )
+            .expect_err("a build-requiring python source package with no orchestrator must fail loud");
+        assert!(
+            matches!(err, AddModuleError::BuildRequiredButNoOrchestrator { ref package, .. }
+                if package.name.as_str() == "py-no-orch"),
+            "expected BuildRequiredButNoOrchestrator for py-no-orch, got: {err:?}",
+        );
+    }
+
     // =====================================================================
     // Recursive dep walker + cycle detection
     // =====================================================================

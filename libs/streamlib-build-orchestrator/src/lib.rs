@@ -37,6 +37,9 @@
 
 mod python_venv;
 
+#[cfg(test)]
+mod test_support;
+
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -541,6 +544,231 @@ mod tests {
             restaged.contains("2048"),
             "edited schema must be re-staged into the cache, got: {restaged}"
         );
+    }
+
+    /// Recursively collect `(relative_path, bytes)` for every file under
+    /// `dir`, excluding `.pyc` (compileall artifacts vary by interpreter).
+    /// Used to compare two generated-code trees for an exact file-set +
+    /// content match.
+    fn collect_tree(dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+        fn walk(
+            dir: &Path,
+            root: &Path,
+            out: &mut std::collections::BTreeMap<String, Vec<u8>>,
+        ) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                if path.extension().is_some_and(|e| e == "pyc") {
+                    continue;
+                }
+                if entry.file_type().unwrap().is_dir() {
+                    if path.file_name().is_some_and(|n| n == "__pycache__") {
+                        continue;
+                    }
+                    walk(&path, root, out);
+                } else {
+                    let rel = path
+                        .strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .to_string();
+                    out.insert(rel, std::fs::read(&path).unwrap());
+                }
+            }
+        }
+        let mut out = std::collections::BTreeMap::new();
+        walk(dir, dir, &mut out);
+        out
+    }
+
+    fn py_request(pkg_dir: &Path, policy: BuildPolicy) -> BuildRequest {
+        BuildRequest {
+            package: pkg_ref("tatolab", "py-source"),
+            source: BuildSource::PackageDir(pkg_dir.to_path_buf()),
+            policy,
+            host_triple: build::host_target_triple().to_string(),
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn python_package_reuse_then_rebuild_via_unified_fingerprint() {
+        // A pure-Python SOURCE package materialized with IfStale: the venv
+        // tail runs (interpreter + populated _generated_ land), an unchanged
+        // re-materialize SKIPS via the sidecar fingerprint (cache slot left
+        // untouched), and a source edit busts the fingerprint so the next
+        // materialize re-stages (cache slot wiped + rewritten with the new
+        // content).
+        //
+        // The skip-vs-restage signal is a SENTINEL file we plant in the
+        // cache slot after the first stage: `atomic_swap` does
+        // `remove_dir_all(slot)` + rename, so a re-stage destroys the
+        // sentinel while a skip (which returns the cached slot verbatim,
+        // never touching it) leaves it intact. (`StagedArtifact.rebuilt` is
+        // NOT a usable signal here: source-only Python invokes no
+        // compiler/wheel-builder, so assemble reports rebuilt=false even on
+        // a real re-stage — only Rust packages flip it.)
+        //
+        // Mentally-revert: if the sidecar staleness comparison were removed
+        // (always re-assemble), the unchanged re-materialize would re-stage
+        // and wipe the sentinel — the "sentinel survives unchanged
+        // re-materialize" assertion fails. If it were inverted to "always
+        // skip", the post-edit materialize would NOT pick up the edited
+        // source — the "edited content re-staged" assertion fails.
+        if crate::test_support::which_uv().is_none() {
+            eprintln!("skipping: `uv` not on PATH");
+            return;
+        }
+        let _home = HomeGuard::new();
+        let root = tempfile::tempdir().unwrap();
+        let sdk = crate::test_support::write_fixture_streamlib_sdk(root.path());
+        let src = tempfile::tempdir().unwrap();
+        crate::test_support::write_python_source_package(src.path(), &sdk);
+        let orch = PolyglotBuildOrchestrator::default();
+
+        // First materialize: assembles + provisions the venv.
+        let first = orch
+            .materialize(&py_request(src.path(), BuildPolicy::IfStale), &NoopSink)
+            .expect("first materialize of a python source package must succeed offline");
+        let venv_python = first.staged_dir.join(".venv").join("bin").join("python");
+        assert!(
+            venv_python.exists(),
+            "venv interpreter must exist after first materialize at {}",
+            venv_python.display()
+        );
+        // The installed (editable) streamlib's _generated_ is populated by
+        // codegen — the unified provision tail ran.
+        let generated = sdk.join("src").join("streamlib").join("_generated_");
+        let populated = generated
+            .read_dir()
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name() != "__init__.py");
+        assert!(populated, "_generated_ must be populated after first materialize");
+
+        // Plant a sentinel in the staged cache slot. A skip leaves it; a
+        // re-stage (atomic_swap → remove_dir_all + rename) destroys it.
+        let sentinel = first.staged_dir.join(".reuse-sentinel");
+        std::fs::write(&sentinel, b"present").unwrap();
+
+        // Second materialize, source UNCHANGED → fingerprint match → skip.
+        let second = orch
+            .materialize(&py_request(src.path(), BuildPolicy::IfStale), &NoopSink)
+            .expect("second materialize (unchanged) must succeed");
+        assert_eq!(
+            second.staged_dir, first.staged_dir,
+            "skip path returns the same staged dir"
+        );
+        assert!(
+            sentinel.exists(),
+            "unchanged source must SKIP (sidecar fingerprint match) — the cache slot \
+             must be left untouched, so the sentinel survives"
+        );
+        assert!(
+            venv_python.exists(),
+            "venv must still be present after the skip (the skip returns the cached slot intact)"
+        );
+
+        // Edit a source file → fingerprint busts → re-stage.
+        std::fs::write(
+            src.path().join("pyproc.py"),
+            "class PyProc:\n    VERSION = 2\n",
+        )
+        .unwrap();
+        let third = orch
+            .materialize(&py_request(src.path(), BuildPolicy::IfStale), &NoopSink)
+            .expect("third materialize (after edit) must succeed");
+        assert!(
+            !sentinel.exists(),
+            "edited source must bust the fingerprint and RE-STAGE — atomic_swap wipes \
+             the old cache slot, destroying the sentinel"
+        );
+        let restaged = std::fs::read_to_string(third.staged_dir.join("pyproc.py")).unwrap();
+        assert!(
+            restaged.contains("VERSION = 2"),
+            "edited source must be re-staged into the cache, got: {restaged}"
+        );
+        // The re-staged slot is freshly provisioned: venv present again.
+        assert!(
+            third.staged_dir.join(".venv").join("bin").join("python").exists(),
+            "re-staged slot must carry a freshly provisioned venv"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn orchestrator_generated_matches_standalone_codegen() {
+        // Identical-output lock: the streamlib wire vocabulary the
+        // orchestrator's venv tail writes into the installed SDK's
+        // `_generated_` must be byte-for-byte identical to what
+        // `streamlib_jtd_codegen::generate` produces directly for the SAME
+        // installed SDK manifest with the SAME options (Python target,
+        // project_dir = installed streamlib dir). This is the STRONGER lock
+        // than asserting hardcoded expected content: it can't drift when
+        // codegen output legitimately changes, and it directly asserts the
+        // contract "orchestrator output == canonical codegen output" rather
+        // than "orchestrator output == some frozen snapshot".
+        //
+        // Mentally-revert: if the orchestrator stopped running codegen (or
+        // ran it with a different runtime/target/project_dir), the file-set
+        // or contents would diverge and the equality assertion fails.
+        if crate::test_support::which_uv().is_none() {
+            eprintln!("skipping: `uv` not on PATH");
+            return;
+        }
+        let _home = HomeGuard::new();
+        let root = tempfile::tempdir().unwrap();
+        let sdk = crate::test_support::write_fixture_streamlib_sdk(root.path());
+        let src = tempfile::tempdir().unwrap();
+        crate::test_support::write_python_source_package(src.path(), &sdk);
+        let orch = PolyglotBuildOrchestrator::default();
+
+        orch.materialize(&py_request(src.path(), BuildPolicy::IfStale), &NoopSink)
+            .expect("materialize must succeed offline against the fixture SDK");
+
+        // The editable install points `streamlib` at the SDK src; the venv
+        // tail wrote codegen into <sdk>/src/streamlib/_generated_.
+        let streamlib_dir = sdk.join("src").join("streamlib");
+        let orchestrator_generated = streamlib_dir.join("_generated_");
+
+        // Reproduce the exact codegen call the venv tail makes, into a
+        // scratch dir.
+        let scratch = tempfile::tempdir().unwrap();
+        let standalone = scratch.path().join("_generated_");
+        std::fs::create_dir_all(&standalone).unwrap();
+        std::fs::write(standalone.join("__init__.py"), "").unwrap();
+        streamlib_jtd_codegen::generate(streamlib_jtd_codegen::GenerateOptions {
+            runtime: streamlib_jtd_codegen::RuntimeTarget::Python,
+            output: standalone.clone(),
+            project_dir: Some(streamlib_dir.clone()),
+            schema_file: None,
+            schema_dir: None,
+            workspace_root: streamlib_dir.clone(),
+            write_lockfile: false,
+        })
+        .expect("standalone codegen must succeed against the same installed manifest");
+
+        let from_orch = collect_tree(&orchestrator_generated);
+        let from_codegen = collect_tree(&standalone);
+
+        assert!(
+            from_codegen.len() > 1,
+            "standalone codegen must emit generated module(s) beyond __init__.py, got: {:?}",
+            from_codegen.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            from_orch.keys().collect::<Vec<_>>(),
+            from_codegen.keys().collect::<Vec<_>>(),
+            "orchestrator-generated file SET must equal standalone codegen's"
+        );
+        for (rel, bytes) in &from_codegen {
+            assert_eq!(
+                from_orch.get(rel),
+                Some(bytes),
+                "generated file `{rel}` must match standalone codegen byte-for-byte"
+            );
+        }
     }
 
     #[test]

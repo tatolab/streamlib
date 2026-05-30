@@ -304,52 +304,7 @@ fn build_failed(package: &str, detail: String) -> BuildError {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Build a self-contained, OFFLINE-installable fixture `streamlib` SDK
-    /// package under `root/sdk`: ships `streamlib.yaml` + one trivial,
-    /// dependency-free schema + an empty `_generated_/`, installable via uv
-    /// from local path with no network. Returns the SDK dir.
-    ///
-    /// This stands in for the real registry-resolved SDK. The real SDK
-    /// install pulls `streamlib` from the Gitea registry (network); a
-    /// fixture SDK keeps the test fully offline while still exercising the
-    /// exact provision flow: install → probe `import streamlib` → codegen
-    /// against the installed `streamlib.yaml` → compileall.
-    fn write_fixture_streamlib_sdk(root: &Path) -> PathBuf {
-        let sdk = root.join("sdk");
-        let pkg = sdk.join("src").join("streamlib");
-        std::fs::create_dir_all(pkg.join("_generated_")).unwrap();
-        std::fs::create_dir_all(pkg.join("schemas")).unwrap();
-        std::fs::write(
-            sdk.join("pyproject.toml"),
-            r#"[project]
-name = "streamlib"
-version = "0.1.0"
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-[tool.hatch.build.targets.wheel]
-packages = ["src/streamlib"]
-[tool.hatch.build.targets.wheel.force-include]
-"src/streamlib/streamlib.yaml" = "streamlib/streamlib.yaml"
-"src/streamlib/schemas" = "streamlib/schemas"
-"#,
-        )
-        .unwrap();
-        std::fs::write(pkg.join("__init__.py"), "").unwrap();
-        std::fs::write(pkg.join("_generated_").join("__init__.py"), "").unwrap();
-        std::fs::write(
-            pkg.join("streamlib.yaml"),
-            "package:\n  org: tatolab\n  name: streamlib\n  version: 0.1.0\nschemas:\n  TestSchema:\n    file: schemas/test_schema.yaml\n",
-        )
-        .unwrap();
-        std::fs::write(
-            pkg.join("schemas").join("test_schema.yaml"),
-            "metadata:\n  type: TestSchema\n  max_payload_bytes: 1024\nproperties:\n  value:\n    type: uint32\n",
-        )
-        .unwrap();
-        sdk
-    }
+    use crate::test_support::{which_uv, write_fixture_streamlib_sdk};
 
     /// Stage a temp package dir that carries a Python runtime and
     /// path-depends on the fixture SDK (so the `import streamlib` probe +
@@ -441,15 +396,6 @@ packages = ["python"]
         // compileall: at least one .pyc somewhere under the venv.
         let has_pyc = find_any_pyc(&temp.path().join(".venv"));
         assert!(has_pyc, "compileall must have produced at least one .pyc in the venv");
-    }
-
-    fn which_uv() -> Option<()> {
-        Command::new("uv")
-            .arg("--version")
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|_| ())
     }
 
     fn find_any_pyc(dir: &Path) -> bool {
