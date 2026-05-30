@@ -150,6 +150,19 @@ enum Commands {
     /// `streamlib.yaml` carries the `# yaml-language-server: $schema=...`
     /// header, (3) every `streamlib.yaml` validates against the schema.
     CheckManifestSchema,
+
+    /// Strip dev-time path-flavor `patch:` entries from a crate's
+    /// `streamlib.yaml` so the published manifest is path-free. Intended to
+    /// run against a scratch copy of the crate before `cargo publish` (cargo
+    /// bundles `streamlib.yaml` verbatim with no file-rewrite hook). The
+    /// publish-side half of the Gitea registry distribution; the resolver's
+    /// `Registry` arm resolves the now-path-free dep from the registry. See
+    /// `docs/architecture/gitea-registry-distribution.md`.
+    StripPublishManifest {
+        /// Directory containing the `streamlib.yaml` to strip in place.
+        #[arg(long)]
+        dir: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -198,6 +211,12 @@ fn main() -> Result<()> {
         }
         Commands::EmitManifestSchema => manifest_schema::emit(&workspace_root()?)?,
         Commands::CheckManifestSchema => manifest_schema::check(&workspace_root()?)?,
+        Commands::StripPublishManifest { dir } => {
+            streamlib_pack::strip_path_patches_in_dir(&dir).with_context(|| {
+                format!("stripping path patches from {}", dir.display())
+            })?;
+            tracing::info!(dir = %dir.display(), "stripped path-flavor patch entries from streamlib.yaml");
+        }
     }
 
     Ok(())
