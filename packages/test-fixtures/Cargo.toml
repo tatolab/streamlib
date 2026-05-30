@@ -14,20 +14,20 @@ name = "streamlib_test_fixtures"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen" }
+streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen", version = "0.4.30", registry = "gitea" }
 
 [dependencies]
 # Engine substrate — runtime context, processor traits, generated config
 # types under `crate::_generated_::tatolab__test_fixtures::*`.
-streamlib = { path = "../../libs/streamlib-sdk" }
+streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
 
 # Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = { path = "../../libs/streamlib-macros" }
+streamlib-macros = { path = "../../libs/streamlib-macros", version = "0.4.30", registry = "gitea" }
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = { path = "../../libs/streamlib-plugin-abi" }
+streamlib-plugin-abi = { path = "../../libs/streamlib-plugin-abi", version = "0.4.30", registry = "gitea" }
 
 # Serialization (config dataclass ships as serde-derived).
 serde.workspace = true
@@ -45,11 +45,11 @@ tokio = { workspace = true, features = ["rt", "net", "macros"] }
 # and the v10 `host_vulkan_texture_arc` bridge plus the existing
 # `acquire_render_target_dma_buf_image` slot).
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib-adapter-abi = { path = "../../libs/streamlib-adapter-abi" }
-streamlib-adapter-cpu-readback = { path = "../../libs/streamlib-adapter-cpu-readback" }
-streamlib-adapter-cuda = { path = "../../libs/streamlib-adapter-cuda" }
-streamlib-adapter-opengl = { path = "../../libs/streamlib-adapter-opengl" }
-streamlib-adapter-vulkan = { path = "../../libs/streamlib-adapter-vulkan" }
+streamlib-adapter-abi = { path = "../../libs/streamlib-adapter-abi", version = "0.4.30", registry = "gitea" }
+streamlib-adapter-cpu-readback = { path = "../../libs/streamlib-adapter-cpu-readback", version = "0.4.30", registry = "gitea" }
+streamlib-adapter-cuda = { path = "../../libs/streamlib-adapter-cuda", version = "0.4.30", registry = "gitea" }
+streamlib-adapter-opengl = { path = "../../libs/streamlib-adapter-opengl", version = "0.4.30", registry = "gitea" }
+streamlib-adapter-vulkan = { path = "../../libs/streamlib-adapter-vulkan", version = "0.4.30", registry = "gitea" }
 
 [lints]
 workspace = true

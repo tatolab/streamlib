@@ -29,14 +29,14 @@ default = []
 cuda = []
 
 [dependencies]
-streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
-streamlib-adapter-cuda-abi = { path = "../streamlib-adapter-cuda-abi" }
+streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.4.30", registry = "gitea" }
+streamlib-adapter-cuda-abi = { path = "../streamlib-adapter-cuda-abi", version = "0.4.30", registry = "gitea" }
 thiserror.workspace = true
 tracing.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
-streamlib-surface-client = { path = "../streamlib-surface-client" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.4.30", registry = "gitea" }
+streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.4.30", registry = "gitea" }
 vulkanalia.workspace = true
 libc.workspace = true
 # DLPack ABI mirrors only — `default-features = false` pulls in only

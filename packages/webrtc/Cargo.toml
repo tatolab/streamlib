@@ -14,12 +14,12 @@ name = "streamlib_webrtc"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen" }
+streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen", version = "0.4.30", registry = "gitea" }
 
 [dependencies]
-streamlib = { path = "../../libs/streamlib-sdk" }
-streamlib-macros = { path = "../../libs/streamlib-macros" }
-streamlib-plugin-abi = { path = "../../libs/streamlib-plugin-abi" }
+streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
+streamlib-macros = { path = "../../libs/streamlib-macros", version = "0.4.30", registry = "gitea" }
+streamlib-plugin-abi = { path = "../../libs/streamlib-plugin-abi", version = "0.4.30", registry = "gitea" }
 
 serde.workspace = true
 # Generated `EncodedVideoFrame.data` / `EncodedAudioFrame.data` ride msgpack

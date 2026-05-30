@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-streamlib = { path = "../../libs/streamlib-sdk" }
+streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-streamlib-screen-capture = { path = "../../packages/screen-capture" }
+streamlib-screen-capture = { path = "../../packages/screen-capture", version = "0.4.30", registry = "gitea" }

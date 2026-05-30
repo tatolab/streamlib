@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-streamlib = { path = "../../libs/streamlib-sdk" }
-streamlib-camera = { path = "../../packages/camera" }
+streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
+streamlib-camera = { path = "../../packages/camera", version = "0.4.30", registry = "gitea" }
 serde_json = "1.0"

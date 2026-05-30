@@ -42,11 +42,11 @@ default = []
 cuda = ["dep:cudarc"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib = { path = "../streamlib-sdk" }
-streamlib-engine = { path = "../streamlib-engine" }
-streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
-streamlib-adapter-cuda = { path = "../streamlib-adapter-cuda" }
-streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
+streamlib = { path = "../streamlib-sdk", version = "0.4.30", registry = "gitea" }
+streamlib-engine = { path = "../streamlib-engine", version = "0.4.30", registry = "gitea" }
+streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.4.30", registry = "gitea" }
+streamlib-adapter-cuda = { path = "../streamlib-adapter-cuda", version = "0.4.30", registry = "gitea" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.4.30", registry = "gitea" }
 vulkanalia.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

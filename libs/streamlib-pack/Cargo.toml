@@ -15,9 +15,9 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 serde_yaml = { workspace = true }
 zip = "2.2"
-streamlib-cargo-build = { path = "../streamlib-cargo-build" }
-streamlib-processor-schema = { path = "../streamlib-processor-schema" }
-streamlib-idents = { path = "../streamlib-idents" }
+streamlib-cargo-build = { path = "../streamlib-cargo-build", version = "0.4.30", registry = "gitea" }
+streamlib-processor-schema = { path = "../streamlib-processor-schema", version = "0.4.30", registry = "gitea" }
+streamlib-idents = { path = "../streamlib-idents", version = "0.4.30", registry = "gitea" }
 
 [dev-dependencies]
 tempfile = "3.14"

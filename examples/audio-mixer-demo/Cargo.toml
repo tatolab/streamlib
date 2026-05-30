@@ -9,5 +9,5 @@ edition = "2024"
 # `Runner::add_module_with` against the build orchestrator
 # output — no compile-time link.
 [dependencies]
-streamlib = { path = "../../libs/streamlib-sdk" }
+streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
 serde_json = "1"

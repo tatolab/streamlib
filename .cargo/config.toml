@@ -2,3 +2,12 @@
 
 [alias]
 xtask = "run --package xtask --"
+
+# Unified Gitea registry (org: tatolab). SDK crates + the vulkanalia fork
+# resolve by version from here; see docs/architecture/gitea-registry-distribution.md.
+# Sparse protocol — Gitea serves the index from its package DB (no _cargo-index
+# repo, no web-session init). Read is anonymous; publish needs a Bearer token in
+# credentials.toml. The localhost URL is the local dev-registry default; override
+# for a hosted backend with CARGO_REGISTRIES_GITEA_INDEX.
+[registries.gitea]
+index = "sparse+http://localhost:3300/api/packages/tatolab/cargo/"

@@ -9,5 +9,5 @@ edition = "2024"
 # Rust dep would auto-register the `Camera` processor at link time,
 # conflicting with the cdylib's registration at load time.
 [dependencies]
-streamlib = { path = "../../libs/streamlib-sdk" }
+streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
 serde_json = "1"
