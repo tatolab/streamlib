@@ -115,20 +115,42 @@ Gitea by version.
 > on the consuming host to build the rust cdylib — weigh against the
 > compiler-free-deployment goal.
 
-## Schema-package resolution (finalized in #1116)
+## Schema-package resolution (resolver + strip capability shipped in #1116; cargo-publish wiring in #1105)
 
 `streamlib.yaml` schema dependencies (e.g. `@tatolab/escalate`) are themselves
-packages — they resolve from Gitea's **generic** registry: fetch the schema
-package's `.slpkg` by name+version, extract, resolve (the `extract_slpkg`
-plumbing already exists; today `streamlib-idents`' resolver returns
-`RegistryNotImplemented` for the `Registry` arm). Two halves, mirroring cargo:
+packages — they resolve from Gitea's **generic** registry: list the schema
+package's versions, select the highest satisfying the declared semver range,
+fetch that version's `.slpkg`, extract, resolve. The flat generic registry
+has no semver-range query, so range → concrete version happens client-side
+(cargo/npm/pip shape) via Gitea's package-management API
+(`GET /api/v1/packages/{org}?type=generic`), and the resolved concrete
+version is pinned in `streamlib.lock` via `ResolvedSource::Registry`. Two
+halves, mirroring cargo:
 
-1. **Publish side (already exists):** `streamlib pack`'s `RejectPathPatches`
-   strips the dev `path:` patch from a distributed `streamlib.yaml`. The gap is
-   that **`cargo publish` bundles `streamlib.yaml` verbatim** (patch included),
-   so the same strip must run when a crate's manifest is bundled by cargo.
-2. **Consume side (new code):** implement the resolver's `Registry` arm to
-   fetch+extract the schema package's `.slpkg` from Gitea.
+1. **Consume side:** `streamlib-idents`' resolver implements the `Registry`
+   arm — list → select-highest-in-range → fetch + `extract_slpkg` → load. The
+   registry base URL threads through `ResolverOptions::registry`, falling back
+   to `STREAMLIB_REGISTRY_URL` / `GITEA_URL` so build-script codegen picks it
+   up transparently; `file://` is the hermetic local-mirror / test transport.
+   A `Registry` dep with no registry configured fails loud with
+   `RegistryNotConfigured`.
+2. **Publish side:** a crate's bundled `streamlib.yaml` must be path-free so a
+   registry-cached consumer hits the `Registry` arm (not a dangling
+   `../../packages/...` path patch). `streamlib_pack::strip_path_patches`
+   drops dev path-flavor `patch:` entries, exposed as `xtask
+   strip-publish-manifest --dir <crate-dir>`. Because **`cargo publish`
+   bundles `streamlib.yaml` verbatim** with no file-rewrite hook, the strip
+   runs against a scratch copy before publish — that wiring (plus the
+   ~28-crate manifest migration and the out-of-repo build) lands with the
+   dev-publish script in #1105.
+
+   > ~~`streamlib pack`'s `RejectPathPatches` strips the dev `path:` patch.~~
+   > — Corrected 2026-05-30 (#1116): `RejectPathPatches` *rejects* a path
+   > patch with a hard error (a distributed source `.slpkg` must not carry a
+   > dev override); it never stripped. The cargo-publish case genuinely needs
+   > a *strip* — the path patch is a legitimate dev affordance locally but
+   > must be removed from the published manifest — so `strip_path_patches` is
+   > new code, the publish-side counterpart to `RejectPathPatches`.
 
 This is the schema-tier twin of the cargo-crate resolution. The resolver is
 shared by all three runtimes' codegen, so the one fix covers rust/python/deno.
@@ -194,7 +216,8 @@ Notes the scripts encode:
 | cargo publish → resolve-by-version (real SDK chain + vulkanalia/VMA) | ✅ validated (POC) | #1105 |
 | `.slpkg` round-trip through the generic registry | ✅ validated (POC) | #1119 |
 | `tatolab` org namespace + POC cleanup | ✅ shipped | #1115 |
-| schema-package registry resolution + cargo-publish path-strip | ⏳ | #1116 |
+| schema-package registry resolution (resolver `Registry` arm) + `strip_path_patches` capability | ✅ shipped | #1116 |
+| cargo-publish manifest path-strip *wiring* (dev-publish script + manifest migration) | ⏳ | #1105 |
 | Python SDK publish | ⏳ | #1117 |
 | Deno SDK publish | ⏳ | #1118 |
 | packages as source-only `.slpkg` + `streamlib pack` source-only | ⏳ | #1119 |
