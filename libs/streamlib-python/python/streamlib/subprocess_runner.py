@@ -41,6 +41,12 @@ import time
 import traceback
 
 from . import clock, log
+from ._protocol import (
+    PROTOCOL_VERSION,
+    ProtocolMismatchError,
+    assert_engine_compatible,
+    engine_protocol_from_env,
+)
 from .escalate import BridgeReaderThread, EscalateChannel, install_channel
 from .processor_context import (
     NativeProcessorState,
@@ -395,6 +401,20 @@ def main():
         sys.stderr.flush()
         sys.exit(1)
 
+    # Protocol handshake (engine → SDK direction). The engine advertises its
+    # subprocess protocol version via the environment; refuse to run — before
+    # loading the native lib or touching the bridge — if this installed SDK
+    # can't speak it. This replaces the old compatibility-by-injection
+    # guarantee now that `streamlib` is resolved from a registry by version.
+    # The SDK → engine direction is validated host-side from the
+    # `protocol_version` echoed in the `ready` response below.
+    try:
+        assert_engine_compatible(engine_protocol_from_env())
+    except ProtocolMismatchError as e:
+        sys.stderr.write(f"[streamlib] subprocess protocol handshake failed: {e}\n")
+        sys.stderr.flush()
+        sys.exit(1)
+
     project_path = os.environ.get("STREAMLIB_PROJECT_PATH", "")
     native_lib_path = os.environ.get("STREAMLIB_PYTHON_NATIVE_LIB", "")
     processor_id = os.environ.get("STREAMLIB_PROCESSOR_ID", "unknown")
@@ -476,7 +496,12 @@ def main():
                     if hasattr(processor, "setup"):
                         # setup() — privileged, receives full-access ctx
                         processor.setup(full_ctx)
-                    bridge_send_message(stdout, {"rpc": "ready"})
+                    # Echo this SDK's protocol version so the host can validate
+                    # the SDK → engine direction of the handshake.
+                    bridge_send_message(
+                        stdout,
+                        {"rpc": "ready", "protocol_version": PROTOCOL_VERSION},
+                    )
                 except Exception as e:
                     traceback.print_exc(file=sys.stderr)
                     bridge_send_message(stdout, {"rpc": "error", "error": str(e)})

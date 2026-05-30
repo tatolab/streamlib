@@ -15,7 +15,10 @@ use crate::core::{
 };
 
 use super::spawn_python_subprocess_op::ensure_processor_venv;
-use super::subprocess_bridge::{spawn_fd_line_reader, EscalateTransport, SubprocessBridge};
+use super::subprocess_bridge::{
+    spawn_fd_line_reader, validate_subprocess_protocol, EscalateTransport, SubprocessBridge,
+    PROTOCOL_VERSION_ENV, STREAMLIB_SUBPROCESS_PROTOCOL_VERSION,
+};
 
 // ============================================================================
 // PythonNativeSubprocessHostProcessor — Rust host for Python native-mode processors
@@ -134,7 +137,15 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
                 .env("STREAMLIB_PYTHON_NATIVE_LIB", &self.native_lib_path)
                 .env("STREAMLIB_PROCESSOR_ID", &self.processor_id)
                 .env("STREAMLIB_EXECUTION_MODE", execution_mode)
-                .env("STREAMLIB_RUNTIME_ID", &runtime_id);
+                .env("STREAMLIB_RUNTIME_ID", &runtime_id)
+                // Advertise the engine's subprocess protocol version. The SDK
+                // refuses to run at startup if it can't speak it — the engine →
+                // SDK handshake direction (the reverse is validated from the
+                // `ready` response below).
+                .env(
+                    PROTOCOL_VERSION_ENV,
+                    STREAMLIB_SUBPROCESS_PROTOCOL_VERSION.to_string(),
+                );
 
             #[cfg(target_os = "linux")]
             command.env("STREAMLIB_SURFACE_SOCKET", ctx.host_base().surface_socket_path());
@@ -232,6 +243,16 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
                     self.processor_id, error
                 )));
             }
+
+            // Validate the SDK → engine handshake direction: the `ready`
+            // response echoes the SDK's protocol version. An incompatible
+            // installed SDK is caught here, at setup, rather than as a deep
+            // FFI/escalate crash later.
+            let sdk_protocol = response
+                .get("protocol_version")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
+            validate_subprocess_protocol(sdk_protocol, &self.processor_id)?;
 
             tracing::info!(
                 "[{}] Python native subprocess setup complete (pid={})",

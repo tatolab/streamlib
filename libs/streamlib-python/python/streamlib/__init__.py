@@ -49,6 +49,10 @@ from .decorators import (
     output,
 )
 
+# Subprocess protocol version this SDK speaks — the engine↔SDK handshake
+# coordinate. Public so consumers / tooling can introspect compatibility.
+from ._protocol import PROTOCOL_VERSION
+
 # Structured schema identity (mirrors Rust's streamlib_idents::SchemaIdent)
 from .schema_ident import SchemaIdent
 
@@ -80,6 +84,8 @@ __all__ = [
     # Structured schema identity
     "SchemaIdent",
     "PixelFormat",
+    # Engine↔SDK subprocess protocol version
+    "PROTOCOL_VERSION",
     # Capability-typed runtime context
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",

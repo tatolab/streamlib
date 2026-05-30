@@ -46,6 +46,62 @@ use super::subprocess_escalate::{process_bridge_message, EscalateHandleRegistry}
 /// uses it as the framed-IPC transport.
 pub(crate) const ESCALATE_FD_ENV: &str = "STREAMLIB_ESCALATE_FD";
 
+/// Engine-wide, language-agnostic subprocess protocol version — the single
+/// coordinate every subprocess SDK (Python, Deno, any future language)
+/// handshakes on. Covers the three lockstep runtime surfaces: the native-lib
+/// ctypes/FFI symbol contract, the escalate IPC schema, and this
+/// lifecycle-command protocol. The subprocess analogue of the cdylib plugin
+/// ABI's `STREAMLIB_ABI_VERSION`; bump it (in lockstep with each SDK's mirror
+/// constant) when any of those surfaces changes incompatibly.
+///
+/// Now that an SDK is resolved from a registry *by version* rather than
+/// injected from the workspace, compatibility is no longer guaranteed by
+/// construction — it's asserted by a handshake at subprocess startup. The
+/// engine satisfies a monotonic *range* (`MIN..=CURRENT`, the Cloudflare
+/// `compatibility_date` shape), not strict equality, so a newer engine keeps
+/// accepting SDKs that speak an older-but-still-supported protocol.
+pub(crate) const STREAMLIB_SUBPROCESS_PROTOCOL_VERSION: u32 = 1;
+
+/// Oldest subprocess-SDK protocol version this engine still accepts. Raise it
+/// only when dropping support for an old SDK protocol.
+pub(crate) const MIN_SUPPORTED_SUBPROCESS_PROTOCOL: u32 = 1;
+
+/// Env var the engine sets to advertise [`STREAMLIB_SUBPROCESS_PROTOCOL_VERSION`]
+/// to the subprocess. The SDK reads it at startup and refuses to run if it
+/// can't speak the engine's protocol (the engine → SDK handshake direction).
+pub(crate) const PROTOCOL_VERSION_ENV: &str = "STREAMLIB_PROTOCOL_VERSION";
+
+/// Validate the protocol version an SDK reported (in its `ready` response)
+/// against the engine's supported range — the SDK → engine handshake
+/// direction. Fails loud with an actionable named error so an incompatible
+/// installed SDK is caught at setup, never as a deep FFI/escalate crash.
+pub(crate) fn validate_subprocess_protocol(
+    sdk_version: Option<u32>,
+    processor_id: &str,
+) -> Result<()> {
+    let sdk_version = sdk_version.ok_or_else(|| {
+        Error::Runtime(format!(
+            "[{processor_id}] subprocess protocol handshake failed: the SDK did \
+             not report a protocol version. The installed streamlib is older \
+             than this engine's handshake (engine speaks \
+             v{MIN_SUPPORTED_SUBPROCESS_PROTOCOL}..=v{STREAMLIB_SUBPROCESS_PROTOCOL_VERSION}); \
+             bump the package's declared streamlib version."
+        ))
+    })?;
+    if !(MIN_SUPPORTED_SUBPROCESS_PROTOCOL..=STREAMLIB_SUBPROCESS_PROTOCOL_VERSION)
+        .contains(&sdk_version)
+    {
+        return Err(Error::Runtime(format!(
+            "[{processor_id}] subprocess protocol mismatch: the installed \
+             streamlib SDK speaks protocol v{sdk_version}, this engine speaks \
+             v{MIN_SUPPORTED_SUBPROCESS_PROTOCOL}..=v{STREAMLIB_SUBPROCESS_PROTOCOL_VERSION}. \
+             Align the package's declared streamlib version to one compatible \
+             with this engine."
+        )));
+    }
+    Ok(())
+}
+
 /// Socketpair-backed escalate IPC transport. The parent holds one half
 /// and the subprocess inherits the other via [`ESCALATE_FD_ENV`].
 pub(crate) struct EscalateTransport {
@@ -558,5 +614,52 @@ mod tests {
             .recv_lifecycle_timeout(Duration::from_millis(500))
             .expect("lifecycle frame must route through");
         assert_eq!(got.get("rpc").and_then(|v| v.as_str()), Some("ready"));
+    }
+
+    // SDK → engine handshake gate. The whole point of the version handshake is
+    // that an incompatible installed SDK is refused at setup, not run. Mentally
+    // revert `validate_subprocess_protocol` to `Ok(())` and every assertion
+    // below that expects an `Err` goes green for the wrong reason — so these
+    // lock the gate, not just exercise it.
+    #[test]
+    fn subprocess_protocol_gate_accepts_supported_and_rejects_others() {
+        // Current engine version is in range → accepted.
+        assert!(validate_subprocess_protocol(
+            Some(STREAMLIB_SUBPROCESS_PROTOCOL_VERSION),
+            "p",
+        )
+        .is_ok());
+        // The minimum supported version is in range → accepted.
+        assert!(
+            validate_subprocess_protocol(Some(MIN_SUPPORTED_SUBPROCESS_PROTOCOL), "p").is_ok()
+        );
+
+        // One past the engine's current version → refused (SDK too new).
+        let too_new = validate_subprocess_protocol(
+            Some(STREAMLIB_SUBPROCESS_PROTOCOL_VERSION + 1),
+            "p-too-new",
+        );
+        assert!(too_new.is_err(), "an SDK newer than the engine must be refused");
+        assert!(too_new.unwrap_err().to_string().contains("protocol mismatch"));
+
+        // Below the minimum supported version → refused (SDK too old).
+        if MIN_SUPPORTED_SUBPROCESS_PROTOCOL > 0 {
+            assert!(
+                validate_subprocess_protocol(
+                    Some(MIN_SUPPORTED_SUBPROCESS_PROTOCOL - 1),
+                    "p-too-old",
+                )
+                .is_err(),
+                "an SDK older than the engine's minimum must be refused"
+            );
+        }
+
+        // No version reported at all (an SDK predating the handshake) → refused.
+        let missing = validate_subprocess_protocol(None, "p-missing");
+        assert!(missing.is_err(), "a missing SDK protocol version must be refused");
+        assert!(missing
+            .unwrap_err()
+            .to_string()
+            .contains("did not report a protocol version"));
     }
 }
