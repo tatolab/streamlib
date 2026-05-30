@@ -18,6 +18,7 @@ streamlib-engine = { path = "../streamlib-engine", version = "0.4.30", registry 
 streamlib-cargo-build = { path = "../streamlib-cargo-build", version = "0.4.30", registry = "gitea" }
 streamlib-pack = { path = "../streamlib-pack", version = "0.4.30", registry = "gitea" }
 streamlib-plugin-abi = { path = "../streamlib-plugin-abi", version = "0.4.30", registry = "gitea" }
+streamlib-jtd-codegen = { path = "../streamlib-jtd-codegen", version = "0.4.30", registry = "gitea" }
 
 [dev-dependencies]
 tempfile = "3.14"

@@ -6,7 +6,6 @@ mod prepare_processor_op;
 mod spawn_deno_subprocess_op;
 mod spawn_processor_op;
 mod spawn_python_native_subprocess_op;
-mod spawn_python_subprocess_op;
 mod subprocess_bridge;
 mod subprocess_escalate;
 
@@ -17,4 +16,3 @@ pub(crate) use spawn_processor_op::spawn_processor;
 pub(crate) use spawn_python_native_subprocess_op::{
     create_python_native_subprocess_host_constructor, resolve_python_native_lib_path,
 };
-pub use spawn_python_subprocess_op::ensure_processor_venv;

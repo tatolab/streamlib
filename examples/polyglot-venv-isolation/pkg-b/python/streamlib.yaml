@@ -1,0 +1,16 @@
+# yaml-language-server: $schema=../../../../schemas/streamlib.schema.json
+package:
+  org: tatolab
+  name: polyglot-venv-isolation-pkg-b
+  version: "0.1.0"
+  description: "Per-package venv isolation proof — package B pins numpy==2.1.3 (NumPy 2.x ABI)"
+
+processors:
+  - name: NumpyVersionReporter
+    version: "1.0.0"
+    description: "Continuous processor: imports numpy and writes numpy.__version__ to a host-visible output file. Package B's pyproject pins numpy==2.1.3, so a correctly-isolated per-package venv must yield exactly 2.1.3."
+    runtime: python
+    execution:
+      type: continuous
+      interval_ms: 16
+    entrypoint: "numpy_version_reporter:NumpyVersionReporter"

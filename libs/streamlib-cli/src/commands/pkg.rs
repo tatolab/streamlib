@@ -5,7 +5,35 @@
 
 use anyhow::{Context, Result};
 use streamlib::engine_internal::core::{InstalledPackageEntry, InstalledPackageManifest, ProjectConfig};
-use streamlib::sdk::runtime::extract_slpkg_to_cache;
+use streamlib::sdk::runtime::{
+    extract_slpkg_to_cache, host_target_triple, BuildEvent, BuildEventSink, BuildOrchestrator,
+    BuildPolicy, BuildRequest, BuildSource, BuildStream,
+};
+use streamlib::sdk::PolyglotBuildOrchestrator;
+
+/// Routes the orchestrator's build diagnostics to the CLI's stdout/stderr
+/// during `pkg install` (the engine default sink re-emits via `tracing`,
+/// but the CLI prints progress directly for the interactive install flow).
+struct CliBuildSink;
+
+impl BuildEventSink for CliBuildSink {
+    fn emit(&self, event: BuildEvent) {
+        match event {
+            BuildEvent::Started { language } => {
+                println!("    [{language}] build started");
+            }
+            BuildEvent::Line { stream, line } => match stream {
+                BuildStream::Stdout => println!("    {line}"),
+                BuildStream::Stderr => eprintln!("    {line}"),
+            },
+            BuildEvent::Finished { language } => {
+                println!("    [{language}] build finished");
+            }
+            // `BuildEvent` is `#[non_exhaustive]`; a future variant prints nothing.
+            _ => {}
+        }
+    }
+}
 
 /// Install a .slpkg package from a local path or HTTP URL.
 pub async fn install(source: &str) -> Result<()> {
@@ -53,20 +81,45 @@ pub async fn install(source: &str) -> Result<()> {
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("Package missing [package] section in streamlib.yaml"))?;
 
-    // For Python processors, ensure venvs are created
-    for processor in &config.processors {
-        if matches!(
-            processor.runtime.language,
+    // Provision the package's runtime via the build orchestrator — the same
+    // `materialize` path module-load drives at runtime. For a Python package
+    // this re-stages the extracted artifact and provisions its self-contained
+    // venv at `{staged_package_dir}/.venv/bin/python` as the tail of the
+    // materialize step. A package with no Python runtime is a no-op on the
+    // venv tail; a Rust package re-builds its cdylib (cargo short-circuits
+    // when clean). `AlwaysBuild` forces the venv provision regardless of any
+    // prior stale staging.
+    let has_python = config.processors.iter().any(|p| {
+        matches!(
+            p.runtime.language,
             streamlib_processor_schema::ProcessorLanguage::Python
-        ) {
-            println!("  Setting up Python venv for {}...", processor.name);
-            streamlib::engine_internal::core::ensure_processor_venv(
-                &processor.name,
-                &cache_dir,
-            )
-            .map_err(|e| anyhow::anyhow!("Failed to create venv for {}: {}", processor.name, e))?;
-        }
+        )
+    });
+    if has_python {
+        println!("  Provisioning Python venv via the build orchestrator...");
     }
+    let request = BuildRequest {
+        package: streamlib_processor_schema::PackageRef::new(
+            package.org.clone(),
+            package.name.clone(),
+        ),
+        source: BuildSource::PackageDir(cache_dir.clone()),
+        policy: BuildPolicy::AlwaysBuild,
+        host_triple: host_target_triple().to_string(),
+    };
+    let orchestrator = PolyglotBuildOrchestrator::default();
+    let sink = CliBuildSink;
+    let staged = orchestrator
+        .materialize(&request, &sink)
+        .map_err(|e| anyhow::anyhow!("Failed to materialize package: {}", e))?;
+    // The orchestrator stages into the package cache slot
+    // (`cache/packages/<name>-<version>/`), the same slot
+    // `extract_slpkg_to_cache` wrote to. This is order-safe: `materialize`
+    // fully reads the source (assemble into a temp dir + provision the venv
+    // there) before its closing `atomic_swap` wipes-and-replaces the slot,
+    // so the extracted source is consumed before it's overwritten. Keep
+    // using the returned staged path below.
+    let cache_dir = staged.staged_dir;
 
     // Add to installed packages manifest. Identity is the canonical
     // `@org/name` PackageRef — the typed-key contract from #717 means

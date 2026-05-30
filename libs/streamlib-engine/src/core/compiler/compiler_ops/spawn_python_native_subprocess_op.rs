@@ -14,7 +14,6 @@ use crate::core::{
     ProcessorDescriptor, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 };
 
-use super::spawn_python_subprocess_op::ensure_processor_venv;
 use super::subprocess_bridge::{
     spawn_fd_line_reader, validate_subprocess_protocol, EscalateTransport, SubprocessBridge,
     PROTOCOL_VERSION_ENV, STREAMLIB_SUBPROCESS_PROTOCOL_VERSION,
@@ -48,6 +47,10 @@ pub(crate) struct PythonNativeSubprocessHostProcessor {
     // Config for spawning (set at construction, used during setup)
     entrypoint: String,
     project_path: String,
+    // Interpreter for the package's prepared venv, provisioned by the
+    // build orchestrator at `{staged_package_dir}/.venv/bin/python`.
+    // Baked in at construction; used as the `Command::new` target at spawn.
+    python_executable: String,
     processor_id: String,
     processor_config: Option<serde_json::Value>,
     execution_config: ExecutionConfig,
@@ -85,8 +88,11 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
                 self.project_path
             );
 
-            // Create venv and get python executable path (reuse existing function)
-            let python_executable = ensure_processor_venv(&self.processor_id, &project_path)?;
+            // The package's venv is provisioned by the build orchestrator at
+            // `{staged_package_dir}/.venv/bin/python` during materialize; the
+            // interpreter path was baked into this host at construction time.
+            // No venv creation happens at spawn.
+            let python_executable = self.python_executable.clone();
 
             // Build PYTHONPATH for the subprocess. `streamlib` is NOT injected
             // here — it is installed into the per-processor venv from the
@@ -572,16 +578,20 @@ impl PythonNativeSubprocessHostProcessor {
 ///
 /// The constructor creates a [`PythonNativeSubprocessHostProcessor`] with NO InputMailboxes
 /// or OutputWriter. The Python subprocess manages its own iceoryx2 I/O via FFI.
-/// The Rust host always runs in Manual execution mode.
+/// The Rust host always runs in Manual execution mode. `python_executable` is the
+/// interpreter from the package's orchestrator-provisioned venv
+/// (`{staged_package_dir}/.venv/bin/python`).
 pub(crate) fn create_python_native_subprocess_host_constructor(
     descriptor: &ProcessorDescriptor,
     execution_config: ExecutionConfig,
     project_path: std::path::PathBuf,
+    python_executable: std::path::PathBuf,
     native_lib_path: String,
 ) -> DynamicProcessorConstructorFn {
     let descriptor_clone = descriptor.clone();
     let entrypoint = descriptor.entrypoint.clone().unwrap_or_default();
     let project_path_str = project_path.to_string_lossy().to_string();
+    let python_executable_str = python_executable.to_string_lossy().to_string();
 
     Box::new(move |node: &ProcessorNode| {
         Ok(Box::new(PythonNativeSubprocessHostProcessor {
@@ -589,6 +599,7 @@ pub(crate) fn create_python_native_subprocess_host_constructor(
             bridge: None,
             entrypoint: entrypoint.clone(),
             project_path: project_path_str.clone(),
+            python_executable: python_executable_str.clone(),
             processor_id: node.id.to_string(),
             processor_config: node.config.clone(),
             execution_config,

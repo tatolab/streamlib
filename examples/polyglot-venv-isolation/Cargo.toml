@@ -1,0 +1,12 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "polyglot-venv-isolation-scenario"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
+serde_json = "1.0"
