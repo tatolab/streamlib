@@ -35,6 +35,7 @@
 //! [`Strategy::Git`]: streamlib_engine::core::runtime::Strategy::Git
 //! [`BuildPolicy`]: streamlib_engine::core::runtime::BuildPolicy
 
+mod native_host;
 mod python_venv;
 
 #[cfg(test)]
@@ -157,6 +158,37 @@ impl PolyglotBuildOrchestrator {
         let cache_slot = streamlib_engine::core::get_cached_package_dir(&cache_key);
 
         let has_rust = build::has_rust_runtime_processors(&config);
+
+        // Ensure the subprocess native FFI host(s) this package needs are built
+        // + cached in the streamlib home, independent of the package slot. A
+        // reused venv/slot can still be missing the host — they're independent
+        // handoffs, the gap that left a registry consumer with a dead relative
+        // path — so this runs before the staleness skip. It is itself
+        // IfStale-cached per host triple + version (a cheap existence check
+        // once present) and a no-op when the `STREAMLIB_*_NATIVE_LIB` env
+        // override points at a prebuilt host.
+        let host_version = env!("CARGO_PKG_VERSION");
+        let ensure_host = |rt: native_host::NativeRuntime| {
+            // Best-effort pre-build: if it can't (no registry configured,
+            // network down), don't fail materialize — the spawn-time resolver
+            // is the real gate and also covers the env override and the
+            // monorepo `target/` (in-tree dev / tests). Only a pipeline that
+            // actually spawns the runtime needs the host, and it gets an
+            // actionable error there if it's truly absent.
+            if let Err(e) = native_host::ensure_native_host(rt, host_version, self.profile) {
+                tracing::warn!(
+                    error = %e,
+                    "could not pre-build the subprocess native host; it must be resolvable \
+                     at spawn time (STREAMLIB_*_NATIVE_LIB, the home cache, or the monorepo target/)"
+                );
+            }
+        };
+        if build::has_python_runtime_processors(&config) {
+            ensure_host(native_host::NativeRuntime::Python);
+        }
+        if build::has_typescript_runtime_processors(&config) {
+            ensure_host(native_host::NativeRuntime::Deno);
+        }
 
         // Source-input fingerprint — drives IfStale for non-Rust packages
         // and is recorded in the sidecar regardless.
@@ -401,14 +433,14 @@ fn atomic_swap(temp: &Path, final_path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn other(package: &str, detail: String) -> BuildError {
+pub(crate) fn other(package: &str, detail: String) -> BuildError {
     BuildError::Other {
         package: package.to_string(),
         detail,
     }
 }
 
-fn build_failed(package: &str, detail: String) -> BuildError {
+pub(crate) fn build_failed(package: &str, detail: String) -> BuildError {
     BuildError::BuildFailed {
         tool: "assemble".to_string(),
         package: package.to_string(),

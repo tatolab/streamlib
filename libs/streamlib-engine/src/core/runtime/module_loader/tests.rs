@@ -411,6 +411,40 @@ impl Drop for StreamlibHomeRestore {
     }
 }
 
+/// Clears a set of env vars on construction and restores them on drop, so a
+/// test can assert behavior under "no ambient registry config" deterministically
+/// regardless of the developer/CI shell. `#[serial]` makes the env exclusive.
+struct EnvVarsCleared(Vec<(&'static str, Option<std::ffi::OsString>)>);
+impl EnvVarsCleared {
+    fn new(vars: &[&'static str]) -> Self {
+        let saved = vars
+            .iter()
+            .map(|&v| {
+                let prev = std::env::var_os(v);
+                // SAFETY: `#[serial]` makes every test in this module exclusive.
+                unsafe {
+                    std::env::remove_var(v);
+                }
+                (v, prev)
+            })
+            .collect();
+        Self(saved)
+    }
+}
+impl Drop for EnvVarsCleared {
+    fn drop(&mut self) {
+        for (v, prev) in self.0.drain(..) {
+            // SAFETY: `#[serial]` makes every test in this module exclusive.
+            unsafe {
+                match prev {
+                    Some(val) => std::env::set_var(v, val),
+                    None => std::env::remove_var(v),
+                }
+            }
+        }
+    }
+}
+
 /// Assemble a minimal schemas-only `.slpkg` (a ZIP with `streamlib.yaml`
 /// plus one schema file) at `out`, returning the SHA-256 hex of the
 /// archive bytes for an integrity-pin assertion.
@@ -535,24 +569,35 @@ fn url_strategy_rejects_checksum_mismatch() {
 
 #[test]
 #[serial]
-fn path_strategy_resolves_registry_dep_via_installed_cache() {
+fn path_package_registry_dep_routes_to_registry_not_installed_cache() {
+    // Registry-only model: a package's streamlib.yaml dependency resolves from
+    // the Gitea registry (Strategy::Registry), NOT the installed-package cache.
+    // The installed-cache-as-dep fallback an earlier model used is gone — proven
+    // by routing: with no registry configured, the dep errors
+    // RegistryNotConfigured even though a satisfying installed-cache entry exists.
     let sandbox = tempfile::tempdir().unwrap();
     let prev_home = std::env::var_os("STREAMLIB_HOME");
     unsafe {
         std::env::set_var("STREAMLIB_HOME", sandbox.path());
     }
     let _restore = StreamlibHomeRestore(prev_home);
+    // No ambient registry config, so the routing is observable regardless of
+    // the developer / CI shell.
+    let _no_registry = EnvVarsCleared::new(&[
+        "STREAMLIB_REGISTRY_URL",
+        "GITEA_URL",
+        "STREAMLIB_REGISTRY_TOKEN",
+    ]);
 
-    let cache_root = sandbox.path().join("cache/packages");
-    std::fs::create_dir_all(&cache_root).unwrap();
-    let dep_cache_dir = cache_root.join("b-0.1.0");
-    std::fs::create_dir(&dep_cache_dir).unwrap();
+    // An installed-cache entry for @tatolab/b that WOULD satisfy `^0.1.0` —
+    // resolved through the production accessor so it lands at the real layout.
+    let dep_cache_dir = crate::core::get_cached_package_dir("b-0.1.0");
+    std::fs::create_dir_all(&dep_cache_dir).unwrap();
     std::fs::write(
         dep_cache_dir.join("streamlib.yaml"),
         "package:\n  org: tatolab\n  name: b\n  version: \"0.1.0\"\n",
     )
     .unwrap();
-
     let mut installed = crate::core::config::InstalledPackageManifest::default();
     installed.add(crate::core::config::InstalledPackageEntry {
         name: streamlib_idents::PackageRef::new(
@@ -567,6 +612,8 @@ fn path_strategy_resolves_registry_dep_via_installed_cache() {
     });
     installed.save().unwrap();
 
+    // ...is ignored: the consumer's dep routes to Strategy::Registry, which
+    // fails because no registry is configured.
     let consumer = tempfile::tempdir().unwrap();
     std::fs::write(
         consumer.path().join("streamlib.yaml"),
@@ -582,7 +629,7 @@ dependencies:
     .unwrap();
 
     let runtime = Runner::new().unwrap();
-    runtime
+    let err = runtime
         .add_module_with_blocking(
             streamlib_idents::ModuleIdent::any(
                 streamlib_idents::Org::new("tatolab").unwrap(),
@@ -593,7 +640,13 @@ dependencies:
                 build: BuildPolicy::NeverBuild,
             },
         )
-        .expect("registry dep must resolve via installed-package cache");
+        .expect_err("a registry dep must route to the registry, not the installed cache");
+
+    assert!(
+        matches!(err, AddModuleError::RegistryNotConfigured { ref package, .. } if package.name.as_str() == "b"),
+        "expected RegistryNotConfigured(@tatolab/b) — deps resolve from the registry, \
+         not the installed cache; got: {err:?}",
+    );
 }
 
 #[test]
@@ -862,15 +915,15 @@ mod add_module_tests {
 
     /// Install a schemas-only package into the sandboxed installed-package
     /// cache so bare `add_module` (which resolves cache-only) can find it.
-    fn install_cached_package(
-        home_root: &std::path::Path,
-        org: &str,
-        name: &str,
-        version: &str,
-        schema: Option<&str>,
-    ) {
+    fn install_cached_package(org: &str, name: &str, version: &str, schema: Option<&str>) {
         let cache_dir_name = format!("{name}-{version}");
-        let dep_cache_dir = home_root.join("cache/packages").join(&cache_dir_name);
+        // Resolve the cache dir through the production accessor so the fixture
+        // can't drift from the real layout — `get_cached_package_dir` →
+        // `<STREAMLIB_HOME>/.streamlib/cache/packages/<name>-<version>`, and the
+        // caller's HomeGuard points STREAMLIB_HOME at the test tempdir. A
+        // hardcoded `.streamlib/cache/packages` literal here is exactly what
+        // drifted when the cache moved under `.streamlib`.
+        let dep_cache_dir = crate::core::get_cached_package_dir(&cache_dir_name);
         std::fs::create_dir_all(&dep_cache_dir).unwrap();
         write_schemas_only_manifest(&dep_cache_dir, org, name, version, schema);
 
@@ -899,7 +952,7 @@ mod add_module_tests {
         const TYPE_NAME: &str = "AddModuleCacheSchema";
         let home = tempfile::tempdir().unwrap();
         let _guard = HomeGuard::install(home.path());
-        install_cached_package(home.path(), "tatolab", "add-module-cache", "1.2.3", Some(TYPE_NAME));
+        install_cached_package("tatolab", "add-module-cache", "1.2.3", Some(TYPE_NAME));
 
         let runtime = Runner::new().expect("Runner::new");
         let canonical = format!("@tatolab/add-module-cache/{TYPE_NAME}");
@@ -927,7 +980,7 @@ mod add_module_tests {
     fn add_module_rejects_version_range_mismatch() {
         let home = tempfile::tempdir().unwrap();
         let _guard = HomeGuard::install(home.path());
-        install_cached_package(home.path(), "tatolab", "add-module-range", "1.0.0", None);
+        install_cached_package("tatolab", "add-module-range", "1.0.0", None);
 
         let runtime = Runner::new().expect("Runner::new");
         let err = runtime
@@ -950,8 +1003,9 @@ mod add_module_tests {
         let home = tempfile::tempdir().unwrap();
         let _guard = HomeGuard::install(home.path());
         // Cache entry keyed @tatolab/add-module-identity but the on-disk
-        // manifest declares a different identity (clobbered cache).
-        let dep_cache_dir = home.path().join("cache/packages").join("add-module-identity-1.0.0");
+        // manifest declares a different identity (clobbered cache). Resolve
+        // through the production accessor so the fixture tracks the real layout.
+        let dep_cache_dir = crate::core::get_cached_package_dir("add-module-identity-1.0.0");
         std::fs::create_dir_all(&dep_cache_dir).unwrap();
         write_schemas_only_manifest(&dep_cache_dir, "vendor", "other", "1.0.0", None);
         let mut installed = crate::core::config::InstalledPackageManifest::default();
@@ -1012,7 +1066,7 @@ mod add_module_tests {
         const TYPE_NAME: &str = "InstalledCacheOnlySchema";
         let home = tempfile::tempdir().unwrap();
         let _guard = HomeGuard::install(home.path());
-        install_cached_package(home.path(), "tatolab", "ic-only", "1.0.0", Some(TYPE_NAME));
+        install_cached_package("tatolab", "ic-only", "1.0.0", Some(TYPE_NAME));
 
         let runtime = Runner::new().expect("Runner::new");
         let canonical = format!("@tatolab/ic-only/{TYPE_NAME}");

@@ -288,6 +288,27 @@ pub fn has_rust_runtime_processors(config: &ProjectConfigMinimal) -> bool {
         .any(|p| matches!(p.runtime.language, ProcessorLanguage::Rust))
 }
 
+/// Whether a parsed manifest declares at least one Python runtime processor —
+/// the predicate the orchestrator uses to decide it must ensure the Python
+/// subprocess native host (`libstreamlib_python_native`) is built + cached.
+pub fn has_python_runtime_processors(config: &ProjectConfigMinimal) -> bool {
+    config
+        .processors
+        .iter()
+        .any(|p| matches!(p.runtime.language, ProcessorLanguage::Python))
+}
+
+/// Whether a parsed manifest declares at least one TypeScript runtime
+/// processor — the predicate the orchestrator uses to decide it must ensure
+/// the Deno subprocess native host (`libstreamlib_deno_native`) is built +
+/// cached.
+pub fn has_typescript_runtime_processors(config: &ProjectConfigMinimal) -> bool {
+    config
+        .processors
+        .iter()
+        .any(|p| matches!(p.runtime.language, ProcessorLanguage::TypeScript))
+}
+
 
 
 /// Canonical staged-directory name for a package: `<org>__<name>` with

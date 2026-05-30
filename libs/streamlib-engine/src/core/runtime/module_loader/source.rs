@@ -216,25 +216,46 @@ pub(super) fn resolve_strategy_to_source(
                     package: pkg_ref.clone(),
                     detail: e.to_string(),
                 })?;
-            let (bytes, url) = client.download_slpkg(pkg_ref, selected).map_err(|e| {
-                AddModuleError::RegistryResolutionFailed {
-                    package: pkg_ref.clone(),
-                    detail: format!("downloading {selected}: {e}"),
-                }
-            })?;
-            tracing::debug!(
-                package = %pkg_ref,
-                version = %selected,
-                %url,
-                "resolved module from Gitea generic registry"
-            );
-            let archive = persist_registry_slpkg(pkg_ref, &url, &bytes)?;
-            let extracted = extract_slpkg_to_cache(&archive).map_err(|e| {
-                AddModuleError::SlpkgExtractionFailed {
-                    archive: archive.clone(),
-                    detail: e.to_string(),
-                }
-            })?;
+            // IfStale fast path: a `.slpkg` already materialized for this exact
+            // version is reused instead of re-downloaded and re-extracted.
+            // `extract_slpkg_to_cache` rm -rf's the cache slot on every call,
+            // which wipes any cdylib a prior run built into `lib/<triple>/` (and
+            // any provisioned `.venv`) — so without this check `IfStale` rebuilt
+            // on every run even when the registry had not changed. Registry
+            // versions are immutable (a content change ships a new version);
+            // `streamlib pkg clean` clears the cache to force a re-fetch when a
+            // version is republished in place during development.
+            let cache_key = format!("{}-{}", pkg_ref.name, selected);
+            let slot = crate::core::streamlib_home::get_cached_package_dir(&cache_key);
+            let extracted = if matches!(build, BuildPolicy::IfStale) && slot.is_dir() {
+                tracing::debug!(
+                    package = %pkg_ref,
+                    version = %selected,
+                    slot = %slot.display(),
+                    "registry slot already materialized for selected version — reusing (no re-download/extract)"
+                );
+                slot
+            } else {
+                let (bytes, url) = client.download_slpkg(pkg_ref, selected).map_err(|e| {
+                    AddModuleError::RegistryResolutionFailed {
+                        package: pkg_ref.clone(),
+                        detail: format!("downloading {selected}: {e}"),
+                    }
+                })?;
+                tracing::debug!(
+                    package = %pkg_ref,
+                    version = %selected,
+                    %url,
+                    "resolved module from Gitea generic registry"
+                );
+                let archive = persist_registry_slpkg(pkg_ref, &url, &bytes)?;
+                extract_slpkg_to_cache(&archive).map_err(|e| {
+                    AddModuleError::SlpkgExtractionFailed {
+                        archive: archive.clone(),
+                        detail: e.to_string(),
+                    }
+                })?
+            };
             Ok(source_for_fetched_slpkg(pkg_ref, extracted, *build))
         }
     }

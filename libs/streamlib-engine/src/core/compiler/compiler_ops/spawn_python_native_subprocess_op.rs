@@ -618,46 +618,11 @@ pub(crate) fn create_python_native_subprocess_host_constructor(
 
 /// Resolve the path to the Python native FFI library.
 ///
-/// Resolution order:
-/// 1. `STREAMLIB_PYTHON_NATIVE_LIB` environment variable
-/// 2. Default path: `{workspace_root}/target/debug/libstreamlib_python_native.dylib`
-/// 3. Release path: `{workspace_root}/target/release/libstreamlib_python_native.dylib`
+/// Delegates to the shared [`super::native_lib_resolver`] so Python and Deno
+/// resolve identically (env override → registry-built home cache → monorepo
+/// `target/` dev fallback).
 pub(crate) fn resolve_python_native_lib_path() -> Result<String> {
-    // Tier 1: Environment variable
-    if let Ok(path) = std::env::var("STREAMLIB_PYTHON_NATIVE_LIB") {
-        if std::path::Path::new(&path).exists() {
-            return Ok(path);
-        }
-    }
-
-    // Tier 2: Default path relative to workspace root
-    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let lib_name = if cfg!(target_os = "macos") {
-        "libstreamlib_python_native.dylib"
-    } else if cfg!(target_os = "linux") {
-        "libstreamlib_python_native.so"
-    } else {
-        "streamlib_python_native.dll"
-    };
-
-    let default_path = workspace_root.join("target/debug").join(lib_name);
-    if default_path.exists() {
-        if let Ok(canonical) = default_path.canonicalize() {
-            return Ok(canonical.to_string_lossy().to_string());
-        }
-    }
-
-    // Tier 3: Release path
-    let release_path = workspace_root.join("target/release").join(lib_name);
-    if release_path.exists() {
-        if let Ok(canonical) = release_path.canonicalize() {
-            return Ok(canonical.to_string_lossy().to_string());
-        }
-    }
-
-    Err(Error::Runtime(format!(
-        "Python native FFI library not found. Expected at '{}' or '{}'. Build with: cargo build -p streamlib-python-native",
-        default_path.display(),
-        release_path.display()
-    )))
+    super::native_lib_resolver::resolve_subprocess_native_lib_path(
+        super::native_lib_resolver::SubprocessNativeRuntime::Python,
+    )
 }

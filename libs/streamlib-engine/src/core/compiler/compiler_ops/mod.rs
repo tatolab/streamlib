@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+mod native_lib_resolver;
 mod open_iceoryx2_service_op;
 mod prepare_processor_op;
 mod spawn_deno_subprocess_op;
