@@ -310,16 +310,22 @@ mod tests {
     }
 
     #[test]
-    fn from_env_reads_url_and_token() {
-        // No env set in this process by default — the round-trip is exercised
-        // by the resolver's file:// integration test. Here we only assert the
-        // None-when-unset contract holds for a name unlikely to be set.
-        // (Avoid mutating process env in a parallel test run.)
-        let cfg = RegistryConfig {
+    fn scheme_detection_http_vs_file() {
+        // The client routes list/download by URL scheme. `from_env`'s env
+        // parsing is intentionally NOT unit-tested here — mutating process
+        // env would race the resolver's `registry: None` tests that rely on
+        // an unset registry env; it's covered via the resolver's default
+        // path in real usage and the file:// integration tests.
+        let http = RegistryConfig {
             base_url: "http://localhost:3000".into(),
             token: Some("abc".into()),
         };
-        assert!(!RegistryClient::new(&cfg).is_file_scheme());
+        assert!(!RegistryClient::new(&http).is_file_scheme());
+        let file = RegistryConfig {
+            base_url: "file:///tmp/mirror".into(),
+            token: None,
+        };
+        assert!(RegistryClient::new(&file).is_file_scheme());
     }
 
     #[test]
@@ -335,5 +341,71 @@ mod tests {
             client.download_path(&pr, SemVer::new(1, 2, 0)),
             PathBuf::from("/tmp/mirror/escalate/1.2.0/escalate.slpkg")
         );
+    }
+
+    /// Locks the production `http://` path end-to-end against a one-shot
+    /// localhost server: the management-API list URL + Gitea JSON shape
+    /// (`list_versions_http`) and the generic download URL
+    /// (`download_slpkg`). A typo in either URL or in the `GiteaPackageEntry`
+    /// field names would only surface against a real Gitea without this.
+    #[test]
+    fn http_list_and_download_against_localhost() {
+        use std::io::{Read, Write};
+
+        let slpkg_body = b"slpkg-zip-bytes".to_vec();
+        // Gitea `GET /api/v1/packages/{owner}?type=generic` response shape.
+        let list_json = r#"[
+            {"name":"escalate","version":"1.0.0","type":"generic"},
+            {"name":"escalate","version":"1.2.0","type":"generic"},
+            {"name":"other","version":"9.9.9","type":"generic"}
+        ]"#
+        .to_string();
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let slpkg_for_server = slpkg_body.clone();
+        let server = std::thread::spawn(move || {
+            // Serve exactly two requests: the version list, then the download.
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 2048];
+                let n = stream.read(&mut buf).unwrap();
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let request_line = req.lines().next().unwrap_or("");
+                let body: Vec<u8> = if request_line.contains("/api/v1/packages/") {
+                    list_json.clone().into_bytes()
+                } else {
+                    slpkg_for_server.clone()
+                };
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream.write_all(header.as_bytes()).unwrap();
+                stream.write_all(&body).unwrap();
+                stream.flush().unwrap();
+            }
+        });
+
+        let cfg = RegistryConfig {
+            base_url: format!("http://127.0.0.1:{port}"),
+            token: None,
+        };
+        let client = RegistryClient::new(&cfg);
+        let pr = pkg_ref("tatolab", "escalate");
+
+        // Management API: only matching-name generic entries are returned.
+        let versions = client.list_versions(&pr).unwrap();
+        assert_eq!(versions, vec![SemVer::new(1, 0, 0), SemVer::new(1, 2, 0)]);
+
+        // Generic download by exact version returns the bytes + canonical URL.
+        let (bytes, url) = client.download_slpkg(&pr, SemVer::new(1, 2, 0)).unwrap();
+        assert_eq!(bytes, slpkg_body);
+        assert!(
+            url.ends_with("/api/packages/tatolab/generic/escalate/1.2.0/escalate.slpkg"),
+            "unexpected download url: {url}"
+        );
+
+        server.join().unwrap();
     }
 }
