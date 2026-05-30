@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.32](https://github.com/tatolab/streamlib/compare/v0.4.31...v0.4.32) (2026-05-30)
+
+
+### Features
+
+* **orchestrator:** lift Python venv provisioning + codegen into the build orchestrator ([#1126](https://github.com/tatolab/streamlib/issues/1126)) ([#1127](https://github.com/tatolab/streamlib/issues/1127)) ([b69db4a](https://github.com/tatolab/streamlib/commit/b69db4a7e823a98a528752cc367e4d9a57792bf5))
+
 ## [0.4.31](https://github.com/tatolab/streamlib/compare/v0.4.30...v0.4.31) (2026-05-30)
 
 
