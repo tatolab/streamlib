@@ -7,6 +7,7 @@ version = "0.1.0"
 description = "Polyglot CUDA texture-interop — Python imports an OPAQUE_FD VkImage as cudaTextureObject_t, undistorts a fisheye warp via cupy.RawKernel hardware-bilinear sampling, runs YOLOv8n detection"
 requires-python = ">=3.10"
 dependencies = [
+    "streamlib>=0.4,<0.5",
     "iceoryx2>=0.8.1",
     "msgpack>=1.0",
     "numpy>=1.24.0",

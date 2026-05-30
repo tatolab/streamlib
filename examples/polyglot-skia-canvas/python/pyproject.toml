@@ -7,6 +7,7 @@ version = "0.1.0"
 description = "Polyglot Skia adapter scenario — Python skia.Surface drawn into a host DMA-BUF VkImage"
 requires-python = ">=3.10"
 dependencies = [
+    "streamlib>=0.4,<0.5",
     "iceoryx2>=0.8.1",
     "msgpack>=1.0",
     "skia-python>=120",

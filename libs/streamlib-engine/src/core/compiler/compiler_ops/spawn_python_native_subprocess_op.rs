@@ -15,7 +15,10 @@ use crate::core::{
 };
 
 use super::spawn_python_subprocess_op::ensure_processor_venv;
-use super::subprocess_bridge::{spawn_fd_line_reader, EscalateTransport, SubprocessBridge};
+use super::subprocess_bridge::{
+    spawn_fd_line_reader, validate_subprocess_protocol, EscalateTransport, SubprocessBridge,
+    PROTOCOL_VERSION_ENV, STREAMLIB_SUBPROCESS_PROTOCOL_VERSION,
+};
 
 // ============================================================================
 // PythonNativeSubprocessHostProcessor — Rust host for Python native-mode processors
@@ -85,16 +88,13 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
             // Create venv and get python executable path (reuse existing function)
             let python_executable = ensure_processor_venv(&self.processor_id, &project_path)?;
 
-            // Build PYTHONPATH for the subprocess.
-            let streamlib_python_source =
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../streamlib-python/python");
-
+            // Build PYTHONPATH for the subprocess. `streamlib` is NOT injected
+            // here — it is installed into the per-processor venv from the
+            // registry by version (the package declares it), and the venv's
+            // own site-packages puts it on `sys.path`. PYTHONPATH carries only
+            // the processor's project dir (its own modules) plus any inherited
+            // value. This is the de-magic: no compile-time workspace path.
             let mut python_path_parts: Vec<String> = Vec::new();
-            if streamlib_python_source.exists() {
-                if let Ok(canonical) = streamlib_python_source.canonicalize() {
-                    python_path_parts.push(canonical.to_string_lossy().to_string());
-                }
-            }
             if !project_path.as_os_str().is_empty() {
                 python_path_parts.push(project_path.to_string_lossy().to_string());
             }
@@ -134,7 +134,15 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
                 .env("STREAMLIB_PYTHON_NATIVE_LIB", &self.native_lib_path)
                 .env("STREAMLIB_PROCESSOR_ID", &self.processor_id)
                 .env("STREAMLIB_EXECUTION_MODE", execution_mode)
-                .env("STREAMLIB_RUNTIME_ID", &runtime_id);
+                .env("STREAMLIB_RUNTIME_ID", &runtime_id)
+                // Advertise the engine's subprocess protocol version. The SDK
+                // refuses to run at startup if it can't speak it — the engine →
+                // SDK handshake direction (the reverse is validated from the
+                // `ready` response below).
+                .env(
+                    PROTOCOL_VERSION_ENV,
+                    STREAMLIB_SUBPROCESS_PROTOCOL_VERSION.to_string(),
+                );
 
             #[cfg(target_os = "linux")]
             command.env("STREAMLIB_SURFACE_SOCKET", ctx.host_base().surface_socket_path());
@@ -232,6 +240,16 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
                     self.processor_id, error
                 )));
             }
+
+            // Validate the SDK → engine handshake direction: the `ready`
+            // response echoes the SDK's protocol version. An incompatible
+            // installed SDK is caught here, at setup, rather than as a deep
+            // FFI/escalate crash later.
+            let sdk_protocol = response
+                .get("protocol_version")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
+            validate_subprocess_protocol(sdk_protocol, &self.processor_id)?;
 
             tracing::info!(
                 "[{}] Python native subprocess setup complete (pid={})",

@@ -7,6 +7,7 @@ version = "0.1.0"
 description = "Polyglot OpenGL adapter scenario — Python Mandelbrot fragment shader"
 requires-python = ">=3.10"
 dependencies = [
+    "streamlib>=0.4,<0.5",
     "iceoryx2>=0.8.1",
     "msgpack>=1.0",
 ]
