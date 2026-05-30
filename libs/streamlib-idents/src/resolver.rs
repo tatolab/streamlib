@@ -21,7 +21,8 @@ use crate::error::{ResolverError, ResolverResult};
 use crate::git::fetch_git;
 use crate::ident::{PackageRef, TypeName};
 use crate::lockfile::{compute_content_hash, Lockfile, LockfileEntry, LockfileSource};
-use crate::manifest::{DependencySpec, Manifest, SchemaEntry};
+use crate::manifest::{DependencySpec, Manifest, RegistryDependency, SchemaEntry};
+use crate::registry::{cache_slpkg_bytes, select_version, RegistryClient, RegistryConfig};
 
 /// Outcome of resolving a `streamlib.yaml` graph: the root project + every
 /// transitive package, keyed by canonical `"@org/name"` lockfile key.
@@ -125,6 +126,29 @@ pub struct ResolverOptions {
     /// Override the cache directory for git clones and `.slpkg` extractions.
     /// `None` falls back to `$HOME/.streamlib/resolver-cache/`.
     pub cache_dir: Option<PathBuf>,
+    /// Gitea generic-registry configuration for resolving `Registry` schema
+    /// dependencies. `None` means no registry is configured — a `Registry`
+    /// dependency then surfaces [`ResolverError::RegistryNotConfigured`].
+    /// [`resolve_with`] reads this field only; it never consults the process
+    /// environment. Codegen entry points (build scripts, `streamlib
+    /// generate`) populate it via [`ResolverOptions::from_env`].
+    pub registry: Option<RegistryConfig>,
+}
+
+impl ResolverOptions {
+    /// Options with the registry config read from the environment
+    /// (`STREAMLIB_REGISTRY_URL` / `GITEA_URL`, optional
+    /// `STREAMLIB_REGISTRY_TOKEN`) and the default cache dir. This is the
+    /// codegen-boundary constructor — build scripts and `streamlib generate`
+    /// use it so a registry-cached crate resolves its schema deps from the
+    /// configured registry. Unit tests construct [`ResolverOptions`] directly
+    /// to stay hermetic.
+    pub fn from_env() -> Self {
+        Self {
+            cache_dir: None,
+            registry: RegistryConfig::from_env(),
+        }
+    }
 }
 
 /// Resolve a `streamlib.yaml` at `root_dir` and every transitive dependency
@@ -145,6 +169,15 @@ pub fn resolve_with(
         Some(p) => p.clone(),
         None => default_cache_dir()?,
     };
+
+    // `resolve_with` is pure: it reads the registry config from `options`
+    // only, never from the process environment. The env read lives at the
+    // codegen boundary (`ResolverOptions::from_env`, used by build scripts
+    // and `streamlib generate`) so unit tests fully control resolution and
+    // a stray `GITEA_URL` in the shell can't redirect a resolve into a live
+    // fetch. `None` means "no registry" — a `Registry` dep then fails loud
+    // with `RegistryNotConfigured`.
+    let registry = options.registry.as_ref();
 
     let root = build_resolved_package(
         root_manifest,
@@ -193,8 +226,15 @@ pub fn resolve_with(
                 return Err(ResolverError::CircularDependency { chain: dep_id });
             }
 
-            let resolved =
-                resolve_one(&consumer_dir, &dep_ref, &dep_id, &spec, &patch, &cache_dir)?;
+            let resolved = resolve_one(
+                &consumer_dir,
+                &dep_ref,
+                &dep_id,
+                &spec,
+                &patch,
+                &cache_dir,
+                registry,
+            )?;
 
             check_resolved_id_matches(&resolved, &dep_id, &consumer_dir)?;
             check_resolved_satisfies_spec(&resolved, &spec, &consumer_dir, &dep_id)?;
@@ -225,6 +265,7 @@ fn resolve_one(
     spec: &DependencySpec,
     patch: &BTreeMap<PackageRef, DependencySpec>,
     cache_dir: &Path,
+    registry: Option<&RegistryConfig>,
 ) -> ResolverResult<ResolvedPackage> {
     // Consumer's `patch:` table overrides the dep declaration when present.
     // Mirrors Cargo's `[patch.crates-io]` semantics: dependencies declare
@@ -249,10 +290,38 @@ fn resolve_one(
                 },
             )
         }
-        DependencySpec::Registry(_) => Err(ResolverError::RegistryNotImplemented {
-            name: dep_id.to_string(),
-        }),
+        DependencySpec::Registry(reg) => {
+            resolve_registry_dependency(dep_ref, dep_id, reg, cache_dir, registry)
+        }
     }
+}
+
+/// Resolve a `Registry` schema dependency from Gitea's generic registry:
+/// list the package's available versions, select the highest satisfying the
+/// declared range, fetch + extract that version's `.slpkg`, and load it.
+///
+/// The flat generic registry has no semver-range query, so range → concrete
+/// version happens client-side (cargo/npm/pip shape). The resolved concrete
+/// version is recorded in the lockfile via [`ResolvedSource::Registry`].
+fn resolve_registry_dependency(
+    dep_ref: &PackageRef,
+    dep_id: &str,
+    reg: &RegistryDependency,
+    cache_dir: &Path,
+    registry: Option<&RegistryConfig>,
+) -> ResolverResult<ResolvedPackage> {
+    let config = registry.ok_or_else(|| ResolverError::RegistryNotConfigured {
+        name: dep_id.to_string(),
+        env: crate::registry::REGISTRY_URL_ENV.to_string(),
+    })?;
+    let client = RegistryClient::new(config);
+    let available = client.list_versions(dep_ref)?;
+    let selected = select_version(dep_ref, &reg.version, &available)?;
+    let (bytes, url) = client.download_slpkg(dep_ref, selected)?;
+    let archive = cache_slpkg_bytes(dep_ref, &bytes, cache_dir)?;
+    let extracted = extract_slpkg(&archive, cache_dir)?;
+    let manifest = Manifest::load(&extracted)?;
+    build_resolved_package(manifest, extracted, ResolvedSource::Registry { url })
 }
 
 fn resolve_path_dependency(
@@ -843,7 +912,12 @@ dependencies:
     }
 
     #[test]
-    fn registry_dependency_not_implemented() {
+    fn registry_dependency_without_config_errors() {
+        // A bare registry range with `registry: None` fails loud with
+        // RegistryNotConfigured — the actionable successor to the old
+        // RegistryNotImplemented. `resolve_with` is pure (it never reads the
+        // process env), so this is deterministic regardless of any ambient
+        // STREAMLIB_REGISTRY_URL / GITEA_URL in the shell.
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("project");
         write_streamlib_yaml(
@@ -853,8 +927,123 @@ dependencies:
   "@tatolab/core": "^1.0.0"
 "#,
         );
-        let err = resolve(&root).unwrap_err();
-        assert!(matches!(err, ResolverError::RegistryNotImplemented { .. }));
+        let opts = ResolverOptions {
+            cache_dir: Some(tmp.path().join("cache")),
+            registry: None,
+        };
+        let err = resolve_with(&root, &opts).unwrap_err();
+        assert!(
+            matches!(err, ResolverError::RegistryNotConfigured { .. }),
+            "expected RegistryNotConfigured, got {err:?}"
+        );
+    }
+
+    /// End-to-end registry resolution over the hermetic `file://` mirror:
+    /// build a real schema `.slpkg`, lay it out in a versioned mirror dir,
+    /// declare a bare semver-range registry dep (NO path patch), and assert
+    /// the resolver lists → selects-highest-in-range → fetches → extracts →
+    /// loads it. This is exactly the path `build.rs` codegen drives for a
+    /// registry-cached crate. Mirrors the broken case the issue fixes: with
+    /// the patch stripped, the bare range MUST resolve from the registry.
+    #[test]
+    fn registry_dependency_resolves_from_file_mirror() {
+        use std::io::Write;
+        let tmp = tempfile::tempdir().unwrap();
+        let mirror = tmp.path().join("mirror");
+        let cache = tmp.path().join("cache");
+
+        // Two versions present; the ^1.0.0 range must select 1.2.0 over
+        // 1.0.0 (and ignore the out-of-range 2.0.0).
+        let make_slpkg = |dir: &Path, version: &str| {
+            std::fs::create_dir_all(dir).unwrap();
+            let archive = dir.join("escalate.slpkg");
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+            let opts = zip::write::SimpleFileOptions::default();
+            zip.start_file(Manifest::FILE_NAME, opts).unwrap();
+            zip.write_all(
+                format!(
+                    "package:\n  org: tatolab\n  name: escalate\n  version: {version}\nschemas:\n  EscalateRequest:\n    file: schemas/EscalateRequest.yaml\n"
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+            zip.start_file("schemas/EscalateRequest.yaml", opts).unwrap();
+            zip.write_all(b"metadata:\n  name: EscalateRequest\nproperties: {}\n")
+                .unwrap();
+            zip.finish().unwrap();
+        };
+        make_slpkg(&mirror.join("escalate").join("1.0.0"), "1.0.0");
+        make_slpkg(&mirror.join("escalate").join("1.2.0"), "1.2.0");
+        make_slpkg(&mirror.join("escalate").join("2.0.0"), "2.0.0");
+
+        let root = tmp.path().join("project");
+        write_streamlib_yaml(
+            &root,
+            r#"
+dependencies:
+  "@tatolab/escalate": "^1.0.0"
+"#,
+        );
+
+        let opts = ResolverOptions {
+            cache_dir: Some(cache),
+            registry: Some(crate::RegistryConfig {
+                base_url: format!("file://{}", mirror.display()),
+                token: None,
+            }),
+        };
+        let res = resolve_with(&root, &opts).unwrap();
+        let escalate = res.packages.get("@tatolab/escalate").unwrap();
+        assert!(matches!(escalate.source, ResolvedSource::Registry { .. }));
+        // Highest-in-range selected.
+        assert_eq!(
+            escalate.manifest.package.as_ref().unwrap().version.to_string(),
+            "1.2.0"
+        );
+        assert_eq!(escalate.schema_files.len(), 1);
+
+        // Lockfile records the registry source + concrete version.
+        let lock = res.to_lockfile();
+        let entry = lock.packages.get("@tatolab/escalate").unwrap();
+        assert_eq!(entry.version.to_string(), "1.2.0");
+        assert!(matches!(entry.source, LockfileSource::Registry { .. }));
+    }
+
+    #[test]
+    fn registry_dependency_no_matching_version_errors() {
+        use std::io::Write;
+        let tmp = tempfile::tempdir().unwrap();
+        let mirror = tmp.path().join("mirror");
+        let dir = mirror.join("escalate").join("2.0.0");
+        std::fs::create_dir_all(&dir).unwrap();
+        let archive = dir.join("escalate.slpkg");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+        let zopts = zip::write::SimpleFileOptions::default();
+        zip.start_file(Manifest::FILE_NAME, zopts).unwrap();
+        zip.write_all(b"package:\n  org: tatolab\n  name: escalate\n  version: 2.0.0\n")
+            .unwrap();
+        zip.finish().unwrap();
+
+        let root = tmp.path().join("project");
+        write_streamlib_yaml(
+            &root,
+            r#"
+dependencies:
+  "@tatolab/escalate": "^1.0.0"
+"#,
+        );
+        let opts = ResolverOptions {
+            cache_dir: Some(tmp.path().join("cache")),
+            registry: Some(crate::RegistryConfig {
+                base_url: format!("file://{}", mirror.display()),
+                token: None,
+            }),
+        };
+        let err = resolve_with(&root, &opts).unwrap_err();
+        assert!(
+            matches!(err, ResolverError::RegistryNoMatchingVersion { .. }),
+            "expected RegistryNoMatchingVersion, got {err:?}"
+        );
     }
 
     #[test]
@@ -887,6 +1076,7 @@ dependencies:
 
         let opts = ResolverOptions {
             cache_dir: Some(cache),
+            registry: None,
         };
         let res = resolve_with(&root, &opts).unwrap();
         let core = res.packages.get("@tatolab/core").unwrap();

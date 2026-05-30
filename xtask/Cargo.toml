@@ -15,6 +15,10 @@ streamlib-jtd-codegen = { path = "../libs/streamlib-jtd-codegen" }
 # `schemars::schema_for!(StreamlibYaml)` from this crate (#714).
 streamlib-processor-schema = { path = "../libs/streamlib-processor-schema" }
 
+# Package-artifact assembly — backs `strip-publish-manifest`, the publish-side
+# path-patch strip for the Gitea registry distribution.
+streamlib-pack = { path = "../libs/streamlib-pack" }
+
 # Logging — needed to surface tracing::info! output from streamlib-jtd-codegen.
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

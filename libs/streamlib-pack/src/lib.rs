@@ -587,6 +587,49 @@ fn reject_path_patches(pkg_dir: &Path) -> Result<()> {
     );
 }
 
+/// Strip dev-time path-flavor `patch:` entries from a `streamlib.yaml`
+/// body, returning the rewritten YAML. `dependencies:`, git/registry
+/// `patch:` overrides, and every other manifest field pass through
+/// unchanged.
+///
+/// This is the publish-side counterpart to
+/// [`PathDepPolicy::RejectPathPatches`]. Where `streamlib pack` *rejects* a
+/// path patch (a distributed source `.slpkg` must not carry a dev override),
+/// `cargo publish` must *strip* it: the path patch is a legitimate dev
+/// affordance inside the monorepo (it redirects a dep to local source for
+/// instant edits), but the published manifest must be path-free so a
+/// registry-cached consumer resolves the dep from the registry instead of a
+/// dangling `../../packages/...` path. The schema-tier analog of cargo
+/// stripping `path` from a `[dependencies]` path dep on publish.
+///
+/// Idempotent: a manifest with no path patches round-trips unchanged in
+/// content (modulo serializer normalization).
+pub fn strip_path_patches(manifest_yaml: &str) -> Result<String> {
+    let mut manifest: streamlib_processor_schema::StreamlibYaml =
+        serde_yaml::from_str(manifest_yaml).context("parse streamlib.yaml")?;
+    manifest
+        .patch
+        .retain(|_dep_ref, spec| !matches!(spec, DependencySpec::Path(_)));
+    serde_yaml::to_string(&manifest).context("serialize streamlib.yaml")
+}
+
+/// In-place [`strip_path_patches`] on `<dir>/streamlib.yaml`. Intended to run
+/// against a scratch copy of a crate at `cargo publish` time (cargo bundles
+/// `streamlib.yaml` verbatim, with no file-rewrite hook, so the strip happens
+/// before publishing the staged copy). No-op when the file is absent.
+pub fn strip_path_patches_in_dir(dir: &Path) -> Result<()> {
+    let manifest_path = dir.join(Manifest::FILE_NAME);
+    if !manifest_path.exists() {
+        return Ok(());
+    }
+    let body = std::fs::read_to_string(&manifest_path)
+        .with_context(|| format!("read {}", manifest_path.display()))?;
+    let stripped = strip_path_patches(&body)?;
+    std::fs::write(&manifest_path, stripped)
+        .with_context(|| format!("write {}", manifest_path.display()))?;
+    Ok(())
+}
+
 /// Serialize `streamlib.yaml` with every relative `path:` dep/patch
 /// rewritten to absolute, anchored at `pkg_dir`. Registry / git entries
 /// pass through unchanged.
@@ -950,6 +993,69 @@ mod tests {
         .expect_err("RejectPathPatches must reject a path-flavor patch");
         let msg = format!("{err}");
         assert!(msg.contains("@tatolab/core") && msg.contains("not publishable"));
+    }
+
+    #[test]
+    fn strip_path_patches_removes_path_patch_keeps_dependencies() {
+        // Engine-shaped manifest: a registry dep + a dev path patch. The
+        // strip must drop the patch entry but leave the dependency range,
+        // schemas, package block, and everything else intact.
+        let yaml = "package:\n  org: tatolab\n  name: engine\n  version: 0.4.30\ndependencies:\n  \"@tatolab/escalate\": \"^1.0.0\"\npatch:\n  \"@tatolab/escalate\":\n    path: ../../packages/escalate\nschemas:\n  EscalateRequest:\n    package: \"@tatolab/escalate\"\n";
+        let stripped = strip_path_patches(yaml).unwrap();
+        // No path patch survives.
+        assert!(!stripped.contains("../../packages/escalate"));
+        assert!(!stripped.contains("patch:") || !stripped.contains("path:"));
+        // The dependency range + schema import are preserved.
+        assert!(stripped.contains("@tatolab/escalate"));
+        assert!(stripped.contains("^1.0.0"));
+        // Re-parse to prove it's still a valid, path-free manifest.
+        let manifest: streamlib_idents::Manifest = serde_yaml::from_str(&stripped).unwrap();
+        assert!(manifest.patch.is_empty());
+        assert_eq!(manifest.dependencies.len(), 1);
+    }
+
+    #[test]
+    fn strip_path_patches_preserves_non_path_patches() {
+        // A git-flavor patch override is NOT a dev path affordance — it must
+        // survive the strip (only `path:` patches are dev-only).
+        let yaml = "package:\n  org: tatolab\n  name: foo\n  version: 1.0.0\ndependencies:\n  \"@tatolab/core\": \"^1.0.0\"\n  \"@tatolab/bar\": \"^2.0.0\"\npatch:\n  \"@tatolab/core\":\n    path: ../core\n  \"@tatolab/bar\":\n    git: https://example.com/bar\n    rev: abc123\n";
+        let stripped = strip_path_patches(yaml).unwrap();
+        let manifest: streamlib_idents::Manifest = serde_yaml::from_str(&stripped).unwrap();
+        // The git patch survives; the path patch is gone.
+        assert_eq!(manifest.patch.len(), 1);
+        let (dep_ref, bar) = manifest.patch.iter().next().unwrap();
+        assert_eq!(dep_ref.to_string(), "@tatolab/bar");
+        assert!(matches!(bar, DependencySpec::Git(_)));
+    }
+
+    #[test]
+    fn strip_path_patches_idempotent_when_no_path_patch() {
+        // A manifest with no path patch round-trips through parse+serialize
+        // (content equal modulo serializer normalization — re-stripping a
+        // stripped manifest is a no-op on the dependency graph).
+        let yaml = "package:\n  org: tatolab\n  name: leaf\n  version: 1.0.0\ndependencies:\n  \"@tatolab/core\": \"^1.0.0\"\n";
+        let once = strip_path_patches(yaml).unwrap();
+        let twice = strip_path_patches(&once).unwrap();
+        assert_eq!(once, twice);
+        let manifest: streamlib_idents::Manifest = serde_yaml::from_str(&once).unwrap();
+        assert!(manifest.patch.is_empty());
+        assert_eq!(manifest.dependencies.len(), 1);
+    }
+
+    #[test]
+    fn strip_path_patches_in_dir_rewrites_file() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: engine\n  version: 0.4.30\ndependencies:\n  \"@tatolab/escalate\": \"^1.0.0\"\npatch:\n  \"@tatolab/escalate\":\n    path: ../../packages/escalate\n",
+        )
+        .unwrap();
+        strip_path_patches_in_dir(dir.path()).unwrap();
+        let body = std::fs::read_to_string(dir.path().join("streamlib.yaml")).unwrap();
+        assert!(!body.contains("../../packages/escalate"));
+        let manifest: streamlib_idents::Manifest = serde_yaml::from_str(&body).unwrap();
+        assert!(manifest.patch.is_empty());
+        assert_eq!(manifest.dependencies.len(), 1);
     }
 
     #[test]

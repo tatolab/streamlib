@@ -114,8 +114,24 @@ pub enum ResolverError {
     #[error("`.slpkg` archive `{path}` failed to extract: {message}")]
     SlpkgExtractFailed { path: PathBuf, message: String },
 
-    #[error("registry dependency `{name}` requires a registry, but the v1 resolver does not yet ship one")]
-    RegistryNotImplemented { name: String },
+    #[error(
+        "registry dependency `{name}` cannot be resolved: no registry is configured. \
+         Set `{env}` (or `GITEA_URL`) to the Gitea base URL, or add a `patch:` override."
+    )]
+    RegistryNotConfigured { name: String, env: String },
+
+    #[error("registry dependency `{name}` fetch failed: {detail}")]
+    RegistryFetchFailed { name: String, detail: String },
+
+    #[error(
+        "registry dependency `{name}` has no version satisfying range `{range}` \
+         (available: {available})"
+    )]
+    RegistryNoMatchingVersion {
+        name: String,
+        range: String,
+        available: String,
+    },
 
     #[error("io error at `{path}`: {source}")]
     Io {
