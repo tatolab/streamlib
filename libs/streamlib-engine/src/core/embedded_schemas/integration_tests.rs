@@ -24,11 +24,15 @@ use iceoryx2::prelude::*;
 use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib_processor_schema::PortSchemaSpec;
 
-/// Build a `PortSchemaSpec::Specific` for a `@tatolab/core/<Type>@1.0.0` lookup.
-fn core_spec(type_name: &str) -> PortSchemaSpec {
+/// Build a `PortSchemaSpec::Specific` for a synthetic `@test/wire/<Type>@1.0.0`
+/// lookup. The engine has no compile-time knowledge of any package's real wire
+/// vocabulary — these tests register their own synthetic schemas (see
+/// [`test_support`]) and exercise the resolver + publisher-sizing mechanics
+/// against them.
+fn test_wire_spec(type_name: &str) -> PortSchemaSpec {
     PortSchemaSpec::Specific(SchemaIdent::new(
-        Org::new("tatolab").unwrap(),
-        Package::new("core").unwrap(),
+        Org::new("test").unwrap(),
+        Package::new("wire").unwrap(),
         TypeName::new(type_name).unwrap(),
         SemVer::new(1, 0, 0),
     ))
@@ -125,19 +129,24 @@ fn test_loan_256kb_succeeds_with_512kb_publisher_limit() {
 // =============================================================================
 
 #[test]
-fn test_schema_max_payload_bytes_audioframe() {
-    test_support::register_core_wire_vocabulary();
-    let bytes = max_payload_bytes_for_port_spec(&core_spec("AudioFrame")).unwrap();
-    assert_eq!(bytes, 65536, "audioframe should declare 64 KB");
+fn test_schema_max_payload_bytes_small_frame() {
+    test_support::register_test_wire_vocabulary();
+    let bytes = max_payload_bytes_for_port_spec(&test_wire_spec("SmallFrame")).unwrap();
+    assert_eq!(
+        bytes,
+        test_support::SMALL_FRAME_MAX_PAYLOAD_BYTES,
+        "resolver returns the declared 128 KiB payload bound (a non-default value)"
+    );
 }
 
 #[test]
-fn test_schema_max_payload_bytes_videoframe() {
-    test_support::register_core_wire_vocabulary();
-    let bytes = max_payload_bytes_for_port_spec(&core_spec("VideoFrame")).unwrap();
+fn test_schema_max_payload_bytes_large_frame() {
+    test_support::register_test_wire_vocabulary();
+    let bytes = max_payload_bytes_for_port_spec(&test_wire_spec("LargeFrame")).unwrap();
     assert_eq!(
-        bytes, 65536,
-        "videoframe carries surface IDs only — 64 KB default is correct"
+        bytes,
+        test_support::LARGE_FRAME_MAX_PAYLOAD_BYTES,
+        "resolver returns the declared 16 MiB payload bound"
     );
 }
 
@@ -169,15 +178,15 @@ fn test_schema_max_payload_bytes_unknown_schema_errors_with_add_module_hint() {
 }
 
 #[test]
-fn test_encodedvideoframe_larger_than_audioframe() {
-    test_support::register_core_wire_vocabulary();
-    let audio = max_payload_bytes_for_port_spec(&core_spec("AudioFrame")).unwrap();
-    let video = max_payload_bytes_for_port_spec(&core_spec("EncodedVideoFrame")).unwrap();
+fn test_large_frame_larger_than_small_frame() {
+    test_support::register_test_wire_vocabulary();
+    let small = max_payload_bytes_for_port_spec(&test_wire_spec("SmallFrame")).unwrap();
+    let large = max_payload_bytes_for_port_spec(&test_wire_spec("LargeFrame")).unwrap();
     assert!(
-        video > audio,
-        "encodedvideoframe ({} bytes) should declare more capacity than audioframe ({} bytes)",
-        video,
-        audio
+        large > small,
+        "large frame ({} bytes) should declare more capacity than small frame ({} bytes)",
+        large,
+        small
     );
 }
 
@@ -189,53 +198,53 @@ fn test_encodedvideoframe_larger_than_audioframe() {
 // and verify that large payloads actually transit end-to-end.
 // =============================================================================
 
-/// Publisher sized from the audioframe schema (64 KB) rejects a 256 KB payload.
-/// This mirrors the pre-fix failure mode for any connection carrying audioframes.
+/// Publisher sized from the small-frame schema (128 KiB) rejects a 256 KiB
+/// payload — mirrors the pre-fix failure mode for any sub-256-KiB connection.
 #[test]
-fn test_audioframe_schema_publisher_rejects_256kb() {
-    test_support::register_core_wire_vocabulary();
+fn test_small_frame_schema_publisher_rejects_256kb() {
+    test_support::register_test_wire_vocabulary();
     let node = Iceoryx2Node::new().unwrap();
     let service = node
         .open_or_create_service(
-            "streamlib/test/schema-audio-reject",
+            "streamlib/test/schema-small-reject",
             crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES,
             true,
         )
         .unwrap();
 
-    let max_bytes = max_payload_bytes_for_port_spec(&core_spec("AudioFrame")).unwrap();
+    let max_bytes = max_payload_bytes_for_port_spec(&test_wire_spec("SmallFrame")).unwrap();
     let publisher = service.create_publisher(max_bytes).unwrap();
 
-    // 256 KB exceeds the 64 KB audioframe limit.
+    // 256 KiB exceeds the 64 KiB small-frame limit.
     let result = publisher.loan_slice_uninit(256 * 1024);
     assert!(
         result.is_err(),
-        "Expected 256 KB loan to fail on audioframe-sized publisher ({} bytes)",
+        "Expected 256 KB loan to fail on small-frame-sized publisher ({} bytes)",
         max_bytes
     );
 }
 
-/// Publisher sized from the encodedvideoframe schema accepts a 256 KB payload.
+/// Publisher sized from the large-frame schema accepts a 256 KiB payload.
 /// This is the GREEN-after-fix test: before the fix all publishers used ~64 KB.
 #[test]
-fn test_encodedvideoframe_schema_publisher_accepts_256kb() {
-    test_support::register_core_wire_vocabulary();
+fn test_large_frame_schema_publisher_accepts_256kb() {
+    test_support::register_test_wire_vocabulary();
     let node = Iceoryx2Node::new().unwrap();
     let service = node
         .open_or_create_service(
-            "streamlib/test/schema-video-ok",
+            "streamlib/test/schema-large-ok",
             crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES,
             true,
         )
         .unwrap();
 
-    let max_bytes = max_payload_bytes_for_port_spec(&core_spec("EncodedVideoFrame")).unwrap();
+    let max_bytes = max_payload_bytes_for_port_spec(&test_wire_spec("LargeFrame")).unwrap();
     let publisher = service.create_publisher(max_bytes).unwrap();
 
     let result = publisher.loan_slice_uninit(256 * 1024);
     assert!(
         result.is_ok(),
-        "Expected 256 KB loan to succeed on encodedvideoframe-sized publisher ({} bytes), got: {:?}",
+        "Expected 256 KB loan to succeed on large-frame-sized publisher ({} bytes), got: {:?}",
         max_bytes,
         result.err()
     );
@@ -250,7 +259,7 @@ fn test_encodedvideoframe_schema_publisher_accepts_256kb() {
 /// have been silently truncated on receipt.
 #[test]
 fn test_frame_header_plus_256kb_roundtrip_through_slice_service() {
-    test_support::register_core_wire_vocabulary();
+    test_support::register_test_wire_vocabulary();
     let node = Iceoryx2Node::new().unwrap();
     let service = node
         .open_or_create_service(
@@ -261,7 +270,7 @@ fn test_frame_header_plus_256kb_roundtrip_through_slice_service() {
         .unwrap();
 
     let data_size = 256 * 1024;
-    let max_bytes = max_payload_bytes_for_port_spec(&core_spec("EncodedVideoFrame")).unwrap();
+    let max_bytes = max_payload_bytes_for_port_spec(&test_wire_spec("LargeFrame")).unwrap();
     // Publisher sized like the FFI layer: schema max + header.
     let publisher = service.create_publisher(max_bytes).unwrap();
     let subscriber = service.create_subscriber().unwrap();
@@ -273,9 +282,8 @@ fn test_frame_header_plus_256kb_roundtrip_through_slice_service() {
 
     let total_len = FRAME_HEADER_SIZE + data_size;
     let mut frame = vec![0u8; total_len];
-    let schema_ident =
-        SchemaIdentWire::from_segments("tatolab", "core", "EncodedVideoFrame", 1, 0, 0)
-            .expect("EncodedVideoFrame segments fit SchemaIdentWire bounds");
+    let schema_ident = SchemaIdentWire::from_segments("test", "wire", "LargeFrame", 1, 0, 0)
+        .expect("LargeFrame segments fit SchemaIdentWire bounds");
     FrameHeader::new("dest_port", schema_ident, 42, data_size as u32)
         .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
     frame[FRAME_HEADER_SIZE..].copy_from_slice(&data);
@@ -306,8 +314,8 @@ fn test_frame_header_plus_256kb_roundtrip_through_slice_service() {
 
     let header = FrameHeader::read_from_slice(&buf);
     assert_eq!(header.port(), "dest_port");
-    let expected_ident = SchemaIdentWire::from_segments("tatolab", "core", "EncodedVideoFrame", 1, 0, 0)
-        .unwrap();
+    let expected_ident =
+        SchemaIdentWire::from_segments("test", "wire", "LargeFrame", 1, 0, 0).unwrap();
     assert_eq!(header.schema(), &expected_ident);
     assert_eq!(header.timestamp_ns, 42);
     assert_eq!(header.len as usize, data_size);
@@ -323,18 +331,18 @@ fn test_frame_header_plus_256kb_roundtrip_through_slice_service() {
 /// Full publish/subscribe round-trip: publisher sized from encodedvideoframe schema,
 /// 256 KB payload written and received on the same service.
 #[test]
-fn test_encodedvideoframe_schema_publisher_subscriber_roundtrip_256kb() {
-    test_support::register_core_wire_vocabulary();
+fn test_large_frame_schema_publisher_subscriber_roundtrip_256kb() {
+    test_support::register_test_wire_vocabulary();
     let node = Iceoryx2Node::new().unwrap();
     let service = node
         .open_or_create_service(
-            "streamlib/test/schema-video-roundtrip",
+            "streamlib/test/schema-large-roundtrip",
             crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES,
             true,
         )
         .unwrap();
 
-    let max_bytes = max_payload_bytes_for_port_spec(&core_spec("EncodedVideoFrame")).unwrap();
+    let max_bytes = max_payload_bytes_for_port_spec(&test_wire_spec("LargeFrame")).unwrap();
     let publisher = service.create_publisher(max_bytes).unwrap();
     let subscriber = service.create_subscriber().unwrap();
 
