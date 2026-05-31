@@ -1,5 +1,7 @@
 {
   "imports": {
+    "streamlib": "npm:@tatolab/streamlib-deno@^0.4",
+    "streamlib/": "npm:/@tatolab/streamlib-deno@^0.4/",
     "@msgpack/msgpack": "npm:@msgpack/msgpack@3.0.0-beta2"
   }
 }

@@ -38,8 +38,8 @@ import {
   MonotonicTimer,
   processor,
   type RuntimeContextFullAccess,
-} from "../../../libs/streamlib-deno/mod.ts";
-import type { OutputPorts } from "../../../libs/streamlib-deno/types.ts";
+} from "streamlib";
+import type { OutputPorts } from "streamlib/types.ts";
 
 @processor("PolyglotManualSource", import.meta.url)
 export default class PolyglotManualSource implements ManualProcessor {

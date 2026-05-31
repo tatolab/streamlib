@@ -19,7 +19,7 @@ import {
   type ReactiveProcessor,
   type RuntimeContextFullAccess,
   type RuntimeContextLimitedAccess,
-} from "../../../libs/streamlib-deno/mod.ts";
+} from "streamlib";
 import type { VideoFrame } from "./_generated_/tatolab__core/video_frame.ts";
 
 const HALFTONE_WGSL = /* wgsl */`

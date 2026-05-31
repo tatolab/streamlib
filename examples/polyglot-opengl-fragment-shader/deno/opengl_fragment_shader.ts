@@ -40,12 +40,12 @@ import {
   type ReactiveProcessor,
   type RuntimeContextFullAccess,
   type RuntimeContextLimitedAccess,
-} from "../../../libs/streamlib-deno/mod.ts";
-import { OpenGLContext } from "../../../libs/streamlib-deno/adapters/opengl.ts";
+} from "streamlib";
+import { OpenGLContext } from "streamlib/adapters/opengl.ts";
 import {
   VkImageLayout,
   VulkanContext,
-} from "../../../libs/streamlib-deno/adapters/vulkan.ts";
+} from "streamlib/adapters/vulkan.ts";
 
 // =============================================================================
 // Minimal libGL.so.1 binding via Deno.dlopen

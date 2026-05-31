@@ -30,12 +30,12 @@ import {
   type ReactiveProcessor,
   type RuntimeContextFullAccess,
   type RuntimeContextLimitedAccess,
-} from "../../../libs/streamlib-deno/mod.ts";
+} from "streamlib";
 import {
   VkImageLayout,
   VulkanContext,
-} from "../../../libs/streamlib-deno/adapters/vulkan.ts";
-import type { EscalateRequestRegisterGraphicsKernelPipelineState } from "../../../libs/streamlib-deno/escalate.ts";
+} from "streamlib/adapters/vulkan.ts";
+import type { EscalateRequestRegisterGraphicsKernelPipelineState } from "streamlib/escalate.ts";
 
 function hexToBytes(hex: string): Uint8Array {
   const out = new Uint8Array(hex.length / 2);
