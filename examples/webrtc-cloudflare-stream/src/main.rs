@@ -21,8 +21,7 @@ mod _generated_ {
     include!(concat!(env!("OUT_DIR"), "/_generated_shim.rs"));
 }
 
-#[cfg(target_os = "linux")]
-use streamlib::sdk::permissions::{request_audio_permission, request_camera_permission};
+use streamlib::sdk::RunnerAutoBuild;
 #[cfg(target_os = "linux")]
 use streamlib::sdk::error::Result;
 #[cfg(target_os = "linux")]
@@ -30,13 +29,22 @@ use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 #[cfg(target_os = "linux")]
 use streamlib::sdk::module_ident_any_version;
 #[cfg(target_os = "linux")]
-use streamlib::sdk::runtime::Runner;
-use streamlib::sdk::RunnerAutoBuild;
+use streamlib::sdk::permissions::{request_audio_permission, request_camera_permission};
 #[cfg(target_os = "linux")]
 use streamlib::sdk::processors::ProcessorSpec;
 #[cfg(target_os = "linux")]
+use streamlib::sdk::runtime::{BuildPolicy, Runner, SemVerRange, Strategy};
+#[cfg(target_os = "linux")]
 use streamlib::sdk::schema_ident_any_version;
 
+#[cfg(target_os = "linux")]
+use crate::_generated_::tatolab__audio::audio_channel_converter_config::Mode;
+#[cfg(target_os = "linux")]
+use crate::_generated_::tatolab__audio::audio_resampler_config::Quality;
+#[cfg(target_os = "linux")]
+use crate::_generated_::tatolab__audio::{
+    AudioCaptureConfig, AudioChannelConverterConfig, AudioResamplerConfig, BufferRechunkerConfig,
+};
 #[cfg(target_os = "linux")]
 use crate::_generated_::tatolab__camera::CameraConfig;
 #[cfg(target_os = "linux")]
@@ -44,18 +52,9 @@ use crate::_generated_::tatolab__h264::H264EncoderConfig;
 #[cfg(target_os = "linux")]
 use crate::_generated_::tatolab__opus::OpusEncoderConfig;
 #[cfg(target_os = "linux")]
-use crate::_generated_::tatolab__webrtc::webrtc_whip_config::{Audio, Video, Whip};
-#[cfg(target_os = "linux")]
 use crate::_generated_::tatolab__webrtc::WebrtcWhipConfig;
 #[cfg(target_os = "linux")]
-use crate::_generated_::tatolab__audio::audio_channel_converter_config::Mode;
-#[cfg(target_os = "linux")]
-use crate::_generated_::tatolab__audio::audio_resampler_config::Quality;
-#[cfg(target_os = "linux")]
-use crate::_generated_::tatolab__audio::{
-    AudioCaptureConfig, AudioChannelConverterConfig, AudioResamplerConfig,
-    BufferRechunkerConfig,
-};
+use crate::_generated_::tatolab__webrtc::webrtc_whip_config::{Audio, Video, Whip};
 
 #[cfg(target_os = "linux")]
 fn main() -> Result<()> {
@@ -66,11 +65,19 @@ fn main() -> Result<()> {
 
     let runtime = Runner::with_auto_build()?;
 
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "audio"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/audio"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/camera"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h264"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/h264"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "opus"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/opus"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "webrtc"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/webrtc"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    // Resolve every package from the Gitea generic registry by version — the
+    // cross-repo consumer path. The orchestrator pulls each `.slpkg` and builds
+    // it from source on the host. Registry endpoint comes from
+    // `STREAMLIB_REGISTRY_URL` (or `GITEA_URL`).
+    let registry = || Strategy::Registry {
+        version_req: SemVerRange::Any,
+        build: BuildPolicy::IfStale,
+    };
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "audio"), registry())?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), registry())?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h264"), registry())?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "opus"), registry())?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "webrtc"), registry())?;
 
     println!("🔒 Requesting camera permission...");
     if !request_camera_permission()? {
@@ -100,7 +107,10 @@ fn main() -> Result<()> {
         serde_json::to_value(CameraConfig::default())
             .map_err(|e| streamlib::sdk::error::Error::Configuration(e.to_string()))?,
     ))?;
-    println!("✓ Camera added (capturing video @ {}x{})\n", video_width, video_height);
+    println!(
+        "✓ Camera added (capturing video @ {}x{})\n",
+        video_width, video_height
+    );
 
     println!("🎬 Adding H.264 encoder...");
     let h264_encoder = runtime.add_processor(ProcessorSpec::new(
@@ -115,7 +125,10 @@ fn main() -> Result<()> {
         })
         .map_err(|e| streamlib::sdk::error::Error::Configuration(e.to_string()))?,
     ))?;
-    println!("✓ H.264 encoder added (Vulkan Video, baseline @ {} bps)\n", video_bitrate);
+    println!(
+        "✓ H.264 encoder added (Vulkan Video, baseline @ {} bps)\n",
+        video_bitrate
+    );
 
     // Audio pipeline is optional — skip if no audio device is available.
     println!("🎤 Adding audio capture processor...");
@@ -162,10 +175,19 @@ fn main() -> Result<()> {
                 .map_err(|e| streamlib::sdk::error::Error::Configuration(e.to_string()))?,
             ))?;
 
-            Some((audio_capture, resampler, channel_converter, rechunker, opus_encoder))
+            Some((
+                audio_capture,
+                resampler,
+                channel_converter,
+                rechunker,
+                opus_encoder,
+            ))
         }
         Err(e) => {
-            println!("⚠️  Audio capture unavailable ({}), streaming video only\n", e);
+            println!(
+                "⚠️  Audio capture unavailable ({}), streaming video only\n",
+                e
+            );
             None
         }
     };
