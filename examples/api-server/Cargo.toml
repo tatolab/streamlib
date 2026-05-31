@@ -1,11 +1,19 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# Standalone, registry-only example (headed to its own repo). Every dependency
+# resolves from the Gitea registry by version, and the empty `[workspace]` table
+# makes this its own workspace root so it builds off-tree. Loads
+# `@tatolab/api-server` at runtime via `Strategy::Registry`.
 [package]
 name = "api-server"
 version = "0.1.0"
 edition = "2024"
+publish = false
 
-# `@tatolab/api-server` loaded at runtime via
-# `Runner::add_module` — no compile-time link.
 [dependencies]
-streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
+streamlib = { version = "0.4.33-dev.5", registry = "gitea" }
 serde_json = "1"
 tokio = { version = "1.48.0", features = ["full"] }
+
+[workspace]
