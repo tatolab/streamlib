@@ -1,4 +1,3 @@
-# yaml-language-server: $schema=../../../../schemas/streamlib.schema.json
 package:
   org: tatolab
   name: polyglot-venv-isolation-pkg-a
