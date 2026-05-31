@@ -24,22 +24,29 @@ use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::runtime::{BuildPolicy, Runner, SemVerRange, Strategy};
 use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
     let runtime = Runner::with_auto_build()?;
 
-    // 1. Load `@tatolab/camera` and `@tatolab/display` from the
-    //    package source — built on demand by the orchestrator.
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/camera"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "display"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/display"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    // 1. Resolve `@tatolab/camera` and `@tatolab/display` from the Gitea
+    //    generic registry by version — the cross-repo consumer path. The
+    //    orchestrator pulls each `.slpkg` and builds it from source on the
+    //    host. Registry endpoint comes from `STREAMLIB_REGISTRY_URL` (or
+    //    `GITEA_URL`).
+    let registry = || Strategy::Registry {
+        version_req: SemVerRange::Any,
+        build: BuildPolicy::IfStale,
+    };
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), registry())?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "display"), registry())?;
 
-    // 2. Load the sibling Deno sub-package — it lives at `./deno`
-    //    relative to this example, isn't workspace-staged, so we
-    //    resolve it by its manifest directory. The recursive dep
-    //    walker follows its own dependencies.
+    // 2. Load this example's own Deno sub-package — it lives at `./deno`
+    //    relative to this example (it ships in this repo, not the registry),
+    //    so we resolve it by its manifest directory. The recursive dep walker
+    //    follows its own dependencies.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "camera-deno-subprocess"),

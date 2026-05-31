@@ -1,12 +1,23 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
+# Standalone, registry-only example (headed to its own repo). Every dependency
+# resolves from the Gitea registry by version, and the empty `[workspace]` table
+# makes this its own workspace root so it builds off-tree. Loads
+# `@tatolab/camera` + `@tatolab/display` at runtime via `Strategy::Registry`,
+# and its own `@tatolab/camera-deno-subprocess` Deno package from `./deno`.
 [package]
 name = "camera-deno-subprocess"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
+[features]
+default = []
+backend-vulkan = ["streamlib/backend-vulkan"]
+
 [dependencies]
-streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
+streamlib = { version = "0.4.33-dev.3", registry = "gitea" }
 serde_json = "1.0"
+
+[workspace]
