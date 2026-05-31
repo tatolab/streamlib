@@ -35,6 +35,7 @@
 //! [`Strategy::Git`]: streamlib_engine::core::runtime::Strategy::Git
 //! [`BuildPolicy`]: streamlib_engine::core::runtime::BuildPolicy
 
+mod deno_codegen;
 mod native_host;
 mod python_venv;
 
@@ -260,6 +261,16 @@ impl PolyglotBuildOrchestrator {
         // `temp_dir` means the atomic rename below carries the venv into
         // place — no second rename. On failure, drop the half-staged temp.
         python_venv::provision_python_venv(&temp_dir, &pkg_label).map_err(|e| {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            e
+        })?;
+
+        // Regenerate the staged Deno package's `_generated_/` wire vocabulary
+        // (no-op for non-Deno packages). `_generated_` is excluded from the
+        // bundled source as a per-consumer artifact, so it must be rebuilt
+        // here — the Deno mirror of the Python venv codegen above. Building
+        // into `temp_dir` lets the atomic rename below carry it into place.
+        deno_codegen::provision_deno_typescript(&temp_dir, &pkg_label).map_err(|e| {
             let _ = std::fs::remove_dir_all(&temp_dir);
             e
         })?;
