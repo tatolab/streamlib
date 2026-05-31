@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.4.35](https://github.com/tatolab/streamlib/compare/v0.4.34...v0.4.35) (2026-05-31)
+
+
+### Features
+
+* **1119:** anonymous generic-registry version index + bulk package publish ([#1163](https://github.com/tatolab/streamlib/issues/1163)) ([522762d](https://github.com/tatolab/streamlib/commit/522762d2a7802991ad3f34219ce1079a91f605cd))
+* **1131:** convert api-server example to registry-only standalone ([#1165](https://github.com/tatolab/streamlib/issues/1165)) ([23416d4](https://github.com/tatolab/streamlib/commit/23416d45a65640464655ec22188cb1f50718e60f)), closes [#1131](https://github.com/tatolab/streamlib/issues/1131)
+* **1132:** camera-audio-recorder → registry-only no-op (deferred) ([#1177](https://github.com/tatolab/streamlib/issues/1177)) ([9dc7ef8](https://github.com/tatolab/streamlib/commit/9dc7ef8727b2dc478cab9d1e0228166899c9f24f)), closes [#1132](https://github.com/tatolab/streamlib/issues/1132)
+* **1134:** convert camera-rust-plugin to registry-only + Linux GrayscaleRust ([#1170](https://github.com/tatolab/streamlib/issues/1170)) ([eb265aa](https://github.com/tatolab/streamlib/commit/eb265aa7dc4d6e41199c9e17f9cd80e468fe6b0b)), closes [#1134](https://github.com/tatolab/streamlib/issues/1134)
+* **1135:** convert cuda-fisheye-detection to registry-only standalone ([#1191](https://github.com/tatolab/streamlib/issues/1191)) ([44201c1](https://github.com/tatolab/streamlib/commit/44201c14aefb9e928ec40a80fa8b943473fffbf5)), closes [#1135](https://github.com/tatolab/streamlib/issues/1135)
+* **1136:** convert h264-opus-validator to standalone (registry-only) ([#1175](https://github.com/tatolab/streamlib/issues/1175)) ([5950c1d](https://github.com/tatolab/streamlib/commit/5950c1ded0c37870bc65cb6217e4f0078657067b)), closes [#1136](https://github.com/tatolab/streamlib/issues/1136)
+* **1137:** convert jpeg-psnr example to registry-only standalone ([#1166](https://github.com/tatolab/streamlib/issues/1166)) ([5d50a0e](https://github.com/tatolab/streamlib/commit/5d50a0e1072ef4001796ba85d368757e78bfbe79)), closes [#1137](https://github.com/tatolab/streamlib/issues/1137)
+* **1138:** microphone-reverb-speaker → registry-only no-op (deferred) ([#1174](https://github.com/tatolab/streamlib/issues/1174)) ([3a48f4c](https://github.com/tatolab/streamlib/commit/3a48f4c3e9552e29fe92358e2331bf8b4a5822b3)), closes [#1138](https://github.com/tatolab/streamlib/issues/1138)
+* **1139:** convert moq-roundtrip to registry-only standalone ([#1173](https://github.com/tatolab/streamlib/issues/1173)) ([6d3f0ca](https://github.com/tatolab/streamlib/commit/6d3f0ca1c91d486c051a9e0f642aa944d60e7830)), closes [#1139](https://github.com/tatolab/streamlib/issues/1139)
+* **1140:** convert polyglot-continuous-processor to registry-only standalone ([#1180](https://github.com/tatolab/streamlib/issues/1180)) ([3925c48](https://github.com/tatolab/streamlib/commit/3925c481eb9ed26330d83c42638b5f8530ac2476)), closes [#1140](https://github.com/tatolab/streamlib/issues/1140)
+* **1141:** convert polyglot-cpu-readback-blur to registry-only standalone ([#1182](https://github.com/tatolab/streamlib/issues/1182)) ([faa49b2](https://github.com/tatolab/streamlib/commit/faa49b26fd011ef8d7d83d485171302eede9fdf6)), closes [#1141](https://github.com/tatolab/streamlib/issues/1141)
+* **1142:** convert polyglot-cuda-inference to registry-only standalone ([#1189](https://github.com/tatolab/streamlib/issues/1189)) ([23f6ebe](https://github.com/tatolab/streamlib/commit/23f6ebea69a7fef1ee12714017245e110148cf6c)), closes [#1142](https://github.com/tatolab/streamlib/issues/1142)
+* **1143:** convert polyglot-dma-buf-consumer to registry-only standalone ([#1188](https://github.com/tatolab/streamlib/issues/1188)) ([c1933d1](https://github.com/tatolab/streamlib/commit/c1933d1ae2bb99c763d616f3f90ca9426ff51c7b)), closes [#1143](https://github.com/tatolab/streamlib/issues/1143)
+* **1144:** convert polyglot-manual-source to registry-only standalone ([#1192](https://github.com/tatolab/streamlib/issues/1192)) ([2af5dae](https://github.com/tatolab/streamlib/commit/2af5daeeff4a74b4bdf4b19f82e7ffd511ec7537)), closes [#1144](https://github.com/tatolab/streamlib/issues/1144)
+* **1145:** convert polyglot-opengl-fragment-shader to registry-only standalone ([#1186](https://github.com/tatolab/streamlib/issues/1186)) ([d594874](https://github.com/tatolab/streamlib/commit/d5948743d87c6f4faf5e47e2e2c365f026093dc4)), closes [#1145](https://github.com/tatolab/streamlib/issues/1145)
+* **1146:** convert polyglot-skia-canvas to registry-only standalone ([#1187](https://github.com/tatolab/streamlib/issues/1187)) ([5bdf6de](https://github.com/tatolab/streamlib/commit/5bdf6dec80189ace776824e7f6805afb2b860a4b)), closes [#1146](https://github.com/tatolab/streamlib/issues/1146)
+* **1147:** convert polyglot-venv-isolation to registry-only standalone ([#1181](https://github.com/tatolab/streamlib/issues/1181)) ([4f2b836](https://github.com/tatolab/streamlib/commit/4f2b836690d618a14342212f317be6aaaab0de48)), closes [#1147](https://github.com/tatolab/streamlib/issues/1147)
+* **1148:** convert polyglot-vulkan-compute to registry-only standalone ([#1183](https://github.com/tatolab/streamlib/issues/1183)) ([d5e6af4](https://github.com/tatolab/streamlib/commit/d5e6af4058f8ec1aef94924dceeed68332ee9570)), closes [#1148](https://github.com/tatolab/streamlib/issues/1148)
+* **1149:** convert polyglot-vulkan-graphics to registry-only standalone ([#1184](https://github.com/tatolab/streamlib/issues/1184)) ([cb97f6f](https://github.com/tatolab/streamlib/commit/cb97f6fa0199053e8383e8572f645f961a692f37)), closes [#1149](https://github.com/tatolab/streamlib/issues/1149)
+* **1150:** convert polyglot-vulkan-ray-tracing to registry-only standalone ([#1185](https://github.com/tatolab/streamlib/issues/1185)) ([600cd81](https://github.com/tatolab/streamlib/commit/600cd8122a1e7f16677b007288b0a4171f484139)), closes [#1150](https://github.com/tatolab/streamlib/issues/1150)
+* **1151:** convert raytracing-showcase to registry-only standalone ([#1171](https://github.com/tatolab/streamlib/issues/1171)) ([365af1b](https://github.com/tatolab/streamlib/commit/365af1bef6e1acf3c9720e3258728b95db14b1e9)), closes [#1151](https://github.com/tatolab/streamlib/issues/1151)
+* **1152:** convert runtime-graph-json-demo to registry-only standalone ([#1167](https://github.com/tatolab/streamlib/issues/1167)) ([45e8465](https://github.com/tatolab/streamlib/commit/45e8465aa0dde85aa408972ddcab0644bd19cdfc)), closes [#1152](https://github.com/tatolab/streamlib/issues/1152)
+* **1153:** screen-recorder → registry-only no-op (deferred) ([#1176](https://github.com/tatolab/streamlib/issues/1176)) ([c02a093](https://github.com/tatolab/streamlib/commit/c02a0931dd7552bf9f99e9fb51b1565a6f0c05b5)), closes [#1153](https://github.com/tatolab/streamlib/issues/1153)
+* **1154:** convert vulkan-video-psnr example to registry-only standalone ([#1168](https://github.com/tatolab/streamlib/issues/1168)) ([e904c6b](https://github.com/tatolab/streamlib/commit/e904c6bdc693de3aa034cd8ad19de1d47676a971))
+* **1155:** convert vulkan-video-roundtrip example to registry-only standalone ([#1169](https://github.com/tatolab/streamlib/issues/1169)) ([2497caf](https://github.com/tatolab/streamlib/commit/2497caf75880775b784b2ea49949f9d8349f3a1f)), closes [#1155](https://github.com/tatolab/streamlib/issues/1155)
+* **1156:** convert vulkan-video-roundtrip-cdylib-camera to registry-only ([#1172](https://github.com/tatolab/streamlib/issues/1172)) ([124a531](https://github.com/tatolab/streamlib/commit/124a531c0911173c9d2772f8352d98bc7cf7de94)), closes [#1156](https://github.com/tatolab/streamlib/issues/1156)
+* **1157:** convert webrtc-cloudflare-stream to registry-only standalone ([#1179](https://github.com/tatolab/streamlib/issues/1179)) ([ebe1333](https://github.com/tatolab/streamlib/commit/ebe1333c6a08dabcae177cf141d12b4a17579955)), closes [#1157](https://github.com/tatolab/streamlib/issues/1157)
+* **1158:** whep-player → registry-only no-op (deferred) ([#1178](https://github.com/tatolab/streamlib/issues/1178)) ([7d2c124](https://github.com/tatolab/streamlib/commit/7d2c124c59e031607c8d5105d459cfb8951972c3)), closes [#1158](https://github.com/tatolab/streamlib/issues/1158)
+
+
+### Bug Fixes
+
+* **1142:** drop accidentally-committed yolov8n.pt weights from cuda-inference ([#1190](https://github.com/tatolab/streamlib/issues/1190)) ([07b8489](https://github.com/tatolab/streamlib/commit/07b84896e11cec263d240ffbf9b989f05324e39e))
+* **core:** make @tatolab/core package registry-only (drop jtd-codegen path dep) ([#1194](https://github.com/tatolab/streamlib/issues/1194)) ([3bf8e30](https://github.com/tatolab/streamlib/commit/3bf8e306ce7cb8d0f4394ddea7a0454ca81a3271))
+* **pack:** defer Python/TS entrypoint resolution to the runtime (PyPA) ([#1193](https://github.com/tatolab/streamlib/issues/1193)) ([d44a176](https://github.com/tatolab/streamlib/commit/d44a176b5c31e08fe6394c542452697e8d2bb050))
+
 ## [0.4.34](https://github.com/tatolab/streamlib/compare/v0.4.33...v0.4.34) (2026-05-31)
 
 
