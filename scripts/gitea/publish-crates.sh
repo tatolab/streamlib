@@ -70,7 +70,13 @@ pkgs = {p["id"]: p for p in md["packages"]}
 members = set(md["workspace_members"])
 resolve = {n["id"]: n for n in md["resolve"]["nodes"]}
 name = lambda i: pkgs[i]["name"]
-sdk = next(i for i in members if name(i) == "streamlib")
+# Publish-closure roots: the `streamlib` SDK crate a consumer deps, PLUS the
+# subprocess native hosts the build orchestrator fetches from the registry by
+# exact version (streamlib-python-native / streamlib-deno-native). The hosts
+# pull adapters + consumer-rhi the SDK closure alone doesn't, so the union of
+# the three roots' closures (topo-ordered) is what a polyglot consumer needs.
+root_names = ("streamlib", "streamlib-python-native", "streamlib-deno-native")
+roots = [i for i in members if name(i) in root_names]
 internal = lambda i: i in members and (name(i).startswith("streamlib") or name(i) == "vulkan-jpeg")
 def deps(i):
     out = []
@@ -85,7 +91,8 @@ def visit(i):
     for d in deps(i):
         if internal(d): visit(d)
     if internal(i): order.append(name(i))
-visit(sdk)
+for r in roots:
+    visit(r)
 print("\n".join(order))
 PY
 )
