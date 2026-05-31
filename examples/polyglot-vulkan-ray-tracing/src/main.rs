@@ -39,61 +39,38 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::context::{
-    BlasRegisterDecl,
-    RayTracingBindingKindWire,
-    RayTracingKernelBridge,
-    RayTracingKernelRegisterDecl,
-    RayTracingKernelRunDispatch,
-    RayTracingShaderGroupWire,
-    RayTracingShaderStageWire,
-    TlasRegisterDecl,
+    BlasRegisterDecl, RayTracingBindingKindWire, RayTracingKernelBridge,
+    RayTracingKernelRegisterDecl, RayTracingKernelRunDispatch, RayTracingShaderGroupWire,
+    RayTracingShaderStageWire, TlasRegisterDecl,
 };
 use streamlib::sdk::descriptors::SchemaIdent;
-use streamlib::sdk::rhi::{
-    RayTracingBindingSpec,
-    RayTracingKernelDescriptor,
-    RayTracingPushConstants,
-    RayTracingShaderGroup,
-    RayTracingShaderStageFlags,
-    RayTracingStage,
-    Texture,
-    TextureDescriptor,
-    TextureFormat,
-    TextureReadbackDescriptor,
-    TextureSourceLayout,
-    TextureUsages,
-    VulkanLayout,
-};
-use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::error::Error;
 use streamlib::sdk::engine::host_rhi::{
-    GeometryInstanceFlagsKHR,
-    HostVulkanDevice,
-    HostVulkanTexture,
-    TlasInstanceDesc,
-    VulkanAccelerationStructure,
-    VulkanRayTracingKernel,
-    VulkanTextureReadback,
+    GeometryInstanceFlagsKHR, HostVulkanDevice, HostVulkanTexture, TlasInstanceDesc,
+    VulkanAccelerationStructure, VulkanRayTracingKernel, VulkanTextureReadback,
 };
+use streamlib::sdk::error::Error;
+use streamlib::sdk::error::Result;
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
+use streamlib::sdk::rhi::{
+    RayTracingBindingSpec, RayTracingKernelDescriptor, RayTracingPushConstants,
+    RayTracingShaderGroup, RayTracingShaderStageFlags, RayTracingStage, Texture, TextureDescriptor,
+    TextureFormat, TextureReadbackDescriptor, TextureSourceLayout, TextureUsages, VulkanLayout,
+};
+use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
 use streamlib::sdk::schema_ident;
-use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
-use streamlib::sdk::RunnerAutoBuild;
 
 /// Compiled SPIR-V for the ray-generation shader.
-const SCENE_RGEN_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/scene.rgen.spv"));
+const SCENE_RGEN_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/scene.rgen.spv"));
 
 /// Compiled SPIR-V for the miss shader.
-const SCENE_RMISS_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/scene.rmiss.spv"));
+const SCENE_RMISS_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/scene.rmiss.spv"));
 
 /// Compiled SPIR-V for the closest-hit shader.
-const SCENE_RCHIT_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/scene.rchit.spv"));
+const SCENE_RCHIT_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/scene.rchit.spv"));
 
 /// UUID the host registers the storage-image surface under.
 const SCENARIO_SURFACE_UUID: &str = "00000000-0000-0000-0000-0000000007a1";
@@ -277,10 +254,7 @@ fn flags_from_bits(bits: u32) -> RayTracingShaderStageFlags {
 }
 
 impl RayTracingKernelBridge for SceneKernelBridge {
-    fn register_blas(
-        &self,
-        decl: &BlasRegisterDecl,
-    ) -> std::result::Result<String, String> {
+    fn register_blas(&self, decl: &BlasRegisterDecl) -> std::result::Result<String, String> {
         let as_id = Self::canonical_blas_id(decl);
         let mut handles = self.as_handles.lock();
         if !handles.contains_key(&as_id) {
@@ -296,10 +270,7 @@ impl RayTracingKernelBridge for SceneKernelBridge {
         Ok(as_id)
     }
 
-    fn register_tlas(
-        &self,
-        decl: &TlasRegisterDecl,
-    ) -> std::result::Result<String, String> {
+    fn register_tlas(&self, decl: &TlasRegisterDecl) -> std::result::Result<String, String> {
         let as_id = Self::canonical_tlas_id(decl);
         let mut handles = self.as_handles.lock();
         if !handles.contains_key(&as_id) {
@@ -537,9 +508,7 @@ fn main() -> Result<()> {
 
     println!("=== Polyglot Vulkan adapter ray-tracing scenario (#667) ===");
     println!("Runtime:     {}", runtime_kind.as_str());
-    println!(
-        "Surface:     {SURFACE_SIZE}x{SURFACE_SIZE} RGBA8 (uuid {SCENARIO_SURFACE_UUID})"
-    );
+    println!("Surface:     {SURFACE_SIZE}x{SURFACE_SIZE} RGBA8 (uuid {SCENARIO_SURFACE_UUID})");
     println!(
         "SPIR-V:      rgen={} bytes, rmiss={} bytes, rchit={} bytes",
         SCENE_RGEN_SPV.len(),
@@ -552,8 +521,7 @@ fn main() -> Result<()> {
     let runtime = Runner::with_auto_build()?;
 
     let texture_slot: Arc<Mutex<Option<Texture>>> = Arc::new(Mutex::new(None));
-    let readback_slot: Arc<Mutex<Option<Arc<VulkanTextureReadback>>>> =
-        Arc::new(Mutex::new(None));
+    let readback_slot: Arc<Mutex<Option<Arc<VulkanTextureReadback>>>> = Arc::new(Mutex::new(None));
 
     {
         let texture_slot = Arc::clone(&texture_slot);
@@ -583,24 +551,17 @@ fn main() -> Result<()> {
                 },
             )
             .map_err(|e| {
-                Error::Configuration(format!(
-                    "HostVulkanTexture::new_device_local: {e}"
-                ))
+                Error::Configuration(format!("HostVulkanTexture::new_device_local: {e}"))
             })?;
             let stream_texture = Texture::from_vulkan(texture);
             // Storage-image binding requires `VK_IMAGE_LAYOUT_GENERAL`.
-            let image = stream_texture
-                .vulkan_inner()
-                .image()
-                .ok_or_else(|| {
-                    Error::Configuration(
-                        "freshly-created HostVulkanTexture missing VkImage handle".into(),
-                    )
-                })?;
+            let image = stream_texture.vulkan_inner().image().ok_or_else(|| {
+                Error::Configuration(
+                    "freshly-created HostVulkanTexture missing VkImage handle".into(),
+                )
+            })?;
             HostVulkanTexture::transition_to_general(&host_device, image).map_err(|e| {
-                Error::Configuration(format!(
-                    "transition output texture to GENERAL: {e}"
-                ))
+                Error::Configuration(format!("transition output texture to GENERAL: {e}"))
             })?;
 
             // Same-process registration so the bridge / readback can
@@ -628,17 +589,20 @@ fn main() -> Result<()> {
 
             *texture_slot.lock().unwrap() = Some(stream_texture);
             *readback_slot.lock().unwrap() = Some(readback);
-            println!(
-                "✓ storage image registered as '{}'",
-                SCENARIO_SURFACE_UUID
-            );
+            println!("✓ storage image registered as '{}'", SCENARIO_SURFACE_UUID);
             Ok(())
         });
     }
 
     // Load the BgraFileSource processor from `@tatolab/debug-utilities`
     // built on demand from source by the orchestrator.
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "debug-utilities"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/debug-utilities"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(
+        module_ident_any_version!("tatolab", "debug-utilities"),
+        streamlib::sdk::runtime::Strategy::Registry {
+            version_req: streamlib::sdk::runtime::SemVerRange::Any,
+            build: streamlib::sdk::runtime::BuildPolicy::IfStale,
+        },
+    )?;
 
     // Load the polyglot processors via explicit add_module_with calls.
     // The Python and Deno sub-packages are example-local (siblings of
@@ -650,15 +614,20 @@ fn main() -> Result<()> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-vulkan-ray-tracing"),
-        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::IfStale },
+        Strategy::Path {
+            path: manifest_dir.join("python"),
+            build: BuildPolicy::IfStale,
+        },
     )?;
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-vulkan-ray-tracing-deno"),
-        Strategy::Path { path: manifest_dir.join("deno"), build: BuildPolicy::IfStale },
+        Strategy::Path {
+            path: manifest_dir.join("deno"),
+            build: BuildPolicy::IfStale,
+        },
     )?;
 
-    let fixture_path = write_trigger_fixture()
-        .map_err(Error::Configuration)?;
+    let fixture_path = write_trigger_fixture().map_err(Error::Configuration)?;
     let fixture_path_str = fixture_path
         .to_str()
         .ok_or_else(|| Error::Configuration("fixture path has non-utf8 component".into()))?;
@@ -709,17 +678,13 @@ fn main() -> Result<()> {
     runtime.stop()?;
 
     println!("\nReading host storage image back via Vulkan...");
-    let texture = texture_slot
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| {
-            Error::Runtime(
-                "host texture slot is empty — setup hook never ran (likely \
+    let texture = texture_slot.lock().unwrap().clone().ok_or_else(|| {
+        Error::Runtime(
+            "host texture slot is empty — setup hook never ran (likely \
                  because the device lacks RT support; see the earlier log)"
-                    .into(),
-            )
-        })?;
+                .into(),
+        )
+    })?;
     let readback = readback_slot
         .lock()
         .unwrap()
@@ -751,19 +716,13 @@ fn write_trigger_fixture() -> std::result::Result<PathBuf, String> {
     use std::io::Write;
 
     let path = std::env::temp_dir().join("vulkan-rt-trigger.bgra");
-    let mut f = File::create(&path)
-        .map_err(|e| format!("create {}: {e}", path.display()))?;
+    let mut f = File::create(&path).map_err(|e| format!("create {}: {e}", path.display()))?;
     f.write_all(&[0u8; 4 * 4 * 4 * 3])
         .map_err(|e| format!("write {}: {e}", path.display()))?;
     Ok(path)
 }
 
-fn write_png(
-    rgba: &[u8],
-    width: u32,
-    height: u32,
-    output: &std::path::Path,
-) -> Result<()> {
+fn write_png(rgba: &[u8], width: u32, height: u32, output: &std::path::Path) -> Result<()> {
     use std::fs::File;
     use std::io::BufWriter;
 
