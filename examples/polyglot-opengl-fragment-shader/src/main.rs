@@ -29,16 +29,16 @@ use std::time::Duration;
 use streamlib::sdk::engine::HostGpuDeviceExt;
 use streamlib::sdk::engine::HostSurfaceStoreExt;
 
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::descriptors::SchemaIdent;
-use streamlib::sdk::rhi::{TextureFormat, TextureReadbackDescriptor, TextureSourceLayout};
-use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::error::Error;
 use streamlib::sdk::engine::host_rhi::{HostVulkanTimelineSemaphore, VulkanTextureReadback};
+use streamlib::sdk::error::Error;
+use streamlib::sdk::error::Result;
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
-use streamlib::sdk::RunnerAutoBuild;
+use streamlib::sdk::rhi::{TextureFormat, TextureReadbackDescriptor, TextureSourceLayout};
+use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
 use streamlib::sdk::schema_ident;
 
 /// UUID the host registers the render-target surface under. The
@@ -99,8 +99,7 @@ fn main() -> Result<()> {
 
     for a in args {
         if let Some(value) = a.strip_prefix("--runtime=") {
-            runtime_kind =
-                RuntimeKind::parse(value).map_err(Error::Configuration)?;
+            runtime_kind = RuntimeKind::parse(value).map_err(Error::Configuration)?;
         } else if let Some(value) = a.strip_prefix("--output=") {
             output_png = PathBuf::from(value);
         }
@@ -108,9 +107,7 @@ fn main() -> Result<()> {
 
     println!("=== Polyglot OpenGL adapter fragment-shader scenario (#530) ===");
     println!("Runtime:     {}", runtime_kind.as_str());
-    println!(
-        "Surface:     {SURFACE_SIZE}x{SURFACE_SIZE} BGRA8 (uuid {SCENARIO_SURFACE_UUID})"
-    );
+    println!("Surface:     {SURFACE_SIZE}x{SURFACE_SIZE} BGRA8 (uuid {SCENARIO_SURFACE_UUID})");
     println!("Output PNG:  {}", output_png.display());
     println!();
 
@@ -120,15 +117,12 @@ fn main() -> Result<()> {
     // back post-stop and write the output PNG. We can't keep the
     // `&GpuContext` borrow past the hook, so we Arc-clone the bits we
     // need.
-    let texture_slot: Arc<
-        Mutex<Option<streamlib::sdk::rhi::Texture>>,
-    > = Arc::new(Mutex::new(None));
+    let texture_slot: Arc<Mutex<Option<streamlib::sdk::rhi::Texture>>> = Arc::new(Mutex::new(None));
     let produce_done_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
         Arc::new(Mutex::new(None));
     let consume_done_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
         Arc::new(Mutex::new(None));
-    let readback_slot: Arc<Mutex<Option<Arc<VulkanTextureReadback>>>> =
-        Arc::new(Mutex::new(None));
+    let readback_slot: Arc<Mutex<Option<Arc<VulkanTextureReadback>>>> = Arc::new(Mutex::new(None));
 
     {
         let texture_slot = Arc::clone(&texture_slot);
@@ -168,28 +162,24 @@ fn main() -> Result<()> {
             // OpenGL-only.
             let host_device = Arc::clone(gpu.device().vulkan_device());
             let produce_done = Arc::new(
-                HostVulkanTimelineSemaphore::new_exportable(
-                    host_device.device(),
-                    0,
-                )
-                .map_err(|e| {
-                    Error::Configuration(format!(
-                        "HostVulkanTimelineSemaphore::new_exportable \
+                HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0).map_err(
+                    |e| {
+                        Error::Configuration(format!(
+                            "HostVulkanTimelineSemaphore::new_exportable \
                          (produce_done): {e}"
-                    ))
-                })?,
+                        ))
+                    },
+                )?,
             );
             let consume_done = Arc::new(
-                HostVulkanTimelineSemaphore::new_exportable(
-                    host_device.device(),
-                    0,
-                )
-                .map_err(|e| {
-                    Error::Configuration(format!(
-                        "HostVulkanTimelineSemaphore::new_exportable \
+                HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0).map_err(
+                    |e| {
+                        Error::Configuration(format!(
+                            "HostVulkanTimelineSemaphore::new_exportable \
                          (consume_done): {e}"
-                    ))
-                })?,
+                        ))
+                    },
+                )?,
             );
 
             // GL writes leave the underlying DMA-BUF in GENERAL from
@@ -211,11 +201,7 @@ fn main() -> Result<()> {
                     Some(consume_done.as_ref()),
                     streamlib::sdk::rhi::VulkanLayout::GENERAL,
                 )
-                .map_err(|e| {
-                    Error::Configuration(format!(
-                        "register_texture: {e}"
-                    ))
-                })?;
+                .map_err(|e| Error::Configuration(format!("register_texture: {e}")))?;
 
             // RHI-owned readback handle for the post-stop pixel
             // capture — staging buffer + command resources + timeline
@@ -241,7 +227,13 @@ fn main() -> Result<()> {
 
     // Load the BgraFileSource processor from `@tatolab/debug-utilities`
     // built on demand from source by the orchestrator.
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "debug-utilities"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/debug-utilities"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(
+        module_ident_any_version!("tatolab", "debug-utilities"),
+        streamlib::sdk::runtime::Strategy::Registry {
+            version_req: streamlib::sdk::runtime::SemVerRange::Any,
+            build: streamlib::sdk::runtime::BuildPolicy::IfStale,
+        },
+    )?;
 
     // Load the polyglot processors via explicit add_module_with calls.
     // The Python and Deno sub-packages are example-local (siblings of
@@ -253,19 +245,24 @@ fn main() -> Result<()> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-opengl-fragment-shader"),
-        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::IfStale },
+        Strategy::Path {
+            path: manifest_dir.join("python"),
+            build: BuildPolicy::IfStale,
+        },
     )?;
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-opengl-fragment-shader-deno"),
-        Strategy::Path { path: manifest_dir.join("deno"), build: BuildPolicy::IfStale },
+        Strategy::Path {
+            path: manifest_dir.join("deno"),
+            build: BuildPolicy::IfStale,
+        },
     )?;
 
     // Trigger source: BgraFileSource emits a few `VideoFrame`s so the
     // polyglot processor's `process()` is invoked. The processor
     // ignores frame contents — it works on the pre-registered host
     // surface, not the trigger frame's pixel buffer.
-    let fixture_path = write_trigger_fixture()
-        .map_err(Error::Configuration)?;
+    let fixture_path = write_trigger_fixture().map_err(Error::Configuration)?;
 
     let fixture_path_str = fixture_path
         .to_str()
@@ -316,15 +313,9 @@ fn main() -> Result<()> {
 
     // Read the surface back via Vulkan and write the output PNG.
     println!("\nReading host surface back via Vulkan...");
-    let texture = texture_slot
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| {
-            Error::Runtime(
-                "host texture slot is empty — setup hook never ran".into(),
-            )
-        })?;
+    let texture = texture_slot.lock().unwrap().clone().ok_or_else(|| {
+        Error::Runtime("host texture slot is empty — setup hook never ran".into())
+    })?;
     let readback = readback_slot
         .lock()
         .unwrap()
@@ -352,20 +343,14 @@ fn write_trigger_fixture() -> std::result::Result<PathBuf, String> {
     use std::io::Write;
 
     let path = std::env::temp_dir().join("opengl-fragment-shader-trigger.bgra");
-    let mut f = File::create(&path)
-        .map_err(|e| format!("create {}: {e}", path.display()))?;
+    let mut f = File::create(&path).map_err(|e| format!("create {}: {e}", path.display()))?;
     f.write_all(&[0u8; 4 * 4 * 4 * 3])
         .map_err(|e| format!("write {}: {e}", path.display()))?;
     Ok(path)
 }
 
 /// Encode BGRA bytes as RGBA PNG (channel-swap on the fly).
-fn write_png(
-    bgra: &[u8],
-    width: u32,
-    height: u32,
-    output: &std::path::Path,
-) -> Result<()> {
+fn write_png(bgra: &[u8], width: u32, height: u32, output: &std::path::Path) -> Result<()> {
     use std::fs::File;
     use std::io::BufWriter;
 
@@ -378,10 +363,7 @@ fn write_png(
     }
 
     let file = File::create(output).map_err(|e| {
-        Error::Configuration(format!(
-            "create output PNG {}: {e}",
-            output.display()
-        ))
+        Error::Configuration(format!("create output PNG {}: {e}", output.display()))
     })?;
     let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgba);
