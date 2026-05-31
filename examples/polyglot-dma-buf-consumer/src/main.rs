@@ -25,13 +25,13 @@
 
 use std::path::PathBuf;
 
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::descriptors::SchemaIdent;
+use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
-use streamlib::sdk::RunnerAutoBuild;
+use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
 use streamlib::sdk::schema_ident;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -87,9 +87,8 @@ fn main() -> Result<()> {
         if a == "--negative" {
             negative = true;
         } else if let Some(value) = a.strip_prefix("--runtime=") {
-            runtime_kind = RuntimeKind::parse(value).map_err(|e| {
-                streamlib::sdk::error::Error::Configuration(e)
-            })?;
+            runtime_kind = RuntimeKind::parse(value)
+                .map_err(|e| streamlib::sdk::error::Error::Configuration(e))?;
         } else {
             positional.push(a);
         }
@@ -121,8 +120,20 @@ fn main() -> Result<()> {
     // resolver chain . Both must
     // have been staged via `the build orchestrator
     //` first.
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/camera"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "display"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/display"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(
+        module_ident_any_version!("tatolab", "camera"),
+        streamlib::sdk::runtime::Strategy::Registry {
+            version_req: streamlib::sdk::runtime::SemVerRange::Any,
+            build: streamlib::sdk::runtime::BuildPolicy::IfStale,
+        },
+    )?;
+    runtime.add_module_with_blocking(
+        module_ident_any_version!("tatolab", "display"),
+        streamlib::sdk::runtime::Strategy::Registry {
+            version_req: streamlib::sdk::runtime::SemVerRange::Any,
+            build: streamlib::sdk::runtime::BuildPolicy::IfStale,
+        },
+    )?;
 
     // Load the polyglot processors via explicit add_module_with calls.
     // The Python and Deno sub-packages are example-local (siblings of
@@ -134,11 +145,17 @@ fn main() -> Result<()> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-dma-buf-consumer"),
-        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::IfStale },
+        Strategy::Path {
+            path: manifest_dir.join("python"),
+            build: BuildPolicy::IfStale,
+        },
     )?;
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-dma-buf-consumer-deno"),
-        Strategy::Path { path: manifest_dir.join("deno"), build: BuildPolicy::IfStale },
+        Strategy::Path {
+            path: manifest_dir.join("deno"),
+            build: BuildPolicy::IfStale,
+        },
     )?;
 
     let camera = runtime.add_processor(ProcessorSpec::new(
