@@ -636,7 +636,7 @@ async function main(): Promise<void> {
               if (hasData === 1) {
                 dataCount++;
                 if (dataCount <= 3 || dataCount % 60 === 0) {
-                  log.debug("poll: data received", { frame_index: dataCount });
+                  log.debug("poll: data received", { data_count: dataCount });
                 }
                 try {
                   await reactiveProc.process(limitedCtx);

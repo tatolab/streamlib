@@ -479,7 +479,7 @@ impl BlendingCompositorProcessor::Processor {
 ///
 /// The texture pointed at by a cached registration is still live —
 /// producers write into the same `surface_id` (or rotate through a
-/// ring keyed by `frame_index`), so a cached resolve names whatever
+/// ring slot), so a cached resolve names whatever
 /// the producer most recently wrote. Layout drift is harmless: the
 /// compositor's pre-render barrier transitions from
 /// `current_layout` regardless of how stale the value is.

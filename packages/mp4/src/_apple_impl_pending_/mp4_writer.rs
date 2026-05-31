@@ -205,8 +205,8 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
                 let video = self.read_video_frame()?;
                 let video_timestamp_ns: i64 = video.timestamp_ns.parse().unwrap_or(0);
 
-                // Dedup on the monotonic timestamp (unique per frame); the
-                // removed `frame_index` field used to serve this role.
+                // Dedup on the monotonic timestamp — unique and monotonic
+                // per frame, the schema's ordering primitive.
                 let should_write = match self.last_written_video_timestamp_ns {
                     None => true,
                     Some(last_ts) => video_timestamp_ns != last_ts,
@@ -300,8 +300,8 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
 
             // Write video frame independently if available (only write each frame once)
             if let Some(last_video) = self.last_video_frame.clone() {
-                // Dedup on the monotonic timestamp (unique per frame); the
-                // removed `frame_index` field used to serve this role.
+                // Dedup on the monotonic timestamp — unique and monotonic
+                // per frame, the schema's ordering primitive.
                 let video_timestamp_ns: i64 = last_video.timestamp_ns.parse().unwrap_or(0);
                 let should_write = match self.last_written_video_timestamp_ns {
                     None => true,                                   // First video frame

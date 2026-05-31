@@ -6,7 +6,7 @@
 Public API:
 
     from streamlib import log
-    log.info("captured frame", frame_index=42)
+    log.info("captured frame", width=1920)
     log.error("decode failed", error=str(e))
 
 Records are serialized as `{op: "log", ...}` escalate-IPC payloads and
