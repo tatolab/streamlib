@@ -3,8 +3,8 @@
     "setup": "cd ../../.. && cargo run --release --quiet -p streamlib-cli -- generate --runtime typescript --project-dir examples/camera-deno-subprocess/deno --output examples/camera-deno-subprocess/deno/_generated_"
   },
   "imports": {
-    "streamlib": "npm:@tatolab/streamlib-deno@0.4.33-dev.4",
-    "streamlib/": "npm:/@tatolab/streamlib-deno@0.4.33-dev.4/",
+    "streamlib": "npm:@tatolab/streamlib-deno@0.4.33-dev.5",
+    "streamlib/": "npm:/@tatolab/streamlib-deno@0.4.33-dev.5/",
     "@msgpack/msgpack": "npm:@msgpack/msgpack@3.0.0-beta2",
     "typegpu": "npm:typegpu@0.8.2",
     "typegpu/data": "npm:typegpu@0.8.2/data"
