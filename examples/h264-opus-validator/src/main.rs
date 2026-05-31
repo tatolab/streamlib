@@ -34,7 +34,7 @@ fn main() -> Result<()> {
             "-b:v", "2M",
             "-g", "30", // Keyframe every 30 frames (1 second)
             "-pix_fmt", "yuv420p",
-            "examples/h264-opus-validator/temp_video.mp4",
+            "temp_video.mp4",
         ])
         .status()
         .context("Failed to generate video")?;
@@ -53,7 +53,7 @@ fn main() -> Result<()> {
             "-i", "sine=frequency=440:sample_rate=48000:duration=4[l];sine=frequency=880:sample_rate=48000:duration=4[r];[l][r]amerge=inputs=2",
             "-c:a", "aac",
             "-b:a", "128k",
-            "examples/h264-opus-validator/temp_audio.aac",
+            "temp_audio.aac",
         ])
         .status()
         .context("Failed to create audio")?;
@@ -65,12 +65,12 @@ fn main() -> Result<()> {
 
     // Step 3: Mux video and audio into final MP4
     println!("📦 Step 3: Muxing into MP4...");
-    let output_path = "examples/h264-opus-validator/output.mp4";
+    let output_path = "output.mp4";
     let mux_status = Command::new("ffmpeg")
         .args(&[
             "-y",
-            "-i", "examples/h264-opus-validator/temp_video.mp4",
-            "-i", "examples/h264-opus-validator/temp_audio.aac",
+            "-i", "temp_video.mp4",
+            "-i", "temp_audio.aac",
             "-c", "copy",
             "-shortest",
             output_path,
