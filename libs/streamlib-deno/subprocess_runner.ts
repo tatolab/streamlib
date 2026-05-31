@@ -430,11 +430,9 @@ async function main(): Promise<void> {
 
           // Parse entrypoint: "module.ts:export_name"
           const [modulePath, exportName] = parseEntrypoint(entrypoint);
-          // Resolve against the project path. `streamlib pack` writes the
-          // module under `deno/<module>.ts` for layout symmetry with
-          // `python/wheels/`; dev-tree projects keep the module at the
-          // project root (where `streamlib.yaml` lives). Try the packed
-          // layout first, then fall back to project root.
+          // Resolve against the project path. The staged package mirrors
+          // the authored layout, so the module sits at the project root
+          // beside `streamlib.yaml`.
           const fullModulePath = projectPath
             ? resolveDenoModulePath(projectPath, modulePath)
             : modulePath;
@@ -851,22 +849,17 @@ function parseEntrypoint(entrypoint: string): [string, string] {
 /**
  * Resolve a Deno processor module path against the project directory.
  *
- * `streamlib pack` writes the module under `deno/<module>.ts` inside
- * the .slpkg for layout symmetry with `python/wheels/`. Dev-tree
- * projects keep the module at the project root (where `streamlib.yaml`
- * lives). Try the packed-layout path first; fall back to project root.
+ * Staged and dev-tree packages share one layout: a package is a faithful
+ * mirror of the authored source tree (`streamlib pack` relocates nothing),
+ * so the entrypoint `.ts` sits at the package root beside `streamlib.yaml`
+ * — the same place the `@processor` decorator looks for the sibling
+ * manifest. Resolve the module there.
  */
 function resolveDenoModulePath(
   projectPath: string,
   modulePath: string,
 ): string {
-  const packed = `${projectPath}/deno/${modulePath}`;
-  try {
-    Deno.statSync(packed);
-    return packed;
-  } catch {
-    return `${projectPath}/${modulePath}`;
-  }
+  return `${projectPath}/${modulePath}`;
 }
 
 // Run
