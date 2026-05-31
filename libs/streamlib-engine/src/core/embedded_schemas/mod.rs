@@ -278,41 +278,49 @@ fn is_semver(s: &str) -> bool {
 
 #[cfg(test)]
 pub(crate) mod test_support {
-    //! Test helpers: register the `@tatolab/core` wire vocabulary
-    //! against the live registry so consumers exercising VideoFrame /
-    //! AudioFrame / EncodedVideoFrame lookups can run without spinning
-    //! up a full `Runner::add_module` chain. Mirrors what
-    //! `Runner::add_module(@tatolab/core)` would do in production.
+    //! Synthetic in-test schema fixtures for exercising the registry +
+    //! metadata-resolver mechanics.
     //!
-    //! Schemas are embedded via `include_str!` at compile time — the
-    //! engine doesn't depend on `@tatolab/core` as a Cargo crate, the
-    //! linkage is through `streamlib.yaml` and the schemas live on disk
-    //! at the workspace-relative path below.
+    //! The engine registry starts empty and learns every real schema only
+    //! at runtime via `Runner::add_module`. These tests therefore register
+    //! their own synthetic schemas under a neutral `@test/wire/*` namespace
+    //! rather than reaching into any package's real schema files — the
+    //! engine has no compile-time knowledge of `@tatolab/core`,
+    //! `@tatolab/mavlink`, or any other package's wire vocabulary. Locking a
+    //! package's own declarations (e.g. core's payload bounds, mavlink's
+    //! queue depth) belongs in that package's tests, not the engine's.
 
     use super::register_schema;
     use std::sync::Once;
 
-    const AUDIO_FRAME_YAML: &str =
-        include_str!("../../../../../packages/core/schemas/audio_frame.yaml");
-    const ENCODED_AUDIO_FRAME_YAML: &str =
-        include_str!("../../../../../packages/core/schemas/encoded_audio_frame.yaml");
-    const ENCODED_VIDEO_FRAME_YAML: &str =
-        include_str!("../../../../../packages/core/schemas/encoded_video_frame.yaml");
-    const VIDEO_FRAME_YAML: &str =
-        include_str!("../../../../../packages/core/schemas/video_frame.yaml");
+    /// Synthetic "small" wire schema — 128 KiB payload bound. Deliberately
+    /// NOT the iceoryx2 default ([`MAX_PAYLOAD_SIZE`] = 64 KiB) so that
+    /// asserting the resolved value distinguishes "read the declared
+    /// metadata" from "fell back to the default".
+    ///
+    /// [`MAX_PAYLOAD_SIZE`]: crate::iceoryx2::MAX_PAYLOAD_SIZE
+    pub const SMALL_FRAME_ID: &str = "@test/wire/SmallFrame";
+    /// Declared `max_payload_bytes` for [`SMALL_FRAME_ID`] (128 KiB).
+    pub const SMALL_FRAME_MAX_PAYLOAD_BYTES: usize = 131072;
+    /// Synthetic "large" wire schema — 16 MiB payload bound, sized for the
+    /// 256 KiB publish/subscribe roundtrip tests.
+    pub const LARGE_FRAME_ID: &str = "@test/wire/LargeFrame";
+    /// Declared `max_payload_bytes` for [`LARGE_FRAME_ID`] (16 MiB).
+    pub const LARGE_FRAME_MAX_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
 
-    /// Register the four wire-vocabulary schemas. Idempotent across
-    /// tests in the same process.
-    pub fn register_core_wire_vocabulary() {
+    /// Register the synthetic wire schemas. Idempotent across tests in the
+    /// same process.
+    pub fn register_test_wire_vocabulary() {
         static INIT: Once = Once::new();
         INIT.call_once(|| {
-            register_schema("@tatolab/core/AudioFrame", AUDIO_FRAME_YAML);
-            register_schema("@tatolab/core/EncodedAudioFrame", ENCODED_AUDIO_FRAME_YAML);
             register_schema(
-                "@tatolab/core/EncodedVideoFrame",
-                ENCODED_VIDEO_FRAME_YAML,
+                SMALL_FRAME_ID,
+                "metadata:\n  type: SmallFrame\n  max_payload_bytes: 131072\n  max_queued_messages: 32\n",
             );
-            register_schema("@tatolab/core/VideoFrame", VIDEO_FRAME_YAML);
+            register_schema(
+                LARGE_FRAME_ID,
+                "metadata:\n  type: LargeFrame\n  max_payload_bytes: 16777216\n  max_queued_messages: 16\n",
+            );
         });
     }
 }
@@ -321,18 +329,19 @@ pub(crate) mod test_support {
 mod tests {
     //! Tests mutate the global `SCHEMA_REGISTRY` and do NOT clean up
     //! after themselves — every registration uses a canonical id
-    //! unique to its test. The `register_core_wire_vocabulary()` setup
-    //! helper is `Once`-guarded, so wire-vocabulary entries are
-    //! registered at most once per test process.
+    //! unique to its test. The `register_test_wire_vocabulary()` setup
+    //! helper is `Once`-guarded, so the synthetic fixtures are registered
+    //! at most once per test process.
     use super::*;
     use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
     use streamlib_processor_schema::PortSchemaSpec;
 
-    /// Construct a `PortSchemaSpec::Specific` for a `@tatolab/core/<Type>` lookup.
-    fn core_spec(type_name: &str) -> PortSchemaSpec {
+    /// Construct a `PortSchemaSpec::Specific` for a synthetic
+    /// `@test/wire/<Type>` lookup.
+    fn test_wire_spec(type_name: &str) -> PortSchemaSpec {
         PortSchemaSpec::Specific(SchemaIdent::new(
-            Org::new("tatolab").unwrap(),
-            Package::new("core").unwrap(),
+            Org::new("test").unwrap(),
+            Package::new("wire").unwrap(),
             TypeName::new(type_name).unwrap(),
             SemVer::new(1, 0, 0),
         ))
@@ -340,11 +349,11 @@ mod tests {
 
     #[test]
     fn lookup_finds_wire_vocabulary_via_new_identifier() {
-        test_support::register_core_wire_vocabulary();
-        let yaml = get_embedded_schema_definition("@tatolab/core/VideoFrame");
+        test_support::register_test_wire_vocabulary();
+        let yaml = get_embedded_schema_definition(test_support::SMALL_FRAME_ID);
         assert!(
             yaml.is_some(),
-            "wire vocabulary VideoFrame must be registered before lookup"
+            "registered schema must be found before lookup"
         );
         assert!(
             yaml.unwrap().contains("metadata"),
@@ -354,9 +363,10 @@ mod tests {
 
     #[test]
     fn lookup_strips_version_suffix() {
-        test_support::register_core_wire_vocabulary();
-        let unversioned = get_embedded_schema_definition("@tatolab/core/AudioFrame");
-        let versioned = get_embedded_schema_definition("@tatolab/core/AudioFrame@1.0.0");
+        test_support::register_test_wire_vocabulary();
+        let unversioned = get_embedded_schema_definition(test_support::SMALL_FRAME_ID);
+        let versioned =
+            get_embedded_schema_definition(&format!("{}@1.0.0", test_support::SMALL_FRAME_ID));
         assert!(unversioned.is_some());
         assert_eq!(unversioned.as_deref(), versioned.as_deref());
     }
@@ -374,11 +384,11 @@ mod tests {
         // walking the manifest at build time would seed
         // `@tatolab/escalate/EscalateRequest` into the registry.
         // No test in this crate's test binary registers it (the
-        // wire-vocabulary setup helper only covers `@tatolab/core/*`,
-        // and the `add_module` regression tests build fresh tempdir
-        // packages with no `@tatolab/escalate` dep). So if this lookup
-        // ever returns Some, someone has reintroduced a build-time
-        // seeding path.
+        // synthetic wire-vocabulary setup helper only registers
+        // `@test/wire/*` fixtures, and the `add_module` regression tests
+        // build fresh tempdir packages with no `@tatolab/escalate` dep).
+        // So if this lookup ever returns Some, someone has reintroduced a
+        // build-time seeding path.
         assert!(
             get_embedded_schema_definition("@tatolab/escalate/EscalateRequest").is_none(),
             "registry must start empty — `@tatolab/escalate/EscalateRequest` would only \
@@ -448,11 +458,22 @@ mod tests {
     }
 
     #[test]
-    fn max_payload_bytes_resolves_video_frame() {
-        test_support::register_core_wire_vocabulary();
-        let spec = core_spec("VideoFrame");
-        let bytes = max_payload_bytes_for_port_spec(&spec).unwrap();
-        assert!(bytes >= 65536, "VideoFrame should declare a generous payload bound");
+    fn max_payload_bytes_resolves_declared_value() {
+        use crate::iceoryx2::MAX_PAYLOAD_SIZE;
+        test_support::register_test_wire_vocabulary();
+        let bytes = max_payload_bytes_for_port_spec(&test_wire_spec("SmallFrame")).unwrap();
+        assert_eq!(
+            bytes,
+            test_support::SMALL_FRAME_MAX_PAYLOAD_BYTES,
+            "resolver must return the schema's declared metadata.max_payload_bytes"
+        );
+        // Guard against a reverted resolver that ignores metadata and always
+        // returns the default: the declared value is deliberately not the default.
+        assert_ne!(
+            test_support::SMALL_FRAME_MAX_PAYLOAD_BYTES,
+            MAX_PAYLOAD_SIZE as usize,
+            "test fixture must declare a non-default payload bound to be meaningful"
+        );
     }
 
     #[test]
@@ -545,25 +566,6 @@ mod tests {
             max_queued_messages_for_port_spec(&spec).unwrap(),
             DEFAULT_MAX_QUEUED_MESSAGES
         );
-    }
-
-    /// The MAVLink wire schema declares `max_queued_messages: 64` for
-    /// 200 Hz burst tolerance. Locks the live in-tree declaration so a
-    /// silent edit to the YAML (back to 16, or to a lower value)
-    /// trips this test rather than silently regressing the AGP pipeline.
-    #[test]
-    fn max_queued_messages_resolves_mavlink_at_64() {
-        register_schema(
-            "@tatolab/mavlink/MavlinkMessage",
-            include_str!("../../../../../packages/mavlink/schemas/mavlink_message.yaml"),
-        );
-        let spec = PortSchemaSpec::Specific(SchemaIdent::new(
-            Org::new("tatolab").unwrap(),
-            Package::new("mavlink").unwrap(),
-            TypeName::new("MavlinkMessage").unwrap(),
-            SemVer::new(1, 0, 0),
-        ));
-        assert_eq!(max_queued_messages_for_port_spec(&spec).unwrap(), 64);
     }
 
     /// Locks the default-fallback path: a processor type that isn't
