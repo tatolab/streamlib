@@ -41,6 +41,14 @@ members = [
     # Build a package/example with `cd <dir> && cargo build`, or via
     # `streamlib pkg install` / runtime `Strategy::Registry` for packages.
     "libs/vulkan-jpeg",                   # JPEG decoder: CPU parser + Huffman entropy decode + GPU compute kernel (compute kernel ships in a follow-up issue)
+    # Exception to the "packages/* are not members" rule above: the
+    # test-fixtures packages are INTERNAL test infrastructure, not
+    # distributable units. The engine integration tests build them in-place
+    # (`cargo build -p streamlib-test-fixtures --features plugin`) and load
+    # the resulting cdylib, so they must stay workspace members. They are
+    # never published to the registry.
+    "packages/test-fixtures",    # @tatolab/test-fixtures — attribute-macro test fixtures (TestConfiguredProcessor)
+    "packages/test-fixtures-abi-mismatch", # @tatolab/test-fixtures-abi-mismatch — hand-crafted STREAMLIB_PLUGIN with tampered abi_version for the load_project rejection test
 ]
 
 [workspace.package]
