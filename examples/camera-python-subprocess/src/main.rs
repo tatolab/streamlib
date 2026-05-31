@@ -18,17 +18,27 @@ use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::runtime::{BuildPolicy, Runner, SemVerRange, Strategy};
 use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
     let runtime = Runner::with_auto_build()?;
 
-    // 1. Load `@tatolab/camera` and `@tatolab/display` from the
-    //    package source — built on demand by the orchestrator.
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/camera"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "display"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/display"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    // 1. Resolve `@tatolab/camera` and `@tatolab/display` from the Gitea
+    //    generic registry by version — the cross-repo consumer path. The
+    //    orchestrator downloads each package's `.slpkg`, then prefers a
+    //    matching prebuilt or builds the bundled source on the host. The
+    //    registry endpoint comes from `STREAMLIB_REGISTRY_URL` (or
+    //    `GITEA_URL`); run with e.g. `STREAMLIB_REGISTRY_URL=http://localhost:3300`.
+    runtime.add_module_with_blocking(
+        module_ident_any_version!("tatolab", "camera"),
+        Strategy::Registry { version_req: SemVerRange::Any, build: BuildPolicy::IfStale },
+    )?;
+    runtime.add_module_with_blocking(
+        module_ident_any_version!("tatolab", "display"),
+        Strategy::Registry { version_req: SemVerRange::Any, build: BuildPolicy::IfStale },
+    )?;
 
     // 2. Load the sibling Python sub-package — it lives at `./python`
     //    relative to this example, isn't workspace-staged, so we

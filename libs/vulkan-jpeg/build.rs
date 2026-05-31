@@ -26,14 +26,18 @@ fn compile_shaders() {
 
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
 
-    // The JPEG kernel `#include`s `color_convert_common.glsl` from the
-    // streamlib-engine shader tree so the YCbCr → RGB math, transfer
-    // closed-forms, and `TRANSFER_*` / `FLAG_APPLY_TRANSFER` constants
-    // come from one source of truth. Rebuild when that file changes.
-    let engine_shader_include_dir = "../streamlib-engine/src/vulkan/rhi/shaders";
+    // The JPEG kernel `#include`s `color_convert_common.glsl` (YCbCr → RGB
+    // math, transfer closed-forms, `TRANSFER_*` / `FLAG_APPLY_TRANSFER`
+    // constants). It is vendored into this crate's own `src/shaders/` rather
+    // than referenced across a workspace-relative path into streamlib-engine,
+    // so the crate is self-contained and compiles from the registry off-tree
+    // (a registry consumer has no sibling engine source tree). It mirrors
+    // `streamlib-engine/src/vulkan/rhi/shaders/color_convert_common.glsl` and
+    // must stay in sync with it if the color math changes.
+    let shader_include_dir = "src/shaders";
     println!(
         "cargo:rerun-if-changed={}/color_convert_common.glsl",
-        engine_shader_include_dir
+        shader_include_dir
     );
 
     for (src, dst, stage) in shaders {
@@ -46,7 +50,7 @@ fn compile_shaders() {
             .arg(format!("-fshader-stage={stage}"))
             .arg("-O")
             .arg("-I")
-            .arg(engine_shader_include_dir)
+            .arg(shader_include_dir)
             .arg(src_path)
             .arg("-o")
             .arg(&dst_path)

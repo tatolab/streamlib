@@ -1,45 +1,44 @@
 [package]
 name = "streamlib-webrtc"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license-file.workspace = true
-repository.workspace = true
+version = "0.4.30"
+edition = "2024"
+authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "WebRTC WHIP/WHEP transport processors for streamlib."
 keywords = ["webrtc", "whip", "whep", "streaming", "streamlib"]
 categories = ["multimedia::video", "multimedia"]
+repository = "https://github.com/tato123/streamlib"
+license = "BUSL-1.1"
 
 [lib]
 name = "streamlib_webrtc"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen", version = "0.4.30", registry = "gitea" }
+streamlib-jtd-codegen = {version = "0.4.30", registry = "gitea"}
 
 [dependencies]
-streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
-streamlib-macros = { path = "../../libs/streamlib-macros", version = "0.4.30", registry = "gitea" }
-streamlib-plugin-abi = { path = "../../libs/streamlib-plugin-abi", version = "0.4.30", registry = "gitea" }
+streamlib = {version = "0.4.30", registry = "gitea"}
+streamlib-macros = {version = "0.4.30", registry = "gitea"}
+streamlib-plugin-abi = {version = "0.4.30", registry = "gitea"}
 
-serde.workspace = true
 # Generated `EncodedVideoFrame.data` / `EncodedAudioFrame.data` ride msgpack
 # `bin` (1× wire) instead of array.
-serde_bytes.workspace = true
-tracing.workspace = true
+serde = {version = "1.0", features = ["derive"]}
+serde_bytes = {version = "0.11"}
 
 webrtc = "0.14.0"
 bytes = "1.5"
 fastrand = "2.0"
 local-ip-address = "0.6"
 
-tokio = { workspace = true, features = ["rt-multi-thread", "sync", "macros"] }
+tokio = {version = "1.48.0", features = ["full", "rt-multi-thread", "sync", "macros"]}
 
 # HTTP client for WHIP/WHEP signaling (RFC 9725 / IETF WHEP).
-hyper = { workspace = true }
+hyper = {version = "1.7.0"}
 hyper-rustls = { version = "0.27", features = ["http2", "native-tokio", "ring"] }
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "http2", "tokio"] }
 http-body-util = "0.1"
 rustls = { version = "0.23", features = ["ring"] }
+tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 
-[lints]
-workspace = true
+[workspace]

@@ -14,6 +14,7 @@ repository.workspace = true
 anyhow = { workspace = true }
 tracing = { workspace = true }
 serde_json = { workspace = true }
+ureq = { workspace = true }
 streamlib-engine = { path = "../streamlib-engine", version = "0.4.30", registry = "gitea" }
 streamlib-cargo-build = { path = "../streamlib-cargo-build", version = "0.4.30", registry = "gitea" }
 streamlib-pack = { path = "../streamlib-pack", version = "0.4.30", registry = "gitea" }

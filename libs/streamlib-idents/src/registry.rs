@@ -124,6 +124,49 @@ impl<'a> RegistryClient<'a> {
         Ok((bytes, url))
     }
 
+    /// Publish the source-only `.slpkg` `bytes` for `version` of `pkg_ref` to
+    /// the generic registry, returning the canonical URL they were published
+    /// to. The mirror image of [`Self::download_slpkg`]: `file://` writes the
+    /// mirror layout, `http(s)://` uploads with the token. The remote upload
+    /// is a delete-then-PUT so a republish of the same version overwrites the
+    /// prior bytes — Gitea generic packages are immutable per
+    /// (name, version, file), so a bare re-PUT of an existing file 409s.
+    pub fn upload_slpkg(
+        &self,
+        pkg_ref: &PackageRef,
+        version: SemVer,
+        bytes: &[u8],
+    ) -> ResolverResult<String> {
+        let url = self.download_url(pkg_ref, version);
+        let upload_err = |detail: String| ResolverError::RegistryFetchFailed {
+            name: pkg_ref.to_string(),
+            detail,
+        };
+        if self.is_file_scheme() {
+            let path = self.download_path(pkg_ref, version);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| upload_err(format!("creating {} : {e}", parent.display())))?;
+            }
+            std::fs::write(&path, bytes)
+                .map_err(|e| upload_err(format!("writing {} : {e}", path.display())))?;
+        } else {
+            // Overwrite-on-republish: drop the existing version (a 404 is the
+            // benign first-publish case) before the PUT, since Gitea rejects a
+            // duplicate generic file upload.
+            let version_url = format!(
+                "{}/api/v1/packages/{}/generic/{}/{}",
+                self.config.base_url,
+                pkg_ref.org.as_str(),
+                pkg_ref.name.as_str(),
+                version,
+            );
+            http_delete(&version_url, self.config.token.as_deref());
+            http_put_bytes(&url, self.config.token.as_deref(), bytes).map_err(upload_err)?;
+        }
+        Ok(url)
+    }
+
     /// Canonical generic-registry download URL (recorded in the lockfile).
     fn download_url(&self, pkg_ref: &PackageRef, version: SemVer) -> String {
         let name = pkg_ref.name.as_str();
@@ -203,7 +246,7 @@ impl<'a> RegistryClient<'a> {
 }
 
 /// Select the highest version in `available` that satisfies `range`.
-pub(crate) fn select_version(
+pub fn select_version(
     pkg_ref: &PackageRef,
     range: &crate::semver::SemVerRange,
     available: &[SemVer],
@@ -238,6 +281,30 @@ fn http_get_bytes(url: &str, token: Option<&str>) -> Result<Vec<u8>, String> {
     std::io::Read::read_to_end(&mut response.into_reader(), &mut bytes)
         .map_err(|e| format!("reading HTTP response body from {url}: {e}"))?;
     Ok(bytes)
+}
+
+/// Blocking PUT of `bytes` to `url`, with a Gitea `Authorization: token <t>`
+/// header when present. Used to publish a package `.slpkg` to the generic
+/// registry.
+fn http_put_bytes(url: &str, token: Option<&str>, bytes: &[u8]) -> Result<(), String> {
+    let mut req = ureq::put(url);
+    if let Some(t) = token {
+        req = req.set("Authorization", &format!("token {t}"));
+    }
+    req.send_bytes(bytes)
+        .map(|_| ())
+        .map_err(|e| format!("HTTP PUT to {url} failed: {e}"))
+}
+
+/// Best-effort blocking DELETE of `url` (a generic-package version). Errors
+/// are intentionally swallowed — a 404 (nothing to overwrite) is the common,
+/// benign case on a first publish.
+fn http_delete(url: &str, token: Option<&str>) {
+    let mut req = ureq::delete(url);
+    if let Some(t) = token {
+        req = req.set("Authorization", &format!("token {t}"));
+    }
+    let _ = req.call();
 }
 
 /// Persist downloaded `.slpkg` bytes into the resolver cache as a file

@@ -1,50 +1,44 @@
-# yaml-language-server: $schema=../../schemas/streamlib.schema.json
-# Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
-
-# @tatolab/screen-capture — screen capture processor for streamlib.
-# Apple-only today (macOS / iOS via ScreenCaptureKit); a Linux screen-
-# capture processor is tracked separately (#374).
 package:
   org: tatolab
   name: screen-capture
   version: 1.0.0
-  description: "Screen capture processor — ScreenCaptureKit on macOS / iOS"
-
+  description: Screen capture processor — ScreenCaptureKit on macOS / iOS
 dependencies:
-  "@tatolab/core": "^1.0.0"
-
-# Dev-time path override; `streamlib pack` rejects this.
-patch:
-  "@tatolab/core":
-    path: ../core
-
+  '@tatolab/core':
+    version: ^1.0.0
 schemas:
-  # Wire types imported from @tatolab/core.
   ColorInfo:
-    package: "@tatolab/core"
+    package: '@tatolab/core'
   ContentLight:
-    package: "@tatolab/core"
+    package: '@tatolab/core'
   MasteringDisplay:
-    package: "@tatolab/core"
-  VideoFrame:
-    package: "@tatolab/core"
-  # Local config schemas this package owns.
+    package: '@tatolab/core'
   ScreenCaptureConfig:
     file: schemas/screen_capture_config.yaml
-
+  VideoFrame:
+    package: '@tatolab/core'
 processors:
-  - name: ScreenCapture
-    version: 1.0.0
-    description: "Captures display, window, or application content using ScreenCaptureKit (macOS 12.3+)"
-    execution: manual
-    runtime:
-      options:
-        unsafe_send: true
-    config:
-      name: config
-      schema: ScreenCaptureConfig
-    outputs:
-      - name: video
-        schema: VideoFrame
-        description: Captured video frames from screen content
+- name: ScreenCapture
+  version: 1.0.0
+  description: Captures display, window, or application content using ScreenCaptureKit (macOS 12.3+)
+  runtime:
+    language: rust
+    options:
+      unsafe_send: true
+      python_version: null
+    env: {}
+  entrypoint: null
+  execution: manual
+  scheduling: null
+  config:
+    name: config
+    schema: ScreenCaptureConfig
+  state: []
+  inputs: []
+  outputs:
+  - name: video
+    schema: VideoFrame
+    description: Captured video frames from screen content
+    read_mode: null
+    overflow: null
+    buffer_size: null

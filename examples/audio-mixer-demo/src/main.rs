@@ -29,7 +29,7 @@ fn main() -> Result<()> {
     // 1) Load @tatolab/audio (and any deps it walks via patch:) from
     //    the package source. `the build orchestrator`
     //   .
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "audio"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/audio"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "audio"), streamlib::sdk::runtime::Strategy::Registry { version_req: streamlib::sdk::runtime::SemVerRange::Any, build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
     println!("+ @tatolab/audio loaded from target/streamlib-plugins/\n");
 
     // 2) Chord generator — addressed by structured schema_ident,

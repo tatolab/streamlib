@@ -100,7 +100,10 @@ pub(super) fn register_manifest_processors(
             Some(
                 streamlib_idents::resolve_with(
                     project_path,
-                    &streamlib_idents::ResolverOptions::default(),
+                    // Runtime package-load boundary — read the registry config
+                    // from the environment so a registry-only package resolves
+                    // its schema deps from the registry (not a dev path patch).
+                    &streamlib_idents::ResolverOptions::from_env(),
                 )
                 .map_err(|e| {
                     Error::Configuration(format!(

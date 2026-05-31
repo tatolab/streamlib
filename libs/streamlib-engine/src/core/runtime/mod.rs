@@ -13,8 +13,8 @@ mod status;
 pub use module_loader::{
     extract_slpkg_to_cache, host_target_triple, AddModuleError, AddedModule, ArtifactChecksum,
     BuildError, BuildEvent, BuildEventSink, BuildOrchestrator, BuildPolicy, BuildRequest,
-    BuildSource, BuildStream, LoadedModule, ModuleLoadEvent, RemoveModuleError, StagedArtifact,
-    Strategy,
+    BuildSource, BuildStream, LoadedModule, ModuleLoadEvent, RemoveModuleError, SemVerRange,
+    StagedArtifact, Strategy,
 };
 pub use operations::{BoxFuture, RuntimeOperations};
 pub use runtime::Runner;

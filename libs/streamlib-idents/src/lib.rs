@@ -31,7 +31,9 @@ pub use manifest::{
     DependencySpec, GitDependency, Manifest, PackageMetadata, PathDependency, RegistryDependency,
     SchemaEntry,
 };
-pub use registry::{RegistryConfig, REGISTRY_TOKEN_ENV, REGISTRY_URL_ENV};
+pub use registry::{
+    select_version, RegistryClient, RegistryConfig, REGISTRY_TOKEN_ENV, REGISTRY_URL_ENV,
+};
 pub use resolver::{
     resolve, resolve_bare_schema_name, resolve_with, ResolvedPackage, ResolvedPackages,
     ResolvedSource, ResolverOptions,

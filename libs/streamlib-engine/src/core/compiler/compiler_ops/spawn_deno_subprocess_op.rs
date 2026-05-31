@@ -80,27 +80,17 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
             // Locate deno binary
             let deno_binary = which_deno()?;
 
-            // Resolve native lib path. In dev mode, the cdylib is built to target/debug/.
-            // Users can override via STREAMLIB_DENO_NATIVE_LIB env var.
+            // Resolve native lib path via the shared resolver (env override →
+            // registry-built home cache → monorepo `target/` dev fallback).
+            // Previously this fell through to an unchecked `target/debug` path
+            // string, which handed a registry consumer a dead path silently;
+            // the shared resolver checks each tier and errors clearly.
             let native_lib_path = if !self.native_lib_path.is_empty() {
                 self.native_lib_path.clone()
-            } else if let Ok(path) = std::env::var("STREAMLIB_DENO_NATIVE_LIB") {
-                path
             } else {
-                // Default: assume target/debug/ relative to workspace root
-                let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-                let lib_name = if cfg!(target_os = "macos") {
-                    "libstreamlib_deno_native.dylib"
-                } else if cfg!(target_os = "linux") {
-                    "libstreamlib_deno_native.so"
-                } else {
-                    "streamlib_deno_native.dll"
-                };
-                workspace_root
-                    .join("target/debug")
-                    .join(lib_name)
-                    .to_string_lossy()
-                    .to_string()
+                super::native_lib_resolver::resolve_subprocess_native_lib_path(
+                    super::native_lib_resolver::SubprocessNativeRuntime::Deno,
+                )?
             };
 
             // Resolve the SDK path (subprocess_runner.ts location)
