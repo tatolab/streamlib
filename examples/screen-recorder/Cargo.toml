@@ -1,3 +1,16 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# Standalone, registry-only example (headed to its own repo). The SDK resolves
+# from the Gitea registry by version and the empty `[workspace]` table makes
+# this its own workspace root.
+#
+# DEFERRED, not in scope: this example is a no-op at HEAD. Its
+# `ScreenCapture → Mp4Writer` pipeline is macOS/iOS-only — `@tatolab/screen-capture`
+# is Apple-only (ScreenCaptureKit); there is no Linux screen-capture backend
+# yet, and the pipeline still uses the deprecated compile-time typed-struct API.
+# The real pipeline lives in git history; see `src/main.rs` for the deferral
+# note and the path back.
 [package]
 name = "screen-recorder"
 version = "0.1.0"
@@ -5,7 +18,6 @@ edition = "2024"
 publish = false
 
 [dependencies]
-streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
+streamlib = { version = "0.4.33-dev.5", registry = "gitea" }
 
-[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-streamlib-screen-capture = { path = "../../packages/screen-capture", version = "0.4.30", registry = "gitea" }
+[workspace]

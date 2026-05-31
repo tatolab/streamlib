@@ -1,94 +1,30 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+//! Screen Recorder Example — Screen Capture → MP4 Writer
+//!
+//! Captures the screen and records it to an MP4 file.
+//!
+//! # Registry-only migration status — DEFERRED, not in scope
+//!
+//! This example is intentionally a no-op at HEAD. Its real implementation
+//! (preserved in git history before the registry-only migration) cannot yet
+//! be a standalone, registry-only example: `@tatolab/screen-capture` is
+//! **Apple-only** (macOS/iOS via ScreenCaptureKit) — there is no Linux
+//! screen-capture backend — and the pipeline still uses the deprecated
+//! compile-time typed-struct API rather than runtime `add_module` /
+//! `ProcessorSpec`.
+//!
+//! When a Linux screen-capture backend lands, restore the
+//! `ScreenCapture → Mp4Writer` pipeline from git history and load
+//! `@tatolab/screen-capture` + `@tatolab/mp4` via `Strategy::Registry` like
+//! the other examples.
+
 fn main() {
     eprintln!(
-        "screen-recorder currently requires macOS — no Linux screen capture \
-         processor is available yet. Tracked as a follow-up to issue #358."
+        "screen-recorder is deferred and currently a no-op — screen capture is \
+         macOS/iOS-only (ScreenCaptureKit) with no Linux backend yet, and the \
+         example has no registry-only path. See the module-level note in \
+         src/main.rs."
     );
-    std::process::exit(2);
-}
-
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-use streamlib::sdk::permissions::request_display_permission;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-use streamlib::sdk::processors::Mp4WriterProcessor;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-use streamlib_screen_capture::{AppleScreenCaptureProcessor as ScreenCaptureProcessor, TargetType};
-use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::Runner;
-
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-fn main() -> Result<()> {
-
-    println!("=== Screen Recorder Pipeline ===\n");
-
-    // Create runtime first
-    let runtime = Runner::new()?;
-
-    // Request screen recording permission
-    println!("Requesting screen recording permission...");
-    if !request_display_permission()? {
-        eprintln!("Screen recording permission denied!");
-        eprintln!(
-            "Please grant permission in System Settings -> Privacy & Security -> Screen Recording"
-        );
-        return Ok(());
-    }
-    println!("Screen recording permission granted\n");
-
-    // Determine output path
-    let output_path = std::env::var("OUTPUT_PATH").unwrap_or_else(|_| {
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
-        format!("{}/screen_recording.mp4", manifest_dir)
-    });
-
-    println!("Output file: {}\n", output_path);
-
-    println!("Adding screen capture processor...");
-    let screen_capture = runtime.add_processor(ScreenCaptureProcessor::node(
-        ScreenCaptureProcessor::Config {
-            target_type: TargetType::Display,
-            display_index: Some(0), // Main display
-            frame_rate: Some(30.0),
-            show_cursor: Some(true),
-            exclude_current_app: Some(true),
-            ..Default::default()
-        },
-    ))?;
-    println!("Screen capture added (capturing main display)\n");
-
-    println!("Adding MP4 writer processor...");
-    let mp4_writer =
-        runtime.add_processor(Mp4WriterProcessor::node(Mp4WriterProcessor::Config {
-            output_path: output_path.clone(),
-            sync_tolerance_ms: Some(16.6),
-            video_codec: Some("avc1".to_string()),
-            video_bitrate: Some(8_000_000), // 8 Mbps for screen content
-            audio_codec: None,
-            audio_bitrate: None,
-        }))?;
-    println!("MP4 writer added (H.264 video)\n");
-
-    println!("Connecting pipeline:");
-    println!("   screen_capture.video -> mp4_writer.video");
-    runtime.connect(
-        output::<ScreenCaptureProcessor::OutputLink::video>(&screen_capture),
-        input::<Mp4WriterProcessor::InputLink::video>(&mp4_writer),
-    )?;
-    println!("   Video connected\n");
-
-    println!("Starting recording pipeline...");
-    println!("   Recording to: {}", output_path);
-    println!("   Press Ctrl+C to stop recording\n");
-
-    runtime.start()?;
-    runtime.wait_for_signal()?;
-
-    println!("\nRecording stopped");
-    println!("MP4 file finalized: {}", output_path);
-    println!("\nPlay with: ffplay {} or QuickTime Player", output_path);
-
-    Ok(())
 }
