@@ -46,21 +46,18 @@ use std::time::{Duration, Instant};
 use streamlib::sdk::engine::HostGpuDeviceExt;
 use streamlib::sdk::engine::HostSurfaceStoreExt;
 
-use streamlib::sdk::rhi::{
-    TextureFormat,
-    TextureReadbackDescriptor,
-    TextureSourceLayout,
-    VulkanLayout,
-};
-use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::error::Error;
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::engine::host_rhi::{HostVulkanTimelineSemaphore, VulkanTextureReadback};
+use streamlib::sdk::error::Error;
+use streamlib::sdk::error::Result;
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
+use streamlib::sdk::rhi::{
+    TextureFormat, TextureReadbackDescriptor, TextureSourceLayout, VulkanLayout,
+};
+use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
 use streamlib::sdk::schema_ident;
-use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
-use streamlib::sdk::RunnerAutoBuild;
 
 const SCENARIO_SURFACE_UUID: &str = "00000000-0000-0000-0000-000000005c1a";
 const SURFACE_SIZE: u32 = 512;
@@ -78,34 +75,29 @@ fn main() -> Result<()> {
         }
     }
     std::fs::create_dir_all(&output_dir).map_err(|e| {
-        Error::Configuration(format!(
-            "create output dir {}: {e}",
-            output_dir.display()
-        ))
+        Error::Configuration(format!("create output dir {}: {e}", output_dir.display()))
     })?;
     let mp4_path = output_dir.join("skia_canvas.mp4");
     let hero_path = output_dir.join("skia_canvas_hero.png");
 
     println!("=== Polyglot Skia adapter canvas scenario (#577 / #581) ===");
-    println!(
-        "Surface:    {SURFACE_SIZE}x{SURFACE_SIZE} BGRA8 (uuid {SCENARIO_SURFACE_UUID})"
-    );
+    println!("Surface:    {SURFACE_SIZE}x{SURFACE_SIZE} BGRA8 (uuid {SCENARIO_SURFACE_UUID})");
     println!("Animation:  {FPS} fps × {DURATION_SECS}s = {FRAME_COUNT} frames");
     println!("MP4:        {}", mp4_path.display());
-    println!("Hero PNG:   {} (frame {HERO_FRAME_INDEX})", hero_path.display());
+    println!(
+        "Hero PNG:   {} (frame {HERO_FRAME_INDEX})",
+        hero_path.display()
+    );
     println!();
 
     let runtime = Runner::with_auto_build()?;
 
-    let texture_slot: Arc<
-        Mutex<Option<streamlib::sdk::rhi::Texture>>,
-    > = Arc::new(Mutex::new(None));
+    let texture_slot: Arc<Mutex<Option<streamlib::sdk::rhi::Texture>>> = Arc::new(Mutex::new(None));
     let produce_done_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
         Arc::new(Mutex::new(None));
     let consume_done_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
         Arc::new(Mutex::new(None));
-    let readback_slot: Arc<Mutex<Option<Arc<VulkanTextureReadback>>>> =
-        Arc::new(Mutex::new(None));
+    let readback_slot: Arc<Mutex<Option<Arc<VulkanTextureReadback>>>> = Arc::new(Mutex::new(None));
 
     {
         let texture_slot = Arc::clone(&texture_slot);
@@ -168,9 +160,7 @@ fn main() -> Result<()> {
                     Some(consume_done.as_ref()),
                     VulkanLayout::GENERAL,
                 )
-                .map_err(|e| {
-                    Error::Configuration(format!("register_texture: {e}"))
-                })?;
+                .map_err(|e| Error::Configuration(format!("register_texture: {e}")))?;
             // No bridge wiring: Skia composes on the OpenGL adapter,
             // which has no per-acquire host work — every line of GPU
             // dispatch happens inside the subprocess process via
@@ -200,7 +190,13 @@ fn main() -> Result<()> {
 
     // Load the BgraFileSource processor from `@tatolab/debug-utilities`
     // built on demand from source by the orchestrator.
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "debug-utilities"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/debug-utilities"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(
+        module_ident_any_version!("tatolab", "debug-utilities"),
+        streamlib::sdk::runtime::Strategy::Registry {
+            version_req: streamlib::sdk::runtime::SemVerRange::Any,
+            build: streamlib::sdk::runtime::BuildPolicy::IfStale,
+        },
+    )?;
 
     // Load the polyglot processor via an explicit add_module_with
     // call. The Python sub-package is example-local (sibling of this
@@ -211,11 +207,13 @@ fn main() -> Result<()> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-skia-canvas"),
-        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::IfStale },
+        Strategy::Path {
+            path: manifest_dir.join("python"),
+            build: BuildPolicy::IfStale,
+        },
     )?;
 
-    let fixture_path =
-        write_trigger_fixture().map_err(Error::Configuration)?;
+    let fixture_path = write_trigger_fixture().map_err(Error::Configuration)?;
     let fixture_path_str = fixture_path
         .to_str()
         .ok_or_else(|| Error::Configuration("fixture path has non-utf8 component".into()))?;
@@ -288,24 +286,16 @@ fn main() -> Result<()> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| {
-            Error::Configuration(format!(
-                "ffmpeg spawn (install ffmpeg if missing): {e}"
-            ))
+            Error::Configuration(format!("ffmpeg spawn (install ffmpeg if missing): {e}"))
         })?;
     let mut ffmpeg_stdin = ffmpeg.stdin.take().expect("ffmpeg stdin");
 
     println!("Starting pipeline...");
     runtime.start()?;
 
-    let texture = texture_slot
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| {
-            Error::Runtime(
-                "host texture slot is empty — setup hook never ran".into(),
-            )
-        })?;
+    let texture = texture_slot.lock().unwrap().clone().ok_or_else(|| {
+        Error::Runtime("host texture slot is empty — setup hook never ran".into())
+    })?;
     let readback = readback_slot
         .lock()
         .unwrap()
@@ -328,8 +318,7 @@ fn main() -> Result<()> {
     let mut hero_pixels: Option<Vec<u8>> = None;
     let mut readback_times: Vec<Duration> = Vec::with_capacity(FRAME_COUNT as usize);
     for f in 0..FRAME_COUNT {
-        let target =
-            run_start + Duration::from_secs_f64((f as f64) / (FPS as f64));
+        let target = run_start + Duration::from_secs_f64((f as f64) / (FPS as f64));
         let now = Instant::now();
         if let Some(sleep) = target.checked_duration_since(now) {
             std::thread::sleep(sleep);
@@ -348,18 +337,15 @@ fn main() -> Result<()> {
                 ffmpeg_stdin.write_all(bgra)
             })
             .map_err(|e| Error::Runtime(format!("readback wait: {e}")))?
-            .map_err(|e| {
-                Error::Runtime(format!("ffmpeg stdin write: {e}"))
-            })?;
+            .map_err(|e| Error::Runtime(format!("ffmpeg stdin write: {e}")))?;
         readback_times.push(rb_start.elapsed());
         if let Some(pixels) = hero_capture {
             hero_pixels = Some(pixels);
         }
         if (f + 1) % 120 == 0 {
             let wall = run_start.elapsed().as_secs_f32();
-            let avg_rb_ms = readback_times.iter().sum::<Duration>().as_secs_f32()
-                * 1000.0
-                / (f as f32 + 1.0);
+            let avg_rb_ms =
+                readback_times.iter().sum::<Duration>().as_secs_f32() * 1000.0 / (f as f32 + 1.0);
             println!(
                 "  frame {:>4}/{FRAME_COUNT} wall={:>5.1}s readback_avg={:>5.2}ms",
                 f + 1,
@@ -373,9 +359,9 @@ fn main() -> Result<()> {
     runtime.stop()?;
 
     drop(ffmpeg_stdin);
-    let ffmpeg_status = ffmpeg.wait().map_err(|e| {
-        Error::Runtime(format!("ffmpeg wait: {e}"))
-    })?;
+    let ffmpeg_status = ffmpeg
+        .wait()
+        .map_err(|e| Error::Runtime(format!("ffmpeg wait: {e}")))?;
     if !ffmpeg_status.success() {
         return Err(Error::Runtime(format!(
             "ffmpeg encode failed: {ffmpeg_status:?}"
@@ -406,8 +392,7 @@ fn write_trigger_fixture() -> std::result::Result<PathBuf, String> {
     // ignores the buffer and uses each frame as a per-tick wakeup so
     // it can run a Skia draw against the host's render-target surface.
     let path = std::env::temp_dir().join("skia-canvas-trigger.bgra");
-    let mut f = File::create(&path)
-        .map_err(|e| format!("create {}: {e}", path.display()))?;
+    let mut f = File::create(&path).map_err(|e| format!("create {}: {e}", path.display()))?;
     let bytes_per_frame: usize = 4 * 4 * 4;
     let total = bytes_per_frame * (FRAME_COUNT as usize);
     f.write_all(&vec![0u8; total])
@@ -415,12 +400,7 @@ fn write_trigger_fixture() -> std::result::Result<PathBuf, String> {
     Ok(path)
 }
 
-fn write_png(
-    bgra: &[u8],
-    width: u32,
-    height: u32,
-    output: &std::path::Path,
-) -> Result<()> {
+fn write_png(bgra: &[u8], width: u32, height: u32, output: &std::path::Path) -> Result<()> {
     use std::fs::File;
     use std::io::BufWriter;
 
@@ -432,10 +412,7 @@ fn write_png(
     }
 
     let file = File::create(output).map_err(|e| {
-        Error::Configuration(format!(
-            "create output PNG {}: {e}",
-            output.display()
-        ))
+        Error::Configuration(format!("create output PNG {}: {e}", output.display()))
     })?;
     let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgba);
