@@ -418,7 +418,6 @@ impl VideoToolboxDecoder {
             width: source_buffer.width,
             height: source_buffer.height,
             timestamp_ns: decoded_frame.timestamp_ns.to_string(),
-            frame_index: self.frame_count.to_string(),
             fps: None,
             // Per-frame override is opt-in (#633); per-surface
             // `current_image_layout` from surface-share is the default.

@@ -100,7 +100,6 @@ Deno.test("VideoFrame with all color metadata round-trips", () => {
     width: 1920,
     height: 1080,
     timestamp_ns: "0",
-    frame_index: "0",
     color_info: bt2020PqColorInfo(),
     mastering_display: bt2020MasteringDisplay(),
     content_light: { max_cll: 1000, max_fall: 400 },
@@ -126,7 +125,6 @@ Deno.test("VideoFrame without color metadata omits fields on wire", () => {
     width: 1920,
     height: 1080,
     timestamp_ns: "0",
-    frame_index: "0",
   };
   const json = JSON.parse(JSON.stringify(frame));
   assertEquals(json.color_info, undefined);

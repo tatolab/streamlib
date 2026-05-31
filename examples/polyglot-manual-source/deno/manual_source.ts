@@ -114,7 +114,6 @@ export default class PolyglotManualSource implements ManualProcessor {
       width: this.width,
       height: this.height,
       timestamp_ns: String(tsNs),
-      frame_index: String(this.frameCount),
     };
     try {
       this.outputs.write("frame_out", frame, tsNs);

@@ -110,7 +110,6 @@ export default class HalftoneProcessor implements ReactiveProcessor {
   private outputPoolIndex = 0;
   private outputPoolWidth = 0;
   private outputPoolHeight = 0;
-  private frameIndex = 0;
 
   async setup(ctx: RuntimeContextFullAccess): Promise<void> {
     console.error("[HalftoneProcessor] setup — config:", JSON.stringify(ctx.config));
@@ -324,13 +323,13 @@ export default class HalftoneProcessor implements ReactiveProcessor {
     outputSurface.release();
 
     // --- Forward downstream ---
-    this.frameIndex++;
+    // Ordering/timing is the monotonic clock (`timestamp_ns`), propagated
+    // from the input frame's stamp — never a per-processor frame counter.
     const outputFrame: VideoFrame = {
       surface_id: slot.handleId,
       width,
       height,
       timestamp_ns: String(timestampNs),
-      frame_index: String(this.frameIndex),
     };
     ctx.outputs.write("video_out", outputFrame, timestampNs);
   }
