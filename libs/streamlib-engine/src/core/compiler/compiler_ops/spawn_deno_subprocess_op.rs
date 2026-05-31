@@ -96,8 +96,28 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
                 )?
             };
 
-            // Resolve the SDK path (subprocess_runner.ts location)
-            let sdk_path = resolve_deno_sdk_path()?;
+            // The SDK is resolved from the registry by version, never from a
+            // workspace path: the Deno package's deno.json declares `streamlib`
+            // (npm:@tatolab/streamlib-deno@<version>) and a sibling .npmrc
+            // points the @tatolab scope at Gitea. The engine launches the SDK's
+            // runner as the bare specifier `streamlib/subprocess_runner.ts`,
+            // resolved through that config — the direct mirror of how the
+            // Python op runs `-m streamlib.subprocess_runner` from the
+            // registry-installed venv. The processor's own `import "streamlib"`
+            // resolves through the same config. Deno fetches + caches the SDK on
+            // first run, so no separate install step is needed. Dev iteration is
+            // publish-a-dev-version + bump the package's declared `streamlib`
+            // (no path escape hatch, by design — parity with the Python loop).
+            let project_deno_config = project_path.join("deno.json");
+            if !project_deno_config.exists() {
+                return Err(Error::Runtime(format!(
+                    "Deno package at '{}' has no deno.json — it must declare \
+                     `streamlib` (npm:@tatolab/streamlib-deno@<version>) plus a \
+                     sibling .npmrc pointing the @tatolab scope at the registry, \
+                     so the engine can resolve the SDK runner by version.",
+                    project_path.display()
+                )));
+            }
 
             // Determine the original TypeScript execution mode for the subprocess
             let execution_mode = match &self.execution_config.execution {
@@ -107,14 +127,12 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
             };
 
             tracing::info!(
-                "[{}] Spawning Deno subprocess: binary='{}', sdk='{}', native_lib='{}'",
+                "[{}] Spawning Deno subprocess: binary='{}', config='{}', native_lib='{}'",
                 self.processor_id,
                 deno_binary,
-                sdk_path.display(),
+                project_deno_config.display(),
                 native_lib_path
             );
-
-            let runner_path = sdk_path.join("subprocess_runner.ts");
 
             let mut command = Command::new(&deno_binary);
             command
@@ -133,7 +151,12 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
                 .arg("--allow-all")
                 .arg("--no-prompt")
                 .arg("--unstable-webgpu")
-                .arg(runner_path.to_str().unwrap_or(""))
+                // Resolve `streamlib` (the runner here, and `import "streamlib"`
+                // inside the dynamically-imported processor) through the
+                // package's deno.json + sibling .npmrc.
+                .arg("--config")
+                .arg(&project_deno_config)
+                .arg("streamlib/subprocess_runner.ts")
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -640,30 +663,6 @@ fn which_deno() -> Result<String> {
 
     Err(Error::Runtime(
         "deno binary not found on PATH. Install with: curl -fsSL https://deno.land/install.sh | sh"
-            .to_string(),
-    ))
-}
-
-/// Resolve the path to the StreamLib Deno SDK (where subprocess_runner.ts lives).
-fn resolve_deno_sdk_path() -> Result<PathBuf> {
-    // Check env var first
-    if let Ok(path) = std::env::var("STREAMLIB_DENO_SDK_PATH") {
-        let p = PathBuf::from(path);
-        if p.exists() {
-            return Ok(p);
-        }
-    }
-
-    // Dev mode: SDK lives at libs/streamlib-deno/ relative to workspace root
-    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../libs/streamlib-deno");
-    if dev_path.exists() {
-        return dev_path
-            .canonicalize()
-            .map_err(|e| Error::Runtime(format!("Failed to canonicalize SDK path: {}", e)));
-    }
-
-    Err(Error::Runtime(
-        "StreamLib Deno SDK not found. Set STREAMLIB_DENO_SDK_PATH or build from workspace."
             .to_string(),
     ))
 }
