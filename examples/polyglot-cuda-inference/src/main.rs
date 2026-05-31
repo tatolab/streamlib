@@ -48,22 +48,18 @@ use std::time::Duration;
 use streamlib::sdk::engine::HostGpuDeviceExt;
 use streamlib::sdk::engine::HostSurfaceStoreExt;
 
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::descriptors::SchemaIdent;
-use streamlib::sdk::rhi::{PixelFormat, PixelBuffer};
-use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::engine::host_rhi::{HostMarker, HostVulkanBuffer, HostVulkanTimelineSemaphore};
 use streamlib::sdk::error::Error;
-use streamlib::sdk::engine::host_rhi::{
-    HostMarker,
-    HostVulkanBuffer,
-    HostVulkanTimelineSemaphore,
-};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
+use streamlib::sdk::rhi::{PixelBuffer, PixelFormat};
+use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
 use streamlib::sdk::schema_ident;
-use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
-use streamlib::sdk::RunnerAutoBuild;
 use streamlib_adapter_abi::SurfaceId;
 use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
 
@@ -129,14 +125,13 @@ fn main() -> Result<()> {
 
     for a in args {
         if let Some(value) = a.strip_prefix("--runtime=") {
-            runtime_kind =
-                RuntimeKind::parse(value).map_err(Error::Configuration)?;
+            runtime_kind = RuntimeKind::parse(value).map_err(Error::Configuration)?;
         } else if let Some(value) = a.strip_prefix("--output=") {
             output_png = PathBuf::from(value);
         } else if let Some(value) = a.strip_prefix("--timeout-secs=") {
-            timeout_secs = value.parse().map_err(|e| {
-                Error::Configuration(format!("invalid --timeout-secs: {e}"))
-            })?;
+            timeout_secs = value
+                .parse()
+                .map_err(|e| Error::Configuration(format!("invalid --timeout-secs: {e}")))?;
         }
     }
 
@@ -158,8 +153,7 @@ fn main() -> Result<()> {
     // is no `set_cuda_bridge` to wire — keeping the adapter alive is
     // about preserving the OPAQUE_FD `VkBuffer` + timeline `Arc`s that
     // surface-share's daemon dup'd from on registration.
-    let adapter_slot: Arc<Mutex<Option<Arc<HostAdapter>>>> =
-        Arc::new(Mutex::new(None));
+    let adapter_slot: Arc<Mutex<Option<Arc<HostAdapter>>>> = Arc::new(Mutex::new(None));
 
     {
         let adapter_slot = Arc::clone(&adapter_slot);
@@ -168,9 +162,8 @@ fn main() -> Result<()> {
             let adapter: Arc<HostAdapter> =
                 Arc::new(CudaSurfaceAdapter::new(Arc::clone(&host_device)));
 
-            register_host_surface(&adapter, gpu).map_err(|e| {
-                Error::Configuration(format!("register_host_surface: {e}"))
-            })?;
+            register_host_surface(&adapter, gpu)
+                .map_err(|e| Error::Configuration(format!("register_host_surface: {e}")))?;
 
             *adapter_slot.lock().unwrap() = Some(adapter);
             println!(
@@ -183,7 +176,13 @@ fn main() -> Result<()> {
 
     // Load the BgraFileSource processor from `@tatolab/debug-utilities`
     // built on demand from source by the orchestrator.
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "debug-utilities"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/debug-utilities"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(
+        module_ident_any_version!("tatolab", "debug-utilities"),
+        streamlib::sdk::runtime::Strategy::Registry {
+            version_req: streamlib::sdk::runtime::SemVerRange::Any,
+            build: streamlib::sdk::runtime::BuildPolicy::IfStale,
+        },
+    )?;
 
     // Load the polyglot processors via explicit add_module_with calls.
     // The Python and Deno sub-packages are example-local (siblings of
@@ -195,11 +194,17 @@ fn main() -> Result<()> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-cuda-inference"),
-        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::IfStale },
+        Strategy::Path {
+            path: manifest_dir.join("python"),
+            build: BuildPolicy::IfStale,
+        },
     )?;
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-cuda-inference-deno"),
-        Strategy::Path { path: manifest_dir.join("deno"), build: BuildPolicy::IfStale },
+        Strategy::Path {
+            path: manifest_dir.join("deno"),
+            build: BuildPolicy::IfStale,
+        },
     )?;
 
     // Trigger source: a tiny BGRA fixture that drives Videoframes
@@ -207,8 +212,7 @@ fn main() -> Result<()> {
     // invoked. Frame contents are unused (the polyglot processor works
     // on the pre-registered cuda OPAQUE_FD surface, not the trigger
     // frame's pixel buffer). Same shape as cpu-readback-blur.
-    let fixture_path = write_trigger_fixture()
-        .map_err(Error::Configuration)?;
+    let fixture_path = write_trigger_fixture().map_err(Error::Configuration)?;
 
     let fixture_path_str = fixture_path
         .to_str()
@@ -254,19 +258,18 @@ fn main() -> Result<()> {
     // (yolov8n.pt, ~6 MB) and a test image (bus.jpg, ~140 KB) on
     // first run, plus run inference. Subsequent runs are much faster
     // because ultralytics caches the weights under ~/.cache.
-    println!(
-        "Waiting up to {timeout_secs}s for the polyglot processor to finish..."
-    );
+    println!("Waiting up to {timeout_secs}s for the polyglot processor to finish...");
     std::thread::sleep(Duration::from_secs(timeout_secs));
 
     println!("Stopping pipeline...");
     runtime.stop()?;
 
     let adapter_alive = adapter_slot.lock().unwrap().is_some();
+    println!("\n✓ Scenario complete. Adapter held alive through stop: {adapter_alive}");
     println!(
-        "\n✓ Scenario complete. Adapter held alive through stop: {adapter_alive}"
+        "Inspect the output PNG with the Read tool: {}",
+        output_png.display()
     );
-    println!("Inspect the output PNG with the Read tool: {}", output_png.display());
 
     Ok(())
 }
@@ -290,7 +293,10 @@ fn register_host_surface(
     //    exported as OPAQUE_FD. See
     //    `docs/architecture/subprocess-rhi-parity.md` →
     //    "OPAQUE_FD VkBuffer import (cuda — #588)".
-    let pixel_buffer = HostVulkanBuffer::new_opaque_fd_export(host_device, (SURFACE_WIDTH as u64) * (SURFACE_HEIGHT as u64) * (BYTES_PER_PIXEL as u64))
+    let pixel_buffer = HostVulkanBuffer::new_opaque_fd_export(
+        host_device,
+        (SURFACE_WIDTH as u64) * (SURFACE_HEIGHT as u64) * (BYTES_PER_PIXEL as u64),
+    )
     .map_err(|e| format!("HostVulkanBuffer::new_opaque_fd_export: {e}"))?;
     let pixel_buffer_arc = Arc::new(pixel_buffer);
     let pixel_buffer_rhi = PixelBuffer::from_host_vulkan_buffer(
@@ -307,14 +313,14 @@ fn register_host_surface(
     //    subprocess `acquire_*` waits on 0 → satisfied immediately;
     //    each release advances the corresponding edge's counter by 1.
     let produce_done = Arc::new(
-        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0).map_err(
-            |e| format!("HostVulkanTimelineSemaphore::new_exportable (produce_done): {e}"),
-        )?,
+        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0).map_err(|e| {
+            format!("HostVulkanTimelineSemaphore::new_exportable (produce_done): {e}")
+        })?,
     );
     let consume_done = Arc::new(
-        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0).map_err(
-            |e| format!("HostVulkanTimelineSemaphore::new_exportable (consume_done): {e}"),
-        )?,
+        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0).map_err(|e| {
+            format!("HostVulkanTimelineSemaphore::new_exportable (consume_done): {e}")
+        })?,
     );
 
     // 3. Pre-fill the buffer with a known sentinel pattern (all zeros)
@@ -374,8 +380,7 @@ fn write_trigger_fixture() -> std::result::Result<PathBuf, String> {
     use std::io::Write;
 
     let path = std::env::temp_dir().join("cuda-inference-trigger.bgra");
-    let mut f =
-        File::create(&path).map_err(|e| format!("create {}: {e}", path.display()))?;
+    let mut f = File::create(&path).map_err(|e| format!("create {}: {e}", path.display()))?;
     f.write_all(&[0u8; 4 * 4 * 4 * 3])
         .map_err(|e| format!("write {}: {e}", path.display()))?;
     Ok(path)
