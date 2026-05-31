@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.33](https://github.com/tatolab/streamlib/compare/v0.4.32...v0.4.33) (2026-05-31)
+
+
+### Features
+
+* **dist:** registry-only source distribution — Strategy::Registry, source-only .slpkg, de-workspace packages + examples ([#1128](https://github.com/tatolab/streamlib/issues/1128)) ([f644c39](https://github.com/tatolab/streamlib/commit/f644c390f6a5b3b592f6b0056f62a62e01f9f660))
+
 ## [0.4.32](https://github.com/tatolab/streamlib/compare/v0.4.31...v0.4.32) (2026-05-30)
 
 
