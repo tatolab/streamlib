@@ -1,12 +1,37 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
+# Standalone, registry-only example (headed to its own repo). Every dependency
+# resolves from the Gitea registry by version. This crate is its own workspace
+# root and includes the sibling `plugin/` cdylib (the grayscale Rust plugin) as
+# a member so `cargo build -p grayscale-plugin` builds it for the example to
+# stage. `@tatolab/camera` + `@tatolab/display` load at runtime via
+# `Strategy::Registry`; the example-local plugin loads via `Strategy::Path`.
 [package]
 name = "camera-rust-plugin"
-version = "0.1.0"
+version = "0.4.33-dev.5"
 edition = "2024"
+authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
+license = "BUSL-1.1"
 publish = false
 
 [dependencies]
-streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
-serde_json = "1.0"
+streamlib = { workspace = true }
+serde_json = { workspace = true }
+
+[workspace]
+members = ["plugin"]
+
+[workspace.package]
+version = "0.4.33-dev.5"
+edition = "2024"
+authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
+license = "BUSL-1.1"
+
+[workspace.dependencies]
+streamlib = { version = "0.4.33-dev.5", registry = "gitea" }
+streamlib-jtd-codegen = { version = "0.4.33-dev.5", registry = "gitea" }
+streamlib-plugin-abi = { version = "0.4.33-dev.5", registry = "gitea" }
+tracing = { version = "0.1.41", features = ["release_max_level_debug"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
