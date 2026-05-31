@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.34](https://github.com/tatolab/streamlib/compare/v0.4.33...v0.4.34) (2026-05-31)
+
+
+### Features
+
+* **1133:** camera-deno-subprocess standalone registry-only + Deno mirror-staging ([#1162](https://github.com/tatolab/streamlib/issues/1162)) ([8085a9d](https://github.com/tatolab/streamlib/commit/8085a9d6655bba7c1af96cd33a22e28fa8752a3d))
+* **deno-sdk:** publish to Gitea npm + bare-specifier resolution + protocol handshake ([#1118](https://github.com/tatolab/streamlib/issues/1118)) ([#1160](https://github.com/tatolab/streamlib/issues/1160)) ([f39833a](https://github.com/tatolab/streamlib/commit/f39833adabf3c109c022fe2b0cfa99397ff1126e))
+
 ## [0.4.33](https://github.com/tatolab/streamlib/compare/v0.4.32...v0.4.33) (2026-05-31)
 
 
