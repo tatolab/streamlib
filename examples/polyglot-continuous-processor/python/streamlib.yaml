@@ -1,9 +1,10 @@
-# yaml-language-server: $schema=../../../schemas/streamlib.schema.json
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
 package:
   org: tatolab
   name: polyglot-continuous-processor
   version: "0.1.0"
-  description: "Polyglot continuous processor (#542) — Python process() driven by monotonic-clock timerfd"
+  description: "Polyglot continuous processor — Python process() driven by monotonic-clock timerfd"
 
 processors:
   - name: PolyglotContinuousProcessor
