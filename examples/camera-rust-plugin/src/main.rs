@@ -3,26 +3,23 @@
 
 //! Camera → Rust Grayscale Plugin → Display Pipeline Example
 //!
-//! Demonstrates the in-tree cdylib plugin pattern: the example owns a
-//! sibling `plugin/` crate that builds as a cdylib carrying the
-//! `GrayscaleRust` processor, and the host manually stages that cdylib
-//! into `plugin/lib/<host_triple>/` before calling
-//! `runtime.add_module_with_blocking(..., Strategy::Path)`
-//! to register it. This is the "build from source + load from path"
-//! shape, distinct from the `the build orchestrator` +
-//! `runtime.add_module_blocking(...)` flow that the other examples use for
-//! canonical workspace packages.
+//! Demonstrates the local cdylib plugin pattern: the example owns a
+//! sibling `plugin/` crate (a workspace member) that builds as a cdylib
+//! carrying the `GrayscaleRust` processor, and the host manually stages
+//! that cdylib into `plugin/lib/<host_triple>/` before calling
+//! `runtime.add_module_with_blocking(..., Strategy::Path)` to register it.
+//! This is the "build from source + load from path" shape for an
+//! example-local plugin.
 //!
-//! `@tatolab/camera` and `@tatolab/display` themselves load via
-//! `add_module` against the workspace-staged plugin dir — only the
-//! example-local plugin subdir goes through the manual stage path.
+//! `@tatolab/camera` and `@tatolab/display` instead resolve from the Gitea
+//! registry by version via `Strategy::Registry` — only the example-local
+//! plugin goes through the manual stage + `Strategy::Path`.
 //!
 //! ## Prerequisites
 //!
-//! Build the plugin cdylib + stage the canonical packages:
+//! Build the plugin cdylib (a member of this example's workspace):
 //! ```bash
 //! cargo build -p grayscale-plugin
-//! the build orchestrator
 //! ```
 //!
 //! ## Usage
@@ -32,22 +29,29 @@
 //! ```
 
 use std::path::PathBuf;
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
-use streamlib::sdk::RunnerAutoBuild;
+use streamlib::sdk::runtime::{BuildPolicy, Runner, SemVerRange, Strategy};
 use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
     let runtime = Runner::with_auto_build()?;
 
-    // 1. Load `@tatolab/camera` and `@tatolab/display` via the canonical
-    //    package source. `the build orchestrator --package
-    //    @tatolab/camera`.
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/camera"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "display"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/display"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    // 1. Resolve `@tatolab/camera` and `@tatolab/display` from the Gitea
+    //    generic registry by version — the cross-repo consumer path. The
+    //    orchestrator pulls each `.slpkg` and builds it from source on the
+    //    host. Registry endpoint comes from `STREAMLIB_REGISTRY_URL` (or
+    //    `GITEA_URL`).
+    let registry = || Strategy::Registry {
+        version_req: SemVerRange::Any,
+        build: BuildPolicy::IfStale,
+    };
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), registry())?;
+    runtime
+        .add_module_with_blocking(module_ident_any_version!("tatolab", "display"), registry())?;
 
     // 2. Stage the example-local grayscale plugin cdylib at
     //    `plugin/lib/<triple>/` so the explicit `Path`
@@ -63,12 +67,10 @@ fn main() -> Result<()> {
         streamlib::sdk::error::Error::Configuration(format!("Failed to create lib dir: {}", e))
     })?;
 
-    // Derive workspace target dir: CARGO_MANIFEST_DIR is examples/camera-rust-plugin/,
-    // workspace root is 2 levels up, target dir is workspace_root/target/
-    let workspace_root = manifest_dir
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("Failed to find workspace root");
+    // This example is its own workspace root (the `plugin/` cdylib is a member),
+    // so `cargo build -p grayscale-plugin` writes the dylib into this crate's
+    // own `target/` dir.
+    let workspace_root = &manifest_dir;
     let dylib_name = if cfg!(target_os = "macos") {
         "libgrayscale_plugin.dylib"
     } else if cfg!(target_os = "windows") {
@@ -114,11 +116,14 @@ fn main() -> Result<()> {
     //    grayscale processor from the staged cdylib). The
     //    `Path` strategy preserves the recursive
     //    dep-walker shape — it reads `plugin/streamlib.yaml`, walks
-    //    declared deps (`@tatolab/core` patched to a workspace path),
-    //    and registers the local plugin's processors + schemas.
+    //    declared deps (`@tatolab/core` resolved from the registry by
+    //    version), and registers the local plugin's processors + schemas.
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "camera-rust-plugin"),
-        Strategy::Path { path: plugin_dir.clone(), build: BuildPolicy::IfStale },
+        Strategy::Path {
+            path: plugin_dir.clone(),
+            build: BuildPolicy::IfStale,
+        },
     )?;
 
     // 4. Add processors

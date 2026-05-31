@@ -1,0 +1,189 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+//! Grayscale processor (macOS / iOS).
+//!
+//! Reads pixels directly from `CVPixelBuffer` memory via CoreVideo,
+//! applies a BT.601 luma grayscale conversion on the CPU, and forwards
+//! the result on a freshly-acquired pixel buffer. CoreVideo is Apple-only;
+//! the Linux path lives in [`crate::grayscale_linux`] and runs the same
+//! effect on the GPU via a sandboxed graphics kernel.
+
+use crate::_generated_::VideoFrame;
+use std::ffi::c_void;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::JoinHandle;
+use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
+use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::processors::ManualProcessor;
+use streamlib::sdk::rhi::PixelFormat;
+
+#[link(name = "CoreVideo", kind = "framework")]
+unsafe extern "C" {
+    fn CVPixelBufferLockBaseAddress(pixel_buffer: *mut c_void, lock_flags: u64) -> i32;
+    fn CVPixelBufferUnlockBaseAddress(pixel_buffer: *mut c_void, lock_flags: u64) -> i32;
+    fn CVPixelBufferGetBaseAddress(pixel_buffer: *mut c_void) -> *mut c_void;
+    fn CVPixelBufferGetBytesPerRow(pixel_buffer: *mut c_void) -> usize;
+}
+
+#[streamlib::sdk::processor("GrayscaleRust")]
+pub struct GrayscaleProcessor {
+    gpu_context: Option<GpuContextLimitedAccess>,
+    running: Arc<AtomicBool>,
+    processing_thread: Option<JoinHandle<()>>,
+}
+
+impl ManualProcessor for GrayscaleProcessor::Processor {
+    fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        self.gpu_context = Some(ctx.gpu_limited_access().clone());
+        self.running = Arc::new(AtomicBool::new(false));
+        tracing::info!("GrayscaleProcessor: setup complete");
+        Ok(())
+    }
+
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        let inputs = std::mem::take(&mut self.inputs);
+        let outputs = std::mem::take(&mut self.outputs);
+        let gpu = self
+            .gpu_context
+            .clone()
+            .ok_or_else(|| Error::Configuration("GpuContext not initialized".into()))?;
+        let running = Arc::clone(&self.running);
+
+        running.store(true, Ordering::Release);
+
+        let handle = std::thread::Builder::new()
+            .name("grayscale-processing".into())
+            .spawn(move || {
+                tracing::info!("GrayscaleProcessor: processing thread started");
+
+                while running.load(Ordering::Acquire) {
+                    if !inputs.has_data("video_in") {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                        continue;
+                    }
+
+                    let frame: VideoFrame = match inputs.read("video_in") {
+                        Ok(f) => f,
+                        Err(e) => {
+                            tracing::warn!("GrayscaleProcessor: failed to read frame: {}", e);
+                            continue;
+                        }
+                    };
+
+                    let input_buffer = match gpu.check_out_surface(&frame.surface_id) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            tracing::warn!("GrayscaleProcessor: check_out_surface failed: {}", e);
+                            continue;
+                        }
+                    };
+
+                    let w = input_buffer.width;
+                    let h = input_buffer.height;
+
+                    let (pool_id, output_buffer) =
+                        match gpu.acquire_pixel_buffer(w, h, PixelFormat::Bgra32) {
+                            Ok(r) => r,
+                            Err(e) => {
+                                tracing::warn!(
+                                    "GrayscaleProcessor: acquire_pixel_buffer failed: {}",
+                                    e
+                                );
+                                continue;
+                            }
+                        };
+
+                    let input_ptr = input_buffer.as_ptr();
+                    let output_ptr = output_buffer.as_ptr();
+
+                    // Lock both buffers for CPU access (kCVPixelBufferLock_ReadOnly = 1)
+                    let lock_result = unsafe { CVPixelBufferLockBaseAddress(input_ptr, 1) };
+                    if lock_result != 0 {
+                        tracing::warn!(
+                            "GrayscaleProcessor: failed to lock input buffer: {}",
+                            lock_result
+                        );
+                        continue;
+                    }
+
+                    let lock_result = unsafe { CVPixelBufferLockBaseAddress(output_ptr, 0) };
+                    if lock_result != 0 {
+                        unsafe { CVPixelBufferUnlockBaseAddress(input_ptr, 1) };
+                        tracing::warn!(
+                            "GrayscaleProcessor: failed to lock output buffer: {}",
+                            lock_result
+                        );
+                        continue;
+                    }
+
+                    let input_base = unsafe { CVPixelBufferGetBaseAddress(input_ptr) };
+                    let input_bytes_per_row = unsafe { CVPixelBufferGetBytesPerRow(input_ptr) };
+                    let output_base = unsafe { CVPixelBufferGetBaseAddress(output_ptr) };
+                    let output_bytes_per_row = unsafe { CVPixelBufferGetBytesPerRow(output_ptr) };
+
+                    // Grayscale conversion (BGRA order): gray = 0.114*B + 0.587*G + 0.299*R
+                    for row in 0..h as usize {
+                        let in_row_ptr =
+                            unsafe { (input_base as *const u8).add(row * input_bytes_per_row) };
+                        let out_row_ptr =
+                            unsafe { (output_base as *mut u8).add(row * output_bytes_per_row) };
+
+                        for col in 0..w as usize {
+                            let pixel_offset = col * 4;
+                            unsafe {
+                                let b = *in_row_ptr.add(pixel_offset) as f32;
+                                let g = *in_row_ptr.add(pixel_offset + 1) as f32;
+                                let r = *in_row_ptr.add(pixel_offset + 2) as f32;
+
+                                let gray = (0.114 * b + 0.587 * g + 0.299 * r) as u8;
+
+                                *out_row_ptr.add(pixel_offset) = gray; // B
+                                *out_row_ptr.add(pixel_offset + 1) = gray; // G
+                                *out_row_ptr.add(pixel_offset + 2) = gray; // R
+                                *out_row_ptr.add(pixel_offset + 3) = 255; // A
+                            }
+                        }
+                    }
+
+                    // Unlock both buffers
+                    unsafe {
+                        CVPixelBufferUnlockBaseAddress(output_ptr, 0);
+                        CVPixelBufferUnlockBaseAddress(input_ptr, 1);
+                    }
+
+                    // Forward frame with new surface_id
+                    let output_frame = VideoFrame {
+                        surface_id: pool_id.to_string(),
+                        ..frame
+                    };
+                    if let Err(e) = outputs.write("video_out", &output_frame) {
+                        tracing::warn!("GrayscaleProcessor: failed to write output: {}", e);
+                    }
+                }
+
+                tracing::info!("GrayscaleProcessor: processing thread stopped");
+            })
+            .map_err(|e| {
+                Error::Configuration(format!("Failed to spawn processing thread: {}", e))
+            })?;
+
+        self.processing_thread = Some(handle);
+        tracing::info!("GrayscaleProcessor: started");
+        Ok(())
+    }
+
+    fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        self.running.store(false, Ordering::Release);
+
+        if let Some(handle) = self.processing_thread.take() {
+            handle
+                .join()
+                .map_err(|_| Error::Runtime("Processing thread panicked".into()))?;
+        }
+
+        tracing::info!("GrayscaleProcessor: stopped");
+        Ok(())
+    }
+}
