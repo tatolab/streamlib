@@ -130,13 +130,29 @@ def bump_workspace():
 def bump_member(path):
     doc = tomlkit.parse(open(path).read())
     changed = False
-    for sec in ("dependencies", "build-dependencies"):
-        tbl = doc.get(sec, {})
+    def bump_table(tbl):
+        nonlocal changed
         for name in list(tbl.keys()):
             dep = tbl[name]
-            if isinstance(dep, dict) and dep.get("version") == base and "path" in dep:
+            # Any internal dep (a `path` dep with an explicit version req) must
+            # move to the prerelease target. Matching on `== base` is too narrow:
+            # internal reqs are floor-pinned (e.g. "0.4.30") while the workspace
+            # version floats above, so an exact-base match misses them and the
+            # prerelease crate then fails its own ^floor req (caret excludes
+            # prereleases). Rewriting every path-dep's version is correct because
+            # path deps are always in-workspace crates published at `target`.
+            if isinstance(dep, dict) and "path" in dep and "version" in dep:
                 dep["version"] = target
                 changed = True
+    for sec in ("dependencies", "build-dependencies", "dev-dependencies"):
+        if sec in doc:
+            bump_table(doc[sec])
+    # [target.'cfg(...)'.dependencies] — the native hosts pin their adapter +
+    # consumer-rhi deps here, so these must move to the prerelease too.
+    for cfg_tbl in doc.get("target", {}).values():
+        for sec in ("dependencies", "build-dependencies", "dev-dependencies"):
+            if sec in cfg_tbl:
+                bump_table(cfg_tbl[sec])
     if changed:
         open(path, "w").write(tomlkit.dumps(doc))
 bump_workspace()
