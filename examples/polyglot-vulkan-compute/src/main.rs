@@ -34,36 +34,28 @@ use std::time::Duration;
 use streamlib::sdk::engine::HostGpuDeviceExt;
 use streamlib::sdk::engine::HostSurfaceStoreExt;
 
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::context::ComputeKernelBridge;
 use streamlib::sdk::descriptors::SchemaIdent;
-use streamlib::sdk::rhi::{
-    derive_bindings_from_spirv,
-    ComputeKernelDescriptor,
-    Texture,
-    TextureFormat,
-    TextureReadbackDescriptor,
-    TextureSourceLayout,
-};
-use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::error::Error;
 use streamlib::sdk::engine::host_rhi::{
-    HostVulkanDevice,
-    HostVulkanTimelineSemaphore,
-    VulkanComputeKernel,
-    VulkanTextureReadback,
+    HostVulkanDevice, HostVulkanTimelineSemaphore, VulkanComputeKernel, VulkanTextureReadback,
 };
+use streamlib::sdk::error::Error;
+use streamlib::sdk::error::Result;
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
-use streamlib::sdk::RunnerAutoBuild;
+use streamlib::sdk::rhi::{
+    ComputeKernelDescriptor, Texture, TextureFormat, TextureReadbackDescriptor,
+    TextureSourceLayout, derive_bindings_from_spirv,
+};
+use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
 use streamlib::sdk::schema_ident;
 
 /// Compiled SPIR-V for the Mandelbrot compute shader. Built by
 /// `build.rs` from `shaders/mandelbrot.comp`. Shipped to the polyglot
 /// processor as a hex-encoded string in the processor config.
-const MANDELBROT_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/mandelbrot.spv"));
+const MANDELBROT_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mandelbrot.spv"));
 
 /// UUID the host registers the render-target surface under. The
 /// polyglot processor reads it from its config and passes it to
@@ -133,10 +125,7 @@ struct MandelbrotKernelBridge {
 }
 
 impl MandelbrotKernelBridge {
-    fn new(
-        device: Arc<HostVulkanDevice>,
-        surfaces: Vec<(String, Texture)>,
-    ) -> Self {
+    fn new(device: Arc<HostVulkanDevice>, surfaces: Vec<(String, Texture)>) -> Self {
         Self {
             device,
             surfaces: surfaces.into_iter().collect(),
@@ -153,11 +142,7 @@ impl MandelbrotKernelBridge {
 }
 
 impl ComputeKernelBridge for MandelbrotKernelBridge {
-    fn register(
-        &self,
-        spv: &[u8],
-        push_constant_size: u32,
-    ) -> std::result::Result<String, String> {
+    fn register(&self, spv: &[u8], push_constant_size: u32) -> std::result::Result<String, String> {
         let kernel_id = Self::sha256_hex(spv);
         let mut kernels = self.kernels.lock();
         if !kernels.contains_key(&kernel_id) {
@@ -191,18 +176,12 @@ impl ComputeKernelBridge for MandelbrotKernelBridge {
         group_count_y: u32,
         group_count_z: u32,
     ) -> std::result::Result<(), String> {
-        let kernel = self
-            .kernels
-            .lock()
-            .get(kernel_id)
-            .cloned()
-            .ok_or_else(|| {
+        let kernel =
+            self.kernels.lock().get(kernel_id).cloned().ok_or_else(|| {
                 format!("kernel_id '{kernel_id}' not registered with this bridge")
             })?;
         let texture = self.surfaces.get(surface_uuid).ok_or_else(|| {
-            format!(
-                "surface_uuid '{surface_uuid}' not registered with this bridge"
-            )
+            format!("surface_uuid '{surface_uuid}' not registered with this bridge")
         })?;
         kernel
             .set_storage_image(0, texture)
@@ -227,8 +206,7 @@ fn main() -> Result<()> {
 
     for a in args {
         if let Some(value) = a.strip_prefix("--runtime=") {
-            runtime_kind =
-                RuntimeKind::parse(value).map_err(Error::Configuration)?;
+            runtime_kind = RuntimeKind::parse(value).map_err(Error::Configuration)?;
         } else if let Some(value) = a.strip_prefix("--output=") {
             output_png = PathBuf::from(value);
         }
@@ -236,24 +214,19 @@ fn main() -> Result<()> {
 
     println!("=== Polyglot Vulkan adapter compute scenario (#531) ===");
     println!("Runtime:     {}", runtime_kind.as_str());
-    println!(
-        "Surface:     {SURFACE_SIZE}x{SURFACE_SIZE} BGRA8 (uuid {SCENARIO_SURFACE_UUID})"
-    );
+    println!("Surface:     {SURFACE_SIZE}x{SURFACE_SIZE} BGRA8 (uuid {SCENARIO_SURFACE_UUID})");
     println!("SPIR-V:      {} bytes", MANDELBROT_SPV.len());
     println!("Output PNG:  {}", output_png.display());
     println!();
 
     let runtime = Runner::with_auto_build()?;
 
-    let texture_slot: Arc<
-        Mutex<Option<streamlib::sdk::rhi::Texture>>,
-    > = Arc::new(Mutex::new(None));
+    let texture_slot: Arc<Mutex<Option<streamlib::sdk::rhi::Texture>>> = Arc::new(Mutex::new(None));
     let produce_done_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
         Arc::new(Mutex::new(None));
     let consume_done_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
         Arc::new(Mutex::new(None));
-    let readback_slot: Arc<Mutex<Option<Arc<VulkanTextureReadback>>>> =
-        Arc::new(Mutex::new(None));
+    let readback_slot: Arc<Mutex<Option<Arc<VulkanTextureReadback>>>> = Arc::new(Mutex::new(None));
 
     {
         let texture_slot = Arc::clone(&texture_slot);
@@ -273,22 +246,24 @@ fn main() -> Result<()> {
             // host signals `produce_done` after each write; the
             // subprocess signals `consume_done` after each release.
             let produce_done = Arc::new(
-                HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-                    .map_err(|e| {
+                HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0).map_err(
+                    |e| {
                         Error::Configuration(format!(
                             "HostVulkanTimelineSemaphore::new_exportable \
                              (produce_done): {e}"
                         ))
-                    })?,
+                    },
+                )?,
             );
             let consume_done = Arc::new(
-                HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-                    .map_err(|e| {
+                HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0).map_err(
+                    |e| {
                         Error::Configuration(format!(
                             "HostVulkanTimelineSemaphore::new_exportable \
                              (consume_done): {e}"
                         ))
-                    })?,
+                    },
+                )?,
             );
             // Surface-share registration carries BOTH the DMA-BUF FD
             // and the timeline OPAQUE_FD so the subprocess can wire up
@@ -313,11 +288,7 @@ fn main() -> Result<()> {
                     Some(consume_done.as_ref()),
                     streamlib::sdk::rhi::VulkanLayout::GENERAL,
                 )
-                .map_err(|e| {
-                    Error::Configuration(format!(
-                        "register_texture: {e}"
-                    ))
-                })?;
+                .map_err(|e| Error::Configuration(format!("register_texture: {e}")))?;
 
             // Wire the compute-kernel bridge: subprocess
             // `register_compute_kernel` + `run_compute_kernel` IPCs
@@ -354,7 +325,13 @@ fn main() -> Result<()> {
 
     // Load the BgraFileSource processor from `@tatolab/debug-utilities`
     // built on demand from source by the orchestrator.
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "debug-utilities"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/debug-utilities"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(
+        module_ident_any_version!("tatolab", "debug-utilities"),
+        streamlib::sdk::runtime::Strategy::Registry {
+            version_req: streamlib::sdk::runtime::SemVerRange::Any,
+            build: streamlib::sdk::runtime::BuildPolicy::IfStale,
+        },
+    )?;
 
     // Load the polyglot processors via explicit add_module_with calls.
     // The Python and Deno sub-packages are example-local (siblings of
@@ -366,19 +343,24 @@ fn main() -> Result<()> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-vulkan-compute"),
-        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::IfStale },
+        Strategy::Path {
+            path: manifest_dir.join("python"),
+            build: BuildPolicy::IfStale,
+        },
     )?;
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-vulkan-compute-deno"),
-        Strategy::Path { path: manifest_dir.join("deno"), build: BuildPolicy::IfStale },
+        Strategy::Path {
+            path: manifest_dir.join("deno"),
+            build: BuildPolicy::IfStale,
+        },
     )?;
 
     // Trigger source: a few BGRA frames so the polyglot processor's
     // `process()` is invoked. Frame contents are ignored — the processor
     // works on the pre-registered host surface, not the trigger frame's
     // pixel buffer.
-    let fixture_path = write_trigger_fixture()
-        .map_err(Error::Configuration)?;
+    let fixture_path = write_trigger_fixture().map_err(Error::Configuration)?;
 
     let fixture_path_str = fixture_path
         .to_str()
@@ -430,15 +412,9 @@ fn main() -> Result<()> {
     runtime.stop()?;
 
     println!("\nReading host surface back via Vulkan...");
-    let texture = texture_slot
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| {
-            Error::Runtime(
-                "host texture slot is empty — setup hook never ran".into(),
-            )
-        })?;
+    let texture = texture_slot.lock().unwrap().clone().ok_or_else(|| {
+        Error::Runtime("host texture slot is empty — setup hook never ran".into())
+    })?;
     let readback = readback_slot
         .lock()
         .unwrap()
@@ -470,19 +446,13 @@ fn write_trigger_fixture() -> std::result::Result<PathBuf, String> {
     use std::io::Write;
 
     let path = std::env::temp_dir().join("vulkan-compute-trigger.bgra");
-    let mut f = File::create(&path)
-        .map_err(|e| format!("create {}: {e}", path.display()))?;
+    let mut f = File::create(&path).map_err(|e| format!("create {}: {e}", path.display()))?;
     f.write_all(&[0u8; 4 * 4 * 4 * 3])
         .map_err(|e| format!("write {}: {e}", path.display()))?;
     Ok(path)
 }
 
-fn write_png(
-    bgra: &[u8],
-    width: u32,
-    height: u32,
-    output: &std::path::Path,
-) -> Result<()> {
+fn write_png(bgra: &[u8], width: u32, height: u32, output: &std::path::Path) -> Result<()> {
     use std::fs::File;
     use std::io::BufWriter;
 
@@ -493,10 +463,7 @@ fn write_png(
     let rgba = bgra.to_vec();
 
     let file = File::create(output).map_err(|e| {
-        Error::Configuration(format!(
-            "create output PNG {}: {e}",
-            output.display()
-        ))
+        Error::Configuration(format!("create output PNG {}: {e}", output.display()))
     })?;
     let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgba);
