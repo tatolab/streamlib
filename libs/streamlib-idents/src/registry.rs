@@ -8,16 +8,25 @@
 //! `Registry` dependency by a semver *range* requires two steps the flat
 //! generic registry can't do in one request:
 //!
-//! 1. **List** the available concrete versions of the package
-//!    (Gitea's package-management API), then select the highest one that
-//!    satisfies the declared range — cargo/npm/pip semantics.
+//! 1. **List** the available concrete versions of the package, then select
+//!    the highest one that satisfies the declared range — cargo/npm/pip
+//!    semantics.
 //! 2. **Download** that version's `.slpkg` from the generic registry's
 //!    by-version download namespace.
+//!
+//! Both steps are **anonymous** on a public registry, matching cargo's
+//! sparse index. The generic registry has no native version-listing query
+//! (Gitea's `/api/v1/packages` management API `401`s anonymously), so each
+//! publish writes a cargo-sparse-shaped **version index** as a plain generic
+//! file at `<base>/api/packages/<org>/generic/<name>/index/index.json`
+//! (anonymously downloadable like any generic file). The list step reads
+//! that index; the only token-requiring path is **publish**.
 //!
 //! `http(s)://` is the production transport; `file://` is the hermetic
 //! local-mirror / test transport (mirroring the engine's remote-`.slpkg`
 //! fetch), where the base URL points at a directory laid out as
-//! `<base>/<name>/<version>/<name>.slpkg`.
+//! `<base>/<name>/<version>/<name>.slpkg` (the `file://` list step
+//! enumerates the per-version subdirectories directly — no index file).
 
 use std::path::{Path, PathBuf};
 
@@ -31,9 +40,10 @@ use crate::semver::SemVer;
 pub const REGISTRY_URL_ENV: &str = "STREAMLIB_REGISTRY_URL";
 const REGISTRY_URL_ENV_FALLBACK: &str = "GITEA_URL";
 
-/// Environment variable carrying an optional read token for the
-/// package-management API (private registries). Read is anonymous on a
-/// public registry, so this is usually unset.
+/// Environment variable carrying the registry credential. The read path
+/// (list + download) is anonymous on a public registry, so this is **only**
+/// required to *publish*; it is also sent on reads when set, for private
+/// registries that gate generic downloads behind auth.
 pub const REGISTRY_TOKEN_ENV: &str = "STREAMLIB_REGISTRY_TOKEN";
 
 /// Resolved configuration for the Gitea generic registry.
@@ -163,8 +173,53 @@ impl<'a> RegistryClient<'a> {
             );
             http_delete(&version_url, self.config.token.as_deref());
             http_put_bytes(&url, self.config.token.as_deref(), bytes).map_err(upload_err)?;
+            // Maintain the anonymous version index so the read path lists
+            // versions tokenless. Recompute from the authed management
+            // listing unioned with the just-published version — every publish
+            // rewrites the full correct index, so a missed or stale index
+            // self-heals on the next publish.
+            self.write_version_index(pkg_ref, version)?;
         }
         Ok(url)
+    }
+
+    /// Rewrite the anonymous version index for `pkg_ref` after a publish.
+    /// The index is the union of the authed management-API listing and the
+    /// `just_published` version (covers any management-API propagation lag),
+    /// serialized as cargo-sparse-shaped NDJSON and uploaded (delete-then-PUT,
+    /// since the `index` pseudo-version is immutable per generic-file rules).
+    ///
+    /// Ordering note: [`Self::upload_slpkg`] PUTs the artifact *before* calling
+    /// this, so a failure here surfaces as an `Err` even though the `.slpkg` is
+    /// already published and downloadable — the package just isn't *listable*
+    /// until its index lands. This is deliberately a hard failure (the index is
+    /// the read path; an unlistable artifact isn't resolvable) and is fully
+    /// recoverable: re-running publish is idempotent and rewrites the full
+    /// correct index from the management listing.
+    fn write_version_index(
+        &self,
+        pkg_ref: &PackageRef,
+        just_published: SemVer,
+    ) -> ResolverResult<()> {
+        let upload_err = |detail: String| ResolverError::RegistryFetchFailed {
+            name: pkg_ref.to_string(),
+            detail,
+        };
+        let mut versions = self.list_versions_via_management_api(pkg_ref)?;
+        versions.push(just_published);
+        let versions = merge_versions(versions);
+        let body = render_index_ndjson(pkg_ref.name.as_str(), &versions);
+        // Drop the prior `index` pseudo-version, then PUT the fresh index.
+        let index_version_url = format!(
+            "{}/api/v1/packages/{}/generic/{}/index",
+            self.config.base_url,
+            pkg_ref.org.as_str(),
+            pkg_ref.name.as_str(),
+        );
+        http_delete(&index_version_url, self.config.token.as_deref());
+        http_put_bytes(&self.index_url(pkg_ref), self.config.token.as_deref(), body.as_bytes())
+            .map_err(|detail| upload_err(format!("publishing version index: {detail}")))?;
+        Ok(())
     }
 
     /// Canonical generic-registry download URL (recorded in the lockfile).
@@ -189,7 +244,49 @@ impl<'a> RegistryClient<'a> {
             .join(format!("{name}.slpkg"))
     }
 
+    /// Anonymous version-index URL — a plain generic file under the literal
+    /// `index` pseudo-version. Downloaded tokenless like any generic file;
+    /// the `index` segment is not a semver, so the `.slpkg` version namespace
+    /// can never collide with it.
+    fn index_url(&self, pkg_ref: &PackageRef) -> String {
+        format!(
+            "{}/api/packages/{}/generic/{}/index/index.json",
+            self.config.base_url,
+            pkg_ref.org.as_str(),
+            pkg_ref.name.as_str(),
+        )
+    }
+
+    /// List versions by reading the anonymous, cargo-sparse-shaped version
+    /// index (`index/index.json`). No token is required on a public registry;
+    /// the configured token is still sent when set, for private registries
+    /// that gate generic downloads. A `404` (no index published yet) yields
+    /// an empty list — parity with `file://`'s missing-directory case — so
+    /// `select_version` reports `RegistryNoMatchingVersion` rather than a
+    /// transport error.
     fn list_versions_http(&self, pkg_ref: &PackageRef) -> ResolverResult<Vec<SemVer>> {
+        let url = self.index_url(pkg_ref);
+        let body = match http_get_optional(&url, self.config.token.as_deref()) {
+            Ok(Some(body)) => body,
+            Ok(None) => return Ok(Vec::new()),
+            Err(detail) => {
+                return Err(ResolverError::RegistryFetchFailed {
+                    name: pkg_ref.to_string(),
+                    detail: format!("listing versions: {detail}"),
+                })
+            }
+        };
+        Ok(parse_index_ndjson(&body, pkg_ref.name.as_str()))
+    }
+
+    /// List versions via Gitea's **authed** package-management API. Used only
+    /// on the publish path to recompute the anonymous index — never on the
+    /// read path (the management API `401`s anonymously). `index` and any
+    /// other non-semver pseudo-version is dropped by the semver parse.
+    fn list_versions_via_management_api(
+        &self,
+        pkg_ref: &PackageRef,
+    ) -> ResolverResult<Vec<SemVer>> {
         let name = pkg_ref.name.as_str();
         let url = format!(
             "{}/api/v1/packages/{}?type=generic&q={}",
@@ -265,6 +362,71 @@ pub fn select_version(
                 available: sorted.join(", "),
             }
         })
+}
+
+/// One line of the cargo-sparse-shaped version index — `{"name","vers"}`
+/// per version. Extra fields a future index might carry (checksum, yanked)
+/// are ignored on read, so the shape can grow without breaking older readers.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct VersionIndexLine {
+    name: String,
+    vers: String,
+}
+
+/// Render a sorted version list as NDJSON (one `{"name","vers"}` object per
+/// line, trailing newline) — the byte shape published to `index/index.json`.
+fn render_index_ndjson(name: &str, versions: &[SemVer]) -> String {
+    let mut out = String::new();
+    for v in versions {
+        let line = VersionIndexLine {
+            name: name.to_string(),
+            vers: v.to_string(),
+        };
+        // Serializing a struct of two owned strings is infallible.
+        out.push_str(&serde_json::to_string(&line).expect("serialize version index line"));
+        out.push('\n');
+    }
+    out
+}
+
+/// Parse NDJSON index bytes into the semvers whose `name` matches `name`.
+/// Blank lines and unparseable lines/versions are skipped, so a partially
+/// corrupt index degrades to "fewer versions" rather than a hard failure.
+fn parse_index_ndjson(body: &[u8], name: &str) -> Vec<SemVer> {
+    String::from_utf8_lossy(body)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str::<VersionIndexLine>(l).ok())
+        .filter(|e| e.name == name)
+        .filter_map(|e| SemVer::from_dotted(&e.vers).ok())
+        .collect()
+}
+
+/// Sort ascending + dedup a version list (the index is canonicalized this way
+/// before publish so republishes are byte-stable and reads are ordered).
+fn merge_versions(mut versions: Vec<SemVer>) -> Vec<SemVer> {
+    versions.sort();
+    versions.dedup();
+    versions
+}
+
+/// Blocking GET that distinguishes a `404` (`Ok(None)`) from a real transport
+/// or non-404 status error (`Err`). Used for the optional version index.
+fn http_get_optional(url: &str, token: Option<&str>) -> Result<Option<Vec<u8>>, String> {
+    let mut req = ureq::get(url);
+    if let Some(t) = token {
+        req = req.set("Authorization", &format!("token {t}"));
+    }
+    match req.call() {
+        Ok(response) => {
+            let mut bytes = Vec::new();
+            std::io::Read::read_to_end(&mut response.into_reader(), &mut bytes)
+                .map_err(|e| format!("reading HTTP response body from {url}: {e}"))?;
+            Ok(Some(bytes))
+        }
+        Err(ureq::Error::Status(404, _)) => Ok(None),
+        Err(e) => Err(format!("HTTP request to {url} failed: {e}")),
+    }
 }
 
 /// Blocking GET of `url`'s raw body. `token` is sent as a Gitea
@@ -410,37 +572,39 @@ mod tests {
         );
     }
 
-    /// Locks the production `http://` path end-to-end against a one-shot
-    /// localhost server: the management-API list URL + Gitea JSON shape
-    /// (`list_versions_http`) and the generic download URL
-    /// (`download_slpkg`). A typo in either URL or in the `GiteaPackageEntry`
-    /// field names would only surface against a real Gitea without this.
+    /// Locks the production `http://` **read** path end-to-end against a
+    /// one-shot localhost server, with **no token configured** — the
+    /// tokenless read the sparse index exists to enable. The list step reads
+    /// the anonymous `index/index.json` (NDJSON) and the download step reads
+    /// the generic-file URL. Mentally revert `list_versions_http` to the
+    /// authed `/api/v1/packages` management API: against a real public Gitea
+    /// the no-token list `401`s, so this locks the tokenless contract rather
+    /// than merely exercising a happy path.
     #[test]
     fn http_list_and_download_against_localhost() {
         use std::io::{Read, Write};
 
         let slpkg_body = b"slpkg-zip-bytes".to_vec();
-        // Gitea `GET /api/v1/packages/{owner}?type=generic` response shape.
-        let list_json = r#"[
-            {"name":"escalate","version":"1.0.0","type":"generic"},
-            {"name":"escalate","version":"1.2.0","type":"generic"},
-            {"name":"other","version":"9.9.9","type":"generic"}
-        ]"#
-        .to_string();
+        // Anonymous version-index (NDJSON) body. A foreign-named line is
+        // included to prove the name filter drops it.
+        let index_ndjson = "{\"name\":\"escalate\",\"vers\":\"1.0.0\"}\n\
+             {\"name\":\"escalate\",\"vers\":\"1.2.0\"}\n\
+             {\"name\":\"other\",\"vers\":\"9.9.9\"}\n"
+            .to_string();
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let slpkg_for_server = slpkg_body.clone();
         let server = std::thread::spawn(move || {
-            // Serve exactly two requests: the version list, then the download.
+            // Serve exactly two requests: the index read, then the download.
             for _ in 0..2 {
                 let (mut stream, _) = listener.accept().unwrap();
                 let mut buf = [0u8; 2048];
                 let n = stream.read(&mut buf).unwrap();
                 let req = String::from_utf8_lossy(&buf[..n]);
                 let request_line = req.lines().next().unwrap_or("");
-                let body: Vec<u8> = if request_line.contains("/api/v1/packages/") {
-                    list_json.clone().into_bytes()
+                let body: Vec<u8> = if request_line.contains("/index/index.json") {
+                    index_ndjson.clone().into_bytes()
                 } else {
                     slpkg_for_server.clone()
                 };
@@ -456,12 +620,12 @@ mod tests {
 
         let cfg = RegistryConfig {
             base_url: format!("http://127.0.0.1:{port}"),
-            token: None,
+            token: None, // <-- no token: the whole point of the sparse index.
         };
         let client = RegistryClient::new(&cfg);
         let pr = pkg_ref("tatolab", "escalate");
 
-        // Management API: only matching-name generic entries are returned.
+        // Index read: only matching-name lines are returned, sorted-as-served.
         let versions = client.list_versions(&pr).unwrap();
         assert_eq!(versions, vec![SemVer::new(1, 0, 0), SemVer::new(1, 2, 0)]);
 
@@ -474,5 +638,168 @@ mod tests {
         );
 
         server.join().unwrap();
+    }
+
+    /// A `404` on the index (no version published yet) yields an empty list,
+    /// not a transport error — parity with `file://`'s missing-directory case.
+    #[test]
+    fn http_list_missing_index_yields_empty() {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf).unwrap();
+            let resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            stream.write_all(resp.as_bytes()).unwrap();
+            stream.flush().unwrap();
+        });
+
+        let cfg = RegistryConfig {
+            base_url: format!("http://127.0.0.1:{port}"),
+            token: None,
+        };
+        let client = RegistryClient::new(&cfg);
+        let versions = client.list_versions(&pkg_ref("tatolab", "nope")).unwrap();
+        assert!(versions.is_empty(), "404 index must list as empty, got {versions:?}");
+        server.join().unwrap();
+    }
+
+    /// NDJSON render → parse is a faithful round-trip, name-filtered.
+    #[test]
+    fn index_ndjson_render_parse_round_trip() {
+        let versions = vec![SemVer::new(0, 4, 32), SemVer::new(0, 4, 33), SemVer::new(1, 0, 0)];
+        let rendered = render_index_ndjson("camera", &versions);
+        // One line per version, trailing newline, cargo-sparse `vers` field.
+        assert_eq!(rendered.lines().count(), 3);
+        assert!(rendered.contains("\"vers\":\"0.4.33\""));
+        assert!(rendered.ends_with('\n'));
+        let parsed = parse_index_ndjson(rendered.as_bytes(), "camera");
+        assert_eq!(parsed, versions);
+        // A line for a different package name is dropped by the filter.
+        let mixed = format!("{rendered}{{\"name\":\"display\",\"vers\":\"9.9.9\"}}\n");
+        assert_eq!(parse_index_ndjson(mixed.as_bytes(), "camera"), versions);
+        // Blank lines and garbage degrade gracefully (skipped, not fatal).
+        let dirty = format!("\n{rendered}not-json\n");
+        assert_eq!(parse_index_ndjson(dirty.as_bytes(), "camera"), versions);
+    }
+
+    #[test]
+    fn merge_versions_sorts_and_dedups() {
+        let merged = merge_versions(vec![
+            SemVer::new(1, 2, 0),
+            SemVer::new(1, 0, 0),
+            SemVer::new(1, 2, 0),
+            SemVer::new(0, 9, 9),
+        ]);
+        assert_eq!(
+            merged,
+            vec![SemVer::new(0, 9, 9), SemVer::new(1, 0, 0), SemVer::new(1, 2, 0)]
+        );
+    }
+
+    /// Locks the **publish** path: `upload_slpkg` PUTs the `.slpkg`, then
+    /// recomputes the version index from the authed management listing unioned
+    /// with the just-published version and PUTs it to `index/index.json`. A
+    /// stateful localhost server records every request; we assert the index
+    /// PUT body is canonical NDJSON containing both the pre-existing version
+    /// and the new one. Mentally revert the `write_version_index` call in
+    /// `upload_slpkg`: no index PUT is recorded and the assertion fails.
+    #[test]
+    fn upload_writes_version_index_round_trip() {
+        use std::io::{Read, Write};
+        use std::sync::mpsc;
+
+        // The management API reports one pre-existing version; the publish is
+        // a new, higher version. The index must end up holding the union.
+        let mgmt_json = r#"[{"name":"camera","version":"0.4.32","type":"generic"}]"#;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = mpsc::channel::<(String, String, Vec<u8>)>();
+        let mgmt = mgmt_json.to_string();
+        let server = std::thread::spawn(move || {
+            // upload_slpkg → 5 requests: DELETE slpkg ver, PUT slpkg,
+            // GET mgmt list, DELETE index ver, PUT index.
+            for _ in 0..5 {
+                let (mut stream, _) = listener.accept().unwrap();
+                // Read the full request: headers, then exactly Content-Length
+                // body bytes (a single `read` can split header from body).
+                let mut raw = Vec::new();
+                let mut chunk = [0u8; 4096];
+                let header_end = loop {
+                    let n = stream.read(&mut chunk).unwrap();
+                    if n == 0 {
+                        break raw.windows(4).position(|w| w == b"\r\n\r\n");
+                    }
+                    raw.extend_from_slice(&chunk[..n]);
+                    if let Some(pos) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let header_str = String::from_utf8_lossy(&raw[..pos]).to_lowercase();
+                        let want = header_str
+                            .split("content-length:")
+                            .nth(1)
+                            .and_then(|s| s.split("\r\n").next())
+                            .and_then(|s| s.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        if raw.len() - (pos + 4) >= want {
+                            break Some(pos);
+                        }
+                    }
+                };
+                let pos = header_end.unwrap_or(raw.len().saturating_sub(0));
+                let head = String::from_utf8_lossy(&raw[..pos]).to_string();
+                let request_line = head.lines().next().unwrap_or("").to_string();
+                let method = request_line.split(' ').next().unwrap_or("").to_string();
+                let path = request_line.split(' ').nth(1).unwrap_or("").to_string();
+                let body: Vec<u8> = raw.get(pos + 4..).map(|b| b.to_vec()).unwrap_or_default();
+                tx.send((method.clone(), path.clone(), body)).unwrap();
+
+                let resp_body: &[u8] = if method == "GET" {
+                    mgmt.as_bytes()
+                } else {
+                    b""
+                };
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    resp_body.len()
+                );
+                stream.write_all(header.as_bytes()).unwrap();
+                stream.write_all(resp_body).unwrap();
+                stream.flush().unwrap();
+            }
+        });
+
+        let cfg = RegistryConfig {
+            base_url: format!("http://127.0.0.1:{port}"),
+            token: Some("publish-token".into()),
+        };
+        let client = RegistryClient::new(&cfg);
+        let pr = pkg_ref("tatolab", "camera");
+        client
+            .upload_slpkg(&pr, SemVer::new(0, 4, 33), b"new-slpkg-bytes")
+            .unwrap();
+        server.join().unwrap();
+
+        let reqs: Vec<(String, String, Vec<u8>)> = rx.try_iter().collect();
+        // The index PUT carries the union of {0.4.32 (mgmt), 0.4.33 (new)}.
+        let index_put = reqs
+            .iter()
+            .find(|(m, p, _)| m == "PUT" && p.ends_with("/index/index.json"))
+            .expect("an index PUT must be recorded");
+        let body = String::from_utf8_lossy(&index_put.2);
+        let parsed = parse_index_ndjson(body.as_bytes(), "camera");
+        assert_eq!(
+            parsed,
+            vec![SemVer::new(0, 4, 32), SemVer::new(0, 4, 33)],
+            "index body must hold the management-listing ∪ published version, got {body:?}"
+        );
+        // The .slpkg itself was PUT too.
+        assert!(
+            reqs.iter().any(|(m, p, _)| m == "PUT"
+                && p.ends_with("/generic/camera/0.4.33/camera.slpkg")),
+            "the .slpkg PUT must be recorded; saw {reqs:?}"
+        );
     }
 }

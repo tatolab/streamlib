@@ -1,16 +1,13 @@
 # Unified Gitea registry — distribution & dependency resolution
 
-> **Decided architecture, validated by POC, in active migration.** This is the
-> committed shape for how every StreamLib-authored and -customized artifact is
-> distributed and resolved. It is documented ahead of full implementation **on
-> purpose** — so the issues that land it follow one design instead of
-> re-inventing resolution. Sections tagged **(finalized in #N)** are being
-> implemented by that issue, which completes the corresponding section as it
-> merges. Work lives under the **"Gitea Package Registry"** milestone.
->
-> This doc is an explicit exception to the "architecture docs describe merged
-> code only" discipline — granted by the principal architect so the design is
-> known up front. Validated-vs-in-flight status is tracked in the last section.
+> **Living document.** Validate, update, critique freely per
+> [CLAUDE.md's markdown editing rules](../../CLAUDE.md#editing-markdown-documentation).
+
+Every StreamLib-authored **or customized** artifact is distributed and resolved
+through a single self-hosted Gitea instance, by version — never by relative
+`path` or git `[patch]` in anything a consumer sees. SDK libraries resolve from
+Gitea's cargo / pypi / npm registries; packages are source-only `.slpkg`s in
+its generic registry.
 
 ## The model in one picture
 
@@ -20,7 +17,7 @@
    │  cargo registry     pypi registry     npm registry         │  ← SDK libraries
    │  (rust SDK crates)  (python SDK)      (deno SDK)            │    resolved by version
    │                                                            │
-   │  generic registry  ── source-only .slpkg (via streamlib pack) ─┐ ← packages
+   │  generic registry  ── source-only .slpkg (streamlib pkg publish) ─┐ ← packages
    └───────────────────────────────────────────────────────────┘  │   (polyglot)
             ▲ publish (release step)            ▲ resolve by version │
             │                                   │                     │
@@ -39,7 +36,7 @@ go through Gitea.
 | Kind | What | Registry | Produced by |
 |---|---|---|---|
 | **SDK library** | the code a package compiles/runs *against*: rust `streamlib` crate chain, python `streamlib` pkg, deno `@tatolab/streamlib-deno` | cargo / pypi / npm | normal per-language publish |
-| **Package** | a streamlib package (polyglot: rust + python + deno), loaded by `runtime.add_module` | **generic** (as `.slpkg`) | **`streamlib pack`, source-only** |
+| **Package** | a streamlib package (polyglot: rust + python + deno), loaded by `runtime.add_module` | **generic** (as `.slpkg`) | **`streamlib pkg publish`, source-only** |
 
 The distinction is load-bearing: SDK libraries are versioned registry
 dependencies; packages are **source-only `.slpkg`s** in the generic registry
@@ -100,10 +97,13 @@ streamlib-engine = { path = "../streamlib-engine", version = "0.4.30", registry 
   after install via in-process JTD codegen, with schema deps (`@tatolab/core`,
   `@tatolab/escalate`) resolved from the generic registry. Running an example or
   `streamlib pkg install` therefore needs **both** registry env channels set
-  (`UV_INDEX` for the pypi install; `STREAMLIB_REGISTRY_URL` +
-  `STREAMLIB_REGISTRY_TOKEN` for the codegen's generic-registry resolution) —
-  see [`../learnings/polyglot-venv-gitea-registry-env.md`](../learnings/polyglot-venv-gitea-registry-env.md)
-  for the failure symptoms when they're missing. Engine and SDK agree on a monotonic, language-agnostic
+  (`UV_INDEX` for the pypi install; `STREAMLIB_REGISTRY_URL` for the codegen's
+  generic-registry resolution) — see
+  [`../learnings/polyglot-venv-gitea-registry-env.md`](../learnings/polyglot-venv-gitea-registry-env.md)
+  for the failure symptoms when they're missing. The generic-registry read path
+  (version index + `.slpkg` download) is anonymous, so no
+  `STREAMLIB_REGISTRY_TOKEN` is needed to resolve — the token is publish-only.
+  Engine and SDK agree on a monotonic, language-agnostic
   **subprocess protocol version** (`STREAMLIB_SUBPROCESS_PROTOCOL_VERSION` ↔
   `streamlib.PROTOCOL_VERSION`), handshaken at subprocess startup and fail-loud
   on mismatch — the replacement for the old compatibility-by-injection
@@ -140,30 +140,52 @@ Gitea and resolved by `{ version, registry = "gitea" }`. The workspace's
 shares crates.io version numbers, so the `registry` annotation (not a distinct
 version) is what selects the fork over upstream.
 
-## Packages: source-only `.slpkg`s (finalized in #1119)
+## Packages: source-only `.slpkg`s
 
-`streamlib pack` produces **source-only** `.slpkg`s — the prebuilt per-triple
-cdylib it bundles today is dropped, because a package is polyglot and source
-is the uniform shape. Every `packages/*` is published as a source `.slpkg` to
-Gitea's generic registry under `tatolab`. A host `add_module`s one, and its
-rust/python/deno code builds on the host resolving the SDK libraries from
-Gitea by version.
+`streamlib pkg build` / `streamlib pkg publish` produce **source-only**
+`.slpkg`s — no prebuilt per-triple cdylib, because a package is polyglot and
+source is the uniform shape. The `Slpkg` assemble target ships source only
+(`streamlib-pack`); only the runtime orchestrator's `StagedDir` target
+compiles a cdylib, because that materialization *is* the host build. Every
+`packages/*` is published as a source `.slpkg` to Gitea's generic registry
+under `tatolab` (`scripts/gitea/publish-packages.sh` loops the set, shelling
+out to `streamlib pkg publish`). A host `add_module`s one via
+`Strategy::Registry`, and its rust/python/deno code builds on the host
+resolving the SDK libraries from Gitea by version.
 
-> Trade-off to confirm in #1119: a source-only `.slpkg` requires a toolchain
-> on the consuming host to build the rust cdylib — weigh against the
-> compiler-free-deployment goal.
+A source-only `.slpkg` requires a Rust toolchain on the consuming host to
+build the cdylib — the accepted trade-off for the polyglot/uniform-source
+shape; compiler-free deployment is a separate prebuilt-distribution concern,
+not the package-registry path.
 
-## Schema-package resolution (resolver + strip capability + cargo-publish wiring shipped)
+### Anonymous version index
+
+Reads are tokenless, matching cargo's sparse index. The generic registry has
+no native version-listing query — Gitea's `/api/v1/packages` management API
+`401`s anonymously — so each publish writes a **cargo-sparse-shaped version
+index** as a plain generic file at
+`/api/packages/{org}/generic/{name}/index/index.json` (NDJSON, one
+`{"name","vers"}` line per version), anonymously downloadable like any
+generic file. `streamlib pkg publish` recomputes that index from the authed
+management listing unioned with the just-published version — every publish
+rewrites the full correct index, so a stale or missing index self-heals on
+the next publish. `streamlib_idents`' resolver lists versions by reading the
+index (`list_versions_http`); the management API is used only on the publish
+path. Generic *download* was already anonymous, so the whole read path (list
++ download) is tokenless and the registry token is publish-only.
+
+## Schema-package resolution
 
 `streamlib.yaml` schema dependencies (e.g. `@tatolab/escalate`) are themselves
 packages — they resolve from Gitea's **generic** registry: list the schema
 package's versions, select the highest satisfying the declared semver range,
 fetch that version's `.slpkg`, extract, resolve. The flat generic registry
 has no semver-range query, so range → concrete version happens client-side
-(cargo/npm/pip shape) via Gitea's package-management API
-(`GET /api/v1/packages/{org}?type=generic`), and the resolved concrete
-version is pinned in `streamlib.lock` via `ResolvedSource::Registry`. Two
-halves, mirroring cargo:
+(cargo/npm/pip shape) by reading the package's anonymous version index
+(`/api/packages/{org}/generic/{name}/index/index.json`, see [Anonymous
+version index](#anonymous-version-index)), and the resolved concrete version
+is pinned in `streamlib.lock` via `ResolvedSource::Registry`. Two halves,
+mirroring cargo:
 
 1. **Consume side:** `streamlib-idents`' resolver implements the `Registry`
    arm — list → select-highest-in-range → fetch + `extract_slpkg` → load. The
@@ -189,13 +211,11 @@ halves, mirroring cargo:
    resolves `@tatolab/escalate` from the generic registry (the schema package
    published as a source `.slpkg`) and the engine compiles.
 
-   > ~~`streamlib pack`'s `RejectPathPatches` strips the dev `path:` patch.~~
-   > — Corrected 2026-05-30 (#1116): `RejectPathPatches` *rejects* a path
-   > patch with a hard error (a distributed source `.slpkg` must not carry a
-   > dev override); it never stripped. The cargo-publish case genuinely needs
-   > a *strip* — the path patch is a legitimate dev affordance locally but
-   > must be removed from the published manifest — so `strip_path_patches` is
-   > new code, the publish-side counterpart to `RejectPathPatches`.
+   `strip_path_patches` is distinct from `streamlib-pack`'s `RejectPathPatches`:
+   the latter *rejects* a path patch with a hard error (a distributed source
+   `.slpkg` must not carry a dev override), while the cargo-publish case needs a
+   *strip* — the path patch is a legitimate dev affordance locally but must be
+   removed from the published manifest.
 
 This is the schema-tier twin of the cargo-crate resolution. The resolver is
 shared by all three runtimes' codegen, so the one fix covers rust/python/deno.
@@ -234,13 +254,10 @@ Notes the scripts encode:
 - cargo token must be stored as `Bearer <token>` in `credentials.toml`
   (`cargo login` stores it bare → 401).
 - The **sparse** cargo index needs no setup: the registry is reachable once
-  the org exists and the first publish populates the DB-backed index.
-
-  > ~~cargo index needs a one-time web-session init
-  > (`/user/settings/packages/cargo/initialize`).~~ — Superseded 2026-05-29.
-  > That step belongs to Gitea's older **git-based** cargo index. The
-  > committed shape uses the sparse protocol (`sparse+…`), which Gitea serves
-  > from the package DB with no `_cargo-index` repo and no initialize call.
+  the org exists and the first publish populates the DB-backed index. (The
+  one-time web-session init `/user/settings/packages/cargo/initialize` belongs
+  to Gitea's older **git-based** cargo index — the sparse protocol Gitea serves
+  from the package DB needs no `_cargo-index` repo and no initialize call.)
 - The generic registry (the `.slpkg` home) requires a **raw** request body on
   upload (`curl --upload-file`); a urlencoded body (`curl --data`) is rejected
   with HTTP 500.
@@ -254,27 +271,10 @@ Notes the scripts encode:
   exclude `dev-dependencies` (cargo strips bare-path dev-deps on publish;
   annotating them creates publish-order cycles, e.g. engine dev-deps streamlib).
 
-## Validated vs in-flight
-
-| Piece | Status | Issue |
-|---|---|---|
-| cargo publish → resolve-by-version (real SDK chain + vulkanalia/VMA) | ✅ shipped | #1105 |
-| `.slpkg` round-trip through the generic registry | ✅ validated (POC) | #1119 |
-| `tatolab` org namespace + POC cleanup | ✅ shipped | #1115 |
-| schema-package registry resolution (resolver `Registry` arm) + `strip_path_patches` capability | ✅ shipped | #1116 |
-| cargo-publish manifest path-strip *wiring* (dev-publish script + manifest migration) | ✅ shipped | #1105 |
-| full-engine codegen consumer build (engine `build.rs` resolves `@tatolab/escalate` from the generic registry) | ✅ shipped | #1105 |
-| Python SDK publish (source-only) + declare/install-from-registry, protocol-version handshake, codegen-into-venv | ✅ shipped | #1117 |
-| Deno SDK publish (built JS via `deno pack`) + declare/resolve-from-npm, protocol-version handshake | ✅ shipped | #1118 |
-| packages as source-only `.slpkg` + `streamlib pack` source-only | ⏳ | #1119 |
-| repo migration committed (`{ path, version, registry }`, `.cargo/config`, dev-publish script) | ✅ shipped | #1105 |
-
 ## Reference
 
-- Milestone: **Gitea Package Registry**.
-- Downstream: #1114 (package/example repo split — packages become version
-  consumers of the published `streamlib`); the `.deb`/Docker work syncs
-  against Gitea.
-- Related: `docs/architecture/runtime-module-materialization.md` (how
-  `add_module` builds a source module — its SDK-resolution role becomes
-  "resolve from the Gitea registry" under this model).
+- `docs/architecture/runtime-module-materialization.md` — how `add_module`
+  builds a source module, resolving its SDK dependencies from the Gitea
+  registry.
+- `docs/learnings/polyglot-venv-gitea-registry-env.md` — failure symptoms when
+  the registry env channels aren't set for a polyglot build.
