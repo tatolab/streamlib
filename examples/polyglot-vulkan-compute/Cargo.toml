@@ -9,12 +9,14 @@ publish = false
 build = "build.rs"
 
 [dependencies]
-streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
-streamlib-adapter-abi = { path = "../../libs/streamlib-adapter-abi", version = "0.4.30", registry = "gitea" }
+streamlib = { version = "0.4.33-dev.5", registry = "gitea" }
+streamlib-adapter-abi = { version = "0.4.33-dev.5", registry = "gitea" }
 serde_json = "1.0"
 png = "0.17"
 parking_lot = "0.12"
-sha2 = { workspace = true }
+sha2 = { version = "0.10", features = ["std"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib-adapter-vulkan = { path = "../../libs/streamlib-adapter-vulkan", version = "0.4.30", registry = "gitea" }
+streamlib-adapter-vulkan = { version = "0.4.33-dev.5", registry = "gitea" }
+
+[workspace]
