@@ -18,17 +18,16 @@
 //! All MoQ config is automatic — Cloudflare draft-14 relay, auto-generated
 //! namespace.
 //!
-//! Packages build automatically on `cargo run` via the build orchestrator.
-//!
-//!` so the runtime can resolve
-//! each cdylib at load time.
+//! Packages build automatically on `cargo run` via the build orchestrator,
+//! resolved from the Gitea generic registry by version so the runtime can
+//! resolve each cdylib at load time.
 
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::Runner;
-use streamlib::sdk::RunnerAutoBuild;
+use streamlib::sdk::runtime::{BuildPolicy, Runner, SemVerRange, Strategy};
 use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
@@ -42,12 +41,21 @@ fn main() -> Result<()> {
 
     let runtime = Runner::with_auto_build()?;
 
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "audio"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/audio"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/camera"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "display"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/display"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h264"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/h264"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "moq"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/moq"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "opus"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/opus"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    // Resolve every package from the Gitea generic registry by version — the
+    // cross-repo consumer path. The orchestrator pulls each `.slpkg` and builds
+    // it from source on the host. Registry endpoint comes from
+    // `STREAMLIB_REGISTRY_URL` (or `GITEA_URL`).
+    let registry = || Strategy::Registry {
+        version_req: SemVerRange::Any,
+        build: BuildPolicy::IfStale,
+    };
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "audio"), registry())?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), registry())?;
+    runtime
+        .add_module_with_blocking(module_ident_any_version!("tatolab", "display"), registry())?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h264"), registry())?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "moq"), registry())?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "opus"), registry())?;
 
     // ---- PUBLISH SIDE ----
 
@@ -79,7 +87,13 @@ fn main() -> Result<()> {
     ))?;
     let resampler = runtime.add_processor(ProcessorSpec::new(
         schema_ident!("tatolab", "audio", "AudioResampler", "1.0.0"),
-        serde_json::json!({ "target_sample_rate": 48000 }),
+        // `source_sample_rate` is required by the config schema but advisory —
+        // the resampler derives the real source rate from each input frame.
+        serde_json::json!({
+            "source_sample_rate": 48000,
+            "target_sample_rate": 48000,
+            "quality": "High",
+        }),
     ))?;
     let rechunker = runtime.add_processor(ProcessorSpec::new(
         schema_ident!("tatolab", "audio", "BufferRechunker", "1.0.0"),
@@ -169,7 +183,11 @@ fn main() -> Result<()> {
     ))?;
     let sub_resampler = runtime.add_processor(ProcessorSpec::new(
         schema_ident!("tatolab", "audio", "AudioResampler", "1.0.0"),
-        serde_json::json!({ "target_sample_rate": 44100 }),
+        serde_json::json!({
+            "source_sample_rate": 48000,
+            "target_sample_rate": 44100,
+            "quality": "High",
+        }),
     ))?;
     let sub_rechunker = runtime.add_processor(ProcessorSpec::new(
         schema_ident!("tatolab", "audio", "BufferRechunker", "1.0.0"),
