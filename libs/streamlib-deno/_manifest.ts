@@ -13,12 +13,15 @@
  * the host loads it; this reader only needs enough fields to validate
  * the decorator's short name and compose a structured `SchemaIdent`.
  *
- * Uses `@std/yaml` (Deno's standard library YAML parser) — no npm shim.
+ * Uses the npm `yaml` parser (declared as a registry dependency) rather
+ * than a `jsr:` import: the SDK is published to npm via `deno pack`, and
+ * Deno cannot resolve `jsr:` specifiers from inside a published npm
+ * package — so the wire-vocabulary deps must be plain npm / `node:`.
  *
  * @module
  */
 
-import { parse as parseYaml } from "@std/yaml";
+import { parse as parseYaml } from "yaml";
 
 /** Resolved `package:` block from streamlib.yaml. */
 export interface ManifestPackage {

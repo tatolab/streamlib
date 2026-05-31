@@ -5,9 +5,9 @@
     "jsr:@std/assert@^1.0.19": "1.0.19",
     "jsr:@std/internal@^1.0.12": "1.0.13",
     "jsr:@std/path@1": "1.1.4",
-    "jsr:@std/yaml@1": "1.1.0",
     "npm:@msgpack/msgpack@3.0.0-beta2": "3.0.0-beta2",
-    "npm:typegpu@0.8.2": "0.8.2"
+    "npm:typegpu@0.8.2": "0.8.2",
+    "npm:yaml@2": "2.9.0"
   },
   "jsr": {
     "@std/assert@1.0.19": {
@@ -24,9 +24,6 @@
       "dependencies": [
         "jsr:@std/internal"
       ]
-    },
-    "@std/yaml@1.1.0": {
-      "integrity": "fc1c5c63e05c4c5eb6118355f557958035d41940d6c29d35b306ef7155d6edb0"
     }
   },
   "npm": {
@@ -46,14 +43,18 @@
         "tinyest",
         "typed-binary"
       ]
+    },
+    "yaml@2.9.0": {
+      "integrity": "sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA==",
+      "bin": true
     }
   },
   "workspace": {
     "dependencies": [
       "jsr:@std/assert@^1.0.19",
       "jsr:@std/path@1",
-      "jsr:@std/yaml@1",
-      "npm:@msgpack/msgpack@3.0.0-beta2"
+      "npm:@msgpack/msgpack@3.0.0-beta2",
+      "npm:yaml@2"
     ]
   }
 }

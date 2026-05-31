@@ -43,7 +43,8 @@
  * @module
  */
 
-import { dirname, fromFileUrl, join } from "@std/path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   type ManifestSummary,
@@ -288,7 +289,7 @@ function locateSiblingManifest(
         `regular .ts module file.`,
     );
   }
-  const filePath = fromFileUrl(moduleUrl);
+  const filePath = fileURLToPath(moduleUrl);
   return join(dirname(filePath), "streamlib.yaml");
 }
 
