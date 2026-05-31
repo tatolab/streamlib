@@ -45,22 +45,18 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostSurfaceStoreExt, HostTextureExt};
 
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::context::{CpuReadbackBridge, CpuReadbackCopyDirection, GpuContext};
 use streamlib::sdk::descriptors::SchemaIdent;
-use streamlib::sdk::rhi::{PixelFormat, PixelBuffer, TextureFormat};
-use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::engine::host_rhi::{HostMarker, HostVulkanBuffer, HostVulkanTimelineSemaphore};
 use streamlib::sdk::error::Error;
-use streamlib::sdk::engine::host_rhi::{
-    HostMarker,
-    HostVulkanBuffer,
-    HostVulkanTimelineSemaphore,
-};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
+use streamlib::sdk::rhi::{PixelBuffer, PixelFormat, TextureFormat};
+use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
 use streamlib::sdk::schema_ident;
-use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
-use streamlib::sdk::RunnerAutoBuild;
 use streamlib_adapter_abi::{StreamlibSurface, SurfaceFormat, SurfaceId};
 use streamlib_adapter_cpu_readback::{
     CpuReadbackCopyTrigger, CpuReadbackSurfaceAdapter, HostSurfaceRegistration,
@@ -128,26 +124,23 @@ fn main() -> Result<()> {
 
     for a in args {
         if let Some(value) = a.strip_prefix("--runtime=") {
-            runtime_kind =
-                RuntimeKind::parse(value).map_err(Error::Configuration)?;
+            runtime_kind = RuntimeKind::parse(value).map_err(Error::Configuration)?;
         } else if let Some(value) = a.strip_prefix("--output=") {
             output_png = PathBuf::from(value);
         } else if let Some(value) = a.strip_prefix("--kernel-size=") {
-            kernel_size = value.parse().map_err(|e| {
-                Error::Configuration(format!("invalid --kernel-size: {e}"))
-            })?;
+            kernel_size = value
+                .parse()
+                .map_err(|e| Error::Configuration(format!("invalid --kernel-size: {e}")))?;
         } else if let Some(value) = a.strip_prefix("--sigma=") {
-            sigma = value.parse().map_err(|e| {
-                Error::Configuration(format!("invalid --sigma: {e}"))
-            })?;
+            sigma = value
+                .parse()
+                .map_err(|e| Error::Configuration(format!("invalid --sigma: {e}")))?;
         }
     }
 
     println!("=== Polyglot cpu-readback adapter scenario (#562) ===");
     println!("Runtime:     {}", runtime_kind.as_str());
-    println!(
-        "Surface:     {SURFACE_SIZE}x{SURFACE_SIZE} BGRA8 (id {SCENARIO_SURFACE_ID})"
-    );
+    println!("Surface:     {SURFACE_SIZE}x{SURFACE_SIZE} BGRA8 (id {SCENARIO_SURFACE_ID})");
     println!("Blur:        kernel={kernel_size} sigma={sigma}");
     println!("Output PNG:  {}", output_png.display());
     println!();
@@ -157,26 +150,22 @@ fn main() -> Result<()> {
     // Slot the setup hook will populate with the cpu-readback adapter
     // it constructs — main.rs reuses this Arc post-stop to read the
     // surface back for the output PNG.
-    let adapter_slot: Arc<Mutex<Option<Arc<HostAdapter>>>> =
-        Arc::new(Mutex::new(None));
+    let adapter_slot: Arc<Mutex<Option<Arc<HostAdapter>>>> = Arc::new(Mutex::new(None));
 
     {
         let adapter_slot = Arc::clone(&adapter_slot);
         runtime.install_setup_hook(move |gpu| {
             let host_device = Arc::clone(gpu.device().vulkan_device());
-            let trigger = Arc::new(InProcessCpuReadbackCopyTrigger::new(
+            let trigger = Arc::new(InProcessCpuReadbackCopyTrigger::new(Arc::clone(
+                &host_device,
+            ))) as Arc<dyn CpuReadbackCopyTrigger<HostMarker>>;
+            let adapter: Arc<HostAdapter> = Arc::new(CpuReadbackSurfaceAdapter::new(
                 Arc::clone(&host_device),
-            ))
-                as Arc<dyn CpuReadbackCopyTrigger<HostMarker>>;
-            let adapter: Arc<HostAdapter> = Arc::new(
-                CpuReadbackSurfaceAdapter::new(Arc::clone(&host_device), trigger),
-            );
+                trigger,
+            ));
 
-            register_host_surface(&adapter, gpu).map_err(|e| {
-                Error::Configuration(format!(
-                    "register_host_surface: {e}"
-                ))
-            })?;
+            register_host_surface(&adapter, gpu)
+                .map_err(|e| Error::Configuration(format!("register_host_surface: {e}")))?;
 
             upload_input_pattern(&adapter)?;
 
@@ -195,7 +184,13 @@ fn main() -> Result<()> {
 
     // Load the BgraFileSource processor from `@tatolab/debug-utilities`
     // built on demand from source by the orchestrator.
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "debug-utilities"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/debug-utilities"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(
+        module_ident_any_version!("tatolab", "debug-utilities"),
+        streamlib::sdk::runtime::Strategy::Registry {
+            version_req: streamlib::sdk::runtime::SemVerRange::Any,
+            build: streamlib::sdk::runtime::BuildPolicy::IfStale,
+        },
+    )?;
 
     // Load the polyglot processors via explicit add_module_with calls.
     // The Python and Deno sub-packages are example-local (siblings of
@@ -207,11 +202,17 @@ fn main() -> Result<()> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-cpu-readback-blur"),
-        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::IfStale },
+        Strategy::Path {
+            path: manifest_dir.join("python"),
+            build: BuildPolicy::IfStale,
+        },
     )?;
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-cpu-readback-blur-deno"),
-        Strategy::Path { path: manifest_dir.join("deno"), build: BuildPolicy::IfStale },
+        Strategy::Path {
+            path: manifest_dir.join("deno"),
+            build: BuildPolicy::IfStale,
+        },
     )?;
 
     // Trigger source: a tiny BGRA fixture that drives Videoframes
@@ -219,8 +220,7 @@ fn main() -> Result<()> {
     // invoked. Frame contents are unused (the polyglot processor works
     // on the pre-registered cpu-readback surface, not the trigger
     // frame's pixel buffer).
-    let fixture_path = write_trigger_fixture()
-        .map_err(Error::Configuration)?;
+    let fixture_path = write_trigger_fixture().map_err(Error::Configuration)?;
 
     let fixture_path_str = fixture_path
         .to_str()
@@ -252,7 +252,10 @@ fn main() -> Result<()> {
         OutputLinkPortRef::new(&source, "video"),
         InputLinkPortRef::new(&blur, "video_in"),
     )?;
-    println!("\nPipeline: BgraFileSource → {} blur\n", runtime_kind.as_str());
+    println!(
+        "\nPipeline: BgraFileSource → {} blur\n",
+        runtime_kind.as_str()
+    );
 
     println!("Starting pipeline...");
     runtime.start()?;
@@ -267,16 +270,9 @@ fn main() -> Result<()> {
     // Read the surface back through the adapter and write the output
     // PNG. Reading this PNG with the Read tool is the visual gate.
     println!("\nReading cpu-readback surface back through the adapter...");
-    let adapter = adapter_slot
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| {
-            Error::Runtime(
-                "cpu-readback adapter slot is empty — setup hook never ran"
-                    .into(),
-            )
-        })?;
+    let adapter = adapter_slot.lock().unwrap().clone().ok_or_else(|| {
+        Error::Runtime("cpu-readback adapter slot is empty — setup hook never ran".into())
+    })?;
     write_output_png(&adapter, &output_png)?;
     println!("✓ Output PNG written: {}", output_png.display());
 
@@ -319,9 +315,7 @@ impl CpuReadbackBridge for BridgeImpl {
         // a non-blocking flavor. Returning the blocking result is
         // safe because the bridge holds no per-surface lock; the
         // subprocess's adapter does its own contention tracking.
-        Ok(Some(
-            self.run_copy(surface_id, direction)?,
-        ))
+        Ok(Some(self.run_copy(surface_id, direction)?))
     }
 }
 
@@ -338,16 +332,15 @@ fn register_host_surface(
 
     // 1. Allocate the source render-target DMA-BUF VkImage.
     let stream_texture = gpu
-        .acquire_render_target_dma_buf_image(
-            SURFACE_SIZE,
-            SURFACE_SIZE,
-            TextureFormat::Bgra8Unorm,
-        )
+        .acquire_render_target_dma_buf_image(SURFACE_SIZE, SURFACE_SIZE, TextureFormat::Bgra8Unorm)
         .map_err(|e| format!("acquire_render_target_dma_buf_image: {e}"))?;
     let texture_arc = Arc::clone(stream_texture.vulkan_inner());
 
     // 2. Allocate the HOST_VISIBLE staging buffer (BGRA8 = 1 plane).
-    let staging = HostVulkanBuffer::new(host_device, (SURFACE_SIZE as u64) * (SURFACE_SIZE as u64) * (4 as u64))
+    let staging = HostVulkanBuffer::new(
+        host_device,
+        (SURFACE_SIZE as u64) * (SURFACE_SIZE as u64) * (4 as u64),
+    )
     .map_err(|e| format!("HostVulkanBuffer::new: {e}"))?;
     let staging_arc = Arc::new(staging);
     let staging_rhi = PixelBuffer::from_host_vulkan_buffer(
@@ -362,16 +355,14 @@ fn register_host_surface(
     //    single-writer edge per
     //    `docs/architecture/adapter-timeline-single-writer.md`.
     let produce_done = Arc::new(
-        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-            .map_err(|e| {
-                format!("HostVulkanTimelineSemaphore::new_exportable (produce_done): {e}")
-            })?,
+        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0).map_err(|e| {
+            format!("HostVulkanTimelineSemaphore::new_exportable (produce_done): {e}")
+        })?,
     );
     let consume_done = Arc::new(
-        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-            .map_err(|e| {
-                format!("HostVulkanTimelineSemaphore::new_exportable (consume_done): {e}")
-            })?,
+        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0).map_err(|e| {
+            format!("HostVulkanTimelineSemaphore::new_exportable (consume_done): {e}")
+        })?,
     );
 
     // 4. Register staging + timelines with the surface-share service so
@@ -426,9 +417,9 @@ fn upload_input_pattern(adapter: &Arc<HostAdapter>) -> Result<()> {
         SurfaceSyncState::default(),
     );
 
-    let mut guard = adapter.acquire_write(&surface).map_err(|e| {
-        Error::Configuration(format!("upload_input_pattern acquire: {e:?}"))
-    })?;
+    let mut guard = adapter
+        .acquire_write(&surface)
+        .map_err(|e| Error::Configuration(format!("upload_input_pattern acquire: {e:?}")))?;
 
     {
         let view = guard.view_mut();
@@ -477,10 +468,7 @@ fn write_trigger_fixture() -> std::result::Result<PathBuf, String> {
 /// a PNG (BGRA→RGBA channel swap to match PNG color order), write to
 /// `output`. The reader of this PNG is the visual gate that decides
 /// whether the polyglot subprocess actually applied the blur.
-fn write_output_png(
-    adapter: &Arc<HostAdapter>,
-    output: &std::path::Path,
-) -> Result<()> {
+fn write_output_png(adapter: &Arc<HostAdapter>, output: &std::path::Path) -> Result<()> {
     use std::fs::File;
     use std::io::BufWriter;
     use streamlib_adapter_abi::{
@@ -497,11 +485,9 @@ fn write_output_png(
         SurfaceSyncState::default(),
     );
 
-    let guard = adapter.acquire_read(&surface).map_err(|e| {
-        Error::Configuration(format!(
-            "acquire_read for output PNG: {e:?}"
-        ))
-    })?;
+    let guard = adapter
+        .acquire_read(&surface)
+        .map_err(|e| Error::Configuration(format!("acquire_read for output PNG: {e:?}")))?;
 
     let view = guard.view();
     let plane = view.plane(0);
@@ -515,10 +501,7 @@ fn write_output_png(
     }
 
     let file = File::create(output).map_err(|e| {
-        Error::Configuration(format!(
-            "create output PNG {}: {e}",
-            output.display()
-        ))
+        Error::Configuration(format!("create output PNG {}: {e}", output.display()))
     })?;
     let mut encoder = png::Encoder::new(BufWriter::new(file), SURFACE_SIZE, SURFACE_SIZE);
     encoder.set_color(png::ColorType::Rgba);
