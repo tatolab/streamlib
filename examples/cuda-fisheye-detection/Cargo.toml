@@ -8,9 +8,10 @@ edition = "2024"
 publish = false
 
 [dependencies]
-streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
-streamlib-adapter-abi = { path = "../../libs/streamlib-adapter-abi", version = "0.4.30", registry = "gitea" }
-streamlib-adapter-cuda = { path = "../../libs/streamlib-adapter-cuda", version = "0.4.30", registry = "gitea" }
-streamlib-debug-utilities = { path = "../../packages/debug-utilities", version = "0.4.30", registry = "gitea" }
+streamlib = { version = "0.4.33-dev.5", registry = "gitea" }
+streamlib-adapter-abi = { version = "0.4.33-dev.5", registry = "gitea" }
+streamlib-adapter-cuda = { version = "0.4.33-dev.5", registry = "gitea" }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 serde_json = "1.0"
+
+[workspace]

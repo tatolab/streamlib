@@ -36,11 +36,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::descriptors::SchemaIdent;
 use streamlib::sdk::engine::host_rhi::{
-    HostMarker, HostVulkanBuffer, HostVulkanTexture, HostVulkanTimelineSemaphore,
-    ImageCopyRegion, RhiCommandRecorder, VulkanAccess, VulkanStage,
+    HostMarker, HostVulkanBuffer, HostVulkanTexture, HostVulkanTimelineSemaphore, ImageCopyRegion,
+    RhiCommandRecorder, VulkanAccess, VulkanStage,
 };
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostSurfaceStoreExt, HostTextureExt};
 use streamlib::sdk::error::{Error, Result};
@@ -48,11 +49,9 @@ use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::rhi::{StorageBuffer, Texture, TextureDescriptor, TextureFormat, VulkanLayout};
-use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
-use streamlib::sdk::RunnerAutoBuild;
+use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
 use streamlib_adapter_abi::SurfaceId;
 use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostImageSurfaceRegistration};
-use streamlib_debug_utilities::BgraFileSourceProcessor;
 
 /// Host-assigned surface id the python processor receives via config
 /// and threads through `CudaContext.acquire_texture`.
@@ -105,9 +104,9 @@ fn main() -> Result<()> {
         if let Some(value) = a.strip_prefix("--output=") {
             output_png = PathBuf::from(value);
         } else if let Some(value) = a.strip_prefix("--timeout-secs=") {
-            timeout_secs = value.parse().map_err(|e| {
-                Error::Configuration(format!("invalid --timeout-secs: {e}"))
-            })?;
+            timeout_secs = value
+                .parse()
+                .map_err(|e| Error::Configuration(format!("invalid --timeout-secs: {e}")))?;
         }
     }
 
@@ -136,9 +135,8 @@ fn main() -> Result<()> {
             let adapter: Arc<HostAdapter> =
                 Arc::new(CudaSurfaceAdapter::new(Arc::clone(&host_device)));
 
-            register_warped_host_surface(&adapter, gpu, &output_png_for_hook).map_err(|e| {
-                Error::Configuration(format!("register_warped_host_surface: {e}"))
-            })?;
+            register_warped_host_surface(&adapter, gpu, &output_png_for_hook)
+                .map_err(|e| Error::Configuration(format!("register_warped_host_surface: {e}")))?;
 
             *adapter_slot.lock().unwrap() = Some(adapter);
             println!(
@@ -149,16 +147,29 @@ fn main() -> Result<()> {
         });
     }
 
+    // Resolve `@tatolab/debug-utilities` (the BgraFileSource trigger) from the
+    // Gitea registry by version.
+    runtime.add_module_with_blocking(
+        module_ident_any_version!("tatolab", "debug-utilities"),
+        streamlib::sdk::runtime::Strategy::Registry {
+            version_req: streamlib::sdk::runtime::SemVerRange::Any,
+            build: BuildPolicy::IfStale,
+        },
+    )?;
+
     // Load the Python sub-package via an explicit add_module_with
     // call. The Python sub-package is example-local (sibling of this
     // example crate) and not workspace-staged, so it's resolved by
     // its manifest directory. The recursive dep walker follows the
-    // sub-package's own dependencies (`@tatolab/core` patched to
-    // `../../../packages/core`).
+    // sub-package's own dependencies (`@tatolab/core` resolved from the
+    // registry by version).
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "cuda-fisheye-python"),
-        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::IfStale },
+        Strategy::Path {
+            path: manifest_dir.join("python"),
+            build: BuildPolicy::IfStale,
+        },
     )?;
 
     // Trigger source — emits a tiny BGRA fixture frame whose contents
@@ -166,19 +177,17 @@ fn main() -> Result<()> {
     // pre-registered cuda OPAQUE_FD surface, not the trigger frame's
     // pixel buffer. Same shape as `polyglot-cuda-inference`.
     let fixture_path = write_trigger_fixture().map_err(Error::Configuration)?;
-    let source = runtime.add_processor(BgraFileSourceProcessor::Processor::node(
-        BgraFileSourceProcessor::Config {
-            file_path: fixture_path
+    let source = runtime.add_processor(ProcessorSpec::new(
+        streamlib::sdk::schema_ident_any_version!("tatolab", "debug-utilities", "BgraFileSource")?,
+        serde_json::json!({
+            "file_path": fixture_path
                 .to_str()
-                .ok_or_else(|| {
-                    Error::Configuration("fixture path has non-utf8 component".into())
-                })?
-                .to_string(),
-            width: 4,
-            height: 4,
-            fps: 5,
-            frame_count: 3,
-        },
+                .ok_or_else(|| Error::Configuration("fixture path has non-utf8 component".into()))?,
+            "width": 4,
+            "height": 4,
+            "fps": 5,
+            "frame_count": 3,
+        }),
     ))?;
     println!("+ BgraFileSource: {source}");
 
@@ -215,19 +224,18 @@ fn main() -> Result<()> {
     println!("Starting pipeline...");
     runtime.start()?;
 
-    println!(
-        "Waiting up to {timeout_secs}s for the polyglot processor to finish..."
-    );
+    println!("Waiting up to {timeout_secs}s for the polyglot processor to finish...");
     std::thread::sleep(Duration::from_secs(timeout_secs));
 
     println!("Stopping pipeline...");
     runtime.stop()?;
 
     let adapter_alive = adapter_slot.lock().unwrap().is_some();
+    println!("\n✓ Scenario complete. Adapter held alive through stop: {adapter_alive}");
     println!(
-        "\n✓ Scenario complete. Adapter held alive through stop: {adapter_alive}"
+        "Inspect the output PNG with the Read tool: {}",
+        output_png.display()
     );
-    println!("Inspect the output PNG with the Read tool: {}", output_png.display());
 
     Ok(())
 }
@@ -316,11 +324,7 @@ fn register_warped_host_surface(
     // we hold the sole reference to it. No other writer can race the
     // pre-upload memcpy.
     unsafe {
-        std::ptr::copy_nonoverlapping(
-            warped_rgba.as_ptr(),
-            staging_host.mapped_ptr(),
-            byte_count,
-        );
+        std::ptr::copy_nonoverlapping(warped_rgba.as_ptr(), staging_host.mapped_ptr(), byte_count);
     }
     let staging = StorageBuffer::from_host_vulkan_buffer(Arc::new(staging_host));
 
@@ -329,7 +333,8 @@ fn register_warped_host_surface(
     //    the host RHI constructor enforces the same gate, so passing
     //    a non-CUDA-mappable `TextureFormat` fails here, not late at
     //    the cdylib's `cudaExternalMemoryGetMappedMipmappedArray` call.
-    let texture_descriptor = TextureDescriptor::new(SURFACE_WIDTH, SURFACE_HEIGHT, TextureFormat::Rgba8Unorm);
+    let texture_descriptor =
+        TextureDescriptor::new(SURFACE_WIDTH, SURFACE_HEIGHT, TextureFormat::Rgba8Unorm);
     let host_texture = HostVulkanTexture::new_opaque_fd_export(host_device, &texture_descriptor)
         .map_err(|e| format!("HostVulkanTexture::new_opaque_fd_export: {e}"))?;
     let texture: Texture = Texture::from_vulkan(host_texture);
@@ -341,16 +346,14 @@ fn register_warped_host_surface(
     //    which is satisfied immediately. Each release advances the
     //    edge's writer-side counter by 1.
     let produce_done = Arc::new(
-        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-            .map_err(|e| {
-                format!("HostVulkanTimelineSemaphore::new_exportable (produce_done): {e}")
-            })?,
+        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0).map_err(|e| {
+            format!("HostVulkanTimelineSemaphore::new_exportable (produce_done): {e}")
+        })?,
     );
     let consume_done = Arc::new(
-        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-            .map_err(|e| {
-                format!("HostVulkanTimelineSemaphore::new_exportable (consume_done): {e}")
-            })?,
+        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0).map_err(|e| {
+            format!("HostVulkanTimelineSemaphore::new_exportable (consume_done): {e}")
+        })?,
     );
 
     // 6. One-shot upload + layout transition via the canonical
@@ -361,7 +364,9 @@ fn register_warped_host_surface(
     //    one-shot setup path, not a per-frame hot path.
     let mut recorder = RhiCommandRecorder::new(host_device, "cuda-fisheye-upload")
         .map_err(|e| format!("RhiCommandRecorder::new: {e}"))?;
-    recorder.begin().map_err(|e| format!("recorder.begin(): {e}"))?;
+    recorder
+        .begin()
+        .map_err(|e| format!("recorder.begin(): {e}"))?;
     recorder
         .record_image_barrier(
             &texture,
@@ -443,7 +448,7 @@ fn register_warped_host_surface(
 /// parking lot — many cars and boats, drone-perspective, YOLOv8n-
 /// detectable) and cache the JPG for subsequent runs.
 fn load_resized_test_image_rgba(width: u32, height: u32) -> std::result::Result<Vec<u8>, String> {
-    use image::{imageops::FilterType, GenericImageView};
+    use image::{GenericImageView, imageops::FilterType};
 
     let jpg_path = cache_subpath("dota8-marina.jpg")?;
     if !jpg_path.exists() {
@@ -477,13 +482,14 @@ fn load_resized_test_image_rgba(width: u32, height: u32) -> std::result::Result<
         }
     }
 
-    let img = image::open(&jpg_path)
-        .map_err(|e| format!("image::open({}): {e}", jpg_path.display()))?;
+    let img =
+        image::open(&jpg_path).map_err(|e| format!("image::open({}): {e}", jpg_path.display()))?;
     let (src_w, src_h) = img.dimensions();
     let resized = if src_w == width && src_h == height {
         img.to_rgba8()
     } else {
-        img.resize_exact(width, height, FilterType::Triangle).to_rgba8()
+        img.resize_exact(width, height, FilterType::Triangle)
+            .to_rgba8()
     };
     Ok(resized.into_raw())
 }
@@ -543,13 +549,7 @@ fn download_to_file(url: &str, dst: &std::path::Path) -> std::result::Result<(),
 /// radius). Negative coefficients pull samples toward the center —
 /// the classic barrel/fisheye look. Bilinear sampling; pixels that
 /// would sample outside the source bounds emit transparent black.
-fn apply_fisheye_warp(
-    source: &[u8],
-    width: u32,
-    height: u32,
-    k1: f32,
-    k2: f32,
-) -> Vec<u8> {
+fn apply_fisheye_warp(source: &[u8], width: u32, height: u32, k1: f32, k2: f32) -> Vec<u8> {
     let w = width as usize;
     let h = height as usize;
     let cx = (width as f32 - 1.0) * 0.5;
