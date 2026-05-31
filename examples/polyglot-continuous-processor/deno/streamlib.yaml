@@ -1,17 +1,13 @@
-# yaml-language-server: $schema=../../../schemas/streamlib.schema.json
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
 package:
   org: tatolab
   name: polyglot-continuous-processor-deno
   version: "0.1.0"
-  description: "Polyglot continuous processor (#542) — Deno process() driven by monotonic-clock timerfd"
+  description: "Polyglot continuous processor — Deno process() driven by monotonic-clock timerfd"
 
 dependencies:
   "@tatolab/core": "^1.0.0"
-
-# Dev-time path override; `streamlib pack` rejects this (#717).
-patch:
-  "@tatolab/core":
-    path: ../../../packages/core
 
 processors:
   - name: PolyglotContinuousProcessor
