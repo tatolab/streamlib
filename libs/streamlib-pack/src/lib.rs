@@ -465,11 +465,21 @@ fn cargo_path_dep_names(doc: &toml::Value) -> Vec<String> {
 /// `_generated_` is the JTD-codegen wire vocabulary (Python
 /// `<pkg>/_generated_/`): a build artifact regenerated per-consumer at
 /// install time from the package's schemas, never shipped as source.
+///
+/// `Cargo.lock` is stripped too: a streamlib package is a cdylib *library*,
+/// and a library's lockfile is neither published nor honored by a downstream
+/// build. Shipping it is actively harmful in the registry model — the lock
+/// pins transitive deps (incl. the streamlib SDK) by exact version+checksum,
+/// so an in-place republish of any pinned version makes the lock's checksum
+/// stale and `cargo build` aborts with "checksum changed between lock files".
+/// The consumer re-resolves from the registry by the manifest's version reqs;
+/// the lock is pure byproduct (already gitignored).
 pub fn is_non_source_artifact(name: &std::ffi::OsStr) -> bool {
     match name.to_str() {
         Some(
             "target" | "lib" | ".git" | "node_modules" | "__pycache__"
             | "_generated_" | ".streamlib-build.json" | ".venv" | "venv"
+            | "Cargo.lock"
             | ".mypy_cache" | ".pytest_cache" | ".ruff_cache" | ".tox" | ".DS_Store",
         ) => true,
         Some(s) => s.ends_with(".slpkg") || s.ends_with(".egg-info") || s.ends_with(".pyc"),
@@ -1002,6 +1012,37 @@ mod tests {
         assert!(
             !entries.iter().any(|e| e.contains("_generated_")),
             "generated wire vocabulary must be stripped, got {entries:?}"
+        );
+    }
+
+    #[test]
+    fn cargo_lock_is_stripped_from_collected_source() {
+        // A streamlib package is a cdylib library; shipping its Cargo.lock
+        // breaks the consumer's build when a pinned dep is republished (the
+        // lock's checksum goes stale → "checksum changed between lock files").
+        // Revert the is_non_source_artifact entry and the lock leaks into the
+        // .slpkg, reproducing exactly that failure at materialize time.
+        use std::ffi::OsStr;
+        assert!(
+            is_non_source_artifact(OsStr::new("Cargo.lock")),
+            "Cargo.lock must be a non-source artifact"
+        );
+
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), b"[package]\nname=\"p\"\nversion=\"0.1.0\"\n")
+            .unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), b"// src").unwrap();
+        std::fs::write(dir.path().join("Cargo.lock"), b"# stale lock\n").unwrap();
+
+        let mut files = Vec::new();
+        collect_source_tree(dir.path(), &mut files).unwrap();
+        let names: Vec<&str> = files.iter().map(|(rel, _)| rel.as_str()).collect();
+        assert!(names.contains(&"Cargo.toml"), "manifest must ship: {names:?}");
+        assert!(names.iter().any(|n| n.contains("lib.rs")), "src must ship: {names:?}");
+        assert!(
+            !names.iter().any(|n| n.contains("Cargo.lock")),
+            "Cargo.lock must be stripped from shipped source: {names:?}"
         );
     }
 
