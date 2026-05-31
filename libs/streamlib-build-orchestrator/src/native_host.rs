@@ -154,6 +154,25 @@ pub(crate) fn ensure_native_host(
     extract_crate_tarball(&crate_bytes, &build_root)
         .map_err(|e| build_failed(runtime.crate_name(), format!("extracting .crate: {e}")))?;
 
+    // The crate is extracted under `<home>/.streamlib/cache/native-build/`,
+    // which may itself sit inside a cargo workspace — e.g. when the streamlib
+    // home is the repo root during an in-tree example run. Declare the
+    // extracted crate its own workspace root so cargo doesn't treat it as a
+    // member of that outer workspace (the published manifest has no
+    // `[workspace]`, so cargo would otherwise walk up, find the repo's, and
+    // fail: "current package believes it's in a workspace when it's not").
+    {
+        let manifest = crate_dir.join("Cargo.toml");
+        let mut toml = std::fs::read_to_string(&manifest)
+            .map_err(|e| other(runtime.crate_name(), format!("read extracted Cargo.toml: {e}")))?;
+        if !toml.contains("[workspace]") {
+            toml.push_str("\n[workspace]\n");
+            std::fs::write(&manifest, &toml).map_err(|e| {
+                other(runtime.crate_name(), format!("write standalone Cargo.toml: {e}"))
+            })?;
+        }
+    }
+
     // 3. Build standalone. The published manifest carries inline
     //    `registry-index` on its Gitea deps, so dep resolution needs no
     //    `.cargo/config.toml`. `run_cargo_build` runs `cargo build -p <crate>`
