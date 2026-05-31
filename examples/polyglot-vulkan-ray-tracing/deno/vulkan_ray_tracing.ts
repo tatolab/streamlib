@@ -30,8 +30,8 @@ import {
   type ReactiveProcessor,
   type RuntimeContextFullAccess,
   type RuntimeContextLimitedAccess,
-} from "../../../libs/streamlib-deno/mod.ts";
-import { VulkanContext } from "../../../libs/streamlib-deno/adapters/vulkan.ts";
+} from "streamlib";
+import { VulkanContext } from "streamlib/adapters/vulkan.ts";
 
 function hexToBytes(hex: string): Uint8Array {
   const out = new Uint8Array(hex.length / 2);

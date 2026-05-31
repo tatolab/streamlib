@@ -32,6 +32,12 @@ import {
 } from "./escalate_fd.ts";
 import * as clock from "./clock.ts";
 import * as log from "./log.ts";
+import {
+  assertEngineCompatible,
+  engineProtocolFromEnv,
+  ProtocolMismatchError,
+  PROTOCOL_VERSION,
+} from "./_protocol.ts";
 import type {
   ContinuousProcessor,
   ManualProcessor,
@@ -175,6 +181,22 @@ async function main(): Promise<void> {
 
   if (!entrypoint) {
     fatalPreInstall("STREAMLIB_ENTRYPOINT not set");
+  }
+
+  // Protocol handshake (engine → SDK direction). The engine advertises its
+  // subprocess protocol version via the environment; refuse to run — before
+  // loading the native lib or touching the bridge — if this installed SDK
+  // can't speak it. This replaces the old compatibility-by-injection
+  // guarantee now that the SDK is resolved from a registry by version. The
+  // SDK → engine direction is validated host-side from the `protocol_version`
+  // echoed in the `ready` response below.
+  try {
+    assertEngineCompatible(engineProtocolFromEnv());
+  } catch (e) {
+    if (e instanceof ProtocolMismatchError) {
+      fatalPreInstall(`subprocess protocol handshake failed: ${e.message}`);
+    }
+    throw e;
   }
 
   // Escalate channel — requests from the TS processor go out on stdout,
@@ -461,7 +483,12 @@ async function main(): Promise<void> {
               await processor.setup(fullCtx);
             }
 
-            await bridgeSendJson({ rpc: "ready" });
+            // Echo this SDK's protocol version so the host can validate the
+            // SDK → engine direction of the handshake.
+            await bridgeSendJson({
+              rpc: "ready",
+              protocol_version: PROTOCOL_VERSION,
+            });
           } catch (e) {
             log.error("Setup failed", { error: String(e) });
             await bridgeSendJson({ rpc: "error", error: String(e) });

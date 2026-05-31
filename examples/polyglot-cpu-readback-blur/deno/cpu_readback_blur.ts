@@ -31,8 +31,8 @@ import {
   type ReactiveProcessor,
   type RuntimeContextFullAccess,
   type RuntimeContextLimitedAccess,
-} from "../../../libs/streamlib-deno/mod.ts";
-import { CpuReadbackContext } from "../../../libs/streamlib-deno/adapters/cpu_readback.ts";
+} from "streamlib";
+import { CpuReadbackContext } from "streamlib/adapters/cpu_readback.ts";
 
 @processor("CpuReadbackBlurProcessor", import.meta.url)
 export default class CpuReadbackBlurProcessor implements ReactiveProcessor {

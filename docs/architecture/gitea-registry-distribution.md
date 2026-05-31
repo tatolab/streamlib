@@ -87,7 +87,7 @@ streamlib-engine = { path = "../streamlib-engine", version = "0.4.30", registry 
 - The repo `.cargo/config.toml` declares `[registries.gitea]`; read is
   anonymous (publish needs a token).
 
-### Python (shipped) / Deno (finalized in #1118)
+### Python / Deno
 
 - Python: a package **declares** `streamlib` like any dependency; the build
   orchestrator provisions a **per-package venv** as the tail of `materialize`
@@ -109,9 +109,28 @@ streamlib-engine = { path = "../streamlib-engine", version = "0.4.30", registry 
   on mismatch — the replacement for the old compatibility-by-injection
   guarantee. The engine satisfies a range (`MIN..=CURRENT`), so a newer engine
   keeps accepting SDKs that speak an older-but-supported protocol.
-- Deno: a stable bare `import "streamlib"` resolves from Gitea's npm registry
-  (`.npmrc`) or a container-level import map — no relative `../../../libs/...`.
-  The same protocol-version handshake coordinate applies to the Deno SDK.
+- Deno: a package's `deno.json` **declares** `streamlib`
+  (`npm:@tatolab/streamlib-deno@^0.4`) and a sibling `.npmrc` points the
+  `@tatolab` scope at Gitea's npm registry (read is anonymous; the localhost
+  URL is the dev default, overridden for a hosted backend). A processor then
+  imports a stable bare `import "streamlib"` / `import "streamlib/adapters/…"`
+  — no relative `../../../libs/...`. The engine launches the SDK's runner the
+  same way (`deno run --config <package>/deno.json
+  streamlib/subprocess_runner.ts`), so the runner and the processor resolve
+  the same registry-pinned SDK; there is no workspace path and no env
+  path-injection escape hatch (parity with the Python venv loop — dev
+  iteration is publish-a-dev-version + bump the declared `streamlib`). Unlike
+  the source-shipping cargo/pypi SDKs, the **npm artifact is built JS + `.d.ts`**
+  (produced by `deno pack` — `scripts/gitea/publish-deno-sdk.sh`): Deno cannot
+  consume a `.ts` package through the `npm:` protocol (node_modules forbids
+  type-stripping and `jsr:` schemes), so the npm idiom of shipping transpiled
+  JS applies. The SDK source is therefore kept free of `jsr:` deps (`node:`
+  builtins + plain npm deps), and the protocol-locked escalate wire-vocabulary
+  is regenerated and baked into the published JS (there is no post-install
+  codegen hook for an npm consumer the way Python regenerates into its venv).
+  The same protocol-version handshake coordinate
+  (`STREAMLIB_SUBPROCESS_PROTOCOL_VERSION` ↔ the SDK's `PROTOCOL_VERSION`)
+  applies to the Deno SDK.
 
 ### vulkanalia fork
 
@@ -246,7 +265,7 @@ Notes the scripts encode:
 | cargo-publish manifest path-strip *wiring* (dev-publish script + manifest migration) | ✅ shipped | #1105 |
 | full-engine codegen consumer build (engine `build.rs` resolves `@tatolab/escalate` from the generic registry) | ✅ shipped | #1105 |
 | Python SDK publish (source-only) + declare/install-from-registry, protocol-version handshake, codegen-into-venv | ✅ shipped | #1117 |
-| Deno SDK publish | ⏳ | #1118 |
+| Deno SDK publish (built JS via `deno pack`) + declare/resolve-from-npm, protocol-version handshake | ✅ shipped | #1118 |
 | packages as source-only `.slpkg` + `streamlib pack` source-only | ⏳ | #1119 |
 | repo migration committed (`{ path, version, registry }`, `.cargo/config`, dev-publish script) | ✅ shipped | #1105 |
 

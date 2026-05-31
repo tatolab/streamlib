@@ -37,8 +37,8 @@ import {
   type ReactiveProcessor,
   type RuntimeContextFullAccess,
   type RuntimeContextLimitedAccess,
-} from "../../../libs/streamlib-deno/mod.ts";
-import { CudaContext } from "../../../libs/streamlib-deno/adapters/cuda.ts";
+} from "streamlib";
+import { CudaContext } from "streamlib/adapters/cuda.ts";
 
 interface CudaInferenceConfig {
   cuda_surface_id: bigint | number;

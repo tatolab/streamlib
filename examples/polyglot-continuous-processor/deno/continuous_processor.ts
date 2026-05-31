@@ -31,7 +31,7 @@ import {
   processor,
   type RuntimeContextFullAccess,
   type RuntimeContextLimitedAccess,
-} from "../../../libs/streamlib-deno/mod.ts";
+} from "streamlib";
 
 @processor("PolyglotContinuousProcessor", import.meta.url)
 export default class PolyglotContinuousProcessor

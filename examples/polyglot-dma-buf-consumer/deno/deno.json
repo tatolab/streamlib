@@ -3,6 +3,8 @@
     "setup": "cd ../../.. && cargo run --release --quiet -p streamlib-cli -- generate --runtime typescript --project-dir examples/polyglot-dma-buf-consumer/deno --output examples/polyglot-dma-buf-consumer/deno/_generated_"
   },
   "imports": {
+    "streamlib": "npm:@tatolab/streamlib-deno@^0.4",
+    "streamlib/": "npm:/@tatolab/streamlib-deno@^0.4/",
     "@msgpack/msgpack": "npm:@msgpack/msgpack@3.0.0-beta2"
   }
 }
