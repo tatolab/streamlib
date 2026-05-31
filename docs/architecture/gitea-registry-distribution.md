@@ -140,18 +140,39 @@ Gitea and resolved by `{ version, registry = "gitea" }`. The workspace's
 shares crates.io version numbers, so the `registry` annotation (not a distinct
 version) is what selects the fork over upstream.
 
-## Packages: source-only `.slpkg`s (finalized in #1119)
+## Packages: source-only `.slpkg`s
 
-`streamlib pack` produces **source-only** `.slpkg`s — the prebuilt per-triple
-cdylib it bundles today is dropped, because a package is polyglot and source
-is the uniform shape. Every `packages/*` is published as a source `.slpkg` to
-Gitea's generic registry under `tatolab`. A host `add_module`s one, and its
-rust/python/deno code builds on the host resolving the SDK libraries from
-Gitea by version.
+`streamlib pkg build` / `streamlib pkg publish` produce **source-only**
+`.slpkg`s — no prebuilt per-triple cdylib, because a package is polyglot and
+source is the uniform shape. The `Slpkg` assemble target ships source only
+(`streamlib-pack`); only the runtime orchestrator's `StagedDir` target
+compiles a cdylib, because that materialization *is* the host build. Every
+`packages/*` is published as a source `.slpkg` to Gitea's generic registry
+under `tatolab` (`scripts/gitea/publish-packages.sh` loops the set, shelling
+out to `streamlib pkg publish`). A host `add_module`s one via
+`Strategy::Registry`, and its rust/python/deno code builds on the host
+resolving the SDK libraries from Gitea by version.
 
-> Trade-off to confirm in #1119: a source-only `.slpkg` requires a toolchain
-> on the consuming host to build the rust cdylib — weigh against the
-> compiler-free-deployment goal.
+A source-only `.slpkg` requires a Rust toolchain on the consuming host to
+build the cdylib — the accepted trade-off for the polyglot/uniform-source
+shape; compiler-free deployment is a separate prebuilt-distribution concern,
+not the package-registry path.
+
+### Anonymous version index
+
+Reads are tokenless, matching cargo's sparse index. The generic registry has
+no native version-listing query — Gitea's `/api/v1/packages` management API
+`401`s anonymously — so each publish writes a **cargo-sparse-shaped version
+index** as a plain generic file at
+`/api/packages/{org}/generic/{name}/index/index.json` (NDJSON, one
+`{"name","vers"}` line per version), anonymously downloadable like any
+generic file. `streamlib pkg publish` recomputes that index from the authed
+management listing unioned with the just-published version — every publish
+rewrites the full correct index, so a stale or missing index self-heals on
+the next publish. `streamlib_idents`' resolver lists versions by reading the
+index (`list_versions_http`); the management API is used only on the publish
+path. Generic *download* was already anonymous, so the whole read path (list
++ download) is tokenless and the registry token is publish-only.
 
 ## Schema-package resolution (resolver + strip capability + cargo-publish wiring shipped)
 
@@ -160,10 +181,11 @@ packages — they resolve from Gitea's **generic** registry: list the schema
 package's versions, select the highest satisfying the declared semver range,
 fetch that version's `.slpkg`, extract, resolve. The flat generic registry
 has no semver-range query, so range → concrete version happens client-side
-(cargo/npm/pip shape) via Gitea's package-management API
-(`GET /api/v1/packages/{org}?type=generic`), and the resolved concrete
-version is pinned in `streamlib.lock` via `ResolvedSource::Registry`. Two
-halves, mirroring cargo:
+(cargo/npm/pip shape) by reading the package's anonymous version index
+(`/api/packages/{org}/generic/{name}/index/index.json`, see [Anonymous
+version index](#anonymous-version-index)), and the resolved concrete version
+is pinned in `streamlib.lock` via `ResolvedSource::Registry`. Two halves,
+mirroring cargo:
 
 1. **Consume side:** `streamlib-idents`' resolver implements the `Registry`
    arm — list → select-highest-in-range → fetch + `extract_slpkg` → load. The
@@ -266,7 +288,7 @@ Notes the scripts encode:
 | full-engine codegen consumer build (engine `build.rs` resolves `@tatolab/escalate` from the generic registry) | ✅ shipped | #1105 |
 | Python SDK publish (source-only) + declare/install-from-registry, protocol-version handshake, codegen-into-venv | ✅ shipped | #1117 |
 | Deno SDK publish (built JS via `deno pack`) + declare/resolve-from-npm, protocol-version handshake | ✅ shipped | #1118 |
-| packages as source-only `.slpkg` + `streamlib pack` source-only | ⏳ | #1119 |
+| packages as source-only `.slpkg` (`streamlib pkg build`/`publish`, bulk publish script) + anonymous version index (tokenless read) | ✅ shipped | #1119 |
 | repo migration committed (`{ path, version, registry }`, `.cargo/config`, dev-publish script) | ✅ shipped | #1105 |
 
 ## Reference
