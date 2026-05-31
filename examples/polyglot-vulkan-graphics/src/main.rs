@@ -36,67 +36,37 @@ use std::time::Duration;
 use streamlib::sdk::engine::HostGpuDeviceExt;
 use streamlib::sdk::engine::HostSurfaceStoreExt;
 
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::context::{
-    BlendFactorWire,
-    BlendOpWire,
-    CullModeWire,
-    DynamicStateWire,
-    FrontFaceWire,
-    GraphicsBindingDecl,
-    GraphicsKernelBridge,
-    GraphicsKernelRegisterDecl,
-    GraphicsKernelRunDraw,
-    GraphicsPipelineStateWire,
-    PolygonModeWire,
-    PrimitiveTopologyWire,
+    BlendFactorWire, BlendOpWire, CullModeWire, DynamicStateWire, FrontFaceWire,
+    GraphicsBindingDecl, GraphicsKernelBridge, GraphicsKernelRegisterDecl, GraphicsKernelRunDraw,
+    GraphicsPipelineStateWire, PolygonModeWire, PrimitiveTopologyWire,
 };
 use streamlib::sdk::descriptors::SchemaIdent;
-use streamlib::sdk::rhi::{
-    AttachmentFormats,
-    ColorBlendState,
-    ColorWriteMask,
-    DepthStencilState,
-    GraphicsBindingSpec,
-    GraphicsDynamicState,
-    GraphicsKernelDescriptor,
-    GraphicsPipelineState,
-    GraphicsPushConstants,
-    GraphicsShaderStage,
-    GraphicsShaderStageFlags,
-    GraphicsStage,
-    MultisampleState,
-    PrimitiveTopology,
-    RasterizationState,
-    Texture,
-    TextureFormat,
-    TextureReadbackDescriptor,
-    TextureSourceLayout,
-    VertexInputState,
-};
-use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::error::Error;
 use streamlib::sdk::engine::host_rhi::{
-    HostVulkanDevice,
-    HostVulkanTimelineSemaphore,
-    OffscreenColorTarget,
-    OffscreenDraw,
-    VulkanGraphicsKernel,
-    VulkanTextureReadback,
+    HostVulkanDevice, HostVulkanTimelineSemaphore, OffscreenColorTarget, OffscreenDraw,
+    VulkanGraphicsKernel, VulkanTextureReadback,
 };
+use streamlib::sdk::error::Error;
+use streamlib::sdk::error::Result;
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
+use streamlib::sdk::rhi::{
+    AttachmentFormats, ColorBlendState, ColorWriteMask, DepthStencilState, GraphicsBindingSpec,
+    GraphicsDynamicState, GraphicsKernelDescriptor, GraphicsPipelineState, GraphicsPushConstants,
+    GraphicsShaderStage, GraphicsShaderStageFlags, GraphicsStage, MultisampleState,
+    PrimitiveTopology, RasterizationState, Texture, TextureFormat, TextureReadbackDescriptor,
+    TextureSourceLayout, VertexInputState,
+};
+use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
 use streamlib::sdk::schema_ident;
-use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
-use streamlib::sdk::RunnerAutoBuild;
 
 /// Compiled SPIR-V for the triangle vertex shader.
-const TRIANGLE_VERT_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/triangle.vert.spv"));
+const TRIANGLE_VERT_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/triangle.vert.spv"));
 
 /// Compiled SPIR-V for the triangle fragment shader.
-const TRIANGLE_FRAG_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/triangle.frag.spv"));
+const TRIANGLE_FRAG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/triangle.frag.spv"));
 
 /// UUID the host registers the render-target surface under.
 const SCENARIO_SURFACE_UUID: &str = "00000000-0000-0000-0000-0000000006a1";
@@ -163,10 +133,7 @@ struct TriangleKernelBridge {
 }
 
 impl TriangleKernelBridge {
-    fn new(
-        device: Arc<HostVulkanDevice>,
-        surfaces: Vec<(String, Texture)>,
-    ) -> Self {
+    fn new(device: Arc<HostVulkanDevice>, surfaces: Vec<(String, Texture)>) -> Self {
         Self {
             device,
             surfaces: surfaces.into_iter().collect(),
@@ -310,9 +277,7 @@ fn build_pipeline_state(
         ));
     }
     if p.attachment_depth_format.is_some() || p.depth_stencil_enabled {
-        return Err(
-            "depth attachments are not supported in v1 of the bridge".into(),
-        );
+        return Err("depth attachments are not supported in v1 of the bridge".into());
     }
     if !p.vertex_input_bindings.is_empty() || !p.vertex_input_attributes.is_empty() {
         // The triangle example uses gl_VertexIndex (no vertex buffers); a
@@ -325,10 +290,7 @@ fn build_pipeline_state(
     }
 
     let color_blend = if p.color_blend_enabled {
-        let mask = ColorWriteMask::R
-            | ColorWriteMask::G
-            | ColorWriteMask::B
-            | ColorWriteMask::A;
+        let mask = ColorWriteMask::R | ColorWriteMask::G | ColorWriteMask::B | ColorWriteMask::A;
         ColorBlendState::Enabled(ColorBlendAttachment {
             src_color_blend_factor: map_blend_factor(p.color_blend_src_color_factor),
             dst_color_blend_factor: map_blend_factor(p.color_blend_dst_color_factor),
@@ -413,10 +375,7 @@ impl FlagsFromBits for GraphicsShaderStageFlags {
 }
 
 impl GraphicsKernelBridge for TriangleKernelBridge {
-    fn register(
-        &self,
-        decl: &GraphicsKernelRegisterDecl,
-    ) -> std::result::Result<String, String> {
+    fn register(&self, decl: &GraphicsKernelRegisterDecl) -> std::result::Result<String, String> {
         let kernel_id = Self::canonical_kernel_id(decl);
         let mut kernels = self.kernels.lock();
         if !kernels.contains_key(&kernel_id) {
@@ -447,9 +406,7 @@ impl GraphicsKernelBridge for TriangleKernelBridge {
             } else {
                 GraphicsPushConstants {
                     size: decl.push_constant_size,
-                    stages: GraphicsShaderStageFlags::from_bits_or_zero(
-                        decl.push_constant_stages,
-                    ),
+                    stages: GraphicsShaderStageFlags::from_bits_or_zero(decl.push_constant_stages),
                 }
             };
             let descriptor = GraphicsKernelDescriptor {
@@ -471,10 +428,7 @@ impl GraphicsKernelBridge for TriangleKernelBridge {
         Ok(kernel_id)
     }
 
-    fn run_draw(
-        &self,
-        draw: &GraphicsKernelRunDraw,
-    ) -> std::result::Result<(), String> {
+    fn run_draw(&self, draw: &GraphicsKernelRunDraw) -> std::result::Result<(), String> {
         let kernel = self
             .kernels
             .lock()
@@ -494,9 +448,7 @@ impl GraphicsKernelBridge for TriangleKernelBridge {
         }
         let target_uuid = &draw.color_target_uuids[0];
         let texture = self.surfaces.get(target_uuid).ok_or_else(|| {
-            format!(
-                "color_target_uuid '{target_uuid}' not registered with this bridge"
-            )
+            format!("color_target_uuid '{target_uuid}' not registered with this bridge")
         })?;
         if !draw.push_constants.is_empty() {
             kernel
@@ -531,17 +483,15 @@ impl GraphicsKernelBridge for TriangleKernelBridge {
                 first_index,
                 vertex_offset,
                 first_instance,
-            } => OffscreenDraw::DrawIndexed(
-                streamlib::sdk::rhi::DrawIndexedCall {
-                    index_count,
-                    instance_count,
-                    first_index,
-                    vertex_offset,
-                    first_instance,
-                    viewport: None,
-                    scissor: None,
-                },
-            ),
+            } => OffscreenDraw::DrawIndexed(streamlib::sdk::rhi::DrawIndexedCall {
+                index_count,
+                instance_count,
+                first_index,
+                vertex_offset,
+                first_instance,
+                viewport: None,
+                scissor: None,
+            }),
         };
         kernel
             .offscreen_render(
@@ -572,9 +522,7 @@ fn main() -> Result<()> {
 
     println!("=== Polyglot Vulkan adapter graphics scenario (#656) ===");
     println!("Runtime:     {}", runtime_kind.as_str());
-    println!(
-        "Surface:     {SURFACE_SIZE}x{SURFACE_SIZE} RGBA8 (uuid {SCENARIO_SURFACE_UUID})"
-    );
+    println!("Surface:     {SURFACE_SIZE}x{SURFACE_SIZE} RGBA8 (uuid {SCENARIO_SURFACE_UUID})");
     println!(
         "SPIR-V:      vert={} bytes, frag={} bytes",
         TRIANGLE_VERT_SPV.len(),
@@ -590,8 +538,7 @@ fn main() -> Result<()> {
         Arc::new(Mutex::new(None));
     let consume_done_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
         Arc::new(Mutex::new(None));
-    let readback_slot: Arc<Mutex<Option<Arc<VulkanTextureReadback>>>> =
-        Arc::new(Mutex::new(None));
+    let readback_slot: Arc<Mutex<Option<Arc<VulkanTextureReadback>>>> = Arc::new(Mutex::new(None));
 
     {
         let texture_slot = Arc::clone(&texture_slot);
@@ -608,22 +555,24 @@ fn main() -> Result<()> {
             // Single-writer-per-edge — one timeline per direction per
             // `docs/architecture/adapter-timeline-single-writer.md`.
             let produce_done = Arc::new(
-                HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-                    .map_err(|e| {
+                HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0).map_err(
+                    |e| {
                         Error::Configuration(format!(
                             "HostVulkanTimelineSemaphore::new_exportable \
                              (produce_done): {e}"
                         ))
-                    })?,
+                    },
+                )?,
             );
             let consume_done = Arc::new(
-                HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-                    .map_err(|e| {
+                HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0).map_err(
+                    |e| {
                         Error::Configuration(format!(
                             "HostVulkanTimelineSemaphore::new_exportable \
                              (consume_done): {e}"
                         ))
-                    })?,
+                    },
+                )?,
             );
             let store = gpu.surface_store().ok_or_else(|| {
                 Error::Configuration(
@@ -645,9 +594,7 @@ fn main() -> Result<()> {
                     Some(consume_done.as_ref()),
                     streamlib::sdk::rhi::VulkanLayout::COLOR_ATTACHMENT_OPTIMAL,
                 )
-                .map_err(|e| {
-                    Error::Configuration(format!("register_texture: {e}"))
-                })?;
+                .map_err(|e| Error::Configuration(format!("register_texture: {e}")))?;
 
             let bridge = Arc::new(TriangleKernelBridge::new(
                 Arc::clone(&host_device),
@@ -676,7 +623,13 @@ fn main() -> Result<()> {
 
     // Load the BgraFileSource processor from `@tatolab/debug-utilities`
     // built on demand from source by the orchestrator.
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "debug-utilities"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/debug-utilities"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    runtime.add_module_with_blocking(
+        module_ident_any_version!("tatolab", "debug-utilities"),
+        streamlib::sdk::runtime::Strategy::Registry {
+            version_req: streamlib::sdk::runtime::SemVerRange::Any,
+            build: streamlib::sdk::runtime::BuildPolicy::IfStale,
+        },
+    )?;
 
     // Load the polyglot processors via explicit add_module_with calls.
     // The Python and Deno sub-packages are example-local (siblings of
@@ -688,15 +641,20 @@ fn main() -> Result<()> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-vulkan-graphics"),
-        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::IfStale },
+        Strategy::Path {
+            path: manifest_dir.join("python"),
+            build: BuildPolicy::IfStale,
+        },
     )?;
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "polyglot-vulkan-graphics-deno"),
-        Strategy::Path { path: manifest_dir.join("deno"), build: BuildPolicy::IfStale },
+        Strategy::Path {
+            path: manifest_dir.join("deno"),
+            build: BuildPolicy::IfStale,
+        },
     )?;
 
-    let fixture_path = write_trigger_fixture()
-        .map_err(Error::Configuration)?;
+    let fixture_path = write_trigger_fixture().map_err(Error::Configuration)?;
     let fixture_path_str = fixture_path
         .to_str()
         .ok_or_else(|| Error::Configuration("fixture path has non-utf8 component".into()))?;
@@ -746,15 +704,9 @@ fn main() -> Result<()> {
     runtime.stop()?;
 
     println!("\nReading host surface back via Vulkan...");
-    let texture = texture_slot
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| {
-            Error::Runtime(
-                "host texture slot is empty — setup hook never ran".into(),
-            )
-        })?;
+    let texture = texture_slot.lock().unwrap().clone().ok_or_else(|| {
+        Error::Runtime("host texture slot is empty — setup hook never ran".into())
+    })?;
     let readback = readback_slot
         .lock()
         .unwrap()
@@ -786,19 +738,13 @@ fn write_trigger_fixture() -> std::result::Result<PathBuf, String> {
     use std::io::Write;
 
     let path = std::env::temp_dir().join("vulkan-graphics-trigger.bgra");
-    let mut f = File::create(&path)
-        .map_err(|e| format!("create {}: {e}", path.display()))?;
+    let mut f = File::create(&path).map_err(|e| format!("create {}: {e}", path.display()))?;
     f.write_all(&[0u8; 4 * 4 * 4 * 3])
         .map_err(|e| format!("write {}: {e}", path.display()))?;
     Ok(path)
 }
 
-fn write_png(
-    rgba: &[u8],
-    width: u32,
-    height: u32,
-    output: &std::path::Path,
-) -> Result<()> {
+fn write_png(rgba: &[u8], width: u32, height: u32, output: &std::path::Path) -> Result<()> {
     use std::fs::File;
     use std::io::BufWriter;
 
