@@ -1,9 +1,23 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# Standalone, registry-only example (headed to its own repo). The SDK resolves
+# from the Gitea registry by version and the empty `[workspace]` table makes
+# this its own workspace root.
+#
+# DEFERRED, not in scope: this example is a no-op at HEAD. The WHEP player
+# decodes received H.264 with VideoToolbox (macOS hardware decode) and is
+# macOS-only as written; it also uses the deprecated compile-time typed-struct
+# API. A Linux version would rewire WHEP → `@tatolab/h264` (Vulkan) decoder →
+# display via runtime `add_module`, which is future work. The real pipeline
+# lives in git history; see `src/main.rs` for the deferral note.
 [package]
 name = "whep-player"
 version = "0.1.0"
 edition = "2024"
+publish = false
 
 [dependencies]
-streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
-streamlib-webrtc = { path = "../../packages/webrtc", version = "0.4.30", registry = "gitea" }
-ctrlc = "3.4"
+streamlib = { version = "0.4.33-dev.5", registry = "gitea" }
+
+[workspace]
