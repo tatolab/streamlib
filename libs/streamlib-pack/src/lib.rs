@@ -188,43 +188,22 @@ pub fn assemble_artifact(
         files.push((schema_rel.to_string_lossy().replace('\\', "/"), abs));
     }
 
-    // Per-processor entrypoint validation. Python `.py` and Deno `.ts`
-    // both live at the package root (the authored layout); the archive
-    // path mirrors the source path verbatim — no language relocates the
-    // developer's files. Rust has no source to bundle here (the cdylib
-    // is the artifact). The full source tree (these entrypoints plus
-    // helpers, `.npmrc`, assets) is bundled below via
-    // `collect_source_tree`; the dedup in the emitters drops the overlap.
-    for proc in &config.processors {
-        if let Some(entrypoint) = &proc.entrypoint {
-            let (source_file, archive_path) = match proc.runtime.language {
-                ProcessorLanguage::Python => {
-                    let module = entrypoint.split(':').next().unwrap_or(entrypoint);
-                    let source = format!("{module}.py");
-                    (source.clone(), source)
-                }
-                ProcessorLanguage::TypeScript => {
-                    let source = entrypoint
-                        .split(':')
-                        .next()
-                        .unwrap_or(entrypoint)
-                        .to_string();
-                    (source.clone(), source)
-                }
-                ProcessorLanguage::Rust => continue,
-            };
-            let source_path = pkg_dir.join(&source_file);
-            if source_path.exists() {
-                files.push((archive_path, source_path));
-            } else {
-                anyhow::bail!(
-                    "Processor '{}' entrypoint file not found: {}",
-                    proc.name,
-                    source_path.display()
-                );
-            }
-        }
-    }
+    // Entrypoint resolution is the runtime's job, not the packer's.
+    //
+    // A processor's `entrypoint` (`module:Class` for Python, `file.ts:export`
+    // for Deno) is resolved at load time by the language's own import system —
+    // Python via `importlib.import_module` (the PyPA entry-point object-reference
+    // algorithm), Deno via its module loader. Reimplementing that resolution
+    // here as a build-time path-stat is lossy and gap-prone: a dotted Python
+    // module path (`pkg.module`) maps to `pkg/module.py` OR
+    // `pkg/module/__init__.py` OR a PEP 420 namespace-package directory, and can
+    // also be provided via a zip / `.pth` / editable layout — none of which a
+    // naive `"{module}.py"` check resolves (it looks for the literal file
+    // `pkg.module.py`). So we do NOT validate or relocate entrypoints here: the
+    // FULL authored source tree (every entrypoint + helper module + asset) ships
+    // verbatim via `collect_source_tree` below, and a genuinely-bad entrypoint
+    // surfaces at load with a precise `importlib` / loader error instead of a
+    // guessed "entrypoint file not found" at pack time.
 
     let mut rebuilt = false;
 
@@ -1101,6 +1080,45 @@ mod tests {
         assert!(
             !entries.iter().any(|e| e.ends_with(".whl")),
             "no wheel should be produced, got {entries:?}"
+        );
+    }
+
+    #[test]
+    fn nested_and_namespace_python_entrypoint_packs_without_path_stat() {
+        // Regression lock for the build-time entrypoint-resolution bug: a PyPA
+        // object-reference entrypoint (`module:Class`) is a dotted *module
+        // path*, not a filename. `cuda_fisheye.processor` maps to
+        // `cuda_fisheye/processor.py` — here a PEP 420 namespace package (no
+        // `__init__.py`) — which the old `format!("{module}.py")` path-stat
+        // mis-resolved to the literal `cuda_fisheye.processor.py` and aborted.
+        // Assembly must NOT reimplement import resolution: it ships the full
+        // tree and lets the runtime's `importlib` resolve the entrypoint.
+        // Mentally restore the per-processor path-stat and this bails on a
+        // valid layout — even a `replace('.', "/")`-plus-`__init__.py` check
+        // would still reject this namespace-package case.
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: py\n  version: 0.1.0\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: python\n    execution: manual\n    entrypoint: \"cuda_fisheye.processor:P\"\n    inputs: []\n    outputs: []\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("pyproject.toml"), b"[project]\nname='py'\nversion='0.1.0'\n").unwrap();
+        std::fs::create_dir(dir.path().join("cuda_fisheye")).unwrap();
+        std::fs::write(dir.path().join("cuda_fisheye/processor.py"), b"class P:\n    pass\n").unwrap();
+
+        let out = dir.path().join("o.slpkg");
+        // Must NOT bail on the dotted/nested entrypoint.
+        assemble_artifact(
+            dir.path(),
+            &AssembleTarget::Slpkg(out.clone()),
+            &slpkg_opts(false),
+            &(),
+        )
+        .unwrap();
+        let entries = zip_entries(&out);
+        assert!(
+            entries.contains(&"cuda_fisheye/processor.py".to_string()),
+            "nested entrypoint module must ship via the source tree, got {entries:?}"
         );
     }
 
