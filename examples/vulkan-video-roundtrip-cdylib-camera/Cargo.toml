@@ -1,13 +1,24 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# Standalone, registry-only example (headed to its own repo). Every dependency
+# resolves from the Gitea registry by version, and the empty `[workspace]` table
+# makes this its own workspace root so it builds off-tree. Loads
+# `@tatolab/camera` + `@tatolab/display` + `@tatolab/h264` + `@tatolab/h265`
+# at runtime via `Strategy::Registry`.
+#
+# Deliberately NOT taking streamlib-camera as a Rust dep. The camera is loaded
+# at runtime via `Runner::add_module(...)`; linking streamlib-camera as a Rust
+# dep would auto-register the `Camera` processor at link time, conflicting with
+# the cdylib's registration at load time.
 [package]
 name = "vulkan-video-roundtrip-cdylib-camera"
 version = "0.1.0"
 edition = "2024"
+publish = false
 
-# Deliberately NOT taking streamlib-camera as a Rust dep. The camera
-# is loaded at runtime via `Runner::add_module(...)` against a
-# staged copy of `packages/camera/`. Linking streamlib-camera as a
-# Rust dep would auto-register the `Camera` processor at link time,
-# conflicting with the cdylib's registration at load time.
 [dependencies]
-streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
+streamlib = { version = "0.4.33-dev.5", registry = "gitea" }
 serde_json = "1"
+
+[workspace]

@@ -15,16 +15,16 @@
 //!   cargo run -p vulkan-video-roundtrip-cdylib-camera -- h264 [device] [seconds]
 //!   cargo run -p vulkan-video-roundtrip-cdylib-camera -- h265 /dev/video0 10
 //!
-//! Packages build automatically on `cargo run` via the build orchestrator.
-//!`
-//! so the runtime can resolve each cdylib at load time.
+//! Packages build automatically on `cargo run` via the build orchestrator,
+//! resolved from the Gitea generic registry by version so the runtime can
+//! resolve each cdylib at load time.
 
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::Runner;
-use streamlib::sdk::RunnerAutoBuild;
+use streamlib::sdk::runtime::{BuildPolicy, Runner, SemVerRange, Strategy};
 use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
@@ -43,11 +43,20 @@ fn main() -> Result<()> {
 
     let runtime = Runner::with_auto_build()?;
 
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/camera"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "display"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/display"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h264"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/h264"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h265"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/h265"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    println!("+ Camera / Display / H264 / H265 loaded from target/streamlib-plugins/");
+    // Resolve every package from the Gitea generic registry by version — the
+    // cross-repo consumer path. The orchestrator pulls each `.slpkg` and builds
+    // it from source on the host. Registry endpoint comes from
+    // `STREAMLIB_REGISTRY_URL` (or `GITEA_URL`).
+    let registry = || Strategy::Registry {
+        version_req: SemVerRange::Any,
+        build: BuildPolicy::IfStale,
+    };
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), registry())?;
+    runtime
+        .add_module_with_blocking(module_ident_any_version!("tatolab", "display"), registry())?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h264"), registry())?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h265"), registry())?;
+    println!("+ Camera / Display / H264 / H265 resolved from the Gitea registry");
     println!("+ Wire vocabulary registered (via @tatolab/core dep walk)\n");
 
     let camera = runtime.add_processor(ProcessorSpec::new(
@@ -89,10 +98,8 @@ fn main() -> Result<()> {
     } else {
         schema_ident!("tatolab", "h264", "H264Decoder", "1.0.0")
     };
-    let decoder = runtime.add_processor(ProcessorSpec::new(
-        decoder_ident,
-        serde_json::json!({}),
-    ))?;
+    let decoder =
+        runtime.add_processor(ProcessorSpec::new(decoder_ident, serde_json::json!({})))?;
     println!("+ {}Decoder: {decoder}", codec.to_uppercase());
 
     let display = runtime.add_processor(ProcessorSpec::new(
