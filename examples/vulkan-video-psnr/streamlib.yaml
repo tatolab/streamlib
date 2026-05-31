@@ -20,10 +20,6 @@ package:
 dependencies:
   "@tatolab/core": "^1.0.0"
 
-patch:
-  "@tatolab/core":
-    path: ../../packages/core
-
 schemas:
   ColorInfo:
     package: "@tatolab/core"

@@ -11,25 +11,24 @@
 //! Usage:
 //!   vulkan-video-psnr <h264|h265> <bgra-path> <width> <height> <fps> <frame-count>
 //!
-//! Packages build automatically on `cargo run` via the build orchestrator.
-//!`
-//! so the runtime can resolve each cdylib at load time.
+//! Packages build automatically on `cargo run` via the build orchestrator,
+//! resolved from the Gitea generic registry by version so the runtime can
+//! resolve each cdylib at load time.
 
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::Runner;
-use streamlib::sdk::RunnerAutoBuild;
+use streamlib::sdk::runtime::{BuildPolicy, Runner, SemVerRange, Strategy};
 use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let codec = args.get(1).map(|s| s.as_str()).unwrap_or("h264");
-    let bgra_path = args
-        .get(2)
-        .cloned()
-        .expect("missing <bgra-path>: usage vulkan-video-psnr <codec> <bgra-path> <w> <h> <fps> <frames>");
+    let bgra_path = args.get(2).cloned().expect(
+        "missing <bgra-path>: usage vulkan-video-psnr <codec> <bgra-path> <w> <h> <fps> <frames>",
+    );
     let width: u32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(1920);
     let height: u32 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(1080);
     let fps: u32 = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(30);
@@ -42,10 +41,22 @@ fn main() -> Result<()> {
 
     let runtime = Runner::with_auto_build()?;
 
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "debug-utilities"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/debug-utilities"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "display"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/display"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h264"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/h264"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h265"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/h265"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    // Resolve every package from the Gitea generic registry by version — the
+    // cross-repo consumer path. The orchestrator pulls each `.slpkg` and builds
+    // it from source on the host. Registry endpoint comes from
+    // `STREAMLIB_REGISTRY_URL` (or `GITEA_URL`).
+    let registry = || Strategy::Registry {
+        version_req: SemVerRange::Any,
+        build: BuildPolicy::IfStale,
+    };
+    runtime.add_module_with_blocking(
+        module_ident_any_version!("tatolab", "debug-utilities"),
+        registry(),
+    )?;
+    runtime
+        .add_module_with_blocking(module_ident_any_version!("tatolab", "display"), registry())?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h264"), registry())?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h265"), registry())?;
 
     let source = runtime.add_processor(ProcessorSpec::new(
         schema_ident!("tatolab", "debug-utilities", "BgraFileSource", "1.0.0"),
@@ -86,10 +97,8 @@ fn main() -> Result<()> {
     } else {
         schema_ident!("tatolab", "h264", "H264Decoder", "1.0.0")
     };
-    let decoder = runtime.add_processor(ProcessorSpec::new(
-        decoder_ident,
-        serde_json::json!({}),
-    ))?;
+    let decoder =
+        runtime.add_processor(ProcessorSpec::new(decoder_ident, serde_json::json!({})))?;
     println!("+ {}Decoder: {decoder}", codec.to_uppercase());
 
     let display = runtime.add_processor(ProcessorSpec::new(
