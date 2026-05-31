@@ -1,4 +1,3 @@
-# yaml-language-server: $schema=../../../schemas/streamlib.schema.json
 package:
   org: tatolab
   name: cuda-fisheye-python
@@ -7,10 +6,6 @@ package:
 
 dependencies:
   "@tatolab/core": "^1.0.0"
-
-patch:
-  "@tatolab/core":
-    path: ../../../packages/core
 
 schemas:
   ColorInfo:
