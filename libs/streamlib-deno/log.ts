@@ -150,7 +150,11 @@ let _channel: EscalateChannel | null = null;
 // avoid a timer leak (the Deno test runner flags any unresolved
 // setTimeout as a leak).
 let _writerSleepResolve: (() => void) | null = null;
-let _writerSleepTimer: number = -1;
+// Typed as the timer handle (not `number`) so the module stays portable: once
+// the SDK pulls a `node:` builtin into its graph, `setTimeout` resolves to the
+// Node typing (`Timeout`) rather than Deno's `number`. `null` is the unset
+// sentinel.
+let _writerSleepTimer: ReturnType<typeof setTimeout> | null = null;
 
 // ============================================================================
 // Hot path — build payload and enqueue
@@ -296,15 +300,15 @@ function writerSleep(ms: number): Promise<void> {
   return new Promise<void>((resolve) => {
     _writerSleepResolve = () => {
       _writerSleepResolve = null;
-      if (_writerSleepTimer >= 0) {
+      if (_writerSleepTimer !== null) {
         clearTimeout(_writerSleepTimer);
-        _writerSleepTimer = -1;
+        _writerSleepTimer = null;
       }
       resolve();
     };
     _writerSleepTimer = setTimeout(() => {
       _writerSleepResolve = null;
-      _writerSleepTimer = -1;
+      _writerSleepTimer = null;
       resolve();
     }, ms);
   });
@@ -386,12 +390,12 @@ export async function shutdown(timeoutMs = 2000): Promise<void> {
   // Deno's test runner reports as a leak.
   wakeWriterSleep();
   if (_writerDone) {
-    let timeoutId = -1;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
     const timer = new Promise<void>((resolve) => {
       timeoutId = setTimeout(resolve, timeoutMs);
     });
     await Promise.race([_writerDone, timer]);
-    if (timeoutId >= 0) clearTimeout(timeoutId);
+    if (timeoutId !== null) clearTimeout(timeoutId);
   }
   _writerDone = null;
   _writerActive = false;

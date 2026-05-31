@@ -1,7 +1,16 @@
 {
   "name": "@tatolab/streamlib-deno",
-  "version": "0.3.0",
-  "exports": "./mod.ts",
+  "version": "0.4.33",
+  "exports": {
+    ".": "./mod.ts",
+    "./subprocess_runner.ts": "./subprocess_runner.ts",
+    "./escalate.ts": "./escalate.ts",
+    "./types.ts": "./types.ts",
+    "./adapters/vulkan.ts": "./adapters/vulkan.ts",
+    "./adapters/opengl.ts": "./adapters/opengl.ts",
+    "./adapters/cuda.ts": "./adapters/cuda.ts",
+    "./adapters/cpu_readback.ts": "./adapters/cpu_readback.ts"
+  },
   "tasks": {
     "setup": "cd ../.. && cargo run --release --quiet -p streamlib-cli -- generate --runtime typescript --project-dir libs/streamlib-deno --output libs/streamlib-deno/_generated_"
   },
