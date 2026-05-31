@@ -123,7 +123,6 @@ class PolyglotManualSource:
             "width": self._width,
             "height": self._height,
             "timestamp_ns": str(ts_ns),
-            "frame_index": str(self._frame_count),
         }
         try:
             self._outputs.write("frame_out", frame, timestamp_ns=ts_ns)

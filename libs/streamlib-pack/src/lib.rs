@@ -14,7 +14,12 @@
 //!   runs a Python processor from its source dir, so only its dependencies
 //!   are installed at load time, and shipping identical source in dev and
 //!   in the artifact removes the editable-vs-wheel packaging skew.
-//! - **Deno** — entrypoint `.ts` under `deno/`.
+//! - **Deno** — the full authored source tree (every `.ts` + `deno.json`
+//!   + `.npmrc` + assets), staged verbatim at the package root. Like
+//!   Python, nothing is relocated: the staged layout is a faithful
+//!   mirror of what the developer wrote, so relative resolution
+//!   (sibling `streamlib.yaml`, `./_generated_/…`, asset paths) holds
+//!   identically in dev and in the artifact.
 //! - **always** — `streamlib.yaml` + `schemas/`.
 //!
 //! The same assembly emits to either of two [`AssembleTarget`]s: a
@@ -183,8 +188,13 @@ pub fn assemble_artifact(
         files.push((schema_rel.to_string_lossy().replace('\\', "/"), abs));
     }
 
-    // Per-processor source: Python `.py` at root, Deno `.ts` under
-    // `deno/`. Rust has no source to bundle (the cdylib is the artifact).
+    // Per-processor entrypoint validation. Python `.py` and Deno `.ts`
+    // both live at the package root (the authored layout); the archive
+    // path mirrors the source path verbatim — no language relocates the
+    // developer's files. Rust has no source to bundle here (the cdylib
+    // is the artifact). The full source tree (these entrypoints plus
+    // helpers, `.npmrc`, assets) is bundled below via
+    // `collect_source_tree`; the dedup in the emitters drops the overlap.
     for proc in &config.processors {
         if let Some(entrypoint) = &proc.entrypoint {
             let (source_file, archive_path) = match proc.runtime.language {
@@ -199,8 +209,7 @@ pub fn assemble_artifact(
                         .next()
                         .unwrap_or(entrypoint)
                         .to_string();
-                    let archive = format!("deno/{source}");
-                    (source, archive)
+                    (source.clone(), source)
                 }
                 ProcessorLanguage::Rust => continue,
             };
@@ -301,9 +310,20 @@ pub fn assemble_artifact(
         python_wheels = collect_wheels_in_dir(&pkg_dir.join("python").join("wheels"))?.len();
     }
 
+    let has_deno = config
+        .processors
+        .iter()
+        .any(|p| matches!(p.runtime.language, ProcessorLanguage::TypeScript));
+
     // Bundle the source tree when the package ships code that's run or
     // built FROM source:
     //   - Python → the engine runs it from source (see above).
+    //   - Deno   → the engine runs the `.ts` from source; the whole
+    //     authored tree travels at its authored paths (entrypoints,
+    //     helper modules, `deno.json`, `.npmrc`, assets) so the staged
+    //     package is a faithful mirror of what the developer wrote.
+    //     `_generated_` is excluded (a per-consumer codegen artifact,
+    //     regenerated at stage time — same as Python's `_generated_`).
     //   - Rust   → so a host on a different triple (or one given a
     //     source-only box) can `cargo build` the cdylib itself. The
     //     prebuilt cdylib for the packing host is already in `files`
@@ -312,7 +332,7 @@ pub fn assemble_artifact(
     //     wheel". A package whose Cargo deps are path/workspace-only only
     //     builds where those resolve (same constraint crates.io has); it
     //     relies on the bundled prebuilt for its own triple.
-    if has_python || has_rust {
+    if has_python || has_rust || has_deno {
         collect_source_tree(pkg_dir, &mut files)?;
     }
 
@@ -1151,8 +1171,54 @@ mod tests {
         assert!(entries.contains(&"p.py".to_string()));
     }
 
+    /// A Deno package stages as a faithful mirror of the authored layout:
+    /// the entrypoint `.ts` sits at the package root (NOT relocated under
+    /// `deno/`), and every other authored file — helper `.ts`, `deno.json`,
+    /// `.npmrc`, and assets a package ships (future embedded movies / html /
+    /// data) — travels at its authored path. This is the same source-tree
+    /// bundling Python/Rust already get; nothing is moved. Reverting the
+    /// `has_deno` gate would drop the asset/`.npmrc`/helper assertions.
     #[test]
-    fn slpkg_deno_source_lands_under_deno_subdir() {
+    fn slpkg_deno_source_mirrors_authored_layout() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: ts\n  version: 0.1.0\nprocessors:\n  - name: T\n    version: 1.0.0\n    description: d\n    runtime: deno\n    execution: manual\n    entrypoint: \"t.ts:default\"\n    inputs: []\n    outputs: []\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("t.ts"), b"export default class {}").unwrap();
+        std::fs::write(dir.path().join("helper.ts"), b"export const x = 1;").unwrap();
+        std::fs::write(dir.path().join("deno.json"), b"{\"imports\":{}}").unwrap();
+        std::fs::write(dir.path().join(".npmrc"), b"@tatolab:registry=http://x/\n").unwrap();
+        std::fs::create_dir(dir.path().join("assets")).unwrap();
+        std::fs::write(dir.path().join("assets/logo.bin"), b"\x00\x01\x02").unwrap();
+        // `_generated_` is a codegen artifact regenerated per-consumer at
+        // stage time — it must NOT ship as source.
+        std::fs::create_dir(dir.path().join("_generated_")).unwrap();
+        std::fs::write(dir.path().join("_generated_/stale.ts"), b"// stale").unwrap();
+
+        let out = dir.path().join("o.slpkg");
+        assemble_artifact(dir.path(), &AssembleTarget::Slpkg(out.clone()), &slpkg_opts(false), &())
+            .unwrap();
+        let entries = zip_entries(&out);
+        // Entrypoint at the authored path — NOT relocated under `deno/`.
+        assert!(entries.contains(&"t.ts".to_string()), "entrypoint must stage at root, got {entries:?}");
+        assert!(!entries.contains(&"deno/t.ts".to_string()), "must not relocate under deno/");
+        // The whole authored tree travels at its authored paths.
+        assert!(entries.contains(&"helper.ts".to_string()), "helper module must travel");
+        assert!(entries.contains(&"deno.json".to_string()));
+        assert!(entries.contains(&".npmrc".to_string()), ".npmrc must travel so the package is self-contained");
+        assert!(entries.contains(&"assets/logo.bin".to_string()), "assets must travel at their authored path");
+        // Codegen artifact excluded.
+        assert!(!entries.contains(&"_generated_/stale.ts".to_string()), "_generated_ must not ship as source");
+    }
+
+    /// A staged Deno package keeps `streamlib.yaml` beside the entrypoint
+    /// `.ts` at the staged root — which is what the `@processor` decorator's
+    /// sibling-manifest lookup requires. This locks the layout the runtime
+    /// SDK depends on; relocating the `.ts` would break the decorator.
+    #[test]
+    fn staged_deno_manifest_sits_beside_entrypoint() {
         let dir = tempdir().unwrap();
         std::fs::write(
             dir.path().join("streamlib.yaml"),
@@ -1161,12 +1227,21 @@ mod tests {
         .unwrap();
         std::fs::write(dir.path().join("t.ts"), b"export default class {}").unwrap();
 
-        let out = dir.path().join("o.slpkg");
-        assemble_artifact(dir.path(), &AssembleTarget::Slpkg(out.clone()), &slpkg_opts(false), &())
-            .unwrap();
-        let entries = zip_entries(&out);
-        assert!(entries.contains(&"deno/t.ts".to_string()));
-        assert!(!entries.contains(&"t.ts".to_string()), "must not duplicate at root");
+        let staged = tempdir().unwrap();
+        assemble_artifact(
+            dir.path(),
+            &AssembleTarget::StagedDir(staged.path().to_path_buf()),
+            &AssembleOptions {
+                no_build: false,
+                profile: CargoProfile::Dev,
+                path_deps: PathDepPolicy::RewriteRelativeToAbsolute,
+            },
+            &(),
+        )
+        .unwrap();
+        // Decorator does `join(dirname(<t.ts>), "streamlib.yaml")` — both at root.
+        assert!(staged.path().join("t.ts").is_file(), "entrypoint at staged root");
+        assert!(staged.path().join("streamlib.yaml").is_file(), "manifest beside entrypoint");
     }
 
     #[test]

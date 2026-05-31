@@ -532,7 +532,7 @@ def main():
                             if data_count <= 3 or data_count % 60 == 0:
                                 log.debug(
                                     "poll: data received",
-                                    frame_index=data_count,
+                                    data_count=data_count,
                                 )
                             try:
                                 if hasattr(processor, "process"):

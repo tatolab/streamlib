@@ -734,18 +734,11 @@ impl DisplayEventLoopHandler {
             // iceoryx2 receipt itself is the "GPU writes are visible"
             // signal — no separate timeline wait is required.
             //
-            // Pre-decoupling this read a `host_video_source_timeline`
-            // shared global at `VideoFrame.frame_index` (parsed as
-            // u64). That made Display couple to the camera's timeline
-            // specifically; downstream processors that hand Display a
-            // VideoFrame with their own `frame_index` counter — none
-            // of which is the camera's signal value — would deadlock
-            // (the camera's timeline never reaches that value). Today
-            // every producer in tree is GPU-sync; a future async
-            // producer that genuinely needs Display-side timeline
-            // sync should carry an explicit (timeline_handle,
-            // wait_value) pair on the VideoFrame protocol, not
-            // overload `frame_index`. Until then, the wait is gone.
+            // A future async producer that genuinely needs Display-side
+            // timeline sync should carry an explicit (timeline_handle,
+            // wait_value) pair on the VideoFrame protocol. Ordering and
+            // timing otherwise ride the monotonic clock (timestamp_ns) —
+            // the single ordering primitive — never a per-frame counter.
 
             // Compute aspect-ratio-aware scale per the configured mode.
             let src_aspect = src_width as f32 / src_height as f32;

@@ -64,8 +64,8 @@ pub struct AppleMp4WriterProcessor {
     #[allow(dead_code)] // Reserved for timestamp validation
     last_written_timestamp_ns: i64,
 
-    // Track last written video frame number to avoid duplicates
-    last_written_video_frame_number: Option<u64>,
+    // Track last written video frame timestamp (ns) to avoid duplicates
+    last_written_video_timestamp_ns: Option<i64>,
 
     // Track total audio samples written for timestamp calculation
     #[allow(dead_code)] // Reserved for audio timestamp calculation
@@ -203,29 +203,28 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
         if self.video_only_mode {
             while self.inputs.has_data("video") {
                 let video = self.read_video_frame()?;
-                let frame_index: u64 = video.frame_index.parse().unwrap_or(0);
+                let video_timestamp_ns: i64 = video.timestamp_ns.parse().unwrap_or(0);
 
-                // Check if this is a new video frame (not already written)
-                let should_write = match self.last_written_video_frame_number {
+                // Dedup on the monotonic timestamp — unique and monotonic
+                // per frame, the schema's ordering primitive.
+                let should_write = match self.last_written_video_timestamp_ns {
                     None => true,
-                    Some(last_num) => frame_index != last_num,
+                    Some(last_ts) => video_timestamp_ns != last_ts,
                 };
 
                 if should_write {
-                    let video_timestamp_ns: i64 = video.timestamp_ns.parse().unwrap_or(0);
                     let video_relative_ns = video_timestamp_ns - self.start_time_ns;
 
                     let mut video_to_write = video.clone();
                     video_to_write.timestamp_ns = video_relative_ns.to_string();
 
                     debug!(
-                        "Writing video (video-only): frame_index={}, relative_ts={:.6}s",
-                        frame_index,
+                        "Writing video (video-only): relative_ts={:.6}s",
                         video_relative_ns as f64 / 1_000_000_000.0
                     );
 
                     self.write_video_frame(&video_to_write)?;
-                    self.last_written_video_frame_number = Some(frame_index);
+                    self.last_written_video_timestamp_ns = Some(video_timestamp_ns);
                     self.frames_written += 1;
                 }
 
@@ -259,8 +258,8 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
             if self.inputs.has_data("video") {
                 let video = self.read_video_frame()?;
                 debug!(
-                    "New video frame received: timestamp_ns={}, frame_index={}, size={}x{}",
-                    video.timestamp_ns, video.frame_index, video.width, video.height
+                    "New video frame received: timestamp_ns={}, size={}x{}",
+                    video.timestamp_ns, video.width, video.height
                 );
                 self.last_video_frame = Some(video);
             }
@@ -301,17 +300,16 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
 
             // Write video frame independently if available (only write each frame once)
             if let Some(last_video) = self.last_video_frame.clone() {
-                // Check if this is a new video frame (not already written)
-                let frame_index: u64 = last_video.frame_index.parse().unwrap_or(0);
-                let should_write = match self.last_written_video_frame_number {
-                    None => true,                              // First video frame
-                    Some(last_num) => frame_index != last_num, // New frame
+                // Dedup on the monotonic timestamp — unique and monotonic
+                // per frame, the schema's ordering primitive.
+                let video_timestamp_ns: i64 = last_video.timestamp_ns.parse().unwrap_or(0);
+                let should_write = match self.last_written_video_timestamp_ns {
+                    None => true,                                   // First video frame
+                    Some(last_ts) => video_timestamp_ns != last_ts, // New frame
                 };
 
                 if should_write {
                     // Calculate relative timestamp from video frame
-                    // Parse timestamp from string and make relative
-                    let video_timestamp_ns: i64 = last_video.timestamp_ns.parse().unwrap_or(0);
                     let video_relative_ns = video_timestamp_ns - self.start_time_ns;
                     let video_timestamp_s = video_relative_ns as f64 / 1_000_000_000.0;
 
@@ -319,12 +317,12 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
                     video_to_write.timestamp_ns = video_relative_ns.to_string();
 
                     debug!(
-                        "Writing video: frame_index={}, relative_ts={:.6}s",
-                        video_to_write.frame_index, video_timestamp_s
+                        "Writing video: relative_ts={:.6}s",
+                        video_timestamp_s
                     );
 
                     self.write_video_frame(&video_to_write)?;
-                    self.last_written_video_frame_number = Some(frame_index);
+                    self.last_written_video_timestamp_ns = Some(video_timestamp_ns);
                 }
             }
         }
