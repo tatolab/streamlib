@@ -7,7 +7,7 @@
 # runner can `cargo build -p camera-python-display-effects` and stage it.
 [package]
 name = "camera-python-display"
-version = "0.4.30"
+version = "0.4.33-dev.2"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 license = "BUSL-1.1"
@@ -30,17 +30,17 @@ streamlib-consumer-rhi = { workspace = true }
 members = ["effects"]
 
 [workspace.package]
-version = "0.4.30"
+version = "0.4.33-dev.2"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 license = "BUSL-1.1"
 
 [workspace.dependencies]
-streamlib = { version = "0.4.30", registry = "gitea" }
-streamlib-jtd-codegen = { version = "0.4.30", registry = "gitea" }
-streamlib-plugin-abi = { version = "0.4.30", registry = "gitea" }
-streamlib-adapter-abi = { version = "0.4.30", registry = "gitea" }
-streamlib-consumer-rhi = { version = "0.4.30", registry = "gitea" }
+streamlib = { version = "0.4.33-dev.2", registry = "gitea" }
+streamlib-jtd-codegen = { version = "0.4.33-dev.2", registry = "gitea" }
+streamlib-plugin-abi = { version = "0.4.33-dev.2", registry = "gitea" }
+streamlib-adapter-abi = { version = "0.4.33-dev.2", registry = "gitea" }
+streamlib-consumer-rhi = { version = "0.4.33-dev.2", registry = "gitea" }
 tracing = { version = "0.1.41", features = ["release_max_level_debug"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }

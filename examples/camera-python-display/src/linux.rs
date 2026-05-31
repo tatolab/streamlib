@@ -483,15 +483,14 @@ fn stage_effects_cdylib(effects_dir: &std::path::Path) -> Result<()> {
         ))
     })?;
 
-    let workspace_root = effects_dir
-        .parent()
-        .and_then(|p| p.parent())
-        .and_then(|p| p.parent())
-        .ok_or_else(|| {
-            Error::Configuration(
-                "Failed to derive workspace root from effects dir".into(),
-            )
-        })?;
+    // The example is a standalone cargo workspace (its own root with `effects`
+    // as a member), so `cargo build -p camera-python-display-effects` outputs
+    // to `<example>/target/`. The workspace root is the effects dir's parent
+    // (the example root) — NOT three levels up at the monorepo root, which is
+    // where this looked before the example was de-worked into its own repo.
+    let workspace_root = effects_dir.parent().ok_or_else(|| {
+        Error::Configuration("Failed to derive workspace root from effects dir".into())
+    })?;
 
     let dylib_name = if cfg!(target_os = "macos") {
         "libcamera_python_display_effects.dylib"
