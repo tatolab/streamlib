@@ -251,13 +251,11 @@ fn stage_plugin_dylib(plugin_dir: &std::path::Path) -> Result<()> {
         ))
     })?;
 
+    // This example is its own workspace root (the `plugin/` cdylib is a member),
+    // so `cargo build -p ...-counting-sink-plugin` writes the dylib into this
+    // crate's own `target/` dir.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let workspace_root = manifest_dir
-        .parent()
-        .and_then(|p| p.parent())
-        .ok_or_else(|| Error::Configuration("workspace root not found".into()))?;
-
-    let target_dir = workspace_root.join("target");
+    let target_dir = manifest_dir.join("target");
     let candidates = [
         target_dir.join("debug").join(COUNTING_SINK_PLUGIN_DYLIB),
         target_dir.join("release").join(COUNTING_SINK_PLUGIN_DYLIB),
