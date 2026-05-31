@@ -132,10 +132,19 @@ impl BuildOrchestrator for PolyglotBuildOrchestrator {
     }
 }
 
-/// A fingerprint-matched cache slot is reusable only if a Python package
-/// also has its provisioned venv present; otherwise it must re-materialize.
-fn cache_slot_is_reusable(has_python: bool, venv_python_exists: bool) -> bool {
-    !has_python || venv_python_exists
+/// A fingerprint-matched cache slot is reusable only if every language's
+/// build-output dir is present: a Python package's provisioned `.venv`, and a
+/// Deno package's regenerated `_generated_` wire vocabulary. Either missing
+/// (out-of-band deletion, or a slot staged by an older orchestrator that never
+/// ran that language's provision tail) forces a re-materialize; otherwise the
+/// reused slot would run broken.
+fn cache_slot_is_reusable(
+    has_python: bool,
+    venv_python_exists: bool,
+    has_deno: bool,
+    generated_exists: bool,
+) -> bool {
+    (!has_python || venv_python_exists) && (!has_deno || generated_exists)
 }
 
 impl PolyglotBuildOrchestrator {
@@ -211,6 +220,7 @@ impl PolyglotBuildOrchestrator {
             if let Some(side) = read_sidecar(&cache_slot) {
                 let venv_python_exists =
                     cache_slot.join(".venv").join("bin").join("python").exists();
+                let generated_exists = cache_slot.join("_generated_").is_dir();
                 if side.abi_version == streamlib_plugin_abi::STREAMLIB_ABI_VERSION
                     && side.triple == *triple
                     && side.profile == self.profile.label()
@@ -218,6 +228,8 @@ impl PolyglotBuildOrchestrator {
                     && cache_slot_is_reusable(
                         python_venv::staged_package_has_python(&cache_slot),
                         venv_python_exists,
+                        deno_codegen::staged_package_has_deno(&cache_slot),
+                        generated_exists,
                     )
                 {
                     tracing::debug!(package = %pkg_label, staged = %cache_slot.display(), "up to date — skipping rebuild");
@@ -470,16 +482,25 @@ mod tests {
     }
 
     // Mentally-revert check: a constant-`true` impl of `cache_slot_is_reusable`
-    // would fail the `(true, false)` case below (the warm-cache venv-less bug).
+    // would fail the venv-less and `_generated_`-less cases below (the
+    // warm-cache build-output-less bugs).
     #[test]
-    fn cache_slot_is_reusable_requires_venv_only_for_python() {
-        // Non-Python slot: always reusable, venv irrelevant.
-        assert!(cache_slot_is_reusable(false, false));
-        assert!(cache_slot_is_reusable(false, true));
-        // Python slot without a provisioned venv: must re-materialize (the bug).
-        assert!(!cache_slot_is_reusable(true, false));
-        // Python slot with its venv present: reusable.
-        assert!(cache_slot_is_reusable(true, true));
+    fn cache_slot_is_reusable_requires_build_outputs_per_language() {
+        // (has_python, venv_exists, has_deno, generated_exists)
+        // Plain slot (no Python, no Deno): always reusable.
+        assert!(cache_slot_is_reusable(false, false, false, false));
+        // Python slot without its venv: must re-materialize (the bug).
+        assert!(!cache_slot_is_reusable(true, false, false, false));
+        // Python slot with its venv: reusable.
+        assert!(cache_slot_is_reusable(true, true, false, false));
+        // Deno slot without its regenerated `_generated_`: must re-materialize.
+        assert!(!cache_slot_is_reusable(false, false, true, false));
+        // Deno slot with `_generated_` present: reusable.
+        assert!(cache_slot_is_reusable(false, false, true, true));
+        // Polyglot slot needs BOTH outputs present.
+        assert!(!cache_slot_is_reusable(true, true, true, false));
+        assert!(!cache_slot_is_reusable(true, false, true, true));
+        assert!(cache_slot_is_reusable(true, true, true, true));
     }
 
     /// No-op engine event sink for tests that don't assert on build logs.

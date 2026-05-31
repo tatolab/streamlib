@@ -49,7 +49,20 @@ pub fn provision_deno_typescript(temp_dir: &Path, package_label: &str) -> Result
         return Ok(());
     }
 
+    // Always materialize `_generated_/` for a Deno package, even when codegen
+    // emits nothing (no external schema deps). Its presence is the reliable
+    // "the codegen tail ran" marker the cache-reuse guard
+    // ([`staged_package_has_deno`] + `_generated_` existence) checks — the
+    // Deno parallel to Python's always-present `.venv`. Without an
+    // unconditional marker, a no-schema Deno package would never satisfy the
+    // guard and would re-stage on every IfStale hit.
     let generated = temp_dir.join("_generated_");
+    std::fs::create_dir_all(&generated).map_err(|e| {
+        build_failed(
+            package_label,
+            format!("creating _generated_ dir for Deno codegen: {e}"),
+        )
+    })?;
     tracing::info!(
         generated = %generated.display(),
         "generating Deno wire vocabulary into staged package"
@@ -77,6 +90,19 @@ pub fn provision_deno_typescript(temp_dir: &Path, package_label: &str) -> Result
     })
 }
 
+/// Whether a staged package carries a Deno (TypeScript) runtime — read from
+/// its manifest, matching the gate [`provision_deno_typescript`] uses. The
+/// cache-reuse guard pairs this with `_generated_` existence so a Deno slot
+/// missing its regenerated wire vocabulary re-stages instead of being reused
+/// broken (the Deno parallel to [`crate::python_venv::staged_package_has_python`]
+/// + `.venv` existence).
+pub(crate) fn staged_package_has_deno(dir: &Path) -> bool {
+    matches!(
+        build::read_minimal_project_config(dir),
+        Ok(Some(config)) if build::has_typescript_runtime_processors(&config)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,6 +114,27 @@ mod tests {
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
+    }
+
+    #[test]
+    fn staged_package_has_deno_reads_manifest() {
+        let deno = tempdir().unwrap();
+        std::fs::write(
+            deno.path().join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: ts\n  version: 0.1.0\nprocessors:\n  - name: T\n    version: 1.0.0\n    description: d\n    runtime: deno\n    execution: manual\n    entrypoint: \"t.ts:default\"\n    inputs: []\n    outputs: []\n",
+        )
+        .unwrap();
+        assert!(staged_package_has_deno(deno.path()));
+
+        let schemas_only = tempdir().unwrap();
+        std::fs::write(
+            schemas_only.path().join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: s\n  version: 0.1.0\nschemas:\n  T:\n    file: schemas/t.yaml\n",
+        )
+        .unwrap();
+        assert!(!staged_package_has_deno(schemas_only.path()));
+        // Missing manifest → not a Deno package.
+        assert!(!staged_package_has_deno(tempdir().unwrap().path()));
     }
 
     #[test]
