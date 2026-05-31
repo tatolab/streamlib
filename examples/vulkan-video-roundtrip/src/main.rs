@@ -13,16 +13,16 @@
 //!   cargo run -p vulkan-video-roundtrip -- h264 [device] [seconds]
 //!   cargo run -p vulkan-video-roundtrip -- h265 /dev/video2 10
 //!
-//! Packages build automatically on `cargo run` via the build orchestrator.
-//!`
-//! so the runtime can find each cdylib at load time.
+//! Packages build automatically on `cargo run` via the build orchestrator,
+//! resolved from the Gitea generic registry by version so the runtime can
+//! find each cdylib at load time.
 
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::Runner;
-use streamlib::sdk::RunnerAutoBuild;
+use streamlib::sdk::runtime::{BuildPolicy, Runner, SemVerRange, Strategy};
 use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
@@ -38,14 +38,21 @@ fn main() -> Result<()> {
 
     let runtime = Runner::with_auto_build()?;
 
-    // Load all four processor packages at runtime. `@tatolab/core` is
-    // pulled in transitively by each — its wire-vocabulary schemas
-    // (`EncodedVideoFrame.max_payload_bytes` in particular) are
-    // load-bearing for iceoryx2 publisher sizing.
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/camera"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "display"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/display"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h264"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/h264"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h265"), streamlib::sdk::runtime::Strategy::Path { path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/h265"), build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
+    // Resolve every package from the Gitea generic registry by version — the
+    // cross-repo consumer path. The orchestrator pulls each `.slpkg` and builds
+    // it from source on the host. `@tatolab/core` is pulled in transitively by
+    // each — its wire-vocabulary schemas (`EncodedVideoFrame.max_payload_bytes`
+    // in particular) are load-bearing for iceoryx2 publisher sizing. Registry
+    // endpoint comes from `STREAMLIB_REGISTRY_URL` (or `GITEA_URL`).
+    let registry = || Strategy::Registry {
+        version_req: SemVerRange::Any,
+        build: BuildPolicy::IfStale,
+    };
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), registry())?;
+    runtime
+        .add_module_with_blocking(module_ident_any_version!("tatolab", "display"), registry())?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h264"), registry())?;
+    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h265"), registry())?;
 
     // --- Camera ---
     // STREAMLIB_CAMERA_MAX_WIDTH / STREAMLIB_CAMERA_MAX_HEIGHT cap V4L2
@@ -58,7 +65,10 @@ fn main() -> Result<()> {
         .ok()
         .and_then(|s| s.parse().ok());
     let mut camera_config = serde_json::Map::new();
-    camera_config.insert("device_id".into(), serde_json::Value::String(device.to_string()));
+    camera_config.insert(
+        "device_id".into(),
+        serde_json::Value::String(device.to_string()),
+    );
     if let Some(w) = max_width {
         camera_config.insert("max_width".into(), serde_json::Value::from(w));
     }
@@ -98,10 +108,8 @@ fn main() -> Result<()> {
     } else {
         schema_ident!("tatolab", "h264", "H264Decoder", "1.0.0")
     };
-    let decoder = runtime.add_processor(ProcessorSpec::new(
-        decoder_ident,
-        serde_json::json!({}),
-    ))?;
+    let decoder =
+        runtime.add_processor(ProcessorSpec::new(decoder_ident, serde_json::json!({})))?;
     println!("+ {}Decoder: {decoder}", codec.to_uppercase());
 
     // --- Display ---
