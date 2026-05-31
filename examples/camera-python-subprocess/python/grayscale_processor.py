@@ -29,7 +29,6 @@ class GrayscaleProcessor:
         self._output_pool_index = 0
         self._output_pool_width = 0
         self._output_pool_height = 0
-        self._frame_index = 0
         print("[GrayscaleProcessor] setup", flush=True)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -65,11 +64,9 @@ class GrayscaleProcessor:
             output_surface.unlock(read_only=False)
             output_surface.release()
 
-        self._frame_index += 1
         frame["surface_id"] = handle_id
         frame["width"] = width
         frame["height"] = height
-        frame["frame_index"] = str(self._frame_index)
         ctx.outputs.write("video_out", frame)
 
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:
