@@ -1,13 +1,23 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# Standalone, registry-only example (headed to its own repo). The SDK resolves
+# from the Gitea registry by version and the empty `[workspace]` table makes
+# this its own workspace root.
+#
+# DEFERRED, not in scope: this example is a no-op at HEAD. Its CLAP reverb
+# pipeline (`AudioCapture → ClapEffect → AudioOutput`) is macOS/iOS-only and
+# cannot yet be a standalone registry-only example — `@tatolab/clap` is not
+# published to the registry and CLAP plugin discovery still needs a runtime
+# `add_module` story. The real pipeline lives in git history; see
+# `src/main.rs` for the full deferral note and the path back.
 [package]
 name = "microphone-reverb-speaker"
 version = "0.1.0"
 edition = "2024"
+publish = false
 
 [dependencies]
-streamlib = { path = "../../libs/streamlib-sdk", version = "0.4.30", registry = "gitea" }
-streamlib-audio = { path = "../../packages/audio", version = "0.4.30", registry = "gitea" }
-tokio = { version = "1.48.0", features = ["full"] }
-anyhow = "1.0.100"
+streamlib = { version = "0.4.33-dev.5", registry = "gitea" }
 
-[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-streamlib-clap = { path = "../../packages/clap", version = "0.4.30", registry = "gitea" }
+[workspace]

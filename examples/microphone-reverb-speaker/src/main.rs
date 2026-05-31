@@ -3,151 +3,35 @@
 
 //! Microphone → CLAP Reverb → Speaker Example
 //!
-//! Demonstrates streamlib's audio processing pipeline using CLAP as the "shader language for audio".
-//! Just as video shaders transform pixels on GPU, CLAP plugins transform audio in real-time.
+//! Demonstrates streamlib's audio processing pipeline using CLAP as the
+//! "shader language for audio": `AudioCapture → ClapEffect (reverb) →
+//! AudioOutput`, with the reverb plugin discovered on the host via
+//! `ClapScanner`.
+//!
+//! # Registry-only migration status — DEFERRED, not in scope
+//!
+//! This example is intentionally a no-op at HEAD. Its real implementation
+//! (preserved in git history before the registry-only migration) cannot yet
+//! be expressed as a standalone, registry-only example for two reasons:
+//!
+//! 1. The CLAP plugin host (`@tatolab/clap`) is macOS/iOS-only and is **not**
+//!    published to the Gitea registry, so a standalone consumer cannot resolve
+//!    it by version.
+//! 2. The pipeline relies on `ClapScanner` — a compile-time library API for
+//!    discovering installed CLAP plugins — and the deprecated typed-struct
+//!    processor API. There is no runtime `add_module` / `ProcessorSpec`
+//!    equivalent for CLAP plugin discovery yet. Designing that runtime
+//!    CLAP-discovery story is the out-of-scope work this example waits on.
+//!
+//! When CLAP ships on Linux and a runtime plugin-discovery path exists, restore
+//! the `AudioCapture → ClapEffect → AudioOutput` pipeline from git history and
+//! load `@tatolab/audio` + `@tatolab/clap` via `Strategy::Registry` like the
+//! other examples.
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
 fn main() {
     eprintln!(
-        "microphone-reverb-speaker currently requires macOS — the CLAP plugin \
-         host is not yet available on Linux. Tracked as a follow-up to issue #358."
+        "microphone-reverb-speaker is deferred and currently a no-op — its CLAP \
+         reverb pipeline is macOS/iOS-only and has no registry-only / runtime \
+         plugin-discovery path yet. See the module-level note in src/main.rs."
     );
-    std::process::exit(2);
-}
-
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-use streamlib::sdk::permissions::request_audio_permission;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-use streamlib::sdk::error::Result;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-use streamlib::sdk::runtime::Runner;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-use streamlib_audio::{AudioCaptureProcessor, AudioOutputProcessor};
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-use streamlib_clap::{ClapEffectProcessor, ClapScanner};
-
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-fn main() -> Result<()> {
-
-    println!("\n🎙️  Microphone → CLAP Reverb → Speaker Example\n");
-
-    // Create runtime first
-    let runtime = Runner::new()?;
-
-    // Request microphone permission (must be on main thread before adding audio processors)
-    println!("🔒 Requesting microphone permission...");
-    if !request_audio_permission()? {
-        eprintln!("❌ Microphone permission denied!");
-        eprintln!("\nThis example requires microphone access.");
-        eprintln!("Please grant permission in System Settings → Privacy & Security → Microphone");
-        return Ok(());
-    }
-    println!("✅ Microphone permission granted\n");
-
-    // Step 1: Scan for installed CLAP plugins
-    println!("🔍 Scanning for installed CLAP plugins...");
-    let plugins = ClapScanner::scan_system_plugins()?;
-
-    if plugins.is_empty() {
-        eprintln!("❌ No CLAP plugins found!");
-        eprintln!("\nPlease install a CLAP plugin:");
-        eprintln!("  • Surge XT Effects: https://surge-synthesizer.github.io/");
-        eprintln!("  • Airwindows Consolidated: https://github.com/baconpaul/airwin2rack");
-        eprintln!("\nInstallation paths:");
-        eprintln!("  macOS: ~/Library/Audio/Plug-Ins/CLAP/");
-        eprintln!("  Linux: ~/.clap/ or /usr/lib/clap/");
-        eprintln!("  Windows: %COMMONPROGRAMFILES%\\CLAP\\");
-        return Ok(());
-    }
-
-    println!("✅ Found {} CLAP plugins:", plugins.len());
-    for (i, plugin) in plugins.iter().enumerate().take(10) {
-        println!("   [{}] {} by {}", i, plugin.name, plugin.vendor);
-    }
-
-    // Step 2: Find an effects plugin (reverb, delay, etc.)
-    println!("\n🔍 Looking for audio effects plugin...");
-    let effects_plugin = plugins.iter().find(|p| {
-        let name_lower = p.name.to_lowercase();
-        name_lower.contains("reverb")
-            || name_lower.contains("verb")
-            || name_lower.contains("effects")
-            || name_lower.contains("fx")
-            || p.features.iter().any(|f| {
-                let f_lower = f.to_lowercase();
-                f_lower.contains("reverb") || f_lower.contains("effect")
-            })
-    });
-
-    let plugin_path = match effects_plugin {
-        Some(plugin) => {
-            println!("✅ Using: {} by {}", plugin.name, plugin.vendor);
-            println!("   Path: {}", plugin.path.display());
-            plugin.path.clone()
-        }
-        None => {
-            println!("⚠️  No effects plugin found, using first available plugin...");
-            let first = &plugins[0];
-            println!("   Using: {} by {}", first.name, first.vendor);
-            first.path.clone()
-        }
-    };
-
-    // Step 3: Add microphone input processor
-    println!("\n🎤 Adding microphone input...");
-    let mic =
-        runtime.add_processor(AudioCaptureProcessor::node(AudioCaptureProcessor::Config {
-            device_id: None,
-        }))?;
-    println!("✅ Microphone processor added");
-
-    // Step 4: Add CLAP reverb plugin (activates at source sample rate on first frame)
-    println!("\n🎛️  Adding CLAP plugin...");
-    let reverb = runtime.add_processor(ClapEffectProcessor::node(ClapEffectProcessor::Config {
-        plugin_path: plugin_path.to_string_lossy().to_string(),
-        plugin_name: None, // Use first plugin in bundle
-        plugin_index: None,
-        buffer_size: 512,
-    }))?;
-    println!("✅ CLAP effect processor added (activates at source sample rate)");
-
-    // Step 5: Add speaker output processor
-    println!("\n🔊 Adding speaker output...");
-    let speaker =
-        runtime.add_processor(AudioOutputProcessor::node(AudioOutputProcessor::Config {
-            device_id: None, // Use default speaker
-        }))?;
-    println!("✅ Speaker processor added");
-
-    // Step 6: Connect the pipeline using type-safe port markers
-    println!("\n🔗 Building audio pipeline...");
-
-    // Pipeline: mic → reverb → speaker
-    runtime.connect(
-        output::<AudioCaptureProcessor::OutputLink::audio>(&mic),
-        input::<ClapEffectProcessor::InputLink::audio_in>(&reverb),
-    )?;
-    println!("   ✓ mic → reverb");
-
-    runtime.connect(
-        output::<ClapEffectProcessor::OutputLink::audio_out>(&reverb),
-        input::<AudioOutputProcessor::InputLink::audio>(&speaker),
-    )?;
-    println!("   ✓ reverb → speaker");
-
-    println!("✅ Pipeline connected: mic → reverb → speaker");
-
-    // Step 7: Start the runtime
-    println!("\n▶️  Starting audio processing...");
-    println!("   Press Ctrl+C to stop\n");
-    println!("🎙️  Speak into your microphone - you should hear yourself with reverb!\n");
-
-    // start() blocks on macOS standalone (runs NSApplication event loop)
-    runtime.start()?;
-
-    runtime.wait_for_signal()?;
-
-    println!("\n✅ Stopped\n");
-
-    Ok(())
 }
