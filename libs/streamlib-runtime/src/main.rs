@@ -132,7 +132,10 @@ async fn run(args: Args) -> Result<()> {
 
     if let Some(ref path) = args.snapshot {
         println!("Loading pipeline: {}", path.display());
-        runtime.load_graph_snapshot_from_path(path)?;
+        // Resolving variant: pull + build any referenced package from the
+        // registry so a snapshot is self-contained (the runtime only
+        // pre-loads the api-server at boot).
+        runtime.load_graph_snapshot_resolving_from_path(path).await?;
     }
 
     runtime.start()?;
