@@ -21,7 +21,6 @@
 
 use streamlib::sdk::color::ResolvedColorInfo;
 use streamlib::sdk::context::GpuContextFullAccess;
-use streamlib::sdk::engine::HostGpuDeviceExt;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::rhi::Texture;
 
@@ -209,9 +208,13 @@ fn build_backend(
     max_height: u32,
     preference: JpegBackendPreference,
 ) -> Result<Box<dyn JpegDecodeBackend>> {
+    // `host_vulkan_device_arc()` is the cdylib-safe bridge: it dispatches
+    // through the v9 FullAccess vtable slot when the decoder runs as a
+    // plugin cdylib, and reaches the host device directly in host mode.
+    // `device()` panics in cdylib mode (its `&Arc<GpuDevice>` borrows
+    // into host-private state that can't cross the plugin ABI).
     let caps = full_access
-        .device()
-        .vulkan_device()
+        .host_vulkan_device_arc()?
         .third_party_gpu_capabilities();
 
     match preference {

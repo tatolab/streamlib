@@ -23,7 +23,6 @@ use streamlib::sdk::context::{GpuContextFullAccess, TextureRing};
 use streamlib::sdk::engine::host_rhi::{
     HostVulkanBuffer, RhiCommandRecorder, VulkanAccess, VulkanStage,
 };
-use streamlib::sdk::engine::HostGpuDeviceExt;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::rhi::{TextureFormat, TextureUsages, VulkanLayout};
 
@@ -86,7 +85,13 @@ impl VulkanComputeBackend {
             )));
         }
 
-        let device = full_access.device().vulkan_device();
+        // `host_vulkan_device_arc()` is the cdylib-safe bridge — `device()`
+        // panics when this backend is constructed inside a plugin cdylib
+        // (its `&Arc<GpuDevice>` can't cross the plugin ABI). The owned
+        // Arc lives for the whole constructor; borrow it for the helpers
+        // below that expect `&Arc<HostVulkanDevice>`.
+        let device_arc = full_access.host_vulkan_device_arc()?;
+        let device = &device_arc;
         let kernel = JpegDecodeKernel::new(device)?;
 
         let coef_bytes = worst_case_coefficient_buffer_bytes_420(max_width, max_height);
