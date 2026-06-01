@@ -64,7 +64,7 @@ target_version="$base_version"
 
 # --- derive the streamlib closure in topological order -----------------------
 mapfile -t ORDER < <("$PY" - <<'PY'
-import json, subprocess
+import json, os, subprocess
 md = json.loads(subprocess.check_output(["cargo","metadata","--format-version","1"]))
 pkgs = {p["id"]: p for p in md["packages"]}
 members = set(md["workspace_members"])
@@ -76,8 +76,24 @@ name = lambda i: pkgs[i]["name"]
 # pull adapters + consumer-rhi the SDK closure alone doesn't, so the union of
 # the three roots' closures (topo-ordered) is what a polyglot consumer needs.
 root_names = ("streamlib", "streamlib-python-native", "streamlib-deno-native")
-roots = [i for i in members if name(i) in root_names]
 internal = lambda i: i in members and (name(i).startswith("streamlib") or name(i) == "vulkan-jpeg")
+# STREAMLIB_PUBLISH_ALL_LIBS=1 widens the closure from "what the streamlib SDK
+# needs" to "every internal library crate", so a package can cargo-depend on any
+# in-tree lib (e.g. api-server -> streamlib-moq) and resolve it from the
+# registry. Binaries (streamlib-cli / -runtime) and test fixtures are excluded.
+# Used by the container's registry-fill (docker/build-stage1.sh).
+if os.environ.get("STREAMLIB_PUBLISH_ALL_LIBS") == "1":
+    skip = {"streamlib-test-fixtures", "streamlib-test-fixtures-abi-mismatch"}
+    lib_kinds = {"lib", "rlib", "cdylib", "proc-macro", "dylib", "staticlib"}
+    has_lib = lambda i: any(set(t["kind"]) & lib_kinds for t in pkgs[i]["targets"])
+    # Respect each crate's own publish setting: cargo metadata reports
+    # `publish == []` for `publish = false` crates (internal adapter helpers),
+    # which `cargo publish` refuses. Only publishable libs go to the registry.
+    publishable = lambda i: pkgs[i].get("publish") != []
+    roots = [i for i in members
+             if internal(i) and has_lib(i) and publishable(i) and name(i) not in skip]
+else:
+    roots = [i for i in members if name(i) in root_names]
 def deps(i):
     out = []
     for d in resolve[i]["deps"]:

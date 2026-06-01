@@ -3,20 +3,20 @@
 # StreamLib — self-contained, headless, GPU-capable runtime image.
 #
 # Multi-stage:
-#   * gitea-src : pull the static Gitea binary out of the official image.
-#   * builder   : full toolchain (GPU-free). Stands up an ephemeral Gitea,
-#                 publishes the whole closure from THIS checkout, builds the
-#                 runtime, and pre-materializes the api-server core module.
-#                 (docker/build-stage1.sh does all of it.)
-#   * final     : nvidia/cuda runtime base + GPU/Vulkan/GLVND + V4L2 + userspace
-#                 audio + the build toolchain (build-capable). Carries the
-#                 filled Gitea, the app dir, and the cargo caches. Runs the
-#                 service via docker/entrypoint.sh — no .deb, no systemd.
+#   * builder : full toolchain (GPU-free). Stands up an ephemeral Gitea,
+#               publishes the full internal lib set + SDKs + every package from
+#               THIS checkout, and builds the runtime binaries.
+#               (docker/build-stage1.sh does all of it.)
+#   * final   : nvidia/cuda runtime base + GPU/Vulkan/GLVND + V4L2 + userspace
+#               audio + the build toolchain (build-capable). Carries the filled
+#               Gitea, the app dir, and the cargo caches. Runs the service via
+#               docker/entrypoint.sh — no .deb, no systemd.
 #
 # The image is build-capable on purpose: the in-container Gitea + toolchain let
-# `runtime.add_module` resolve and build *new* packages against the same
+# `runtime.add_module` resolve and build packages against the same
 # registry-by-version model used locally (docs/architecture/gitea-registry-distribution.md).
-# Core boot needs neither (api-server is pre-materialized).
+# The api-server core module builds from source on first boot (warm cargo cache
+# -> tens of seconds); a resolution preflight at build time fails fast on a gap.
 #
 # Host prerequisites (driver + nvidia-container-toolkit + virtual devices) are
 # NOT bakeable into an image — see scripts/docker/host-prereqs.sh and docker/README.md.
@@ -76,16 +76,15 @@ RUN curl -fsSL "https://dl.gitea.com/gitea/${GITEA_VERSION}/gitea-${GITEA_VERSIO
 WORKDIR /src
 COPY . /src
 
-# Fill the registry, build the binaries, pre-materialize api-server.
+# Fill the registry (all internal libs + SDKs + packages), build the binaries.
 ARG SKIP_PYTHON_SDK=0
 ARG SKIP_DENO_SDK=0
 ARG SKIP_PACKAGES=0
-ARG PREBUILD_API_SERVER=1
 ENV SRC=/src APP_DIR=/opt/streamlib GITEA_WORK_DIR=/var/lib/gitea \
     GITEA_URL=http://localhost:3300 GITEA_ORG=tatolab GITEA_ADMIN_USER=tatolab-admin
 RUN chmod +x docker/build-stage1.sh \
  && SKIP_PYTHON_SDK=${SKIP_PYTHON_SDK} SKIP_DENO_SDK=${SKIP_DENO_SDK} \
-    SKIP_PACKAGES=${SKIP_PACKAGES} PREBUILD_API_SERVER=${PREBUILD_API_SERVER} \
+    SKIP_PACKAGES=${SKIP_PACKAGES} \
     docker/build-stage1.sh
 
 # -----------------------------------------------------------------------------

@@ -1,22 +1,24 @@
 [package]
-name = "streamlib-moq"
+name = "streamlib-moq-processors"
 version = "0.4.30"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
-description = "MoQ (Media over QUIC) publish/subscribe track processors for streamlib."
+description = "MoQ (Media over QUIC) publish/subscribe track processors for streamlib — the @tatolab/moq package, built on the streamlib-moq transport library."
 keywords = ["moq", "media-over-quic", "streaming", "streamlib", "webtransport"]
 categories = ["multimedia::video", "multimedia"]
 repository = "https://github.com/tato123/streamlib"
 license = "BUSL-1.1"
 
 [lib]
-name = "streamlib_moq"
+name = "streamlib_moq_processors"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
 streamlib-jtd-codegen = {version = "0.4.30", registry = "gitea"}
 
 [dependencies]
+# Transport library half of @tatolab/moq (publish/subscribe sessions + catalog).
+streamlib-moq = {version = "0.4.30", registry = "gitea"}
 streamlib = {version = "0.4.30", registry = "gitea"}
 streamlib-macros = {version = "0.4.30", registry = "gitea"}
 streamlib-plugin-abi = {version = "0.4.30", registry = "gitea"}
@@ -29,13 +31,6 @@ parking_lot = "0.12"
 bytes = "1.5"
 rmp-serde = "1.3"
 tokio = {version = "1.48.0", features = ["full", "rt-multi-thread", "sync", "macros", "time"]}
-
-moq-transport = {version = "0.14.1"}
-web-transport = {version = "0.10"}
-quinn = {version = "0.11"}
-url = "2"
-rustls = { version = "0.23", features = ["ring"] }
-rustls-native-certs = {version = "0.8"}
 tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 
 [workspace]

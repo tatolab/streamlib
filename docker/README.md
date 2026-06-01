@@ -50,13 +50,16 @@ in-container Gitea registry is on `localhost:3300` (inside the container).
   a declarative virtual null sink ([`docker/pipewire/10-virtual.conf`](pipewire/10-virtual.conf))
   comes up in the entrypoint. No `/dev/snd`.
 - **Registry — in-container, pre-filled.** Stage 1 stands up an ephemeral Gitea,
-  publishes the vulkanalia fork + the streamlib crate/python/deno closure + every
-  `packages/*` as a `.slpkg`, and bakes the filled data dir into the image. The
-  entrypoint serves it (as the `git` user — Gitea refuses root) so
-  `runtime.add_module` of a new package resolves in-container.
-- **Boot — compiler-free.** The `api-server` core module is pre-materialized into
-  the package cache in stage 1, so the runtime boots without rebuilding it. The
-  toolchain is present only for *new* runtime module builds.
+  publishes the vulkanalia fork + the full internal `libs/` set + the python/deno
+  SDKs + every `packages/*` as a `.slpkg`, and bakes the filled data dir into the
+  image. The entrypoint serves it (as the `git` user — Gitea refuses root) so
+  `runtime.add_module` of a package — and any in-tree lib it cargo-depends on —
+  resolves in-container.
+- **Boot — builds the core module on first start.** The runtime compiles
+  `api-server` from source on first boot against the in-container registry
+  (build-capable image, warm cargo cache → tens of seconds); a build-time
+  resolution preflight fails the image build fast if a dependency can't resolve.
+  The toolchain stays for runtime module builds.
 
 ## Build args
 
