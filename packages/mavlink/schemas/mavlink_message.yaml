@@ -354,3 +354,81 @@ mapping:
         metadata:
           description: "Target component ID. Request: 0 (broadcast) or id of specific component. MAVLink2 extension field that defaults to 0."
         type: uint8
+
+  command_long:
+    properties:
+      system_id:
+        metadata: { description: "MAVLink system ID of the sender." }
+        type: uint8
+      component_id:
+        metadata: { description: "MAVLink component ID of the sender." }
+        type: uint8
+      sequence:
+        metadata: { description: "MAVLink sequence counter." }
+        type: uint8
+      peer_addr:
+        metadata: { description: "Networking peer address (host:port). See heartbeat.peer_addr." }
+        type: string
+      timestamp_ns:
+        metadata: { description: "Monotonic timestamp from source NetworkPacket recv (int64 as string)." }
+        type: string
+      target_system:
+        metadata: { description: "System ID of the command target." }
+        type: uint8
+      target_component:
+        metadata: { description: "Component ID of the command target." }
+        type: uint8
+      command:
+        metadata:
+          description: "MAV_CMD command id (uint16). 400 = MAV_CMD_COMPONENT_ARM_DISARM. The encoder lifts this to a typed MavCmd; ids outside the common dialect are rejected on encode."
+        type: uint16
+      confirmation:
+        metadata: { description: "0 for the first transmission of this command; incremented on retransmission." }
+        type: uint8
+      param1:
+        metadata: { description: "Command parameter 1 (meaning depends on command; for ARM_DISARM, 1=arm / 0=disarm)." }
+        type: float32
+      param2:
+        metadata: { description: "Command parameter 2." }
+        type: float32
+      param3:
+        metadata: { description: "Command parameter 3." }
+        type: float32
+      param4:
+        metadata: { description: "Command parameter 4." }
+        type: float32
+      param5:
+        metadata: { description: "Command parameter 5." }
+        type: float32
+      param6:
+        metadata: { description: "Command parameter 6." }
+        type: float32
+      param7:
+        metadata: { description: "Command parameter 7." }
+        type: float32
+
+  encapsulated_data:
+    properties:
+      system_id:
+        metadata: { description: "MAVLink system ID of the sender." }
+        type: uint8
+      component_id:
+        metadata: { description: "MAVLink component ID of the sender." }
+        type: uint8
+      sequence:
+        metadata: { description: "MAVLink sequence counter." }
+        type: uint8
+      peer_addr:
+        metadata: { description: "Networking peer address (host:port). See heartbeat.peer_addr." }
+        type: string
+      timestamp_ns:
+        metadata: { description: "Monotonic timestamp from source NetworkPacket recv (int64 as string)." }
+        type: string
+      seqnr:
+        metadata: { description: "Data-chunk sequence number. The AGP sim streams race-status + track data in the payload (see VADR-TS-002)." }
+        type: uint16
+      data:
+        metadata:
+          description: "Raw chunk payload (up to 253 bytes). Application-defined; the AGP sim packs its race-status / track structs here for the consumer to parse."
+        elements:
+          type: uint8

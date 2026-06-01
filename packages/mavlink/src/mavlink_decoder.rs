@@ -17,8 +17,9 @@ use streamlib::sdk::error::Result;
 use streamlib::sdk::processors::ReactiveProcessor;
 
 use crate::_generated_::tatolab__mavlink::mavlink_message::{
-    MavlinkMessageAttitude, MavlinkMessageHeartbeat, MavlinkMessageHighresImu,
-    MavlinkMessageSetAttitudeTarget, MavlinkMessageSetPositionTargetLocalNed, MavlinkMessageTimesync,
+    MavlinkMessageAttitude, MavlinkMessageCommandLong, MavlinkMessageEncapsulatedData,
+    MavlinkMessageHeartbeat, MavlinkMessageHighresImu, MavlinkMessageSetAttitudeTarget,
+    MavlinkMessageSetPositionTargetLocalNed, MavlinkMessageTimesync,
 };
 use crate::_generated_::{MavlinkMessage, NetworkPacket};
 
@@ -213,6 +214,33 @@ fn convert(
             ts1: d.ts1.to_string(),
             target_system: d.target_system,
             target_component: d.target_component,
+        }),
+        COMMAND_LONG(d) => MavlinkMessage::CommandLong(MavlinkMessageCommandLong {
+            system_id,
+            component_id,
+            sequence,
+            peer_addr,
+            timestamp_ns,
+            target_system: d.target_system,
+            target_component: d.target_component,
+            command: d.command as u16,
+            confirmation: d.confirmation,
+            param1: d.param1,
+            param2: d.param2,
+            param3: d.param3,
+            param4: d.param4,
+            param5: d.param5,
+            param6: d.param6,
+            param7: d.param7,
+        }),
+        ENCAPSULATED_DATA(d) => MavlinkMessage::EncapsulatedData(MavlinkMessageEncapsulatedData {
+            system_id,
+            component_id,
+            sequence,
+            peer_addr,
+            timestamp_ns,
+            seqnr: d.seqnr,
+            data: d.data.to_vec(),
         }),
         _ => return None,
     })
