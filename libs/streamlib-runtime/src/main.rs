@@ -135,7 +135,7 @@ async fn run(args: Args) -> Result<()> {
         // Resolving variant: pull + build any referenced package from the
         // registry so a snapshot is self-contained (the runtime only
         // pre-loads the api-server at boot).
-        runtime.load_graph_snapshot_resolving_from_path(path).await?;
+        runtime.load_graph_snapshot_from_path_with_resolving(path).await?;
     }
 
     runtime.start()?;

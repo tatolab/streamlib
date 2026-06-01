@@ -1002,6 +1002,11 @@ impl Runner {
     /// The snapshot's `name` is stashed on the runtime so a subsequent
     /// [`Self::save_graph_snapshot`] re-emits it without caller
     /// bookkeeping.
+    ///
+    /// Assumes every referenced processor type is already registered (it
+    /// validates and fails on an unregistered type). For the turnkey case —
+    /// resolve and build referenced packages from the registry first — use
+    /// [`Self::load_graph_snapshot_with_resolving`].
     pub fn load_graph_snapshot(
         &self,
         snapshot: &crate::core::graph_snapshot::GraphSnapshot,
@@ -1064,6 +1069,10 @@ impl Runner {
     }
 
     /// Load a graph snapshot from a JSON file path.
+    ///
+    /// Assumes referenced processor types are already registered; for the
+    /// turnkey path that resolves missing modules from the registry, use
+    /// [`Self::load_graph_snapshot_from_path_with_resolving`].
     pub fn load_graph_snapshot_from_path(&self, path: &std::path::Path) -> Result<()> {
         let snapshot = crate::core::graph_snapshot::GraphSnapshot::from_json_file(path)?;
 
@@ -1087,7 +1096,7 @@ impl Runner {
     /// registry at its highest published version and built on the host —
     /// requires a build orchestrator (e.g. `RunnerAutoBuild::with_auto_build`).
     /// Fails loud, naming the package, if a referenced module can't resolve.
-    pub async fn load_graph_snapshot_resolving(
+    pub async fn load_graph_snapshot_with_resolving(
         &self,
         snapshot: &crate::core::graph_snapshot::GraphSnapshot,
     ) -> Result<()> {
@@ -1141,8 +1150,8 @@ impl Runner {
         self.load_graph_snapshot(snapshot)
     }
 
-    /// Path variant of [`Runner::load_graph_snapshot_resolving`].
-    pub async fn load_graph_snapshot_resolving_from_path(
+    /// Path variant of [`Runner::load_graph_snapshot_with_resolving`].
+    pub async fn load_graph_snapshot_from_path_with_resolving(
         &self,
         path: &std::path::Path,
     ) -> Result<()> {
@@ -1152,7 +1161,7 @@ impl Runner {
         } else {
             tracing::info!("Loading pipeline (resolving modules) from {}", path.display());
         }
-        self.load_graph_snapshot_resolving(&snapshot).await
+        self.load_graph_snapshot_with_resolving(&snapshot).await
     }
 
     /// Snapshot the live graph as a [`GraphSnapshot`].
