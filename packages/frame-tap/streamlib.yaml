@@ -1,0 +1,38 @@
+package:
+  org: tatolab
+  name: frame-tap
+  version: 1.0.0
+  description: "Frame tap — a sink processor that fans out from any video output and samples frames to disk on a configurable strategy, off the hot path."
+
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
+schemas:
+  FrameTapConfig:
+    file: schemas/frame_tap_config.yaml
+  # Wire types imported from @tatolab/core.
+  ColorInfo:
+    package: "@tatolab/core"
+  ContentLight:
+    package: "@tatolab/core"
+  MasteringDisplay:
+    package: "@tatolab/core"
+  VideoFrame:
+    package: "@tatolab/core"
+
+processors:
+  - name: FrameTap
+    version: 1.0.0
+    description: "Samples video frames to disk (JPEG) on a configurable strategy, off the hot path. A sink: attach it to any video output port (fan-out) to inspect that output without rerouting the pipeline."
+    runtime: rust
+    execution: reactive
+    config:
+      name: config
+      schema: FrameTapConfig
+    inputs:
+      - name: video_in
+        schema: VideoFrame
+    # A tap is a sink — no outputs. The upstream output fans out to this
+    # tap in parallel with its real consumer(s); the engine broadcasts a
+    # port's frames to every connected input.
+    outputs: []

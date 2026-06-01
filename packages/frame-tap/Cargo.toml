@@ -1,0 +1,33 @@
+[package]
+name = "streamlib-frame-tap"
+version = "0.4.30"
+edition = "2024"
+authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
+description = "Frame tap — a sink processor that fans out from any video output and samples frames to disk (JPEG) on a configurable strategy, off the hot path. The seed for streamlib's general tap behavior."
+keywords = ["tap", "sampler", "frame", "streamlib", "debug"]
+categories = ["multimedia::video", "multimedia"]
+repository = "https://github.com/tato123/streamlib"
+license = "BUSL-1.1"
+
+[lib]
+name = "streamlib_frame_tap"
+crate-type = ["rlib", "cdylib"]
+
+[build-dependencies]
+streamlib-jtd-codegen = {version = "0.4.30", registry = "gitea"}
+
+[dependencies]
+streamlib = {version = "0.4.30", registry = "gitea"}
+streamlib-macros = {version = "0.4.30", registry = "gitea"}
+streamlib-plugin-abi = {version = "0.4.30", registry = "gitea"}
+
+serde = {version = "1.0", features = ["derive"]}
+serde_json = {version = "1.0", features = ["preserve_order"]}
+parking_lot = "0.12"
+tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
+
+# Pure-Rust CPU JPEG encoder for the stills sample path (no GPU JPEG encode
+# exists in-tree; vulkan-jpeg is decode-only).
+jpeg-encoder = "0.6"
+
+[workspace]

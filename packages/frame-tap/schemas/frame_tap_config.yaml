@@ -1,0 +1,53 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for the FrameTap processor config.
+# The tap is a sink: it samples frames to disk (JPEG) on the selected
+# strategy, off the hot path, with safe-by-default filesystem caps.
+
+metadata:
+  type: FrameTapConfig
+  description: "Configuration for the frame tap (sink frame sampler)."
+
+properties:
+  strategy:
+    metadata:
+      description: "When to sample a frame. EveryNFrames: every n_frames-th frame. EveryDuration: at most one sample per interval_ms (monotonic wall clock). KeepLastK: every frame, retaining only the last keep_last_k files (rotating)."
+    enum:
+      - EveryNFrames
+      - EveryDuration
+      - KeepLastK
+  output_dir:
+    metadata:
+      description: "Directory to write sampled JPEG frames into (created if missing)."
+    type: string
+
+optionalProperties:
+  n_frames:
+    metadata:
+      description: "EveryNFrames: sample every Nth frame (default 30)."
+    type: uint32
+  interval_ms:
+    metadata:
+      description: "EveryDuration: minimum gap between samples in ms, measured on a monotonic wall clock (default 1000)."
+    type: uint32
+  keep_last_k:
+    metadata:
+      description: "KeepLastK: number of most-recent samples to retain (default 8)."
+    type: uint32
+  jpeg_quality:
+    metadata:
+      description: "JPEG quality 1..100 (default 85)."
+    type: uint32
+  max_file_count:
+    metadata:
+      description: "Filesystem safety cap: max sample files retained; oldest evicted past this (default 200)."
+    type: uint32
+  max_total_mb:
+    metadata:
+      description: "Filesystem safety cap: max total bytes of samples in MiB; oldest evicted past this (default 512)."
+    type: uint32
+  filename_prefix:
+    metadata:
+      description: "Filename prefix for samples (default 'frame'); files are '<prefix>_<index:06>.jpg'."
+    type: string

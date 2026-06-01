@@ -1,0 +1,26 @@
+{
+  "name": "camera-frame-tap",
+  "processors": [
+    {
+      "alias": "camera",
+      "type": { "org": "tatolab", "package": "camera", "type": "Camera", "version": "1.0.0" },
+      "config": { "device_id": "/dev/video0" }
+    },
+    {
+      "alias": "tap",
+      "type": { "org": "tatolab", "package": "frame-tap", "type": "FrameTap", "version": "1.0.0" },
+      "config": {
+        "strategy": "EveryNFrames",
+        "output_dir": "/tmp/frame-tap-samples",
+        "n_frames": 30,
+        "jpeg_quality": 85,
+        "max_file_count": 50,
+        "max_total_mb": 128,
+        "filename_prefix": "vivid"
+      }
+    }
+  ],
+  "connections": [
+    { "from": "camera.video", "to": "tap.video_in" }
+  ]
+}
