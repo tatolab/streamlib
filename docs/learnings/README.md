@@ -52,6 +52,8 @@ Avoid the two failure modes:
   interop); engine pre-warms every export pool at `HostVulkanDevice` construction
 - [@docs/learnings/nvidia-egl-dmabuf-render-target.md](nvidia-egl-dmabuf-render-target.md) —
   Linear DMA-BUFs on NVIDIA are EGL `external_only=TRUE` (sampler-only); FBO color attachments require a tiled DRM modifier from `eglQueryDmaBufModifiersEXT`
+- [@docs/learnings/headless-nvidia-vulkan-container.md](headless-nvidia-vulkan-container.md) —
+  Headless NVIDIA Vulkan in a container reports `ERROR_INCOMPATIBLE_DRIVER` without the GLVND/EGL dispatch libs (the toolkit mounts only vendor libs); plus the PipeWire-in-container recipe for an ALSA/cpal app (virtual null sink, `XDG_RUNTIME_DIR=/run/user/0`, poll-don't-sleep)
 - [@docs/learnings/vma-export-pools.md](vma-export-pools.md) —
   Pattern for mixing DMA-BUF exportable and non-exportable allocations via VMA pools
 - [@docs/learnings/vulkan-frames-in-flight.md](vulkan-frames-in-flight.md) —

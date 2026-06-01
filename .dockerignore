@@ -1,0 +1,20 @@
+# Build context excludes — keep the context small and the build hermetic.
+# The vulkanalia fork is cloned fresh in stage 1; the registry is filled from
+# source; binaries + caches are produced inside the build, never shipped in.
+**/target
+**/.streamlib
+.git
+.github
+**/node_modules
+**/__pycache__
+**/_generated_
+**/.venv
+**/venv
+**/*.slpkg
+**/*.pyc
+**/.mypy_cache
+**/.pytest_cache
+**/.ruff_cache
+**/.DS_Store
+docs/retests
+*.log
