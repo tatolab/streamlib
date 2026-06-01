@@ -1,0 +1,38 @@
+# Run reference for the self-contained headless StreamLib GPU service.
+#
+# A Dockerfile captures only the in-image layer; GPU + device passthrough are
+# host/run concerns that cannot be baked in. Run host prerequisites first:
+#   scripts/docker/host-prereqs.sh
+# then:  docker compose up --build
+#
+# See docker/README.md for the full three-layer split (host / image / run).
+services:
+  streamlib:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Override the base / toolchain or skip closure streams for faster
+      # iteration, e.g. --build-arg SKIP_DENO_SDK=1 --build-arg PREBUILD_API_SERVER=0
+      args:
+        CUDA_BASE: nvidia/cuda:13.2.1-runtime-ubuntu24.04
+    image: streamlib:latest
+    # Real headless NVIDIA Vulkan — no X server, no Weston, no software GL.
+    gpus: all
+    environment:
+      NVIDIA_DRIVER_CAPABILITIES: all
+      NVIDIA_VISIBLE_DEVICES: all
+    ports:
+      - "9000:9000"   # runtime HTTP/WebSocket control plane
+    # The toolkit auto-injects /dev/dri (renderD128) + /dev/nvidia* under the
+    # graphics capability. A camera is optional — uncomment to pass a
+    # v4l2loopback node (created by scripts/docker/host-prereqs.sh) into the
+    # container; otherwise use a synthetic/file source in the graph.
+    # devices:
+    #   - "/dev/video0:/dev/video0"
+    #
+    # Genuine low-latency (drone) audio is opt-in; PipeWire degrades gracefully
+    # to non-RT without these:
+    # cap_add: [ SYS_NICE ]
+    # ulimits:
+    #   rtprio: 95
+    restart: unless-stopped

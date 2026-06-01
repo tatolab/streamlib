@@ -4,7 +4,7 @@
 //! MoQ Publish Track — forwards raw bytes from a graph input to a named MoQ track.
 
 use crate::_generated_::EncodedVideoFrame;
-use crate::moq_session::{sessions_for_runtime, MoqPublishSession, SharedMoqSessions};
+use streamlib_moq::{sessions_for_runtime, MoqPublishSession, SharedMoqSessions};
 use parking_lot::Mutex;
 use std::sync::Arc;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};

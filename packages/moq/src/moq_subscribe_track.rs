@@ -6,7 +6,7 @@
 //! Type-agnostic: uses `write_raw()` to pass through bytes without
 //! deserialization. Reconnects on connection loss with exponential backoff.
 
-use crate::moq_session::{sessions_for_runtime, MoqTrackReader};
+use streamlib_moq::{sessions_for_runtime, MoqTrackReader};
 use std::sync::Arc;
 use std::time::Duration;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};

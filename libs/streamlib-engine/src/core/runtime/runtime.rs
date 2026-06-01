@@ -1002,6 +1002,11 @@ impl Runner {
     /// The snapshot's `name` is stashed on the runtime so a subsequent
     /// [`Self::save_graph_snapshot`] re-emits it without caller
     /// bookkeeping.
+    ///
+    /// Assumes every referenced processor type is already registered (it
+    /// validates and fails on an unregistered type). For the turnkey case —
+    /// resolve and build referenced packages from the registry first — use
+    /// [`Self::load_graph_snapshot_with_resolving`].
     pub fn load_graph_snapshot(
         &self,
         snapshot: &crate::core::graph_snapshot::GraphSnapshot,
@@ -1064,6 +1069,10 @@ impl Runner {
     }
 
     /// Load a graph snapshot from a JSON file path.
+    ///
+    /// Assumes referenced processor types are already registered; for the
+    /// turnkey path that resolves missing modules from the registry, use
+    /// [`Self::load_graph_snapshot_from_path_with_resolving`].
     pub fn load_graph_snapshot_from_path(&self, path: &std::path::Path) -> Result<()> {
         let snapshot = crate::core::graph_snapshot::GraphSnapshot::from_json_file(path)?;
 
@@ -1074,6 +1083,85 @@ impl Runner {
         }
 
         self.load_graph_snapshot(&snapshot)
+    }
+
+    /// Like [`Runner::load_graph_snapshot`], but first resolves and loads —
+    /// from the registry — any module referenced by the snapshot whose
+    /// processor type isn't registered yet, so a graph snapshot is
+    /// self-contained: `streamlib-runtime --snapshot graph.json` brings up a
+    /// full pipeline turnkey instead of failing on the first unregistered
+    /// processor type (the bare runtime only pre-loads the api-server).
+    ///
+    /// One `add_module` per referenced package (deduped), resolved from the
+    /// registry at its highest published version and built on the host —
+    /// requires a build orchestrator (e.g. `RunnerAutoBuild::with_auto_build`).
+    /// Fails loud, naming the package, if a referenced module can't resolve.
+    pub async fn load_graph_snapshot_with_resolving(
+        &self,
+        snapshot: &crate::core::graph_snapshot::GraphSnapshot,
+    ) -> Result<()> {
+        use crate::core::processors::PROCESSOR_REGISTRY;
+        use crate::core::runtime::module_loader::{BuildPolicy, Strategy};
+        use streamlib_idents::{ModuleIdent, SemVerRange};
+
+        // NB: do NOT validate() here — validate() rejects unregistered processor
+        // types, which is exactly what this pass resolves. Reading the structured
+        // processor_type fields needs no validation; load_graph_snapshot below
+        // validates (structure + registration) once the modules are loaded.
+
+        // The unique packages whose processor types aren't already registered
+        // (e.g. api-server is pre-loaded at boot). One add_module per package —
+        // a snapshot may reference several processors from the same package.
+        let mut seen: std::collections::HashSet<streamlib_idents::PackageRef> =
+            std::collections::HashSet::new();
+        let mut to_load: Vec<ModuleIdent> = Vec::new();
+        for proc_def in &snapshot.processors {
+            let ty = &proc_def.processor_type;
+            if PROCESSOR_REGISTRY.port_info(ty).is_some() {
+                continue;
+            }
+            let module = ModuleIdent::new(ty.org.clone(), ty.package.clone(), SemVerRange::Any);
+            if seen.insert(module.package_ref()) {
+                to_load.push(module);
+            }
+        }
+
+        for module in to_load {
+            tracing::info!(
+                "Snapshot: resolving module '{}' from registry",
+                module.package_ref()
+            );
+            self.add_module_with(
+                module.clone(),
+                Strategy::Registry {
+                    version_req: SemVerRange::Any,
+                    build: BuildPolicy::IfStale,
+                },
+            )
+            .await
+            .map_err(|e| {
+                Error::GraphError(format!(
+                    "snapshot module resolution failed for '{}': {e}",
+                    module.package_ref()
+                ))
+            })?;
+        }
+
+        self.load_graph_snapshot(snapshot)
+    }
+
+    /// Path variant of [`Runner::load_graph_snapshot_with_resolving`].
+    pub async fn load_graph_snapshot_from_path_with_resolving(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<()> {
+        let snapshot = crate::core::graph_snapshot::GraphSnapshot::from_json_file(path)?;
+        if let Some(name) = &snapshot.name {
+            tracing::info!("Loading pipeline '{}' (resolving modules) from {}", name, path.display());
+        } else {
+            tracing::info!("Loading pipeline (resolving modules) from {}", path.display());
+        }
+        self.load_graph_snapshot_with_resolving(&snapshot).await
     }
 
     /// Snapshot the live graph as a [`GraphSnapshot`].
