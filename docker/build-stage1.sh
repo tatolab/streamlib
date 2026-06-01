@@ -144,6 +144,30 @@ export STREAMLIB_BIN="$SRC/target/release/streamlib"
 # ---------------------------------------------------------------------------
 log "publishing streamlib crate closure"
 ( cd "$SRC" && ./scripts/gitea/publish-crates.sh )
+
+# Package cargo crates consumed by OTHER packages must also land in the cargo
+# registry. api-server's optional `moq` feature cargo-depends on streamlib-moq
+# (packages/moq); cargo requires optional deps to be resolvable in the index
+# even when the feature is off, so api-server can't build at all without it.
+# Publish source-only (--no-verify): the index entry makes it resolvable; the
+# crate is only compiled if a consumer enables the feature.
+publish_package_crate() {
+  local dir="$1" name; name="$(basename "$dir")"
+  [ -f "$SRC/$dir/Cargo.toml" ] || return 0
+  if [ -f "$SRC/$dir/streamlib.yaml" ] && grep -q '^patch:' "$SRC/$dir/streamlib.yaml"; then
+    ( cd "$SRC" && cargo run -q -p xtask -- strip-publish-manifest --dir "$dir" ) >/dev/null 2>&1 || true
+  fi
+  log "publishing package cargo crate: $name"
+  local out
+  if out="$( cd "$SRC/$dir" && cargo publish --no-verify --allow-dirty --registry "$CARGO_REGISTRY" 2>&1 )"; then
+    log "  ✓ $name published"
+  elif printf '%s' "$out" | grep -qiE 'already exists|already uploaded|is already'; then
+    log "  • $name already present — skipping"
+  else
+    printf '%s\n' "$out" >&2; fail "publish of package cargo crate $name failed"
+  fi
+}
+publish_package_crate packages/moq
 if [ "$SKIP_PYTHON_SDK" != 1 ]; then
   log "publishing python SDK"; ( cd "$SRC" && ./scripts/gitea/publish-python-sdk.sh )
 else log "SKIP python SDK"; fi
@@ -177,18 +201,32 @@ if [ "$PREBUILD_API_SERVER" = 1 ]; then
   log "pre-materializing api-server (this compiles the SDK closure once)"
   export STREAMLIB_HOME="$APP_DIR"
   export UV_INDEX="${GITEA_URL}/api/packages/${GITEA_ORG}/pypi/simple"
+  # The runtime needs a writable XDG_RUNTIME_DIR for its surface-share socket.
+  export XDG_RUNTIME_DIR=/run/user/0
+  mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+
+  # Resolution preflight: the orchestrator routes cargo stderr to the JSONL log,
+  # so a standalone `cargo fetch` here surfaces any dependency-resolution error
+  # (e.g. a missing registry crate) directly in the build output — fast, no
+  # compile. Run in a temp copy so it doesn't pollute the shipped tree.
+  log "preflight: api-server dependency resolution (cargo fetch)"
+  rm -rf /tmp/apisrv-diag && cp -a "$APP_DIR/packages/api-server" /tmp/apisrv-diag
+  ( cd /tmp/apisrv-diag && cargo fetch 2>&1 ) \
+    || fail "api-server dependency resolution failed — root cause printed above"
+  rm -rf /tmp/apisrv-diag
+
   slot="$APP_DIR/.streamlib/cache/packages"
   "$APP_DIR/bin/streamlib-runtime" --host 127.0.0.1 --port 9001 >/tmp/prematerialize.log 2>&1 &
   RT_PID=$!
   built=0
-  for i in $(seq 1 1800); do
+  for i in $(seq 1 3600); do
     if ls "$slot"/api-server-*/.streamlib-build.json >/dev/null 2>&1; then built=1; break; fi
     kill -0 "$RT_PID" 2>/dev/null || { tail -60 /tmp/prematerialize.log; fail "runtime exited before api-server built"; }
     sleep 1
   done
   sleep 2  # let the load settle past the build
   kill "$RT_PID" 2>/dev/null || true; wait "$RT_PID" 2>/dev/null || true
-  [ "$built" = 1 ] || { tail -60 /tmp/prematerialize.log; fail "api-server not materialized within 30m"; }
+  [ "$built" = 1 ] || { tail -60 /tmp/prematerialize.log; fail "api-server not materialized within 60m"; }
   log "api-server materialized: $(ls -d "$slot"/api-server-* 2>/dev/null)"
 else
   log "SKIP api-server pre-materialize (first boot will build it)"

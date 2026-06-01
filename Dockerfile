@@ -44,7 +44,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # build.rs, the av*/opus/asound/v4l -dev libs back the codec/audio/camera cdylibs).
 # npm publishes the packed Deno SDK; util-linux provides setpriv (Gitea-as-git).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential pkg-config glslc protobuf-compiler \
+        build-essential clang libclang-dev cmake pkg-config glslc protobuf-compiler \
+        libssl-dev \
         libvulkan-dev libopus-dev libasound2-dev libv4l-dev \
         libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
         libswresample-dev libavfilter-dev libavdevice-dev \
@@ -104,7 +105,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libvulkan1 libglvnd0 libgl1 libglx0 libegl1 libgles2 libx11-6 libxext6 \
         vulkan-tools \
         pipewire pipewire-bin pipewire-alsa wireplumber libspa-0.2-modules dbus \
-        build-essential pkg-config glslc \
+        build-essential clang libclang-dev cmake pkg-config glslc libssl-dev \
         libvulkan-dev libopus-dev libasound2-dev libv4l-dev \
         libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
         libswresample-dev libavfilter-dev libavdevice-dev \

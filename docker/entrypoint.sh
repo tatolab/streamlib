@@ -24,6 +24,10 @@ export XDG_RUNTIME_DIR
 log()  { printf '[entrypoint] %s\n' "$*"; }
 warn() { printf '[entrypoint] WARN: %s\n' "$*" >&2; }
 
+# The runtime needs a writable XDG_RUNTIME_DIR for its surface-share socket,
+# independent of whether the audio stack comes up below.
+mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+
 # ---------------------------------------------------------------------------
 # 1. In-container package registry (Gitea as the git user).
 # ---------------------------------------------------------------------------
@@ -48,7 +52,6 @@ fi
 #    cpal -> ALSA -> PipeWire via the packaged pipewire-alsa bridge config.
 # ---------------------------------------------------------------------------
 if command -v pipewire >/dev/null 2>&1; then
-  mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
   export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
   dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --nofork --nopidfile >/var/log/dbus.log 2>&1 &
   sleep 0.5
