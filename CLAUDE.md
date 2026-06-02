@@ -654,6 +654,19 @@ make sense if the surrounding files were renamed or restructured.
   then read a cached field off the borrow (`.width()` / `.byte_size()`
   / etc.) and got zero. Read before adding a new host wrapper that
   reconstructs a borrowed PluginAbiObject from a `*const c_void` handle.
+- @docs/learnings/slpkg-raw-device-rhi-construction.md — A GPU package
+  that builds RHI objects (`VulkanComputeKernel::new`,
+  `HostVulkanBuffer::new*`) on the raw `HostVulkanDevice` it got via
+  `host_vulkan_device_arc()` works in-process but, to the best of our
+  current knowledge, corrupts the GPU driver (NVIDIA double-free in
+  `vkCreatePipelineLayout`) when loaded as a *separately-built* registry
+  `.slpkg`: the non-`#[repr(C)]` device layout can differ across
+  independent compilations, so the transited device reads at wrong
+  offsets. Version-alignment does not fix it. Build through the
+  cdylib-safe FullAccess primitives (`create_compute_kernel`,
+  `acquire_storage_buffer`, `create_texture_ring`) instead — a package's
+  GPU code should never name the raw device. Read before writing GPU
+  code in any package destined to ship as a `.slpkg`.
 - @docs/learnings/cross-process-vkimage-layout.md — Cross-process
   `VkImage` layout coordination. `VkImageLayout` is independent state
   per `VkDevice` by Vulkan spec — no shared mutable tracker. The

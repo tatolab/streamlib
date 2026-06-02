@@ -68,6 +68,12 @@ Avoid the two failure modes:
   Plugin pipeline runs end-to-end clean but produces zero/black output
   when host-side `make_*_borrow` helpers leave the PluginAbiObject's cached
   POD fields zeroed instead of mirroring the inner
+- [@docs/learnings/slpkg-raw-device-rhi-construction.md](slpkg-raw-device-rhi-construction.md) —
+  GPU package works in-process but crashes the driver (NVIDIA double-free in
+  `vkCreatePipelineLayout`) as a separately-built `.slpkg` — it hand-rolled
+  RHI on the raw `HostVulkanDevice` (via `host_vulkan_device_arc()`) instead
+  of the cdylib-safe FullAccess primitives; non-`#[repr(C)]` layout differs
+  across separate builds. Version-alignment doesn't fix it
 - [@docs/learnings/nvidia-dual-vulkan-device-crash.md](nvidia-dual-vulkan-device-crash.md) —
   SIGSEGV when two Vulkan devices have concurrent GPU work on NVIDIA Linux
 - [@docs/learnings/cross-process-vkimage-layout.md](cross-process-vkimage-layout.md) —
