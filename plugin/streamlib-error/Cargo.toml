@@ -1,0 +1,26 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-error"
+description = "Canonical StreamLib Error + Result, shared by the engine and the plugin-SDK so plugin cdylibs need not link the engine for error types."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[lib]
+name = "streamlib_error"
+path = "src/lib.rs"
+
+[dependencies]
+thiserror.workspace = true
+anyhow.workspace = true
+streamlib-processor-schema = { path = "../../libs/streamlib-processor-schema", version = "0.4.30", registry = "gitea" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+streamlib-consumer-rhi = { path = "../../libs/streamlib-consumer-rhi", version = "0.4.30", registry = "gitea" }
+
+[lints]
+workspace = true

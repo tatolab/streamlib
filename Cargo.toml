@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "plugin/streamlib-error", # plugin/ zone: canonical Error + Result (engine-free)
     "xtask",                    # Development tasks (cargo xtask <command>)
     "libs/streamlib-sdk",       # Public authoring API surface — customer apps depend on this (Cargo name `streamlib`)
     "libs/streamlib-engine",    # Engine internals (RHI, IPC, surface-share, runtime executor) — private dep of the SDK
