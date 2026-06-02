@@ -1,7 +1,7 @@
 package:
   org: tatolab
   name: mavlink
-  version: 1.0.0
+  version: 1.0.1
   description: MAVLink2 encoder + decoder processors via rust-mavlink — pairs with @tatolab/network for MAVLink-over-UDP
 dependencies:
   '@tatolab/network':
