@@ -1456,17 +1456,24 @@ impl HostVulkanDevice {
     #[cfg(target_os = "linux")]
     fn prewarm_pipeline_compiler(device: &Arc<Self>) {
         const PREWARM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/prewarm.spv"));
-        // Mirror the heaviest real kernels' layout shape (two storage
-        // buffers + an rgba8 storage image + a 128-byte push block) — the
-        // driver's lazy compiler init is keyed off the pipeline-layout
-        // shape, so a trivial layout doesn't trigger the same init.
+        // Kitchen-sink layout — NOT modeled on any kernel. The driver's
+        // lazy compiler init fires on the first pipeline whose shader needs
+        // real codegen; a no-op shader can be fast-pathed and skip it. So
+        // the probe touches every compute descriptor kind (storage buffers,
+        // uniform buffer, sampled texture, storage image) + the spec-min-max
+        // 128-byte push block, with enough work that the driver can't
+        // fast-path it — forcing the init regardless of which feature
+        // engages codegen. Mirror this in prewarm.comp; don't trim to a
+        // specific kernel's shape.
         let descriptor = crate::core::rhi::ComputeKernelDescriptor {
             label: "pipeline_compiler_prewarm",
             spv: PREWARM_SPV,
             bindings: &[
                 crate::core::rhi::ComputeBindingSpec::storage_buffer(0),
                 crate::core::rhi::ComputeBindingSpec::storage_buffer(1),
-                crate::core::rhi::ComputeBindingSpec::storage_image(2),
+                crate::core::rhi::ComputeBindingSpec::uniform_buffer(2),
+                crate::core::rhi::ComputeBindingSpec::sampled_texture(3),
+                crate::core::rhi::ComputeBindingSpec::storage_image(4),
             ],
             push_constant_size: 128,
         };

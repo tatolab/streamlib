@@ -1,38 +1,44 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 //
-// Minimal compute kernel whose sole purpose is to force the host's first
-// `vkCreatePipelineLayout` + `vkCreateComputePipelines` at device-construction
-// time. On NVIDIA Linux the shader compiler (`libnvidia-gpucomp`) does a
-// lazy `pthread_once` global init the first time a pipeline of a given shape
-// is created in a process; when that first init lands during concurrent
-// multi-plugin processor setup it double-frees its own heap and aborts.
-// Building (and dropping) this pipeline single-threaded at
-// `HostVulkanDevice::new` makes the compiler initialize in a controlled
-// state first.
+// Pipeline-compiler pre-warm probe. NOT modeled on any specific kernel.
 //
-// The binding layout deliberately MIRRORS the heaviest real compute kernels
-// (color converter / JPEG decode: two storage buffers + an rgba8 storage
-// image + a 128-byte push-constant block). The driver's lazy compiler init
-// is keyed off the pipeline-layout *shape* — a layout that lacks storage
-// images / push constants does not trigger the same init — so the probe must
-// carry the same descriptor types as the real kernels it protects. Every
-// binding is touched so reflection can't optimize it away.
+// On NVIDIA Linux the shader backend compiler (`libnvidia-gpucomp`) does a
+// lazy `pthread_once` GLOBAL init the first time a pipeline that requires
+// real codegen is created in a process. That init is `pthread_once`, so it
+// runs exactly once per process — but when it first fires during concurrent
+// multi-plugin processor setup it double-frees its own heap and aborts.
+// `HostVulkanDevice::prewarm_pipeline_compiler` builds (and drops) this
+// pipeline single-threaded at device construction so the compiler comes
+// online in a controlled state; every later pipeline of any shape then
+// finds it already initialized.
+//
+// The trigger is "a pipeline whose shader requires real codegen", NOT a
+// particular descriptor layout — a no-op shader can be fast-pathed without
+// engaging the compiler. So this probe is deliberately a kitchen sink: it
+// touches every compute descriptor kind (two storage buffers, a uniform
+// buffer, a sampled texture, a storage image) plus the spec-minimum-maximum
+// 128-byte push-constant block, and does enough arithmetic + a texture
+// fetch + an image store that the driver cannot fast-path it. The point is
+// to force the compiler init regardless of which feature happens to engage
+// codegen — do not trim it down to match whatever kernel prompted it.
 #version 450
 
-layout(local_size_x = 16, local_size_y = 16) in;
+layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(set = 0, binding = 0) readonly buffer In0 { uint data[]; } in0;
 layout(set = 0, binding = 1) readonly buffer In1 { uint data[]; } in1;
-layout(set = 0, binding = 2, rgba8) uniform writeonly image2D out_image;
+layout(set = 0, binding = 2) uniform Params { uint scale; } params;
+layout(set = 0, binding = 3) uniform sampler2D src_tex;
+layout(set = 0, binding = 4, rgba8) uniform writeonly image2D dst_image;
 
 layout(push_constant) uniform PushConstants { uint values[32]; } pc; // 128 bytes
 
 void main() {
-    uint acc = in0.data[0] + in1.data[0] + pc.values[0];
-    imageStore(
-        out_image,
-        ivec2(gl_GlobalInvocationID.xy),
-        vec4(float(acc & 0xFFu) / 255.0)
-    );
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    // textureLod (not texture) — compute shaders have no implicit derivatives.
+    float t = textureLod(src_tex, vec2(0.5), 0.0).r;
+    uint acc = in0.data[0] + in1.data[0] + params.scale + pc.values[0]
+             + uint(t * 255.0);
+    imageStore(dst_image, p, vec4(float(acc & 0xFFu) / 255.0));
 }
