@@ -26,6 +26,11 @@ use streamlib_plugin_abi::{
     GpuContextFullAccessVTable, GpuContextLimitedAccessVTable, RuntimeContextVTable,
 };
 
+#[cfg(target_os = "linux")]
+use streamlib_consumer_rhi::{PixelFormat, TextureFormat, TextureUsages, VulkanLayout};
+#[cfg(target_os = "linux")]
+use streamlib_error::{Error, Result};
+
 // =============================================================================
 // GpuContextLimitedAccess — cdylib arm
 // =============================================================================
@@ -73,6 +78,65 @@ impl Drop for GpuContextLimitedAccess {
             // `clone_handle`; the matching `drop_handle` callback runs
             // `Box::from_raw + drop` on the host side.
             unsafe { ((*self.vtable).drop_handle)(self.handle) };
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl GpuContextLimitedAccess {
+    /// Acquire a HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
+    /// Dispatches through the plugin ABI vtable's `acquire_storage_buffer`
+    /// callback.
+    pub fn acquire_storage_buffer(
+        &self,
+        byte_size: u64,
+    ) -> Result<crate::rhi::StorageBuffer> {
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "acquire_storage_buffer: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut out: std::mem::MaybeUninit<crate::rhi::StorageBuffer> =
+            std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: vtable + handle were paired at construction; `out`
+        // points at uninitialized stack storage the host writes a valid
+        // `StorageBuffer` into on success.
+        let status = unsafe {
+            ((*self.vtable).acquire_storage_buffer)(
+                self.handle,
+                byte_size,
+                out.as_mut_ptr() as *mut c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            // SAFETY: host signaled success and wrote a valid value.
+            Ok(unsafe { out.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    /// Update a registered texture's tracked layout after a transition.
+    /// Dispatches through the plugin ABI vtable's
+    /// `update_texture_registration_layout` callback.
+    pub fn update_texture_registration_layout(&self, id: &str, layout: VulkanLayout) {
+        if self.handle.is_null() || self.vtable.is_null() {
+            return;
+        }
+        // SAFETY: handle + vtable were paired at construction.
+        unsafe {
+            ((*self.vtable).update_texture_registration_layout)(
+                self.handle,
+                id.as_ptr(),
+                id.len(),
+                layout.0,
+            );
         }
     }
 }
@@ -157,6 +221,310 @@ impl Drop for GpuContextFullAccess {
             HandleKind::Boxed => {}
             // No-op — escalate_end is the authority.
             HandleKind::ScopeToken => {}
+        }
+    }
+}
+
+// =============================================================================
+// GpuContextFullAccess — privileged GPU surface (cdylib / ScopeToken arm)
+// =============================================================================
+//
+// The SDK only ever holds a ScopeToken-mode FullAccess (built by the
+// host's `escalate_begin` path), so each method carries ONLY the
+// vtable-dispatch arm — the engine's `HandleKind::Boxed => host_inner()…`
+// arm is dropped (the SDK never constructs a Boxed handle). The
+// LimitedAccess-mirror methods (`acquire_storage_buffer`,
+// `update_texture_registration_layout`) inherit through the originating
+// LimitedAccess vtable per the `inherited_lim_*` fields, mirroring the
+// engine's Option-B dispatch.
+
+#[cfg(target_os = "linux")]
+impl GpuContextFullAccess {
+    /// Construct a non-dropping view of the originating
+    /// [`GpuContextLimitedAccess`] for cdylib dispatch through the
+    /// inherited vtable.
+    ///
+    /// **Wrapped in [`std::mem::ManuallyDrop`]** so the borrowed handle
+    /// isn't double-released — the originating LimitedAccess outlives the
+    /// FullAccess scope and owns the only Drop responsibility for the
+    /// handle.
+    pub(crate) fn inherited_limited_unchecked(
+        &self,
+    ) -> std::mem::ManuallyDrop<GpuContextLimitedAccess> {
+        std::mem::ManuallyDrop::new(GpuContextLimitedAccess {
+            handle: self.inherited_lim_handle,
+            vtable: self.inherited_lim_vtable,
+        })
+    }
+
+    /// Acquire a HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
+    ///
+    /// LimitedAccess mirror — cdylib dispatch inherits the
+    /// `acquire_storage_buffer` slot via
+    /// [`Self::inherited_limited_unchecked`].
+    pub fn acquire_storage_buffer(
+        &self,
+        byte_size: u64,
+    ) -> Result<crate::rhi::StorageBuffer> {
+        self.inherited_limited_unchecked()
+            .acquire_storage_buffer(byte_size)
+    }
+
+    /// Update a registered texture's tracked layout after a transition.
+    ///
+    /// LimitedAccess mirror — cdylib dispatch inherits the
+    /// `update_texture_registration_layout` slot via
+    /// [`Self::inherited_limited_unchecked`].
+    pub fn update_texture_registration_layout(&self, id: &str, layout: VulkanLayout) {
+        self.inherited_limited_unchecked()
+            .update_texture_registration_layout(id, layout);
+    }
+
+    /// Allocate a render-target-capable DMA-BUF VkImage (privileged
+    /// host-only adapter primitive). Dispatches through the
+    /// [`GpuContextFullAccessVTable`]'s
+    /// `acquire_render_target_dma_buf_image` slot.
+    pub fn acquire_render_target_dma_buf_image(
+        &self,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+    ) -> Result<crate::rhi::Texture> {
+        if self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "acquire_render_target_dma_buf_image: GpuContextFullAccess has null vtable".into(),
+            ));
+        }
+        let mut out_texture: std::mem::MaybeUninit<crate::rhi::Texture> =
+            std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: vtable + handle (scope token) were paired at
+        // construction; the host writes a valid Texture into
+        // `out_texture` on success.
+        let status = unsafe {
+            ((*self.vtable).acquire_render_target_dma_buf_image)(
+                self.handle,
+                width,
+                height,
+                format as u32,
+                out_texture.as_mut_ptr() as *mut c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            // SAFETY: host signaled success and wrote a valid value.
+            Ok(unsafe { out_texture.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    /// Pre-allocate a ring of `count` non-exportable DEVICE_LOCAL
+    /// textures and register each in the same-process texture cache.
+    /// Dispatches through the [`GpuContextFullAccessVTable`]'s
+    /// `create_texture_ring` slot.
+    pub fn create_texture_ring(
+        &self,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+        usages: TextureUsages,
+        count: usize,
+    ) -> Result<crate::rhi::TextureRing> {
+        if self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "create_texture_ring: GpuContextFullAccess has null vtable".into(),
+            ));
+        }
+        let mut out_ring: *const c_void = std::ptr::null();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: vtable + handle (scope token) paired at construction.
+        let status = unsafe {
+            ((*self.vtable).create_texture_ring)(
+                self.handle,
+                width,
+                height,
+                format as u32,
+                usages.bits(),
+                count,
+                &mut out_ring,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status != 0 {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            return Err(Error::GpuError(msg));
+        }
+        if out_ring.is_null() {
+            return Err(Error::GpuError(
+                "create_texture_ring: host signaled success but out_ring is null".into(),
+            ));
+        }
+        // PluginAbiObject: cached POD descriptors come from the caller's
+        // own inputs (we know width / height / format / count). The
+        // per-type methods vtable comes from `host_callbacks()`.
+        let methods_vtable = crate::plugin::host_callbacks()
+            .map(|c| c.texture_ring_methods_vtable)
+            .unwrap_or(std::ptr::null());
+        Ok(crate::rhi::TextureRing {
+            handle: out_ring,
+            vtable: self.vtable,
+            methods_vtable,
+            cached_len: count as u32,
+            cached_width: width,
+            cached_height: height,
+            cached_format: format as u32,
+        })
+    }
+
+    /// Acquire a cached `(src, dst)`-keyed color converter. Dispatches
+    /// through the [`GpuContextFullAccessVTable`]'s `color_converter`
+    /// slot.
+    pub fn color_converter(
+        &self,
+        src: PixelFormat,
+        dst: PixelFormat,
+    ) -> Result<crate::rhi::RhiColorConverter> {
+        if self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "color_converter: GpuContextFullAccess has null vtable".into(),
+            ));
+        }
+        let mut out_converter: *const c_void = std::ptr::null();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: vtable + handle (scope token) paired at construction.
+        let status = unsafe {
+            ((*self.vtable).color_converter)(
+                self.handle,
+                src as u32,
+                dst as u32,
+                &mut out_converter,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status != 0 {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            return Err(Error::GpuError(msg));
+        }
+        if out_converter.is_null() {
+            return Err(Error::GpuError(
+                "color_converter: host signaled success but out_converter is null".into(),
+            ));
+        }
+        let methods_vtable = crate::plugin::host_callbacks()
+            .map(|c| c.rhi_color_converter_methods_vtable)
+            .unwrap_or(std::ptr::null());
+        Ok(crate::rhi::RhiColorConverter {
+            handle: out_converter,
+            vtable: self.vtable,
+            methods_vtable,
+            cached_src_format_raw: src as u32,
+            cached_dst_format_raw: dst as u32,
+        })
+    }
+
+    /// Create a compute kernel from a SPIR-V shader and a binding
+    /// declaration. Dispatches through the [`GpuContextFullAccessVTable`]'s
+    /// `create_compute_kernel` slot; the host reflects the SPIR-V,
+    /// validates the declared bindings match the shader, and allocates
+    /// the Vulkan pipeline host-side.
+    pub fn create_compute_kernel(
+        &self,
+        descriptor: &crate::rhi::ComputeKernelDescriptor<'_>,
+    ) -> Result<crate::rhi::VulkanComputeKernel> {
+        if self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "create_compute_kernel: GpuContextFullAccess has null vtable".into(),
+            ));
+        }
+        // Stage the descriptor into its repr + backing bindings_buf; the
+        // backing Vec must stay alive for the vtable call because the
+        // repr's bindings_ptr borrows into it.
+        let (repr, _bindings_buf) = crate::rhi::stage_compute_kernel_descriptor(descriptor);
+        let mut out_kernel: *const c_void = std::ptr::null();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: vtable + handle (scope token) paired at construction;
+        // `repr` borrows into `_bindings_buf` / `descriptor`, both alive
+        // for the duration of the call.
+        let status = unsafe {
+            ((*self.vtable).create_compute_kernel)(
+                self.handle,
+                &repr,
+                &mut out_kernel,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status != 0 {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            return Err(Error::GpuError(msg));
+        }
+        if out_kernel.is_null() {
+            return Err(Error::GpuError(
+                "create_compute_kernel: host signaled success but out_kernel is null".into(),
+            ));
+        }
+        let methods_vtable = crate::plugin::host_callbacks()
+            .map(|c| c.vulkan_compute_kernel_methods_vtable)
+            .unwrap_or(std::ptr::null());
+        Ok(crate::rhi::VulkanComputeKernel {
+            handle: out_kernel,
+            vtable: self.vtable,
+            methods_vtable,
+            cached_push_constant_size: descriptor.push_constant_size,
+            _reserved_padding: 0,
+        })
+    }
+
+    /// Build an engine-owned multi-step command-buffer recorder.
+    /// Dispatches through the [`GpuContextFullAccessVTable`]'s
+    /// `create_command_recorder` slot.
+    pub fn create_command_recorder(
+        &self,
+        label: &str,
+    ) -> Result<crate::rhi::RhiCommandRecorder> {
+        if self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "create_command_recorder: GpuContextFullAccess has null vtable".into(),
+            ));
+        }
+        let mut out_recorder: std::mem::MaybeUninit<crate::rhi::RhiCommandRecorder> =
+            std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: vtable + handle (scope token) paired at construction;
+        // the host writes the RhiCommandRecorder by value (layout
+        // byte-identical via `#[repr(C)]`), populating both `vtable` and
+        // `methods_vtable` with host-static addresses.
+        let status = unsafe {
+            ((*self.vtable).create_command_recorder)(
+                self.handle,
+                label.as_ptr(),
+                label.len(),
+                out_recorder.as_mut_ptr() as *mut c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            // SAFETY: host signaled success and wrote a valid value.
+            Ok(unsafe { out_recorder.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            Err(Error::GpuError(msg))
         }
     }
 }

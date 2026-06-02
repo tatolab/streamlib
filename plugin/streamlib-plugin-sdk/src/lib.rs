@@ -25,11 +25,14 @@
 // `*Inner` backings + `HOST_*_VTABLE` statics stay in the engine; these are
 // the `#[repr(C)]` layout-matched twins + the cdylib-side vtable-marshal
 // code, re-exported under `sdk::*` below.
+mod color;
 mod context;
 mod iceoryx2;
 mod media_clock;
 mod plugin;
 mod processors;
+#[cfg(target_os = "linux")]
+mod rhi;
 
 /// Public plugin-authoring surface. Packages author against
 /// `streamlib_plugin_sdk::sdk::*`; the `#[processor]` macro and
@@ -81,6 +84,40 @@ pub mod sdk {
         pub use crate::context::{
             GpuContextFullAccess, GpuContextLimitedAccess, RuntimeContextFullAccess,
             RuntimeContextLimitedAccess,
+        };
+    }
+
+    // ---- Cdylib-arm RHI views (the GPU resource surface) ----
+    /// `#[repr(C)]` PluginAbiObject twins of the engine's RHI resource
+    /// views — `Texture`, `StorageBuffer`, `VulkanComputeKernel`,
+    /// `TextureRing`, `RhiCommandRecorder`, `RhiColorConverter` — plus
+    /// their descriptor inputs and the `TextureFormat` / `TextureUsages`
+    /// / `PixelFormat` / `VulkanLayout` format primitives (re-exported
+    /// engine-free from `streamlib-consumer-rhi`). Mirrors the engine
+    /// facade's `sdk::rhi`. Linux-only — GPU RHI is Vulkan-backed.
+    #[cfg(target_os = "linux")]
+    pub mod rhi {
+        pub use crate::rhi::{
+            pixel_format_color_kind, ColorConverterPushConstants, ComputeBindingKind,
+            ComputeBindingSpec, ComputeKernelDescriptor, ImageCopyRegion, NativeTextureHandle,
+            PixelFormat, RhiColorConverter, RhiCommandRecorder, SourceLayoutInfo, StorageBuffer,
+            Texture, TextureDescriptor, TextureFormat, TextureRing, TextureRingSlot,
+            TextureUsages, VulkanAccess, VulkanComputeKernel, VulkanLayout, VulkanStage,
+            COLOR_CONVERTER_PUSH_CONSTANT_SIZE, TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES,
+        };
+    }
+
+    // ---- Engine-free color-math support types ----
+    /// Pure-data color ID enums + closed-form transfer functions + the
+    /// YCbCr→RGB matrix decomposition the color converter and the
+    /// Vulkan-compute kernels consume as push-constant state. Mirrors the
+    /// engine facade's `sdk::color` (the GPU-relevant subset).
+    pub mod color {
+        pub use crate::color::{
+            bt709_to_linear, from_linear, hlg_to_linear, linear_to_bt709, linear_to_hlg,
+            linear_to_pq, linear_to_srgb, pq_to_linear, srgb_to_linear, to_linear,
+            yuv_to_rgb_matrix, ColorSpaceKind, MatrixId, PrimariesId, RangeId, ResolvedColorInfo,
+            TransferId, YuvToRgbDecomposition,
         };
     }
 
