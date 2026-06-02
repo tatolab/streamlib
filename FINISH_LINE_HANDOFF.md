@@ -1,9 +1,16 @@
 # Plugin-SDK Extraction — Finish-Line Handoff (dev.10 republish + proof)
 
-> **Transient working doc.** Delete when the proof lands. Supersedes the
-> "Next steps" of `PLUGIN_SDK_HANDOFF.md` — Phases 1, 2a, 2b and the
-> vulkan-jpeg split described there are DONE. Only the dev.10 republish +
-> the crash-vanishes proof remain.
+> **OUTCOME (resolved):** the dev.10 republish is DONE and the migration
+> is PROVEN — all five plugins dev.10-coherent, zero `streamlib_engine`
+> symbols, duplicate-engine crash mode eliminated. The proof then exposed
+> a **second, independent** cause of the `device-panic`: a pre-existing
+> engine concurrent-GPU-setup race, NOT part of this migration, handed off
+> in [`ENGINE_GPU_SETUP_RACE_HANDOFF.md`](ENGINE_GPU_SETUP_RACE_HANDOFF.md).
+> This doc is retained as the record of the republish recipe.
+
+> **Transient working doc.** Supersedes the "Next steps" of
+> `PLUGIN_SDK_HANDOFF.md` — Phases 1, 2a, 2b and the vulkan-jpeg split
+> described there are DONE, as is the dev.10 republish below.
 
 ## TL;DR
 
