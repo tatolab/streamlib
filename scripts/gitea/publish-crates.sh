@@ -134,7 +134,7 @@ if [ -n "$DEV_N" ]; then
   log "bumping in place: $base_version -> $target_version (restored on exit)"
   # collect member manifests + root, snapshot, then rewrite with tomlkit
   while IFS= read -r m; do snapshot "$m"; done < <(
-    { echo Cargo.toml; find libs packages -name Cargo.toml -not -path '*/target/*'; }
+    { echo Cargo.toml; find libs packages plugin -name Cargo.toml -not -path '*/target/*'; }
   )
   BASE="$base_version" TARGET="$target_version" "$PY" - <<'PY'
 import os, glob, tomlkit
@@ -172,7 +172,9 @@ def bump_member(path):
     if changed:
         open(path, "w").write(tomlkit.dumps(doc))
 bump_workspace()
-for m in glob.glob("libs/**/Cargo.toml", recursive=True) + glob.glob("packages/**/Cargo.toml", recursive=True):
+for m in (glob.glob("libs/**/Cargo.toml", recursive=True)
+          + glob.glob("packages/**/Cargo.toml", recursive=True)
+          + glob.glob("plugin/**/Cargo.toml", recursive=True)):
     if "/target/" in m: continue
     bump_member(m)
 print("bumped")
