@@ -52,6 +52,6 @@ tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 [target.'cfg(target_os = "linux")'.dependencies]
 # GPU JPEG decode primitive — fused Vulkan compute kernel + optional
 # nvJPEG fast path behind SimpleJpegDecoder. Owns its own texture ring.
-vulkan-jpeg = {version = "=0.4.35-dev.1", registry = "gitea"}
+vulkan-jpeg = {version = "=0.4.35-dev.2", registry = "gitea"}
 
 [workspace]
