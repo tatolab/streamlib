@@ -12,9 +12,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use mavlink::MavHeader;
 use mavlink::dialects::common::{
-    ATTITUDE_DATA, AttitudeTargetTypemask, HEARTBEAT_DATA, HIGHRES_IMU_DATA, HighresImuUpdatedFlags,
-    MavAutopilot, MavFrame, MavMessage, MavModeFlag, MavState, MavType, PositionTargetTypemask,
-    SET_ATTITUDE_TARGET_DATA, SET_POSITION_TARGET_LOCAL_NED_DATA, TIMESYNC_DATA,
+    ATTITUDE_DATA, AttitudeTargetTypemask, COMMAND_LONG_DATA, ENCAPSULATED_DATA_DATA, HEARTBEAT_DATA,
+    HIGHRES_IMU_DATA, HighresImuUpdatedFlags, MavAutopilot, MavCmd, MavFrame, MavMessage,
+    MavModeFlag, MavState, MavType, PositionTargetTypemask, SET_ATTITUDE_TARGET_DATA,
+    SET_POSITION_TARGET_LOCAL_NED_DATA, TIMESYNC_DATA,
 };
 use num_traits::FromPrimitive;
 use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
@@ -137,6 +138,8 @@ fn identity(msg: &MavlinkMessage, default_sys: u8, default_comp: u8) -> (u8, u8,
         }
         MavlinkMessage::SetAttitudeTarget(d) => (d.system_id, d.component_id, d.peer_addr.clone()),
         MavlinkMessage::Timesync(d) => (d.system_id, d.component_id, d.peer_addr.clone()),
+        MavlinkMessage::CommandLong(d) => (d.system_id, d.component_id, d.peer_addr.clone()),
+        MavlinkMessage::EncapsulatedData(d) => (d.system_id, d.component_id, d.peer_addr.clone()),
     };
     let sys = if sys == 0 { default_sys } else { sys };
     let comp = if comp == 0 { default_comp } else { comp };
@@ -258,6 +261,32 @@ fn convert_to_mavlink(msg: &MavlinkMessage) -> Result<MavMessage> {
                 target_system: d.target_system,
                 target_component: d.target_component,
             })
+        }
+        MavlinkMessage::CommandLong(d) => MavMessage::COMMAND_LONG(COMMAND_LONG_DATA {
+            target_system: d.target_system,
+            target_component: d.target_component,
+            command: MavCmd::from_u16(d.command).ok_or_else(|| {
+                Error::Configuration(format!(
+                    "MavlinkEncoder: COMMAND_LONG.command = {} is not a known MAV_CMD in the common dialect",
+                    d.command
+                ))
+            })?,
+            confirmation: d.confirmation,
+            param1: d.param1,
+            param2: d.param2,
+            param3: d.param3,
+            param4: d.param4,
+            param5: d.param5,
+            param6: d.param6,
+            param7: d.param7,
+        }),
+        MavlinkMessage::EncapsulatedData(d) => {
+            // ENCAPSULATED_DATA carries a fixed 253-byte payload on the wire;
+            // pad or truncate the variable-length schema bytes to fit.
+            let mut data = [0u8; 253];
+            let n = d.data.len().min(253);
+            data[..n].copy_from_slice(&d.data[..n]);
+            MavMessage::ENCAPSULATED_DATA(ENCAPSULATED_DATA_DATA { seqnr: d.seqnr, data })
         }
     })
 }
