@@ -956,7 +956,10 @@ impl VulkanComputeKernelInner {
 impl Drop for VulkanComputeKernelInner {
     fn drop(&mut self) {
         unsafe {
-            let _ = self.device.device_wait_idle();
+            // Route through the queue-mutex-guarded helper, NOT raw
+            // device_wait_idle — concurrent multi-processor setup makes raw
+            // waits race queue submits (UNASSIGNED-Threading-Info → driver crash).
+            let _ = self.vulkan_device.wait_idle();
             if let Some(sampler) = self.default_sampler.lock().take() {
                 self.device.destroy_sampler(sampler, None);
             }
@@ -2034,6 +2037,13 @@ fn create_compute_pipeline_with_cache(
 ) -> Result<vk::Pipeline> {
     let cache_path = pipeline_cache_file_path(spv);
     let initial_data = cache_path.as_deref().and_then(read_cache_blob);
+    tracing::debug!(
+        label,
+        cache_path = ?cache_path,
+        cache_hit = initial_data.is_some(),
+        blob_bytes = initial_data.as_ref().map_or(0, |d| d.len()),
+        "compute pipeline cache lookup",
+    );
 
     // `Some(cache_handle)` if we successfully created a `VkPipelineCache` —
     // we need to destroy it before returning regardless of success/failure
@@ -2084,7 +2094,14 @@ fn pipeline_cache_dir() -> Option<PathBuf> {
             return Some(PathBuf::from(dir));
         }
     }
-    dirs::cache_dir().map(|d| d.join("streamlib/pipeline-cache"))
+    // Co-located under the streamlib home (`<STREAMLIB_HOME>/.streamlib/cache/`),
+    // NOT the XDG cache dir — every built/cached artifact lives under the
+    // streamlib working tree per the home contract. See [`core::streamlib_home`].
+    Some(
+        crate::core::streamlib_home::get_streamlib_data_dir()
+            .join("cache")
+            .join("pipeline-cache"),
+    )
 }
 
 /// Compute the cache file path for a given SPIR-V blob, or `None` if no

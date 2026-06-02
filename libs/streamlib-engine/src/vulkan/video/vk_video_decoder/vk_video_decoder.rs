@@ -1492,7 +1492,7 @@ impl VkVideoDecoder {
         let device = self.ctx.device();
 
         // Wait for all operations to complete before cleanup.
-        unsafe { let _ = device.device_wait_idle(); }
+        let _ = self.ctx.host_device().wait_idle();
 
         // Destroy DPB image views.
         for &view in &self.dpb_image_views {

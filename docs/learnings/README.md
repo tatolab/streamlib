@@ -98,3 +98,11 @@ Avoid the two failure modes:
   disagrees with the Vulkan C spec; using the struct directly puts the BLAS
   device address at the wrong offset and every TLAS instance points at
   garbage. Workaround: serialize the 64-byte instance manually in spec order
+- [@docs/learnings/concurrent-vkdevicewaitidle-threading.md](concurrent-vkdevicewaitidle-threading.md) —
+  Concurrent `vkDeviceWaitIdle` on NVIDIA SIGSEGVs in `libnvidia-glcore`
+  during multi-processor GPU setup — it's externally synchronized over the
+  device + every queue it owns. The validation layer
+  (`UNASSIGNED-Threading-Info: Couldn't find VkQueue`) is the diagnostic that
+  cracks an otherwise-causeless driver crash; the fix routes every wait
+  through `HostVulkanDevice::wait_idle` (holds all queue mutexes), enforced by
+  `xtask check-device-wait-idle`

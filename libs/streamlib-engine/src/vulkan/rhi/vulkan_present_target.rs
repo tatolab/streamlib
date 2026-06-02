@@ -646,8 +646,10 @@ impl Drop for VulkanPresentTarget {
         // Drain in-flight work before destroying handles.
         let raw_device = self.device.device();
         let instance = self.device.instance();
+        // Queue-mutex-guarded wait, not raw device_wait_idle (see
+        // HostVulkanDevice::wait_idle — concurrent setup races otherwise).
+        let _ = self.device.wait_idle();
         unsafe {
-            let _ = raw_device.device_wait_idle();
             for &view in &self.swapchain_image_views {
                 raw_device.destroy_image_view(view, None);
             }

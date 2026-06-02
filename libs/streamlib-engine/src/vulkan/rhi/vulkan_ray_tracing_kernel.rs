@@ -872,7 +872,9 @@ impl VulkanRayTracingKernelInner {
 impl Drop for VulkanRayTracingKernelInner {
     fn drop(&mut self) {
         unsafe {
-            let _ = self.device.device_wait_idle();
+            // Queue-mutex-guarded wait, not raw device_wait_idle (see
+            // HostVulkanDevice::wait_idle — concurrent setup races otherwise).
+            let _ = self.vulkan_device.wait_idle();
             if let Some(sampler) = self.default_sampler.lock().take() {
                 self.device.destroy_sampler(sampler, None);
             }

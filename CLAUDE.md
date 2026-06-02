@@ -685,6 +685,18 @@ make sense if the surrounding files were renamed or restructured.
   structurally permanent on NVIDIA, with the QFOT path reserved for
   Mesa. Read before consuming an imported `VkImage` on the host or
   in a cdylib.
+- @docs/learnings/concurrent-vkdevicewaitidle-threading.md — Concurrent
+  `vkDeviceWaitIdle` on NVIDIA SIGSEGVs in `libnvidia-glcore` during
+  concurrent multi-processor GPU setup. `vkDeviceWaitIdle` is externally
+  synchronized over the `VkDevice` AND every queue it owns; a raw
+  `device_wait_idle()` that skips the per-queue mutexes races a concurrent
+  `vkQueueSubmit` on another thread, corrupts driver state, and surfaces as
+  a SIGSEGV in a later `vkCreate*Pipelines`. The validation layer
+  (`UNASSIGNED-Threading-Info: vkDeviceWaitIdle(): Couldn't find VkQueue`)
+  is the diagnostic — turn it on first when an NVIDIA GPU crash has no
+  obvious cause and only reproduces under concurrency. Fix: route every wait
+  through `HostVulkanDevice::wait_idle` (acquires all queue mutexes in a
+  fixed order); the `xtask check-device-wait-idle` lint bans raw calls.
 - @docs/architecture/adapter-runtime-integration.md — Two IPC seams
   (surface-share FD lookup, escalate IPC) already exist for handing
   host-allocated adapter resources to subprocess customers. The doc

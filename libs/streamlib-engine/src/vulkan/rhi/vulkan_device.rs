@@ -3349,9 +3349,9 @@ impl Drop for HostVulkanDevice {
             );
         }
 
-        unsafe {
-            let _ = self.device.device_wait_idle();
-        }
+        // Queue-mutex-guarded wait (drains every queue before teardown);
+        // uncontended at Drop but keeps the single discipline everywhere.
+        let _ = self.wait_idle();
 
         // Critical drop order:
         //  0. OPAQUE_FD export sentinels — free via the still-live
