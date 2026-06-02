@@ -12,9 +12,9 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::processors::ReactiveProcessor;
+use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::processors::ReactiveProcessor;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 
@@ -27,7 +27,7 @@ struct OutboundDatagram {
     payload: Vec<u8>,
 }
 
-#[streamlib::sdk::processor("UdpSink")]
+#[streamlib_plugin_sdk::sdk::processor("UdpSink")]
 pub struct UdpSinkProcessor {
     /// Plugin-owned tokio runtime. Constructed in `setup()`; the host's
     /// runtime is not reachable across the plugin ABI per #885.

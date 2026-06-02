@@ -17,13 +17,13 @@ use mavlink::dialects::common::{
     SET_ATTITUDE_TARGET_DATA, SET_POSITION_TARGET_LOCAL_NED_DATA, TIMESYNC_DATA,
 };
 use num_traits::FromPrimitive;
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::processors::ReactiveProcessor;
+use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::processors::ReactiveProcessor;
 
 use crate::_generated_::{MavlinkMessage, NetworkPacket};
 
-#[streamlib::sdk::processor("MavlinkEncoder")]
+#[streamlib_plugin_sdk::sdk::processor("MavlinkEncoder")]
 pub struct MavlinkEncoderProcessor {
     /// Per-(system_id, component_id) sequence counter. Initialized lazily
     /// on first message for each pair; wraps at 256.

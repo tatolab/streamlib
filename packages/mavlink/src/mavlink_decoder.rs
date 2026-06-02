@@ -12,9 +12,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use mavlink::dialects::common::MavMessage;
 use mavlink::peek_reader::PeekReader;
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use streamlib::sdk::error::Result;
-use streamlib::sdk::processors::ReactiveProcessor;
+use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_plugin_sdk::sdk::error::Result;
+use streamlib_plugin_sdk::sdk::processors::ReactiveProcessor;
 
 use crate::_generated_::tatolab__mavlink::mavlink_message::{
     MavlinkMessageAttitude, MavlinkMessageHeartbeat, MavlinkMessageHighresImu,
@@ -22,7 +22,7 @@ use crate::_generated_::tatolab__mavlink::mavlink_message::{
 };
 use crate::_generated_::{MavlinkMessage, NetworkPacket};
 
-#[streamlib::sdk::processor("MavlinkDecoder")]
+#[streamlib_plugin_sdk::sdk::processor("MavlinkDecoder")]
 pub struct MavlinkDecoderProcessor {
     messages_decoded: AtomicU64,
     parse_errors: AtomicU64,

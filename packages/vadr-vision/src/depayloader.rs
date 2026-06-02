@@ -11,9 +11,9 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use streamlib::sdk::error::Result;
-use streamlib::sdk::processors::ReactiveProcessor;
+use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_plugin_sdk::sdk::error::Result;
+use streamlib_plugin_sdk::sdk::processors::ReactiveProcessor;
 
 use crate::_generated_::{EncodedJpegFrame, NetworkPacket};
 use crate::reassembly::{
@@ -21,7 +21,7 @@ use crate::reassembly::{
     IngestOutcome,
 };
 
-#[streamlib::sdk::processor("VadrVisionDepayloader")]
+#[streamlib_plugin_sdk::sdk::processor("VadrVisionDepayloader")]
 pub struct VadrVisionDepayloaderProcessor {
     /// Reassembly state machine. `Option` so we can build it in
     /// `setup()` from the config (default values plumbed in).
@@ -128,7 +128,7 @@ impl ReactiveProcessor for VadrVisionDepayloaderProcessor::Processor {
 /// counter, NOT the source `frame_id` (which can repeat or skip after
 /// loss).
 fn emit_completed(
-    outputs: &streamlib::sdk::iceoryx2::OutputWriter,
+    outputs: &streamlib_plugin_sdk::sdk::iceoryx2::OutputWriter,
     counter: &AtomicU64,
     completed: CompletedFrame,
 ) -> Result<()> {

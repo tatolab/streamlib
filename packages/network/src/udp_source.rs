@@ -15,10 +15,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 
-use streamlib::sdk::context::RuntimeContextFullAccess;
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::iceoryx2::OutputWriter;
-use streamlib::sdk::processors::ManualProcessor;
+use streamlib_plugin_sdk::sdk::context::RuntimeContextFullAccess;
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::iceoryx2::OutputWriter;
+use streamlib_plugin_sdk::sdk::processors::ManualProcessor;
 use tokio::net::UdpSocket;
 use tokio::sync::Notify;
 
@@ -52,7 +52,7 @@ fn monotonic_ns() -> i64 {
     MONOTONIC_EPOCH.elapsed().as_nanos() as i64
 }
 
-#[streamlib::sdk::processor("UdpSource")]
+#[streamlib_plugin_sdk::sdk::processor("UdpSource")]
 pub struct UdpSourceProcessor {
     /// Plugin-owned tokio runtime. Constructed in `setup()`; the host's
     /// runtime is not reachable across the plugin ABI per #885.
