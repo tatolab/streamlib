@@ -1,6 +1,6 @@
 [package]
 name = "streamlib-jpeg"
-version = "0.4.30"
+version = "0.4.35-dev.1"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "JPEG decoder processor — thin wrapper around libs/vulkan-jpeg::SimpleJpegDecoder (GPU compute / nvJPEG)."
@@ -14,21 +14,30 @@ name = "streamlib_jpeg"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = {version = "0.4.30", registry = "gitea"}
+streamlib-jtd-codegen = {version = "=0.4.35-dev.1", registry = "gitea"}
 
 [dependencies]
 # Engine substrate — runtime context, processor traits, generated config
 # types under `crate::_generated_::tatolab__jpeg::*`, VideoFrame wire
 # type, RHI texture / color primitives.
-streamlib = {version = "0.4.30", registry = "gitea"}
+#
+# EXACT-pinned (`=`) on purpose. JpegDecoder is a GPU processor: its
+# `setup()` reaches the host's `HostVulkanDevice` through
+# `GpuContextFullAccess::host_vulkan_device_arc()`, which transits a
+# non-`#[repr(C)]` type across the plugin ABI. That transit is only
+# sound when this plugin links the SAME streamlib-engine build as the
+# host runtime. A caret floor would let the plugin drift to a newer
+# dev publish than the (lockfile-pinned) host and corrupt device state.
+# Move all four streamlib-family pins together when retargeting.
+streamlib = {version = "=0.4.35-dev.1", registry = "gitea"}
 
 # Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = {version = "0.4.30", registry = "gitea"}
+streamlib-macros = {version = "=0.4.35-dev.1", registry = "gitea"}
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = {version = "0.4.30", registry = "gitea"}
+streamlib-plugin-abi = {version = "=0.4.35-dev.1", registry = "gitea"}
 
 # Serialization (config dataclasses ship as serde-derived).
 # Generated `EncodedJpegFrame.data` carries `#[serde(with = "serde_bytes")]`
@@ -43,6 +52,6 @@ tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 [target.'cfg(target_os = "linux")'.dependencies]
 # GPU JPEG decode primitive — fused Vulkan compute kernel + optional
 # nvJPEG fast path behind SimpleJpegDecoder. Owns its own texture ring.
-vulkan-jpeg = {version = "0.4.30", registry = "gitea"}
+vulkan-jpeg = {version = "=0.4.35-dev.1", registry = "gitea"}
 
 [workspace]
