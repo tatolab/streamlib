@@ -25,11 +25,20 @@ streamlib-plugin-abi = { path = "../../libs/streamlib-plugin-abi", version = "0.
 # Procedural macros (#[processor], schema_ident!, module_ident!, ...). Re-exported
 # under sdk::* so plugins author against this crate by its real name.
 streamlib-macros = { path = "../../libs/streamlib-macros", version = "0.4.30", registry = "gitea" }
+# Engine-free panic-safety helper (run_host_extern_c) shared by the engine
+# and the five surface adapters; the SDK's processor_vtable thunks route
+# every extern "C" boundary crossing through it. Deps: bitflags / parking_lot
+# / thiserror / tracing / libc — no engine.
+streamlib-adapter-abi = { path = "../../libs/streamlib-adapter-abi", version = "0.4.30", registry = "gitea" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
 rmp-serde = { workspace = true }
 tracing = { workspace = true }
+# iceoryx2's logging facade — the cdylib's Log forwarder routes iceoryx2
+# records through the host's iceoryx_log_emit callback. Logging facade only
+# (not the full iceoryx2 transport); engine-free.
+iceoryx2-log = "0.8.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Consumer-side RHI carve-out: TextureFormat / TextureUsages / PixelFormat /

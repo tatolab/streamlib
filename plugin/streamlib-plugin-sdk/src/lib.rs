@@ -19,6 +19,18 @@
 //! `#[repr(C)]` twins of the engine's, so the host can build a struct and a
 //! plugin can read its fields across the plugin ABI soundly.
 
+// ---- Crate-internal modules carrying the cdylib (vtable-marshal) arm ----
+//
+// Engine-free twins of the engine's dual-mode authoring types. The host
+// `*Inner` backings + `HOST_*_VTABLE` statics stay in the engine; these are
+// the `#[repr(C)]` layout-matched twins + the cdylib-side vtable-marshal
+// code, re-exported under `sdk::*` below.
+mod context;
+mod iceoryx2;
+mod media_clock;
+mod plugin;
+mod processors;
+
 /// Public plugin-authoring surface. Packages author against
 /// `streamlib_plugin_sdk::sdk::*`; the `#[processor]` macro and
 /// `export_plugin!` resolve their emitted paths into this module.
@@ -60,4 +72,48 @@ pub mod sdk {
         module_ident, module_ident_any_version, module_ident_joined,
         module_ident_joined_any_version, schema_ident, schema_ident_any_version,
     };
+
+    // ---- Capability-typed context views (cdylib arm) ----
+    /// `RuntimeContext{Full,Limited}Access` + `GpuContext{Full,Limited}Access`
+    /// — `#[repr(C)]` twins of the engine's, layout-locked so a host-built
+    /// view can be read field-by-field across the plugin ABI.
+    pub mod context {
+        pub use crate::context::{
+            GpuContextFullAccess, GpuContextLimitedAccess, RuntimeContextFullAccess,
+            RuntimeContextLimitedAccess,
+        };
+    }
+
+    // ---- Processor-authoring traits + support types ----
+    /// Mode traits, `Config`, `EmptyConfig`, `ProcessorSpec`, the port
+    /// markers, and the macro-targeted `__generated_private::GeneratedProcessor`.
+    pub mod processors {
+        pub use crate::processors::{
+            Config, ConfigValidationError, ContinuousProcessor, DynGeneratedProcessor,
+            EmptyConfig, GeneratedProcessor, InputPortMarker, ManualProcessor, OutputPortMarker,
+            PortMarker, ProcessorSpec, ReactiveProcessor,
+        };
+        pub use crate::processors::__generated_private;
+        /// Re-export so the macro's `sdk::processors::PortSchemaSpec` path
+        /// resolves (the macro emits port-spec construction against it).
+        pub use streamlib_processor_schema::PortSchemaSpec;
+    }
+
+    // ---- iceoryx2 transport views (cdylib arm) ----
+    /// `OutputWriter` / `InputMailboxes` PluginAbiObjects, their opaque
+    /// `*Inner` placeholders, and `ReadMode`.
+    pub mod iceoryx2 {
+        pub use crate::iceoryx2::{
+            InputMailboxes, InputMailboxesInner, OutputWriter, OutputWriterInner, ReadMode,
+        };
+    }
+
+    // ---- Plugin registration glue (cdylib arm) ----
+    /// `install_host_services` + `RegisterHelper` — the symbols
+    /// `export_plugin!` resolves into. Re-exports the ABI's `HostServices`
+    /// + layout-version const for the macro's payload handling.
+    pub mod plugin {
+        pub use crate::plugin::{install_host_services, RegisterHelper};
+        pub use streamlib_plugin_abi::{HostServices, HOST_SERVICES_LAYOUT_VERSION};
+    }
 }
