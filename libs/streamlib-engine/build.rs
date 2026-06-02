@@ -37,6 +37,14 @@ fn compile_shaders() {
     // consumed via `include_bytes!(concat!(env!("OUT_DIR"), …))`.
     // Add new kernels (compute, vertex, fragment) here.
     let shaders: &[(&str, &str, &str)] = &[
+        // Trivial kernel built+dropped at device init to force NVIDIA's
+        // shader-compiler global init in a controlled state — see
+        // HostVulkanDevice::prewarm_pipeline_compiler.
+        (
+            "src/vulkan/rhi/shaders/prewarm.comp",
+            "prewarm.spv",
+            "compute",
+        ),
         (
             "src/vulkan/rhi/shaders/color_convert_nv12_buffer_to_rgba.comp",
             "color_convert_nv12_buffer_to_rgba.spv",

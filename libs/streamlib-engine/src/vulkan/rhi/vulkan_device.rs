@@ -1429,10 +1429,61 @@ impl HostVulkanDevice {
                      export sentinels must not hold Arc<HostVulkanDevice> clones",
                 )
                 .opaque_fd_export_sentinels = sentinels;
+            // Force NVIDIA's shader-compiler global init now — single-threaded,
+            // at construction, before any plugin processor setup runs. The
+            // kernel is built and dropped purely for the compiler-init side
+            // effect. See [`Self::prewarm_pipeline_compiler`].
+            Self::prewarm_pipeline_compiler(&device);
             device
         };
 
         Ok(device)
+    }
+
+    /// Build (and immediately drop) a trivial compute pipeline at device
+    /// construction so the GPU driver's shader-compiler global init runs
+    /// single-threaded in a controlled state.
+    ///
+    /// On NVIDIA Linux, `libnvidia-gpucomp` does a lazy `pthread_once`
+    /// init on the **first** `vkCreatePipelineLayout` in a process. When
+    /// that first pipeline lands during concurrent multi-plugin processor
+    /// setup, the one-time init double-frees its own heap and aborts.
+    /// Forcing it here — before any plugin setup runs — sidesteps that,
+    /// mirroring how the VMA pool pre-warm above sidesteps NVIDIA's
+    /// exportable-memory cap. Unconditional (cheap on every driver; only
+    /// NVIDIA needs it). Non-fatal: a pre-warm failure only forgoes the
+    /// protection — the first real pipeline triggers the init instead.
+    #[cfg(target_os = "linux")]
+    fn prewarm_pipeline_compiler(device: &Arc<Self>) {
+        const PREWARM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/prewarm.spv"));
+        // Mirror the heaviest real kernels' layout shape (two storage
+        // buffers + an rgba8 storage image + a 128-byte push block) — the
+        // driver's lazy compiler init is keyed off the pipeline-layout
+        // shape, so a trivial layout doesn't trigger the same init.
+        let descriptor = crate::core::rhi::ComputeKernelDescriptor {
+            label: "pipeline_compiler_prewarm",
+            spv: PREWARM_SPV,
+            bindings: &[
+                crate::core::rhi::ComputeBindingSpec::storage_buffer(0),
+                crate::core::rhi::ComputeBindingSpec::storage_buffer(1),
+                crate::core::rhi::ComputeBindingSpec::storage_image(2),
+            ],
+            push_constant_size: 128,
+        };
+        match crate::vulkan::rhi::VulkanComputeKernel::new(device, &descriptor) {
+            // `_kernel` drops at the end of this arm — only the
+            // compiler-init side effect persists process-globally.
+            Ok(_kernel) => {
+                tracing::info!("HostVulkanDevice pipeline-compiler pre-warmed");
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "pipeline-compiler pre-warm failed (non-fatal — first real \
+                     pipeline will trigger the driver's compiler init instead)"
+                );
+            }
+        }
     }
 
     /// Run every export-capable VMA pool through one allocation **before
