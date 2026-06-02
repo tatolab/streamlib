@@ -15,13 +15,12 @@
 //! construction. No raw `vulkanalia` calls; no hand-rolled descriptor
 //! sets, pipeline layouts, or command buffers.
 
-use streamlib::sdk::color::{ResolvedColorInfo, TransferId};
-use streamlib::sdk::context::GpuContextFullAccess;
-use streamlib::sdk::engine::host_rhi::VulkanComputeKernel;
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::rhi::{
+use streamlib_plugin_sdk::sdk::color::{ResolvedColorInfo, TransferId};
+use streamlib_plugin_sdk::sdk::context::GpuContextFullAccess;
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::rhi::{
     ColorConverterPushConstants, ComputeBindingSpec, ComputeKernelDescriptor, SourceLayoutInfo,
-    StorageBuffer, Texture,
+    StorageBuffer, Texture, VulkanComputeKernel,
 };
 
 use crate::header::DecodedJpeg;

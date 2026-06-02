@@ -137,7 +137,8 @@ impl TextureRingSlot {
     /// Index of this slot within the ring's slot vector. Public for
     /// callers who need the slot identity beyond the `surface_id`
     /// (e.g. third-party backends that cache per-slot CUDA imports —
-    /// see `libs/vulkan-jpeg/src/nvjpeg_backend/resources.rs`).
+    /// see the parked nvJPEG backend at
+    /// `vulkan/_nvjpeg_impl_pending_/resources.rs`).
     pub fn slot_index(&self) -> u32 {
         self.slot_index
     }

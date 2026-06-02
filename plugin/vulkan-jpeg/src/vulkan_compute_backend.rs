@@ -18,10 +18,12 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use streamlib::sdk::context::{GpuContextFullAccess, TextureRing};
-use streamlib::sdk::engine::host_rhi::{VulkanAccess, VulkanStage};
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::rhi::{StorageBuffer, TextureFormat, TextureUsages, VulkanLayout};
+use streamlib_plugin_sdk::sdk::context::GpuContextFullAccess;
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::rhi::{
+    StorageBuffer, TextureFormat, TextureRing, TextureUsages, VulkanAccess, VulkanLayout,
+    VulkanStage,
+};
 
 use crate::backend::{JpegBackendKind, JpegDecodeBackend};
 use crate::color::JpegColorInfo;

@@ -5,7 +5,7 @@
 //!
 //! Parsed-as-bytes inside the crate's marker walker and surfaced on
 //! [`crate::DecodedJpeg::color_info`]. Resolution to the engine's
-//! `streamlib::sdk::color::ResolvedColorInfo` lives in
+//! `streamlib_plugin_sdk::sdk::color::ResolvedColorInfo` lives in
 //! [`JpegColorInfo::resolve`] (Linux-only).
 
 use crate::error::{JpegError, JpegResult};
@@ -427,7 +427,7 @@ pub(crate) fn parse_app14_adobe(payload: &[u8]) -> JpegResult<Option<AdobeMetada
 #[derive(Debug, Clone, Copy)]
 pub struct ResolvedJpegColor {
     /// Engine-shaped 4-tuple the kernel consumes via push constants.
-    pub info: streamlib::sdk::color::ResolvedColorInfo,
+    pub info: streamlib_plugin_sdk::sdk::color::ResolvedColorInfo,
     /// Why this resolution was picked — useful for logging and tests
     /// that need to verify which branch fired without inspecting the
     /// numeric 4-tuple.
@@ -463,7 +463,7 @@ impl JpegColorInfo {
     /// rejected with a typed error (the 4-component decode path
     /// doesn't exist today).
     pub fn resolve(&self) -> JpegResult<ResolvedJpegColor> {
-        use streamlib::sdk::color::{MatrixId, PrimariesId, RangeId, ResolvedColorInfo, TransferId};
+        use streamlib_plugin_sdk::sdk::color::{MatrixId, PrimariesId, RangeId, ResolvedColorInfo, TransferId};
 
         let jfif_default = ResolvedColorInfo {
             primaries: PrimariesId::Bt709,
@@ -698,13 +698,13 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Resolution tests (Linux-only — depend on streamlib::sdk::color).
+    // Resolution tests (Linux-only — depend on streamlib_plugin_sdk::sdk::color).
     // -----------------------------------------------------------------
 
     #[cfg(target_os = "linux")]
     #[test]
     fn resolve_empty_color_info_returns_jfif_default() {
-        use streamlib::sdk::color::{MatrixId, PrimariesId, RangeId, TransferId};
+        use streamlib_plugin_sdk::sdk::color::{MatrixId, PrimariesId, RangeId, TransferId};
         let info = JpegColorInfo::default();
         let resolved = info.resolve().expect("resolve");
         assert_eq!(resolved.source, JpegColorSource::JfifDefault);
@@ -717,7 +717,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn resolve_adobe_rgb_direct_collapses_matrix_to_identity() {
-        use streamlib::sdk::color::MatrixId;
+        use streamlib_plugin_sdk::sdk::color::MatrixId;
         let info = JpegColorInfo {
             adobe: Some(AdobeMetadata {
                 transform: AdobeTransform::Direct,
@@ -732,7 +732,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn resolve_adobe_ycbcr_equals_jfif_default() {
-        use streamlib::sdk::color::MatrixId;
+        use streamlib_plugin_sdk::sdk::color::MatrixId;
         let info = JpegColorInfo {
             adobe: Some(AdobeMetadata {
                 transform: AdobeTransform::YCbCr,

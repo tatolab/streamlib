@@ -1,0 +1,29 @@
+[package]
+name = "vulkan-jpeg"
+version.workspace = true
+edition = "2024"
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "JPEG decode for streamlib — CPU parser + Huffman entropy decode + fused Vulkan compute kernel (dequant + IDCT + chroma upsample + YCbCr->RGB)"
+
+[dependencies]
+thiserror = { workspace = true }
+tracing = { workspace = true }
+bytemuck = { version = "1.16", features = ["derive"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Engine-free authoring SDK — provides the FullAccess GPU surface the
+# Vulkan-compute backend builds against (VulkanComputeKernel, StorageBuffer,
+# TextureRing, RhiCommandRecorder, ComputeKernelDescriptor, the color-math
+# types, and the GpuContext{Full,Limited}Access views) under
+# `streamlib_plugin_sdk::sdk::*`. Depending on the SDK by its real name keeps
+# this crate engine-free, so it is safe to compile into a `.slpkg` cdylib.
+streamlib-plugin-sdk = { path = "../streamlib-plugin-sdk", version = "0.4.30", registry = "gitea" }
+
+[dev-dependencies]
+jpeg-encoder = "0.6"
+zune-jpeg = "0.4"
+
+[lints]
+workspace = true

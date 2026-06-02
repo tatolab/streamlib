@@ -13,7 +13,7 @@
 use crate::_generated_::tatolab__core::color_info::{
     ColorInfo, Matrix, Primaries, Range, Transfer,
 };
-use streamlib::sdk::color::{MatrixId, PrimariesId, RangeId, ResolvedColorInfo, TransferId};
+use streamlib_plugin_sdk::sdk::color::{MatrixId, PrimariesId, RangeId, ResolvedColorInfo, TransferId};
 
 /// Convert a fully-resolved engine color tuple into the on-wire
 /// `ColorInfo` schema. Every axis is `Some(_)` since
@@ -84,7 +84,7 @@ mod tests {
 
     #[test]
     fn jfif_default_maps_to_bt709_srgb_smpte170m_full() {
-        // JFIF default per libs/vulkan-jpeg/src/color.rs::JFIF_DEFAULT.
+        // JFIF default per plugin/vulkan-jpeg/src/color.rs::JFIF_DEFAULT.
         let resolved = ResolvedColorInfo {
             primaries: PrimariesId::Bt709,
             transfer: TransferId::Srgb,
