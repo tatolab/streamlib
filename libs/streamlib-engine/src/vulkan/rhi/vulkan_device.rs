@@ -1429,11 +1429,14 @@ impl HostVulkanDevice {
                      export sentinels must not hold Arc<HostVulkanDevice> clones",
                 )
                 .opaque_fd_export_sentinels = sentinels;
-            // Force NVIDIA's shader-compiler global init now — single-threaded,
-            // at construction, before any plugin processor setup runs. The
-            // kernel is built and dropped purely for the compiler-init side
-            // effect. See [`Self::prewarm_pipeline_compiler`].
+            // Force the driver's shader-compiler init now — single-threaded,
+            // at construction, before any plugin processor setup runs. Each
+            // probe pipeline is built and dropped purely for the compiler-init
+            // side effect. Compute + graphics cover the two pipeline-creation
+            // paths the engine exercises today; ray-tracing is a follow-up
+            // (it very likely shares the same compiler `once`).
             Self::prewarm_pipeline_compiler(&device);
+            Self::prewarm_graphics_pipeline(&device);
             device
         };
 
@@ -1488,6 +1491,79 @@ impl HostVulkanDevice {
                     error = %e,
                     "pipeline-compiler pre-warm failed (non-fatal — first real \
                      pipeline will trigger the driver's compiler init instead)"
+                );
+            }
+        }
+    }
+
+    /// Build (and immediately drop) a trivial graphics pipeline at device
+    /// construction so the driver's shader-compiler init for the
+    /// `vkCreateGraphicsPipelines` path also runs single-threaded in a
+    /// controlled state. Companion to [`Self::prewarm_pipeline_compiler`]
+    /// (the compute path); ray-tracing is a tracked follow-up. Trivial
+    /// vertex + fragment stages, no vertex input, a dummy `Rgba8Unorm`
+    /// color attachment via dynamic rendering, dynamic viewport/scissor —
+    /// built and dropped purely for the compiler-init side effect.
+    /// Non-fatal.
+    #[cfg(target_os = "linux")]
+    fn prewarm_graphics_pipeline(device: &Arc<Self>) {
+        use crate::core::rhi::{
+            AttachmentFormats, ColorBlendState, ColorWriteMask, DepthStencilState,
+            GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor,
+            GraphicsPipelineState, GraphicsPushConstants, GraphicsShaderStage,
+            GraphicsShaderStageFlags, GraphicsStage, MultisampleState, PrimitiveTopology,
+            RasterizationState, TextureFormat, VertexInputState,
+        };
+        const VERT_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/prewarm.vert.spv"));
+        const FRAG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/prewarm.frag.spv"));
+        const NO_BINDINGS: &[GraphicsBindingSpec] = &[];
+        let stages = [
+            GraphicsStage {
+                stage: GraphicsShaderStage::Vertex,
+                spv: VERT_SPV,
+                entry_point: "main",
+            },
+            GraphicsStage {
+                stage: GraphicsShaderStage::Fragment,
+                spv: FRAG_SPV,
+                entry_point: "main",
+            },
+        ];
+        let descriptor = GraphicsKernelDescriptor {
+            label: "pipeline_compiler_prewarm_graphics",
+            stages: &stages,
+            bindings: NO_BINDINGS,
+            push_constants: GraphicsPushConstants {
+                size: 4,
+                stages: GraphicsShaderStageFlags::FRAGMENT,
+            },
+            pipeline_state: GraphicsPipelineState {
+                topology: PrimitiveTopology::TriangleList,
+                vertex_input: VertexInputState::None,
+                rasterization: RasterizationState::default(),
+                multisample: MultisampleState::default(),
+                depth_stencil: DepthStencilState::Disabled,
+                color_blend: ColorBlendState::Disabled {
+                    color_write_mask: ColorWriteMask::RGBA,
+                },
+                attachment_formats: AttachmentFormats {
+                    color: vec![TextureFormat::Rgba8Unorm],
+                    depth: None,
+                },
+                dynamic_state: GraphicsDynamicState::ViewportScissor,
+            },
+            descriptor_sets_in_flight: 1,
+        };
+        match crate::vulkan::rhi::VulkanGraphicsKernel::new(device, &descriptor) {
+            // `_kernel` drops here — only the compiler-init side effect persists.
+            Ok(_kernel) => {
+                tracing::info!("HostVulkanDevice graphics-pipeline compiler pre-warmed");
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "graphics-pipeline pre-warm failed (non-fatal — first real \
+                     graphics pipeline will trigger the compiler init instead)"
                 );
             }
         }
