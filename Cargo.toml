@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "plugin/streamlib-error", # plugin/ zone: canonical Error + Result (engine-free)
+    "plugin/streamlib-plugin-sdk", # plugin/ zone: engine-free authoring SDK (cdylib arm of the dual-mode views + glue)
     "xtask",                    # Development tasks (cargo xtask <command>)
     "libs/streamlib-sdk",       # Public authoring API surface — customer apps depend on this (Cargo name `streamlib`)
     "libs/streamlib-engine",    # Engine internals (RHI, IPC, surface-share, runtime executor) — private dep of the SDK
