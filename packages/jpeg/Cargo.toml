@@ -1,6 +1,6 @@
 [package]
 name = "streamlib-jpeg"
-version = "0.4.35-dev.1"
+version = "0.4.35-dev.5"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "JPEG decoder processor — thin wrapper around libs/vulkan-jpeg::SimpleJpegDecoder (GPU compute / nvJPEG)."
@@ -14,7 +14,7 @@ name = "streamlib_jpeg"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = {version = "=0.4.35-dev.1", registry = "gitea"}
+streamlib-jtd-codegen = {version = "=0.4.35-dev.5", registry = "gitea"}
 
 [dependencies]
 # Engine substrate — runtime context, processor traits, generated config
@@ -29,15 +29,15 @@ streamlib-jtd-codegen = {version = "=0.4.35-dev.1", registry = "gitea"}
 # host runtime. A caret floor would let the plugin drift to a newer
 # dev publish than the (lockfile-pinned) host and corrupt device state.
 # Move all four streamlib-family pins together when retargeting.
-streamlib = {version = "=0.4.35-dev.1", registry = "gitea"}
+streamlib = {version = "=0.4.35-dev.5", registry = "gitea"}
 
 # Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = {version = "=0.4.35-dev.1", registry = "gitea"}
+streamlib-macros = {version = "=0.4.35-dev.5", registry = "gitea"}
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = {version = "=0.4.35-dev.1", registry = "gitea"}
+streamlib-plugin-abi = {version = "=0.4.35-dev.5", registry = "gitea"}
 
 # Serialization (config dataclasses ship as serde-derived).
 # Generated `EncodedJpegFrame.data` carries `#[serde(with = "serde_bytes")]`

@@ -17,7 +17,7 @@ use crate::linux::color_resolved_to_core::resolved_color_info_to_core;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
 
-use vulkan_jpeg::SimpleJpegDecoder;
+use vulkan_jpeg::{JpegBackendKind, JpegBackendPreference, SimpleJpegDecoder};
 
 /// Default max width when `JpegDecoderConfig::max_width` is unset. 4K
 /// covers AGP drone-racing (1280×720 / 1920×1080 typical) and most
@@ -52,7 +52,26 @@ impl streamlib::sdk::processors::ReactiveProcessor for JpegDecoderProcessor::Pro
         // trip the gate's same-thread re-entry panic (see
         // `EscalateGate`'s type doc — the historical sandbox contract
         // forbids escalate-from-setup).
-        let decoder = SimpleJpegDecoder::new(ctx.gpu_full_access(), max_width, max_height)?;
+        // Backend selection. Default is `Auto` (nvJPEG fast path when the
+        // device supports it, Vulkan-compute otherwise). On hosts where the
+        // nvJPEG/CUDA probe can't initialize during concurrent multi-plugin
+        // setup — `cudaSetDevice` racing with other processors' Vulkan
+        // pipeline compilation corrupts NVIDIA driver state and SIGSEGVs in
+        // the subsequent `vkCreateComputePipelines` — set
+        // `STREAMLIB_JPEG_BACKEND=vulkan` to skip the doomed probe and go
+        // straight to the Vulkan-compute backend.
+        let preference = match std::env::var("STREAMLIB_JPEG_BACKEND").as_deref() {
+            Ok("vulkan") | Ok("vulkan-compute") => {
+                JpegBackendPreference::Force(JpegBackendKind::VulkanCompute)
+            }
+            _ => JpegBackendPreference::Auto,
+        };
+        let decoder = SimpleJpegDecoder::new_with_preference(
+            ctx.gpu_full_access(),
+            max_width,
+            max_height,
+            preference,
+        )?;
 
         tracing::info!(
             backend = decoder.backend_kind().as_str(),
