@@ -1429,12 +1429,14 @@ impl HostVulkanDevice {
                      export sentinels must not hold Arc<HostVulkanDevice> clones",
                 )
                 .opaque_fd_export_sentinels = sentinels;
-            // Force the driver's shader-compiler init now — single-threaded,
-            // at construction, before any plugin processor setup runs. Each
-            // probe pipeline is built and dropped purely for the compiler-init
-            // side effect. Compute + graphics cover the two pipeline-creation
-            // paths the engine exercises today; ray-tracing is a follow-up
-            // (it very likely shares the same compiler `once`).
+            // Provisional precaution: force the driver's shader-compiler init
+            // now — single-threaded, at construction, before any plugin
+            // processor setup runs. Each probe pipeline is built and dropped
+            // purely for the compiler-init side effect. Compute + graphics
+            // cover the two pipeline-creation paths the engine exercises today;
+            // ray-tracing is a follow-up (it very likely shares the same
+            // compiler `once`). See `prewarm_pipeline_compiler` for why this is
+            // a precaution rather than a proven fix.
             Self::prewarm_pipeline_compiler(&device);
             Self::prewarm_graphics_pipeline(&device);
             device
@@ -1447,15 +1449,25 @@ impl HostVulkanDevice {
     /// construction so the GPU driver's shader-compiler global init runs
     /// single-threaded in a controlled state.
     ///
-    /// On NVIDIA Linux, `libnvidia-gpucomp` does a lazy `pthread_once`
-    /// init on the **first** `vkCreatePipelineLayout` in a process. When
-    /// that first pipeline lands during concurrent multi-plugin processor
-    /// setup, the one-time init double-frees its own heap and aborts.
-    /// Forcing it here — before any plugin setup runs — sidesteps that,
-    /// mirroring how the VMA pool pre-warm above sidesteps NVIDIA's
-    /// exportable-memory cap. Unconditional (cheap on every driver; only
-    /// NVIDIA needs it). Non-fatal: a pre-warm failure only forgoes the
-    /// protection — the first real pipeline triggers the init instead.
+    /// **Provisional precaution, not a proven fix.** On NVIDIA Linux,
+    /// `libnvidia-gpucomp` does a lazy `pthread_once` init on the first
+    /// `vkCreatePipelineLayout` in a process; the working hypothesis is
+    /// that running it concurrently with other multi-plugin processor setup
+    /// can corrupt the driver's heap. Forcing it here — before any plugin
+    /// setup runs — closes that one window, mirroring how the VMA pool
+    /// pre-warm above sidesteps NVIDIA's exportable-memory cap. It does NOT
+    /// fix the broader concurrent pipeline-creation contention: only the
+    /// FIRST init is serialized, while later concurrent `vkCreate*Pipelines`
+    /// calls still race. The canonical fix is funneling every pipeline
+    /// creation through one dedicated compile thread (the concurrent-setup
+    /// race, tracked separately); this pre-warm is the cheap precaution kept
+    /// until that lands. Its causal necessity is unproven — the crash that
+    /// originally motivated it was later diagnosed as an IPC/wiring failure,
+    /// and the residual driver race is latent (not reproduced outside a
+    /// debugger). Unconditional on Linux today (only NVIDIA is suspected to
+    /// need it; vendor-id gating is a tracked consideration). Non-fatal: a
+    /// pre-warm failure only forgoes the precaution — the first real
+    /// pipeline triggers the init instead.
     #[cfg(target_os = "linux")]
     fn prewarm_pipeline_compiler(device: &Arc<Self>) {
         const PREWARM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/prewarm.spv"));
@@ -1500,7 +1512,9 @@ impl HostVulkanDevice {
     /// construction so the driver's shader-compiler init for the
     /// `vkCreateGraphicsPipelines` path also runs single-threaded in a
     /// controlled state. Companion to [`Self::prewarm_pipeline_compiler`]
-    /// (the compute path); ray-tracing is a tracked follow-up. Trivial
+    /// (the compute path) — same provisional-precaution caveat; see it for
+    /// why this is a precaution rather than a proven fix. Ray-tracing is a
+    /// tracked follow-up. Trivial
     /// vertex + fragment stages, no vertex input, a dummy `Rgba8Unorm`
     /// color attachment via dynamic rendering, dynamic viewport/scissor —
     /// built and dropped purely for the compiler-init side effect.
