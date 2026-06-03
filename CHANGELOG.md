@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.4.36](https://github.com/tatolab/streamlib/compare/v0.4.35...v0.4.36) (2026-06-03)
+
+
+### Features
+
+* **jpeg:** STREAMLIB_JPEG_BACKEND override + retarget plugin pins to the dev-loop engine ([c272c6a](https://github.com/tatolab/streamlib/commit/c272c6a9d44c07ad8f8299a485485fd8ebb63213))
+* **mavlink:** add command_long + encapsulated_data to MavlinkMessage union ([#1198](https://github.com/tatolab/streamlib/issues/1198)) ([2b69a8f](https://github.com/tatolab/streamlib/commit/2b69a8f68be345245ebe467eacc57d0e7285c0cb))
+* **mavlink:** complete the engine-free schema — add command_long + encapsulated_data (1.1.2) ([8fcfd50](https://github.com/tatolab/streamlib/commit/8fcfd5045078fcf5032a15b9eefe5e1f0e5aeff0))
+* **plugin-sdk:** auto-detect the real SDK crate in #[processor] + make export_plugin! SDK-agnostic ([c857902](https://github.com/tatolab/streamlib/commit/c85790236cd9abbaa919762e6ea16994723b8f16))
+* **plugin-sdk:** migrate network / vadr-vision / mavlink packages to the engine-free SDK ([1e9d122](https://github.com/tatolab/streamlib/commit/1e9d122522ee5092a59f8baa1573c7a9403db8f4))
+* **plugin-sdk:** relocate the cdylib arm of the dual-mode plugin machinery ([efccdfe](https://github.com/tatolab/streamlib/commit/efccdfe266b91f9166734517c0d0fb0cbc79196f))
+* **plugin-sdk:** relocate the Vulkan-compute GPU FullAccess surface into the SDK ([131f049](https://github.com/tatolab/streamlib/commit/131f049c7d01ed40e416809cb9fb9bd1d966e543))
+* **plugin-sdk:** scaffold streamlib-plugin-sdk with the engine-free shared surface ([f4a70d6](https://github.com/tatolab/streamlib/commit/f4a70d61bebbf05bc0f2fbfa8ea59706c5403369))
+* **plugin-sdk:** split vulkan-jpeg — engine-free plugin/vulkan-jpeg + parked nvJPEG ([f37d23f](https://github.com/tatolab/streamlib/commit/f37d23f10b2e4794a3407f18abcffb9c089fd897))
+
+
+### Bug Fixes
+
+* **gitea-publish:** bump the plugin/ zone Cargo.tomls in the dev-version rewrite ([8bf03d6](https://github.com/tatolab/streamlib/commit/8bf03d698a60e6c325bf6ca6731216790eda2fda))
+* **ipc:** size shared per-destination iceoryx2 service to its deepest inbound link ([3a81f42](https://github.com/tatolab/streamlib/commit/3a81f42566f4cb2ca0a13c1c0261e77fc77c696a))
+* **jpeg:** build GPU kernel + buffers via FullAccess primitives ([#1199](https://github.com/tatolab/streamlib/issues/1199)) ([769975b](https://github.com/tatolab/streamlib/commit/769975ba98174d38d11b20b02249d0222f6455c0))
+* **jpeg:** pin @tatolab/jpeg to streamlib 0.4.35-dev.1 (GPU plugin/host coherence) ([e92d3de](https://github.com/tatolab/streamlib/commit/e92d3defb0c551b2aac1a7988314d8f97e9fd964))
+* **jpeg:** use cdylib-safe host_vulkan_device_arc() in vulkan-jpeg ([407cb78](https://github.com/tatolab/streamlib/commit/407cb7864c7b853b136ef8c0bc8da1feea1e3e96))
+* **mavlink:** publish engine-free .slpkg at 1.1.1 (above the stale 1.1.0) ([ed9d97c](https://github.com/tatolab/streamlib/commit/ed9d97c884b9b8c50019c9c2a4df6ec379af665b))
+* **rhi:** drain the device inside the escalate gate, not after releasing it ([e8d865a](https://github.com/tatolab/streamlib/commit/e8d865ab1fb0e14d98dc3e7ab24d99352f03f758))
+* **rhi:** pre-warm the shader-compiler pipeline path at device init ([#1203](https://github.com/tatolab/streamlib/issues/1203)) ([5290ddd](https://github.com/tatolab/streamlib/commit/5290ddd70c3f3c0d72c87ca5211b949b13573d95))
+* **rhi:** route vkDeviceWaitIdle through the queue-mutex helper + co-locate the pipeline cache under STREAMLIB_HOME ([70012bd](https://github.com/tatolab/streamlib/commit/70012bd728cf7bbcbdc48ba774192969c2b02234))
+
 ## [0.4.35](https://github.com/tatolab/streamlib/compare/v0.4.34...v0.4.35) (2026-05-31)
 
 
