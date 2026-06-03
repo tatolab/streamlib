@@ -1468,6 +1468,16 @@ impl HostVulkanDevice {
     /// need it; vendor-id gating is a tracked consideration). Non-fatal: a
     /// pre-warm failure only forgoes the precaution — the first real
     /// pipeline triggers the init instead.
+    ///
+    /// **Boxed-in — treat as a removal candidate, not load-bearing code.**
+    /// To prove necessity: delete the two `prewarm_*` calls in `new()`, run
+    /// a multi-plugin NVIDIA setup (the drone-racer host) across a
+    /// dozen-plus cold starts, and watch for a `libnvidia-glcore` /
+    /// `vkCreate*Pipelines` SIGSEGV during setup. No crash ⇒ dead weight:
+    /// remove the calls and the `prewarm.comp` / `prewarm.{vert,frag}`
+    /// shaders. The single-threaded pipeline-create funnel supersedes it
+    /// outright; don't grow it (e.g. a ray-tracing probe) on speculation
+    /// before necessity is shown.
     #[cfg(target_os = "linux")]
     fn prewarm_pipeline_compiler(device: &Arc<Self>) {
         const PREWARM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/prewarm.spv"));
