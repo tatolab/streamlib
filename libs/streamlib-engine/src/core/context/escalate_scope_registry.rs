@@ -35,6 +35,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use super::gpu_context::GpuContext;
+use crate::core::error::Result;
 
 /// Opaque scope token identifying an active escalate scope.
 ///
@@ -77,25 +78,45 @@ pub(crate) fn begin_escalate_scope(arc_ctx: Arc<GpuContext>) -> ScopeToken {
     token
 }
 
-/// End an escalate scope. Removes the bound `Arc<GpuContext>` from
-/// the registry and releases that context's escalate gate.
+/// End an escalate scope, running `drain` against the bound
+/// `Arc<GpuContext>` **while the gate is still held**, and only then
+/// releasing the gate. This is the single gate-release primitive
+/// every escalate-scope teardown goes through.
 ///
-/// Returns `true` if the token was present (normal completion);
-/// `false` if it was already removed (e.g. double `escalate_end` or a
-/// never-issued token). Idempotent on the registry — duplicate calls
-/// don't release another scope's gate.
+/// Holding the gate across `drain` is load-bearing. The production
+/// drain is a device-wide `vkDeviceWaitIdle`
+/// ([`end_escalate_scope_draining`]); on NVIDIA Linux a
+/// `vkDeviceWaitIdle` that runs *after* the gate is released races
+/// the next scope's `vkCreateComputePipelines` and corrupts the
+/// shared driver state (see
+/// `docs/learnings/concurrent-vkdevicewaitidle-threading.md`).
+/// Folding the drain into the release here makes "release then wait"
+/// — the exact bug shape that recurred across two hand-rolled call
+/// sites — unreachable through the registry: there is exactly one
+/// `escalate_gate().exit()` in the engine and the drain always
+/// precedes it.
+///
+/// The gate is released via an exit-on-drop guard, so a panic in
+/// `drain` still releases it — a leaked gate would deadlock every
+/// subsequent escalate scope.
+///
+/// Returns `None` for a stale or never-issued token (no-op — the gate
+/// was never claimed by this token); `Some(drain_result)` after a
+/// successful release.
 ///
 /// **Caller contract.** The caller MUST ensure no FullAccess vtable
 /// call against this scope token is still in-flight on another
-/// thread when `end_escalate_scope` runs. Releasing the gate early
-/// while a FullAccess method is mid-execution would let a fresh
-/// `begin_escalate_scope` overlap with the tail of the prior scope's
-/// GPU work. The cdylib's `escalate_via_vtable` wrapper enforces
-/// this naturally — the closure runs synchronously and returns
-/// before `escalate_end` fires. Cdylib code that spawns a thread
-/// inside an escalate closure and lets it outlive the scope is a
-/// caller bug.
-pub(crate) fn end_escalate_scope(token: ScopeToken) -> bool {
+/// thread when this runs. Releasing the gate while a FullAccess
+/// method is mid-execution would let a fresh `begin_escalate_scope`
+/// overlap with the tail of the prior scope's GPU work. The cdylib's
+/// `escalate_via_vtable` wrapper enforces this naturally — the
+/// closure runs synchronously and returns before `escalate_end`
+/// fires. Cdylib code that spawns a thread inside an escalate closure
+/// and lets it outlive the scope is a caller bug.
+pub(crate) fn end_escalate_scope_with<F, R>(token: ScopeToken, drain: F) -> Option<R>
+where
+    F: FnOnce(&Arc<GpuContext>) -> R,
+{
     let removed = {
         let mut scopes = registry()
             .scopes
@@ -103,13 +124,58 @@ pub(crate) fn end_escalate_scope(token: ScopeToken) -> bool {
             .unwrap_or_else(|e| e.into_inner());
         scopes.remove(&token)
     };
-    match removed {
-        Some(arc_ctx) => {
-            arc_ctx.escalate_gate().exit();
-            true
+    let arc_ctx = removed?;
+
+    // Release the gate on drop — runs after `drain` returns, and also
+    // if `drain` unwinds. The gate stays held for the whole of
+    // `drain`, so the device wait can't race another scope's GPU work.
+    struct ExitGateOnDrop<'a>(&'a Arc<GpuContext>);
+    impl Drop for ExitGateOnDrop<'_> {
+        fn drop(&mut self) {
+            self.0.escalate_gate().exit();
         }
-        None => false,
     }
+    let _exit = ExitGateOnDrop(&arc_ctx);
+
+    Some(drain(&arc_ctx))
+}
+
+/// End an escalate scope with no device drain — releases the gate
+/// only, returning whether the token was present. **Test-only
+/// registry-mechanics helper**: every production escalate teardown
+/// touches the GPU and goes through [`end_escalate_scope_draining`]
+/// so the device wait stays inside the gate. This bool-returning,
+/// drain-free variant exists for the registry's own unit tests
+/// (token lifecycle / idempotency), which don't want a real
+/// `wait_device_idle` on the path.
+///
+/// Returns `true` if the token was present, `false` if it was already
+/// removed (double-end or never-issued). Idempotent on the registry.
+#[cfg(test)]
+pub(crate) fn end_escalate_scope(token: ScopeToken) -> bool {
+    end_escalate_scope_with(token, |_| ()).is_some()
+}
+
+/// End an escalate scope, draining the device (`wait_device_idle`)
+/// while the gate is held, then releasing it. The teardown every
+/// GPU-touching escalate path uses — see [`end_escalate_scope_with`]
+/// for why the drain must run inside the gate.
+///
+/// Returns `None` for a stale/never-issued token; `Some(Ok(()))` on a
+/// clean drain; `Some(Err(_))` if `wait_device_idle` failed.
+pub(crate) fn end_escalate_scope_draining(token: ScopeToken) -> Option<Result<()>> {
+    end_escalate_scope_with(token, |arc_ctx| {
+        let wait_start = std::time::Instant::now();
+        let result = arc_ctx.wait_device_idle();
+        tracing::trace!(
+            target: "streamlib::gpu_context::escalate",
+            wait_idle_ns = wait_start.elapsed().as_nanos() as u64,
+            gate_held = true,
+            ok = result.is_ok(),
+            "escalate scope drained device while holding the gate"
+        );
+        result
+    })
 }
 
 /// Look up the `Arc<GpuContext>` bound to an active scope, then invoke
@@ -223,5 +289,40 @@ mod tests {
         // Double-end is idempotent — returns false rather than
         // panicking or releasing another scope's lock.
         assert!(!end_escalate_scope(token));
+    }
+
+    #[test]
+    #[serial]
+    fn drain_runs_while_gate_is_held() {
+        // Locks the NVIDIA-crash regression
+        // (`docs/learnings/concurrent-vkdevicewaitidle-threading.md`):
+        // the scope-end device drain MUST run while the escalate gate
+        // is still held, so a `vkDeviceWaitIdle` can't race another
+        // scope's `vkCreateComputePipelines`.
+        let Some(arc) = new_arc_ctx() else {
+            tracing::warn!(
+                "escalate_scope_registry test skipped: init_for_platform failed (no GPU)"
+            );
+            return;
+        };
+        let token = begin_escalate_scope(Arc::clone(&arc));
+        // The drain action observes the gate's held state. With the
+        // fix, the gate is still in-scope while the drain runs and is
+        // released only after. Mentally revert the registry to exit
+        // before draining and this observes `false` → the assert fails.
+        let observed =
+            end_escalate_scope_with(token, |arc_ctx| arc_ctx.escalate_gate().in_scope());
+        assert_eq!(
+            observed,
+            Some(true),
+            "device drain must run while the escalate gate is held"
+        );
+        assert!(
+            !arc.escalate_gate().in_scope(),
+            "gate must be released after the scope ends"
+        );
+        // Gate is free again — a follow-up begin must not block.
+        let token2 = begin_escalate_scope(Arc::clone(&arc));
+        assert!(end_escalate_scope(token2));
     }
 }

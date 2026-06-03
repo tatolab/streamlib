@@ -84,21 +84,16 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_esc
         "host_gpu_lim_escalate_end",
         || {
             let token = scope_token as u64;
-            // Resolve the Arc BEFORE removing it from the registry so
-            // we can call wait_device_idle. If the token is stale or
-            // never-issued, this returns None — silently no-op (the
-            // gate was never acquired by this token, so there's
-            // nothing to release).
-            let arc_clone = crate::core::context::escalate_scope_registry::with_scope(
-                token,
-                Arc::clone,
-            );
-            let removed = crate::core::context::escalate_scope_registry::end_escalate_scope(token);
-            if !removed {
-                return 0i32;
-            }
-            match arc_clone.as_ref().map(|arc| arc.wait_device_idle()) {
-                Some(Ok(())) | None => 0,
+            // Drain the device (`wait_device_idle`) WHILE the escalate
+            // gate is still held, then release it. The prior shape
+            // released the gate first and waited afterward, racing
+            // another scope's gated `vkCreateComputePipelines` on
+            // NVIDIA — see `end_escalate_scope_draining` and
+            // `docs/learnings/concurrent-vkdevicewaitidle-threading.md`.
+            // `None` = stale / never-issued token: a silent no-op (the
+            // gate was never claimed by this token).
+            match crate::core::context::escalate_scope_registry::end_escalate_scope_draining(token) {
+                None | Some(Ok(())) => 0,
                 Some(Err(e)) => {
                     write_err(
                         &format!("escalate_end: wait_device_idle failed: {e}"),

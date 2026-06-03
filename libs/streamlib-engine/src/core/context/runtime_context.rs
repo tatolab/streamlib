@@ -802,7 +802,7 @@ impl<'a> RuntimeContextFullAccess<'a> {
         F: FnOnce(&RuntimeContextFullAccess<'_>) -> crate::core::error::Result<T>,
     {
         use super::escalate_scope_registry::{
-            begin_escalate_scope, end_escalate_scope, with_scope,
+            begin_escalate_scope, end_escalate_scope_draining,
         };
         use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -843,14 +843,16 @@ impl<'a> RuntimeContextFullAccess<'a> {
 
         let call_result = catch_unwind(AssertUnwindSafe(|| f(&cdylib_ctx)));
 
-        // Always end the scope. `with_scope` keeps the Arc alive
-        // across the registry removal so wait_device_idle can run
-        // afterward (mirrors `host_gpu_lim_escalate_end`).
-        let arc_for_wait = with_scope(scope_token, Arc::clone);
-        let _removed = end_escalate_scope(scope_token);
-        let wait_result = match arc_for_wait.as_ref().map(|arc| arc.wait_device_idle()) {
-            Some(Ok(())) | None => Ok(()),
-            Some(Err(e)) => Err(e),
+        // End the scope: drain the device (`wait_device_idle`) WHILE
+        // the escalate gate is still held, then release it. Running the
+        // wait after releasing the gate (the prior shape) raced another
+        // processor thread's gated `vkCreateComputePipelines` and
+        // corrupted the NVIDIA driver during the concurrent setup
+        // fan-out — see `end_escalate_scope_draining` and
+        // `docs/learnings/concurrent-vkdevicewaitidle-threading.md`.
+        let wait_result = match end_escalate_scope_draining(scope_token) {
+            Some(r) => r,
+            None => Ok(()),
         };
 
         match (call_result, wait_result) {
