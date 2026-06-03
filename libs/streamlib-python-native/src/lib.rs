@@ -19,7 +19,9 @@ use iceoryx2::port::notifier::Notifier;
 use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
-use streamlib_ipc_types::{FrameHeader, FRAME_HEADER_SIZE, MAX_FANIN_PER_DESTINATION};
+use streamlib_ipc_types::{
+    FrameHeader, FRAME_HEADER_SIZE, MAX_FANIN_PER_DESTINATION, MAX_SUBSCRIBERS_PER_DESTINATION,
+};
 
 // ============================================================================
 // Tracing subscriber init
@@ -386,6 +388,7 @@ pub unsafe extern "C" fn slpn_input_subscribe(
         .service_builder(&service_name_iox)
         .publish_subscribe::<[u8]>()
         .max_publishers(MAX_FANIN_PER_DESTINATION)
+        .max_subscribers(MAX_SUBSCRIBERS_PER_DESTINATION)
         .subscriber_max_buffer_size(max_queued_messages)
         .open_or_create()
     {
@@ -670,6 +673,7 @@ pub unsafe extern "C" fn slpn_output_publish(
         .service_builder(&service_name_iox)
         .publish_subscribe::<[u8]>()
         .max_publishers(MAX_FANIN_PER_DESTINATION)
+        .max_subscribers(MAX_SUBSCRIBERS_PER_DESTINATION)
         .subscriber_max_buffer_size(max_queued_messages)
         .open_or_create()
     {
