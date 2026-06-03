@@ -14,22 +14,22 @@ name = "streamlib_vadr_vision"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = {version = "0.4.35-dev.10", registry = "gitea"}
+streamlib-jtd-codegen = {version = "0.4.36", registry = "gitea"}
 
 [dependencies]
 # Engine substrate — runtime context, processor traits, generated wire
 # types under `crate::_generated_::*` (NetworkPacket imported from
 # @tatolab/network; EncodedJpegFrame imported from @tatolab/jpeg;
 # VadrVisionDepayloaderConfig defined locally).
-streamlib-plugin-sdk = {version = "0.4.35-dev.10", registry = "gitea"}
+streamlib-plugin-sdk = {version = "0.4.36", registry = "gitea"}
 
 # Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = {version = "0.4.35-dev.10", registry = "gitea"}
+streamlib-macros = {version = "0.4.36", registry = "gitea"}
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = {version = "0.4.35-dev.10", registry = "gitea"}
+streamlib-plugin-abi = {version = "0.4.36", registry = "gitea"}
 
 # Serialization (config dataclasses ship as serde-derived).
 # Generated `NetworkPacket.payload` / `EncodedJpegFrame.data` ride msgpack
