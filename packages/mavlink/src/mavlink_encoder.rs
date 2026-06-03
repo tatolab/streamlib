@@ -308,9 +308,9 @@ fn lift_enum<E: FromPrimitive>(value: u8, ctx: &'static str) -> Result<E> {
 mod tests {
     use super::*;
     use crate::_generated_::tatolab__mavlink::mavlink_message::{
-        MavlinkMessageAttitude, MavlinkMessageHeartbeat, MavlinkMessageHighresImu,
-        MavlinkMessageSetAttitudeTarget, MavlinkMessageSetPositionTargetLocalNed,
-        MavlinkMessageTimesync,
+        MavlinkMessageAttitude, MavlinkMessageCommandLong, MavlinkMessageEncapsulatedData,
+        MavlinkMessageHeartbeat, MavlinkMessageHighresImu, MavlinkMessageSetAttitudeTarget,
+        MavlinkMessageSetPositionTargetLocalNed, MavlinkMessageTimesync,
     };
 
     fn make_heartbeat(sys: u8, comp: u8) -> MavlinkMessage {
@@ -432,6 +432,45 @@ mod tests {
         })
     }
 
+    fn make_command_long() -> MavlinkMessage {
+        MavlinkMessage::CommandLong(MavlinkMessageCommandLong {
+            system_id: 255,
+            component_id: 190,
+            sequence: 0,
+            peer_addr: String::new(),
+            timestamp_ns: "0".to_string(),
+            target_system: 1,
+            target_component: 1,
+            command: 400, // MAV_CMD_COMPONENT_ARM_DISARM
+            confirmation: 0,
+            param1: 1.0, // 1 = arm
+            param2: 0.0,
+            param3: 0.0,
+            param4: 0.0,
+            param5: 0.0,
+            param6: 0.0,
+            param7: 0.0,
+        })
+    }
+
+    fn make_encapsulated_data() -> MavlinkMessage {
+        // ENCAPSULATED_DATA carries a fixed 253-byte wire payload; build the
+        // full width so the round-trip compares equal (the encoder pads to 253).
+        let mut data = vec![0u8; 253];
+        data[0] = 1; // AGP race-status discriminator (data_type)
+        data[1] = 0xAB;
+        data[252] = 0xCD;
+        MavlinkMessage::EncapsulatedData(MavlinkMessageEncapsulatedData {
+            system_id: 1,
+            component_id: 1,
+            sequence: 0,
+            peer_addr: String::new(),
+            timestamp_ns: "0".to_string(),
+            seqnr: 7,
+            data,
+        })
+    }
+
     /// Encode → write_v2_msg → read_v2_msg → decode → compare. Exercises
     /// the encoder's typed lift, the wire framing, the decoder's typed
     /// drop, and the schema's discriminator path end-to-end. Mentally
@@ -489,6 +528,16 @@ mod tests {
                     d.timestamp_ns = "0".to_string();
                     d.sequence = 0;
                 }
+                MavlinkMessage::CommandLong(d) => {
+                    d.peer_addr.clear();
+                    d.timestamp_ns = "0".to_string();
+                    d.sequence = 0;
+                }
+                MavlinkMessage::EncapsulatedData(d) => {
+                    d.peer_addr.clear();
+                    d.timestamp_ns = "0".to_string();
+                    d.sequence = 0;
+                }
             }
             msg
         };
@@ -524,6 +573,29 @@ mod tests {
     #[test]
     fn round_trip_timesync() {
         assert_round_trip(make_timesync());
+    }
+
+    #[test]
+    fn round_trip_command_long() {
+        assert_round_trip(make_command_long());
+    }
+
+    #[test]
+    fn round_trip_encapsulated_data() {
+        assert_round_trip(make_encapsulated_data());
+    }
+
+    #[test]
+    fn command_long_sim_reset_roundtrips() {
+        // The AGP sim-reset (cmd 31000) is within rust-mavlink's MavCmd, so it
+        // encodes and survives the wire roundtrip — the attempt-cycle reset works
+        // through the same COMMAND_LONG path as arm (400).
+        let mut msg = make_command_long();
+        if let MavlinkMessage::CommandLong(d) = &mut msg {
+            d.command = 31000;
+            d.param1 = 0.0;
+        }
+        assert_round_trip(msg);
     }
 
     #[test]
