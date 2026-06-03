@@ -1037,9 +1037,10 @@ mod tests {
     /// enumeration, the re-traversal borrow-collect, and the
     /// resolve-to-default contract (a regression to 0, a panic on the
     /// re-traversal borrow, or skipping edges all fail here). The
-    /// mismatched-depth discrimination (e.g. 4 vs 64 → 64) is
-    /// integration-locked by the faithful drone-racer reproducer against
-    /// real package schemas that declare distinct `max_queued_messages`.
+    /// mismatched-depth discrimination — where `.max()` and `.min()`
+    /// actually differ — is locked by the sibling
+    /// [`max_queued_messages_for_dest_sizes_to_deepest_inbound_link`], which
+    /// fans two distinct declared depths into one destination.
     #[test]
     fn max_queued_messages_for_dest_spans_all_inbound_links() {
         let mut graph = Graph::new();
@@ -1159,6 +1160,129 @@ mod tests {
         assert!(
             matches!(err, crate::core::error::Error::Configuration(_)),
             "registry miss at wire time must surface as Error::Configuration; got: {err:?}"
+        );
+    }
+
+    /// The load-bearing half of the iceoryx2 sizing fix: when a destination
+    /// has inbound links of DIFFERENT declared depths, the shared
+    /// per-destination service is sized to the DEEPEST one. Two sources fan
+    /// into one destination at depths 4 and 64 (both ≠ the engine default of
+    /// 16); the helper must return 64.
+    ///
+    /// This locks the order-dependent `DoesNotSupportRequestedMinBufferSize`
+    /// crash directly: iceoryx2 rejects opening an existing service with a
+    /// LARGER subscriber buffer than it was created with, so creating the
+    /// shared service from the shallow link (4) then reopening it for the
+    /// deep link (64) fails. Sizing to the max up front avoids it.
+    ///
+    /// Mentally revert `.max()` → `.min()` (or "use only one link's depth")
+    /// and this returns 4, failing. The schema-free `any` sibling test
+    /// cannot catch that — every `any` source resolves to the same default,
+    /// so min and max coincide. This test deliberately gives the two inbound
+    /// links DIFFERENT depths so only `.max()` produces 64.
+    #[test]
+    fn max_queued_messages_for_dest_sizes_to_deepest_inbound_link() {
+        use crate::core::descriptors::{
+            CodeExamples, PortDescriptor, ProcessorDescriptor, ProcessorRuntime,
+            ProcessorScheduling,
+        };
+        use crate::core::embedded_schemas::register_schema;
+        use streamlib_idents::{Org, Package, SemVer, TypeName};
+        use streamlib_processor_schema::PortSchemaSpec;
+
+        // Two wire schemas with distinct, non-default ring depths.
+        register_schema(
+            "@test/qdepth-shallow/ShallowFrame",
+            "metadata:\n  type: ShallowFrame\n  max_queued_messages: 4\n",
+        );
+        register_schema(
+            "@test/qdepth-deep/DeepFrame",
+            "metadata:\n  type: DeepFrame\n  max_queued_messages: 64\n",
+        );
+        let shallow_schema = PortSchemaSpec::Specific(SchemaIdent::new(
+            Org::new("test").unwrap(),
+            Package::new("qdepth-shallow").unwrap(),
+            TypeName::new("ShallowFrame").unwrap(),
+            SemVer::new(1, 0, 0),
+        ));
+        let deep_schema = PortSchemaSpec::Specific(SchemaIdent::new(
+            Org::new("test").unwrap(),
+            Package::new("qdepth-deep").unwrap(),
+            TypeName::new("DeepFrame").unwrap(),
+            SemVer::new(1, 0, 0),
+        ));
+
+        // Register an output-only source whose `out` port carries `carries`,
+        // then return its processor ident. A closure (not a nested `fn`) so
+        // the test's `use` imports are in scope.
+        let register_source = |type_name: &str, pkg: &str, carries: PortSchemaSpec| -> SchemaIdent {
+            let ident = SchemaIdent::new(
+                Org::new("tatolab").unwrap(),
+                Package::new(pkg).unwrap(),
+                TypeName::new(type_name).unwrap(),
+                SemVer::new(1, 0, 0),
+            );
+            let descriptor = ProcessorDescriptor {
+                name: ident.clone(),
+                description: "qdepth source mock".into(),
+                version: "1.0.0".into(),
+                repository: String::new(),
+                runtime: ProcessorRuntime::Rust,
+                entrypoint: None,
+                config_schema: None,
+                scheduling: ProcessorScheduling::default(),
+                inputs: Vec::new(),
+                outputs: vec![PortDescriptor::iceoryx2(
+                    "out",
+                    "carries a depth-tagged frame",
+                    carries,
+                )],
+                examples: CodeExamples::default(),
+            };
+            PROCESSOR_REGISTRY
+                .register_descriptor_only(descriptor)
+                .expect("register_descriptor_only accepts a fresh ident");
+            ident
+        };
+
+        let shallow_src = register_source(
+            "QDepthShallowSource",
+            "test-qdepth-shallow-src",
+            shallow_schema,
+        );
+        let deep_src =
+            register_source("QDepthDeepSource", "test-qdepth-deep-src", deep_schema);
+
+        let mut graph = Graph::new();
+        let dest_id = add_mock_input_only(&mut graph);
+
+        // Wire the SHALLOW source first, the DEEP source second: a naive
+        // "first inbound link" regression would pick 4, "last" would pick 64,
+        // and only the correct `.max()` over all inbound links is robust to
+        // ordering while returning 64.
+        for ident in [&shallow_src, &deep_src] {
+            let src_id = graph
+                .traversal_mut()
+                .add_v(ProcessorSpec::new(ident.clone(), serde_json::Value::Null))
+                .first()
+                .expect("descriptor-only source registers as a graph vertex")
+                .id
+                .to_string();
+            graph.traversal_mut().add_e(
+                OutputLinkPortRef::new(&src_id, "out"),
+                InputLinkPortRef::new(&dest_id, "in1"),
+            );
+        }
+
+        let dest_uid: ProcessorUniqueId = dest_id.as_str().into();
+        let depth = max_queued_messages_for_dest(&mut graph, &dest_uid)
+            .expect("sizing across mismatched-depth inbound links must succeed");
+        assert_eq!(
+            depth, 64,
+            "shared per-destination service must size to the DEEPEST inbound link \
+             (deep=64, shallow=4, default=16); got {depth}. Reverting `.max()` to \
+             `.min()` yields 4 — the order-dependent \
+             DoesNotSupportRequestedMinBufferSize regression this locks.",
         );
     }
 }
