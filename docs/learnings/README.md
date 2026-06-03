@@ -106,3 +106,11 @@ Avoid the two failure modes:
   cracks an otherwise-causeless driver crash; the fix routes every wait
   through `HostVulkanDevice::wait_idle` (holds all queue mutexes), enforced by
   `xtask check-device-wait-idle`
+- [@docs/learnings/startup-crash-iceoryx2-wire-vs-gpu-setup-race.md](startup-crash-iceoryx2-wire-vs-gpu-setup-race.md) —
+  Two different NVIDIA-Linux startup SIGSEGVs both exit 139: an iceoryx2 WIRE
+  crash (`DoesNotSupportRequestedMinBufferSize`, never reaches `setup()`) and a
+  latent GPU concurrent-setup race (`vkCreateComputePipelines` in glcore, during
+  `setup()`). Classify by `grep "Calling setup"` before blaming GPU concurrency;
+  gdb/api_dump/validation overhead shifts *which* crash you hit, so never use
+  them to decide the production failure mode; re-verify the symptom after each
+  fix
