@@ -22,6 +22,9 @@ pub(crate) mod forwarding_subscriber;
 pub mod host_services;
 pub(crate) mod iceoryx2_log_forwarder;
 pub(crate) mod processor_vtable;
+/// CI drift guard: fails if the engine↔SDK twin marshalling copies diverge.
+#[cfg(test)]
+mod twin_drift_guard;
 
 pub use host_services::{install_host_services, RegisterHelper};
 pub use streamlib_plugin_abi::{HostServices, HOST_SERVICES_LAYOUT_VERSION};

@@ -14,8 +14,10 @@
 
 use crate::_generated_::{EncodedJpegFrame, VideoFrame};
 use crate::linux::color_resolved_to_core::resolved_color_info_to_core;
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use streamlib::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::context::{
+    RuntimeContextFullAccess, RuntimeContextLimitedAccess,
+};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
 
 use vulkan_jpeg::SimpleJpegDecoder;
 
@@ -27,7 +29,7 @@ const DEFAULT_MAX_WIDTH: u32 = 3840;
 /// Default max height when `JpegDecoderConfig::max_height` is unset.
 const DEFAULT_MAX_HEIGHT: u32 = 2160;
 
-#[streamlib::sdk::processor("JpegDecoder")]
+#[streamlib_plugin_sdk::sdk::processor("JpegDecoder")]
 pub struct JpegDecoderProcessor {
     /// Underlying GPU JPEG decoder primitive. Owns the texture ring +
     /// per-slot surface_id registration internally.
@@ -37,7 +39,7 @@ pub struct JpegDecoderProcessor {
     frames_decoded: u64,
 }
 
-impl streamlib::sdk::processors::ReactiveProcessor for JpegDecoderProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for JpegDecoderProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let max_width = self.config.max_width.unwrap_or(DEFAULT_MAX_WIDTH);
         let max_height = self.config.max_height.unwrap_or(DEFAULT_MAX_HEIGHT);
@@ -52,6 +54,12 @@ impl streamlib::sdk::processors::ReactiveProcessor for JpegDecoderProcessor::Pro
         // trip the gate's same-thread re-entry panic (see
         // `EscalateGate`'s type doc — the historical sandbox contract
         // forbids escalate-from-setup).
+        //
+        // `SimpleJpegDecoder` builds the cross-vendor Vulkan-compute backend
+        // entirely through the engine-free FullAccess primitives — no raw
+        // `HostVulkanDevice`, no nvJPEG/CUDA probe. (The nvJPEG fast path
+        // was parked in the engine during the plugin-SDK extraction because
+        // it reaches the raw device, which is not cdylib-safe.)
         let decoder = SimpleJpegDecoder::new(ctx.gpu_full_access(), max_width, max_height)?;
 
         tracing::info!(

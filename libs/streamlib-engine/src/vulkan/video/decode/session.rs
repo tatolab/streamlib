@@ -5,7 +5,6 @@
 
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
-use vulkanalia::vk::KhrVideoQueueExtensionDeviceCommands;
 use std::ptr;
 use tracing::{debug, info};
 
@@ -461,9 +460,7 @@ impl SimpleDecoder {
         // Set-on-decoder happens after the new one is built so the swap is
         // atomic from the caller's perspective.
         if vk_dec.session_parameters() != vk::VideoSessionParametersKHR::null() {
-            unsafe {
-                self.ctx.device().device_wait_idle().map_err(VideoError::from)?;
-            }
+            self.ctx.host_device().wait_idle().map_err(VideoError::from)?;
         }
 
         let descriptor = crate::vulkan::rhi::VideoSessionParametersDescriptor {
@@ -888,9 +885,7 @@ impl SimpleDecoder {
 
         // VUID-vkDestroyVideoSessionParametersKHR-videoSessionParameters-07212.
         if vk_dec.session_parameters() != vk::VideoSessionParametersKHR::null() {
-            unsafe {
-                self.ctx.device().device_wait_idle().map_err(VideoError::from)?;
-            }
+            self.ctx.host_device().wait_idle().map_err(VideoError::from)?;
         }
 
         let vps_array = [h265_vps];

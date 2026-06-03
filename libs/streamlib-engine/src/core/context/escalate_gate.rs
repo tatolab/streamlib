@@ -112,6 +112,23 @@ impl EscalateGate {
         // Condvar.
     }
 
+    /// Whether a scope is currently held (`enter` without a matching
+    /// `exit`).
+    ///
+    /// Test-only invariant probe: used by the
+    /// [`escalate_scope_registry`](super::escalate_scope_registry)
+    /// regression test that locks "the device drain runs while the
+    /// gate is still held." Not a general-purpose API — the held
+    /// state can change between this read and any action taken on it,
+    /// so it must not be used for control flow.
+    #[cfg(test)]
+    pub(crate) fn in_scope(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .in_scope
+    }
+
     /// Release the gate. Wakes one waiter (if any).
     ///
     /// Calling `exit` without a matching `enter` clears a flag that

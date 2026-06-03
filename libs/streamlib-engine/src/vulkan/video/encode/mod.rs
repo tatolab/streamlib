@@ -24,7 +24,6 @@ pub use config::*;
 
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
-use vulkanalia::vk::KhrVideoQueueExtensionDeviceCommands;
 use vulkanalia_vma as vma;
 use std::ptr;
 use std::sync::Arc;
@@ -435,7 +434,7 @@ impl SimpleEncoder {
 impl Drop for SimpleEncoder {
     fn drop(&mut self) {
         unsafe {
-            let _ = self.device.device_wait_idle();
+            let _ = self.host_device.wait_idle();
 
             // Drop RGB→NV12 converter first (owns Vulkan objects).
             drop(self.rgb_to_nv12.take());

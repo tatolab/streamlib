@@ -4,22 +4,23 @@
 //! Fused JPEG decode compute kernel: dequantize, 8x8 IDCT, 4:2:0 chroma
 //! upsample, BT.601 full-range YCbCr -> RGB, write `rgba8` storage image.
 //!
-//! Built on the streamlib RHI public surface ([`HostVulkanDevice`],
-//! [`VulkanComputeKernel`]) per `docs/architecture/compute-kernel.md`:
-//! bindings declared as data, SPIR-V reflection validates the layout at
-//! kernel construction. No raw `vulkanalia` calls; no hand-rolled
-//! descriptor sets, pipeline layouts, or command buffers.
+//! Built through the cdylib-safe RHI surface
+//! ([`GpuContextFullAccess`]) per `docs/architecture/compute-kernel.md`:
+//! the kernel is constructed via `create_compute_kernel` and its storage
+//! buffers via `acquire_storage_buffer`, so this package never touches the
+//! raw `HostVulkanDevice` and stays sound when built as a separately-
+//! compiled `.slpkg` plugin (see
+//! `docs/learnings/slpkg-raw-device-rhi-construction.md`). Bindings are
+//! declared as data; SPIR-V reflection validates the layout at kernel
+//! construction. No raw `vulkanalia` calls; no hand-rolled descriptor
+//! sets, pipeline layouts, or command buffers.
 
-use std::sync::Arc;
-
-use streamlib::sdk::color::{ResolvedColorInfo, TransferId};
-use streamlib::sdk::engine::host_rhi::{
-    HostVulkanBuffer, HostVulkanDevice, VulkanComputeKernel,
-};
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::rhi::{
+use streamlib_plugin_sdk::sdk::color::{ResolvedColorInfo, TransferId};
+use streamlib_plugin_sdk::sdk::context::GpuContextFullAccess;
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::rhi::{
     ColorConverterPushConstants, ComputeBindingSpec, ComputeKernelDescriptor, SourceLayoutInfo,
-    StorageBuffer, Texture,
+    StorageBuffer, Texture, VulkanComputeKernel,
 };
 
 use crate::header::DecodedJpeg;
@@ -91,29 +92,26 @@ const _: () = assert!(
 
 /// Fused JPEG decode kernel.
 pub struct JpegDecodeKernel {
-    vulkan_device: Arc<HostVulkanDevice>,
     kernel: VulkanComputeKernel,
 }
 
 impl JpegDecodeKernel {
-    /// Build the kernel — loads SPIR-V, runs reflection, validates the
-    /// declared bindings match the shader, allocates the Vulkan pipeline +
-    /// descriptor set + command buffer + fence.
-    pub fn new(device: &Arc<HostVulkanDevice>) -> Result<Self> {
+    /// Build the kernel through the FullAccess `create_compute_kernel`
+    /// primitive — the host builds the kernel on its own device and hands
+    /// back a cdylib-safe `#[repr(C)]` handle. Loads SPIR-V, runs
+    /// reflection, validates the declared bindings match the shader,
+    /// allocates the Vulkan pipeline + descriptor set + command buffer +
+    /// fence host-side. Never reaches the raw `HostVulkanDevice`, so it is
+    /// sound from a separately-built `.slpkg` plugin.
+    pub fn new(full_access: &GpuContextFullAccess) -> Result<Self> {
         let spv: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/jpeg_decode.spv"));
-        let kernel = VulkanComputeKernel::new(
-            device,
-            &ComputeKernelDescriptor {
-                label: "jpeg_decode",
-                spv,
-                bindings: BINDINGS,
-                push_constant_size: PUSH_CONSTANT_SIZE,
-            },
-        )?;
-        Ok(Self {
-            vulkan_device: Arc::clone(device),
-            kernel,
-        })
+        let kernel = full_access.create_compute_kernel(&ComputeKernelDescriptor {
+            label: "jpeg_decode",
+            spv,
+            bindings: BINDINGS,
+            push_constant_size: PUSH_CONSTANT_SIZE,
+        })?;
+        Ok(Self { kernel })
     }
 
     /// Decode `decoded` into `output_texture`. The texture must be an
@@ -138,6 +136,7 @@ impl JpegDecodeKernel {
     /// [`crate::SimpleJpegDecoder`] instead.
     pub fn dispatch(
         &self,
+        full_access: &GpuContextFullAccess,
         decoded: &DecodedJpeg,
         output_texture: &Texture,
         color_info: &ResolvedColorInfo,
@@ -149,14 +148,8 @@ impl JpegDecodeKernel {
         let coef_bytes = bytemuck::cast_slice::<i32, u8>(&coef_words);
         let qt_bytes = bytemuck::cast_slice::<u32, u8>(&qt_words);
 
-        let coef_buf = Arc::new(HostVulkanBuffer::new_storage_buffer_host_visible(
-            &self.vulkan_device,
-            coef_bytes.len() as u64,
-        )?);
-        let qt_buf = Arc::new(HostVulkanBuffer::new_storage_buffer_host_visible(
-            &self.vulkan_device,
-            qt_bytes.len() as u64,
-        )?);
+        let coef_buf = full_access.acquire_storage_buffer(coef_bytes.len() as u64)?;
+        let qt_buf = full_access.acquire_storage_buffer(qt_bytes.len() as u64)?;
 
         self.dispatch_with_buffers(
             decoded,
@@ -172,8 +165,8 @@ impl JpegDecodeKernel {
     /// pre-allocated HOST_VISIBLE SSBOs. Steady-state hot-path entrypoint:
     /// no `vkAllocateMemory`, no `vkCreateBuffer`, no `vkMapMemory`.
     ///
-    /// `coef_buf` and `qt_buf` must be HOST_VISIBLE storage buffers (built
-    /// via [`HostVulkanBuffer::new_storage_buffer_host_visible`]) sized
+    /// `coef_buf` and `qt_buf` must be HOST_VISIBLE storage buffers
+    /// (acquired via `GpuContextFullAccess::acquire_storage_buffer`) sized
     /// to fit the largest decode the caller intends to run — typically the
     /// worst-case 4:2:0 byte count for the decoder's `(max_width,
     /// max_height)`. The kernel checks the sizes against `decoded` and
@@ -188,8 +181,8 @@ impl JpegDecodeKernel {
         &self,
         decoded: &DecodedJpeg,
         output_texture: &Texture,
-        coef_buf: &Arc<HostVulkanBuffer>,
-        qt_buf: &Arc<HostVulkanBuffer>,
+        coef_buf: &StorageBuffer,
+        qt_buf: &StorageBuffer,
         color_info: &ResolvedColorInfo,
     ) -> Result<()> {
         let layout = JpegBufferLayout::from_decoded(decoded)?;
@@ -212,8 +205,8 @@ impl JpegDecodeKernel {
         decoded: &DecodedJpeg,
         layout: &JpegBufferLayout,
         output_texture: &Texture,
-        coef_buf: &Arc<HostVulkanBuffer>,
-        qt_buf: &Arc<HostVulkanBuffer>,
+        coef_buf: &StorageBuffer,
+        qt_buf: &StorageBuffer,
         color_info: &ResolvedColorInfo,
     ) -> Result<()> {
         // Pack i16 coefficients into i32 SSBO words. Sign-extension is
@@ -226,43 +219,43 @@ impl JpegDecodeKernel {
         let coef_bytes = bytemuck::cast_slice::<i32, u8>(&coef_words);
         let qt_bytes = bytemuck::cast_slice::<u32, u8>(&qt_words);
 
-        if (coef_bytes.len() as u64) > coef_buf.size() {
+        if (coef_bytes.len() as u64) > coef_buf.byte_size() {
             return Err(Error::GpuError(format!(
                 "jpeg_decode: coefficient buffer too small — need {} bytes, pool sized for {} \
                  (rebuild SimpleJpegDecoder with larger max_width/max_height)",
                 coef_bytes.len(),
-                coef_buf.size(),
+                coef_buf.byte_size(),
             )));
         }
-        if (qt_bytes.len() as u64) > qt_buf.size() {
+        if (qt_bytes.len() as u64) > qt_buf.byte_size() {
             return Err(Error::GpuError(format!(
                 "jpeg_decode: quant-table buffer too small — need {} bytes, pool sized for {}",
                 qt_bytes.len(),
-                qt_buf.size(),
+                qt_buf.byte_size(),
             )));
         }
 
-        // Persistently mapped HOST_VISIBLE | HOST_COHERENT memory.
-        // SAFETY: size-checked above; `mapped_ptr()` returns a valid
-        // mapped pointer for the full allocation.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                coef_bytes.as_ptr(),
-                coef_buf.mapped_ptr(),
-                coef_bytes.len(),
-            );
-            std::ptr::copy_nonoverlapping(
-                qt_bytes.as_ptr(),
-                qt_buf.mapped_ptr(),
-                qt_bytes.len(),
-            );
+        // `acquire_storage_buffer` returns HOST_VISIBLE | HOST_COHERENT
+        // storage. A null mapped pointer would mean a non-host-visible
+        // allocation slipped through — fail loudly instead of memcpy-ing
+        // through null.
+        let coef_ptr = coef_buf.mapped_ptr();
+        let qt_ptr = qt_buf.mapped_ptr();
+        if coef_ptr.is_null() || qt_ptr.is_null() {
+            return Err(Error::GpuError(
+                "jpeg_decode: storage buffer is not HOST_VISIBLE (null mapped pointer)".into(),
+            ));
         }
 
-        let coef_storage = StorageBuffer::from_host_vulkan_buffer(Arc::clone(coef_buf));
-        let qt_storage = StorageBuffer::from_host_vulkan_buffer(Arc::clone(qt_buf));
+        // SAFETY: size-checked above; mapped pointers non-null (checked)
+        // and valid for the full allocation.
+        unsafe {
+            std::ptr::copy_nonoverlapping(coef_bytes.as_ptr(), coef_ptr, coef_bytes.len());
+            std::ptr::copy_nonoverlapping(qt_bytes.as_ptr(), qt_ptr, qt_bytes.len());
+        }
 
-        self.kernel.set_storage_buffer_storage(0, &coef_storage)?;
-        self.kernel.set_storage_buffer_storage(1, &qt_storage)?;
+        self.kernel.set_storage_buffer_storage(0, coef_buf)?;
+        self.kernel.set_storage_buffer_storage(1, qt_buf)?;
         self.kernel.set_storage_image(2, output_texture)?;
 
         // Build the color-side push constants via the engine helper so

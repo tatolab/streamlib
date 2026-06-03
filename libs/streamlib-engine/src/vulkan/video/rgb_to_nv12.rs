@@ -534,7 +534,7 @@ impl RgbToNv12Converter {
 impl Drop for RgbToNv12Converter {
     fn drop(&mut self) {
         unsafe {
-            let _ = self.device.device_wait_idle();
+            let _ = self.host_device.wait_idle();
 
             if self.fence != vk::Fence::null() {
                 self.device.destroy_fence(self.fence, None);

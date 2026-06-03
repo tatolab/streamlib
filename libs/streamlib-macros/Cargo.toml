@@ -13,6 +13,10 @@ proc-macro = true
 quote = "1.0"
 syn = { version = "2.0", features = ["full", "extra-traits"] }
 proc-macro2 = "1.0"
+# Detect the consumer's real SDK crate name (streamlib-plugin-sdk for plugin
+# packages, the streamlib facade for hosts) so emitted paths use real names
+# with no `streamlib` aliasing — the serde_derive pattern.
+proc-macro-crate = "3"
 
 # YAML parsing for streamlib.yaml processor lookup
 serde = { workspace = true }

@@ -88,9 +88,41 @@ pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
         &schema,
         &schema_ident,
         config_schema_id.as_deref(),
+        sdk_root(),
     );
 
     TokenStream::from(generated)
+}
+
+/// Resolve the path to the `sdk` module the emitted code authors against.
+///
+/// Plugin packages depend on `streamlib-plugin-sdk` (the engine-free SDK) by
+/// its real name; hosts depend on the `streamlib` facade. Detected per
+/// invocation from the consumer's `Cargo.toml` (the `serde_derive` pattern),
+/// so emitted paths use the consumer's real crate name with no `streamlib`
+/// aliasing. Falls back to `::streamlib::sdk` for in-engine macro use, which
+/// resolves via the engine's `extern crate self as streamlib`.
+fn sdk_root() -> proc_macro2::TokenStream {
+    use proc_macro_crate::{crate_name, FoundCrate};
+    fn as_sdk_path(found: FoundCrate) -> proc_macro2::TokenStream {
+        match found {
+            FoundCrate::Itself => quote! { crate::sdk },
+            FoundCrate::Name(name) => {
+                let ident = proc_macro2::Ident::new(&name, proc_macro2::Span::call_site());
+                quote! { ::#ident::sdk }
+            }
+        }
+    }
+    // Prefer the engine-free plugin SDK — packages depend on it by real name.
+    if let Ok(found) = crate_name("streamlib-plugin-sdk") {
+        return as_sdk_path(found);
+    }
+    // Host consumers depend on the `streamlib` facade.
+    if let Ok(found) = crate_name("streamlib") {
+        return as_sdk_path(found);
+    }
+    // In-engine macro use: `extern crate self as streamlib` resolves this.
+    quote! { ::streamlib::sdk }
 }
 
 /// Parse the processor's PascalCase short name out of the attribute

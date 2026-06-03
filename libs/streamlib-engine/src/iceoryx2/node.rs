@@ -11,7 +11,9 @@ use iceoryx2::port::notifier::Notifier;
 use iceoryx2::prelude::*;
 use parking_lot::Mutex;
 
-use super::{EventPayload, FRAME_HEADER_SIZE, MAX_FANIN_PER_DESTINATION};
+use super::{
+    EventPayload, FRAME_HEADER_SIZE, MAX_FANIN_PER_DESTINATION, MAX_SUBSCRIBERS_PER_DESTINATION,
+};
 use crate::core::error::{Result, Error};
 
 /// Thread-safe wrapper for iceoryx2 Node.
@@ -117,6 +119,7 @@ impl Iceoryx2Node {
             .service_builder(&service_name)
             .publish_subscribe::<[u8]>()
             .max_publishers(MAX_FANIN_PER_DESTINATION)
+            .max_subscribers(MAX_SUBSCRIBERS_PER_DESTINATION)
             .subscriber_max_buffer_size(max_queued_messages)
             .enable_safe_overflow(enable_safe_overflow)
             .open_or_create()
@@ -276,6 +279,74 @@ mod tests {
             MAX_FANIN_PER_DESTINATION + 1,
             MAX_FANIN_PER_DESTINATION,
         );
+    }
+
+    /// A per-destination data service carries exactly one subscriber (the
+    /// destination). `open_or_create_service` pins `max_subscribers` to
+    /// [`MAX_SUBSCRIBERS_PER_DESTINATION`] (1) so each publisher's
+    /// shared-memory data segment isn't sized for the iceoryx2 default of 8
+    /// nonexistent subscribers (the standing 8× over-allocation the pin
+    /// reclaims). Locks the pin: a second subscriber must be rejected.
+    ///
+    /// Mentally-revert: drop the `.max_subscribers(...)` line in
+    /// [`Iceoryx2Node::open_or_create_service`] and the second
+    /// `create_subscriber` succeeds against the default of 8 — this test
+    /// goes green-by-accident only if the pin is removed, so it fails when
+    /// the contract is broken.
+    #[test]
+    fn data_service_caps_subscribers_at_one() {
+        let node = Iceoryx2Node::new().expect("create iceoryx2 node");
+        let service = node
+            .open_or_create_service(&unique_service_name("subs_cap"), 4, true)
+            .expect("open data service");
+
+        let _first = service
+            .create_subscriber()
+            .expect("first subscriber (the destination) must succeed");
+        assert!(
+            service.create_subscriber().is_err(),
+            "second subscriber must fail — max_subscribers drifted from \
+             MAX_SUBSCRIBERS_PER_DESTINATION ({})",
+            MAX_SUBSCRIBERS_PER_DESTINATION,
+        );
+    }
+
+    /// The shared per-destination service is created once and reopened by
+    /// every inbound link. iceoryx2 rejects reopening with a LARGER buffer
+    /// than the existing service — `DoesNotSupportRequestedMinBufferSize`,
+    /// the exact crash the drone-racer pilot hit (a VideoFrame link at
+    /// depth 4 wired before a MavlinkMessage link at depth 64) — but
+    /// accepts reopening with a SMALLER one. This is the premise the
+    /// `max_queued_messages_for_dest` sizing relies on: create the shared
+    /// service at the deepest inbound depth and every shallower link fits,
+    /// regardless of wiring order. If a future iceoryx2 changes this
+    /// open-validation behavior, the destination-max strategy needs to be
+    /// revisited and this test is the trip-wire.
+    #[test]
+    fn shared_service_reopen_larger_fails_smaller_succeeds() {
+        let node = Iceoryx2Node::new().expect("create iceoryx2 node");
+
+        // Bug shape: a shallow-depth link creates the service first, then a
+        // deeper link's reopen is rejected.
+        let bug_name = unique_service_name("reopen_bug");
+        let _shallow = node
+            .open_or_create_service(&bug_name, 4, true)
+            .expect("create shared service at depth 4");
+        assert!(
+            node.open_or_create_service(&bug_name, 64, true).is_err(),
+            "reopening the shared service with a deeper buffer must fail — \
+             this is the DoesNotSupportRequestedMinBufferSize crash the \
+             destination-max sizing prevents",
+        );
+
+        // Fix shape: create at the deepest depth first, then every shallower
+        // inbound link reopens cleanly.
+        let fixed_name = unique_service_name("reopen_fixed");
+        let _deep = node
+            .open_or_create_service(&fixed_name, 64, true)
+            .expect("create shared service at depth 64");
+        node.open_or_create_service(&fixed_name, 4, true)
+            .expect("reopening the shared service with a shallower buffer must succeed");
     }
 
     /// With `enable_safe_overflow(true)` (the engine-wide realtime

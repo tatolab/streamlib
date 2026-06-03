@@ -654,6 +654,19 @@ make sense if the surrounding files were renamed or restructured.
   then read a cached field off the borrow (`.width()` / `.byte_size()`
   / etc.) and got zero. Read before adding a new host wrapper that
   reconstructs a borrowed PluginAbiObject from a `*const c_void` handle.
+- @docs/learnings/slpkg-raw-device-rhi-construction.md — A GPU package
+  that builds RHI objects (`VulkanComputeKernel::new`,
+  `HostVulkanBuffer::new*`) on the raw `HostVulkanDevice` it got via
+  `host_vulkan_device_arc()` works in-process but, to the best of our
+  current knowledge, corrupts the GPU driver (NVIDIA double-free in
+  `vkCreatePipelineLayout`) when loaded as a *separately-built* registry
+  `.slpkg`: the non-`#[repr(C)]` device layout can differ across
+  independent compilations, so the transited device reads at wrong
+  offsets. Version-alignment does not fix it. Build through the
+  cdylib-safe FullAccess primitives (`create_compute_kernel`,
+  `acquire_storage_buffer`, `create_texture_ring`) instead — a package's
+  GPU code should never name the raw device. Read before writing GPU
+  code in any package destined to ship as a `.slpkg`.
 - @docs/learnings/cross-process-vkimage-layout.md — Cross-process
   `VkImage` layout coordination. `VkImageLayout` is independent state
   per `VkDevice` by Vulkan spec — no shared mutable tracker. The
@@ -672,6 +685,18 @@ make sense if the surrounding files were renamed or restructured.
   structurally permanent on NVIDIA, with the QFOT path reserved for
   Mesa. Read before consuming an imported `VkImage` on the host or
   in a cdylib.
+- @docs/learnings/concurrent-vkdevicewaitidle-threading.md — Concurrent
+  `vkDeviceWaitIdle` on NVIDIA SIGSEGVs in `libnvidia-glcore` during
+  concurrent multi-processor GPU setup. `vkDeviceWaitIdle` is externally
+  synchronized over the `VkDevice` AND every queue it owns; a raw
+  `device_wait_idle()` that skips the per-queue mutexes races a concurrent
+  `vkQueueSubmit` on another thread, corrupts driver state, and surfaces as
+  a SIGSEGV in a later `vkCreate*Pipelines`. The validation layer
+  (`UNASSIGNED-Threading-Info: vkDeviceWaitIdle(): Couldn't find VkQueue`)
+  is the diagnostic — turn it on first when an NVIDIA GPU crash has no
+  obvious cause and only reproduces under concurrency. Fix: route every wait
+  through `HostVulkanDevice::wait_idle` (acquires all queue mutexes in a
+  fixed order); the `xtask check-device-wait-idle` lint bans raw calls.
 - @docs/architecture/adapter-runtime-integration.md — Two IPC seams
   (surface-share FD lookup, escalate IPC) already exist for handing
   host-allocated adapter resources to subprocess customers. The doc

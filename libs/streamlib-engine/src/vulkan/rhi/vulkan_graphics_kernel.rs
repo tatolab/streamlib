@@ -1220,7 +1220,9 @@ enum DrawKind {
 impl Drop for VulkanGraphicsKernelInner {
     fn drop(&mut self) {
         unsafe {
-            let _ = self.device.device_wait_idle();
+            // Queue-mutex-guarded wait, not raw device_wait_idle (see
+            // HostVulkanDevice::wait_idle — concurrent setup races otherwise).
+            let _ = self.vulkan_device.wait_idle();
             if let Some(scaffold) = self.offscreen.lock().take() {
                 self.device.destroy_fence(scaffold.fence, None);
                 self.device.destroy_command_pool(scaffold.command_pool, None);
@@ -2822,6 +2824,13 @@ fn create_graphics_pipeline_with_cache(
     let cache_key = hash_stages(stages);
     let cache_path = pipeline_cache_file_path(&cache_key);
     let initial_data = cache_path.as_deref().and_then(read_cache_blob);
+    tracing::debug!(
+        label,
+        cache_path = ?cache_path,
+        cache_hit = initial_data.is_some(),
+        blob_bytes = initial_data.as_ref().map_or(0, |d| d.len()),
+        "graphics pipeline cache lookup",
+    );
     let pipeline_cache = create_pipeline_cache_handle(device, initial_data.as_deref(), label);
     let cache_handle = pipeline_cache.unwrap_or(vk::PipelineCache::null());
 
@@ -3058,7 +3067,14 @@ fn pipeline_cache_dir() -> Option<PathBuf> {
             return Some(PathBuf::from(dir));
         }
     }
-    dirs::cache_dir().map(|d| d.join("streamlib/pipeline-cache"))
+    // Co-located under the streamlib home (`<STREAMLIB_HOME>/.streamlib/cache/`),
+    // NOT the XDG cache dir — every built/cached artifact lives under the
+    // streamlib working tree per the home contract. See [`core::streamlib_home`].
+    Some(
+        crate::core::streamlib_home::get_streamlib_data_dir()
+            .join("cache")
+            .join("pipeline-cache"),
+    )
 }
 
 fn pipeline_cache_file_path(hash_hex: &str) -> Option<PathBuf> {

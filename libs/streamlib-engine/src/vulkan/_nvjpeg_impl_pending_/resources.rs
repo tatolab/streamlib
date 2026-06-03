@@ -40,7 +40,6 @@ use streamlib::sdk::engine::host_rhi::{
     HostVulkanBuffer, HostVulkanDevice, ImageCopyRegion, RhiCommandRecorder, VulkanAccess,
     VulkanStage,
 };
-use streamlib::sdk::engine::HostGpuDeviceExt;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::rhi::{Texture, TextureFormat, TextureUsages, VulkanLayout};
 
@@ -153,7 +152,10 @@ impl NvJpegResources {
         max_height: u32,
     ) -> Result<Self> {
         let lib = NvJpegLib::load()?;
-        let device = Arc::clone(full_access.device().vulkan_device());
+        // `host_vulkan_device_arc()` is the cdylib-safe bridge — `device()`
+        // panics when this backend is constructed inside a plugin cdylib
+        // (its `&Arc<GpuDevice>` can't cross the plugin ABI).
+        let device = full_access.host_vulkan_device_arc()?;
 
         // ── Bind CUDA to the matching physical device ──────────────────
         // Match the Vulkan-selected device's `VkPhysicalDeviceIDProperties::deviceUUID`

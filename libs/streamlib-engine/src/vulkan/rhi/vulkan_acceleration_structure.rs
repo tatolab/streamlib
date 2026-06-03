@@ -653,7 +653,9 @@ impl Drop for VulkanAccelerationStructureInner {
     fn drop(&mut self) {
         unsafe {
             let device = self.vulkan_device.device();
-            let _ = device.device_wait_idle();
+            // Queue-mutex-guarded wait, not raw device_wait_idle (see
+            // HostVulkanDevice::wait_idle — concurrent setup races otherwise).
+            let _ = self.vulkan_device.wait_idle();
             device.destroy_acceleration_structure_khr(self.handle, None);
             if let Some(allocation) = self.storage_allocation.take() {
                 self.vulkan_device

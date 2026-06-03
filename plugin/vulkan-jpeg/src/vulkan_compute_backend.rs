@@ -17,15 +17,13 @@
 //! when nvJPEG isn't available or isn't preferred.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
-use streamlib::sdk::context::{GpuContextFullAccess, TextureRing};
-use streamlib::sdk::engine::host_rhi::{
-    HostVulkanBuffer, RhiCommandRecorder, VulkanAccess, VulkanStage,
+use streamlib_plugin_sdk::sdk::context::GpuContextFullAccess;
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::rhi::{
+    StorageBuffer, TextureFormat, TextureRing, TextureUsages, VulkanAccess, VulkanLayout,
+    VulkanStage,
 };
-use streamlib::sdk::engine::HostGpuDeviceExt;
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::rhi::{TextureFormat, TextureUsages, VulkanLayout};
 
 use crate::backend::{JpegBackendKind, JpegDecodeBackend};
 use crate::color::JpegColorInfo;
@@ -38,8 +36,8 @@ use crate::JpegColorSource;
 /// Cross-vendor Vulkan-compute JPEG decode backend.
 pub struct VulkanComputeBackend {
     kernel: JpegDecodeKernel,
-    coef_buf: Arc<HostVulkanBuffer>,
-    qt_buf: Arc<HostVulkanBuffer>,
+    coef_buf: StorageBuffer,
+    qt_buf: StorageBuffer,
     ring: TextureRing,
     max_width: u32,
     max_height: u32,
@@ -86,17 +84,17 @@ impl VulkanComputeBackend {
             )));
         }
 
-        let device = full_access.device().vulkan_device();
-        let kernel = JpegDecodeKernel::new(device)?;
+        // Build the kernel and SSBOs through the FullAccess primitives —
+        // the host constructs them on its own device and hands back
+        // cdylib-safe `#[repr(C)]` handles. This backend never touches the
+        // raw `HostVulkanDevice`, so it stays sound when built as a
+        // separately-compiled `.slpkg` plugin (see
+        // `docs/learnings/slpkg-raw-device-rhi-construction.md`).
+        let kernel = JpegDecodeKernel::new(full_access)?;
 
         let coef_bytes = worst_case_coefficient_buffer_bytes_420(max_width, max_height);
-        let coef_buf = Arc::new(HostVulkanBuffer::new_storage_buffer_host_visible(
-            device, coef_bytes,
-        )?);
-        let qt_buf = Arc::new(HostVulkanBuffer::new_storage_buffer_host_visible(
-            device,
-            QUANT_TABLE_BUFFER_BYTES,
-        )?);
+        let coef_buf = full_access.acquire_storage_buffer(coef_bytes)?;
+        let qt_buf = full_access.acquire_storage_buffer(QUANT_TABLE_BUFFER_BYTES)?;
 
         let ring = full_access.create_texture_ring(
             max_width,
@@ -118,7 +116,7 @@ impl VulkanComputeBackend {
                 .slot(slot_index)
                 .ok_or_else(|| Error::GpuError("ring slot index out of range".into()))?;
             let mut recorder =
-                RhiCommandRecorder::new(device, "vulkan_compute_backend_init_layout")?;
+                full_access.create_command_recorder("vulkan_compute_backend_init_layout")?;
             recorder.begin()?;
             recorder.record_image_barrier(
                 &slot.texture,

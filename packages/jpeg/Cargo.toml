@@ -1,9 +1,9 @@
 [package]
 name = "streamlib-jpeg"
-version = "0.4.30"
+version = "0.4.35-dev.5"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
-description = "JPEG decoder processor — thin wrapper around libs/vulkan-jpeg::SimpleJpegDecoder (GPU compute / nvJPEG)."
+description = "JPEG decoder processor — thin wrapper around vulkan-jpeg::SimpleJpegDecoder (cross-vendor Vulkan compute)."
 keywords = ["jpeg", "image", "decoder", "vulkan-compute", "nvjpeg"]
 categories = ["multimedia::images", "multimedia"]
 repository = "https://github.com/tato123/streamlib"
@@ -14,21 +14,23 @@ name = "streamlib_jpeg"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = {version = "0.4.30", registry = "gitea"}
+streamlib-jtd-codegen = {version = "=0.4.36", registry = "gitea"}
 
 [dependencies]
-# Engine substrate — runtime context, processor traits, generated config
-# types under `crate::_generated_::tatolab__jpeg::*`, VideoFrame wire
-# type, RHI texture / color primitives.
-streamlib = {version = "0.4.30", registry = "gitea"}
+# Engine-free authoring SDK — runtime context views, processor traits,
+# generated config types under `crate::_generated_::tatolab__jpeg::*`,
+# VideoFrame wire type, RHI texture / color primitives. Depending on the
+# plugin SDK by its real name (never the `streamlib` engine facade) keeps
+# this plugin cdylib from statically linking a second copy of the engine.
+streamlib-plugin-sdk = {version = "=0.4.36", registry = "gitea"}
 
-# Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
-# crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = {version = "0.4.30", registry = "gitea"}
+# Procedural macros — `#[streamlib_plugin_sdk::sdk::processor("...")]`
+# reads the crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
+streamlib-macros = {version = "=0.4.36", registry = "gitea"}
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = {version = "0.4.30", registry = "gitea"}
+streamlib-plugin-abi = {version = "=0.4.36", registry = "gitea"}
 
 # Serialization (config dataclasses ship as serde-derived).
 # Generated `EncodedJpegFrame.data` carries `#[serde(with = "serde_bytes")]`
@@ -41,8 +43,9 @@ serde_bytes = {version = "0.11"}
 tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# GPU JPEG decode primitive — fused Vulkan compute kernel + optional
-# nvJPEG fast path behind SimpleJpegDecoder. Owns its own texture ring.
-vulkan-jpeg = {version = "0.4.30", registry = "gitea"}
+# GPU JPEG decode primitive — fused Vulkan compute kernel behind
+# SimpleJpegDecoder. Owns its own texture ring. Engine-free (plugin/ zone);
+# the nvJPEG fast path was parked in the engine during the SDK extraction.
+vulkan-jpeg = {version = "=0.4.36", registry = "gitea"}
 
 [workspace]

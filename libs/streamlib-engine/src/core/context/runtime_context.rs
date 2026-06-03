@@ -618,6 +618,7 @@ impl RuntimeContext {
 /// fn assert_not_clone<T: Clone>() {}
 /// assert_not_clone::<streamlib::sdk::context::RuntimeContextFullAccess<'static>>();
 /// ```
+#[repr(C)]
 pub struct RuntimeContextFullAccess<'a> {
     /// Opaque pointer to the host-owned [`RuntimeContext`]. Threaded
     /// through every [`RuntimeContextVTable`] callback. The host's
@@ -658,6 +659,7 @@ pub struct RuntimeContextFullAccess<'a> {
 ///     let _ = ctx.gpu_full_access();
 /// }
 /// ```
+#[repr(C)]
 pub struct RuntimeContextLimitedAccess<'a> {
     handle: *const c_void,
     vtable: *const RuntimeContextVTable,
@@ -800,7 +802,7 @@ impl<'a> RuntimeContextFullAccess<'a> {
         F: FnOnce(&RuntimeContextFullAccess<'_>) -> crate::core::error::Result<T>,
     {
         use super::escalate_scope_registry::{
-            begin_escalate_scope, end_escalate_scope, with_scope,
+            begin_escalate_scope, end_escalate_scope_draining,
         };
         use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -841,14 +843,16 @@ impl<'a> RuntimeContextFullAccess<'a> {
 
         let call_result = catch_unwind(AssertUnwindSafe(|| f(&cdylib_ctx)));
 
-        // Always end the scope. `with_scope` keeps the Arc alive
-        // across the registry removal so wait_device_idle can run
-        // afterward (mirrors `host_gpu_lim_escalate_end`).
-        let arc_for_wait = with_scope(scope_token, Arc::clone);
-        let _removed = end_escalate_scope(scope_token);
-        let wait_result = match arc_for_wait.as_ref().map(|arc| arc.wait_device_idle()) {
-            Some(Ok(())) | None => Ok(()),
-            Some(Err(e)) => Err(e),
+        // End the scope: drain the device (`wait_device_idle`) WHILE
+        // the escalate gate is still held, then release it. Running the
+        // wait after releasing the gate (the prior shape) raced another
+        // processor thread's gated `vkCreateComputePipelines` and
+        // corrupted the NVIDIA driver during the concurrent setup
+        // fan-out — see `end_escalate_scope_draining` and
+        // `docs/learnings/concurrent-vkdevicewaitidle-threading.md`.
+        let wait_result = match end_escalate_scope_draining(scope_token) {
+            Some(r) => r,
+            None => Ok(()),
         };
 
         match (call_result, wait_result) {
@@ -1160,5 +1164,63 @@ mod with_cdylib_scope_tests {
                 Ok(())
             });
         result.unwrap_or_else(|e| panic!("{TEST}: with_cdylib_scope returned err: {e}"));
+    }
+}
+
+// =============================================================================
+// Layout regression tests
+// =============================================================================
+//
+// `RuntimeContextFullAccess` / `RuntimeContextLimitedAccess` cross the plugin
+// ABI by raw-pointer reinterpret — the host builds the struct
+// (`processor_instance_factory.rs`) and a cdylib reads its fields directly
+// (`processor_vtable.rs`). They are `#[repr(C)]` so that layout is identical
+// across the host build and a separately-built plugin (`streamlib-plugin-sdk`),
+// which compiles a layout-matched twin. These assertions pin the byte shape;
+// the SDK twin asserts the SAME numbers, so a field added to one side but not
+// the other trips a test rather than corrupting field reads at runtime.
+#[cfg(all(test, target_pointer_width = "64"))]
+mod layout_tests {
+    use super::*;
+    use core::mem::{align_of, offset_of, size_of};
+
+    #[test]
+    fn gpu_context_view_sizes_are_pinned() {
+        // The RuntimeContext views embed these by value, so their sizes are
+        // load-bearing for the outer offsets below.
+        assert_eq!(size_of::<GpuContextFullAccess>(), 40);
+        assert_eq!(align_of::<GpuContextFullAccess>(), 8);
+        assert_eq!(size_of::<GpuContextLimitedAccess>(), 16);
+        assert_eq!(align_of::<GpuContextLimitedAccess>(), 8);
+    }
+
+    #[test]
+    fn runtime_context_full_access_layout() {
+        // handle      : *const c_void          → offset 0,  size 8
+        // vtable      : *const RuntimeContextVTable → offset 8, size 8
+        // gpu_full    : GpuContextFullAccess (40) → offset 16
+        // gpu_limited : GpuContextLimitedAccess (16) → offset 56
+        // _marker     : PhantomData (ZST)       → offset 72
+        // Total: 72 bytes, 8-byte alignment.
+        assert_eq!(size_of::<RuntimeContextFullAccess<'static>>(), 72);
+        assert_eq!(align_of::<RuntimeContextFullAccess<'static>>(), 8);
+        assert_eq!(offset_of!(RuntimeContextFullAccess<'static>, handle), 0);
+        assert_eq!(offset_of!(RuntimeContextFullAccess<'static>, vtable), 8);
+        assert_eq!(offset_of!(RuntimeContextFullAccess<'static>, gpu_full), 16);
+        assert_eq!(offset_of!(RuntimeContextFullAccess<'static>, gpu_limited), 56);
+    }
+
+    #[test]
+    fn runtime_context_limited_access_layout() {
+        // handle      : *const c_void          → offset 0,  size 8
+        // vtable      : *const RuntimeContextVTable → offset 8, size 8
+        // gpu_limited : GpuContextLimitedAccess (16) → offset 16
+        // _marker     : PhantomData (ZST)       → offset 32
+        // Total: 32 bytes, 8-byte alignment.
+        assert_eq!(size_of::<RuntimeContextLimitedAccess<'static>>(), 32);
+        assert_eq!(align_of::<RuntimeContextLimitedAccess<'static>>(), 8);
+        assert_eq!(offset_of!(RuntimeContextLimitedAccess<'static>, handle), 0);
+        assert_eq!(offset_of!(RuntimeContextLimitedAccess<'static>, vtable), 8);
+        assert_eq!(offset_of!(RuntimeContextLimitedAccess<'static>, gpu_limited), 16);
     }
 }

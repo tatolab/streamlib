@@ -16,6 +16,7 @@ use streamlib_jtd_codegen::{generate, GenerateOptions, RuntimeTarget};
 pub mod check_boundaries;
 pub mod check_cdylib_reach;
 pub mod check_consumer_rhi_repr;
+pub mod check_device_wait_idle;
 pub mod check_no_escalate_in_lifecycle;
 pub mod check_no_inventory_submit;
 pub mod check_no_reverse_dns;
@@ -139,6 +140,15 @@ enum Commands {
     /// `docs/architecture/subprocess-rhi-parity.md`.
     CheckConsumerRhiRepr,
 
+    /// CI gate for the `vkDeviceWaitIdle` threading discipline. Fails on any
+    /// raw `device_wait_idle()` call in the engine outside the mutex-guarded
+    /// `HostVulkanDevice::wait_idle` helper. `vkDeviceWaitIdle` is externally
+    /// synchronized over the device + every queue it owns; a raw call that
+    /// skips the per-queue mutexes races concurrent submits during
+    /// multi-processor setup and crashes the driver (the validation layer
+    /// reports `UNASSIGNED-Threading-Info`).
+    CheckDeviceWaitIdle,
+
     /// Regenerate `schemas/streamlib.schema.json` from the Rust
     /// [`StreamlibYaml`](streamlib_processor_schema::StreamlibYaml) source of
     /// truth (#714). Editors with `yaml-language-server` consume this schema
@@ -209,6 +219,7 @@ fn main() -> Result<()> {
         Commands::CheckConsumerRhiRepr => {
             check_consumer_rhi_repr::run(&workspace_root()?)?
         }
+        Commands::CheckDeviceWaitIdle => check_device_wait_idle::run(&workspace_root()?)?,
         Commands::EmitManifestSchema => manifest_schema::emit(&workspace_root()?)?,
         Commands::CheckManifestSchema => manifest_schema::check(&workspace_root()?)?,
         Commands::StripPublishManifest { dir } => {

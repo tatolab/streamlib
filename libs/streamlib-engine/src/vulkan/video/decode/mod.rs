@@ -975,7 +975,7 @@ mod color_vui_helper_tests {
 impl Drop for SimpleDecoder {
     fn drop(&mut self) {
         unsafe {
-            let _ = self.device.device_wait_idle();
+            let _ = self.host_device.wait_idle();
 
             // Destroy NV12→RGBA converter (owns its own Vulkan resources)
             self.nv12_converter.take();

@@ -28,6 +28,7 @@ use std::sync::Arc;
 
 use jpeg_encoder::{ColorType, Encoder, SamplingFactor};
 use streamlib::sdk::color::{MatrixId, PrimariesId, RangeId, ResolvedColorInfo, TransferId};
+use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::engine::HostTextureExt;
 use streamlib::sdk::engine::host_rhi::{
     HostVulkanDevice, HostVulkanTexture, RhiCommandRecorder, VulkanAccess, VulkanStage,
@@ -41,6 +42,17 @@ use vulkan_jpeg::{
     decode, AdobeTransform, ComponentScan, DecodedJpeg, JpegColorSource, JpegDecodeKernel,
     QuantizationTable, ZIGZAG,
 };
+
+/// Acquire a `GpuContext` for tests, or skip cleanly when no GPU is
+/// available. Probing `HostVulkanDevice::new` first skips on the host
+/// side before paying full `GpuContext` init cost. The kernel is built
+/// through the host-mode FullAccess from `gpu.escalate(...)` — the same
+/// `create_compute_kernel` path the cdylib plugin uses — so this test
+/// exercises the plugin-safe construction, not a raw-device shortcut.
+fn fresh_gpu_context() -> Option<GpuContext> {
+    HostVulkanDevice::new().ok()?;
+    GpuContext::init_for_platform().ok()
+}
 
 const QUALITY: u8 = 85;
 const TEST_WIDTH: u16 = 64;
@@ -56,7 +68,7 @@ const PSNR_FLOOR_DB: f64 = 50.0;
 fn gpu_decode_matches_cpu_reference_psnr_50db() {
     // Probe for a Vulkan device. Tests that need a real GPU bail
     // cleanly on hosts without one (CI baseline runners, etc.).
-    let Some(device) = HostVulkanDevice::new().ok().map(Arc::new) else {
+    let Some(gpu) = fresh_gpu_context() else {
         return;
     };
 
@@ -78,19 +90,27 @@ fn gpu_decode_matches_cpu_reference_psnr_50db() {
 
     // 5. GPU path: allocate rgba8 storage texture, transition to GENERAL,
     //    build the kernel, dispatch, read back.
-    let texture = allocate_storage_texture_general(
-        &device,
-        u32::from(TEST_WIDTH),
-        u32::from(TEST_HEIGHT),
-    );
-    let kernel = JpegDecodeKernel::new(&device).expect("kernel construction");
     // No APP segments → JFIF default resolves to BT.601-Full / sRGB.
     let resolved = decoded.color_info.resolve().expect("resolve color");
     assert_eq!(resolved.source, JpegColorSource::JfifDefault);
-    kernel
-        .dispatch(&decoded, &texture, &resolved.info)
-        .expect("kernel dispatch");
-    let gpu_rgba = readback_texture(&device, &texture, TEST_WIDTH, TEST_HEIGHT);
+
+    // GPU path through the FullAccess primitives. Host-mode `escalate`
+    // hands a Boxed FullAccess — the same `create_compute_kernel` /
+    // `acquire_storage_buffer` path the cdylib plugin exercises.
+    let gpu_rgba = gpu
+        .limited_access()
+        .escalate(|full| {
+            let device = full.host_vulkan_device_arc()?;
+            let texture = allocate_storage_texture_general(
+                &device,
+                u32::from(TEST_WIDTH),
+                u32::from(TEST_HEIGHT),
+            );
+            let kernel = JpegDecodeKernel::new(full)?;
+            kernel.dispatch(full, &decoded, &texture, &resolved.info)?;
+            Ok(readback_texture(&device, &texture, TEST_WIDTH, TEST_HEIGHT))
+        })
+        .expect("gpu decode");
 
     assert_eq!(cpu_rgba.len(), gpu_rgba.len());
 
@@ -369,7 +389,7 @@ fn y_channel_psnr_db(reference: &[u8], actual: &[u8]) -> f64 {
 /// RGB triples diverge by hundreds of LSBs.
 #[test]
 fn app14_transform_zero_rgb_direct_matches_cpu_reference_psnr_50db() {
-    let Some(device) = HostVulkanDevice::new().ok().map(Arc::new) else {
+    let Some(gpu) = fresh_gpu_context() else {
         return;
     };
 
@@ -394,20 +414,24 @@ fn app14_transform_zero_rgb_direct_matches_cpu_reference_psnr_50db() {
     let cpu_rgba = cpu_reference_decode_identity(&decoded);
 
     // GPU path: resolve from the parsed metadata, dispatch, read back.
-    let texture = allocate_storage_texture_general(
-        &device,
-        u32::from(TEST_WIDTH),
-        u32::from(TEST_HEIGHT),
-    );
-    let kernel = JpegDecodeKernel::new(&device).expect("kernel construction");
     let resolved = decoded.color_info.resolve().expect("resolve");
     assert_eq!(resolved.source, JpegColorSource::AdobeRgbDirect);
     assert_eq!(resolved.info.matrix, MatrixId::Identity);
 
-    kernel
-        .dispatch(&decoded, &texture, &resolved.info)
-        .expect("kernel dispatch");
-    let gpu_rgba = readback_texture(&device, &texture, TEST_WIDTH, TEST_HEIGHT);
+    let gpu_rgba = gpu
+        .limited_access()
+        .escalate(|full| {
+            let device = full.host_vulkan_device_arc()?;
+            let texture = allocate_storage_texture_general(
+                &device,
+                u32::from(TEST_WIDTH),
+                u32::from(TEST_HEIGHT),
+            );
+            let kernel = JpegDecodeKernel::new(full)?;
+            kernel.dispatch(full, &decoded, &texture, &resolved.info)?;
+            Ok(readback_texture(&device, &texture, TEST_WIDTH, TEST_HEIGHT))
+        })
+        .expect("gpu decode");
 
     let psnr = y_channel_psnr_db(&cpu_rgba, &gpu_rgba);
     tracing::info!(
@@ -437,7 +461,7 @@ fn app14_transform_zero_rgb_direct_matches_cpu_reference_psnr_50db() {
 /// which is what the bitstream actually declared.
 #[test]
 fn app14_transform_zero_forced_jfif_interpretation_drops_psnr() {
-    let Some(device) = HostVulkanDevice::new().ok().map(Arc::new) else {
+    let Some(gpu) = fresh_gpu_context() else {
         return;
     };
 
@@ -460,16 +484,20 @@ fn app14_transform_zero_forced_jfif_interpretation_drops_psnr() {
         range: RangeId::Full,
     };
 
-    let texture = allocate_storage_texture_general(
-        &device,
-        u32::from(TEST_WIDTH),
-        u32::from(TEST_HEIGHT),
-    );
-    let kernel = JpegDecodeKernel::new(&device).expect("kernel construction");
-    kernel
-        .dispatch(&decoded, &texture, &jfif_force)
-        .expect("kernel dispatch");
-    let gpu_rgba = readback_texture(&device, &texture, TEST_WIDTH, TEST_HEIGHT);
+    let gpu_rgba = gpu
+        .limited_access()
+        .escalate(|full| {
+            let device = full.host_vulkan_device_arc()?;
+            let texture = allocate_storage_texture_general(
+                &device,
+                u32::from(TEST_WIDTH),
+                u32::from(TEST_HEIGHT),
+            );
+            let kernel = JpegDecodeKernel::new(full)?;
+            kernel.dispatch(full, &decoded, &texture, &jfif_force)?;
+            Ok(readback_texture(&device, &texture, TEST_WIDTH, TEST_HEIGHT))
+        })
+        .expect("gpu decode");
 
     let psnr = y_channel_psnr_db(&cpu_rgba_truth, &gpu_rgba);
     tracing::info!(

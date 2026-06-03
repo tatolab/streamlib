@@ -8,6 +8,7 @@ mod process_execution;
 mod streamlib_yaml;
 mod thread_priority;
 
+pub mod descriptors;
 pub mod error;
 pub mod processor_schema;
 pub mod processor_schema_parser;

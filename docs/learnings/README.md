@@ -68,6 +68,12 @@ Avoid the two failure modes:
   Plugin pipeline runs end-to-end clean but produces zero/black output
   when host-side `make_*_borrow` helpers leave the PluginAbiObject's cached
   POD fields zeroed instead of mirroring the inner
+- [@docs/learnings/slpkg-raw-device-rhi-construction.md](slpkg-raw-device-rhi-construction.md) —
+  GPU package works in-process but crashes the driver (NVIDIA double-free in
+  `vkCreatePipelineLayout`) as a separately-built `.slpkg` — it hand-rolled
+  RHI on the raw `HostVulkanDevice` (via `host_vulkan_device_arc()`) instead
+  of the cdylib-safe FullAccess primitives; non-`#[repr(C)]` layout differs
+  across separate builds. Version-alignment doesn't fix it
 - [@docs/learnings/nvidia-dual-vulkan-device-crash.md](nvidia-dual-vulkan-device-crash.md) —
   SIGSEGV when two Vulkan devices have concurrent GPU work on NVIDIA Linux
 - [@docs/learnings/cross-process-vkimage-layout.md](cross-process-vkimage-layout.md) —
@@ -92,3 +98,19 @@ Avoid the two failure modes:
   disagrees with the Vulkan C spec; using the struct directly puts the BLAS
   device address at the wrong offset and every TLAS instance points at
   garbage. Workaround: serialize the 64-byte instance manually in spec order
+- [@docs/learnings/concurrent-vkdevicewaitidle-threading.md](concurrent-vkdevicewaitidle-threading.md) —
+  Concurrent `vkDeviceWaitIdle` on NVIDIA SIGSEGVs in `libnvidia-glcore`
+  during multi-processor GPU setup — it's externally synchronized over the
+  device + every queue it owns. The validation layer
+  (`UNASSIGNED-Threading-Info: Couldn't find VkQueue`) is the diagnostic that
+  cracks an otherwise-causeless driver crash; the fix routes every wait
+  through `HostVulkanDevice::wait_idle` (holds all queue mutexes), enforced by
+  `xtask check-device-wait-idle`
+- [@docs/learnings/startup-crash-iceoryx2-wire-vs-gpu-setup-race.md](startup-crash-iceoryx2-wire-vs-gpu-setup-race.md) —
+  Two different NVIDIA-Linux startup SIGSEGVs both exit 139: an iceoryx2 WIRE
+  crash (`DoesNotSupportRequestedMinBufferSize`, never reaches `setup()`) and a
+  latent GPU concurrent-setup race (`vkCreateComputePipelines` in glcore, during
+  `setup()`). Classify by `grep "Calling setup"` before blaming GPU concurrency;
+  gdb/api_dump/validation overhead shifts *which* crash you hit, so never use
+  them to decide the production failure mode; re-verify the symptom after each
+  fix
