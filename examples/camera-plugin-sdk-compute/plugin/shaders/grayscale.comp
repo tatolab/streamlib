@@ -1,0 +1,27 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+// Grayscale compute shader. Reads the input texture (descriptor-set 0,
+// binding 0) and writes the BT.601 luma of each texel to all three color
+// channels of the output storage image (binding 1), matching the
+// camera-rust-plugin graphics-kernel grayscale path
+// (gray = 0.299*R + 0.587*G + 0.114*B). Input and output are 1:1, so the
+// shader uses texelFetch at the global invocation coordinate (no filtering).
+
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D inputTex;
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D outputImg;
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(outputImg);
+    if (coord.x >= size.x || coord.y >= size.y) {
+        return;
+    }
+    vec4 src = texelFetch(inputTex, coord, 0);
+    float luma = dot(src.rgb, vec3(0.299, 0.587, 0.114));
+    imageStore(outputImg, coord, vec4(luma, luma, luma, 1.0));
+}

@@ -1,0 +1,32 @@
+package:
+  org: tatolab
+  name: camera-plugin-sdk-compute
+  version: 0.1.0
+  description: "Engine-free grayscale compute effect (streamlib-plugin-sdk only)"
+
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
+schemas:
+  # Wire types imported from @tatolab/core.
+  ColorInfo:
+    package: "@tatolab/core"
+  ContentLight:
+    package: "@tatolab/core"
+  MasteringDisplay:
+    package: "@tatolab/core"
+  VideoFrame:
+    package: "@tatolab/core"
+
+processors:
+  - name: GrayscaleCompute
+    version: 1.0.0
+    description: "Grayscale video effect via an engine-free SPIR-V compute kernel"
+    runtime: rust
+    execution: reactive
+    inputs:
+      - name: video_in
+        schema: VideoFrame
+    outputs:
+      - name: video_out
+        schema: VideoFrame

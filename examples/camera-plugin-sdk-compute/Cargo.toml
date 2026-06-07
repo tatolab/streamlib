@@ -1,0 +1,50 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# Standalone, registry-only example (headed to its own repo). Every dependency
+# resolves from the Gitea registry by version. This crate is its own workspace
+# root and includes the sibling `plugin/` cdylib (the engine-free grayscale
+# compute plugin) as a member so `cargo build -p grayscale-compute-plugin`
+# builds it for the example to stage. `@tatolab/camera` + `@tatolab/display`
+# load at runtime via `Strategy::Registry`; the example-local plugin loads via
+# `Strategy::Path`.
+#
+# The version pin below tracks the streamlib release that first shipped the
+# engine-free SDK surface-consumer API (resolve_texture_registration_by_surface_id
+# et al.). It is bumped to the published dev version during validation and to
+# the release version at publish.
+[package]
+name = "camera-plugin-sdk-compute"
+version = "0.4.36-dev.1"
+edition = "2024"
+authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
+license = "BUSL-1.1"
+publish = false
+
+[dependencies]
+streamlib = { workspace = true }
+serde_json = { workspace = true }
+
+[workspace]
+members = ["plugin"]
+
+[workspace.package]
+version = "0.4.36-dev.1"
+edition = "2024"
+authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
+license = "BUSL-1.1"
+
+[workspace.dependencies]
+# Engine facade — used ONLY by the runner (the host app), never the plugin.
+# Exact (`=`) pins so the dev prerelease is selected over the higher stable
+# `0.4.36` (which predates the engine-free surface-consumer API). At release
+# these bump to the published minor.
+streamlib = { version = "=0.4.36-dev.1", registry = "gitea" }
+# Engine-free authoring SDK chain — used by the plugin cdylib.
+streamlib-plugin-sdk = { version = "=0.4.36-dev.1", registry = "gitea" }
+streamlib-macros = { version = "=0.4.36-dev.1", registry = "gitea" }
+streamlib-plugin-abi = { version = "=0.4.36-dev.1", registry = "gitea" }
+streamlib-jtd-codegen = { version = "=0.4.36-dev.1", registry = "gitea" }
+tracing = { version = "0.1.41", features = ["release_max_level_debug"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
