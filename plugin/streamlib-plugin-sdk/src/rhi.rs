@@ -20,6 +20,7 @@ mod compute_kernel_descriptor;
 mod pipeline_flags;
 mod storage_buffer;
 mod texture;
+mod texture_registration;
 mod texture_ring;
 mod vulkan_compute_kernel;
 
@@ -34,6 +35,7 @@ pub use compute_kernel_descriptor::{
 pub use pipeline_flags::{VulkanAccess, VulkanStage};
 pub use storage_buffer::StorageBuffer;
 pub use texture::{NativeTextureHandle, Texture, TextureDescriptor};
+pub use texture_registration::TextureRegistration;
 pub use texture_ring::{
     TextureRing, TextureRingSlot, TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES,
 };

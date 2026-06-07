@@ -139,6 +139,118 @@ impl GpuContextLimitedAccess {
             );
         }
     }
+
+    /// Resolve an incoming `VideoFrame`'s `surface_id` to a
+    /// [`TextureRegistration`](crate::rhi::TextureRegistration) — the GPU
+    /// texture plus its last-known layout. This is the engine-free
+    /// surface-consumer entry point: a plugin's `process()` calls it to read
+    /// a decoded frame on the GPU and run a compute/graphics kernel on it.
+    ///
+    /// Dispatches through the plugin ABI vtable's
+    /// `resolve_texture_registration_by_surface_id` callback. `texture_layout`
+    /// is the optional per-frame layout override carried on the `VideoFrame`
+    /// (raw `VkImageLayout`); pass `None` to use the per-surface default.
+    pub fn resolve_texture_registration_by_surface_id(
+        &self,
+        surface_id: &str,
+        texture_layout: Option<i32>,
+        width: u32,
+        height: u32,
+    ) -> Result<crate::rhi::TextureRegistration> {
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "resolve_texture_registration_by_surface_id: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut out_reg: std::mem::MaybeUninit<crate::rhi::TextureRegistration> =
+            std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let (has_layout, layout_raw) = match texture_layout {
+            Some(v) => (1i32, v),
+            None => (0i32, 0i32),
+        };
+        // SAFETY: handle + vtable were paired at construction; `out_reg` is
+        // uninitialized stack storage the host writes a valid
+        // TextureRegistration into on success (status == 0) and nothing on
+        // failure.
+        let status = unsafe {
+            ((*self.vtable).resolve_texture_registration_by_surface_id)(
+                self.handle,
+                surface_id.as_ptr(),
+                surface_id.len(),
+                has_layout,
+                layout_raw,
+                width,
+                height,
+                out_reg.as_mut_ptr() as *mut c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            // SAFETY: host signaled success and wrote a valid value.
+            Ok(unsafe { out_reg.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    /// Resolve an incoming `VideoFrame`'s `surface_id` directly to a
+    /// [`Texture`](crate::rhi::Texture) (the texture-cache fast path, without
+    /// the surrounding [`TextureRegistration`](crate::rhi::TextureRegistration)
+    /// layout metadata).
+    ///
+    /// Dispatches through the plugin ABI vtable's
+    /// `resolve_texture_by_surface_id` callback.
+    pub fn resolve_texture_by_surface_id(
+        &self,
+        surface_id: &str,
+        texture_layout: Option<i32>,
+        width: u32,
+        height: u32,
+    ) -> Result<crate::rhi::Texture> {
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "resolve_texture_by_surface_id: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut out_texture: std::mem::MaybeUninit<crate::rhi::Texture> =
+            std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let (has_layout, layout_raw) = match texture_layout {
+            Some(v) => (1i32, v),
+            None => (0i32, 0i32),
+        };
+        // SAFETY: handle + vtable were paired at construction; `out_texture`
+        // points at uninitialized stack storage the host writes a valid
+        // `Texture` into on success (status == 0) and nothing on failure.
+        let status = unsafe {
+            ((*self.vtable).resolve_texture_by_surface_id)(
+                self.handle,
+                surface_id.as_ptr(),
+                surface_id.len(),
+                has_layout,
+                layout_raw,
+                width,
+                height,
+                out_texture.as_mut_ptr() as *mut c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            // SAFETY: host signaled success and wrote a valid value.
+            Ok(unsafe { out_texture.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
 }
 
 // =============================================================================
@@ -278,6 +390,40 @@ impl GpuContextFullAccess {
     pub fn update_texture_registration_layout(&self, id: &str, layout: VulkanLayout) {
         self.inherited_limited_unchecked()
             .update_texture_registration_layout(id, layout);
+    }
+
+    /// Resolve an incoming `VideoFrame`'s `surface_id` to a
+    /// [`TextureRegistration`](crate::rhi::TextureRegistration).
+    ///
+    /// LimitedAccess mirror — cdylib dispatch inherits the
+    /// `resolve_texture_registration_by_surface_id` slot via
+    /// [`Self::inherited_limited_unchecked`].
+    pub fn resolve_texture_registration_by_surface_id(
+        &self,
+        surface_id: &str,
+        texture_layout: Option<i32>,
+        width: u32,
+        height: u32,
+    ) -> Result<crate::rhi::TextureRegistration> {
+        self.inherited_limited_unchecked()
+            .resolve_texture_registration_by_surface_id(surface_id, texture_layout, width, height)
+    }
+
+    /// Resolve an incoming `VideoFrame`'s `surface_id` directly to a
+    /// [`Texture`](crate::rhi::Texture).
+    ///
+    /// LimitedAccess mirror — cdylib dispatch inherits the
+    /// `resolve_texture_by_surface_id` slot via
+    /// [`Self::inherited_limited_unchecked`].
+    pub fn resolve_texture_by_surface_id(
+        &self,
+        surface_id: &str,
+        texture_layout: Option<i32>,
+        width: u32,
+        height: u32,
+    ) -> Result<crate::rhi::Texture> {
+        self.inherited_limited_unchecked()
+            .resolve_texture_by_surface_id(surface_id, texture_layout, width, height)
     }
 
     /// Allocate a render-target-capable DMA-BUF VkImage (privileged
