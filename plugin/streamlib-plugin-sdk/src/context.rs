@@ -251,6 +251,265 @@ impl GpuContextLimitedAccess {
             Err(Error::GpuError(msg))
         }
     }
+
+    /// Check out a shared surface (CPU-readable [`PixelBuffer`](crate::rhi::PixelBuffer))
+    /// by its `surface_id`. Dispatches through the plugin ABI vtable's
+    /// `check_out_surface` callback.
+    pub fn check_out_surface(&self, surface_id: &str) -> Result<crate::rhi::PixelBuffer> {
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "check_out_surface: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut out_pb: std::mem::MaybeUninit<crate::rhi::PixelBuffer> =
+            std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: handle + vtable paired at construction; the host writes a
+        // valid PixelBuffer into `out_pb` on success.
+        let status = unsafe {
+            ((*self.vtable).check_out_surface)(
+                self.handle,
+                surface_id.as_ptr(),
+                surface_id.len(),
+                out_pb.as_mut_ptr() as *mut c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(unsafe { out_pb.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    /// Resolve an incoming `VideoFrame`'s `surface_id` to a CPU-readable
+    /// [`PixelBuffer`](crate::rhi::PixelBuffer). Dispatches through the plugin
+    /// ABI vtable's `resolve_pixel_buffer_by_surface_id` callback.
+    pub fn resolve_pixel_buffer_by_surface_id(
+        &self,
+        surface_id: &str,
+    ) -> Result<crate::rhi::PixelBuffer> {
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "resolve_pixel_buffer_by_surface_id: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut out_pb: std::mem::MaybeUninit<crate::rhi::PixelBuffer> =
+            std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: handle + vtable paired at construction; the host writes a
+        // valid PixelBuffer into `out_pb` on success.
+        let status = unsafe {
+            ((*self.vtable).resolve_pixel_buffer_by_surface_id)(
+                self.handle,
+                surface_id.as_ptr(),
+                surface_id.len(),
+                out_pb.as_mut_ptr() as *mut c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(unsafe { out_pb.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    /// Acquire a pooled [`PixelBuffer`](crate::rhi::PixelBuffer) for CPU→GPU
+    /// upload, returning its pool id (hand back to [`Self::get_pixel_buffer`]).
+    /// Dispatches through the plugin ABI vtable's `acquire_pixel_buffer`
+    /// callback.
+    pub fn acquire_pixel_buffer(
+        &self,
+        width: u32,
+        height: u32,
+        format: PixelFormat,
+    ) -> Result<(crate::rhi::PixelBufferPoolId, crate::rhi::PixelBuffer)> {
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "acquire_pixel_buffer: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut pool_id_buf = [0u8; 1024];
+        let mut pool_id_len: usize = 0;
+        let mut out_pb: std::mem::MaybeUninit<crate::rhi::PixelBuffer> =
+            std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: handle + vtable paired at construction; the host writes the
+        // pool-id UTF-8 bytes into `pool_id_buf` and a valid PixelBuffer into
+        // `out_pb` on success.
+        let status = unsafe {
+            ((*self.vtable).acquire_pixel_buffer)(
+                self.handle,
+                width,
+                height,
+                format as u32,
+                pool_id_buf.as_mut_ptr(),
+                pool_id_buf.len(),
+                &mut pool_id_len as *mut usize,
+                out_pb.as_mut_ptr() as *mut c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            let id_str =
+                String::from_utf8_lossy(&pool_id_buf[..pool_id_len.min(pool_id_buf.len())])
+                    .into_owned();
+            let pool_id = crate::rhi::PixelBufferPoolId::from_string(id_str);
+            let pb = unsafe { out_pb.assume_init() };
+            Ok((pool_id, pb))
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    /// Look up a previously-acquired pooled
+    /// [`PixelBuffer`](crate::rhi::PixelBuffer) by its pool id. Dispatches
+    /// through the plugin ABI vtable's `get_pixel_buffer` callback.
+    pub fn get_pixel_buffer(
+        &self,
+        pool_id: &crate::rhi::PixelBufferPoolId,
+    ) -> Result<crate::rhi::PixelBuffer> {
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "get_pixel_buffer: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let id_str = pool_id.as_str();
+        let mut out_pb: std::mem::MaybeUninit<crate::rhi::PixelBuffer> =
+            std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: handle + vtable paired at construction.
+        let status = unsafe {
+            ((*self.vtable).get_pixel_buffer)(
+                self.handle,
+                id_str.as_ptr(),
+                id_str.len(),
+                out_pb.as_mut_ptr() as *mut c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(unsafe { out_pb.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    /// Register a texture under a `surface_id` (defaults to layout UNDEFINED).
+    /// Dispatches through the plugin ABI vtable's `register_texture` callback;
+    /// the host bumps the texture's Arc before stashing it, so the passed
+    /// [`Texture`](crate::rhi::Texture) is consumed.
+    pub fn register_texture(&self, id: &str, texture: crate::rhi::Texture) {
+        if self.handle.is_null() || self.vtable.is_null() {
+            return;
+        }
+        // SAFETY: handle + vtable paired at construction; `texture.handle` is
+        // a live `Arc::into_raw(Arc<TextureInner>)` the host re-bumps.
+        unsafe {
+            ((*self.vtable).register_texture)(
+                self.handle,
+                id.as_ptr(),
+                id.len(),
+                texture.handle,
+                0, // VulkanLayout::UNDEFINED.0 == 0
+            );
+        }
+        drop(texture);
+    }
+
+    /// Register a texture under a `surface_id` with an explicit initial layout.
+    /// Dispatches through the plugin ABI vtable's `register_texture` callback.
+    pub fn register_texture_with_layout(
+        &self,
+        id: &str,
+        texture: crate::rhi::Texture,
+        initial_layout: VulkanLayout,
+    ) {
+        if self.handle.is_null() || self.vtable.is_null() {
+            return;
+        }
+        // SAFETY: handle + vtable paired at construction; `texture.handle` is
+        // a live `Arc::into_raw(Arc<TextureInner>)` the host re-bumps.
+        unsafe {
+            ((*self.vtable).register_texture)(
+                self.handle,
+                id.as_ptr(),
+                id.len(),
+                texture.handle,
+                initial_layout.0,
+            );
+        }
+        drop(texture);
+    }
+
+    /// Unregister a texture by its `surface_id`. Dispatches through the plugin
+    /// ABI vtable's `unregister_texture` callback. Idempotent.
+    pub fn unregister_texture(&self, id: &str) {
+        if self.handle.is_null() || self.vtable.is_null() {
+            return;
+        }
+        // SAFETY: handle + vtable paired at construction.
+        unsafe {
+            ((*self.vtable).unregister_texture)(self.handle, id.as_ptr(), id.len());
+        }
+    }
+
+    /// Acquire a pooled scratch texture, returning a
+    /// [`PooledTextureHandle`](crate::rhi::PooledTextureHandle) that returns
+    /// the texture to the pool on Drop. Dispatches through the plugin ABI
+    /// vtable's `acquire_texture` callback.
+    pub fn acquire_texture(
+        &self,
+        desc: &crate::rhi::TexturePoolDescriptor,
+    ) -> Result<crate::rhi::PooledTextureHandle> {
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "acquire_texture: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut out_pooled: std::mem::MaybeUninit<crate::rhi::PooledTextureHandle> =
+            std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: handle + vtable paired at construction; the host writes a
+        // valid PooledTextureHandle into `out_pooled` on success.
+        let status = unsafe {
+            ((*self.vtable).acquire_texture)(
+                self.handle,
+                desc.width,
+                desc.height,
+                desc.format as u32,
+                desc.usage.bits(),
+                out_pooled.as_mut_ptr() as *mut c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(unsafe { out_pooled.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
 }
 
 // =============================================================================
@@ -424,6 +683,98 @@ impl GpuContextFullAccess {
     ) -> Result<crate::rhi::Texture> {
         self.inherited_limited_unchecked()
             .resolve_texture_by_surface_id(surface_id, texture_layout, width, height)
+    }
+
+    /// Check out a shared surface as a CPU-readable
+    /// [`PixelBuffer`](crate::rhi::PixelBuffer) by `surface_id`.
+    ///
+    /// LimitedAccess mirror — inherits the `check_out_surface` slot via
+    /// [`Self::inherited_limited_unchecked`].
+    pub fn check_out_surface(&self, surface_id: &str) -> Result<crate::rhi::PixelBuffer> {
+        self.inherited_limited_unchecked()
+            .check_out_surface(surface_id)
+    }
+
+    /// Resolve a `surface_id` to a CPU-readable
+    /// [`PixelBuffer`](crate::rhi::PixelBuffer).
+    ///
+    /// LimitedAccess mirror — inherits the `resolve_pixel_buffer_by_surface_id`
+    /// slot via [`Self::inherited_limited_unchecked`].
+    pub fn resolve_pixel_buffer_by_surface_id(
+        &self,
+        surface_id: &str,
+    ) -> Result<crate::rhi::PixelBuffer> {
+        self.inherited_limited_unchecked()
+            .resolve_pixel_buffer_by_surface_id(surface_id)
+    }
+
+    /// Acquire a pooled [`PixelBuffer`](crate::rhi::PixelBuffer) for CPU→GPU
+    /// upload.
+    ///
+    /// LimitedAccess mirror — inherits the `acquire_pixel_buffer` slot via
+    /// [`Self::inherited_limited_unchecked`].
+    pub fn acquire_pixel_buffer(
+        &self,
+        width: u32,
+        height: u32,
+        format: PixelFormat,
+    ) -> Result<(crate::rhi::PixelBufferPoolId, crate::rhi::PixelBuffer)> {
+        self.inherited_limited_unchecked()
+            .acquire_pixel_buffer(width, height, format)
+    }
+
+    /// Look up a pooled [`PixelBuffer`](crate::rhi::PixelBuffer) by its pool id.
+    ///
+    /// LimitedAccess mirror — inherits the `get_pixel_buffer` slot via
+    /// [`Self::inherited_limited_unchecked`].
+    pub fn get_pixel_buffer(
+        &self,
+        pool_id: &crate::rhi::PixelBufferPoolId,
+    ) -> Result<crate::rhi::PixelBuffer> {
+        self.inherited_limited_unchecked().get_pixel_buffer(pool_id)
+    }
+
+    /// Register a texture under a `surface_id` (defaults to layout UNDEFINED).
+    ///
+    /// LimitedAccess mirror — inherits the `register_texture` slot via
+    /// [`Self::inherited_limited_unchecked`].
+    pub fn register_texture(&self, id: &str, texture: crate::rhi::Texture) {
+        self.inherited_limited_unchecked()
+            .register_texture(id, texture);
+    }
+
+    /// Register a texture under a `surface_id` with an explicit initial layout.
+    ///
+    /// LimitedAccess mirror — inherits the `register_texture` slot via
+    /// [`Self::inherited_limited_unchecked`].
+    pub fn register_texture_with_layout(
+        &self,
+        id: &str,
+        texture: crate::rhi::Texture,
+        initial_layout: VulkanLayout,
+    ) {
+        self.inherited_limited_unchecked()
+            .register_texture_with_layout(id, texture, initial_layout);
+    }
+
+    /// Unregister a texture by its `surface_id`.
+    ///
+    /// LimitedAccess mirror — inherits the `unregister_texture` slot via
+    /// [`Self::inherited_limited_unchecked`].
+    pub fn unregister_texture(&self, id: &str) {
+        self.inherited_limited_unchecked().unregister_texture(id);
+    }
+
+    /// Acquire a pooled scratch texture as a
+    /// [`PooledTextureHandle`](crate::rhi::PooledTextureHandle).
+    ///
+    /// LimitedAccess mirror — inherits the `acquire_texture` slot via
+    /// [`Self::inherited_limited_unchecked`].
+    pub fn acquire_texture(
+        &self,
+        desc: &crate::rhi::TexturePoolDescriptor,
+    ) -> Result<crate::rhi::PooledTextureHandle> {
+        self.inherited_limited_unchecked().acquire_texture(desc)
     }
 
     /// Allocate a render-target-capable DMA-BUF VkImage (privileged

@@ -18,6 +18,8 @@ mod color_converter;
 mod command_recorder;
 mod compute_kernel_descriptor;
 mod pipeline_flags;
+mod pixel_buffer;
+mod pooled_texture_handle;
 mod storage_buffer;
 mod texture;
 mod texture_registration;
@@ -33,6 +35,8 @@ pub use compute_kernel_descriptor::{
     ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor,
 };
 pub use pipeline_flags::{VulkanAccess, VulkanStage};
+pub use pixel_buffer::{PixelBuffer, PixelBufferPoolId};
+pub use pooled_texture_handle::{PooledTextureHandle, TexturePoolDescriptor};
 pub use storage_buffer::StorageBuffer;
 pub use texture::{NativeTextureHandle, Texture, TextureDescriptor};
 pub use texture_registration::TextureRegistration;
