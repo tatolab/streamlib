@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.5.0](https://github.com/tatolab/streamlib/compare/v0.4.36...v0.5.0) (2026-06-07)
+
+
+### Features
+
+* **examples:** engine-free grayscale-compute example (validates the SDK surface-consumer path) ([7f39052](https://github.com/tatolab/streamlib/commit/7f390524321e545e4af272d29d187e087afcf82e))
+* **plugin-sdk:** expose GPU surface-consumer + graphics-effect methods on the engine-free cdylib twin ([c443ac5](https://github.com/tatolab/streamlib/commit/c443ac5aa5517361bde5c08ed25bd471bcb0da43))
+* **plugin-sdk:** expose graphics-effect kernel on the engine-free twin ([95fa05f](https://github.com/tatolab/streamlib/commit/95fa05f4645f9b64cb12e0b5939c2a7ed36eb590))
+* **plugin-sdk:** expose pixel-buffer + pooled-texture consumer/lifecycle methods ([540408c](https://github.com/tatolab/streamlib/commit/540408cd96b492fafca5f107f9537bb20ed76af9))
+* **plugin-sdk:** expose surface→texture resolution on engine-free twin ([2119306](https://github.com/tatolab/streamlib/commit/21193060507edaa7802129dace0e245ed40ecc8a))
+
+
+### Miscellaneous
+
+* release as 0.5.0 ([ba953d6](https://github.com/tatolab/streamlib/commit/ba953d61219a85294e7c8c513046e40bf288b309))
+
 ## [0.4.36](https://github.com/tatolab/streamlib/compare/v0.4.35...v0.4.36) (2026-06-03)
 
 
