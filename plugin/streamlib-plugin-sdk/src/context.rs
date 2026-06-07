@@ -985,6 +985,62 @@ impl GpuContextFullAccess {
         })
     }
 
+    /// Create a graphics kernel from a multi-stage SPIR-V set, binding
+    /// declaration, and fixed-function pipeline state. Dispatches through
+    /// the [`GpuContextFullAccessVTable`]'s `create_graphics_kernel` slot;
+    /// the host reflects every stage's SPIR-V, validates the declared
+    /// bindings match the shaders, and allocates the Vulkan pipeline
+    /// host-side.
+    pub fn create_graphics_kernel(
+        &self,
+        descriptor: &crate::rhi::GraphicsKernelDescriptor<'_>,
+    ) -> Result<crate::rhi::VulkanGraphicsKernel> {
+        if self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "create_graphics_kernel: GpuContextFullAccess has null vtable".into(),
+            ));
+        }
+        // Stage the descriptor into its repr + the keepalive backing Vecs;
+        // every backing Vec must stay alive for the vtable call because the
+        // repr's pointer fields borrow into them.
+        let (repr, _stage) = crate::rhi::stage_graphics_kernel_descriptor(descriptor);
+        let mut out_kernel: *const c_void = std::ptr::null();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: vtable + handle (scope token) paired at construction;
+        // `repr` borrows into `_stage` / `descriptor`, both alive for the
+        // duration of the call.
+        let status = unsafe {
+            ((*self.vtable).create_graphics_kernel)(
+                self.handle,
+                &repr,
+                &mut out_kernel,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status != 0 {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            return Err(Error::GpuError(msg));
+        }
+        if out_kernel.is_null() {
+            return Err(Error::GpuError(
+                "create_graphics_kernel: host signaled success but out_kernel is null".into(),
+            ));
+        }
+        let methods_vtable = crate::plugin::host_callbacks()
+            .map(|c| c.vulkan_graphics_kernel_methods_vtable)
+            .unwrap_or(std::ptr::null());
+        Ok(crate::rhi::VulkanGraphicsKernel {
+            handle: out_kernel,
+            vtable: self.vtable,
+            methods_vtable,
+            cached_push_constant_size: descriptor.push_constants.size,
+            cached_descriptor_sets_in_flight: descriptor.descriptor_sets_in_flight,
+        })
+    }
+
     /// Build an engine-owned multi-step command-buffer recorder.
     /// Dispatches through the [`GpuContextFullAccessVTable`]'s
     /// `create_command_recorder` slot.
