@@ -14,21 +14,21 @@ name = "streamlib_debug_utilities"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = {version = "0.4.30", registry = "gitea"}
+streamlib-jtd-codegen = {version = "0.5.0", registry = "gitea"}
 
 [dependencies]
 # Engine substrate — runtime context, processor traits, generated config
 # types under `crate::_generated_::tatolab__debug_utilities::*`, the
 # VideoFrame wire type, RHI primitives.
-streamlib = {version = "0.4.30", registry = "gitea"}
+streamlib = {version = "0.5.0", registry = "gitea"}
 
 # Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = {version = "0.4.30", registry = "gitea"}
+streamlib-macros = {version = "0.5.0", registry = "gitea"}
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = {version = "0.4.30", registry = "gitea"}
+streamlib-plugin-abi = {version = "0.5.0", registry = "gitea"}
 
 # Serialization (config dataclasses ship as serde-derived).
 # Generated `EncodedJpegFrame.data` rides msgpack `bin` (1× wire) instead of array.

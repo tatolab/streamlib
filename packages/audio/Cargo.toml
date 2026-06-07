@@ -14,21 +14,21 @@ name = "streamlib_audio"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = {version = "0.4.30", registry = "gitea"}
+streamlib-jtd-codegen = {version = "0.5.0", registry = "gitea"}
 
 [dependencies]
 # Engine substrate — runtime context, processor traits, generated config
 # types under `crate::_generated_::tatolab__audio::*`, AudioFrame
 # wire type, audio utilities (resample, channel/format conversion).
-streamlib = {version = "0.4.30", registry = "gitea"}
+streamlib = {version = "0.5.0", registry = "gitea"}
 
 # Procedural macros — `#[streamlib::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = {version = "0.4.30", registry = "gitea"}
+streamlib-macros = {version = "0.5.0", registry = "gitea"}
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = {version = "0.4.30", registry = "gitea"}
+streamlib-plugin-abi = {version = "0.5.0", registry = "gitea"}
 
 # Cross-platform deps used by every audio processor.
 parking_lot = "0.12"
