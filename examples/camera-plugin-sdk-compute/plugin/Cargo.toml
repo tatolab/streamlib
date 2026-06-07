@@ -1,0 +1,34 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# Member of the standalone `camera-plugin-sdk-compute` workspace — inherits
+# its `[workspace.package]` fields and resolves every dependency from the
+# Gitea registry via `[workspace.dependencies]`. No path deps.
+#
+# This is the FIRST example whose plugin links ONLY the engine-free
+# `streamlib-plugin-sdk` (never the `streamlib` engine facade) — it proves a
+# cdylib built against the engine-free SDK can resolve an incoming
+# `VideoFrame` surface to a GPU `Texture` and run a SPIR-V compute kernel on
+# it, exactly the build configuration `tatolab/drone-racer` ships.
+[package]
+name = "grayscale-compute-plugin"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[build-dependencies]
+streamlib-jtd-codegen = { workspace = true }
+
+[dependencies]
+# Engine-free authoring SDK — the whole point of this example. NO `streamlib`
+# facade dependency: the plugin cdylib must not statically link the engine.
+streamlib-plugin-sdk = { workspace = true }
+streamlib-macros = { workspace = true }
+streamlib-plugin-abi = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }

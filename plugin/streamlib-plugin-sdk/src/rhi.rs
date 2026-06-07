@@ -17,11 +17,16 @@
 mod color_converter;
 mod command_recorder;
 mod compute_kernel_descriptor;
+mod graphics_kernel_descriptor;
 mod pipeline_flags;
+mod pixel_buffer;
+mod pooled_texture_handle;
 mod storage_buffer;
 mod texture;
+mod texture_registration;
 mod texture_ring;
 mod vulkan_compute_kernel;
+mod vulkan_graphics_kernel;
 
 pub use color_converter::{
     pixel_format_color_kind, ColorConverterPushConstants, RhiColorConverter, SourceLayoutInfo,
@@ -31,19 +36,34 @@ pub use command_recorder::{ImageCopyRegion, RhiCommandRecorder};
 pub use compute_kernel_descriptor::{
     ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor,
 };
+pub use graphics_kernel_descriptor::{
+    AttachmentFormats, BlendFactor, BlendOp, ColorBlendAttachment, ColorBlendState, ColorWriteMask,
+    CullMode, DepthCompareOp, DepthFormat, DepthStencilState, DrawCall, DrawIndexedCall, FrontFace,
+    GraphicsBindingKind, GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor,
+    GraphicsPipelineState, GraphicsPushConstants, GraphicsShaderStage, GraphicsShaderStageFlags,
+    GraphicsStage, IndexType, MultisampleState, OffscreenColorTarget, OffscreenDraw, PolygonMode,
+    PrimitiveTopology, RasterizationState, ScissorRect, VertexAttributeFormat, VertexInputAttribute,
+    VertexInputBinding, VertexInputRate, VertexInputState, Viewport,
+};
 pub use pipeline_flags::{VulkanAccess, VulkanStage};
+pub use pixel_buffer::{PixelBuffer, PixelBufferPoolId};
+pub use pooled_texture_handle::{PooledTextureHandle, TexturePoolDescriptor};
 pub use storage_buffer::StorageBuffer;
 pub use texture::{NativeTextureHandle, Texture, TextureDescriptor};
+pub use texture_registration::TextureRegistration;
 pub use texture_ring::{
     TextureRing, TextureRingSlot, TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES,
 };
 pub use vulkan_compute_kernel::VulkanComputeKernel;
+pub use vulkan_graphics_kernel::VulkanGraphicsKernel;
 
 // Format / layout primitives — already engine-free in consumer-rhi.
 pub use streamlib_consumer_rhi::{PixelFormat, TextureFormat, TextureUsages, VulkanLayout};
 
 // Internal staging helper for `create_compute_kernel`.
 pub(crate) use compute_kernel_descriptor::stage_compute_kernel_descriptor;
+// Internal staging helper for `create_graphics_kernel`.
+pub(crate) use graphics_kernel_descriptor::stage_graphics_kernel_descriptor;
 
 // =============================================================================
 // Cdylib vtable resolver

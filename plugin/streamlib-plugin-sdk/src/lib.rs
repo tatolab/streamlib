@@ -98,11 +98,19 @@ pub mod sdk {
     #[cfg(target_os = "linux")]
     pub mod rhi {
         pub use crate::rhi::{
-            pixel_format_color_kind, ColorConverterPushConstants, ComputeBindingKind,
-            ComputeBindingSpec, ComputeKernelDescriptor, ImageCopyRegion, NativeTextureHandle,
-            PixelFormat, RhiColorConverter, RhiCommandRecorder, SourceLayoutInfo, StorageBuffer,
-            Texture, TextureDescriptor, TextureFormat, TextureRing, TextureRingSlot,
-            TextureUsages, VulkanAccess, VulkanComputeKernel, VulkanLayout, VulkanStage,
+            pixel_format_color_kind, AttachmentFormats, BlendFactor, BlendOp,
+            ColorBlendAttachment, ColorBlendState, ColorConverterPushConstants, ColorWriteMask,
+            ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, CullMode,
+            DepthCompareOp, DepthFormat, DepthStencilState, DrawCall, DrawIndexedCall, FrontFace,
+            GraphicsBindingKind, GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor,
+            GraphicsPipelineState, GraphicsPushConstants, GraphicsShaderStage,
+            GraphicsShaderStageFlags, GraphicsStage, ImageCopyRegion, IndexType, MultisampleState,
+            NativeTextureHandle, OffscreenColorTarget, OffscreenDraw, PixelFormat, PolygonMode,
+            PrimitiveTopology, RasterizationState, RhiColorConverter, RhiCommandRecorder,
+            ScissorRect, SourceLayoutInfo, StorageBuffer, Texture, TextureDescriptor, TextureFormat,
+            TextureRing, TextureRingSlot, TextureUsages, VertexAttributeFormat,
+            VertexInputAttribute, VertexInputBinding, VertexInputRate, VertexInputState, Viewport,
+            VulkanAccess, VulkanComputeKernel, VulkanGraphicsKernel, VulkanLayout, VulkanStage,
             COLOR_CONVERTER_PUSH_CONSTANT_SIZE, TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES,
         };
     }
