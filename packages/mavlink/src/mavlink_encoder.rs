@@ -12,9 +12,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use mavlink::MavHeader;
 use mavlink::dialects::common::{
-    ATTITUDE_DATA, AttitudeTargetTypemask, COMMAND_LONG_DATA, ENCAPSULATED_DATA_DATA, HEARTBEAT_DATA,
-    HIGHRES_IMU_DATA, HighresImuUpdatedFlags, MavAutopilot, MavCmd, MavFrame, MavMessage,
-    MavModeFlag, MavState, MavType, PositionTargetTypemask, SET_ATTITUDE_TARGET_DATA,
+    ATTITUDE_DATA, AttitudeTargetTypemask, COMMAND_LONG_DATA, ENCAPSULATED_DATA_DATA,
+    HEARTBEAT_DATA, HIGHRES_IMU_DATA, HighresImuUpdatedFlags, MavAutopilot, MavCmd, MavFrame,
+    MavMessage, MavModeFlag, MavState, MavType, PositionTargetTypemask, SET_ATTITUDE_TARGET_DATA,
     SET_POSITION_TARGET_LOCAL_NED_DATA, TIMESYNC_DATA,
 };
 use num_traits::FromPrimitive;
@@ -109,7 +109,11 @@ impl ReactiveProcessor for MavlinkEncoderProcessor::Processor {
 
         let n = self.messages_encoded.fetch_add(1, Ordering::Relaxed) + 1;
         if n == 1 {
-            tracing::info!(system_id, component_id, "MavlinkEncoder: first message encoded");
+            tracing::info!(
+                system_id,
+                component_id,
+                "MavlinkEncoder: first message encoded"
+            );
         }
         Ok(())
     }
@@ -140,6 +144,13 @@ fn identity(msg: &MavlinkMessage, default_sys: u8, default_comp: u8) -> (u8, u8,
         MavlinkMessage::Timesync(d) => (d.system_id, d.component_id, d.peer_addr.clone()),
         MavlinkMessage::CommandLong(d) => (d.system_id, d.component_id, d.peer_addr.clone()),
         MavlinkMessage::EncapsulatedData(d) => (d.system_id, d.component_id, d.peer_addr.clone()),
+        MavlinkMessage::LocalPositionNed(d) => (d.system_id, d.component_id, d.peer_addr.clone()),
+        MavlinkMessage::Odometry(d) => (d.system_id, d.component_id, d.peer_addr.clone()),
+        MavlinkMessage::ActuatorOutputStatus(d) => {
+            (d.system_id, d.component_id, d.peer_addr.clone())
+        }
+        MavlinkMessage::Collision(d) => (d.system_id, d.component_id, d.peer_addr.clone()),
+        MavlinkMessage::CommandAck(d) => (d.system_id, d.component_id, d.peer_addr.clone()),
     };
     let sys = if sys == 0 { default_sys } else { sys };
     let comp = if comp == 0 { default_comp } else { comp };
@@ -288,6 +299,21 @@ fn convert_to_mavlink(msg: &MavlinkMessage) -> Result<MavMessage> {
             data[..n].copy_from_slice(&d.data[..n]);
             MavMessage::ENCAPSULATED_DATA(ENCAPSULATED_DATA_DATA { seqnr: d.seqnr, data })
         }
+        // SIM->PILOT telemetry the decoder surfaces for consumers but the
+        // pilot never transmits. They have no encode path on purpose: the
+        // racer receives these, it does not emit them.
+        MavlinkMessage::LocalPositionNed(_)
+        | MavlinkMessage::Odometry(_)
+        | MavlinkMessage::ActuatorOutputStatus(_)
+        | MavlinkMessage::Collision(_)
+        | MavlinkMessage::CommandAck(_) => {
+            return Err(Error::Configuration(
+                "MavlinkEncoder: LOCAL_POSITION_NED / ODOMETRY / ACTUATOR_OUTPUT_STATUS / \
+                 COLLISION / COMMAND_ACK are SIM->PILOT telemetry surfaced by the decoder but \
+                 never transmitted by the pilot — decode-only, not encodable"
+                    .to_string(),
+            ));
+        }
     })
 }
 
@@ -309,8 +335,9 @@ mod tests {
     use super::*;
     use crate::_generated_::tatolab__mavlink::mavlink_message::{
         MavlinkMessageAttitude, MavlinkMessageCommandLong, MavlinkMessageEncapsulatedData,
-        MavlinkMessageHeartbeat, MavlinkMessageHighresImu, MavlinkMessageSetAttitudeTarget,
-        MavlinkMessageSetPositionTargetLocalNed, MavlinkMessageTimesync,
+        MavlinkMessageHeartbeat, MavlinkMessageHighresImu, MavlinkMessageLocalPositionNed,
+        MavlinkMessageSetAttitudeTarget, MavlinkMessageSetPositionTargetLocalNed,
+        MavlinkMessageTimesync,
     };
 
     fn make_heartbeat(sys: u8, comp: u8) -> MavlinkMessage {
@@ -321,7 +348,7 @@ mod tests {
             peer_addr: String::new(),
             timestamp_ns: "0".to_string(),
             custom_mode: 0,
-            mavtype: 2, // MAV_TYPE_QUADROTOR
+            mavtype: 2,    // MAV_TYPE_QUADROTOR
             autopilot: 12, // MAV_AUTOPILOT_PX4
             base_mode: 0,
             system_status: 4, // MAV_STATE_ACTIVE
@@ -538,6 +565,35 @@ mod tests {
                     d.timestamp_ns = "0".to_string();
                     d.sequence = 0;
                 }
+                // Decode-only telemetry variants: convert_to_mavlink rejects
+                // them, so they never reach assert_round_trip — but normalize
+                // them anyway to keep the match exhaustive (so a future
+                // encodable variant can't silently skip normalization).
+                MavlinkMessage::LocalPositionNed(d) => {
+                    d.peer_addr.clear();
+                    d.timestamp_ns = "0".to_string();
+                    d.sequence = 0;
+                }
+                MavlinkMessage::Odometry(d) => {
+                    d.peer_addr.clear();
+                    d.timestamp_ns = "0".to_string();
+                    d.sequence = 0;
+                }
+                MavlinkMessage::ActuatorOutputStatus(d) => {
+                    d.peer_addr.clear();
+                    d.timestamp_ns = "0".to_string();
+                    d.sequence = 0;
+                }
+                MavlinkMessage::Collision(d) => {
+                    d.peer_addr.clear();
+                    d.timestamp_ns = "0".to_string();
+                    d.sequence = 0;
+                }
+                MavlinkMessage::CommandAck(d) => {
+                    d.peer_addr.clear();
+                    d.timestamp_ns = "0".to_string();
+                    d.sequence = 0;
+                }
             }
             msg
         };
@@ -651,9 +707,9 @@ mod tests {
                     "got: {s}"
                 );
             }
-            other => panic!(
-                "expected configuration error on thrust_body.len() != 3, got {other:?}"
-            ),
+            other => {
+                panic!("expected configuration error on thrust_body.len() != 3, got {other:?}")
+            }
         }
     }
 
@@ -698,9 +754,37 @@ mod tests {
                 assert!(s.contains("mavtype"), "expected mavtype in error: {s}");
                 assert!(s.contains("250"), "expected the bad value in error: {s}");
             }
-            other => panic!(
-                "expected configuration error on out-of-range mavtype, got {other:?}"
-            ),
+            other => panic!("expected configuration error on out-of-range mavtype, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn telemetry_messages_are_decode_only() {
+        // LOCAL_POSITION_NED (like ODOMETRY / ACTUATOR_OUTPUT_STATUS / COLLISION
+        // / COMMAND_ACK) is SIM->PILOT telemetry the decoder surfaces but the
+        // pilot never sends — encode must refuse rather than fabricate a frame.
+        let msg = MavlinkMessage::LocalPositionNed(MavlinkMessageLocalPositionNed {
+            system_id: 1,
+            component_id: 1,
+            sequence: 0,
+            peer_addr: String::new(),
+            timestamp_ns: "0".to_string(),
+            time_boot_ms: 0,
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            vx: 0.0,
+            vy: 0.0,
+            vz: 0.0,
+        });
+        match convert_to_mavlink(&msg) {
+            Err(Error::Configuration(s)) => {
+                assert!(
+                    s.contains("decode-only"),
+                    "expected decode-only rejection, got: {s}"
+                );
+            }
+            other => panic!("expected decode-only rejection, got {other:?}"),
         }
     }
 }

@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: BUSL-1.1
 #
 # JSON Type Definition (RFC 8927) schema for a decoded MAVLink2 message,
-# represented as a tagged union over the six core navigation / telemetry /
-# control messages. The discriminator (`kind`) preserves the message-type
-# distinction across the iceoryx2 mailbox; consumers `match` on the
-# variant to dispatch typed payload handling.
+# represented as a tagged union over the common-dialect navigation /
+# telemetry / control messages the sim exchanges with the pilot. The
+# discriminator (`kind`) preserves the message-type distinction across the
+# iceoryx2 mailbox; consumers `match` on the variant to dispatch typed
+# payload handling.
 #
 # Each variant carries:
 #   - MAVLink header fields (system_id, component_id, sequence)
@@ -25,7 +26,7 @@
 
 metadata:
   type: MavlinkMessage
-  description: "Decoded MAVLink2 message as a tagged union over the core six common-dialect messages"
+  description: "Decoded MAVLink2 message as a tagged union over the supported common-dialect messages"
   read_mode: read_next_in_order
   max_queued_messages: 64
   # MAVLink2 max wire frame is 280 bytes (1 STX + 10 header + 255 payload
@@ -432,3 +433,220 @@ mapping:
           description: "Raw chunk payload (up to 253 bytes). Application-defined; the AGP sim packs its race-status / track structs here for the consumer to parse."
         elements:
           type: uint8
+
+  local_position_ned:
+    properties:
+      system_id:
+        metadata: { description: "MAVLink system ID of the sender." }
+        type: uint8
+      component_id:
+        metadata: { description: "MAVLink component ID of the sender." }
+        type: uint8
+      sequence:
+        metadata: { description: "MAVLink sequence counter." }
+        type: uint8
+      peer_addr:
+        metadata: { description: "Networking peer address (host:port). See heartbeat.peer_addr." }
+        type: string
+      timestamp_ns:
+        metadata: { description: "Monotonic timestamp from source NetworkPacket recv (int64 as string)." }
+        type: string
+      time_boot_ms:
+        metadata: { description: "Timestamp since system boot, milliseconds." }
+        type: uint32
+      x:
+        metadata: { description: "X position in local NED frame, m." }
+        type: float32
+      y:
+        metadata: { description: "Y position in local NED frame, m." }
+        type: float32
+      z:
+        metadata: { description: "Z position in local NED frame, m (positive down)." }
+        type: float32
+      vx:
+        metadata: { description: "X velocity in local NED (world) frame, m/s." }
+        type: float32
+      vy:
+        metadata: { description: "Y velocity in local NED (world) frame, m/s." }
+        type: float32
+      vz:
+        metadata: { description: "Z velocity in local NED (world) frame, m/s." }
+        type: float32
+
+  odometry:
+    properties:
+      system_id:
+        metadata: { description: "MAVLink system ID of the sender." }
+        type: uint8
+      component_id:
+        metadata: { description: "MAVLink component ID of the sender." }
+        type: uint8
+      sequence:
+        metadata: { description: "MAVLink sequence counter." }
+        type: uint8
+      peer_addr:
+        metadata: { description: "Networking peer address (host:port). See heartbeat.peer_addr." }
+        type: string
+      timestamp_ns:
+        metadata: { description: "Monotonic timestamp from source NetworkPacket recv (int64 as string)." }
+        type: string
+      time_usec:
+        metadata: { description: "Timestamp (UNIX Epoch or time since system boot), microseconds (uint64 as string)." }
+        type: string
+      x:
+        metadata: { description: "X position, m. Frame given by frame_id." }
+        type: float32
+      y:
+        metadata: { description: "Y position, m. Frame given by frame_id." }
+        type: float32
+      z:
+        metadata: { description: "Z position, m. Frame given by frame_id." }
+        type: float32
+      q:
+        metadata: { description: "Orientation quaternion [w, x, y, z] (1 0 0 0 is the null-rotation). Four elements." }
+        elements:
+          type: float32
+      vx:
+        metadata: { description: "X linear velocity, m/s. Frame given by child_frame_id (BODY_NED on the AGP sim)." }
+        type: float32
+      vy:
+        metadata: { description: "Y linear velocity, m/s. Frame given by child_frame_id." }
+        type: float32
+      vz:
+        metadata: { description: "Z linear velocity, m/s. Frame given by child_frame_id." }
+        type: float32
+      rollspeed:
+        metadata: { description: "Roll angular speed, rad/s (body frame)." }
+        type: float32
+      pitchspeed:
+        metadata: { description: "Pitch angular speed, rad/s (body frame)." }
+        type: float32
+      yawspeed:
+        metadata: { description: "Yaw angular speed, rad/s (body frame)." }
+        type: float32
+      pose_covariance:
+        metadata: { description: "Upper-right triangle of the 6x6 pose cross-covariance (x,y,z,roll,pitch,yaw), row-major; 21 elements. NaN in the first element if unknown." }
+        elements:
+          type: float32
+      velocity_covariance:
+        metadata: { description: "Upper-right triangle of the 6x6 velocity cross-covariance (vx,vy,vz,rollspeed,pitchspeed,yawspeed), row-major; 21 elements. NaN in the first element if unknown." }
+        elements:
+          type: float32
+      frame_id:
+        metadata: { description: "Coordinate frame of the pose data — MAV_FRAME enum (raw uint8). 1=LOCAL_NED." }
+        type: uint8
+      child_frame_id:
+        metadata: { description: "Coordinate frame of the velocity (twist) data — MAV_FRAME enum (raw uint8). 8=BODY_NED." }
+        type: uint8
+      reset_counter:
+        metadata: { description: "Estimate reset counter; incremented on any estimate reset/jump (SLAM loop-closure, sim teleport). Use to reject transient frames after a reset." }
+        type: uint8
+      estimator_type:
+        metadata: { description: "Estimator providing the odometry — MAV_ESTIMATOR_TYPE enum (raw uint8). 2=VISION." }
+        type: uint8
+      quality:
+        metadata: { description: "Optional odometry quality, percent. -1=failed, 0=unknown/unset, 1=worst, 100=best." }
+        type: int8
+
+  actuator_output_status:
+    properties:
+      system_id:
+        metadata: { description: "MAVLink system ID of the sender." }
+        type: uint8
+      component_id:
+        metadata: { description: "MAVLink component ID of the sender." }
+        type: uint8
+      sequence:
+        metadata: { description: "MAVLink sequence counter." }
+        type: uint8
+      peer_addr:
+        metadata: { description: "Networking peer address (host:port). See heartbeat.peer_addr." }
+        type: string
+      timestamp_ns:
+        metadata: { description: "Monotonic timestamp from source NetworkPacket recv (int64 as string)." }
+        type: string
+      time_usec:
+        metadata: { description: "Timestamp since system boot, microseconds (uint64 as string)." }
+        type: string
+      active:
+        metadata: { description: "Bitmap of active output channels (1 bit per actuator)." }
+        type: uint32
+      actuator:
+        metadata: { description: "Servo / motor output array values; 32 elements. Zero indicates an unused channel." }
+        elements:
+          type: float32
+
+  collision:
+    properties:
+      system_id:
+        metadata: { description: "MAVLink system ID of the sender." }
+        type: uint8
+      component_id:
+        metadata: { description: "MAVLink component ID of the sender." }
+        type: uint8
+      sequence:
+        metadata: { description: "MAVLink sequence counter." }
+        type: uint8
+      peer_addr:
+        metadata: { description: "Networking peer address (host:port). See heartbeat.peer_addr." }
+        type: string
+      timestamp_ns:
+        metadata: { description: "Monotonic timestamp from source NetworkPacket recv (int64 as string)." }
+        type: string
+      id:
+        metadata: { description: "Unique collision identifier; domain depends on src. On the AGP sim 1001=gate, 1002=environment." }
+        type: uint32
+      time_to_minimum_delta:
+        metadata: { description: "Estimated time until collision occurs, s." }
+        type: float32
+      altitude_minimum_delta:
+        metadata: { description: "Closest vertical distance to the object, m." }
+        type: float32
+      horizontal_minimum_delta:
+        metadata: { description: "Closest horizontal distance to the object, m (on the AGP sim this carries the impact impulse magnitude, kg*m/s)." }
+        type: float32
+      src:
+        metadata: { description: "Collision data source — MAV_COLLISION_SRC enum (raw uint8)." }
+        type: uint8
+      action:
+        metadata: { description: "Action taken to avoid the collision — MAV_COLLISION_ACTION enum (raw uint8)." }
+        type: uint8
+      threat_level:
+        metadata: { description: "Threat level — MAV_COLLISION_THREAT_LEVEL enum (raw uint8). 1..2, higher is a harder impact." }
+        type: uint8
+
+  command_ack:
+    properties:
+      system_id:
+        metadata: { description: "MAVLink system ID of the sender." }
+        type: uint8
+      component_id:
+        metadata: { description: "MAVLink component ID of the sender." }
+        type: uint8
+      sequence:
+        metadata: { description: "MAVLink sequence counter." }
+        type: uint8
+      peer_addr:
+        metadata: { description: "Networking peer address (host:port). See heartbeat.peer_addr." }
+        type: string
+      timestamp_ns:
+        metadata: { description: "Monotonic timestamp from source NetworkPacket recv (int64 as string)." }
+        type: string
+      command:
+        metadata: { description: "MAV_CMD id being acknowledged (uint16). 400=COMPONENT_ARM_DISARM." }
+        type: uint16
+      result:
+        metadata: { description: "Result of the command — MAV_RESULT enum (raw uint8). 0=ACCEPTED, 4=FAILED." }
+        type: uint8
+      progress:
+        metadata: { description: "Progress percent when result is IN_PROGRESS [0-100], or 255 if unknown." }
+        type: uint8
+      result_param2:
+        metadata: { description: "Additional command-specific result information (signed)." }
+        type: int32
+      target_system:
+        metadata: { description: "System ID of the recipient (the system that sent the acknowledged command)." }
+        type: uint8
+      target_component:
+        metadata: { description: "Component ID of the recipient." }
+        type: uint8
