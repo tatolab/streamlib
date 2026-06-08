@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/tatolab/streamlib/compare/v0.5.0...v0.5.1) (2026-06-08)
+
+
+### Features
+
+* **mavlink:** surface all sim-emitted messages (LOCAL_POSITION_NED, ODOMETRY, ACTUATOR_OUTPUT_STATUS, COLLISION, COMMAND_ACK) ([#1231](https://github.com/tatolab/streamlib/issues/1231)) ([76096cf](https://github.com/tatolab/streamlib/commit/76096cf89069cf2812d6d3b917b6f1124876d42a))
+
 ## [0.5.0](https://github.com/tatolab/streamlib/compare/v0.4.36...v0.5.0) (2026-06-07)
 
 
