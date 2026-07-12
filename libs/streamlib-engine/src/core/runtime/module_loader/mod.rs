@@ -43,6 +43,7 @@ use crate::iceoryx2::Iceoryx2Node;
 mod added_module;
 mod build_orchestrator;
 mod errors;
+mod locked;
 mod processor_registration;
 mod recursive_walker;
 mod schema_registration;
@@ -58,6 +59,7 @@ pub use build_orchestrator::{
     BuildSource, BuildStream, StagedArtifact,
 };
 pub use errors::{AddModuleError, RemoveModuleError};
+pub(crate) use locked::LockedResolution;
 pub use processor_registration::host_target_triple;
 pub(crate) use recursive_walker::ResolutionMemo;
 pub use slpkg::extract_slpkg_to_cache;
@@ -122,6 +124,7 @@ fn run_module_load(
     events: broadcast::Sender<ModuleLoadEvent>,
     resolution_memo: Arc<ResolutionMemo>,
     load_id: u64,
+    locked: Option<Arc<LockedResolution>>,
 ) -> std::result::Result<LoadedModule, AddModuleError> {
     let start = Instant::now();
     let _ = events.send(ModuleLoadEvent::Started {
@@ -145,6 +148,7 @@ fn run_module_load(
         &resolution_memo,
         load_id,
         &mut skipped_in_flight,
+        locked.as_deref(),
     );
     // End-of-walk verification: this walk skipped some packages because a
     // CONCURRENT load had them in flight at the same version. Before
@@ -234,6 +238,19 @@ impl Runner {
         module: streamlib_idents::ModuleIdent,
         strategy: Strategy,
     ) -> AddedModule {
+        self.spawn_module_load(module, strategy, None)
+    }
+
+    /// Shared spawn body for [`Self::add_module_with`] (live resolution,
+    /// `locked = None`) and the locked-run path (strict-from-lockfile,
+    /// `locked = Some`). The `locked` context, when present, forces every
+    /// transitive dep edge to its lockfile pin inside the recursive walk.
+    fn spawn_module_load(
+        &self,
+        module: streamlib_idents::ModuleIdent,
+        strategy: Strategy,
+        locked: Option<Arc<LockedResolution>>,
+    ) -> AddedModule {
         let pkg_ref = module.package_ref();
         let load_id = NEXT_MODULE_LOAD_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // Subscribe BEFORE spawning so a driver can't miss early events.
@@ -264,6 +281,7 @@ impl Runner {
                 events,
                 memo,
                 load_id,
+                locked,
             );
             {
                 let mut loading = loading.lock();
@@ -278,6 +296,70 @@ impl Runner {
         });
 
         AddedModule::new(module, join, tx, initial_rx)
+    }
+
+    /// Load every package pinned in an application lockfile
+    /// ([`streamlib_idents::APP_LOCKFILE_NAME`], written by `streamlib
+    /// install`) strictly from the installed-package cache — the **locked
+    /// run**. No live re-resolution: every package, top-level and
+    /// transitive, is forced to its pinned version's cache slot, so the run
+    /// works **offline** (no registry, git, or `.slpkg` fetch reachable)
+    /// and is byte-reproducible against the pinned set.
+    ///
+    /// The lockfile is the flat resolved closure, so each pinned package is
+    /// spawned as a top-level load; the single-version gate dedups the
+    /// transitive re-encounters. Returns one [`AddedModule`] per pinned
+    /// package — drive them via [`Runner::await_modules`].
+    ///
+    /// A dep a manifest declares that the lockfile doesn't pin, or a pinned
+    /// package whose cache slot is missing, fails loud with a typed error
+    /// naming `streamlib install` — never a silent live resolve.
+    ///
+    /// [`Runner::await_modules`]: Self::await_modules
+    pub fn add_modules_from_lockfile(
+        &self,
+        lockfile_path: &std::path::Path,
+    ) -> std::result::Result<Vec<AddedModule>, AddModuleError> {
+        let locked = Arc::new(LockedResolution::from_lockfile_path(lockfile_path)?);
+        let mut added = Vec::new();
+        for (pkg_ref, _version) in locked.pinned_packages() {
+            // Each pinned package resolves to its own slot as a top-level
+            // load; `required_by` is "top-level" for the root add.
+            let (ident, strategy) = locked.resolve(&pkg_ref, "top-level")?;
+            added.push(self.spawn_module_load(ident, strategy, Some(Arc::clone(&locked))));
+        }
+        Ok(added)
+    }
+
+    /// Blocking convenience for [`Self::add_modules_from_lockfile`]: drive
+    /// every pinned load to completion. For simple `fn main` examples and
+    /// tests. Returns [`AddModuleError::BlockingCallFromAsyncContext`] when
+    /// called from inside a tokio runtime — use the async surface there.
+    pub fn add_modules_from_lockfile_blocking(
+        &self,
+        lockfile_path: &std::path::Path,
+    ) -> std::result::Result<(), AddModuleError> {
+        if matches!(
+            self.tokio_runtime_variant,
+            TokioRuntimeVariant::ExternalTokioHandle(_)
+        ) {
+            // No module ident to name here (this is a batch load); surface
+            // the same async-context guard as the single-module path.
+            return Err(AddModuleError::BlockingCallFromAsyncContext {
+                module: streamlib_idents::ModuleIdent::new(
+                    streamlib_idents::Org::new("tatolab").expect("static org valid"),
+                    streamlib_idents::Package::new("locked-run").expect("static package valid"),
+                    SemVerRange::Any,
+                ),
+            });
+        }
+        let added = self.add_modules_from_lockfile(lockfile_path)?;
+        match &self.tokio_runtime_variant {
+            TokioRuntimeVariant::OwnedTokioRuntime(rt) => rt.block_on(async {
+                self.await_modules(added, |_| {}).await
+            }),
+            TokioRuntimeVariant::ExternalTokioHandle(_) => unreachable!("guarded above"),
+        }
     }
 
     /// Synchronous convenience: drive a single cache-only load to

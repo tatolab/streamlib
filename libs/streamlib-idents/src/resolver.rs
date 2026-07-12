@@ -368,7 +368,25 @@ fn build_resolved_package(
     source: ResolvedSource,
 ) -> ResolverResult<ResolvedPackage> {
     let schema_files = discover_schema_files(&manifest, &root_dir)?;
+    let content_hash = hash_package_contents(&manifest, &root_dir, &schema_files)?;
 
+    Ok(ResolvedPackage {
+        manifest,
+        root_dir,
+        schema_files,
+        source,
+        content_hash,
+    })
+}
+
+/// Hash a package's manifest body + schema files — the single content-hash
+/// routine behind both resolver-time hashing and package-dir
+/// re-verification ([`content_hash_for_package_dir`]).
+fn hash_package_contents(
+    manifest: &Manifest,
+    root_dir: &Path,
+    schema_files: &[PathBuf],
+) -> ResolverResult<String> {
     let manifest_path = root_dir.join(Manifest::FILE_NAME);
     let manifest_body = if manifest_path.exists() {
         std::fs::read_to_string(&manifest_path).map_err(|e| ResolverError::ManifestRead {
@@ -377,16 +395,16 @@ fn build_resolved_package(
         })?
     } else {
         // Manifests synthesized in tests may have no on-disk file; serialize.
-        serde_yaml::to_string(&manifest).map_err(|e| ResolverError::ManifestParse {
+        serde_yaml::to_string(manifest).map_err(|e| ResolverError::ManifestParse {
             path: manifest_path.clone(),
             source: e,
         })?
     };
 
     let mut schema_pairs = Vec::with_capacity(schema_files.len());
-    for path in &schema_files {
+    for path in schema_files {
         let rel = path
-            .strip_prefix(&root_dir)
+            .strip_prefix(root_dir)
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| path.to_string_lossy().into_owned());
         let body = std::fs::read_to_string(path).map_err(|e| ResolverError::Io {
@@ -396,15 +414,19 @@ fn build_resolved_package(
         schema_pairs.push((rel, body));
     }
 
-    let content_hash = compute_content_hash(&manifest_body, &schema_pairs);
+    Ok(compute_content_hash(&manifest_body, &schema_pairs))
+}
 
-    Ok(ResolvedPackage {
-        manifest,
-        root_dir,
-        schema_files,
-        source,
-        content_hash,
-    })
+/// Content hash of the package rooted at `root_dir`: SHA-256 over its
+/// `streamlib.yaml` body + every schema file it owns, via the exact same
+/// discovery + hashing routine the resolver uses when pinning
+/// `content_hash` into a lockfile entry. Callers use it to re-verify a
+/// materialized package directory (e.g. an installed-cache slot at locked
+/// run time) against a lockfile pin.
+pub fn content_hash_for_package_dir(root_dir: &Path) -> ResolverResult<String> {
+    let manifest = Manifest::load(root_dir)?;
+    let schema_files = discover_schema_files(&manifest, root_dir)?;
+    hash_package_contents(&manifest, root_dir, &schema_files)
 }
 
 /// Discover the schema files this manifest owns. Two modes:

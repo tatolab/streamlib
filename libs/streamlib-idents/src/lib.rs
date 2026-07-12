@@ -25,8 +25,8 @@ pub use ident::{
     SchemaIdent, TypeName,
 };
 pub use lockfile::{
-    compute_content_hash, hash_content, read_lockfile, write_lockfile, Lockfile, LockfileEntry,
-    LockfileSource, LOCKFILE_NAME,
+    compute_content_hash, hash_content, read_lockfile, write_app_lockfile, write_lockfile,
+    Lockfile, LockfileEntry, LockfileSource, APP_LOCKFILE_NAME, LOCKFILE_NAME,
 };
 pub use manifest::{
     DependencySpec, GitDependency, Manifest, PackageMetadata, PathDependency, RegistryDependency,
@@ -40,7 +40,7 @@ pub use release::{
     crates_missing_from_release, ReleaseManifest, ReleaseManifestMember, RELEASE_MANIFEST_FORMAT,
 };
 pub use resolver::{
-    resolve, resolve_bare_schema_name, resolve_with, ResolvedPackage, ResolvedPackages,
-    ResolvedSource, ResolverOptions,
+    content_hash_for_package_dir, resolve, resolve_bare_schema_name, resolve_with,
+    ResolvedPackage, ResolvedPackages, ResolvedSource, ResolverOptions,
 };
 pub use semver::{Prerelease, PrereleaseKind, SemVer, SemVerRange};

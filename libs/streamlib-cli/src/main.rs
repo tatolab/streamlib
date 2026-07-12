@@ -78,6 +78,26 @@ enum Commands {
         action: SchemasCommands,
     },
 
+    /// Resolve + materialize + lock an application's package tree.
+    ///
+    /// Run from a project root (a directory with `streamlib.yaml`). Resolves
+    /// the full transitive dependency tree range→concrete, materializes every
+    /// package into the installed-package cache (building cdylibs, provisioning
+    /// venvs, pre-building the subprocess native hosts), and writes an
+    /// application lockfile. A subsequent run loads the pinned set offline via
+    /// `Runner::add_modules_from_lockfile`.
+    ///
+    /// To install a single package artifact (a `.slpkg`, URL, or registry
+    /// ref) rather than a project tree, use `streamlib pkg install`.
+    Install {
+        /// Project directory (default: current working directory).
+        project_dir: Option<PathBuf>,
+
+        /// Lockfile output path (default: <project_dir>/streamlib-app.lock).
+        #[arg(long)]
+        lockfile: Option<PathBuf>,
+    },
+
     /// Manage installed packages
     Pkg {
         #[command(subcommand)]
@@ -181,6 +201,8 @@ enum PkgCommands {
     Clean,
     /// Install a package: a registry ref `@org/name[@version]` (resolved from
     /// the registry and built from source), a local `.slpkg` path, or an HTTP URL.
+    /// To resolve + lock a whole project tree (with an application lockfile
+    /// for offline runs), use the top-level `streamlib install` instead.
     Install {
         /// `@org/name[@version]` | path to a `.slpkg` | HTTP URL
         source: String,
@@ -251,6 +273,10 @@ async fn async_main(cli: Cli) -> Result<()> {
                 commands::schema::validate_processor(&path)?
             }
         },
+        Some(Commands::Install {
+            project_dir,
+            lockfile,
+        }) => commands::install::run(project_dir.as_deref(), lockfile)?,
         Some(Commands::Pkg { action }) => match action {
             PkgCommands::Build { output } => commands::pkg::build(output.as_deref())?,
             PkgCommands::Publish => commands::pkg::publish()?,

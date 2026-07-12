@@ -228,8 +228,10 @@ pub(super) fn resolve_strategy_to_source(
             // versions are immutable (a content change ships a new version);
             // `streamlib pkg clean` clears the cache to force a re-fetch when a
             // version is republished in place during development.
-            let cache_key = format!("{}-{}", pkg_ref.name, selected);
-            let slot = crate::core::streamlib_home::get_cached_package_dir(&cache_key);
+            let slot = crate::core::streamlib_home::get_cached_package_dir_for_name_version(
+                pkg_ref.name.as_str(),
+                selected,
+            );
             let extracted = if matches!(build, BuildPolicy::IfStale) && slot.is_dir() {
                 tracing::debug!(
                     package = %pkg_ref,

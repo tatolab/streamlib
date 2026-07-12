@@ -2554,4 +2554,620 @@ processors:
             "got: {err:?}",
         );
     }
+
+    // =====================================================================
+    // install / run split (#1221)
+    //
+    // Exercises the full resolver handoff: `install` resolves range→concrete,
+    // materializes every package into the installed-package cache, and writes
+    // the application lockfile; a locked run consumes that lockfile strictly
+    // from the cache with NO live re-resolution — so it works offline even
+    // against a poisoned / unreachable registry.
+    // =====================================================================
+
+    use std::io::Write as _;
+
+    /// Orchestrator that stages a `PackageDir` into the installed-package
+    /// cache slot `cache/packages/<name>-<version>/` — where a locked run
+    /// looks — by copying the resolved source tree. No toolchain: enough to
+    /// prove the resolve→materialize→lock→locked-run handoff with
+    /// schemas-only packages. The real `PolyglotBuildOrchestrator` stages
+    /// into the identical slot (plus builds cdylibs / venvs / native hosts).
+    struct StageIntoCacheOrchestrator;
+    impl BuildOrchestrator for StageIntoCacheOrchestrator {
+        fn materialize(
+            &self,
+            request: &BuildRequest,
+            _sink: &dyn BuildEventSink,
+        ) -> std::result::Result<StagedArtifact, BuildError> {
+            let src = match &request.source {
+                BuildSource::PackageDir(d) => d.clone(),
+                other => return Err(BuildError::UnsupportedSource(format!("{other:?}"))),
+            };
+            let cfg = crate::core::config::ProjectConfig::load(&src).map_err(|e| {
+                BuildError::Other {
+                    package: request.package.to_string(),
+                    detail: e.to_string(),
+                }
+            })?;
+            let pkg = cfg.package.as_ref().ok_or_else(|| BuildError::Other {
+                package: request.package.to_string(),
+                detail: "no [package] block".into(),
+            })?;
+            let slot = crate::core::get_cached_package_dir(&format!(
+                "{}-{}",
+                pkg.name.as_str(),
+                pkg.version
+            ));
+            let _ = std::fs::remove_dir_all(&slot);
+            copy_dir_recursive(&src, &slot).map_err(|e| BuildError::Other {
+                package: request.package.to_string(),
+                detail: format!("staging into cache: {e}"),
+            })?;
+            Ok(StagedArtifact {
+                staged_dir: slot,
+                rebuilt: false,
+            })
+        }
+    }
+
+    fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(dst)?;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            let from = entry.path();
+            let to = dst.join(entry.file_name());
+            if entry.file_type()?.is_dir() {
+                copy_dir_recursive(&from, &to)?;
+            } else {
+                std::fs::copy(&from, &to)?;
+            }
+        }
+        Ok(())
+    }
+
+    struct NoopBuildSink;
+    impl BuildEventSink for NoopBuildSink {
+        fn emit(&self, _event: BuildEvent) {}
+    }
+
+    /// Write a schemas-only `.slpkg` into a `file://` registry mirror at
+    /// `<mirror>/<name>/<version>/<name>.slpkg`. `dep` optionally adds a
+    /// registry-flavored dependency edge (`@tatolab/<dep>: "^<range>"`).
+    fn write_mirror_slpkg(
+        mirror: &std::path::Path,
+        name: &str,
+        version: &str,
+        type_name: &str,
+        dep: Option<(&str, &str)>,
+    ) {
+        let dir = mirror.join(name).join(version);
+        std::fs::create_dir_all(&dir).unwrap();
+        let archive = dir.join(format!("{name}.slpkg"));
+        let stem = type_name.to_ascii_lowercase();
+        let mut manifest = format!(
+            "package:\n  org: tatolab\n  name: {name}\n  version: \"{version}\"\n\
+             schemas:\n  {type_name}:\n    file: schemas/{stem}.yaml\n"
+        );
+        if let Some((dep_name, dep_range)) = dep {
+            manifest.push_str(&format!(
+                "dependencies:\n  \"@tatolab/{dep_name}\": \"^{dep_range}\"\n"
+            ));
+        }
+        let schema = format!("metadata:\n  type: {type_name}\n  max_payload_bytes: 4096\n");
+        let mut zw = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+        let opts: zip::write::FileOptions<()> =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zw.start_file("streamlib.yaml", opts).unwrap();
+        zw.write_all(manifest.as_bytes()).unwrap();
+        zw.start_file(format!("schemas/{stem}.yaml"), opts).unwrap();
+        zw.write_all(schema.as_bytes()).unwrap();
+        zw.finish().unwrap();
+    }
+
+    /// THE key test: install from a `file://` registry, then run **strictly
+    /// from the lockfile** against a POISONED (unreachable) registry. The
+    /// locked run must load the full graph offline — including a
+    /// registry-flavored transitive dep edge, which the locked walker forces
+    /// to the pinned cache slot instead of a live registry fetch.
+    ///
+    /// Mentally-revert: drop the `locked` forcing in the recursive walker and
+    /// `app-lib`'s `@tatolab/lockrun-core` registry edge would resolve live,
+    /// hit the poisoned registry, and fail — the run would NOT be offline.
+    #[test]
+    #[serial]
+    fn install_then_locked_run_is_offline_against_poisoned_registry() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let prev_home = std::env::var_os("STREAMLIB_HOME");
+        unsafe {
+            std::env::set_var("STREAMLIB_HOME", sandbox.path());
+        }
+        let _restore = StreamlibHomeRestore(prev_home);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "GITEA_URL"]);
+
+        // Two-level registry tree: lockrun-lib depends on lockrun-core.
+        let mirror = tempfile::tempdir().unwrap();
+        write_mirror_slpkg(mirror.path(), "lockrun-core", "0.1.0", "LockrunCoreSchema", None);
+        write_mirror_slpkg(
+            mirror.path(),
+            "lockrun-lib",
+            "0.1.0",
+            "LockrunLibSchema",
+            Some(("lockrun-core", "0.1.0")),
+        );
+
+        // Root project declares a registry dep on lockrun-lib.
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(
+            project.path().join("streamlib.yaml"),
+            "dependencies:\n  \"@tatolab/lockrun-lib\": \"^0.1.0\"\n",
+        )
+        .unwrap();
+
+        // ---- install (registry reachable) ----
+        unsafe {
+            std::env::set_var(
+                "STREAMLIB_REGISTRY_URL",
+                format!("file://{}", mirror.path().display()),
+            );
+        }
+        let report = crate::core::runtime::install(
+            project.path(),
+            &StageIntoCacheOrchestrator,
+            &NoopBuildSink,
+            &crate::core::runtime::InstallOptions::default(),
+        )
+        .expect("install must resolve + materialize + lock");
+
+        // Lockfile pins the full transitive set (lib + its transitive core).
+        assert_eq!(report.packages.len(), 2, "pins: {:?}", report.packages);
+        let names: Vec<String> = report.packages.iter().map(|(p, _)| p.to_string()).collect();
+        assert!(names.contains(&"@tatolab/lockrun-lib".to_string()), "{names:?}");
+        assert!(names.contains(&"@tatolab/lockrun-core".to_string()), "{names:?}");
+        assert!(report.lockfile_path.ends_with("streamlib-app.lock"));
+
+        // ---- poison the registry ----
+        // Any live registry touch now fails (connection refused).
+        unsafe {
+            std::env::set_var("STREAMLIB_REGISTRY_URL", "http://127.0.0.1:1");
+        }
+
+        assert!(
+            crate::core::embedded_schemas::get_embedded_schema_definition(
+                "@tatolab/lockrun-lib/LockrunLibSchema"
+            )
+            .is_none(),
+            "schema must not be registered before the locked run"
+        );
+
+        // ---- locked run (offline) ----
+        let runtime = Runner::new().unwrap();
+        runtime
+            .add_modules_from_lockfile_blocking(&report.lockfile_path)
+            .expect("locked run must load the full graph offline against a poisoned registry");
+
+        assert!(
+            crate::core::embedded_schemas::get_embedded_schema_definition(
+                "@tatolab/lockrun-lib/LockrunLibSchema"
+            )
+            .is_some(),
+            "lib schema must register from the locked cache"
+        );
+        assert!(
+            crate::core::embedded_schemas::get_embedded_schema_definition(
+                "@tatolab/lockrun-core/LockrunCoreSchema"
+            )
+            .is_some(),
+            "transitive core schema must register from the locked cache. (The \
+             offline/transitive-forcing guarantee itself is proven by the \
+             .expect() above not failing against the poisoned registry — this \
+             assert only confirms the dep's registration side effect.)"
+        );
+    }
+
+    /// `install` is byte-deterministic: identical inputs → identical lockfile
+    /// bytes. Uses a path dep (hermetic, no registry) so the run is fast and
+    /// the only variable is the resolver output.
+    #[test]
+    #[serial]
+    fn install_writes_byte_identical_lockfile() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let prev_home = std::env::var_os("STREAMLIB_HOME");
+        unsafe {
+            std::env::set_var("STREAMLIB_HOME", sandbox.path());
+        }
+        let _restore = StreamlibHomeRestore(prev_home);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "GITEA_URL"]);
+
+        // A local package + a project that path-deps it.
+        let work = tempfile::tempdir().unwrap();
+        let dep = work.path().join("det-dep");
+        std::fs::create_dir_all(dep.join("schemas")).unwrap();
+        std::fs::write(
+            dep.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: det-dep\n  version: \"1.0.0\"\n\
+             schemas:\n  DetDepSchema:\n    file: schemas/detdepschema.yaml\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dep.join("schemas/detdepschema.yaml"),
+            "metadata:\n  type: DetDepSchema\n  max_payload_bytes: 1024\n",
+        )
+        .unwrap();
+        let project = work.path().join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("streamlib.yaml"),
+            "dependencies:\n  \"@tatolab/det-dep\":\n    path: ../det-dep\n",
+        )
+        .unwrap();
+
+        let install_to = |lock: std::path::PathBuf| {
+            crate::core::runtime::install(
+                &project,
+                &StageIntoCacheOrchestrator,
+                &NoopBuildSink,
+                &crate::core::runtime::InstallOptions {
+                    lockfile_path: Some(lock),
+                    ..Default::default()
+                },
+            )
+            .expect("install")
+        };
+
+        let lock_a = work.path().join("a.lock");
+        let lock_b = work.path().join("b.lock");
+        install_to(lock_a.clone());
+        install_to(lock_b.clone());
+        let a = std::fs::read(&lock_a).unwrap();
+        let b = std::fs::read(&lock_b).unwrap();
+        assert_eq!(a, b, "two installs of identical inputs must produce identical lockfile bytes");
+
+        // Path deps are recorded as `path:` sources (the link-bridge shape:
+        // a linked/local tree records Path entries).
+        let text = String::from_utf8(a).unwrap();
+        assert!(text.contains("kind: path"), "path dep must record a path source:\n{text}");
+    }
+
+    /// A locked run whose manifest declares a dep the lockfile does NOT pin
+    /// fails loud with the typed [`AddModuleError::LockfileMiss`] naming
+    /// `streamlib install` — never a silent live resolve.
+    #[test]
+    #[serial]
+    fn locked_run_lockfile_miss_is_typed_error() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let prev_home = std::env::var_os("STREAMLIB_HOME");
+        unsafe {
+            std::env::set_var("STREAMLIB_HOME", sandbox.path());
+        }
+        let _restore = StreamlibHomeRestore(prev_home);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "GITEA_URL"]);
+
+        // Hand-stage a package whose manifest declares a dep on `miss-dep`,
+        // and a lockfile that pins ONLY the package (stale relative to the
+        // manifest graph).
+        let slot = crate::core::get_cached_package_dir("miss-pkg-0.1.0");
+        std::fs::create_dir_all(slot.join("schemas")).unwrap();
+        std::fs::write(
+            slot.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: miss-pkg\n  version: \"0.1.0\"\n\
+             schemas:\n  MissPkgSchema:\n    file: schemas/misspkgschema.yaml\n\
+             dependencies:\n  \"@tatolab/miss-dep\": \"^0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            slot.join("schemas/misspkgschema.yaml"),
+            "metadata:\n  type: MissPkgSchema\n  max_payload_bytes: 1024\n",
+        )
+        .unwrap();
+
+        // Pin the REAL slot hash so the content-integrity gate passes and
+        // the walk reaches the dep edge where LockfileMiss fires.
+        let slot_hash = streamlib_idents::content_hash_for_package_dir(&slot).unwrap();
+        let lock = sandbox.path().join("stale.lock");
+        std::fs::write(
+            &lock,
+            format!(
+                r#"version: 1
+packages:
+  "@tatolab/miss-pkg":
+    version: 0.1.0
+    source:
+      kind: registry
+      url: file:///x
+    content_hash: "{slot_hash}"
+"#
+            ),
+        )
+        .unwrap();
+
+        let runtime = Runner::new().unwrap();
+        let err = runtime
+            .add_modules_from_lockfile_blocking(&lock)
+            .expect_err("a dep missing from the lockfile must fail loud");
+        assert!(
+            matches!(err, AddModuleError::LockfileMiss { ref package, .. }
+                if package.name.as_str() == "miss-dep"),
+            "expected LockfileMiss naming miss-dep, got: {err:?}"
+        );
+    }
+
+    /// A lockfile that pins a package whose cache slot was never materialized
+    /// fails loud with [`AddModuleError::LockedSlotMissing`] naming
+    /// `streamlib install`.
+    #[test]
+    #[serial]
+    fn locked_run_uninstalled_slot_is_typed_error() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let prev_home = std::env::var_os("STREAMLIB_HOME");
+        unsafe {
+            std::env::set_var("STREAMLIB_HOME", sandbox.path());
+        }
+        let _restore = StreamlibHomeRestore(prev_home);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "GITEA_URL"]);
+
+        // Lockfile pins a package but nothing was ever staged into its slot.
+        let lock = sandbox.path().join("uninstalled.lock");
+        std::fs::write(
+            &lock,
+            r#"version: 1
+packages:
+  "@tatolab/uninstalled-xyz":
+    version: 9.9.9
+    source:
+      kind: registry
+      url: file:///x
+    content_hash: "sha256:0"
+"#,
+        )
+        .unwrap();
+
+        let runtime = Runner::new().unwrap();
+        let err = runtime
+            .add_modules_from_lockfile_blocking(&lock)
+            .expect_err("a pinned-but-uninstalled package must fail loud");
+        assert!(
+            matches!(err, AddModuleError::LockedSlotMissing { ref package, .. }
+                if package.name.as_str() == "uninstalled-xyz"),
+            "expected LockedSlotMissing, got: {err:?}"
+        );
+    }
+
+    /// Hand-stage a schemas-only package into the installed cache slot for
+    /// `name`@`version` and return `(slot_dir, content_hash)`.
+    fn stage_schemas_only_slot(
+        name: &str,
+        version: &str,
+        type_name: &str,
+    ) -> (std::path::PathBuf, String) {
+        let slot = crate::core::get_cached_package_dir_for_name_version(name, version);
+        let stem = type_name.to_ascii_lowercase();
+        std::fs::create_dir_all(slot.join("schemas")).unwrap();
+        std::fs::write(
+            slot.join("streamlib.yaml"),
+            format!(
+                "package:\n  org: tatolab\n  name: {name}\n  version: \"{version}\"\n\
+                 schemas:\n  {type_name}:\n    file: schemas/{stem}.yaml\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            slot.join(format!("schemas/{stem}.yaml")),
+            format!("metadata:\n  type: {type_name}\n  max_payload_bytes: 1024\n"),
+        )
+        .unwrap();
+        let hash = streamlib_idents::content_hash_for_package_dir(&slot).unwrap();
+        (slot, hash)
+    }
+
+    /// Write a minimal single-package app lockfile pinning `name`@`version`
+    /// with `content_hash`, returning its path.
+    fn write_single_pin_lockfile(
+        dir: &std::path::Path,
+        name: &str,
+        version: &str,
+        content_hash: &str,
+    ) -> std::path::PathBuf {
+        let lock = dir.join(format!("{name}.lock"));
+        std::fs::write(
+            &lock,
+            format!(
+                r#"version: 1
+packages:
+  "@tatolab/{name}":
+    version: {version}
+    source:
+      kind: registry
+      url: file:///x
+    content_hash: "{content_hash}"
+"#
+            ),
+        )
+        .unwrap();
+        lock
+    }
+
+    /// The content-hash run-time integrity gate: a slot whose manifest /
+    /// schema bytes were modified AFTER install no longer hashes to the
+    /// lockfile pin, and the locked run fails typed with
+    /// [`AddModuleError::LockedSlotContentMismatch`] naming the remedy.
+    /// Mentally-revert: drop the hash comparison in
+    /// `LockedResolution::resolve` and the tampered slot loads silently.
+    #[test]
+    #[serial]
+    fn locked_run_tampered_slot_is_content_mismatch() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let prev_home = std::env::var_os("STREAMLIB_HOME");
+        unsafe {
+            std::env::set_var("STREAMLIB_HOME", sandbox.path());
+        }
+        let _restore = StreamlibHomeRestore(prev_home);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "GITEA_URL"]);
+
+        let (slot, hash) = stage_schemas_only_slot("tamper-pkg", "0.1.0", "TamperPkgSchema");
+        let lock = write_single_pin_lockfile(sandbox.path(), "tamper-pkg", "0.1.0", &hash);
+
+        // Untampered: the pinned hash matches and the locked run succeeds.
+        {
+            let runtime = Runner::new().unwrap();
+            runtime
+                .add_modules_from_lockfile_blocking(&lock)
+                .expect("untampered slot must pass the content-hash gate");
+        }
+
+        // Tamper the slot's schema post-install → hash busts → typed error.
+        std::fs::write(
+            slot.join("schemas/tamperpkgschema.yaml"),
+            "metadata:\n  type: TamperPkgSchema\n  max_payload_bytes: 9999\n",
+        )
+        .unwrap();
+        let runtime = Runner::new().unwrap();
+        let err = runtime
+            .add_modules_from_lockfile_blocking(&lock)
+            .expect_err("tampered slot must fail the content-hash gate");
+        assert!(
+            matches!(err, AddModuleError::LockedSlotContentMismatch { ref package, .. }
+                if package.name.as_str() == "tamper-pkg"),
+            "expected LockedSlotContentMismatch, got: {err:?}"
+        );
+    }
+
+    /// Version drift between the lockfile pin and the slot's on-disk
+    /// manifest fails typed: the locked ident carries an Exact pin, so the
+    /// walker's version check rejects a slot whose manifest version moved.
+    #[test]
+    #[serial]
+    fn locked_run_version_drift_is_range_unsatisfied() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let prev_home = std::env::var_os("STREAMLIB_HOME");
+        unsafe {
+            std::env::set_var("STREAMLIB_HOME", sandbox.path());
+        }
+        let _restore = StreamlibHomeRestore(prev_home);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "GITEA_URL"]);
+
+        // The slot lives at the LOCKED version's key (drift-pkg-1.0.0), but
+        // its manifest inside claims 1.0.1 — an in-place republish that kept
+        // the dir name. Pin the drifted slot's REAL hash so the content gate
+        // passes and the walker's version check is the one that fires.
+        let slot = crate::core::get_cached_package_dir_for_name_version("drift-pkg", "1.0.0");
+        std::fs::create_dir_all(slot.join("schemas")).unwrap();
+        std::fs::write(
+            slot.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: drift-pkg\n  version: \"1.0.1\"\n\
+             schemas:\n  DriftPkgSchema:\n    file: schemas/driftpkgschema.yaml\n",
+        )
+        .unwrap();
+        std::fs::write(
+            slot.join("schemas/driftpkgschema.yaml"),
+            "metadata:\n  type: DriftPkgSchema\n  max_payload_bytes: 1024\n",
+        )
+        .unwrap();
+        let hash = streamlib_idents::content_hash_for_package_dir(&slot).unwrap();
+        let lock = write_single_pin_lockfile(sandbox.path(), "drift-pkg", "1.0.0", &hash);
+
+        let runtime = Runner::new().unwrap();
+        let err = runtime
+            .add_modules_from_lockfile_blocking(&lock)
+            .expect_err("a slot whose on-disk version drifted from the pin must fail");
+        assert!(
+            matches!(err, AddModuleError::VersionRangeUnsatisfied { ref found, .. }
+                if found.to_string() == "1.0.1"),
+            "expected VersionRangeUnsatisfied at 1.0.1, got: {err:?}"
+        );
+    }
+
+    /// A corrupted lockfile file surfaces the typed
+    /// [`AddModuleError::LockfileReadFailed`] through the REAL
+    /// `add_modules_from_lockfile` entry (not just the parser unit).
+    #[test]
+    #[serial]
+    fn locked_run_corrupted_lockfile_is_read_failed() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let prev_home = std::env::var_os("STREAMLIB_HOME");
+        unsafe {
+            std::env::set_var("STREAMLIB_HOME", sandbox.path());
+        }
+        let _restore = StreamlibHomeRestore(prev_home);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "GITEA_URL"]);
+
+        let lock = sandbox.path().join("corrupt.lock");
+        std::fs::write(&lock, "{ this is: [not, a lockfile").unwrap();
+
+        let runtime = Runner::new().unwrap();
+        let err = match runtime.add_modules_from_lockfile(&lock) {
+            Err(e) => e,
+            Ok(_) => panic!("a corrupted lockfile must fail typed at the run entry"),
+        };
+        assert!(
+            matches!(err, AddModuleError::LockfileReadFailed { .. }),
+            "expected LockfileReadFailed, got: {err:?}"
+        );
+    }
+
+    /// Registry mutated after install, registry REACHABLE at run time: the
+    /// locked run must still load the pinned version — proving the walker's
+    /// pin-forcing is version-selection-ignoring independent of
+    /// connectivity (the poisoned-registry test proves the offline half).
+    #[test]
+    #[serial]
+    fn locked_run_ignores_newer_version_on_reachable_registry() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let prev_home = std::env::var_os("STREAMLIB_HOME");
+        unsafe {
+            std::env::set_var("STREAMLIB_HOME", sandbox.path());
+        }
+        let _restore = StreamlibHomeRestore(prev_home);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "GITEA_URL"]);
+
+        let mirror = tempfile::tempdir().unwrap();
+        write_mirror_slpkg(mirror.path(), "mutate-pkg", "0.1.0", "MutatePkgSchema", None);
+
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(
+            project.path().join("streamlib.yaml"),
+            "dependencies:\n  \"@tatolab/mutate-pkg\": \"^0.1.0\"\n",
+        )
+        .unwrap();
+
+        // Install with only 0.1.0 published.
+        unsafe {
+            std::env::set_var(
+                "STREAMLIB_REGISTRY_URL",
+                format!("file://{}", mirror.path().display()),
+            );
+        }
+        let report = crate::core::runtime::install(
+            project.path(),
+            &StageIntoCacheOrchestrator,
+            &NoopBuildSink,
+            &crate::core::runtime::InstallOptions::default(),
+        )
+        .expect("install must pin 0.1.0");
+
+        // Mutate the registry AFTER install: publish a newer in-range
+        // version. The registry stays reachable for the run.
+        write_mirror_slpkg(mirror.path(), "mutate-pkg", "0.2.0", "MutatePkgSchema", None);
+
+        let runtime = Runner::new().unwrap();
+        runtime
+            .add_modules_from_lockfile_blocking(&report.lockfile_path)
+            .expect("locked run must succeed against the mutated (reachable) registry");
+
+        // The committed resolution is the PINNED 0.1.0, not the newer 0.2.0
+        // a live range resolve would have selected.
+        let pkg = streamlib_idents::PackageRef::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("mutate-pkg").unwrap(),
+        );
+        let record = runtime
+            .resolution_memo
+            .committed_record(&pkg)
+            .expect("mutate-pkg must be committed");
+        assert_eq!(
+            record.version.to_string(),
+            "0.1.0",
+            "locked run must load the pinned version, ignoring the newer registry version"
+        );
+    }
 }

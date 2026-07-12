@@ -111,6 +111,18 @@ pub fn get_cached_package_dir(cache_key: &str) -> PathBuf {
     get_streamlib_data_dir().join("cache/packages").join(cache_key)
 }
 
+/// The installed-cache slot for a package name + version — the single
+/// source of the `{name}-{version}` cache-key convention shared by
+/// `.slpkg` extraction, registry resolution, orchestrator staging, and
+/// locked-run slot derivation. A drift in any one of those sites would
+/// make locked runs look in the wrong slot; route them all through here.
+pub fn get_cached_package_dir_for_name_version(
+    package_name: &str,
+    version: impl std::fmt::Display,
+) -> PathBuf {
+    get_cached_package_dir(&format!("{package_name}-{version}"))
+}
+
 /// Get the path to a runtime's directory.
 pub fn get_runtime_dir(runtime_id: &str) -> PathBuf {
     get_streamlib_data_dir().join("runtimes").join(runtime_id)
