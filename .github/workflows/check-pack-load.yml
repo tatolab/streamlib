@@ -93,6 +93,16 @@ jobs:
       # replaces the fork-only tree with fork + closure).
       - name: Emit closure crates into the static registry
         run: |
+          # Force a fresh `cargo package` for every closure crate. The `target`
+          # dir is cached across runs (see the Cache Cargo step), and the emit
+          # reuses target/package/<crate>-<version>.crate after STRUCTURAL-only
+          # verification. A stale-content tarball at an unchanged version
+          # (e.g. an ABI-4 streamlib-plugin-abi cached under a version the
+          # source has since moved to ABI 5) would be re-emitted verbatim while
+          # the host compiles the new source — a same-version content skew the
+          # structural check can't catch. Content-addressed verification is the
+          # real fix; clearing the dir here is the belt-and-suspenders stop-gap.
+          rm -rf target/package
           VULKANALIA_DIR=/tmp/vulkanalia-fork             cargo run -q -p xtask -- static-registry emit               --out "$STREAMLIB_STATIC_REGISTRY_DIR"               --base-url "$STATIC_FORK_URL"               --cargo-closure --no-pypi --no-npm --no-slpkg
           curl -fsS "$STATIC_FORK_URL/cargo/st/re/streamlib-plugin-sdk" >/dev/null             || { echo "closure crate not fetchable from the static tree"; exit 1; }
 

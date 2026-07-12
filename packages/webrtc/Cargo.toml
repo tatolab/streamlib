@@ -14,12 +14,12 @@ name = "streamlib_webrtc"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = {version = "0.5.0", registry = "tatolab"}
+streamlib-jtd-codegen = {version = "0.6.0", registry = "tatolab"}
 
 [dependencies]
-streamlib = {version = "0.5.0", registry = "tatolab"}
-streamlib-macros = {version = "0.5.0", registry = "tatolab"}
-streamlib-plugin-abi = {version = "0.5.0", registry = "tatolab"}
+streamlib = {version = "0.6.0", registry = "tatolab"}
+streamlib-macros = {version = "0.6.0", registry = "tatolab"}
+streamlib-plugin-abi = {version = "0.6.0", registry = "tatolab"}
 
 # Generated `EncodedVideoFrame.data` / `EncodedAudioFrame.data` ride msgpack
 # `bin` (1× wire) instead of array.

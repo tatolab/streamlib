@@ -154,6 +154,49 @@ change under the same version fails the emit with an explicit "bump the
 version" error. See
 [`../learnings/cargo-crate-vcs-info-nondeterminism.md`](../learnings/cargo-crate-vcs-info-nondeterminism.md).
 
+## Release / ABI republish
+
+`STREAMLIB_ABI_VERSION` (in `streamlib-plugin-abi`) is the C-ABI contract a
+`dlopen`-loaded package cdylib and the source-built host must agree on. A
+package resolves the **published** `streamlib` SDK **by version** from this
+registry; the host builds the SDK **from source**. The two carry the same
+ABI only when the registry serves an SDK compiled at the host's
+`STREAMLIB_ABI_VERSION`. When they diverge, the load handshake refuses the
+cdylib with `PluginAbiVersionMismatch` — working as designed on a genuine
+version skew, not a bug to route around.
+
+So **an ABI-version bump is a coordinated SDK republish**, atomic across three
+edits:
+
+1. **Bump `[workspace.package] version`** in the root `Cargo.toml`. The whole
+   SDK crate set (`libs/*` + the engine-free `plugin/*` crates) inherits it
+   via `version.workspace = true`, so one bump moves every published SDK
+   crate. Keep `.release-please-manifest.json` in step with the manual bump so
+   release automation doesn't fight it.
+2. **Bump every package's `streamlib*` pin** to the new version. Each
+   `packages/*` and each internal cross-crate `{ path, version, registry =
+   "tatolab" }` dep pins the SDK by version; a caret pin (`"0.5.0"`) does not
+   span a minor bump, so a stale pin re-introduces the skew for that package.
+   Exact pins (`"=x.y.z"`) are the easy ones to miss.
+3. **Re-emit the closure** at the new version (`static-registry emit
+   --cargo-closure`), which republishes every SDK crate so a package resolves
+   the new-ABI SDK.
+
+A new version also sidesteps the crate-tarball reuse cache: `emit_cargo_closure`
+reuses a `target/package/<crate>-<version>.crate` after **structural** (not
+content) verification, so a same-version re-emit can hand back a stale-content
+tarball (e.g. an old-ABI `streamlib-plugin-abi` cached under a version whose
+source has since moved) while the host compiles the new source. A fresh version
+is a fresh filename — a cache miss that forces a fresh `cargo package` at the
+current source. (Clearing `target/package` before an emit is the CI
+belt-and-suspenders; content-addressed verification is the durable fix.)
+
+The `cargo xtask check-abi-republish` CI gate enforces the first, mechanical
+half at PR time: a change to `STREAMLIB_ABI_VERSION` without a matching
+`[workspace.package]` version change fails the check (a registry-free `git`
+diff of merge-base vs. working tree). The pin sweep and closure re-emit are the
+release-time actions the gate points a bumper toward.
+
 ## Catalog — queryable processor / port / schema metadata
 
 Alongside the resolvable artifacts, an emit writes a **catalog**: the

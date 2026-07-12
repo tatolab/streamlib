@@ -14,20 +14,20 @@ name = "streamlib_screen_capture"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = {version = "0.5.0", registry = "tatolab"}
+streamlib-jtd-codegen = {version = "0.6.0", registry = "tatolab"}
 
 [dependencies]
 # Engine substrate — runtime context, processor traits, generated wire
 # types under `crate::_generated_::*` (VideoFrame), RHI primitives.
-streamlib = {version = "0.5.0", registry = "tatolab"}
+streamlib = {version = "0.6.0", registry = "tatolab"}
 
 # Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = {version = "0.5.0", registry = "tatolab"}
+streamlib-macros = {version = "0.6.0", registry = "tatolab"}
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = {version = "0.5.0", registry = "tatolab"}
+streamlib-plugin-abi = {version = "0.6.0", registry = "tatolab"}
 
 # Serialization (config dataclasses ship as serde-derived).
 

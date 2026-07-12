@@ -17,10 +17,10 @@ path = "src/lib.rs"
 [dependencies]
 thiserror.workspace = true
 anyhow.workspace = true
-streamlib-processor-schema = { path = "../../libs/streamlib-processor-schema", version = "0.5.0", registry = "tatolab" }
+streamlib-processor-schema = { path = "../../libs/streamlib-processor-schema", version = "0.6.0", registry = "tatolab" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib-consumer-rhi = { path = "../../libs/streamlib-consumer-rhi", version = "0.5.0", registry = "tatolab" }
+streamlib-consumer-rhi = { path = "../../libs/streamlib-consumer-rhi", version = "0.6.0", registry = "tatolab" }
 
 [lints]
 workspace = true
