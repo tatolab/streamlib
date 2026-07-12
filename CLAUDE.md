@@ -340,10 +340,10 @@ Run `cargo doc -p streamlib --no-deps` - fix any unresolved link warnings.
 
 To the best of our current knowledge streamlib runs **two loops** over one
 package substrate, with **install** as the seam between them. Full shipped
-model: @docs/architecture/package-development-model.md. The two distribution
-backends and the catalog: @docs/architecture/static-registry.md (static file
-tree) and @docs/architecture/gitea-registry-distribution.md (hosted Gitea +
-the shared by-version resolution shape).
+model: @docs/architecture/package-development-model.md. The registry backend,
+its by-version resolution shape, and the catalog:
+@docs/architecture/static-registry.md (the static file tree — the only
+registry backend).
 
 **Distribution loop — resolve by version, never by path/patch.** Every
 StreamLib-authored **or customized** artifact is resolved **by version** —
@@ -358,13 +358,22 @@ never by relative `path` or git `[patch]` in anything a consumer sees:
 - **Truly-external untouched deps** (serde, tokio, …) keep resolving from
   their normal public registries.
 
-Distribution has **two backends behind one tokenless read shape**: a hosted
-Gitea registry and a plain static file tree (sparse index + tarballs +
-`.slpkg` + catalog). The static tree is what CI and local `file://`
-resolution use. Rust internal cross-crate deps use `{ path = "../foo",
-version = "x.y", registry = "gitea" }` — the `path` is a dev-only affordance
-cargo strips from the published manifest; `registry` is required or cargo
-defaults to crates.io. Releases are **atomic** (`compute_release_closure` is
+Distribution has **one backend behind a tokenless read shape**: a plain static
+file tree (sparse index + tarballs + `.slpkg` + catalog), served by any dumb
+HTTP mount or read over `file://`.
+> Note (2026-07-12, #1245): the static file tree is the **only** registry
+> backend. A prior design had a second, hosted-daemon backend behind the same
+> read shape — that daemon, its publish scripts, and its hosted read/write
+> client arms were removed entirely. Do not re-introduce a hosted-daemon
+> backend; the static tree + `file://` / dumb-HTTP-mount read shape fully
+> covers distribution. The by-version resolution shape below is unchanged.
+
+The static tree is what CI and local `file://` resolution use. Rust internal
+cross-crate deps use `{ path = "../foo", version = "x.y", registry = "tatolab"
+}` — the `path` is a dev-only affordance cargo strips from the published
+manifest; `registry` (the `tatolab` registry, canonical index
+`sparse+https://registry.tatolab.com/cargo/`) is required or cargo defaults to
+crates.io. Releases are **atomic** (`compute_release_closure` is
 the one definition of "what a release publishes"; the release manifest is
 written last as the completion marker) and a consumer **detects a partial
 release** up front rather than failing deep in version unification.

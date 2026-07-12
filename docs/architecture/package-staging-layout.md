@@ -148,7 +148,7 @@ staged-layout, and that is achieved by mirroring, not by moving.
   (`--config <pkg>/deno.json`) in
   `libs/streamlib-engine/src/core/compiler/compiler_ops/spawn_deno_subprocess_op.rs`.
 - **Related**:
-  - [`gitea-registry-distribution.md`](gitea-registry-distribution.md) —
+  - [`static-registry.md`](static-registry.md) —
     how a package resolves and publishes by version (the *what travels
     where* of distribution; this doc is the *how it's laid out* of
     staging).

@@ -63,7 +63,7 @@ all resolve to that one tree:
 | Deno | import-map `imports.streamlib` → `libs/streamlib-deno/mod.ts` | `deno.json(c)` (only if present) |
 
 The cargo registry index is discovered live (`discover_registry_index`
-reads `registries.gitea.index` from the consumer's cargo config), never
+reads `registries.tatolab.index` from the consumer's cargo config), never
 hardcoded; each emitted table carries a greppable
 `# streamlib-link — managed by streamlib link` marker. The crate set is
 derived from the checkout via `compute_release_closure` — the **same**
@@ -195,7 +195,7 @@ locked run bypasses `patch:` entirely and resolves from the lockfile.
 
 A release is cut with `streamlib pkg publish` (one package to the registry)
 or, for the whole workspace surface (crate chain, SDKs, packages, static
-tree), the publish tooling under `scripts/gitea/` and `cargo xtask
+tree), the publish tooling under `scripts/registry/` and `cargo xtask
 static-registry emit`; everything below is what those commands do under the
 hood.
 
@@ -230,10 +230,10 @@ index + tarballs + `.slpkg` generic store + catalog). The static tree —
 what CI and local `file://` resolution use — is documented in
 [`static-registry.md`](static-registry.md); its catalog surface (a queryable
 processor / port / schema index a visual editor browses without downloading
-packages) is documented there too. The hosted-Gitea backend is documented in
-[`gitea-registry-distribution.md`](gitea-registry-distribution.md); the
-by-version resolution model (`{ path, version, registry }`, schema-package
-resolution, the anonymous version index) is shared by both. CI resolves
+packages) is documented there too. The static file tree is the only registry
+backend; the by-version resolution model (`{ path, version, registry }`,
+schema-package resolution, the anonymous version index) is documented in
+[`static-registry.md`](static-registry.md). CI resolves
 against the static file tree; to reproduce a CI resolve locally, serve an
 emitted tree per [`static-registry.md` § Consuming a
 tree](static-registry.md#consuming-a-tree).
@@ -338,9 +338,7 @@ Stated honestly; verify against current code before relying on any.
   `libs/streamlib-engine/src/core/streamlib_home.rs`.
 - **Related docs**: [`runtime-module-materialization.md`](runtime-module-materialization.md)
   (the one materialize path), [`static-registry.md`](static-registry.md)
-  (static backend + catalog),
-  [`gitea-registry-distribution.md`](gitea-registry-distribution.md)
-  (hosted backend + by-version resolution),
+  (the static registry backend, by-version resolution + catalog),
   [`schema-identity-and-packaging.md`](schema-identity-and-packaging.md)
   (schema-ident grammar + packaging),
   [`package-staging-layout.md`](package-staging-layout.md) (what a staged /

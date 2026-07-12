@@ -82,12 +82,12 @@ Avoid the two failure modes:
   release/acquire (with `VK_EXT_external_memory_acquire_unmodified` chained
   for content preservation), bridging `UNDEFINED → target` as the fallback
   when extensions are missing
-- [@docs/learnings/polyglot-venv-gitea-registry-env.md](polyglot-venv-gitea-registry-env.md) —
-  Polyglot Python example / `pkg install` fails in the build
-  orchestrator's venv tail (`failed to generate streamlib wire
-  vocabulary in venv` / `uv` can't find `streamlib`) when the Gitea
-  registry env vars (`UV_INDEX`, `STREAMLIB_REGISTRY_URL`,
-  `STREAMLIB_REGISTRY_TOKEN`) aren't set
+<!-- polyglot-venv-registry-env learning removed 2026-07-12 (#1245) — the
+     hosted-daemon backend it described (and its registry-token / daemon-URL
+     env surface) was dropped when the static file tree became the only
+     registry (see docs/architecture/static-registry.md). The venv build now
+     derives `UV_INDEX` from the tree-root `STREAMLIB_REGISTRY_URL`; the
+     tokenless read shape means there is no token env var to forget. -->
 - [@docs/learnings/sandboxing-demo-content-pending-engine-feature.md](sandboxing-demo-content-pending-engine-feature.md) —
   Recipe for relocating app-specific hot-path content out of the engine
   into an example crate when the right engine primitive is a future
