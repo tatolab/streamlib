@@ -19,9 +19,12 @@ operation: **install**.
   Releases are atomic and a consumer can detect a partial one.
 
 The two loops never blur: a link override is refused entry into any
-published artifact, and a locked run does zero live re-resolution. The
-version model in the middle makes both consistent — one version axis per
-package, one version per package in a running process.
+published artifact, and a locked run does zero live re-resolution. Both
+loops feed the same install seam — installing over a linked / path-declared
+tree records `path:` sources in the lockfile, while installing from a
+registry records content-pinned slots. The version model in the middle makes
+both consistent — one version axis per package, one version per package in a
+running process.
 
 ```
    dev loop                         install seam                 distribution loop
@@ -190,6 +193,12 @@ locked run bypasses `patch:` entirely and resolves from the lockfile.
 
 ## The distribution loop — atomic release
 
+A release is cut with `streamlib pkg publish` (one package to the registry)
+or, for the whole workspace surface (crate chain, SDKs, packages, static
+tree), the publish tooling under `scripts/gitea/` and `cargo xtask
+static-registry emit`; everything below is what those commands do under the
+hood.
+
 **Closure by definition.** `compute_release_closure(workspace_root)`
 ([`libs/streamlib-pack/src/lib.rs`](../../libs/streamlib-pack/src/lib.rs))
 is the *single* definition of "the set of crates a release publishes":
@@ -224,7 +233,10 @@ processor / port / schema index a visual editor browses without downloading
 packages) is documented there too. The hosted-Gitea backend is documented in
 [`gitea-registry-distribution.md`](gitea-registry-distribution.md); the
 by-version resolution model (`{ path, version, registry }`, schema-package
-resolution, the anonymous version index) is shared by both.
+resolution, the anonymous version index) is shared by both. CI resolves
+against the static file tree; to reproduce a CI resolve locally, serve an
+emitted tree per [`static-registry.md` § Consuming a
+tree](static-registry.md#consuming-a-tree).
 
 One gap the static path closes: on a hosted-registry read path, a partial
 crate set uploaded at a version *above* the newest manifest'd version — with

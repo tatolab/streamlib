@@ -53,7 +53,7 @@ They do NOT need to agree on:
 
 **Where the dream currently leaks**: Phase D (#906) and Phase C2 (#905) shipped some FullAccess methods that return `Arc<HostInternalType>` via `Arc::into_raw` / `Arc::from_raw` raw-pointer transit. Those code paths DO require rustc-version coupling because the host-internal types aren't `#[repr(C)]`. Issue #917 closes that gap by refactoring the affected return types into `#[repr(C)] { handle, vtable }` PluginAbiObject pairs (mirroring `RhiCommandQueue` / `CommandBuffer`). After #917 lands, no plugin ABI return type leaks host layout, and the cross-repo dream is fully real.
 
-**What's NOT in scope** (deferred to its own milestone): a hosted marketplace / registry / index. Today's distribution model is "package author hands you an `.slpkg` directly, or you clone the repo and run `streamlib pack` yourself". A managed registry where you'd run `streamlib install @tatolab/camera` is a separate future deliverable.
+**What's NOT in scope** (deferred to its own milestone): a hosted marketplace / registry / index. Today's distribution model is "package author hands you an `.slpkg` directly, or you clone the repo and run `streamlib pkg build` yourself". A managed registry where you'd run `streamlib install @tatolab/camera` is a separate future deliverable.
 
 **Implication for new architectural work**: any plugin ABI surface added in this codebase MUST be `#[repr(C)]` end-to-end. If you're tempted to return `Arc<SomeHostInternalType>` from a cdylib-callable method, stop — the answer is to expose the type as a PluginAbiObject. The dormant `clone_*` / `drop_*` slots already present on the FullAccess vtable are infrastructure for this. The "rustc-version coupling stays" framing that previously appeared in the All-Dynamic Package Loading milestone body was a permissive fallback while PluginAbiObject coverage was incomplete; it's superseded as of 2026-05-22.
 
@@ -348,7 +348,7 @@ never by relative `path` or git `[patch]` in anything a consumer sees:
 - **SDK libraries** (rust `streamlib` crate chain, python pkg, deno module) →
   the backend's cargo / pypi / npm registries.
 - **Packages** (polyglot streamlib packages) → **source-only `.slpkg`** via
-  `streamlib pack` → the generic store.
+  `streamlib pkg build` / `streamlib pkg publish` → the generic store.
 - **`streamlib.yaml` schema deps** (e.g. `@tatolab/escalate`) → resolved from
   the generic store (schema-package `.slpkg`), not a dev path patch.
 - **Truly-external untouched deps** (serde, tokio, …) keep resolving from

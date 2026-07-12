@@ -187,8 +187,8 @@ cargo xtask static-registry emit --out <dir> [--dev N] \
 - `--cargo-closure` additionally packages every workspace release-closure crate
   into the cargo tree (heavy).
 - pypi (uv sdist) and npm (deno pack) reuse the SDK build toolchains; `.slpkg`
-  packages are assembled via `streamlib pack` semantics and the release manifest
-  is written last.
+  packages are assembled via `streamlib pkg build` semantics and the release
+  manifest is written last.
 
 ## Consuming a tree
 
