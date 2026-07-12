@@ -46,7 +46,10 @@ docs/research/SESSION_RESTORE.md
 
 # Rust
 target/
+# Workspace lockfile is committed (reproducible dev/CI builds, per current
+# cargo guidance); nested package/example lockfiles stay untracked.
 Cargo.lock
+!/Cargo.lock
 
 # Node/Nx
 node_modules/
