@@ -93,10 +93,18 @@ enum Commands {
     Link {
         /// Path to a local streamlib checkout. Omit to print status.
         checkout: Option<PathBuf>,
+
+        /// Skip the post-link cargo resolution verification.
+        #[arg(long)]
+        skip_verify: bool,
     },
 
     /// Remove the active streamlib link, restoring every manifest byte-identically.
-    Unlink,
+    Unlink {
+        /// Discard files modified while the link was active instead of refusing.
+        #[arg(long)]
+        force: bool,
+    },
 
     /// Generate typed bindings from JTD schemas via the JTD-codegen pipeline.
     ///
@@ -252,16 +260,19 @@ async fn async_main(cli: Cli) -> Result<()> {
             PkgCommands::List => commands::pkg::list()?,
             PkgCommands::Remove { name } => commands::pkg::remove(&name)?,
         },
-        Some(Commands::Link { checkout }) => {
+        Some(Commands::Link {
+            checkout,
+            skip_verify,
+        }) => {
             let consumer_root = std::env::current_dir()?;
             match checkout {
-                Some(checkout) => commands::link::link(&consumer_root, &checkout)?,
+                Some(checkout) => commands::link::link(&consumer_root, &checkout, skip_verify)?,
                 None => commands::link::status(&consumer_root)?,
             }
         }
-        Some(Commands::Unlink) => {
+        Some(Commands::Unlink { force }) => {
             let consumer_root = std::env::current_dir()?;
-            commands::link::unlink(&consumer_root)?;
+            commands::link::unlink(&consumer_root, force)?;
         }
         Some(Commands::Generate {
             runtime,

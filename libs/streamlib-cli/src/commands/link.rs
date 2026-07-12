@@ -1,27 +1,17 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `streamlib link` / `streamlib unlink` — whole-tree local dev override.
-//!
-//! Points the entire streamlib surface a consumer resolves (all SDK cargo
-//! crates + the Python SDK + the Deno SDK) at a local streamlib checkout via
-//! language-native overrides, so an edit in the checkout is picked up by the
-//! consumer's next build with no publish step. `unlink` restores every touched
-//! manifest byte-identically. Emission is whole-tree and transactional: either
-//! all overrides land or none do.
+//! `streamlib link` / `streamlib unlink` — whole-tree local checkout override.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use streamlib_pack::link_marker::{
+    LinkManifest, LinkMarkerError, LinkTransactionState, LinkedManifestFile, LINK_BACKUP_DIR,
+    LINK_MANIFEST_FILE, LINK_STATE_DIR,
+};
 
-/// Consumer-root-relative directory holding all link state.
-const LINK_STATE_DIR: &str = ".streamlib";
-/// Manifest recording the active link (checkout + every touched file).
-const LINK_MANIFEST_FILE: &str = "link.json";
-/// Directory under [`LINK_STATE_DIR`] mirroring pre-edit backups by relative path.
-const LINK_BACKUP_DIR: &str = "link-backup";
 /// Human-facing greppability marker on the emitted cargo `[patch]` block.
 const CARGO_PATCH_MARKER: &str =
     "# streamlib-link — managed by `streamlib link`; removed by `streamlib unlink`";
@@ -44,6 +34,20 @@ pub enum LinkError {
     )]
     AlreadyLinkedElsewhere { active: PathBuf, requested: PathBuf },
 
+    /// A previous link run crashed mid-apply and left torn state behind.
+    #[error(
+        "a previous `streamlib link` was interrupted mid-apply (marker: {path}); run \
+         `streamlib unlink` to restore before linking again"
+    )]
+    TornLinkState { path: PathBuf },
+
+    /// The link marker already exists at creation time (concurrent link run).
+    #[error(
+        "link state already exists at `{path}` — another `streamlib link` may be running \
+         concurrently, or a previous link was interrupted; run `streamlib unlink` first"
+    )]
+    LinkMarkerAlreadyExists { path: PathBuf },
+
     /// No `[registries.gitea].index` is discoverable from the consumer's cargo config.
     #[error(
         "no `[registries.gitea]` registry index found in this consumer's cargo config (looked in \
@@ -60,17 +64,33 @@ pub enum LinkError {
     #[error("failed to parse `{path}`: {detail}")]
     ManifestParse { path: PathBuf, detail: String },
 
-    /// The recorded link manifest is corrupt / unreadable.
+    /// The recorded link manifest / a backup is corrupt.
     #[error("link state at `{path}` is corrupt: {detail}")]
     CorruptLinkState { path: PathBuf, detail: String },
 
-    /// A pack/publish was attempted while a link is active.
+    /// Unlink found a file the user modified while the link was active.
     #[error(
-        "this package cannot be packed or published while a streamlib link is active (marker: \
-         {marker}). Local link overrides are dev-only and must not leak into a distributed \
-         artifact — run `streamlib unlink` first"
+        "`{path}` was modified while the link was active; refusing to clobber it — re-apply your \
+         edit after unlinking, or run `streamlib unlink --force` to discard it and restore the \
+         pre-link original"
     )]
-    PackRefusedWhileLinked { marker: PathBuf },
+    UnlinkRefusedModifiedFile { path: PathBuf },
+
+    /// A rollback after a failed link could not restore every file.
+    #[error(
+        "link failed and rollback could not restore every file; originals are preserved under \
+         `{backup_dir}` — resolve the filesystem issue and run `streamlib unlink` to finish \
+         restoring. {detail}"
+    )]
+    RollbackIncomplete { backup_dir: PathBuf, detail: String },
+
+    /// Post-link cargo resolution check failed; the link was rolled back.
+    #[error(
+        "post-link verification failed and the link was rolled back: {detail}. Fix the \
+         consumer's version requirements so the checkout's crate versions satisfy them, or \
+         re-run with `--skip-verify` to keep the link unverified"
+    )]
+    LinkVerificationFailed { detail: String },
 
     /// A filesystem operation failed.
     #[error("filesystem error at `{path}`: {source}")]
@@ -90,28 +110,23 @@ impl LinkError {
     }
 }
 
-/// One manifest file the active link overrode, recorded for byte-clean teardown.
-#[derive(Debug, Serialize, Deserialize)]
-struct TouchedFile {
-    /// Path relative to the consumer root.
-    path: PathBuf,
-    /// Whether the file existed before linking. `false` ⇒ unlink deletes it.
-    existed_before: bool,
-    /// Hex SHA-256 of the pre-edit content (empty when `!existed_before`).
-    pre_edit_sha256: String,
-}
-
-/// Persisted record of the active whole-tree link.
-#[derive(Debug, Serialize, Deserialize)]
-struct LinkManifest {
-    /// Canonicalized path of the linked streamlib checkout.
-    checkout: PathBuf,
-    /// RFC-3339 timestamp of when the link was established.
-    linked_at: String,
-    /// Number of cargo crates redirected to the checkout.
-    linked_crate_count: usize,
-    /// Every manifest file the link touched (in apply order).
-    files: Vec<TouchedFile>,
+impl From<LinkMarkerError> for LinkError {
+    fn from(e: LinkMarkerError) -> Self {
+        match e {
+            LinkMarkerError::CorruptLinkState { path, detail } => {
+                LinkError::CorruptLinkState { path, detail }
+            }
+            LinkMarkerError::Io { path, source } => LinkError::Io { path, source },
+            LinkMarkerError::PackRefusedWhileLinked { marker } => {
+                // Not produced by link/unlink flows; map to corrupt-state shape
+                // for completeness.
+                LinkError::CorruptLinkState {
+                    path: marker,
+                    detail: "unexpected pack refusal in link flow".to_string(),
+                }
+            }
+        }
+    }
 }
 
 /// A computed manifest edit, not yet applied.
@@ -128,30 +143,32 @@ struct PlannedEdit {
 }
 
 /// Establish (or refresh) a whole-tree link from `consumer_root` to `checkout`.
-#[tracing::instrument(skip_all, fields(consumer_root = %consumer_root.display(), checkout = %checkout.display()))]
-pub fn link(consumer_root: &Path, checkout: &Path) -> Result<(), LinkError> {
+#[tracing::instrument(skip_all, fields(consumer_root = %consumer_root.display(), checkout = %checkout.display(), skip_verify))]
+pub fn link(consumer_root: &Path, checkout: &Path, skip_verify: bool) -> Result<(), LinkError> {
     let checkout = canonicalize_checkout(checkout)?;
     let consumer_root = consumer_root
         .canonicalize()
         .map_err(|e| LinkError::io(consumer_root, e))?;
 
-    // Idempotency: identical checkout ⇒ refresh; different checkout ⇒ refuse.
-    if let Some(existing) = load_active_manifest(&consumer_root)? {
-        if existing.checkout == checkout {
-            tracing::info!("refreshing existing link (same checkout) — re-deriving crate set");
-            println!(
-                "Refreshing active link to {} (re-deriving overrides).",
-                checkout.display()
-            );
-            unlink(&consumer_root)?;
-        } else {
+    // Idempotency gates: different checkout ⇒ refuse; torn state ⇒ point at
+    // `unlink`; identical active checkout ⇒ refresh (below).
+    let existing = load_active_manifest(&consumer_root)?;
+    if let Some(m) = &existing {
+        if m.checkout != checkout {
             return Err(LinkError::AlreadyLinkedElsewhere {
-                active: existing.checkout,
+                active: m.checkout.clone(),
                 requested: checkout,
+            });
+        }
+        if m.state == LinkTransactionState::Applying {
+            return Err(LinkError::TornLinkState {
+                path: consumer_root.join(LINK_STATE_DIR).join(LINK_MANIFEST_FILE),
             });
         }
     }
 
+    // Derive everything failure-prone BEFORE tearing down an existing link, so
+    // a failed derivation preserves the working link on a refresh.
     let index_url = discover_registry_index(&consumer_root)?;
     let crates = derive_linkable_crates(&checkout)?;
     if crates.is_empty() {
@@ -161,32 +178,58 @@ pub fn link(consumer_root: &Path, checkout: &Path) -> Result<(), LinkError> {
         });
     }
 
-    let edits = plan_edits(&consumer_root, &checkout, &index_url, &crates)?;
-    let touched = apply_transaction(&consumer_root, &edits)?;
+    if existing.is_some() {
+        tracing::info!("refreshing existing link (same checkout) — re-deriving crate set");
+        println!(
+            "Refreshing active link to {} (re-deriving overrides).",
+            checkout.display()
+        );
+        unlink(&consumer_root, false)?;
+    }
 
-    // Persisting the manifest is the final transactional step: if it fails, the
-    // overrides are already on disk, so roll them all back and clear the link
-    // state — the all-or-nothing contract holds through this step too.
-    let manifest = LinkManifest {
-        checkout: checkout.clone(),
-        linked_at: chrono::Utc::now().to_rfc3339(),
-        linked_crate_count: crates.len(),
-        files: touched,
-    };
-    finalize_link(&consumer_root, &edits, &manifest)?;
+    let edits = establish_link(&consumer_root, &checkout, &index_url, &crates)?;
 
     println!("Linked streamlib → {}", checkout.display());
     println!("  Cargo crates redirected: {}", crates.len());
     for edit in &edits {
         println!("  Overrode: {}", edit.rel_path.display());
     }
+
+    // Post-link verification: prove the [patch] actually took effect in the
+    // consumer's cargo resolution. A semver-incompatible consumer requirement
+    // makes cargo silently ignore the patch — roll the whole link back rather
+    // than leave a "linked" tree that still resolves from the registry.
+    if skip_verify {
+        println!("  Verification skipped (--skip-verify).");
+    } else if let Err(detail) = verify_cargo_patch_resolution(&consumer_root, &checkout, &crates) {
+        unlink(&consumer_root, false)?;
+        return Err(LinkError::LinkVerificationFailed { detail });
+    } else if consumer_root.join("Cargo.toml").is_file() {
+        // Count is re-derived inside the verify; recompute cheaply for the
+        // success message.
+        println!("  Verified: streamlib crates resolve to the checkout via cargo metadata.");
+    }
+
     println!("Run `streamlib unlink` to restore.");
     Ok(())
 }
 
+/// The teardown action pass 1 of `unlink` decides for one touched file.
+enum RestoreAction {
+    /// Live content already matches the pre-link original — nothing to do.
+    Skip,
+    /// Write the (hash-verified) backup bytes back over the live file.
+    RestoreOriginal(Vec<u8>),
+    /// Delete a file the link created, then prune empty parents.
+    RemoveCreated,
+}
+
 /// Tear down the active link, restoring every touched manifest byte-identically.
-#[tracing::instrument(skip_all, fields(consumer_root = %consumer_root.display()))]
-pub fn unlink(consumer_root: &Path) -> Result<(), LinkError> {
+///
+/// Recovers torn (`applying`) state from a crashed link run. Refuses to
+/// clobber a file the user modified while the link was active unless `force`.
+#[tracing::instrument(skip_all, fields(consumer_root = %consumer_root.display(), force))]
+pub fn unlink(consumer_root: &Path, force: bool) -> Result<(), LinkError> {
     let consumer_root = consumer_root
         .canonicalize()
         .map_err(|e| LinkError::io(consumer_root, e))?;
@@ -202,39 +245,74 @@ pub fn unlink(consumer_root: &Path) -> Result<(), LinkError> {
     let state_dir = consumer_root.join(LINK_STATE_DIR);
     let backup_dir = state_dir.join(LINK_BACKUP_DIR);
 
-    // Restore in reverse apply order so partial states unwind predictably.
+    // Pass 1 — classify every file (tri-state per file) and verify every
+    // needed backup BEFORE mutating anything, so a refusal or a corrupt
+    // backup leaves the tree untouched.
+    let mut actions: Vec<(&LinkedManifestFile, RestoreAction)> = Vec::new();
     for tf in manifest.files.iter().rev() {
         let abs = consumer_root.join(&tf.path);
-        if tf.existed_before {
-            let backup = backup_dir.join(&tf.path);
-            let bytes = std::fs::read(&backup).map_err(|e| LinkError::io(&backup, e))?;
-            // Integrity guard: the backup must still hash to the value recorded
-            // when the link was established. A mismatch means the backup was
-            // corrupted/tampered — refuse to restore wrong bytes over the
-            // consumer's file rather than silently clobber it.
-            if hex_sha256(&bytes) != tf.pre_edit_sha256 {
-                return Err(LinkError::CorruptLinkState {
-                    path: backup.clone(),
-                    detail: format!(
-                        "backup content hash does not match the pre-edit hash recorded for `{}`; \
-                         refusing to restore a corrupted backup",
-                        tf.path.display()
-                    ),
-                });
+        let live = read_optional_bytes(&abs)?;
+        let live_hash = live.as_deref().map(hex_sha256);
+
+        let action = if tf.existed_before {
+            if live_hash.as_deref() == Some(tf.pre_edit_sha256.as_str()) {
+                // Already the original (e.g. crash before this edit applied).
+                RestoreAction::Skip
+            } else {
+                let is_linked_content =
+                    live_hash.as_deref() == Some(tf.post_edit_sha256.as_str());
+                if !(live.is_none() || is_linked_content || force) {
+                    return Err(LinkError::UnlinkRefusedModifiedFile { path: abs.clone() });
+                }
+                let backup = backup_dir.join(&tf.path);
+                let bytes = std::fs::read(&backup).map_err(|e| LinkError::io(&backup, e))?;
+                // Integrity guard: the backup must still hash to the value
+                // recorded at link time — never restore corrupted bytes.
+                if hex_sha256(&bytes) != tf.pre_edit_sha256 {
+                    return Err(LinkError::CorruptLinkState {
+                        path: backup.clone(),
+                        detail: format!(
+                            "backup content hash does not match the pre-edit hash recorded for \
+                             `{}`; refusing to restore a corrupted backup",
+                            tf.path.display()
+                        ),
+                    });
+                }
+                RestoreAction::RestoreOriginal(bytes)
             }
-            std::fs::write(&abs, &bytes).map_err(|e| LinkError::io(&abs, e))?;
         } else {
-            // We created this file — remove it, then prune any now-empty parent
-            // dirs we introduced (e.g. `.cargo/`), up to the consumer root.
-            if abs.exists() {
-                std::fs::remove_file(&abs).map_err(|e| LinkError::io(&abs, e))?;
+            match live_hash.as_deref() {
+                None => RestoreAction::Skip,
+                Some(h) if h == tf.post_edit_sha256 => RestoreAction::RemoveCreated,
+                Some(_) if force => RestoreAction::RemoveCreated,
+                Some(_) => {
+                    return Err(LinkError::UnlinkRefusedModifiedFile { path: abs.clone() });
+                }
             }
-            prune_empty_parents(&abs, &consumer_root);
+        };
+        actions.push((tf, action));
+    }
+
+    // Pass 2 — apply the restores (already in reverse apply order).
+    let mut restored = 0usize;
+    for (tf, action) in actions {
+        let abs = consumer_root.join(&tf.path);
+        match action {
+            RestoreAction::Skip => {}
+            RestoreAction::RestoreOriginal(bytes) => {
+                std::fs::write(&abs, &bytes).map_err(|e| LinkError::io(&abs, e))?;
+                restored += 1;
+            }
+            RestoreAction::RemoveCreated => {
+                std::fs::remove_file(&abs).map_err(|e| LinkError::io(&abs, e))?;
+                prune_empty_parents(&abs, &consumer_root);
+                restored += 1;
+            }
         }
     }
 
     std::fs::remove_dir_all(&state_dir).map_err(|e| LinkError::io(&state_dir, e))?;
-    println!("Unlinked streamlib — {} file(s) restored.", manifest.files.len());
+    println!("Unlinked streamlib — {restored} file(s) restored.");
     Ok(())
 }
 
@@ -249,33 +327,19 @@ pub fn status(consumer_root: &Path) -> Result<(), LinkError> {
         Some(m) => {
             println!("streamlib linked → {}", m.checkout.display());
             println!("  Linked at: {}", m.linked_at);
+            println!(
+                "  State: {}",
+                match m.state {
+                    LinkTransactionState::Active => "active",
+                    LinkTransactionState::Applying =>
+                        "applying (torn — run `streamlib unlink` to restore)",
+                }
+            );
             println!("  Cargo crates redirected: {}", m.linked_crate_count);
             for tf in &m.files {
                 println!("  Overrode: {}", tf.path.display());
             }
         }
-    }
-    Ok(())
-}
-
-/// Walk up from `start` to the filesystem root looking for an active link
-/// marker (`.streamlib/link.json`). Returns the marker path when found.
-pub fn find_active_link_marker(start: &Path) -> Option<PathBuf> {
-    let mut dir = Some(start);
-    while let Some(d) = dir {
-        let marker = d.join(LINK_STATE_DIR).join(LINK_MANIFEST_FILE);
-        if marker.is_file() {
-            return Some(marker);
-        }
-        dir = d.parent();
-    }
-    None
-}
-
-/// Refuse a pack/publish while a link is active anywhere above `package_dir`.
-pub fn ensure_no_active_link_for_pack(package_dir: &Path) -> Result<(), LinkError> {
-    if let Some(marker) = find_active_link_marker(package_dir) {
-        return Err(LinkError::PackRefusedWhileLinked { marker });
     }
     Ok(())
 }
@@ -294,7 +358,7 @@ fn canonicalize_checkout(checkout: &Path) -> Result<PathBuf, LinkError> {
     Ok(canonical)
 }
 
-/// Load the active link manifest from `consumer_root/.streamlib/link.json`.
+/// Load the link manifest from `consumer_root/.streamlib/link.json` (any state).
 fn load_active_manifest(consumer_root: &Path) -> Result<Option<LinkManifest>, LinkError> {
     let path = consumer_root
         .join(LINK_STATE_DIR)
@@ -302,31 +366,63 @@ fn load_active_manifest(consumer_root: &Path) -> Result<Option<LinkManifest>, Li
     if !path.is_file() {
         return Ok(None);
     }
-    let body = std::fs::read_to_string(&path).map_err(|e| LinkError::io(&path, e))?;
-    let manifest: LinkManifest = serde_json::from_str(&body).map_err(|e| {
-        LinkError::CorruptLinkState {
-            path: path.clone(),
-            detail: e.to_string(),
-        }
-    })?;
-    Ok(Some(manifest))
+    Ok(Some(streamlib_pack::link_marker::load_link_manifest(
+        &path,
+    )?))
 }
 
-fn write_manifest(consumer_root: &Path, manifest: &LinkManifest) -> Result<(), LinkError> {
+fn manifest_json(manifest: &LinkManifest, path: &Path) -> Result<String, LinkError> {
+    serde_json::to_string_pretty(manifest).map_err(|e| LinkError::CorruptLinkState {
+        path: path.to_path_buf(),
+        detail: e.to_string(),
+    })
+}
+
+/// Create `link.json` with O_EXCL semantics — fails if the marker already
+/// exists, closing the concurrent-link race.
+fn write_manifest_excl(consumer_root: &Path, manifest: &LinkManifest) -> Result<(), LinkError> {
+    use std::io::Write;
     let state_dir = consumer_root.join(LINK_STATE_DIR);
     std::fs::create_dir_all(&state_dir).map_err(|e| LinkError::io(&state_dir, e))?;
     let path = state_dir.join(LINK_MANIFEST_FILE);
-    let body = serde_json::to_string_pretty(manifest).map_err(|e| LinkError::CorruptLinkState {
-        path: path.clone(),
-        detail: e.to_string(),
-    })?;
+    let body = manifest_json(manifest, &path)?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                LinkError::LinkMarkerAlreadyExists { path: path.clone() }
+            } else {
+                LinkError::io(&path, e)
+            }
+        })?;
+    file.write_all(body.as_bytes())
+        .map_err(|e| LinkError::io(&path, e))
+}
+
+/// Overwrite `link.json` in place (used for the `applying → active` flip).
+fn overwrite_manifest(consumer_root: &Path, manifest: &LinkManifest) -> Result<(), LinkError> {
+    let path = consumer_root
+        .join(LINK_STATE_DIR)
+        .join(LINK_MANIFEST_FILE);
+    let body = manifest_json(manifest, &path)?;
     std::fs::write(&path, body).map_err(|e| LinkError::io(&path, e))
 }
 
 /// Discover the consumer's effective `[registries.gitea].index` string the way
-/// cargo does: closest `.cargo/config.toml` (walking up) wins, then
-/// `~/.cargo/config.toml`.
+/// cargo does: closest `.cargo/config.toml` (walking up) wins, then the home
+/// cargo config.
 fn discover_registry_index(consumer_root: &Path) -> Result<String, LinkError> {
+    discover_registry_index_with_home(consumer_root, dirs::home_dir().as_deref())
+}
+
+/// [`discover_registry_index`] with an injectable home dir (`None` disables
+/// the home fallback) so tests are environment-independent.
+fn discover_registry_index_with_home(
+    consumer_root: &Path,
+    home: Option<&Path>,
+) -> Result<String, LinkError> {
     let mut dir = Some(consumer_root);
     while let Some(d) = dir {
         for name in [".cargo/config.toml", ".cargo/config"] {
@@ -337,7 +433,7 @@ fn discover_registry_index(consumer_root: &Path) -> Result<String, LinkError> {
         }
         dir = d.parent();
     }
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = home {
         for name in [".cargo/config.toml", ".cargo/config"] {
             if let Some(idx) = read_gitea_index(&home.join(name))? {
                 return Ok(idx);
@@ -365,35 +461,51 @@ fn read_gitea_index(path: &Path) -> Result<Option<String>, LinkError> {
         .map(|s| s.to_string()))
 }
 
-/// Derive the linkable crate set (`name` → checkout-relative member dir) from
-/// the checkout live via `cargo metadata` — same selection as the publish
-/// closure with `STREAMLIB_PUBLISH_ALL_LIBS=1`: every workspace member whose
-/// name starts with `streamlib` (or is `vulkan-jpeg`), that produces a library
-/// target and is publishable.
+/// Run `cargo metadata` and parse its JSON output.
+fn run_cargo_metadata(
+    args: &[&str],
+    cwd: Option<&Path>,
+) -> Result<serde_json::Value, String> {
+    let mut cmd = std::process::Command::new("cargo");
+    cmd.args(args);
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
+    }
+    let output = cmd
+        .output()
+        .map_err(|e| format!("failed to run cargo metadata: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cargo metadata failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("cargo metadata is not valid JSON: {e}"))
+}
+
+/// Derive the linkable crate set (`name` → checkout member dir) from the
+/// checkout live via `cargo metadata` — same selection as the publish closure
+/// with `STREAMLIB_PUBLISH_ALL_LIBS=1`: every workspace member named
+/// `streamlib*` (or `vulkan-jpeg`) with a library target that is publishable.
 fn derive_linkable_crates(checkout: &Path) -> Result<BTreeMap<String, PathBuf>, LinkError> {
     let manifest_path = checkout.join("Cargo.toml");
-    let output = std::process::Command::new("cargo")
-        .args(["metadata", "--format-version", "1", "--no-deps", "--manifest-path"])
-        .arg(&manifest_path)
-        .output()
-        .map_err(|e| LinkError::CrateSetDerivation {
-            checkout: checkout.to_path_buf(),
-            detail: format!("failed to run cargo metadata: {e}"),
-        })?;
-    if !output.status.success() {
-        return Err(LinkError::CrateSetDerivation {
-            checkout: checkout.to_path_buf(),
-            detail: format!(
-                "cargo metadata failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ),
-        });
-    }
-    let md: serde_json::Value =
-        serde_json::from_slice(&output.stdout).map_err(|e| LinkError::CrateSetDerivation {
-            checkout: checkout.to_path_buf(),
-            detail: format!("cargo metadata is not valid JSON: {e}"),
-        })?;
+    let manifest_path_str = manifest_path.to_string_lossy().into_owned();
+    let md = run_cargo_metadata(
+        &[
+            "metadata",
+            "--format-version",
+            "1",
+            "--no-deps",
+            "--manifest-path",
+            &manifest_path_str,
+        ],
+        None,
+    )
+    .map_err(|detail| LinkError::CrateSetDerivation {
+        checkout: checkout.to_path_buf(),
+        detail,
+    })?;
 
     let members: std::collections::HashSet<&str> = md
         .get("workspace_members")
@@ -413,7 +525,7 @@ fn derive_linkable_crates(checkout: &Path) -> Result<BTreeMap<String, PathBuf>, 
             continue;
         }
         let name = pkg.get("name").and_then(|v| v.as_str()).unwrap_or_default();
-        if !(name.starts_with("streamlib") || name == "vulkan-jpeg") {
+        if !is_linkable_crate_name(name) {
             continue;
         }
         // `publish == []` ⇒ publish = false ⇒ not a linkable SDK crate.
@@ -434,6 +546,10 @@ fn derive_linkable_crates(checkout: &Path) -> Result<BTreeMap<String, PathBuf>, 
     Ok(crates)
 }
 
+fn is_linkable_crate_name(name: &str) -> bool {
+    name.starts_with("streamlib") || name == "vulkan-jpeg"
+}
+
 fn has_library_target(pkg: &serde_json::Value) -> bool {
     const LIB_KINDS: &[&str] = &["lib", "rlib", "cdylib", "proc-macro", "dylib", "staticlib"];
     pkg.get("targets")
@@ -450,6 +566,155 @@ fn has_library_target(pkg: &serde_json::Value) -> bool {
                     })
             })
         })
+}
+
+/// Verify the consumer's cargo resolution honors the link: every resolved
+/// `streamlib*` / `vulkan-jpeg` package must be a path source under the
+/// checkout. Returns `Err(detail)` naming the offending crates. `Ok(())`
+/// (vacuously) when the consumer has no `Cargo.toml`.
+fn verify_cargo_patch_resolution(
+    consumer_root: &Path,
+    checkout: &Path,
+    crates: &BTreeMap<String, PathBuf>,
+) -> Result<(), String> {
+    if !consumer_root.join("Cargo.toml").is_file() {
+        return Ok(());
+    }
+
+    // Offline first (the whole point of link mode); fall back to online when
+    // offline resolution fails for unrelated reasons (cold cache).
+    let md = match run_cargo_metadata(
+        &["metadata", "--format-version", "1", "--offline"],
+        Some(consumer_root),
+    ) {
+        Ok(md) => md,
+        Err(offline_err) => run_cargo_metadata(
+            &["metadata", "--format-version", "1"],
+            Some(consumer_root),
+        )
+        .map_err(|online_err| {
+            format!(
+                "cargo could not resolve the consumer's dependency graph — offline: \
+                 {offline_err}; online: {online_err}"
+            )
+        })?,
+    };
+
+    let empty = Vec::new();
+    let packages = md
+        .get("packages")
+        .and_then(|p| p.as_array())
+        .unwrap_or(&empty);
+    let mut verified = 0usize;
+    let mut not_patched: Vec<String> = Vec::new();
+    for pkg in packages {
+        let name = pkg.get("name").and_then(|v| v.as_str()).unwrap_or_default();
+        if !crates.contains_key(name) {
+            continue;
+        }
+        let is_path_source = pkg.get("source").is_none_or(|s| s.is_null());
+        let at_checkout = pkg
+            .get("manifest_path")
+            .and_then(|v| v.as_str())
+            .is_some_and(|mp| Path::new(mp).starts_with(checkout));
+        if is_path_source && at_checkout {
+            verified += 1;
+        } else {
+            let version = pkg.get("version").and_then(|v| v.as_str()).unwrap_or("?");
+            not_patched.push(format!("{name}@{version}"));
+        }
+    }
+
+    if !not_patched.is_empty() {
+        return Err(format!(
+            "these streamlib crates still resolve from the registry (the consumer's version \
+             requirements don't admit the checkout's versions, so cargo ignored the [patch]): {}",
+            not_patched.join(", ")
+        ));
+    }
+    tracing::info!(verified, "post-link cargo resolution verified");
+    Ok(())
+}
+
+/// Run the full link transaction against a computed crate set: plan every
+/// edit, persist the plan as `link.json` (state `applying`, O_EXCL), apply the
+/// edits with backups, then flip the state to `active`. Returns the applied
+/// edits for reporting.
+fn establish_link(
+    consumer_root: &Path,
+    checkout: &Path,
+    index_url: &str,
+    crates: &BTreeMap<String, PathBuf>,
+) -> Result<Vec<PlannedEdit>, LinkError> {
+    let edits = plan_edits(consumer_root, checkout, index_url, crates)?;
+    let mut manifest = build_link_manifest(checkout, crates.len(), &edits);
+
+    // Manifest-first: the full plan is on disk (O_EXCL) before any edit, so a
+    // crash at any later point is recoverable by a plain `streamlib unlink`,
+    // and a concurrent second `link` run fails the exclusive create.
+    write_manifest_excl(consumer_root, &manifest)?;
+
+    if let Err(e) = apply_transaction(consumer_root, &edits) {
+        return Err(unwind_failed_transaction(consumer_root, &edits, e));
+    }
+
+    manifest.state = LinkTransactionState::Active;
+    if let Err(e) = overwrite_manifest(consumer_root, &manifest) {
+        return Err(unwind_failed_transaction(consumer_root, &edits, e));
+    }
+
+    Ok(edits)
+}
+
+/// Build the persisted link manifest (state `applying`) from the edit plan.
+fn build_link_manifest(
+    checkout: &Path,
+    linked_crate_count: usize,
+    edits: &[PlannedEdit],
+) -> LinkManifest {
+    let files: Vec<LinkedManifestFile> = edits
+        .iter()
+        .map(|edit| LinkedManifestFile {
+            path: edit.rel_path.clone(),
+            existed_before: edit.original.is_some(),
+            pre_edit_sha256: edit
+                .original
+                .as_deref()
+                .map(hex_sha256)
+                .unwrap_or_default(),
+            post_edit_sha256: hex_sha256(edit.new_content.as_bytes()),
+        })
+        .collect();
+    LinkManifest {
+        checkout: checkout.to_path_buf(),
+        python_sdk_path: checkout.join(PYTHON_SDK_REL),
+        deno_sdk_entrypoint_path: checkout.join(DENO_SDK_ENTRYPOINT_REL),
+        linked_at: chrono::Utc::now().to_rfc3339(),
+        linked_crate_count,
+        state: LinkTransactionState::Applying,
+        files,
+    }
+}
+
+/// Roll back a failed link transaction. Removes the link state only when the
+/// verified rollback restored every file; otherwise the state dir (manifest +
+/// backups) is left intact for `streamlib unlink` recovery and the error says
+/// so.
+fn unwind_failed_transaction(
+    consumer_root: &Path,
+    edits: &[PlannedEdit],
+    cause: LinkError,
+) -> LinkError {
+    let refs: Vec<&PlannedEdit> = edits.iter().collect();
+    if rollback(&refs) {
+        let _ = std::fs::remove_dir_all(consumer_root.join(LINK_STATE_DIR));
+        cause
+    } else {
+        LinkError::RollbackIncomplete {
+            backup_dir: consumer_root.join(LINK_STATE_DIR).join(LINK_BACKUP_DIR),
+            detail: format!("original failure: {cause}"),
+        }
+    }
 }
 
 /// Compute every planned edit (cargo config always; pyproject / deno.json only
@@ -519,7 +784,13 @@ fn plan_cargo_config_edit(
         patch.set_implicit(true);
         doc.insert("patch", toml_edit::Item::Table(patch));
     }
-    doc["patch"][index_url] = toml_edit::Item::Table(patch_target);
+    let patch = doc["patch"]
+        .as_table_mut()
+        .ok_or_else(|| LinkError::ManifestParse {
+            path: abs_path.clone(),
+            detail: "`patch` exists but is not a table".to_string(),
+        })?;
+    patch.insert(index_url, toml_edit::Item::Table(patch_target));
 
     Ok(PlannedEdit {
         rel_path,
@@ -527,6 +798,24 @@ fn plan_cargo_config_edit(
         new_content: doc.to_string(),
         original,
     })
+}
+
+/// Get-or-create `key` as a table on `table`, with a typed error when an
+/// existing non-table value occupies the key.
+fn ensure_table_mut<'a>(
+    table: &'a mut toml_edit::Table,
+    key: &str,
+    file: &Path,
+) -> Result<&'a mut toml_edit::Table, LinkError> {
+    if !table.contains_key(key) {
+        table.insert(key, toml_edit::Item::Table(toml_edit::Table::new()));
+    }
+    table[key]
+        .as_table_mut()
+        .ok_or_else(|| LinkError::ManifestParse {
+            path: file.to_path_buf(),
+            detail: format!("`{key}` exists but is not a table"),
+        })
 }
 
 fn plan_pyproject_edit(
@@ -554,11 +843,13 @@ fn plan_pyproject_edit(
     );
     source.insert("editable", toml_edit::Value::from(true));
 
-    ensure_table(&mut doc, "tool");
-    ensure_subtable(doc["tool"].as_table_mut().unwrap(), "uv");
-    let uv = doc["tool"]["uv"].as_table_mut().unwrap();
-    ensure_subtable(uv, "sources");
-    uv["sources"]["streamlib"] = toml_edit::Item::Value(toml_edit::Value::InlineTable(source));
+    let tool = ensure_table_mut(doc.as_table_mut(), "tool", pyproject)?;
+    let uv = ensure_table_mut(tool, "uv", pyproject)?;
+    let sources = ensure_table_mut(uv, "sources", pyproject)?;
+    sources.insert(
+        "streamlib",
+        toml_edit::Item::Value(toml_edit::Value::InlineTable(source)),
+    );
 
     Ok(PlannedEdit {
         rel_path: rel_of(pyproject, consumer_root),
@@ -617,90 +908,51 @@ fn plan_deno_edit(
     })
 }
 
-/// Apply every planned edit transactionally: back up pre-existing files, write
-/// the new content, and roll back all applied edits on any failure.
-fn apply_transaction(
-    consumer_root: &Path,
-    edits: &[PlannedEdit],
-) -> Result<Vec<TouchedFile>, LinkError> {
+/// Apply every planned edit: back up pre-existing files, then write the new
+/// content. The caller (`establish_link`) owns rollback on failure — the plan
+/// is already persisted in `link.json` (state `applying`) before this runs.
+fn apply_transaction(consumer_root: &Path, edits: &[PlannedEdit]) -> Result<(), LinkError> {
     let backup_dir = consumer_root.join(LINK_STATE_DIR).join(LINK_BACKUP_DIR);
     std::fs::create_dir_all(&backup_dir).map_err(|e| LinkError::io(&backup_dir, e))?;
 
-    let mut applied: Vec<&PlannedEdit> = Vec::new();
-    let mut touched: Vec<TouchedFile> = Vec::new();
-
     for edit in edits {
-        let result = (|| -> Result<(), LinkError> {
-            if let Some(orig) = &edit.original {
-                let backup = backup_dir.join(&edit.rel_path);
-                if let Some(parent) = backup.parent() {
-                    std::fs::create_dir_all(parent).map_err(|e| LinkError::io(parent, e))?;
-                }
-                std::fs::write(&backup, orig).map_err(|e| LinkError::io(&backup, e))?;
-            }
-            if let Some(parent) = edit.abs_path.parent() {
+        if let Some(orig) = &edit.original {
+            let backup = backup_dir.join(&edit.rel_path);
+            if let Some(parent) = backup.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| LinkError::io(parent, e))?;
             }
-            std::fs::write(&edit.abs_path, &edit.new_content)
-                .map_err(|e| LinkError::io(&edit.abs_path, e))
-        })();
-
-        if let Err(e) = result {
-            // Restore the failing edit too — its target may already be
-            // truncated and its backup is about to be wiped with the state dir
-            // — then unwind every previously-applied edit.
-            let mut to_undo = applied.clone();
-            to_undo.push(edit);
-            rollback(&to_undo);
-            let state_dir = consumer_root.join(LINK_STATE_DIR);
-            let _ = std::fs::remove_dir_all(&state_dir);
-            return Err(e);
+            std::fs::write(&backup, orig).map_err(|e| LinkError::io(&backup, e))?;
         }
-
-        touched.push(TouchedFile {
-            path: edit.rel_path.clone(),
-            existed_before: edit.original.is_some(),
-            pre_edit_sha256: edit
-                .original
-                .as_ref()
-                .map(|b| hex_sha256(b))
-                .unwrap_or_default(),
-        });
-        applied.push(edit);
-    }
-
-    Ok(touched)
-}
-
-/// Persist the link manifest as the final transactional step. On failure, roll
-/// every applied edit back and clear the link state so the consumer is left
-/// exactly as it was before `link` ran.
-fn finalize_link(
-    consumer_root: &Path,
-    edits: &[PlannedEdit],
-    manifest: &LinkManifest,
-) -> Result<(), LinkError> {
-    if let Err(e) = write_manifest(consumer_root, manifest) {
-        let refs: Vec<&PlannedEdit> = edits.iter().collect();
-        rollback(&refs);
-        let _ = std::fs::remove_dir_all(consumer_root.join(LINK_STATE_DIR));
-        return Err(e);
+        if let Some(parent) = edit.abs_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| LinkError::io(parent, e))?;
+        }
+        std::fs::write(&edit.abs_path, &edit.new_content)
+            .map_err(|e| LinkError::io(&edit.abs_path, e))?;
     }
     Ok(())
 }
 
-/// Undo applied edits in reverse order: restore originals, delete created files.
-fn rollback(applied: &[&PlannedEdit]) {
+/// Undo edits in reverse order and VERIFY each outcome: an `existed_before`
+/// file must read back byte-identical to its original, a created file must be
+/// gone. Returns `true` only when every file verifiably reached its pre-link
+/// state.
+fn rollback(applied: &[&PlannedEdit]) -> bool {
+    let mut ok = true;
     for edit in applied.iter().rev() {
         match &edit.original {
             Some(orig) => {
                 let _ = std::fs::write(&edit.abs_path, orig);
+                ok &= std::fs::read(&edit.abs_path)
+                    .map(|live| &live == orig)
+                    .unwrap_or(false);
             }
             None => {
                 let _ = std::fs::remove_file(&edit.abs_path);
+                ok &= !edit.abs_path.exists();
             }
         }
     }
+    ok
 }
 
 /// Remove now-empty parent directories of `removed_file` up to (but excluding)
@@ -738,18 +990,6 @@ fn hex_sha256(bytes: &[u8]) -> String {
         s.push_str(&format!("{b:02x}"));
     }
     s
-}
-
-fn ensure_table(doc: &mut toml_edit::DocumentMut, key: &str) {
-    if !doc.contains_key(key) {
-        doc.insert(key, toml_edit::Item::Table(toml_edit::Table::new()));
-    }
-}
-
-fn ensure_subtable(table: &mut toml_edit::Table, key: &str) {
-    if !table.contains_key(key) {
-        table.insert(key, toml_edit::Item::Table(toml_edit::Table::new()));
-    }
 }
 
 #[cfg(test)]
