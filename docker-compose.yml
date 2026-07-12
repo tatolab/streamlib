@@ -12,7 +12,7 @@ services:
       context: .
       dockerfile: Dockerfile
       # Override the base / toolchain or skip closure streams for faster
-      # iteration, e.g. --build-arg SKIP_DENO_SDK=1 --build-arg PREBUILD_API_SERVER=0
+      # iteration, e.g. --build-arg SKIP_DENO_SDK=1 --build-arg SKIP_PACKAGES=1
       args:
         CUDA_BASE: nvidia/cuda:13.2.1-runtime-ubuntu24.04
     image: streamlib:latest
