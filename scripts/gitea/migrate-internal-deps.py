@@ -2,7 +2,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 """Migrate internal cross-crate path deps to the canonical
-``{ path, version, registry = "gitea" }`` form — the standard cargo
+``{ path, version, registry = "tatolab" }`` form — the standard cargo
 "publish a workspace" pattern (tokio et al.).
 
 What it does:
@@ -17,7 +17,7 @@ What it does:
   (resolving ``version.workspace = true`` against the workspace root), so a
   crate off the shared version (e.g. ``streamlib-cross-rustc-fixture`` at
   ``0.1.0``) gets its real version, not a blanket stamp.
-* ``registry = "gitea"`` is required — without it cargo records the dep as
+* ``registry = "tatolab"`` is required — without it cargo records the dep as
   crates.io and ``cargo publish`` fails.
 * Inline tables are **rebuilt fresh** — appending keys in place corrupts the
   ``,`` separators tomlkit tracks. Key order is ``package?, path, version,
@@ -43,7 +43,7 @@ import tomlkit
 from tomlkit.items import InlineTable
 
 DEP_SECTIONS = ("dependencies", "build-dependencies")
-REGISTRY = "gitea"
+REGISTRY = "tatolab"
 
 
 def workspace_root(start: Path) -> Path:

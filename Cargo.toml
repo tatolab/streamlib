@@ -124,10 +124,10 @@ libc = "0.2.177"
 
 # Vulkan bindings (tatolab fork for the VMA 3.3.0 patch). Resolved by version
 # from the Gitea registry — the fork shares crates.io version numbers, so the
-# `registry = "gitea"` annotation (not a distinct version) is what selects the
+# `registry = "tatolab"` annotation (not a distinct version) is what selects the
 # fork over upstream. See docs/architecture/gitea-registry-distribution.md.
-vulkanalia = { version = "0.35.0", registry = "gitea", features = ["libloading", "provisional", "window"] }
-vulkanalia-vma = { version = "0.9.0", registry = "gitea" }
+vulkanalia = { version = "0.35.0", registry = "tatolab", features = ["libloading", "provisional", "window"] }
+vulkanalia-vma = { version = "0.9.0", registry = "tatolab" }
 
 # SPIR-V reflection for descriptor-set-layout validation in the compute-kernel RHI.
 rspirv-reflect = "0.9.0"

@@ -8,7 +8,7 @@ publish = false
 # `[workspace]` makes this its own workspace root so it builds off-tree, and
 # `streamlib` resolves from the Gitea registry by version.
 [dependencies]
-streamlib = { version = "0.4.33-dev.2", registry = "gitea" }
+streamlib = { version = "0.4.33-dev.2", registry = "tatolab" }
 tokio = { version = "1", features = ["full"] }
 
 [workspace]

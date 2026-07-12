@@ -29,9 +29,9 @@ authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 license = "BUSL-1.1"
 
 [workspace.dependencies]
-streamlib = { version = "0.4.33-dev.5", registry = "gitea" }
-streamlib-jtd-codegen = { version = "0.4.33-dev.5", registry = "gitea" }
-streamlib-plugin-abi = { version = "0.4.33-dev.5", registry = "gitea" }
+streamlib = { version = "0.4.33-dev.5", registry = "tatolab" }
+streamlib-jtd-codegen = { version = "0.4.33-dev.5", registry = "tatolab" }
+streamlib-plugin-abi = { version = "0.4.33-dev.5", registry = "tatolab" }
 tracing = { version = "0.1.41", features = ["release_max_level_debug"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }

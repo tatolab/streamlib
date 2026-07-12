@@ -253,7 +253,7 @@ impl PolyglotBuildOrchestrator {
         // deep in the build. No-op for dev/path builds (no registry) and
         // pre-atomic-release registries (no manifest) — see `release_check`.
         if has_rust {
-            let pins = build::read_gitea_registry_pins(pkg_dir)
+            let pins = build::read_tatolab_registry_pins(pkg_dir)
                 .map_err(|e| other(&pkg_label, format!("reading gitea-registry pins: {e}")))?;
             release_check::assert_release_complete(&pkg_label, &pins)?;
         }

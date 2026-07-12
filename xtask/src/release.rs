@@ -44,9 +44,9 @@ fn target_version(base: &str, dev: Option<u32>) -> String {
     }
 }
 
-/// The registry org the release lives under (`GITEA_ORG`, default `tatolab`).
+/// The registry org the release lives under (`STREAMLIB_REGISTRY_ORG`, default `tatolab`).
 fn registry_org() -> String {
-    std::env::var("GITEA_ORG")
+    std::env::var("STREAMLIB_REGISTRY_ORG")
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "tatolab".to_string())

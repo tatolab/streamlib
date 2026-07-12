@@ -3,11 +3,14 @@
 [alias]
 xtask = "run --package xtask --"
 
-# Unified Gitea registry (org: tatolab). SDK crates + the vulkanalia fork
-# resolve by version from here; see docs/architecture/gitea-registry-distribution.md.
-# Sparse protocol — Gitea serves the index from its package DB (no _cargo-index
-# repo, no web-session init). Read is anonymous; publish needs a Bearer token in
-# credentials.toml. The localhost URL is the local dev-registry default; override
-# for a hosted backend with CARGO_REGISTRIES_GITEA_INDEX.
-[registries.gitea]
-index = "sparse+http://localhost:3300/api/packages/tatolab/cargo/"
+# The `tatolab` registry: the streamlib SDK crate chain + the vulkanalia fork
+# resolve by version from the static file-tree registry. This canonical index
+# URL is baked into every consumer's Cargo.lock; it does NOT need to be live —
+# offline / local resolution works against a mirror of the tree. To resolve
+# from a local folder or any other mount, emit the `[source]` replacement with
+# `streamlib registry use <dir>` (cargo source-replacement keeps this canonical
+# source id in the lockfile), or override with `CARGO_REGISTRIES_TATOLAB_INDEX`.
+# Reads are anonymous (tokenless); the tree is served by any dumb HTTP mount.
+# See docs/architecture/static-registry.md.
+[registries.tatolab]
+index = "sparse+https://registry.tatolab.com/cargo/"

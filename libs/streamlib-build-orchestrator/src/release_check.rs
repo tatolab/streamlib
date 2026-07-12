@@ -34,16 +34,16 @@
 
 use std::collections::BTreeMap;
 
-use streamlib_cargo_build::GiteaRegistryPin;
+use streamlib_cargo_build::TatolabRegistryPin;
 use streamlib_engine::core::runtime::BuildError;
 use streamlib_idents::{
     crates_missing_from_release, RegistryClient, RegistryConfig, SemVer, SemVerRange,
 };
 
 /// Registry org the release manifest lives under. Matches the publish
-/// scripts' `GITEA_ORG` default.
+/// scripts' `STREAMLIB_REGISTRY_ORG` default.
 fn registry_org() -> String {
-    std::env::var("GITEA_ORG")
+    std::env::var("STREAMLIB_REGISTRY_ORG")
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "tatolab".to_string())
@@ -70,7 +70,7 @@ fn cargo_req_to_range(req: &str) -> Option<SemVerRange> {
 /// the no-op cases.
 pub(crate) fn assert_release_complete(
     package_label: &str,
-    pins: &[GiteaRegistryPin],
+    pins: &[TatolabRegistryPin],
 ) -> Result<(), BuildError> {
     if pins.is_empty() {
         return Ok(());
@@ -179,8 +179,8 @@ mod tests {
     use super::*;
     use streamlib_idents::{ReleaseManifest, ReleaseManifestMember};
 
-    fn pin(name: &str, req: &str) -> GiteaRegistryPin {
-        GiteaRegistryPin {
+    fn pin(name: &str, req: &str) -> TatolabRegistryPin {
+        TatolabRegistryPin {
             name: name.to_string(),
             req: req.to_string(),
             version: req.trim_start_matches(['=', '^', '~', '>', '<']).trim().to_string(),
@@ -337,7 +337,7 @@ mod tests {
             .to_path_buf();
         let mavlink_dir = workspace_root.join("packages").join("mavlink");
 
-        let pins = streamlib_cargo_build::read_gitea_registry_pins(&mavlink_dir)
+        let pins = streamlib_cargo_build::read_tatolab_registry_pins(&mavlink_dir)
             .expect("read mavlink gitea pins");
         assert!(
             pins.iter().any(|p| p.name == "streamlib-plugin-sdk"),

@@ -314,9 +314,9 @@ pub fn sibling_temp(path: &Path, tag: &str) -> PathBuf {
     parent.join(format!(".{name}.{tag}.{nonce}"))
 }
 
-/// The registry org the tree is emitted under (`GITEA_ORG`, default `tatolab`).
+/// The registry org the tree is emitted under (`STREAMLIB_REGISTRY_ORG`, default `tatolab`).
 fn registry_org() -> String {
-    std::env::var("GITEA_ORG")
+    std::env::var("STREAMLIB_REGISTRY_ORG")
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "tatolab".to_string())
@@ -505,7 +505,7 @@ fn emit_cargo_closure(opts: &EmitOptions, staging: &Path) -> Result<()> {
             || {
                 let out = Command::new("cargo")
                     .args(["package", "--no-verify", "--allow-dirty", "-p", &c.name])
-                    .env("CARGO_REGISTRIES_GITEA_INDEX", &staging_index)
+                    .env("CARGO_REGISTRIES_TATOLAB_INDEX", &staging_index)
                     .current_dir(&opts.workspace_root)
                     .output()
                     .with_context(|| format!("cargo package -p {}", c.name))?;

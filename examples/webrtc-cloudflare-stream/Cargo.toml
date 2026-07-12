@@ -14,10 +14,10 @@ edition = "2024"
 publish = false
 
 [build-dependencies]
-streamlib-jtd-codegen = { version = "0.4.33-dev.5", registry = "gitea" }
+streamlib-jtd-codegen = { version = "0.4.33-dev.5", registry = "tatolab" }
 
 [dependencies]
-streamlib = { version = "0.4.33-dev.5", registry = "gitea" }
+streamlib = { version = "0.4.33-dev.5", registry = "tatolab" }
 tokio = { version = "1.48.0", features = ["full"] }
 anyhow = "1.0.100"
 libc = "0.2"
