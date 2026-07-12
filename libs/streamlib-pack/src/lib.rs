@@ -325,10 +325,25 @@ pub fn assemble_artifact(
     // Manifest bytes (possibly rewritten).
     let manifest_bytes = manifest_bytes_for(pkg_dir, opts.path_deps)?;
 
+    // Derive the crate version from the `.slpkg` semver. A Rust package's
+    // `Cargo.toml` `[package].version` is stamped to match
+    // `streamlib.yaml`'s `package.version` so a stale in-tree crate version
+    // can never reach the registry via the artifact. `None` when there's
+    // nothing to stamp (no `Cargo.toml`, no `[package].version`).
+    let stamped_cargo_toml = if has_rust {
+        stamped_cargo_toml_bytes(pkg_dir, &pkg_version)?
+    } else {
+        None
+    };
+
     // Emit.
     match target {
-        AssembleTarget::Slpkg(zip_path) => emit_slpkg(zip_path, &files, &manifest_bytes)?,
-        AssembleTarget::StagedDir(dir) => emit_staged_dir(dir, &files, &manifest_bytes)?,
+        AssembleTarget::Slpkg(zip_path) => {
+            emit_slpkg(zip_path, &files, &manifest_bytes, stamped_cargo_toml.as_deref())?
+        }
+        AssembleTarget::StagedDir(dir) => {
+            emit_staged_dir(dir, &files, &manifest_bytes, stamped_cargo_toml.as_deref())?
+        }
     }
 
     Ok(AssembleOutcome {
@@ -783,9 +798,48 @@ fn rewrite_manifest_path_deps_absolute(pkg_dir: &Path) -> Result<Vec<u8>> {
     Ok(out.into_bytes())
 }
 
-/// Write the `.slpkg` zip: the manifest bytes as `streamlib.yaml`, then
-/// every collected file at its archive path. Duplicate paths skipped.
-fn emit_slpkg(zip_path: &Path, files: &[(String, PathBuf)], manifest_bytes: &[u8]) -> Result<()> {
+/// Compute the `Cargo.toml` bytes to ship in the artifact with
+/// `[package].version` stamped to `package_version` (the `.slpkg` semver
+/// from `streamlib.yaml`'s `package.version`). Format-preserving via
+/// [`toml_edit`] — comments and every other field pass through unchanged.
+///
+/// Returns `Ok(None)` (ship the in-tree `Cargo.toml` verbatim) when there's
+/// nothing to stamp: no `Cargo.toml`, no `[package]` table, or no `version`
+/// key. A `version.workspace = true` inheritance IS stamped to a literal —
+/// the artifact is built standalone (no defining workspace root travels), so
+/// the inherited form would fail to resolve.
+fn stamped_cargo_toml_bytes(pkg_dir: &Path, package_version: &str) -> Result<Option<Vec<u8>>> {
+    let cargo_path = pkg_dir.join("Cargo.toml");
+    if !cargo_path.exists() {
+        return Ok(None);
+    }
+    let body = std::fs::read_to_string(&cargo_path)
+        .with_context(|| format!("read {}", cargo_path.display()))?;
+    let mut doc: toml_edit::DocumentMut = body
+        .parse()
+        .with_context(|| format!("parse {}", cargo_path.display()))?;
+    let Some(package) = doc.get_mut("package").and_then(|p| p.as_table_mut()) else {
+        return Ok(None);
+    };
+    if !package.contains_key("version") {
+        return Ok(None);
+    }
+    // Replace whatever `version` shape is present — a literal string OR a
+    // `version.workspace = true` inheritance — with the derived literal.
+    package["version"] = toml_edit::value(package_version);
+    Ok(Some(doc.to_string().into_bytes()))
+}
+
+/// Write the `.slpkg` zip: the manifest bytes as `streamlib.yaml`, the
+/// version-stamped `Cargo.toml` (when present), then every collected file at
+/// its archive path. Duplicate paths skipped — writing the stamped
+/// `Cargo.toml` first means the verbatim copy from the source tree is deduped.
+fn emit_slpkg(
+    zip_path: &Path,
+    files: &[(String, PathBuf)],
+    manifest_bytes: &[u8],
+    stamped_cargo_toml: Option<&[u8]>,
+) -> Result<()> {
     use zip::write::FileOptions;
     use zip::ZipWriter;
 
@@ -799,6 +853,12 @@ fn emit_slpkg(zip_path: &Path, files: &[(String, PathBuf)], manifest_bytes: &[u8
     zip.start_file("streamlib.yaml", options)?;
     zip.write_all(manifest_bytes)?;
     seen.insert("streamlib.yaml".to_string());
+
+    if let Some(bytes) = stamped_cargo_toml {
+        zip.start_file("Cargo.toml", options)?;
+        zip.write_all(bytes)?;
+        seen.insert("Cargo.toml".to_string());
+    }
 
     for (name, path) in files {
         if !seen.insert(name.clone()) {
@@ -816,14 +876,25 @@ fn emit_slpkg(zip_path: &Path, files: &[(String, PathBuf)], manifest_bytes: &[u8
 }
 
 /// Write the extracted layout into `dir`: the manifest bytes as
-/// `streamlib.yaml`, then every collected file at its archive path
-/// (parents created). Duplicate paths skipped.
-fn emit_staged_dir(dir: &Path, files: &[(String, PathBuf)], manifest_bytes: &[u8]) -> Result<()> {
+/// `streamlib.yaml`, the version-stamped `Cargo.toml` (when present), then
+/// every collected file at its archive path (parents created). Duplicate
+/// paths skipped — the stamped `Cargo.toml` is written first so the verbatim
+/// source-tree copy is deduped.
+fn emit_staged_dir(
+    dir: &Path,
+    files: &[(String, PathBuf)],
+    manifest_bytes: &[u8],
+    stamped_cargo_toml: Option<&[u8]>,
+) -> Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     std::fs::write(dir.join("streamlib.yaml"), manifest_bytes).context("write streamlib.yaml")?;
 
     let mut seen = std::collections::HashSet::new();
     seen.insert("streamlib.yaml".to_string());
+    if let Some(bytes) = stamped_cargo_toml {
+        std::fs::write(dir.join("Cargo.toml"), bytes).context("write stamped Cargo.toml")?;
+        seen.insert("Cargo.toml".to_string());
+    }
     for (name, src) in files {
         if !seen.insert(name.clone()) {
             continue;
@@ -859,6 +930,16 @@ mod tests {
         (0..zip.len())
             .map(|i| zip.by_index(i).unwrap().name().to_string())
             .collect()
+    }
+
+    fn zip_file_contents(slpkg: &Path, name: &str) -> String {
+        use std::io::Read as _;
+        let bytes = std::fs::read(slpkg).unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut f = zip.by_name(name).unwrap();
+        let mut s = String::new();
+        f.read_to_string(&mut s).unwrap();
+        s
     }
 
     #[test]
@@ -1483,5 +1564,155 @@ mod tests {
             staged_yaml.contains(core_abs.to_str().unwrap()),
             "manifest must carry the absolute core path, got: {staged_yaml}"
         );
+    }
+
+    // ---- Version-stamp: derive crate version from the .slpkg semver ----
+
+    #[test]
+    fn stamp_replaces_literal_crate_version_with_manifest_version() {
+        // In-tree Cargo.toml pins a stale crate version; the stamp derives
+        // the version from streamlib.yaml. Mentally revert the stamp and the
+        // stale literal survives.
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"rp\"\nversion = \"0.4.30\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        let bytes = stamped_cargo_toml_bytes(dir.path(), "1.1.3-dev.4")
+            .unwrap()
+            .expect("a literal [package].version must be stamped");
+        let out = String::from_utf8(bytes).unwrap();
+        assert!(out.contains("version = \"1.1.3-dev.4\""), "got: {out}");
+        assert!(!out.contains("0.4.30"), "stale literal must be gone, got: {out}");
+        // Other fields + shape preserved.
+        assert!(out.contains("name = \"rp\""));
+        assert!(out.contains("edition = \"2024\""));
+    }
+
+    #[test]
+    fn stamp_replaces_workspace_inherited_version_with_literal() {
+        // `version.workspace = true` cannot resolve in a standalone artifact
+        // build (no defining workspace root travels), so it must become a
+        // literal. Revert this branch and a staged workspace-member package
+        // fails to `cargo build`.
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"rp\"\nversion.workspace = true\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        let bytes = stamped_cargo_toml_bytes(dir.path(), "1.0.0")
+            .unwrap()
+            .expect("a workspace-inherited version must be stamped to a literal");
+        let out = String::from_utf8(bytes).unwrap();
+        assert!(out.contains("version = \"1.0.0\""), "got: {out}");
+        assert!(!out.contains("workspace = true"), "inheritance must be gone, got: {out}");
+    }
+
+    #[test]
+    fn stamp_preserves_comments_and_unrelated_fields() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "# top comment\n[package]\nname = \"rp\"\nversion = \"0.1.0\" # inline\nedition = \"2024\"\n\n[dependencies]\nserde = \"1.0\"\n",
+        )
+        .unwrap();
+        let out = String::from_utf8(
+            stamped_cargo_toml_bytes(dir.path(), "2.5.0").unwrap().unwrap(),
+        )
+        .unwrap();
+        assert!(out.contains("# top comment"), "comment preserved, got: {out}");
+        assert!(out.contains("[dependencies]") && out.contains("serde = \"1.0\""));
+        assert!(out.contains("version = \"2.5.0\""), "got: {out}");
+    }
+
+    #[test]
+    fn stamp_is_noop_without_cargo_toml_or_version() {
+        // No Cargo.toml → nothing to stamp.
+        let dir = tempdir().unwrap();
+        assert!(stamped_cargo_toml_bytes(dir.path(), "1.0.0").unwrap().is_none());
+        // A [package] with no version key → nothing to stamp (ship verbatim).
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]\nname = \"rp\"\n").unwrap();
+        assert!(stamped_cargo_toml_bytes(dir.path(), "1.0.0").unwrap().is_none());
+    }
+
+    #[test]
+    fn slpkg_stamps_crate_version_from_manifest_semver() {
+        // Integration: the emitted `.slpkg` carries a `Cargo.toml` whose
+        // `[package].version` equals streamlib.yaml's `package.version`,
+        // regardless of the stale in-tree value. Revert the stamp step and
+        // the verbatim copy would carry `0.4.30`.
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: rp\n  version: 1.1.3-dev.4\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"rp\"\nversion = \"0.4.30\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), b"// crate source").unwrap();
+
+        let out = dir.path().join("o.slpkg");
+        assemble_artifact(dir.path(), &AssembleTarget::Slpkg(out.clone()), &slpkg_opts(false), &())
+            .unwrap();
+        let entries = zip_entries(&out);
+        // Exactly one Cargo.toml (the stamped one; verbatim copy deduped).
+        assert_eq!(
+            entries.iter().filter(|e| e.as_str() == "Cargo.toml").count(),
+            1,
+            "exactly one Cargo.toml must ship, got {entries:?}"
+        );
+        let cargo = zip_file_contents(&out, "Cargo.toml");
+        assert!(cargo.contains("version = \"1.1.3-dev.4\""), "got: {cargo}");
+        assert!(!cargo.contains("0.4.30"), "stale version must not reach the artifact, got: {cargo}");
+    }
+
+    #[test]
+    fn staged_dir_stamps_crate_version_from_manifest_semver() {
+        // Same lock for the StagedDir target (orchestrator load-time build):
+        // the stale in-tree crate version cannot reach the built artifact.
+        // A prebuilt lib/<triple>/ is pre-populated so the rust path takes the
+        // prebuilt branch and no cargo build runs in the test.
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: rp\n  version: 1.1.3-dev.4\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"rp\"\nversion = \"0.4.30\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), b"// crate source").unwrap();
+        let triple_dir = dir.path().join("lib").join(host_target_triple());
+        std::fs::create_dir_all(&triple_dir).unwrap();
+        std::fs::write(
+            triple_dir.join(format!("librp.{}", host_dylib_extension())),
+            b"prebuilt",
+        )
+        .unwrap();
+
+        let staged = tempdir().unwrap();
+        assemble_artifact(
+            dir.path(),
+            &AssembleTarget::StagedDir(staged.path().to_path_buf()),
+            &AssembleOptions {
+                no_build: true,
+                profile: CargoProfile::Dev,
+                path_deps: PathDepPolicy::RewriteRelativeToAbsolute,
+            },
+            &(),
+        )
+        .unwrap();
+        let cargo = std::fs::read_to_string(staged.path().join("Cargo.toml")).unwrap();
+        assert!(cargo.contains("version = \"1.1.3-dev.4\""), "got: {cargo}");
+        assert!(!cargo.contains("0.4.30"), "stale version must not reach the staged build, got: {cargo}");
     }
 }

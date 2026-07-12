@@ -1,0 +1,49 @@
+name: Check Package Version Drift
+
+# CI gate that every publishable package's crate version matches its
+# `.slpkg` semver.
+#
+# `cargo xtask check-package-version-drift` asserts that every
+# `packages/*/Cargo.toml` `[package].version` equals its `streamlib.yaml`
+# `package.version` (the single source of truth). Schema-only packages (no
+# `Cargo.toml`) and workspace-inherited versions are skipped. A drift means
+# a stale crate version could reach the registry; the remedy is
+# `cargo xtask check-package-version-drift --fix`.
+#
+# See also `docs/architecture/gitea-registry-distribution.md`.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  xtask-check-package-version-drift:
+    name: xtask check-package-version-drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-xtask-${{ hashFiles('xtask/Cargo.toml', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-xtask-
+
+      - name: cargo xtask check-package-version-drift
+        run: cargo xtask check-package-version-drift
+
+      - name: cargo test -p xtask check_package_version_drift (unit tests)
+        run: cargo test -p xtask check_package_version_drift
