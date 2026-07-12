@@ -487,27 +487,43 @@ fn emit_cargo_closure(opts: &EmitOptions, staging: &Path) -> Result<()> {
         // The packaged artifact carries the crate's ACTUAL manifest version
         // (see `crate_artifact_filename`); a dev emit bumps manifests first.
         let version = c.version.clone();
-        let out = Command::new("cargo")
-            .args(["package", "--no-verify", "--allow-dirty", "-p", &c.name])
-            .env("CARGO_REGISTRIES_GITEA_INDEX", &staging_index)
-            .current_dir(&opts.workspace_root)
-            .output()
-            .with_context(|| format!("cargo package -p {}", c.name))?;
-        if !out.status.success() {
-            anyhow::bail!(
-                "cargo package -p {} failed: {}",
-                c.name,
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-        }
         let crate_file = opts
             .workspace_root
             .join("target/package")
             .join(crate_artifact_filename(&c.name, &version));
-        anyhow::ensure!(
-            crate_file.is_file(),
-            "expected packaged crate at {}",
-            crate_file.display()
+        // Reuse a previously-packaged `.crate` only after structural
+        // verification (a truncated leftover from an aborted emit is
+        // discarded + repackaged, never trusted). A verified reuse skips
+        // `cargo package` — and with it that crate's live registry-dep
+        // validation — but the emitted index line is rendered from the
+        // reused tarball's own manifest, so the tree stays correct; a
+        // per-version tarball is treated as immutable for reuse.
+        let provenance = crate::crate_tarball::obtain_crate_tarball(
+            &crate_file,
+            &c.name,
+            &version,
+            || {
+                let out = Command::new("cargo")
+                    .args(["package", "--no-verify", "--allow-dirty", "-p", &c.name])
+                    .env("CARGO_REGISTRIES_GITEA_INDEX", &staging_index)
+                    .current_dir(&opts.workspace_root)
+                    .output()
+                    .with_context(|| format!("cargo package -p {}", c.name))?;
+                if !out.status.success() {
+                    anyhow::bail!(
+                        "cargo package -p {} failed: {}",
+                        c.name,
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    );
+                }
+                Ok(())
+            },
+        )?;
+        tracing::info!(
+            crate_name = %c.name,
+            version = %version,
+            ?provenance,
+            "static-registry cargo-closure crate tarball obtained"
         );
         let dest = cargo_dir.join("crates").join(&c.name);
         std::fs::create_dir_all(&dest)?;

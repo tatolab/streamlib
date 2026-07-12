@@ -5306,6 +5306,7 @@ name = "streamlib-pack"
 version = "0.5.1"
 dependencies = [
  "anyhow",
+ "flate2",
  "libc",
  "serde",
  "serde_json",
@@ -5315,6 +5316,7 @@ dependencies = [
  "streamlib-cargo-build",
  "streamlib-idents",
  "streamlib-processor-schema",
+ "tar",
  "tempfile",
  "thiserror 2.0.18",
  "toml 0.8.23",
