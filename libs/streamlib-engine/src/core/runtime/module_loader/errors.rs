@@ -271,6 +271,64 @@ pub enum AddModuleError {
     DependencyCycleDetected {
         cycle: Vec<streamlib_idents::PackageRef>,
     },
+
+    /// Two requirers resolved the same `@org/name` package to different
+    /// concrete versions within the runtime's lifetime — a diamond
+    /// version conflict. The engine enforces a single version per package
+    /// across the whole module graph (and across successive `add_module`
+    /// calls), so this is a hard error rather than a silent
+    /// double-registration. Resolve it by pinning a single version via a
+    /// `patch:` entry in the requiring `streamlib.yaml` that redirects the
+    /// package to one `path:` / `git:` source, or by aligning the two
+    /// requirers on a single declared version.
+    #[error(
+        "Single-version conflict for package '{package}': version \
+         {existing_version} (required by {existing_required_by}) conflicts \
+         with version {conflicting_version} (required by \
+         {conflicting_required_by}). streamlib enforces one version per \
+         package across the module graph — pin a single version via a \
+         `patch:` entry in the requiring streamlib.yaml (redirecting \
+         '{package}' to one path/git source), or align the two requirers \
+         on the same version."
+    )]
+    SingleVersionConflict {
+        package: streamlib_idents::PackageRef,
+        existing_version: streamlib_idents::SemVer,
+        existing_required_by: String,
+        conflicting_version: streamlib_idents::SemVer,
+        conflicting_required_by: String,
+    },
+
+    /// This load skipped registering `package` because a concurrent
+    /// `add_module` load was already resolving the same version — and
+    /// that concurrent load subsequently failed, so the package never
+    /// registered. Fails loudly rather than reporting a false success
+    /// over an unregistered dependency.
+    #[error(
+        "Concurrent load of '{package}' (version {version}) failed after \
+         this load skipped it as already-in-flight — the package never \
+         registered. Retry this add_module call."
+    )]
+    ConcurrentLoadOfSkippedDependencyFailed {
+        package: streamlib_idents::PackageRef,
+        version: streamlib_idents::SemVer,
+    },
+
+    /// This load skipped `package` as already-in-flight on a concurrent
+    /// `add_module` load, and that load neither committed nor failed
+    /// within the wait window. Defensive bound — a wedged concurrent
+    /// load surfaces as this typed error, never as a hang.
+    #[error(
+        "Timed out after {waited_secs}s waiting for a concurrent load of \
+         '{package}' (version {version}) that this load skipped as \
+         already-in-flight. The concurrent load may be wedged; retry this \
+         add_module call once it settles."
+    )]
+    ConcurrentLoadOfSkippedDependencyTimedOut {
+        package: streamlib_idents::PackageRef,
+        version: streamlib_idents::SemVer,
+        waited_secs: u64,
+    },
 }
 
 impl From<AddModuleError> for Error {
