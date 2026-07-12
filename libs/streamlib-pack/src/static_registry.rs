@@ -689,24 +689,26 @@ fn emit_npm(opts: &EmitOptions, staging: &Path, target: &str) -> Result<()> {
 enum PackageEmitDecision {
     /// Publishable — assemble + upload + catalog + release-manifest membership.
     Emit,
-    /// Non-publishable: carries a dev path-`patch:` block (the test-only
-    /// fixtures). Skipped from the whole-tree emit, naming every offender.
-    SkipDevPatch(Vec<String>),
+    /// Non-distributable: carries a `streamlib.yaml` path-`patch:` block OR a
+    /// Cargo.toml dependency-table `path` dep (the test-only fixtures).
+    /// Skipped from the whole-tree emit, naming every offender.
+    SkipNonDistributable(Vec<String>),
 }
 
 /// Classify a `packages/*` dir for the whole-tree emit. A package carrying a
-/// dev path-`patch:` block is non-distributable by construction — the exact
-/// condition [`PathDepPolicy::RejectPathPatches`](crate::PathDepPolicy)
-/// refuses inside [`assemble_slpkg_bytes`] — so the whole-tree emit skips it
-/// rather than hard-failing the whole release. The predicate is shared with
-/// the CLI gate (`crate::path_patch_offenders`), so the skip is the same
-/// condition, sound by construction rather than a proxy.
+/// `streamlib.yaml` path-`patch:` block OR a Cargo.toml dependency-table `path`
+/// dep is non-distributable by construction — the exact set
+/// `ensure_no_path_artifacts` rejects inside [`assemble_slpkg_bytes`] for the
+/// `Slpkg` target — so the whole-tree emit skips it rather than hard-failing
+/// the whole release. The predicate is shared with that gate via
+/// [`crate::non_distributable_path_offenders`], so the skip set equals the
+/// rejection set, sound by construction rather than a proxy.
 fn decide_package_emit(pkg_dir: &Path) -> Result<PackageEmitDecision> {
-    let offenders = crate::path_patch_offenders(pkg_dir)?;
+    let offenders = crate::non_distributable_path_offenders(pkg_dir)?;
     if offenders.is_empty() {
         Ok(PackageEmitDecision::Emit)
     } else {
-        Ok(PackageEmitDecision::SkipDevPatch(offenders))
+        Ok(PackageEmitDecision::SkipNonDistributable(offenders))
     }
 }
 
@@ -750,20 +752,21 @@ fn emit_slpkg_and_manifest(
             if !yaml.is_file() {
                 continue;
             }
-            // A package carrying a dev path-`patch:` block is non-distributable
-            // by construction (the same condition
-            // `PathDepPolicy::RejectPathPatches` refuses inside
-            // `assemble_slpkg_bytes`). The whole-tree emit skips it — with a
-            // warning naming every offender — rather than hard-failing the
-            // whole release; the single-package `streamlib pkg build/publish`
-            // still hard-fails so an author sees the error. Skipping here means
-            // no upload, no release-manifest membership, and no catalog entry.
+            // A package carrying a `streamlib.yaml` path-`patch:` block OR a
+            // Cargo.toml dependency-table `path` dep is non-distributable by
+            // construction (the same set `ensure_no_path_artifacts` rejects
+            // inside `assemble_slpkg_bytes` for the `Slpkg` target). The
+            // whole-tree emit skips it — with a warning naming every offender —
+            // rather than hard-failing the whole release; the single-package
+            // `streamlib pkg build/publish` still hard-fails so an author sees
+            // the error. Skipping here means no upload, no release-manifest
+            // membership, and no catalog entry.
             match decide_package_emit(pkg_dir)? {
-                PackageEmitDecision::SkipDevPatch(offenders) => {
+                PackageEmitDecision::SkipNonDistributable(offenders) => {
                     tracing::warn!(
                         package = %pkg_dir.display(),
                         offenders = %offenders.join(", "),
-                        "skipping non-publishable package (dev path patch) from static-registry .slpkg emit"
+                        "skipping non-distributable package (path patch or cargo path dep) from static-registry .slpkg emit"
                     );
                     skipped += 1;
                     continue;
@@ -1294,7 +1297,7 @@ mod tests {
     }
 
     /// A manifest carrying a dev path-`patch:` block (the test-fixtures shape)
-    /// classifies as `SkipDevPatch`, naming the offending dependency.
+    /// classifies as `SkipNonDistributable`, naming the offending dependency.
     ///
     /// Mental revert: change `decide_package_emit`'s non-empty arm to
     /// `PackageEmitDecision::Emit` and this test fails — the classification is
@@ -1308,7 +1311,7 @@ mod tests {
              patch:\n  \"@tatolab/core\":\n    path: ../core\n",
         );
         match decide_package_emit(dir.path()).unwrap() {
-            PackageEmitDecision::SkipDevPatch(offenders) => {
+            PackageEmitDecision::SkipNonDistributable(offenders) => {
                 assert_eq!(offenders.len(), 1);
                 assert!(
                     offenders[0].contains("@tatolab/core") && offenders[0].contains("../core"),
@@ -1317,6 +1320,70 @@ mod tests {
             }
             PackageEmitDecision::Emit => panic!("path-patch-carrying package must be skipped"),
         }
+    }
+
+    /// A clean `streamlib.yaml` (no path `patch:`) paired with a Cargo.toml
+    /// carrying a dependency-table `path` dep classifies as
+    /// `SkipNonDistributable`. This is the case #1285's streamlib.yaml-only
+    /// predicate missed: `ensure_no_path_artifacts` would hard-fail the whole
+    /// emit on the Cargo path dep, so the skip predicate must detect it too —
+    /// the skip set must equal the rejection set.
+    ///
+    /// Mental revert: drop the `cargo_path_dep_offenders` half of
+    /// `non_distributable_path_offenders` and this package classifies `Emit`
+    /// (its streamlib.yaml carries no patch), reintroducing the "one
+    /// non-publishable package fails the whole release" mode via the other
+    /// gate.
+    #[test]
+    fn decide_package_emit_cargo_path_dep_skips_and_names_offender() {
+        let dir = package_dir_with_manifest(
+            "package:\n  org: tatolab\n  name: cargo-path-pkg\n  version: 1.0.0\n\
+             dependencies:\n  \"@tatolab/core\": \"^1.0.0\"\n",
+        );
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"cargo-path-pkg\"\nversion = \"1.0.0\"\n\
+             [dependencies]\nsibling = { path = \"../sibling\", version = \"1.0\" }\n",
+        )
+        .unwrap();
+        match decide_package_emit(dir.path()).unwrap() {
+            PackageEmitDecision::SkipNonDistributable(offenders) => {
+                assert!(
+                    offenders.iter().any(|o| o.contains("sibling")),
+                    "offender should name the Cargo path dep: {offenders:?}"
+                );
+            }
+            PackageEmitDecision::Emit => {
+                panic!("a Cargo.toml dependency-table path dep must be skipped")
+            }
+        }
+    }
+
+    /// A Cargo.toml TARGET path (`[[bin]].path` / `[lib].path`) is NOT a
+    /// dependency path — a package whose only Cargo path keys are target
+    /// paths (and whose streamlib.yaml carries no patch, and whose deps
+    /// resolve from the registry) still classifies `Emit`. Guards against an
+    /// over-broad scan that would skip a publishable package for declaring a
+    /// non-default `src/` layout.
+    #[test]
+    fn decide_package_emit_cargo_target_path_still_emits() {
+        let dir = package_dir_with_manifest(
+            "package:\n  org: tatolab\n  name: target-path-pkg\n  version: 1.0.0\n\
+             dependencies:\n  \"@tatolab/core\": \"^1.0.0\"\n",
+        );
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"target-path-pkg\"\nversion = \"1.0.0\"\n\
+             [lib]\npath = \"src/lib.rs\"\n\
+             [[bin]]\nname = \"tool\"\npath = \"src/bin/tool.rs\"\n\
+             [dependencies]\nserde = { version = \"1\", registry = \"tatolab\" }\n",
+        )
+        .unwrap();
+        assert!(
+            matches!(decide_package_emit(dir.path()).unwrap(), PackageEmitDecision::Emit),
+            "Cargo target paths ([[bin]].path / [lib].path) are not dependency \
+             paths and must not trigger skip"
+        );
     }
 
     /// A non-path (git) `patch:` override is a legitimate distributable

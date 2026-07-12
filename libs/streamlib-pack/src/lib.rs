@@ -610,48 +610,50 @@ fn dylib_filename(path: &Path) -> Result<String> {
 /// the registry, so a stray path would ship and break the consumer's off-tree
 /// build. Called only for the `Slpkg` target (`pkg build` / `pkg publish`).
 fn ensure_no_path_artifacts(pkg_dir: &Path) -> Result<()> {
-    let manifest_path = pkg_dir.join(Manifest::FILE_NAME);
-    if manifest_path.exists() {
-        let body = std::fs::read_to_string(&manifest_path)
-            .with_context(|| format!("read {}", manifest_path.display()))?;
-        let manifest: streamlib_processor_schema::StreamlibYaml =
-            serde_yaml::from_str(&body).context("parse streamlib.yaml")?;
-        let path_patches: Vec<String> = manifest
-            .patch
-            .iter()
-            .filter(|(_, spec)| matches!(spec, DependencySpec::Path(_)))
-            .map(|(dep, _)| dep.to_string())
-            .collect();
-        if !path_patches.is_empty() {
-            anyhow::bail!(
-                "{} carries path `patch:` override(s) for [{}] — a published package \
-                 must be standalone (registry-only). Remove the `patch:` block; each \
-                 dependency resolves from the registry by the version in `dependencies:`.",
-                manifest_path.display(),
-                path_patches.join(", "),
-            );
-        }
+    // Both halves flow through the SAME helpers the whole-tree emit's skip
+    // predicate ([`non_distributable_path_offenders`]) is built from, so the
+    // rejection set and the skip set are identical by construction — neither
+    // half can drift into a "skip misses what reject catches" gap.
+    let patch_offenders = path_patch_offenders(pkg_dir)?;
+    if !patch_offenders.is_empty() {
+        anyhow::bail!(
+            "{} carries path `patch:` override(s) for [{}] — a published package \
+             must be standalone (registry-only). Remove the `patch:` block; each \
+             dependency resolves from the registry by the version in `dependencies:`.",
+            pkg_dir.join(Manifest::FILE_NAME).display(),
+            patch_offenders.join(", "),
+        );
     }
 
-    let cargo_path = pkg_dir.join("Cargo.toml");
-    if cargo_path.exists() {
-        let body = std::fs::read_to_string(&cargo_path)
-            .with_context(|| format!("read {}", cargo_path.display()))?;
-        let doc: toml::Value =
-            toml::from_str(&body).with_context(|| format!("parse {}", cargo_path.display()))?;
-        let offenders = cargo_path_dep_names(&doc);
-        if !offenders.is_empty() {
-            anyhow::bail!(
-                "{} declares path dependenc(ies) [{}] — a published package must be \
-                 standalone (registry-only). Replace each with \
-                 `{{ version = \"…\", registry = \"tatolab\" }}` so the crate resolves \
-                 from the registry.",
-                cargo_path.display(),
-                offenders.join(", "),
-            );
-        }
+    let cargo_offenders = cargo_path_dep_offenders(pkg_dir)?;
+    if !cargo_offenders.is_empty() {
+        anyhow::bail!(
+            "{} declares path dependenc(ies) [{}] — a published package must be \
+             standalone (registry-only). Replace each with \
+             `{{ version = \"…\", registry = \"tatolab\" }}` so the crate resolves \
+             from the registry.",
+            pkg_dir.join("Cargo.toml").display(),
+            cargo_offenders.join(", "),
+        );
     }
     Ok(())
+}
+
+/// Names of dependency-table `path` deps in `<pkg_dir>/Cargo.toml` — the same
+/// scan [`ensure_no_path_artifacts`] rejects on. Empty when the Cargo.toml is
+/// absent or carries only registry-resolved deps. Reads + parses the Cargo.toml
+/// then defers to [`cargo_path_dep_names`], so a `[[bin]].path` / `[lib].path`
+/// TARGET path never counts — only dependency tables are scanned.
+fn cargo_path_dep_offenders(pkg_dir: &Path) -> Result<Vec<String>> {
+    let cargo_path = pkg_dir.join("Cargo.toml");
+    if !cargo_path.exists() {
+        return Ok(Vec::new());
+    }
+    let body = std::fs::read_to_string(&cargo_path)
+        .with_context(|| format!("read {}", cargo_path.display()))?;
+    let doc: toml::Value =
+        toml::from_str(&body).with_context(|| format!("parse {}", cargo_path.display()))?;
+    Ok(cargo_path_dep_names(&doc))
 }
 
 /// Names of dependencies carrying a `path` key across every dependency table
@@ -945,6 +947,22 @@ pub(crate) fn path_patch_offenders(pkg_dir: &Path) -> Result<Vec<String>> {
             _ => None,
         })
         .collect())
+}
+
+/// Every non-distributable path artifact in a package dir — the union of
+/// `streamlib.yaml` path-`patch:` overrides ([`path_patch_offenders`]) and
+/// Cargo.toml dependency-table `path` deps ([`cargo_path_dep_offenders`]).
+///
+/// [`ensure_no_path_artifacts`] rejects on these exact same two helpers for
+/// the [`AssembleTarget::Slpkg`] target, so the whole-tree static-registry
+/// emit's skip predicate keys on the same condition it would otherwise
+/// hard-fail on: the skip set equals the rejection set, sound by construction
+/// (one shared definition per half) rather than a proxy. TARGET paths
+/// (`[[bin]].path` / `[lib].path`) are not dependency paths and never count.
+pub(crate) fn non_distributable_path_offenders(pkg_dir: &Path) -> Result<Vec<String>> {
+    let mut offenders = path_patch_offenders(pkg_dir)?;
+    offenders.extend(cargo_path_dep_offenders(pkg_dir)?);
+    Ok(offenders)
 }
 
 /// Reject path-flavor `patch:` entries (dev-time overrides that don't
