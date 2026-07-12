@@ -38,6 +38,7 @@
 mod deno_codegen;
 mod native_host;
 mod python_venv;
+mod release_check;
 
 #[cfg(test)]
 mod test_support;
@@ -239,6 +240,21 @@ impl PolyglotBuildOrchestrator {
                     });
                 }
             }
+        }
+
+        // ---- Consumer-side release-completeness pre-check ----
+        // A Rust package resolves its gitea-registry deps via cargo below. If
+        // the configured registry holds a partial/mid-publish release of the
+        // pinned version, fail fast here naming the missing artifacts instead
+        // of surfacing it as a cryptic cargo `failed to select a version …`
+        // deep in the build. No-op for dev/path builds (no registry) and
+        // pre-atomic-release registries (no manifest) — see `release_check`.
+        if has_rust {
+            let pins = build::read_gitea_registry_pins(pkg_dir)
+                .map_err(|e| other(&pkg_label, format!("reading gitea-registry pins: {e}")))?;
+            let required: Vec<(String, String)> =
+                pins.into_iter().map(|p| (p.name, p.version)).collect();
+            release_check::assert_release_complete(&pkg_label, &required)?;
         }
 
         // ---- Assemble + stage to the package cache ----

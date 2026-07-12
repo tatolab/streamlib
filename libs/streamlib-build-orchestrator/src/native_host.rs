@@ -111,6 +111,16 @@ pub(crate) fn ensure_native_host(
         return Ok(dest);
     }
 
+    // Consumer-side release-completeness pre-check: the native host crate is
+    // itself a member of the engine release closure. If the registry holds a
+    // partial release of `version`, fail fast naming the gap instead of a
+    // cryptic cargo resolve error inside the standalone build below. No-op
+    // for pre-atomic-release registries (no manifest) — see `release_check`.
+    crate::release_check::assert_release_complete(
+        runtime.crate_name(),
+        &[(runtime.crate_name().to_string(), version.to_string())],
+    )?;
+
     tracing::info!(
         crate_name = runtime.crate_name(),
         %version,

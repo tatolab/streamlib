@@ -94,6 +94,93 @@ pub fn read_cargo_package_name(package_dir: &Path) -> Result<String> {
     Ok(name.to_string())
 }
 
+/// A direct gitea-registry cargo dependency pin: the crate `name` and the
+/// concrete `version` its manifest floor-pins it at (leading range operators
+/// `=` / `^` / `~` / `>=` stripped). The unit the release-completeness check
+/// validates against a release manifest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GiteaRegistryPin {
+    pub name: String,
+    pub version: String,
+}
+
+/// Strip a cargo version-req's leading range operator, yielding the concrete
+/// floor version string (`=0.5.0` / `^0.5.0` / `>=0.5.0` → `0.5.0`).
+fn strip_version_req_operator(req: &str) -> String {
+    req.trim()
+        .trim_start_matches(['=', '^', '~', '>', '<'])
+        .trim()
+        .to_string()
+}
+
+/// Collect gitea-registry pins from one `[dependencies]`-shaped table into
+/// `out`. The dep key is the crate name unless a `package = "..."` rename
+/// overrides it.
+fn collect_gitea_pins_from_table(table: &toml::value::Table, out: &mut Vec<GiteaRegistryPin>) {
+    for (key, value) in table {
+        let Some(dep) = value.as_table() else {
+            continue;
+        };
+        let is_gitea = dep.get("registry").and_then(|r| r.as_str()) == Some("gitea");
+        if !is_gitea {
+            continue;
+        }
+        let Some(version) = dep.get("version").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let name = dep
+            .get("package")
+            .and_then(|p| p.as_str())
+            .unwrap_or(key.as_str())
+            .to_string();
+        out.push(GiteaRegistryPin {
+            name,
+            version: strip_version_req_operator(version),
+        });
+    }
+}
+
+/// Read a package's **direct** gitea-registry cargo dependency pins from its
+/// `Cargo.toml` — every `[dependencies]` / `[build-dependencies]` /
+/// `[target.*.dependencies]` / `[target.*.build-dependencies]` entry declaring
+/// `registry = "gitea"`. `dev-dependencies` are excluded (they don't
+/// participate in the release closure).
+///
+/// Returns `(name, floor-version)` pairs. `Ok(vec![])` when the package has no
+/// `Cargo.toml` (schema-only package) — the check simply has nothing to
+/// validate in that case.
+pub fn read_gitea_registry_pins(package_dir: &Path) -> Result<Vec<GiteaRegistryPin>> {
+    let cargo_toml_path = package_dir.join("Cargo.toml");
+    if !cargo_toml_path.exists() {
+        return Ok(Vec::new());
+    }
+    let body = std::fs::read_to_string(&cargo_toml_path)
+        .with_context(|| format!("Failed to read {}", cargo_toml_path.display()))?;
+    let parsed: toml::Value = toml::from_str(&body)
+        .with_context(|| format!("Failed to parse {}", cargo_toml_path.display()))?;
+
+    let mut pins = Vec::new();
+    for section in ["dependencies", "build-dependencies"] {
+        if let Some(table) = parsed.get(section).and_then(|v| v.as_table()) {
+            collect_gitea_pins_from_table(table, &mut pins);
+        }
+    }
+    // `[target.'cfg(...)'.{dependencies,build-dependencies}]`.
+    if let Some(targets) = parsed.get("target").and_then(|v| v.as_table()) {
+        for cfg_tbl in targets.values() {
+            let Some(cfg_tbl) = cfg_tbl.as_table() else {
+                continue;
+            };
+            for section in ["dependencies", "build-dependencies"] {
+                if let Some(table) = cfg_tbl.get(section).and_then(|v| v.as_table()) {
+                    collect_gitea_pins_from_table(table, &mut pins);
+                }
+            }
+        }
+    }
+    Ok(pins)
+}
+
 /// Cargo build profile selector for [`run_cargo_build`].
 ///
 /// `Release` is the production-distribution shape (`streamlib pack`
@@ -405,6 +492,64 @@ crate-type = ["cdylib"]
         let dylib_only = collect_host_dylibs_in_lib(&lib, "dylib").unwrap();
         assert_eq!(dylib_only.len(), 1);
         assert!(dylib_only[0].ends_with("libfoo.dylib"));
+    }
+
+    #[test]
+    fn read_gitea_registry_pins_collects_direct_pins_and_strips_operators() {
+        // Mixed dep table: gitea pins (with `=` / bare / cfg-target /
+        // build-dep / renamed) must be collected with operators stripped;
+        // non-gitea deps (serde) and dev-deps must be excluded. Reverting the
+        // `registry == "gitea"` filter would slurp serde; reverting the
+        // operator strip would leave `=` on the version and mismatch the
+        // manifest's stamped string.
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            r#"
+[package]
+name = "streamlib-jpeg"
+version = "1.0.7"
+
+[build-dependencies]
+streamlib-jtd-codegen = {version = "=0.5.1", registry = "gitea"}
+
+[dependencies]
+streamlib-plugin-sdk = {version = "0.5.1", registry = "gitea"}
+streamlib-macros = {version = "^0.5.1", registry = "gitea"}
+serde = {version = "1.0", features = ["derive"]}
+renamed-dep = {version = "=0.5.1", registry = "gitea", package = "streamlib-plugin-abi"}
+
+[dev-dependencies]
+streamlib-test-fixtures = {version = "0.5.1", registry = "gitea"}
+
+[target.'cfg(target_os = "linux")'.dependencies]
+vulkan-jpeg = {version = ">=0.5.1", registry = "gitea"}
+"#,
+        )
+        .unwrap();
+
+        let mut pins = read_gitea_registry_pins(dir.path()).unwrap();
+        pins.sort_by(|a, b| a.name.cmp(&b.name));
+        let got: Vec<(String, String)> =
+            pins.into_iter().map(|p| (p.name, p.version)).collect();
+        assert_eq!(
+            got,
+            vec![
+                ("streamlib-jtd-codegen".to_string(), "0.5.1".to_string()),
+                ("streamlib-macros".to_string(), "0.5.1".to_string()),
+                ("streamlib-plugin-abi".to_string(), "0.5.1".to_string()), // renamed
+                ("streamlib-plugin-sdk".to_string(), "0.5.1".to_string()),
+                ("vulkan-jpeg".to_string(), "0.5.1".to_string()),
+            ],
+            "gitea pins must include normal/build/cfg-target deps (renamed via \
+             `package`), strip range operators, and exclude serde + dev-deps"
+        );
+    }
+
+    #[test]
+    fn read_gitea_registry_pins_empty_without_cargo_toml() {
+        let dir = tempdir().unwrap();
+        assert!(read_gitea_registry_pins(dir.path()).unwrap().is_empty());
     }
 
     #[test]

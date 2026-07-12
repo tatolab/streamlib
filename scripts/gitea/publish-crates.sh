@@ -62,56 +62,20 @@ PY
 target_version="$base_version"
 [ -n "$DEV_N" ] && target_version="${base_version}-dev.${DEV_N}"
 
-# --- derive the streamlib closure in topological order -----------------------
-mapfile -t ORDER < <("$PY" - <<'PY'
-import json, os, subprocess
-md = json.loads(subprocess.check_output(["cargo","metadata","--format-version","1"]))
-pkgs = {p["id"]: p for p in md["packages"]}
-members = set(md["workspace_members"])
-resolve = {n["id"]: n for n in md["resolve"]["nodes"]}
-name = lambda i: pkgs[i]["name"]
-# Publish-closure roots: the `streamlib` SDK crate a consumer deps, PLUS the
-# subprocess native hosts the build orchestrator fetches from the registry by
-# exact version (streamlib-python-native / streamlib-deno-native). The hosts
-# pull adapters + consumer-rhi the SDK closure alone doesn't, so the union of
-# the three roots' closures (topo-ordered) is what a polyglot consumer needs.
-root_names = ("streamlib", "streamlib-python-native", "streamlib-deno-native")
-internal = lambda i: i in members and (name(i).startswith("streamlib") or name(i) == "vulkan-jpeg")
-# STREAMLIB_PUBLISH_ALL_LIBS=1 widens the closure from "what the streamlib SDK
-# needs" to "every internal library crate", so a package can cargo-depend on any
-# in-tree lib (e.g. api-server -> streamlib-moq) and resolve it from the
-# registry. Binaries (streamlib-cli / -runtime) and test fixtures are excluded.
-# Used by the container's registry-fill (docker/build-stage1.sh).
-if os.environ.get("STREAMLIB_PUBLISH_ALL_LIBS") == "1":
-    skip = {"streamlib-test-fixtures", "streamlib-test-fixtures-abi-mismatch"}
-    lib_kinds = {"lib", "rlib", "cdylib", "proc-macro", "dylib", "staticlib"}
-    has_lib = lambda i: any(set(t["kind"]) & lib_kinds for t in pkgs[i]["targets"])
-    # Respect each crate's own publish setting: cargo metadata reports
-    # `publish == []` for `publish = false` crates (internal adapter helpers),
-    # which `cargo publish` refuses. Only publishable libs go to the registry.
-    publishable = lambda i: pkgs[i].get("publish") != []
-    roots = [i for i in members
-             if internal(i) and has_lib(i) and publishable(i) and name(i) not in skip]
-else:
-    roots = [i for i in members if name(i) in root_names]
-def deps(i):
-    out = []
-    for d in resolve[i]["deps"]:
-        if {k["kind"] for k in d["dep_kinds"]} & {None, "build"}:
-            out.append(d["pkg"])
-    return out
-seen, order = set(), []
-def visit(i):
-    if i in seen: return
-    seen.add(i)
-    for d in deps(i):
-        if internal(d): visit(d)
-    if internal(i): order.append(name(i))
-for r in roots:
-    visit(r)
-print("\n".join(order))
-PY
-)
+# --- derive the streamlib release closure in topological order ---------------
+# The closure is the SINGLE canonical set of crates a release publishes,
+# defined once in streamlib-pack (`compute_release_closure`) and emitted by
+# `cargo xtask release-closure --json`. There is deliberately NO "SDK-subset vs
+# all-libs" switch: the easy-to-skip libs (streamlib-plugin-sdk, vulkan-jpeg)
+# and the subprocess native hosts (streamlib-python-native / -deno-native) are
+# all members by definition, in dependency (topological) publish order.
+closure_json="$(cargo run -q -p xtask -- release-closure)" \
+  || fail "could not compute the release closure (cargo xtask release-closure)"
+mapfile -t ORDER < <(printf '%s' "$closure_json" | "$PY" -c '
+import json, sys
+for c in json.load(sys.stdin)["crates"]:
+    print(c["name"])
+')
 [ "${#ORDER[@]}" -gt 0 ] || fail "could not derive the streamlib closure"
 log "closure (${#ORDER[@]} crates): ${ORDER[*]}"
 log "publishing version: $target_version"
@@ -132,9 +96,14 @@ snapshot() {
 # --- optional dev-version bump (workspace version + internal dep reqs) --------
 if [ -n "$DEV_N" ]; then
   log "bumping in place: $base_version -> $target_version (restored on exit)"
-  # collect member manifests + root, snapshot, then rewrite with tomlkit
+  # collect member manifests + root, snapshot, then rewrite with tomlkit.
+  # Only libs/ + plugin/ carry the workspace-versioned engine crates the
+  # closure publishes; packages/ own INDEPENDENT semver (.slpkg version, per
+  # #1239) and are published by publish-packages.sh, so bumping their crate
+  # version here would be semantically wrong (a transient bump/restore that
+  # doesn't belong to the engine dev-version axis).
   while IFS= read -r m; do snapshot "$m"; done < <(
-    { echo Cargo.toml; find libs packages plugin -name Cargo.toml -not -path '*/target/*'; }
+    { echo Cargo.toml; find libs plugin -name Cargo.toml -not -path '*/target/*'; }
   )
   BASE="$base_version" TARGET="$target_version" "$PY" - <<'PY'
 import os, glob, tomlkit
@@ -172,8 +141,9 @@ def bump_member(path):
     if changed:
         open(path, "w").write(tomlkit.dumps(doc))
 bump_workspace()
+# libs/ + plugin/ only — packages/ own independent .slpkg semver (#1239) and
+# are not part of the engine dev-version bump.
 for m in (glob.glob("libs/**/Cargo.toml", recursive=True)
-          + glob.glob("packages/**/Cargo.toml", recursive=True)
           + glob.glob("plugin/**/Cargo.toml", recursive=True)):
     if "/target/" in m: continue
     bump_member(m)

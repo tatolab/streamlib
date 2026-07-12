@@ -140,23 +140,21 @@ export STREAMLIB_BIN="$SRC/target/release/streamlib"
 [ -x "$SRC/target/release/streamlib-runtime" ] || fail "streamlib-runtime not built"
 
 # ---------------------------------------------------------------------------
-# 8. Publish ALL internal library crates so the in-container registry matches
-#    the local build and every package can cargo-resolve any in-tree lib
-#    (e.g. api-server -> streamlib-moq). STREAMLIB_PUBLISH_ALL_LIBS widens
-#    publish-crates' closure from the SDK set to the full internal lib set
-#    (binaries + test fixtures excluded).
+# 8. Publish a CONSISTENT, ATOMIC release: the full crate closure (the single
+#    canonical release closure — every publishable streamlib* / vulkan-jpeg
+#    library crate, incl. the easy-to-skip streamlib-plugin-sdk + vulkan-jpeg,
+#    by definition — plus the subprocess native hosts), the polyglot SDKs, the
+#    packages, and finally the release manifest (the atomicity flip). The
+#    manifest marks the in-container registry as a complete release, so a
+#    consumer resolving against it detects a partial set up front. The
+#    SKIP_* guards below are honored by publish-release.sh.
 # ---------------------------------------------------------------------------
-log "publishing all internal library crates"
-( cd "$SRC" && STREAMLIB_PUBLISH_ALL_LIBS=1 ./scripts/gitea/publish-crates.sh )
-if [ "$SKIP_PYTHON_SDK" != 1 ]; then
-  log "publishing python SDK"; ( cd "$SRC" && ./scripts/gitea/publish-python-sdk.sh )
-else log "SKIP python SDK"; fi
-if [ "$SKIP_DENO_SDK" != 1 ]; then
-  log "publishing deno SDK"; ( cd "$SRC" && ./scripts/gitea/publish-deno-sdk.sh )
-else log "SKIP deno SDK"; fi
-if [ "$SKIP_PACKAGES" != 1 ]; then
-  log "publishing packages (.slpkg)"; ( cd "$SRC" && ./scripts/gitea/publish-packages.sh )
-else log "SKIP packages"; fi
+log "publishing consistent release (crates + SDKs + packages + manifest)"
+( cd "$SRC" \
+  && SKIP_PYTHON_SDK="$SKIP_PYTHON_SDK" \
+     SKIP_DENO_SDK="$SKIP_DENO_SDK" \
+     SKIP_PACKAGES="$SKIP_PACKAGES" \
+     ./scripts/gitea/publish-release.sh )
 
 # ---------------------------------------------------------------------------
 # 9. Assemble the /opt/streamlib app dir (binaries + package source + registry

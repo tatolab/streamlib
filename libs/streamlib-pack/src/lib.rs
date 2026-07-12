@@ -47,6 +47,226 @@ pub use streamlib_cargo_build::CargoProfile;
 
 pub mod link_marker;
 
+/// One member of the engine release closure: a publishable workspace library
+/// crate, with its version and manifest directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseCrate {
+    pub name: String,
+    pub version: String,
+    /// Directory holding the crate's `Cargo.toml` (its manifest dir).
+    pub manifest_dir: PathBuf,
+}
+
+/// The engine **release closure** — every publishable `streamlib*` /
+/// `vulkan-jpeg` library crate in the workspace, in dependency (topological)
+/// publish order (a crate always precedes its dependents).
+///
+/// This is the single, only definition of "the set of crates a release
+/// publishes." There is deliberately no "SDK-subset vs. all-libs" switch: the
+/// closure is the full linkable set by construction, so the easy-to-skip
+/// libraries (`streamlib-plugin-sdk`, `vulkan-jpeg`) are members by definition
+/// — the foot-gun a human-remembered "publish everything" flag used to hide.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseClosure {
+    pub crates: Vec<ReleaseCrate>,
+}
+
+impl ReleaseClosure {
+    /// The closure member names in topological publish order.
+    pub fn names(&self) -> Vec<&str> {
+        self.crates.iter().map(|c| c.name.as_str()).collect()
+    }
+}
+
+/// Whether a crate name belongs to the streamlib release closure *by name*:
+/// every workspace library crate named `streamlib*` (SDK, engine, macros,
+/// plugin ABI, adapters, consumer-rhi, …) plus `vulkan-jpeg`. The full
+/// closure predicate also requires a library target and a publishable
+/// `publish` setting — see [`compute_release_closure`].
+pub fn is_linkable_crate_name(name: &str) -> bool {
+    name.starts_with("streamlib") || name == "vulkan-jpeg"
+}
+
+/// The library-target kinds a publishable crate must expose. A crate with
+/// only a `bin` target (the CLI / runtime binaries) is excluded.
+const RELEASE_CLOSURE_LIB_KINDS: &[&str] =
+    &["lib", "rlib", "cdylib", "proc-macro", "dylib", "staticlib"];
+
+fn json_has_library_target(pkg: &serde_json::Value) -> bool {
+    pkg.get("targets")
+        .and_then(|t| t.as_array())
+        .is_some_and(|targets| {
+            targets.iter().any(|t| {
+                t.get("kind")
+                    .and_then(|k| k.as_array())
+                    .is_some_and(|kinds| {
+                        kinds
+                            .iter()
+                            .filter_map(|k| k.as_str())
+                            .any(|k| RELEASE_CLOSURE_LIB_KINDS.contains(&k))
+                    })
+            })
+        })
+}
+
+/// `publish == []` in cargo metadata means `publish = false` — cargo refuses
+/// to publish it, so it's excluded from the closure.
+fn json_is_publishable(pkg: &serde_json::Value) -> bool {
+    !pkg.get("publish")
+        .and_then(|v| v.as_array())
+        .is_some_and(|a| a.is_empty())
+}
+
+/// Compute the engine release closure from a live `cargo metadata` run at
+/// `workspace_root`. The predicate — workspace member, [`is_linkable_crate_name`],
+/// a library target, and a publishable `publish` setting — is the *only*
+/// definition of the closure; the topological ordering is derived from the
+/// resolved dependency graph so it stays correct as the graph shifts.
+pub fn compute_release_closure(workspace_root: &Path) -> Result<ReleaseClosure> {
+    let manifest_path = workspace_root.join("Cargo.toml");
+    let output = Command::new("cargo")
+        .args(["metadata", "--format-version", "1"])
+        .arg("--manifest-path")
+        .arg(&manifest_path)
+        .output()
+        .with_context(|| format!("running cargo metadata at {}", manifest_path.display()))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "cargo metadata failed at {}: {}",
+            manifest_path.display(),
+            String::from_utf8_lossy(&output.stderr).trim(),
+        );
+    }
+    let md: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .context("parsing cargo metadata JSON")?;
+
+    let members: std::collections::HashSet<&str> = md
+        .get("workspace_members")
+        .and_then(|m| m.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+
+    let empty = Vec::new();
+    let packages = md.get("packages").and_then(|p| p.as_array()).unwrap_or(&empty);
+    // id → package json, and id → name, for the members we care about.
+    let mut pkg_by_id: std::collections::HashMap<&str, &serde_json::Value> =
+        std::collections::HashMap::new();
+    for pkg in packages {
+        if let Some(id) = pkg.get("id").and_then(|v| v.as_str()) {
+            pkg_by_id.insert(id, pkg);
+        }
+    }
+    let name_of = |id: &str| -> &str {
+        pkg_by_id
+            .get(id)
+            .and_then(|p| p.get("name"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+    };
+    // An id is "internal" (walked + publishable) when it's a workspace member
+    // that satisfies the full closure predicate.
+    let is_internal = |id: &str| -> bool {
+        if !members.contains(id) {
+            return false;
+        }
+        let Some(pkg) = pkg_by_id.get(id) else {
+            return false;
+        };
+        is_linkable_crate_name(name_of(id)) && json_has_library_target(pkg) && json_is_publishable(pkg)
+    };
+
+    // Resolved dependency graph: id → its normal/build dep ids.
+    let resolve_nodes = md
+        .get("resolve")
+        .and_then(|r| r.get("nodes"))
+        .and_then(|n| n.as_array())
+        .ok_or_else(|| anyhow::anyhow!("cargo metadata has no resolve graph (ran with --no-deps?)"))?;
+    let mut deps_by_id: std::collections::HashMap<&str, Vec<&str>> =
+        std::collections::HashMap::new();
+    for node in resolve_nodes {
+        let Some(id) = node.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let mut deps = Vec::new();
+        if let Some(dep_arr) = node.get("deps").and_then(|d| d.as_array()) {
+            for dep in dep_arr {
+                // Keep normal + build deps (kind null | "build"); drop dev-only
+                // deps, which don't participate in the publish closure.
+                let keep = dep
+                    .get("dep_kinds")
+                    .and_then(|k| k.as_array())
+                    .map(|kinds| {
+                        kinds.iter().any(|k| {
+                            matches!(
+                                k.get("kind").and_then(|v| v.as_str()),
+                                None | Some("build")
+                            )
+                        })
+                    })
+                    .unwrap_or(true);
+                if keep && let Some(pkg) = dep.get("pkg").and_then(|v| v.as_str()) {
+                    deps.push(pkg);
+                }
+            }
+        }
+        deps_by_id.insert(id, deps);
+    }
+
+    // Post-order DFS over internal deps ⇒ topological publish order.
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut order: Vec<&str> = Vec::new();
+    // Iterative DFS to avoid recursion-depth concerns on large graphs.
+    let mut roots: Vec<&str> = members.iter().copied().filter(|id| is_internal(id)).collect();
+    roots.sort_by_key(|id| name_of(id).to_string());
+    for root in roots {
+        let mut stack: Vec<(&str, bool)> = vec![(root, false)];
+        while let Some((id, expanded)) = stack.pop() {
+            if expanded {
+                if !order.contains(&id) {
+                    order.push(id);
+                }
+                continue;
+            }
+            if seen.contains(id) {
+                continue;
+            }
+            seen.insert(id);
+            stack.push((id, true));
+            if let Some(deps) = deps_by_id.get(id) {
+                for &dep in deps {
+                    if is_internal(dep) && !seen.contains(dep) {
+                        stack.push((dep, false));
+                    }
+                }
+            }
+        }
+    }
+
+    let crates = order
+        .into_iter()
+        .map(|id| {
+            let pkg = pkg_by_id[id];
+            let name = name_of(id).to_string();
+            let version = pkg
+                .get("version")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let manifest_dir = pkg
+                .get("manifest_path")
+                .and_then(|v| v.as_str())
+                .and_then(|m| Path::new(m).parent().map(|p| p.to_path_buf()))
+                .unwrap_or_default();
+            ReleaseCrate {
+                name,
+                version,
+                manifest_dir,
+            }
+        })
+        .collect();
+    Ok(ReleaseClosure { crates })
+}
+
 /// Which child-process stream a build-log line came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackStream {
@@ -931,6 +1151,66 @@ mod tests {
             no_build,
             profile: CargoProfile::Release,
             path_deps: PathDepPolicy::RejectPathPatches,
+        }
+    }
+
+    #[test]
+    fn is_linkable_crate_name_covers_streamlib_and_vulkan_jpeg() {
+        assert!(is_linkable_crate_name("streamlib-plugin-sdk"));
+        assert!(is_linkable_crate_name("streamlib"));
+        assert!(is_linkable_crate_name("vulkan-jpeg"));
+        assert!(!is_linkable_crate_name("serde"));
+        assert!(!is_linkable_crate_name("tokio"));
+    }
+
+    #[test]
+    fn release_closure_includes_the_easy_to_skip_libs_by_definition() {
+        // The whole point of the closure-by-definition model: the libraries a
+        // human-remembered flag used to skip (streamlib-plugin-sdk,
+        // vulkan-jpeg) are members by construction. Runs against the real
+        // workspace so it cross-checks cargo metadata ground truth. Mentally
+        // revert the predicate to the old SDK-subset roots and
+        // streamlib-plugin-sdk / vulkan-jpeg drop out — the exact 0.4.36
+        // foot-gun.
+        let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root two levels above streamlib-pack")
+            .to_path_buf();
+        let closure = compute_release_closure(&workspace_root).expect("compute closure");
+        let names: std::collections::HashSet<&str> = closure.names().into_iter().collect();
+
+        for required in [
+            "streamlib-plugin-sdk",
+            "vulkan-jpeg",
+            "streamlib-macros",
+            "streamlib-plugin-abi",
+            "streamlib-engine",
+            "streamlib",
+        ] {
+            assert!(
+                names.contains(required),
+                "release closure must contain {required} by definition; got {names:?}"
+            );
+        }
+
+        // Every member is a linkable name (predicate holds for the whole set).
+        for c in &closure.crates {
+            assert!(
+                is_linkable_crate_name(&c.name),
+                "non-linkable crate {} leaked into the closure",
+                c.name
+            );
+        }
+
+        // Topological order: a dependency precedes its dependents. The plugin
+        // ABI is a low-level dep of the SDK facade, so it must come first.
+        let pos = |name: &str| closure.names().iter().position(|n| *n == name);
+        if let (Some(abi), Some(sdk)) = (pos("streamlib-plugin-abi"), pos("streamlib")) {
+            assert!(
+                abi < sdk,
+                "topo order violated: streamlib-plugin-abi ({abi}) must precede streamlib ({sdk})"
+            );
         }
     }
 

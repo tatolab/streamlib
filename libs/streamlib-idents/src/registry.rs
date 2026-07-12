@@ -32,7 +32,15 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{ResolverError, ResolverResult};
 use crate::ident::PackageRef;
+use crate::release::ReleaseManifest;
 use crate::semver::SemVer;
+
+/// Generic-registry "package name" the release manifest is published under.
+/// Reserved channel — a `@org/name` package can never collide with it
+/// because package names never equal this literal.
+pub const RELEASE_MANIFEST_CHANNEL: &str = "streamlib-release";
+/// File name of the release manifest inside its per-version directory.
+pub const RELEASE_MANIFEST_FILE: &str = "manifest.json";
 
 /// Environment variable carrying the Gitea base URL (e.g.
 /// `http://localhost:3000`). Falls back to `GITEA_URL` to match the
@@ -220,6 +228,105 @@ impl<'a> RegistryClient<'a> {
         http_put_bytes(&self.index_url(pkg_ref), self.config.token.as_deref(), body.as_bytes())
             .map_err(|detail| upload_err(format!("publishing version index: {detail}")))?;
         Ok(())
+    }
+
+    /// Canonical URL of the release manifest for `release_version` — a plain
+    /// generic file under the reserved [`RELEASE_MANIFEST_CHANNEL`].
+    fn release_manifest_url(&self, org: &str, release_version: &str) -> String {
+        format!(
+            "{}/api/packages/{}/generic/{}/{}/{}",
+            self.config.base_url,
+            org,
+            RELEASE_MANIFEST_CHANNEL,
+            release_version,
+            RELEASE_MANIFEST_FILE,
+        )
+    }
+
+    /// `file://` mirror layout for the release manifest:
+    /// `<base>/streamlib-release/<V>/manifest.json`.
+    fn release_manifest_path(&self, release_version: &str) -> PathBuf {
+        self.file_base_dir()
+            .join(RELEASE_MANIFEST_CHANNEL)
+            .join(release_version)
+            .join(RELEASE_MANIFEST_FILE)
+    }
+
+    /// Publish the release `manifest` for its `release_version`, returning the
+    /// canonical URL it was written to. This is the **atomicity flip** — the
+    /// caller runs it *last*, after every crate / SDK / package has landed, so
+    /// the manifest's presence marks the release complete. `file://` writes
+    /// the mirror layout; `http(s)://` deletes-then-PUTs (Gitea generic files
+    /// are immutable per (name, version, file), so a bare re-PUT 409s). `org`
+    /// is the registry org the release lives under (e.g. `tatolab`).
+    pub fn upload_release_manifest(
+        &self,
+        org: &str,
+        manifest: &ReleaseManifest,
+    ) -> ResolverResult<String> {
+        let upload_err = |detail: String| ResolverError::RegistryFetchFailed {
+            name: format!("{}/{}", RELEASE_MANIFEST_CHANNEL, manifest.release_version),
+            detail,
+        };
+        let body = serde_json::to_vec_pretty(manifest)
+            .map_err(|e| upload_err(format!("serializing release manifest: {e}")))?;
+        let url = self.release_manifest_url(org, &manifest.release_version);
+        if self.is_file_scheme() {
+            let path = self.release_manifest_path(&manifest.release_version);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| upload_err(format!("creating {} : {e}", parent.display())))?;
+            }
+            std::fs::write(&path, &body)
+                .map_err(|e| upload_err(format!("writing {} : {e}", path.display())))?;
+        } else {
+            // Overwrite-on-republish: drop the existing version before the PUT.
+            let version_url = format!(
+                "{}/api/v1/packages/{}/generic/{}/{}",
+                self.config.base_url,
+                org,
+                RELEASE_MANIFEST_CHANNEL,
+                manifest.release_version,
+            );
+            http_delete(&version_url, self.config.token.as_deref());
+            http_put_bytes(&url, self.config.token.as_deref(), &body).map_err(upload_err)?;
+        }
+        Ok(url)
+    }
+
+    /// Fetch the release manifest for `release_version`. `Ok(None)` when no
+    /// manifest is published for that version — the back-compat case for a
+    /// pre-atomic-release registry, which the consumer treats as "no
+    /// completeness signal, proceed". `Err` only on a real transport / parse
+    /// failure.
+    pub fn fetch_release_manifest(
+        &self,
+        org: &str,
+        release_version: &str,
+    ) -> ResolverResult<Option<ReleaseManifest>> {
+        let fetch_err = |detail: String| ResolverError::RegistryFetchFailed {
+            name: format!("{}/{}", RELEASE_MANIFEST_CHANNEL, release_version),
+            detail,
+        };
+        let bytes = if self.is_file_scheme() {
+            let path = self.release_manifest_path(release_version);
+            match std::fs::read(&path) {
+                Ok(b) => b,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(e) => return Err(fetch_err(format!("reading {} : {e}", path.display()))),
+            }
+        } else {
+            let url = self.release_manifest_url(org, release_version);
+            match http_get_optional(&url, self.config.token.as_deref())
+                .map_err(|detail| fetch_err(format!("fetching release manifest: {detail}")))?
+            {
+                Some(b) => b,
+                None => return Ok(None),
+            }
+        };
+        let manifest = serde_json::from_slice(&bytes)
+            .map_err(|e| fetch_err(format!("parsing release manifest JSON: {e}")))?;
+        Ok(Some(manifest))
     }
 
     /// Canonical generic-registry download URL (recorded in the lockfile).
@@ -870,5 +977,46 @@ mod tests {
                 && p.ends_with("/generic/camera/0.4.33/camera.slpkg")),
             "the .slpkg PUT must be recorded; saw {reqs:?}"
         );
+    }
+
+    /// The release-manifest publish/fetch round-trip over the `file://`
+    /// transport — the hermetic path CI and the scratch-registry integration
+    /// test ride. Mentally revert `upload_release_manifest` to a no-op and
+    /// `fetch_release_manifest` returns `None`, so this locks the write→read
+    /// contract, not merely a happy path.
+    #[test]
+    fn release_manifest_file_scheme_round_trip() {
+        use crate::release::{ReleaseManifest, ReleaseManifestMember};
+
+        let tmp = std::env::temp_dir().join(format!("slpkg-relman-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let cfg = RegistryConfig {
+            base_url: format!("file://{}", tmp.display()),
+            token: None,
+        };
+        let client = RegistryClient::new(&cfg);
+
+        // Missing manifest ⇒ None (the pre-atomic-release back-compat case).
+        assert!(client.fetch_release_manifest("tatolab", "0.5.1").unwrap().is_none());
+
+        let mut manifest = ReleaseManifest::new(
+            "0.5.1",
+            vec![
+                ReleaseManifestMember::new("streamlib-plugin-sdk", "0.5.1"),
+                ReleaseManifestMember::new("vulkan-jpeg", "0.5.1"),
+            ],
+        );
+        manifest.python = Some("0.5.1".to_string());
+        manifest.packages = vec![ReleaseManifestMember::new("@tatolab/jpeg", "1.0.7")];
+
+        let url = client.upload_release_manifest("tatolab", &manifest).unwrap();
+        assert!(url.ends_with("/generic/streamlib-release/0.5.1/manifest.json"), "url: {url}");
+        // The mirror layout must be `<base>/streamlib-release/<V>/manifest.json`.
+        assert!(tmp.join("streamlib-release").join("0.5.1").join("manifest.json").is_file());
+
+        let back = client.fetch_release_manifest("tatolab", "0.5.1").unwrap().unwrap();
+        assert_eq!(back, manifest);
+
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }

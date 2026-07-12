@@ -11,7 +11,8 @@ a local dev container and a hosted backend. Architecture:
 | `provision-registry.sh` | Ensure the admin owner + `GITEA_ORG` exist; verify cargo/pypi/npm/generic are reachable. | One-time / idempotent. |
 | `smoke-test-registry.sh` | Publish→resolve→remove a throwaway crate + a generic round-trip. | Verify a live registry. |
 | `publish-vulkanalia.sh` | Publish the `tatolab/vulkanalia` fork (`-sys`, `vulkanalia`, `-vma`) to the cargo registry. | One-time bootstrap (fork rarely changes). |
-| `publish-crates.sh [--dev N]` | Publish the `streamlib` SDK crate closure by version, in topo order. | The recurring dev-loop publish. |
+| `publish-crates.sh [--dev N]` | Publish the full engine crate closure by version, in topo order (the closure `cargo xtask release-closure` computes — every publishable `streamlib*` / `vulkan-jpeg` library crate). | The recurring dev-loop publish. |
+| `publish-release.sh [--dev N]` | Publish a **consistent, atomic release**: crate closure + polyglot SDKs + packages, then the release manifest LAST. | A full release (honors `SKIP_PYTHON_SDK` / `SKIP_DENO_SDK` / `SKIP_PACKAGES`). |
 | `migrate-internal-deps.py` | Idempotent tomlkit sweep that put internal deps in the `{ path, version, registry }` form. | One-shot migration (kept for re-derivation / drift check). |
 
 The Python helpers need **tomlkit** (`pip install tomlkit`, or run with
@@ -52,17 +53,28 @@ export CARGO_REGISTRIES_GITEA_TOKEN="Bearer <token>"
 # VULKANALIA_DIR, default ~/Repositories/tatolab/vulkanalia)
 CARGO_REGISTRIES_GITEA_TOKEN="Bearer <token>" scripts/gitea/publish-vulkanalia.sh
 
-# then publish the streamlib SDK closure at the base [workspace.package].version
+# then publish the full engine crate closure at the base [workspace.package].version
 CARGO_REGISTRIES_GITEA_TOKEN="Bearer <token>" scripts/gitea/publish-crates.sh
 
 # dev loop: publish 0.4.x-dev.N so a consumer can bump to it without a path dep
 CARGO_REGISTRIES_GITEA_TOKEN="Bearer <token>" scripts/gitea/publish-crates.sh --dev 3
+
+# full atomic release: crates + SDKs + packages, then the release manifest LAST.
+# The manifest at streamlib-release/<V>/manifest.json is the completion marker —
+# a consumer resolving against a partial registry fails fast naming the gap
+# instead of a cryptic cargo version-unification error. Also needs
+# STREAMLIB_REGISTRY_URL (or GITEA_URL) + STREAMLIB_REGISTRY_TOKEN for the
+# manifest upload.
+CARGO_REGISTRIES_GITEA_TOKEN="Bearer <token>" STREAMLIB_REGISTRY_TOKEN="<token>" \
+  scripts/gitea/publish-release.sh
 ```
 
 `--no-verify` publishes source without compiling (the consumer verifies by
 building); both scripts treat an already-published version as success, so they
-are safe to re-run. The closure + topo order is derived live from
-`cargo metadata`. `publish-crates.sh` strips the dev `path:` patch from any
+are safe to re-run. The crate closure + topo order is the single canonical
+`streamlib-pack::compute_release_closure` set, emitted by `cargo xtask
+release-closure --json` — there is no "publish everything" flag to forget.
+`publish-crates.sh` strips the dev `path:` patch from any
 bundled `streamlib.yaml` (today: `streamlib-engine` →`@tatolab/escalate`) and
 restores the tree afterward, so the published manifest is path-free and the
 consumer resolves schema deps from the registry.

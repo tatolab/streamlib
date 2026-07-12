@@ -485,87 +485,23 @@ fn run_cargo_metadata(
 }
 
 /// Derive the linkable crate set (`name` → checkout member dir) from the
-/// checkout live via `cargo metadata` — same selection as the publish closure
-/// with `STREAMLIB_PUBLISH_ALL_LIBS=1`: every workspace member named
-/// `streamlib*` (or `vulkan-jpeg`) with a library target that is publishable.
+/// checkout via the single canonical release-closure definition
+/// ([`streamlib_pack::compute_release_closure`]): every publishable workspace
+/// library crate named `streamlib*` / `vulkan-jpeg`. This is the exact set a
+/// release publishes, so a whole-tree link and a release always agree on the
+/// crate set by construction.
 fn derive_linkable_crates(checkout: &Path) -> Result<BTreeMap<String, PathBuf>, LinkError> {
-    let manifest_path = checkout.join("Cargo.toml");
-    let manifest_path_str = manifest_path.to_string_lossy().into_owned();
-    let md = run_cargo_metadata(
-        &[
-            "metadata",
-            "--format-version",
-            "1",
-            "--no-deps",
-            "--manifest-path",
-            &manifest_path_str,
-        ],
-        None,
-    )
-    .map_err(|detail| LinkError::CrateSetDerivation {
-        checkout: checkout.to_path_buf(),
-        detail,
+    let closure = streamlib_pack::compute_release_closure(checkout).map_err(|e| {
+        LinkError::CrateSetDerivation {
+            checkout: checkout.to_path_buf(),
+            detail: format!("{e}"),
+        }
     })?;
-
-    let members: std::collections::HashSet<&str> = md
-        .get("workspace_members")
-        .and_then(|m| m.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
-        .unwrap_or_default();
-
-    let mut crates = BTreeMap::new();
-    let empty = Vec::new();
-    let packages = md
-        .get("packages")
-        .and_then(|p| p.as_array())
-        .unwrap_or(&empty);
-    for pkg in packages {
-        let id = pkg.get("id").and_then(|v| v.as_str()).unwrap_or_default();
-        if !members.contains(id) {
-            continue;
-        }
-        let name = pkg.get("name").and_then(|v| v.as_str()).unwrap_or_default();
-        if !is_linkable_crate_name(name) {
-            continue;
-        }
-        // `publish == []` ⇒ publish = false ⇒ not a linkable SDK crate.
-        if pkg.get("publish").and_then(|v| v.as_array()).is_some_and(|a| a.is_empty()) {
-            continue;
-        }
-        if !has_library_target(pkg) {
-            continue;
-        }
-        let manifest = pkg
-            .get("manifest_path")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        if let Some(dir) = Path::new(manifest).parent() {
-            crates.insert(name.to_string(), dir.to_path_buf());
-        }
-    }
-    Ok(crates)
-}
-
-fn is_linkable_crate_name(name: &str) -> bool {
-    name.starts_with("streamlib") || name == "vulkan-jpeg"
-}
-
-fn has_library_target(pkg: &serde_json::Value) -> bool {
-    const LIB_KINDS: &[&str] = &["lib", "rlib", "cdylib", "proc-macro", "dylib", "staticlib"];
-    pkg.get("targets")
-        .and_then(|t| t.as_array())
-        .is_some_and(|targets| {
-            targets.iter().any(|t| {
-                t.get("kind")
-                    .and_then(|k| k.as_array())
-                    .is_some_and(|kinds| {
-                        kinds
-                            .iter()
-                            .filter_map(|k| k.as_str())
-                            .any(|k| LIB_KINDS.contains(&k))
-                    })
-            })
-        })
+    Ok(closure
+        .crates
+        .into_iter()
+        .map(|c| (c.name, c.manifest_dir))
+        .collect())
 }
 
 /// Verify the consumer's cargo resolution honors the link: every resolved
