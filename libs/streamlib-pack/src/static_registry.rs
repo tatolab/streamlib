@@ -525,11 +525,29 @@ fn emit_cargo_closure(opts: &EmitOptions, staging: &Path) -> Result<()> {
             ?provenance,
             "static-registry cargo-closure crate tarball obtained"
         );
+        // Normalize the tarball to a byte-stable, source-only form (strip the
+        // git-HEAD-derived `.cargo_vcs_info.json`, re-gzip with a fixed header)
+        // and refuse a source change under an already-published version.
+        // `opts.out` still holds the PREVIOUS complete served tree during this
+        // staged emit (the flip runs after the closure returns), so the prior
+        // `.crate` is the immutability reference; `cksum` is the normalized
+        // tarball's checksum for the sparse-index line.
+        let served_crate = opts
+            .out
+            .join("cargo")
+            .join("crates")
+            .join(&c.name)
+            .join(crate_artifact_filename(&c.name, &version));
+        let cksum = crate::crate_tarball::finalize_crate_tarball(
+            &crate_file,
+            &c.name,
+            &version,
+            served_crate.exists().then_some(served_crate.as_path()),
+        )?;
         let dest = cargo_dir.join("crates").join(&c.name);
         std::fs::create_dir_all(&dest)?;
         std::fs::copy(&crate_file, dest.join(crate_artifact_filename(&c.name, &version)))?;
 
-        let cksum = sha256_hex(&crate_file)?;
         let idx = cargo_dir.join(cargo_index_path(&c.name));
         if let Some(parent) = idx.parent() {
             std::fs::create_dir_all(parent)?;
