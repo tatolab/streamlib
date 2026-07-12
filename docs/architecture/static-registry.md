@@ -40,8 +40,10 @@ does **not** ship a server binary.
     simple/streamlib/index.html         # per-project links (#sha256=…)
     packages/streamlib-<version>.tar.gz # sdist
   npm/
-    @tatolab/streamlib-deno/index.json  # packument
-    @tatolab/streamlib-deno/-/streamlib-deno-<version>.tgz
+    @tatolab/streamlib-deno             # packument — a FILE at the package
+                                        # URL path (npm GETs /npm/@scope%2fname;
+                                        # a static server decodes to this path)
+    tarballs/streamlib-deno-<version>.tgz  # dist.tarball points here
   slpkg/
     <pkg>/<version>/<pkg>.slpkg         # generic store (RegistryClient file:// layout)
     streamlib-release/<V>/manifest.json # the release manifest — completion marker
@@ -68,8 +70,21 @@ crates.io and its own siblings, never the workspace or a registry daemon),
 mirroring `publish-vulkanalia.sh` but writing a static file tree. CI serves it
 with `python3 -m http.server` and points cargo at it via
 `CARGO_REGISTRIES_GITEA_INDEX` (the `.github/actions/serve-static-fork`
-composite action). Fork sibling index deps omit the `registry` key
-(same-registry); crates.io deps name `https://github.com/rust-lang/crates.io-index`.
+composite action starts the server FIRST and passes `STATIC_FORK_URL`, so the
+script skips its own throwaway server and resolves fork siblings through the
+exact tree being populated — no port coupling). Same-registry index deps (fork
+siblings, closure crates) omit the `registry` key — detected data-driven from
+the packaged manifest's `registry-index` key; crates.io deps name
+`https://github.com/rust-lang/crates.io-index`.
+
+The **workspace release closure** rides the same tree via
+`cargo xtask static-registry emit --cargo-closure`: each closure crate is
+`cargo package`d in topo order against an ephemeral static server on the
+staging tree itself (each crate resolves its already-emitted siblings + the
+fork from the growing staging index; `cargo package` validates registry deps
+at package time). Versions always follow the crates' actual manifests — a
+`--dev` emit expects the workspace manifests already bumped (the publish
+scripts' bump/restore convention).
 
 ## Atomic release — the staged swap
 

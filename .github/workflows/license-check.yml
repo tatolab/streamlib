@@ -16,7 +16,14 @@ jobs:
         run: |
           missing_files=()
           while IFS= read -r -d '' file; do
-            if ! head -1 "$file" | grep -q "// Copyright (c) 2025 Jonathan Fontanez"; then
+            # Shebang-aware: a `#!` interpreter line may legitimately occupy
+            # line 1; the copyright header then sits on line 2.
+            if head -1 "$file" | grep -q '^#!'; then
+              check_line=2
+            else
+              check_line=1
+            fi
+            if ! sed -n "${check_line}p" "$file" | grep -q "// Copyright (c) 2025 Jonathan Fontanez"; then
               missing_files+=("$file")
             fi
           done < <(find libs examples -name "*.rs" -print0)
@@ -40,7 +47,14 @@ jobs:
         run: |
           missing_files=()
           while IFS= read -r -d '' file; do
-            if ! head -1 "$file" | grep -q "# Copyright (c) 2025 Jonathan Fontanez"; then
+            # Shebang-aware: executable scripts start with `#!`; the copyright
+            # header then sits on line 2 (e.g. scripts/gitea/*.py).
+            if head -1 "$file" | grep -q '^#!'; then
+              check_line=2
+            else
+              check_line=1
+            fi
+            if ! sed -n "${check_line}p" "$file" | grep -q "# Copyright (c) 2025 Jonathan Fontanez"; then
               missing_files+=("$file")
             fi
           done < <(find . -name "*.py" -not -path "./node_modules/*" -not -path "./.venv/*" -not -path "./target/*" -print0 2>/dev/null || true)

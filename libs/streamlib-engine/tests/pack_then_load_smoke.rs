@@ -1,12 +1,18 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! End-to-end gate for the `streamlib pack` →
+//! End-to-end gate for the `streamlib pkg build` →
 //! `Runner::add_module_with(_, Strategy::Slpkg)`
-//! chain: pack a real workspace package into a `.slpkg`, hand the
-//! bundle back to a fresh `Runner`, and assert the loaded artifacts
+//! chain: pack a real workspace package into a source-only `.slpkg`
+//! (the distribution shape — no prebuilt cdylib), hand the bundle
+//! back to a fresh `Runner`, and assert the loaded artifacts
 //! (processors for Rust-impl packages, schemas for the canonical
-//! schemas-only package) land in the runtime registries.
+//! schemas-only package) land in the runtime registries. The
+//! Rust-impl leg exercises the FULL consumer story: the loader
+//! builds the bundled source on this host via the build
+//! orchestrator, resolving every dep from the configured registry
+//! (`CARGO_REGISTRIES_GITEA_INDEX` — a Gitea daemon or the static
+//! registry tree; check-pack-load CI serves the static tree).
 //!
 //! Mentally-revert lock summary (each maps to a specific test):
 //! - Drop *any one* processor from `streamlib-network`'s
@@ -30,8 +36,9 @@
 //!
 //! Cache scope: the `SlpkgArchive` strategy extracts every slpkg into
 //! the process-global `<STREAMLIB_HOME>/.streamlib/cache/packages/<name>-<version>/`
-//! cache. This test therefore writes to the *real* `network-1.0.0`
-//! and `core-1.0.0` cache entries on the host running the test. The
+//! cache. This test therefore writes to the *real* network / core
+//! cache entries (at their current package versions) on the host
+//! running the test. The
 //! extract is idempotent (`extract_slpkg_to_cache` clears the dir
 //! before re-extracting) and the package names match the real
 //! workspace packages, so a fresh extract reproduces the same
@@ -51,6 +58,7 @@ use serial_test::serial;
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 use streamlib::sdk::runtime::{Strategy, Runner};
+use streamlib::sdk::RunnerAutoBuild as _;
 use streamlib_engine::core::runtime::host_target_triple;
 use streamlib_engine::schemas::current_schema_definition;
 
@@ -61,30 +69,6 @@ fn workspace_root() -> PathBuf {
         .parent()
         .unwrap()
         .to_path_buf()
-}
-
-fn host_dylib_filename(crate_lib_name: &str) -> String {
-    let ext = if cfg!(target_os = "macos") {
-        "dylib"
-    } else if cfg!(target_os = "windows") {
-        "dll"
-    } else {
-        "so"
-    };
-    format!("lib{}.{}", crate_lib_name, ext)
-}
-
-fn copy_dir_recursive(src: &Path, dst: &Path) {
-    std::fs::create_dir_all(dst).unwrap();
-    for entry in std::fs::read_dir(src).unwrap() {
-        let entry = entry.unwrap();
-        let dst_entry = dst.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_dir_recursive(&entry.path(), &dst_entry);
-        } else {
-            std::fs::copy(entry.path(), &dst_entry).unwrap();
-        }
-    }
 }
 
 fn build_streamlib_cli() -> PathBuf {
@@ -113,91 +97,47 @@ fn build_streamlib_cli() -> PathBuf {
     bin
 }
 
-fn cargo_build_dylib(crate_name: &str) -> PathBuf {
-    let status = Command::new(env!("CARGO"))
-        .args(["build", "-p", crate_name])
+/// Run `streamlib pkg build --output <slpkg>` inside `pkg_dir` — the
+/// current CLI pack verb (source-only `.slpkg`, run inside the package).
+fn pkg_build_slpkg(cli: &Path, pkg_dir: &Path, slpkg: &Path) {
+    let status = Command::new(cli)
+        .args(["pkg", "build", "--output"])
+        .arg(slpkg)
+        .current_dir(pkg_dir)
         .status()
-        .unwrap_or_else(|e| panic!("invoking cargo build -p {}: {}", crate_name, e));
+        .expect("invoking `streamlib pkg build`");
     assert!(
         status.success(),
-        "cargo build -p {} must succeed",
-        crate_name
+        "`streamlib pkg build` in {} must succeed",
+        pkg_dir.display()
     );
-
-    let lib_name = crate_name.replace('-', "_");
-    let dylib = workspace_root()
-        .join("target")
-        .join("debug")
-        .join(host_dylib_filename(&lib_name));
-    assert!(
-        dylib.exists(),
-        "expected cdylib at {} after `cargo build -p {}`",
-        dylib.display(),
-        crate_name
-    );
-    dylib
-}
-
-/// Stage a workspace package into a tempdir with a prebuilt dylib so
-/// `streamlib pack --no-build` can bundle it without forcing a release
-/// build inside the test (the workspace's debug-mode artifact already
-/// satisfies the per-triple `lib/<triple>/<filename>` contract pack
-/// looks for).
-fn stage_package_with_prebuilt_dylib(
-    pkg_src: &Path,
-    staging: &Path,
-    crate_lib_name: &str,
-    dylib: &Path,
-) {
-    std::fs::create_dir_all(staging).unwrap();
-    std::fs::copy(
-        pkg_src.join("streamlib.yaml"),
-        staging.join("streamlib.yaml"),
-    )
-    .unwrap();
-    let schemas_src = pkg_src.join("schemas");
-    if schemas_src.is_dir() {
-        copy_dir_recursive(&schemas_src, &staging.join("schemas"));
-    }
-    let triple_dir = staging.join("lib").join(host_target_triple());
-    std::fs::create_dir_all(&triple_dir).unwrap();
-    std::fs::copy(dylib, triple_dir.join(host_dylib_filename(crate_lib_name))).unwrap();
+    assert!(slpkg.exists(), "pkg build must have written {}", slpkg.display());
 }
 
 #[test]
 #[serial]
 fn pack_then_load_rust_package_registers_processors() {
-    // Rust-impl gate: pack `@tatolab/network` (small dep graph, no GPU
-    // / audio hardware, no transitive `@tatolab/core` dep so the
-    // pack-then-load chain stands alone without an installed-package
-    // cache prime) and assert both exported processors land in
-    // `PROCESSOR_REGISTRY` after `Runner::add_module_with`.
+    // Rust-impl gate: `pkg build` packs `@tatolab/network` (small dep
+    // graph, no GPU / audio hardware, registry-only Cargo deps) into a
+    // source-only `.slpkg` straight from its package dir — packages/*
+    // are standalone workspaces, NOT members of the repo workspace, so
+    // there is no `cargo -p streamlib-network` to lean on. Loading the
+    // source-only box makes the orchestrator build it on this host,
+    // resolving streamlib-plugin-sdk & friends from the configured
+    // registry — the real consumer story. Both exported processors must
+    // land in `PROCESSOR_REGISTRY` after `Runner::add_module_with`.
     let cli = build_streamlib_cli();
-    let dylib = cargo_build_dylib("streamlib-network");
 
     let tmp = tempfile::tempdir().unwrap();
     let pkg_src = workspace_root().join("packages").join("network");
-    let staging = tmp.path().join("network-pkg");
-    stage_package_with_prebuilt_dylib(&pkg_src, &staging, "streamlib_network", &dylib);
-
     let slpkg = tmp.path().join("network.slpkg");
-    let status = Command::new(&cli)
-        .args([
-            "pack",
-            staging.to_str().unwrap(),
-            "--no-build",
-            "-o",
-            slpkg.to_str().unwrap(),
-        ])
-        .status()
-        .expect("invoking `streamlib pack`");
-    assert!(
-        status.success(),
-        "`streamlib pack` against staged network package must succeed"
-    );
-    assert!(slpkg.exists(), "pack must have written {}", slpkg.display());
+    pkg_build_slpkg(&cli, &pkg_src, &slpkg);
 
-    let runtime = Runner::new().unwrap();
+    // A source-only Rust slpkg builds at load — the Runner needs the
+    // polyglot build orchestrator wired (`Runner::new()` is
+    // orchestrator-free by design and would fail with
+    // BuildRequiredButNoOrchestrator).
+    let runtime = Runner::with_auto_build().unwrap();
     runtime
         .add_module_with_blocking(
             module_ident_any_version!("tatolab", "network"),
@@ -235,31 +175,8 @@ fn pack_then_load_schemas_only_package_registers_schemas() {
 
     let tmp = tempfile::tempdir().unwrap();
     let pkg_src = workspace_root().join("packages").join("core");
-    let staging = tmp.path().join("core-pkg");
-    std::fs::create_dir_all(&staging).unwrap();
-    std::fs::copy(
-        pkg_src.join("streamlib.yaml"),
-        staging.join("streamlib.yaml"),
-    )
-    .unwrap();
-    copy_dir_recursive(&pkg_src.join("schemas"), &staging.join("schemas"));
-
     let slpkg = tmp.path().join("core.slpkg");
-    let status = Command::new(&cli)
-        .args([
-            "pack",
-            staging.to_str().unwrap(),
-            "--no-build",
-            "-o",
-            slpkg.to_str().unwrap(),
-        ])
-        .status()
-        .expect("invoking `streamlib pack`");
-    assert!(
-        status.success(),
-        "`streamlib pack` against the schemas-only core package must succeed"
-    );
-    assert!(slpkg.exists());
+    pkg_build_slpkg(&cli, &pkg_src, &slpkg);
 
     let runtime = Runner::new().unwrap();
     runtime

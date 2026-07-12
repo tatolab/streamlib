@@ -241,7 +241,11 @@ enum StaticRegistryAction {
         /// and moved in atomically).
         #[arg(long)]
         out: PathBuf,
-        /// `-dev.N` prerelease suffix (matches `--dev N` on the publish scripts).
+        /// `-dev.N` prerelease suffix for the release manifest + SDK
+        /// artifacts (matches `--dev N` on the publish scripts). The cargo
+        /// closure always emits at the crates' ACTUAL manifest versions —
+        /// a dev closure emit expects the workspace manifests already
+        /// bumped (the publish scripts' bump/restore convention).
         #[arg(long)]
         dev: Option<u32>,
         /// Absolute base URL the cargo + npm mounts are served at (sparse/npm

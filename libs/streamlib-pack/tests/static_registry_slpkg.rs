@@ -141,3 +141,86 @@ fn removed_slpkg_from_tree_is_rejected_at_download() {
     // list_versions for the removed package is now empty (no version dir).
     assert!(client.list_versions(&pkg_ref("display")).unwrap().is_empty());
 }
+
+/// The truncation gate proven against the manifest `emit_static_registry`
+/// ACTUALLY writes (not a hand-built one): emit a minimal fake workspace's
+/// slpkg ecosystem through the real emit path, then truncate the emitted
+/// tree and assert the consumer-side checks reject it.
+#[test]
+fn emitted_tree_truncation_is_rejected_by_consumer_checks() {
+    use streamlib_pack::static_registry::{emit_static_registry, EmitEcosystems, EmitOptions};
+
+    // Minimal fake workspace: empty cargo workspace + one schemas-only
+    // package (no cargo build at assemble time).
+    let root = tempfile::tempdir().unwrap();
+    let ws = root.path().join("ws");
+    std::fs::create_dir_all(ws.join("packages/demopkg/schemas")).unwrap();
+    // cargo metadata rejects an empty virtual workspace — give it one stub
+    // member whose name is outside the release closure (not `streamlib*`).
+    std::fs::write(
+        ws.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"stub\"]\n\n[workspace.package]\nversion = \"0.9.0\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(ws.join("stub/src")).unwrap();
+    std::fs::write(
+        ws.join("stub/Cargo.toml"),
+        "[package]\nname = \"stub\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    std::fs::write(ws.join("stub/src/lib.rs"), "").unwrap();
+    std::fs::write(
+        ws.join("packages/demopkg/streamlib.yaml"),
+        "package:\n  org: tatolab\n  name: demopkg\n  version: 1.0.0\n\
+         \nschemas:\n  DemoFrame:\n    file: schemas/demo_frame.yaml\n",
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join("packages/demopkg/schemas/demo_frame.yaml"),
+        "metadata:\n  type: DemoFrame\n  description: \"demo\"\n\
+         properties:\n  value:\n    type: uint32\n",
+    )
+    .unwrap();
+
+    let out = root.path().join("registry");
+    emit_static_registry(&EmitOptions {
+        workspace_root: ws.clone(),
+        out: out.clone(),
+        base_url: "http://127.0.0.1:9".into(), // unused by the slpkg ecosystem
+        dev: None,
+        ecosystems: EmitEcosystems {
+            cargo_fork: false,
+            cargo_closure: false,
+            pypi: false,
+            npm: false,
+            slpkg: true,
+        },
+    })
+    .expect("slpkg-only emit against the fake workspace must succeed");
+
+    // The REAL emitted manifest is fetchable + lists the package.
+    let slpkg = out.join("slpkg");
+    let cfg = file_config(&slpkg);
+    let client = RegistryClient::new(&cfg);
+    assert_eq!(client.list_release_versions("tatolab").unwrap(), vec![SemVer::new(0, 9, 0)]);
+    let manifest = client.fetch_release_manifest("tatolab", "0.9.0").unwrap().unwrap();
+    assert!(
+        manifest.packages.iter().any(|m| m.name == "@tatolab/demopkg" && m.version == "1.0.0"),
+        "the emitted manifest must list the assembled package; got {:?}",
+        manifest.packages
+    );
+    // And the .slpkg artifact itself downloads.
+    let (bytes, _) = client.download_slpkg(&pkg_ref("demopkg"), SemVer::new(1, 0, 0)).unwrap();
+    assert!(!bytes.is_empty());
+
+    // TRUNCATE the emitted tree: remove the package's artifacts post-flip.
+    std::fs::remove_dir_all(slpkg.join("demopkg")).unwrap();
+
+    // The manifest still claims the member, but the tree can't serve it —
+    // the consumer fails loudly at download instead of half-resolving.
+    let manifest = client.fetch_release_manifest("tatolab", "0.9.0").unwrap().unwrap();
+    assert!(manifest.packages.iter().any(|m| m.name == "@tatolab/demopkg"));
+    let err = client.download_slpkg(&pkg_ref("demopkg"), SemVer::new(1, 0, 0)).unwrap_err();
+    assert!(err.to_string().contains("demopkg"), "truncated member must be named: {err}");
+    assert!(client.list_versions(&pkg_ref("demopkg")).unwrap().is_empty());
+}

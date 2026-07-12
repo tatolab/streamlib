@@ -13,17 +13,31 @@
 # with `python3 -m http.server` and points cargo at it via
 # `CARGO_REGISTRIES_GITEA_INDEX=sparse+http://127.0.0.1:PORT/cargo/`.
 #
-#   ./emit-static-fork.sh <out_dir> [--base-url http://127.0.0.1:8000]
+#   ./emit-static-fork.sh <out_dir> [--base-url http://127.0.0.1:8000] \
+#                                    [--fork-url http://127.0.0.1:8000]
 #
 # The cargo sparse `dl` template needs an absolute URL (sparse is HTTP-only by
 # spec), so --base-url is baked into <out>/cargo/config.json — pass the exact
 # scheme://host:port the tree will be served at. The .crate tarballs and index
 # NDJSON are relocatable; only config.json carries the base URL.
 #
+# Sibling resolution during packaging: `cargo package` for vulkanalia needs to
+# resolve vulkanalia-sys (and -vma needs vulkanalia) from the gitea registry.
+# Two modes:
+#   * --fork-url URL (or env STATIC_FORK_URL): an EXTERNAL static server is
+#     already serving a tree containing the fork (CI: the composite action
+#     serves <out> itself while this script populates it). No server is
+#     started here; cargo resolves via that URL. This removes the
+#     bind-own-port coupling that silently resolves from a different tree.
+#   * neither set: a throwaway `python3 -m http.server` is started on the
+#     --base-url port serving <out>; a bind failure is FATAL (packaging the
+#     later fork crates cannot succeed without sibling resolution).
+#
 # Configure-by-env (all optional):
 #   VULKANALIA_DIR   a local checkout of the fork (skips the clone). When unset,
 #                    the pinned rev is cloned from GitHub (rev sourced from the
 #                    workspace, not hardcoded).
+#   STATIC_FORK_URL  same as --fork-url (the flag wins when both are set).
 #   GITEA_ORG        default tatolab (only affects the annotated `registry` name,
 #                    which is cosmetic in a static tree — the index carries the
 #                    resolution truth).
@@ -34,15 +48,18 @@ PY="${PYTHON:-python3}"
 
 OUT=""
 BASE_URL="http://127.0.0.1:8000"
+FORK_URL="${STATIC_FORK_URL:-}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --base-url) BASE_URL="${2:?--base-url needs a URL}"; shift 2 ;;
+    --fork-url) FORK_URL="${2:?--fork-url needs a URL}"; shift 2 ;;
     -*) echo "unknown arg: $1" >&2; exit 2 ;;
     *) if [ -z "$OUT" ]; then OUT="$1"; else echo "unexpected arg: $1" >&2; exit 2; fi; shift ;;
   esac
 done
-[ -n "$OUT" ] || { echo "usage: emit-static-fork.sh <out_dir> [--base-url URL]" >&2; exit 2; }
+[ -n "$OUT" ] || { echo "usage: emit-static-fork.sh <out_dir> [--base-url URL] [--fork-url URL]" >&2; exit 2; }
 BASE_URL="${BASE_URL%/}"
+FORK_URL="${FORK_URL%/}"
 
 log()  { printf '[emit-static-fork] %s\n' "$*"; }
 fail() { printf '[emit-static-fork] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -110,6 +127,9 @@ annotate(f"{scratch}/vulkanalia/Cargo.toml", ["vulkanalia-sys"])
 annotate(f"{scratch}/ext/vma/Cargo.toml", ["vulkanalia"])
 PY
 
+# shellcheck source=scripts/gitea/cargo-idx-path.sh
+. "$ROOT/scripts/gitea/cargo-idx-path.sh"
+
 # --- package each fork crate into a .crate (no gitea, no workspace) -----------
 # `cargo package` resolves the crate's deps to write the normalized (published)
 # Cargo.toml. The fork's only registry dep is its own siblings; we serve those
@@ -118,15 +138,15 @@ PY
 CARGO_DIR="$OUT/cargo"
 mkdir -p "$CARGO_DIR/crates"
 
-# Point cargo at the tree we are populating so vulkanalia can resolve the
-# already-emitted vulkanalia-sys, and vulkanalia-vma can resolve vulkanalia.
-# A file:// dl isn't valid for sparse, so we don't serve during packaging —
-# instead we package in dependency order and pass each already-emitted sibling
-# via an offline local cache the packaged manifest doesn't need to hit (the
-# packaged .crate records deps by version; resolution during `cargo package`
-# only needs the sibling's index entry, which we make available via a throwaway
-# static server if required — see below).
-export CARGO_REGISTRIES_GITEA_INDEX="sparse+${BASE_URL}/cargo/"
+# Sibling resolution: cargo resolves the earlier-emitted fork sibling from a
+# sparse index over HTTP (sparse is HTTP-only — no file:// form). Either an
+# external server is already serving a fork-bearing tree (--fork-url), or a
+# throwaway server on BASE_URL's port serves the tree we are populating.
+if [ -n "$FORK_URL" ]; then
+  export CARGO_REGISTRIES_GITEA_INDEX="sparse+${FORK_URL}/cargo/"
+else
+  export CARGO_REGISTRIES_GITEA_INDEX="sparse+${BASE_URL}/cargo/"
+fi
 
 # Write config.json up front so the throwaway server (if used) serves it.
 "$PY" - "$CARGO_DIR/config.json" "$BASE_URL" <<'PY'
@@ -137,32 +157,25 @@ cfg = '{"dl":"%s/cargo/crates/{crate}/{crate}-{version}.crate","api":"%s/cargo"}
 open(out, "w").write(cfg)
 PY
 
-# Serve the (growing) tree so cargo can resolve fork siblings during packaging.
-srv_port="${BASE_URL##*:}"
-case "$srv_port" in *[!0-9]*) srv_port="8000" ;; esac
+# Serve the (growing) tree so cargo can resolve fork siblings during packaging
+# — unless an external server already does (--fork-url / STATIC_FORK_URL).
 srv_pid=""
-start_server() {
-  ( cd "$OUT" && exec "$PY" -m http.server "$srv_port" --bind 127.0.0.1 ) >/dev/null 2>&1 &
-  srv_pid=$!
-  # give it a moment to bind
-  for _ in $(seq 1 20); do
-    curl -fsS "${BASE_URL}/cargo/config.json" >/dev/null 2>&1 && return 0
-    sleep 0.2
-  done
-}
 stop_server() { if [ -n "$srv_pid" ]; then kill "$srv_pid" 2>/dev/null || true; fi; srv_pid=""; }
 trap 'stop_server; rm -rf "$scratch_root"' EXIT
-start_server || log "WARN: throwaway static server did not come up on :$srv_port (packaging may still succeed for crates.io-only crates)"
-
-idx_path() {
-  local n="$1"
-  case ${#n} in
-    1) printf '1/%s' "$n" ;;
-    2) printf '2/%s' "$n" ;;
-    3) printf '3/%s/%s' "${n:0:1}" "$n" ;;
-    *) printf '%s/%s/%s' "${n:0:2}" "${n:2:2}" "$n" ;;
-  esac
-}
+if [ -z "$FORK_URL" ]; then
+  srv_port="${BASE_URL##*:}"
+  case "$srv_port" in *[!0-9]*) srv_port="8000" ;; esac
+  ( cd "$OUT" && exec "$PY" -m http.server "$srv_port" --bind 127.0.0.1 ) >/dev/null 2>&1 &
+  srv_pid=$!
+  server_up=""
+  for _ in $(seq 1 25); do
+    if curl -fsS "${BASE_URL}/cargo/config.json" >/dev/null 2>&1; then server_up=1; break; fi
+    sleep 0.2
+  done
+  # FATAL: without sibling resolution, packaging vulkanalia / -vma fails, or
+  # worse — a stale server on this port would resolve from a DIFFERENT tree.
+  [ -n "$server_up" ] || fail "throwaway static server did not come up on ${BASE_URL} (port busy? pass --fork-url to use an external server)"
+fi
 
 emit_one() {
   local name="$1" version="$2" manifest="$3"
@@ -185,15 +198,11 @@ emit_one() {
 
   # Render the sparse index NDJSON line from the packaged Cargo.toml deps.
   local idx_rel idx_abs
-  idx_rel="$(idx_path "$name")"
+  idx_rel="$(cargo_idx_path "$name")"
   idx_abs="$CARGO_DIR/$idx_rel"
   mkdir -p "$(dirname "$idx_abs")"
   NAME="$name" VERSION="$version" CKSUM="$cksum" CRATE="$crate_file" \
     "$PY" "$ROOT/scripts/gitea/render_cargo_index_line.py" >> "$idx_abs"
-  # Restart the server so it re-reads the tree (http.server is stateless per
-  # request, so a running server already sees new files; the restart is belt +
-  # braces after appending the just-published crate to the index).
-  stop_server; start_server || true
 }
 
 emit_one vulkanalia-sys 0.35.0 "$scratch/vulkanalia-sys/Cargo.toml"

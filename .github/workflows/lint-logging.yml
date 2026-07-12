@@ -44,6 +44,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-xtask-
 
+      # Daemon-free: the workspace declares `vulkanalia = { registry = "gitea" }`,
+      # so xtask cannot build without the fork served. Emit + serve it statically
+      # (no Gitea) and point cargo at it.
+      - name: Serve static vulkanalia fork registry
+        uses: ./.github/actions/serve-static-fork
+
       - name: cargo xtask lint-logging
         run: cargo xtask lint-logging
 

@@ -13,8 +13,17 @@
 #   {"name","vers","deps":[...],"cksum","features","yanked"}
 # Each dep: {"name","req","features","optional","default_features","target",
 #            "kind","registry","package"?}. A dep from THIS registry (a fork
-# sibling) omits/nulls "registry"; a crates.io dep sets it to the canonical
-# crates.io index URL so cargo fetches it from crates.io, not this tree.
+# sibling or another closure crate) OMITS "registry"; a crates.io dep sets it
+# to the canonical crates.io index URL so cargo fetches it from crates.io,
+# not this tree.
+#
+# Same-registry detection is data-driven: `cargo package` normalizes a
+# `registry = "gitea"` dev dep into `registry-index = "<the index URL cargo
+# resolved it from>"` in the packaged Cargo.toml. A dep carrying
+# `registry-index` therefore resolved from THIS registry at package time
+# (the packaging env points CARGO_REGISTRIES_GITEA_INDEX at the tree being
+# built); a dep without it is crates.io. This covers the vulkanalia fork
+# siblings AND every streamlib closure crate without a hardcoded name list.
 
 import json
 import os
@@ -25,10 +34,6 @@ import sys
 # itself lives in a non-crates.io registry, is still crates.io — named by this
 # canonical index URL in the sparse index line.
 CRATES_IO_INDEX = "https://github.com/rust-lang/crates.io-index"
-
-# The fork siblings resolve from THIS (gitea/static) registry — a same-registry
-# dep, so its index line dep carries a null registry.
-FORK_SIBLINGS = {"vulkanalia", "vulkanalia-sys", "vulkanalia-vma"}
 
 
 def load_packaged_manifest(crate_path: str, name: str, version: str) -> dict:
@@ -97,10 +102,11 @@ def dep_entries(manifest: dict) -> list:
                 "target": target,
                 "kind": kind,
             }
-            # A crates.io dep names the crates.io index; a same-registry (fork
-            # sibling) dep OMITS the `registry` key entirely — cargo treats an
-            # absent key as "this registry" (matches Gitea's index output).
-            if real_name not in FORK_SIBLINGS:
+            # A crates.io dep names the crates.io index; a same-registry dep
+            # (one the packaged toml records with `registry-index`) OMITS the
+            # `registry` key entirely — cargo treats an absent key as "this
+            # registry" (matches Gitea's index output).
+            if "registry-index" not in spec:
                 entry["registry"] = CRATES_IO_INDEX
             # Preserve the local alias when the dep was renamed via `package`.
             if real_name != dep_name:

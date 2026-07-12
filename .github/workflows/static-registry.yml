@@ -35,7 +35,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck
-          shellcheck scripts/gitea/emit-static-fork.sh
+          shellcheck scripts/gitea/emit-static-fork.sh \
+                     scripts/gitea/serve-static-registry.sh \
+                     scripts/gitea/cargo-idx-path.sh
 
       - name: Install system dependencies
         # streamlib-pack sits on the lean idents/schema/cargo-build crates, but

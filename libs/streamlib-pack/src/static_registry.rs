@@ -100,62 +100,6 @@ pub fn cargo_index_path(name: &str) -> String {
     }
 }
 
-/// One dependency entry in a cargo sparse-index line.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct CargoIndexDep {
-    pub name: String,
-    pub req: String,
-    pub features: Vec<String>,
-    pub optional: bool,
-    pub default_features: bool,
-    pub target: Option<String>,
-    /// `"normal" | "build" | "dev"`.
-    pub kind: String,
-    /// The index URL the dep resolves from. Omitted means "this registry" (a
-    /// same-registry dep, e.g. a fork sibling) — cargo treats an absent key as
-    /// the current registry, matching Gitea's index output; [`CRATES_IO_INDEX`]
-    /// means crates.io.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub registry: Option<String>,
-    /// The published crate name when the dep is locally renamed via `package`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub package: Option<String>,
-}
-
-/// One version line of a cargo sparse index (serialized as a single NDJSON row).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct CargoIndexLine {
-    pub name: String,
-    pub vers: String,
-    pub deps: Vec<CargoIndexDep>,
-    pub cksum: String,
-    pub features: std::collections::BTreeMap<String, Vec<String>>,
-    pub yanked: bool,
-}
-
-impl CargoIndexLine {
-    /// Serialize to the exact NDJSON byte shape cargo expects (compact JSON,
-    /// one object, trailing newline appended by the caller when writing a file).
-    pub fn to_ndjson(&self) -> String {
-        serde_json::to_string(self).expect("CargoIndexLine serializes")
-    }
-}
-
-/// A bare `X.Y.Z` cargo version req means `^X.Y.Z`; operators/ranges pass
-/// through unchanged.
-pub fn normalize_cargo_req(version: &str) -> String {
-    let v = version.trim();
-    if v.is_empty() {
-        return "*".to_string();
-    }
-    let first = v.chars().next().unwrap();
-    if v == "*" || v.contains(',') || matches!(first, '^' | '~' | '=' | '<' | '>' | '*') {
-        v.to_string()
-    } else {
-        format!("^{v}")
-    }
-}
-
 /// Render the cargo sparse-index `config.json` for a tree served at `base_url`.
 /// The templated `dl` yields clean, browsable `.crate` filenames.
 pub fn render_cargo_config_json(base_url: &str) -> String {
@@ -222,7 +166,9 @@ pub fn render_npm_packument(name: &str, base_url: &str, versions: &[NpmVersion])
     let mut latest = String::new();
     for v in versions {
         latest = v.version.clone();
-        let tarball = format!("{base}/npm/{}/-/{}", name, v.tarball_filename);
+        // Tarballs live at a sibling path that cannot collide with the
+        // packument FILE at `npm/<scope>/<name>` (see `emit_npm`).
+        let tarball = format!("{base}/npm/tarballs/{}", v.tarball_filename);
         let entry = serde_json::json!({
             "name": name,
             "version": v.version,
@@ -272,32 +218,48 @@ pub fn publish_staged_tree(staging: &Path, served: &Path) -> Result<()> {
         return std::fs::rename(staging, served)
             .with_context(|| format!("rename {} → {}", staging.display(), served.display()));
     }
-    // `served` exists → gapless replace.
+    // `served` exists → gapless replace where the platform supports it.
     #[cfg(target_os = "linux")]
     {
-        exchange_paths(staging, served).with_context(|| {
-            format!("atomically swap {} ⇄ {}", staging.display(), served.display())
-        })?;
-        // After the exchange, `staging` holds the old tree.
-        std::fs::remove_dir_all(staging).ok();
-        Ok(())
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let backup = sibling_temp(served, "old");
-        std::fs::rename(served, &backup)
-            .with_context(|| format!("rename {} → {}", served.display(), backup.display()))?;
-        match std::fs::rename(staging, served) {
+        match exchange_paths(staging, served) {
             Ok(()) => {
-                std::fs::remove_dir_all(&backup).ok();
-                Ok(())
+                // After the exchange, `staging` holds the old tree.
+                std::fs::remove_dir_all(staging).ok();
+                return Ok(());
             }
+            // Filesystem / kernel without RENAME_EXCHANGE support (e.g. some
+            // network / FUSE mounts, pre-3.15 kernels) → degrade to the
+            // rename-aside path below (sub-instant absence window, never a
+            // partial tree).
+            Err(e) if matches!(e.raw_os_error(), Some(libc::EINVAL) | Some(libc::ENOSYS)) => {}
             Err(e) => {
-                std::fs::rename(&backup, served).ok();
-                Err(e).with_context(|| {
-                    format!("rename {} → {}", staging.display(), served.display())
-                })
+                return Err(e).with_context(|| {
+                    format!("atomically swap {} ⇄ {}", staging.display(), served.display())
+                });
             }
+        }
+    }
+    rename_aside_replace(staging, served)
+}
+
+/// Replace `served` with `staging` via rename-aside: old tree renamed away,
+/// staging renamed in, old removed. Never exposes a partial tree; has a
+/// sub-instant window where `served` is absent (the RENAME_EXCHANGE-less
+/// fallback).
+fn rename_aside_replace(staging: &Path, served: &Path) -> Result<()> {
+    let backup = sibling_temp(served, "old");
+    std::fs::rename(served, &backup)
+        .with_context(|| format!("rename {} → {}", served.display(), backup.display()))?;
+    match std::fs::rename(staging, served) {
+        Ok(()) => {
+            std::fs::remove_dir_all(&backup).ok();
+            Ok(())
+        }
+        Err(e) => {
+            std::fs::rename(&backup, served).ok();
+            Err(e).with_context(|| {
+                format!("rename {} → {}", staging.display(), served.display())
+            })
         }
     }
 }
@@ -387,37 +349,40 @@ pub fn emit_static_registry(opts: &EmitOptions) -> Result<()> {
     let target = target_version(&base, opts.dev);
     let org = registry_org();
 
-    let staging = sibling_temp(&opts.out, "staging");
+    build_and_flip(&opts.out, |staging| {
+        if opts.ecosystems.cargo_fork {
+            emit_cargo_fork(opts, staging)?;
+        }
+        if opts.ecosystems.cargo_closure {
+            emit_cargo_closure(opts, staging)?;
+        }
+        if opts.ecosystems.pypi {
+            emit_pypi(opts, staging, &target)?;
+        }
+        if opts.ecosystems.npm {
+            emit_npm(opts, staging, &target)?;
+        }
+        if opts.ecosystems.slpkg {
+            emit_slpkg_and_manifest(opts, staging, &target, &org)?;
+        }
+        Ok(())
+    })?;
+    tracing::info!(out = %opts.out.display(), release = %target, "static registry emitted");
+    Ok(())
+}
+
+/// The staged-swap seam: run `build` against a fresh staging sibling of `out`,
+/// then flip staging into `out` atomically ([`publish_staged_tree`]). On build
+/// error the staging dir is removed and `out` is untouched — a crashed /
+/// failed emit never perturbs the served tree.
+pub fn build_and_flip(out: &Path, build: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
+    let staging = sibling_temp(out, "staging");
     // Best-effort clean of any prior staging remnant, then a fresh dir.
     std::fs::remove_dir_all(&staging).ok();
     std::fs::create_dir_all(&staging)
         .with_context(|| format!("create staging dir {}", staging.display()))?;
-
-    let result = (|| -> Result<()> {
-        if opts.ecosystems.cargo_fork {
-            emit_cargo_fork(opts, &staging)?;
-        }
-        if opts.ecosystems.cargo_closure {
-            emit_cargo_closure(opts, &staging, &target)?;
-        }
-        if opts.ecosystems.pypi {
-            emit_pypi(opts, &staging, &target)?;
-        }
-        if opts.ecosystems.npm {
-            emit_npm(opts, &staging, &target)?;
-        }
-        if opts.ecosystems.slpkg {
-            emit_slpkg_and_manifest(opts, &staging, &target, &org)?;
-        }
-        Ok(())
-    })();
-
-    match result {
-        Ok(()) => {
-            publish_staged_tree(&staging, &opts.out)?;
-            tracing::info!(out = %opts.out.display(), release = %target, "static registry emitted");
-            Ok(())
-        }
+    match build(&staging) {
+        Ok(()) => publish_staged_tree(&staging, out),
         Err(e) => {
             std::fs::remove_dir_all(&staging).ok();
             Err(e)
@@ -446,21 +411,82 @@ fn emit_cargo_fork(opts: &EmitOptions, staging: &Path) -> Result<()> {
 
 /// Package each workspace release-closure crate with `cargo package` and render
 /// its `.crate` + sparse-index line into the staging cargo tree.
-fn emit_cargo_closure(opts: &EmitOptions, staging: &Path, target: &str) -> Result<()> {
+/// The `.crate` artifact filename `cargo package` produces for a crate:
+/// always `{name}-{manifest_version}.crate`, where the version is the crate's
+/// actual `Cargo.toml` version. Never re-derive the version (e.g. by stamping
+/// a `-dev.N` the manifests don't carry) — `cargo package` embeds the manifest
+/// version, so index/filename/manifest must all follow it. A `--dev` closure
+/// emit expects the workspace manifests already bumped (the publish scripts'
+/// bump/restore convention).
+pub fn crate_artifact_filename(name: &str, manifest_version: &str) -> String {
+    format!("{name}-{manifest_version}.crate")
+}
+
+/// Kills a spawned child process on drop — the ephemeral staging server's
+/// lifetime guard inside [`emit_cargo_closure`].
+struct KillOnDrop(std::process::Child);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Package each workspace release-closure crate with `cargo package` and
+/// render its `.crate` + sparse-index line into the staging cargo tree.
+///
+/// `cargo package` validates every `registry = "gitea"` dep against the live
+/// index, so the closure is packaged in topo order against an EPHEMERAL
+/// static server on the staging tree itself: each crate resolves its
+/// already-emitted siblings (and the fork, emitted before this) from the
+/// growing staging index. The staging `config.json` points at the ephemeral
+/// server during packaging and is stamped with the final base URL afterward
+/// — the served tree never observes the ephemeral URL.
+fn emit_cargo_closure(opts: &EmitOptions, staging: &Path) -> Result<()> {
     let closure = crate::compute_release_closure(&opts.workspace_root)?;
     let cargo_dir = staging.join("cargo");
     std::fs::create_dir_all(cargo_dir.join("crates"))?;
-    // config.json (fork emit already wrote one; overwrite is identical bytes).
-    std::fs::write(cargo_dir.join("config.json"), render_cargo_config_json(&opts.base_url))?;
     let render = opts
         .workspace_root
         .join("scripts/gitea/render_cargo_index_line.py");
 
+    // Ephemeral staging server: pick a free port, serve the staging dir.
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")
+            .context("bind ephemeral port for the staging index server")?;
+        listener.local_addr()?.port()
+    };
+    let ephemeral_base = format!("http://127.0.0.1:{port}");
+    std::fs::write(cargo_dir.join("config.json"), render_cargo_config_json(&ephemeral_base))?;
+    let server = KillOnDrop(
+        Command::new("python3")
+            .args(["-m", "http.server", &port.to_string(), "--bind", "127.0.0.1", "--directory"])
+            .arg(staging)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .context("spawn the ephemeral staging index server (python3)")?,
+    );
+    // Wait for it to accept connections.
+    let mut up = false;
+    for _ in 0..50 {
+        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            up = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    anyhow::ensure!(up, "ephemeral staging index server did not come up on {ephemeral_base}");
+    let staging_index = format!("sparse+{ephemeral_base}/cargo/");
+
     for c in &closure.crates {
-        // A --dev publish stamps every closure crate at the target version.
-        let version = if opts.dev.is_some() { target.to_string() } else { c.version.clone() };
+        // The packaged artifact carries the crate's ACTUAL manifest version
+        // (see `crate_artifact_filename`); a dev emit bumps manifests first.
+        let version = c.version.clone();
         let out = Command::new("cargo")
             .args(["package", "--no-verify", "--allow-dirty", "-p", &c.name])
+            .env("CARGO_REGISTRIES_GITEA_INDEX", &staging_index)
             .current_dir(&opts.workspace_root)
             .output()
             .with_context(|| format!("cargo package -p {}", c.name))?;
@@ -474,7 +500,7 @@ fn emit_cargo_closure(opts: &EmitOptions, staging: &Path, target: &str) -> Resul
         let crate_file = opts
             .workspace_root
             .join("target/package")
-            .join(format!("{}-{}.crate", c.name, version));
+            .join(crate_artifact_filename(&c.name, &version));
         anyhow::ensure!(
             crate_file.is_file(),
             "expected packaged crate at {}",
@@ -482,7 +508,7 @@ fn emit_cargo_closure(opts: &EmitOptions, staging: &Path, target: &str) -> Resul
         );
         let dest = cargo_dir.join("crates").join(&c.name);
         std::fs::create_dir_all(&dest)?;
-        std::fs::copy(&crate_file, dest.join(format!("{}-{}.crate", c.name, version)))?;
+        std::fs::copy(&crate_file, dest.join(crate_artifact_filename(&c.name, &version)))?;
 
         let cksum = sha256_hex(&crate_file)?;
         let idx = cargo_dir.join(cargo_index_path(&c.name));
@@ -512,6 +538,10 @@ fn emit_cargo_closure(opts: &EmitOptions, staging: &Path, target: &str) -> Resul
             .with_context(|| format!("open index {}", idx.display()))?;
         f.write_all(&line.stdout)?;
     }
+
+    // Packaging done: stamp the FINAL base URL into config.json.
+    drop(server);
+    std::fs::write(cargo_dir.join("config.json"), render_cargo_config_json(&opts.base_url))?;
     Ok(())
 }
 
@@ -561,9 +591,15 @@ fn emit_pypi(opts: &EmitOptions, staging: &Path, target: &str) -> Result<()> {
 fn emit_npm(opts: &EmitOptions, staging: &Path, target: &str) -> Result<()> {
     let project = opts.workspace_root.join("libs/streamlib-deno");
     let name = "@tatolab/streamlib-deno";
-    let npm_dir = staging.join("npm").join(name).join("-");
-    std::fs::create_dir_all(&npm_dir)?;
-    let tgz = npm_dir.join(format!("streamlib-deno-{target}.tgz"));
+    // Layout that actually serves statically: npm clients GET
+    // `<base>/npm/@scope%2fname` (the packument), which a static server
+    // decodes to the path `npm/@scope/name` — so the packument must be a
+    // FILE at exactly that path. Tarballs live under the non-conflicting
+    // sibling `npm/tarballs/` (`dist.tarball` URLs match — see
+    // `render_npm_packument`).
+    let tarballs_dir = staging.join("npm").join("tarballs");
+    std::fs::create_dir_all(&tarballs_dir)?;
+    let tgz = tarballs_dir.join(format!("streamlib-deno-{target}.tgz"));
     // Regenerate the escalate wire vocabulary so the artifact is current.
     let setup = Command::new("deno")
         .args(["task", "setup"])
@@ -604,7 +640,11 @@ fn emit_npm(opts: &EmitOptions, staging: &Path, target: &str) -> Result<()> {
             integrity_sha512_b64: integrity,
         }],
     );
-    std::fs::write(staging.join("npm").join(name).join("index.json"), packument)?;
+    let packument_path = staging.join("npm").join(name);
+    if let Some(parent) = packument_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&packument_path, packument)?;
     Ok(())
 }
 
@@ -647,15 +687,14 @@ fn emit_slpkg_and_manifest(
         }
     }
 
-    // Crate closure members at the target version.
+    // Crate closure members at their ACTUAL manifest versions — the same
+    // correct-by-construction rule as `crate_artifact_filename`: the manifest
+    // records what the tree really holds; a dev emit bumps manifests first.
     let closure = crate::compute_release_closure(&opts.workspace_root)?;
     let crate_members: Vec<ReleaseManifestMember> = closure
         .crates
         .iter()
-        .map(|c| {
-            let v = if opts.dev.is_some() { target.to_string() } else { c.version.clone() };
-            ReleaseManifestMember::new(c.name.clone(), v)
-        })
+        .map(|c| ReleaseManifestMember::new(c.name.clone(), c.version.clone()))
         .collect();
 
     let mut manifest = ReleaseManifest::new(target.to_string(), crate_members);
@@ -693,15 +732,24 @@ fn assemble_slpkg_bytes(pkg_dir: &Path) -> Result<(PackageRef, String, Vec<u8>)>
         &(),
     )?;
     let bytes = std::fs::read(tmp.path()).context("read assembled .slpkg")?;
-    // Parse org/name from the package name (`@org/name`).
-    let (org, name) = outcome
-        .package_name
-        .trim_start_matches('@')
-        .split_once('/')
-        .with_context(|| format!("package name `{}` is not `@org/name`", outcome.package_name))?;
+    // `AssembleOutcome.package_name` is the bare name; the org comes from the
+    // manifest's `package:` block.
+    #[derive(serde::Deserialize)]
+    struct Pkg {
+        org: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct Yaml {
+        package: Pkg,
+    }
+    let yaml_body = std::fs::read_to_string(pkg_dir.join("streamlib.yaml"))
+        .with_context(|| format!("read {}/streamlib.yaml", pkg_dir.display()))?;
+    let parsed: Yaml = serde_yaml::from_str(&yaml_body)
+        .with_context(|| format!("parse {}/streamlib.yaml", pkg_dir.display()))?;
     let pkg_ref = PackageRef::new(
-        streamlib_idents::Org::new(org).map_err(|e| anyhow::anyhow!("{e}"))?,
-        streamlib_idents::Package::new(name).map_err(|e| anyhow::anyhow!("{e}"))?,
+        streamlib_idents::Org::new(&parsed.package.org).map_err(|e| anyhow::anyhow!("{e}"))?,
+        streamlib_idents::Package::new(&outcome.package_name)
+            .map_err(|e| anyhow::anyhow!("{e}"))?,
     );
     Ok((pkg_ref, outcome.package_version, bytes))
 }
@@ -750,17 +798,6 @@ mod tests {
     }
 
     #[test]
-    fn req_normalization_adds_caret_only_to_bare_versions() {
-        assert_eq!(normalize_cargo_req("0.35.0"), "^0.35.0");
-        assert_eq!(normalize_cargo_req("^0.35.0"), "^0.35.0");
-        assert_eq!(normalize_cargo_req("=1.0.0"), "=1.0.0");
-        assert_eq!(normalize_cargo_req("~1.2"), "~1.2");
-        assert_eq!(normalize_cargo_req(">=1, <2"), ">=1, <2");
-        assert_eq!(normalize_cargo_req("*"), "*");
-        assert_eq!(normalize_cargo_req(""), "*");
-    }
-
-    #[test]
     fn config_json_carries_templated_dl_and_base_url() {
         let cfg = render_cargo_config_json("http://127.0.0.1:8799");
         assert!(cfg.contains("\"dl\":\"http://127.0.0.1:8799/cargo/crates/{crate}/{crate}-{version}.crate\""));
@@ -769,48 +806,6 @@ mod tests {
         // Trailing slash on the base is normalized away.
         let cfg2 = render_cargo_config_json("http://127.0.0.1:8799/");
         assert_eq!(cfg, cfg2);
-    }
-
-    #[test]
-    fn index_line_ndjson_shape_is_a_single_compact_object() {
-        let line = CargoIndexLine {
-            name: "vulkanalia".into(),
-            vers: "0.35.0".into(),
-            deps: vec![
-                CargoIndexDep {
-                    name: "vulkanalia-sys".into(),
-                    req: "^0.35.0".into(),
-                    features: vec![],
-                    optional: false,
-                    default_features: true,
-                    target: None,
-                    kind: "normal".into(),
-                    registry: None, // same registry → null
-                    package: None,
-                },
-                CargoIndexDep {
-                    name: "bitflags".into(),
-                    req: "^2.0".into(),
-                    features: vec![],
-                    optional: false,
-                    default_features: true,
-                    target: None,
-                    kind: "normal".into(),
-                    registry: Some(CRATES_IO_INDEX.into()),
-                    package: None,
-                },
-            ],
-            cksum: "0".repeat(64),
-            features: Default::default(),
-            yanked: false,
-        };
-        let ndjson = line.to_ndjson();
-        assert!(!ndjson.contains('\n'), "index line must be a single row");
-        let back: serde_json::Value = serde_json::from_str(&ndjson).unwrap();
-        assert_eq!(back["name"], "vulkanalia");
-        assert_eq!(back["deps"][0]["registry"], serde_json::Value::Null);
-        assert_eq!(back["deps"][1]["registry"], CRATES_IO_INDEX);
-        assert_eq!(back["yanked"], false);
     }
 
     #[test]
@@ -839,9 +834,73 @@ mod tests {
         assert_eq!(v["dist-tags"]["latest"], "0.5.1");
         assert_eq!(
             v["versions"]["0.5.1"]["dist"]["tarball"],
-            "http://127.0.0.1:8799/npm/@tatolab/streamlib-deno/-/streamlib-deno-0.5.1.tgz"
+            "http://127.0.0.1:8799/npm/tarballs/streamlib-deno-0.5.1.tgz"
         );
         assert_eq!(v["versions"]["0.5.1"]["dist"]["integrity"], "sha512-AAAA");
+    }
+
+    /// The npm layout must actually serve statically: the packument is a FILE
+    /// at `npm/@scope/name` (what a client's `GET <base>/npm/@scope%2fname`
+    /// decodes to on a static server), and tarballs live at a sibling path
+    /// that can NEVER collide with it. The historical bug: writing the
+    /// packument at `npm/@scope/name/index.json` makes `npm/@scope/name` a
+    /// DIRECTORY — a static server answers the packument GET with an HTML
+    /// listing and resolution breaks.
+    #[test]
+    fn npm_static_layout_packument_is_a_file_and_tarballs_dont_collide() {
+        let root = tempfile::tempdir().unwrap();
+        let staging = root.path();
+        let name = "@tatolab/streamlib-deno";
+
+        // Mirror emit_npm's layout without the deno toolchain.
+        let tarballs_dir = staging.join("npm").join("tarballs");
+        std::fs::create_dir_all(&tarballs_dir).unwrap();
+        std::fs::write(tarballs_dir.join("streamlib-deno-0.5.1.tgz"), b"tgz").unwrap();
+        let packument_path = staging.join("npm").join(name);
+        std::fs::create_dir_all(packument_path.parent().unwrap()).unwrap();
+        let doc = render_npm_packument(
+            name,
+            "http://127.0.0.1:8799",
+            &[NpmVersion {
+                version: "0.5.1".into(),
+                tarball_filename: "streamlib-deno-0.5.1.tgz".into(),
+                shasum_sha1_hex: "deadbeef".into(),
+                integrity_sha512_b64: "AAAA".into(),
+            }],
+        );
+        std::fs::write(&packument_path, &doc).unwrap();
+
+        // The packument path IS a file (not a directory) …
+        assert!(packument_path.is_file(), "packument must be a plain file");
+        // … and the tarball URL path maps to an existing file that does not
+        // collide with the packument path.
+        let v: serde_json::Value = serde_json::from_str(&doc).unwrap();
+        let tarball_url = v["versions"]["0.5.1"]["dist"]["tarball"].as_str().unwrap();
+        let rel = tarball_url.strip_prefix("http://127.0.0.1:8799/").unwrap();
+        let tarball_path = staging.join(rel);
+        assert!(tarball_path.is_file(), "dist.tarball must map to a real file");
+        assert!(
+            !tarball_path.starts_with(&packument_path),
+            "tarball path must not nest under the packument path"
+        );
+    }
+
+    /// Locks the correct-by-construction version rule for the closure emit:
+    /// the artifact filename always follows the crate's ACTUAL manifest
+    /// version — a dev emit bumps manifests first, never re-derives.
+    /// Mentally revert emit_cargo_closure to stamp `target` when
+    /// `opts.dev.is_some()`: `cargo package` still writes
+    /// `{name}-{manifest_version}.crate` and the emit dies at the ensure!.
+    #[test]
+    fn crate_artifact_filename_follows_manifest_version() {
+        assert_eq!(
+            crate_artifact_filename("streamlib-macros", "0.5.1"),
+            "streamlib-macros-0.5.1.crate"
+        );
+        assert_eq!(
+            crate_artifact_filename("streamlib-macros", "0.5.1-dev.3"),
+            "streamlib-macros-0.5.1-dev.3.crate"
+        );
     }
 
     #[test]
@@ -875,57 +934,154 @@ mod tests {
         vs
     }
 
-    /// The mid-publish window guarantee (#1240): while the NEW release tree is
-    /// being built (into a staging dir), the served tree stays the OLD
-    /// *complete* release — no partial/mixed state ever appears in the served
-    /// path — and the flip to the new release is a single atomic operation.
+    /// The mid-publish window guarantee, exercised through the REAL seam
+    /// (`build_and_flip`, the exact path `emit_static_registry` runs) with a
+    /// CONCURRENT reader: while a new release is built, a reader of the
+    /// served tree only ever observes a complete release set — the old
+    /// `{0.5.0}` or the new `{0.5.1}` — never a partial or mixed one.
     ///
-    /// Deterministic (single-threaded): after every incremental staging write
-    /// we assert the served tree is still exactly `{0.5.0}`, proving staging
-    /// never leaks into served. Mentally revert `publish_staged_tree` to a
-    /// copy-into-served loop and the pre-flip assertions fail (served would
-    /// gain a half-written `0.5.1`); mentally revert the manifest-last ordering
-    /// and the "complete" filter would admit an incomplete `0.5.1`.
+    /// Reader protocol (the file:// consumer shape): list the release
+    /// channel, then read each listed version's manifest. A manifest read
+    /// that fails is tolerated ONLY when a re-list shows the version gone
+    /// (the atomic flip raced between the two syscalls); a version that
+    /// stays listed without its manifest is a partial tree → panic.
+    /// Mentally revert `build_and_flip`/`publish_staged_tree` to a
+    /// copy-into-served loop: the half-copied `0.5.1` dir is listed without
+    /// its manifest (manifest is written last) and stays listed → panic.
     #[test]
-    fn publish_staged_tree_keeps_served_complete_through_the_window() {
+    #[cfg(target_os = "linux")] // relies on the gapless RENAME_EXCHANGE flip
+    fn window_concurrent_reader_never_observes_partial_release() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
         let root = tempfile::tempdir().unwrap();
-        let served = root.path().join("served");
-        std::fs::create_dir_all(served.join("slpkg/streamlib-release/0.5.0")).unwrap();
+        let out = root.path().join("served");
+
+        let write_release = |staging: &Path, ver: &str, slow: bool| -> Result<()> {
+            std::fs::create_dir_all(staging.join("cargo/crates"))?;
+            for i in 0..30 {
+                std::fs::write(
+                    staging.join(format!("cargo/crates/payload-{i}.bin")),
+                    vec![0u8; 1024],
+                )?;
+                if slow {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            }
+            // Release manifest written LAST — the completion marker.
+            let rel = staging.join("slpkg/streamlib-release").join(ver);
+            std::fs::create_dir_all(&rel)?;
+            std::fs::write(
+                rel.join("manifest.json"),
+                format!("{{\"release_version\":\"{ver}\"}}"),
+            )?;
+            Ok(())
+        };
+
+        // Old complete release, published through the real seam.
+        build_and_flip(&out, |staging| write_release(staging, "0.5.0", false)).unwrap();
+
+        let list = |base: &Path| -> Option<Vec<String>> {
+            let rd = std::fs::read_dir(base.join("slpkg/streamlib-release")).ok()?;
+            let mut vs: Vec<String> = rd
+                .filter_map(|e| e.ok())
+                .filter_map(|e| e.file_name().into_string().ok())
+                .collect();
+            vs.sort();
+            Some(vs)
+        };
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let out_r = out.clone();
+        let stop_r = stop.clone();
+        let reader = std::thread::spawn(move || {
+            let mut saw_old = false;
+            let mut saw_new = false;
+            while !stop_r.load(Ordering::Relaxed) {
+                // With RENAME_EXCHANGE the served path never vanishes.
+                let listed = list(&out_r).expect("release channel must never vanish");
+                match listed.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+                    ["0.5.0"] | ["0.5.1"] => {}
+                    ref other => panic!("non-atomic release set observed: {other:?}"),
+                }
+                for v in &listed {
+                    let manifest =
+                        out_r.join("slpkg/streamlib-release").join(v).join("manifest.json");
+                    match std::fs::read_to_string(&manifest) {
+                        Ok(body) => {
+                            // Never a torn/partial file: staged writes are
+                            // invisible until the flip.
+                            let parsed: serde_json::Value =
+                                serde_json::from_str(&body).expect("manifest must be whole JSON");
+                            assert_eq!(parsed["release_version"], v.as_str());
+                            if v == "0.5.0" {
+                                saw_old = true;
+                            } else {
+                                saw_new = true;
+                            }
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                            // Tolerable ONLY if the flip raced between list
+                            // and read — the version must now be gone.
+                            let relisted = list(&out_r).expect("channel must never vanish");
+                            assert!(
+                                !relisted.contains(v),
+                                "version {v} listed without its manifest and still \
+                                 listed on re-list — PARTIAL tree exposed"
+                            );
+                        }
+                        Err(e) => panic!("manifest read failed: {e}"),
+                    }
+                }
+            }
+            (saw_old, saw_new)
+        });
+
+        // New release built + flipped through the real seam, slowly, while
+        // the reader spins.
+        build_and_flip(&out, |staging| write_release(staging, "0.5.1", true)).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        stop.store(true, Ordering::Relaxed);
+        let (saw_old, saw_new) = reader.join().unwrap();
+
+        assert!(saw_old, "reader must have observed the old release during staging");
+        assert!(saw_new, "reader must have observed the flipped-in new release");
+        assert_eq!(complete_releases(&out), vec!["0.5.1".to_string()]);
+    }
+
+    /// A build that CRASHES (errors) mid-emit must leave the served tree
+    /// untouched and clean up its staging dir — the failed-publish half of
+    /// the window guarantee.
+    #[test]
+    fn crashed_build_leaves_served_tree_untouched() {
+        let root = tempfile::tempdir().unwrap();
+        let out = root.path().join("served");
+        std::fs::create_dir_all(out.join("slpkg/streamlib-release/0.5.0")).unwrap();
         std::fs::write(
-            served.join("slpkg/streamlib-release/0.5.0/manifest.json"),
+            out.join("slpkg/streamlib-release/0.5.0/manifest.json"),
             b"{\"release_version\":\"0.5.0\"}",
         )
         .unwrap();
-        assert_eq!(complete_releases(&served), vec!["0.5.0".to_string()]);
 
-        // Build the NEW release into staging incrementally — the "window."
-        let staging = sibling_temp(&served, "staging");
-        std::fs::create_dir_all(staging.join("slpkg/streamlib-release/0.5.1")).unwrap();
-        std::fs::create_dir_all(staging.join("cargo/crates")).unwrap();
-        for i in 0..20 {
-            std::fs::write(staging.join(format!("cargo/crates/part-{i}.bin")), b"x").unwrap();
-            // Throughout staging, served is untouched and complete.
-            assert_eq!(
-                complete_releases(&served),
-                vec!["0.5.0".to_string()],
-                "served tree changed during the staging window (partial exposure)"
-            );
-        }
-        // ReleaseManifest written LAST into staging (the completion marker).
-        std::fs::write(
-            staging.join("slpkg/streamlib-release/0.5.1/manifest.json"),
-            b"{\"release_version\":\"0.5.1\"}",
-        )
-        .unwrap();
-        // Still old until the flip.
-        assert_eq!(complete_releases(&served), vec!["0.5.0".to_string()]);
+        let err = build_and_flip(&out, |staging| {
+            // Write half a release, then die before the manifest.
+            std::fs::create_dir_all(staging.join("slpkg/streamlib-release/0.5.1"))?;
+            std::fs::write(staging.join("slpkg/streamlib-release/0.5.1/partial.bin"), b"x")?;
+            anyhow::bail!("simulated mid-emit crash")
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("simulated mid-emit crash"));
 
-        publish_staged_tree(&staging, &served).unwrap();
-
-        // Post-flip: exactly the new release, staging consumed, cargo tree in.
-        assert_eq!(complete_releases(&served), vec!["0.5.1".to_string()]);
-        assert!(!staging.exists());
-        assert!(served.join("cargo/crates/part-0.bin").is_file());
+        // Served tree: exactly the old complete release, nothing else.
+        assert_eq!(complete_releases(&out), vec!["0.5.0".to_string()]);
+        assert!(!out.join("slpkg/streamlib-release/0.5.1").exists());
+        // No staging remnant left beside the served tree.
+        let remnants: Vec<_> = std::fs::read_dir(root.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".staging."))
+            .collect();
+        assert!(remnants.is_empty(), "staging remnant left behind: {remnants:?}");
     }
 
     /// Locks the gapless replace primitive: `publish_staged_tree` onto an

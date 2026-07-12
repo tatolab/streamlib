@@ -48,6 +48,28 @@ runs:
         git -C /tmp/vulkanalia-fork submodule update --init --quiet \
           ext/vma/vendor/Vulkan-Headers ext/vma/vendor/VulkanMemoryAllocator
 
+    - name: Serve the tree (before emit — emit resolves fork siblings from it)
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "${{ inputs.out }}"
+        # Detach the static server so it survives into later job steps. It
+        # serves the tree WHILE emit populates it (http.server stats per
+        # request), so `cargo package` for vulkanalia resolves the
+        # already-emitted vulkanalia-sys from THIS exact tree — one server,
+        # no port coupling, no second bind.
+        nohup python3 -m http.server "${{ inputs.port }}" --bind 127.0.0.1 \
+          --directory "${{ inputs.out }}" > /tmp/static-registry-httpd.log 2>&1 &
+        for _ in $(seq 1 30); do
+          curl -fsS "http://127.0.0.1:${{ inputs.port }}/" >/dev/null 2>&1 && break
+          sleep 1
+        done
+        curl -fsS "http://127.0.0.1:${{ inputs.port }}/" >/dev/null \
+          || { echo "static registry server did not come up"; cat /tmp/static-registry-httpd.log; exit 1; }
+        echo "STATIC_FORK_URL=http://127.0.0.1:${{ inputs.port }}" >> "$GITHUB_ENV"
+        echo "CARGO_REGISTRIES_GITEA_INDEX=sparse+http://127.0.0.1:${{ inputs.port }}/cargo/" >> "$GITHUB_ENV"
+        echo "STREAMLIB_STATIC_REGISTRY_DIR=${{ inputs.out }}" >> "$GITHUB_ENV"
+
     - name: Emit static fork registry tree
       shell: bash
       run: |
@@ -56,22 +78,12 @@ runs:
         python3 -m pip install --quiet tomlkit \
           || python3 -m pip install --quiet --user tomlkit \
           || python3 -m pip install --quiet --break-system-packages tomlkit
+        # STATIC_FORK_URL → the script skips its own throwaway server and
+        # resolves fork siblings through the already-running one above.
         VULKANALIA_DIR=/tmp/vulkanalia-fork \
+        STATIC_FORK_URL="http://127.0.0.1:${{ inputs.port }}" \
           scripts/gitea/emit-static-fork.sh "${{ inputs.out }}" \
           --base-url "http://127.0.0.1:${{ inputs.port }}"
-
-    - name: Serve the tree + export the cargo registry index
-      shell: bash
-      run: |
-        set -euo pipefail
-        # Detach the static server so it survives into later job steps.
-        nohup python3 -m http.server "${{ inputs.port }}" --bind 127.0.0.1 \
-          --directory "${{ inputs.out }}" > /tmp/static-registry-httpd.log 2>&1 &
-        for _ in $(seq 1 30); do
-          curl -fsS "http://127.0.0.1:${{ inputs.port }}/cargo/config.json" >/dev/null 2>&1 && break
-          sleep 1
-        done
+        # The emitted tree is complete and fetchable through the live server.
         curl -fsS "http://127.0.0.1:${{ inputs.port }}/cargo/config.json" >/dev/null \
-          || { echo "static registry did not come up"; cat /tmp/static-registry-httpd.log; exit 1; }
-        echo "CARGO_REGISTRIES_GITEA_INDEX=sparse+http://127.0.0.1:${{ inputs.port }}/cargo/" >> "$GITHUB_ENV"
-        echo "STREAMLIB_STATIC_REGISTRY_DIR=${{ inputs.out }}" >> "$GITHUB_ENV"
+          || { echo "emitted tree not fetchable"; exit 1; }
