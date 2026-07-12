@@ -65,6 +65,13 @@ pub use error::{ConsumerRhiError, Result};
 pub use formats::{TextureFormat, TextureUsages};
 pub use pixel_format::PixelFormat;
 
+/// This crate's package version, captured at compile time. Folded into
+/// the engine's build fingerprint so a host and plugin that disagree on
+/// the consumer-side carve-out (the `Consumer*` texture / buffer /
+/// device / timeline types every subprocess-wired adapter imports
+/// through) are refused at load rather than skewing silently.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[cfg(target_os = "linux")]
 pub use consumer_vulkan_device::ConsumerVulkanDevice;
 #[cfg(target_os = "linux")]

@@ -219,6 +219,20 @@ pub struct HostVulkanTimelineSemaphore {
     exportable: bool,
 }
 
+/// First-order layout probe for [`HostVulkanTimelineSemaphore`] — one of
+/// the three non-`#[repr(C)]` engine types that transit the plugin ABI
+/// by raw `Arc` pointer (the FullAccess `create_timeline_semaphore` /
+/// set / wait / `host_video_source_timeline_arc` slots). Colocated with
+/// the type; folded into
+/// [`crate::core::plugin::build_fingerprint::ENGINE_TRANSIT_FINGERPRINT`].
+#[cfg(target_os = "linux")]
+pub(crate) const fn host_vulkan_timeline_semaphore_layout_probe() -> [u64; 2] {
+    [
+        core::mem::size_of::<HostVulkanTimelineSemaphore>() as u64,
+        core::mem::align_of::<HostVulkanTimelineSemaphore>() as u64,
+    ]
+}
+
 #[cfg(target_os = "linux")]
 impl HostVulkanTimelineSemaphore {
     /// Create an in-process timeline semaphore (no export).

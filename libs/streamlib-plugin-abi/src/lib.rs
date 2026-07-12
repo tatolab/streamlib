@@ -85,7 +85,16 @@ pub use vtables::*;
 /// incompatibly. Same-major-version layout additions append to the
 /// end of [`HostServices`] and read the new fields only when
 /// `abi_layout_version` advertises them.
-pub const STREAMLIB_ABI_VERSION: u32 = 4;
+///
+/// - v5: [`PluginDeclaration`] grows the build-fingerprint handshake
+///   (`abi_layout_fingerprint`, `engine_transit_fingerprint`,
+///   `build_identity_ptr` / `build_identity_len`). The host refuses,
+///   with a typed error, any plugin whose measured ABI layout or
+///   engine-internal transit layout could skew from its own. The
+///   `abi_version` field stays pinned at offset 0 and is read first,
+///   so the appended fields are dereferenced only from a v5
+///   declaration.
+pub const STREAMLIB_ABI_VERSION: u32 = 5;
 
 /// Layout version of the [`HostServices`] payload. Read first by the
 /// cdylib's `install_host_services` before any other field is
@@ -154,6 +163,179 @@ pub const STREAMLIB_ABI_VERSION: u32 = 4;
 ///   delivers the per-instance opaque handles. Non-null for every
 ///   host that wires processors through iceoryx2.
 pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 14;
+
+// =============================================================================
+// Build-fingerprint folding — shared FNV-1a helpers
+// =============================================================================
+
+/// FNV-1a 64-bit offset basis.
+const FNV1A_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+/// FNV-1a 64-bit prime.
+const FNV1A_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+/// Begin an FNV-1a fold accumulator.
+pub const fn fingerprint_init() -> u64 {
+    FNV1A_OFFSET_BASIS
+}
+
+/// Fold one `u64` (little-endian bytes) into an FNV-1a accumulator.
+pub const fn fingerprint_fold_u64(mut hash: u64, value: u64) -> u64 {
+    let bytes = value.to_le_bytes();
+    let mut i = 0;
+    while i < 8 {
+        hash ^= bytes[i] as u64;
+        hash = hash.wrapping_mul(FNV1A_PRIME);
+        i += 1;
+    }
+    hash
+}
+
+/// Fold a byte slice into an FNV-1a accumulator.
+pub const fn fingerprint_fold_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
+    let mut i = 0;
+    while i < bytes.len() {
+        hash ^= bytes[i] as u64;
+        hash = hash.wrapping_mul(FNV1A_PRIME);
+        i += 1;
+    }
+    hash
+}
+
+/// Fold a type's measured `size_of` + `align_of` into an FNV-1a
+/// accumulator. Measured from the compiled binary, so a same-declared-
+/// version / different-actual-layout republish of any dispatch-surface
+/// type changes the fingerprint.
+const fn fingerprint_fold_layout(hash: u64, size: usize, align: usize) -> u64 {
+    let hash = fingerprint_fold_u64(hash, size as u64);
+    fingerprint_fold_u64(hash, align as u64)
+}
+
+/// Structural fingerprint of the `#[repr(C)]` plugin-ABI dispatch
+/// surface: the declared layout-version constants plus the measured
+/// `size_of` / `align_of` of [`HostServices`], [`PluginDeclaration`],
+/// and every vtable struct the host and plugin dereference field-by-
+/// field.
+///
+/// The host folds this into its own build fingerprint and refuses,
+/// with a typed error, any plugin whose value differs. Because it is
+/// *measured* (not a hand-maintained constant), a layout-changing edit
+/// to any dispatch-surface struct that forgot to bump the matching
+/// layout-version constant still changes this value — catching the
+/// same-constant / different-layout republish a version-only check
+/// would miss.
+///
+/// The pure-POD `repr/` structs (`ComputeKernelDescriptorRepr`,
+/// `GraphicsPipelineStateRepr`, …) are intentionally *not* folded here:
+/// they are `#[repr(C)]` with primitive / explicit-`repr` fields only,
+/// so their layout is fully source-determined and identical across any
+/// two builds of the same source. Their byte layout is locked by the
+/// per-struct `offset_of!` regression tests in each `repr/` module.
+pub const PLUGIN_ABI_LAYOUT_FINGERPRINT: u64 = {
+    use core::mem::{align_of, size_of};
+    let mut h = fingerprint_init();
+
+    // Declared version constants.
+    h = fingerprint_fold_u64(h, STREAMLIB_ABI_VERSION as u64);
+    h = fingerprint_fold_u64(h, HOST_SERVICES_LAYOUT_VERSION as u64);
+    h = fingerprint_fold_u64(h, PROCESSOR_VTABLE_LAYOUT_VERSION as u64);
+    h = fingerprint_fold_u64(h, RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION as u64);
+    h = fingerprint_fold_u64(h, AUDIO_CLOCK_VTABLE_LAYOUT_VERSION as u64);
+    h = fingerprint_fold_u64(h, RUNTIME_OPS_VTABLE_LAYOUT_VERSION as u64);
+    h = fingerprint_fold_u64(h, GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION as u64);
+    h = fingerprint_fold_u64(h, SURFACE_STORE_VTABLE_LAYOUT_VERSION as u64);
+    h = fingerprint_fold_u64(h, GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION as u64);
+    h = fingerprint_fold_u64(h, TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION as u64);
+    h = fingerprint_fold_u64(h, VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION as u64);
+    h = fingerprint_fold_u64(h, VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION as u64);
+    h = fingerprint_fold_u64(
+        h,
+        VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION as u64,
+    );
+    h = fingerprint_fold_u64(
+        h,
+        VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION as u64,
+    );
+    h = fingerprint_fold_u64(h, RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION as u64);
+    h = fingerprint_fold_u64(h, RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION as u64);
+    h = fingerprint_fold_u64(h, OUTPUT_WRITER_VTABLE_LAYOUT_VERSION as u64);
+    h = fingerprint_fold_u64(h, INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION as u64);
+
+    // Measured layout of the wire envelope + callback table.
+    h = fingerprint_fold_layout(h, size_of::<PluginDeclaration>(), align_of::<PluginDeclaration>());
+    h = fingerprint_fold_layout(h, size_of::<HostServices>(), align_of::<HostServices>());
+
+    // Measured layout of every vtable struct dereferenced field-by-field.
+    h = fingerprint_fold_layout(h, size_of::<ProcessorVTable>(), align_of::<ProcessorVTable>());
+    h = fingerprint_fold_layout(
+        h,
+        size_of::<RuntimeContextVTable>(),
+        align_of::<RuntimeContextVTable>(),
+    );
+    h = fingerprint_fold_layout(h, size_of::<AudioClockVTable>(), align_of::<AudioClockVTable>());
+    h = fingerprint_fold_layout(h, size_of::<RuntimeOpsVTable>(), align_of::<RuntimeOpsVTable>());
+    h = fingerprint_fold_layout(
+        h,
+        size_of::<GpuContextLimitedAccessVTable>(),
+        align_of::<GpuContextLimitedAccessVTable>(),
+    );
+    h = fingerprint_fold_layout(
+        h,
+        size_of::<SurfaceStoreVTable>(),
+        align_of::<SurfaceStoreVTable>(),
+    );
+    h = fingerprint_fold_layout(
+        h,
+        size_of::<GpuContextFullAccessVTable>(),
+        align_of::<GpuContextFullAccessVTable>(),
+    );
+    h = fingerprint_fold_layout(
+        h,
+        size_of::<TextureRingMethodsVTable>(),
+        align_of::<TextureRingMethodsVTable>(),
+    );
+    h = fingerprint_fold_layout(
+        h,
+        size_of::<VulkanComputeKernelMethodsVTable>(),
+        align_of::<VulkanComputeKernelMethodsVTable>(),
+    );
+    h = fingerprint_fold_layout(
+        h,
+        size_of::<VulkanGraphicsKernelMethodsVTable>(),
+        align_of::<VulkanGraphicsKernelMethodsVTable>(),
+    );
+    h = fingerprint_fold_layout(
+        h,
+        size_of::<VulkanRayTracingKernelMethodsVTable>(),
+        align_of::<VulkanRayTracingKernelMethodsVTable>(),
+    );
+    h = fingerprint_fold_layout(
+        h,
+        size_of::<VulkanAccelerationStructureMethodsVTable>(),
+        align_of::<VulkanAccelerationStructureMethodsVTable>(),
+    );
+    h = fingerprint_fold_layout(
+        h,
+        size_of::<RhiColorConverterMethodsVTable>(),
+        align_of::<RhiColorConverterMethodsVTable>(),
+    );
+    h = fingerprint_fold_layout(
+        h,
+        size_of::<RhiCommandRecorderMethodsVTable>(),
+        align_of::<RhiCommandRecorderMethodsVTable>(),
+    );
+    h = fingerprint_fold_layout(
+        h,
+        size_of::<OutputWriterVTable>(),
+        align_of::<OutputWriterVTable>(),
+    );
+    h = fingerprint_fold_layout(
+        h,
+        size_of::<InputMailboxesVTable>(),
+        align_of::<InputMailboxesVTable>(),
+    );
+
+    h
+};
 
 // =============================================================================
 // HostServices — the callback table
@@ -554,20 +736,57 @@ pub type PluginRegisterFn = unsafe extern "C" fn(host_services: *const c_void);
 ///
 /// Plugins export a static named `STREAMLIB_PLUGIN` of this type via
 /// [`export_plugin!`]. The host's loader looks up the symbol,
-/// validates `abi_version`, and invokes `register`.
+/// validates `abi_version` (offset 0, read first), then the build
+/// fingerprints, then invokes `register`.
+///
+/// # Layout discipline
+///
+/// `abi_version` is pinned at offset 0 and `register` at offset 8
+/// forever. The host reads `abi_version` before dereferencing the
+/// appended v5 fields, so those fields are only ever read from a v5
+/// declaration whose byte shape matches.
 #[repr(C)]
 pub struct PluginDeclaration {
     /// Wire ABI version — must equal [`STREAMLIB_ABI_VERSION`] at
-    /// load time.
+    /// load time. Pinned at offset 0; read first.
     pub abi_version: u32,
+
+    /// Reserved padding (keeps `register` naturally aligned; zero
+    /// today, never read).
+    pub _reserved_padding: u32,
 
     /// Register callback. Receives the host-services pointer; the
     /// cdylib's macro expansion uses it to install every per-plugin
-    /// static's forwarder before registering processors.
+    /// static's forwarder before registering processors. Pinned at
+    /// offset 8.
     pub register: PluginRegisterFn,
+
+    /// Structural fingerprint of the plugin's `#[repr(C)]` plugin-ABI
+    /// dispatch surface — the plugin's [`PLUGIN_ABI_LAYOUT_FINGERPRINT`]
+    /// at build time. The host refuses the load unless it equals its
+    /// own.
+    pub abi_layout_fingerprint: u64,
+
+    /// Structural fingerprint of the engine-internal (non-`#[repr(C)]`)
+    /// transit surface the plugin's statically-linked engine copy
+    /// exposes across the FullAccess vtable's raw-`Arc` slots. `0` for
+    /// an engine-free plugin (no transit surface); otherwise the
+    /// host refuses the load unless it equals its own engine's value.
+    pub engine_transit_fingerprint: u64,
+
+    /// Pointer to the plugin's human-readable build-identity string
+    /// (engine version / rustc version / target triple / profile).
+    /// Read defensively by the host only on the error path. Never
+    /// null for an [`export_plugin!`]-emitted declaration.
+    pub build_identity_ptr: *const u8,
+
+    /// Byte length of the [`Self::build_identity_ptr`] string.
+    pub build_identity_len: usize,
 }
 
-// Safety: contains only a u32 and a function pointer.
+// Safety: primitives, a function pointer, and a `*const u8` that
+// points at a `'static` string owned by the plugin cdylib (kept
+// alive for the process lifetime via `LOADED_PLUGIN_LIBRARIES`).
 unsafe impl Send for PluginDeclaration {}
 unsafe impl Sync for PluginDeclaration {}
 
@@ -650,7 +869,19 @@ macro_rules! export_plugin {
         #[unsafe(no_mangle)]
         pub static STREAMLIB_PLUGIN: $crate::PluginDeclaration = $crate::PluginDeclaration {
             abi_version: $crate::STREAMLIB_ABI_VERSION,
+            _reserved_padding: 0,
             register: __streamlib_plugin_register,
+            // The `#[processor]` macro emits these three associated
+            // consts against the plugin's detected SDK crate — the
+            // facade `streamlib` (statically-linked engine → real
+            // transit fingerprint) or the engine-free
+            // `streamlib-plugin-sdk` (transit fingerprint 0). The
+            // envelope names no SDK path itself, matching how
+            // `register` is resolved.
+            abi_layout_fingerprint: <$first>::__STREAMLIB_ABI_LAYOUT_FINGERPRINT,
+            engine_transit_fingerprint: <$first>::__STREAMLIB_ENGINE_TRANSIT_FINGERPRINT,
+            build_identity_ptr: <$first>::__STREAMLIB_BUILD_IDENTITY.as_ptr(),
+            build_identity_len: <$first>::__STREAMLIB_BUILD_IDENTITY.len(),
         };
     };
 }
@@ -671,11 +902,40 @@ mod layout_tests {
 
     #[test]
     fn plugin_declaration_layout() {
-        // u32 + 4-byte padding + 8-byte fn pointer = 16 bytes.
-        assert_eq!(size_of::<PluginDeclaration>(), 16);
+        // v5 envelope: u32 abi_version + u32 padding + fn ptr +
+        // two u64 fingerprints + (*const u8, usize) identity slice
+        // = 48 bytes, align 8.
+        assert_eq!(size_of::<PluginDeclaration>(), 48);
         assert_eq!(align_of::<PluginDeclaration>(), 8);
+        // `abi_version` @0 and `register` @8 are pinned forever — the
+        // host reads `abi_version` before dereferencing any appended
+        // field.
         assert_eq!(offset_of!(PluginDeclaration, abi_version), 0);
+        assert_eq!(offset_of!(PluginDeclaration, _reserved_padding), 4);
         assert_eq!(offset_of!(PluginDeclaration, register), 8);
+        assert_eq!(offset_of!(PluginDeclaration, abi_layout_fingerprint), 16);
+        assert_eq!(offset_of!(PluginDeclaration, engine_transit_fingerprint), 24);
+        assert_eq!(offset_of!(PluginDeclaration, build_identity_ptr), 32);
+        assert_eq!(offset_of!(PluginDeclaration, build_identity_len), 40);
+    }
+
+    #[test]
+    fn plugin_abi_layout_fingerprint_is_nonzero_and_deterministic() {
+        // A degenerate all-zero fold would silently accept every
+        // mismatched plugin; assert it's a real value.
+        assert_ne!(PLUGIN_ABI_LAYOUT_FINGERPRINT, 0);
+        // Recomputing the fold over the same inputs is stable within
+        // a single build — the const is evaluated once, but the FNV
+        // helpers are pure, so folding the abi version twice agrees.
+        let a = fingerprint_fold_u64(fingerprint_init(), STREAMLIB_ABI_VERSION as u64);
+        let b = fingerprint_fold_u64(fingerprint_init(), STREAMLIB_ABI_VERSION as u64);
+        assert_eq!(a, b);
+        // Distinct inputs fold to distinct accumulators (the fold is
+        // not a constant function).
+        assert_ne!(
+            fingerprint_fold_u64(fingerprint_init(), 4),
+            fingerprint_fold_u64(fingerprint_init(), 5)
+        );
     }
 
     #[test]
@@ -684,7 +944,8 @@ mod layout_tests {
         // InputMailboxesVTable references and bumps
         // ProcessorVTable to v2 (slot swap).
         assert_eq!(HOST_SERVICES_LAYOUT_VERSION, 14);
-        assert_eq!(STREAMLIB_ABI_VERSION, 4);
+        // v5: PluginDeclaration grew the build-fingerprint handshake.
+        assert_eq!(STREAMLIB_ABI_VERSION, 5);
         // v2: shared-Rust-type iceoryx2 slots replaced by
         // `set_iceoryx2_resources` (issue #894).
         assert_eq!(PROCESSOR_VTABLE_LAYOUT_VERSION, 2);

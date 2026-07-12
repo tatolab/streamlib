@@ -18,6 +18,7 @@
 //!
 //! [`PUBSUB`]: crate::core::pubsub::PUBSUB
 
+pub mod build_fingerprint;
 pub(crate) mod forwarding_subscriber;
 pub mod host_services;
 pub(crate) mod iceoryx2_log_forwarder;
@@ -28,3 +29,12 @@ mod twin_drift_guard;
 
 pub use host_services::{install_host_services, RegisterHelper};
 pub use streamlib_plugin_abi::{HostServices, HOST_SERVICES_LAYOUT_VERSION};
+
+// Build-fingerprint handshake surface. The facade `streamlib` SDK's
+// `sdk::plugin` re-exports `core::plugin`, so the `#[processor]` macro
+// resolves these three names against a facade plugin's statically-
+// linked engine copy — `ENGINE_TRANSIT_FINGERPRINT` is the plugin's
+// real transit fingerprint. The engine-free `streamlib-plugin-sdk`
+// exports the same three names with a transit fingerprint of 0.
+pub use build_fingerprint::{BUILD_IDENTITY, ENGINE_TRANSIT_FINGERPRINT};
+pub use streamlib_plugin_abi::PLUGIN_ABI_LAYOUT_FINGERPRINT;

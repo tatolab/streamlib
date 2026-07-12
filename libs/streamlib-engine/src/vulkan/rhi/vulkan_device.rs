@@ -291,6 +291,22 @@ pub struct HostVulkanDevice {
     opaque_fd_export_sentinels: Vec<ExportPoolSentinel>,
 }
 
+/// First-order layout probe for [`HostVulkanDevice`] — one of the three
+/// non-`#[repr(C)]` engine types that transit the plugin ABI by raw
+/// `Arc` pointer (`host_vulkan_device_arc`). Colocated with the type so
+/// a future probe can add private-field `offset_of!` coverage without
+/// crossing a module boundary. Folded into
+/// [`crate::core::plugin::build_fingerprint::ENGINE_TRANSIT_FINGERPRINT`]
+/// so a host and a separately-built plugin with divergent transit
+/// layouts are refused at load.
+#[cfg(target_os = "linux")]
+pub(crate) const fn host_vulkan_device_layout_probe() -> [u64; 2] {
+    [
+        core::mem::size_of::<HostVulkanDevice>() as u64,
+        core::mem::align_of::<HostVulkanDevice>() as u64,
+    ]
+}
+
 /// Single-COLOR-aspect / single-mip / single-layer subresource range —
 /// every host-side surface-adapter-managed image fits this shape today.
 fn host_default_color_subresource_range() -> vk::ImageSubresourceRange {

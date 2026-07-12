@@ -1,26 +1,31 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Module-load rejection test for the ABI-version mismatch path.
+//! Module-load rejection test for the plugin build-fingerprint handshake.
 //!
 //! Builds the `streamlib-test-fixtures-abi-mismatch` cdylib once per
-//! mismatch direction (`tamper-too-low` → `abi_version = 0`;
-//! `tamper-too-high` → `abi_version = u32::MAX`), assembles a minimal
-//! project directory, calls
-//! `runtime.add_module_with_blocking(_, Strategy::ManifestDirectory)`,
-//! and asserts the returned error is `Error::Configuration` with the
-//! documented "ABI version mismatch" prefix.
+//! tamper direction, assembles a minimal project directory, calls
+//! `runtime.add_module_with_blocking(_, Strategy::Path)`, and asserts
+//! the returned error is the typed variant for that direction — the
+//! plugin's no-op `register` stub is never invoked:
 //!
-//! Both directions are covered to lock the equality check in
-//! `core/runtime/runtime.rs` — a future `<` or `>` regression would
-//! only catch one direction.
+//! - `tamper-too-low` (`abi_version = 0`) and `tamper-too-high`
+//!   (`abi_version = u32::MAX`) → `Error::PluginAbiVersionMismatch`.
+//!   Both directions lock the *equality* check — a future `<` or `>`
+//!   regression would only catch one.
+//! - `tamper-transit-fingerprint` (correct `abi_version` + correct
+//!   `abi_layout_fingerprint`, bit-flipped `engine_transit_fingerprint`)
+//!   → `Error::PluginBuildMismatch`, whose Display names both build
+//!   identities + the rebuild remedy. This is the check the whole
+//!   feature exists for: a mixed host/plugin build is refused BEFORE
+//!   the raw-`Arc` transit could corrupt the driver.
 //!
-//! Mental-revert: removing the `if decl.abi_version != STREAMLIB_ABI_VERSION`
-//! check in the module loader would let the runtime invoke the fixture's
-//! no-op `register` stub, which never registers `AbiMismatchSentinel`.
-//! The runtime's subsequent "processor not registered" check would
-//! then surface a different error, regressing the contract this test
-//! locks.
+//! Mental-revert: removing any of the three checks in
+//! `validate_plugin_declaration` would let the runtime invoke the
+//! fixture's no-op `register` stub, which never registers the
+//! processor. The runtime's subsequent "processor not registered"
+//! check would then surface a different error, regressing the contract
+//! this test locks.
 //!
 //! No GPU required.
 
@@ -120,31 +125,31 @@ fn stage_project(tmp: &Path, source_dylib: &Path) -> std::path::PathBuf {
     fixture_dst
 }
 
-fn assert_abi_mismatch_rejected(project_dir: &Path) {
+fn load_tampered_module(project_dir: &Path) -> Error {
     let runtime = Runner::with_auto_build().expect("Runner::new");
-    let err: Error = runtime
+    runtime
         .add_module_with_blocking(
             module_ident_any_version!("tatolab", "test-fixtures-abi-mismatch"),
             Strategy::Path { path: project_dir.to_path_buf(), build: BuildPolicy::NeverBuild },
         )
-        .expect_err("add_module_with must REJECT a tampered abi_version")
-        .into();
+        .expect_err("add_module_with must REJECT a tampered declaration")
+        .into()
+}
 
-    let msg = match err {
-        Error::Configuration(s) => s,
-        other => panic!(
-            "expected Error::Configuration with 'ABI version mismatch', \
-             got {other:?}"
-        ),
-    };
-
+fn assert_abi_version_mismatch_rejected(project_dir: &Path) {
+    let err = load_tampered_module(project_dir);
+    match &err {
+        Error::PluginAbiVersionMismatch { .. } => {}
+        other => panic!("expected Error::PluginAbiVersionMismatch, got {other:?}"),
+    }
+    let msg = err.to_string();
     assert!(
         msg.contains("ABI version mismatch"),
         "rejection message must call out the abi_version mismatch — got: {msg}"
     );
     assert!(
         msg.contains("Rebuild the plugin"),
-        "rejection message must include the rebuild hint — got: {msg}"
+        "rejection message must include the rebuild remedy — got: {msg}"
     );
 }
 
@@ -155,7 +160,7 @@ fn load_project_rejects_abi_version_below_runtime() {
     let tmp = tempfile::tempdir().unwrap();
     let project = stage_project(tmp.path(), &dylib);
 
-    assert_abi_mismatch_rejected(&project);
+    assert_abi_version_mismatch_rejected(&project);
 }
 
 #[test]
@@ -165,5 +170,49 @@ fn load_project_rejects_abi_version_above_runtime() {
     let tmp = tempfile::tempdir().unwrap();
     let project = stage_project(tmp.path(), &dylib);
 
-    assert_abi_mismatch_rejected(&project);
+    assert_abi_version_mismatch_rejected(&project);
+}
+
+#[test]
+#[serial]
+fn load_project_rejects_mismatched_engine_transit_fingerprint() {
+    // Correct abi_version + correct abi_layout_fingerprint, but a
+    // bit-flipped engine_transit_fingerprint: the host must reject with
+    // PluginBuildMismatch BEFORE invoking `register` — no segfault, no
+    // abort, a clean typed error naming both build identities.
+    let dylib = build_tampered_cdylib("tamper-transit-fingerprint");
+    let tmp = tempfile::tempdir().unwrap();
+    let project = stage_project(tmp.path(), &dylib);
+
+    let err = load_tampered_module(&project);
+    match &err {
+        Error::PluginBuildMismatch {
+            plugin_identity,
+            host_identity,
+            ..
+        } => {
+            assert_eq!(
+                plugin_identity, "tampered-fixture-build",
+                "the plugin's build identity must be surfaced verbatim"
+            );
+            assert!(
+                host_identity.starts_with("streamlib-engine "),
+                "the host's build identity must be surfaced — got: {host_identity}"
+            );
+        }
+        other => panic!("expected Error::PluginBuildMismatch, got {other:?}"),
+    }
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Plugin build mismatch"),
+        "rejection message must call out the build mismatch — got: {msg}"
+    );
+    assert!(
+        msg.contains("tampered-fixture-build"),
+        "rejection message must name the plugin build identity — got: {msg}"
+    );
+    assert!(
+        msg.contains("Rebuild the plugin"),
+        "rejection message must include the rebuild remedy — got: {msg}"
+    );
 }

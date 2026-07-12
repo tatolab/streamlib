@@ -18,6 +18,25 @@ fn main() {
     println!("cargo:rustc-env=STREAMLIB_HOST_TARGET={}", target);
     println!("cargo:rerun-if-env-changed=TARGET");
 
+    // Capture the rustc version + build profile for the plugin
+    // build-identity string (see `core::plugin::build_fingerprint`).
+    // Both go in the *human-readable* identity only, never in the
+    // fingerprint hash: identical measured layouts across rustc
+    // releases are compatible (hashing rustc over-refuses), and a
+    // debug plugin loading into a release host is legitimate
+    // (`repr(Rust)` layout is profile-independent).
+    let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
+    let rustc_version = std::process::Command::new(&rustc)
+        .arg("-V")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|| "unknown-rustc".to_string());
+    println!("cargo:rustc-env=STREAMLIB_RUSTC_VERSION={}", rustc_version);
+    let profile = std::env::var("PROFILE").unwrap_or_else(|_| "unknown".to_string());
+    println!("cargo:rustc-env=STREAMLIB_BUILD_PROFILE={}", profile);
+
     // Link Metal framework on macOS for MP4 writer
     #[cfg(target_os = "macos")]
     {

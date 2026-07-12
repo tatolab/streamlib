@@ -590,6 +590,22 @@ fn generate_processor_impl_from_schema(
             /// Use [`Processor::schema_ident`] for the full structured identity.
             pub const NAME: &'static str = #processor_name;
 
+            /// Build-fingerprint handshake constants read by
+            /// `export_plugin!` when it emits the `STREAMLIB_PLUGIN`
+            /// declaration. Resolved against the detected SDK crate:
+            /// the facade `streamlib` (statically-linked engine → real
+            /// engine transit fingerprint) or the engine-free
+            /// `streamlib-plugin-sdk` (transit fingerprint 0).
+            #[doc(hidden)]
+            pub const __STREAMLIB_ABI_LAYOUT_FINGERPRINT: u64 =
+                __streamlib_sdk::plugin::PLUGIN_ABI_LAYOUT_FINGERPRINT;
+            #[doc(hidden)]
+            pub const __STREAMLIB_ENGINE_TRANSIT_FINGERPRINT: u64 =
+                __streamlib_sdk::plugin::ENGINE_TRANSIT_FINGERPRINT;
+            #[doc(hidden)]
+            pub const __STREAMLIB_BUILD_IDENTITY: &'static str =
+                __streamlib_sdk::plugin::BUILD_IDENTITY;
+
             /// Install the host's services into this plugin and return the
             /// registration helper. Called by `export_plugin!` so the plugin
             /// ABI entry point never names an SDK path — all SDK-crate

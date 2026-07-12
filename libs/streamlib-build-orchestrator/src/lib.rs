@@ -24,6 +24,7 @@
 //!
 //! Staging uses build-to-temp + atomic rename, with a
 //! `.streamlib-build.json` sidecar recording the plugin-ABI version,
+//! the ABI-layout + engine-transit build fingerprints (diagnostics),
 //! host triple, profile, and the source-input fingerprint that drives
 //! [`BuildPolicy::IfStale`] for non-Rust packages. Rust packages always
 //! invoke cargo (its own fingerprint short-circuits when clean AND
@@ -362,9 +363,12 @@ struct Sidecar {
 }
 
 /// Sidecar recording the staged artifact's toolchain context + the input
-/// fingerprint it was built from. The fingerprint drives `IfStale` for
+/// fingerprint it was built from. The `inputs_hash` drives `IfStale` for
 /// non-Rust packages; abi/triple/profile are defense-in-depth atop the
-/// runtime `PluginDeclaration.abi_version` handshake.
+/// runtime `PluginDeclaration` handshake. The two build fingerprints are
+/// recorded for diagnostics — the runtime `validate_plugin_declaration`
+/// check is the authoritative gate; they are not part of the staleness
+/// comparison here.
 fn write_sidecar(
     dest: &Path,
     triple: &str,
@@ -373,6 +377,12 @@ fn write_sidecar(
 ) -> anyhow::Result<()> {
     let body = serde_json::to_string_pretty(&serde_json::json!({
         "abi_version": streamlib_plugin_abi::STREAMLIB_ABI_VERSION,
+        "abi_layout_fingerprint":
+            format!("{:#018x}", streamlib_plugin_abi::PLUGIN_ABI_LAYOUT_FINGERPRINT),
+        "engine_transit_fingerprint": format!(
+            "{:#018x}",
+            streamlib_engine::core::plugin::ENGINE_TRANSIT_FINGERPRINT
+        ),
         "triple": triple,
         "profile": profile.label(),
         "inputs_hash": inputs_hash,
