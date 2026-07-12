@@ -171,18 +171,13 @@ fn canonical_identifier_for_schema(
     )))
 }
 
-/// Strip a trailing `@MAJOR.MINOR.PATCH` semver suffix. Mirrors
-/// `embedded_schemas::strip_semver_suffix` (kept private here to avoid
-/// introducing a cross-module dep on a tiny string helper).
+/// Strip a trailing `@MAJOR.MINOR.PATCH` semver suffix (optionally with a
+/// `-dev.N` / `-rc.N` prerelease). Mirrors `embedded_schemas::strip_semver_suffix`
+/// by delegating to the canonical `streamlib_idents::SemVer` parser, so the
+/// suffix grammar can't drift between the two strippers.
 fn strip_legacy_semver_suffix(name: &str) -> &str {
     if let Some(at_pos) = name.rfind('@') {
-        let suffix = &name[at_pos + 1..];
-        let parts: Vec<&str> = suffix.split('.').collect();
-        if parts.len() == 3
-            && parts
-                .iter()
-                .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
-        {
+        if name[at_pos + 1..].parse::<streamlib_idents::SemVer>().is_ok() {
             return &name[..at_pos];
         }
     }

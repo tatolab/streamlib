@@ -617,7 +617,11 @@ fn run_jtd_codegen_python(tasks: &[SchemaTask], output_dir: &Path) -> Result<()>
                 org: p.org.clone(),
                 package: p.name.clone(),
                 type_name: identity.struct_name.clone(),
-                version: p.version.to_string(),
+                // Schema idents are release-only by invariant (#1215): project
+                // the package's (possibly `-dev.N` / `-rc.N`) version onto its
+                // release core so the emitted Python/Deno SchemaIdent literal
+                // validates against the 3-part version regex those SDKs enforce.
+                version: p.version.release_core().to_string(),
             })
         } else {
             None

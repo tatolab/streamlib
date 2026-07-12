@@ -238,11 +238,17 @@ fn load_processor_schema(
         )
     })?;
 
+    // Schema idents are release-only by invariant (#1215): a package may carry
+    // a `-dev.N` / `-rc.N` version, but its schema idents project onto the
+    // release core. The flat global schema registry is version-lookup-blind
+    // (see `strip_semver_suffix`), so prerelease fidelity on the wire carries
+    // no compat meaning; prerelease iteration of schemas happens locally via
+    // link mode, not via published idents.
     let ident = SchemaIdent::new(
         pkg.org.clone(),
         pkg.name.clone(),
         type_name,
-        pkg.version,
+        pkg.version.release_core(),
     );
 
     // Resolve bare-name port + config schema references against the
@@ -353,11 +359,12 @@ fn resolve_named_to_ident(
     // that only declare `metadata.name`.
     let type_segment = read_schema_metadata_type(&schema_path).unwrap_or_else(|| name.clone());
 
+    // Release-only projection (#1215) — see the note in `expand_processor`.
     Ok(SchemaIdent::new(
         owner_pkg.org.clone(),
         owner_pkg.name.clone(),
         type_segment,
-        owner_pkg.version,
+        owner_pkg.version.release_core(),
     ))
 }
 
@@ -385,19 +392,22 @@ fn resolve_config_schema_to_canonical_id(
         .as_ref()
         .ok_or_else(|| "owning package has no `package:` block".to_string())?;
 
+    // Release-only projection (#1215) — schema-ident versions carry the
+    // package's release core, never its `-dev.N` / `-rc.N` prerelease.
+    let owner_version = owner_pkg.version.release_core();
     if let Some(type_segment) = read_schema_metadata_type(&schema_path) {
         Ok(format!(
             "@{}/{}/{}@{}",
             owner_pkg.org.as_str(),
             owner_pkg.name.as_str(),
             type_segment.as_str(),
-            owner_pkg.version,
+            owner_version,
         ))
     } else if let Some(legacy_name) = read_schema_metadata_name(&schema_path) {
         // Legacy reverse-DNS — the metadata.name carries the canonical
         // unversioned id; append the owning package's semver to match
         // the long-form `<dotted>.config@<version>` codegen helper expects.
-        Ok(format!("{}@{}", legacy_name, owner_pkg.version))
+        Ok(format!("{}@{}", legacy_name, owner_version))
     } else {
         Err(format!(
             "schema {} declares neither `metadata.type` nor `metadata.name`",
@@ -868,7 +878,17 @@ fn emit_module_ident(
     })
 }
 
+/// Parse a `schema_ident!` version string. Schema-ident versions are
+/// release-only by invariant (#1215) — a `-dev.N` / `-rc.N` prerelease is
+/// rejected here (the package-dependency axis accepts prereleases via
+/// `SemVerRange::from_str`, not this parser).
 fn parse_semver(s: &str) -> Result<(u32, u32, u32), String> {
+    if s.contains('-') {
+        return Err(format!(
+            "schema-ident version `{s}` must be a release `MAJOR.MINOR.PATCH`; \
+             prerelease (`-dev.N` / `-rc.N`) versions are not valid for schema idents"
+        ));
+    }
     let mut parts = s.split('.');
     let major = parse_part(parts.next())?;
     let minor = parse_part(parts.next())?;
