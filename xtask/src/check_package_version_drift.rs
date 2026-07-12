@@ -128,35 +128,49 @@ fn cargo_literal_version(cargo_path: &Path) -> Result<Option<String>> {
     Ok(version.map(|s| s.to_string()))
 }
 
-/// The `package.version` string in a `streamlib.yaml`, or `None` when the
-/// manifest declares no `package.version`.
+/// The canonical `package.version` of a `streamlib.yaml` — parsed through
+/// [`streamlib_idents::SemVer`] and rendered via its Display, so the
+/// comparison target is exactly what the pack-time stamp writes. A malformed
+/// version (2-part, numeric YAML scalar, bad prerelease) is a loud error, not
+/// a silent skip. `None` when the manifest declares no `package.version`.
 fn manifest_package_version(manifest_path: &Path) -> Result<Option<String>> {
     let body = fs::read_to_string(manifest_path)
         .with_context(|| format!("read {}", manifest_path.display()))?;
     let value: serde_yaml::Value = serde_yaml::from_str(&body)
         .with_context(|| format!("parse {}", manifest_path.display()))?;
-    let version = value.get("package").and_then(|p| p.get("version"));
-    Ok(match version {
-        Some(serde_yaml::Value::String(s)) => Some(s.clone()),
-        Some(serde_yaml::Value::Number(n)) => Some(n.to_string()),
-        _ => None,
-    })
+    let raw = match value.get("package").and_then(|p| p.get("version")) {
+        Some(serde_yaml::Value::String(s)) => s.clone(),
+        // A bare `version: 1.0` parses as a YAML float — feed its string
+        // form to the SemVer parser so it fails loudly below instead of
+        // slipping through as CI-green-but-pack-fails.
+        Some(serde_yaml::Value::Number(n)) => n.to_string(),
+        _ => return Ok(None),
+    };
+    let semver = raw.parse::<streamlib_idents::SemVer>().map_err(|e| {
+        anyhow::anyhow!(
+            "{}: invalid `package.version` `{raw}`: {e}",
+            manifest_path.display()
+        )
+    })?;
+    Ok(Some(semver.to_string()))
 }
 
-/// Rewrite `[package].version` in the drifting `Cargo.toml` to the manifest
-/// version, preserving formatting and comments via [`toml_edit`].
+/// Rewrite `[package].version` in the drifting `Cargo.toml` to the canonical
+/// manifest version, via the same format-preserving rewrite the pack-time
+/// stamp uses ([`streamlib_pack::rewrite_cargo_package_version`]).
 fn apply_fix(drift: &VersionDrift) -> Result<()> {
     let body = fs::read_to_string(&drift.cargo_path)
         .with_context(|| format!("read {}", drift.cargo_path.display()))?;
-    let mut doc: toml_edit::DocumentMut = body
-        .parse()
-        .with_context(|| format!("parse {}", drift.cargo_path.display()))?;
-    let package = doc
-        .get_mut("package")
-        .and_then(|p| p.as_table_mut())
-        .ok_or_else(|| anyhow::anyhow!("{}: no [package] table", drift.cargo_path.display()))?;
-    package["version"] = toml_edit::value(drift.manifest_version.clone());
-    fs::write(&drift.cargo_path, doc.to_string())
+    let rewritten =
+        streamlib_pack::rewrite_cargo_package_version(&body, &drift.manifest_version)
+            .with_context(|| format!("rewrite {}", drift.cargo_path.display()))?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}: no `[package].version` to rewrite",
+                    drift.cargo_path.display()
+                )
+            })?;
+    fs::write(&drift.cargo_path, rewritten)
         .with_context(|| format!("write {}", drift.cargo_path.display()))?;
     Ok(())
 }
@@ -269,6 +283,37 @@ mod tests {
     }
 
     #[test]
+    fn malformed_cargo_toml_is_a_typed_error_not_a_panic() {
+        let root = TempDir::new().unwrap();
+        write_pkg(root.path(), "foo", ":::: not toml ::::\n", MANIFEST_1_0_0);
+        let err = scan(root.path()).expect_err("garbage Cargo.toml must be a loud error");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("Cargo.toml") && msg.contains("parse"),
+            "error must name the file and the parse failure, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn malformed_manifest_version_is_a_loud_error_not_a_silent_pass() {
+        // `version: 1.0` parses as a YAML float; the SemVer gate must turn
+        // it into a hard error instead of a CI-green-but-pack-fails skip.
+        let root = TempDir::new().unwrap();
+        write_pkg(
+            root.path(),
+            "foo",
+            "[package]\nname = \"streamlib-foo\"\nversion = \"1.0.0\"\n",
+            "package:\n  org: tatolab\n  name: foo\n  version: 1.0\n",
+        );
+        let err = scan(root.path()).expect_err("2-part version must fail the lint loudly");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("invalid `package.version`") && msg.contains("1.0"),
+            "error must name the invalid version, got: {msg}"
+        );
+    }
+
+    #[test]
     fn current_workspace_has_no_drift() {
         // Smoke test: after the sweep, no real package drifts. Locks the
         // sweep in place — a future package with a stale crate version fails
@@ -277,7 +322,7 @@ mod tests {
         let drifts = scan(&workspace).unwrap();
         assert!(
             drifts.is_empty(),
-            "current workspace has package version drift: {drifts:?}"
+            "current workspace has package version drift: {drifts:?} — run `cargo xtask check-package-version-drift --fix`"
         );
     }
 

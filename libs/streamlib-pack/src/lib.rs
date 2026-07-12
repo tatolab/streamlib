@@ -798,16 +798,36 @@ fn rewrite_manifest_path_deps_absolute(pkg_dir: &Path) -> Result<Vec<u8>> {
     Ok(out.into_bytes())
 }
 
+/// Rewrite `[package].version` in a `Cargo.toml` body to `version`,
+/// format-preserving via [`toml_edit`] — comments and every other field pass
+/// through unchanged. Handles the standard `[package]` table AND the inline
+/// `package = { version = … }` form; replaces whatever `version` shape is
+/// present (a literal string OR a `version.workspace = true` inheritance)
+/// with the literal. Returns `Ok(None)` when there's no `[package]` table or
+/// no `version` key.
+pub fn rewrite_cargo_package_version(cargo_toml: &str, version: &str) -> Result<Option<String>> {
+    let mut doc: toml_edit::DocumentMut =
+        cargo_toml.parse().context("parse Cargo.toml")?;
+    let Some(package) = doc.get_mut("package").and_then(|p| p.as_table_like_mut()) else {
+        return Ok(None);
+    };
+    if package.get("version").is_none() {
+        return Ok(None);
+    }
+    package.insert("version", toml_edit::value(version));
+    Ok(Some(doc.to_string()))
+}
+
 /// Compute the `Cargo.toml` bytes to ship in the artifact with
 /// `[package].version` stamped to `package_version` (the `.slpkg` semver
-/// from `streamlib.yaml`'s `package.version`). Format-preserving via
-/// [`toml_edit`] — comments and every other field pass through unchanged.
+/// from `streamlib.yaml`'s `package.version`) via
+/// [`rewrite_cargo_package_version`].
 ///
 /// Returns `Ok(None)` (ship the in-tree `Cargo.toml` verbatim) when there's
 /// nothing to stamp: no `Cargo.toml`, no `[package]` table, or no `version`
-/// key. A `version.workspace = true` inheritance IS stamped to a literal —
-/// the artifact is built standalone (no defining workspace root travels), so
-/// the inherited form would fail to resolve.
+/// key. A `version.workspace = true` inheritance is stamped to a literal —
+/// defensive for artifact copies assembled without the defining workspace
+/// root.
 fn stamped_cargo_toml_bytes(pkg_dir: &Path, package_version: &str) -> Result<Option<Vec<u8>>> {
     let cargo_path = pkg_dir.join("Cargo.toml");
     if !cargo_path.exists() {
@@ -815,19 +835,9 @@ fn stamped_cargo_toml_bytes(pkg_dir: &Path, package_version: &str) -> Result<Opt
     }
     let body = std::fs::read_to_string(&cargo_path)
         .with_context(|| format!("read {}", cargo_path.display()))?;
-    let mut doc: toml_edit::DocumentMut = body
-        .parse()
-        .with_context(|| format!("parse {}", cargo_path.display()))?;
-    let Some(package) = doc.get_mut("package").and_then(|p| p.as_table_mut()) else {
-        return Ok(None);
-    };
-    if !package.contains_key("version") {
-        return Ok(None);
-    }
-    // Replace whatever `version` shape is present — a literal string OR a
-    // `version.workspace = true` inheritance — with the derived literal.
-    package["version"] = toml_edit::value(package_version);
-    Ok(Some(doc.to_string().into_bytes()))
+    let stamped = rewrite_cargo_package_version(&body, package_version)
+        .with_context(|| format!("stamp version into {}", cargo_path.display()))?;
+    Ok(stamped.map(String::into_bytes))
 }
 
 /// Write the `.slpkg` zip: the manifest bytes as `streamlib.yaml`, the
@@ -1714,5 +1724,116 @@ mod tests {
         let cargo = std::fs::read_to_string(staged.path().join("Cargo.toml")).unwrap();
         assert!(cargo.contains("version = \"1.1.3-dev.4\""), "got: {cargo}");
         assert!(!cargo.contains("0.4.30"), "stale version must not reach the staged build, got: {cargo}");
+    }
+
+    #[test]
+    fn stamp_handles_inline_package_table() {
+        // The inline `package = { … }` form is valid TOML that
+        // `as_table_mut` silently misses (it's an inline table, not a
+        // standard table) — the stamp must cover it via `as_table_like_mut`
+        // or the stale version ships verbatim.
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "package = { name = \"rp\", version = \"0.4.30\", edition = \"2024\" }\n",
+        )
+        .unwrap();
+        let out = String::from_utf8(
+            stamped_cargo_toml_bytes(dir.path(), "1.0.0")
+                .unwrap()
+                .expect("inline package table must be stamped"),
+        )
+        .unwrap();
+        assert!(out.contains("\"1.0.0\""), "got: {out}");
+        assert!(!out.contains("0.4.30"), "stale inline version must be gone, got: {out}");
+    }
+
+    #[test]
+    fn malformed_cargo_toml_is_a_typed_error_not_a_panic() {
+        // StagedDir assembly reaches the stamp parse (prebuilt lib +
+        // no_build skips the cargo invocation); garbage TOML must surface
+        // as a typed error naming the file, never a panic.
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: rp\n  version: 1.0.0\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), ":::: not toml ::::\n").unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), b"// crate source").unwrap();
+        let triple_dir = dir.path().join("lib").join(host_target_triple());
+        std::fs::create_dir_all(&triple_dir).unwrap();
+        std::fs::write(
+            triple_dir.join(format!("librp.{}", host_dylib_extension())),
+            b"prebuilt",
+        )
+        .unwrap();
+
+        let staged = tempdir().unwrap();
+        let err = assemble_artifact(
+            dir.path(),
+            &AssembleTarget::StagedDir(staged.path().to_path_buf()),
+            &AssembleOptions {
+                no_build: true,
+                profile: CargoProfile::Dev,
+                path_deps: PathDepPolicy::RewriteRelativeToAbsolute,
+            },
+            &(),
+        )
+        .expect_err("malformed Cargo.toml must be a typed error");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("Cargo.toml") && msg.contains("parse"),
+            "error must name the file and the parse failure, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn staged_dir_stamps_workspace_inherited_version_to_literal() {
+        // Inherited→literal asserted through an emitted artifact: a
+        // `version.workspace = true` source stages with a literal derived
+        // from streamlib.yaml. The artifact lacks the defining workspace
+        // root, so the stamped literal is what makes `[package].version`
+        // resolvable there at all.
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: rp\n  version: 1.0.0\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"rp\"\nversion.workspace = true\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), b"// crate source").unwrap();
+        let triple_dir = dir.path().join("lib").join(host_target_triple());
+        std::fs::create_dir_all(&triple_dir).unwrap();
+        std::fs::write(
+            triple_dir.join(format!("librp.{}", host_dylib_extension())),
+            b"prebuilt",
+        )
+        .unwrap();
+
+        let staged = tempdir().unwrap();
+        assemble_artifact(
+            dir.path(),
+            &AssembleTarget::StagedDir(staged.path().to_path_buf()),
+            &AssembleOptions {
+                no_build: true,
+                profile: CargoProfile::Dev,
+                path_deps: PathDepPolicy::RewriteRelativeToAbsolute,
+            },
+            &(),
+        )
+        .unwrap();
+        let cargo = std::fs::read_to_string(staged.path().join("Cargo.toml")).unwrap();
+        assert!(cargo.contains("version = \"1.0.0\""), "got: {cargo}");
+        assert!(
+            !cargo.contains("version.workspace"),
+            "version inheritance must be replaced with the literal, got: {cargo}"
+        );
     }
 }
