@@ -86,6 +86,9 @@ enum Commands {
     /// venvs, pre-building the subprocess native hosts), and writes an
     /// application lockfile. A subsequent run loads the pinned set offline via
     /// `Runner::add_modules_from_lockfile`.
+    ///
+    /// To install a single package artifact (a `.slpkg`, URL, or registry
+    /// ref) rather than a project tree, use `streamlib pkg install`.
     Install {
         /// Project directory (default: current working directory).
         project_dir: Option<PathBuf>,
@@ -198,6 +201,8 @@ enum PkgCommands {
     Clean,
     /// Install a package: a registry ref `@org/name[@version]` (resolved from
     /// the registry and built from source), a local `.slpkg` path, or an HTTP URL.
+    /// To resolve + lock a whole project tree (with an application lockfile
+    /// for offline runs), use the top-level `streamlib install` instead.
     Install {
         /// `@org/name[@version]` | path to a `.slpkg` | HTTP URL
         source: String,

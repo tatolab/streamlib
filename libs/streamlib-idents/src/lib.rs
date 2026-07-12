@@ -40,7 +40,7 @@ pub use release::{
     crates_missing_from_release, ReleaseManifest, ReleaseManifestMember, RELEASE_MANIFEST_FORMAT,
 };
 pub use resolver::{
-    resolve, resolve_bare_schema_name, resolve_with, ResolvedPackage, ResolvedPackages,
-    ResolvedSource, ResolverOptions,
+    content_hash_for_package_dir, resolve, resolve_bare_schema_name, resolve_with,
+    ResolvedPackage, ResolvedPackages, ResolvedSource, ResolverOptions,
 };
 pub use semver::{Prerelease, PrereleaseKind, SemVer, SemVerRange};

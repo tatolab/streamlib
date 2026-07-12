@@ -151,6 +151,14 @@ pub fn install(
         None
     };
 
+    // Per-package content hash of the STAGED cache slot, keyed by the
+    // canonical lockfile key. The lockfile pins this staged hash (not the
+    // resolver-source hash) because staging may legitimately rewrite the
+    // manifest (relative `path:` deps become absolute), and the locked run
+    // verifies against the slot it actually loads.
+    let mut staged_hashes: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+
     for pkg in resolved.iter_all() {
         let Some(pkg_ref) = package_ref_of(pkg) else {
             // Root project with no `[package]` — nothing to materialize.
@@ -171,6 +179,13 @@ pub fn install(
                 package: pkg_ref.clone(),
                 source,
             })?;
+
+        let staged_hash = streamlib_idents::content_hash_for_package_dir(&staged.staged_dir)
+            .map_err(|source| InstallError::Resolve {
+                root_dir: staged.staged_dir.clone(),
+                source,
+            })?;
+        staged_hashes.insert(pkg_ref.to_string(), staged_hash);
 
         if let (Some(manifest), Some(meta)) = (installed.as_mut(), pkg.manifest.package.as_ref()) {
             manifest.add(InstalledPackageEntry {
@@ -196,7 +211,14 @@ pub fn install(
 
     // Write the application lockfile from the resolved dep closure (root
     // excluded — the lock records dependencies, mirroring Cargo.lock).
-    let lockfile = resolved.to_lockfile();
+    // Each entry's content_hash is replaced with the STAGED slot's hash so
+    // the locked run's integrity gate verifies the exact bytes it loads.
+    let mut lockfile = resolved.to_lockfile();
+    for (key, entry) in lockfile.packages.iter_mut() {
+        if let Some(staged_hash) = staged_hashes.get(key) {
+            entry.content_hash = staged_hash.clone();
+        }
+    }
     let lockfile_path = options
         .lockfile_path
         .clone()

@@ -39,8 +39,10 @@ pub fn extract_slpkg_to_cache(slpkg_path: &std::path::Path) -> Result<std::path:
         Error::Configuration("streamlib.yaml missing [package] section".to_string())
     })?;
 
-    let cache_key = format!("{}-{}", package.name, package.version);
-    let cache_dir = crate::core::streamlib_home::get_cached_package_dir(&cache_key);
+    let cache_dir = crate::core::streamlib_home::get_cached_package_dir_for_name_version(
+        package.name.as_str(),
+        package.version,
+    );
 
     // Always overwrite
     if cache_dir.exists() {

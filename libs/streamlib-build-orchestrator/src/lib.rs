@@ -165,8 +165,10 @@ impl PolyglotBuildOrchestrator {
             .package
             .as_ref()
             .ok_or_else(|| other(&pkg_label, "streamlib.yaml missing [package] section".into()))?;
-        let cache_key = format!("{}-{}", package.name.as_str(), package.version);
-        let cache_slot = streamlib_engine::core::get_cached_package_dir(&cache_key);
+        let cache_slot = streamlib_engine::core::get_cached_package_dir_for_name_version(
+            package.name.as_str(),
+            package.version,
+        );
 
         let has_rust = build::has_rust_runtime_processors(&config);
 

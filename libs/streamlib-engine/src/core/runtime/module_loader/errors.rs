@@ -370,6 +370,24 @@ pub enum AddModuleError {
         path: std::path::PathBuf,
         detail: String,
     },
+
+    /// A locked run found `package`'s installed-cache slot, but its
+    /// manifest + schema content no longer hashes to the lockfile's pinned
+    /// `content_hash` — the slot was tampered with or republished in place
+    /// after install. The lockfile's reproducibility promise requires the
+    /// bytes it pinned; re-run `streamlib install` to re-materialize and
+    /// re-pin a consistent set.
+    #[error(
+        "Locked run: package '{package}' failed the content-hash integrity \
+         check — lockfile pins {expected} but the installed slot hashes to \
+         {actual}. The slot was modified after install; re-run \
+         `streamlib install` to re-materialize and re-pin."
+    )]
+    LockedSlotContentMismatch {
+        package: streamlib_idents::PackageRef,
+        expected: String,
+        actual: String,
+    },
 }
 
 impl From<AddModuleError> for Error {
