@@ -34,8 +34,11 @@ use std::process::Command;
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use streamlib_idents::{
-    PackageRef, RegistryClient, RegistryConfig, ReleaseManifest, ReleaseManifestMember, SemVer,
+    render_catalog_index_ndjson, schema_jtd_file_name, CatalogIndexLine, PackageRef, RegistryClient,
+    RegistryConfig, ReleaseManifest, ReleaseManifestMember, SemVer, CATALOG_INDEX_PATH,
 };
+
+use crate::catalog::{build_package_catalog, build_sibling_versions};
 
 /// Which ecosystems an emit run produces. Each maps to its native anonymous
 /// read transport (see the module docs).
@@ -666,16 +669,27 @@ fn emit_slpkg_and_manifest(
 
     let packages_dir = opts.workspace_root.join("packages");
     let mut package_members: Vec<ReleaseManifestMember> = Vec::new();
+    // Registry-wide processor index accumulated across every package — the
+    // node-palette aggregate, written LAST (after the release manifest).
+    let mut catalog_index: Vec<CatalogIndexLine> = Vec::new();
     if packages_dir.is_dir() {
         let mut entries: Vec<PathBuf> =
             std::fs::read_dir(&packages_dir)?.filter_map(|e| e.ok().map(|e| e.path())).collect();
         entries.sort();
-        for pkg_dir in entries {
+
+        // Resolution universe for external schema refs: every package being
+        // published, with its version + manifest. Built up front so an
+        // importer's catalog resolves a dep's version regardless of emit
+        // order (alphabetical `entries` doesn't respect dependency order).
+        let siblings = build_sibling_versions(&entries)
+            .context("building the catalog resolution universe from packages/")?;
+
+        for pkg_dir in &entries {
             let yaml = pkg_dir.join("streamlib.yaml");
             if !yaml.is_file() {
                 continue;
             }
-            let (pkg_ref, version, bytes) = assemble_slpkg_bytes(&pkg_dir)?;
+            let (pkg_ref, version, bytes) = assemble_slpkg_bytes(pkg_dir)?;
             let semver: SemVer = version
                 .parse()
                 .with_context(|| format!("package {} version `{version}` is not semver", pkg_ref))?;
@@ -684,6 +698,16 @@ fn emit_slpkg_and_manifest(
                 .map_err(|e| anyhow::anyhow!("upload {}: {e}", pkg_ref))?;
             package_members
                 .push(ReleaseManifestMember::new(pkg_ref.to_string(), version.clone()));
+
+            // Publish-time catalog: per-package `<name>.catalog.json` + the
+            // JTDs this package owns, written into the same version dir as the
+            // `.slpkg`. Accumulate the per-processor index lines for the
+            // registry-wide aggregate.
+            let artifacts = build_package_catalog(pkg_dir, &siblings)
+                .with_context(|| format!("building catalog for {pkg_ref}"))?;
+            write_package_catalog(&slpkg_dir, &artifacts)
+                .with_context(|| format!("writing catalog for {pkg_ref}"))?;
+            catalog_index.extend(artifacts.index_lines);
         }
     }
 
@@ -710,6 +734,53 @@ fn emit_slpkg_and_manifest(
     RegistryClient::new(&config)
         .upload_release_manifest(org, &manifest)
         .map_err(|e| anyhow::anyhow!("upload release manifest: {e}"))?;
+
+    // Registry-wide catalog aggregate, written AFTER the per-package catalog
+    // files and the release manifest. The whole staging tree flips atomically
+    // (`build_and_flip`), so a `file://` reader never observes the aggregate
+    // without the release it describes — but ordering it last keeps the
+    // HTTP-direct-write intuition (index after members) consistent.
+    let index_path = staging.join(CATALOG_INDEX_PATH);
+    if let Some(parent) = index_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create {}", parent.display()))?;
+    }
+    std::fs::write(&index_path, render_catalog_index_ndjson(&catalog_index))
+        .with_context(|| format!("write {}", index_path.display()))?;
+    Ok(())
+}
+
+/// Write one package's catalog artifacts into its version directory under
+/// `slpkg/<name>/<version>/`: `<name>.catalog.json` beside the `.slpkg`, and
+/// each owned schema's JTD under `schemas/<Type>.jtd.json`. `slpkg_dir` is the
+/// tree's `slpkg/` root (the same base the `.slpkg` store uses).
+pub fn write_package_catalog(
+    slpkg_dir: &Path,
+    artifacts: &crate::catalog::PackageCatalogArtifacts,
+) -> Result<()> {
+    let name = artifacts.catalog.package.name.as_str();
+    let version = artifacts.catalog.version.to_string();
+    let ver_dir = slpkg_dir.join(name).join(&version);
+    std::fs::create_dir_all(&ver_dir).with_context(|| format!("create {}", ver_dir.display()))?;
+
+    let catalog_path = ver_dir.join(streamlib_idents::package_catalog_file_name(name));
+    let catalog_json = serde_json::to_vec_pretty(&artifacts.catalog)
+        .context("serialize package catalog JSON")?;
+    std::fs::write(&catalog_path, catalog_json)
+        .with_context(|| format!("write {}", catalog_path.display()))?;
+
+    if !artifacts.schema_jtd.is_empty() {
+        let schemas_dir = ver_dir.join("schemas");
+        std::fs::create_dir_all(&schemas_dir)
+            .with_context(|| format!("create {}", schemas_dir.display()))?;
+        for jtd in &artifacts.schema_jtd {
+            let path = schemas_dir.join(schema_jtd_file_name(&jtd.type_name));
+            let bytes = serde_json::to_vec_pretty(&jtd.json)
+                .with_context(|| format!("serialize JTD for {}", jtd.type_name))?;
+            std::fs::write(&path, bytes)
+                .with_context(|| format!("write {}", path.display()))?;
+        }
+    }
     Ok(())
 }
 

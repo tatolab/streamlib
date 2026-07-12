@@ -8,6 +8,7 @@
 //! by typed YAML/JSON deserialization. There is no public `parse` API and
 //! none should be added — see `docs/architecture/schema-identity-and-packaging.md`.
 
+mod catalog;
 mod error;
 mod git;
 mod ident;
@@ -17,6 +18,12 @@ mod registry;
 mod release;
 mod resolver;
 mod semver;
+
+pub use catalog::{
+    package_catalog_file_name, parse_catalog_index_ndjson, render_catalog_index_ndjson,
+    schema_jtd_file_name, CatalogClient, CatalogConfig, CatalogIndexLine, CatalogPort,
+    CatalogProcessor, CatalogRuntime, CatalogSchemaRef, PackageCatalog, CATALOG_INDEX_PATH,
+};
 
 pub use error::{IdentError, IdentResult, ResolverError, ResolverResult};
 pub use git::fetch_git;
