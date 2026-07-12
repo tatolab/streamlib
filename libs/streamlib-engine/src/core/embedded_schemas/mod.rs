@@ -714,7 +714,7 @@ mod tests {
             "@tatolab/core/VideoFrame"
         );
         // Prerelease-suffixed idents strip cleanly now that `is_semver`
-        // delegates to the canonical parser (#1215). Schema idents are
+        // delegates to the canonical parser. Schema idents are
         // release-only by invariant, but the stripper stays robust regardless.
         assert_eq!(
             strip_semver_suffix("@tatolab/core/VideoFrame@0.4.33-dev.2"),

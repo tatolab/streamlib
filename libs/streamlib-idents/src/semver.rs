@@ -157,10 +157,18 @@ fn parse_prerelease(full: &str, suffix: &str) -> IdentResult<Prerelease> {
             ))
         }
     };
+    // Digits-only, not `u32::from_str` leniency — `+4` would otherwise parse
+    // and round-trip asymmetrically (`1.2.3-dev.+4` would display `1.2.3-dev.4`).
+    if n_str.is_empty() || !n_str.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(IdentError::InvalidSemVer(
+            full.to_string(),
+            format!("prerelease ordinal `{n_str}` is not a non-negative integer"),
+        ));
+    }
     let n = n_str.parse::<u32>().map_err(|_| {
         IdentError::InvalidSemVer(
             full.to_string(),
-            format!("prerelease ordinal `{n_str}` is not a non-negative integer"),
+            format!("prerelease ordinal `{n_str}` is out of range"),
         )
     })?;
     Ok(Prerelease { kind, n })
@@ -243,8 +251,9 @@ impl JsonSchema for SemVer {
 /// additionally admits same-core prereleases at or above it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SemVerRange {
-    /// `*` — matches every version. The imperative module API uses this when
-    /// the caller doesn't pin a version range.
+    /// `*` — matches every release version (prereleases excluded per the npm
+    /// policy above). The imperative module API uses this when the caller
+    /// doesn't pin a version range.
     Any,
     Exact(SemVer),
     AtLeast(SemVer),
@@ -325,8 +334,11 @@ fn caret_matches(req: SemVer, v: SemVer) -> bool {
         // ^0.minor.patch → same minor
         v.major == 0 && v.minor == req.minor
     } else {
-        // ^0.0.patch → exact
-        v == req
+        // ^0.0.patch → exact core. Comparing full versions here would reject
+        // the release for a prerelease req (`^0.0.3-dev.2` must match `0.0.3`
+        // — npm range is `>=0.0.3-dev.2 <0.0.4`); the `v >= req` guard above
+        // already enforces ordering, so core equality is the only bound left.
+        same_core(req, v)
     }
 }
 
@@ -472,7 +484,7 @@ mod tests {
     }
 
     #[test]
-    fn range_any_matches_every_version() {
+    fn range_any_matches_every_release() {
         let r = SemVerRange::from_str("*").unwrap();
         assert_eq!(r, SemVerRange::Any);
         assert!(r.matches(SemVer::new(0, 0, 0)));
@@ -489,7 +501,7 @@ mod tests {
         assert_eq!(r, back);
     }
 
-    // ---- prerelease support (#1215) ----
+    // ---- prerelease support ----
 
     #[test]
     fn prerelease_parse_display_round_trip() {
@@ -514,6 +526,8 @@ mod tests {
             "1.2.3-alpha.1", // unknown channel
             "1.2.3-dev",     // missing ordinal
             "1.2.3-dev.x",   // non-numeric ordinal
+            "1.2.3-dev.+4",  // sign prefix — u32::from_str leniency must not leak in
+            "1.2.3-dev.",    // empty ordinal
             "1.2.3+build",   // build metadata unsupported
             "1.2.3-dev.1.2", // ordinal must be a single integer
             "1.2.3-rc",      // missing ordinal
@@ -600,6 +614,47 @@ mod tests {
         assert!(r.matches(SemVer::new(0, 4, 33)));
         assert!(!r.matches(SemVer::new_prerelease(0, 5, 0, PrereleaseKind::Dev, 1)));
         assert!(!r.matches(SemVer::new_prerelease(0, 4, 33, PrereleaseKind::Dev, 1)));
+    }
+
+    #[test]
+    fn range_caret_pre_1_0_patch_prerelease_req() {
+        // `^0.0.3-dev.2` — npm range `>=0.0.3-dev.2 <0.0.4`. The same-core
+        // RELEASE must match (mentally revert the `same_core` fix in
+        // `caret_matches`'s ^0.0.patch branch: `v == req` can never hold for
+        // a release vs a prerelease req and this fails).
+        let r = SemVerRange::from_str("^0.0.3-dev.2").unwrap();
+        assert!(r.matches(SemVer::new(0, 0, 3)));
+        assert!(r.matches(SemVer::new_prerelease(0, 0, 3, PrereleaseKind::Dev, 5)));
+        assert!(!r.matches(SemVer::new(0, 0, 4)));
+        assert!(!r.matches(SemVer::new_prerelease(0, 0, 3, PrereleaseKind::Dev, 1)));
+        // Release preference is not inverted: mixed candidates pick the release.
+        let avail = [
+            SemVer::new_prerelease(0, 0, 3, PrereleaseKind::Dev, 5),
+            SemVer::new(0, 0, 3),
+        ];
+        let best = avail.iter().filter(|v| r.matches(**v)).max().copied();
+        assert_eq!(best, Some(SemVer::new(0, 0, 3)));
+        // The ^0.minor.patch branch is unaffected.
+        let minor = SemVerRange::from_str("^0.2.3-dev.1").unwrap();
+        assert!(minor.matches(SemVer::new(0, 2, 4)));
+        assert!(!minor.matches(SemVer::new(0, 3, 0)));
+    }
+
+    #[test]
+    fn range_tilde_prerelease_policy() {
+        // Release tilde req excludes all prereleases.
+        let release_req = SemVerRange::from_str("~1.2.3").unwrap();
+        assert!(!release_req.matches(SemVer::new_prerelease(1, 2, 4, PrereleaseKind::Dev, 1)));
+        // Prerelease tilde req admits same-core prereleases >= req and the
+        // release line per the core rule; foreign-core prereleases excluded.
+        let r = SemVerRange::from_str("~1.2.3-rc.4").unwrap();
+        assert!(r.matches(SemVer::new_prerelease(1, 2, 3, PrereleaseKind::Rc, 4)));
+        assert!(r.matches(SemVer::new_prerelease(1, 2, 3, PrereleaseKind::Rc, 9)));
+        assert!(r.matches(SemVer::new(1, 2, 3)));
+        assert!(r.matches(SemVer::new(1, 2, 9)));
+        assert!(!r.matches(SemVer::new_prerelease(1, 2, 3, PrereleaseKind::Rc, 3))); // below req
+        assert!(!r.matches(SemVer::new_prerelease(1, 2, 4, PrereleaseKind::Dev, 1))); // other core
+        assert!(!r.matches(SemVer::new(1, 3, 0))); // outside minor
     }
 
     #[test]

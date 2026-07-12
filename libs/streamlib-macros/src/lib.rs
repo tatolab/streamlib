@@ -238,17 +238,13 @@ fn load_processor_schema(
         )
     })?;
 
-    // Schema idents are release-only by invariant (#1215): a package may carry
-    // a `-dev.N` / `-rc.N` version, but its schema idents project onto the
-    // release core. The flat global schema registry is version-lookup-blind
-    // (see `strip_semver_suffix`), so prerelease fidelity on the wire carries
-    // no compat meaning; prerelease iteration of schemas happens locally via
-    // link mode, not via published idents.
+    // `SchemaIdent::new` projects a prerelease package version onto its
+    // release core — schema idents are release-only by constructor invariant.
     let ident = SchemaIdent::new(
         pkg.org.clone(),
         pkg.name.clone(),
         type_name,
-        pkg.version.release_core(),
+        pkg.version,
     );
 
     // Resolve bare-name port + config schema references against the
@@ -359,12 +355,12 @@ fn resolve_named_to_ident(
     // that only declare `metadata.name`.
     let type_segment = read_schema_metadata_type(&schema_path).unwrap_or_else(|| name.clone());
 
-    // Release-only projection (#1215) — see the note in `expand_processor`.
+    // `SchemaIdent::new` projects to the release core (constructor invariant).
     Ok(SchemaIdent::new(
         owner_pkg.org.clone(),
         owner_pkg.name.clone(),
         type_segment,
-        owner_pkg.version.release_core(),
+        owner_pkg.version,
     ))
 }
 
@@ -392,8 +388,9 @@ fn resolve_config_schema_to_canonical_id(
         .as_ref()
         .ok_or_else(|| "owning package has no `package:` block".to_string())?;
 
-    // Release-only projection (#1215) — schema-ident versions carry the
-    // package's release core, never its `-dev.N` / `-rc.N` prerelease.
+    // Release-only projection — this path formats the version into a string
+    // without constructing a `SchemaIdent`, so the constructor invariant does
+    // not cover it and the explicit `release_core()` is load-bearing.
     let owner_version = owner_pkg.version.release_core();
     if let Some(type_segment) = read_schema_metadata_type(&schema_path) {
         Ok(format!(
@@ -879,7 +876,7 @@ fn emit_module_ident(
 }
 
 /// Parse a `schema_ident!` version string. Schema-ident versions are
-/// release-only by invariant (#1215) — a `-dev.N` / `-rc.N` prerelease is
+/// release-only by invariant — a `-dev.N` / `-rc.N` prerelease is
 /// rejected here (the package-dependency axis accepts prereleases via
 /// `SemVerRange::from_str`, not this parser).
 fn parse_semver(s: &str) -> Result<(u32, u32, u32), String> {

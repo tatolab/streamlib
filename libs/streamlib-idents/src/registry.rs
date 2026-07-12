@@ -728,13 +728,22 @@ mod tests {
     }
 
     /// NDJSON render → parse is a faithful round-trip, name-filtered.
+    /// Includes a prerelease entry — the index is how a published `-dev.N`
+    /// becomes listable, so the round-trip must carry it.
     #[test]
     fn index_ndjson_render_parse_round_trip() {
-        let versions = vec![SemVer::new(0, 4, 32), SemVer::new(0, 4, 33), SemVer::new(1, 0, 0)];
+        use crate::semver::PrereleaseKind;
+        let versions = vec![
+            SemVer::new(0, 4, 32),
+            SemVer::new_prerelease(0, 4, 33, PrereleaseKind::Dev, 2),
+            SemVer::new(0, 4, 33),
+            SemVer::new(1, 0, 0),
+        ];
         let rendered = render_index_ndjson("camera", &versions);
         // One line per version, trailing newline, cargo-sparse `vers` field.
-        assert_eq!(rendered.lines().count(), 3);
+        assert_eq!(rendered.lines().count(), 4);
         assert!(rendered.contains("\"vers\":\"0.4.33\""));
+        assert!(rendered.contains("\"vers\":\"0.4.33-dev.2\""));
         assert!(rendered.ends_with('\n'));
         let parsed = parse_index_ndjson(rendered.as_bytes(), "camera");
         assert_eq!(parsed, versions);

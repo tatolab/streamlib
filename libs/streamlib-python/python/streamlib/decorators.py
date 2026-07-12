@@ -43,8 +43,9 @@ human-facing display.
 from __future__ import annotations
 
 import inspect
+import re
 from pathlib import Path
-from typing import Optional, Type, Union
+from typing import Optional, Pattern, Type, Union
 
 from ._manifest import ManifestParseError, read_manifest_summary
 from .schema_ident import SchemaIdent
@@ -152,14 +153,30 @@ def processor(short_name: str):
     return decorator
 
 
+# Package-version grammar: 3-part core + optional closed `-dev.N` / `-rc.N`
+# prerelease. Mirrors Rust's `SemVer::from_dotted` so all three runtimes
+# accept and reject the same manifests.
+_PACKAGE_VERSION_PATTERN: Pattern[str] = re.compile(
+    r"^(\d+\.\d+\.\d+)(?:-(?:dev|rc)\.\d+)?$"
+)
+
+
 def _release_core(version: str) -> str:
     """Project a package version onto its release core `MAJOR.MINOR.PATCH`.
 
     Package versions may carry a `-dev.N` / `-rc.N` prerelease, but schema
-    idents are release-only by invariant. Mirrors Rust's
-    `streamlib_idents::SemVer::release_core`.
+    idents are release-only by invariant. Anything outside that closed
+    grammar (`-alpha.1`, `+build`, malformed ordinals) raises — identical
+    posture to Rust's manifest parsing, never a silent projection of an
+    invalid version. Mirrors Rust's `streamlib_idents::SemVer::release_core`.
     """
-    return version.split("-", 1)[0]
+    match = _PACKAGE_VERSION_PATTERN.match(version)
+    if match is None:
+        raise ValueError(
+            f"invalid package version {version!r}: must be MAJOR.MINOR.PATCH "
+            f"with an optional -dev.N / -rc.N prerelease"
+        )
+    return match.group(1)
 
 
 def _locate_sibling_manifest(cls) -> Path:

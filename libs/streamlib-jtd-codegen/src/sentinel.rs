@@ -142,11 +142,23 @@ fn parse_schema_ident_from_value(value: &Value, alias: &str) -> anyhow::Result<S
         )
     })?;
 
+    let version = SemVer::deserialize_from_str(&raw.version)?;
+    // Schema idents are release-only by invariant. User-authored import text
+    // carrying a prerelease is malformed input — reject it here rather than
+    // letting `SchemaIdent::new` silently project it (the author referenced a
+    // schema identity that cannot exist).
+    if version.prerelease.is_some() {
+        anyhow::bail!(
+            "imports[{alias}] version `{version}` must be a release `MAJOR.MINOR.PATCH`; \
+             prerelease (`-dev.N` / `-rc.N`) versions are not valid for schema idents"
+        );
+    }
+
     Ok(SchemaIdent::new(
         Org::new(raw.org)?,
         Package::new(raw.package)?,
         TypeName::new(raw.r#type)?,
-        SemVer::deserialize_from_str(&raw.version)?,
+        version,
     ))
 }
 
@@ -686,6 +698,35 @@ mod tests {
         assert_ne!(sentinel_name(&a), sentinel_name(&b));
         assert_ne!(sentinel_name(&a), sentinel_name(&c));
         assert_ne!(sentinel_name(&a), sentinel_name(&d));
+    }
+
+    #[test]
+    fn substitute_rejects_prerelease_import_version() {
+        // Schema-import versions are a parse path for schema idents:
+        // prerelease text must be rejected as malformed, not projected.
+        let yaml = r#"
+imports:
+  EncodedVideoFrame:
+    org: tatolab
+    package: core
+    type: EncodedVideoFrame
+    version: "1.0.0-dev.2"
+
+metadata:
+  name: JtdCodegenFixtureA
+
+properties:
+  source:
+    ref: EncodedVideoFrame
+"#;
+        let mut value: Value = yaml_from_str(yaml).unwrap();
+        let mut table = SentinelTable::default();
+        let err = substitute(&mut value, &mut table).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("release") && msg.contains("dev"),
+            "error must name the release-only rule: {msg}"
+        );
     }
 
     #[test]

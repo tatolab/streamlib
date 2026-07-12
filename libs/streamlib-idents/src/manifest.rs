@@ -499,7 +499,7 @@ dependencies: {}
 
     #[test]
     fn package_flavor_round_trips_prerelease_version() {
-        // A package may carry a `-dev.N` / `-rc.N` prerelease version (#1215).
+        // A package may carry a `-dev.N` / `-rc.N` prerelease version.
         let yaml = "
 package:
   org: tatolab

@@ -313,6 +313,7 @@ pub struct SchemaIdent {
     pub package: Package,
     #[serde(rename = "type")]
     pub r#type: TypeName,
+    #[serde(deserialize_with = "deserialize_release_only_semver")]
     pub version: SemVer,
 }
 
@@ -320,14 +321,35 @@ impl SchemaIdent {
     /// Construct from already-validated structured fields. Callers in
     /// non-codegen positions should use [`Org::new`], [`Package::new`],
     /// [`TypeName::new`] to validate the inputs first.
+    ///
+    /// Schema idents are release-only by invariant: `version` is projected
+    /// onto its release core (`-dev.N` / `-rc.N` stripped). The flat global
+    /// schema registry is version-lookup-blind and the IPC wire form carries
+    /// only major/minor/patch, so prerelease fidelity here has no meaning —
+    /// packages iterate prereleases; their schema identities do not.
     pub fn new(org: Org, package: Package, r#type: TypeName, version: SemVer) -> Self {
         Self {
             org,
             package,
             r#type,
-            version,
+            version: version.release_core(),
         }
     }
+}
+
+/// Deserialize a [`SchemaIdent`] version, rejecting prereleases. Input text
+/// carrying `-dev.N` / `-rc.N` in a schema-ident position is an upstream bug
+/// (the producing side should have projected via [`SemVer::release_core`]) —
+/// surface it rather than silently projecting.
+fn deserialize_release_only_semver<'de, D: Deserializer<'de>>(d: D) -> Result<SemVer, D::Error> {
+    let version = SemVer::deserialize(d)?;
+    if version.prerelease.is_some() {
+        return Err(serde::de::Error::custom(format!(
+            "schema-ident version `{version}` must be a release `MAJOR.MINOR.PATCH`; \
+             prerelease (`-dev.N` / `-rc.N`) versions are not valid for schema idents"
+        )));
+    }
+    Ok(version)
 }
 
 impl fmt::Display for SchemaIdent {
@@ -419,8 +441,9 @@ impl JsonSchema for ModuleIdent {
         ident_string_schema(
             "Imperative-API module identifier of the form `@org/name@<range>` \
              where `<range>` is a SemVerRange (`*`, `=1.2.3`, `>=1.2.3`, `^1.2.3`, \
-             `~1.2.3`, or bare `1.2.3`).",
-            r"^@[a-z][a-z0-9-]*/[a-z][a-z0-9-]*@(\*|(\^|~|>=|=)?[0-9]+\.[0-9]+\.[0-9]+)$",
+             `~1.2.3`, or bare `1.2.3`; versions may carry an optional `-dev.N` / \
+             `-rc.N` prerelease).",
+            r"^@[a-z][a-z0-9-]*/[a-z][a-z0-9-]*@(\*|(\^|~|>=|=)?[0-9]+\.[0-9]+\.[0-9]+(-(dev|rc)\.[0-9]+)?)$",
         )
     }
 }
@@ -580,6 +603,50 @@ version: 1.0.0
         assert_eq!(id.package.as_str(), "core");
         assert_eq!(id.r#type.as_str(), "VideoFrame");
         assert_eq!(id.version, SemVer::new(1, 0, 0));
+    }
+
+    #[test]
+    fn schema_ident_constructor_projects_prerelease_to_release_core() {
+        // The release-only invariant lives in the constructor — a prerelease
+        // version cannot survive construction.
+        use crate::semver::PrereleaseKind;
+        let id = SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("camera").unwrap(),
+            TypeName::new("Camera").unwrap(),
+            SemVer::new_prerelease(0, 4, 33, PrereleaseKind::Dev, 2),
+        );
+        assert_eq!(id.version, SemVer::new(0, 4, 33));
+        assert_eq!(id.to_string(), "@tatolab/camera/Camera@0.4.33");
+    }
+
+    #[test]
+    fn schema_ident_deserialize_rejects_prerelease_version() {
+        // Parse paths REJECT (not project) — prerelease text in a schema-ident
+        // position is an upstream bug that must surface.
+        let yaml = "
+org: tatolab
+package: camera
+type: Camera
+version: 0.4.33-dev.2
+";
+        let err = serde_yaml::from_str::<SchemaIdent>(yaml).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("release") && msg.contains("dev"),
+            "error must name the release-only rule: {msg}"
+        );
+    }
+
+    #[test]
+    fn module_ident_wire_parses_prerelease_range() {
+        use crate::semver::PrereleaseKind;
+        let wire = "\"@tatolab/camera@>=0.4.33-dev.2\"";
+        let id: ModuleIdent = serde_yaml::from_str(wire).unwrap();
+        assert_eq!(
+            id.version,
+            SemVerRange::AtLeast(SemVer::new_prerelease(0, 4, 33, PrereleaseKind::Dev, 2))
+        );
     }
 
     #[test]

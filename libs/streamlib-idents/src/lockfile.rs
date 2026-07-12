@@ -150,10 +150,16 @@ packages:
       url: https://github.com/tatolab/moq
       rev: abc123def456
     content_hash: "sha256:1111222233334444"
+  "@tatolab/camera":
+    version: 0.4.33-dev.2
+    source:
+      kind: registry
+      url: https://packages.streamlib.dev
+    content_hash: "sha256:5555666677778888"
 "#;
         let lock: Lockfile = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(lock.version, 1);
-        assert_eq!(lock.packages.len(), 3);
+        assert_eq!(lock.packages.len(), 4);
 
         let core = lock.packages.get("@tatolab/core").unwrap();
         assert_eq!(core.version, SemVer::new(1, 0, 0));
@@ -171,9 +177,22 @@ packages:
             other => panic!("expected Git source, got {:?}", other),
         }
 
+        // A prerelease package version survives the lockfile round-trip.
+        use crate::semver::PrereleaseKind;
+        let camera = lock.packages.get("@tatolab/camera").unwrap();
+        assert_eq!(
+            camera.version,
+            SemVer::new_prerelease(0, 4, 33, PrereleaseKind::Dev, 2)
+        );
+
         let s = serde_yaml::to_string(&lock).unwrap();
+        assert!(s.contains("0.4.33-dev.2"), "serialized: {s}");
         let back: Lockfile = serde_yaml::from_str(&s).unwrap();
-        assert_eq!(back.packages.len(), 3);
+        assert_eq!(back.packages.len(), 4);
+        assert_eq!(
+            back.packages.get("@tatolab/camera").unwrap().version,
+            SemVer::new_prerelease(0, 4, 33, PrereleaseKind::Dev, 2)
+        );
     }
 
     #[test]

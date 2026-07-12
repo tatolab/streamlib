@@ -11,6 +11,7 @@
 import {
   assert,
   assertEquals,
+  assertRejects,
   assertThrows,
 } from "@std/assert";
 import { join } from "@std/path";
@@ -218,6 +219,38 @@ Deno.test("@processor projects a prerelease package version to release core", as
     const ident = cls.streamlibSchemaIdent;
     assertEquals(ident.version, "0.4.33");
     assertEquals(String(ident), "@tatolab/camera/Camera@0.4.33");
+  } finally {
+    await Deno.remove(fixture.dir, { recursive: true });
+  }
+});
+
+Deno.test("@processor rejects unknown prerelease channels", async () => {
+  // Only `-dev.N` / `-rc.N` project; an alpha (or any foreign channel) must
+  // throw — the same manifest is rejected by Rust's parser, and silently
+  // projecting here would let the runtimes disagree.
+  const fixture = await makeFixture(
+    [
+      "package:",
+      "  org: tatolab",
+      "  name: camera",
+      "  version: 0.4.33-alpha.1",
+      "",
+      "processors:",
+      "  - name: Camera",
+      "    runtime: deno",
+      "    execution: reactive",
+      "",
+    ].join("\n"),
+    moduleHeader() +
+      `@processor("Camera", import.meta.url)\n` +
+      `export default class Camera {}\n`,
+  );
+  try {
+    await assertRejects(
+      () => import(`file://${fixture.modulePath}`),
+      Error,
+      "invalid package version",
+    );
   } finally {
     await Deno.remove(fixture.dir, { recursive: true });
   }

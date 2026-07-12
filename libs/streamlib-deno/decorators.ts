@@ -284,15 +284,30 @@ export function output(opts: PortOptions = {}) {
 // =============================================================================
 
 /**
+ * Package-version grammar: 3-part core + optional closed `-dev.N` / `-rc.N`
+ * prerelease. Mirrors Rust's `SemVer::from_dotted` so all three runtimes
+ * accept and reject the same manifests.
+ */
+const PACKAGE_VERSION_PATTERN = /^(\d+\.\d+\.\d+)(?:-(?:dev|rc)\.\d+)?$/;
+
+/**
  * Project a package version onto its release core `MAJOR.MINOR.PATCH`.
  *
  * Package versions may carry a `-dev.N` / `-rc.N` prerelease, but schema
- * idents are release-only by invariant. Mirrors Rust's
- * `streamlib_idents::SemVer::release_core`.
+ * idents are release-only by invariant. Anything outside that closed grammar
+ * (`-alpha.1`, `+build`, malformed ordinals) throws — identical posture to
+ * Rust's manifest parsing, never a silent projection of an invalid version.
+ * Mirrors Rust's `streamlib_idents::SemVer::release_core`.
  */
 function releaseCore(version: string): string {
-  const dash = version.indexOf("-");
-  return dash === -1 ? version : version.slice(0, dash);
+  const match = PACKAGE_VERSION_PATTERN.exec(version);
+  if (match === null) {
+    throw new Error(
+      `invalid package version ${JSON.stringify(version)}: must be ` +
+        `MAJOR.MINOR.PATCH with an optional -dev.N / -rc.N prerelease`,
+    );
+  }
+  return match[1];
 }
 
 function locateSiblingManifest(

@@ -38,4 +38,4 @@ pub use resolver::{
     resolve, resolve_bare_schema_name, resolve_with, ResolvedPackage, ResolvedPackages,
     ResolvedSource, ResolverOptions,
 };
-pub use semver::{SemVer, SemVerRange};
+pub use semver::{Prerelease, PrereleaseKind, SemVer, SemVerRange};

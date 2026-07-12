@@ -613,19 +613,9 @@ fn run_jtd_codegen_python(tasks: &[SchemaTask], output_dir: &Path) -> Result<()>
         // authors who reference them construct `SchemaIdent` directly until
         // #702 migrates them off reverse-DNS.
         let schema_ident_emit: Option<SchemaIdentEmit> = if identity.package_subdir.is_some() {
-            task.package.as_ref().map(|p| SchemaIdentEmit {
-                org: p.org.clone(),
-                package: p.name.clone(),
-                type_name: identity.struct_name.clone(),
-                // Schema idents are release-only by invariant (#1215): project
-                // the package's (possibly `-dev.N` / `-rc.N`) version onto its
-                // release core so the emitted Python SchemaIdent literal
-                // validates against the 3-part version regex the SDK enforces.
-                // (The TypeScript codegen emits no version literal — a Deno
-                // package's ident is minted by its `@processor` decorator,
-                // which applies the same projection.)
-                version: p.version.release_core().to_string(),
-            })
+            task.package
+                .as_ref()
+                .map(|p| SchemaIdentEmit::from_package_context(p, &identity.struct_name))
         } else {
             None
         };
@@ -1124,6 +1114,25 @@ struct SchemaIdentEmit {
     version: String,
 }
 
+impl SchemaIdentEmit {
+    /// Build the emit record from the enclosing package context. The version
+    /// text is projected onto its release core — this writes version TEXT into
+    /// generated Python sources without constructing a Rust `SchemaIdent`, so
+    /// the constructor's release-only invariant does not cover it and the
+    /// explicit `release_core()` here is load-bearing (the emitted literal must
+    /// validate against the Python SDK's 3-part version regex). The TypeScript
+    /// codegen emits no version literal — a Deno package's ident is minted by
+    /// its `@processor` decorator, which applies the same projection.
+    fn from_package_context(p: &PackageContext, struct_name: &str) -> Self {
+        Self {
+            org: p.org.clone(),
+            package: p.name.clone(),
+            type_name: struct_name.to_string(),
+            version: p.version.release_core().to_string(),
+        }
+    }
+}
+
 /// Post-process jtd-codegen Python output.
 ///
 /// Always strips the `ROOT_NAME_SENTINEL` placeholder and prepends the
@@ -1610,6 +1619,30 @@ fn pascal_to_snake(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn schema_ident_emit_projects_prerelease_to_release_core() {
+        // The emit writes version TEXT into generated sources without a Rust
+        // `SchemaIdent`, so the constructor invariant doesn't cover it —
+        // mentally revert the `release_core()` in `from_package_context` and
+        // this fails (and the emitted Python literal would be rejected by the
+        // SDK's 3-part version regex).
+        use streamlib_idents::{PrereleaseKind, SemVer};
+        let ctx = PackageContext {
+            org: "tatolab".to_string(),
+            name: "camera".to_string(),
+            version: SemVer::new_prerelease(0, 4, 33, PrereleaseKind::Dev, 2),
+        };
+        let emit = SchemaIdentEmit::from_package_context(&ctx, "VideoFrame");
+        assert_eq!(emit.version, "0.4.33");
+        // A release version passes through unchanged.
+        let release_ctx = PackageContext {
+            version: SemVer::new(1, 2, 3),
+            ..ctx
+        };
+        let emit = SchemaIdentEmit::from_package_context(&release_ctx, "VideoFrame");
+        assert_eq!(emit.version, "1.2.3");
+    }
 
     #[test]
     fn post_process_python_substitutes_root_sentinel() {
