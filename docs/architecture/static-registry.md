@@ -45,8 +45,12 @@ does **not** ship a server binary.
                                         # a static server decodes to this path)
     tarballs/streamlib-deno-<version>.tgz  # dist.tarball points here
   slpkg/
-    <pkg>/<version>/<pkg>.slpkg         # generic store (RegistryClient file:// layout)
-    streamlib-release/<V>/manifest.json # the release manifest — completion marker
+    <pkg>/<version>/<pkg>.slpkg          # generic store (RegistryClient file:// layout)
+    <pkg>/<version>/<pkg>.catalog.json   # per-package catalog — keyed by FULL version
+    <pkg>/<core>/schemas/<Type>.jtd.json # per-schema JTD — keyed by RELEASE-CORE version
+    streamlib-release/<V>/manifest.json  # the release manifest — completion marker
+  catalog/
+    index.ndjson                         # processor palette — one NDJSON line per processor
 ```
 
 The cargo `config.json` `dl`/`api` and the npm `dist.tarball` are absolute URLs
@@ -100,6 +104,77 @@ sees the previous *complete* release; the flip is the only mutation of the
 served path. This closes the mid-publish window where a consumer could cargo-
 resolve a higher partial version before its release manifest landed.
 
+## Catalog — queryable processor / port / schema metadata
+
+Alongside the resolvable artifacts, an emit writes a **catalog**: the
+processor / port / schema metadata a visual graph editor (or any tool
+building a node palette) browses without downloading every `.slpkg`. The
+protocol surface — types plus the read client — lives in `streamlib-idents`
+([`catalog.rs`](../../libs/streamlib-idents/src/catalog.rs)), the crate that
+owns the registry protocol; assembly lives in `streamlib-pack`
+([`catalog.rs`](../../libs/streamlib-pack/src/catalog.rs),
+`build_package_catalog`).
+
+Three on-disk shapes, all written during the same atomic emit:
+
+| Path | Contents |
+|---|---|
+| `catalog/index.ndjson` | Aggregate processor palette — one `CatalogIndexLine` per processor across all packages (`CATALOG_INDEX_PATH`). |
+| `slpkg/<name>/<version>/<name>.catalog.json` | One package's `PackageCatalog` (its processors, ports, config), keyed by **full** published version. |
+| `slpkg/<name>/<core>/schemas/<Type>.jtd.json` | One schema's JTD document, keyed by **release-core** version. |
+
+### The version asymmetry
+
+`catalog.json` is keyed by the **full** package version (`2.1.0-dev.3`);
+the `schemas/` JTD directory is keyed by the **release-core** version
+(`2.1.0` — prerelease stripped, patch preserved). The asymmetry is
+deliberate: a schema `SchemaIdent` is release-core by invariant (see
+[`package-development-model.md`](package-development-model.md#the-version-model)),
+so the reader derives a JTD path from the ident's already-projected version.
+A `-dev.N` publisher whose JTDs sat under the full prerelease dir would be
+silently unfetchable, because no consumer ever holds a prerelease-versioned
+schema ident to look them up by.
+
+### Query surface
+
+`CatalogClient::new(base_url, token)` exposes exactly three fetches (each
+tolerates an absent tree as "empty / none", so a pre-catalog registry
+degrades cleanly):
+
+- `fetch_processor_index() -> Vec<CatalogIndexLine>` — the whole palette.
+- `fetch_package_catalog(package, version) -> Option<PackageCatalog>` — one
+  package's processors / ports / config at an exact version.
+- `fetch_schema_type_definition(ident) -> Option<Value>` — the JTD for one
+  schema, from the owning package's dir.
+
+There is no "list all packages" or "query by processor type" call by design —
+palette-by-type is served client-side by scanning `fetch_processor_index()`,
+each line of which carries a full `CatalogProcessor`.
+
+### External refs carry the owner's version
+
+When a package's port / config references a schema owned by *another*
+package, the recorded `SchemaIdent` carries **that owner's** version, not the
+referencing package's. Catalog assembly resolves a manifest's `schemas:`
+external entry by recursing into the dependency with the dependency's own
+version (a missing dep is `ExternalDepMissing`, a cycle is
+`SchemaResolutionCycle`). So a camera package at `2.1.0` referencing
+`@tatolab/core`'s `Frame` at `1.4.0` records the ref as core's `1.4.0`.
+
+### Deliberate omissions
+
+`CatalogPort` carries `name`, `description`, `schema`, `read_mode` only. Two
+classes of manifest field are intentionally dropped:
+
+- `overflow` / `buffer_size` — present on the authored manifest port, but
+  they are per-edge *buffering knobs*, not wiring topology, so they don't
+  belong in a palette the editor wires graphs from.
+- `required` — has no authored-manifest source at all; it exists only on the
+  runtime port descriptors, not on the `streamlib.yaml` port.
+
+The omission is structural (the fields simply aren't on `CatalogPort` and
+aren't copied by the assembler), not gated by a runtime check.
+
 ## Emitting a tree
 
 ```
@@ -142,8 +217,12 @@ export CARGO_REGISTRIES_GITEA_INDEX="sparse+http://127.0.0.1:8799/cargo/"
 ## Reference
 
 - **Renderers + atomic swap**: `libs/streamlib-pack/src/static_registry.rs`.
+- **Catalog**: `libs/streamlib-idents/src/catalog.rs` (protocol surface +
+  `CatalogClient`), `libs/streamlib-pack/src/catalog.rs` (assembly).
 - **Fork bootstrap**: `scripts/gitea/emit-static-fork.sh`,
   `scripts/gitea/render_cargo_index_line.py`.
 - **Generator CLI**: `cargo xtask static-registry emit`.
 - **`.slpkg` `file://` transport**: `libs/streamlib-idents/src/registry.rs`.
 - **CI**: `.github/actions/serve-static-fork`, `.github/workflows/static-registry.yml`.
+- **The two loops** this backend serves:
+  [`package-development-model.md`](package-development-model.md).

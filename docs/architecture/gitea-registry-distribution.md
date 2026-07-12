@@ -1,18 +1,42 @@
-# Unified Gitea registry — distribution & dependency resolution
+# Gitea registry — the hosted distribution backend
 
 > **Living document.** Validate, update, critique freely per
 > [CLAUDE.md's markdown editing rules](../../CLAUDE.md#editing-markdown-documentation).
 
+> **Scope.** This doc describes the **hosted-registry backend** and the
+> by-version resolution model both backends share. Distribution has two
+> backends behind one tokenless read shape: this hosted Gitea one and a
+> plain static file tree ([`static-registry.md`](static-registry.md)) — the
+> static tree is what CI and local `file://` resolution use. The overall
+> two-loop model (dev loop = `streamlib link`; distribution loop =
+> publish/install/run) is
+> [`package-development-model.md`](package-development-model.md). The
+> `{ path, version, registry }` cargo shape, schema-package resolution, and
+> the anonymous version index below apply to both backends.
+
+> ~~Every StreamLib-authored **or customized** artifact is distributed and
+> resolved through a *single* self-hosted Gitea instance.~~ — Superseded
+> 2026-07-12: distribution now has two backends behind one read shape (this
+> hosted Gitea one and the static file tree in
+> [`static-registry.md`](static-registry.md)). The by-version resolution
+> model below is unchanged and shared by both; only the "single Gitea
+> instance is the sole backend" framing is superseded.
+
 Every StreamLib-authored **or customized** artifact is distributed and resolved
-through a single self-hosted Gitea instance, by version — never by relative
-`path` or git `[patch]` in anything a consumer sees. SDK libraries resolve from
-Gitea's cargo / pypi / npm registries; packages are source-only `.slpkg`s in
-its generic registry.
+**by version** — never by relative `path` or git `[patch]` in anything a
+consumer sees. SDK libraries resolve from the backend's cargo / pypi / npm
+registries; packages are source-only `.slpkg`s in its generic store.
 
 ## The model in one picture
 
+> ~~The self-hosted Gitea lifts to a *cloud Gitea* for the public / hosted
+> backend.~~ — Superseded 2026-07-12: the public / fresh-clone / CDN path is
+> the static file tree ([`static-registry.md`](static-registry.md)), not a
+> hosted Gitea. A self-hosted Gitea remains a valid backend for the
+> by-version read/publish model below; a *hosted* one is no longer the plan.
+
 ```
-                self-hosted Gitea  (org: tatolab)   ──lifts to──▶  cloud Gitea (hosted backend)
+                self-hosted Gitea  (org: tatolab)
    ┌───────────────────────────────────────────────────────────┐
    │  cargo registry     pypi registry     npm registry         │  ← SDK libraries
    │  (rust SDK crates)  (python SDK)      (deno SDK)            │    resolved by version
@@ -220,15 +244,30 @@ mirroring cargo:
 This is the schema-tier twin of the cargo-crate resolution. The resolver is
 shared by all three runtimes' codegen, so the one fix covers rust/python/deno.
 
-## The dev loop — one knob, publish-by-version
+## The dev loop — publish-by-version, or whole-tree link
 
-A change to an internal crate becomes a **published `0.4.x-dev.N` version** the
-consumer bumps to — never a new path dep or `[patch]`. In the monorepo, the
-dev-only `path` makes local edits instant; publishing is a release step. For
-co-developing the engine against a separate-repo package, the same applies:
-publish a dev version and bump — there is no relative-path escape hatch by
-design (that "purity" is what makes splitting crates into their own repos a
-no-op later).
+There are two local dev loops, for two different intents (full model:
+[`package-development-model.md`](package-development-model.md)):
+
+- **Develop against a specific *published* version.** A change to an
+  internal crate becomes a **published `-dev.N` version** the consumer bumps
+  to — never a persistent path dep or `[patch]` in a manifest. In the
+  monorepo the dev-only `path` makes local edits instant; publishing is a
+  release step. This is the loop for co-developing the engine against a
+  separate-repo package: publish a dev version and bump.
+
+- **Develop all-local against one checkout.** `streamlib link <checkout>`
+  points a consumer's *entire* streamlib surface at a working tree
+  (whole-tree cargo `[patch]` / uv-source / deno-import-map overrides), for
+  the instant edit→run WIP loop.
+
+> ~~There is no relative-path escape hatch by design.~~ — Reconciled
+> 2026-07-12: `streamlib link` *does* emit a whole-tree path override, but it
+> is transactional, greppable, restored byte-identically by `streamlib
+> unlink`, and **refused entry into any published `.slpkg`**
+> (`PackRefusedWhileLinked`). So the "purity" the original claim protects —
+> no persistent relative-path dep leaking into a distributed artifact — still
+> holds; link is a dev-only toolchain override, not a manifest path dep.
 
 ## Operational notes
 
@@ -249,8 +288,11 @@ self-hosted instance:
 Notes the scripts encode:
 
 - One Gitea container hosts all four registries (cargo/pypi/npm/generic) — a
-  single lightweight Go binary, no JVM. Local dev registry today; lifts to a
-  cloud Gitea for the hosted/centralized backend unchanged.
+  single lightweight Go binary, no JVM. Used as a local dev registry.
+  > ~~Lifts to a cloud Gitea for the hosted/centralized backend
+  > unchanged.~~ — Superseded 2026-07-12: the public / centralized path is
+  > the static file tree ([`static-registry.md`](static-registry.md)) served
+  > from a dumb HTTP mount / object store, not a hosted Gitea.
 - cargo token must be stored as `Bearer <token>` in `credentials.toml`
   (`cargo login` stores it bare → 401).
 - The **sparse** cargo index needs no setup: the registry is reachable once
@@ -273,8 +315,12 @@ Notes the scripts encode:
 
 ## Reference
 
+- `docs/architecture/package-development-model.md` — the two loops (dev =
+  `streamlib link`; distribution = publish/install/run), the version model,
+  and the install/run seam this backend feeds.
+- `docs/architecture/static-registry.md` — the other backend behind the same
+  read shape (static file tree + catalog).
 - `docs/architecture/runtime-module-materialization.md` — how `add_module`
-  builds a source module, resolving its SDK dependencies from the Gitea
-  registry.
+  builds a source module, resolving its SDK dependencies from the registry.
 - `docs/learnings/polyglot-venv-gitea-registry-env.md` — failure symptoms when
   the registry env channels aren't set for a polyglot build.

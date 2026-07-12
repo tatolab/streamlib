@@ -67,11 +67,28 @@ learning.
 If you hit either symptom above, set the three env vars first — don't
 go debugging the codegen step or the example's Python.
 
+## Static-file-tree backend: same two channels, no token
+
+The two-channel story above is the **hosted Gitea** backend. The static
+file-tree backend (`docs/architecture/static-registry.md`) reads the same
+two channels — `UV_INDEX` for the pypi-simple install, `STREAMLIB_REGISTRY_URL`
+for the codegen resolver — but is **tokenless**: `STREAMLIB_REGISTRY_URL`
+points at a `file://…/slpkg` tree and no `STREAMLIB_REGISTRY_TOKEN` is needed
+(static reads are anonymous). So if you're resolving against a static tree
+and hit the step-2 `streamlib.yaml dependency graph` failure, the fix is
+`STREAMLIB_REGISTRY_URL` (+ `UV_INDEX`), not the token —
+`scripts/gitea/serve-static-registry.sh` prints the exact exports. The token
+is only load-bearing on a Gitea instance whose generic read endpoint requires
+auth.
+
 ## Reference
 
-- Model (which registry backs which dependency kind, and the env each
-  reads): `docs/architecture/gitea-registry-distribution.md` — consume
-  side. `UV_INDEX` / `pip.conf` for the pypi install;
+- Two-loop model + where each backend fits:
+  `docs/architecture/package-development-model.md`.
+- Which registry backs which dependency kind, and the env each reads
+  (consume side): `docs/architecture/gitea-registry-distribution.md`
+  (hosted Gitea) and `docs/architecture/static-registry.md` (static tree,
+  tokenless). `UV_INDEX` / `pip.conf` for the pypi install;
   `ResolverOptions::from_env` → `STREAMLIB_REGISTRY_URL` /
   `STREAMLIB_REGISTRY_TOKEN` for the generic registry.
 - The provisioning step that emits the symptom:
