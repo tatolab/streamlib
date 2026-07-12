@@ -404,6 +404,97 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
+    fn unreachable_registry_degrades_to_proceed() {
+        // The module-doc promise: a network blip must not manufacture a
+        // build failure. Point the registry at a connection-refused endpoint
+        // — both the release listing and the fallback manifest fetch error,
+        // and the check must degrade to Ok (cargo remains the hard gate).
+        // Mentally revert the Err arms to hard failures and this fails.
+        // SAFETY: `#[serial]` — no other thread races these env writes.
+        let prev_url = std::env::var("STREAMLIB_REGISTRY_URL").ok();
+        let prev_g = std::env::var("GITEA_URL").ok();
+        unsafe {
+            std::env::set_var("STREAMLIB_REGISTRY_URL", "http://127.0.0.1:1");
+            std::env::remove_var("GITEA_URL");
+        }
+        let pins = vec![pin("streamlib-plugin-sdk", "0.5.0")];
+        let out = assert_release_complete("pkg", &pins);
+        unsafe {
+            match prev_url {
+                Some(v) => std::env::set_var("STREAMLIB_REGISTRY_URL", v),
+                None => std::env::remove_var("STREAMLIB_REGISTRY_URL"),
+            }
+            if let Some(v) = prev_g {
+                std::env::set_var("GITEA_URL", v);
+            }
+        }
+        assert!(out.is_ok(), "transport errors must degrade to proceed: {out:?}");
+    }
+
+    #[test]
+    fn incomplete_release_error_renders_version_missing_and_hint() {
+        // The error string is the user-facing artifact — it must carry the
+        // release version, every missing name@req, and the actionable hint.
+        let err = BuildError::IncompleteRelease {
+            package: "@tatolab/mavlink".to_string(),
+            release_version: "0.5.1".to_string(),
+            missing: "streamlib-plugin-sdk@^0.5.0, vulkan-jpeg@^0.5.0".to_string(),
+            hint: "re-run the release publish (scripts/gitea/publish-release.sh)".to_string(),
+        };
+        let rendered = err.to_string();
+        assert!(rendered.contains("incomplete release of 0.5.1"), "{rendered}");
+        assert!(rendered.contains("streamlib-plugin-sdk@^0.5.0"), "{rendered}");
+        assert!(rendered.contains("vulkan-jpeg@^0.5.0"), "{rendered}");
+        assert!(rendered.contains("@tatolab/mavlink"), "{rendered}");
+        assert!(rendered.contains("publish-release.sh"), "{rendered}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn prerelease_pin_keys_against_dev_release_manifest() {
+        // The -dev.N prerelease train interacting with the gate: a
+        // prerelease floor pin (bare `0.5.1-dev.3` = caret per cargo) must
+        // key against the newest same-core dev release at-or-above it, per
+        // the npm prerelease policy SemVerRange carries. Partial dev release
+        // ⇒ typed fast-fail; complete ⇒ clean.
+        let tmp = tempfile::tempdir().unwrap();
+        let partial = ReleaseManifest::new(
+            "0.5.1-dev.5",
+            vec![ReleaseManifestMember::new("streamlib-macros", "0.5.1-dev.5")],
+        );
+        publish_manifest(tmp.path(), &partial);
+        let pins = vec![
+            pin("streamlib-plugin-sdk", "0.5.1-dev.3"),
+            pin("streamlib-macros", "0.5.1-dev.3"),
+        ];
+        let err = with_file_registry(tmp.path(), || {
+            assert_release_complete("pkg", &pins).unwrap_err()
+        });
+        match err {
+            BuildError::IncompleteRelease { release_version, missing, .. } => {
+                assert_eq!(release_version, "0.5.1-dev.5");
+                assert!(
+                    missing.contains("streamlib-plugin-sdk@^0.5.1-dev.3"),
+                    "missing: {missing}"
+                );
+            }
+            other => panic!("expected IncompleteRelease, got {other:?}"),
+        }
+
+        let complete = ReleaseManifest::new(
+            "0.5.1-dev.5",
+            vec![
+                ReleaseManifestMember::new("streamlib-macros", "0.5.1-dev.5"),
+                ReleaseManifestMember::new("streamlib-plugin-sdk", "0.5.1-dev.5"),
+            ],
+        );
+        publish_manifest(tmp.path(), &complete);
+        let out = with_file_registry(tmp.path(), || assert_release_complete("pkg", &pins));
+        assert!(out.is_ok(), "complete dev release must pass: {out:?}");
+    }
+
+    #[test]
+    #[serial_test::serial]
     fn absent_manifest_proceeds_back_compat() {
         // No release manifest anywhere ⇒ pre-atomic-release registry ⇒ warn +
         // proceed (Ok). Mentally revert the Ok(None) arm to an error and this

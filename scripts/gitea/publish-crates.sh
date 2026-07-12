@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
-# Publish the `streamlib` SDK crate closure (the 14-crate chain `streamlib`
-# transitively needs) to the Gitea cargo registry by version, in dependency
-# (topological) order. This is the recurring dev-loop publish: a local engine
-# change becomes a published 0.4.x-dev.N version a consumer bumps to — never a
-# new path dep or [patch]. See docs/architecture/gitea-registry-distribution.md.
+# Publish the engine RELEASE CLOSURE — every publishable `streamlib*` /
+# `vulkan-jpeg` workspace library crate — to the Gitea cargo registry by
+# version, in dependency (topological) order. This is the recurring dev-loop
+# publish: a local engine change becomes a published <base>-dev.N version a
+# consumer bumps to — never a new path dep or [patch]. See
+# docs/architecture/gitea-registry-distribution.md.
 #
 #   ./publish-crates.sh            # publish the base [workspace.package].version
 #   ./publish-crates.sh --dev 3    # publish <base>-dev.3 (workspace + dep reqs
 #                                  #   bumped in place, then restored)
 #
-# The closure + topo order is derived live from `cargo metadata`, so it stays
-# correct as the dependency graph shifts — nothing is hard-coded.
+# The closure + topo order come from `cargo xtask release-closure --json` —
+# the single canonical closure definition (streamlib-pack's
+# compute_release_closure), shared with `streamlib link`. It is derived live
+# from `cargo metadata`, so it stays correct as the dependency graph shifts —
+# nothing is hard-coded, and there is no "publish everything" flag to forget.
 #
 # Two in-place rewrites are applied before publish and restored after (the tree
 # is left exactly as found, clean or not):

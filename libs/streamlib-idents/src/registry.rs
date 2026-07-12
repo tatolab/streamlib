@@ -1018,8 +1018,8 @@ mod tests {
     fn release_manifest_file_scheme_round_trip() {
         use crate::release::{ReleaseManifest, ReleaseManifestMember};
 
-        let tmp = std::env::temp_dir().join(format!("slpkg-relman-{}", std::process::id()));
-        std::fs::create_dir_all(&tmp).unwrap();
+        let tmp_guard = tempfile::tempdir().unwrap();
+        let tmp = tmp_guard.path().to_path_buf();
         let cfg = RegistryConfig {
             base_url: format!("file://{}", tmp.display()),
             token: None,
@@ -1053,7 +1053,5 @@ mod tests {
             client.list_release_versions("tatolab").unwrap(),
             vec![SemVer::new(0, 5, 1)]
         );
-
-        std::fs::remove_dir_all(&tmp).ok();
     }
 }
