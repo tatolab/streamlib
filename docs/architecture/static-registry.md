@@ -120,6 +120,38 @@ sees the previous *complete* release; the flip is the only mutation of the
 served path. This closes the mid-publish window where a consumer could cargo-
 resolve a higher partial version before its release manifest landed.
 
+## Byte-stable crate emission
+
+Each emitted `.crate` is a pure function of source content per
+`(crate, version)`: re-emitting an unchanged release yields byte-identical
+tarballs and checksums (no sparse-index or consumer-lockfile churn), and a
+crate whose source changed under an already-published version is **refused**
+rather than silently swapped.
+
+`cargo package` is already byte-deterministic on a fixed toolchain (gzip
+MTIME zeroed, fixed tar mtimes / modes, stable entry order, deterministic
+DEFLATE) *except* for the `{name}-{version}/.cargo_vcs_info.json` entry,
+whose `{"git":{"sha1":...}}` payload tracks git HEAD, not source — so the
+raw `.crate` checksum was a function of the commit. No stable cargo flag
+suppresses that entry, so `emit_cargo_closure` normalizes each tarball after
+packaging (`crate_tarball::finalize_crate_tarball`): strip
+`.cargo_vcs_info.json`, re-tar the survivors (cargo's headers cloned
+verbatim), and re-gzip with a fixed header. Normalization is idempotent, so
+the reuse path (a cached `target/package/<crate>.crate` across emits) stays
+stable.
+
+The immutability guard compares a **content fingerprint** — the sha256 of
+the canonical, vcs-stripped, *uncompressed* tar, so it's independent of gzip
+level too — of the freshly packaged crate against the prior served crate,
+which is still present at `opts.out` during the staged build (the flip
+happens after the emit closure returns). The served side is fingerprinted
+through the same normalization, so a legacy un-normalized served tree does
+not false-positive during the transition. A benign commit bump (identical
+source, new git HEAD) passes and yields the same checksum; a real source
+change under the same version fails the emit with an explicit "bump the
+version" error. See
+[`../learnings/cargo-crate-vcs-info-nondeterminism.md`](../learnings/cargo-crate-vcs-info-nondeterminism.md).
+
 ## Catalog — queryable processor / port / schema metadata
 
 Alongside the resolvable artifacts, an emit writes a **catalog**: the
@@ -233,8 +265,10 @@ export CARGO_REGISTRIES_GITEA_INDEX="sparse+http://127.0.0.1:8799/cargo/"
 ## Reference
 
 - **Renderers + atomic swap**: `libs/streamlib-pack/src/static_registry.rs`.
-- **Verified crate-tarball reuse**: `libs/streamlib-pack/src/crate_tarball.rs`
-  (`verify_crate_tarball`, `obtain_crate_tarball`).
+- **Verified crate-tarball reuse + byte-stable normalization**:
+  `libs/streamlib-pack/src/crate_tarball.rs` (`verify_crate_tarball`,
+  `obtain_crate_tarball`, `normalize_crate_tarball`,
+  `crate_content_fingerprint`, `finalize_crate_tarball`).
 - **Catalog**: `libs/streamlib-idents/src/catalog.rs` (protocol surface +
   `CatalogClient`), `libs/streamlib-pack/src/catalog.rs` (assembly).
 - **Fork bootstrap**: `scripts/gitea/emit-static-fork.sh`,

@@ -114,3 +114,10 @@ Avoid the two failure modes:
   gdb/api_dump/validation overhead shifts *which* crash you hit, so never use
   them to decide the production failure mode; re-verify the symptom after each
   fix
+- [@docs/learnings/cargo-crate-vcs-info-nondeterminism.md](cargo-crate-vcs-info-nondeterminism.md) —
+  Re-emitting an unchanged release changes `.crate` checksums (churning the
+  cargo sparse index + consumer lockfiles). `cargo package` is byte-deterministic
+  EXCEPT `{name}-{version}/.cargo_vcs_info.json`, which embeds the git HEAD sha1,
+  making the checksum a function of the commit not the source. No stable cargo
+  flag suppresses it; strip the entry post-hoc + re-gzip with a fixed header for
+  byte-stable, source-only `.crate`s
