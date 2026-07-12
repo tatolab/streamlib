@@ -38,6 +38,7 @@
 mod deno_codegen;
 mod native_host;
 mod python_venv;
+mod release_check;
 
 #[cfg(test)]
 mod test_support;
@@ -239,6 +240,19 @@ impl PolyglotBuildOrchestrator {
                     });
                 }
             }
+        }
+
+        // ---- Consumer-side release-completeness pre-check ----
+        // A Rust package resolves its gitea-registry deps via cargo below. If
+        // the configured registry holds a partial/mid-publish release of the
+        // pinned version, fail fast here naming the missing artifacts instead
+        // of surfacing it as a cryptic cargo `failed to select a version …`
+        // deep in the build. No-op for dev/path builds (no registry) and
+        // pre-atomic-release registries (no manifest) — see `release_check`.
+        if has_rust {
+            let pins = build::read_gitea_registry_pins(pkg_dir)
+                .map_err(|e| other(&pkg_label, format!("reading gitea-registry pins: {e}")))?;
+            release_check::assert_release_complete(&pkg_label, &pins)?;
         }
 
         // ---- Assemble + stage to the package cache ----
@@ -878,6 +892,169 @@ mod tests {
             };
             let err = orch.materialize(&req, &NoopSink).expect_err("must reject");
             assert!(matches!(err, BuildError::UnsupportedSource(_)));
+        }
+    }
+
+    /// Point the registry env at a `file://` scratch dir for the duration of
+    /// `f`, restoring prior values after, and shielding the native-host env
+    /// override. SAFETY: callers are `#[serial]` — no other thread races the
+    /// process-global env.
+    fn with_scratch_registry<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
+        let prev_url = std::env::var("STREAMLIB_REGISTRY_URL").ok();
+        let prev_gitea = std::env::var("GITEA_URL").ok();
+        let prev_py_lib = std::env::var("STREAMLIB_PYTHON_NATIVE_LIB").ok();
+        unsafe {
+            std::env::set_var("STREAMLIB_REGISTRY_URL", format!("file://{}", dir.display()));
+            std::env::remove_var("GITEA_URL");
+            std::env::remove_var("STREAMLIB_PYTHON_NATIVE_LIB");
+        }
+        let out = f();
+        unsafe {
+            match prev_url {
+                Some(v) => std::env::set_var("STREAMLIB_REGISTRY_URL", v),
+                None => std::env::remove_var("STREAMLIB_REGISTRY_URL"),
+            }
+            if let Some(v) = prev_gitea {
+                std::env::set_var("GITEA_URL", v);
+            }
+            if let Some(v) = prev_py_lib {
+                std::env::set_var("STREAMLIB_PYTHON_NATIVE_LIB", v);
+            }
+        }
+        out
+    }
+
+    /// Publish a PARTIAL release manifest (macros only — plugin-sdk absent)
+    /// at `version` into the scratch `file://` registry dir.
+    fn publish_partial_manifest(dir: &Path, version: &str) {
+        let cfg = streamlib_idents::RegistryConfig {
+            base_url: format!("file://{}", dir.display()),
+            token: None,
+        };
+        let manifest = streamlib_idents::ReleaseManifest::new(
+            version,
+            vec![streamlib_idents::ReleaseManifestMember::new(
+                "streamlib-macros",
+                version,
+            )],
+        );
+        streamlib_idents::RegistryClient::new(&cfg)
+            .upload_release_manifest("tatolab", &manifest)
+            .unwrap();
+    }
+
+    /// Rust-runtime source package whose Cargo.toml pins streamlib-plugin-sdk
+    /// from the gitea registry — the shape every published Rust package has.
+    fn rust_source_pkg(dir: &Path) {
+        std::fs::write(
+            dir.join("streamlib.yaml"),
+            r#"package:
+  org: tatolab
+  name: rust-source
+  version: 0.1.0
+processors:
+  - name: RustProc
+    version: 1.0.0
+    description: "rust processor fixture (never built - pre-check fires first)"
+    runtime: rust
+    execution: manual
+    inputs:
+      - name: in0
+        schema: any
+    outputs:
+      - name: out0
+        schema: any
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            r#"[package]
+name = "rust-source"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+streamlib-plugin-sdk = {version = "0.5.0", registry = "gitea"}
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[serial]
+    fn materialize_fails_fast_on_incomplete_release_before_cargo() {
+        // WIRING lock for the package path: `materialize` on a Rust package
+        // whose registry release is partial must surface IncompleteRelease
+        // BEFORE any cargo build runs. Mentally delete the
+        // `assert_release_complete` call in `materialize_package_dir` and
+        // this test fails (materialize would proceed into assemble/cargo and
+        // die on the unresolvable fixture crate instead).
+        let _home = HomeGuard::new();
+        let src = tempfile::tempdir().unwrap();
+        rust_source_pkg(src.path());
+        let registry = tempfile::tempdir().unwrap();
+        // Partial release ABOVE the pin's floor — production keying.
+        publish_partial_manifest(registry.path(), "0.5.1");
+
+        let orch = PolyglotBuildOrchestrator::default();
+        let req = BuildRequest {
+            package: pkg_ref("tatolab", "rust-source"),
+            source: BuildSource::PackageDir(src.path().to_path_buf()),
+            policy: BuildPolicy::IfStale,
+            host_triple: build::host_target_triple().to_string(),
+        };
+        let err = with_scratch_registry(registry.path(), || {
+            orch.materialize(&req, &NoopSink)
+                .expect_err("partial release must fail the materialize pre-check")
+        });
+        match err {
+            BuildError::IncompleteRelease { missing, release_version, .. } => {
+                assert_eq!(release_version, "0.5.1");
+                assert!(
+                    missing.contains("streamlib-plugin-sdk"),
+                    "must name the missing crate; got: {missing}"
+                );
+            }
+            other => panic!("expected IncompleteRelease from materialize, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn native_host_build_fails_fast_on_incomplete_release() {
+        // WIRING lock for the native-host path: `ensure_native_host` against
+        // a registry whose release manifest omits the host crate must surface
+        // IncompleteRelease before attempting the crate download. Mentally
+        // delete the `assert_release_complete` call in `ensure_native_host`
+        // and this fails differently (a download error against the file://
+        // URL) — the match arm below pins the typed error.
+        let _home = HomeGuard::new();
+        let registry = tempfile::tempdir().unwrap();
+        // Partial release at the exact requested host version, missing
+        // streamlib-python-native.
+        publish_partial_manifest(registry.path(), "0.5.1");
+
+        let err = with_scratch_registry(registry.path(), || {
+            native_host::ensure_native_host(
+                native_host::NativeRuntime::Python,
+                "0.5.1",
+                build::CargoProfile::Dev,
+            )
+            .expect_err("partial release must fail the native-host pre-check")
+        });
+        match err {
+            BuildError::IncompleteRelease { missing, release_version, .. } => {
+                assert_eq!(release_version, "0.5.1");
+                assert!(
+                    missing.contains("streamlib-python-native"),
+                    "must name the missing host crate; got: {missing}"
+                );
+            }
+            other => panic!("expected IncompleteRelease from ensure_native_host, got {other:?}"),
         }
     }
 }

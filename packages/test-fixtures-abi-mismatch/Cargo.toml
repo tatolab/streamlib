@@ -5,6 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license-file.workspace = true
 repository.workspace = true
+# Never published — test fixture. Also keeps this crate out of the release
+# closure (`compute_release_closure` requires a publishable crate).
+publish = false
 description = "Test-only cdylib emitting STREAMLIB_PLUGIN with a tampered abi_version — drives the load_project rejection-path integration test."
 keywords = ["streamlib", "test-fixtures", "abi"]
 categories = ["development-tools::testing"]

@@ -26,6 +26,7 @@ pub mod check_processor_spec_new;
 pub mod check_schema_versions;
 pub mod lint_logging;
 pub mod manifest_schema;
+pub mod release;
 
 #[derive(Parser)]
 #[command(name = "xtask")]
@@ -187,6 +188,40 @@ enum Commands {
         #[arg(long)]
         dir: PathBuf,
     },
+
+    /// Emit the engine **release closure** as JSON — the single canonical set
+    /// of crates a release publishes (every publishable `streamlib*` /
+    /// `vulkan-jpeg` library crate), in topological publish order.
+    /// `scripts/gitea/publish-crates.sh` consumes this instead of a
+    /// human-remembered "publish everything" flag.
+    ReleaseClosure {
+        /// Stamp the `-dev.N` prerelease suffix on the emitted versions (matches
+        /// `publish-crates.sh --dev N`).
+        #[arg(long)]
+        dev: Option<u32>,
+    },
+
+    /// Publish the **release manifest** for the current workspace to the
+    /// configured registry — the atomicity flip, run LAST in the release
+    /// sequence (after crates + SDKs + packages land). Its presence marks the
+    /// release complete; a consumer resolving against a partial registry
+    /// detects the gap. Requires `STREAMLIB_REGISTRY_URL` (or `GITEA_URL`) +
+    /// `STREAMLIB_REGISTRY_TOKEN`.
+    ReleaseManifestPublish {
+        /// Stamp the `-dev.N` prerelease suffix (matches `--dev N` on the
+        /// crate publish).
+        #[arg(long)]
+        dev: Option<u32>,
+        /// Record no Python SDK in the manifest (the SDK publish was skipped).
+        #[arg(long)]
+        skip_python: bool,
+        /// Record no Deno SDK in the manifest (the SDK publish was skipped).
+        #[arg(long)]
+        skip_deno: bool,
+        /// Record no packages in the manifest (the package publish was skipped).
+        #[arg(long)]
+        skip_packages: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -245,6 +280,23 @@ fn main() -> Result<()> {
             })?;
             tracing::info!(dir = %dir.display(), "stripped path-flavor patch entries from streamlib.yaml");
         }
+        Commands::ReleaseClosure { dev } => {
+            release::emit_closure_json(&workspace_root()?, dev)?
+        }
+        Commands::ReleaseManifestPublish {
+            dev,
+            skip_python,
+            skip_deno,
+            skip_packages,
+        } => release::publish_manifest(
+            &workspace_root()?,
+            &release::PublishManifestOptions {
+                dev,
+                skip_python,
+                skip_deno,
+                skip_packages,
+            },
+        )?,
     }
 
     Ok(())

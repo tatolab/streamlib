@@ -5,6 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license-file.workspace = true
 repository.workspace = true
+# Never published — test fixture. Also keeps this crate out of the release
+# closure (`compute_release_closure` requires a publishable crate).
+publish = false
 description = "Attribute-macro test fixtures (TestConfiguredProcessor) for streamlib SDK macro contract tests."
 keywords = ["streamlib", "test-fixtures", "macros"]
 categories = ["development-tools::testing"]

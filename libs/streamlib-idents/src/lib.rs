@@ -14,6 +14,7 @@ mod ident;
 mod lockfile;
 mod manifest;
 mod registry;
+mod release;
 mod resolver;
 mod semver;
 
@@ -32,7 +33,11 @@ pub use manifest::{
     SchemaEntry,
 };
 pub use registry::{
-    select_version, RegistryClient, RegistryConfig, REGISTRY_TOKEN_ENV, REGISTRY_URL_ENV,
+    select_version, RegistryClient, RegistryConfig, RELEASE_MANIFEST_CHANNEL,
+    RELEASE_MANIFEST_FILE, REGISTRY_TOKEN_ENV, REGISTRY_URL_ENV,
+};
+pub use release::{
+    crates_missing_from_release, ReleaseManifest, ReleaseManifestMember, RELEASE_MANIFEST_FORMAT,
 };
 pub use resolver::{
     resolve, resolve_bare_schema_name, resolve_with, ResolvedPackage, ResolvedPackages,
