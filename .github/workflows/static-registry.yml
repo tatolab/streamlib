@@ -78,6 +78,12 @@ jobs:
         # The composite action already cloned the fork to /tmp/vulkanalia-fork;
         # reuse it so the generator doesn't re-clone.
         run: |
+          # Defensive: this smoke emit is fork-only (no --cargo-closure), so
+          # target/package holds no closure tarballs today. Clearing it keeps
+          # the "never reuse a stale-content tarball across a cached target dir"
+          # invariant true even if a closure emit is added here later.
+          # Content-addressed verification is the real fix.
+          rm -rf target/package
           VULKANALIA_DIR=/tmp/vulkanalia-fork \
             cargo run -q -p xtask -- static-registry emit \
               --out /tmp/emitted-registry \
