@@ -53,7 +53,7 @@ They do NOT need to agree on:
 
 **Where the dream currently leaks**: Phase D (#906) and Phase C2 (#905) shipped some FullAccess methods that return `Arc<HostInternalType>` via `Arc::into_raw` / `Arc::from_raw` raw-pointer transit. Those code paths DO require rustc-version coupling because the host-internal types aren't `#[repr(C)]`. Issue #917 closes that gap by refactoring the affected return types into `#[repr(C)] { handle, vtable }` PluginAbiObject pairs (mirroring `RhiCommandQueue` / `CommandBuffer`). After #917 lands, no plugin ABI return type leaks host layout, and the cross-repo dream is fully real.
 
-**What's NOT in scope** (deferred to its own milestone): a hosted marketplace / registry / index. Today's distribution model is "package author hands you an `.slpkg` directly, or you clone the repo and run `streamlib pack` yourself". A managed registry where you'd run `streamlib install @tatolab/camera` is a separate future deliverable.
+**What's NOT in scope** (deferred to its own milestone): a hosted marketplace / registry / index. Today's distribution model is "package author hands you an `.slpkg` directly, or you clone the repo and run `streamlib pkg build` yourself". A managed registry where you'd run `streamlib install @tatolab/camera` is a separate future deliverable.
 
 **Implication for new architectural work**: any plugin ABI surface added in this codebase MUST be `#[repr(C)]` end-to-end. If you're tempted to return `Arc<SomeHostInternalType>` from a cdylib-callable method, stop — the answer is to expose the type as a PluginAbiObject. The dormant `clone_*` / `drop_*` slots already present on the FullAccess vtable are infrastructure for this. The "rustc-version coupling stays" framing that previously appeared in the All-Dynamic Package Loading milestone body was a permissive fallback while PluginAbiObject coverage was incomplete; it's superseded as of 2026-05-22.
 
@@ -332,35 +332,57 @@ Run `cargo doc -p streamlib --no-deps` - fix any unresolved link warnings.
 ### Dependencies
 - **Git dependencies must be pinned** with `rev = "<commit sha>"` (or `tag = "..."`). Never use a bare `git = "..."` or `branch = "..."` — Cargo resolves those against the remote's current HEAD, so fresh clones drift out of sync with the lockfile and stop compiling. This applies to every `Cargo.toml` in the workspace, including `[patch.crates-io]` entries.
 
-### Dependency resolution & distribution — unified Gitea registry
+### Dependency resolution & distribution — two loops over one substrate
 
-**Decided architecture, validated by POC, in active migration** (the "Gitea
-Package Registry" milestone). Documented ahead of full implementation on
-purpose — follow it; do **not** reimplement resolution a different way. Full
-model + which issue finalizes each piece: @docs/architecture/gitea-registry-distribution.md.
+To the best of our current knowledge streamlib runs **two loops** over one
+package substrate, with **install** as the seam between them. Full shipped
+model: @docs/architecture/package-development-model.md. The two distribution
+backends and the catalog: @docs/architecture/static-registry.md (static file
+tree) and @docs/architecture/gitea-registry-distribution.md (hosted Gitea +
+the shared by-version resolution shape).
 
-Every StreamLib-authored **or customized** artifact is published to a single
-self-hosted **Gitea** instance under the **`tatolab`** org and resolved **by
-version** — never by relative `path` or git `[patch]` in anything a consumer
-sees:
+**Distribution loop — resolve by version, never by path/patch.** Every
+StreamLib-authored **or customized** artifact is resolved **by version** —
+never by relative `path` or git `[patch]` in anything a consumer sees:
 
 - **SDK libraries** (rust `streamlib` crate chain, python pkg, deno module) →
-  Gitea's cargo / pypi / npm registries.
+  the backend's cargo / pypi / npm registries.
 - **Packages** (polyglot streamlib packages) → **source-only `.slpkg`** via
-  `streamlib pack` → Gitea's generic registry.
+  `streamlib pkg build` / `streamlib pkg publish` → the generic store.
 - **`streamlib.yaml` schema deps** (e.g. `@tatolab/escalate`) → resolved from
-  the generic registry (schema-package `.slpkg`), not a dev path patch.
+  the generic store (schema-package `.slpkg`), not a dev path patch.
 - **Truly-external untouched deps** (serde, tokio, …) keep resolving from
   their normal public registries.
 
-Rust internal cross-crate deps use `{ path = "../foo", version = "x.y",
-registry = "gitea" }` — the `path` is a dev-only affordance cargo strips from
-the published manifest (standard workspace-publish pattern); `registry =
-"gitea"` is required or cargo defaults to crates.io. A local engine change is
-published as a `0.4.x-dev.N` version the consumer bumps to — **never** a new
-relative-path dep or `[patch]`. Don't introduce new relative-path / git-`[patch]`
-cross-crate deps. The monorepo still builds itself in-place (the dev `path`
-wins locally); publishing is a release step.
+Distribution has **two backends behind one tokenless read shape**: a hosted
+Gitea registry and a plain static file tree (sparse index + tarballs +
+`.slpkg` + catalog). The static tree is what CI and local `file://`
+resolution use. Rust internal cross-crate deps use `{ path = "../foo",
+version = "x.y", registry = "gitea" }` — the `path` is a dev-only affordance
+cargo strips from the published manifest; `registry` is required or cargo
+defaults to crates.io. Releases are **atomic** (`compute_release_closure` is
+the one definition of "what a release publishes"; the release manifest is
+written last as the completion marker) and a consumer **detects a partial
+release** up front rather than failing deep in version unification.
+
+**Dev loop — two intents.** Don't introduce new persistent relative-path /
+git-`[patch]` cross-crate deps in a manifest. For local development use one of
+the sanctioned loops instead:
+
+- **All-local WIP against one checkout** → `streamlib link <checkout>` emits
+  whole-tree cargo `[patch]` / uv-source / deno-import-map overrides at the
+  toolchain layer; it is transactional, greppable, restored byte-identically
+  by `streamlib unlink`, and refused entry into any published `.slpkg`.
+- **Against a specific *published* version** → publish a `-dev.N` version the
+  consumer bumps to. The monorepo still builds itself in-place (the dev
+  `path` wins locally); publishing is a release step.
+
+**Install seam.** `streamlib install` resolves range→concrete, materializes,
+and writes `streamlib-app.lock`; a locked run (`add_modules_from_lockfile`)
+loads that pinned set offline (five network/build touchpoints unreachable),
+content-hash-verified. Range logic lives only at install, concrete
+enforcement only at run — the two resolvers stay separate; the lockfile is
+the handoff.
 
 ### Vulkan RHI Boundary — ABSOLUTE RULE
 
