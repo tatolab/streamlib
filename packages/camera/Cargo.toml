@@ -14,21 +14,21 @@ name = "streamlib_camera"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = {version = "0.5.0", registry = "gitea"}
+streamlib-jtd-codegen = {version = "0.5.0", registry = "tatolab"}
 
 [dependencies]
 # Engine substrate — runtime context, processor traits, generated config
 # types under `crate::_generated_::tatolab__camera::*`, VideoFrame
 # wire type, RHI primitives.
-streamlib = {version = "0.5.0", registry = "gitea"}
+streamlib = {version = "0.5.0", registry = "tatolab"}
 
 # Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = {version = "0.5.0", registry = "gitea"}
+streamlib-macros = {version = "0.5.0", registry = "tatolab"}
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = {version = "0.5.0", registry = "gitea"}
+streamlib-plugin-abi = {version = "0.5.0", registry = "tatolab"}
 
 # Cross-platform deps used by the camera processor.
 parking_lot = "0.12"
@@ -50,17 +50,17 @@ v4l = "0.14"
 # anything else from consumer-rhi (no `ConsumerVulkanDevice`, no imports);
 # this is the typed-layout interop type shared between the host RHI's
 # `RhiCommandRecorder` and the cross-process surface-share schema.
-streamlib-consumer-rhi = {version = "0.5.0", registry = "gitea"}
+streamlib-consumer-rhi = {version = "0.5.0", registry = "tatolab"}
 # CUDA host-side surface adapter — the `CameraToCudaCopy` processor
 # allocates a DEVICE_LOCAL OPAQUE_FD VkBuffer + exportable timeline
 # and runs the host-side `vkCmdCopyImageToBuffer` per frame for
 # cross-API CUDA interop. The adapter crate itself stays cudarc-free
 # (`cudarc` integration happens in the cdylib consumer); this dep
 # does NOT pull `libcuda.so` into the camera package's link surface.
-streamlib-adapter-cuda = {version = "0.5.0", registry = "gitea"}
+streamlib-adapter-cuda = {version = "0.5.0", registry = "tatolab"}
 # Adapter ABI — provides `SurfaceId` and `AdapterError` types the
 # CUDA adapter surface uses in its public API.
-streamlib-adapter-abi = {version = "0.5.0", registry = "gitea"}
+streamlib-adapter-abi = {version = "0.5.0", registry = "tatolab"}
 libc = {version = "0.2.177"}
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]

@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Emit a STATIC, daemon-free cargo sparse-index tree for the tatolab/vulkanalia
-# fork (vulkanalia-sys, vulkanalia, vulkanalia-vma) into <out>/cargo/. No Gitea,
+# fork (vulkanalia-sys, vulkanalia, vulkanalia-vma) into <out>/cargo/. No registry daemon,
 # no database, no token — just files a dumb static HTTP server can serve.
 #
 # Why this exists as a standalone shell step (not `cargo xtask`): the workspace
-# declares `vulkanalia = { registry = "gitea" }`, so cargo cannot resolve —
+# declares `vulkanalia = { registry = "tatolab" }`, so cargo cannot resolve —
 # and therefore cannot BUILD xtask — until the fork is fetchable. This script
 # breaks that chicken-and-egg by packaging the fork from a standalone clone
-# (the fork only depends on crates.io + itself, never the workspace or Gitea),
-# exactly like scripts/gitea/publish-vulkanalia.sh does — but it writes a
-# static file tree instead of PUTting to a Gitea daemon. CI serves the tree
+# (the fork only depends on crates.io + itself, never the workspace or registry daemon),
+# exactly like scripts/registry/publish-vulkanalia.sh does — but it writes a
+# static file tree instead of PUTting to a registry daemon. CI serves the tree
 # with `python3 -m http.server` and points cargo at it via
-# `CARGO_REGISTRIES_GITEA_INDEX=sparse+http://127.0.0.1:PORT/cargo/`.
+# `CARGO_REGISTRIES_TATOLAB_INDEX=sparse+http://127.0.0.1:PORT/cargo/`.
 #
 #   ./emit-static-fork.sh <out_dir> [--base-url http://127.0.0.1:8000] \
 #                                    [--fork-url http://127.0.0.1:8000]
@@ -22,7 +22,7 @@
 # NDJSON are relocatable; only config.json carries the base URL.
 #
 # Sibling resolution during packaging: `cargo package` for vulkanalia needs to
-# resolve vulkanalia-sys (and -vma needs vulkanalia) from the gitea registry.
+# resolve vulkanalia-sys (and -vma needs vulkanalia) from the tatolab registry.
 # Two modes:
 #   * --fork-url URL (or env STATIC_FORK_URL): an EXTERNAL static server is
 #     already serving a tree containing the fork (CI: the composite action
@@ -38,7 +38,7 @@
 #                    the pinned rev is cloned from GitHub (rev sourced from the
 #                    workspace, not hardcoded).
 #   STATIC_FORK_URL  same as --fork-url (the flag wins when both are set).
-#   GITEA_ORG        default tatolab (only affects the annotated `registry` name,
+#   STREAMLIB_REGISTRY_ORG        default tatolab (only affects the annotated `registry` name,
 #                    which is cosmetic in a static tree — the index carries the
 #                    resolution truth).
 set -euo pipefail
@@ -94,12 +94,12 @@ scratch="$scratch_root/fork"
 mkdir -p "$scratch"
 rsync -a --exclude='.git' --exclude='target' "$src_fork"/ "$scratch"/
 
-# --- annotate inter-crate deps with registry = "gitea" (fork siblings) --------
+# --- annotate inter-crate deps with registry = "tatolab" (fork siblings) --------
 # The fork's own manifests use bare version/path for their siblings, which would
 # resolve from crates.io (upstream). Force the fork's registry so the packaged
-# Cargo.toml records the inter-fork dep as a gitea-registry dep — the static
+# Cargo.toml records the inter-fork dep as a tatolab-registry dep — the static
 # index then renders it as a same-registry (null-registry) index dep.
-REGISTRY="gitea" "$PY" - "$scratch" <<'PY'
+REGISTRY="tatolab" "$PY" - "$scratch" <<'PY'
 import os, sys, tomlkit
 scratch = sys.argv[1]
 reg = os.environ["REGISTRY"]
@@ -127,14 +127,14 @@ annotate(f"{scratch}/vulkanalia/Cargo.toml", ["vulkanalia-sys"])
 annotate(f"{scratch}/ext/vma/Cargo.toml", ["vulkanalia"])
 PY
 
-# shellcheck source=scripts/gitea/cargo-idx-path.sh
-. "$ROOT/scripts/gitea/cargo-idx-path.sh"
+# shellcheck source=scripts/registry/cargo-idx-path.sh
+. "$ROOT/scripts/registry/cargo-idx-path.sh"
 
-# --- package each fork crate into a .crate (no gitea, no workspace) -----------
+# --- package each fork crate into a .crate (no tatolab, no workspace) -----------
 # `cargo package` resolves the crate's deps to write the normalized (published)
 # Cargo.toml. The fork's only registry dep is its own siblings; we serve those
 # incrementally from the tree we are building so a later crate resolves an
-# earlier one from the static index — no Gitea needed at any point.
+# earlier one from the static index — no registry daemon needed at any point.
 CARGO_DIR="$OUT/cargo"
 mkdir -p "$CARGO_DIR/crates"
 
@@ -143,9 +143,9 @@ mkdir -p "$CARGO_DIR/crates"
 # external server is already serving a fork-bearing tree (--fork-url), or a
 # throwaway server on BASE_URL's port serves the tree we are populating.
 if [ -n "$FORK_URL" ]; then
-  export CARGO_REGISTRIES_GITEA_INDEX="sparse+${FORK_URL}/cargo/"
+  export CARGO_REGISTRIES_TATOLAB_INDEX="sparse+${FORK_URL}/cargo/"
 else
-  export CARGO_REGISTRIES_GITEA_INDEX="sparse+${BASE_URL}/cargo/"
+  export CARGO_REGISTRIES_TATOLAB_INDEX="sparse+${BASE_URL}/cargo/"
 fi
 
 # Write config.json up front so the throwaway server (if used) serves it.
@@ -202,7 +202,7 @@ emit_one() {
   idx_abs="$CARGO_DIR/$idx_rel"
   mkdir -p "$(dirname "$idx_abs")"
   NAME="$name" VERSION="$version" CKSUM="$cksum" CRATE="$crate_file" \
-    "$PY" "$ROOT/scripts/gitea/render_cargo_index_line.py" >> "$idx_abs"
+    "$PY" "$ROOT/scripts/registry/render_cargo_index_line.py" >> "$idx_abs"
 }
 
 emit_one vulkanalia-sys 0.35.0 "$scratch/vulkanalia-sys/Cargo.toml"

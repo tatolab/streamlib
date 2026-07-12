@@ -66,9 +66,9 @@ fn run_for_rust_crate_inner() -> Result<()> {
         );
     }
 
-    // `from_env` reads STREAMLIB_REGISTRY_URL / GITEA_URL so a registry-cached
+    // `from_env` reads STREAMLIB_REGISTRY_URL / STREAMLIB_REGISTRY_URL so a registry-cached
     // crate resolves its schema deps (e.g. `@tatolab/escalate`) from the
-    // configured Gitea registry — the env read lives here at the build-script
+    // configured static registry — the env read lives here at the build-script
     // boundary, not inside the pure resolver.
     let resolved = streamlib_idents::resolve_with(&crate_dir, &ResolverOptions::from_env())
         .context("Failed to resolve streamlib.yaml dependency graph")?;

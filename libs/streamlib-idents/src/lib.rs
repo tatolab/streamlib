@@ -40,8 +40,8 @@ pub use manifest::{
     SchemaEntry,
 };
 pub use registry::{
-    select_version, RegistryClient, RegistryConfig, RELEASE_MANIFEST_CHANNEL,
-    RELEASE_MANIFEST_FILE, REGISTRY_TOKEN_ENV, REGISTRY_URL_ENV,
+    select_version, RegistryClient, RegistryConfig, DEFAULT_REGISTRY_URL,
+    RELEASE_MANIFEST_CHANNEL, RELEASE_MANIFEST_FILE, REGISTRY_URL_ENV,
 };
 pub use release::{
     crates_missing_from_release, ReleaseManifest, ReleaseManifestMember, RELEASE_MANIFEST_FORMAT,

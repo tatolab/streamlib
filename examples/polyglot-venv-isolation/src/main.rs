@@ -33,11 +33,11 @@
 //! continuous processors, each self-paced by the runner's MonotonicTimer,
 //! no camera / display / Vulkan. The point is venv isolation, not GPU.
 //!
-//! Prerequisite: the per-package venv installs `streamlib` from the Gitea
+//! Prerequisite: the per-package venv installs `streamlib` from the static registry
 //! pypi registry by version (it is declared like any dependency, not
-//! injected). The host environment must therefore expose the Gitea pypi
+//! injected). The host environment must therefore expose the static registry pypi
 //! index to `uv` via a container-level `UV_INDEX` / `pip.conf`, e.g.
-//!   UV_INDEX="gitea=http://localhost:3300/api/packages/tatolab/pypi/simple/"
+//!   UV_INDEX="tatolab=file:///path/to/registry-tree/pypi/simple"
 //! numpy resolves from public PyPI normally (a truly-external dep).
 //!
 //! Run:

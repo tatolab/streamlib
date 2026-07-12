@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BUSL-1.1
 
 # Standalone, registry-only example (headed to its own repo). Every dependency
-# resolves from the Gitea registry by version. This crate is its own workspace
+# resolves from the static registry by version. This crate is its own workspace
 # root and includes the sibling `effects/` cdylib plugin as a member so the
 # runner can `cargo build -p camera-python-display-effects` and stage it.
 [package]
@@ -36,11 +36,11 @@ authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 license = "BUSL-1.1"
 
 [workspace.dependencies]
-streamlib = { version = "0.5", registry = "gitea" }
-streamlib-jtd-codegen = { version = "0.5", registry = "gitea" }
-streamlib-plugin-abi = { version = "0.5", registry = "gitea" }
-streamlib-adapter-abi = { version = "0.5", registry = "gitea" }
-streamlib-consumer-rhi = { version = "0.5", registry = "gitea" }
+streamlib = { version = "0.5", registry = "tatolab" }
+streamlib-jtd-codegen = { version = "0.5", registry = "tatolab" }
+streamlib-plugin-abi = { version = "0.5", registry = "tatolab" }
+streamlib-adapter-abi = { version = "0.5", registry = "tatolab" }
+streamlib-consumer-rhi = { version = "0.5", registry = "tatolab" }
 tracing = { version = "0.1.41", features = ["release_max_level_debug"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }

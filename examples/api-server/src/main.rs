@@ -17,7 +17,7 @@
 //! - WS /ws/events - WebSocket event stream
 //!
 //! Packages build automatically on `cargo run` via the build orchestrator,
-//! resolved from the Gitea generic registry by version.
+//! resolved from the static generic store by version.
 //!
 //! Loads `@tatolab/api-server` through the imperative
 //! [`Runner::add_module`] API. The fully spelled out
@@ -37,11 +37,11 @@ use streamlib::sdk::schema_ident;
 async fn main() -> streamlib::sdk::error::Result<()> {
     let runtime = Runner::with_auto_build()?;
 
-    // Imperative module load — the runtime resolves the ident from the Gitea
+    // Imperative module load — the runtime resolves the ident from the static registry
     // generic registry by version (the orchestrator pulls each `.slpkg` and
     // builds it from source on the host), verifies the semver range, then
     // drives the internal module-loading machinery. Registry endpoint comes
-    // from `STREAMLIB_REGISTRY_URL` (or `GITEA_URL`).
+    // from `STREAMLIB_REGISTRY_URL`.
     runtime
         .add_module_with(
             module_ident!("tatolab", "api-server", "^1.0.0"),

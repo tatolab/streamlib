@@ -8,9 +8,9 @@ edition = "2024"
 publish = false
 
 [dependencies]
-streamlib = { version = "0.4.33-dev.5", registry = "gitea" }
-streamlib-adapter-abi = { version = "0.4.33-dev.5", registry = "gitea" }
-streamlib-adapter-cuda = { version = "0.4.33-dev.5", registry = "gitea" }
+streamlib = { version = "0.4.33-dev.5", registry = "tatolab" }
+streamlib-adapter-abi = { version = "0.4.33-dev.5", registry = "tatolab" }
+streamlib-adapter-cuda = { version = "0.4.33-dev.5", registry = "tatolab" }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 serde_json = "1.0"
 

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BUSL-1.1
 
 # Standalone, registry-only example (headed to its own repo). Every dependency
-# resolves from the Gitea registry by version, and the empty `[workspace]` table
+# resolves from the static registry by version, and the empty `[workspace]` table
 # makes this its own workspace root so it builds off-tree. Loads
 # `@tatolab/debug-utilities` + `@tatolab/display` + `@tatolab/h264` +
 # `@tatolab/h265` at runtime via `Strategy::Registry`.
@@ -13,7 +13,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-streamlib = { version = "0.4.33-dev.5", registry = "gitea" }
+streamlib = { version = "0.4.33-dev.5", registry = "tatolab" }
 serde_json = "1"
 anyhow = "1.0.100"
 

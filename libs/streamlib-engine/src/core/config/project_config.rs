@@ -126,7 +126,7 @@ impl ProjectConfig {
         }
 
         // Runtime package-load boundary: read the registry config from the
-        // environment (STREAMLIB_REGISTRY_URL / GITEA_URL) so a standalone,
+        // environment (STREAMLIB_REGISTRY_URL / STREAMLIB_REGISTRY_URL) so a standalone,
         // registry-only package resolves its schema deps (e.g. @tatolab/core)
         // from the registry instead of failing as RegistryNotConfigured.
         let resolved = streamlib_idents::resolve_with(

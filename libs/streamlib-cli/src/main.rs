@@ -191,10 +191,11 @@ enum PkgCommands {
     /// Publish THIS package to the registry (run inside the package).
     ///
     /// Always repacks a fresh source-only `.slpkg` (never trusts an existing
-    /// artifact) and uploads it to the Gitea generic registry. Registry
-    /// endpoint + token come from `STREAMLIB_REGISTRY_URL` (or `GITEA_URL`)
-    /// and `STREAMLIB_REGISTRY_TOKEN`. Publishing many packages is a script
-    /// over this single-package command.
+    /// artifact) and writes it into the static generic store. The registry
+    /// tree root comes from `STREAMLIB_REGISTRY_URL` and must be a `file://`
+    /// tree — publishing writes files (a static HTTP mount is read-only);
+    /// reads are tokenless. Publishing many packages is a script over this
+    /// single-package command.
     Publish,
     /// Remove THIS package's build/pack artifacts (run inside the package):
     /// any `*.slpkg`, the prebuilt `lib/` dir, and generated `_generated_/` trees.

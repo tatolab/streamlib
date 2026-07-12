@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BUSL-1.1
 
 # Standalone, registry-only example (headed to its own repo). Every dependency
-# resolves from the Gitea registry by version. This crate is its own workspace
+# resolves from the static registry by version. This crate is its own workspace
 # root and includes the sibling `plugin/` cdylib (the engine-free grayscale
 # compute plugin) as a member so `cargo build -p grayscale-compute-plugin`
 # builds it for the example to stage. `@tatolab/camera` + `@tatolab/display`
@@ -39,12 +39,12 @@ license = "BUSL-1.1"
 # Exact (`=`) pins so the dev prerelease is selected over the higher stable
 # `0.4.36` (which predates the engine-free surface-consumer API). At release
 # these bump to the published minor.
-streamlib = { version = "=0.4.36-dev.1", registry = "gitea" }
+streamlib = { version = "=0.4.36-dev.1", registry = "tatolab" }
 # Engine-free authoring SDK chain — used by the plugin cdylib.
-streamlib-plugin-sdk = { version = "=0.4.36-dev.1", registry = "gitea" }
-streamlib-macros = { version = "=0.4.36-dev.1", registry = "gitea" }
-streamlib-plugin-abi = { version = "=0.4.36-dev.1", registry = "gitea" }
-streamlib-jtd-codegen = { version = "=0.4.36-dev.1", registry = "gitea" }
+streamlib-plugin-sdk = { version = "=0.4.36-dev.1", registry = "tatolab" }
+streamlib-macros = { version = "=0.4.36-dev.1", registry = "tatolab" }
+streamlib-plugin-abi = { version = "=0.4.36-dev.1", registry = "tatolab" }
+streamlib-jtd-codegen = { version = "=0.4.36-dev.1", registry = "tatolab" }
 tracing = { version = "0.1.41", features = ["release_max_level_debug"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }

@@ -34,7 +34,7 @@ tamper-too-high = []
 tamper-transit-fingerprint = []
 
 [dependencies]
-streamlib-plugin-abi = { path = "../../libs/streamlib-plugin-abi", version = "0.5.0", registry = "gitea" }
+streamlib-plugin-abi = { path = "../../libs/streamlib-plugin-abi", version = "0.5.0", registry = "tatolab" }
 
 [lints]
 workspace = true

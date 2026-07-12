@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 
-const INDEX_URL: &str = "sparse+http://localhost:3300/api/packages/tatolab/cargo/";
+const INDEX_URL: &str = "sparse+https://registry.tatolab.com/cargo/";
 
 /// Absolute path of the real streamlib workspace this test binary was built in
 /// (`<root>/libs/streamlib-cli` → `<root>`). It is a genuine streamlib
@@ -19,7 +19,7 @@ fn workspace_checkout() -> PathBuf {
         .to_path_buf()
 }
 
-/// A consumer dir carrying its own gitea registry config, a pyproject, and a
+/// A consumer dir carrying its own tatolab registry config, a pyproject, and a
 /// deno.json — the three manifest types link mode overrides.
 fn write_full_consumer(root: &Path) {
     let cargo_dir = root.join(".cargo");
@@ -27,7 +27,7 @@ fn write_full_consumer(root: &Path) {
     std::fs::write(
         cargo_dir.join("config.toml"),
         format!(
-            "# consumer cargo config\n[registries.gitea]\nindex = \"{INDEX_URL}\"\n\n[alias]\nb = \"build\"\n"
+            "# consumer cargo config\n[registries.tatolab]\nindex = \"{INDEX_URL}\"\n\n[alias]\nb = \"build\"\n"
         ),
     )
     .unwrap();
@@ -99,7 +99,7 @@ fn link_then_unlink_is_byte_clean_and_idempotent_across_cycles() {
         );
         assert!(linked_cargo.contains("streamlib-idents"));
         assert!(linked_cargo.contains(CARGO_PATCH_MARKER));
-        assert!(linked_cargo.contains("[registries.gitea]"));
+        assert!(linked_cargo.contains("[registries.tatolab]"));
         assert!(std::fs::read_to_string(&pyproject)
             .unwrap()
             .contains("[tool.uv.sources]"));
@@ -131,7 +131,7 @@ fn unlink_deletes_a_cargo_config_it_created_and_prunes_the_dir() {
     std::fs::create_dir_all(&outer_cargo).unwrap();
     std::fs::write(
         outer_cargo.join("config.toml"),
-        format!("[registries.gitea]\nindex = \"{INDEX_URL}\"\n"),
+        format!("[registries.tatolab]\nindex = \"{INDEX_URL}\"\n"),
     )
     .unwrap();
 
@@ -212,7 +212,7 @@ fn pyproject_and_deno_overrides_are_presence_gated() {
     std::fs::create_dir_all(&cargo).unwrap();
     std::fs::write(
         cargo.join("config.toml"),
-        format!("[registries.gitea]\nindex = \"{INDEX_URL}\"\n"),
+        format!("[registries.tatolab]\nindex = \"{INDEX_URL}\"\n"),
     )
     .unwrap();
 
@@ -240,7 +240,7 @@ fn deno_jsonc_with_comments_is_rejected_cleanly() {
     std::fs::create_dir_all(&cargo).unwrap();
     std::fs::write(
         cargo.join("config.toml"),
-        format!("[registries.gitea]\nindex = \"{INDEX_URL}\"\n"),
+        format!("[registries.tatolab]\nindex = \"{INDEX_URL}\"\n"),
     )
     .unwrap();
     std::fs::write(
@@ -562,7 +562,7 @@ fn real_link_offline_e2e_link_refresh_unlink_roundtrip() {
     std::fs::create_dir_all(&cargo_dir).unwrap();
     std::fs::write(
         cargo_dir.join("config.toml"),
-        format!("[registries.gitea]\nindex = \"{INDEX_URL}\"\n"),
+        format!("[registries.tatolab]\nindex = \"{INDEX_URL}\"\n"),
     )
     .unwrap();
     std::fs::create_dir_all(consumer.join("src")).unwrap();
@@ -570,7 +570,7 @@ fn real_link_offline_e2e_link_refresh_unlink_roundtrip() {
     std::fs::write(
         consumer.join("Cargo.toml"),
         "[package]\nname = \"link-e2e-consumer\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
-         publish = false\n[dependencies]\nstreamlib-idents = { version = \"0.5\", registry = \"gitea\" }\n[workspace]\n",
+         publish = false\n[dependencies]\nstreamlib-idents = { version = \"0.5\", registry = \"tatolab\" }\n[workspace]\n",
     )
     .unwrap();
     let orig_config = std::fs::read(cargo_dir.join("config.toml")).unwrap();

@@ -45,7 +45,7 @@ use crate::catalog::{build_package_catalog, build_sibling_versions};
 #[derive(Debug, Clone)]
 pub struct EmitEcosystems {
     /// Emit the vulkanalia fork cargo tree (the daemon-free bootstrap the CI
-    /// resolve needs). Delegates to `scripts/gitea/emit-static-fork.sh`.
+    /// resolve needs). Delegates to `scripts/registry/emit-static-fork.sh`.
     pub cargo_fork: bool,
     /// Package + emit the workspace release-closure crates into the cargo tree.
     pub cargo_closure: bool,
@@ -314,9 +314,9 @@ pub fn sibling_temp(path: &Path, tag: &str) -> PathBuf {
     parent.join(format!(".{name}.{tag}.{nonce}"))
 }
 
-/// The registry org the tree is emitted under (`GITEA_ORG`, default `tatolab`).
+/// The registry org the tree is emitted under (`STREAMLIB_REGISTRY_ORG`, default `tatolab`).
 fn registry_org() -> String {
-    std::env::var("GITEA_ORG")
+    std::env::var("STREAMLIB_REGISTRY_ORG")
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "tatolab".to_string())
@@ -398,7 +398,7 @@ pub fn build_and_flip(out: &Path, build: impl FnOnce(&Path) -> Result<()>) -> Re
 fn emit_cargo_fork(opts: &EmitOptions, staging: &Path) -> Result<()> {
     let script = opts
         .workspace_root
-        .join("scripts/gitea/emit-static-fork.sh");
+        .join("scripts/registry/emit-static-fork.sh");
     let status = Command::new("bash")
         .arg(&script)
         .arg(staging)
@@ -439,7 +439,7 @@ impl Drop for KillOnDrop {
 /// Package each workspace release-closure crate with `cargo package` and
 /// render its `.crate` + sparse-index line into the staging cargo tree.
 ///
-/// `cargo package` validates every `registry = "gitea"` dep against the live
+/// `cargo package` validates every `registry = "tatolab"` dep against the live
 /// index, so the closure is packaged in topo order against an EPHEMERAL
 /// static server on the staging tree itself: each crate resolves its
 /// already-emitted siblings (and the fork, emitted before this) from the
@@ -452,7 +452,7 @@ fn emit_cargo_closure(opts: &EmitOptions, staging: &Path) -> Result<()> {
     std::fs::create_dir_all(cargo_dir.join("crates"))?;
     let render = opts
         .workspace_root
-        .join("scripts/gitea/render_cargo_index_line.py");
+        .join("scripts/registry/render_cargo_index_line.py");
 
     // Ephemeral staging server: pick a free port, serve the staging dir.
     let port = {
@@ -505,7 +505,7 @@ fn emit_cargo_closure(opts: &EmitOptions, staging: &Path) -> Result<()> {
             || {
                 let out = Command::new("cargo")
                     .args(["package", "--no-verify", "--allow-dirty", "-p", &c.name])
-                    .env("CARGO_REGISTRIES_GITEA_INDEX", &staging_index)
+                    .env("CARGO_REGISTRIES_TATOLAB_INDEX", &staging_index)
                     .current_dir(&opts.workspace_root)
                     .output()
                     .with_context(|| format!("cargo package -p {}", c.name))?;
@@ -696,9 +696,9 @@ fn emit_slpkg_and_manifest(
 ) -> Result<()> {
     let slpkg_dir = staging.join("slpkg");
     std::fs::create_dir_all(&slpkg_dir)?;
+    // The registry client is rooted at the tree root and writes under `slpkg/`.
     let config = RegistryConfig {
-        base_url: format!("file://{}", slpkg_dir.display()),
-        token: None,
+        base_url: format!("file://{}", staging.display()),
     };
 
     let packages_dir = opts.workspace_root.join("packages");

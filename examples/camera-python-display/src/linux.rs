@@ -138,12 +138,12 @@ pub fn main() -> Result<()> {
     let effects_dir = manifest_dir.join("effects");
     stage_effects_cdylib(&effects_dir)?;
 
-    // Resolve `@tatolab/camera` + `@tatolab/display` from the Gitea generic
+    // Resolve `@tatolab/camera` + `@tatolab/display` from the static registry generic
     // registry by version — the cross-repo consumer path. The orchestrator
     // downloads each `.slpkg` and prefers a matching prebuilt or builds the
     // bundled source on the host. Endpoint comes from `STREAMLIB_REGISTRY_URL`
-    // (or `GITEA_URL`); run with e.g.
-    // `STREAMLIB_REGISTRY_URL=http://localhost:3300`. The example-local
+    //; run with e.g.
+    // `STREAMLIB_REGISTRY_URL=file:///path/to/registry-tree`. The example-local
     // effects + Python sub-packages stay path-resolved (they aren't
     // published — they're this example's own code).
     runtime.add_module_with_blocking(

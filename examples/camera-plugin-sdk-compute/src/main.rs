@@ -17,7 +17,7 @@
 //! as a cdylib carrying the `GrayscaleCompute` processor; the host stages that
 //! cdylib into `plugin/lib/<host_triple>/` before calling
 //! `add_module_with_blocking(..., Strategy::Path)`. `@tatolab/camera` and
-//! `@tatolab/display` resolve from the Gitea registry via `Strategy::Registry`.
+//! `@tatolab/display` resolve from the static registry via `Strategy::Registry`.
 //!
 //! ## Prerequisites
 //!
@@ -44,9 +44,9 @@ use streamlib::sdk::schema_ident;
 fn main() -> Result<()> {
     let runtime = Runner::with_auto_build()?;
 
-    // 1. Resolve `@tatolab/camera` and `@tatolab/display` from the Gitea
+    // 1. Resolve `@tatolab/camera` and `@tatolab/display` from the static registry
     //    generic registry by version. Endpoint comes from
-    //    `STREAMLIB_REGISTRY_URL` (or `GITEA_URL`).
+    //    `STREAMLIB_REGISTRY_URL`.
     let registry = || Strategy::Registry {
         version_req: SemVerRange::Any,
         build: BuildPolicy::IfStale,

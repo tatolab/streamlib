@@ -14,7 +14,7 @@ name = "streamlib_display"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = {version = "0.5.0", registry = "gitea"}
+streamlib-jtd-codegen = {version = "0.5.0", registry = "tatolab"}
 
 [dependencies]
 # Engine substrate — runtime context, processor traits, generated config
@@ -22,15 +22,15 @@ streamlib-jtd-codegen = {version = "0.5.0", registry = "gitea"}
 # wire type, host RHI types (HostVulkanDevice, VulkanGraphicsKernel,
 # VulkanPresentTarget, RhiCommandRecorder, OffscreenColorTarget,
 # TextureFormat).
-streamlib = {version = "0.5.0", registry = "gitea"}
+streamlib = {version = "0.5.0", registry = "tatolab"}
 
 # Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = {version = "0.5.0", registry = "gitea"}
+streamlib-macros = {version = "0.5.0", registry = "tatolab"}
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = {version = "0.5.0", registry = "gitea"}
+streamlib-plugin-abi = {version = "0.5.0", registry = "tatolab"}
 
 tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 serde = {version = "1.0", features = ["derive"]}
@@ -45,7 +45,7 @@ raw-window-handle = "0.6"
 # Consumer-side RHI carve-out — typed `VulkanLayout` enum used in
 # producer/consumer surface-share interop. Camera uses the same dep
 # for the same reason.
-streamlib-consumer-rhi = {version = "0.5.0", registry = "gitea"}
+streamlib-consumer-rhi = {version = "0.5.0", registry = "tatolab"}
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 # Apple module is ported into this package but DISABLED in `lib.rs` —

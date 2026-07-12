@@ -644,7 +644,7 @@ fn ensure_no_path_artifacts(pkg_dir: &Path) -> Result<()> {
             anyhow::bail!(
                 "{} declares path dependenc(ies) [{}] — a published package must be \
                  standalone (registry-only). Replace each with \
-                 `{{ version = \"…\", registry = \"gitea\" }}` so the crate resolves \
+                 `{{ version = \"…\", registry = \"tatolab\" }}` so the crate resolves \
                  from the registry.",
                 cargo_path.display(),
                 offenders.join(", "),

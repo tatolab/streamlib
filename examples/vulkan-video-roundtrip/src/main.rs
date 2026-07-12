@@ -14,7 +14,7 @@
 //!   cargo run -p vulkan-video-roundtrip -- h265 /dev/video2 10
 //!
 //! Packages build automatically on `cargo run` via the build orchestrator,
-//! resolved from the Gitea generic registry by version so the runtime can
+//! resolved from the static generic store by version so the runtime can
 //! find each cdylib at load time.
 
 use streamlib::sdk::RunnerAutoBuild;
@@ -38,12 +38,12 @@ fn main() -> Result<()> {
 
     let runtime = Runner::with_auto_build()?;
 
-    // Resolve every package from the Gitea generic registry by version — the
+    // Resolve every package from the static generic store by version — the
     // cross-repo consumer path. The orchestrator pulls each `.slpkg` and builds
     // it from source on the host. `@tatolab/core` is pulled in transitively by
     // each — its wire-vocabulary schemas (`EncodedVideoFrame.max_payload_bytes`
     // in particular) are load-bearing for iceoryx2 publisher sizing. Registry
-    // endpoint comes from `STREAMLIB_REGISTRY_URL` (or `GITEA_URL`).
+    // endpoint comes from `STREAMLIB_REGISTRY_URL`.
     let registry = || Strategy::Registry {
         version_req: SemVerRange::Any,
         build: BuildPolicy::IfStale,

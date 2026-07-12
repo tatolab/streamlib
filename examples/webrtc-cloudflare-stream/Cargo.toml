@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BUSL-1.1
 
 # Standalone, registry-only example (headed to its own repo). Every dependency
-# resolves from the Gitea registry by version, and the empty `[workspace]` table
+# resolves from the static registry by version, and the empty `[workspace]` table
 # makes this its own workspace root so it builds off-tree. Loads
 # `@tatolab/{audio,camera,h264,opus,webrtc}` at runtime via `Strategy::Registry`;
 # the build-time jtd-codegen generates typed configs from the schemas declared
@@ -14,10 +14,10 @@ edition = "2024"
 publish = false
 
 [build-dependencies]
-streamlib-jtd-codegen = { version = "0.4.33-dev.5", registry = "gitea" }
+streamlib-jtd-codegen = { version = "0.4.33-dev.5", registry = "tatolab" }
 
 [dependencies]
-streamlib = { version = "0.4.33-dev.5", registry = "gitea" }
+streamlib = { version = "0.4.33-dev.5", registry = "tatolab" }
 tokio = { version = "1.48.0", features = ["full"] }
 anyhow = "1.0.100"
 libc = "0.2"

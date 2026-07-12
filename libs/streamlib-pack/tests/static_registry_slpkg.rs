@@ -14,10 +14,11 @@ use streamlib_idents::{
     ReleaseManifest, ReleaseManifestMember, SemVer, SemVerRange,
 };
 
-fn file_config(dir: &std::path::Path) -> RegistryConfig {
+/// A `file://` registry config rooted at the tree root (the dir holding
+/// `slpkg/`) — the client prepends `slpkg/` itself.
+fn file_config(tree_root: &std::path::Path) -> RegistryConfig {
     RegistryConfig {
-        base_url: format!("file://{}", dir.display()),
-        token: None,
+        base_url: format!("file://{}", tree_root.display()),
     }
 }
 
@@ -32,9 +33,7 @@ fn req(name: &str, range: &str) -> (String, SemVerRange) {
 /// Build a COMPLETE static slpkg tree: two packages + a release manifest that
 /// lists the crate closure and both packages. Returns the slpkg dir.
 fn emit_complete_tree(root: &std::path::Path) -> std::path::PathBuf {
-    let slpkg = root.join("slpkg");
-    std::fs::create_dir_all(&slpkg).unwrap();
-    let cfg = file_config(&slpkg);
+    let cfg = file_config(root);
     let client = RegistryClient::new(&cfg);
 
     client
@@ -58,14 +57,14 @@ fn emit_complete_tree(root: &std::path::Path) -> std::path::PathBuf {
     ];
     // Written LAST — the completion marker.
     client.upload_release_manifest("tatolab", &manifest).unwrap();
-    slpkg
+    root.to_path_buf()
 }
 
 #[test]
 fn complete_tree_resolves_offline_and_completeness_passes() {
     let root = tempfile::tempdir().unwrap();
-    let slpkg = emit_complete_tree(root.path());
-    let cfg = file_config(&slpkg);
+    let tree = emit_complete_tree(root.path());
+    let cfg = file_config(&tree);
     let client = RegistryClient::new(&cfg);
 
     // The consumer lists releases + fetches the manifest with NO daemon, NO token.
@@ -85,14 +84,14 @@ fn complete_tree_resolves_offline_and_completeness_passes() {
     // Both package .slpkgs download from the file:// store.
     let (bytes, url) = client.download_slpkg(&pkg_ref("camera"), SemVer::new(1, 0, 0)).unwrap();
     assert_eq!(bytes, b"camera-slpkg-bytes");
-    assert!(url.ends_with("/generic/camera/1.0.0/camera.slpkg"), "url: {url}");
+    assert!(url.ends_with("/slpkg/camera/1.0.0/camera.slpkg"), "url: {url}");
 }
 
 #[test]
 fn truncated_release_manifest_is_rejected_by_completeness_check() {
     let root = tempfile::tempdir().unwrap();
-    let slpkg = emit_complete_tree(root.path());
-    let cfg = file_config(&slpkg);
+    let tree = emit_complete_tree(root.path());
+    let cfg = file_config(&tree);
     let client = RegistryClient::new(&cfg);
 
     // Simulate a partial release: overwrite the manifest with one that OMITS
@@ -121,12 +120,12 @@ fn truncated_release_manifest_is_rejected_by_completeness_check() {
 #[test]
 fn removed_slpkg_from_tree_is_rejected_at_download() {
     let root = tempfile::tempdir().unwrap();
-    let slpkg = emit_complete_tree(root.path());
-    let cfg = file_config(&slpkg);
+    let tree = emit_complete_tree(root.path());
+    let cfg = file_config(&tree);
     let client = RegistryClient::new(&cfg);
 
     // Truncate the TREE: remove display's .slpkg after the manifest claimed it.
-    std::fs::remove_dir_all(slpkg.join("display")).unwrap();
+    std::fs::remove_dir_all(tree.join("slpkg").join("display")).unwrap();
 
     // The manifest still lists it (stale/partial), but the artifact is gone —
     // the consumer's download fails loudly rather than half-resolving.
@@ -199,8 +198,7 @@ fn emitted_tree_truncation_is_rejected_by_consumer_checks() {
     .expect("slpkg-only emit against the fake workspace must succeed");
 
     // The REAL emitted manifest is fetchable + lists the package.
-    let slpkg = out.join("slpkg");
-    let cfg = file_config(&slpkg);
+    let cfg = file_config(&out);
     let client = RegistryClient::new(&cfg);
     assert_eq!(client.list_release_versions("tatolab").unwrap(), vec![SemVer::new(0, 9, 0)]);
     let manifest = client.fetch_release_manifest("tatolab", "0.9.0").unwrap().unwrap();
@@ -214,7 +212,7 @@ fn emitted_tree_truncation_is_rejected_by_consumer_checks() {
     assert!(!bytes.is_empty());
 
     // TRUNCATE the emitted tree: remove the package's artifacts post-flip.
-    std::fs::remove_dir_all(slpkg.join("demopkg")).unwrap();
+    std::fs::remove_dir_all(out.join("slpkg").join("demopkg")).unwrap();
 
     // The manifest still claims the member, but the tree can't serve it —
     // the consumer fails loudly at download instead of half-resolving.

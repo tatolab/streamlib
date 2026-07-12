@@ -19,7 +19,7 @@ sha2 = { workspace = true }
 zip = "2.2"
 tracing = { workspace = true }
 schemars = "0.8"  # JSON Schema generation for streamlib.yaml editor support
-ureq = { workspace = true }  # Blocking HTTP for Gitea generic-registry schema-package fetch
+ureq = { workspace = true }  # Blocking HTTP for static generic-registry schema-package fetch
 
 [dev-dependencies]
 serde_yaml = { workspace = true }

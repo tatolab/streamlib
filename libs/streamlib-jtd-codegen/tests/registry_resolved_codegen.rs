@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! End-to-end: a registry-cached crate's codegen resolves a schema
-//! dependency from a (hermetic `file://`) Gitea generic registry and
+//! dependency from a (hermetic `file://`) static generic store and
 //! generates bindings — the exact pipeline `build.rs` drives, minus the
 //! cargo build.
 //!
 //! This is the faithful E2E for issue #1116's "a registry-cached
-//! `streamlib-engine` codegen resolves `@tatolab/escalate` from Gitea and
+//! `streamlib-engine` codegen resolves `@tatolab/escalate` from the static registry and
 //! builds." The consumer manifest declares the dep as a bare semver range
 //! with **no `patch:` override** — exactly the published shape after the
 //! cargo-publish path-strip. Before #1116 the resolver returned
@@ -28,10 +28,11 @@ use streamlib_idents::{resolve_with, RegistryConfig, ResolverOptions};
 use streamlib_jtd_codegen::{generate_from_resolved, RuntimeTarget};
 use tempfile::TempDir;
 
-/// Build a schema-package `.slpkg` at `<mirror>/<name>/<version>/<name>.slpkg`
-/// laid out the way the `file://` registry transport expects.
-fn write_slpkg(mirror: &Path, name: &str, version: &str, schema_type: &str) {
-    let dir = mirror.join(name).join(version);
+/// Build a schema-package `.slpkg` at `<root>/slpkg/<name>/<version>/<name>.slpkg`
+/// laid out the way the `file://` registry transport expects (base URL is the
+/// tree root; the client prepends `slpkg/`).
+fn write_slpkg(tree_root: &Path, name: &str, version: &str, schema_type: &str) {
+    let dir = tree_root.join("slpkg").join(name).join(version);
     fs::create_dir_all(&dir).expect("create mirror version dir");
     let archive = dir.join(format!("{name}.slpkg"));
     let mut zip = zip::ZipWriter::new(fs::File::create(&archive).expect("create slpkg"));
@@ -96,7 +97,6 @@ schemas:
             cache_dir: Some(tmp.path().join("cache")),
             registry: Some(RegistryConfig {
                 base_url: format!("file://{}", mirror.display()),
-                token: None,
             }),
         },
     )

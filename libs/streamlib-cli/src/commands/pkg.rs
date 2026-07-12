@@ -41,7 +41,7 @@ impl BuildEventSink for CliBuildSink {
 
 /// Install a package: a registry ref `@org/name[@version]`, a local `.slpkg`
 /// path, or an HTTP URL. A registry ref resolves + downloads the source-only
-/// `.slpkg` from the Gitea generic registry; the package is then built from
+/// `.slpkg` from the static generic store; the package is then built from
 /// source by the orchestrator (`AlwaysBuild`), identical to runtime
 /// `Strategy::Registry` resolution.
 pub async fn install(source: &str) -> Result<()> {
@@ -199,11 +199,12 @@ pub fn build(output: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-/// Publish THIS package (the current working directory) to the Gitea generic
-/// registry. Always repacks a fresh source-only `.slpkg` to a temp file
-/// (never trusts a pre-existing artifact), then uploads it by version.
-/// Registry endpoint + token come from `STREAMLIB_REGISTRY_URL` /
-/// `STREAMLIB_REGISTRY_TOKEN` (falling back to `GITEA_URL`).
+/// Publish THIS package (the current working directory) into the static
+/// registry tree's `.slpkg` generic store. Always repacks a fresh source-only
+/// `.slpkg` to a temp file (never trusts a pre-existing artifact), then writes
+/// it by version and refreshes the package's version index. The registry tree
+/// root comes from `STREAMLIB_REGISTRY_URL` and must be a `file://` tree —
+/// publishing writes files; a static HTTP mount is read-only.
 pub fn publish() -> Result<()> {
     let package_dir = std::env::current_dir().context("resolve current working directory")?;
     // Early friendly check; the load-bearing guard runs again inside
@@ -221,8 +222,8 @@ pub fn publish() -> Result<()> {
 
     let registry = RegistryConfig::from_env().ok_or_else(|| {
         anyhow::anyhow!(
-            "registry not configured: set STREAMLIB_REGISTRY_URL (e.g. http://localhost:3300) \
-             and STREAMLIB_REGISTRY_TOKEN to publish"
+            "registry not configured: set STREAMLIB_REGISTRY_URL to a file:// registry tree \
+             (e.g. file:///path/to/registry-tree) to publish"
         )
     })?;
 
@@ -346,7 +347,7 @@ fn resolve_registry_ref_to_temp_slpkg(source: &str) -> Result<std::path::PathBuf
     let pkg_ref = parse_canonical_package_ref(&ref_str)?;
     let registry = RegistryConfig::from_env().ok_or_else(|| {
         anyhow::anyhow!(
-            "registry not configured: set STREAMLIB_REGISTRY_URL (e.g. http://localhost:3300) \
+            "registry not configured: set STREAMLIB_REGISTRY_URL (e.g. file:///path/to/registry-tree) \
              to install '{source}' from the registry"
         )
     })?;

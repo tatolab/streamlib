@@ -110,8 +110,8 @@ pub fn generate(opts: GenerateOptions) -> Result<()> {
     } = opts;
 
     if let Some(project_dir) = project_dir {
-        // `from_env` picks up the Gitea registry config (STREAMLIB_REGISTRY_URL
-        // / GITEA_URL) so `streamlib generate` resolves registry schema deps;
+        // `from_env` picks up the static registry config (STREAMLIB_REGISTRY_URL
+        // / STREAMLIB_REGISTRY_URL) so `streamlib generate` resolves registry schema deps;
         // the pure resolver itself never reads env.
         let resolved = streamlib_idents::resolve_with(&project_dir, &ResolverOptions::from_env())
             .context("Failed to resolve streamlib.yaml dependency graph")?;

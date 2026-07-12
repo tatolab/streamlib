@@ -18,10 +18,10 @@
 # not this tree.
 #
 # Same-registry detection is data-driven: `cargo package` normalizes a
-# `registry = "gitea"` dev dep into `registry-index = "<the index URL cargo
+# `registry = "tatolab"` dev dep into `registry-index = "<the index URL cargo
 # resolved it from>"` in the packaged Cargo.toml. A dep carrying
 # `registry-index` therefore resolved from THIS registry at package time
-# (the packaging env points CARGO_REGISTRIES_GITEA_INDEX at the tree being
+# (the packaging env points CARGO_REGISTRIES_TATOLAB_INDEX at the tree being
 # built); a dep without it is crates.io. This covers the vulkanalia fork
 # siblings AND every streamlib closure crate without a hardcoded name list.
 
@@ -105,7 +105,7 @@ def dep_entries(manifest: dict) -> list:
             # A crates.io dep names the crates.io index; a same-registry dep
             # (one the packaged toml records with `registry-index`) OMITS the
             # `registry` key entirely — cargo treats an absent key as "this
-            # registry" (matches Gitea's index output).
+            # registry" (matches registry daemon's index output).
             if "registry-index" not in spec:
                 entry["registry"] = CRATES_IO_INDEX
             # Preserve the local alias when the dep was renamed via `package`.

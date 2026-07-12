@@ -80,8 +80,8 @@ jobs:
             ${{ runner.os }}-cargo-pack-load-
 
       # Daemon-free registry resolve: the workspace build resolves the
-      # `vulkanalia` fork from `registry = "gitea"`. Serve it as a static tree
-      # (no Gitea, no localhost:3300) so the pack-then-load build resolves.
+      # `vulkanalia` fork from `registry = "tatolab"`. Serve it as a static tree
+      # (no registry daemon, offline) so the pack-then-load build resolves.
       - name: Serve static vulkanalia fork registry
         uses: ./.github/actions/serve-static-fork
 

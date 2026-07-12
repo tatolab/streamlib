@@ -126,16 +126,16 @@ pub enum AddModuleError {
     },
 
     /// A [`Strategy::Registry`] resolution found no usable registry
-    /// endpoint: neither `STREAMLIB_REGISTRY_URL` nor its `GITEA_URL`
-    /// fallback is set. Point one at the Gitea base URL (e.g.
-    /// `http://localhost:3300`) so the generic registry is reachable.
+    /// endpoint: neither `STREAMLIB_REGISTRY_URL` nor its `STREAMLIB_REGISTRY_URL`
+    /// fallback is set. Point one at the static registry base URL (e.g.
+    /// `file:///path/to/registry-tree`) so the generic registry is reachable.
     /// Fail-loud — never silently fall back to a local source for a
     /// dependency the caller asked to resolve from the registry.
     ///
     /// [`Strategy::Registry`]: super::Strategy::Registry
     #[error(
         "Registry not configured for '{package}': set {env} (e.g. \
-         http://localhost:3300) to resolve from the Gitea generic registry"
+         file:///path/to/registry-tree) to resolve from the static generic store"
     )]
     RegistryNotConfigured {
         package: streamlib_idents::PackageRef,

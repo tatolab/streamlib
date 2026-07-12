@@ -246,15 +246,15 @@ impl PolyglotBuildOrchestrator {
         }
 
         // ---- Consumer-side release-completeness pre-check ----
-        // A Rust package resolves its gitea-registry deps via cargo below. If
+        // A Rust package resolves its tatolab-registry deps via cargo below. If
         // the configured registry holds a partial/mid-publish release of the
         // pinned version, fail fast here naming the missing artifacts instead
         // of surfacing it as a cryptic cargo `failed to select a version …`
         // deep in the build. No-op for dev/path builds (no registry) and
         // pre-atomic-release registries (no manifest) — see `release_check`.
         if has_rust {
-            let pins = build::read_gitea_registry_pins(pkg_dir)
-                .map_err(|e| other(&pkg_label, format!("reading gitea-registry pins: {e}")))?;
+            let pins = build::read_tatolab_registry_pins(pkg_dir)
+                .map_err(|e| other(&pkg_label, format!("reading tatolab-registry pins: {e}")))?;
             release_check::assert_release_complete(&pkg_label, &pins)?;
         }
 
@@ -913,11 +913,9 @@ mod tests {
     /// process-global env.
     fn with_scratch_registry<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
         let prev_url = std::env::var("STREAMLIB_REGISTRY_URL").ok();
-        let prev_gitea = std::env::var("GITEA_URL").ok();
         let prev_py_lib = std::env::var("STREAMLIB_PYTHON_NATIVE_LIB").ok();
         unsafe {
             std::env::set_var("STREAMLIB_REGISTRY_URL", format!("file://{}", dir.display()));
-            std::env::remove_var("GITEA_URL");
             std::env::remove_var("STREAMLIB_PYTHON_NATIVE_LIB");
         }
         let out = f();
@@ -925,9 +923,6 @@ mod tests {
             match prev_url {
                 Some(v) => std::env::set_var("STREAMLIB_REGISTRY_URL", v),
                 None => std::env::remove_var("STREAMLIB_REGISTRY_URL"),
-            }
-            if let Some(v) = prev_gitea {
-                std::env::set_var("GITEA_URL", v);
             }
             if let Some(v) = prev_py_lib {
                 std::env::set_var("STREAMLIB_PYTHON_NATIVE_LIB", v);
@@ -941,7 +936,6 @@ mod tests {
     fn publish_partial_manifest(dir: &Path, version: &str) {
         let cfg = streamlib_idents::RegistryConfig {
             base_url: format!("file://{}", dir.display()),
-            token: None,
         };
         let manifest = streamlib_idents::ReleaseManifest::new(
             version,
@@ -956,7 +950,7 @@ mod tests {
     }
 
     /// Rust-runtime source package whose Cargo.toml pins streamlib-plugin-sdk
-    /// from the gitea registry — the shape every published Rust package has.
+    /// from the tatolab registry — the shape every published Rust package has.
     fn rust_source_pkg(dir: &Path) {
         std::fs::write(
             dir.join("streamlib.yaml"),
@@ -990,7 +984,7 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-streamlib-plugin-sdk = {version = "0.5.0", registry = "gitea"}
+streamlib-plugin-sdk = {version = "0.5.0", registry = "tatolab"}
 "#,
         )
         .unwrap();

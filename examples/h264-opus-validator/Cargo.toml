@@ -5,7 +5,7 @@
 # makes this its own workspace root so it builds off-tree. This is a
 # self-contained H.264/Opus/WebRTC validator built on public crates — it does
 # not depend on the streamlib SDK or any `@tatolab/*` package, so there is
-# nothing to resolve from the Gitea registry.
+# nothing to resolve from the static registry.
 [package]
 name = "h264-opus-validator"
 version = "0.1.0"

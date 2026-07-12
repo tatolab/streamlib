@@ -3,7 +3,7 @@
 
 //! Consumer-side release-completeness pre-check.
 //!
-//! Before a package's Rust build resolves its gitea-registry dependencies via
+//! Before a package's Rust build resolves its tatolab-registry dependencies via
 //! cargo, this checks the registry's **release manifests** against the
 //! package's pins. A partial / mid-publish registry — the historical `0.4.36`
 //! `streamlib-plugin-sdk` + `vulkan-jpeg` foot-gun — fails fast here with a
@@ -25,7 +25,7 @@
 //! (build proceeds) when:
 //!
 //! - no registry is configured (in-tree / dev builds resolve deps by `path`);
-//! - the package declares no gitea-registry pins;
+//! - the package declares no tatolab-registry pins;
 //! - no release manifest covers a pin's range (a pre-atomic-release
 //!   registry — logged, then proceed); or
 //! - the manifest fetch / listing hits a transient transport error (the real
@@ -34,16 +34,16 @@
 
 use std::collections::BTreeMap;
 
-use streamlib_cargo_build::GiteaRegistryPin;
+use streamlib_cargo_build::TatolabRegistryPin;
 use streamlib_engine::core::runtime::BuildError;
 use streamlib_idents::{
     crates_missing_from_release, RegistryClient, RegistryConfig, SemVer, SemVerRange,
 };
 
 /// Registry org the release manifest lives under. Matches the publish
-/// scripts' `GITEA_ORG` default.
+/// scripts' `STREAMLIB_REGISTRY_ORG` default.
 fn registry_org() -> String {
-    std::env::var("GITEA_ORG")
+    std::env::var("STREAMLIB_REGISTRY_ORG")
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "tatolab".to_string())
@@ -66,11 +66,11 @@ fn cargo_req_to_range(req: &str) -> Option<SemVerRange> {
 
 /// Fail fast with [`BuildError::IncompleteRelease`] when the configured
 /// registry's release manifests cannot satisfy the package's direct
-/// gitea-registry `pins`. See the module docs for the resolution model and
+/// tatolab-registry `pins`. See the module docs for the resolution model and
 /// the no-op cases.
 pub(crate) fn assert_release_complete(
     package_label: &str,
-    pins: &[GiteaRegistryPin],
+    pins: &[TatolabRegistryPin],
 ) -> Result<(), BuildError> {
     if pins.is_empty() {
         return Ok(());
@@ -168,7 +168,7 @@ pub(crate) fn assert_release_complete(
         release_version: incomplete_versions.join(", "),
         missing: missing_all.join(", "),
         hint: "the registry has a partial or inconsistent release — re-run the release publish \
-               (scripts/gitea/publish-release.sh) so the full closure lands, or pin a version \
+               (cargo xtask static-registry emit) so the full closure lands, or pin a version \
                whose release manifest lists every dependency"
             .to_string(),
     })
@@ -179,8 +179,8 @@ mod tests {
     use super::*;
     use streamlib_idents::{ReleaseManifest, ReleaseManifestMember};
 
-    fn pin(name: &str, req: &str) -> GiteaRegistryPin {
-        GiteaRegistryPin {
+    fn pin(name: &str, req: &str) -> TatolabRegistryPin {
+        TatolabRegistryPin {
             name: name.to_string(),
             req: req.to_string(),
             version: req.trim_start_matches(['=', '^', '~', '>', '<']).trim().to_string(),
@@ -192,19 +192,14 @@ mod tests {
     /// thread races these process-global env writes.
     fn with_file_registry<T>(dir: &std::path::Path, f: impl FnOnce() -> T) -> T {
         let prev_url = std::env::var("STREAMLIB_REGISTRY_URL").ok();
-        let prev_fallback = std::env::var("GITEA_URL").ok();
         unsafe {
             std::env::set_var("STREAMLIB_REGISTRY_URL", format!("file://{}", dir.display()));
-            std::env::remove_var("GITEA_URL");
         }
         let out = f();
         unsafe {
             match prev_url {
                 Some(v) => std::env::set_var("STREAMLIB_REGISTRY_URL", v),
                 None => std::env::remove_var("STREAMLIB_REGISTRY_URL"),
-            }
-            if let Some(v) = prev_fallback {
-                std::env::set_var("GITEA_URL", v);
             }
         }
         out
@@ -213,7 +208,6 @@ mod tests {
     fn publish_manifest(dir: &std::path::Path, m: &ReleaseManifest) {
         let cfg = RegistryConfig {
             base_url: format!("file://{}", dir.display()),
-            token: None,
         };
         RegistryClient::new(&cfg)
             .upload_release_manifest("tatolab", m)
@@ -234,19 +228,14 @@ mod tests {
         // Clear the env entirely; the check must pass vacuously (dev / path).
         // SAFETY: `#[serial]` — no other thread races these env writes.
         let prev = std::env::var("STREAMLIB_REGISTRY_URL").ok();
-        let prev_g = std::env::var("GITEA_URL").ok();
         unsafe {
             std::env::remove_var("STREAMLIB_REGISTRY_URL");
-            std::env::remove_var("GITEA_URL");
         }
         let pins = vec![pin("streamlib-plugin-sdk", "0.5.1")];
         assert!(assert_release_complete("pkg", &pins).is_ok());
         unsafe {
             if let Some(v) = prev {
                 std::env::set_var("STREAMLIB_REGISTRY_URL", v);
-            }
-            if let Some(v) = prev_g {
-                std::env::set_var("GITEA_URL", v);
             }
         }
     }
@@ -333,7 +322,7 @@ mod tests {
     #[serial_test::serial]
     fn mavlink_1213_scenario_against_file_registry() {
         // The live #1213 failure class, hermetically: the real
-        // packages/mavlink Cargo.toml pins streamlib-plugin-sdk from the gitea
+        // packages/mavlink Cargo.toml pins streamlib-plugin-sdk from the tatolab
         // registry — the exact crate the 0.4.36 partial publish silently
         // skipped. Against a registry whose newest release manifest OMITS
         // plugin-sdk (a partial release that "looks complete"), the pre-check
@@ -348,11 +337,11 @@ mod tests {
             .to_path_buf();
         let mavlink_dir = workspace_root.join("packages").join("mavlink");
 
-        let pins = streamlib_cargo_build::read_gitea_registry_pins(&mavlink_dir)
-            .expect("read mavlink gitea pins");
+        let pins = streamlib_cargo_build::read_tatolab_registry_pins(&mavlink_dir)
+            .expect("read mavlink tatolab pins");
         assert!(
             pins.iter().any(|p| p.name == "streamlib-plugin-sdk"),
-            "packages/mavlink must pin streamlib-plugin-sdk from gitea (the #1213 crate); \
+            "packages/mavlink must pin streamlib-plugin-sdk from tatolab (the #1213 crate); \
              got {pins:?}"
         );
         let floor: SemVer = pins
@@ -412,10 +401,8 @@ mod tests {
         // Mentally revert the Err arms to hard failures and this fails.
         // SAFETY: `#[serial]` — no other thread races these env writes.
         let prev_url = std::env::var("STREAMLIB_REGISTRY_URL").ok();
-        let prev_g = std::env::var("GITEA_URL").ok();
         unsafe {
             std::env::set_var("STREAMLIB_REGISTRY_URL", "http://127.0.0.1:1");
-            std::env::remove_var("GITEA_URL");
         }
         let pins = vec![pin("streamlib-plugin-sdk", "0.5.0")];
         let out = assert_release_complete("pkg", &pins);
@@ -423,9 +410,6 @@ mod tests {
             match prev_url {
                 Some(v) => std::env::set_var("STREAMLIB_REGISTRY_URL", v),
                 None => std::env::remove_var("STREAMLIB_REGISTRY_URL"),
-            }
-            if let Some(v) = prev_g {
-                std::env::set_var("GITEA_URL", v);
             }
         }
         assert!(out.is_ok(), "transport errors must degrade to proceed: {out:?}");
@@ -439,14 +423,14 @@ mod tests {
             package: "@tatolab/mavlink".to_string(),
             release_version: "0.5.1".to_string(),
             missing: "streamlib-plugin-sdk@^0.5.0, vulkan-jpeg@^0.5.0".to_string(),
-            hint: "re-run the release publish (scripts/gitea/publish-release.sh)".to_string(),
+            hint: "re-run the release publish (cargo xtask static-registry emit)".to_string(),
         };
         let rendered = err.to_string();
         assert!(rendered.contains("incomplete release of 0.5.1"), "{rendered}");
         assert!(rendered.contains("streamlib-plugin-sdk@^0.5.0"), "{rendered}");
         assert!(rendered.contains("vulkan-jpeg@^0.5.0"), "{rendered}");
         assert!(rendered.contains("@tatolab/mavlink"), "{rendered}");
-        assert!(rendered.contains("publish-release.sh"), "{rendered}");
+        assert!(rendered.contains("cargo xtask static-registry emit"), "{rendered}");
     }
 
     #[test]

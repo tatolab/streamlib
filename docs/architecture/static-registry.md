@@ -8,7 +8,7 @@ tree — a cargo sparse index + `.crate` tarballs, a PEP-503 pypi-simple tree, a
 npm packument + `.tgz`, and the `.slpkg` generic store — that is **tokenless to
 read** and **browsable as a plain HTTP directory index**. The same tree serves
 identically whether it is a CI fixture, a local publish-and-read folder, or a
-cloud object store. No Gitea daemon, no database, no token is required to
+cloud object store. No registry daemon, no database, no token is required to
 *serve* it.
 
 ## Per-ecosystem read transport
@@ -60,20 +60,22 @@ relocatable.
 
 ## The vulkanalia fork is mandatory
 
-The workspace declares `vulkanalia = { registry = "gitea" }`. With no committed
-`Cargo.lock`, **no `cargo` command in the workspace resolves — not even
-`cargo run -p xtask`** — until the fork (`vulkanalia`, `vulkanalia-sys`,
-`vulkanalia-vma`) is fetchable. This is the standing CI red: jobs that build the
-workspace died fetching the fork from `localhost:3300`.
+The workspace declares `vulkanalia = { registry = "tatolab" }`. The canonical
+index URL is baked into the committed `Cargo.lock`, but the fork
+(`vulkanalia`, `vulkanalia-sys`, `vulkanalia-vma`) still has to be *fetchable*
+from a mirror of the tree — **no `cargo` command in the workspace resolves —
+not even `cargo run -p xtask`** — until it is. Local / CI builds point cargo at
+a served mirror via a cargo `[source]` replacement (source replacement keeps
+the canonical source id in the lockfile) or `CARGO_REGISTRIES_TATOLAB_INDEX`.
 
 Because building `xtask` itself requires the fork, the fork's cargo tree cannot
 be produced by an `xtask` subcommand — it is emitted by the standalone shell
-script [`scripts/gitea/emit-static-fork.sh`](../../scripts/gitea/emit-static-fork.sh),
+script [`scripts/registry/emit-static-fork.sh`](../../scripts/registry/emit-static-fork.sh),
 which packages the fork from a standalone clone (the fork depends only on
-crates.io and its own siblings, never the workspace or a registry daemon),
-mirroring `publish-vulkanalia.sh` but writing a static file tree. CI serves it
+crates.io and its own siblings, never the workspace or a registry daemon) into a
+static file tree. CI serves it
 with `python3 -m http.server` and points cargo at it via
-`CARGO_REGISTRIES_GITEA_INDEX` (the `.github/actions/serve-static-fork`
+`CARGO_REGISTRIES_TATOLAB_INDEX` (the `.github/actions/serve-static-fork`
 composite action starts the server FIRST and passes `STATIC_FORK_URL`, so the
 script skips its own throwaway server and resolves fork siblings through the
 exact tree being populated — no port coupling). Same-registry index deps (fork
@@ -240,27 +242,41 @@ cargo xtask static-registry emit --out <dir> [--dev N] \
 
 ## Consuming a tree
 
-Serve the tree and export the four env channels — one helper does both:
+A consumer configures **one registry location** — the tree ROOT — and the
+toolchain derives every ecosystem channel from it. Serve + configure it with:
 
 ```
-scripts/gitea/serve-static-registry.sh <dir> [--port 8799]
+scripts/registry/serve-static-registry.sh <dir> [--port 8799]
 ```
 
-It starts `python3 -m http.server` on the tree and prints the env a consumer
-sets (both the in-process codegen channel and the ecosystem clients — see
-[`polyglot-venv-gitea-registry-env`](../learnings/polyglot-venv-gitea-registry-env.md)
-for why *both* `STREAMLIB_REGISTRY_*` and `UV_INDEX` are needed):
+which starts `python3 -m http.server` on the tree root and prints the channels
+a consumer sets. `.slpkg` + in-process schema codegen and pypi read straight
+off `file://`; cargo + npm need a static HTTP mount (sparse + npm are HTTP-only
+by spec):
 
 ```bash
-# .slpkg + in-venv codegen (file://)
-export STREAMLIB_REGISTRY_URL="file://<dir>/slpkg"
-# pypi (file://)
+# .slpkg generic store + in-process schema codegen (file://, tree root)
+export STREAMLIB_REGISTRY_URL="file://<dir>"
+# pypi (file://, PEP-503 simple)
 export UV_INDEX="file://<dir>/pypi/simple"
-# cargo (static HTTP mount)
-export CARGO_REGISTRIES_GITEA_INDEX="sparse+http://127.0.0.1:8799/cargo/"
 # npm (static HTTP mount) — .npmrc:
 #   @tatolab:registry=http://127.0.0.1:8799/npm/
 ```
+
+cargo resolves the `tatolab` registry from the served mount via a `[source]`
+replacement (which keeps the canonical source id in `Cargo.lock`):
+
+```toml
+[source.tatolab]
+registry = "sparse+https://registry.tatolab.com/cargo/"
+replace-with = "tatolab-local"
+[source.tatolab-local]
+registry = "sparse+http://127.0.0.1:8799/cargo/"
+```
+
+A `streamlib registry use <dir>` verb that emits the cargo `[source]`
+replacement + the npm `.npmrc` scope and auto-serves npm on localhost — so a
+consumer never hand-writes any of the above — is **planned**.
 
 ## Reference
 
@@ -271,10 +287,10 @@ export CARGO_REGISTRIES_GITEA_INDEX="sparse+http://127.0.0.1:8799/cargo/"
   `crate_content_fingerprint`, `finalize_crate_tarball`).
 - **Catalog**: `libs/streamlib-idents/src/catalog.rs` (protocol surface +
   `CatalogClient`), `libs/streamlib-pack/src/catalog.rs` (assembly).
-- **Fork bootstrap**: `scripts/gitea/emit-static-fork.sh`,
-  `scripts/gitea/render_cargo_index_line.py`.
+- **Fork bootstrap**: `scripts/registry/emit-static-fork.sh`,
+  `scripts/registry/render_cargo_index_line.py`.
 - **Generator CLI**: `cargo xtask static-registry emit`.
 - **`.slpkg` `file://` transport**: `libs/streamlib-idents/src/registry.rs`.
 - **CI**: `.github/actions/serve-static-fork`, `.github/workflows/static-registry.yml`.
-- **The two loops** this backend serves:
+- **The two loops** this registry serves:
   [`package-development-model.md`](package-development-model.md).

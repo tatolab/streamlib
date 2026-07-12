@@ -48,11 +48,11 @@ pub enum LinkError {
     )]
     LinkMarkerAlreadyExists { path: PathBuf },
 
-    /// No `[registries.gitea].index` is discoverable from the consumer's cargo config.
+    /// No `[registries.tatolab].index` is discoverable from the consumer's cargo config.
     #[error(
-        "no `[registries.gitea]` registry index found in this consumer's cargo config (looked in \
+        "no `[registries.tatolab]` registry index found in this consumer's cargo config (looked in \
          `.cargo/config.toml` walking up from the consumer root and in `~/.cargo/config.toml`); a \
-         streamlib consumer must configure the gitea registry before linking"
+         streamlib consumer must configure the tatolab registry before linking"
     )]
     RegistryIndexNotConfigured,
 
@@ -410,7 +410,7 @@ fn overwrite_manifest(consumer_root: &Path, manifest: &LinkManifest) -> Result<(
     std::fs::write(&path, body).map_err(|e| LinkError::io(&path, e))
 }
 
-/// Discover the consumer's effective `[registries.gitea].index` string the way
+/// Discover the consumer's effective `[registries.tatolab].index` string the way
 /// cargo does: closest `.cargo/config.toml` (walking up) wins, then the home
 /// cargo config.
 fn discover_registry_index(consumer_root: &Path) -> Result<String, LinkError> {
@@ -427,7 +427,7 @@ fn discover_registry_index_with_home(
     while let Some(d) = dir {
         for name in [".cargo/config.toml", ".cargo/config"] {
             let candidate = d.join(name);
-            if let Some(idx) = read_gitea_index(&candidate)? {
+            if let Some(idx) = read_tatolab_index(&candidate)? {
                 return Ok(idx);
             }
         }
@@ -435,7 +435,7 @@ fn discover_registry_index_with_home(
     }
     if let Some(home) = home {
         for name in [".cargo/config.toml", ".cargo/config"] {
-            if let Some(idx) = read_gitea_index(&home.join(name))? {
+            if let Some(idx) = read_tatolab_index(&home.join(name))? {
                 return Ok(idx);
             }
         }
@@ -443,8 +443,8 @@ fn discover_registry_index_with_home(
     Err(LinkError::RegistryIndexNotConfigured)
 }
 
-/// Read `registries.gitea.index` from a cargo config file, if present.
-fn read_gitea_index(path: &Path) -> Result<Option<String>, LinkError> {
+/// Read `registries.tatolab.index` from a cargo config file, if present.
+fn read_tatolab_index(path: &Path) -> Result<Option<String>, LinkError> {
     if !path.is_file() {
         return Ok(None);
     }
@@ -455,7 +455,7 @@ fn read_gitea_index(path: &Path) -> Result<Option<String>, LinkError> {
     })?;
     Ok(doc
         .get("registries")
-        .and_then(|r| r.get("gitea"))
+        .and_then(|r| r.get("tatolab"))
         .and_then(|g| g.get("index"))
         .and_then(|i| i.as_str())
         .map(|s| s.to_string()))

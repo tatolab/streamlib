@@ -94,13 +94,13 @@ pub fn read_cargo_package_name(package_dir: &Path) -> Result<String> {
     Ok(name.to_string())
 }
 
-/// A direct gitea-registry cargo dependency pin: the crate `name`, the raw
+/// A direct tatolab-registry cargo dependency pin: the crate `name`, the raw
 /// cargo version requirement `req` (cargo semantics — a bare `0.5.0` means
 /// caret), and the concrete floor `version` (leading range operators
 /// `=` / `^` / `~` / `>=` stripped). The unit the release-completeness check
 /// validates against a release manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GiteaRegistryPin {
+pub struct TatolabRegistryPin {
     pub name: String,
     /// Raw cargo version requirement as written in the manifest
     /// (`"0.5.0"`, `"=0.4.36"`, `"^0.5.1"`, …).
@@ -118,16 +118,16 @@ fn strip_version_req_operator(req: &str) -> String {
         .to_string()
 }
 
-/// Collect gitea-registry pins from one `[dependencies]`-shaped table into
+/// Collect tatolab-registry pins from one `[dependencies]`-shaped table into
 /// `out`. The dep key is the crate name unless a `package = "..."` rename
 /// overrides it.
-fn collect_gitea_pins_from_table(table: &toml::value::Table, out: &mut Vec<GiteaRegistryPin>) {
+fn collect_tatolab_pins_from_table(table: &toml::value::Table, out: &mut Vec<TatolabRegistryPin>) {
     for (key, value) in table {
         let Some(dep) = value.as_table() else {
             continue;
         };
-        let is_gitea = dep.get("registry").and_then(|r| r.as_str()) == Some("gitea");
-        if !is_gitea {
+        let is_tatolab = dep.get("registry").and_then(|r| r.as_str()) == Some("tatolab");
+        if !is_tatolab {
             continue;
         }
         let Some(version) = dep.get("version").and_then(|v| v.as_str()) else {
@@ -138,7 +138,7 @@ fn collect_gitea_pins_from_table(table: &toml::value::Table, out: &mut Vec<Gitea
             .and_then(|p| p.as_str())
             .unwrap_or(key.as_str())
             .to_string();
-        out.push(GiteaRegistryPin {
+        out.push(TatolabRegistryPin {
             name,
             req: version.trim().to_string(),
             version: strip_version_req_operator(version),
@@ -146,16 +146,16 @@ fn collect_gitea_pins_from_table(table: &toml::value::Table, out: &mut Vec<Gitea
     }
 }
 
-/// Read a package's **direct** gitea-registry cargo dependency pins from its
+/// Read a package's **direct** tatolab-registry cargo dependency pins from its
 /// `Cargo.toml` — every `[dependencies]` / `[build-dependencies]` /
 /// `[target.*.dependencies]` / `[target.*.build-dependencies]` entry declaring
-/// `registry = "gitea"`. `dev-dependencies` are excluded (they don't
+/// `registry = "tatolab"`. `dev-dependencies` are excluded (they don't
 /// participate in the release closure).
 ///
 /// Returns `(name, floor-version)` pairs. `Ok(vec![])` when the package has no
 /// `Cargo.toml` (schema-only package) — the check simply has nothing to
 /// validate in that case.
-pub fn read_gitea_registry_pins(package_dir: &Path) -> Result<Vec<GiteaRegistryPin>> {
+pub fn read_tatolab_registry_pins(package_dir: &Path) -> Result<Vec<TatolabRegistryPin>> {
     let cargo_toml_path = package_dir.join("Cargo.toml");
     if !cargo_toml_path.exists() {
         return Ok(Vec::new());
@@ -168,7 +168,7 @@ pub fn read_gitea_registry_pins(package_dir: &Path) -> Result<Vec<GiteaRegistryP
     let mut pins = Vec::new();
     for section in ["dependencies", "build-dependencies"] {
         if let Some(table) = parsed.get(section).and_then(|v| v.as_table()) {
-            collect_gitea_pins_from_table(table, &mut pins);
+            collect_tatolab_pins_from_table(table, &mut pins);
         }
     }
     // `[target.'cfg(...)'.{dependencies,build-dependencies}]`.
@@ -179,7 +179,7 @@ pub fn read_gitea_registry_pins(package_dir: &Path) -> Result<Vec<GiteaRegistryP
             };
             for section in ["dependencies", "build-dependencies"] {
                 if let Some(table) = cfg_tbl.get(section).and_then(|v| v.as_table()) {
-                    collect_gitea_pins_from_table(table, &mut pins);
+                    collect_tatolab_pins_from_table(table, &mut pins);
                 }
             }
         }
@@ -501,11 +501,11 @@ crate-type = ["cdylib"]
     }
 
     #[test]
-    fn read_gitea_registry_pins_collects_direct_pins_and_strips_operators() {
-        // Mixed dep table: gitea pins (with `=` / bare / cfg-target /
+    fn read_tatolab_registry_pins_collects_direct_pins_and_strips_operators() {
+        // Mixed dep table: tatolab pins (with `=` / bare / cfg-target /
         // build-dep / renamed) must be collected with operators stripped;
-        // non-gitea deps (serde) and dev-deps must be excluded. Reverting the
-        // `registry == "gitea"` filter would slurp serde; reverting the
+        // non-tatolab deps (serde) and dev-deps must be excluded. Reverting the
+        // `registry == "tatolab"` filter would slurp serde; reverting the
         // operator strip would leave `=` on the version and mismatch the
         // manifest's stamped string.
         let dir = tempdir().unwrap();
@@ -517,24 +517,24 @@ name = "streamlib-jpeg"
 version = "1.0.7"
 
 [build-dependencies]
-streamlib-jtd-codegen = {version = "=0.5.1", registry = "gitea"}
+streamlib-jtd-codegen = {version = "=0.5.1", registry = "tatolab"}
 
 [dependencies]
-streamlib-plugin-sdk = {version = "0.5.1", registry = "gitea"}
-streamlib-macros = {version = "^0.5.1", registry = "gitea"}
+streamlib-plugin-sdk = {version = "0.5.1", registry = "tatolab"}
+streamlib-macros = {version = "^0.5.1", registry = "tatolab"}
 serde = {version = "1.0", features = ["derive"]}
-renamed-dep = {version = "=0.5.1", registry = "gitea", package = "streamlib-plugin-abi"}
+renamed-dep = {version = "=0.5.1", registry = "tatolab", package = "streamlib-plugin-abi"}
 
 [dev-dependencies]
-streamlib-test-fixtures = {version = "0.5.1", registry = "gitea"}
+streamlib-test-fixtures = {version = "0.5.1", registry = "tatolab"}
 
 [target.'cfg(target_os = "linux")'.dependencies]
-vulkan-jpeg = {version = ">=0.5.1", registry = "gitea"}
+vulkan-jpeg = {version = ">=0.5.1", registry = "tatolab"}
 "#,
         )
         .unwrap();
 
-        let mut pins = read_gitea_registry_pins(dir.path()).unwrap();
+        let mut pins = read_tatolab_registry_pins(dir.path()).unwrap();
         pins.sort_by(|a, b| a.name.cmp(&b.name));
         let got: Vec<(String, String, String)> = pins
             .into_iter()
@@ -550,16 +550,16 @@ vulkan-jpeg = {version = ">=0.5.1", registry = "gitea"}
                 ("streamlib-plugin-sdk".to_string(), "0.5.1".to_string(), "0.5.1".to_string()),
                 ("vulkan-jpeg".to_string(), ">=0.5.1".to_string(), "0.5.1".to_string()),
             ],
-            "gitea pins must include normal/build/cfg-target deps (renamed via \
+            "tatolab pins must include normal/build/cfg-target deps (renamed via \
              `package`), carry the raw req, strip range operators for the floor, \
              and exclude serde + dev-deps"
         );
     }
 
     #[test]
-    fn read_gitea_registry_pins_empty_without_cargo_toml() {
+    fn read_tatolab_registry_pins_empty_without_cargo_toml() {
         let dir = tempdir().unwrap();
-        assert!(read_gitea_registry_pins(dir.path()).unwrap().is_empty());
+        assert!(read_tatolab_registry_pins(dir.path()).unwrap().is_empty());
     }
 
     #[test]

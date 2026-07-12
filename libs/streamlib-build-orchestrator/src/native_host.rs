@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Builds the subprocess native FFI host cdylibs (`streamlib-python-native` /
-//! `streamlib-deno-native`) from the Gitea cargo registry source into the
+//! `streamlib-deno-native`) from the static registry cargo subtree source into the
 //! streamlib home cache.
 //!
 //! The host is the engine's own subprocess interpreter shim — engine-scoped,
@@ -71,7 +71,7 @@ fn lib_filename(stem: &str, ext: &str) -> String {
 
 /// Ensure the native host cdylib for `runtime` is built and cached at
 /// `<home>/.streamlib/cache/native/<triple>/lib<stem>.<ext>`, fetching the
-/// crate source from the Gitea cargo registry and building it from source.
+/// crate source from the static registry cargo subtree and building it from source.
 ///
 /// No-ops when the runtime's `STREAMLIB_*_NATIVE_LIB` env override points at an
 /// existing file (the resolver's tier 1 — nothing to build), and reuses the
@@ -118,7 +118,7 @@ pub(crate) fn ensure_native_host(
     // for pre-atomic-release registries (no manifest) — see `release_check`.
     crate::release_check::assert_release_complete(
         runtime.crate_name(),
-        &[streamlib_cargo_build::GiteaRegistryPin {
+        &[streamlib_cargo_build::TatolabRegistryPin {
             name: runtime.crate_name().to_string(),
             req: format!("={version}"),
             version: version.to_string(),
@@ -132,29 +132,43 @@ pub(crate) fn ensure_native_host(
         "building subprocess native host from registry source (first use / version change)"
     );
 
-    // 1. Download the .crate source from the Gitea cargo registry (anonymous —
-    //    the cargo registry's `auth-required` is false for downloads).
+    // 1. Fetch the `.crate` source from the static registry tree's cargo
+    //    subtree (`cargo/crates/<name>/<name>-<version>.crate`), tokenless.
+    //    `STREAMLIB_REGISTRY_URL` is the tree root — `file://<root>` reads the
+    //    file directly, `http(s)://…` GETs it off the static mount.
     let registry_url = std::env::var("STREAMLIB_REGISTRY_URL")
-        .or_else(|_| std::env::var("GITEA_URL"))
-        .map_err(|_| {
+        .ok()
+        .map(|s| s.trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
             other(
                 runtime.crate_name(),
-                "STREAMLIB_REGISTRY_URL (or GITEA_URL) must be set to fetch the native host source"
+                "STREAMLIB_REGISTRY_URL must be set to the registry tree root to fetch the \
+                 native host source"
                     .to_string(),
             )
         })?;
-    let url = format!(
-        "{}/api/packages/tatolab/cargo/api/v1/crates/{}/{}/download",
-        registry_url.trim_end_matches('/'),
-        runtime.crate_name(),
-        version,
+    let crate_file = format!(
+        "cargo/crates/{name}/{name}-{version}.crate",
+        name = runtime.crate_name(),
     );
-    let crate_bytes = http_get_bytes(&url).map_err(|e| {
-        build_failed(
-            runtime.crate_name(),
-            format!("downloading native host source from {url}: {e}"),
-        )
-    })?;
+    let crate_bytes = if let Some(root) = registry_url.strip_prefix("file://") {
+        let path = Path::new(root).join(&crate_file);
+        std::fs::read(&path).map_err(|e| {
+            build_failed(
+                runtime.crate_name(),
+                format!("reading native host source {}: {e}", path.display()),
+            )
+        })?
+    } else {
+        let url = format!("{registry_url}/{crate_file}");
+        http_get_bytes(&url).map_err(|e| {
+            build_failed(
+                runtime.crate_name(),
+                format!("downloading native host source from {url}: {e}"),
+            )
+        })?
+    };
 
     // 2. Extract the .crate (gzip-tar) into a scratch build dir under the home
     //    cache. The archive carries a `<crate>-<version>/` top-level dir.
@@ -188,7 +202,7 @@ pub(crate) fn ensure_native_host(
     }
 
     // 3. Build standalone. The published manifest carries inline
-    //    `registry-index` on its Gitea deps, so dep resolution needs no
+    //    `registry-index` on its `tatolab`-registry deps, so dep resolution needs no
     //    `.cargo/config.toml`. `run_cargo_build` runs `cargo build -p <crate>`
     //    in `crate_dir` and returns the produced cdylib path.
     let cdylib = run_cargo_build(&crate_dir, runtime.crate_name(), ext, profile)
@@ -211,8 +225,8 @@ pub(crate) fn ensure_native_host(
     Ok(dest)
 }
 
-/// GET the bytes at `url` (no auth — cargo downloads are anonymous on the
-/// streamlib Gitea instance).
+/// GET the bytes at `url` (no auth — reads from the static registry are
+/// anonymous).
 fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
     let resp = ureq::get(url).call().map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
