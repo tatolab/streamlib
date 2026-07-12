@@ -33,9 +33,18 @@ use streamlib_engine::core::runtime::BuildError;
 /// (Windows) — so that after the orchestrator's atomic rename it lands at
 /// `{staged_package_dir}/.venv/bin/python`.
 ///
+/// `source_pkg_dir` is the on-disk package source the artifact was assembled
+/// from; it is walked upward for an active `streamlib link` marker so the venv
+/// can build against a linked checkout's Python SDK. Pass the staged dir when
+/// there is no distinct source tree.
+///
 /// No-op (returns `Ok(())`) when the staged package has no Python runtime.
-#[tracing::instrument(skip(temp_dir), fields(temp_dir = %temp_dir.display(), package = %package_label))]
-pub fn provision_python_venv(temp_dir: &Path, package_label: &str) -> Result<(), BuildError> {
+#[tracing::instrument(skip(temp_dir, source_pkg_dir), fields(temp_dir = %temp_dir.display(), package = %package_label))]
+pub fn provision_python_venv(
+    temp_dir: &Path,
+    source_pkg_dir: &Path,
+    package_label: &str,
+) -> Result<(), BuildError> {
     if !staged_package_has_python(temp_dir) {
         tracing::debug!("no Python runtime in staged package — skipping venv provisioning");
         return Ok(());
@@ -66,6 +75,15 @@ pub fn provision_python_venv(temp_dir: &Path, package_label: &str) -> Result<(),
             None
         }
     };
+
+    // ---- link-mode override ----
+    // When a `streamlib link` is active for the source tree this package was
+    // built from, redirect the staged pyproject's `streamlib` dependency at the
+    // linked checkout's Python SDK before installing, so the venv resolves the
+    // SDK from local source (mirrors the cargo `[patch]` the CLI emits).
+    if let Some(pyproject) = &pyproject_path {
+        apply_link_override_if_active(pyproject, source_pkg_dir, package_label)?;
+    }
 
     // ---- uv venv ----
     let venv_dir_str = path_to_str(&venv_dir, package_label)?;
@@ -301,6 +319,80 @@ fn build_failed(package: &str, detail: String) -> BuildError {
     }
 }
 
+/// Checkout-relative path of the Python SDK the link override targets. Must
+/// stay in sync with the CLI's `streamlib link` emission.
+const LINKED_PYTHON_SDK_REL: &str = "libs/streamlib-python";
+
+/// If a `streamlib link` is active for `source_pkg_dir`, rewrite the staged
+/// `pyproject`'s `streamlib` dependency to resolve from the linked checkout's
+/// Python SDK via `[tool.uv.sources]`.
+fn apply_link_override_if_active(
+    pyproject: &Path,
+    source_pkg_dir: &Path,
+    package_label: &str,
+) -> Result<(), BuildError> {
+    let Some(checkout) = active_link_checkout(source_pkg_dir) else {
+        return Ok(());
+    };
+    let sdk_path = checkout.join(LINKED_PYTHON_SDK_REL);
+    tracing::info!(
+        checkout = %checkout.display(),
+        sdk = %sdk_path.display(),
+        "streamlib link active — pointing staged pyproject's streamlib dep at the linked checkout"
+    );
+
+    let body = std::fs::read_to_string(pyproject).map_err(|e| {
+        build_failed(package_label, format!("read staged pyproject.toml: {e}"))
+    })?;
+    let mut doc: toml_edit::DocumentMut = body.parse().map_err(|e: toml_edit::TomlError| {
+        build_failed(package_label, format!("parse staged pyproject.toml: {e}"))
+    })?;
+
+    let mut source = toml_edit::InlineTable::new();
+    source.insert(
+        "path",
+        toml_edit::Value::from(sdk_path.to_string_lossy().into_owned()),
+    );
+    source.insert("editable", toml_edit::Value::from(true));
+
+    if !doc.contains_key("tool") {
+        doc.insert("tool", toml_edit::Item::Table(toml_edit::Table::new()));
+    }
+    let tool = doc["tool"].as_table_mut().unwrap();
+    if !tool.contains_key("uv") {
+        tool.insert("uv", toml_edit::Item::Table(toml_edit::Table::new()));
+    }
+    let uv = doc["tool"]["uv"].as_table_mut().unwrap();
+    if !uv.contains_key("sources") {
+        uv.insert("sources", toml_edit::Item::Table(toml_edit::Table::new()));
+    }
+    uv["sources"]["streamlib"] = toml_edit::Item::Value(toml_edit::Value::InlineTable(source));
+
+    std::fs::write(pyproject, doc.to_string()).map_err(|e| {
+        build_failed(package_label, format!("write staged pyproject.toml: {e}"))
+    })
+}
+
+/// Walk up from `source_pkg_dir` to the filesystem root looking for an active
+/// `streamlib link` marker (`.streamlib/link.json`) and return its `checkout`.
+/// Reads only the one field it needs; the CLI owns the full marker schema.
+fn active_link_checkout(source_pkg_dir: &Path) -> Option<PathBuf> {
+    let mut dir = Some(source_pkg_dir);
+    while let Some(d) = dir {
+        let marker = d.join(".streamlib").join("link.json");
+        if marker.is_file() {
+            let body = std::fs::read_to_string(&marker).ok()?;
+            let value: serde_json::Value = serde_json::from_str(&body).ok()?;
+            return value
+                .get("checkout")
+                .and_then(|v| v.as_str())
+                .map(PathBuf::from);
+        }
+        dir = d.parent();
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,7 +473,8 @@ packages = ["python"]
         // schemas-only or Rust-only package.
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join("streamlib.yaml"), "package:\n  name: x\n").unwrap();
-        provision_python_venv(temp.path(), "tatolab/x").expect("no-python must be a no-op");
+        provision_python_venv(temp.path(), temp.path(), "tatolab/x")
+            .expect("no-python must be a no-op");
         assert!(
             !temp.path().join(".venv").exists(),
             "no venv must be created for a non-Python staged package"
@@ -407,7 +500,7 @@ packages = ["python"]
         let temp = tempfile::tempdir().unwrap();
         write_staged_python_package(temp.path(), &sdk);
 
-        provision_python_venv(temp.path(), "tatolab/mypkg")
+        provision_python_venv(temp.path(), temp.path(), "tatolab/mypkg")
             .expect("provision must succeed offline against the fixture SDK");
 
         // Contract: interpreter at exactly {temp_dir}/.venv/bin/python.
@@ -435,6 +528,52 @@ packages = ["python"]
         // compileall: at least one .pyc somewhere under the venv.
         let has_pyc = find_any_pyc(&temp.path().join(".venv"));
         assert!(has_pyc, "compileall must have produced at least one .pyc in the venv");
+    }
+
+    #[test]
+    fn link_override_redirects_staged_pyproject_at_the_checkout_python_sdk() {
+        // A source tree carrying an active `streamlib link` marker; the staged
+        // pyproject's streamlib dep must be redirected at the checkout's SDK.
+        let src = tempfile::tempdir().unwrap();
+        let marker_dir = src.path().join(".streamlib");
+        std::fs::create_dir_all(&marker_dir).unwrap();
+        std::fs::write(
+            marker_dir.join("link.json"),
+            r#"{ "checkout": "/opt/streamlib-checkout", "files": [] }"#,
+        )
+        .unwrap();
+
+        let staged = tempfile::tempdir().unwrap();
+        let pyproject = staged.path().join("pyproject.toml");
+        std::fs::write(
+            &pyproject,
+            "[project]\nname = \"p\"\nversion = \"0.1.0\"\ndependencies = [\"streamlib\"]\n",
+        )
+        .unwrap();
+
+        apply_link_override_if_active(&pyproject, src.path(), "tatolab/p").unwrap();
+
+        let body = std::fs::read_to_string(&pyproject).unwrap();
+        assert!(body.contains("[tool.uv.sources]"), "sources table missing:\n{body}");
+        assert!(
+            body.contains("/opt/streamlib-checkout/libs/streamlib-python"),
+            "override path missing:\n{body}"
+        );
+        assert!(body.contains("editable = true"), "editable flag missing:\n{body}");
+    }
+
+    #[test]
+    fn link_override_is_a_noop_without_an_active_marker() {
+        let src = tempfile::tempdir().unwrap();
+        let staged = tempfile::tempdir().unwrap();
+        let pyproject = staged.path().join("pyproject.toml");
+        let original = "[project]\nname = \"p\"\nversion = \"0.1.0\"\ndependencies = [\"streamlib\"]\n";
+        std::fs::write(&pyproject, original).unwrap();
+
+        apply_link_override_if_active(&pyproject, src.path(), "tatolab/p").unwrap();
+
+        // No marker ⇒ pyproject untouched.
+        assert_eq!(std::fs::read_to_string(&pyproject).unwrap(), original);
     }
 
     fn find_any_pyc(dir: &Path) -> bool {

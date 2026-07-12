@@ -272,7 +272,7 @@ impl PolyglotBuildOrchestrator {
         // (no-op when the package has no Python runtime). Building it into
         // `temp_dir` means the atomic rename below carries the venv into
         // place — no second rename. On failure, drop the half-staged temp.
-        python_venv::provision_python_venv(&temp_dir, &pkg_label).map_err(|e| {
+        python_venv::provision_python_venv(&temp_dir, pkg_dir, &pkg_label).map_err(|e| {
             let _ = std::fs::remove_dir_all(&temp_dir);
             e
         })?;

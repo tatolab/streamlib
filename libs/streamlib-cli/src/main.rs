@@ -84,6 +84,20 @@ enum Commands {
         action: PkgCommands,
     },
 
+    /// Point this consumer's entire streamlib surface at a local checkout.
+    ///
+    /// Run from a consumer root (app or package dir). Emits whole-tree
+    /// language-native overrides (cargo `[patch]`, uv sources, Deno import map)
+    /// so an edit in the checkout is picked up by the next build with no
+    /// publish. Omit `<CHECKOUT>` to print the active link status.
+    Link {
+        /// Path to a local streamlib checkout. Omit to print status.
+        checkout: Option<PathBuf>,
+    },
+
+    /// Remove the active streamlib link, restoring every manifest byte-identically.
+    Unlink,
+
     /// Generate typed bindings from JTD schemas via the JTD-codegen pipeline.
     ///
     /// Same pipeline contributors run as `cargo xtask generate-schemas`,
@@ -238,6 +252,17 @@ async fn async_main(cli: Cli) -> Result<()> {
             PkgCommands::List => commands::pkg::list()?,
             PkgCommands::Remove { name } => commands::pkg::remove(&name)?,
         },
+        Some(Commands::Link { checkout }) => {
+            let consumer_root = std::env::current_dir()?;
+            match checkout {
+                Some(checkout) => commands::link::link(&consumer_root, &checkout)?,
+                None => commands::link::status(&consumer_root)?,
+            }
+        }
+        Some(Commands::Unlink) => {
+            let consumer_root = std::env::current_dir()?;
+            commands::link::unlink(&consumer_root)?;
+        }
         Some(Commands::Generate {
             runtime,
             output,

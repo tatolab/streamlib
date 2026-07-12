@@ -183,6 +183,7 @@ pub async fn install(source: &str) -> Result<()> {
 /// artifact is a hand-off bundle; the consumer builds it from source.
 pub fn build(output: Option<&Path>) -> Result<()> {
     let package_dir = std::env::current_dir().context("resolve current working directory")?;
+    crate::commands::link::ensure_no_active_link_for_pack(&package_dir)?;
     let output_path = resolve_slpkg_output(&package_dir, output)?;
     let outcome = assemble_source_slpkg(&package_dir, &output_path)?;
     println!("Built source-only package: {}", output_path.display());
@@ -203,6 +204,7 @@ pub fn build(output: Option<&Path>) -> Result<()> {
 /// `STREAMLIB_REGISTRY_TOKEN` (falling back to `GITEA_URL`).
 pub fn publish() -> Result<()> {
     let package_dir = std::env::current_dir().context("resolve current working directory")?;
+    crate::commands::link::ensure_no_active_link_for_pack(&package_dir)?;
     // Lightweight manifest read — package metadata only, NO dependency
     // resolution (which would require the registry just to read name/version).
     let config = streamlib_cargo_build::read_minimal_project_config(&package_dir)

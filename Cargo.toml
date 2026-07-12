@@ -88,6 +88,7 @@ serde_yaml = "0.9"
 # array of integers (~1.5× footprint for ≥128 byte values).
 serde_bytes = "0.11"
 toml = "0.8"
+toml_edit = "0.22"
 rmp-serde = "1.3"
 
 # Hashing

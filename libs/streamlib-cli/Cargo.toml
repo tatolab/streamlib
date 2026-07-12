@@ -49,8 +49,16 @@ serde_json.workspace = true
 serde_yaml.workspace = true
 toml.workspace = true
 
+# Format-preserving TOML editing for `streamlib link` (cargo config + pyproject
+# override emission that survives an idempotent byte-clean unlink).
+toml_edit.workspace = true
+
+# Content hashing for the `streamlib link` backup manifest.
+sha2.workspace = true
+
 # Error handling
 anyhow.workspace = true
+thiserror.workspace = true
 
 # Load .env files for development environment
 dotenvy = "0.15"
