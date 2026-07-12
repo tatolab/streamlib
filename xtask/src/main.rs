@@ -222,6 +222,49 @@ enum Commands {
         #[arg(long)]
         skip_packages: bool,
     },
+
+    /// Emit a daemon-free STATIC registry tree (cargo sparse + pypi-simple +
+    /// npm + `.slpkg` generic) for the current workspace release into a
+    /// directory served identically over `file://` (slpkg, pypi) or a dumb
+    /// static HTTP mount (cargo, npm). No Gitea, no token. See
+    /// `docs/architecture/static-registry.md`.
+    #[command(subcommand)]
+    StaticRegistry(StaticRegistryAction),
+}
+
+#[derive(Subcommand)]
+enum StaticRegistryAction {
+    /// Emit the full four-ecosystem tree into `--out`, flipped in atomically
+    /// once the release manifest lands.
+    Emit {
+        /// Target directory for the served tree (built in a staging sibling
+        /// and moved in atomically).
+        #[arg(long)]
+        out: PathBuf,
+        /// `-dev.N` prerelease suffix (matches `--dev N` on the publish scripts).
+        #[arg(long)]
+        dev: Option<u32>,
+        /// Absolute base URL the cargo + npm mounts are served at (sparse/npm
+        /// are HTTP-only by spec; baked into config.json + packuments).
+        #[arg(long, default_value = "http://127.0.0.1:8000")]
+        base_url: String,
+        /// Also package + emit the workspace release-closure crates into the
+        /// cargo tree (heavy — off by default; the fork is always emitted).
+        #[arg(long)]
+        cargo_closure: bool,
+        /// Skip the vulkanalia-fork cargo tree.
+        #[arg(long)]
+        no_cargo_fork: bool,
+        /// Skip the pypi-simple tree.
+        #[arg(long)]
+        no_pypi: bool,
+        /// Skip the npm tree.
+        #[arg(long)]
+        no_npm: bool,
+        /// Skip the `.slpkg` store + release manifest.
+        #[arg(long)]
+        no_slpkg: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -297,6 +340,33 @@ fn main() -> Result<()> {
                 skip_packages,
             },
         )?,
+        Commands::StaticRegistry(StaticRegistryAction::Emit {
+            out,
+            dev,
+            base_url,
+            cargo_closure,
+            no_cargo_fork,
+            no_pypi,
+            no_npm,
+            no_slpkg,
+        }) => {
+            use streamlib_pack::static_registry::{
+                emit_static_registry, EmitEcosystems, EmitOptions,
+            };
+            emit_static_registry(&EmitOptions {
+                workspace_root: workspace_root()?,
+                out,
+                base_url,
+                dev,
+                ecosystems: EmitEcosystems {
+                    cargo_fork: !no_cargo_fork,
+                    cargo_closure,
+                    pypi: !no_pypi,
+                    npm: !no_npm,
+                    slpkg: !no_slpkg,
+                },
+            })?
+        }
     }
 
     Ok(())

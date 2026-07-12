@@ -79,5 +79,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-pack-load-
 
+      # Daemon-free registry resolve: the workspace build resolves the
+      # `vulkanalia` fork from `registry = "gitea"`. Serve it as a static tree
+      # (no Gitea, no localhost:3300) so the pack-then-load build resolves.
+      - name: Serve static vulkanalia fork registry
+        uses: ./.github/actions/serve-static-fork
+
       - name: cargo test pack_then_load_smoke
         run: cargo test --test pack_then_load_smoke -p streamlib-engine

@@ -19,7 +19,17 @@ serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 toml = { workspace = true }
 toml_edit = { workspace = true }
+sha2 = { workspace = true }
+# npm packument `dist.shasum` is a legacy sha1 of the tarball; `dist.integrity`
+# is the modern sha512 (from sha2). Both feed the static-registry npm emit.
+sha1 = "0.10"
+tempfile = "3.14"
 zip = "2.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Gapless atomic directory swap (renameat2 RENAME_EXCHANGE) for the static
+# registry staged-tree flip — see static_registry::publish_staged_tree.
+libc = { workspace = true }
 streamlib-cargo-build = { path = "../streamlib-cargo-build", version = "0.5.0", registry = "gitea" }
 streamlib-processor-schema = { path = "../streamlib-processor-schema", version = "0.5.0", registry = "gitea" }
 streamlib-idents = { path = "../streamlib-idents", version = "0.5.0", registry = "gitea" }
