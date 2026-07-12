@@ -92,21 +92,26 @@ at package time). Versions always follow the crates' actual manifests — a
 `--dev` emit expects the workspace manifests already bumped (the publish
 scripts' bump/restore convention).
 
-Per-crate `.crate` tarballs are **reused across emits, but only after
-integrity verification** (`streamlib_pack::crate_tarball`): a previously
-packaged `target/package/<crate>-<version>.crate` is structurally checked —
-its gzip stream fully decodes, every tar entry enumerates to EOF, and the
-`<crate>-<version>/Cargo.toml` entry is present — before the emit trusts it.
-A tarball that passes is reused (skipping a redundant `cargo package`); one
-that fails — a truncated leftover from an aborted emit is the motivating
-case — is logged, deleted, and repackaged automatically, so a stale artifact
-never poisons the emitted tree and no manual cache-clearing is needed. A
-freshly packaged tarball is verified too; a still-invalid result is a hard
-error. Reuse treats a `(crate, version)` tarball as immutable, so a verified
-reuse skips that crate's `cargo package` registry-dep validation for the run
-— acceptable because the emitted sparse-index line is rendered from the
-reused tarball's own bundled manifest, so the tree stays internally
-consistent.
+Per-crate `.crate` tarballs are **always repackaged, never reused from a
+content cache** (`streamlib_pack::crate_tarball::obtain_crate_tarball`).
+`cargo package` is the single source of truth for crate bytes:
+`target/package/<crate>-<version>.crate` is cargo scratch, not a
+streamlib-managed cache, so any pre-existing artifact is dropped up front and
+`cargo package` re-runs for every closure crate. This guarantees the emitted
+`.crate` reflects current source at that version — a structurally-valid but
+content-stale leftover (e.g. an old-ABI `streamlib-plugin-abi` tarball cached
+under a version whose source has since moved to a new ABI) can never be handed
+back verbatim. The freshly packaged tarball is then structurally verified
+(`verify_crate_tarball`: gzip stream fully decodes, every tar entry enumerates
+to EOF, the `<crate>-<version>/Cargo.toml` entry is present); a still-invalid
+result is a hard error. Each fresh `cargo package` validates its own live
+`registry = "tatolab"` dep set, and the emitted sparse-index line is rendered
+from that tarball's bundled manifest, so the tree stays internally consistent.
+(Source-tree-hash-keyed reuse was rejected: 35 member manifests inherit
+`workspace = true` and the committed workspace `Cargo.lock` is packaged into
+each crate, so inputs live outside a crate's own directory and a source-dir
+hash would silently miss a central dep / lock bump — reintroducing the exact
+stale-emit bug.)
 
 ## Atomic release — the staged swap
 
@@ -139,8 +144,8 @@ suppresses that entry, so `emit_cargo_closure` normalizes each tarball after
 packaging (`crate_tarball::finalize_crate_tarball`): strip
 `.cargo_vcs_info.json`, re-tar the survivors (cargo's headers cloned
 verbatim), and re-gzip with a fixed header. Normalization is idempotent, so
-the reuse path (a cached `target/package/<crate>.crate` across emits) stays
-stable.
+re-emitting a crate at an unchanged version yields byte-identical output even
+though each emit repackages from source.
 
 The immutability guard compares a **content fingerprint** — the sha256 of
 the canonical, vcs-stripped, *uncompressed* tar, so it's independent of gzip
@@ -182,14 +187,15 @@ edits:
    --cargo-closure`), which republishes every SDK crate so a package resolves
    the new-ABI SDK.
 
-A new version also sidesteps the crate-tarball reuse cache: `emit_cargo_closure`
-reuses a `target/package/<crate>-<version>.crate` after **structural** (not
-content) verification, so a same-version re-emit can hand back a stale-content
-tarball (e.g. an old-ABI `streamlib-plugin-abi` cached under a version whose
-source has since moved) while the host compiles the new source. A fresh version
-is a fresh filename — a cache miss that forces a fresh `cargo package` at the
-current source. (Clearing `target/package` before an emit is the CI
-belt-and-suspenders; content-addressed verification is the durable fix.)
+The version bump is what lets a consumer pin the new-ABI SDK (the load
+handshake refuses an ABI-mismatched cdylib) and what the immutability guard
+requires to change published source — a silent same-version source change is
+refused. The emit itself carries no stale-cache risk at any version:
+`emit_cargo_closure` always repackages each closure crate from current source
+(`target/package` is cargo scratch, not a trusted content cache — see [the
+fork section](#the-vulkanalia-fork-is-mandatory)), so even a same-version
+re-emit reflects current source. Clearing `target/package` before a CI emit is
+therefore redundant belt-and-suspenders, not a correctness requirement.
 
 The `cargo xtask check-abi-republish` CI gate enforces the first, mechanical
 half at PR time: a change to `STREAMLIB_ABI_VERSION` without a matching
@@ -335,7 +341,7 @@ consumer never hand-writes any of the above — is **planned**.
 ## Reference
 
 - **Renderers + atomic swap**: `libs/streamlib-pack/src/static_registry.rs`.
-- **Verified crate-tarball reuse + byte-stable normalization**:
+- **Always-repackage crate emission + byte-stable normalization**:
   `libs/streamlib-pack/src/crate_tarball.rs` (`verify_crate_tarball`,
   `obtain_crate_tarball`, `normalize_crate_tarball`,
   `crate_content_fingerprint`, `finalize_crate_tarball`).
