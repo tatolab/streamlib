@@ -120,11 +120,16 @@ def processor(short_name: str):
                 f"{available}"
             )
 
+        # Schema idents are release-only by invariant: a package may carry a
+        # `-dev.N` / `-rc.N` prerelease version, but its schema idents project
+        # onto the release core (mirrors Rust's `SemVer::release_core`). The
+        # 3-part `SchemaIdent` validator would otherwise reject a legitimately
+        # dev-versioned package's processors.
         ident = SchemaIdent(
             org=summary.package.org,
             package=summary.package.name,
             type_=short_name,
-            version=summary.package.version,
+            version=_release_core(summary.package.version),
         )
         cls.__streamlib_schema_ident__ = ident
 
@@ -145,6 +150,16 @@ def processor(short_name: str):
         return cls
 
     return decorator
+
+
+def _release_core(version: str) -> str:
+    """Project a package version onto its release core `MAJOR.MINOR.PATCH`.
+
+    Package versions may carry a `-dev.N` / `-rc.N` prerelease, but schema
+    idents are release-only by invariant. Mirrors Rust's
+    `streamlib_idents::SemVer::release_core`.
+    """
+    return version.split("-", 1)[0]
 
 
 def _locate_sibling_manifest(cls) -> Path:

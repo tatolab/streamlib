@@ -169,11 +169,16 @@ export function processor(shortName: string, moduleUrl: string) {
       );
     }
 
+    // Schema idents are release-only by invariant: a package may carry a
+    // `-dev.N` / `-rc.N` prerelease version, but its schema idents project
+    // onto the release core (mirrors Rust's `SemVer::release_core`). The
+    // 3-part `SchemaIdent` validator would otherwise reject a legitimately
+    // dev-versioned package's processors.
     const ident = new SchemaIdent(
       summary.package.org,
       summary.package.name,
       shortName,
-      summary.package.version,
+      releaseCore(summary.package.version),
     );
 
     // Attach as static fields. Mirrors Python's
@@ -277,6 +282,18 @@ export function output(opts: PortOptions = {}) {
 // =============================================================================
 // Internal helpers
 // =============================================================================
+
+/**
+ * Project a package version onto its release core `MAJOR.MINOR.PATCH`.
+ *
+ * Package versions may carry a `-dev.N` / `-rc.N` prerelease, but schema
+ * idents are release-only by invariant. Mirrors Rust's
+ * `streamlib_idents::SemVer::release_core`.
+ */
+function releaseCore(version: string): string {
+  const dash = version.indexOf("-");
+  return dash === -1 ? version : version.slice(0, dash);
+}
 
 function locateSiblingManifest(
   moduleUrl: string,

@@ -191,6 +191,38 @@ Deno.test("@processor attaches structured SchemaIdent from manifest", async () =
   }
 });
 
+Deno.test("@processor projects a prerelease package version to release core", async () => {
+  // A `-dev.N` / `-rc.N` package version is legal; the minted schema ident
+  // must project onto the release core (the 3-part SchemaIdent validator
+  // would otherwise reject the dev-versioned package).
+  const fixture = await makeFixture(
+    [
+      "package:",
+      "  org: tatolab",
+      "  name: camera",
+      "  version: 0.4.33-dev.2",
+      "",
+      "processors:",
+      "  - name: Camera",
+      "    runtime: deno",
+      "    execution: reactive",
+      "",
+    ].join("\n"),
+    moduleHeader() +
+      `@processor("Camera", import.meta.url)\n` +
+      `export default class Camera {}\n`,
+  );
+  try {
+    const mod = await import(`file://${fixture.modulePath}`);
+    const cls = mod.default as unknown as StreamlibClassMetadata;
+    const ident = cls.streamlibSchemaIdent;
+    assertEquals(ident.version, "0.4.33");
+    assertEquals(String(ident), "@tatolab/camera/Camera@0.4.33");
+  } finally {
+    await Deno.remove(fixture.dir, { recursive: true });
+  }
+});
+
 Deno.test("@processor errors with expected path when manifest missing", async () => {
   const dir = await Deno.makeTempDir({ prefix: "streamlib-decorator-" });
   const modulePath = join(dir, "fixture.ts");
