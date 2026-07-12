@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BUSL-1.1
 
 # Standalone, registry-only example (headed to its own repo). Every dependency
-# resolves from the Gitea registry by version, and the empty `[workspace]` table
+# resolves from the static registry by version, and the empty `[workspace]` table
 # makes this its own workspace root so it builds off-tree. Renders ray-traced
 # frames directly through the SDK's `VulkanRayTracingKernel` RHI — loads no
 # runtime packages.

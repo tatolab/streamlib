@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: BUSL-1.1
 
 # Standalone, registry-only example (headed to its own repo). Every dependency
-# resolves from the Gitea registry by version. This crate is its own workspace
+# resolves from the static registry by version. This crate is its own workspace
 # root and includes the sibling `plugin/` cdylib (the counting-sink Rust
 # plugin) as a member so `cargo build -p polyglot-manual-source-counting-sink-plugin`
 # builds it for the example to stage. All three polyglot packages
 # (counting-sink plugin, python source, deno source) load at runtime via
-# `Strategy::Path` (example-local); the Python SDK resolves from the Gitea
-# pypi index and the Deno SDK (`@tatolab/streamlib-deno`) from the Gitea npm
+# `Strategy::Path` (example-local); the Python SDK resolves from the static registry
+# pypi index and the Deno SDK (`@tatolab/streamlib-deno`) from the static registry npm
 # registry.
 [package]
 name = "polyglot-manual-source-scenario"

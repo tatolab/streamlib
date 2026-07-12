@@ -25,12 +25,12 @@ use streamlib::sdk::schema_ident;
 fn main() -> Result<()> {
     let runtime = Runner::with_auto_build()?;
 
-    // 1. Resolve `@tatolab/camera` and `@tatolab/display` from the Gitea
+    // 1. Resolve `@tatolab/camera` and `@tatolab/display` from the static registry
     //    generic registry by version — the cross-repo consumer path. The
     //    orchestrator downloads each package's `.slpkg`, then prefers a
     //    matching prebuilt or builds the bundled source on the host. The
     //    registry endpoint comes from `STREAMLIB_REGISTRY_URL` (or
-    //    `GITEA_URL`); run with e.g. `STREAMLIB_REGISTRY_URL=http://localhost:3300`.
+    //    `STREAMLIB_REGISTRY_URL`); run with e.g. `STREAMLIB_REGISTRY_URL=file:///path/to/registry-tree`.
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "camera"),
         Strategy::Registry { version_req: SemVerRange::Any, build: BuildPolicy::IfStale },

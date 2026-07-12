@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BUSL-1.1
 
 # Standalone, registry-only example (headed to its own repo). Every dependency
-# resolves from the Gitea registry by version. This crate is its own workspace
+# resolves from the static registry by version. This crate is its own workspace
 # root and includes the sibling `effects/` cdylib plugin as a member so the
 # runner can `cargo build -p camera-python-display-effects` and stage it.
 [package]

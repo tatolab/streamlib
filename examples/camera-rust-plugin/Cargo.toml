@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BUSL-1.1
 
 # Standalone, registry-only example (headed to its own repo). Every dependency
-# resolves from the Gitea registry by version. This crate is its own workspace
+# resolves from the static registry by version. This crate is its own workspace
 # root and includes the sibling `plugin/` cdylib (the grayscale Rust plugin) as
 # a member so `cargo build -p grayscale-plugin` builds it for the example to
 # stage. `@tatolab/camera` + `@tatolab/display` load at runtime via

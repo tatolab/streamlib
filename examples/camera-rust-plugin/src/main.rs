@@ -11,7 +11,7 @@
 //! This is the "build from source + load from path" shape for an
 //! example-local plugin.
 //!
-//! `@tatolab/camera` and `@tatolab/display` instead resolve from the Gitea
+//! `@tatolab/camera` and `@tatolab/display` instead resolve from the static registry
 //! registry by version via `Strategy::Registry` — only the example-local
 //! plugin goes through the manual stage + `Strategy::Path`.
 //!
@@ -40,11 +40,11 @@ use streamlib::sdk::schema_ident;
 fn main() -> Result<()> {
     let runtime = Runner::with_auto_build()?;
 
-    // 1. Resolve `@tatolab/camera` and `@tatolab/display` from the Gitea
+    // 1. Resolve `@tatolab/camera` and `@tatolab/display` from the static registry
     //    generic registry by version — the cross-repo consumer path. The
     //    orchestrator pulls each `.slpkg` and builds it from source on the
     //    host. Registry endpoint comes from `STREAMLIB_REGISTRY_URL` (or
-    //    `GITEA_URL`).
+    //    `STREAMLIB_REGISTRY_URL`).
     let registry = || Strategy::Registry {
         version_req: SemVerRange::Any,
         build: BuildPolicy::IfStale,

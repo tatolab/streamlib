@@ -439,7 +439,7 @@ impl Drop for KillOnDrop {
 /// Package each workspace release-closure crate with `cargo package` and
 /// render its `.crate` + sparse-index line into the staging cargo tree.
 ///
-/// `cargo package` validates every `registry = "gitea"` dep against the live
+/// `cargo package` validates every `registry = "tatolab"` dep against the live
 /// index, so the closure is packaged in topo order against an EPHEMERAL
 /// static server on the staging tree itself: each crate resolves its
 /// already-emitted siblings (and the fork, emitted before this) from the

@@ -91,7 +91,7 @@ pub enum Strategy {
         checksum: Option<ArtifactChecksum>,
     },
 
-    /// Resolve from the configured Gitea **generic** registry by semver
+    /// Resolve from the configured the static registry **generic** registry by semver
     /// requirement — the cross-repo consumer path. Lists the package's
     /// published versions from its anonymous, cargo-sparse-shaped version
     /// index (`/api/packages/{org}/generic/{name}/index/index.json`),
@@ -101,7 +101,7 @@ pub enum Strategy {
     /// source per `build`.
     ///
     /// The registry endpoint comes from the environment
-    /// (`STREAMLIB_REGISTRY_URL`, falling back to `GITEA_URL`) — the same
+    /// (`STREAMLIB_REGISTRY_URL`, falling back to `STREAMLIB_REGISTRY_URL`) — the same
     /// config the engine's schema codegen reads, via
     /// [`RegistryConfig::from_env`]. The read path (list + download) is
     /// anonymous; `STREAMLIB_REGISTRY_TOKEN` is only needed to publish (and
@@ -251,7 +251,7 @@ pub(super) fn resolve_strategy_to_source(
                     package = %pkg_ref,
                     version = %selected,
                     %url,
-                    "resolved module from Gitea generic registry"
+                    "resolved module from static generic store"
                 );
                 let archive = persist_registry_slpkg(pkg_ref, &url, &bytes)?;
                 extract_slpkg_to_cache(&archive).map_err(|e| {

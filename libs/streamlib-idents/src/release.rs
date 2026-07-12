@@ -14,7 +14,7 @@
 //! cargo/`streamlib-macros` version-unification failure deep in the build.
 //!
 //! The manifest is transport-agnostic: [`crate::RegistryClient`] writes/reads
-//! it over `http(s)://` (Gitea generic registry) and `file://` (hermetic
+//! it over `http(s)://` (static generic store) and `file://` (hermetic
 //! local mirror) identically.
 
 /// One published member of a release — a crate or a package, named and
@@ -113,7 +113,7 @@ impl ReleaseManifest {
 /// partial/mid-publish registry yields the missing names so the caller can
 /// name the gap.
 ///
-/// The pins are the consumer's *direct* gitea-registry cargo dep reqs
+/// The pins are the consumer's *direct* tatolab-registry cargo dep reqs
 /// (cargo's bare `0.5.0` maps to `^0.5.0` before calling this); the
 /// manifest's `crates` set is the full published closure at the release
 /// version. A pin whose range the closure can't satisfy is exactly the

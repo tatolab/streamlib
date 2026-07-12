@@ -40,7 +40,7 @@ members = [
     # `examples/*` and `packages/*` are NOT workspace members. They are
     # standalone, registry-only units (each headed to its own repo): every
     # dependency — the streamlib SDK, package crates, adapters — resolves
-    # from the Gitea registry by version, and each carries its own
+    # from the static registry by version, and each carries its own
     # `[workspace]` self-root. Only `libs/*` + `xtask` form this workspace.
     # Build a package/example with `cd <dir> && cargo build`, or via
     # `streamlib pkg install` / runtime `Strategy::Registry` for packages.
@@ -123,9 +123,9 @@ objc2-vision = "0.3.2"
 libc = "0.2.177"
 
 # Vulkan bindings (tatolab fork for the VMA 3.3.0 patch). Resolved by version
-# from the Gitea registry — the fork shares crates.io version numbers, so the
+# from the static registry — the fork shares crates.io version numbers, so the
 # `registry = "tatolab"` annotation (not a distinct version) is what selects the
-# fork over upstream. See docs/architecture/gitea-registry-distribution.md.
+# fork over upstream. See docs/architecture/static-registry.md.
 vulkanalia = { version = "0.35.0", registry = "tatolab", features = ["libloading", "provisional", "window"] }
 vulkanalia-vma = { version = "0.9.0", registry = "tatolab" }
 

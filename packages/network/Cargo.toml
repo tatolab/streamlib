@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BUSL-1.1
 
 # Standalone, registry-only package manifest. This package is published
-# independently to the Gitea registry and resolves every dependency by
+# independently to the static registry and resolves every dependency by
 # version from it — no workspace inheritance, no `path` deps. The empty
 # `[workspace]` table makes it its own workspace root so it builds off-tree
 # (e.g. inside the package cache during `pkg install`) without being mistaken

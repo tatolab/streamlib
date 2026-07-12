@@ -3,7 +3,7 @@
 
 //! Consumer-side release-completeness pre-check.
 //!
-//! Before a package's Rust build resolves its gitea-registry dependencies via
+//! Before a package's Rust build resolves its tatolab-registry dependencies via
 //! cargo, this checks the registry's **release manifests** against the
 //! package's pins. A partial / mid-publish registry — the historical `0.4.36`
 //! `streamlib-plugin-sdk` + `vulkan-jpeg` foot-gun — fails fast here with a
@@ -25,7 +25,7 @@
 //! (build proceeds) when:
 //!
 //! - no registry is configured (in-tree / dev builds resolve deps by `path`);
-//! - the package declares no gitea-registry pins;
+//! - the package declares no tatolab-registry pins;
 //! - no release manifest covers a pin's range (a pre-atomic-release
 //!   registry — logged, then proceed); or
 //! - the manifest fetch / listing hits a transient transport error (the real
@@ -66,7 +66,7 @@ fn cargo_req_to_range(req: &str) -> Option<SemVerRange> {
 
 /// Fail fast with [`BuildError::IncompleteRelease`] when the configured
 /// registry's release manifests cannot satisfy the package's direct
-/// gitea-registry `pins`. See the module docs for the resolution model and
+/// tatolab-registry `pins`. See the module docs for the resolution model and
 /// the no-op cases.
 pub(crate) fn assert_release_complete(
     package_label: &str,
@@ -322,7 +322,7 @@ mod tests {
     #[serial_test::serial]
     fn mavlink_1213_scenario_against_file_registry() {
         // The live #1213 failure class, hermetically: the real
-        // packages/mavlink Cargo.toml pins streamlib-plugin-sdk from the gitea
+        // packages/mavlink Cargo.toml pins streamlib-plugin-sdk from the tatolab
         // registry — the exact crate the 0.4.36 partial publish silently
         // skipped. Against a registry whose newest release manifest OMITS
         // plugin-sdk (a partial release that "looks complete"), the pre-check
@@ -338,10 +338,10 @@ mod tests {
         let mavlink_dir = workspace_root.join("packages").join("mavlink");
 
         let pins = streamlib_cargo_build::read_tatolab_registry_pins(&mavlink_dir)
-            .expect("read mavlink gitea pins");
+            .expect("read mavlink tatolab pins");
         assert!(
             pins.iter().any(|p| p.name == "streamlib-plugin-sdk"),
-            "packages/mavlink must pin streamlib-plugin-sdk from gitea (the #1213 crate); \
+            "packages/mavlink must pin streamlib-plugin-sdk from tatolab (the #1213 crate); \
              got {pins:?}"
         );
         let floor: SemVer = pins

@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! End-to-end: a registry-cached crate's codegen resolves a schema
-//! dependency from a (hermetic `file://`) Gitea generic registry and
+//! dependency from a (hermetic `file://`) static generic store and
 //! generates bindings — the exact pipeline `build.rs` drives, minus the
 //! cargo build.
 //!
 //! This is the faithful E2E for issue #1116's "a registry-cached
-//! `streamlib-engine` codegen resolves `@tatolab/escalate` from Gitea and
+//! `streamlib-engine` codegen resolves `@tatolab/escalate` from the static registry and
 //! builds." The consumer manifest declares the dep as a bare semver range
 //! with **no `patch:` override** — exactly the published shape after the
 //! cargo-publish path-strip. Before #1116 the resolver returned

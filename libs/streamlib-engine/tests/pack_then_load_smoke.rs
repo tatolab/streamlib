@@ -11,8 +11,8 @@
 //! Rust-impl leg exercises the FULL consumer story: the loader
 //! builds the bundled source on this host via the build
 //! orchestrator, resolving every dep from the configured registry
-//! (`CARGO_REGISTRIES_GITEA_INDEX` — a Gitea daemon or the static
-//! registry tree; check-pack-load CI serves the static tree).
+//! (`CARGO_REGISTRIES_TATOLAB_INDEX` points cargo at the static registry
+//! tree; check-pack-load CI serves the static tree).
 //!
 //! Mentally-revert lock summary (each maps to a specific test):
 //! - Drop *any one* processor from `streamlib-network`'s

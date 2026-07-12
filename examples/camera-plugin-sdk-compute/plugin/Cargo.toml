@@ -3,7 +3,7 @@
 
 # Member of the standalone `camera-plugin-sdk-compute` workspace — inherits
 # its `[workspace.package]` fields and resolves every dependency from the
-# Gitea registry via `[workspace.dependencies]`. No path deps.
+# static registry via `[workspace.dependencies]`. No path deps.
 #
 # This is the FIRST example whose plugin links ONLY the engine-free
 # `streamlib-plugin-sdk` (never the `streamlib` engine facade) — it proves a

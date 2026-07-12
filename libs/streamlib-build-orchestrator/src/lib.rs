@@ -246,7 +246,7 @@ impl PolyglotBuildOrchestrator {
         }
 
         // ---- Consumer-side release-completeness pre-check ----
-        // A Rust package resolves its gitea-registry deps via cargo below. If
+        // A Rust package resolves its tatolab-registry deps via cargo below. If
         // the configured registry holds a partial/mid-publish release of the
         // pinned version, fail fast here naming the missing artifacts instead
         // of surfacing it as a cryptic cargo `failed to select a version …`
@@ -254,7 +254,7 @@ impl PolyglotBuildOrchestrator {
         // pre-atomic-release registries (no manifest) — see `release_check`.
         if has_rust {
             let pins = build::read_tatolab_registry_pins(pkg_dir)
-                .map_err(|e| other(&pkg_label, format!("reading gitea-registry pins: {e}")))?;
+                .map_err(|e| other(&pkg_label, format!("reading tatolab-registry pins: {e}")))?;
             release_check::assert_release_complete(&pkg_label, &pins)?;
         }
 
@@ -950,7 +950,7 @@ mod tests {
     }
 
     /// Rust-runtime source package whose Cargo.toml pins streamlib-plugin-sdk
-    /// from the gitea registry — the shape every published Rust package has.
+    /// from the tatolab registry — the shape every published Rust package has.
     fn rust_source_pkg(dir: &Path) {
         std::fs::write(
             dir.join("streamlib.yaml"),
@@ -984,7 +984,7 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-streamlib-plugin-sdk = {version = "0.5.0", registry = "gitea"}
+streamlib-plugin-sdk = {version = "0.5.0", registry = "tatolab"}
 "#,
         )
         .unwrap();

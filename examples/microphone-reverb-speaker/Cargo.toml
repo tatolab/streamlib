@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BUSL-1.1
 
 # Standalone, registry-only example (headed to its own repo). The SDK resolves
-# from the Gitea registry by version and the empty `[workspace]` table makes
+# from the static registry by version and the empty `[workspace]` table makes
 # this its own workspace root.
 #
 # DEFERRED, not in scope: this example is a no-op at HEAD. Its CLAP reverb

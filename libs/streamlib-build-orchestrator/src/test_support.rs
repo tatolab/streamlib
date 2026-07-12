@@ -5,7 +5,7 @@
 //! tests. Every helper here keeps the test fully offline: the `streamlib`
 //! SDK is a local path-dep fixture (hatchling, ships `streamlib.yaml` + a
 //! trivial dependency-free schema + an empty `_generated_/`) so
-//! `uv pip install` resolves with NO network / Gitea.
+//! `uv pip install` resolves with NO network / the static registry.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -16,7 +16,7 @@ use std::process::Command;
 /// from a local path with no network. Returns the SDK dir.
 ///
 /// This stands in for the real registry-resolved SDK. The real SDK install
-/// pulls `streamlib` from the Gitea registry (network); a fixture SDK keeps
+/// pulls `streamlib` from the static registry (network); a fixture SDK keeps
 /// the test fully offline while still exercising the exact provision flow:
 /// install → probe `import streamlib` → codegen against the installed
 /// `streamlib.yaml` → compileall.

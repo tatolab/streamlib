@@ -19,10 +19,10 @@ use streamlib::sdk::schema_ident;
 fn main() -> Result<()> {
     let runtime = Runner::with_auto_build()?;
 
-    // Resolve every package from the Gitea generic registry by version — the
+    // Resolve every package from the static generic store by version — the
     // cross-repo consumer path. The orchestrator pulls each `.slpkg` and builds
     // it from source on the host. Registry endpoint comes from
-    // `STREAMLIB_REGISTRY_URL` (or `GITEA_URL`).
+    // `STREAMLIB_REGISTRY_URL`.
     let registry = || Strategy::Registry {
         version_req: SemVerRange::Any,
         build: BuildPolicy::IfStale,

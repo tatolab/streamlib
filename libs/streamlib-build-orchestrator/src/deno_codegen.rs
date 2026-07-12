@@ -13,8 +13,8 @@
 //! This is the Deno mirror of [`crate::python_venv`]'s
 //! `ensure_streamlib_generated_in_venv`: both run in-process JTD codegen so a
 //! staged polyglot package is runnable without a separate `deno task setup`.
-//! Schema deps (e.g. `@tatolab/core`) resolve from the Gitea registry via the
-//! codegen resolver's env-aware config (`STREAMLIB_REGISTRY_URL` / `GITEA_URL`)
+//! Schema deps (e.g. `@tatolab/core`) resolve from the static registry via the
+//! codegen resolver's env-aware config (`STREAMLIB_REGISTRY_URL` / `STREAMLIB_REGISTRY_URL`)
 //! — the same path the Rust build-script codegen uses.
 //!
 //! Generating into the orchestrator's build-to-temp directory means the
@@ -84,7 +84,7 @@ pub fn provision_deno_typescript(temp_dir: &Path, package_label: &str) -> Result
             package_label,
             format!(
                 "failed to generate Deno wire vocabulary (schema deps resolve from the \
-                 registry — is STREAMLIB_REGISTRY_URL / GITEA_URL set?): {e}"
+                 registry — is STREAMLIB_REGISTRY_URL / STREAMLIB_REGISTRY_URL set?): {e}"
             ),
         )
     })

@@ -26,7 +26,6 @@ pub mod check_processor_spec_new;
 pub mod check_schema_versions;
 pub mod lint_logging;
 pub mod manifest_schema;
-pub mod release;
 
 #[derive(Parser)]
 #[command(name = "xtask")]
@@ -180,53 +179,19 @@ enum Commands {
     /// `streamlib.yaml` so the published manifest is path-free. Intended to
     /// run against a scratch copy of the crate before `cargo publish` (cargo
     /// bundles `streamlib.yaml` verbatim with no file-rewrite hook). The
-    /// publish-side half of the Gitea registry distribution; the resolver's
+    /// publish-side half of the static registry distribution; the resolver's
     /// `Registry` arm resolves the now-path-free dep from the registry. See
-    /// `docs/architecture/gitea-registry-distribution.md`.
+    /// `docs/architecture/static-registry.md`.
     StripPublishManifest {
         /// Directory containing the `streamlib.yaml` to strip in place.
         #[arg(long)]
         dir: PathBuf,
     },
 
-    /// Emit the engine **release closure** as JSON — the single canonical set
-    /// of crates a release publishes (every publishable `streamlib*` /
-    /// `vulkan-jpeg` library crate), in topological publish order.
-    /// `cargo xtask static-registry emit --cargo-closure` consumes this instead of a
-    /// human-remembered "publish everything" flag.
-    ReleaseClosure {
-        /// Stamp the `-dev.N` prerelease suffix on the emitted versions (matches
-        /// `publish-crates.sh --dev N`).
-        #[arg(long)]
-        dev: Option<u32>,
-    },
-
-    /// Publish the **release manifest** for the current workspace to the
-    /// configured registry — the atomicity flip, run LAST in the release
-    /// sequence (after crates + SDKs + packages land). Its presence marks the
-    /// release complete; a consumer resolving against a partial registry
-    /// detects the gap. Requires `STREAMLIB_REGISTRY_URL` (or `GITEA_URL`) +
-    /// `STREAMLIB_REGISTRY_TOKEN`.
-    ReleaseManifestPublish {
-        /// Stamp the `-dev.N` prerelease suffix (matches `--dev N` on the
-        /// crate publish).
-        #[arg(long)]
-        dev: Option<u32>,
-        /// Record no Python SDK in the manifest (the SDK publish was skipped).
-        #[arg(long)]
-        skip_python: bool,
-        /// Record no Deno SDK in the manifest (the SDK publish was skipped).
-        #[arg(long)]
-        skip_deno: bool,
-        /// Record no packages in the manifest (the package publish was skipped).
-        #[arg(long)]
-        skip_packages: bool,
-    },
-
     /// Emit a daemon-free STATIC registry tree (cargo sparse + pypi-simple +
     /// npm + `.slpkg` generic) for the current workspace release into a
     /// directory served identically over `file://` (slpkg, pypi) or a dumb
-    /// static HTTP mount (cargo, npm). No Gitea, no token. See
+    /// static HTTP mount (cargo, npm). No registry daemon, no token. See
     /// `docs/architecture/static-registry.md`.
     #[command(subcommand)]
     StaticRegistry(StaticRegistryAction),
@@ -327,23 +292,6 @@ fn main() -> Result<()> {
             })?;
             tracing::info!(dir = %dir.display(), "stripped path-flavor patch entries from streamlib.yaml");
         }
-        Commands::ReleaseClosure { dev } => {
-            release::emit_closure_json(&workspace_root()?, dev)?
-        }
-        Commands::ReleaseManifestPublish {
-            dev,
-            skip_python,
-            skip_deno,
-            skip_packages,
-        } => release::publish_manifest(
-            &workspace_root()?,
-            &release::PublishManifestOptions {
-                dev,
-                skip_python,
-                skip_deno,
-                skip_packages,
-            },
-        )?,
         Commands::StaticRegistry(StaticRegistryAction::Emit {
             out,
             dev,

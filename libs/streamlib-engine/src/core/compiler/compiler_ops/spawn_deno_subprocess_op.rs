@@ -99,7 +99,7 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
             // The SDK is resolved from the registry by version, never from a
             // workspace path: the Deno package's deno.json declares `streamlib`
             // (npm:@tatolab/streamlib-deno@<version>) and a sibling .npmrc
-            // points the @tatolab scope at Gitea. The engine launches the SDK's
+            // points the @tatolab scope at the static registry. The engine launches the SDK's
             // runner as the bare specifier `streamlib/subprocess_runner.ts`,
             // resolved through that config — the direct mirror of how the
             // Python op runs `-m streamlib.subprocess_runner` from the

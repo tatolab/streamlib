@@ -266,7 +266,7 @@ fn load_processor_schema(
 
     let config_schema_id = if needs_resolution {
         // Macro expansion is a build-time codegen boundary: read the registry
-        // config from the environment (STREAMLIB_REGISTRY_URL / GITEA_URL) so a
+        // config from the environment (STREAMLIB_REGISTRY_URL / STREAMLIB_REGISTRY_URL) so a
         // standalone, registry-only package resolves its bare-name schema deps
         // (e.g. @tatolab/core) from the registry instead of failing as
         // RegistryNotConfigured.

@@ -707,7 +707,7 @@ fn url_strategy_rejects_checksum_mismatch() {
 #[serial]
 fn path_package_registry_dep_routes_to_registry_not_installed_cache() {
     // Registry-only model: a package's streamlib.yaml dependency resolves from
-    // the Gitea registry (Strategy::Registry), NOT the installed-package cache.
+    // the static registry (Strategy::Registry), NOT the installed-package cache.
     // The installed-cache-as-dep fallback an earlier model used is gone — proven
     // by routing: with no registry configured, the dep errors
     // RegistryNotConfigured even though a satisfying installed-cache entry exists.
@@ -721,7 +721,7 @@ fn path_package_registry_dep_routes_to_registry_not_installed_cache() {
     // the developer / CI shell.
     let _no_registry = EnvVarsCleared::new(&[
         "STREAMLIB_REGISTRY_URL",
-        "GITEA_URL",
+        "STREAMLIB_REGISTRY_URL",
         "STREAMLIB_REGISTRY_TOKEN",
     ]);
 
@@ -2683,7 +2683,7 @@ processors:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "GITEA_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "STREAMLIB_REGISTRY_URL"]);
 
         // Two-level registry tree: lockrun-lib depends on lockrun-core.
         let mirror = tempfile::tempdir().unwrap();
@@ -2777,7 +2777,7 @@ processors:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "GITEA_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "STREAMLIB_REGISTRY_URL"]);
 
         // A local package + a project that path-deps it.
         let work = tempfile::tempdir().unwrap();
@@ -2841,7 +2841,7 @@ processors:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "GITEA_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "STREAMLIB_REGISTRY_URL"]);
 
         // Hand-stage a package whose manifest declares a dep on `miss-dep`,
         // and a lockfile that pins ONLY the package (stale relative to the
@@ -2904,7 +2904,7 @@ packages:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "GITEA_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "STREAMLIB_REGISTRY_URL"]);
 
         // Lockfile pins a package but nothing was ever staged into its slot.
         let lock = sandbox.path().join("uninstalled.lock");
@@ -3002,7 +3002,7 @@ packages:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "GITEA_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "STREAMLIB_REGISTRY_URL"]);
 
         let (slot, hash) = stage_schemas_only_slot("tamper-pkg", "0.1.0", "TamperPkgSchema");
         let lock = write_single_pin_lockfile(sandbox.path(), "tamper-pkg", "0.1.0", &hash);
@@ -3044,7 +3044,7 @@ packages:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "GITEA_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "STREAMLIB_REGISTRY_URL"]);
 
         // The slot lives at the LOCKED version's key (drift-pkg-1.0.0), but
         // its manifest inside claims 1.0.1 — an in-place republish that kept
@@ -3089,7 +3089,7 @@ packages:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "GITEA_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "STREAMLIB_REGISTRY_URL"]);
 
         let lock = sandbox.path().join("corrupt.lock");
         std::fs::write(&lock, "{ this is: [not, a lockfile").unwrap();
@@ -3118,7 +3118,7 @@ packages:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "GITEA_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "STREAMLIB_REGISTRY_URL"]);
 
         let mirror = tempfile::tempdir().unwrap();
         write_mirror_slpkg(mirror.path(), "mutate-pkg", "0.1.0", "MutatePkgSchema", None);

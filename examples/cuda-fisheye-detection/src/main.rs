@@ -148,7 +148,7 @@ fn main() -> Result<()> {
     }
 
     // Resolve `@tatolab/debug-utilities` (the BgraFileSource trigger) from the
-    // Gitea registry by version.
+    // static registry by version.
     runtime.add_module_with_blocking(
         module_ident_any_version!("tatolab", "debug-utilities"),
         streamlib::sdk::runtime::Strategy::Registry {
