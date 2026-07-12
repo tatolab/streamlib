@@ -361,7 +361,7 @@ never by relative `path` or git `[patch]` in anything a consumer sees:
 Distribution has **one backend behind a tokenless read shape**: a plain static
 file tree (sparse index + tarballs + `.slpkg` + catalog), served by any dumb
 HTTP mount or read over `file://`.
-> Note (2026-07-12, #1245): the static file tree is the **only** registry
+> Note (2026-07-12): the static file tree is the **only** registry
 > backend. A prior design had a second, hosted-daemon backend behind the same
 > read shape — that daemon, its publish scripts, and its hosted read/write
 > client arms were removed entirely. Do not re-introduce a hosted-daemon

@@ -9,7 +9,7 @@
 # breaks that chicken-and-egg by packaging the fork from a standalone clone
 # (the fork only depends on crates.io + itself, never the workspace or registry daemon),
 # exactly like scripts/registry/publish-vulkanalia.sh does — but it writes a
-# static file tree instead of PUTting to a registry daemon daemon. CI serves the tree
+# static file tree instead of PUTting to a registry daemon. CI serves the tree
 # with `python3 -m http.server` and points cargo at it via
 # `CARGO_REGISTRIES_TATOLAB_INDEX=sparse+http://127.0.0.1:PORT/cargo/`.
 #

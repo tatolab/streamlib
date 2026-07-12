@@ -10,9 +10,9 @@
 # The --port MUST match the emit's --base-url port (the cargo config.json + npm
 # packument bake in that absolute URL).
 #
-# For the ergonomic path, prefer `streamlib registry use <tree_dir>` — it writes
-# the cargo `[source]` replacement + `.npmrc` into the consumer's config and
-# auto-serves npm on localhost. This script is the manual equivalent.
+# This is the manual configure-a-consumer path. A `streamlib registry use
+# <tree_dir>` verb that writes the cargo `[source]` replacement + `.npmrc` and
+# auto-serves npm on localhost is planned.
 set -euo pipefail
 
 DIR=""

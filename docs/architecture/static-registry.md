@@ -211,10 +211,7 @@ cargo xtask static-registry emit --out <dir> [--dev N] \
 ## Consuming a tree
 
 A consumer configures **one registry location** — the tree ROOT — and the
-toolchain derives every ecosystem channel from it. `streamlib registry use
-<dir>` writes that configuration (the cargo `[source]` replacement + the npm
-`.npmrc` scope) into the consumer and auto-serves npm on localhost; the manual
-equivalent is:
+toolchain derives every ecosystem channel from it. Serve + configure it with:
 
 ```
 scripts/registry/serve-static-registry.sh <dir> [--port 8799]
@@ -244,6 +241,10 @@ replace-with = "tatolab-local"
 [source.tatolab-local]
 registry = "sparse+http://127.0.0.1:8799/cargo/"
 ```
+
+A `streamlib registry use <dir>` verb that emits the cargo `[source]`
+replacement + the npm `.npmrc` scope and auto-serves npm on localhost — so a
+consumer never hand-writes any of the above — is **planned**.
 
 ## Reference
 

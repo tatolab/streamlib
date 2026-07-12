@@ -721,7 +721,6 @@ fn path_package_registry_dep_routes_to_registry_not_installed_cache() {
     // the developer / CI shell.
     let _no_registry = EnvVarsCleared::new(&[
         "STREAMLIB_REGISTRY_URL",
-        "STREAMLIB_REGISTRY_URL",
         "STREAMLIB_REGISTRY_TOKEN",
     ]);
 
@@ -2632,8 +2631,10 @@ processors:
     }
 
     /// Write a schemas-only `.slpkg` into a `file://` registry mirror at
-    /// `<mirror>/<name>/<version>/<name>.slpkg`. `dep` optionally adds a
-    /// registry-flavored dependency edge (`@tatolab/<dep>: "^<range>"`).
+    /// `<mirror>/slpkg/<name>/<version>/<name>.slpkg` (the base URL is the
+    /// tree root; the registry client prepends the `slpkg/` subtree). `dep`
+    /// optionally adds a registry-flavored dependency edge
+    /// (`@tatolab/<dep>: "^<range>"`).
     fn write_mirror_slpkg(
         mirror: &std::path::Path,
         name: &str,
@@ -2641,7 +2642,7 @@ processors:
         type_name: &str,
         dep: Option<(&str, &str)>,
     ) {
-        let dir = mirror.join(name).join(version);
+        let dir = mirror.join("slpkg").join(name).join(version);
         std::fs::create_dir_all(&dir).unwrap();
         let archive = dir.join(format!("{name}.slpkg"));
         let stem = type_name.to_ascii_lowercase();
@@ -2683,7 +2684,7 @@ processors:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "STREAMLIB_REGISTRY_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL"]);
 
         // Two-level registry tree: lockrun-lib depends on lockrun-core.
         let mirror = tempfile::tempdir().unwrap();
@@ -2777,7 +2778,7 @@ processors:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "STREAMLIB_REGISTRY_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL"]);
 
         // A local package + a project that path-deps it.
         let work = tempfile::tempdir().unwrap();
@@ -2841,7 +2842,7 @@ processors:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "STREAMLIB_REGISTRY_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL"]);
 
         // Hand-stage a package whose manifest declares a dep on `miss-dep`,
         // and a lockfile that pins ONLY the package (stale relative to the
@@ -2904,7 +2905,7 @@ packages:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "STREAMLIB_REGISTRY_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL"]);
 
         // Lockfile pins a package but nothing was ever staged into its slot.
         let lock = sandbox.path().join("uninstalled.lock");
@@ -3002,7 +3003,7 @@ packages:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "STREAMLIB_REGISTRY_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL"]);
 
         let (slot, hash) = stage_schemas_only_slot("tamper-pkg", "0.1.0", "TamperPkgSchema");
         let lock = write_single_pin_lockfile(sandbox.path(), "tamper-pkg", "0.1.0", &hash);
@@ -3044,7 +3045,7 @@ packages:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "STREAMLIB_REGISTRY_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL"]);
 
         // The slot lives at the LOCKED version's key (drift-pkg-1.0.0), but
         // its manifest inside claims 1.0.1 — an in-place republish that kept
@@ -3089,7 +3090,7 @@ packages:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "STREAMLIB_REGISTRY_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL"]);
 
         let lock = sandbox.path().join("corrupt.lock");
         std::fs::write(&lock, "{ this is: [not, a lockfile").unwrap();
@@ -3118,7 +3119,7 @@ packages:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "STREAMLIB_REGISTRY_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL"]);
 
         let mirror = tempfile::tempdir().unwrap();
         write_mirror_slpkg(mirror.path(), "mutate-pkg", "0.1.0", "MutatePkgSchema", None);

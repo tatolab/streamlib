@@ -2,7 +2,7 @@ name: Static Registry
 
 # Daemon-free registry gate: emit the four-ecosystem static tree (cargo sparse
 # + pypi-simple + npm + `.slpkg` generic) and resolve real packages from it over
-# `file://` (slpkg, pypi) / a dumb static HTTP mount (cargo, npm) with NO registry daemon
+# `file://` (slpkg, pypi) / a dumb static HTTP mount (cargo, npm) with NO registry
 # daemon and NO token — closing the standing CI red.
 #
 # Covers:

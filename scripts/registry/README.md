@@ -14,7 +14,7 @@ daemon. See
 | `emit-static-fork.sh` | Package the `tatolab/vulkanalia` fork (`vulkanalia`, `-sys`, `-vma`) into a cargo sparse subtree. The daemon-free bootstrap: the workspace declares `vulkanalia = { registry = "tatolab" }`, so cargo cannot resolve until the fork is fetchable. Emitted from a standalone clone (the fork depends only on crates.io + itself). |
 | `render_cargo_index_line.py` | Render one cargo sparse-index NDJSON line from a `.crate`'s bundled manifest — the single source of truth for the index-line shape. |
 | `cargo-idx-path.sh` | Compute a crate's RFC 2141 sparse-index shard path (`serde → se/rd/serde`), sourced by `emit-static-fork.sh`. |
-| `serve-static-registry.sh` | Serve an emitted tree with `python3 -m http.server` and print the consumer configuration. The manual equivalent of `streamlib registry use <dir>`. |
+| `serve-static-registry.sh` | Serve an emitted tree with `python3 -m http.server` and print the consumer configuration (the manual configure-a-consumer path; a `streamlib registry use <dir>` verb is planned). |
 | `migrate-internal-deps.py` | Rewrite workspace cross-crate deps to the `{ path, version, registry = "tatolab" }` form. |
 
 ## Emitting a full tree
@@ -38,7 +38,7 @@ scripts/registry/serve-static-registry.sh <dir> [--port 8799]
 
 prints the consumer env (`STREAMLIB_REGISTRY_URL=file://<dir>`,
 `UV_INDEX=file://<dir>/pypi/simple`, the cargo `[source]` replacement, and the
-npm `.npmrc` line). For the ergonomic path use `streamlib registry use <dir>`,
-which writes the cargo/npm config into the consumer and auto-serves npm on
-localhost. cargo/npm read over a static HTTP mount (sparse + npm are HTTP-only);
+npm `.npmrc` line). A `streamlib registry use <dir>` verb that writes that
+cargo/npm config into the consumer and auto-serves npm on localhost is planned.
+cargo/npm read over a static HTTP mount (sparse + npm are HTTP-only);
 pypi + `.slpkg` read straight off `file://`.

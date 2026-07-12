@@ -202,7 +202,7 @@ pub(crate) fn ensure_native_host(
     }
 
     // 3. Build standalone. The published manifest carries inline
-    //    `registry-index` on its the static registry deps, so dep resolution needs no
+    //    `registry-index` on its `tatolab`-registry deps, so dep resolution needs no
     //    `.cargo/config.toml`. `run_cargo_build` runs `cargo build -p <crate>`
     //    in `crate_dir` and returns the produced cdylib path.
     let cdylib = run_cargo_build(&crate_dir, runtime.crate_name(), ext, profile)
@@ -225,8 +225,8 @@ pub(crate) fn ensure_native_host(
     Ok(dest)
 }
 
-/// GET the bytes at `url` (no auth — cargo downloads are anonymous on the
-/// streamlib the static registry instance).
+/// GET the bytes at `url` (no auth — reads from the static registry are
+/// anonymous).
 fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
     let resp = ureq::get(url).call().map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
