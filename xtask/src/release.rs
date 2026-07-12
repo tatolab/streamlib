@@ -6,7 +6,7 @@
 //! Two verbs back the atomic-release publish flow:
 //!
 //! - `release-closure --json` — the single canonical definition of "the
-//!   crates a release publishes," emitted for `scripts/gitea/publish-crates.sh`
+//!   crates a release publishes," emitted for `cargo xtask static-registry emit --cargo-closure`
 //!   to consume so the closure is defined once, in code, not in a script.
 //! - `release-manifest-publish` — writes the [`ReleaseManifest`] to the
 //!   registry **last**, after every crate / SDK / package has landed. Its

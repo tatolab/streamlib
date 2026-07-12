@@ -192,7 +192,7 @@ enum Commands {
     /// Emit the engine **release closure** as JSON — the single canonical set
     /// of crates a release publishes (every publishable `streamlib*` /
     /// `vulkan-jpeg` library crate), in topological publish order.
-    /// `scripts/gitea/publish-crates.sh` consumes this instead of a
+    /// `cargo xtask static-registry emit --cargo-closure` consumes this instead of a
     /// human-remembered "publish everything" flag.
     ReleaseClosure {
         /// Stamp the `-dev.N` prerelease suffix on the emitted versions (matches

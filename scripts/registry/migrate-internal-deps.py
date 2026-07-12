@@ -31,7 +31,7 @@ Idempotent. ``--check`` reports files that would change and exits non-zero if
 any do (CI drift guard). Needs ``tomlkit``.
 
 Usage:
-    python3 scripts/gitea/migrate-internal-deps.py [--check] [ROOT]
+    python3 scripts/registry/migrate-internal-deps.py [--check] [ROOT]
 """
 
 from __future__ import annotations

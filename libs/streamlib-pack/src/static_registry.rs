@@ -45,7 +45,7 @@ use crate::catalog::{build_package_catalog, build_sibling_versions};
 #[derive(Debug, Clone)]
 pub struct EmitEcosystems {
     /// Emit the vulkanalia fork cargo tree (the daemon-free bootstrap the CI
-    /// resolve needs). Delegates to `scripts/gitea/emit-static-fork.sh`.
+    /// resolve needs). Delegates to `scripts/registry/emit-static-fork.sh`.
     pub cargo_fork: bool,
     /// Package + emit the workspace release-closure crates into the cargo tree.
     pub cargo_closure: bool,
@@ -398,7 +398,7 @@ pub fn build_and_flip(out: &Path, build: impl FnOnce(&Path) -> Result<()>) -> Re
 fn emit_cargo_fork(opts: &EmitOptions, staging: &Path) -> Result<()> {
     let script = opts
         .workspace_root
-        .join("scripts/gitea/emit-static-fork.sh");
+        .join("scripts/registry/emit-static-fork.sh");
     let status = Command::new("bash")
         .arg(&script)
         .arg(staging)
@@ -452,7 +452,7 @@ fn emit_cargo_closure(opts: &EmitOptions, staging: &Path) -> Result<()> {
     std::fs::create_dir_all(cargo_dir.join("crates"))?;
     let render = opts
         .workspace_root
-        .join("scripts/gitea/render_cargo_index_line.py");
+        .join("scripts/registry/render_cargo_index_line.py");
 
     // Ephemeral staging server: pick a free port, serve the staging dir.
     let port = {

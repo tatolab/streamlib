@@ -7,11 +7,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "streamlib"
-# Tracks the workspace [workspace.package].version in Cargo.toml. The publish
-# script (scripts/gitea/publish-python-sdk.sh) is authoritative: it rewrites
-# this from the workspace version (+ optional -dev.N) at publish time and
-# restores it, mirroring scripts/gitea/publish-crates.sh. Keep it in sync with
-# the workspace on release so a bare local `uv build` produces a sane version.
+# Tracks the workspace [workspace.package].version in Cargo.toml. The static
+# registry emit (`cargo xtask static-registry emit`) is authoritative: it builds
+# the pypi sdist from the workspace version (+ optional -dev.N) at emit time.
+# Keep it in sync with the workspace on release so a bare local `uv build`
+# produces a sane version.
 version = "0.4.30"
 description = "Python subprocess SDK for StreamLib real-time streaming framework"
 requires-python = ">=3.10"

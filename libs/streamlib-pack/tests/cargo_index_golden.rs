@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Golden tests for the cargo sparse-index renderers — the Python index-line
-//! renderer (`scripts/gitea/render_cargo_index_line.py`, the single source of
+//! renderer (`scripts/registry/render_cargo_index_line.py`, the single source of
 //! truth the shell + xtask emit paths shell out to) and the index-path
 //! grammar's two implementations (Rust `cargo_index_path` + bash
 //! `cargo-idx-path.sh`).
@@ -53,7 +53,7 @@ fn render_line(name: &str, version: &str, cksum: &str, fixture_toml: &Path) -> S
     assert!(tar.success(), "building the fixture .crate must succeed");
 
     let out = Command::new("python3")
-        .arg(workspace_root().join("scripts/gitea/render_cargo_index_line.py"))
+        .arg(workspace_root().join("scripts/registry/render_cargo_index_line.py"))
         .env("NAME", name)
         .env("VERSION", version)
         .env("CKSUM", cksum)
@@ -133,7 +133,7 @@ fn python_renderer_matches_captured_golden_vulkanalia_vma() {
 
 /// The index-path grammar exists in TWO implementations — Rust
 /// `cargo_index_path` (xtask closure emit) and bash `cargo_idx_path`
-/// (`scripts/gitea/cargo-idx-path.sh`, sourced by emit-static-fork.sh). Feed
+/// (`scripts/registry/cargo-idx-path.sh`, sourced by emit-static-fork.sh). Feed
 /// both the same names and require identical output, against the expected
 /// paths for every grammar arm (1/2/3-char + sharded 4+, lowercasing).
 #[test]
@@ -149,7 +149,7 @@ fn index_path_grammar_identical_across_rust_and_bash() {
         ("vulkanalia-vma", "vu/lk/vulkanalia-vma"),
         ("streamlib-plugin-sdk", "st/re/streamlib-plugin-sdk"),
     ];
-    let script = workspace_root().join("scripts/gitea/cargo-idx-path.sh");
+    let script = workspace_root().join("scripts/registry/cargo-idx-path.sh");
     for (name, expected) in cases {
         assert_eq!(cargo_index_path(name), expected, "rust grammar for {name}");
         let out = Command::new("bash")

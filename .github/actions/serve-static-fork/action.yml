@@ -3,13 +3,13 @@
 #
 # Composite action: emit the tatolab/vulkanalia fork into a STATIC cargo sparse
 # tree and serve it with a dumb `python3 -m http.server`, so any workspace
-# `cargo` command resolves `vulkanalia` daemon-free — no Gitea, no token.
-# Exports `CARGO_REGISTRIES_GITEA_INDEX` for every later step in the job.
+# `cargo` command resolves `vulkanalia` daemon-free — no registry daemon, no token.
+# Exports `CARGO_REGISTRIES_TATOLAB_INDEX` for every later step in the job.
 #
 # This is the daemon-free bootstrap: the workspace declares
-# `vulkanalia = { registry = "gitea" }`, so cargo cannot build a single crate
+# `vulkanalia = { registry = "tatolab" }`, so cargo cannot build a single crate
 # (including xtask itself) until the fork is fetchable. Emitting it as a static
-# file tree removes the localhost:3300 dependency the standing CI red hit.
+# file tree removes the localhost dependency the standing CI red hit.
 
 name: Serve static vulkanalia fork registry
 description: Emit + serve the vulkanalia fork as a daemon-free static cargo sparse index.
@@ -67,7 +67,7 @@ runs:
         curl -fsS "http://127.0.0.1:${{ inputs.port }}/" >/dev/null \
           || { echo "static registry server did not come up"; cat /tmp/static-registry-httpd.log; exit 1; }
         echo "STATIC_FORK_URL=http://127.0.0.1:${{ inputs.port }}" >> "$GITHUB_ENV"
-        echo "CARGO_REGISTRIES_GITEA_INDEX=sparse+http://127.0.0.1:${{ inputs.port }}/cargo/" >> "$GITHUB_ENV"
+        echo "CARGO_REGISTRIES_TATOLAB_INDEX=sparse+http://127.0.0.1:${{ inputs.port }}/cargo/" >> "$GITHUB_ENV"
         echo "STREAMLIB_STATIC_REGISTRY_DIR=${{ inputs.out }}" >> "$GITHUB_ENV"
 
     - name: Emit static fork registry tree
@@ -82,7 +82,7 @@ runs:
         # resolves fork siblings through the already-running one above.
         VULKANALIA_DIR=/tmp/vulkanalia-fork \
         STATIC_FORK_URL="http://127.0.0.1:${{ inputs.port }}" \
-          scripts/gitea/emit-static-fork.sh "${{ inputs.out }}" \
+          scripts/registry/emit-static-fork.sh "${{ inputs.out }}" \
           --base-url "http://127.0.0.1:${{ inputs.port }}"
         # The emitted tree is complete and fetchable through the live server.
         curl -fsS "http://127.0.0.1:${{ inputs.port }}/cargo/config.json" >/dev/null \

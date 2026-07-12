@@ -10,7 +10,7 @@ name: Check Package Version Drift
 # a stale crate version could reach the registry; the remedy is
 # `cargo xtask check-package-version-drift --fix`.
 #
-# See also `docs/architecture/gitea-registry-distribution.md`.
+# See also `docs/architecture/static-registry.md`.
 
 on:
   pull_request:
@@ -42,9 +42,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-xtask-
 
-      # Daemon-free: the workspace declares `vulkanalia = { registry = "gitea" }`,
+      # Daemon-free: the workspace declares `vulkanalia = { registry = "tatolab" }`,
       # so xtask cannot build without the fork served. Emit + serve it statically
-      # (no Gitea) and point cargo at it.
+      # (no registry daemon) and point cargo at it.
       - name: Serve static vulkanalia fork registry
         uses: ./.github/actions/serve-static-fork
 

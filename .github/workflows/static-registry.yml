@@ -2,8 +2,8 @@ name: Static Registry
 
 # Daemon-free registry gate: emit the four-ecosystem static tree (cargo sparse
 # + pypi-simple + npm + `.slpkg` generic) and resolve real packages from it over
-# `file://` (slpkg, pypi) / a dumb static HTTP mount (cargo, npm) with NO Gitea
-# daemon and NO token — closing the standing localhost:3300 CI red.
+# `file://` (slpkg, pypi) / a dumb static HTTP mount (cargo, npm) with NO registry daemon
+# daemon and NO token — closing the standing CI red.
 #
 # Covers:
 #   - The static-registry renderers + gapless atomic staged-swap (unit tests).
@@ -35,9 +35,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck
-          shellcheck scripts/gitea/emit-static-fork.sh \
-                     scripts/gitea/serve-static-registry.sh \
-                     scripts/gitea/cargo-idx-path.sh
+          shellcheck scripts/registry/emit-static-fork.sh \
+                     scripts/registry/serve-static-registry.sh \
+                     scripts/registry/cargo-idx-path.sh
 
       - name: Install system dependencies
         # streamlib-pack sits on the lean idents/schema/cargo-build crates, but
@@ -67,7 +67,7 @@ jobs:
             ${{ runner.os }}-cargo-static-registry-
 
       # Daemon-free bootstrap: emit + serve the vulkanalia fork as a static
-      # cargo tree so the workspace resolves without Gitea.
+      # cargo tree so the workspace resolves without a registry daemon.
       - name: Serve static vulkanalia fork registry
         uses: ./.github/actions/serve-static-fork
 

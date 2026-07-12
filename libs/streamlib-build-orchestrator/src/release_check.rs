@@ -168,7 +168,7 @@ pub(crate) fn assert_release_complete(
         release_version: incomplete_versions.join(", "),
         missing: missing_all.join(", "),
         hint: "the registry has a partial or inconsistent release — re-run the release publish \
-               (scripts/gitea/publish-release.sh) so the full closure lands, or pin a version \
+               (cargo xtask static-registry emit) so the full closure lands, or pin a version \
                whose release manifest lists every dependency"
             .to_string(),
     })
@@ -423,7 +423,7 @@ mod tests {
             package: "@tatolab/mavlink".to_string(),
             release_version: "0.5.1".to_string(),
             missing: "streamlib-plugin-sdk@^0.5.0, vulkan-jpeg@^0.5.0".to_string(),
-            hint: "re-run the release publish (scripts/gitea/publish-release.sh)".to_string(),
+            hint: "re-run the release publish (cargo xtask static-registry emit)".to_string(),
         };
         let rendered = err.to_string();
         assert!(rendered.contains("incomplete release of 0.5.1"), "{rendered}");
