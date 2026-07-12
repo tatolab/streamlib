@@ -25,8 +25,8 @@ pub use ident::{
     SchemaIdent, TypeName,
 };
 pub use lockfile::{
-    compute_content_hash, hash_content, read_lockfile, write_lockfile, Lockfile, LockfileEntry,
-    LockfileSource, LOCKFILE_NAME,
+    compute_content_hash, hash_content, read_lockfile, write_app_lockfile, write_lockfile,
+    Lockfile, LockfileEntry, LockfileSource, APP_LOCKFILE_NAME, LOCKFILE_NAME,
 };
 pub use manifest::{
     DependencySpec, GitDependency, Manifest, PackageMetadata, PathDependency, RegistryDependency,
