@@ -282,12 +282,17 @@ cargo xtask static-registry emit --out <dir> [--dev N] \
 - pypi (uv sdist) and npm (deno pack) reuse the SDK build toolchains; `.slpkg`
   packages are assembled via `streamlib pkg build` semantics and the release
   manifest is written last.
-- The whole-tree `.slpkg` emit **skips** any `packages/*` that carries a dev
-  path-`patch:` block (the test-only fixtures) with a `warn!` naming every
-  offender — such a package is non-distributable by construction, so it is
-  excluded from the release manifest and the catalog rather than failing the
-  whole emit. The single-package `streamlib pkg build` / `pkg publish` still
-  hard-fails on the same condition so an author sees the error.
+- The whole-tree `.slpkg` emit **skips** any `packages/*` that is
+  non-distributable — one carrying a `streamlib.yaml` path-`patch:` block OR a
+  Cargo.toml dependency-table `path` dep (the test-only fixtures) — with a
+  `warn!` naming every offender, so it is excluded from the release manifest
+  and the catalog rather than failing the whole emit. The skip predicate
+  (`decide_package_emit`) keys on exactly the set `ensure_no_path_artifacts`
+  rejects for the `Slpkg` target, so the skip set equals the rejection set: a
+  package the emit would hard-fail on is always skipped instead. TARGET paths
+  (`[[bin]].path` / `[lib].path`) are not dependency paths and never count. The
+  single-package `streamlib pkg build` / `pkg publish` still hard-fails on the
+  same condition so an author sees the error.
 
 ## Consuming a tree
 
