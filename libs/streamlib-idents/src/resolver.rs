@@ -549,6 +549,17 @@ fn resolve_bare_schema_name_internal<'a>(
                     dep: dep_id.clone(),
                 }
             })?;
+            // Guard against a mutually- or self-referential external chain
+            // (A -> B -> A): without it the recursion never terminates and
+            // aborts on stack overflow instead of surfacing a typed error.
+            if chain.contains(&dep_id) {
+                chain.push(dep_id);
+                return Err(ResolverError::BareSchemaNameCycle {
+                    name: name.as_str().to_string(),
+                    package: pkg_id.clone(),
+                    chain: chain.clone(),
+                });
+            }
             resolve_bare_schema_name_internal(packages, dep, name, chain)
         }
     }
@@ -1242,6 +1253,59 @@ schemas:
         let (owner, file) = resolve_bare_schema_name(&res, &res.root, &name).unwrap();
         assert_eq!(owner.manifest.package_id().as_deref(), Some("@tatolab/core"));
         assert!(file.ends_with("VideoFrame.yaml"));
+    }
+
+    /// A -> B -> A mutual `External` re-export of the same type must surface
+    /// as a typed error, not recurse until stack overflow. Mentally revert
+    /// the `chain.contains` guard in `resolve_bare_schema_name_internal` and
+    /// this test aborts the process instead of passing.
+    #[test]
+    fn bare_schema_name_external_cycle_is_typed_error_not_stack_overflow() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("a");
+        let b = tmp.path().join("b");
+        write_streamlib_yaml(
+            &a,
+            r#"
+package:
+  org: tatolab
+  name: a
+  version: 1.0.0
+dependencies:
+  "@tatolab/b":
+    path: ../b
+schemas:
+  Loop:
+    package: "@tatolab/b"
+"#,
+        );
+        write_streamlib_yaml(
+            &b,
+            r#"
+package:
+  org: tatolab
+  name: b
+  version: 1.0.0
+dependencies:
+  "@tatolab/a":
+    path: ../a
+schemas:
+  Loop:
+    package: "@tatolab/a"
+"#,
+        );
+
+        let res = resolve(&a).unwrap();
+        let name = TypeName::new("Loop").unwrap();
+        let err = resolve_bare_schema_name(&res, &res.root, &name).unwrap_err();
+        match err {
+            ResolverError::BareSchemaNameCycle { name, chain, .. } => {
+                assert_eq!(name, "Loop");
+                assert!(chain.iter().any(|p| p == "@tatolab/a"), "chain: {chain:?}");
+                assert!(chain.iter().any(|p| p == "@tatolab/b"), "chain: {chain:?}");
+            }
+            other => panic!("expected BareSchemaNameCycle, got {other:?}"),
+        }
     }
 
     #[test]

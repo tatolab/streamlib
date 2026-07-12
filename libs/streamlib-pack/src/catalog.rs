@@ -15,6 +15,13 @@
 //! the set of packages being published in the same release. Resolution
 //! failures surface as a typed [`CatalogError`] — never a panic, never a
 //! bare-name fallback.
+//!
+//! Schema-only packages (no `processors:` key, e.g. `@tatolab/core`) emit a
+//! present-but-empty catalog plus their owned JTDs and contribute zero
+//! aggregate index lines. Auto-discovery mode (no explicit `schemas:` map)
+//! keys JTDs by each file's `metadata.type`; two files sharing a
+//! `metadata.type` is malformed input and last-wins-overwrites one JTD —
+//! documented, not defended.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -708,6 +715,87 @@ schemas:
             }
             other => panic!("expected SchemaResolutionCycle, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn schema_only_package_emits_empty_catalog_and_owned_jtds() {
+        // Real emit inputs include schema-only packages (core, escalate) with
+        // no `processors:` key: catalog present-but-empty, owned JTDs
+        // emitted, zero aggregate index lines.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("core");
+        write(
+            &dir,
+            "streamlib.yaml",
+            r#"
+package:
+  org: tatolab
+  name: core
+  version: 1.4.0
+schemas:
+  VideoFrame:
+    file: schemas/video_frame.yaml
+"#,
+        );
+        write(
+            &dir,
+            "schemas/video_frame.yaml",
+            "metadata:\n  type: VideoFrame\nproperties:\n  width:\n    type: uint32\n",
+        );
+        let siblings = build_sibling_versions(&[dir.clone()]).unwrap();
+        let arts = build_package_catalog(&dir, &siblings).unwrap();
+        assert!(arts.catalog.processors.is_empty(), "no processors declared");
+        assert!(arts.index_lines.is_empty(), "no index lines for a schema-only package");
+        let owned: Vec<&str> = arts.schema_jtd.iter().map(|s| s.type_name.as_str()).collect();
+        assert_eq!(owned, vec!["VideoFrame"], "owned JTDs still emitted");
+    }
+
+    /// Locks the deliberate version asymmetry: a `-dev.N` package's catalog
+    /// carries the FULL prerelease version, while every schema ident it
+    /// resolves is release-core (per the SchemaIdent invariant).
+    #[test]
+    fn prerelease_package_catalog_keeps_prerelease_but_idents_are_release_core() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("widget");
+        write(
+            &dir,
+            "streamlib.yaml",
+            r#"
+package:
+  org: tatolab
+  name: widget
+  version: 2.1.0-dev.3
+schemas:
+  WidgetConfig:
+    file: schemas/widget_config.yaml
+processors:
+- name: Widget
+  version: 1.0.0
+  runtime: rust
+  execution: reactive
+  config:
+    name: config
+    schema: WidgetConfig
+  outputs:
+  - name: out
+    schema: WidgetConfig
+"#,
+        );
+        write(
+            &dir,
+            "schemas/widget_config.yaml",
+            "metadata:\n  type: WidgetConfig\nproperties: {}\n",
+        );
+        let siblings = build_sibling_versions(&[dir.clone()]).unwrap();
+        let arts = build_package_catalog(&dir, &siblings).unwrap();
+        // Catalog version: the full published prerelease.
+        assert_eq!(arts.catalog.version.to_string(), "2.1.0-dev.3");
+        assert_eq!(arts.index_lines[0].version.to_string(), "2.1.0-dev.3");
+        // Idents: release-core projected.
+        let cfg = arts.catalog.processors[0].config.as_ref().unwrap();
+        assert_eq!(cfg.schema.to_string(), "@tatolab/widget/WidgetConfig@2.1.0");
+        let port = arts.catalog.processors[0].outputs[0].schema.schema().unwrap();
+        assert_eq!(port.version, SemVer::new(2, 1, 0));
     }
 
     #[test]

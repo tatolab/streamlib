@@ -736,10 +736,13 @@ fn emit_slpkg_and_manifest(
         .map_err(|e| anyhow::anyhow!("upload release manifest: {e}"))?;
 
     // Registry-wide catalog aggregate, written AFTER the per-package catalog
-    // files and the release manifest. The whole staging tree flips atomically
-    // (`build_and_flip`), so a `file://` reader never observes the aggregate
-    // without the release it describes — but ordering it last keeps the
-    // HTTP-direct-write intuition (index after members) consistent.
+    // files and the release manifest, at a STAGING-relative path so it rides
+    // the same atomic flip (`build_and_flip`) — a `file://` reader never
+    // observes the aggregate without the release it describes. Ordering it
+    // last keeps the HTTP-direct-write intuition (index after members)
+    // consistent. The CI static-registry emit smoke asserts the aggregate +
+    // a per-package catalog exist in the emitted tree, locking this
+    // staging-relativity through the real emit path.
     let index_path = staging.join(CATALOG_INDEX_PATH);
     if let Some(parent) = index_path.parent() {
         std::fs::create_dir_all(parent)
@@ -750,10 +753,14 @@ fn emit_slpkg_and_manifest(
     Ok(())
 }
 
-/// Write one package's catalog artifacts into its version directory under
-/// `slpkg/<name>/<version>/`: `<name>.catalog.json` beside the `.slpkg`, and
-/// each owned schema's JTD under `schemas/<Type>.jtd.json`. `slpkg_dir` is the
-/// tree's `slpkg/` root (the same base the `.slpkg` store uses).
+/// Write one package's catalog artifacts under the tree's `slpkg/` root:
+/// `<name>.catalog.json` beside the `.slpkg` in the FULL-version dir
+/// (`slpkg/<name>/<version>/`, matching per-package catalog fetch by exact
+/// published version), and each owned schema's JTD under the **release-core**
+/// version dir (`slpkg/<name>/<release-core>/schemas/`) — schema idents are
+/// release-core by invariant, so the reader derives the JTD path from the
+/// ident's projected version. A `-dev.N` publisher whose JTDs sat under the
+/// full prerelease dir would be silently unfetchable.
 pub fn write_package_catalog(
     slpkg_dir: &Path,
     artifacts: &crate::catalog::PackageCatalogArtifacts,
@@ -770,7 +777,11 @@ pub fn write_package_catalog(
         .with_context(|| format!("write {}", catalog_path.display()))?;
 
     if !artifacts.schema_jtd.is_empty() {
-        let schemas_dir = ver_dir.join("schemas");
+        // Release-core dir — the version basis of every SchemaIdent.
+        let jtd_ver_dir = slpkg_dir
+            .join(name)
+            .join(artifacts.catalog.version.release_core().to_string());
+        let schemas_dir = jtd_ver_dir.join("schemas");
         std::fs::create_dir_all(&schemas_dir)
             .with_context(|| format!("create {}", schemas_dir.display()))?;
         for jtd in &artifacts.schema_jtd {

@@ -192,6 +192,69 @@ fn reconstruct_wiring_graph_from_catalog_without_touching_slpkg() {
     assert_ne!(camera_line.processor.outputs[0].schema, CatalogSchemaRef::Any);
 }
 
+/// GATING regression: a `-dev.N` publisher's JTDs must be fetchable by the
+/// release-core ident. The writer places JTDs under the RELEASE-CORE version
+/// dir because `SchemaIdent` versions are release-core by invariant and the
+/// reader derives the JTD path from the ident. Mentally revert
+/// `write_package_catalog` to place JTDs under the full prerelease dir and
+/// `fetch_schema_type_definition` silently returns `Ok(None)` — this test
+/// fails on the `expect`.
+#[test]
+fn prerelease_publisher_jtd_resolves_by_release_core_ident() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("packages");
+    let tree = tmp.path().join("registry");
+
+    let widget = src.join("widget");
+    write(
+        &widget,
+        "streamlib.yaml",
+        r#"
+package:
+  org: tatolab
+  name: widget
+  version: 2.1.0-dev.3
+schemas:
+  WidgetConfig:
+    file: schemas/widget_config.yaml
+processors:
+- name: Widget
+  version: 1.0.0
+  runtime: rust
+  execution: reactive
+  config:
+    name: config
+    schema: WidgetConfig
+"#,
+    );
+    write(
+        &widget,
+        "schemas/widget_config.yaml",
+        "metadata:\n  type: WidgetConfig\nproperties: {}\n",
+    );
+    emit_catalog_tree(&tree, &[widget]);
+
+    let client = CatalogClient::new(format!("file://{}", tree.display()), None);
+
+    // The per-package catalog is fetched by the FULL published version…
+    let index = client.fetch_processor_index().unwrap();
+    assert_eq!(index.len(), 1);
+    assert_eq!(index[0].version.to_string(), "2.1.0-dev.3");
+    let catalog = client
+        .fetch_package_catalog(&pkg_ref("widget"), &index[0].version)
+        .unwrap()
+        .expect("per-package catalog under the full prerelease version dir");
+
+    // …while the JTD is fetched by the release-core ident and MUST resolve.
+    let cfg_ident = catalog.processors[0].config.as_ref().unwrap().schema.clone();
+    assert_eq!(cfg_ident.to_string(), "@tatolab/widget/WidgetConfig@2.1.0");
+    let jtd = client
+        .fetch_schema_type_definition(&cfg_ident)
+        .unwrap()
+        .expect("JTD must resolve for a -dev.N publisher via the release-core ident");
+    assert_eq!(jtd["metadata"]["type"], "WidgetConfig");
+}
+
 /// The catalog aggregate is written at a STAGING-relative path
 /// (`CATALOG_INDEX_PATH` joined onto the staging root inside
 /// `emit_slpkg_and_manifest`), so it rides the same `build_and_flip` seam as
