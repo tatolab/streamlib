@@ -268,12 +268,11 @@ pub(crate) fn strip_semver_suffix(name: &str) -> &str {
     name
 }
 
+/// Whether `s` is a canonical `SemVer` string (`X.Y.Z`, optionally with a
+/// `-dev.N` / `-rc.N` prerelease). Delegates to the canonical parser so the
+/// suffix-stripping grammar stays in lock-step with `streamlib_idents::SemVer`.
 fn is_semver(s: &str) -> bool {
-    let parts: Vec<&str> = s.split('.').collect();
-    if parts.len() != 3 {
-        return false;
-    }
-    parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+    s.parse::<streamlib_idents::SemVer>().is_ok()
 }
 
 #[cfg(test)]
@@ -713,6 +712,22 @@ mod tests {
         assert_eq!(
             strip_semver_suffix("@tatolab/core/VideoFrame"),
             "@tatolab/core/VideoFrame"
+        );
+        // Prerelease-suffixed idents strip cleanly now that `is_semver`
+        // delegates to the canonical parser. Schema idents are
+        // release-only by invariant, but the stripper stays robust regardless.
+        assert_eq!(
+            strip_semver_suffix("@tatolab/core/VideoFrame@0.4.33-dev.2"),
+            "@tatolab/core/VideoFrame"
+        );
+        assert_eq!(
+            strip_semver_suffix("@tatolab/core/VideoFrame@1.0.0-rc.1"),
+            "@tatolab/core/VideoFrame"
+        );
+        // A non-semver trailing `@segment` is left intact.
+        assert_eq!(
+            strip_semver_suffix("@tatolab/core/VideoFrame@latest"),
+            "@tatolab/core/VideoFrame@latest"
         );
     }
 

@@ -126,6 +126,74 @@ class TestProcessorDecorator:
         assert ident.version == "0.1.0"
         assert str(ident) == "@tatolab/cyberpunk-processor/CyberpunkProcessor@0.1.0"
 
+    def test_prerelease_package_version_projects_to_release_core(
+        self, tmp_path: Path
+    ) -> None:
+        # A `-dev.N` / `-rc.N` package version is legal; the schema ident it
+        # mints must project onto the release core (the 3-part SchemaIdent
+        # validator would otherwise reject the dev-versioned package).
+        _write_manifest(
+            tmp_path,
+            """
+            package:
+              org: tatolab
+              name: camera
+              version: 0.4.33-dev.2
+
+            processors:
+              - name: Camera
+                runtime: python
+                execution: reactive
+            """,
+        )
+        module = _import_class_from_dir(
+            tmp_path,
+            "decorator_prerelease_module",
+            """
+            from streamlib import processor
+
+            @processor("Camera")
+            class Camera:
+                pass
+            """,
+        )
+        ident = module.Camera.__streamlib_schema_ident__
+        assert ident.version == "0.4.33"
+        assert str(ident) == "@tatolab/camera/Camera@0.4.33"
+
+    def test_unknown_prerelease_channel_rejected_not_projected(
+        self, tmp_path: Path
+    ) -> None:
+        # Only `-dev.N` / `-rc.N` project; an alpha (or any foreign channel)
+        # must raise — the same manifest is rejected by Rust's parser, and
+        # silently projecting here would let the runtimes disagree.
+        _write_manifest(
+            tmp_path,
+            """
+            package:
+              org: tatolab
+              name: camera
+              version: 0.4.33-alpha.1
+
+            processors:
+              - name: Camera
+                runtime: python
+                execution: reactive
+            """,
+        )
+        with pytest.raises(ValueError, match="invalid package version"):
+            _import_class_from_dir(
+                tmp_path,
+                "decorator_alpha_module",
+                """
+                from streamlib import processor
+
+                @processor("Camera")
+                class Camera:
+                    pass
+                """,
+            )
+
     def test_missing_manifest_errors_with_expected_path(self, tmp_path: Path) -> None:
         # No streamlib.yaml in tmp_path
         with pytest.raises(FileNotFoundError, match="streamlib.yaml"):

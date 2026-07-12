@@ -378,6 +378,40 @@ env:
     }
 
     #[test]
+    fn resolve_named_to_ident_projects_prerelease_owner_to_release_core() {
+        // Runtime mirror of the macro-side bare-name resolution. The ident it
+        // mints flows onto `PortSchemaSpec`'s wire form, which carries only
+        // major/minor/patch — `SchemaIdent::new`'s release-core projection is
+        // what prevents a dev-versioned owner from silently truncating there.
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("project");
+        std::fs::create_dir_all(root.join("schemas")).unwrap();
+        std::fs::write(
+            root.join("streamlib.yaml"),
+            r#"
+package:
+  org: tatolab
+  name: camera
+  version: 0.4.33-dev.2
+schemas:
+  VideoFrame:
+    file: schemas/video_frame.yaml
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("schemas/video_frame.yaml"),
+            "metadata:\n  type: VideoFrame\nproperties: {}\n",
+        )
+        .unwrap();
+        let resolved = streamlib_idents::resolve(&root).unwrap();
+        let name = streamlib_processor_schema::TypeName::new("VideoFrame").unwrap();
+        let ident = resolve_named_to_ident(&resolved, &name).unwrap();
+        assert_eq!(ident.version, streamlib_idents::SemVer::new(0, 4, 33));
+        assert_eq!(ident.to_string(), "@tatolab/camera/VideoFrame@0.4.33");
+    }
+
+    #[test]
     fn test_load_with_path_dependency() {
         let dir = TempDir::new().unwrap();
         let config_path = dir.path().join("streamlib.yaml");

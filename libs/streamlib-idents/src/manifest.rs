@@ -498,6 +498,33 @@ dependencies: {}
     }
 
     #[test]
+    fn package_flavor_round_trips_prerelease_version() {
+        // A package may carry a `-dev.N` / `-rc.N` prerelease version.
+        let yaml = "
+package:
+  org: tatolab
+  name: camera
+  version: 0.4.33-dev.2
+dependencies:
+  \"@tatolab/core\": \">=1.0.0-rc.1\"
+";
+        let m: Manifest = serde_yaml::from_str(yaml).unwrap();
+        let pkg = m.package.as_ref().unwrap();
+        assert_eq!(
+            pkg.version,
+            SemVer::new_prerelease(0, 4, 33, crate::semver::PrereleaseKind::Dev, 2)
+        );
+        // Serializes back to the canonical dotted-plus-suffix form.
+        let out = serde_yaml::to_string(&m).unwrap();
+        assert!(out.contains("0.4.33-dev.2"), "serialized: {out}");
+        // A prerelease range dep round-trips too.
+        match m.dependencies.get(&pkg_ref("tatolab", "core")).unwrap() {
+            DependencySpec::Registry(r) => assert_eq!(r.version.to_string(), ">=1.0.0-rc.1"),
+            other => panic!("expected Registry, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn project_flavor_with_three_dep_sources() {
         let yaml = r#"
 dependencies:

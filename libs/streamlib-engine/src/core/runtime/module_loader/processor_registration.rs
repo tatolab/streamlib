@@ -121,8 +121,8 @@ pub(super) fn register_manifest_processors(
     for proc_schema in &config.processors {
         // Compose the structured processor ident from the manifest's
         // package metadata + the processor's PascalCase short name.
-        let proc_type_name = streamlib_processor_schema::TypeName::new(&proc_schema.name)
-            .map_err(|e| {
+        let proc_schema_ident =
+            compose_processor_schema_ident(package_metadata, &proc_schema.name).map_err(|e| {
                 Error::Configuration(format!(
                     "processor short name `{}` in {} is not valid PascalCase: {}",
                     proc_schema.name,
@@ -130,12 +130,6 @@ pub(super) fn register_manifest_processors(
                     e
                 ))
             })?;
-        let proc_schema_ident = crate::core::descriptors::SchemaIdent::new(
-            package_metadata.org.clone(),
-            package_metadata.name.clone(),
-            proc_type_name,
-            package_metadata.version.clone(),
-        );
 
         // Map runtime language to ProcessorRuntime
         let runtime = match proc_schema.runtime.language {
@@ -434,4 +428,48 @@ pub(super) fn register_manifest_processors(
     );
 
     Ok(())
+}
+
+/// Compose a processor's structured schema ident from its package's metadata
+/// + PascalCase short name. `SchemaIdent::new` projects a prerelease package
+/// version onto its release core (constructor invariant), so a dev-versioned
+/// package registers release-core processor idents — matching the idents the
+/// Python / Deno decorator side mints for the same processors.
+fn compose_processor_schema_ident(
+    package_metadata: &crate::core::config::PackageMetadata,
+    short_name: &str,
+) -> std::result::Result<crate::core::descriptors::SchemaIdent, streamlib_idents::IdentError> {
+    let type_name = streamlib_processor_schema::TypeName::new(short_name)?;
+    Ok(crate::core::descriptors::SchemaIdent::new(
+        package_metadata.org.clone(),
+        package_metadata.name.clone(),
+        type_name,
+        package_metadata.version,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn processor_ident_from_dev_versioned_package_is_release_core() {
+        // The module-load registration path must register the same identity
+        // the Python / Deno decorators mint — a dev-versioned package's
+        // processor idents carry the release core, or full-ident comparisons
+        // and registry map keys split across the host/subprocess boundary.
+        let meta: crate::core::config::PackageMetadata = serde_yaml::from_str(
+            "org: tatolab\nname: camera\nversion: 0.4.33-dev.2\n",
+        )
+        .unwrap();
+        let ident = compose_processor_schema_ident(&meta, "Camera").unwrap();
+        assert_eq!(
+            ident.version,
+            streamlib_idents::SemVer::new(0, 4, 33),
+            "prerelease must not survive into the registered processor ident"
+        );
+        assert_eq!(ident.to_string(), "@tatolab/camera/Camera@0.4.33");
+        // Invalid short names still surface as errors.
+        assert!(compose_processor_schema_ident(&meta, "not-pascal").is_err());
+    }
 }

@@ -169,11 +169,16 @@ export function processor(shortName: string, moduleUrl: string) {
       );
     }
 
+    // Schema idents are release-only by invariant: a package may carry a
+    // `-dev.N` / `-rc.N` prerelease version, but its schema idents project
+    // onto the release core (mirrors Rust's `SemVer::release_core`). The
+    // 3-part `SchemaIdent` validator would otherwise reject a legitimately
+    // dev-versioned package's processors.
     const ident = new SchemaIdent(
       summary.package.org,
       summary.package.name,
       shortName,
-      summary.package.version,
+      releaseCore(summary.package.version),
     );
 
     // Attach as static fields. Mirrors Python's
@@ -277,6 +282,33 @@ export function output(opts: PortOptions = {}) {
 // =============================================================================
 // Internal helpers
 // =============================================================================
+
+/**
+ * Package-version grammar: 3-part core + optional closed `-dev.N` / `-rc.N`
+ * prerelease. Mirrors Rust's `SemVer::from_dotted` so all three runtimes
+ * accept and reject the same manifests.
+ */
+const PACKAGE_VERSION_PATTERN = /^(\d+\.\d+\.\d+)(?:-(?:dev|rc)\.\d+)?$/;
+
+/**
+ * Project a package version onto its release core `MAJOR.MINOR.PATCH`.
+ *
+ * Package versions may carry a `-dev.N` / `-rc.N` prerelease, but schema
+ * idents are release-only by invariant. Anything outside that closed grammar
+ * (`-alpha.1`, `+build`, malformed ordinals) throws — identical posture to
+ * Rust's manifest parsing, never a silent projection of an invalid version.
+ * Mirrors Rust's `streamlib_idents::SemVer::release_core`.
+ */
+function releaseCore(version: string): string {
+  const match = PACKAGE_VERSION_PATTERN.exec(version);
+  if (match === null) {
+    throw new Error(
+      `invalid package version ${JSON.stringify(version)}: must be ` +
+        `MAJOR.MINOR.PATCH with an optional -dev.N / -rc.N prerelease`,
+    );
+  }
+  return match[1];
+}
 
 function locateSiblingManifest(
   moduleUrl: string,
