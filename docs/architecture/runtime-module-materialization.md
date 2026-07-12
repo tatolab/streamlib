@@ -46,7 +46,7 @@ deployment chooses to wire (or not).
         ┌──────────── streamlib-build-orchestrator ─────────────────┐
         │  PolyglotBuildOrchestrator : BuildOrchestrator             │
         │   calls streamlib-pack::assemble_artifact (the SAME        │
-        │   routine `streamlib pack` uses) targeting an extracted    │
+        │   routine `streamlib pkg build` uses) targeting an extracted    │
         │   StagedDir:                                               │
         │     rust   → cargo build → cdylib at lib/<triple>/         │
         │     python → full source tree (.py + data/assets +         │
@@ -60,7 +60,7 @@ deployment chooses to wire (or not).
         └────────────────────────────────────────────────────────────┘
 ```
 
-There is ONE materialization path, shared with `streamlib pack` and
+There is ONE materialization path, shared with `streamlib pkg build` and
 with installing from a `.slpkg` / GitHub repo. The orchestrator assembles
 the *complete* artifact (Rust cdylib, full Python source, Deno bundle,
 schemas) via [`streamlib-pack`] and stages it as an extracted directory
@@ -293,7 +293,7 @@ Engine ↔ plugin stay in lock-step on two complementary layers:
 - Default orchestrator: `libs/streamlib-build-orchestrator/` (calls
   `streamlib-pack` and stages into `cache/packages/<name>-<version>/`).
 - Shared assembly: `libs/streamlib-pack/` (`assemble_artifact` —
-  emits a `.slpkg` for `streamlib pack` or an extracted `StagedDir` for
+  emits a `.slpkg` for `streamlib pkg build` or an extracted `StagedDir` for
   the orchestrator).
 - Python venv provisioning (the tail of `materialize`: `uv venv` →
   `uv pip install` → `streamlib/_generated_` codegen → `compileall`,
