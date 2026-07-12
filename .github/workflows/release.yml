@@ -1,7 +1,0 @@
-name: Release
-
-# DISABLED: Release workflow needs redesign after PyO3 removal.
-# The old workflow built maturin/PyO3 wheels which are no longer applicable.
-# Future: build .slpkg bundles per #136
-on:
-  workflow_dispatch: # Manual trigger only
