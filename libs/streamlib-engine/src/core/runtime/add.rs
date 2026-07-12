@@ -114,6 +114,21 @@ pub enum AddError {
     #[error("reading the materialized manifest at {} failed: {detail}", dir.display())]
     ManifestRead { dir: PathBuf, detail: String },
 
+    /// The registry served a `.slpkg` whose `package:` block declares a
+    /// different identity than the one requested (its store location and its
+    /// manifest disagree — a mis-published package). Fail loud instead of
+    /// recording a divergent identity in `packages.yaml`.
+    #[error(
+        "identity mismatch: requested '{requested}' v{requested_version} but the \
+         downloaded package declares '{found}' v{found_version}"
+    )]
+    IdentityMismatch {
+        requested: PackageRef,
+        requested_version: SemVer,
+        found: PackageRef,
+        found_version: SemVer,
+    },
+
     /// The injected [`BuildOrchestrator`] failed to materialize the package.
     #[error("materializing '{package}' failed: {source}")]
     Materialize {
@@ -202,29 +217,39 @@ pub fn add(
         })?;
     tracing::info!(version = %selected, "add: selected version");
 
-    // Idempotency: an entry already pinned to exactly the selected version is a
-    // no-op materialize. Reuse the recorded slot; still fetch the catalog so
-    // the caller gets the same summary shape as a fresh add.
+    // Idempotency: an entry already pinned to exactly the selected version whose
+    // cache slot still exists on disk is a no-op materialize. The `is_dir` guard
+    // is self-healing — a recorded-but-evicted slot (someone `rm -rf`'d the
+    // cache) falls through and re-materializes rather than reporting a present
+    // package whose slot is gone. Reuse fetches the catalog so the caller gets
+    // the same summary shape as a fresh add.
     let existing_slot = InstalledPackageManifest::load()
         .map_err(|e| AddError::LoadManifest {
             detail: e.to_string(),
         })?
         .find_by_ref(pkg_ref)
         .filter(|e| e.version == selected)
-        .map(|e| e.cache_dir.clone());
+        .map(|e| get_cached_package_dir(&e.cache_dir))
+        .filter(|dir| dir.is_dir());
 
-    let (cache_dir, already_present) = if let Some(cache_key) = existing_slot {
+    let (cache_dir, already_present) = if let Some(dir) = existing_slot {
         tracing::info!(version = %selected, "add: already present at selected version — skipping materialize");
-        (get_cached_package_dir(&cache_key), true)
+        (dir, true)
     } else {
         let policy = options.materialize_policy.unwrap_or(BuildPolicy::AlwaysBuild);
         let extracted = download_and_extract(&client, pkg_ref, selected)?;
+        // The registry download path is keyed by the requested `pkg_ref` + the
+        // selected version, so the materialized package's own manifest MUST
+        // declare that same identity — reconcile so a mis-published `.slpkg`
+        // (its `package:` block disagreeing with its store location) fails loud
+        // instead of silently recording a divergent identity.
         let (_ref, _version, staged_dir) = materialize_and_record(
             extracted,
             orchestrator,
             sink,
             policy,
             format!("registry:{}", registry.base_url),
+            Some((pkg_ref, selected)),
         )?;
         (staged_dir, false)
     };
@@ -252,6 +277,8 @@ pub fn add_slpkg(
     sink: &dyn BuildEventSink,
 ) -> std::result::Result<AddReport, AddError> {
     let extracted = extract_slpkg(archive)?;
+    // A local artifact has no external identity to reconcile against — its
+    // `package:` block IS the identity — so no `expected` check.
     let (package, version, cache_dir) = materialize_and_record(
         extracted,
         orchestrator,
@@ -260,6 +287,7 @@ pub fn add_slpkg(
         // build the bundled source (identical to `Strategy::Slpkg`).
         BuildPolicy::IfStale,
         format!("slpkg:{}", archive.display()),
+        None,
     )?;
     Ok(AddReport {
         package,
@@ -381,13 +409,19 @@ fn extract_slpkg(archive: &Path) -> std::result::Result<PathBuf, AddError> {
 /// Materialize an extracted package directory through the orchestrator, then
 /// record it in `packages.yaml`. Reads the package's identity + metadata from
 /// its own `streamlib.yaml` (the authoritative source for what was
-/// materialized). Returns `(package, version, staged_dir)`.
+/// materialized). When `expected` is `Some`, the manifest's identity must
+/// match it or [`AddError::IdentityMismatch`] is returned **before** anything
+/// is recorded — the registry path passes the requested `(pkg_ref, version)`
+/// so a mis-published `.slpkg` can't silently record a divergent identity; a
+/// local `.slpkg` passes `None` (its own manifest IS the identity). Returns
+/// `(package, version, staged_dir)`.
 fn materialize_and_record(
     extracted_dir: PathBuf,
     orchestrator: &dyn BuildOrchestrator,
     sink: &dyn BuildEventSink,
     policy: BuildPolicy,
     installed_from: String,
+    expected: Option<(&PackageRef, SemVer)>,
 ) -> std::result::Result<(PackageRef, SemVer, PathBuf), AddError> {
     let meta = Manifest::load(&extracted_dir)
         .map_err(|e| AddError::ManifestRead {
@@ -401,6 +435,17 @@ fn materialize_and_record(
         })?;
     let package = PackageRef::new(meta.org.clone(), meta.name.clone());
     let version = meta.version;
+
+    if let Some((expected_ref, expected_version)) = expected {
+        if &package != expected_ref || version != expected_version {
+            return Err(AddError::IdentityMismatch {
+                requested: expected_ref.clone(),
+                requested_version: expected_version,
+                found: package,
+                found_version: version,
+            });
+        }
+    }
 
     let request = BuildRequest {
         package: package.clone(),
@@ -775,5 +820,63 @@ mod tests {
         let pr = pkg_ref("tatolab", "never-installed");
         let err = remove(&pr).expect_err("removing an absent package must fail loud");
         assert!(matches!(err, RemoveError::NotInstalled { .. }), "got {err:?}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn add_refetches_when_recorded_slot_is_evicted() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = sandbox_home(home.path());
+        let tree = tempfile::tempdir().unwrap();
+        scratch_tree(tree.path(), "tatolab", "foo", &["1.1.0"], None);
+        let pr = pkg_ref("tatolab", "foo");
+        let req = SemVerRange::from_str("^1.0.0").unwrap();
+
+        let first = add(&pr, &req, &MockOrchestrator, &NullSink, &opts(tree.path())).unwrap();
+        assert!(!first.already_present);
+        // Evict the cache slot out from under the recorded entry.
+        std::fs::remove_dir_all(&first.cache_dir).unwrap();
+        assert!(!first.cache_dir.exists());
+
+        // Mentally-revert the `.filter(|dir| dir.is_dir())` self-heal guard: the
+        // second add would report `already_present = true` pointing at a gone
+        // slot. With the guard it re-materializes and the slot is loadable again.
+        let second = add(&pr, &req, &MockOrchestrator, &NullSink, &opts(tree.path())).unwrap();
+        assert!(!second.already_present, "an evicted slot must re-materialize");
+        assert!(second.cache_dir.join("streamlib.yaml").is_file());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn add_identity_mismatch_fails_loud() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = sandbox_home(home.path());
+        let tree = tempfile::tempdir().unwrap();
+        // The store location says foo@1.1.0, but the `.slpkg`'s own manifest
+        // declares `bar` — a mis-published package.
+        let dir = tree.path().join("slpkg").join("foo").join("1.1.0");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_slpkg(&dir.join("foo.slpkg"), "tatolab", "bar", "1.1.0");
+
+        let pr = pkg_ref("tatolab", "foo");
+        let req = SemVerRange::from_str("^1.0.0").unwrap();
+        // Mentally-revert the `expected` reconcile in `materialize_and_record`
+        // and this records `@tatolab/bar` under a `foo` request silently.
+        let err = add(&pr, &req, &MockOrchestrator, &NullSink, &opts(tree.path()))
+            .expect_err("a mis-published .slpkg must fail loud");
+        match err {
+            AddError::IdentityMismatch {
+                requested, found, ..
+            } => {
+                assert_eq!(requested.name.as_str(), "foo");
+                assert_eq!(found.name.as_str(), "bar");
+            }
+            other => panic!("expected IdentityMismatch, got {other:?}"),
+        }
+        // Nothing recorded on the failed add.
+        assert!(InstalledPackageManifest::load()
+            .unwrap()
+            .find_by_ref(&pr)
+            .is_none());
     }
 }
