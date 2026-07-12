@@ -523,6 +523,66 @@ mod tests {
     }
 
     #[test]
+    fn select_version_prefers_release_over_prerelease() {
+        // A release-req range must pick the release even when higher-ordinal
+        // prereleases share or exceed the core. No logic change in
+        // `select_version` — the new Ord + npm range policy carry this.
+        use crate::semver::PrereleaseKind;
+        let pr = pkg_ref("tatolab", "camera");
+        let avail = vec![
+            SemVer::new_prerelease(1, 2, 0, PrereleaseKind::Dev, 9),
+            SemVer::new(1, 2, 0),
+            SemVer::new_prerelease(1, 2, 1, PrereleaseKind::Dev, 1),
+        ];
+        let range = SemVerRange::from_str("^1.2.0").unwrap();
+        assert_eq!(select_version(&pr, &range, &avail).unwrap(), SemVer::new(1, 2, 0));
+    }
+
+    #[test]
+    fn select_version_picks_highest_prerelease_for_prerelease_range() {
+        // A prerelease-req range selects the highest same-core prerelease when
+        // no release is available.
+        use crate::semver::PrereleaseKind;
+        let pr = pkg_ref("tatolab", "camera");
+        let avail = vec![
+            SemVer::new_prerelease(1, 2, 0, PrereleaseKind::Dev, 3),
+            SemVer::new_prerelease(1, 2, 0, PrereleaseKind::Dev, 9),
+            SemVer::new_prerelease(1, 2, 0, PrereleaseKind::Rc, 1),
+        ];
+        let range = SemVerRange::from_str(">=1.2.0-dev.3").unwrap();
+        assert_eq!(
+            select_version(&pr, &range, &avail).unwrap(),
+            SemVer::new_prerelease(1, 2, 0, PrereleaseKind::Rc, 1)
+        );
+    }
+
+    #[test]
+    fn list_versions_file_parses_prerelease_dir_names() {
+        // Directory-name version parsing must accept `-dev.N` / `-rc.N` dirs
+        // so a prerelease publish is listable from the file:// mirror.
+        use crate::semver::PrereleaseKind;
+        let tmp = std::env::temp_dir().join(format!("slpkg-pre-{}", std::process::id()));
+        let pkg_dir = tmp.join("camera");
+        std::fs::create_dir_all(pkg_dir.join("0.4.33-dev.2")).unwrap();
+        std::fs::create_dir_all(pkg_dir.join("0.4.33")).unwrap();
+        let cfg = RegistryConfig {
+            base_url: format!("file://{}", tmp.display()),
+            token: None,
+        };
+        let client = RegistryClient::new(&cfg);
+        let mut versions = client.list_versions(&pkg_ref("tatolab", "camera")).unwrap();
+        versions.sort();
+        assert_eq!(
+            versions,
+            vec![
+                SemVer::new_prerelease(0, 4, 33, PrereleaseKind::Dev, 2),
+                SemVer::new(0, 4, 33),
+            ]
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
     fn select_version_errors_when_none_match() {
         let pr = pkg_ref("tatolab", "escalate");
         let avail = vec![SemVer::new(2, 0, 0), SemVer::new(3, 1, 0)];
