@@ -1537,12 +1537,17 @@ processors:
     }
 
     /// A diamond where both branches agree on the shared dependency's
-    /// version (B→D@1.0.0, C→D@1.0.0) resolves cleanly, D's schema is
-    /// registered, and the memo records D exactly once at 1.0.0 with BOTH
-    /// requirers — the single-registration invariant. Reverting the
-    /// same-version record-and-skip branch drops the second requirer (or
-    /// removes the memo entirely), failing the `required_by.len() == 2`
-    /// assertion.
+    /// version (B→D@1.0.0, C→D@1.0.0) resolves cleanly and D's schema is
+    /// registered. The single-registration invariant is locked by the
+    /// memo assertion: D is recorded exactly once at 1.0.0 with C added as
+    /// a *second requirer of the same resolution* (`required_by.len() ==
+    /// 2`), which proves C took the same-version skip path instead of
+    /// re-registering + re-walking D. (Schema presence alone can't witness
+    /// this — schema registration is an idempotent map overwrite, so a
+    /// double-walk would leave the same observable schema; the requirer
+    /// count is what the skip drives.) Reverting the same-version
+    /// record-and-skip branch drops the second requirer (or removes the
+    /// memo entirely), failing the assertion.
     #[test]
     #[serial]
     fn diamond_agreeing_versions_resolve_and_register_once() {
@@ -1749,6 +1754,60 @@ processors:
             record.required_by.len(),
             2,
             "both top-level add_module calls must be recorded as requirers",
+        );
+    }
+
+    /// A load that fails mid-registration must NOT poison the memo: the
+    /// version commit is deferred until registration + the transitive walk
+    /// succeed, so a failed package leaves no entry and a retry re-runs the
+    /// full registration instead of hitting the same-version skip and
+    /// silently returning `Ok` for a never-registered package. Here X
+    /// declares a schema whose file is missing, so `add_module` fails
+    /// before the deferred commit. Mentally reverting to commit-before-
+    /// registration would leave X in the memo and fail the `!contains_key`
+    /// assertion.
+    #[test]
+    #[serial]
+    fn failed_load_does_not_poison_the_memo() {
+        let home = tempfile::tempdir().unwrap();
+        let pkg = tempfile::tempdir().unwrap();
+        // Declares a schema pointing at a file that does not exist →
+        // `register_package_schemas` errors before the deferred memo
+        // commit at the end of the walk body.
+        std::fs::write(
+            pkg.path().join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: poison-x\n  version: \"1.0.0\"\n\
+             schemas:\n  PoisonSchema:\n    file: schemas/does-not-exist.yaml\n",
+        )
+        .unwrap();
+
+        let _guard = HomeGuard::install(home.path());
+        let runtime = Runner::new().expect("Runner::new");
+        runtime.set_build_orchestrator(LoadAsIsOrchestrator);
+        let err = runtime
+            .add_module_with_blocking(
+                ModuleIdent::any(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("poison-x").unwrap(),
+                ),
+                Strategy::Path {
+                    path: pkg.path().to_path_buf(),
+                    build: BuildPolicy::NeverBuild,
+                },
+            )
+            .expect_err("missing schema file must fail the load");
+        assert!(
+            matches!(err, AddModuleError::LoadProjectFailed { .. }),
+            "expected LoadProjectFailed from the missing schema, got: {err:?}",
+        );
+
+        let x_ref = streamlib_idents::PackageRef::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("poison-x").unwrap(),
+        );
+        assert!(
+            !runtime.resolution_memo.lock().contains_key(&x_ref),
+            "a failed load must not leave a resolution-memo entry",
         );
     }
 

@@ -233,24 +233,22 @@ fn add_module_recursive_body(
     // range-only check would never fire. A same-version re-encounter
     // short-circuits before re-registration + re-recursion, which also
     // fixes the historical silent double-registration.
+    //
+    // The commit into the memo is deferred to *after* this package's
+    // registration + transitive walk succeed (see the end of the
+    // function). A same-package re-entry within the current subtree is a
+    // dependency cycle already caught by the `seen` guard above, so
+    // deferring the commit never weakens conflict detection — but it does
+    // keep a load that fails mid-registration from poisoning the memo and
+    // making a retried `add_module` silently skip an unregistered package.
     let requirer = RequirerRecord {
         requirer: (path.len() >= 2).then(|| path[path.len() - 2].clone()),
         declared_range: module.version.clone(),
     };
     {
         let mut memo = resolution_memo.lock();
-        match memo.get_mut(&pkg_ref) {
-            None => {
-                memo.insert(
-                    pkg_ref.clone(),
-                    ResolvedPackageRecord {
-                        version: on_disk_version,
-                        source_path: manifest_dir.clone(),
-                        required_by: vec![requirer],
-                    },
-                );
-            }
-            Some(existing) if existing.version == on_disk_version => {
+        if let Some(existing) = memo.get_mut(&pkg_ref) {
+            if existing.version == on_disk_version {
                 existing.required_by.push(requirer);
                 tracing::debug!(
                     package = %pkg_ref,
@@ -260,23 +258,21 @@ fn add_module_recursive_body(
                 );
                 return Ok(());
             }
-            Some(existing) => {
-                return Err(AddModuleError::SingleVersionConflict {
-                    package: pkg_ref.clone(),
-                    existing_version: existing.version,
-                    existing_required_by: format!(
-                        "{} [resolved from {}]",
-                        describe_requirers(&existing.required_by),
-                        existing.source_path.display(),
-                    ),
-                    conflicting_version: on_disk_version,
-                    conflicting_required_by: format!(
-                        "{} [resolved from {}]",
-                        describe_requirer(&requirer),
-                        manifest_dir.display(),
-                    ),
-                });
-            }
+            return Err(AddModuleError::SingleVersionConflict {
+                package: pkg_ref.clone(),
+                existing_version: existing.version,
+                existing_required_by: format!(
+                    "{} [resolved from {}]",
+                    describe_requirers(&existing.required_by),
+                    existing.source_path.display(),
+                ),
+                conflicting_version: on_disk_version,
+                conflicting_required_by: format!(
+                    "{} [resolved from {}]",
+                    describe_requirer(&requirer),
+                    manifest_dir.display(),
+                ),
+            });
         }
     }
 
@@ -321,6 +317,20 @@ fn add_module_recursive_body(
             source: Box::new(e),
         }
     })?;
+
+    // Registration + the transitive walk succeeded — commit this package's
+    // resolved version to the runtime-lifetime memo now (not at the gate
+    // check above), so a load that fails mid-registration leaves no entry
+    // and a retry re-runs the full registration rather than silently
+    // skipping.
+    resolution_memo.lock().insert(
+        pkg_ref.clone(),
+        ResolvedPackageRecord {
+            version: on_disk_version,
+            source_path: manifest_dir.clone(),
+            required_by: vec![requirer],
+        },
+    );
 
     Ok(())
 }
