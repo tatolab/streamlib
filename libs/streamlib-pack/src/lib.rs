@@ -45,6 +45,8 @@ use streamlib_processor_schema::ProcessorLanguage;
 
 pub use streamlib_cargo_build::CargoProfile;
 
+pub mod link_marker;
+
 /// Which child-process stream a build-log line came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackStream {
@@ -160,6 +162,11 @@ pub fn assemble_artifact(
     // `RewriteRelativeToAbsolute` policy, which is the dev-resolution path.
     if matches!(target, AssembleTarget::Slpkg(_)) {
         ensure_no_path_artifacts(pkg_dir)?;
+        // Same rationale as the path check: a distributable `.slpkg` must not
+        // be assembled from a tree whose dependency resolution is redirected
+        // by an active `streamlib link`. `StagedDir` stays exempt so
+        // orchestrator load-time builds keep working while linked.
+        link_marker::ensure_no_active_link_for_pack(pkg_dir)?;
     }
 
     // (archive_path, source_path) pairs for every file EXCEPT the
@@ -886,6 +893,63 @@ mod tests {
             !entries.iter().any(|e| e.starts_with("lib/")),
             "schemas-only must not carry lib/, got {entries:?}"
         );
+    }
+
+    #[test]
+    fn slpkg_assembly_refuses_under_an_active_link_but_staged_dir_is_exempt() {
+        // The load-bearing pack-seam guard: a distributable `.slpkg` must not
+        // assemble while a `streamlib link` marker exists above the package
+        // dir. StagedDir (orchestrator load-time build) stays exempt so
+        // linked dev trees keep running pipelines.
+        let root = tempdir().unwrap();
+        let marker_dir = root.path().join(link_marker::LINK_STATE_DIR);
+        std::fs::create_dir_all(&marker_dir).unwrap();
+        std::fs::write(
+            marker_dir.join(link_marker::LINK_MANIFEST_FILE),
+            r#"{"checkout":"/opt/sl","python_sdk_path":"/opt/sl/libs/streamlib-python","deno_sdk_entrypoint_path":"/opt/sl/libs/streamlib-deno/mod.ts","linked_at":"t","linked_crate_count":1,"state":"active","files":[]}"#,
+        )
+        .unwrap();
+
+        let pkg = root.path().join("pkg");
+        std::fs::create_dir_all(pkg.join("schemas")).unwrap();
+        std::fs::write(
+            pkg.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: linked-pkg\n  version: 0.1.0\nschemas:\n  T:\n    file: schemas/t.yaml\n",
+        )
+        .unwrap();
+        std::fs::write(
+            pkg.join("schemas/t.yaml"),
+            "metadata:\n  type: T\n  max_payload_bytes: 16\n",
+        )
+        .unwrap();
+
+        // Slpkg target → typed refusal.
+        let err = assemble_artifact(
+            &pkg,
+            &AssembleTarget::Slpkg(pkg.join("o.slpkg")),
+            &slpkg_opts(false),
+            &(),
+        )
+        .unwrap_err();
+        assert!(
+            err.downcast_ref::<link_marker::LinkMarkerError>()
+                .is_some_and(|e| matches!(e, link_marker::LinkMarkerError::PackRefusedWhileLinked { .. })),
+            "expected PackRefusedWhileLinked, got {err:?}"
+        );
+
+        // StagedDir target → exempt, assembles fine while linked.
+        let staged = tempdir().unwrap();
+        assemble_artifact(
+            &pkg,
+            &AssembleTarget::StagedDir(staged.path().to_path_buf()),
+            &AssembleOptions {
+                no_build: false,
+                profile: CargoProfile::Release,
+                path_deps: PathDepPolicy::RewriteRelativeToAbsolute,
+            },
+            &(),
+        )
+        .expect("StagedDir assembly must stay exempt while linked");
     }
 
     #[test]
