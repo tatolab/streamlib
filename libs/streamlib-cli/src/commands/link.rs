@@ -164,15 +164,16 @@ pub fn link(consumer_root: &Path, checkout: &Path) -> Result<(), LinkError> {
     let edits = plan_edits(&consumer_root, &checkout, &index_url, &crates)?;
     let touched = apply_transaction(&consumer_root, &edits)?;
 
-    write_manifest(
-        &consumer_root,
-        &LinkManifest {
-            checkout: checkout.clone(),
-            linked_at: chrono::Utc::now().to_rfc3339(),
-            linked_crate_count: crates.len(),
-            files: touched,
-        },
-    )?;
+    // Persisting the manifest is the final transactional step: if it fails, the
+    // overrides are already on disk, so roll them all back and clear the link
+    // state — the all-or-nothing contract holds through this step too.
+    let manifest = LinkManifest {
+        checkout: checkout.clone(),
+        linked_at: chrono::Utc::now().to_rfc3339(),
+        linked_crate_count: crates.len(),
+        files: touched,
+    };
+    finalize_link(&consumer_root, &edits, &manifest)?;
 
     println!("Linked streamlib → {}", checkout.display());
     println!("  Cargo crates redirected: {}", crates.len());
@@ -207,6 +208,20 @@ pub fn unlink(consumer_root: &Path) -> Result<(), LinkError> {
         if tf.existed_before {
             let backup = backup_dir.join(&tf.path);
             let bytes = std::fs::read(&backup).map_err(|e| LinkError::io(&backup, e))?;
+            // Integrity guard: the backup must still hash to the value recorded
+            // when the link was established. A mismatch means the backup was
+            // corrupted/tampered — refuse to restore wrong bytes over the
+            // consumer's file rather than silently clobber it.
+            if hex_sha256(&bytes) != tf.pre_edit_sha256 {
+                return Err(LinkError::CorruptLinkState {
+                    path: backup.clone(),
+                    detail: format!(
+                        "backup content hash does not match the pre-edit hash recorded for `{}`; \
+                         refusing to restore a corrupted backup",
+                        tf.path.display()
+                    ),
+                });
+            }
             std::fs::write(&abs, &bytes).map_err(|e| LinkError::io(&abs, e))?;
         } else {
             // We created this file — remove it, then prune any now-empty parent
@@ -631,7 +646,12 @@ fn apply_transaction(
         })();
 
         if let Err(e) = result {
-            rollback(&applied);
+            // Restore the failing edit too — its target may already be
+            // truncated and its backup is about to be wiped with the state dir
+            // — then unwind every previously-applied edit.
+            let mut to_undo = applied.clone();
+            to_undo.push(edit);
+            rollback(&to_undo);
             let state_dir = consumer_root.join(LINK_STATE_DIR);
             let _ = std::fs::remove_dir_all(&state_dir);
             return Err(e);
@@ -650,6 +670,23 @@ fn apply_transaction(
     }
 
     Ok(touched)
+}
+
+/// Persist the link manifest as the final transactional step. On failure, roll
+/// every applied edit back and clear the link state so the consumer is left
+/// exactly as it was before `link` ran.
+fn finalize_link(
+    consumer_root: &Path,
+    edits: &[PlannedEdit],
+    manifest: &LinkManifest,
+) -> Result<(), LinkError> {
+    if let Err(e) = write_manifest(consumer_root, manifest) {
+        let refs: Vec<&PlannedEdit> = edits.iter().collect();
+        rollback(&refs);
+        let _ = std::fs::remove_dir_all(consumer_root.join(LINK_STATE_DIR));
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// Undo applied edits in reverse order: restore originals, delete created files.

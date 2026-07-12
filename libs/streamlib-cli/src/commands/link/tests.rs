@@ -287,6 +287,64 @@ fn pack_is_refused_while_a_link_is_active_above_the_package() {
 }
 
 #[test]
+fn manifest_write_failure_rolls_back_the_overrides() {
+    // If persisting link.json fails after the overrides are written, every
+    // override must be rolled back and the link state cleared — the all-or-
+    // nothing contract holds through the final step.
+    let tmp = tempfile::tempdir().unwrap();
+    let consumer = tmp.path().canonicalize().unwrap();
+    write_full_consumer(&consumer);
+    let cargo = consumer.join(".cargo").join("config.toml");
+    let orig_cargo = std::fs::read(&cargo).unwrap();
+
+    let crates = fake_crate_set();
+    let edits = plan_edits(&consumer, &PathBuf::from("/checkout"), INDEX_URL, &crates).unwrap();
+    let touched = apply_transaction(&consumer, &edits).unwrap();
+    // Overrides are on disk now.
+    assert_ne!(std::fs::read(&cargo).unwrap(), orig_cargo);
+
+    // Force `write_manifest` to fail by occupying link.json with a directory.
+    let link_json = consumer.join(LINK_STATE_DIR).join(LINK_MANIFEST_FILE);
+    std::fs::create_dir_all(&link_json).unwrap();
+
+    let manifest = LinkManifest {
+        checkout: PathBuf::from("/checkout"),
+        linked_at: "t".into(),
+        linked_crate_count: crates.len(),
+        files: touched,
+    };
+    let err = finalize_link(&consumer, &edits, &manifest).unwrap_err();
+    assert!(matches!(err, LinkError::CorruptLinkState { .. } | LinkError::Io { .. }), "got {err:?}");
+
+    // Rolled back byte-clean, zero residue.
+    assert_eq!(std::fs::read(&cargo).unwrap(), orig_cargo);
+    assert!(!consumer.join(LINK_STATE_DIR).exists());
+}
+
+#[test]
+fn unlink_refuses_to_restore_a_corrupted_backup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let consumer = tmp.path().canonicalize().unwrap();
+    write_full_consumer(&consumer);
+    link_with_fixed_crates(&consumer, &PathBuf::from("/checkout"));
+
+    // Tamper with the cargo config backup so its hash no longer matches.
+    let backup = consumer
+        .join(LINK_STATE_DIR)
+        .join(LINK_BACKUP_DIR)
+        .join(".cargo")
+        .join("config.toml");
+    std::fs::write(&backup, b"tampered content").unwrap();
+
+    let err = unlink(&consumer).unwrap_err();
+    assert!(matches!(err, LinkError::CorruptLinkState { .. }), "got {err:?}");
+    // Refused restore ⇒ the live (linked) config was NOT clobbered with the
+    // corrupted backup.
+    let live = std::fs::read_to_string(consumer.join(".cargo").join("config.toml")).unwrap();
+    assert!(live.contains("[patch."), "live config must be untouched by the refused restore");
+}
+
+#[test]
 fn derive_linkable_crates_selects_the_streamlib_sdk_closure() {
     // Runs `cargo metadata --no-deps` against the real workspace this test was
     // built in — offline, no registry required.
