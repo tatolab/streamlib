@@ -27,12 +27,12 @@ publish = false
 path = "src/lib.rs"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib = { path = "../streamlib-sdk", version = "0.5.0", registry = "tatolab" }
-streamlib-engine = { path = "../streamlib-engine", version = "0.5.0", registry = "tatolab" }
-streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.5.0", registry = "tatolab" }
-streamlib-adapter-cpu-readback = { path = "../streamlib-adapter-cpu-readback", version = "0.5.0", registry = "tatolab" }
-streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.5.0", registry = "tatolab" }
-streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.5.0", registry = "tatolab" }
+streamlib = { path = "../streamlib-sdk", version = "0.6.0", registry = "tatolab" }
+streamlib-engine = { path = "../streamlib-engine", version = "0.6.0", registry = "tatolab" }
+streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.6.0", registry = "tatolab" }
+streamlib-adapter-cpu-readback = { path = "../streamlib-adapter-cpu-readback", version = "0.6.0", registry = "tatolab" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.6.0", registry = "tatolab" }
+streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.6.0", registry = "tatolab" }
 vulkanalia.workspace = true
 serde.workspace = true
 serde_json.workspace = true

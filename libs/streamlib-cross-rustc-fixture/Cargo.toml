@@ -33,7 +33,7 @@ name = "streamlib_cross_rustc_fixture"
 crate-type = ["cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = { path = "../streamlib-jtd-codegen", version = "0.5.0", registry = "tatolab" }
+streamlib-jtd-codegen = { path = "../streamlib-jtd-codegen", version = "0.6.0", registry = "tatolab" }
 
 [dependencies]
 # Engine substrate — runtime context, processor traits,
@@ -41,14 +41,14 @@ streamlib-jtd-codegen = { path = "../streamlib-jtd-codegen", version = "0.5.0", 
 # the fixture
 # rebuilds the SDK against THIS workspace's resolver pass, not the
 # host workspace's. Same source, different transitive resolution.
-streamlib = { path = "../streamlib-sdk", version = "0.5.0", registry = "tatolab" }
+streamlib = { path = "../streamlib-sdk", version = "0.6.0", registry = "tatolab" }
 
 # Procedural macros — `#[streamlib::sdk::processor("...")]`.
-streamlib-macros = { path = "../streamlib-macros", version = "0.5.0", registry = "tatolab" }
+streamlib-macros = { path = "../streamlib-macros", version = "0.6.0", registry = "tatolab" }
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol
 # the runtime dlopens at load time.
-streamlib-plugin-abi = { path = "../streamlib-plugin-abi", version = "0.5.0", registry = "tatolab" }
+streamlib-plugin-abi = { path = "../streamlib-plugin-abi", version = "0.6.0", registry = "tatolab" }
 
 # Serialization for the config dataclass + diagnostic tracing. Pinned
 # to specific OLDER patches than what the host workspace resolves

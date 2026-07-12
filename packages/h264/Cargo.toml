@@ -14,21 +14,21 @@ name = "streamlib_h264"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = {version = "0.5.0", registry = "tatolab"}
+streamlib-jtd-codegen = {version = "0.6.0", registry = "tatolab"}
 
 [dependencies]
 # Engine substrate — runtime context, processor traits, generated config
 # types under `crate::_generated_::tatolab__h264::*`, EncodedVideoFrame /
 # VideoFrame wire types, host RHI bridge for queue handles + allocator.
-streamlib = {version = "0.5.0", registry = "tatolab"}
+streamlib = {version = "0.6.0", registry = "tatolab"}
 
 # Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = {version = "0.5.0", registry = "tatolab"}
+streamlib-macros = {version = "0.6.0", registry = "tatolab"}
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = {version = "0.5.0", registry = "tatolab"}
+streamlib-plugin-abi = {version = "0.6.0", registry = "tatolab"}
 
 # Serialization (config dataclasses ship as serde-derived).
 # Generated `EncodedVideoFrame.data` carries `#[serde(with = "serde_bytes")]`

@@ -15,15 +15,15 @@ name = "streamlib_adapter_opengl"
 path = "src/lib.rs"
 
 [dependencies]
-streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.5.0", registry = "tatolab" }
-streamlib-adapter-opengl-abi = { path = "../streamlib-adapter-opengl-abi", version = "0.5.0", registry = "tatolab" }
+streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.6.0", registry = "tatolab" }
+streamlib-adapter-opengl-abi = { path = "../streamlib-adapter-opengl-abi", version = "0.6.0", registry = "tatolab" }
 parking_lot = "0.12"
 thiserror.workspace = true
 tracing.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.5.0", registry = "tatolab" }
-streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.5.0", registry = "tatolab" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.6.0", registry = "tatolab" }
+streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.6.0", registry = "tatolab" }
 khronos-egl = { version = "6.0", features = ["dynamic"] }
 gl = "0.14"
 libc.workspace = true

@@ -34,5 +34,5 @@ strip_debug_logging = ["streamlib-engine/strip_debug_logging"]
 hardware-tests = ["streamlib-engine/hardware-tests"]
 
 [dependencies]
-streamlib-engine = { path = "../streamlib-engine", version = "0.5.0", registry = "tatolab" }
-streamlib-build-orchestrator = { path = "../streamlib-build-orchestrator", version = "0.5.0", registry = "tatolab", optional = true }
+streamlib-engine = { path = "../streamlib-engine", version = "0.6.0", registry = "tatolab" }
+streamlib-build-orchestrator = { path = "../streamlib-build-orchestrator", version = "0.6.0", registry = "tatolab", optional = true }
