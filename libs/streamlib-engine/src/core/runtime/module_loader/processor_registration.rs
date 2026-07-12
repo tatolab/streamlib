@@ -46,6 +46,120 @@ pub(super) fn list_available_triples(lib_dir: &std::path::Path) -> Result<Vec<St
     Ok(triples)
 }
 
+/// Validate a plugin's `STREAMLIB_PLUGIN` declaration against this
+/// host's build before its `register` callback is invoked.
+///
+/// Check order is load-bearing:
+///
+/// 1. `abi_version` (pinned at offset 0) — read through a **raw
+///    pointer** first, WITHOUT forming a `&PluginDeclaration`. A pre-v5
+///    plugin's `STREAMLIB_PLUGIN` static is smaller than
+///    `size_of::<PluginDeclaration>()` (v4 was 16 bytes, v5 is 48), so
+///    materializing the full reference before the version is confirmed
+///    would be undefined behavior on exactly the plugins this check
+///    exists to reject. A mismatch returns
+///    [`Error::PluginAbiVersionMismatch`] without touching the appended
+///    v5 fields.
+/// 2. `abi_layout_fingerprint` — the `#[repr(C)]` dispatch-surface
+///    layout must match; else [`Error::PluginBuildMismatch`].
+/// 3. `engine_transit_fingerprint` — `0` (engine-free plugin, no transit
+///    surface) OR the host's engine transit fingerprint; else
+///    [`Error::PluginBuildMismatch`].
+///
+/// # Safety
+///
+/// `decl_ptr` must point at the loaded plugin's `STREAMLIB_PLUGIN`
+/// static, which the caller keeps alive for the process lifetime via
+/// `LOADED_PLUGIN_LIBRARIES`. The static is at least 4 bytes (the
+/// pinned `abi_version` field); the full 48-byte `PluginDeclaration`
+/// is only dereferenced after `abi_version` confirms a v5 layout.
+#[tracing::instrument(
+    level = "debug",
+    skip(decl_ptr),
+    fields(plugin = %dylib_path.display())
+)]
+pub(crate) unsafe fn validate_plugin_declaration(
+    decl_ptr: *const streamlib_plugin_abi::PluginDeclaration,
+    dylib_path: &std::path::Path,
+) -> Result<()> {
+    let host_abi_version = streamlib_plugin_abi::STREAMLIB_ABI_VERSION;
+    // Read `abi_version` (pinned at offset 0) through the raw pointer.
+    // `addr_of!` computes the field's address without asserting the
+    // whole `PluginDeclaration` is valid, so a shorter pre-v5 static is
+    // read soundly here.
+    // SAFETY: `abi_version` is `u32` at offset 0; the static is at least
+    // that large for any plugin that exports the symbol.
+    let plugin_abi_version =
+        unsafe { std::ptr::addr_of!((*decl_ptr).abi_version).read() };
+    if plugin_abi_version != host_abi_version {
+        // Do NOT form `&*decl_ptr` or read the appended v5 fields — a
+        // non-v5 declaration has a smaller byte shape and those fields
+        // may not exist.
+        return Err(Error::PluginAbiVersionMismatch {
+            plugin_path: dylib_path.display().to_string(),
+            plugin_abi_version,
+            host_abi_version,
+        });
+    }
+
+    // `abi_version == host_abi_version` ⇒ this is a full v5 declaration;
+    // materializing the reference and reading the appended fields is now
+    // sound.
+    // SAFETY: the version match guarantees the 48-byte v5 layout.
+    let decl = unsafe { &*decl_ptr };
+    let host_abi_fingerprint = streamlib_plugin_abi::PLUGIN_ABI_LAYOUT_FINGERPRINT;
+    let host_transit_fingerprint =
+        crate::core::plugin::build_fingerprint::ENGINE_TRANSIT_FINGERPRINT;
+    let host_identity = crate::core::plugin::build_fingerprint::BUILD_IDENTITY.to_string();
+
+    let build_mismatch = |plugin_transit_fingerprint: u64| Error::PluginBuildMismatch {
+        plugin_path: dylib_path.display().to_string(),
+        plugin_identity: read_plugin_build_identity(decl),
+        host_identity: host_identity.clone(),
+        plugin_abi_fingerprint: decl.abi_layout_fingerprint,
+        host_abi_fingerprint,
+        plugin_transit_fingerprint,
+        host_transit_fingerprint,
+    };
+
+    if decl.abi_layout_fingerprint != host_abi_fingerprint {
+        return Err(build_mismatch(decl.engine_transit_fingerprint));
+    }
+
+    // `0` = engine-free plugin (no transit surface). Any non-zero value
+    // must match this host's engine transit fingerprint exactly.
+    if decl.engine_transit_fingerprint != 0
+        && decl.engine_transit_fingerprint != host_transit_fingerprint
+    {
+        return Err(build_mismatch(decl.engine_transit_fingerprint));
+    }
+
+    Ok(())
+}
+
+/// Read a plugin's build-identity string defensively — the plugin's
+/// memory is never trusted on the error path. Null pointer or zero
+/// length → `"unknown"`; the length is capped and the bytes are
+/// lossily decoded.
+fn read_plugin_build_identity(decl: &streamlib_plugin_abi::PluginDeclaration) -> String {
+    /// A build identity is `engine-version / rustc -V / triple / profile`
+    /// — a few hundred bytes at most. Cap well above that so a corrupt
+    /// length can't drive an unbounded read.
+    const MAX_IDENTITY_LEN: usize = 4096;
+
+    if decl.build_identity_ptr.is_null() || decl.build_identity_len == 0 {
+        return "unknown".to_string();
+    }
+    let len = decl.build_identity_len.min(MAX_IDENTITY_LEN);
+    // SAFETY: for a v5 declaration (guaranteed by the `abi_version`
+    // gate above) `build_identity_ptr` / `build_identity_len` describe
+    // a `'static str` in the plugin's image, kept alive for the process
+    // lifetime via `LOADED_PLUGIN_LIBRARIES`. The length is bounded and
+    // the bytes are decoded lossily.
+    let bytes = unsafe { std::slice::from_raw_parts(decl.build_identity_ptr, len) };
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
 /// Register this package's processors with the global processor
 /// registry. Non-recursive — the caller is responsible for having
 /// walked any transitive deps first.
@@ -211,7 +325,11 @@ pub(super) fn register_manifest_processors(
                         })?
                     };
 
-                    let decl: &streamlib_plugin_abi::PluginDeclaration = unsafe {
+                    // Take the RAW pointer to `STREAMLIB_PLUGIN`; do not
+                    // form a `&PluginDeclaration` yet. A pre-v5 plugin's
+                    // static is smaller than the v5 struct, so borrowing
+                    // it before the version is confirmed would be UB.
+                    let decl_ptr: *const streamlib_plugin_abi::PluginDeclaration = unsafe {
                         let symbol = lib
                             .get::<*const streamlib_plugin_abi::PluginDeclaration>(
                                 b"STREAMLIB_PLUGIN\0",
@@ -224,19 +342,24 @@ pub(super) fn register_manifest_processors(
                                     e
                                 ))
                             })?;
-                        &**symbol
+                        *symbol
                     };
 
-                    if decl.abi_version != streamlib_plugin_abi::STREAMLIB_ABI_VERSION {
-                        return Err(Error::Configuration(format!(
-                            "ABI version mismatch for '{}': plugin has v{}, \
-                             runtime expects v{}. Rebuild the plugin with a \
-                             compatible streamlib-plugin-abi version.",
-                            dylib_path.display(),
-                            decl.abi_version,
-                            streamlib_plugin_abi::STREAMLIB_ABI_VERSION,
-                        )));
-                    }
+                    // Refuse — with a typed, actionable error naming both
+                    // build identities — any plugin whose wire ABI, dispatch-
+                    // surface layout, or engine-internal transit layout could
+                    // skew from this host's, BEFORE invoking `register`. Reads
+                    // `abi_version` through the raw pointer first, so a pre-v5
+                    // static is never over-read.
+                    // SAFETY: `decl_ptr` is the `STREAMLIB_PLUGIN` static in
+                    // `lib`, kept alive for the process lifetime below.
+                    unsafe { validate_plugin_declaration(decl_ptr, &dylib_path)? };
+
+                    // Validated as a v5 declaration ⇒ the full struct is
+                    // present; borrowing to invoke `register` is now sound.
+                    // SAFETY: version-confirmed v5 layout; `lib` outlives use.
+                    let decl: &streamlib_plugin_abi::PluginDeclaration =
+                        unsafe { &*decl_ptr };
 
                     // Build the HostServices payload from the host's
                     // process-wide statics + this runtime's iceoryx2
@@ -471,5 +594,140 @@ mod tests {
         assert_eq!(ident.to_string(), "@tatolab/camera/Camera@0.4.33");
         // Invalid short names still surface as errors.
         assert!(compose_processor_schema_ident(&meta, "not-pascal").is_err());
+    }
+
+    // ---- validate_plugin_declaration ----
+
+    unsafe extern "C" fn noop_register(_host_services: *const ::std::ffi::c_void) {}
+
+    const PLUGIN_TEST_IDENTITY: &str =
+        "streamlib-test-plugin 9.9.9 / rustc-test / x-triple / debug";
+
+    /// A declaration whose fingerprints match this host exactly.
+    fn matched_declaration() -> streamlib_plugin_abi::PluginDeclaration {
+        streamlib_plugin_abi::PluginDeclaration {
+            abi_version: streamlib_plugin_abi::STREAMLIB_ABI_VERSION,
+            _reserved_padding: 0,
+            register: noop_register,
+            abi_layout_fingerprint: streamlib_plugin_abi::PLUGIN_ABI_LAYOUT_FINGERPRINT,
+            engine_transit_fingerprint:
+                crate::core::plugin::build_fingerprint::ENGINE_TRANSIT_FINGERPRINT,
+            build_identity_ptr: PLUGIN_TEST_IDENTITY.as_ptr(),
+            build_identity_len: PLUGIN_TEST_IDENTITY.len(),
+        }
+    }
+
+    fn probe_path() -> &'static std::path::Path {
+        std::path::Path::new("/tmp/libtest_plugin.so")
+    }
+
+    // SAFETY (all tests below): the pointer passed is `&<local
+    // PluginDeclaration>`, a full valid v5 struct that outlives the call.
+    #[test]
+    fn validate_accepts_matched_declaration() {
+        unsafe { validate_plugin_declaration(&matched_declaration(), probe_path()) }
+            .expect("a build-matched declaration must load");
+    }
+
+    #[test]
+    fn validate_accepts_engine_free_transit_zero() {
+        // `engine_transit_fingerprint == 0` is the "engine-free plugin"
+        // sentinel — no transit surface, so the transit check is skipped.
+        let mut decl = matched_declaration();
+        decl.engine_transit_fingerprint = 0;
+        unsafe { validate_plugin_declaration(&decl, probe_path()) }
+            .expect("an engine-free plugin (transit fingerprint 0) must load");
+    }
+
+    #[test]
+    fn validate_rejects_wrong_abi_version_without_reading_appended_fields() {
+        let mut decl = matched_declaration();
+        decl.abi_version = streamlib_plugin_abi::STREAMLIB_ABI_VERSION + 1;
+        // Poison the appended fields: a correct implementation gates on
+        // `abi_version` FIRST and never dereferences these, so a null
+        // pointer + absurd length must not be touched.
+        decl.build_identity_ptr = std::ptr::null();
+        decl.build_identity_len = usize::MAX;
+
+        let err = unsafe { validate_plugin_declaration(&decl, probe_path()) }
+            .expect_err("a wrong abi_version must be refused");
+        match &err {
+            Error::PluginAbiVersionMismatch {
+                plugin_abi_version,
+                host_abi_version,
+                ..
+            } => {
+                assert_eq!(*plugin_abi_version, streamlib_plugin_abi::STREAMLIB_ABI_VERSION + 1);
+                assert_eq!(*host_abi_version, streamlib_plugin_abi::STREAMLIB_ABI_VERSION);
+            }
+            other => panic!("expected PluginAbiVersionMismatch, got {other:?}"),
+        }
+        let msg = err.to_string();
+        assert!(msg.contains("Rebuild the plugin"), "remedy missing: {msg}");
+    }
+
+    #[test]
+    fn validate_rejects_mismatched_abi_fingerprint() {
+        let mut decl = matched_declaration();
+        decl.abi_layout_fingerprint ^= 0xDEAD_BEEF;
+        let err = unsafe { validate_plugin_declaration(&decl, probe_path()) }
+            .expect_err("a mismatched abi_layout_fingerprint must be refused");
+        assert!(
+            matches!(err, Error::PluginBuildMismatch { .. }),
+            "expected PluginBuildMismatch, got {err:?}"
+        );
+        let msg = err.to_string();
+        // Both identities + the remedy appear in the operator-facing message.
+        assert!(msg.contains(PLUGIN_TEST_IDENTITY), "plugin identity missing: {msg}");
+        assert!(
+            msg.contains(crate::core::plugin::build_fingerprint::BUILD_IDENTITY),
+            "host identity missing: {msg}"
+        );
+        assert!(msg.contains("Rebuild the plugin"), "remedy missing: {msg}");
+    }
+
+    #[test]
+    fn validate_rejects_mismatched_transit_fingerprint() {
+        let mut decl = matched_declaration();
+        // Non-zero (so not treated as engine-free) and non-matching.
+        decl.engine_transit_fingerprint =
+            crate::core::plugin::build_fingerprint::ENGINE_TRANSIT_FINGERPRINT ^ 0x1;
+        let err = unsafe { validate_plugin_declaration(&decl, probe_path()) }
+            .expect_err("a mismatched engine_transit_fingerprint must be refused");
+        match &err {
+            Error::PluginBuildMismatch {
+                plugin_transit_fingerprint,
+                host_transit_fingerprint,
+                ..
+            } => {
+                assert_ne!(plugin_transit_fingerprint, host_transit_fingerprint);
+            }
+            other => panic!("expected PluginBuildMismatch, got {other:?}"),
+        }
+        let msg = err.to_string();
+        assert!(msg.contains(PLUGIN_TEST_IDENTITY), "plugin identity missing: {msg}");
+        assert!(
+            msg.contains(crate::core::plugin::build_fingerprint::BUILD_IDENTITY),
+            "host identity missing: {msg}"
+        );
+        assert!(msg.contains("Rebuild the plugin"), "remedy missing: {msg}");
+    }
+
+    #[test]
+    fn validate_reads_garbage_identity_pointer_safely() {
+        // A build mismatch with a null identity pointer must still
+        // construct the error (identity → "unknown"), never deref null.
+        let mut decl = matched_declaration();
+        decl.abi_layout_fingerprint ^= 0x1;
+        decl.build_identity_ptr = std::ptr::null();
+        decl.build_identity_len = 128; // non-zero, but ptr is null
+        let err = unsafe { validate_plugin_declaration(&decl, probe_path()) }
+            .expect_err("mismatch must be refused even with a null identity");
+        match &err {
+            Error::PluginBuildMismatch { plugin_identity, .. } => {
+                assert_eq!(plugin_identity, "unknown");
+            }
+            other => panic!("expected PluginBuildMismatch, got {other:?}"),
+        }
     }
 }

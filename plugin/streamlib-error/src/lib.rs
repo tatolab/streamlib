@@ -97,6 +97,39 @@ pub enum Error {
     #[error("Invalid escalate scope: {0}")]
     InvalidEscalateScope(String),
 
+    #[error(
+        "Plugin ABI version mismatch loading '{plugin_path}': plugin was built \
+         against plugin-ABI v{plugin_abi_version}, but this host speaks \
+         v{host_abi_version}. Rebuild the plugin against the host's \
+         streamlib-plugin-abi version — publish a matching engine `-dev` \
+         version and bump the plugin's pin, or use `streamlib link`."
+    )]
+    PluginAbiVersionMismatch {
+        plugin_path: String,
+        plugin_abi_version: u32,
+        host_abi_version: u32,
+    },
+
+    #[error(
+        "Plugin build mismatch loading '{plugin_path}': the plugin's build \
+         fingerprint does not match this host's. Plugin build: [{plugin_identity}] \
+         (abi_layout={plugin_abi_fingerprint:#018x}, \
+         engine_transit={plugin_transit_fingerprint:#018x}); host build: \
+         [{host_identity}] (abi_layout={host_abi_fingerprint:#018x}, \
+         engine_transit={host_transit_fingerprint:#018x}). Rebuild the plugin \
+         against the host's engine build — publish a matching engine `-dev` \
+         version and bump the plugin's pin, or use `streamlib link`."
+    )]
+    PluginBuildMismatch {
+        plugin_path: String,
+        plugin_identity: String,
+        host_identity: String,
+        plugin_abi_fingerprint: u64,
+        host_abi_fingerprint: u64,
+        plugin_transit_fingerprint: u64,
+        host_transit_fingerprint: u64,
+    },
+
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }

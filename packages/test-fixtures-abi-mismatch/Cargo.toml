@@ -18,15 +18,20 @@ crate-type = ["cdylib"]
 
 [features]
 # Pick which mismatch direction to tamper with. The integration test
-# builds the crate twice — once with each feature — and asserts the
-# load_project rejection on both halves. Default is `tamper-too-low`
-# so a bare `cargo build -p streamlib-test-fixtures-abi-mismatch`
-# produces a usable fixture without extra flags.
+# builds the crate once per feature and asserts the load-path rejection
+# for each. Default is `tamper-too-low` so a bare
+# `cargo build -p streamlib-test-fixtures-abi-mismatch` produces a
+# usable fixture without extra flags.
 default = ["tamper-too-low"]
-# abi_version = 0 (below the runtime's expected version).
+# abi_version = 0 (below the runtime's expected version) →
+# PluginAbiVersionMismatch.
 tamper-too-low = []
-# abi_version = u32::MAX (above the runtime's expected version).
+# abi_version = u32::MAX (above the runtime's expected version) →
+# PluginAbiVersionMismatch.
 tamper-too-high = []
+# Correct abi_version + correct abi_layout_fingerprint, but a
+# bit-flipped non-zero engine_transit_fingerprint → PluginBuildMismatch.
+tamper-transit-fingerprint = []
 
 [dependencies]
 streamlib-plugin-abi = { path = "../../libs/streamlib-plugin-abi", version = "0.5.0", registry = "gitea" }

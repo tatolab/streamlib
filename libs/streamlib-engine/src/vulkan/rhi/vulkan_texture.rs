@@ -246,6 +246,19 @@ pub struct HostVulkanTexture {
     vk_image_meta: HostVkImageMeta,
 }
 
+/// First-order layout probe for [`HostVulkanTexture`] — one of the
+/// three non-`#[repr(C)]` engine types that transit the plugin ABI by
+/// raw `Arc` pointer (`host_vulkan_texture_arc`). Colocated with the
+/// type; folded into
+/// [`crate::core::plugin::build_fingerprint::ENGINE_TRANSIT_FINGERPRINT`].
+#[cfg(target_os = "linux")]
+pub(crate) const fn host_vulkan_texture_layout_probe() -> [u64; 2] {
+    [
+        core::mem::size_of::<HostVulkanTexture>() as u64,
+        core::mem::align_of::<HostVulkanTexture>() as u64,
+    ]
+}
+
 impl HostVulkanTexture {
     /// Create a new DMA-BUF exportable Vulkan texture via the device's
     /// dedicated VMA export pool.

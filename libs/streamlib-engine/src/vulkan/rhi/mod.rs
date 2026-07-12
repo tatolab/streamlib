@@ -26,6 +26,16 @@ pub use host_marker::HostMarker;
 pub use vulkan_command_buffer::VulkanCommandBuffer;
 pub use vulkan_command_queue::VulkanCommandQueue;
 pub use vulkan_device::{HostVulkanDevice, RayTracingPipelineProperties, ThirdPartyGpuCapabilities};
+
+// Plugin-ABI transit-layout probes for the three non-`#[repr(C)]`
+// engine types that cross by raw `Arc` pointer. Folded into the
+// engine build fingerprint (`core::plugin::build_fingerprint`).
+#[cfg(target_os = "linux")]
+pub(crate) use vulkan_device::host_vulkan_device_layout_probe;
+#[cfg(target_os = "linux")]
+pub(crate) use vulkan_sync::host_vulkan_timeline_semaphore_layout_probe;
+#[cfg(target_os = "linux")]
+pub(crate) use vulkan_texture::host_vulkan_texture_layout_probe;
 #[allow(unused_imports)]
 pub use vulkan_sync::{VulkanFence, VulkanSemaphore};
 #[cfg(target_os = "linux")]
