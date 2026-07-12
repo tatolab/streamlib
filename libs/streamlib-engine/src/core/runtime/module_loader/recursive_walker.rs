@@ -9,6 +9,7 @@ use parking_lot::{Condvar, Mutex};
 
 use super::build_orchestrator::{BuildEventSink, BuildOrchestrator, BuildPolicy};
 use super::errors::AddModuleError;
+use super::locked::LockedResolution;
 use super::processor_registration::register_manifest_processors;
 use super::schema_registration::register_package_schemas;
 use super::source::{read_version_from_manifest_dir, resolve_strategy_to_source, ResolvedSource, Strategy};
@@ -427,6 +428,7 @@ pub(super) fn add_module_recursively(
     resolution_memo: &ResolutionMemo,
     load_id: u64,
     skipped_in_flight: &mut Vec<SkippedInFlightDependency>,
+    locked: Option<&LockedResolution>,
 ) -> std::result::Result<(), AddModuleError> {
     let pkg_ref = module.package_ref();
     if !seen.insert(pkg_ref.clone()) {
@@ -446,6 +448,7 @@ pub(super) fn add_module_recursively(
         resolution_memo,
         load_id,
         skipped_in_flight,
+        locked,
     );
     seen.remove(&pkg_ref);
     path.pop();
@@ -464,6 +467,7 @@ fn add_module_recursive_body(
     resolution_memo: &ResolutionMemo,
     load_id: u64,
     skipped_in_flight: &mut Vec<SkippedInFlightDependency>,
+    locked: Option<&LockedResolution>,
 ) -> std::result::Result<(), AddModuleError> {
     use crate::core::config::ProjectConfig;
 
@@ -599,14 +603,22 @@ fn add_module_recursive_body(
     })?;
 
     // Walk transitive deps, each routed through this same helper.
+    //
+    // Locked mode forces every dep edge to its lockfile pin (the pinned
+    // installed-cache slot, loaded as-is with `NeverBuild`) instead of
+    // deriving a live source strategy — so a locked run never touches the
+    // registry / git / a `.slpkg` re-fetch / a build. A dep the lockfile
+    // doesn't pin is a stale-lockfile hard error, not a silent live
+    // resolve.
     for (dep_ref, spec) in &config.dependencies {
-        let (dep_ident, dep_strategy) =
-            derive_dep_strategy_and_ident(&manifest_dir, dep_ref, spec, &config.patch).map_err(
-                |e| AddModuleError::LoadProjectFailed {
+        let (dep_ident, dep_strategy) = match locked {
+            Some(lock) => lock.resolve(dep_ref, &pkg_ref.to_string())?,
+            None => derive_dep_strategy_and_ident(&manifest_dir, dep_ref, spec, &config.patch)
+                .map_err(|e| AddModuleError::LoadProjectFailed {
                     module: module.clone(),
                     source: Box::new(e),
-                },
-            )?;
+                })?,
+        };
         tracing::info!(
             "Loading dependency '{}' (strategy {:?})",
             dep_ident,
@@ -623,6 +635,7 @@ fn add_module_recursive_body(
             resolution_memo,
             load_id,
             skipped_in_flight,
+            locked,
         )?;
     }
 

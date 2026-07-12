@@ -329,6 +329,47 @@ pub enum AddModuleError {
         version: streamlib_idents::SemVer,
         waited_secs: u64,
     },
+
+    /// A locked run reached a transitive dependency `package` that the
+    /// application lockfile does not pin. The lockfile is stale relative to
+    /// the manifest graph (a dep was added since the last install), so the
+    /// run can't resolve it offline. Re-run `streamlib install` to refresh
+    /// the lockfile, then run again.
+    #[error(
+        "Locked run: dependency '{package}' (required by '{required_by}') is \
+         not pinned in the application lockfile — the lockfile is stale \
+         relative to the manifest graph. Re-run `streamlib install` to \
+         refresh the lockfile, then run again."
+    )]
+    LockfileMiss {
+        package: streamlib_idents::PackageRef,
+        required_by: String,
+    },
+
+    /// A locked run resolved `package` to its pinned version, but that
+    /// version's installed-cache slot is missing on disk. The lockfile is
+    /// consistent but the package was never materialized (or the cache was
+    /// cleared). Re-run `streamlib install` to re-populate the cache.
+    #[error(
+        "Locked run: package '{package}' is pinned at {version} but its \
+         installed-cache slot is missing at {}. Re-run `streamlib install` \
+         to re-materialize the pinned set, then run again.",
+        expected_dir.display()
+    )]
+    LockedSlotMissing {
+        package: streamlib_idents::PackageRef,
+        version: streamlib_idents::SemVer,
+        expected_dir: std::path::PathBuf,
+    },
+
+    /// The application lockfile could not be read or parsed for a locked
+    /// run — the file is missing, malformed, or carries a lockfile key that
+    /// isn't a canonical `@org/name`. `detail` names the failing step.
+    #[error("Failed to read application lockfile at {}: {detail}", path.display())]
+    LockfileReadFailed {
+        path: std::path::PathBuf,
+        detail: String,
+    },
 }
 
 impl From<AddModuleError> for Error {
