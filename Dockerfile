@@ -3,35 +3,35 @@
 # StreamLib — self-contained, headless, GPU-capable runtime image.
 #
 # Multi-stage:
-#   * builder : full toolchain (GPU-free). Stands up an ephemeral Gitea,
-#               publishes the full internal lib set + SDKs + every package from
-#               THIS checkout, and builds the runtime binaries.
+#   * builder : full toolchain (GPU-free). Emits an image-local STATIC registry
+#               tree (cargo sparse closure + vulkanalia fork + pypi + npm +
+#               `.slpkg` generic store + catalog + release manifest) from THIS
+#               checkout, and builds the runtime binaries.
 #               (docker/build-stage1.sh does all of it.)
 #   * final   : nvidia/cuda runtime base + GPU/Vulkan/GLVND + V4L2 + userspace
-#               audio + the build toolchain (build-capable). Carries the filled
-#               Gitea, the app dir, and the cargo caches. Runs the service via
-#               docker/entrypoint.sh — no .deb, no systemd.
+#               audio + the build toolchain (build-capable). Carries the static
+#               registry tree, the app dir, and the cargo caches. Runs the
+#               service via docker/entrypoint.sh — no .deb, no systemd.
 #
-# The image is build-capable on purpose: the in-container Gitea + toolchain let
-# `runtime.add_module` resolve and build packages against the same
-# registry-by-version model used locally (docs/architecture/gitea-registry-distribution.md).
-# The api-server core module builds from source on first boot (warm cargo cache
-# -> tens of seconds); a resolution preflight at build time fails fast on a gap.
+# The image is build-capable on purpose: the image-local static registry tree +
+# toolchain let `runtime.add_module` resolve and build packages against the same
+# registry-by-version model used locally (docs/architecture/static-registry.md).
+# There is no registry daemon: cargo + npm resolve over a dumb `python3 -m
+# http.server` mount the entrypoint serves (sparse + npm are HTTP-only by spec),
+# and pypi + `.slpkg` read the same tree straight off `file://`. The api-server
+# core module builds from source on first boot (warm cargo cache -> tens of
+# seconds); a resolution preflight at build time fails fast on a gap.
 #
 # Host prerequisites (driver + nvidia-container-toolkit + virtual devices) are
 # NOT bakeable into an image — see scripts/docker/host-prereqs.sh and docker/README.md.
 # =============================================================================
 
 ARG CUDA_BASE=nvidia/cuda:13.2.1-runtime-ubuntu24.04
-# Upstream Gitea linux-amd64 is a glibc static binary (the gitea/gitea Docker
-# image ships a musl build that won't run on the Ubuntu/CUDA glibc base).
-ARG GITEA_VERSION=1.22.6
 ARG RUST_CHANNEL=stable
 ARG JTD_CODEGEN_VERSION=0.4.1
 
 # -----------------------------------------------------------------------------
 FROM ubuntu:24.04 AS builder
-ARG GITEA_VERSION
 ARG RUST_CHANNEL
 ARG JTD_CODEGEN_VERSION
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -41,8 +41,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # Toolchain + dev libs (authoritative set mirrors .github/workflows/test.yml +
 # check-pack-load.yml; glslc compiles the engine's shaders, jtd-codegen runs in
-# build.rs, the av*/opus/asound/v4l -dev libs back the codec/audio/camera cdylibs).
-# npm publishes the packed Deno SDK; util-linux provides setpriv (Gitea-as-git).
+# build.rs, the av*/opus/asound/v4l -dev libs back the codec/audio/camera
+# cdylibs). tomlkit backs the static-fork manifest annotation; `python3 -m
+# http.server` serves the daemon-free cargo sparse mount during the emit.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential clang libclang-dev cmake pkg-config glslc protobuf-compiler \
         libssl-dev \
@@ -50,7 +51,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
         libswresample-dev libavfilter-dev libavdevice-dev \
         ca-certificates curl jq git rsync unzip xz-utils \
-        python3 python3-pip nodejs npm util-linux \
+        python3 python3-pip nodejs npm \
     && rm -rf /var/lib/apt/lists/* \
     && pip3 install --no-cache-dir --break-system-packages tomlkit
 
@@ -63,25 +64,17 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
  && unzip -q /tmp/jtd.zip -d /tmp/jtd && install -m0755 /tmp/jtd/jtd-codegen /usr/local/bin/jtd-codegen \
  && rm -rf /tmp/jtd.zip /tmp/jtd
 
-# Gitea must run as a non-root user (it refuses root). uid 1000 collides with
-# Ubuntu 24.04's default `ubuntu` user — reclaim it for `git`.
-RUN userdel -r ubuntu 2>/dev/null || true \
- && groupadd -g 1000 git && useradd -u 1000 -g 1000 -m -s /bin/bash git
-
-RUN curl -fsSL "https://dl.gitea.com/gitea/${GITEA_VERSION}/gitea-${GITEA_VERSION}-linux-amd64" \
-      -o /usr/local/bin/gitea \
- && chmod 0755 /usr/local/bin/gitea \
- && /usr/local/bin/gitea --version
-
 WORKDIR /src
 COPY . /src
 
-# Fill the registry (all internal libs + SDKs + packages), build the binaries.
+# Emit the image-local static registry tree (all internal libs + SDKs +
+# packages) and build the binaries. SKIP_* map to the emit's per-ecosystem
+# skip flags for faster iteration.
 ARG SKIP_PYTHON_SDK=0
 ARG SKIP_DENO_SDK=0
 ARG SKIP_PACKAGES=0
-ENV SRC=/src APP_DIR=/opt/streamlib GITEA_WORK_DIR=/var/lib/gitea \
-    GITEA_URL=http://localhost:3300 GITEA_ORG=tatolab GITEA_ADMIN_USER=tatolab-admin
+ENV SRC=/src APP_DIR=/opt/streamlib \
+    REGISTRY_DIR=/opt/streamlib/registry REGISTRY_PORT=8799
 RUN chmod +x docker/build-stage1.sh \
  && SKIP_PYTHON_SDK=${SKIP_PYTHON_SDK} SKIP_DENO_SDK=${SKIP_DENO_SDK} \
     SKIP_PACKAGES=${SKIP_PACKAGES} \
@@ -108,46 +101,46 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libvulkan-dev libopus-dev libasound2-dev libv4l-dev \
         libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
         libswresample-dev libavfilter-dev libavdevice-dev \
-        ca-certificates curl jq git rsync unzip xz-utils python3 util-linux \
+        ca-certificates curl jq git rsync unzip xz-utils python3 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN userdel -r ubuntu 2>/dev/null || true \
- && groupadd -g 1000 git && useradd -u 1000 -g 1000 -m -s /bin/bash git
-
 # Language toolchains (Rust + cargo caches, uv, deno, jtd-codegen) and the
-# Gitea binary, lifted from the builder.
+# runtime cargo/npm registry config, lifted from the builder.
 COPY --from=builder /usr/local/rustup /usr/local/rustup
 COPY --from=builder /usr/local/cargo  /usr/local/cargo
 COPY --from=builder /usr/local/bin/uv /usr/local/bin/uv
 COPY --from=builder /usr/local/bin/deno /usr/local/bin/deno
 COPY --from=builder /usr/local/bin/jtd-codegen /usr/local/bin/jtd-codegen
-COPY --from=builder /usr/local/bin/gitea /usr/local/bin/gitea
 COPY --from=builder /root/.npmrc /root/.npmrc
 
-# The app dir (binaries + package source + pre-materialized cache) and the
-# filled Gitea data (owned by the git user that serves it).
+# The app dir: binaries + package source + the image-local static registry tree
+# (under /opt/streamlib/registry) the entrypoint serves / reads for add_module.
 COPY --from=builder /opt/streamlib /opt/streamlib
-COPY --from=builder --chown=git:git /var/lib/gitea /var/lib/gitea
 
 COPY docker/entrypoint.sh /usr/local/bin/streamlib-entrypoint
 COPY docker/pipewire/10-virtual.conf /etc/pipewire/pipewire.conf.d/10-virtual.conf
 RUN chmod +x /usr/local/bin/streamlib-entrypoint
 
+# Registry resolution against the image-local static tree: pypi + `.slpkg` read
+# `file://` with no server; cargo + npm resolve over the localhost static mount
+# docker/entrypoint.sh serves on ${STREAMLIB_REGISTRY_HTTP_PORT} (sparse + npm
+# are HTTP-only by spec). The cargo `[source]`-replacement that redirects the
+# canonical `tatolab` index to that mount lives in $CARGO_HOME/config.toml
+# (written at build time, carried in via the /usr/local/cargo COPY).
 ENV PATH=/opt/streamlib/bin:/usr/local/cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
     RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     STREAMLIB_HOME=/opt/streamlib \
-    GITEA_WORK_DIR=/var/lib/gitea \
-    GITEA_URL=http://localhost:3300 \
-    STREAMLIB_REGISTRY_URL=http://localhost:3300 \
-    UV_INDEX=http://localhost:3300/api/packages/tatolab/pypi/simple \
-    CARGO_REGISTRIES_GITEA_INDEX=sparse+http://localhost:3300/api/packages/tatolab/cargo/ \
+    STREAMLIB_REGISTRY_DIR=/opt/streamlib/registry \
+    STREAMLIB_REGISTRY_HTTP_PORT=8799 \
+    STREAMLIB_REGISTRY_URL=file:///opt/streamlib/registry \
+    UV_INDEX=file:///opt/streamlib/registry/pypi/simple \
     XDG_RUNTIME_DIR=/run/user/0 \
     NVIDIA_DRIVER_CAPABILITIES=all \
     NVIDIA_VISIBLE_DEVICES=all
 
-# API server (9000), in-container Gitea registry (3300).
-EXPOSE 9000 3300
+# API server control plane.
+EXPOSE 9000
 
 ENTRYPOINT ["/usr/local/bin/streamlib-entrypoint"]
 CMD ["streamlib-runtime", "--host", "0.0.0.0", "--port", "9000"]

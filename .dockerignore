@@ -3,6 +3,11 @@
 # source; binaries + caches are produced inside the build, never shipped in.
 **/target
 **/.streamlib
+# Per-package Cargo.lock files are gitignored dev artifacts; a stale one from a
+# standalone `cargo` run under packages/* must not leak into the context and
+# pin a dead source in the api-server resolution preflight. The tracked
+# workspace-root Cargo.lock (not matched by this glob) still travels.
+packages/**/Cargo.lock
 .git
 .github
 **/node_modules
