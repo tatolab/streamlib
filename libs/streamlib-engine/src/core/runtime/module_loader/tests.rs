@@ -1443,6 +1443,315 @@ processors:
         );
     }
 
+    // =========================================================================
+    // Single-version-per-package gate (#1216)
+    // =========================================================================
+
+    /// A diamond where the two branches resolve the shared dependency to
+    /// *different* concrete versions (B→D@1.0.0, C→D@1.1.0) must surface a
+    /// typed [`AddModuleError::SingleVersionConflict`] naming both versions
+    /// and both requirers — not a silent double-registration. Path deps
+    /// enter with range `Any`, so the gate must compare concrete `SemVer`s.
+    #[test]
+    #[serial]
+    fn diamond_conflicting_versions_error_single_version_conflict() {
+        let home = tempfile::tempdir().unwrap();
+        let pkg_root = tempfile::tempdir().unwrap();
+        let a = pkg_root.path().join("a");
+        let b = pkg_root.path().join("b");
+        let c = pkg_root.path().join("c");
+        let d1 = pkg_root.path().join("d1");
+        let d2 = pkg_root.path().join("d2");
+        for p in [&a, &b, &c, &d1, &d2] {
+            std::fs::create_dir(p).unwrap();
+        }
+        std::fs::write(
+            a.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: diamond-a\n  version: \"0.1.0\"\n\
+             dependencies:\n  \"@tatolab/diamond-b\":\n    path: ../b\n\
+             \x20 \"@tatolab/diamond-c\":\n    path: ../c\n",
+        )
+        .unwrap();
+        std::fs::write(
+            b.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: diamond-b\n  version: \"0.1.0\"\n\
+             dependencies:\n  \"@tatolab/diamond-d\":\n    path: ../d1\n",
+        )
+        .unwrap();
+        std::fs::write(
+            c.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: diamond-c\n  version: \"0.1.0\"\n\
+             dependencies:\n  \"@tatolab/diamond-d\":\n    path: ../d2\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d1.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: diamond-d\n  version: \"1.0.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d2.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: diamond-d\n  version: \"1.1.0\"\n",
+        )
+        .unwrap();
+
+        let _guard = HomeGuard::install(home.path());
+        let runtime = Runner::new().expect("Runner::new");
+        runtime.set_build_orchestrator(LoadAsIsOrchestrator);
+        let err = runtime
+            .add_module_with_blocking(
+                ModuleIdent::any(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("diamond-a").unwrap(),
+                ),
+                Strategy::Path {
+                    path: a.clone(),
+                    build: BuildPolicy::NeverBuild,
+                },
+            )
+            .expect_err("diamond version conflict must error");
+        match err {
+            AddModuleError::SingleVersionConflict {
+                package,
+                existing_version,
+                existing_required_by,
+                conflicting_version,
+                conflicting_required_by,
+            } => {
+                assert_eq!(package.name.as_str(), "diamond-d");
+                // B is walked before C (BTreeMap key order), so D@1.0.0 lands
+                // in the memo first and D@1.1.0 is the conflicting encounter.
+                assert_eq!(existing_version, SemVer::new(1, 0, 0));
+                assert_eq!(conflicting_version, SemVer::new(1, 1, 0));
+                assert!(
+                    existing_required_by.contains("diamond-b"),
+                    "existing requirer should name diamond-b, got: {existing_required_by}",
+                );
+                assert!(
+                    conflicting_required_by.contains("diamond-c"),
+                    "conflicting requirer should name diamond-c, got: {conflicting_required_by}",
+                );
+            }
+            other => panic!("expected SingleVersionConflict, got: {other:?}"),
+        }
+    }
+
+    /// A diamond where both branches agree on the shared dependency's
+    /// version (B→D@1.0.0, C→D@1.0.0) resolves cleanly, D's schema is
+    /// registered, and the memo records D exactly once at 1.0.0 with BOTH
+    /// requirers — the single-registration invariant. Reverting the
+    /// same-version record-and-skip branch drops the second requirer (or
+    /// removes the memo entirely), failing the `required_by.len() == 2`
+    /// assertion.
+    #[test]
+    #[serial]
+    fn diamond_agreeing_versions_resolve_and_register_once() {
+        const TYPE_D: &str = "DiamondAgreeDSchema";
+        let home = tempfile::tempdir().unwrap();
+        let pkg_root = tempfile::tempdir().unwrap();
+        let a = pkg_root.path().join("a");
+        let b = pkg_root.path().join("b");
+        let c = pkg_root.path().join("c");
+        let d = pkg_root.path().join("d");
+        for p in [&a, &b, &c, &d] {
+            std::fs::create_dir(p).unwrap();
+        }
+        std::fs::create_dir(d.join("schemas")).unwrap();
+        std::fs::write(
+            d.join("schemas/diamondagreedschema.yaml"),
+            format!("metadata:\n  type: {TYPE_D}\n  max_payload_bytes: 4096\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            a.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: diamond-agree-a\n  version: \"0.1.0\"\n\
+             dependencies:\n  \"@tatolab/diamond-agree-b\":\n    path: ../b\n\
+             \x20 \"@tatolab/diamond-agree-c\":\n    path: ../c\n",
+        )
+        .unwrap();
+        std::fs::write(
+            b.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: diamond-agree-b\n  version: \"0.1.0\"\n\
+             dependencies:\n  \"@tatolab/diamond-agree-d\":\n    path: ../d\n",
+        )
+        .unwrap();
+        std::fs::write(
+            c.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: diamond-agree-c\n  version: \"0.1.0\"\n\
+             dependencies:\n  \"@tatolab/diamond-agree-d\":\n    path: ../d\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("streamlib.yaml"),
+            format!(
+                "package:\n  org: tatolab\n  name: diamond-agree-d\n  version: \"1.0.0\"\n\
+                 schemas:\n  {TYPE_D}:\n    file: schemas/diamondagreedschema.yaml\n"
+            ),
+        )
+        .unwrap();
+
+        let _guard = HomeGuard::install(home.path());
+        let runtime = Runner::new().expect("Runner::new");
+        runtime.set_build_orchestrator(LoadAsIsOrchestrator);
+        runtime
+            .add_module_with_blocking(
+                ModuleIdent::any(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("diamond-agree-a").unwrap(),
+                ),
+                Strategy::Path {
+                    path: a.clone(),
+                    build: BuildPolicy::NeverBuild,
+                },
+            )
+            .expect("agreeing diamond must resolve cleanly");
+
+        let canonical = format!("@tatolab/diamond-agree-d/{TYPE_D}");
+        assert!(
+            crate::core::embedded_schemas::get_embedded_schema_definition(&canonical).is_some(),
+            "expected D's schema {canonical} registered",
+        );
+
+        let d_ref = streamlib_idents::PackageRef::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("diamond-agree-d").unwrap(),
+        );
+        let memo = runtime.resolution_memo.lock();
+        let record = memo
+            .get(&d_ref)
+            .expect("D must be recorded in the resolution memo");
+        assert_eq!(record.version, SemVer::new(1, 0, 0));
+        assert_eq!(
+            record.required_by.len(),
+            2,
+            "both B and C must be recorded as requirers of the single D resolution",
+        );
+    }
+
+    /// The memo persists across successive `add_module` calls on the same
+    /// runtime: adding X@1.0.0, then adding Y (which depends on X@2.0.0),
+    /// conflicts even though the two loads are independent top-level calls.
+    #[test]
+    #[serial]
+    fn cross_call_conflicting_versions_error() {
+        let home = tempfile::tempdir().unwrap();
+        let pkg_root = tempfile::tempdir().unwrap();
+        let xa = pkg_root.path().join("xa");
+        let xb = pkg_root.path().join("xb");
+        let y = pkg_root.path().join("y");
+        for p in [&xa, &xb, &y] {
+            std::fs::create_dir(p).unwrap();
+        }
+        std::fs::write(
+            xa.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: crosscall-x\n  version: \"1.0.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            xb.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: crosscall-x\n  version: \"2.0.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            y.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: crosscall-y\n  version: \"0.1.0\"\n\
+             dependencies:\n  \"@tatolab/crosscall-x\":\n    path: ../xb\n",
+        )
+        .unwrap();
+
+        let _guard = HomeGuard::install(home.path());
+        let runtime = Runner::new().expect("Runner::new");
+        runtime.set_build_orchestrator(LoadAsIsOrchestrator);
+
+        runtime
+            .add_module_with_blocking(
+                ModuleIdent::any(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("crosscall-x").unwrap(),
+                ),
+                Strategy::Path {
+                    path: xa.clone(),
+                    build: BuildPolicy::NeverBuild,
+                },
+            )
+            .expect("first add_module (x@1.0.0) must succeed");
+
+        let err = runtime
+            .add_module_with_blocking(
+                ModuleIdent::any(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("crosscall-y").unwrap(),
+                ),
+                Strategy::Path {
+                    path: y.clone(),
+                    build: BuildPolicy::NeverBuild,
+                },
+            )
+            .expect_err("second add_module pulling x@2.0.0 must conflict");
+        match err {
+            AddModuleError::SingleVersionConflict {
+                package,
+                existing_version,
+                conflicting_version,
+                ..
+            } => {
+                assert_eq!(package.name.as_str(), "crosscall-x");
+                assert_eq!(existing_version, SemVer::new(1, 0, 0));
+                assert_eq!(conflicting_version, SemVer::new(2, 0, 0));
+            }
+            other => panic!("expected SingleVersionConflict, got: {other:?}"),
+        }
+    }
+
+    /// Re-adding the same package at the same version is a cheap idempotent
+    /// no-op: both calls succeed, and the memo records the single X
+    /// resolution with both top-level `add_module` calls as requirers.
+    #[test]
+    #[serial]
+    fn idempotent_re_add_same_version_succeeds() {
+        let home = tempfile::tempdir().unwrap();
+        let pkg = tempfile::tempdir().unwrap();
+        std::fs::write(
+            pkg.path().join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: readd-x\n  version: \"1.0.0\"\n",
+        )
+        .unwrap();
+
+        let _guard = HomeGuard::install(home.path());
+        let runtime = Runner::new().expect("Runner::new");
+        runtime.set_build_orchestrator(LoadAsIsOrchestrator);
+
+        let ident = || {
+            ModuleIdent::any(
+                Org::new("tatolab").unwrap(),
+                Package::new("readd-x").unwrap(),
+            )
+        };
+        let strategy = || Strategy::Path {
+            path: pkg.path().to_path_buf(),
+            build: BuildPolicy::NeverBuild,
+        };
+        runtime
+            .add_module_with_blocking(ident(), strategy())
+            .expect("first add_module must succeed");
+        runtime
+            .add_module_with_blocking(ident(), strategy())
+            .expect("idempotent re-add at same version must succeed");
+
+        let x_ref = streamlib_idents::PackageRef::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("readd-x").unwrap(),
+        );
+        let memo = runtime.resolution_memo.lock();
+        let record = memo.get(&x_ref).expect("X must be recorded");
+        assert_eq!(record.version, SemVer::new(1, 0, 0));
+        assert_eq!(
+            record.required_by.len(),
+            2,
+            "both top-level add_module calls must be recorded as requirers",
+        );
+    }
+
     /// `start()` must refuse to run the graph while a module load is
     /// still in flight. The loading set is `pub(crate)` and is populated
     /// by `add_module_with` at call time; simulating an in-flight entry

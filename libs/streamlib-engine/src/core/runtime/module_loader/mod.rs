@@ -59,6 +59,7 @@ pub use build_orchestrator::{
 };
 pub use errors::{AddModuleError, RemoveModuleError};
 pub use processor_registration::host_target_triple;
+pub(crate) use recursive_walker::ResolutionMemo;
 pub use slpkg::extract_slpkg_to_cache;
 pub use source::{ArtifactChecksum, SemVerRange, Strategy};
 
@@ -113,6 +114,7 @@ fn run_module_load(
     module: streamlib_idents::ModuleIdent,
     strategy: Strategy,
     events: broadcast::Sender<ModuleLoadEvent>,
+    resolution_memo: Arc<parking_lot::Mutex<ResolutionMemo>>,
 ) -> std::result::Result<LoadedModule, AddModuleError> {
     let start = Instant::now();
     let _ = events.send(ModuleLoadEvent::Started {
@@ -132,6 +134,7 @@ fn run_module_load(
         strategy,
         &mut seen,
         &mut path,
+        &resolution_memo,
     );
     match result {
         Ok(()) => {
@@ -201,13 +204,14 @@ impl Runner {
         let node = self.iceoryx2_node.clone();
         let orchestrator = self.build_orchestrator.lock().clone();
         let loading = Arc::clone(&self.loading_modules);
+        let memo = Arc::clone(&self.resolution_memo);
         let events = tx.clone();
         let module_for_task = module.clone();
         let pkg_for_task = pkg_ref;
 
         let join = self.tokio_runtime_variant.handle().spawn_blocking(move || {
             let result =
-                run_module_load(node, orchestrator, module_for_task, strategy, events);
+                run_module_load(node, orchestrator, module_for_task, strategy, events, memo);
             loading.lock().remove(&pkg_for_task);
             result
         });

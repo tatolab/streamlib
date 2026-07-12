@@ -133,6 +133,20 @@ pub struct Runner {
     pub(crate) loading_modules: Arc<
         Mutex<std::collections::HashMap<streamlib_idents::PackageRef, streamlib_idents::ModuleIdent>>,
     >,
+    /// Runtime-lifetime single-version-per-package resolution memo, keyed
+    /// by `@org/name`. Populated by the live module walker on every
+    /// [`Runner::add_module`] call; persists across calls so a diamond
+    /// version divergence — or two successive `add_module`s resolving
+    /// different concrete versions of the same package — surfaces as
+    /// [`AddModuleError::SingleVersionConflict`] instead of a silent
+    /// double-registration. Lives for the runtime's lifetime (there is no
+    /// module unload today); dropped with the [`Runner`].
+    ///
+    /// [`Runner::add_module`]: Self::add_module
+    /// [`AddModuleError::SingleVersionConflict`]: crate::core::runtime::module_loader::AddModuleError::SingleVersionConflict
+    pub(crate) resolution_memo: Arc<
+        Mutex<crate::core::runtime::module_loader::ResolutionMemo>,
+    >,
 }
 
 impl Runner {
@@ -275,6 +289,7 @@ impl Runner {
             pipeline_name: Arc::new(Mutex::new(None)),
             build_orchestrator: Arc::new(Mutex::new(None)),
             loading_modules: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            resolution_memo: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }))
     }
 

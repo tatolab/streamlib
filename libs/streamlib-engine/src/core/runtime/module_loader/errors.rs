@@ -271,6 +271,33 @@ pub enum AddModuleError {
     DependencyCycleDetected {
         cycle: Vec<streamlib_idents::PackageRef>,
     },
+
+    /// Two requirers resolved the same `@org/name` package to different
+    /// concrete versions within the runtime's lifetime — a diamond
+    /// version conflict. The engine enforces a single version per package
+    /// across the whole module graph (and across successive `add_module`
+    /// calls), so this is a hard error rather than a silent
+    /// double-registration. Resolve it by pinning a single version via a
+    /// `patch:` entry in the requiring `streamlib.yaml` that redirects the
+    /// package to one `path:` / `git:` source, or by aligning the two
+    /// requirers on a single declared version.
+    #[error(
+        "Single-version conflict for package '{package}': version \
+         {existing_version} (required by {existing_required_by}) conflicts \
+         with version {conflicting_version} (required by \
+         {conflicting_required_by}). streamlib enforces one version per \
+         package across the module graph — pin a single version via a \
+         `patch:` entry in the requiring streamlib.yaml (redirecting \
+         '{package}' to one path/git source), or align the two requirers \
+         on the same version."
+    )]
+    SingleVersionConflict {
+        package: streamlib_idents::PackageRef,
+        existing_version: streamlib_idents::SemVer,
+        existing_required_by: String,
+        conflicting_version: streamlib_idents::SemVer,
+        conflicting_required_by: String,
+    },
 }
 
 impl From<AddModuleError> for Error {

@@ -4,6 +4,8 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use parking_lot::Mutex;
+
 use super::build_orchestrator::{BuildEventSink, BuildOrchestrator, BuildPolicy};
 use super::errors::AddModuleError;
 use super::processor_registration::register_manifest_processors;
@@ -11,6 +13,69 @@ use super::schema_registration::register_package_schemas;
 use super::source::{read_version_from_manifest_dir, resolve_strategy_to_source, ResolvedSource, Strategy};
 use crate::core::{Error, Result};
 use crate::iceoryx2::Iceoryx2Node;
+
+/// A single requirer edge into a resolved package: the parent
+/// [`PackageRef`] that declared the dependency (or `None` for a
+/// top-level `add_module` call) plus the version range it declared.
+///
+/// [`PackageRef`]: streamlib_idents::PackageRef
+#[derive(Debug, Clone)]
+pub(crate) struct RequirerRecord {
+    /// The parent package that pulled this dependency in, or `None` when
+    /// the package was the root of a top-level `add_module` call.
+    pub requirer: Option<streamlib_idents::PackageRef>,
+    /// The [`SemVerRange`] the requirer declared for this package (`Any`
+    /// for path / git deps, which carry no range).
+    ///
+    /// [`SemVerRange`]: streamlib_idents::SemVerRange
+    pub declared_range: streamlib_idents::SemVerRange,
+}
+
+/// The persistent single-version resolution record for one `@org/name`
+/// package across the whole runtime lifetime. Keyed by [`PackageRef`] in
+/// the loader's [`ResolutionMemo`]; the concrete resolved [`SemVer`] is
+/// authoritative and every subsequent encounter is checked against it.
+///
+/// [`PackageRef`]: streamlib_idents::PackageRef
+/// [`SemVer`]: streamlib_idents::SemVer
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedPackageRecord {
+    /// The concrete on-disk version this package first resolved to.
+    pub version: streamlib_idents::SemVer,
+    /// Where that version's manifest was resolved from.
+    pub source_path: std::path::PathBuf,
+    /// Every requirer that has pulled this package in so far.
+    pub required_by: Vec<RequirerRecord>,
+}
+
+/// Runtime-lifetime memo of every package resolved by the live module
+/// walker, keyed by `@org/name`. Persists across every `add_module` call
+/// on a [`Runner`] so two independently-rooted diamond branches — or two
+/// successive `add_module` calls — that resolve the same package to
+/// different concrete versions conflict instead of silently
+/// double-registering.
+///
+/// [`Runner`]: crate::core::runtime::Runner
+pub(crate) type ResolutionMemo =
+    std::collections::HashMap<streamlib_idents::PackageRef, ResolvedPackageRecord>;
+
+/// Render one requirer edge for a
+/// [`AddModuleError::SingleVersionConflict`] message.
+fn describe_requirer(requirer: &RequirerRecord) -> String {
+    match &requirer.requirer {
+        Some(pkg) => format!("{pkg} (declared `{}`)", requirer.declared_range),
+        None => format!("top-level add_module (declared `{}`)", requirer.declared_range),
+    }
+}
+
+/// Render the accumulated requirers of an already-resolved package.
+fn describe_requirers(requirers: &[RequirerRecord]) -> String {
+    requirers
+        .iter()
+        .map(describe_requirer)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 /// Recursive worker: resolves the [`Strategy`] to a source, materializes
 /// via the injected [`BuildOrchestrator`] when a build is required,
@@ -21,6 +86,11 @@ use crate::iceoryx2::Iceoryx2Node;
 /// `seen` tracks every [`PackageRef`] currently on the recursion stack
 /// (O(1) membership); `path` preserves insertion order so the
 /// dependency-cycle error carries the actual edge that re-entered.
+/// `resolution_memo` is the runtime-lifetime single-version record
+/// shared across every `add_module` call — the gate that turns a
+/// diamond version divergence into a typed
+/// [`AddModuleError::SingleVersionConflict`] instead of a silent
+/// double-registration.
 ///
 /// [`PackageRef`]: streamlib_idents::PackageRef
 #[allow(clippy::too_many_arguments)]
@@ -32,6 +102,7 @@ pub(super) fn add_module_recursively(
     strategy: Strategy,
     seen: &mut HashSet<streamlib_idents::PackageRef>,
     path: &mut Vec<streamlib_idents::PackageRef>,
+    resolution_memo: &Mutex<ResolutionMemo>,
 ) -> std::result::Result<(), AddModuleError> {
     let pkg_ref = module.package_ref();
     if !seen.insert(pkg_ref.clone()) {
@@ -40,8 +111,16 @@ pub(super) fn add_module_recursively(
         return Err(AddModuleError::DependencyCycleDetected { cycle });
     }
     path.push(pkg_ref.clone());
-    let result =
-        add_module_recursive_body(iceoryx2_node, orchestrator, sink, module, strategy, seen, path);
+    let result = add_module_recursive_body(
+        iceoryx2_node,
+        orchestrator,
+        sink,
+        module,
+        strategy,
+        seen,
+        path,
+        resolution_memo,
+    );
     seen.remove(&pkg_ref);
     path.pop();
     result
@@ -56,6 +135,7 @@ fn add_module_recursive_body(
     strategy: Strategy,
     seen: &mut HashSet<streamlib_idents::PackageRef>,
     path: &mut Vec<streamlib_idents::PackageRef>,
+    resolution_memo: &Mutex<ResolutionMemo>,
 ) -> std::result::Result<(), AddModuleError> {
     use crate::core::config::ProjectConfig;
 
@@ -144,6 +224,62 @@ fn add_module_recursive_body(
         on_disk_version,
     );
 
+    // Single-version-per-package gate. The memo persists across the whole
+    // runtime lifetime (not per walk), so two independently-rooted diamond
+    // branches — or two successive `add_module` calls — that resolve the
+    // same package to different concrete versions conflict here instead of
+    // silently double-registering. Compares concrete resolved `SemVer`s,
+    // never ranges: path / git deps enter with range `Any`, so a
+    // range-only check would never fire. A same-version re-encounter
+    // short-circuits before re-registration + re-recursion, which also
+    // fixes the historical silent double-registration.
+    let requirer = RequirerRecord {
+        requirer: (path.len() >= 2).then(|| path[path.len() - 2].clone()),
+        declared_range: module.version.clone(),
+    };
+    {
+        let mut memo = resolution_memo.lock();
+        match memo.get_mut(&pkg_ref) {
+            None => {
+                memo.insert(
+                    pkg_ref.clone(),
+                    ResolvedPackageRecord {
+                        version: on_disk_version,
+                        source_path: manifest_dir.clone(),
+                        required_by: vec![requirer],
+                    },
+                );
+            }
+            Some(existing) if existing.version == on_disk_version => {
+                existing.required_by.push(requirer);
+                tracing::debug!(
+                    package = %pkg_ref,
+                    version = %on_disk_version,
+                    "single-version gate: already resolved at this version — \
+                     skipping re-registration and re-recursion",
+                );
+                return Ok(());
+            }
+            Some(existing) => {
+                return Err(AddModuleError::SingleVersionConflict {
+                    package: pkg_ref.clone(),
+                    existing_version: existing.version,
+                    existing_required_by: format!(
+                        "{} [resolved from {}]",
+                        describe_requirers(&existing.required_by),
+                        existing.source_path.display(),
+                    ),
+                    conflicting_version: on_disk_version,
+                    conflicting_required_by: format!(
+                        "{} [resolved from {}]",
+                        describe_requirer(&requirer),
+                        manifest_dir.display(),
+                    ),
+                });
+            }
+        }
+    }
+
     // Schemas are leaves — register before recursing into deps.
     register_package_schemas(&manifest_dir, &config).map_err(|e| {
         AddModuleError::LoadProjectFailed {
@@ -174,6 +310,7 @@ fn add_module_recursive_body(
             dep_strategy,
             seen,
             path,
+            resolution_memo,
         )?;
     }
 
