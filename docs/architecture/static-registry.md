@@ -239,6 +239,12 @@ cargo xtask static-registry emit --out <dir> [--dev N] \
 - pypi (uv sdist) and npm (deno pack) reuse the SDK build toolchains; `.slpkg`
   packages are assembled via `streamlib pkg build` semantics and the release
   manifest is written last.
+- The whole-tree `.slpkg` emit **skips** any `packages/*` that carries a dev
+  path-`patch:` block (the test-only fixtures) with a `warn!` naming every
+  offender — such a package is non-distributable by construction, so it is
+  excluded from the release manifest and the catalog rather than failing the
+  whole emit. The single-package `streamlib pkg build` / `pkg publish` still
+  hard-fails on the same condition so an author sees the error.
 
 ## Consuming a tree
 

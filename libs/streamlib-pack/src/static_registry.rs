@@ -685,6 +685,31 @@ fn emit_npm(opts: &EmitOptions, staging: &Path, target: &str) -> Result<()> {
     Ok(())
 }
 
+/// Whether a `packages/*` dir participates in the whole-tree `.slpkg` emit.
+enum PackageEmitDecision {
+    /// Publishable — assemble + upload + catalog + release-manifest membership.
+    Emit,
+    /// Non-publishable: carries a dev path-`patch:` block (the test-only
+    /// fixtures). Skipped from the whole-tree emit, naming every offender.
+    SkipDevPatch(Vec<String>),
+}
+
+/// Classify a `packages/*` dir for the whole-tree emit. A package carrying a
+/// dev path-`patch:` block is non-distributable by construction — the exact
+/// condition [`PathDepPolicy::RejectPathPatches`](crate::PathDepPolicy)
+/// refuses inside [`assemble_slpkg_bytes`] — so the whole-tree emit skips it
+/// rather than hard-failing the whole release. The predicate is shared with
+/// the CLI gate (`crate::path_patch_offenders`), so the skip is the same
+/// condition, sound by construction rather than a proxy.
+fn decide_package_emit(pkg_dir: &Path) -> Result<PackageEmitDecision> {
+    let offenders = crate::path_patch_offenders(pkg_dir)?;
+    if offenders.is_empty() {
+        Ok(PackageEmitDecision::Emit)
+    } else {
+        Ok(PackageEmitDecision::SkipDevPatch(offenders))
+    }
+}
+
 /// Assemble each workspace package into a `.slpkg`, write it into the `file://`
 /// generic store, and write the [`ReleaseManifest`] LAST (the atomicity flip
 /// within the staging tree; the whole staging tree then flips atomically).
@@ -718,10 +743,32 @@ fn emit_slpkg_and_manifest(
         let siblings = build_sibling_versions(&entries)
             .context("building the catalog resolution universe from packages/")?;
 
+        let mut emitted = 0usize;
+        let mut skipped = 0usize;
         for pkg_dir in &entries {
             let yaml = pkg_dir.join("streamlib.yaml");
             if !yaml.is_file() {
                 continue;
+            }
+            // A package carrying a dev path-`patch:` block is non-distributable
+            // by construction (the same condition
+            // `PathDepPolicy::RejectPathPatches` refuses inside
+            // `assemble_slpkg_bytes`). The whole-tree emit skips it — with a
+            // warning naming every offender — rather than hard-failing the
+            // whole release; the single-package `streamlib pkg build/publish`
+            // still hard-fails so an author sees the error. Skipping here means
+            // no upload, no release-manifest membership, and no catalog entry.
+            match decide_package_emit(pkg_dir)? {
+                PackageEmitDecision::SkipDevPatch(offenders) => {
+                    tracing::warn!(
+                        package = %pkg_dir.display(),
+                        offenders = %offenders.join(", "),
+                        "skipping non-publishable package (dev path patch) from static-registry .slpkg emit"
+                    );
+                    skipped += 1;
+                    continue;
+                }
+                PackageEmitDecision::Emit => {}
             }
             let (pkg_ref, version, bytes) = assemble_slpkg_bytes(pkg_dir)?;
             let semver: SemVer = version
@@ -742,7 +789,9 @@ fn emit_slpkg_and_manifest(
             write_package_catalog(&slpkg_dir, &artifacts)
                 .with_context(|| format!("writing catalog for {pkg_ref}"))?;
             catalog_index.extend(artifacts.index_lines);
+            emitted += 1;
         }
+        tracing::info!(emitted, skipped, "static-registry .slpkg emit complete");
     }
 
     // Crate closure members at their ACTUAL manifest versions — the same
@@ -1222,5 +1271,67 @@ mod tests {
         assert!(served.join("only-in-new").is_file());
         assert!(!served.join("only-in-old").exists(), "old tree fully replaced");
         assert!(!staging.exists(), "staging (old tree after swap) removed");
+    }
+
+    /// Write a `streamlib.yaml` into a fresh temp package dir and return it.
+    fn package_dir_with_manifest(manifest_yaml: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("streamlib.yaml"), manifest_yaml).unwrap();
+        dir
+    }
+
+    /// A publishable manifest (no `patch:` block) classifies as `Emit`.
+    #[test]
+    fn decide_package_emit_clean_manifest_emits() {
+        let dir = package_dir_with_manifest(
+            "package:\n  org: tatolab\n  name: clean-pkg\n  version: 1.0.0\n\
+             dependencies:\n  \"@tatolab/core\": \"^1.0.0\"\n",
+        );
+        assert!(matches!(
+            decide_package_emit(dir.path()).unwrap(),
+            PackageEmitDecision::Emit
+        ));
+    }
+
+    /// A manifest carrying a dev path-`patch:` block (the test-fixtures shape)
+    /// classifies as `SkipDevPatch`, naming the offending dependency.
+    ///
+    /// Mental revert: change `decide_package_emit`'s non-empty arm to
+    /// `PackageEmitDecision::Emit` and this test fails — the classification is
+    /// what the whole-tree emit's skip branch keys on, so the test locks the
+    /// decision, not just the parse.
+    #[test]
+    fn decide_package_emit_path_patch_skips_and_names_offender() {
+        let dir = package_dir_with_manifest(
+            "package:\n  org: tatolab\n  name: fixture-pkg\n  version: 1.0.0\n\
+             dependencies:\n  \"@tatolab/core\": \"^1.0.0\"\n\
+             patch:\n  \"@tatolab/core\":\n    path: ../core\n",
+        );
+        match decide_package_emit(dir.path()).unwrap() {
+            PackageEmitDecision::SkipDevPatch(offenders) => {
+                assert_eq!(offenders.len(), 1);
+                assert!(
+                    offenders[0].contains("@tatolab/core") && offenders[0].contains("../core"),
+                    "offender should name the dep and the path: {offenders:?}"
+                );
+            }
+            PackageEmitDecision::Emit => panic!("path-patch-carrying package must be skipped"),
+        }
+    }
+
+    /// A non-path (git) `patch:` override is a legitimate distributable
+    /// override, not a dev path affordance — the skip is path-only, so the
+    /// package still classifies as `Emit`.
+    #[test]
+    fn decide_package_emit_git_patch_still_emits() {
+        let dir = package_dir_with_manifest(
+            "package:\n  org: tatolab\n  name: git-pkg\n  version: 1.0.0\n\
+             dependencies:\n  \"@tatolab/bar\": \"^2.0.0\"\n\
+             patch:\n  \"@tatolab/bar\":\n    git: https://example.com/bar\n    rev: abc123\n",
+        );
+        assert!(
+            matches!(decide_package_emit(dir.path()).unwrap(), PackageEmitDecision::Emit),
+            "a git-flavor patch is not a dev path override and must not be skipped"
+        );
     }
 }

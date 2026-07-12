@@ -918,32 +918,46 @@ fn manifest_bytes_for(pkg_dir: &Path, policy: PathDepPolicy) -> Result<Vec<u8>> 
     }
 }
 
-/// Reject path-flavor `patch:` entries (dev-time overrides that don't
-/// generalize to a distributed artifact). Names every offender.
-fn reject_path_patches(pkg_dir: &Path) -> Result<()> {
+/// Names every path-flavor `patch:` entry in `<pkg_dir>/streamlib.yaml` —
+/// dev-time overrides that don't generalize to a distributed artifact. An
+/// empty result means the package is publishable through this gate; a
+/// non-empty one lists each offender (`` `dep` → `path` ``). A missing
+/// manifest is treated as no offenders.
+///
+/// The predicate the whole-tree static-registry emit skips on and the CLI
+/// `.slpkg` gate rejects on share this one definition — the skip is the same
+/// condition, sound by construction rather than a proxy. Filters exactly
+/// [`DependencySpec::Path`], so git/registry `patch:` overrides never count.
+pub(crate) fn path_patch_offenders(pkg_dir: &Path) -> Result<Vec<String>> {
     let manifest_path = pkg_dir.join(Manifest::FILE_NAME);
     if !manifest_path.exists() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let body = std::fs::read_to_string(&manifest_path)
         .with_context(|| format!("read {}", manifest_path.display()))?;
     let manifest: Manifest = serde_yaml::from_str(&body)
         .with_context(|| format!("parse {}", manifest_path.display()))?;
-    let offenders: Vec<String> = manifest
+    Ok(manifest
         .patch
         .iter()
         .filter_map(|(dep_ref, spec)| match spec {
             DependencySpec::Path(p) => Some(format!("`{}` → `{}`", dep_ref, p.path.display())),
             _ => None,
         })
-        .collect();
+        .collect())
+}
+
+/// Reject path-flavor `patch:` entries (dev-time overrides that don't
+/// generalize to a distributed artifact). Names every offender.
+fn reject_path_patches(pkg_dir: &Path) -> Result<()> {
+    let offenders = path_patch_offenders(pkg_dir)?;
     if offenders.is_empty() {
         return Ok(());
     }
     anyhow::bail!(
         "{} carries path-flavor `patch:` entries which are dev-time overrides and not \
          publishable: {}. Remove them — or convert to a git/registry override — before packing.",
-        manifest_path.display(),
+        pkg_dir.join(Manifest::FILE_NAME).display(),
         offenders.join(", "),
     );
 }
