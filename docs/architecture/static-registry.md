@@ -90,6 +90,22 @@ at package time). Versions always follow the crates' actual manifests — a
 `--dev` emit expects the workspace manifests already bumped (the publish
 scripts' bump/restore convention).
 
+Per-crate `.crate` tarballs are **reused across emits, but only after
+integrity verification** (`streamlib_pack::crate_tarball`): a previously
+packaged `target/package/<crate>-<version>.crate` is structurally checked —
+its gzip stream fully decodes, every tar entry enumerates to EOF, and the
+`<crate>-<version>/Cargo.toml` entry is present — before the emit trusts it.
+A tarball that passes is reused (skipping a redundant `cargo package`); one
+that fails — a truncated leftover from an aborted emit is the motivating
+case — is logged, deleted, and repackaged automatically, so a stale artifact
+never poisons the emitted tree and no manual cache-clearing is needed. A
+freshly packaged tarball is verified too; a still-invalid result is a hard
+error. Reuse treats a `(crate, version)` tarball as immutable, so a verified
+reuse skips that crate's `cargo package` registry-dep validation for the run
+— acceptable because the emitted sparse-index line is rendered from the
+reused tarball's own bundled manifest, so the tree stays internally
+consistent.
+
 ## Atomic release — the staged swap
 
 A `file://` consumer must never observe a half-written tree. `emit_static_registry`
@@ -217,6 +233,8 @@ export CARGO_REGISTRIES_GITEA_INDEX="sparse+http://127.0.0.1:8799/cargo/"
 ## Reference
 
 - **Renderers + atomic swap**: `libs/streamlib-pack/src/static_registry.rs`.
+- **Verified crate-tarball reuse**: `libs/streamlib-pack/src/crate_tarball.rs`
+  (`verify_crate_tarball`, `obtain_crate_tarball`).
 - **Catalog**: `libs/streamlib-idents/src/catalog.rs` (protocol surface +
   `CatalogClient`), `libs/streamlib-pack/src/catalog.rs` (assembly).
 - **Fork bootstrap**: `scripts/gitea/emit-static-fork.sh`,
