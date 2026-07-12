@@ -548,8 +548,9 @@ fn merge_versions(mut versions: Vec<SemVer>) -> Vec<SemVer> {
 }
 
 /// Blocking GET that distinguishes a `404` (`Ok(None)`) from a real transport
-/// or non-404 status error (`Err`). Used for the optional version index.
-fn http_get_optional(url: &str, token: Option<&str>) -> Result<Option<Vec<u8>>, String> {
+/// or non-404 status error (`Err`). Used for the optional version index and
+/// the catalog client's tree-relative reads.
+pub(crate) fn http_get_optional(url: &str, token: Option<&str>) -> Result<Option<Vec<u8>>, String> {
     let mut req = ureq::get(url);
     if let Some(t) = token {
         req = req.set("Authorization", &format!("token {t}"));

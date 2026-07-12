@@ -165,6 +165,17 @@ pub enum ResolverError {
         dep: String,
     },
 
+    #[error(
+        "bare schema name `{name}` resolution cycles through external imports \
+         (resolution chain: {chain:?}). Two packages re-export the type from each \
+         other; declare it as `{{ file: ... }}` in the package that actually owns it."
+    )]
+    BareSchemaNameCycle {
+        name: String,
+        package: String,
+        chain: Vec<String>,
+    },
+
     #[error(transparent)]
     Ident(#[from] IdentError),
 }

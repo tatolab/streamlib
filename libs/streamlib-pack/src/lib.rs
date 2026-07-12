@@ -45,6 +45,7 @@ use streamlib_processor_schema::ProcessorLanguage;
 
 pub use streamlib_cargo_build::CargoProfile;
 
+pub mod catalog;
 pub mod link_marker;
 pub mod static_registry;
 
