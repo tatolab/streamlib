@@ -52,14 +52,17 @@ cd "$ROOT"
 log "publishing crate closure"
 "$HERE/publish-crates.sh" "${dev_args[@]}"
 
-# 2. Polyglot SDKs.
+# 2. Polyglot SDKs — same --dev train as the crates so the manifest's
+#    recorded SDK versions match what was actually published (Python spells
+#    the same dev train `<base>.devN` per PEP 440; the manifest records the
+#    canonical semver form).
 if [ "${SKIP_PYTHON_SDK:-0}" != 1 ]; then
-  log "publishing python SDK"; "$HERE/publish-python-sdk.sh"
+  log "publishing python SDK"; "$HERE/publish-python-sdk.sh" "${dev_args[@]}"
 else
   log "SKIP python SDK"; manifest_args+=(--skip-python)
 fi
 if [ "${SKIP_DENO_SDK:-0}" != 1 ]; then
-  log "publishing deno SDK"; "$HERE/publish-deno-sdk.sh"
+  log "publishing deno SDK"; "$HERE/publish-deno-sdk.sh" "${dev_args[@]}"
 else
   log "SKIP deno SDK"; manifest_args+=(--skip-deno)
 fi

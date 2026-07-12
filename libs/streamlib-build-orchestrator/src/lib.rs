@@ -252,9 +252,7 @@ impl PolyglotBuildOrchestrator {
         if has_rust {
             let pins = build::read_gitea_registry_pins(pkg_dir)
                 .map_err(|e| other(&pkg_label, format!("reading gitea-registry pins: {e}")))?;
-            let required: Vec<(String, String)> =
-                pins.into_iter().map(|p| (p.name, p.version)).collect();
-            release_check::assert_release_complete(&pkg_label, &required)?;
+            release_check::assert_release_complete(&pkg_label, &pins)?;
         }
 
         // ---- Assemble + stage to the package cache ----

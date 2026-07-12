@@ -94,13 +94,18 @@ pub fn read_cargo_package_name(package_dir: &Path) -> Result<String> {
     Ok(name.to_string())
 }
 
-/// A direct gitea-registry cargo dependency pin: the crate `name` and the
-/// concrete `version` its manifest floor-pins it at (leading range operators
+/// A direct gitea-registry cargo dependency pin: the crate `name`, the raw
+/// cargo version requirement `req` (cargo semantics — a bare `0.5.0` means
+/// caret), and the concrete floor `version` (leading range operators
 /// `=` / `^` / `~` / `>=` stripped). The unit the release-completeness check
 /// validates against a release manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GiteaRegistryPin {
     pub name: String,
+    /// Raw cargo version requirement as written in the manifest
+    /// (`"0.5.0"`, `"=0.4.36"`, `"^0.5.1"`, …).
+    pub req: String,
+    /// Floor version with the range operator stripped.
     pub version: String,
 }
 
@@ -135,6 +140,7 @@ fn collect_gitea_pins_from_table(table: &toml::value::Table, out: &mut Vec<Gitea
             .to_string();
         out.push(GiteaRegistryPin {
             name,
+            req: version.trim().to_string(),
             version: strip_version_req_operator(version),
         });
     }
@@ -530,19 +536,23 @@ vulkan-jpeg = {version = ">=0.5.1", registry = "gitea"}
 
         let mut pins = read_gitea_registry_pins(dir.path()).unwrap();
         pins.sort_by(|a, b| a.name.cmp(&b.name));
-        let got: Vec<(String, String)> =
-            pins.into_iter().map(|p| (p.name, p.version)).collect();
+        let got: Vec<(String, String, String)> = pins
+            .into_iter()
+            .map(|p| (p.name, p.req, p.version))
+            .collect();
         assert_eq!(
             got,
             vec![
-                ("streamlib-jtd-codegen".to_string(), "0.5.1".to_string()),
-                ("streamlib-macros".to_string(), "0.5.1".to_string()),
-                ("streamlib-plugin-abi".to_string(), "0.5.1".to_string()), // renamed
-                ("streamlib-plugin-sdk".to_string(), "0.5.1".to_string()),
-                ("vulkan-jpeg".to_string(), "0.5.1".to_string()),
+                ("streamlib-jtd-codegen".to_string(), "=0.5.1".to_string(), "0.5.1".to_string()),
+                ("streamlib-macros".to_string(), "^0.5.1".to_string(), "0.5.1".to_string()),
+                // renamed via `package = "streamlib-plugin-abi"`
+                ("streamlib-plugin-abi".to_string(), "=0.5.1".to_string(), "0.5.1".to_string()),
+                ("streamlib-plugin-sdk".to_string(), "0.5.1".to_string(), "0.5.1".to_string()),
+                ("vulkan-jpeg".to_string(), ">=0.5.1".to_string(), "0.5.1".to_string()),
             ],
             "gitea pins must include normal/build/cfg-target deps (renamed via \
-             `package`), strip range operators, and exclude serde + dev-deps"
+             `package`), carry the raw req, strip range operators for the floor, \
+             and exclude serde + dev-deps"
         );
     }
 

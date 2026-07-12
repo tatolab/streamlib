@@ -118,7 +118,11 @@ pub(crate) fn ensure_native_host(
     // for pre-atomic-release registries (no manifest) — see `release_check`.
     crate::release_check::assert_release_complete(
         runtime.crate_name(),
-        &[(runtime.crate_name().to_string(), version.to_string())],
+        &[streamlib_cargo_build::GiteaRegistryPin {
+            name: runtime.crate_name().to_string(),
+            req: format!("={version}"),
+            version: version.to_string(),
+        }],
     )?;
 
     tracing::info!(

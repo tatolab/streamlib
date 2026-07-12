@@ -252,13 +252,34 @@ impl<'a> RegistryClient<'a> {
             .join(RELEASE_MANIFEST_FILE)
     }
 
+    /// [`PackageRef`] for the reserved release-manifest channel under `org`,
+    /// so the channel rides the same list/index machinery as any generic
+    /// package.
+    fn release_channel_ref(&self, org: &str) -> ResolverResult<PackageRef> {
+        let org = crate::ident::Org::new(org)?;
+        let name = crate::ident::Package::new(RELEASE_MANIFEST_CHANNEL)?;
+        Ok(PackageRef::new(org, name))
+    }
+
+    /// List every release version that has a published release manifest.
+    /// `file://` enumerates the mirror directory; `http(s)://` reads the
+    /// channel's anonymous version index (maintained by
+    /// [`Self::upload_release_manifest`]). An empty list is the
+    /// pre-atomic-release back-compat case.
+    pub fn list_release_versions(&self, org: &str) -> ResolverResult<Vec<SemVer>> {
+        let channel = self.release_channel_ref(org)?;
+        self.list_versions(&channel)
+    }
+
     /// Publish the release `manifest` for its `release_version`, returning the
     /// canonical URL it was written to. This is the **atomicity flip** — the
     /// caller runs it *last*, after every crate / SDK / package has landed, so
     /// the manifest's presence marks the release complete. `file://` writes
     /// the mirror layout; `http(s)://` deletes-then-PUTs (Gitea generic files
-    /// are immutable per (name, version, file), so a bare re-PUT 409s). `org`
-    /// is the registry org the release lives under (e.g. `tatolab`).
+    /// are immutable per (name, version, file), so a bare re-PUT 409s) and
+    /// rewrites the channel's anonymous version index so consumers can list
+    /// available releases tokenlessly. `org` is the registry org the release
+    /// lives under (e.g. `tatolab`).
     pub fn upload_release_manifest(
         &self,
         org: &str,
@@ -268,6 +289,10 @@ impl<'a> RegistryClient<'a> {
             name: format!("{}/{}", RELEASE_MANIFEST_CHANNEL, manifest.release_version),
             detail,
         };
+        let release_semver: SemVer = manifest
+            .release_version
+            .parse()
+            .map_err(|e| upload_err(format!("release_version is not a semver: {e}")))?;
         let body = serde_json::to_vec_pretty(manifest)
             .map_err(|e| upload_err(format!("serializing release manifest: {e}")))?;
         let url = self.release_manifest_url(org, &manifest.release_version);
@@ -290,6 +315,11 @@ impl<'a> RegistryClient<'a> {
             );
             http_delete(&version_url, self.config.token.as_deref());
             http_put_bytes(&url, self.config.token.as_deref(), &body).map_err(upload_err)?;
+            // Maintain the channel's anonymous version index so the consumer
+            // read path can list release versions tokenlessly (mirrors the
+            // upload_slpkg ordering: artifact first, index last).
+            let channel = self.release_channel_ref(org)?;
+            self.write_version_index(&channel, release_semver)?;
         }
         Ok(url)
     }
@@ -1016,6 +1046,13 @@ mod tests {
 
         let back = client.fetch_release_manifest("tatolab", "0.5.1").unwrap().unwrap();
         assert_eq!(back, manifest);
+
+        // The release channel is listable — the consumer's range-aware
+        // completeness check discovers available releases this way.
+        assert_eq!(
+            client.list_release_versions("tatolab").unwrap(),
+            vec![SemVer::new(0, 5, 1)]
+        );
 
         std::fs::remove_dir_all(&tmp).ok();
     }

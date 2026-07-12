@@ -93,27 +93,40 @@ impl ReleaseManifest {
             .iter()
             .any(|m| m.name == name && m.version == version)
     }
+
+    /// Whether the manifest lists a crate member named `name` at a version
+    /// satisfying `range`. Members with an unparseable version never match.
+    pub fn contains_crate_satisfying(&self, name: &str, range: &crate::SemVerRange) -> bool {
+        self.crates.iter().any(|m| {
+            m.name == name
+                && m.version
+                    .parse::<crate::SemVer>()
+                    .is_ok_and(|v| range.matches(v))
+        })
+    }
 }
 
-/// Given the direct crate pins a consumer declares (`(name, exact version)`),
-/// return the `name@version` of each pin the release `manifest` does **not**
-/// list as a crate member. An empty result means every pin is covered by the
-/// release — a partial/mid-publish registry yields the missing names so the
-/// caller can name the gap.
+/// Given the direct crate pins a consumer declares (`(name, version range)`),
+/// return the `name@range` of each pin the release `manifest` does **not**
+/// satisfy — no crate member with that name whose version matches the range.
+/// An empty result means every pin is covered by the release; a
+/// partial/mid-publish registry yields the missing names so the caller can
+/// name the gap.
 ///
-/// The pins are the consumer's *direct* gitea-registry cargo deps at the
-/// release version; the manifest's `crates` set is the full published
-/// closure. A pin absent from the closure is exactly the `0.4.36`
-/// `streamlib-plugin-sdk` / `vulkan-jpeg` foot-gun this manifest exists to
-/// catch.
+/// The pins are the consumer's *direct* gitea-registry cargo dep reqs
+/// (cargo's bare `0.5.0` maps to `^0.5.0` before calling this); the
+/// manifest's `crates` set is the full published closure at the release
+/// version. A pin whose range the closure can't satisfy is exactly the
+/// `0.4.36` `streamlib-plugin-sdk` / `vulkan-jpeg` foot-gun this manifest
+/// exists to catch.
 pub fn crates_missing_from_release(
     manifest: &ReleaseManifest,
-    required: &[(String, String)],
+    required: &[(String, crate::SemVerRange)],
 ) -> Vec<String> {
     let mut missing: Vec<String> = required
         .iter()
-        .filter(|(name, version)| !manifest.contains_crate(name, version))
-        .map(|(name, version)| format!("{name}@{version}"))
+        .filter(|(name, range)| !manifest.contains_crate_satisfying(name, range))
+        .map(|(name, range)| format!("{name}@{range}"))
         .collect();
     missing.sort();
     missing.dedup();
@@ -123,6 +136,7 @@ pub fn crates_missing_from_release(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SemVerRange;
 
     fn manifest_with(crates: &[(&str, &str)]) -> ReleaseManifest {
         ReleaseManifest::new(
@@ -134,6 +148,10 @@ mod tests {
         )
     }
 
+    fn req(name: &str, range: &str) -> (String, SemVerRange) {
+        (name.to_string(), SemVerRange::from_str(range).unwrap())
+    }
+
     #[test]
     fn complete_release_reports_no_missing() {
         let m = manifest_with(&[
@@ -142,8 +160,10 @@ mod tests {
             ("vulkan-jpeg", "0.5.1"),
         ]);
         let required = vec![
-            ("streamlib-plugin-sdk".to_string(), "0.5.1".to_string()),
-            ("streamlib-macros".to_string(), "0.5.1".to_string()),
+            req("streamlib-plugin-sdk", "=0.5.1"),
+            // Caret floor pin below the release version — the real-tree
+            // steady state (pins floor 0.5.0, release 0.5.1) must satisfy.
+            req("streamlib-macros", "^0.5.0"),
         ];
         assert!(crates_missing_from_release(&m, &required).is_empty());
     }
@@ -152,32 +172,32 @@ mod tests {
     fn partial_release_names_the_gap() {
         // The historical foot-gun: a closure that published streamlib-macros
         // but silently skipped streamlib-plugin-sdk + vulkan-jpeg. The check
-        // must name exactly the pins that aren't in the manifest.
+        // must name exactly the pins the manifest can't satisfy.
         let m = manifest_with(&[("streamlib-macros", "0.5.1")]);
         let required = vec![
-            ("streamlib-plugin-sdk".to_string(), "0.5.1".to_string()),
-            ("streamlib-macros".to_string(), "0.5.1".to_string()),
-            ("vulkan-jpeg".to_string(), "0.5.1".to_string()),
+            req("streamlib-plugin-sdk", "^0.5.0"),
+            req("streamlib-macros", "^0.5.0"),
+            req("vulkan-jpeg", "^0.5.0"),
         ];
         let missing = crates_missing_from_release(&m, &required);
         assert_eq!(
             missing,
             vec![
-                "streamlib-plugin-sdk@0.5.1".to_string(),
-                "vulkan-jpeg@0.5.1".to_string(),
+                "streamlib-plugin-sdk@^0.5.0".to_string(),
+                "vulkan-jpeg@^0.5.0".to_string(),
             ]
         );
     }
 
     #[test]
-    fn version_mismatch_counts_as_missing() {
-        // A pin at a version the release doesn't carry (skew) is missing —
-        // string-exact match, since the manifest records stamped versions.
+    fn version_out_of_range_counts_as_missing() {
+        // An exact pin at a version the release doesn't carry (skew) is
+        // missing — the manifest's 0.5.1 member does not satisfy =0.4.36.
         let m = manifest_with(&[("streamlib-macros", "0.5.1")]);
-        let required = vec![("streamlib-macros".to_string(), "0.4.36".to_string())];
+        let required = vec![req("streamlib-macros", "=0.4.36")];
         assert_eq!(
             crates_missing_from_release(&m, &required),
-            vec!["streamlib-macros@0.4.36".to_string()]
+            vec!["streamlib-macros@=0.4.36".to_string()]
         );
     }
 

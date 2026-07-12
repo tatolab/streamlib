@@ -97,13 +97,15 @@ snapshot() {
 if [ -n "$DEV_N" ]; then
   log "bumping in place: $base_version -> $target_version (restored on exit)"
   # collect member manifests + root, snapshot, then rewrite with tomlkit.
-  # Only libs/ + plugin/ carry the workspace-versioned engine crates the
-  # closure publishes; packages/ own INDEPENDENT semver (.slpkg version, per
-  # #1239) and are published by publish-packages.sh, so bumping their crate
-  # version here would be semantically wrong (a transient bump/restore that
-  # doesn't belong to the engine dev-version axis).
+  # packages/ is deliberately INCLUDED even though packages own independent
+  # .slpkg semver: bump_member below only rewrites internal path-dep VERSION
+  # REQS (deps with both `path` and `version`), never [package].version — so
+  # package semver is untouched either way. The workspace-member test-fixture
+  # packages carry path+version deps into libs/, and those reqs must track
+  # the transient dev version or cargo's workspace resolution breaks during
+  # the publish (caret reqs exclude prereleases).
   while IFS= read -r m; do snapshot "$m"; done < <(
-    { echo Cargo.toml; find libs plugin -name Cargo.toml -not -path '*/target/*'; }
+    { echo Cargo.toml; find libs packages plugin -name Cargo.toml -not -path '*/target/*'; }
   )
   BASE="$base_version" TARGET="$target_version" "$PY" - <<'PY'
 import os, glob, tomlkit
@@ -141,9 +143,11 @@ def bump_member(path):
     if changed:
         open(path, "w").write(tomlkit.dumps(doc))
 bump_workspace()
-# libs/ + plugin/ only — packages/ own independent .slpkg semver (#1239) and
-# are not part of the engine dev-version bump.
+# packages/ included on purpose: bump_member only rewrites path+version dep
+# reqs (never [package].version), and the workspace-member test-fixture
+# packages' path deps into libs/ must track the transient dev version.
 for m in (glob.glob("libs/**/Cargo.toml", recursive=True)
+          + glob.glob("packages/**/Cargo.toml", recursive=True)
           + glob.glob("plugin/**/Cargo.toml", recursive=True)):
     if "/target/" in m: continue
     bump_member(m)

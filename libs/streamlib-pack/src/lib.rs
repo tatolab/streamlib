@@ -1203,6 +1203,16 @@ mod tests {
             );
         }
 
+        // Never-published crates (publish = false) must be excluded — the
+        // test-fixture packages are workspace members with library targets
+        // and linkable names, so only the publishable filter keeps them out.
+        // Mentally revert `json_is_publishable` and they leak in, and
+        // publish-crates.sh would try (and fail) to publish them.
+        assert!(
+            !names.iter().any(|n| n.contains("test-fixtures")),
+            "publish = false crates leaked into the closure: {names:?}"
+        );
+
         // Topological order: a dependency precedes its dependents. The plugin
         // ABI is a low-level dep of the SDK facade, so it must come first.
         let pos = |name: &str| closure.names().iter().position(|n| *n == name);
