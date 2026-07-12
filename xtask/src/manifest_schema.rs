@@ -58,9 +58,12 @@ pub fn find_streamlib_yamls(workspace_root: &Path) -> Vec<PathBuf> {
     walkdir::WalkDir::new(workspace_root)
         .into_iter()
         .filter_entry(|entry| {
+            // `.streamlib` is the runtime home/cache dir (extracted package
+            // copies land there when a test or runtime runs with the repo as
+            // cwd) — runtime artifacts, never source manifests.
             !matches!(
                 entry.file_name().to_str(),
-                Some("target") | Some("node_modules") | Some(".git")
+                Some("target") | Some("node_modules") | Some(".git") | Some(".streamlib")
             )
         })
         .filter_map(|entry| entry.ok())

@@ -79,5 +79,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-pack-load-
 
+      # Daemon-free registry resolve: the workspace build resolves the
+      # `vulkanalia` fork from `registry = "gitea"`. Serve it as a static tree
+      # (no Gitea, no localhost:3300) so the pack-then-load build resolves.
+      - name: Serve static vulkanalia fork registry
+        uses: ./.github/actions/serve-static-fork
+
+      # The Rust-impl leg loads a SOURCE-ONLY `.slpkg` (`pkg build`'s
+      # distribution shape), so the orchestrator builds `streamlib-network`
+      # on this host — resolving streamlib-plugin-sdk & friends from the
+      # registry. Emit the workspace release closure into the served static
+      # tree so that resolve is daemon-free too (the emit's atomic flip
+      # replaces the fork-only tree with fork + closure).
+      - name: Emit closure crates into the static registry
+        run: |
+          VULKANALIA_DIR=/tmp/vulkanalia-fork             cargo run -q -p xtask -- static-registry emit               --out "$STREAMLIB_STATIC_REGISTRY_DIR"               --base-url "$STATIC_FORK_URL"               --cargo-closure --no-pypi --no-npm --no-slpkg
+          curl -fsS "$STATIC_FORK_URL/cargo/st/re/streamlib-plugin-sdk" >/dev/null             || { echo "closure crate not fetchable from the static tree"; exit 1; }
+
       - name: cargo test pack_then_load_smoke
         run: cargo test --test pack_then_load_smoke -p streamlib-engine

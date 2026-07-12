@@ -46,6 +46,7 @@ use streamlib_processor_schema::ProcessorLanguage;
 pub use streamlib_cargo_build::CargoProfile;
 
 pub mod link_marker;
+pub mod static_registry;
 
 /// One member of the engine release closure: a publishable workspace library
 /// crate, with its version and manifest directory.

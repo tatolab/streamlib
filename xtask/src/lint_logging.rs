@@ -256,11 +256,29 @@ pub fn scan_rust(
             if excluded.iter().any(|p| path.starts_with(p)) {
                 continue;
             }
+            if path.components().any(|c| {
+                c.as_os_str()
+                    .to_str()
+                    .is_some_and(is_parked_pending_segment)
+            }) {
+                // Parked implementation dirs (`_apple_impl_pending_`,
+                // `_nvjpeg_impl_pending_`, ...) hold code that is NOT
+                // declared in any mod graph and never compiles — lint it
+                // when it is activated, not while parked.
+                continue;
+            }
             *files_scanned += 1;
             scan_rust_file(path, violations)?;
         }
     }
     Ok(())
+}
+
+/// Whether a path segment names a parked implementation dir per the
+/// `_<name>_pending_` convention (`_apple_impl_pending_`,
+/// `_nvjpeg_impl_pending_`, `tests_pending` nested inside one, ...).
+fn is_parked_pending_segment(segment: &str) -> bool {
+    segment.starts_with('_') && segment.ends_with("pending_")
 }
 
 /// Starting at the crate's `src/lib.rs`, walk out-of-line `mod foo;`
