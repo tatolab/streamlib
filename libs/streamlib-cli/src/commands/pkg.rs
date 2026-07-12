@@ -2,180 +2,19 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Package management commands.
+//!
+//! Single-package adoption (installing a published package, removing one) lives
+//! in the top-level `streamlib add` / `streamlib remove` verbs
+//! ([`super::add`]); `pkg` here is scoped to authoring artifacts of THIS
+//! package — build, publish, clean, inspect — plus `list`.
 
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use streamlib::engine_internal::core::{InstalledPackageEntry, InstalledPackageManifest, ProjectConfig};
-use streamlib::sdk::runtime::{
-    extract_slpkg_to_cache, host_target_triple, BuildEvent, BuildEventSink, BuildOrchestrator,
-    BuildPolicy, BuildRequest, BuildSource, BuildStream,
-};
-use streamlib::sdk::PolyglotBuildOrchestrator;
-use streamlib_idents::{select_version, RegistryClient, RegistryConfig, SemVerRange};
+use streamlib::engine_internal::core::ProjectConfig;
+use streamlib::engine_internal::core::InstalledPackageManifest;
+use streamlib_idents::{RegistryClient, RegistryConfig};
 use streamlib_pack::{assemble_artifact, AssembleOptions, AssembleTarget, CargoProfile, PathDepPolicy};
-
-/// Routes the orchestrator's build diagnostics to the CLI's stdout/stderr
-/// during `pkg install` (the engine default sink re-emits via `tracing`,
-/// but the CLI prints progress directly for the interactive install flow).
-struct CliBuildSink;
-
-impl BuildEventSink for CliBuildSink {
-    fn emit(&self, event: BuildEvent) {
-        match event {
-            BuildEvent::Started { language } => {
-                println!("    [{language}] build started");
-            }
-            BuildEvent::Line { stream, line } => match stream {
-                BuildStream::Stdout => println!("    {line}"),
-                BuildStream::Stderr => eprintln!("    {line}"),
-            },
-            BuildEvent::Finished { language } => {
-                println!("    [{language}] build finished");
-            }
-            // `BuildEvent` is `#[non_exhaustive]`; a future variant prints nothing.
-            _ => {}
-        }
-    }
-}
-
-/// Install a package: a registry ref `@org/name[@version]`, a local `.slpkg`
-/// path, or an HTTP URL. A registry ref resolves + downloads the source-only
-/// `.slpkg` from the static generic store; the package is then built from
-/// source by the orchestrator (`AlwaysBuild`), identical to runtime
-/// `Strategy::Registry` resolution.
-pub async fn install(source: &str) -> Result<()> {
-    let slpkg_path = if source.starts_with('@') {
-        resolve_registry_ref_to_temp_slpkg(source)?
-    } else if source.starts_with("http://") || source.starts_with("https://") {
-        // Download to temp file
-        println!("Downloading {}...", source);
-        let response = reqwest::get(source)
-            .await
-            .with_context(|| format!("Failed to download {}", source))?;
-
-        if !response.status().is_success() {
-            anyhow::bail!("Download failed: HTTP {} for {}", response.status(), source);
-        }
-
-        let bytes = response
-            .bytes()
-            .await
-            .with_context(|| "Failed to read response body")?;
-
-        let temp_dir = std::env::temp_dir();
-        let temp_path = temp_dir.join("streamlib-pkg-download.slpkg");
-        std::fs::write(&temp_path, &bytes)
-            .with_context(|| format!("Failed to write temp file {}", temp_path.display()))?;
-        temp_path
-    } else {
-        let path = std::path::PathBuf::from(source);
-        if !path.exists() {
-            anyhow::bail!("File not found: {}", source);
-        }
-        path
-    };
-
-    println!("Installing {}...", slpkg_path.display());
-
-    // Extract to cache
-    let cache_dir = extract_slpkg_to_cache(&slpkg_path)
-        .map_err(|e| anyhow::anyhow!("Failed to extract package: {}", e))?;
-
-    // Load project config from extracted cache to get metadata
-    let config = ProjectConfig::load(&cache_dir)
-        .map_err(|e| anyhow::anyhow!("Failed to load package config: {}", e))?;
-
-    let package = config
-        .package
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("Package missing [package] section in streamlib.yaml"))?;
-
-    // Provision the package's runtime via the build orchestrator — the same
-    // `materialize` path module-load drives at runtime. For a Python package
-    // this re-stages the extracted artifact and provisions its self-contained
-    // venv at `{staged_package_dir}/.venv/bin/python` as the tail of the
-    // materialize step. A package with no Python runtime is a no-op on the
-    // venv tail; a Rust package re-builds its cdylib (cargo short-circuits
-    // when clean). `AlwaysBuild` forces the venv provision regardless of any
-    // prior stale staging.
-    let has_python = config.processors.iter().any(|p| {
-        matches!(
-            p.runtime.language,
-            streamlib_processor_schema::ProcessorLanguage::Python
-        )
-    });
-    if has_python {
-        println!("  Provisioning Python venv via the build orchestrator...");
-    }
-    let request = BuildRequest {
-        package: streamlib_processor_schema::PackageRef::new(
-            package.org.clone(),
-            package.name.clone(),
-        ),
-        source: BuildSource::PackageDir(cache_dir.clone()),
-        policy: BuildPolicy::AlwaysBuild,
-        host_triple: host_target_triple().to_string(),
-    };
-    let orchestrator = PolyglotBuildOrchestrator::default();
-    let sink = CliBuildSink;
-    let staged = orchestrator
-        .materialize(&request, &sink)
-        .map_err(|e| anyhow::anyhow!("Failed to materialize package: {}", e))?;
-    // The orchestrator stages into the package cache slot
-    // (`cache/packages/<name>-<version>/`), the same slot
-    // `extract_slpkg_to_cache` wrote to. This is order-safe: `materialize`
-    // fully reads the source (assemble into a temp dir + provision the venv
-    // there) before its closing `atomic_swap` wipes-and-replaces the slot,
-    // so the extracted source is consumed before it's overwritten. Keep
-    // using the returned staged path below.
-    let cache_dir = staged.staged_dir;
-
-    // Add to installed packages manifest. Identity is the canonical
-    // `@org/name` PackageRef — the typed-key contract from #717 means
-    // entries with the same short name from different orgs no longer
-    // collide.
-    let mut manifest = InstalledPackageManifest::load()
-        .map_err(|e| anyhow::anyhow!("Failed to load packages manifest: {}", e))?;
-
-    let entry = InstalledPackageEntry {
-        name: streamlib_processor_schema::PackageRef::new(
-            package.org.clone(),
-            package.name.clone(),
-        ),
-        version: package.version,
-        description: package.description.clone(),
-        installed_from: source.to_string(),
-        installed_at: chrono::Utc::now().to_rfc3339(),
-        cache_dir: cache_dir
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string(),
-    };
-
-    manifest.add(entry);
-    manifest
-        .save()
-        .map_err(|e| anyhow::anyhow!("Failed to save packages manifest: {}", e))?;
-
-    println!();
-    println!("Installed {} v{}", package.name, package.version);
-    if let Some(desc) = &package.description {
-        println!("  {}", desc);
-    }
-    println!("  Cache: {}", cache_dir.display());
-
-    // Clean up the temp .slpkg we materialized (HTTP URL or registry ref).
-    if source.starts_with('@')
-        || source.starts_with("http://")
-        || source.starts_with("https://")
-    {
-        let _ = std::fs::remove_file(&slpkg_path);
-    }
-
-    Ok(())
-}
 
 /// Build THIS package (the current working directory) into a source-only
 /// `.slpkg`. Pure source bundling — no compilation, no prebuilt cdylib,
@@ -329,49 +168,6 @@ fn assemble_source_slpkg(
     .map_err(|e| anyhow::anyhow!("pack failed: {}", e))
 }
 
-/// Resolve a registry reference `@org/name[@version]` to a downloaded
-/// `.slpkg` in a temp file. Lists the package's published versions, selects
-/// the highest satisfying the (optional) version requirement, and downloads
-/// that version's source-only `.slpkg`. The caller's extract + materialize
-/// flow then builds it from source.
-fn resolve_registry_ref_to_temp_slpkg(source: &str) -> Result<std::path::PathBuf> {
-    let body = &source[1..]; // strip the leading '@'
-    let (ref_str, version_req) = match body.split_once('@') {
-        Some((r, v)) => (
-            format!("@{r}"),
-            SemVerRange::from_str(v)
-                .map_err(|e| anyhow::anyhow!("invalid version '{v}' in '{source}': {e}"))?,
-        ),
-        None => (format!("@{body}"), SemVerRange::Any),
-    };
-    let pkg_ref = parse_canonical_package_ref(&ref_str)?;
-    let registry = RegistryConfig::from_env().ok_or_else(|| {
-        anyhow::anyhow!(
-            "registry not configured: set STREAMLIB_REGISTRY_URL (e.g. file:///path/to/registry-tree) \
-             to install '{source}' from the registry"
-        )
-    })?;
-    let client = RegistryClient::new(&registry);
-    let available = client
-        .list_versions(&pkg_ref)
-        .map_err(|e| anyhow::anyhow!("listing versions of {ref_str}: {e}"))?;
-    let selected =
-        select_version(&pkg_ref, &version_req, &available).map_err(|e| anyhow::anyhow!("{e}"))?;
-    println!("Resolving {ref_str} → {selected} from {}…", registry.base_url);
-    let (bytes, url) = client
-        .download_slpkg(&pkg_ref, selected)
-        .map_err(|e| anyhow::anyhow!("downloading {ref_str}@{selected}: {e}"))?;
-    println!("  fetched {url} ({} bytes)", bytes.len());
-    let temp_path = std::env::temp_dir().join(format!(
-        "streamlib-install-{}-{}.slpkg",
-        pkg_ref.name.as_str(),
-        selected
-    ));
-    std::fs::write(&temp_path, &bytes)
-        .with_context(|| format!("writing downloaded slpkg to {}", temp_path.display()))?;
-    Ok(temp_path)
-}
-
 /// Inspect a .slpkg package without installing it.
 pub fn inspect(path: &std::path::Path) -> Result<()> {
     if !path.exists() {
@@ -457,8 +253,9 @@ pub fn list() -> Result<()> {
     if manifest.packages.is_empty() {
         println!("No packages installed.");
         println!();
-        println!("Install a package with:");
-        println!("  streamlib pkg install <path-to.slpkg>");
+        println!("Add a package with:");
+        println!("  streamlib add @org/name          # from the registry");
+        println!("  streamlib add ./path/to.slpkg    # from a local artifact");
         return Ok(());
     }
 
@@ -477,53 +274,3 @@ pub fn list() -> Result<()> {
     Ok(())
 }
 
-/// Remove an installed package. The argument must be the canonical
-/// `@org/name` form — the typed-key contract introduced in #717 means
-/// bare short names like `core` no longer disambiguate which package to
-/// remove.
-pub fn remove(name: &str) -> Result<()> {
-    let package_ref = parse_canonical_package_ref(name)?;
-
-    let mut manifest = InstalledPackageManifest::load()
-        .map_err(|e| anyhow::anyhow!("Failed to load packages manifest: {}", e))?;
-
-    let entry = match manifest.remove_by_ref(&package_ref) {
-        Some(e) => e,
-        None => {
-            anyhow::bail!("Package '{}' is not installed.", package_ref);
-        }
-    };
-
-    // Delete cache directory
-    let cache_dir = streamlib::engine_internal::core::get_cached_package_dir(&entry.cache_dir);
-    if cache_dir.exists() {
-        std::fs::remove_dir_all(&cache_dir)
-            .with_context(|| format!("Failed to remove cache dir {}", cache_dir.display()))?;
-        println!("Removed cache: {}", cache_dir.display());
-    }
-
-    // Save manifest
-    manifest
-        .save()
-        .map_err(|e| anyhow::anyhow!("Failed to save packages manifest: {}", e))?;
-
-    println!("Removed package '{}'.", package_ref);
-
-    Ok(())
-}
-
-/// Convert a CLI-supplied canonical-form string (`@org/name`) into a
-/// typed [`streamlib_processor_schema::PackageRef`] via the official
-/// Deserialize path. Wraps the round-trip with a CLI-friendly error so
-/// users see "expected `@org/name`" rather than a serde parse error.
-fn parse_canonical_package_ref(arg: &str) -> Result<streamlib_processor_schema::PackageRef> {
-    serde_yaml::from_value::<streamlib_processor_schema::PackageRef>(serde_yaml::Value::String(
-        arg.to_string(),
-    ))
-    .with_context(|| {
-        format!(
-            "Invalid canonical package reference '{}'. Expected `@org/name` form (e.g. `@tatolab/core`).",
-            arg
-        )
-    })
-}

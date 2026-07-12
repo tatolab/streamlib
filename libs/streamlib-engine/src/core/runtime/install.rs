@@ -258,8 +258,9 @@ fn package_ref_of(pkg: &ResolvedPackage) -> Option<PackageRef> {
 }
 
 /// Current UTC time as an RFC-3339 timestamp, dependency-free (the engine
-/// carries no `chrono` / `time` dep).
-fn rfc3339_utc_now() -> String {
+/// carries no `chrono` / `time` dep). Shared with [`super::add`] — both write
+/// the same `installed_at` field on `packages.yaml` entries.
+pub(super) fn rfc3339_utc_now() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())

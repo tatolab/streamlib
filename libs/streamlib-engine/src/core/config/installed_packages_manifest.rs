@@ -48,8 +48,8 @@ impl InstalledPackageManifest {
     ///   pre-#717 manifest with bare-name keys).
     ///
     /// In the latter two cases a warning is emitted; the on-disk slpkg
-    /// caches under `<STREAMLIB_HOME>/.streamlib/cache/` are preserved, so reinstalling
-    /// the relevant packages with `streamlib pkg install` repopulates the
+    /// caches under `<STREAMLIB_HOME>/.streamlib/cache/` are preserved, so re-adding
+    /// the relevant packages with `streamlib add` repopulates the
     /// manifest cleanly.
     pub fn load() -> Result<Self> {
         let path = get_installed_packages_manifest_path();
@@ -67,7 +67,7 @@ impl InstalledPackageManifest {
                 tracing::warn!(
                     "Installed-package manifest at {} has format_version={} but expected {}. \
                      Resetting (existing slpkg caches under <STREAMLIB_HOME>/.streamlib/cache/ are preserved; \
-                     reinstall packages with `streamlib pkg install` to repopulate).",
+                     re-add packages with `streamlib add` to repopulate).",
                     path.display(),
                     other.format_version,
                     CURRENT_FORMAT_VERSION,
@@ -79,7 +79,7 @@ impl InstalledPackageManifest {
                     "Installed-package manifest at {} could not be parsed against the \
                      current shape (likely a pre-#717 format with bare-name entries): {}. \
                      Resetting (existing slpkg caches under <STREAMLIB_HOME>/.streamlib/cache/ are preserved; \
-                     reinstall packages with `streamlib pkg install` to repopulate).",
+                     re-add packages with `streamlib add` to repopulate).",
                     path.display(),
                     e,
                 );

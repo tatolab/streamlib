@@ -19,7 +19,7 @@ use streamlib::sdk::runtime::{install, BuildEvent, BuildEventSink, BuildStream, 
 use streamlib::sdk::PolyglotBuildOrchestrator;
 
 /// Routes the orchestrator's build diagnostics to the CLI's stdout/stderr
-/// during `install` (mirrors `pkg install`'s interactive progress).
+/// during `install` (mirrors `streamlib add`'s interactive progress).
 struct CliBuildSink;
 
 impl BuildEventSink for CliBuildSink {

@@ -31,7 +31,7 @@ use std::path::PathBuf;
 ///     │   └── uv/                        # uv PyPI cache      (Python packages only)
 ///     ├── logs/<runtime_id>-<ts>.jsonl  # per-runtime JSONL logs
 ///     ├── resolver-cache/               # git / URL checkouts (Strategy::Git / Url)
-///     └── packages.yaml                 # installed-packages manifest (streamlib pkg install)
+///     └── packages.yaml                 # installed-packages manifest (streamlib add)
 /// ```
 ///
 /// Each subdir is created on demand by its consumer — an all-Rust,
