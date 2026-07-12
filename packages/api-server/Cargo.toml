@@ -1,6 +1,6 @@
 [package]
 name = "streamlib-api-server"
-version = "0.4.30"
+version = "1.0.0"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "HTTP control-plane processor for streamlib runtimes — graph mutation, registry browsing, WebSocket event streaming, OpenAPI spec."

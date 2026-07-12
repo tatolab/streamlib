@@ -1,6 +1,6 @@
 [package]
 name = "streamlib-jpeg"
-version = "0.4.35-dev.5"
+version = "1.0.7"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "JPEG decoder processor — thin wrapper around vulkan-jpeg::SimpleJpegDecoder (cross-vendor Vulkan compute)."

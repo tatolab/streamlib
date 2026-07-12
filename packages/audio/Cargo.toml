@@ -1,6 +1,6 @@
 [package]
 name = "streamlib-audio"
-version = "0.4.30"
+version = "1.0.0"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "Audio processors carved out of the streamlib engine — capture, output, mixer, channel converter, resampler, buffer rechunker, chord generator"

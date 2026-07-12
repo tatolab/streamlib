@@ -9,7 +9,7 @@
 # for a stray member of an enclosing workspace.
 [package]
 name = "streamlib-network"
-version = "0.4.30"
+version = "1.0.2"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 license = "BUSL-1.1"

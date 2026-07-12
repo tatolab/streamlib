@@ -1,6 +1,6 @@
 [package]
 name = "streamlib-moq-processors"
-version = "0.4.30"
+version = "1.0.0"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "MoQ (Media over QUIC) publish/subscribe track processors for streamlib — the @tatolab/moq package, built on the streamlib-moq transport library."

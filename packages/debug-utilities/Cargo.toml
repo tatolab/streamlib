@@ -1,6 +1,6 @@
 [package]
 name = "streamlib-debug-utilities"
-version = "0.4.30"
+version = "1.0.0"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "Utility processors for development, demos, and rigorous-input testing (BgraFileSource, SimplePassthrough)."

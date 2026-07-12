@@ -1,6 +1,6 @@
 [package]
 name = "streamlib-opus"
-version = "0.4.30"
+version = "1.0.0"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "Opus audio encoder + decoder processors via libopus. Cross-platform Rust (macOS / iOS / Linux)."

@@ -1,6 +1,6 @@
 [package]
 name = "streamlib-vadr-vision"
-version = "0.4.30"
+version = "1.0.2"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "VADR-TS-002 §4.6 vision-stream depayloader — parses the 24-byte AGP chunk header, reassembles JPEG frames, drops incomplete frames on timeout, emits EncodedJpegFrame to @tatolab/jpeg."

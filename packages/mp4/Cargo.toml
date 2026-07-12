@@ -1,6 +1,6 @@
 [package]
 name = "streamlib-mp4"
-version = "0.4.30"
+version = "1.0.0"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "MP4 file writer processors for streamlib."
