@@ -430,7 +430,7 @@ mod tests {
         assert!(rendered.contains("streamlib-plugin-sdk@^0.5.0"), "{rendered}");
         assert!(rendered.contains("vulkan-jpeg@^0.5.0"), "{rendered}");
         assert!(rendered.contains("@tatolab/mavlink"), "{rendered}");
-        assert!(rendered.contains("publish-release.sh"), "{rendered}");
+        assert!(rendered.contains("cargo xtask static-registry emit"), "{rendered}");
     }
 
     #[test]
