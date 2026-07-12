@@ -127,26 +127,30 @@ pub struct Runner {
         Mutex<Option<Arc<dyn crate::core::runtime::module_loader::BuildOrchestrator>>>,
     >,
     /// Modules whose loads have not yet settled, keyed by canonical
-    /// `@org/name`. Inserted when [`Runner::add_module`] spawns a load,
-    /// removed when the load task finishes. [`Runner::start`] refuses to
-    /// run the graph while any entry remains.
+    /// `@org/name` with the owning load's id. Inserted when
+    /// [`Runner::add_module`] spawns a load; removed when that same
+    /// load's task finishes (id-guarded so an earlier load's completion
+    /// can't untrack a later load of the same package ref).
+    /// [`Runner::start`] refuses to run the graph while any entry remains.
     pub(crate) loading_modules: Arc<
-        Mutex<std::collections::HashMap<streamlib_idents::PackageRef, streamlib_idents::ModuleIdent>>,
+        Mutex<std::collections::HashMap<streamlib_idents::PackageRef, (u64, streamlib_idents::ModuleIdent)>>,
     >,
     /// Runtime-lifetime single-version-per-package resolution memo, keyed
     /// by `@org/name`. Populated by the live module walker on every
     /// [`Runner::add_module`] call; persists across calls so a diamond
-    /// version divergence — or two successive `add_module`s resolving
-    /// different concrete versions of the same package — surfaces as
-    /// [`AddModuleError::SingleVersionConflict`] instead of a silent
-    /// double-registration. Lives for the runtime's lifetime (there is no
-    /// module unload today); dropped with the [`Runner`].
+    /// version divergence — or two successive / concurrent `add_module`s
+    /// resolving different concrete versions of the same package —
+    /// surfaces as [`AddModuleError::SingleVersionConflict`] instead of a
+    /// silent double-registration. Lives for the runtime's lifetime
+    /// (there is no module unload today); dropped with the [`Runner`].
+    /// The memo is Runner-scoped while the schema / processor registries
+    /// it protects are process-global statics — a second [`Runner`] in
+    /// the same process carries its own memo and does not see this one's
+    /// resolutions (pre-existing registry topology, unchanged here).
     ///
     /// [`Runner::add_module`]: Self::add_module
     /// [`AddModuleError::SingleVersionConflict`]: crate::core::runtime::module_loader::AddModuleError::SingleVersionConflict
-    pub(crate) resolution_memo: Arc<
-        Mutex<crate::core::runtime::module_loader::ResolutionMemo>,
-    >,
+    pub(crate) resolution_memo: Arc<crate::core::runtime::module_loader::ResolutionMemo>,
 }
 
 impl Runner {
@@ -289,7 +293,9 @@ impl Runner {
             pipeline_name: Arc::new(Mutex::new(None)),
             build_orchestrator: Arc::new(Mutex::new(None)),
             loading_modules: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            resolution_memo: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            resolution_memo: Arc::new(
+                crate::core::runtime::module_loader::ResolutionMemo::new(),
+            ),
         }))
     }
 

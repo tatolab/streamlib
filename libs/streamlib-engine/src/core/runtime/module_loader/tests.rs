@@ -35,6 +35,142 @@ impl BuildOrchestrator for LoadAsIsOrchestrator {
     }
 }
 
+/// [`LoadAsIsOrchestrator`] plus a per-directory materialize-call counter,
+/// letting tests assert a skipped package's subtree was not re-walked.
+struct MaterializeCountingOrchestrator {
+    counts: std::sync::Arc<
+        parking_lot::Mutex<std::collections::HashMap<std::path::PathBuf, usize>>,
+    >,
+}
+impl BuildOrchestrator for MaterializeCountingOrchestrator {
+    fn materialize(
+        &self,
+        request: &BuildRequest,
+        _sink: &dyn BuildEventSink,
+    ) -> std::result::Result<StagedArtifact, BuildError> {
+        match &request.source {
+            BuildSource::PackageDir(dir) => {
+                *self.counts.lock().entry(dir.clone()).or_insert(0) += 1;
+                Ok(StagedArtifact {
+                    staged_dir: dir.clone(),
+                    rebuilt: false,
+                })
+            }
+            other => Err(BuildError::UnsupportedSource(format!("{other:?}"))),
+        }
+    }
+}
+
+/// Sum of materialize calls across all dirs whose final path component
+/// matches `dir_name`.
+fn count_materializations_for_dir_named(
+    counts: &std::sync::Arc<
+        parking_lot::Mutex<std::collections::HashMap<std::path::PathBuf, usize>>,
+    >,
+    dir_name: &str,
+) -> usize {
+    counts
+        .lock()
+        .iter()
+        .filter(|(dir, _)| dir.file_name().is_some_and(|name| name == dir_name))
+        .map(|(_, count)| *count)
+        .sum()
+}
+
+/// [`MaterializeCountingOrchestrator`] plus a rendezvous barrier on dirs
+/// whose final path component is in `rendezvous_dir_names` —
+/// deterministically overlaps two concurrent walks at the shared
+/// dependency (both walks must arrive before either proceeds to the
+/// single-version gate).
+struct RendezvousLoadAsIsOrchestrator {
+    rendezvous_dir_names: Vec<String>,
+    rendezvous: std::sync::Barrier,
+    counts: std::sync::Arc<
+        parking_lot::Mutex<std::collections::HashMap<std::path::PathBuf, usize>>,
+    >,
+}
+impl BuildOrchestrator for RendezvousLoadAsIsOrchestrator {
+    fn materialize(
+        &self,
+        request: &BuildRequest,
+        _sink: &dyn BuildEventSink,
+    ) -> std::result::Result<StagedArtifact, BuildError> {
+        match &request.source {
+            BuildSource::PackageDir(dir) => {
+                *self.counts.lock().entry(dir.clone()).or_insert(0) += 1;
+                let matches = dir
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        self.rendezvous_dir_names.iter().any(|r| r == name)
+                    });
+                if matches {
+                    self.rendezvous.wait();
+                }
+                Ok(StagedArtifact {
+                    staged_dir: dir.clone(),
+                    rebuilt: false,
+                })
+            }
+            other => Err(BuildError::UnsupportedSource(format!("{other:?}"))),
+        }
+    }
+}
+
+/// [`LoadAsIsOrchestrator`] that BLOCKS materialization of the dir whose
+/// final path component matches `gated_dir_name` until the test releases
+/// it (then optionally fails it) — deterministically holds the gated
+/// package's parent in flight while a concurrent walk gates on it.
+struct GatedSubDependencyOrchestrator {
+    gated_dir_name: String,
+    release: parking_lot::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    fail_after_release: bool,
+}
+impl BuildOrchestrator for GatedSubDependencyOrchestrator {
+    fn materialize(
+        &self,
+        request: &BuildRequest,
+        _sink: &dyn BuildEventSink,
+    ) -> std::result::Result<StagedArtifact, BuildError> {
+        match &request.source {
+            BuildSource::PackageDir(dir) => {
+                let gated = dir
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name == self.gated_dir_name);
+                if gated {
+                    if let Some(release_receiver) = self.release.lock().take() {
+                        let _ = release_receiver.recv();
+                    }
+                    if self.fail_after_release {
+                        return Err(BuildError::UnsupportedSource(
+                            "injected gated sub-dependency failure".into(),
+                        ));
+                    }
+                }
+                Ok(StagedArtifact {
+                    staged_dir: dir.clone(),
+                    rebuilt: false,
+                })
+            }
+            other => Err(BuildError::UnsupportedSource(format!("{other:?}"))),
+        }
+    }
+}
+
+/// Poll `condition` until it holds or `timeout` elapses; returns the
+/// final evaluation.
+fn poll_until(timeout: std::time::Duration, mut condition: impl FnMut() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if condition() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    condition()
+}
+
 // =========================================================================
 // list_available_triples
 // =========================================================================
@@ -746,6 +882,17 @@ processors:
         msg.contains(wrong_triple),
         "error must list the triples that ARE present, got: {msg}"
     );
+    // Placeholder drop-guard witness: the processor-registration failure
+    // exit must clear the armed single-version placeholder.
+    assert!(
+        !runtime
+            .resolution_memo
+            .contains_package(&streamlib_idents::PackageRef::new(
+                streamlib_idents::Org::new("tatolab").unwrap(),
+                streamlib_idents::Package::new("triple-mismatch-pkg").unwrap(),
+            )),
+        "processor-registration failure must clear the in-flight placeholder",
+    );
 }
 
 #[test]
@@ -854,6 +1001,8 @@ package:
 // =========================================================================
 
 mod add_module_tests {
+    use std::sync::Arc;
+
     use super::*;
     use streamlib_idents::{ModuleIdent, Org, Package, SemVer, SemVerRange};
 
@@ -1354,6 +1503,15 @@ processors:
             }
             other => panic!("expected DependencyCycleDetected, got: {other:?}"),
         }
+        // Placeholder drop-guard witness: the dep-recursion failure exit
+        // must clear the armed placeholder — the memo never wedges.
+        assert!(
+            !runtime.resolution_memo.contains_package(&streamlib_idents::PackageRef::new(
+                Org::new("tatolab").unwrap(),
+                Package::new("cycle-self").unwrap(),
+            )),
+            "cycle failure must clear the in-flight placeholder",
+        );
     }
 
     #[test]
@@ -1400,6 +1558,17 @@ processors:
                 );
             }
             other => panic!("expected DependencyCycleDetected, got: {other:?}"),
+        }
+        // Placeholder drop-guard witness: BOTH armed placeholders (a and
+        // b) must be cleared as the failure unwinds through them.
+        for name in ["cycle-a", "cycle-b"] {
+            assert!(
+                !runtime.resolution_memo.contains_package(&streamlib_idents::PackageRef::new(
+                    Org::new("tatolab").unwrap(),
+                    Package::new(name).unwrap(),
+                )),
+                "cycle failure must clear the in-flight placeholder for {name}",
+            );
         }
     }
 
@@ -1537,17 +1706,19 @@ processors:
     }
 
     /// A diamond where both branches agree on the shared dependency's
-    /// version (B→D@1.0.0, C→D@1.0.0) resolves cleanly and D's schema is
-    /// registered. The single-registration invariant is locked by the
-    /// memo assertion: D is recorded exactly once at 1.0.0 with C added as
-    /// a *second requirer of the same resolution* (`required_by.len() ==
-    /// 2`), which proves C took the same-version skip path instead of
-    /// re-registering + re-walking D. (Schema presence alone can't witness
-    /// this — schema registration is an idempotent map overwrite, so a
-    /// double-walk would leave the same observable schema; the requirer
-    /// count is what the skip drives.) Reverting the same-version
-    /// record-and-skip branch drops the second requirer (or removes the
-    /// memo entirely), failing the assertion.
+    /// version (B→D@1.0.0, C→D@1.0.0, D→E) resolves cleanly and D's
+    /// schema is registered. Two independent witnesses lock the skip:
+    ///
+    /// 1. `required_by.len() == 2` — C is recorded as a second requirer
+    ///    of D's single resolution. NOTE: the commit preserves requirers
+    ///    accumulated on the record (it never overwrite-resets them), so
+    ///    this assertion locks the requirer-push in the skip arm, not the
+    ///    absence of a re-walk.
+    /// 2. E materialized exactly once — the re-walk witness. Reverting
+    ///    the same-version skip makes C re-walk D's subtree, which
+    ///    materializes E a second time and fails the count assertion.
+    ///    (Schema presence can't witness this: registration is an
+    ///    idempotent map overwrite.)
     #[test]
     #[serial]
     fn diamond_agreeing_versions_resolve_and_register_once() {
@@ -1558,7 +1729,8 @@ processors:
         let b = pkg_root.path().join("b");
         let c = pkg_root.path().join("c");
         let d = pkg_root.path().join("d");
-        for p in [&a, &b, &c, &d] {
+        let e = pkg_root.path().join("e");
+        for p in [&a, &b, &c, &d, &e] {
             std::fs::create_dir(p).unwrap();
         }
         std::fs::create_dir(d.join("schemas")).unwrap();
@@ -1590,14 +1762,25 @@ processors:
             d.join("streamlib.yaml"),
             format!(
                 "package:\n  org: tatolab\n  name: diamond-agree-d\n  version: \"1.0.0\"\n\
+                 dependencies:\n  \"@tatolab/diamond-agree-e\":\n    path: ../e\n\
                  schemas:\n  {TYPE_D}:\n    file: schemas/diamondagreedschema.yaml\n"
             ),
+        )
+        .unwrap();
+        std::fs::write(
+            e.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: diamond-agree-e\n  version: \"1.0.0\"\n",
         )
         .unwrap();
 
         let _guard = HomeGuard::install(home.path());
         let runtime = Runner::new().expect("Runner::new");
-        runtime.set_build_orchestrator(LoadAsIsOrchestrator);
+        let materialize_counts = Arc::new(parking_lot::Mutex::new(
+            std::collections::HashMap::<std::path::PathBuf, usize>::new(),
+        ));
+        runtime.set_build_orchestrator(MaterializeCountingOrchestrator {
+            counts: Arc::clone(&materialize_counts),
+        });
         runtime
             .add_module_with_blocking(
                 ModuleIdent::any(
@@ -1621,15 +1804,25 @@ processors:
             Org::new("tatolab").unwrap(),
             Package::new("diamond-agree-d").unwrap(),
         );
-        let memo = runtime.resolution_memo.lock();
-        let record = memo
-            .get(&d_ref)
-            .expect("D must be recorded in the resolution memo");
+        let record = runtime
+            .resolution_memo
+            .committed_record(&d_ref)
+            .expect("D must be committed in the resolution memo");
         assert_eq!(record.version, SemVer::new(1, 0, 0));
+        // Locks the requirer-push in the same-version skip arm; the commit
+        // preserves accumulated requirers (never overwrite-resets them).
         assert_eq!(
             record.required_by.len(),
             2,
             "both B and C must be recorded as requirers of the single D resolution",
+        );
+        // Re-walk witness: reverting the skip re-walks D's subtree from C
+        // and materializes E a second time.
+        let e_materializations = count_materializations_for_dir_named(&materialize_counts, "e");
+        assert_eq!(
+            e_materializations, 1,
+            "D's subtree must be walked exactly once — a second E \
+             materialization means the same-version skip was bypassed",
         );
     }
 
@@ -1697,12 +1890,18 @@ processors:
             AddModuleError::SingleVersionConflict {
                 package,
                 existing_version,
+                existing_required_by,
                 conflicting_version,
                 ..
             } => {
                 assert_eq!(package.name.as_str(), "crosscall-x");
                 assert_eq!(existing_version, SemVer::new(1, 0, 0));
                 assert_eq!(conflicting_version, SemVer::new(2, 0, 0));
+                assert!(
+                    existing_required_by.contains("top-level add_module"),
+                    "existing requirer must name the top-level add_module call, \
+                     got: {existing_required_by}",
+                );
             }
             other => panic!("expected SingleVersionConflict, got: {other:?}"),
         }
@@ -1747,8 +1946,10 @@ processors:
             Org::new("tatolab").unwrap(),
             Package::new("readd-x").unwrap(),
         );
-        let memo = runtime.resolution_memo.lock();
-        let record = memo.get(&x_ref).expect("X must be recorded");
+        let record = runtime
+            .resolution_memo
+            .committed_record(&x_ref)
+            .expect("X must be committed");
         assert_eq!(record.version, SemVer::new(1, 0, 0));
         assert_eq!(
             record.required_by.len(),
@@ -1758,43 +1959,48 @@ processors:
     }
 
     /// A load that fails mid-registration must NOT poison the memo: the
-    /// version commit is deferred until registration + the transitive walk
-    /// succeed, so a failed package leaves no entry and a retry re-runs the
-    /// full registration instead of hitting the same-version skip and
-    /// silently returning `Ok` for a never-registered package. Here X
-    /// declares a schema whose file is missing, so `add_module` fails
-    /// before the deferred commit. Mentally reverting to commit-before-
-    /// registration would leave X in the memo and fail the `!contains_key`
-    /// assertion.
+    /// in-flight placeholder guard clears the entry on the failure exit,
+    /// so a retry re-runs the full registration instead of hitting the
+    /// same-version skip and silently returning `Ok` for a
+    /// never-registered package. Here X declares a schema whose file is
+    /// missing, so `add_module` fails between the gate and the commit;
+    /// after fixing the file, the retry succeeds and the schema actually
+    /// registers — the user-facing retry property. Mentally reverting the
+    /// guard (commit-at-gate) leaves X in the memo and makes the retry a
+    /// silent no-op with no schema registered.
     #[test]
     #[serial]
-    fn failed_load_does_not_poison_the_memo() {
+    fn failed_load_does_not_poison_the_memo_and_retry_succeeds() {
+        const TYPE_POISON: &str = "PoisonRetrySchema";
         let home = tempfile::tempdir().unwrap();
         let pkg = tempfile::tempdir().unwrap();
         // Declares a schema pointing at a file that does not exist →
-        // `register_package_schemas` errors before the deferred memo
+        // `register_package_schemas` errors between the gate and the
         // commit at the end of the walk body.
         std::fs::write(
             pkg.path().join("streamlib.yaml"),
-            "package:\n  org: tatolab\n  name: poison-x\n  version: \"1.0.0\"\n\
-             schemas:\n  PoisonSchema:\n    file: schemas/does-not-exist.yaml\n",
+            format!(
+                "package:\n  org: tatolab\n  name: poison-x\n  version: \"1.0.0\"\n\
+                 schemas:\n  {TYPE_POISON}:\n    file: schemas/poisonretryschema.yaml\n"
+            ),
         )
         .unwrap();
 
         let _guard = HomeGuard::install(home.path());
         let runtime = Runner::new().expect("Runner::new");
         runtime.set_build_orchestrator(LoadAsIsOrchestrator);
-        let err = runtime
-            .add_module_with_blocking(
-                ModuleIdent::any(
-                    Org::new("tatolab").unwrap(),
-                    Package::new("poison-x").unwrap(),
-                ),
-                Strategy::Path {
-                    path: pkg.path().to_path_buf(),
-                    build: BuildPolicy::NeverBuild,
-                },
+        let ident = || {
+            ModuleIdent::any(
+                Org::new("tatolab").unwrap(),
+                Package::new("poison-x").unwrap(),
             )
+        };
+        let strategy = || Strategy::Path {
+            path: pkg.path().to_path_buf(),
+            build: BuildPolicy::NeverBuild,
+        };
+        let err = runtime
+            .add_module_with_blocking(ident(), strategy())
             .expect_err("missing schema file must fail the load");
         assert!(
             matches!(err, AddModuleError::LoadProjectFailed { .. }),
@@ -1806,8 +2012,474 @@ processors:
             Package::new("poison-x").unwrap(),
         );
         assert!(
-            !runtime.resolution_memo.lock().contains_key(&x_ref),
+            !runtime.resolution_memo.contains_package(&x_ref),
             "a failed load must not leave a resolution-memo entry",
+        );
+
+        // Fix the package and retry on the SAME runtime — the retry must
+        // re-run registration (not skip), so the schema becomes visible.
+        std::fs::create_dir(pkg.path().join("schemas")).unwrap();
+        std::fs::write(
+            pkg.path().join("schemas/poisonretryschema.yaml"),
+            format!("metadata:\n  type: {TYPE_POISON}\n  max_payload_bytes: 4096\n"),
+        )
+        .unwrap();
+        runtime
+            .add_module_with_blocking(ident(), strategy())
+            .expect("retry after fixing the schema file must succeed");
+        let canonical = format!("@tatolab/poison-x/{TYPE_POISON}");
+        assert!(
+            crate::core::embedded_schemas::get_embedded_schema_definition(&canonical).is_some(),
+            "retry must actually register the schema {canonical}",
+        );
+        assert!(
+            runtime.resolution_memo.committed_record(&x_ref).is_some(),
+            "retry must commit the resolution",
+        );
+    }
+
+    // =====================================================================
+    // Concurrent loads — single-version gate under overlap. Deterministic:
+    // orchestrator barriers / gates control the overlap window, never
+    // timing luck.
+    // =====================================================================
+
+    /// Two CONCURRENT top-level loads sharing a transitive dep at the
+    /// same version (TA→D, TB→D, D→E) both succeed with a single
+    /// resolution of D. The rendezvous barrier forces both walks past
+    /// D's materialize before either reaches the gate, so the two gate
+    /// calls overlap deterministically: exactly one wins the placeholder
+    /// insert; the other skips (in-flight or committed — both correct).
+    /// E's materialize count == 1 witnesses that D's subtree was walked
+    /// exactly once — the double-registration TOCTOU this gate closes.
+    #[test]
+    #[serial]
+    fn concurrent_loads_agreeing_shared_dep_register_once() {
+        const TYPE_D: &str = "ConcAgreeDSchema";
+        let home = tempfile::tempdir().unwrap();
+        let pkg_root = tempfile::tempdir().unwrap();
+        let ta = pkg_root.path().join("ta");
+        let tb = pkg_root.path().join("tb");
+        let d = pkg_root.path().join("d");
+        let e = pkg_root.path().join("e");
+        for p in [&ta, &tb, &d, &e] {
+            std::fs::create_dir(p).unwrap();
+        }
+        std::fs::create_dir(d.join("schemas")).unwrap();
+        std::fs::write(
+            d.join("schemas/concagreedschema.yaml"),
+            format!("metadata:\n  type: {TYPE_D}\n  max_payload_bytes: 4096\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            ta.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: conc-agree-ta\n  version: \"0.1.0\"\n\
+             dependencies:\n  \"@tatolab/conc-agree-d\":\n    path: ../d\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tb.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: conc-agree-tb\n  version: \"0.1.0\"\n\
+             dependencies:\n  \"@tatolab/conc-agree-d\":\n    path: ../d\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("streamlib.yaml"),
+            format!(
+                "package:\n  org: tatolab\n  name: conc-agree-d\n  version: \"1.0.0\"\n\
+                 dependencies:\n  \"@tatolab/conc-agree-e\":\n    path: ../e\n\
+                 schemas:\n  {TYPE_D}:\n    file: schemas/concagreedschema.yaml\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            e.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: conc-agree-e\n  version: \"1.0.0\"\n",
+        )
+        .unwrap();
+
+        let _guard = HomeGuard::install(home.path());
+        let runtime = Runner::new().expect("Runner::new");
+        let materialize_counts = Arc::new(parking_lot::Mutex::new(
+            std::collections::HashMap::<std::path::PathBuf, usize>::new(),
+        ));
+        runtime.set_build_orchestrator(RendezvousLoadAsIsOrchestrator {
+            rendezvous_dir_names: vec!["d".to_string()],
+            rendezvous: std::sync::Barrier::new(2),
+            counts: Arc::clone(&materialize_counts),
+        });
+
+        let strategy = |path: &std::path::Path| Strategy::Path {
+            path: path.to_path_buf(),
+            build: BuildPolicy::NeverBuild,
+        };
+        let added_ta = runtime.add_module_with(
+            ModuleIdent::any(
+                Org::new("tatolab").unwrap(),
+                Package::new("conc-agree-ta").unwrap(),
+            ),
+            strategy(&ta),
+        );
+        let added_tb = runtime.add_module_with(
+            ModuleIdent::any(
+                Org::new("tatolab").unwrap(),
+                Package::new("conc-agree-tb").unwrap(),
+            ),
+            strategy(&tb),
+        );
+        let handle = runtime.tokio_runtime_variant.handle();
+        let (result_ta, result_tb) =
+            handle.block_on(async { tokio::join!(added_ta, added_tb) });
+        result_ta.expect("TA load must succeed");
+        result_tb.expect("TB load must succeed");
+
+        let d_ref = streamlib_idents::PackageRef::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("conc-agree-d").unwrap(),
+        );
+        let record = runtime
+            .resolution_memo
+            .committed_record(&d_ref)
+            .expect("D must be committed");
+        assert_eq!(record.version, SemVer::new(1, 0, 0));
+        assert_eq!(
+            record.required_by.len(),
+            2,
+            "both concurrent loads must be recorded as requirers of D",
+        );
+        assert_eq!(
+            count_materializations_for_dir_named(&materialize_counts, "e"),
+            1,
+            "D's subtree must be walked exactly once across both concurrent loads",
+        );
+        let canonical = format!("@tatolab/conc-agree-d/{TYPE_D}");
+        assert!(
+            crate::core::embedded_schemas::get_embedded_schema_definition(&canonical).is_some(),
+            "expected D's schema {canonical} registered",
+        );
+    }
+
+    /// Two CONCURRENT top-level loads pulling DIFFERENT versions of the
+    /// same package (TA→D@1.0.0, TB→D@1.1.0) produce exactly one
+    /// SingleVersionConflict — never a silent last-commit-wins
+    /// double-registration. The rendezvous barrier guarantees both walks
+    /// hit the gate window together; whichever loses the insert race
+    /// conflicts against the winner's placeholder or committed record.
+    #[test]
+    #[serial]
+    fn concurrent_loads_conflicting_shared_dep_exactly_one_conflict() {
+        let home = tempfile::tempdir().unwrap();
+        let pkg_root = tempfile::tempdir().unwrap();
+        let ta = pkg_root.path().join("ta");
+        let tb = pkg_root.path().join("tb");
+        let d1 = pkg_root.path().join("d1");
+        let d2 = pkg_root.path().join("d2");
+        for p in [&ta, &tb, &d1, &d2] {
+            std::fs::create_dir(p).unwrap();
+        }
+        std::fs::write(
+            ta.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: conc-conflict-ta\n  version: \"0.1.0\"\n\
+             dependencies:\n  \"@tatolab/conc-conflict-d\":\n    path: ../d1\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tb.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: conc-conflict-tb\n  version: \"0.1.0\"\n\
+             dependencies:\n  \"@tatolab/conc-conflict-d\":\n    path: ../d2\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d1.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: conc-conflict-d\n  version: \"1.0.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d2.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: conc-conflict-d\n  version: \"1.1.0\"\n",
+        )
+        .unwrap();
+
+        let _guard = HomeGuard::install(home.path());
+        let runtime = Runner::new().expect("Runner::new");
+        let materialize_counts = Arc::new(parking_lot::Mutex::new(
+            std::collections::HashMap::<std::path::PathBuf, usize>::new(),
+        ));
+        runtime.set_build_orchestrator(RendezvousLoadAsIsOrchestrator {
+            rendezvous_dir_names: vec!["d1".to_string(), "d2".to_string()],
+            rendezvous: std::sync::Barrier::new(2),
+            counts: Arc::clone(&materialize_counts),
+        });
+
+        let added_ta = runtime.add_module_with(
+            ModuleIdent::any(
+                Org::new("tatolab").unwrap(),
+                Package::new("conc-conflict-ta").unwrap(),
+            ),
+            Strategy::Path {
+                path: ta.clone(),
+                build: BuildPolicy::NeverBuild,
+            },
+        );
+        let added_tb = runtime.add_module_with(
+            ModuleIdent::any(
+                Org::new("tatolab").unwrap(),
+                Package::new("conc-conflict-tb").unwrap(),
+            ),
+            Strategy::Path {
+                path: tb.clone(),
+                build: BuildPolicy::NeverBuild,
+            },
+        );
+        let handle = runtime.tokio_runtime_variant.handle();
+        let (result_ta, result_tb) =
+            handle.block_on(async { tokio::join!(added_ta, added_tb) });
+
+        let results = [result_ta.map(|_| ()), result_tb.map(|_| ())];
+        let conflict_count = results
+            .iter()
+            .filter(|r| {
+                matches!(
+                    r,
+                    Err(AddModuleError::SingleVersionConflict { package, .. })
+                        if package.name.as_str() == "conc-conflict-d"
+                )
+            })
+            .count();
+        let ok_count = results.iter().filter(|r| r.is_ok()).count();
+        assert_eq!(
+            (ok_count, conflict_count),
+            (1, 1),
+            "exactly one load must succeed and one must conflict on D, got: {results:?}",
+        );
+        // The winner's resolution of D is committed; the loser's own
+        // top-level placeholder was cleared by its drop-guard.
+        let d_ref = streamlib_idents::PackageRef::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("conc-conflict-d").unwrap(),
+        );
+        assert!(
+            runtime.resolution_memo.committed_record(&d_ref).is_some(),
+            "the winning load's D resolution must be committed",
+        );
+    }
+
+    /// Deterministic in-flight skip: TA owns D (held in flight because
+    /// D's dep E blocks in the orchestrator), TB gates D, sees the
+    /// same-version placeholder, skips locally, and verifies at the end
+    /// of its walk. After the owner commits, the waiter returns Ok. The
+    /// requirer-count poll makes the interleaving deterministic — TB is
+    /// PROVEN to have gated against the in-flight placeholder before the
+    /// release.
+    #[test]
+    #[serial]
+    fn concurrent_load_waiter_succeeds_after_owner_commits() {
+        let home = tempfile::tempdir().unwrap();
+        let pkg_root = tempfile::tempdir().unwrap();
+        let ta = pkg_root.path().join("ta");
+        let tb = pkg_root.path().join("tb");
+        let d = pkg_root.path().join("d");
+        let e = pkg_root.path().join("e");
+        for p in [&ta, &tb, &d, &e] {
+            std::fs::create_dir(p).unwrap();
+        }
+        std::fs::write(
+            ta.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: conc-wait-ta\n  version: \"0.1.0\"\n\
+             dependencies:\n  \"@tatolab/conc-wait-d\":\n    path: ../d\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tb.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: conc-wait-tb\n  version: \"0.1.0\"\n\
+             dependencies:\n  \"@tatolab/conc-wait-d\":\n    path: ../d\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: conc-wait-d\n  version: \"1.0.0\"\n\
+             dependencies:\n  \"@tatolab/conc-wait-e\":\n    path: ../e\n",
+        )
+        .unwrap();
+        std::fs::write(
+            e.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: conc-wait-e\n  version: \"1.0.0\"\n",
+        )
+        .unwrap();
+
+        let _guard = HomeGuard::install(home.path());
+        let runtime = Runner::new().expect("Runner::new");
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        runtime.set_build_orchestrator(GatedSubDependencyOrchestrator {
+            gated_dir_name: "e".to_string(),
+            release: parking_lot::Mutex::new(Some(release_rx)),
+            fail_after_release: false,
+        });
+
+        let d_ref = streamlib_idents::PackageRef::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("conc-wait-d").unwrap(),
+        );
+        let added_ta = runtime.add_module_with(
+            ModuleIdent::any(
+                Org::new("tatolab").unwrap(),
+                Package::new("conc-wait-ta").unwrap(),
+            ),
+            Strategy::Path {
+                path: ta.clone(),
+                build: BuildPolicy::NeverBuild,
+            },
+        );
+        // TA holds D in flight (blocked inside E's materialize).
+        assert!(
+            poll_until(std::time::Duration::from_secs(10), || {
+                runtime.resolution_memo.in_flight_requirer_count(&d_ref) == Some(1)
+            }),
+            "TA must reach D's in-flight placeholder before TB starts",
+        );
+        let added_tb = runtime.add_module_with(
+            ModuleIdent::any(
+                Org::new("tatolab").unwrap(),
+                Package::new("conc-wait-tb").unwrap(),
+            ),
+            Strategy::Path {
+                path: tb.clone(),
+                build: BuildPolicy::NeverBuild,
+            },
+        );
+        // TB gated against the IN-FLIGHT placeholder (its requirer landed
+        // while D was still in flight) — the deterministic skip witness.
+        assert!(
+            poll_until(std::time::Duration::from_secs(10), || {
+                runtime.resolution_memo.in_flight_requirer_count(&d_ref) == Some(2)
+            }),
+            "TB must record its requirer on D's in-flight placeholder",
+        );
+        release_tx.send(()).unwrap();
+
+        let handle = runtime.tokio_runtime_variant.handle();
+        let (result_ta, result_tb) =
+            handle.block_on(async { tokio::join!(added_ta, added_tb) });
+        result_ta.expect("owner load must succeed");
+        result_tb.expect("waiter load must succeed after the owner commits");
+
+        let record = runtime
+            .resolution_memo
+            .committed_record(&d_ref)
+            .expect("D must be committed");
+        assert_eq!(record.required_by.len(), 2);
+    }
+
+    /// Owner-failure verification: same shape as the success twin, but
+    /// E's materialize fails after release. The owner load fails; the
+    /// waiter — which skipped D as in-flight — must fail LOUDLY with the
+    /// typed concurrent-load error (never Ok over an unregistered
+    /// package, never a hang), and the drop-guard must have cleared D.
+    #[test]
+    #[serial]
+    fn concurrent_load_owner_failure_fails_waiter_loudly() {
+        let home = tempfile::tempdir().unwrap();
+        let pkg_root = tempfile::tempdir().unwrap();
+        let ta = pkg_root.path().join("ta");
+        let tb = pkg_root.path().join("tb");
+        let d = pkg_root.path().join("d");
+        let e = pkg_root.path().join("e");
+        for p in [&ta, &tb, &d, &e] {
+            std::fs::create_dir(p).unwrap();
+        }
+        std::fs::write(
+            ta.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: conc-fail-ta\n  version: \"0.1.0\"\n\
+             dependencies:\n  \"@tatolab/conc-fail-d\":\n    path: ../d\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tb.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: conc-fail-tb\n  version: \"0.1.0\"\n\
+             dependencies:\n  \"@tatolab/conc-fail-d\":\n    path: ../d\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: conc-fail-d\n  version: \"1.0.0\"\n\
+             dependencies:\n  \"@tatolab/conc-fail-e\":\n    path: ../e\n",
+        )
+        .unwrap();
+        std::fs::write(
+            e.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: conc-fail-e\n  version: \"1.0.0\"\n",
+        )
+        .unwrap();
+
+        let _guard = HomeGuard::install(home.path());
+        let runtime = Runner::new().expect("Runner::new");
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        runtime.set_build_orchestrator(GatedSubDependencyOrchestrator {
+            gated_dir_name: "e".to_string(),
+            release: parking_lot::Mutex::new(Some(release_rx)),
+            fail_after_release: true,
+        });
+
+        let d_ref = streamlib_idents::PackageRef::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("conc-fail-d").unwrap(),
+        );
+        let added_ta = runtime.add_module_with(
+            ModuleIdent::any(
+                Org::new("tatolab").unwrap(),
+                Package::new("conc-fail-ta").unwrap(),
+            ),
+            Strategy::Path {
+                path: ta.clone(),
+                build: BuildPolicy::NeverBuild,
+            },
+        );
+        assert!(
+            poll_until(std::time::Duration::from_secs(10), || {
+                runtime.resolution_memo.in_flight_requirer_count(&d_ref) == Some(1)
+            }),
+            "TA must reach D's in-flight placeholder before TB starts",
+        );
+        let added_tb = runtime.add_module_with(
+            ModuleIdent::any(
+                Org::new("tatolab").unwrap(),
+                Package::new("conc-fail-tb").unwrap(),
+            ),
+            Strategy::Path {
+                path: tb.clone(),
+                build: BuildPolicy::NeverBuild,
+            },
+        );
+        assert!(
+            poll_until(std::time::Duration::from_secs(10), || {
+                runtime.resolution_memo.in_flight_requirer_count(&d_ref) == Some(2)
+            }),
+            "TB must record its requirer on D's in-flight placeholder",
+        );
+        release_tx.send(()).unwrap();
+
+        let handle = runtime.tokio_runtime_variant.handle();
+        let (result_ta, result_tb) =
+            handle.block_on(async { tokio::join!(added_ta, added_tb) });
+        let owner_err = result_ta.expect_err("owner load must fail (injected E failure)");
+        assert!(
+            matches!(owner_err, AddModuleError::MaterializeFailed { .. }),
+            "owner must surface the injected materialize failure, got: {owner_err:?}",
+        );
+        let waiter_err =
+            result_tb.expect_err("waiter must fail loudly when the owner fails");
+        assert!(
+            matches!(
+                waiter_err,
+                AddModuleError::ConcurrentLoadOfSkippedDependencyFailed { ref package, version }
+                    if package.name.as_str() == "conc-fail-d"
+                        && version == SemVer::new(1, 0, 0)
+            ),
+            "expected ConcurrentLoadOfSkippedDependencyFailed for D, got: {waiter_err:?}",
+        );
+        assert!(
+            !runtime.resolution_memo.contains_package(&d_ref),
+            "the failed owner's drop-guard must clear D's placeholder",
         );
     }
 
@@ -1827,7 +2499,7 @@ processors:
         );
         let ident =
             ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new("guard-pkg").unwrap());
-        runtime.loading_modules.lock().insert(pkg, ident);
+        runtime.loading_modules.lock().insert(pkg, (0, ident));
 
         let err = runtime
             .start()

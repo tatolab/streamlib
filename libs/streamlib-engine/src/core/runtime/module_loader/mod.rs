@@ -104,6 +104,12 @@ impl BuildEventSink for ModuleEventSink {
     }
 }
 
+/// Monotonic id for each top-level `add_module` load. Identifies the
+/// load in the resolution memo's in-flight placeholders and guards the
+/// `loading_modules` completion-removal against a same-package overwrite
+/// by a later load.
+static NEXT_MODULE_LOAD_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// The blocking body of a single module load. Runs on `spawn_blocking`:
 /// it resolves the strategy, materializes via the orchestrator when a
 /// build is required (blocking), recursively loads transitive deps, and
@@ -114,7 +120,8 @@ fn run_module_load(
     module: streamlib_idents::ModuleIdent,
     strategy: Strategy,
     events: broadcast::Sender<ModuleLoadEvent>,
-    resolution_memo: Arc<parking_lot::Mutex<ResolutionMemo>>,
+    resolution_memo: Arc<ResolutionMemo>,
+    load_id: u64,
 ) -> std::result::Result<LoadedModule, AddModuleError> {
     let start = Instant::now();
     let _ = events.send(ModuleLoadEvent::Started {
@@ -126,6 +133,7 @@ fn run_module_load(
     };
     let mut seen: HashSet<streamlib_idents::PackageRef> = HashSet::new();
     let mut path: Vec<streamlib_idents::PackageRef> = Vec::new();
+    let mut skipped_in_flight: Vec<recursive_walker::SkippedInFlightDependency> = Vec::new();
     let result = recursive_walker::add_module_recursively(
         &iceoryx2_node,
         orchestrator.as_ref(),
@@ -135,7 +143,42 @@ fn run_module_load(
         &mut seen,
         &mut path,
         &resolution_memo,
+        load_id,
+        &mut skipped_in_flight,
     );
+    // End-of-walk verification: this walk skipped some packages because a
+    // CONCURRENT load had them in flight at the same version. Before
+    // reporting success, verify each owner actually committed — an owner
+    // that failed (or wedged) means this load's graph is missing a
+    // registration, and Ok would be a false success. Mid-walk nobody ever
+    // blocks; these waits depend only on other loads' per-package commits,
+    // which flip as their subtrees unwind without needing this waiter —
+    // structurally deadlock-free.
+    let result = result.and_then(|()| {
+        use recursive_walker::{ConcurrentPackageLoadOutcome, SKIPPED_IN_FLIGHT_WAIT_TIMEOUT};
+        for skipped in skipped_in_flight {
+            match skipped
+                .completion_signal
+                .wait_for_outcome(SKIPPED_IN_FLIGHT_WAIT_TIMEOUT)
+            {
+                Some(ConcurrentPackageLoadOutcome::Committed) => {}
+                Some(ConcurrentPackageLoadOutcome::Failed) => {
+                    return Err(AddModuleError::ConcurrentLoadOfSkippedDependencyFailed {
+                        package: skipped.package,
+                        version: skipped.version,
+                    });
+                }
+                None => {
+                    return Err(AddModuleError::ConcurrentLoadOfSkippedDependencyTimedOut {
+                        package: skipped.package,
+                        version: skipped.version,
+                        waited_secs: SKIPPED_IN_FLIGHT_WAIT_TIMEOUT.as_secs(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    });
     match result {
         Ok(()) => {
             let _ = events.send(ModuleLoadEvent::Completed {
@@ -192,14 +235,17 @@ impl Runner {
         strategy: Strategy,
     ) -> AddedModule {
         let pkg_ref = module.package_ref();
+        let load_id = NEXT_MODULE_LOAD_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // Subscribe BEFORE spawning so a driver can't miss early events.
         let (tx, initial_rx) = broadcast::channel(MODULE_EVENT_CHANNEL_CAPACITY);
 
         // Mark in-flight so `start()` can refuse to run the graph while
-        // loads are pending.
+        // loads are pending. Keyed by package ref; the load id lets the
+        // completion below remove only ITS OWN entry — a later load of
+        // the same package ref that overwrote this entry stays tracked.
         self.loading_modules
             .lock()
-            .insert(pkg_ref.clone(), module.clone());
+            .insert(pkg_ref.clone(), (load_id, module.clone()));
 
         let node = self.iceoryx2_node.clone();
         let orchestrator = self.build_orchestrator.lock().clone();
@@ -210,9 +256,24 @@ impl Runner {
         let pkg_for_task = pkg_ref;
 
         let join = self.tokio_runtime_variant.handle().spawn_blocking(move || {
-            let result =
-                run_module_load(node, orchestrator, module_for_task, strategy, events, memo);
-            loading.lock().remove(&pkg_for_task);
+            let result = run_module_load(
+                node,
+                orchestrator,
+                module_for_task,
+                strategy,
+                events,
+                memo,
+                load_id,
+            );
+            {
+                let mut loading = loading.lock();
+                if loading
+                    .get(&pkg_for_task)
+                    .is_some_and(|(owner_load_id, _)| *owner_load_id == load_id)
+                {
+                    loading.remove(&pkg_for_task);
+                }
+            }
             result
         });
 
@@ -337,6 +398,10 @@ impl Runner {
     /// [`Runner::start`] to refuse running the graph while loads are
     /// pending.
     pub(crate) fn pending_module_loads(&self) -> Vec<streamlib_idents::ModuleIdent> {
-        self.loading_modules.lock().values().cloned().collect()
+        self.loading_modules
+            .lock()
+            .values()
+            .map(|(_, module)| module.clone())
+            .collect()
     }
 }
