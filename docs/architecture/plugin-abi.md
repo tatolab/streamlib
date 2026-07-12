@@ -39,11 +39,27 @@ coupling leak.
 | `streamlib-engine` (host-side) | Privileged engine internals: `HostVulkanDevice`, VMA pools, queue mutex, modifier probe, kernel construction, swapchain. Plus the host implementations of every vtable callback (in `core/plugin/host_services.rs`). | Host process only. Cdylibs CANNOT Cargo-dep this. |
 | `streamlib-sdk` | Thin re-export façade. Cdylibs Cargo-dep `streamlib = "..."` and get the PluginAbiObject types, the `processor` macro, the lifecycle traits — without reaching `HostVulkanDevice` etc. | Host AND cdylibs (re-exports the safe surface from `streamlib-engine`). |
 
-The capability boundary is enforced by the type system: a cdylib's
-`cargo tree` excludes `streamlib-engine` and therefore physically
+The capability boundary is enforced by the type system for **subprocess
+native cdylibs** (`streamlib-python-native`, `streamlib-deno-native`):
+their `cargo tree` excludes `streamlib-engine`, so they physically
 cannot reach `HostVulkanDevice` or any other privileged primitive.
 `cargo tree -p streamlib-python-native | grep -c "^streamlib-engine v"`
 returns 0 — that's the lock.
+
+**Facade plugins are a distinct cdylib flavor** and do NOT exclude the
+engine. A package that Cargo-deps `streamlib` (the `streamlib-sdk`
+façade — e.g. `packages/camera`, `packages/h264`, the
+`streamlib-cross-rustc-fixture`) pulls `streamlib-engine` **into the
+cdylib** as a statically-linked copy. That embedded engine copy is
+precisely what makes the `GpuContextFullAccess` raw-`Arc` slots
+(`host_vulkan_device_arc`, `host_vulkan_texture_arc`, the
+timeline-semaphore create/set/wait/get) callable from the plugin — and
+what the build-fingerprint handshake (below) guards, because a
+separately-built copy of the engine can lay those non-`#[repr(C)]`
+transit types out differently. The capability *split* still holds for
+these plugins (FullAccess is reachable only inside `escalate(|full|
+…)`); what differs is that the engine is present in the address space,
+not absent.
 
 ## The vtable catalog
 
@@ -345,6 +361,75 @@ asserts the borrow's POD getters return the real values.
 - Per-vtable `*_VTABLE_LAYOUT_VERSION` — one per vtable. The host's
   vtable consumer reads this first and aborts cleanly on mismatch
   rather than dereferencing past-the-end slots.
+- `PLUGIN_ABI_LAYOUT_FINGERPRINT` (`streamlib-plugin-abi`) — a
+  `const` FNV-1a fold of every wire constant above plus the *measured*
+  `size_of` / `align_of` of `PluginDeclaration`, `HostServices`, and
+  every vtable struct. Measured (not hand-maintained), so a
+  layout-changing edit that forgot to bump the matching version
+  constant still changes it — catching a same-constant /
+  different-layout republish that a version-only check would miss.
+- `ENGINE_TRANSIT_FINGERPRINT` (`streamlib-engine`,
+  `core::plugin::build_fingerprint`) — folds
+  `PLUGIN_ABI_LAYOUT_FINGERPRINT`, the engine and `streamlib-consumer-rhi`
+  crate versions, and (on Linux) the first-order layout of the three
+  non-`#[repr(C)]` engine types that transit by raw `Arc`
+  (`HostVulkanDevice`, `HostVulkanTexture`,
+  `HostVulkanTimelineSemaphore`). The engine version is folded in
+  deliberately, so a cross-engine-version load is refused even when
+  layouts happen to coincide.
+
+### Load handshake
+
+`PluginDeclaration` (ABI v5) carries a build-fingerprint handshake so a
+host refuses — with a typed, actionable error — any plugin whose
+`#[repr(C)]` dispatch surface or engine-internal transit surface could
+skew from its own. The v5 envelope, pinned by the
+`plugin_declaration_layout` regression test:
+
+| offset | field | purpose |
+|---|---|---|
+| 0 | `abi_version: u32` | pinned; read **first** |
+| 4 | `_reserved_padding: u32` | alignment |
+| 8 | `register: PluginRegisterFn` | pinned |
+| 16 | `abi_layout_fingerprint: u64` | plugin's `PLUGIN_ABI_LAYOUT_FINGERPRINT` |
+| 24 | `engine_transit_fingerprint: u64` | plugin's `ENGINE_TRANSIT_FINGERPRINT`, or `0` |
+| 32 | `build_identity_ptr: *const u8` | human-readable identity string |
+| 40 | `build_identity_len: usize` | identity length |
+
+`export_plugin!` populates the two fingerprints and the identity from
+three associated consts the `#[processor]` macro emits against the
+detected SDK crate. A **facade plugin** (Cargo-deps `streamlib`,
+statically-linking the engine) reports its real
+`ENGINE_TRANSIT_FINGERPRINT`; an **engine-free plugin** (Cargo-deps
+`streamlib-plugin-sdk`) reports `0`, the "no transit surface" sentinel.
+
+The host's `validate_plugin_declaration` runs three checks in a
+load-bearing order, before `register` is invoked:
+
+1. `abi_version == STREAMLIB_ABI_VERSION` — read from the pinned
+   offset-0 slot first. A mismatch means the appended v5 fields may not
+   exist, so they are **not** dereferenced; returns
+   `Error::PluginAbiVersionMismatch`.
+2. `abi_layout_fingerprint == PLUGIN_ABI_LAYOUT_FINGERPRINT` — else
+   `Error::PluginBuildMismatch`.
+3. `engine_transit_fingerprint == 0` (engine-free) **or**
+   `== ENGINE_TRANSIT_FINGERPRINT` — else `Error::PluginBuildMismatch`.
+
+Both typed errors name the plugin's and the host's build identities and
+the rebuild remedy (publish a matching engine `-dev` version and bump
+the plugin's pin, or `streamlib link`). The identity string is read
+defensively on the error path — null pointer → `"unknown"`, the length
+is capped, and the bytes are lossily decoded — so a corrupt declaration
+never drives an unbounded or unsafe read.
+
+**Residual soundness gap:** the transit probe is first-order
+(`size_of` / `align_of`), so it catches a transit type whose size or
+alignment skews across two builds (the dominant mode) but not a pure
+reorder-at-identical-size, which `repr(Rust)` permits. The
+engine-version fold narrows the survivable window to "same engine
+version, different transitive resolution, same first-order layout"; the
+fully sound fix is the PluginAbiObject lift of the remaining raw-`Arc`
+slots, which removes the transit entirely.
 
 ### What crosses the wire
 

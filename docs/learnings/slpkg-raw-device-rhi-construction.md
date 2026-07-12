@@ -94,6 +94,28 @@ in a customer's host. Treat "works in-process" as **no evidence** that
 a GPU package is plugin-safe; the only real test is a separate-build
 `.slpkg` run.
 
+> **Update 2026-07-12 (plugin build-fingerprint handshake).** The host
+> now runs a build-fingerprint check at load
+> (`validate_plugin_declaration`): `PluginDeclaration` carries an
+> `engine_transit_fingerprint` folding the engine version, the
+> `streamlib-consumer-rhi` version, and the first-order (`size_of` /
+> `align_of`) layout of the three raw-`Arc` transit types
+> (`HostVulkanDevice`, `HostVulkanTexture`,
+> `HostVulkanTimelineSemaphore`). A plugin whose engine build differs
+> from the host's is **refused with a typed `Error::PluginBuildMismatch`
+> before `register` runs** — so the specific driver-corruption crash
+> above no longer reaches the driver for a *detectably* divergent build.
+> This does **not** retire the guidance: (1) the handshake *refuses* a
+> mismatched build, it does not *make the raw-device path safe* — the
+> remedy is still to build through the cdylib-safe FullAccess
+> primitives; (2) the transit probe is first-order, so a build that
+> matches the fingerprint but reordered a transit type's fields at
+> identical size (permitted by `repr(Rust)`) would still load and could
+> still corrupt. A package's GPU code should never name
+> `HostVulkanDevice`, `VulkanComputeKernel::new`, or
+> `HostVulkanBuffer::new*` regardless of the load-time check. See
+> `docs/architecture/plugin-abi.md` → "Load handshake".
+
 ## Reference
 
 - The sound primitives live on `GpuContextFullAccess` in
