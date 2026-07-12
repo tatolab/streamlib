@@ -116,7 +116,8 @@ pub enum ResolverError {
 
     #[error(
         "registry dependency `{name}` cannot be resolved: no registry is configured. \
-         Set `{env}` (or `GITEA_URL`) to the Gitea base URL, or add a `patch:` override."
+         Set `{env}` to the registry tree-root URL (`file://<root>` or `http(s)://…`), \
+         or add a `patch:` override."
     )]
     RegistryNotConfigured { name: String, env: String },
 

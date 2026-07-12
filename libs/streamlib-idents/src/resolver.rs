@@ -126,7 +126,7 @@ pub struct ResolverOptions {
     /// Override the cache directory for git clones and `.slpkg` extractions.
     /// `None` falls back to `$HOME/.streamlib/resolver-cache/`.
     pub cache_dir: Option<PathBuf>,
-    /// Gitea generic-registry configuration for resolving `Registry` schema
+    /// Static-registry configuration for resolving `Registry` schema
     /// dependencies. `None` means no registry is configured — a `Registry`
     /// dependency then surfaces [`ResolverError::RegistryNotConfigured`].
     /// [`resolve_with`] reads this field only; it never consults the process
@@ -137,12 +137,11 @@ pub struct ResolverOptions {
 
 impl ResolverOptions {
     /// Options with the registry config read from the environment
-    /// (`STREAMLIB_REGISTRY_URL` / `GITEA_URL`, optional
-    /// `STREAMLIB_REGISTRY_TOKEN`) and the default cache dir. This is the
-    /// codegen-boundary constructor — build scripts and `streamlib generate`
-    /// use it so a registry-cached crate resolves its schema deps from the
-    /// configured registry. Unit tests construct [`ResolverOptions`] directly
-    /// to stay hermetic.
+    /// (`STREAMLIB_REGISTRY_URL`, defaulting to the first-party registry) and
+    /// the default cache dir. This is the codegen-boundary constructor — build
+    /// scripts and `streamlib generate` use it so a registry-cached crate
+    /// resolves its schema deps from the configured registry. Unit tests
+    /// construct [`ResolverOptions`] directly to stay hermetic.
     pub fn from_env() -> Self {
         Self {
             cache_dir: None,
@@ -174,9 +173,9 @@ pub fn resolve_with(
     // only, never from the process environment. The env read lives at the
     // codegen boundary (`ResolverOptions::from_env`, used by build scripts
     // and `streamlib generate`) so unit tests fully control resolution and
-    // a stray `GITEA_URL` in the shell can't redirect a resolve into a live
-    // fetch. `None` means "no registry" — a `Registry` dep then fails loud
-    // with `RegistryNotConfigured`.
+    // a stray `STREAMLIB_REGISTRY_URL` in the shell can't redirect a resolve
+    // into a live fetch. `None` means "no registry" — a `Registry` dep then
+    // fails loud with `RegistryNotConfigured`.
     let registry = options.registry.as_ref();
 
     let root = build_resolved_package(
@@ -296,9 +295,9 @@ fn resolve_one(
     }
 }
 
-/// Resolve a `Registry` schema dependency from Gitea's generic registry:
-/// list the package's available versions, select the highest satisfying the
-/// declared range, fetch + extract that version's `.slpkg`, and load it.
+/// Resolve a `Registry` schema dependency from the static registry's generic
+/// store: list the package's available versions, select the highest satisfying
+/// the declared range, fetch + extract that version's `.slpkg`, and load it.
 ///
 /// The flat generic registry has no semver-range query, so range → concrete
 /// version happens client-side (cargo/npm/pip shape). The resolved concrete
@@ -950,7 +949,7 @@ dependencies:
         // RegistryNotConfigured — the actionable successor to the old
         // RegistryNotImplemented. `resolve_with` is pure (it never reads the
         // process env), so this is deterministic regardless of any ambient
-        // STREAMLIB_REGISTRY_URL / GITEA_URL in the shell.
+        // STREAMLIB_REGISTRY_URL in the shell.
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("project");
         write_streamlib_yaml(
@@ -1005,9 +1004,10 @@ dependencies:
                 .unwrap();
             zip.finish().unwrap();
         };
-        make_slpkg(&mirror.join("escalate").join("1.0.0"), "1.0.0");
-        make_slpkg(&mirror.join("escalate").join("1.2.0"), "1.2.0");
-        make_slpkg(&mirror.join("escalate").join("2.0.0"), "2.0.0");
+        let slpkg = mirror.join("slpkg");
+        make_slpkg(&slpkg.join("escalate").join("1.0.0"), "1.0.0");
+        make_slpkg(&slpkg.join("escalate").join("1.2.0"), "1.2.0");
+        make_slpkg(&slpkg.join("escalate").join("2.0.0"), "2.0.0");
 
         let root = tmp.path().join("project");
         write_streamlib_yaml(
@@ -1022,7 +1022,6 @@ dependencies:
             cache_dir: Some(cache),
             registry: Some(crate::RegistryConfig {
                 base_url: format!("file://{}", mirror.display()),
-                token: None,
             }),
         };
         let res = resolve_with(&root, &opts).unwrap();
@@ -1047,7 +1046,7 @@ dependencies:
         use std::io::Write;
         let tmp = tempfile::tempdir().unwrap();
         let mirror = tmp.path().join("mirror");
-        let dir = mirror.join("escalate").join("2.0.0");
+        let dir = mirror.join("slpkg").join("escalate").join("2.0.0");
         std::fs::create_dir_all(&dir).unwrap();
         let archive = dir.join("escalate.slpkg");
         let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
@@ -1069,7 +1068,6 @@ dependencies:
             cache_dir: Some(tmp.path().join("cache")),
             registry: Some(crate::RegistryConfig {
                 base_url: format!("file://{}", mirror.display()),
-                token: None,
             }),
         };
         let err = resolve_with(&root, &opts).unwrap_err();

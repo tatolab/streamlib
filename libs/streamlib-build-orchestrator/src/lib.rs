@@ -913,11 +913,9 @@ mod tests {
     /// process-global env.
     fn with_scratch_registry<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
         let prev_url = std::env::var("STREAMLIB_REGISTRY_URL").ok();
-        let prev_gitea = std::env::var("GITEA_URL").ok();
         let prev_py_lib = std::env::var("STREAMLIB_PYTHON_NATIVE_LIB").ok();
         unsafe {
             std::env::set_var("STREAMLIB_REGISTRY_URL", format!("file://{}", dir.display()));
-            std::env::remove_var("GITEA_URL");
             std::env::remove_var("STREAMLIB_PYTHON_NATIVE_LIB");
         }
         let out = f();
@@ -925,9 +923,6 @@ mod tests {
             match prev_url {
                 Some(v) => std::env::set_var("STREAMLIB_REGISTRY_URL", v),
                 None => std::env::remove_var("STREAMLIB_REGISTRY_URL"),
-            }
-            if let Some(v) = prev_gitea {
-                std::env::set_var("GITEA_URL", v);
             }
             if let Some(v) = prev_py_lib {
                 std::env::set_var("STREAMLIB_PYTHON_NATIVE_LIB", v);
@@ -941,7 +936,6 @@ mod tests {
     fn publish_partial_manifest(dir: &Path, version: &str) {
         let cfg = streamlib_idents::RegistryConfig {
             base_url: format!("file://{}", dir.display()),
-            token: None,
         };
         let manifest = streamlib_idents::ReleaseManifest::new(
             version,

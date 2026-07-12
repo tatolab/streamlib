@@ -678,9 +678,9 @@ fn emit_slpkg_and_manifest(
 ) -> Result<()> {
     let slpkg_dir = staging.join("slpkg");
     std::fs::create_dir_all(&slpkg_dir)?;
+    // The registry client is rooted at the tree root and writes under `slpkg/`.
     let config = RegistryConfig {
-        base_url: format!("file://{}", slpkg_dir.display()),
-        token: None,
+        base_url: format!("file://{}", staging.display()),
     };
 
     let packages_dir = opts.workspace_root.join("packages");

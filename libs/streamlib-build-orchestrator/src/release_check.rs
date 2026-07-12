@@ -192,19 +192,14 @@ mod tests {
     /// thread races these process-global env writes.
     fn with_file_registry<T>(dir: &std::path::Path, f: impl FnOnce() -> T) -> T {
         let prev_url = std::env::var("STREAMLIB_REGISTRY_URL").ok();
-        let prev_fallback = std::env::var("GITEA_URL").ok();
         unsafe {
             std::env::set_var("STREAMLIB_REGISTRY_URL", format!("file://{}", dir.display()));
-            std::env::remove_var("GITEA_URL");
         }
         let out = f();
         unsafe {
             match prev_url {
                 Some(v) => std::env::set_var("STREAMLIB_REGISTRY_URL", v),
                 None => std::env::remove_var("STREAMLIB_REGISTRY_URL"),
-            }
-            if let Some(v) = prev_fallback {
-                std::env::set_var("GITEA_URL", v);
             }
         }
         out
@@ -213,7 +208,6 @@ mod tests {
     fn publish_manifest(dir: &std::path::Path, m: &ReleaseManifest) {
         let cfg = RegistryConfig {
             base_url: format!("file://{}", dir.display()),
-            token: None,
         };
         RegistryClient::new(&cfg)
             .upload_release_manifest("tatolab", m)
@@ -234,19 +228,14 @@ mod tests {
         // Clear the env entirely; the check must pass vacuously (dev / path).
         // SAFETY: `#[serial]` — no other thread races these env writes.
         let prev = std::env::var("STREAMLIB_REGISTRY_URL").ok();
-        let prev_g = std::env::var("GITEA_URL").ok();
         unsafe {
             std::env::remove_var("STREAMLIB_REGISTRY_URL");
-            std::env::remove_var("GITEA_URL");
         }
         let pins = vec![pin("streamlib-plugin-sdk", "0.5.1")];
         assert!(assert_release_complete("pkg", &pins).is_ok());
         unsafe {
             if let Some(v) = prev {
                 std::env::set_var("STREAMLIB_REGISTRY_URL", v);
-            }
-            if let Some(v) = prev_g {
-                std::env::set_var("GITEA_URL", v);
             }
         }
     }
@@ -412,10 +401,8 @@ mod tests {
         // Mentally revert the Err arms to hard failures and this fails.
         // SAFETY: `#[serial]` — no other thread races these env writes.
         let prev_url = std::env::var("STREAMLIB_REGISTRY_URL").ok();
-        let prev_g = std::env::var("GITEA_URL").ok();
         unsafe {
             std::env::set_var("STREAMLIB_REGISTRY_URL", "http://127.0.0.1:1");
-            std::env::remove_var("GITEA_URL");
         }
         let pins = vec![pin("streamlib-plugin-sdk", "0.5.0")];
         let out = assert_release_complete("pkg", &pins);
@@ -423,9 +410,6 @@ mod tests {
             match prev_url {
                 Some(v) => std::env::set_var("STREAMLIB_REGISTRY_URL", v),
                 None => std::env::remove_var("STREAMLIB_REGISTRY_URL"),
-            }
-            if let Some(v) = prev_g {
-                std::env::set_var("GITEA_URL", v);
             }
         }
         assert!(out.is_ok(), "transport errors must degrade to proceed: {out:?}");

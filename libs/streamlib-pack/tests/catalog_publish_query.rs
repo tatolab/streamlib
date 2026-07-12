@@ -105,9 +105,9 @@ processors:
 fn emit_catalog_tree(root: &Path, pkg_dirs: &[PathBuf]) {
     let slpkg = root.join("slpkg");
     std::fs::create_dir_all(&slpkg).unwrap();
+    // Registry client rooted at the tree root; it writes under `slpkg/`.
     let cfg = RegistryConfig {
-        base_url: format!("file://{}", slpkg.display()),
-        token: None,
+        base_url: format!("file://{}", root.display()),
     };
     let siblings = build_sibling_versions(pkg_dirs).unwrap();
 
