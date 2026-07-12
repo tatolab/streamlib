@@ -1,6 +1,6 @@
 [package]
 name = "streamlib-mavlink"
-version = "0.4.30"
+version = "1.1.4"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "MAVLink2 encoder + decoder processors for streamlib — wraps rust-mavlink (common dialect). Pairs with @tatolab/network for MAVLink-over-UDP."

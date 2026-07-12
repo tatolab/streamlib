@@ -1,6 +1,6 @@
 [package]
 name = "streamlib-frame-tap"
-version = "0.4.30"
+version = "1.0.0"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "Frame tap — a sink processor that fans out from any video output and samples frames to disk (JPEG) on a configurable strategy, off the hot path. The seed for streamlib's general tap behavior."

@@ -15,9 +15,14 @@ streamlib-jtd-codegen = { path = "../libs/streamlib-jtd-codegen" }
 # `schemars::schema_for!(StreamlibYaml)` from this crate (#714).
 streamlib-processor-schema = { path = "../libs/streamlib-processor-schema" }
 
-# Package-artifact assembly — backs `strip-publish-manifest`, the publish-side
-# path-patch strip for the Gitea registry distribution.
+# Package-artifact assembly — backs `strip-publish-manifest` (publish-side
+# path-patch strip) and `check-package-version-drift --fix` (shared
+# Cargo.toml version rewrite).
 streamlib-pack = { path = "../libs/streamlib-pack" }
+
+# SemVer parsing for check-package-version-drift — the manifest version is
+# validated through the same SemVer type the pack stamp derives from.
+streamlib-idents = { path = "../libs/streamlib-idents" }
 
 # Logging — needed to surface tracing::info! output from streamlib-jtd-codegen.
 tracing = "0.1"

@@ -1,6 +1,6 @@
 [package]
 name = "streamlib-h265"
-version = "0.4.30"
+version = "1.0.0"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "H.265 encoder + decoder processors for streamlib, via Vulkan Video. Linux-only today; macOS VideoToolbox is a future addition."

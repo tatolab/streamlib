@@ -1,6 +1,6 @@
 [package]
 name = "streamlib-camera"
-version = "0.4.30"
+version = "1.0.0"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "Camera capture processor — V4L2 on Linux, AVFoundation on macOS/iOS — carved out of the streamlib engine."

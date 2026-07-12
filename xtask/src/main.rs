@@ -21,6 +21,7 @@ pub mod check_no_escalate_in_lifecycle;
 pub mod check_no_inventory_submit;
 pub mod check_no_reverse_dns;
 pub mod check_no_streamlib_metadata;
+pub mod check_package_version_drift;
 pub mod check_processor_spec_new;
 pub mod check_schema_versions;
 pub mod lint_logging;
@@ -161,6 +162,19 @@ enum Commands {
     /// header, (3) every `streamlib.yaml` validates against the schema.
     CheckManifestSchema,
 
+    /// CI gate that every publishable package's `Cargo.toml`
+    /// `[package].version` matches its `streamlib.yaml` `package.version`
+    /// (the `.slpkg` semver — the single source of truth). Packages with no
+    /// `Cargo.toml` (schema-only) and workspace-inherited versions are
+    /// skipped. `--fix` rewrites each drifting `Cargo.toml` from its
+    /// `streamlib.yaml`, so the bump workflow is "edit streamlib.yaml, run
+    /// `--fix`" — never hand-edit `Cargo.toml`.
+    CheckPackageVersionDrift {
+        /// Rewrite each drifting `Cargo.toml` from its `streamlib.yaml`.
+        #[arg(long)]
+        fix: bool,
+    },
+
     /// Strip dev-time path-flavor `patch:` entries from a crate's
     /// `streamlib.yaml` so the published manifest is path-free. Intended to
     /// run against a scratch copy of the crate before `cargo publish` (cargo
@@ -220,6 +234,9 @@ fn main() -> Result<()> {
             check_consumer_rhi_repr::run(&workspace_root()?)?
         }
         Commands::CheckDeviceWaitIdle => check_device_wait_idle::run(&workspace_root()?)?,
+        Commands::CheckPackageVersionDrift { fix } => {
+            check_package_version_drift::run(&workspace_root()?, fix)?
+        }
         Commands::EmitManifestSchema => manifest_schema::emit(&workspace_root()?)?,
         Commands::CheckManifestSchema => manifest_schema::check(&workspace_root()?)?,
         Commands::StripPublishManifest { dir } => {

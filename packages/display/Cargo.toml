@@ -1,6 +1,6 @@
 [package]
 name = "streamlib-display"
-version = "0.4.30"
+version = "1.0.0"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "Display processor — renders video frames to a window via the engine's host RHI presentation primitive. Linux first; macOS port is in the package but disabled (rewrite on top of a Metal present target tracked separately)."

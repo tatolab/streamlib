@@ -1,6 +1,6 @@
 [package]
 name = "streamlib-h264"
-version = "0.4.30"
+version = "1.0.0"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "H.264 encoder + decoder via Vulkan Video — carved out of the streamlib engine. Linux-only today; macOS VideoToolbox is a future addition."
