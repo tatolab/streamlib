@@ -852,6 +852,14 @@ impl AppModulesDir {
     /// twice yields the same folder. `Path`/`Link` sources reproduce only where
     /// their recorded local paths exist; a portable install (another machine)
     /// relies on `Url`/`Archive` entries or a vendored folder.
+    ///
+    /// Reproduction is **additive**: it materializes every locked entry but does
+    /// not prune `streamlib_modules/@org/name` slots present on disk yet absent
+    /// from the lock. A from-scratch reproduction (the container/CI target)
+    /// starts from an empty folder, so the result equals the locked set exactly;
+    /// a re-install over a dirty folder is a superset, not a clean slate. Not
+    /// pruning is deliberate — install is non-destructive to slots it doesn't
+    /// own, so a not-yet-`add`ed work-in-progress folder is never deleted.
     #[tracing::instrument(skip(self), fields(app_root = %self.app_root.display()))]
     pub fn install_from_lockfile(&self) -> Result<InstallFromLockfileReport, AppModulesError> {
         let lockfile_path = self.lockfile_path();
