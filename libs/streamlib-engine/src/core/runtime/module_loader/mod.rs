@@ -59,6 +59,7 @@ use crate::iceoryx2::Iceoryx2Node;
 mod added_module;
 mod build_orchestrator;
 mod errors;
+mod lazy_discovery;
 mod ledger;
 mod locked;
 mod processor_registration;
@@ -698,5 +699,174 @@ impl Runner {
             .values()
             .map(|(_, module)| module.clone())
             .collect()
+    }
+}
+
+/// Build the recoverable [`Error::LazyModuleLoadFailed`] for a discovered
+/// package that failed to load, naming the type and its providing package.
+fn lazy_module_load_failed(
+    processor_type: &crate::core::descriptors::SchemaIdent,
+    error: AddModuleError,
+) -> crate::core::error::Error {
+    crate::core::error::Error::LazyModuleLoadFailed {
+        processor_type: processor_type.clone(),
+        package: streamlib_idents::PackageRef::new(
+            processor_type.org.clone(),
+            processor_type.package.clone(),
+        ),
+        detail: error.to_string(),
+    }
+}
+
+impl Runner {
+    // =========================================================================
+    // Lazy plugin auto-discovery — the first-reference load hook
+    // =========================================================================
+
+    /// Set the directory that contains the app's `streamlib_modules/` folder,
+    /// used for lazy plugin discovery and every [`Strategy::InstalledCache`]
+    /// resolution (GST_PLUGIN_PATH-style). **Process-wide** — an associated
+    /// function, not a per-`Runner` setting: it overrides the resolution for
+    /// the whole process, and the last write wins. Unset, resolution falls
+    /// back to the `STREAMLIB_MODULES_DIR` env var, then the process working
+    /// directory.
+    pub fn set_app_modules_dir(app_root: impl Into<std::path::PathBuf>) {
+        source::set_app_modules_root_override(Some(app_root.into()));
+    }
+
+    /// Clear a previously-set [`Self::set_app_modules_dir`] override, restoring
+    /// the env-var / working-directory default. Process-wide.
+    pub fn clear_app_modules_dir() {
+        source::set_app_modules_root_override(None);
+    }
+
+    /// Begin a lazy load of the package that provides `processor_type`, when
+    /// the type isn't registered yet. Returns the in-flight [`AddedModule`] to
+    /// drive to completion, or `None` when nothing needs loading (the type is
+    /// already available — the fast path a second reference to an
+    /// already-loaded package takes — or no package in `streamlib_modules/`
+    /// declares it). An ambiguous discovery is a typed `Err`.
+    fn begin_lazy_provider_load(
+        &self,
+        processor_type: &crate::core::descriptors::SchemaIdent,
+    ) -> std::result::Result<Option<AddedModule>, crate::core::error::Error> {
+        if crate::core::processors::PROCESSOR_REGISTRY
+            .port_info(processor_type)
+            .is_some()
+        {
+            return Ok(None);
+        }
+        let Some(app_modules_root) = source::app_modules_root() else {
+            return Ok(None);
+        };
+        match lazy_discovery::resolve_providing_module(&app_modules_root, processor_type)? {
+            Some(module_ident) => {
+                Ok(Some(self.add_module_with(module_ident, Strategy::InstalledCache)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Lazily discover + load the plugin providing `processor_type` on first
+    /// reference, awaiting completion. Returns `Some(error)` — recoverable,
+    /// the runtime keeps running — when discovery is ambiguous or a discovered
+    /// package failed to load; `None` when the type is already available or no
+    /// package provides it (the caller then degrades to the existing
+    /// `UnknownProcessorType` path). The transactional load leaves zero
+    /// partial registration state on failure.
+    #[tracing::instrument(skip(self), fields(processor_type = %processor_type))]
+    pub(crate) async fn lazily_load_provider_for_processor_type(
+        &self,
+        processor_type: &crate::core::descriptors::SchemaIdent,
+    ) -> Option<crate::core::error::Error> {
+        match self.begin_lazy_provider_load(processor_type) {
+            Ok(Some(added)) => match added.await {
+                Ok(_) => None,
+                Err(e) => Some(lazy_module_load_failed(processor_type, e)),
+            },
+            Ok(None) => None,
+            Err(e) => Some(e),
+        }
+    }
+
+    /// Blocking sibling of [`Self::lazily_load_provider_for_processor_type`]
+    /// for the synchronous `add_processor` path on an external tokio handle,
+    /// where the load future cannot be `.await`ed inline.
+    pub(crate) fn lazily_load_provider_for_processor_type_blocking(
+        &self,
+        processor_type: &crate::core::descriptors::SchemaIdent,
+    ) -> Option<crate::core::error::Error> {
+        let added = match self.begin_lazy_provider_load(processor_type) {
+            Ok(Some(added)) => added,
+            Ok(None) => return None,
+            Err(e) => return Some(e),
+        };
+        match self.drive_added_module_to_completion_blocking(added) {
+            Ok(()) => None,
+            Err(e) => Some(lazy_module_load_failed(processor_type, e)),
+        }
+    }
+
+    /// Drive a single [`AddedModule`] to completion from a synchronous caller,
+    /// variant-aware: `block_on` on an owned runtime, spawn-and-channel on an
+    /// external handle (can't `block_on` from a worker thread).
+    fn drive_added_module_to_completion_blocking(
+        &self,
+        added: AddedModule,
+    ) -> std::result::Result<(), AddModuleError> {
+        match &self.tokio_runtime_variant {
+            TokioRuntimeVariant::OwnedTokioRuntime(rt) => rt.block_on(added).map(|_| ()),
+            TokioRuntimeVariant::ExternalTokioHandle(handle) => {
+                let ident = added.ident().clone();
+                let (tx, rx) = std::sync::mpsc::channel();
+                handle.spawn(async move {
+                    let _ = tx.send(added.await);
+                });
+                match rx.recv() {
+                    Ok(result) => result.map(|_| ()),
+                    Err(_) => Err(AddModuleError::LoadTaskPanicked {
+                        module: ident,
+                        detail: "lazy load task channel closed".into(),
+                    }),
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod lazy_load_error_tests {
+    use super::*;
+
+    /// The recoverable lazy-load error names the referenced type, derives its
+    /// providing package `@org/name` from the type's own org + package, and
+    /// carries the underlying load-failure detail. Shared by the async and
+    /// blocking lazy paths.
+    #[test]
+    fn lazy_module_load_failed_names_type_package_and_detail() {
+        let processor_type = crate::core::descriptors::SchemaIdent::new(
+            streamlib_idents::Org::new("tatolab").unwrap(),
+            streamlib_idents::Package::new("camera").unwrap(),
+            streamlib_idents::TypeName::new("Camera").unwrap(),
+            streamlib_idents::SemVer::new(1, 0, 0),
+        );
+        let underlying = AddModuleError::ModuleNotFound {
+            package: streamlib_idents::PackageRef::new(
+                streamlib_idents::Org::new("tatolab").unwrap(),
+                streamlib_idents::Package::new("camera").unwrap(),
+            ),
+        };
+        match lazy_module_load_failed(&processor_type, underlying) {
+            crate::core::error::Error::LazyModuleLoadFailed {
+                processor_type: reported_type,
+                package,
+                detail,
+            } => {
+                assert_eq!(reported_type, processor_type);
+                assert_eq!(package.to_string(), "@tatolab/camera");
+                assert!(!detail.is_empty(), "the underlying reason must be carried");
+            }
+            other => panic!("expected LazyModuleLoadFailed, got {other:?}"),
+        }
     }
 }
