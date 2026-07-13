@@ -73,15 +73,18 @@ be produced by an `xtask` subcommand — it is emitted by the standalone shell
 script [`scripts/registry/emit-static-fork.sh`](../../scripts/registry/emit-static-fork.sh),
 which packages the fork from a standalone clone (the fork depends only on
 crates.io and its own siblings, never the workspace or a registry daemon) into a
-static file tree. CI serves it
-with `python3 -m http.server` and points cargo at it via
-`CARGO_REGISTRIES_TATOLAB_INDEX` (the `.github/actions/serve-static-fork`
-composite action starts the server FIRST and passes `STATIC_FORK_URL`, so the
-script skips its own throwaway server and resolves fork siblings through the
-exact tree being populated — no port coupling). Same-registry index deps (fork
-siblings, closure crates) omit the `registry` key — detected data-driven from
-the packaged manifest's `registry-index` key; crates.io deps name
-`https://github.com/rust-lang/crates.io-index`.
+static file tree. CI reshapes that sparse tree into a serverless cargo
+`local-registry` and points cargo at it via a `[source]` replacement — no
+running server: the [`.github/actions/cargo-fork-mirror`](../../.github/actions/cargo-fork-mirror/action.yml)
+composite action emits the fork (`emit-static-fork.sh` starts its own ~2s
+throwaway packaging server, which dies before workspace resolution), reshapes it
+with [`scripts/registry/emit-cargo-local-registry.sh`](../../scripts/registry/emit-cargo-local-registry.sh),
+and writes the replacement to the global cargo config. It deliberately does NOT
+export `CARGO_REGISTRIES_TATOLAB_INDEX` — an env index override shadows the
+`[source]` replacement and rewrites the fork's source id in the lockfile.
+Same-registry index deps (fork siblings, closure crates) omit the `registry`
+key — detected data-driven from the packaged manifest's `registry-index` key;
+crates.io deps name `https://github.com/rust-lang/crates.io-index`.
 
 The fork `.crate` tarballs are **byte-stable at the canonical URL**, so their
 checksums are frozen in the committed root `Cargo.lock`. `cargo package` bakes
@@ -103,8 +106,8 @@ on each emitted crate before rendering its sparse-index line, so the index
 checksum equals the served `.crate`'s sha256. `vulkanalia-sys` has no fork
 sibling → no port-coupled URL → it is left exactly as `cargo package` emits it
 (cargo's own byte-deterministic output on the Linux emit target); only
-`vulkanalia` and `vulkanalia-vma` are rewritten. The `serve-static-fork` CI
-action asserts each emitted fork index checksum equals the committed root
+`vulkanalia` and `vulkanalia-vma` are rewritten. The `cargo-fork-mirror` CI
+action asserts each mirror fork index checksum equals the committed root
 `Cargo.lock`, so a fork-rev bump without a lock regen fails fast. The result: a
 canonical-source-preserving `[source]`-replacement `local-registry` mirror
 resolves the fork `--locked --offline` with no `CARGO_REGISTRIES_TATOLAB_INDEX`
@@ -401,8 +404,11 @@ scripts/registry/serve-static-registry.sh <dir> [--port 8799]
 
 which starts `python3 -m http.server` on the tree root and prints the channels
 a consumer sets. `.slpkg` + in-process schema codegen and pypi read straight
-off `file://`; cargo + npm need a static HTTP mount (sparse + npm are HTTP-only
-by spec):
+off `file://`; npm needs a static HTTP mount (HTTP-only by spec). cargo over
+this served mount uses a `sparse+http` `[source]` replacement — or, for a
+serverless resolve, reshape the sparse tree into a `local-registry` and use the
+`file://` replacement instead (the cargo `[source]` blocks below show both
+shapes):
 
 ```bash
 # .slpkg generic store + in-process schema codegen (file://, tree root)
@@ -413,8 +419,43 @@ export UV_INDEX="file://<dir>/pypi/simple"
 #   @tatolab:registry=http://127.0.0.1:8799/npm/
 ```
 
-cargo resolves the `tatolab` registry from the served mount via a `[source]`
-replacement (which keeps the canonical source id in `Cargo.lock`):
+cargo resolves the `tatolab` registry via a `[source]` replacement, which keeps
+the canonical `sparse+https://registry.tatolab.com/cargo/` source id in
+`Cargo.lock`. There are two shapes, depending on whether a server is running.
+
+**Serverless (`local-registry`, `file://` — no server).** The cargo *sparse*
+protocol is HTTP-only, but a cargo `local-registry` is a distinct source kind
+that reads straight off disk. Reshape the sparse `cargo/` subtree into one with
+[`scripts/registry/emit-cargo-local-registry.sh`](../../scripts/registry/emit-cargo-local-registry.sh)
+— it flattens the `.crate` tarballs to the registry root and copies each sparse
+index shard verbatim (a sparse index NDJSON line is byte-identical to a
+local-registry index line, both carrying `cksum`), dropping `config.json` — then
+point `tatolab` at it:
+
+```toml
+[source.tatolab]
+registry = "sparse+https://registry.tatolab.com/cargo/"
+replace-with = "tatolab-local-registry"
+[source.tatolab-local-registry]
+local-registry = "<dir>/cargo-local-registry"
+```
+
+`cargo … --locked --offline` then resolves the fork (and any emitted closure
+crate) from this mirror with **no HTTP server** and **no
+`CARGO_REGISTRIES_TATOLAB_INDEX` override** — the override would shadow the
+replacement and rewrite the source id in `Cargo.lock`, so it must stay unset.
+This works only because the emitted `.crate`s are byte-stable at the canonical
+URL (see [the fork section](#the-vulkanalia-fork-is-mandatory)), so their
+checksums match the committed lock. CI uses exactly this: the
+[`.github/actions/cargo-fork-mirror`](../../.github/actions/cargo-fork-mirror/action.yml)
+composite action emits the fork, reshapes it, writes this replacement to the
+global cargo config, and asserts each mirror checksum equals the committed
+`Cargo.lock` before any `--locked` resolve runs. It is also the offline path an
+external consumer rides.
+
+**Served mount (`sparse+http`).** When the tree is already served over a dumb
+HTTP mount (`serve-static-registry.sh` runs `python3 -m http.server`), point
+`tatolab` at the sparse index over that mount instead — no reshape needed:
 
 ```toml
 [source.tatolab]
@@ -440,9 +481,10 @@ consumer never hand-writes any of the above — is **planned**.
 - **Fork bootstrap**: `scripts/registry/emit-static-fork.sh`,
   `scripts/registry/render_cargo_index_line.py`,
   `scripts/registry/normalize_fork_crate.py` (canonical-URL byte-stable
-  rewrite).
+  rewrite), `scripts/registry/emit-cargo-local-registry.sh` (sparse →
+  serverless `local-registry` reshape).
 - **Generator CLI**: `cargo xtask static-registry emit`.
 - **`.slpkg` `file://` transport**: `libs/streamlib-idents/src/registry.rs`.
-- **CI**: `.github/actions/serve-static-fork`, `.github/workflows/static-registry.yml`.
+- **CI**: `.github/actions/cargo-fork-mirror`, `.github/workflows/static-registry.yml`.
 - **The two loops** this registry serves:
   [`package-development-model.md`](package-development-model.md).
