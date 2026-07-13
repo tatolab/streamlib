@@ -327,6 +327,7 @@ impl PolyglotBuildOrchestrator {
         python_venv::provision_python_venv(
             &temp_dir,
             active_link.as_ref().map(|l| l.python_sdk_path.as_path()),
+            active_link.as_ref().map(|l| l.checkout.as_path()),
             &pkg_label,
         )
         .map_err(|e| {
@@ -339,7 +340,12 @@ impl PolyglotBuildOrchestrator {
         // bundled source as a per-consumer artifact, so it must be rebuilt
         // here — the Deno mirror of the Python venv codegen above. Building
         // into `temp_dir` lets the atomic rename below carry it into place.
-        deno_codegen::provision_deno_typescript(&temp_dir, &pkg_label).map_err(|e| {
+        deno_codegen::provision_deno_typescript(
+            &temp_dir,
+            active_link.as_ref().map(|l| l.checkout.as_path()),
+            &pkg_label,
+        )
+        .map_err(|e| {
             let _ = std::fs::remove_dir_all(&temp_dir);
             e
         })?;
@@ -971,6 +977,7 @@ mod tests {
             schema_dir: None,
             workspace_root: streamlib_dir.clone(),
             write_lockfile: false,
+            link_checkout: None,
         })
         .expect("standalone codegen must succeed against the same installed manifest");
 
@@ -1023,6 +1030,121 @@ mod tests {
             discover_active_build_link_from(dir.path(), "tatolab/x")
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    /// The orchestrator's in-process `generate()` codegen (the venv +
+    /// deno_codegen paths) is LINK-AUTHORITATIVE: it resolves the checkout from
+    /// the caller-supplied `link_checkout`, NEVER by walking up from
+    /// `project_dir` to a marker. This is the polyglot mirror of the Rust
+    /// suppression boundary — a relocated venv/deno codegen runs in the
+    /// orchestrator's own process (so the child-env sentinel that guards the
+    /// Rust `build.rs` can't reach it), and `project_dir` sits under the staged
+    /// cache whose `.streamlib` dir name collides with the link-state dir, so an
+    /// unconditional marker walk-up would redirect a distribution build to a dev
+    /// checkout.
+    ///
+    /// Setup: a stray `.streamlib/link.json` marker sits UP-TREE of
+    /// `project_dir`, pointing at a checkout that provides `@tatolab/core`; no
+    /// registry is configured. Case A (`link_checkout = None`, the distribution /
+    /// non-linked build) must NOT redirect — with no registry the bare range is
+    /// unresolvable, so `generate` errors. Mentally-revert the explicit-link
+    /// threading (fall back to `from_env_or_marker(&project_dir)` inside
+    /// `generate`) and Case A resolves `@tatolab/core` from the marker's checkout
+    /// and SUCCEEDS — failing the `is_err()` assertion. Case B
+    /// (`link_checkout = Some(checkout)`) must keep resolving from the checkout so
+    /// the linked polyglot path is not regressed.
+    #[test]
+    #[serial]
+    fn generate_is_link_authoritative_not_marker_discovered() {
+        // A checkout providing @tatolab/core. Schema-less: it resolves cleanly,
+        // and the schema-less project below yields an empty codegen task set, so
+        // the whole test is independent of the external jtd-codegen binary.
+        let checkout = tempfile::tempdir().unwrap();
+        let core = checkout.path().join("packages").join("core");
+        std::fs::create_dir_all(&core).unwrap();
+        std::fs::write(
+            core.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: core\n  version: 1.0.0\n",
+        )
+        .unwrap();
+
+        // Consumer root carrying a stray link marker UP-TREE of the project dir.
+        let consumer = tempfile::tempdir().unwrap();
+        write_link_marker(consumer.path(), checkout.path(), false);
+        let project_dir = consumer.path().join("app").join("proj");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(
+            project_dir.join("streamlib.yaml"),
+            "dependencies:\n  \"@tatolab/core\": \"^1.0.0\"\n",
+        )
+        .unwrap();
+
+        // Precondition: the marker IS discoverable up-tree, so a redirect (if the
+        // code walked up) would resolve @tatolab/core from the checkout — this is
+        // what makes Case A's Err prove suppression, not mere absence.
+        assert!(
+            streamlib_idents::link_marker::find_active_link_marker(&project_dir).is_some(),
+            "test setup: a stray marker must be discoverable up-tree of project_dir"
+        );
+
+        let out = tempfile::tempdir().unwrap();
+
+        // Control the env: no registry (so a non-link resolve of the bare range
+        // fails loud) and no ambient link env. SAFETY: `#[serial]` serializes the
+        // env-mutating tests.
+        let prev_registry = std::env::var_os("STREAMLIB_REGISTRY_URL");
+        let prev_link = std::env::var_os(streamlib_idents::LINK_CHECKOUT_ENV);
+        unsafe {
+            std::env::remove_var("STREAMLIB_REGISTRY_URL");
+            std::env::remove_var(streamlib_idents::LINK_CHECKOUT_ENV);
+        }
+
+        // Case A — authoritative NO link (distribution / non-linked build).
+        let no_link = streamlib_jtd_codegen::generate(streamlib_jtd_codegen::GenerateOptions {
+            runtime: streamlib_jtd_codegen::RuntimeTarget::Rust,
+            output: out.path().join("no_link"),
+            project_dir: Some(project_dir.clone()),
+            schema_file: None,
+            schema_dir: None,
+            workspace_root: project_dir.clone(),
+            write_lockfile: false,
+            link_checkout: None,
+        });
+
+        // Case B — authoritative link ACTIVE (the caller supplies the checkout).
+        let with_link = streamlib_jtd_codegen::generate(streamlib_jtd_codegen::GenerateOptions {
+            runtime: streamlib_jtd_codegen::RuntimeTarget::Rust,
+            output: out.path().join("with_link"),
+            project_dir: Some(project_dir.clone()),
+            schema_file: None,
+            schema_dir: None,
+            workspace_root: project_dir,
+            write_lockfile: false,
+            link_checkout: Some(checkout.path().to_path_buf()),
+        });
+
+        unsafe {
+            match prev_registry {
+                Some(v) => std::env::set_var("STREAMLIB_REGISTRY_URL", v),
+                None => std::env::remove_var("STREAMLIB_REGISTRY_URL"),
+            }
+            match prev_link {
+                Some(v) => std::env::set_var(streamlib_idents::LINK_CHECKOUT_ENV, v),
+                None => std::env::remove_var(streamlib_idents::LINK_CHECKOUT_ENV),
+            }
+        }
+
+        assert!(
+            no_link.is_err(),
+            "link_checkout=None must NOT resolve @tatolab/core from a stray up-tree \
+             marker (no registry ⇒ unresolvable). Reverting to marker discovery makes \
+             this Ok and reintroduces the distribution→dev-checkout redirect."
+        );
+        assert!(
+            with_link.is_ok(),
+            "link_checkout=Some(checkout) must resolve @tatolab/core from the checkout — \
+             the linked polyglot path must not regress: {with_link:?}"
         );
     }
 

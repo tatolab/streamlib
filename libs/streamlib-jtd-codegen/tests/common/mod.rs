@@ -69,6 +69,7 @@ pub fn run_project_codegen(runtime: RuntimeTarget, output: &Path) {
         schema_dir: None,
         workspace_root: workspace_root(),
         write_lockfile: false,
+        link_checkout: None,
     })
     .expect("generate project codegen");
 }
@@ -84,6 +85,7 @@ pub fn run_single_schema_codegen(runtime: RuntimeTarget, schema_file: &Path, out
         schema_dir: None,
         workspace_root: workspace_root(),
         write_lockfile: false,
+        link_checkout: None,
     })
     .expect("generate single-schema codegen");
 }

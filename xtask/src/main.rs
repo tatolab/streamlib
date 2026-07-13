@@ -250,15 +250,23 @@ fn main() -> Result<()> {
             project_dir,
             schema_file,
             schema_dir,
-        } => generate(GenerateOptions {
-            runtime,
-            output,
-            project_dir,
-            schema_file,
-            schema_dir,
-            workspace_root: workspace_root()?,
-            write_lockfile: true,
-        })?,
+        } => {
+            // Human-run codegen (like the `streamlib generate` CLI): resolve the
+            // active `streamlib link` checkout marker-first from the project dir.
+            let link_checkout = project_dir
+                .as_deref()
+                .and_then(|d| streamlib_idents::ResolverOptions::from_env_or_marker(d).link_checkout);
+            generate(GenerateOptions {
+                runtime,
+                output,
+                project_dir,
+                schema_file,
+                schema_dir,
+                workspace_root: workspace_root()?,
+                write_lockfile: true,
+                link_checkout,
+            })?
+        }
         Commands::LintLogging => lint_logging::run(&workspace_root()?)?,
         Commands::CheckBoundaries => check_boundaries::run(&workspace_root()?)?,
         Commands::CheckSchemaVersions => check_schema_versions::run(&workspace_root()?)?,
