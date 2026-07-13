@@ -2,8 +2,8 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 #
-# Cargo sparse-index path grammar — the single bash implementation, shared by
-# emit-static-fork.sh (sourced) and probeable standalone for the
+# Cargo sparse-index path grammar — the single bash implementation, sourceable
+# by registry shell tooling and probeable standalone for the
 # cross-implementation golden test against Rust's
 # `streamlib_pack::static_registry::cargo_index_path`:
 #

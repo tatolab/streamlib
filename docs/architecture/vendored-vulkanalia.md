@@ -62,7 +62,11 @@ The vendored copy is byte-identical to the fork rev except:
 1. **Manifest edits** — package renames, `[lib]` name pins,
    `readme = "README.md"` (the fork pointed at a repo-root README),
    sibling deps rewritten to
-   `{ package = "tatolab-…", path = "../tatolab-…", version, registry = "tatolab" }`.
+   `{ package = "tatolab-…", path = "../tatolab-…", version, registry = "tatolab" }`,
+   and `[lib] doctest = false` on `tatolab-vulkanalia` (its `bytecode.rs`
+   doctests `include_bytes!` shader fixtures from the fork repo's
+   `tutorial/` + `examples/` dirs, which the trim rule drops; the unit
+   tests in `tests/builders.rs` are the behavior lock instead).
 2. **`src/vk/builders.rs` (`tatolab-vulkanalia`)** — one token,
    `std::mem::size_of` → `core::mem::size_of` in
    `ShaderModuleCreateInfoBuilder::code`. The fork's code_size fix used

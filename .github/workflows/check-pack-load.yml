@@ -121,8 +121,7 @@ jobs:
           git restore Cargo.lock
 
       - name: Configure the serverless [source] replacement (global cargo config)
-        # Inlined from the retired cargo-fork-mirror composite action. GLOBAL
-        # config (not the repo .cargo/config.toml) so the out-of-tree
+        # GLOBAL config (not the repo .cargo/config.toml) so the out-of-tree
         # `cargo` build (check-pack-load's staged .slpkg, which
         # config-discovers from its own temp cwd) sees the replacement. The
         # workspace build itself doesn't need it — vulkanalia resolves by

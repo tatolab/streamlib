@@ -58,69 +58,35 @@ The cargo `config.json` `dl`/`api` and the npm `dist.tarball` are absolute URLs
 the `.crate`/`.tgz`/sdist/`.slpkg` bytes and the index files themselves are
 relocatable.
 
-## The vulkanalia fork is mandatory
+## The workspace release closure
 
-The workspace declares `vulkanalia = { registry = "tatolab" }`. The canonical
-index URL is baked into the committed `Cargo.lock`, but the fork
-(`vulkanalia`, `vulkanalia-sys`, `vulkanalia-vma`) still has to be *fetchable*
-from a mirror of the tree — **no `cargo` command in the workspace resolves —
-not even `cargo run -p xtask`** — until it is. Local / CI builds point cargo at
-a served mirror via a cargo `[source]` replacement (source replacement keeps
-the canonical source id in the lockfile) or `CARGO_REGISTRIES_TATOLAB_INDEX`.
+> Section on the fork-mirror bootstrap ("The vulkanalia fork is
+> mandatory") removed 2026-07-13 — the vulkanalia fork is vendored at
+> `libs/tatolab-vulkanalia*` (see
+> [`vendored-vulkanalia.md`](vendored-vulkanalia.md)) and resolves by
+> path, so the workspace (xtask included) builds with zero registry
+> configuration. The standalone fork emitter
+> (`emit-static-fork.sh`), its byte-stable crate normalizer
+> (`normalize_fork_crate.py`), and the `cargo-fork-mirror` CI
+> composite action were deleted with it; the committed `Cargo.lock`
+> carries no tatolab-registry source lines. The vendored crates
+> publish through the closure emit below like any other member. The
+> normalizer's hand-framed-gzip byte-stability technique survives in
+> `crate_tarball::finalize_crate_tarball` (see [Byte-stable crate
+> emission](#byte-stable-crate-emission)).
 
-Because building `xtask` itself requires the fork, the fork's cargo tree cannot
-be produced by an `xtask` subcommand — it is emitted by the standalone shell
-script [`scripts/registry/emit-static-fork.sh`](../../scripts/registry/emit-static-fork.sh),
-which packages the fork from a standalone clone (the fork depends only on
-crates.io and its own siblings, never the workspace or a registry daemon) into a
-static file tree. CI reshapes that sparse tree into a serverless cargo
-`local-registry` and points cargo at it via a `[source]` replacement — no
-running server: the [`.github/actions/cargo-fork-mirror`](../../.github/actions/cargo-fork-mirror/action.yml)
-composite action emits the fork (`emit-static-fork.sh` starts its own ~2s
-throwaway packaging server, which dies before workspace resolution), reshapes it
-with [`scripts/registry/emit-cargo-local-registry.sh`](../../scripts/registry/emit-cargo-local-registry.sh),
-and writes the replacement to the global cargo config. It deliberately does NOT
-export `CARGO_REGISTRIES_TATOLAB_INDEX` — an env index override shadows the
-`[source]` replacement and rewrites the fork's source id in the lockfile.
-Same-registry index deps (fork siblings, closure crates) omit the `registry`
-key — detected data-driven from the packaged manifest's `registry-index` key;
-crates.io deps name `https://github.com/rust-lang/crates.io-index`.
-
-The fork `.crate` tarballs are **byte-stable at the canonical URL**, so their
-checksums are frozen in the committed root `Cargo.lock`. `cargo package` bakes
-the ephemeral serving-port index into each fork-sibling reference — the
-`registry-index` of `Cargo.toml` and the `source` of the bundled `Cargo.lock`
-both record `sparse+http://127.0.0.1:PORT/cargo/`, which makes the tarball's
-checksum port-coupled. `scripts/registry/normalize_fork_crate.py` rewrites those
-URLs to the canonical `[registries.tatolab]` index
-(`sparse+https://registry.tatolab.com/cargo/`, the single source of truth, read
-from `.cargo/config.toml`), drops any `.cargo_vcs_info.json`, re-tars (GNU
-format, cargo's headers cloned verbatim), and re-gzips as a **hand-framed** gzip
-stream — fixed 10-byte header (OS=0xff "unknown", XFL=0, MTIME=0), raw level-0
-(STORED) DEFLATE body, CRC32/ISIZE trailer. Hand-framing (rather than
-`gzip.compress`, whose OS byte is the emit host's zlib OS_CODE — `0x03` on
-Linux, other values elsewhere) makes the two rewritten crates byte-identical
-across operating system, zlib version, and Python version, so their committed
-checksums reproduce on any emit host. `emit-static-fork.sh` runs the normalizer
-on each emitted crate before rendering its sparse-index line, so the index
-checksum equals the served `.crate`'s sha256. `vulkanalia-sys` has no fork
-sibling → no port-coupled URL → it is left exactly as `cargo package` emits it
-(cargo's own byte-deterministic output on the Linux emit target); only
-`vulkanalia` and `vulkanalia-vma` are rewritten. The `cargo-fork-mirror` CI
-action asserts each mirror fork index checksum equals the committed root
-`Cargo.lock`, so a fork-rev bump without a lock regen fails fast. The result: a
-canonical-source-preserving `[source]`-replacement `local-registry` mirror
-resolves the fork `--locked --offline` with no `CARGO_REGISTRIES_TATOLAB_INDEX`
-override.
-
-The **workspace release closure** rides the same tree via
+The **workspace release closure** rides the tree via
 `cargo xtask static-registry emit --cargo-closure`: each closure crate is
 `cargo package`d in topo order against an ephemeral static server on the
-staging tree itself (each crate resolves its already-emitted siblings + the
-fork from the growing staging index; `cargo package` validates registry deps
+staging tree itself (each crate resolves its already-emitted siblings —
+the vendored `tatolab-vulkanalia*` crates are ordinary closure members —
+from the growing staging index; `cargo package` validates registry deps
 at package time). Versions always follow the crates' actual manifests — a
 `--dev` emit expects the workspace manifests already bumped (the publish
-scripts' bump/restore convention).
+scripts' bump/restore convention). Same-registry index deps omit the
+`registry` key — detected data-driven from the packaged manifest's
+`registry-index` key; crates.io deps name
+`https://github.com/rust-lang/crates.io-index`.
 
 Per-crate `.crate` tarballs are **always repackaged, never reused from a
 content cache** (`streamlib_pack::crate_tarball::obtain_crate_tarball`).
@@ -254,7 +220,7 @@ requires to change published source — a silent same-version source change is
 refused. The emit itself carries no stale-cache risk at any version:
 `emit_cargo_closure` always repackages each closure crate from current source
 (`target/package` is cargo scratch, not a trusted content cache — see [the
-fork section](#the-vulkanalia-fork-is-mandatory)), so even a same-version
+closure section](#the-workspace-release-closure)), so even a same-version
 re-emit reflects current source. Clearing `target/package` before a CI emit is
 therefore redundant belt-and-suspenders, not a correctness requirement.
 
@@ -372,12 +338,12 @@ aren't copied by the assembler), not gated by a runtime check.
 ```
 cargo xtask static-registry emit --out <dir> [--dev N] \
     [--base-url http://127.0.0.1:PORT] \
-    [--cargo-closure] [--no-cargo-fork] [--no-pypi] [--no-npm] [--no-slpkg]
+    [--cargo-closure] [--no-pypi] [--no-npm] [--no-slpkg]
 ```
 
-- The vulkanalia fork cargo tree is always emitted (unless `--no-cargo-fork`).
-- `--cargo-closure` additionally packages every workspace release-closure crate
-  into the cargo tree (heavy).
+- `--cargo-closure` packages every workspace release-closure crate
+  into the cargo tree (heavy). The vendored `tatolab-vulkanalia*` crates are
+  ordinary closure members; there is no separate fork emit.
 - pypi (uv sdist) and npm (deno pack) reuse the SDK build toolchains; `.slpkg`
   packages are assembled via `streamlib pkg build` semantics and the release
   manifest is written last.
@@ -440,18 +406,19 @@ replace-with = "tatolab-local-registry"
 local-registry = "<dir>/cargo-local-registry"
 ```
 
-`cargo … --locked --offline` then resolves the fork (and any emitted closure
-crate) from this mirror with **no HTTP server** and **no
+An out-of-tree consumer's `cargo … --locked --offline` then resolves any
+emitted closure crate from this mirror with **no HTTP server** and **no
 `CARGO_REGISTRIES_TATOLAB_INDEX` override** — the override would shadow the
-replacement and rewrite the source id in `Cargo.lock`, so it must stay unset.
-This works only because the emitted `.crate`s are byte-stable at the canonical
-URL (see [the fork section](#the-vulkanalia-fork-is-mandatory)), so their
-checksums match the committed lock. CI uses exactly this: the
-[`.github/actions/cargo-fork-mirror`](../../.github/actions/cargo-fork-mirror/action.yml)
-composite action emits the fork, reshapes it, writes this replacement to the
-global cargo config, and asserts each mirror checksum equals the committed
-`Cargo.lock` before any `--locked` resolve runs. It is also the offline path an
-external consumer rides.
+replacement and rewrite the source id in the consumer's lockfile, so it must
+stay unset. The emitted `.crate`s are byte-stable at the canonical URL (see
+[Byte-stable crate emission](#byte-stable-crate-emission)), so a consumer's
+locked checksums stay valid across re-emits. CI uses exactly this: the
+check-pack-load workflow closure-emits, reshapes, and writes this replacement
+to the global cargo config so its out-of-tree staged-package build resolves
+`registry = "tatolab"` deps serverlessly. It is also the offline path an
+external consumer rides. (The workspace itself never needs the mirror — the
+vendored `libs/tatolab-vulkanalia*` crates and every internal cross-crate dep
+resolve by path.)
 
 **Served mount (`sparse+http`).** When the tree is already served over a dumb
 HTTP mount (`serve-static-registry.sh` runs `python3 -m http.server`), point
@@ -478,13 +445,14 @@ consumer never hand-writes any of the above — is **planned**.
   `crate_content_fingerprint`, `finalize_crate_tarball`).
 - **Catalog**: `libs/streamlib-idents/src/catalog.rs` (protocol surface +
   `CatalogClient`), `libs/streamlib-pack/src/catalog.rs` (assembly).
-- **Fork bootstrap**: `scripts/registry/emit-static-fork.sh`,
+- **Index-line renderer + reshape scripts**:
   `scripts/registry/render_cargo_index_line.py`,
-  `scripts/registry/normalize_fork_crate.py` (canonical-URL byte-stable
-  rewrite), `scripts/registry/emit-cargo-local-registry.sh` (sparse →
-  serverless `local-registry` reshape).
+  `scripts/registry/emit-cargo-local-registry.sh` (sparse → serverless
+  `local-registry` reshape).
 - **Generator CLI**: `cargo xtask static-registry emit`.
 - **`.slpkg` `file://` transport**: `libs/streamlib-idents/src/registry.rs`.
-- **CI**: `.github/actions/cargo-fork-mirror`, `.github/workflows/static-registry.yml`.
+- **CI**: `.github/workflows/static-registry.yml`,
+  `.github/workflows/check-pack-load.yml` (closure emit + serverless
+  `[source]`-replacement consumer).
 - **The two loops** this registry serves:
   [`package-development-model.md`](package-development-model.md).

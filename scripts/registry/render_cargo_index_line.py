@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: BUSL-1.1
 #
 # Render ONE cargo sparse-index NDJSON line for a crate, from the normalized
-# Cargo.toml embedded in its `.crate` tarball. Used by emit-static-fork.sh to
-# build a daemon-free static cargo index for the tatolab/vulkanalia fork.
+# Cargo.toml embedded in its `.crate` tarball. The single source of truth for
+# the index-line shape; the xtask closure emit shells out to it per crate.
 #
 # Env in:  NAME, VERSION, CKSUM (sha256 hex of the .crate), CRATE (path to it)
 # stdout:  a single NDJSON line + trailing newline (cargo sparse index format).

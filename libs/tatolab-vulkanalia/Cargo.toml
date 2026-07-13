@@ -21,6 +21,11 @@ categories = ["graphics"]
 [lib]
 
 name = "vulkanalia"
+# The bytecode.rs doctests include_bytes! shader fixtures from the fork
+# repo's tutorial/ + examples/ dirs, which are deliberately not vendored
+# (see docs/architecture/vendored-vulkanalia.md — the trim rule). The
+# crate's behavior is locked by its unit tests (tests/builders.rs) instead.
+doctest = false
 
 [features]
 
