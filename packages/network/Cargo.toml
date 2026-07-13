@@ -5,7 +5,7 @@
 # independently to the static registry and resolves every dependency by
 # version from it — no workspace inheritance, no `path` deps. The empty
 # `[workspace]` table makes it its own workspace root so it builds off-tree
-# (e.g. inside the package cache during `pkg install`) without being mistaken
+# (e.g. inside the package cache during `streamlib add`) without being mistaken
 # for a stray member of an enclosing workspace.
 [package]
 name = "streamlib-network"

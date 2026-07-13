@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+mod add;
 mod graph_change_listener;
 mod install;
 mod module_loader;
@@ -11,6 +12,9 @@ mod runtime;
 mod runtime_unique_id;
 mod status;
 
+pub use add::{
+    add, add_slpkg, remove, AddError, AddOptions, AddReport, RemoveError, RemoveReport,
+};
 pub use install::{install, InstallError, InstallOptions, InstallReport};
 pub use module_loader::{
     extract_slpkg_to_cache, host_target_triple, AddModuleError, AddedModule, ArtifactChecksum,

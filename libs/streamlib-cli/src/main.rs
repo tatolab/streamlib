@@ -87,8 +87,9 @@ enum Commands {
     /// application lockfile. A subsequent run loads the pinned set offline via
     /// `Runner::add_modules_from_lockfile`.
     ///
-    /// To install a single package artifact (a `.slpkg`, URL, or registry
-    /// ref) rather than a project tree, use `streamlib pkg install`.
+    /// To adopt a single published package (resolve by version + materialize
+    /// into the local cache) rather than resolve a project tree, use
+    /// `streamlib add`.
     Install {
         /// Project directory (default: current working directory).
         project_dir: Option<PathBuf>,
@@ -96,6 +97,30 @@ enum Commands {
         /// Lockfile output path (default: <project_dir>/streamlib-app.lock).
         #[arg(long)]
         lockfile: Option<PathBuf>,
+    },
+
+    /// Add a single published package to the local installed set — the
+    /// `npm install <pkg>` of streamlib.
+    ///
+    /// Resolves `@org/name[@version-req]` to a concrete version from the
+    /// registry (zero config needed — it defaults to the first-party tree),
+    /// materializes it into the installed-package cache the runtime reads from,
+    /// records it in `packages.yaml`, and prints a catalog-backed summary of
+    /// the processors it contributes and their typed ports. Afterward a bare
+    /// `runtime.add_module(ident)` finds it offline. Also accepts a local
+    /// `.slpkg` path or an HTTP(S) URL. Touches no app code / app manifest /
+    /// app lockfile — for that, use `streamlib install`.
+    Add {
+        /// `@org/name[@version-req]` | path to a `.slpkg` | HTTP(S) URL
+        spec: String,
+    },
+
+    /// Remove a single package from the local installed set.
+    ///
+    /// Un-records `@org/name` from `packages.yaml` and evicts its cache slot.
+    Remove {
+        /// Canonical `@org/name` reference to remove.
+        name: String,
     },
 
     /// Manage installed packages
@@ -180,7 +205,7 @@ enum PkgCommands {
     ///
     /// Bundles source only — no compilation, no prebuilt cdylib, nothing
     /// path-related. The consumer builds it from source on their host
-    /// (`pkg install` / runtime registry resolution), pulling every dep
+    /// (`streamlib add` / runtime registry resolution), pulling every dep
     /// from the registry. The artifact is for hand-off (email it, hand it to
     /// a runtime); `publish` repacks independently.
     Build {
@@ -200,14 +225,6 @@ enum PkgCommands {
     /// Remove THIS package's build/pack artifacts (run inside the package):
     /// any `*.slpkg`, the prebuilt `lib/` dir, and generated `_generated_/` trees.
     Clean,
-    /// Install a package: a registry ref `@org/name[@version]` (resolved from
-    /// the registry and built from source), a local `.slpkg` path, or an HTTP URL.
-    /// To resolve + lock a whole project tree (with an application lockfile
-    /// for offline runs), use the top-level `streamlib install` instead.
-    Install {
-        /// `@org/name[@version]` | path to a `.slpkg` | HTTP URL
-        source: String,
-    },
     /// Inspect a .slpkg package (show manifest without installing)
     Inspect {
         /// Path to .slpkg file
@@ -215,11 +232,6 @@ enum PkgCommands {
     },
     /// List installed packages
     List,
-    /// Remove an installed package
-    Remove {
-        /// Package name to remove
-        name: String,
-    },
 }
 
 fn main() -> Result<()> {
@@ -278,14 +290,14 @@ async fn async_main(cli: Cli) -> Result<()> {
             project_dir,
             lockfile,
         }) => commands::install::run(project_dir.as_deref(), lockfile)?,
+        Some(Commands::Add { spec }) => commands::add::add(&spec).await?,
+        Some(Commands::Remove { name }) => commands::add::remove(&name)?,
         Some(Commands::Pkg { action }) => match action {
             PkgCommands::Build { output } => commands::pkg::build(output.as_deref())?,
             PkgCommands::Publish => commands::pkg::publish()?,
             PkgCommands::Clean => commands::pkg::clean()?,
-            PkgCommands::Install { source } => commands::pkg::install(&source).await?,
             PkgCommands::Inspect { path } => commands::pkg::inspect(&path)?,
             PkgCommands::List => commands::pkg::list()?,
-            PkgCommands::Remove { name } => commands::pkg::remove(&name)?,
         },
         Some(Commands::Link {
             checkout,

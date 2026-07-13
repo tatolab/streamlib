@@ -16,8 +16,8 @@ pub enum AddModuleError {
     #[error(
         "Module '{package}' not found in the installed-package cache. \
          Load it from source with `add_module_with(_, Strategy::Path {{ build: \
-         BuildPolicy::IfStale, .. }})` (dev / runtime-authoring), or install it \
-         with `streamlib pkg install <slpkg>` (distribution)."
+         BuildPolicy::IfStale, .. }})` (dev / runtime-authoring), or add it \
+         with `streamlib add @org/name` (distribution)."
     )]
     ModuleNotFound {
         package: streamlib_idents::PackageRef,

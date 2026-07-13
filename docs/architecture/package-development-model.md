@@ -262,6 +262,26 @@ lockfile. The release-completeness check *rides* materialize — a partial
 registry release fails install before any lockfile is written. Network at
 install time is expected.
 
+**`add` / `remove` — single-package adoption (the `npm install <pkg>`).**
+`add(pkg_ref, version_req, orchestrator, sink, options)`
+([`libs/streamlib-engine/src/core/runtime/add.rs`](../../libs/streamlib-engine/src/core/runtime/add.rs),
+CLI `streamlib add`) adopts ONE published package: it resolves the range to a
+concrete version from the registry, materializes that version into the
+installed-package cache (`cache/packages/<name>-<version>`), and records it in
+the installed-set record `packages.yaml` (`InstalledPackageManifest`). It does
+**not** touch app code, any app `streamlib.yaml`, or `streamlib-app.lock` —
+that is `install`'s job. Afterward a bare `Runner::add_module(ident)`
+(`Strategy::InstalledCache`) finds the package offline. `add` returns a
+catalog-backed report — the package's processors and their typed ports, read
+from the registry catalog artifacts (a catalog-less tree degrades to "no
+catalog metadata", the add still succeeds). It also accepts a local `.slpkg`
+(`add_slpkg`). Registry config resolves `options.registry → from_env →
+DEFAULT_REGISTRY_URL`, so the bare CLI works with zero configuration.
+`remove(pkg_ref)` (CLI `streamlib remove`) reverses it: un-record from
+`packages.yaml`, evict the cache slot. `add` / `remove` are the per-package
+front door; `install` is the whole-app-tree front door — both feed the same
+installed-package cache the runtime loads from.
+
 **Locked run — offline, pinned, verified.**
 `Runner::add_modules_from_lockfile` builds a `LockedResolution` from the
 lockfile and forces every dependency edge through it: each edge becomes a
@@ -336,6 +356,11 @@ Stated honestly; verify against current code before relying on any.
   `libs/streamlib-engine/src/core/runtime/module_loader/locked.rs`,
   `libs/streamlib-idents/src/lockfile.rs`,
   `libs/streamlib-engine/src/core/streamlib_home.rs`.
+- **Add / remove (single-package adoption)**:
+  `libs/streamlib-engine/src/core/runtime/add.rs`,
+  `libs/streamlib-engine/src/core/config/installed_packages_manifest.rs`
+  (`packages.yaml`), `libs/streamlib-cli/src/commands/add.rs` (CLI wrapper +
+  catalog summary), `libs/streamlib-idents/src/catalog.rs` (`CatalogClient`).
 - **Related docs**: [`runtime-module-materialization.md`](runtime-module-materialization.md)
   (the one materialize path), [`static-registry.md`](static-registry.md)
   (the static registry backend, by-version resolution + catalog),

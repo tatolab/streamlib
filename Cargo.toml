@@ -43,7 +43,7 @@ members = [
     # from the static registry by version, and each carries its own
     # `[workspace]` self-root. Only `libs/*` + `xtask` form this workspace.
     # Build a package/example with `cd <dir> && cargo build`, or via
-    # `streamlib pkg install` / runtime `Strategy::Registry` for packages.
+    # `streamlib add` / runtime `Strategy::Registry` for packages.
     # Exception to the "packages/* are not members" rule above: the
     # test-fixtures packages are INTERNAL test infrastructure, not
     # distributable units. The engine integration tests build them in-place
