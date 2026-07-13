@@ -1,10 +1,12 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Grayscale video-effect package — a Rust-backed processor loaded as a
-//! cdylib via `runtime.add_module_with(..., Strategy::Path)` against this
-//! crate's `streamlib.yaml`. The cdylib's `STREAMLIB_PLUGIN` callback
-//! registers the `GrayscaleRust` processor with the host registry.
+//! Grayscale video-effect package — a Rust-backed cdylib processor. The
+//! package is linked into the consuming app's `streamlib_modules/` (via
+//! `streamlib link ./plugin`) and the runtime lazily discovers + loads this
+//! cdylib on the first `processor_type_ref!` reference to it; its
+//! `STREAMLIB_PLUGIN` callback then registers the `GrayscaleRust` processor
+//! with the host registry.
 //!
 //! The Linux implementation ([`grayscale_linux`]) samples the input
 //! camera texture through a sandboxed graphics kernel and writes a

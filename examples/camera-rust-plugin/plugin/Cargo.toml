@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BUSL-1.1
 
 # Member of the standalone `camera-rust-plugin` workspace — inherits its
-# `[workspace.package]` fields and resolves every dependency from the registry
+# `[workspace.package]` fields and resolves every dependency by version
 # via `[workspace.dependencies]`. No path deps.
 [package]
 name = "grayscale-plugin"
