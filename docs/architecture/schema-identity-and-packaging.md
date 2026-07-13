@@ -448,18 +448,27 @@ The package-internal short-name pattern
 name resolved against the enclosing `streamlib.yaml`'s `package:`
 block, exposed via `Processor::schema_ident()`) is the canonical
 shorthand mechanism for **owning** a processor's identity inside its
-own crate. Two convenience macros sit alongside it for **referencing**
+own crate. Three macros sit alongside it for **referencing**
 processors at a call site (typically the spawning binary that doesn't
 own the processor's Rust module):
 
+- **`streamlib::sdk::processor_type_ref!("org", "package", "Type")`**
+  — the default reference form for the no-load-call world. Validates
+  `(org, package, type)` at compile time and expands to a **version-free**
+  `ProcessorTypeReference::ResolveToInstalled` value with **no registry
+  lookup at the call site**. Passed to `ProcessorSpec::new`, it reaches
+  `add_processor`'s lazy hook and resolves to the single installed
+  provider — loading its package from `streamlib_modules/` on first
+  reference. This is what app code uses: no `add_module`, no version at
+  the reference site. Every example uses it.
 - **`streamlib::sdk::schema_ident_any_version!("org", "package", "Type")`**
-  — the default reference form. Validates `(org, package, type)` at
-  compile time; resolves the version at runtime against the global
-  processor registry, picking the highest registered `SemVer`
-  (Cargo / npm convention). Returns
-  `Result<SchemaIdent, streamlib::sdk::error::Error>` so version drift
-  between the spawning binary and the resolved package surfaces as a
-  typed `Error::UnknownProcessorType` rather than a silent miss.
+  — the power-caller form. Resolves a `SchemaIdent` *now* against the
+  already-registered processor types (highest registered `SemVer`,
+  Cargo / npm convention), returning
+  `Result<SchemaIdent, streamlib::sdk::error::Error>`. Reach for it only
+  when the provider is already registered (a post-`add_module` /
+  explicit-load call site) and you need the resolved `SchemaIdent`
+  eagerly; otherwise prefer `processor_type_ref!`.
 - **`streamlib::sdk::schema_ident!("org", "package", "Type", "1.0.0")`**
   — strict-pin reference form. Same four fields as the long
   `SchemaIdent::new(...)` constructor, validated at proc-macro

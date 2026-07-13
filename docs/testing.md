@@ -9,6 +9,25 @@ and you need to exercise the real pipeline.
 > Run the workspace baseline before reaching for an E2E scenario — most bugs
 > surface there first.
 
+> **Running an example is a two-step, per-directory flow.** The `examples/*`
+> are **standalone crates** (each its own `[workspace]` root, not a member of
+> the engine workspace), so `cargo run -p <example>` from the repo root does
+> **not** resolve them. Run one from inside its own directory, after a one-time
+> `./setup.sh` that links the local SDK + the processor packages it needs into
+> `streamlib_modules/`:
+>
+> ```bash
+> cd examples/<name>
+> ./setup.sh          # streamlib link --engine <checkout> + link the packages
+> cargo run -- <args> # e.g. vulkan-video-roundtrip: `cargo run -- h264 /dev/video2 15`
+> ```
+>
+> The `cargo run -q -p <example>` / `cargo build -p <example>` invocations in
+> the scenarios below (and in the `e2e_*.sh` fixture scripts) are written
+> against the older workspace-member shape and need the `cd examples/<name> &&
+> ./setup.sh && cargo run` form for a standalone example. Substitute
+> accordingly until the fixture scripts are updated.
+
 ---
 
 ## Decision tree
