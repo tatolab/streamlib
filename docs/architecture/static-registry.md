@@ -83,6 +83,33 @@ siblings, closure crates) omit the `registry` key — detected data-driven from
 the packaged manifest's `registry-index` key; crates.io deps name
 `https://github.com/rust-lang/crates.io-index`.
 
+The fork `.crate` tarballs are **byte-stable at the canonical URL**, so their
+checksums are frozen in the committed root `Cargo.lock`. `cargo package` bakes
+the ephemeral serving-port index into each fork-sibling reference — the
+`registry-index` of `Cargo.toml` and the `source` of the bundled `Cargo.lock`
+both record `sparse+http://127.0.0.1:PORT/cargo/`, which makes the tarball's
+checksum port-coupled. `scripts/registry/normalize_fork_crate.py` rewrites those
+URLs to the canonical `[registries.tatolab]` index
+(`sparse+https://registry.tatolab.com/cargo/`, the single source of truth, read
+from `.cargo/config.toml`), drops any `.cargo_vcs_info.json`, re-tars (GNU
+format, cargo's headers cloned verbatim), and re-gzips as a **hand-framed** gzip
+stream — fixed 10-byte header (OS=0xff "unknown", XFL=0, MTIME=0), raw level-0
+(STORED) DEFLATE body, CRC32/ISIZE trailer. Hand-framing (rather than
+`gzip.compress`, whose OS byte is the emit host's zlib OS_CODE — `0x03` on
+Linux, other values elsewhere) makes the two rewritten crates byte-identical
+across operating system, zlib version, and Python version, so their committed
+checksums reproduce on any emit host. `emit-static-fork.sh` runs the normalizer
+on each emitted crate before rendering its sparse-index line, so the index
+checksum equals the served `.crate`'s sha256. `vulkanalia-sys` has no fork
+sibling → no port-coupled URL → it is left exactly as `cargo package` emits it
+(cargo's own byte-deterministic output on the Linux emit target); only
+`vulkanalia` and `vulkanalia-vma` are rewritten. The `serve-static-fork` CI
+action asserts each emitted fork index checksum equals the committed root
+`Cargo.lock`, so a fork-rev bump without a lock regen fails fast. The result: a
+canonical-source-preserving `[source]`-replacement `local-registry` mirror
+resolves the fork `--locked --offline` with no `CARGO_REGISTRIES_TATOLAB_INDEX`
+override.
+
 The **workspace release closure** rides the same tree via
 `cargo xtask static-registry emit --cargo-closure`: each closure crate is
 `cargo package`d in topo order against an ephemeral static server on the
@@ -348,7 +375,9 @@ consumer never hand-writes any of the above — is **planned**.
 - **Catalog**: `libs/streamlib-idents/src/catalog.rs` (protocol surface +
   `CatalogClient`), `libs/streamlib-pack/src/catalog.rs` (assembly).
 - **Fork bootstrap**: `scripts/registry/emit-static-fork.sh`,
-  `scripts/registry/render_cargo_index_line.py`.
+  `scripts/registry/render_cargo_index_line.py`,
+  `scripts/registry/normalize_fork_crate.py` (canonical-URL byte-stable
+  rewrite).
 - **Generator CLI**: `cargo xtask static-registry emit`.
 - **`.slpkg` `file://` transport**: `libs/streamlib-idents/src/registry.rs`.
 - **CI**: `.github/actions/serve-static-fork`, `.github/workflows/static-registry.yml`.

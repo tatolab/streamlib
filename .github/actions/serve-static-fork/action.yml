@@ -87,3 +87,46 @@ runs:
         # The emitted tree is complete and fetchable through the live server.
         curl -fsS "http://127.0.0.1:${{ inputs.port }}/cargo/config.json" >/dev/null \
           || { echo "emitted tree not fetchable"; exit 1; }
+
+    - name: Assert emitted fork checksums match the committed Cargo.lock
+      shell: bash
+      run: |
+        set -euo pipefail
+        # The fork `.crate`s are byte-stable at the canonical URL (see
+        # scripts/registry/normalize_fork_crate.py), so each emitted sparse-index
+        # cksum must equal the checksum frozen in the committed root Cargo.lock.
+        # A mismatch means the fork rev moved without a lock regen — fail fast
+        # rather than let a downstream `--locked` resolve brick on it.
+        python3 - "${{ inputs.out }}/cargo" Cargo.lock <<'PY'
+        import json, re, sys
+        tree, lock = sys.argv[1], sys.argv[2]
+        # crate -> sparse-index shard path (fixed: the fork is these 3 crates).
+        forks = {
+            "vulkanalia": "vu/lk/vulkanalia",
+            "vulkanalia-sys": "vu/lk/vulkanalia-sys",
+            "vulkanalia-vma": "vu/lk/vulkanalia-vma",
+        }
+        locktext = open(lock).read()
+        def lock_cksum(name):
+            for blk in locktext.split("[[package]]"):
+                if re.search(rf'^name = "{re.escape(name)}"$', blk, re.MULTILINE):
+                    m = re.search(r'^checksum = "([0-9a-f]+)"$', blk, re.MULTILINE)
+                    return m.group(1) if m else None
+            return None
+        bad = False
+        for name, idx in forks.items():
+            emitted = json.loads(open(f"{tree}/{idx}").read().strip().splitlines()[-1])["cksum"]
+            locked = lock_cksum(name)
+            ok = emitted == locked
+            print(f"  {name:16} emit={emitted} lock={locked} [{'ok' if ok else 'MISMATCH'}]")
+            bad = bad or not ok
+        if bad:
+            sys.stderr.write(
+                "\nEmitted vulkanalia-fork checksum(s) diverge from the committed "
+                "Cargo.lock. Re-run scripts/registry/emit-static-fork.sh and update "
+                "the fork checksums in Cargo.lock "
+                "(see docs/architecture/static-registry.md).\n"
+            )
+            sys.exit(1)
+        print("All fork checksums match the committed Cargo.lock.")
+        PY

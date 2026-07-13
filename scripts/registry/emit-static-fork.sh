@@ -69,6 +69,28 @@ command -v rsync  >/dev/null || fail "rsync not found"
 command -v git    >/dev/null || fail "git not found"
 command -v tar    >/dev/null || fail "tar not found"
 
+# The canonical registry-index URL the fork `.crate`s must bake — the single
+# source of truth is the workspace's [registries.tatolab] index, which is
+# identical to the lockfile `source` id. `cargo package` records the ephemeral
+# serving-port index in each fork-sibling dep instead; the normalize step
+# (below, per crate) rewrites it to this canonical URL so the emit is byte-
+# stable and port-independent. Never hardcode the URL here.
+CANON_INDEX="$("$PY" - "$ROOT/.cargo/config.toml" <<'PY'
+import sys
+path = sys.argv[1]
+try:
+    import tomllib  # py3.11+ stdlib
+    with open(path, "rb") as fh:
+        cfg = tomllib.load(fh)
+except ModuleNotFoundError:
+    import tomlkit  # dev/CI fallback for py<3.11
+    with open(path) as fh:
+        cfg = tomlkit.parse(fh.read())
+print(cfg["registries"]["tatolab"]["index"])
+PY
+)"
+[ -n "$CANON_INDEX" ] || fail "could not derive the canonical tatolab registry index from .cargo/config.toml"
+
 # --- obtain the fork checkout -------------------------------------------------
 scratch_root="$(mktemp -d)"
 trap 'rm -rf "$scratch_root"' EXIT
@@ -189,19 +211,33 @@ emit_one() {
   crate_file="$(find "$pkg_root" "$scratch" -type f -name "${name}-${version}.crate" 2>/dev/null | head -1)"
   [ -n "$crate_file" ] || fail "could not locate ${name}-${version}.crate after packaging"
 
-  local dest_dir="$CARGO_DIR/crates/${name}"
+  local dest_dir crate_dest
+  dest_dir="$CARGO_DIR/crates/${name}"
   mkdir -p "$dest_dir"
-  cp "$crate_file" "$dest_dir/${name}-${version}.crate"
+  crate_dest="$dest_dir/${name}-${version}.crate"
+  cp "$crate_file" "$crate_dest"
 
+  # Normalize the emitted crate (in place, not the scratch original) so its
+  # packaged Cargo.toml bakes the canonical registry-index URL rather than the
+  # ephemeral serving-port URL cargo recorded — byte-stable + port-independent.
+  # vulkanalia-sys has no fork-sibling dep, so the normalizer leaves it exactly
+  # as cargo emitted it; vulkanalia / vulkanalia-vma get their sibling
+  # registry-index rewritten and are re-gzipped deterministically (STORED).
+  "$PY" "$ROOT/scripts/registry/normalize_fork_crate.py" \
+    "$crate_dest" "$name" "$version" "$CANON_INDEX" \
+    || fail "normalize_fork_crate failed for ${name}"
+
+  # Checksum + index line come from the NORMALIZED dest (what consumers fetch),
+  # not the scratch original.
   local cksum
-  cksum="$(sha256sum "$crate_file" | awk '{print $1}')"
+  cksum="$(sha256sum "$crate_dest" | awk '{print $1}')"
 
   # Render the sparse index NDJSON line from the packaged Cargo.toml deps.
   local idx_rel idx_abs
   idx_rel="$(cargo_idx_path "$name")"
   idx_abs="$CARGO_DIR/$idx_rel"
   mkdir -p "$(dirname "$idx_abs")"
-  NAME="$name" VERSION="$version" CKSUM="$cksum" CRATE="$crate_file" \
+  NAME="$name" VERSION="$version" CKSUM="$cksum" CRATE="$crate_dest" \
     "$PY" "$ROOT/scripts/registry/render_cargo_index_line.py" >> "$idx_abs"
 }
 

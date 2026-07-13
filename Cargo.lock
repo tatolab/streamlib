@@ -6135,7 +6135,7 @@ dependencies = [
 name = "vulkanalia"
 version = "0.35.0"
 source = "sparse+https://registry.tatolab.com/cargo/"
-checksum = "316c22f54860d801fb0df291632d22684f4e02ffd0eece60c9546260ef4733cf"
+checksum = "4de872d936f05cf1616c798ccfda8ea3947b30576e45c999f4d981887ee741ef"
 dependencies = [
  "cocoa",
  "libloading 0.8.9",
@@ -6158,7 +6158,7 @@ dependencies = [
 name = "vulkanalia-vma"
 version = "0.9.0"
 source = "sparse+https://registry.tatolab.com/cargo/"
-checksum = "e5b7ad23b56a6078cdf89d871330263e00571bd02e17aa5132358d3837f57cdc"
+checksum = "ab1de2d3cfecf285a8675d17112fcaa97a5db378ad97373732f60e9c9930898d"
 dependencies = [
  "bitflags 2.11.0",
  "cc",
