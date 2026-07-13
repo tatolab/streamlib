@@ -56,7 +56,7 @@ pub fn run(project_dir: Option<&Path>, lockfile_path: Option<PathBuf>) -> Result
     // toolchains (cargo/uv/deno) at the checkout. Surface it so the operator
     // knows the lockfile reflects a linked tree (path-declared deps are
     // recorded as `path:` sources in the lockfile).
-    if let Some(marker) = streamlib_pack::link_marker::find_active_link_marker(&root) {
+    if let Some(marker) = streamlib_idents::link_marker::find_active_link_marker(&root) {
         println!(
             "note: installing inside an active streamlib link (marker: {}) — \
              local checkout overrides are in effect",

@@ -12,7 +12,10 @@ use super::errors::AddModuleError;
 use super::locked::LockedResolution;
 use super::processor_registration::register_manifest_processors;
 use super::schema_registration::register_package_schemas;
-use super::source::{read_version_from_manifest_dir, resolve_strategy_to_source, ResolvedSource, Strategy};
+use super::source::{
+    read_version_from_manifest_dir, resolve_strategy_to_source, ActiveLinkedCheckout,
+    ResolvedSource, Strategy,
+};
 use crate::core::{Error, Result};
 use crate::iceoryx2::Iceoryx2Node;
 
@@ -429,6 +432,7 @@ pub(super) fn add_module_recursively(
     load_id: u64,
     skipped_in_flight: &mut Vec<SkippedInFlightDependency>,
     locked: Option<&LockedResolution>,
+    link: Option<&ActiveLinkedCheckout>,
 ) -> std::result::Result<(), AddModuleError> {
     let pkg_ref = module.package_ref();
     if !seen.insert(pkg_ref.clone()) {
@@ -449,6 +453,7 @@ pub(super) fn add_module_recursively(
         load_id,
         skipped_in_flight,
         locked,
+        link,
     );
     seen.remove(&pkg_ref);
     path.pop();
@@ -468,14 +473,18 @@ fn add_module_recursive_body(
     load_id: u64,
     skipped_in_flight: &mut Vec<SkippedInFlightDependency>,
     locked: Option<&LockedResolution>,
+    link: Option<&ActiveLinkedCheckout>,
 ) -> std::result::Result<(), AddModuleError> {
     use crate::core::config::ProjectConfig;
 
     let pkg_ref = module.package_ref();
 
     // Resolve where the source lives (pure filesystem / cache / git),
-    // then materialize via the orchestrator if a build is required.
-    let manifest_dir = match resolve_strategy_to_source(&strategy, &pkg_ref)? {
+    // then materialize via the orchestrator if a build is required. `link`,
+    // when present, redirects a checkout-present package to the linked
+    // checkout regardless of `strategy` (npm-link semantics; locked runs pass
+    // `None`).
+    let manifest_dir = match resolve_strategy_to_source(&strategy, &pkg_ref, link)? {
         ResolvedSource::Ready(dir) => dir,
         ResolvedSource::NeedsBuild(request) => match orchestrator {
             // An orchestrator is wired — materialize (fetch/build/stage).
@@ -636,6 +645,7 @@ fn add_module_recursive_body(
             load_id,
             skipped_in_flight,
             locked,
+            link,
         )?;
     }
 

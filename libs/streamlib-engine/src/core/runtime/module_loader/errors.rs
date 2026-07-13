@@ -186,6 +186,23 @@ pub enum AddModuleError {
         detail: String,
     },
 
+    /// An active `streamlib link` marker exists but its `.streamlib/link.json`
+    /// could not be parsed. Never silently ignored — a corrupt marker would
+    /// leave resolution in a mixed state (some modules from the checkout, some
+    /// from the registry), the exact failure mode link mode exists to prevent.
+    /// Run `streamlib unlink` to clear the torn state, then re-link.
+    #[error(
+        "active streamlib link marker is corrupt, refusing to resolve modules \
+         against an ambiguous link: {detail}. Run `streamlib unlink` and re-link."
+    )]
+    LinkStateCorrupt { detail: String },
+
+    /// Discovering the active `streamlib link` for the current run failed at
+    /// the filesystem level (working directory unreadable, or the linked
+    /// checkout's `packages/` tree could not be enumerated).
+    #[error("could not read streamlib link state for module resolution: {detail}")]
+    LinkStateUnreadable { detail: String },
+
     /// A graph-mutating call ([`Runner::add_processor`] / `connect` /
     /// `start`) ran while one or more modules were still loading. Await
     /// the pending loads (e.g. via [`Runner::await_modules`]) before

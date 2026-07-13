@@ -48,13 +48,16 @@ running process.
 `streamlib link` prints status. Implementation:
 [`libs/streamlib-cli/src/commands/link.rs`](../../libs/streamlib-cli/src/commands/link.rs)
 plus the shared marker in
-[`libs/streamlib-pack/src/link_marker.rs`](../../libs/streamlib-pack/src/link_marker.rs).
+[`libs/streamlib-idents/src/link_marker.rs`](../../libs/streamlib-idents/src/link_marker.rs)
+(the marker schema lives in `streamlib-idents`, alongside the manifest /
+lockfile types, so the engine module loader can reach it without depending
+on `streamlib-pack`).
 
-**Whole-tree, not per-dep.** Link mode is a *toolchain-emission* concern —
-it does not add a resolution path (the engine already resolves a local
-package via `Strategy::Path`). `plan_edits` computes three language-native
-overrides in one plan, so a checkout's SDK libraries *and* sibling packages
-all resolve to that one tree:
+**Two effects: consumer-manifest overrides + link-aware resolution.**
+
+*Consumer-manifest overrides.* `plan_edits` computes three language-native
+overrides in one plan, so a checkout's SDK libraries resolve to that one tree
+for the consumer's **own** build:
 
 | Toolchain | Override | Written to |
 |---|---|---|
@@ -70,6 +73,35 @@ derived from the checkout via `compute_release_closure` — the **same**
 definition a release uses — so a whole-tree link and a release always agree
 on which crates exist. Whole-tree consistency is by construction: a single
 checkout never mixes published versions.
+
+*Link-aware module resolution (npm-link semantics).* With an active link, the
+engine module loader resolves any `@org/name` present in the linked checkout's
+`packages/` tree **from the checkout, regardless of the caller's
+[`Strategy`]** — including an explicit `add_module(ident, registry())`. A
+linked name takes precedence (the dominant example shape calls
+`registry()`; overriding only the *default* strategy would miss it, so editing
+a linked package and re-running would not reflect the edit). A package **not**
+in the checkout is untouched — it resolves from its declared strategy — so
+registry strategies stay available for everything the checkout doesn't
+provide. Discovery is from the process working directory (the run dir, where
+the marker sits); a corrupt marker is a loud `AddModuleError::LinkStateCorrupt`,
+never a silent skip. A **locked run** (`add_modules_from_lockfile`) ignores
+links by contract (reproducible / offline). Implementation:
+`ActiveLinkedCheckout` +
+`resolve_strategy_to_source` in
+[`module_loader/source.rs`](../../libs/streamlib-engine/src/core/runtime/module_loader/source.rs).
+
+*Link-aware staged builds.* When the orchestrator materializes a package under
+an active link, it builds against the checkout so host + plugin come from one
+source tree (removing the mixed-build plugin-ABI hazard from the dev loop by
+construction): the Rust cdylib build is passed the consumer's `[patch]` cargo
+config via `cargo build --config <file>`
+(`assemble_artifact_with_cargo_config`), and the Python venv installs the
+checkout's SDK via `[tool.uv.sources]` (`apply_link_override`). Discovery is
+resolved once per build in `discover_active_build_link`
+([`streamlib-build-orchestrator`](../../libs/streamlib-build-orchestrator/src/lib.rs)).
+
+[`Strategy`]: ../../libs/streamlib-engine/src/core/runtime/module_loader/source.rs
 
 **Manifest-first transaction.** `establish_link` plans every edit in memory,
 persists the full plan to `.streamlib/link.json` with state `Applying` via
@@ -101,8 +133,9 @@ RemoveCreated}`; a file the user modified while linked refuses with
 *toolchain config* files — never a lockfile. `streamlib pkg build` /
 `publish` refuse while any link marker exists up-tree
 (`ensure_no_active_link_for_pack` → `PackRefusedWhileLinked`), and the build
-orchestrator re-injects the same uv-source override from the marker when it
-provisions a linked package's venv (`apply_link_override_if_active`), so a
+orchestrator re-injects the checkout overrides when it materializes a linked
+package — the consumer's `[patch]` cargo config into the cdylib build and the
+uv-source override (`apply_link_override`) into the venv — so a
 cargo-patched-but-venv-from-registry mixed state can't occur.
 
 **What link deliberately does not solve.** Developing against one *specific
@@ -339,7 +372,11 @@ Stated honestly; verify against current code before relying on any.
 ## Reference
 
 - **Link mode**: `libs/streamlib-cli/src/commands/link.rs`,
-  `libs/streamlib-pack/src/link_marker.rs`.
+  `libs/streamlib-idents/src/link_marker.rs` (marker schema + discovery),
+  `libs/streamlib-engine/src/core/runtime/module_loader/source.rs`
+  (`ActiveLinkedCheckout`, link-aware resolution),
+  `libs/streamlib-build-orchestrator/src/lib.rs`
+  (`discover_active_build_link`, staged-build overrides).
 - **Version model**: `libs/streamlib-idents/src/semver.rs` (SemVer +
   ranges), `ident.rs` (`SchemaIdent` release-core invariant),
   `manifest.rs` (`patch:` locality),

@@ -12,6 +12,7 @@ mod catalog;
 mod error;
 mod git;
 mod ident;
+pub mod link_marker;
 mod lockfile;
 mod manifest;
 mod registry;

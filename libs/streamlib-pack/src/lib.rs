@@ -47,8 +47,14 @@ pub use streamlib_cargo_build::CargoProfile;
 
 pub mod catalog;
 pub mod crate_tarball;
-pub mod link_marker;
 pub mod static_registry;
+
+// The `streamlib link` marker schema + discovery moved to `streamlib-idents`
+// (its natural home alongside the manifest/lockfile types) so the engine module
+// loader — which deps `streamlib-idents` but not `streamlib-pack` — can reach
+// it. `streamlib-pack` still uses it for the pack/publish "refuse while linked"
+// guard.
+use streamlib_idents::link_marker;
 
 /// One member of the engine release closure: a publishable workspace library
 /// crate, with its version and manifest directory.
@@ -354,6 +360,22 @@ pub fn assemble_artifact(
     opts: &AssembleOptions,
     sink: &dyn PackEventSink,
 ) -> Result<AssembleOutcome> {
+    assemble_artifact_with_cargo_config(pkg_dir, target, opts, sink, &[])
+}
+
+/// [`assemble_artifact`], plus extra cargo `--config <file>` TOML files merged
+/// into the Rust cdylib build. The build orchestrator passes the consumer's
+/// `streamlib link`-emitted `.cargo/config.toml` here so a staged package
+/// cdylib resolves its `streamlib*` crate deps from the linked checkout (the
+/// `[patch."<index>"]` block) instead of the registry — host + plugin built
+/// from one source tree. Empty slice ⇒ identical to [`assemble_artifact`].
+pub fn assemble_artifact_with_cargo_config(
+    pkg_dir: &Path,
+    target: &AssembleTarget,
+    opts: &AssembleOptions,
+    sink: &dyn PackEventSink,
+    cargo_config_files: &[PathBuf],
+) -> Result<AssembleOutcome> {
     let config = streamlib_cargo_build::read_minimal_project_config(pkg_dir)
         .context("Failed to read streamlib.yaml")?
         .ok_or_else(|| anyhow::anyhow!("no streamlib.yaml at {}", pkg_dir.display()))?;
@@ -486,7 +508,14 @@ pub fn assemble_artifact(
                     )
                 })?;
             sink.started("rust");
-            let built = cargo_build_streaming(pkg_dir, &cargo_name, dylib_ext, opts.profile, sink)?;
+            let built = cargo_build_streaming(
+                pkg_dir,
+                &cargo_name,
+                dylib_ext,
+                opts.profile,
+                sink,
+                cargo_config_files,
+            )?;
             sink.finished("rust");
             rebuilt = true;
             let filename = dylib_filename(&built)?;
@@ -781,11 +810,20 @@ fn cargo_build_streaming(
     dylib_ext: &str,
     profile: CargoProfile,
     sink: &dyn PackEventSink,
+    cargo_config_files: &[PathBuf],
 ) -> Result<PathBuf> {
     let mut command = Command::new("cargo");
     command.arg("build");
     if matches!(profile, CargoProfile::Release) {
         command.arg("--release");
+    }
+    // Merge extra cargo config TOML files (each a `cargo build --config <file>`).
+    // The orchestrator uses this to inject the `streamlib link` `[patch]` block
+    // so a linked package's cdylib builds against the checkout's crates. Cargo
+    // merges these on top of the config it discovers by walking up from the
+    // build dir, so the injected patch wins.
+    for config_file in cargo_config_files {
+        command.arg("--config").arg(config_file);
     }
     command
         .arg("--message-format=json-render-diagnostics")
@@ -1186,6 +1224,62 @@ mod tests {
             no_build,
             profile: CargoProfile::Release,
             path_deps: PathDepPolicy::RejectPathPatches,
+        }
+    }
+
+    fn write_schemas_only_pkg(dir: &Path) {
+        std::fs::create_dir_all(dir.join("schemas")).unwrap();
+        std::fs::write(
+            dir.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: cfg-pkg\n  version: 0.1.0\nschemas:\n  T:\n    file: schemas/t.yaml\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("schemas/t.yaml"),
+            "metadata:\n  type: T\n  max_payload_bytes: 16\n",
+        )
+        .unwrap();
+    }
+
+    /// `assemble_artifact` delegates to `assemble_artifact_with_cargo_config`
+    /// with an empty slice — an unlinked build is byte-for-byte the same as
+    /// before. And extra cargo-config files are harmlessly ignored for a
+    /// non-Rust package (no `cargo build` runs). This locks that the new entry
+    /// point doesn't change the no-Rust path. Mentally revert the delegation
+    /// and this drifts.
+    #[test]
+    fn cargo_config_entry_point_matches_plain_assemble_for_non_rust_pkg() {
+        let src = tempdir().unwrap();
+        write_schemas_only_pkg(src.path());
+
+        let plain_dir = tempdir().unwrap();
+        assemble_artifact(
+            src.path(),
+            &AssembleTarget::StagedDir(plain_dir.path().to_path_buf()),
+            &slpkg_opts(false),
+            &(),
+        )
+        .expect("plain assemble must succeed");
+
+        let with_cfg_dir = tempdir().unwrap();
+        // A nonexistent cargo-config path would make cargo error IF it were
+        // consulted — proving it is safely ignored for a non-Rust package.
+        assemble_artifact_with_cargo_config(
+            src.path(),
+            &AssembleTarget::StagedDir(with_cfg_dir.path().to_path_buf()),
+            &slpkg_opts(false),
+            &(),
+            &[PathBuf::from("/nonexistent/cargo-override.toml")],
+        )
+        .expect("with-cargo-config assemble must succeed (config ignored, no Rust)");
+
+        // The staged manifest + schema are identical either way.
+        for rel in ["streamlib.yaml", "schemas/t.yaml"] {
+            assert_eq!(
+                std::fs::read(plain_dir.path().join(rel)).unwrap(),
+                std::fs::read(with_cfg_dir.path().join(rel)).unwrap(),
+                "staged {rel} must match between the two entry points"
+            );
         }
     }
 
