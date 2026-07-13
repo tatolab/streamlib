@@ -397,8 +397,11 @@ git-`[patch]` cross-crate deps in a manifest. For local development use one of
 the sanctioned loops instead:
 
 - **All-local WIP against one checkout** → `streamlib link <checkout>` emits
-  whole-tree cargo `[patch]` / uv-source / deno-import-map overrides at the
-  toolchain layer; it is transactional, greppable, restored byte-identically
+  whole-tree cargo `[patch.crates-io]` / uv-source / deno-import-map overrides
+  at the toolchain layer (the SDK deps resolve from crates.io by bare
+  `version`, so `[patch.crates-io]` redirects them to the checkout — a source
+  replacement that works offline even though the SDK isn't published to
+  crates.io yet); it is transactional, greppable, restored byte-identically
   by `streamlib unlink`, and refused entry into any published `.slpkg`.
 - **Against a specific *published* version** → publish a `-dev.N` version the
   consumer bumps to. The monorepo still builds itself in-place (the dev

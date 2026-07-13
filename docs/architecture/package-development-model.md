@@ -61,13 +61,15 @@ for the consumer's **own** build:
 
 | Toolchain | Override | Written to |
 |---|---|---|
-| cargo | `[patch."<index>"]` with one `path = "<member>"` per crate | `.cargo/config.toml` |
+| cargo | `[patch.crates-io]` with one `path = "<member>"` per crate | `.cargo/config.toml` |
 | Python (uv) | `[tool.uv.sources] streamlib = { path = "libs/streamlib-python", editable = true }` | `pyproject.toml` (only if present) |
 | Deno | import-map `imports.streamlib` → `libs/streamlib-deno/mod.ts` | `deno.json(c)` (only if present) |
 
-The cargo registry index is discovered live (`discover_registry_index`
-reads `registries.tatolab.index` from the consumer's cargo config), never
-hardcoded; each emitted table carries a greppable
+The SDK crates resolve from crates.io by bare `version` (there is no custom
+registry), so the override patches `crates-io`; `[patch.crates-io]` is a source
+replacement, so cargo uses the patched `path` and never queries crates.io —
+it works offline even though the SDK isn't published to crates.io yet. Each
+emitted table carries a greppable
 `# streamlib-link — managed by streamlib link` marker. The crate set is
 derived from the checkout via `compute_release_closure` — the **same**
 definition a release uses — so a whole-tree link and a release always agree

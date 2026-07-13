@@ -61,14 +61,12 @@ pub const REGISTRY_URL_ENV: &str = "STREAMLIB_REGISTRY_URL";
 /// [`ResolverOptions::from_env`]: crate::ResolverOptions::from_env
 pub const LINK_CHECKOUT_ENV: &str = "STREAMLIB_LINK_CHECKOUT";
 
-/// Default tree-root URL for the first-party static registry — the sensible
-/// default the CLI writes into a consumer's configuration (`streamlib
-/// registry use` / `streamlib install`) when no tree is named. It is a
-/// *default*, not a lock-in: point [`REGISTRY_URL_ENV`] (or a cargo/npm source
-/// override) at any other tree root, local or remote, to resolve from there
-/// instead. Note it is NOT eagerly assumed by [`RegistryConfig::from_env`]:
-/// an unset env means "no registry configured" so a dev / path-only build
-/// never tries to reach the network.
+/// Default tree-root URL for the first-party static `.slpkg` registry — the
+/// sensible default when no tree is named. It is a *default*, not a lock-in:
+/// point [`REGISTRY_URL_ENV`] at any other tree root, local (`file://`) or
+/// remote, to resolve from there instead. Note it is NOT eagerly assumed by
+/// [`RegistryConfig::from_env`]: an unset env means "no registry configured"
+/// so a dev / path-only build never tries to reach the network.
 pub const DEFAULT_REGISTRY_URL: &str = "https://registry.tatolab.com";
 
 /// Resolved configuration for the static registry tree.
