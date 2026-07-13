@@ -22,8 +22,10 @@ deployment chooses to wire (or not).
 ```
  caller (runner app / CLI / daemon / AI host)
    │
-   │  runtime.add_module(ident)                         ← conservative: InstalledCache only
-   │  runtime.add_module_with(ident, Strategy)          ← explicit source + build policy
+   │  runtime.add_processor(spec)                        ← common: lazily loads the providing
+   │                                                        package on first reference (below)
+   │  runtime.add_module(ident)                         ← escape hatch: InstalledCache only
+   │  runtime.add_module_with(ident, Strategy)          ← escape hatch: explicit source + build policy
    │     └─ returns AddedModule : Future (eager — work spawns at call time)
    │  runtime.await_modules([a, b, …], on_event).await  ← concurrent, interleaved progress
    │  runtime.add_module_blocking(ident)                ← sync convenience (typed err in async ctx)
@@ -233,6 +235,68 @@ resolutions/builds before the caller awaits anything.
   accidental fire-and-forget).
 - `start()` hard-errors `ModulesStillLoading { idents }` if the graph is
   run while any load is still in flight.
+
+## Lazy plugin auto-discovery — no load call in app code
+
+App code never calls `add_module`. When `add_processor(ProcessorSpec::new(
+type, cfg))` references a processor type that isn't registered yet, the
+runtime **discovers and loads the providing package on first reference**
+from the app's `streamlib_modules/` folder — the gstreamer plugin-host
+model applied to a per-app module folder. `add_module` /
+`add_module_with(Strategy)` survive as an embedding / power-caller escape
+hatch, not a step common app code takes.
+
+The trigger is the same registry miss `add_v` already detects. Before a
+processor node is added, `add_processor` checks
+`PROCESSOR_REGISTRY.port_info(&spec.name)`. On a hit the type is already
+available and nothing loads — which is exactly why a **second reference
+to a type from an already-loaded package never reloads** the plugin. On a
+miss the runtime runs lazy discovery:
+
+1. **Discover.** Scan `<app-modules-root>/streamlib_modules/@org/name/streamlib.yaml`,
+   matching each manifest's `package:` org + name and its declared
+   processor short names against the referenced ident's `org` / `package`
+   / `type`. Discovery resolves the *provider package* by
+   `(org, package, type)` and ignores the reference-site version — the
+   installed version is pinned in `streamlib.lock` at `streamlib add`
+   time. The **terminal type resolution is still version-exact**, though:
+   `add_v` / `PROCESSOR_REGISTRY.port_info` match the referenced
+   `SchemaIdent` including its version. So a reference whose version
+   differs from the installed package's version loads the provider but
+   then resolves to `UnknownProcessorType`. A fully version-free
+   reference form is not available yet — a `SchemaIdent` at the
+   reference site still carries a concrete version.
+2. **Load.** Resolve the single matching package to
+   `add_module_with(ModuleIdent, Strategy::InstalledCache)` and drive it
+   through the **transactional load path** below. `InstalledCache` probes
+   the same `streamlib_modules/` folder, so discovery and load agree on
+   the source.
+3. **Proceed.** After the load commits, the type is registered and
+   `add_processor` adds a healthy node.
+
+Because the lazy load rides transactional registration, a failure leaves
+**zero partial state** — the graph keeps being modified and the runtime
+keeps running. `add_processor` returns a typed, recoverable error rather
+than crashing:
+
+- **No package provides the type** → `Error::UnknownProcessorType` (the
+  pre-existing miss behavior; the failed node stays in the graph in
+  `Error` state for observability).
+- **Two folders declare the same type** → `Error::AmbiguousProcessorTypeProviders`
+  (a malformed install; discovery refuses to guess).
+- **A discovered package fails to load** → `Error::LazyModuleLoadFailed`
+  naming the type, the package, and the underlying reason.
+
+### The modules-dir
+
+The app-modules root defaults to the process working directory (so
+`<cwd>/streamlib_modules/` is the folder), matching where `streamlib add`
+writes. A daemon / host tells the runtime an explicit root — GST_PLUGIN_PATH-style
+— via `Runner::set_app_modules_dir(app_root)` (process-wide) or the
+`STREAMLIB_MODULES_DIR` env var; the runtime override wins over the env
+var, which wins over the working directory. Discovery and
+`Strategy::InstalledCache` resolution both read the same root, so they
+never disagree.
 
 ## Transactional registration — staged commit
 

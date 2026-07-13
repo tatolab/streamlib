@@ -313,7 +313,7 @@ pub(super) fn resolve_strategy_to_source(
     }
     match strategy {
         Strategy::InstalledCache => {
-            resolve_installed_cache_strategy(pkg_ref, app_modules_probe_root().as_deref())
+            resolve_installed_cache_strategy(pkg_ref, app_modules_root().as_deref())
         }
         Strategy::Slpkg { path } => {
             let extracted = extract_slpkg_to_cache(path).map_err(|e| {
@@ -457,10 +457,44 @@ fn resolve_installed_cache_strategy(
     Ok(source_for_resolved_dir(pkg_ref, dir))
 }
 
-/// The app-modules probe anchor: the exact process working directory (no
-/// walk-up). `None` when the cwd is unresolvable — resolution then proceeds
-/// with the installed cache alone.
-fn app_modules_probe_root() -> Option<PathBuf> {
+/// Environment override for the directory that contains the app's
+/// `streamlib_modules/` folder — the GST_PLUGIN_PATH-style default a
+/// daemon/host sets. A runtime override ([`set_app_modules_root_override`])
+/// takes precedence.
+pub(crate) const APP_MODULES_DIR_ENV: &str = "STREAMLIB_MODULES_DIR";
+
+/// Process-wide override for the app-modules root, set via
+/// [`Runner::set_app_modules_dir`]. `None` falls back to the env var, then the
+/// process working directory.
+///
+/// [`Runner::set_app_modules_dir`]: super::super::Runner::set_app_modules_dir
+static APP_MODULES_ROOT_OVERRIDE: std::sync::RwLock<Option<PathBuf>> =
+    std::sync::RwLock::new(None);
+
+/// Tell the module loader which directory contains the app's
+/// `streamlib_modules/` folder for lazy discovery and [`Strategy::InstalledCache`]
+/// resolution. `None` clears the override (back to env / cwd).
+pub(crate) fn set_app_modules_root_override(root: Option<PathBuf>) {
+    *APP_MODULES_ROOT_OVERRIDE
+        .write()
+        .expect("app-modules root override lock poisoned") = root;
+}
+
+/// The app-modules root: the runtime-set override, else the
+/// `STREAMLIB_MODULES_DIR` env var, else the exact process working directory
+/// (no walk-up). `None` only when the cwd is unresolvable and neither override
+/// nor env is set — resolution then proceeds with the installed cache alone.
+pub(crate) fn app_modules_root() -> Option<PathBuf> {
+    if let Some(root) = APP_MODULES_ROOT_OVERRIDE
+        .read()
+        .expect("app-modules root override lock poisoned")
+        .clone()
+    {
+        return Some(root);
+    }
+    if let Some(env) = std::env::var_os(APP_MODULES_DIR_ENV).filter(|env| !env.is_empty()) {
+        return Some(PathBuf::from(env));
+    }
     std::env::current_dir().ok()
 }
 

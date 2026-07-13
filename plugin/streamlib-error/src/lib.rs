@@ -10,7 +10,7 @@
 //! (from `streamlib-processor-schema`) and, on Linux, the engine-free
 //! `ConsumerRhiError` conversion.
 
-use streamlib_processor_schema::SchemaIdent;
+use streamlib_processor_schema::{PackageRef, SchemaIdent};
 
 /// The StreamLib error type.
 #[derive(thiserror::Error, Debug)]
@@ -62,6 +62,26 @@ pub enum Error {
 
     #[error("Unknown processor type: {ident} (not registered)")]
     UnknownProcessorType { ident: SchemaIdent },
+
+    #[error(
+        "Processor type {processor_type} is provided by more than one package in \
+         streamlib_modules/: {packages:?} — lazy discovery cannot pick one; remove \
+         the duplicate package folder"
+    )]
+    AmbiguousProcessorTypeProviders {
+        processor_type: SchemaIdent,
+        packages: Vec<PackageRef>,
+    },
+
+    #[error(
+        "Lazy load of package {package} providing processor type {processor_type} \
+         failed: {detail}"
+    )]
+    LazyModuleLoadFailed {
+        processor_type: SchemaIdent,
+        package: PackageRef,
+        detail: String,
+    },
 
     #[error("Processor '{processor_id}' has no {direction} port named '{port_name}'")]
     ProcessorPortNotFound {

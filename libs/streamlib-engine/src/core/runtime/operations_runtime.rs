@@ -20,9 +20,19 @@ use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, PortDirection, Res
 // =============================================================================
 
 /// Core implementation for add_processor - takes owned Arcs for 'static lifetime.
+///
+/// `lazy_error` carries the outcome of the lazy plugin-discovery step the
+/// caller ran before this (see [`Runner::lazily_load_provider_for_processor_type`]):
+/// `Some` when discovery was ambiguous or a discovered package failed to load.
+/// On a registry miss it is returned in place of the generic
+/// [`Error::UnknownProcessorType`], so the app sees the specific recoverable
+/// reason while the failed node is still surfaced in the graph for
+/// observability. `None` (type available after the lazy load, or no package
+/// provided it) leaves the existing behavior unchanged.
 async fn add_processor_impl(
     compiler: Arc<Compiler>,
     spec: ProcessorSpec,
+    lazy_error: Option<Error>,
 ) -> Result<ProcessorUniqueId> {
     let emit_will_add = |id: &ProcessorUniqueId| {
         PUBSUB.publish(
@@ -70,9 +80,13 @@ async fn add_processor_impl(
         if registry_miss {
             emit_will_add(&node_id);
             emit_did_add(&node_id);
-            return Err(Error::UnknownProcessorType {
+            // A specific lazy-discovery failure (ambiguous providers, or a
+            // discovered package that failed to load) supersedes the generic
+            // unknown-type error; a plain "no package provides it" leaves
+            // `lazy_error` None and falls back to UnknownProcessorType.
+            return Err(lazy_error.unwrap_or(Error::UnknownProcessorType {
                 ident: ident_for_err,
-            });
+            }));
         }
 
         emit_will_add(&node_id);
@@ -274,7 +288,16 @@ impl RuntimeOperations for Runner {
 
     fn add_processor_async(&self, spec: ProcessorSpec) -> BoxFuture<'_, Result<ProcessorUniqueId>> {
         let compiler = Arc::clone(&self.compiler);
-        Box::pin(add_processor_impl(compiler, spec))
+        Box::pin(async move {
+            // Lazy plugin auto-discovery: if the referenced processor type
+            // isn't registered, discover + load the providing package from
+            // streamlib_modules/ on first reference. A recoverable failure is
+            // threaded into add_processor_impl (the runtime keeps running).
+            let lazy_error = self
+                .lazily_load_provider_for_processor_type(&spec.name)
+                .await;
+            add_processor_impl(compiler, spec, lazy_error).await
+        })
     }
 
     fn remove_processor_async(&self, processor_id: ProcessorUniqueId) -> BoxFuture<'_, Result<()>> {
@@ -307,13 +330,19 @@ impl RuntimeOperations for Runner {
     fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
         match &self.tokio_runtime_variant {
             TokioRuntimeVariant::OwnedTokioRuntime(rt) => {
+                // The async path runs the lazy plugin-discovery step itself.
                 rt.block_on(self.add_processor_async(spec))
             }
             TokioRuntimeVariant::ExternalTokioHandle(handle) => {
+                // Can't `.await` the borrowing lazy-load future in the spawned
+                // 'static task, so drive lazy discovery to completion here
+                // (blocking) and hand the outcome to the owned add_processor_impl.
+                let lazy_error =
+                    self.lazily_load_provider_for_processor_type_blocking(&spec.name);
                 let compiler = Arc::clone(&self.compiler);
                 let (tx, rx) = std::sync::mpsc::channel();
                 handle.spawn(async move {
-                    let result = add_processor_impl(compiler, spec).await;
+                    let result = add_processor_impl(compiler, spec, lazy_error).await;
                     let _ = tx.send(result);
                 });
                 rx.recv()
