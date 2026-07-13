@@ -24,6 +24,7 @@ pub(crate) struct RetainedPluginLibrary {
     #[allow(dead_code)]
     pub library: libloading::Library,
     /// Path the image was loaded from (diagnostics only).
+    #[allow(dead_code)]
     pub dylib_path: std::path::PathBuf,
     /// The package whose load first retained this image.
     #[allow(dead_code)]

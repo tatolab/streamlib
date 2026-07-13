@@ -674,6 +674,7 @@ impl Runner {
             version = %record.version,
             processors = record.processor_idents.len(),
             schemas = record.schema_ids.len(),
+            retained_dylib_images = record.dylib_paths.len(),
             "remove_module: unloaded (dylib images retained for the \
              process lifetime)",
         );
