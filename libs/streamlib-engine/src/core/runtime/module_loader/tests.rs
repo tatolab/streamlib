@@ -2577,19 +2577,20 @@ processors:
     }
 
     #[test]
-    fn remove_module_returns_hot_reload_lifecycle_deferral() {
+    #[serial]
+    fn remove_module_unknown_package_is_module_not_loaded() {
         let runtime = Runner::new().expect("Runner::new");
         let err = runtime
             .remove_module(ModuleIdent::any(
                 Org::new("tatolab").unwrap(),
-                Package::new("remove-module-stub").unwrap(),
+                Package::new("remove-module-unknown").unwrap(),
             ))
-            .expect_err("remove_module must error until hot-reload ships");
+            .expect_err("remove_module of a never-loaded package must error");
         assert!(
             matches!(
                 err,
-                RemoveModuleError::HotReloadLifecycleNotYetImplemented { ref module }
-                    if module.name.as_str() == "remove-module-stub"
+                RemoveModuleError::ModuleNotLoaded { ref module, loaded_version: None }
+                    if module.name.as_str() == "remove-module-unknown"
             ),
             "got: {err:?}",
         );

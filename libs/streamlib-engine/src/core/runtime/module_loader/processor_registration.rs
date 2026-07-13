@@ -4,13 +4,6 @@
 use crate::core::{Error, Result};
 use crate::iceoryx2::Iceoryx2Node;
 
-/// Keeps loaded dylib plugin libraries alive for the process lifetime.
-///
-/// When a Rust dylib plugin is loaded, the `Library` handle must
-/// remain alive so that the registered processor vtables stay valid.
-static LOADED_PLUGIN_LIBRARIES: std::sync::LazyLock<parking_lot::Mutex<Vec<libloading::Library>>> =
-    std::sync::LazyLock::new(|| parking_lot::Mutex::new(Vec::new()));
-
 /// The rustc target triple this engine was compiled for, captured at
 /// build time via `build.rs`. Same string Cargo prints for `--target`
 /// (e.g. `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`). Used to
@@ -155,14 +148,17 @@ fn read_plugin_build_identity(decl: &streamlib_plugin_abi::PluginDeclaration) ->
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-/// Register this package's processors with the global processor
-/// registry. Non-recursive — the caller is responsible for having
-/// walked any transitive deps first.
+/// Stage this package's processors into the load's registration staging
+/// buffer — applied to the global processor registry only at the
+/// whole-load commit. Non-recursive — the caller is responsible for
+/// having walked any transitive deps first.
 pub(super) fn register_manifest_processors(
     iceoryx2_node: &Iceoryx2Node,
     project_path: &std::path::Path,
     config: &crate::core::config::ProjectConfig,
     link_checkout: Option<&std::path::Path>,
+    staging: &std::sync::Arc<super::staging::ModuleLoadRegistrationStaging>,
+    owner_package: &streamlib_idents::PackageRef,
 ) -> Result<()> {
     use super::schema_registration::resolve_config_schema_canonical_id;
     use crate::core::ProcessorDescriptor;
@@ -370,31 +366,46 @@ pub(super) fn register_manifest_processors(
                         crate::core::plugin::host_services::runtime_facing::host_services_for_self(
                             iceoryx2_node,
                         );
-                    // SAFETY: `host_services` outlives the call;
-                    // the cdylib's callback returns before this
-                    // function frame is dropped.
-                    unsafe {
-                        (decl.register)(&host_services as *const _ as *const ::std::ffi::c_void);
+                    // The cdylib's registration prologue runs synchronously
+                    // on this thread and lands in the host's
+                    // `host_schema_register` / `host_processor_register`
+                    // callbacks — install the thread-local staging sink
+                    // around the call so those registrations stage into
+                    // this load instead of writing the global registries.
+                    // The RAII guard clears the sink on every exit.
+                    {
+                        let _cdylib_registration_sink_guard =
+                            super::staging::CdylibRegistrationSinkGuard::install(
+                                std::sync::Arc::clone(staging),
+                                owner_package.clone(),
+                            );
+                        // SAFETY: `host_services` outlives the call;
+                        // the cdylib's callback returns before this
+                        // function frame is dropped.
+                        unsafe {
+                            (decl.register)(
+                                &host_services as *const _ as *const ::std::ffi::c_void,
+                            );
+                        }
                     }
 
-                    // Keep the library alive for the process lifetime
-                    LOADED_PLUGIN_LIBRARIES.lock().push(lib);
+                    // Stage the image; retained for the process lifetime
+                    // whether this load commits or fails.
+                    staging.stage_plugin_library(lib, dylib_path.clone(), owner_package.clone());
 
                     rust_dylib_loaded = true;
                     tracing::info!(
-                        "Rust dylib plugin loaded and registered: {}",
+                        "Rust dylib plugin loaded and registrations staged: {}",
                         dylib_path.display()
                     );
                 }
 
                 // Validate the processor was registered by the dylib —
                 // compare by structured `SchemaIdent`, not bare PascalCase
-                // (two packages can declare the same short name).
-                let registered = crate::core::processors::PROCESSOR_REGISTRY
-                    .list_registered()
-                    .iter()
-                    .any(|desc| desc.name == proc_schema_ident);
-                if !registered {
+                // (two packages can declare the same short name). Reads the
+                // load's staging buffer: mid-walk, nothing has landed in
+                // the global registry yet.
+                if !staging.contains_staged_processor(&proc_schema_ident) {
                     return Err(Error::Configuration(format!(
                         "Processor '{}' declared in streamlib.yaml but not \
                          registered by the dylib. Ensure export_plugin!() \
@@ -526,19 +537,19 @@ pub(super) fn register_manifest_processors(
             _ => unreachable!(),
         };
 
-        crate::core::processors::PROCESSOR_REGISTRY.register_dynamic(descriptor, constructor)?;
-
-        tracing::info!(
-            "Registered processor '{}' ({:?})",
-            proc_schema.name,
-            runtime
+        staging.stage_processor(
+            descriptor,
+            super::staging::StagedProcessorRegistrationKind::Dynamic { constructor },
+            owner_package.clone(),
         );
+
+        tracing::info!("Staged processor '{}' ({:?})", proc_schema.name, runtime);
 
         registered_count += 1;
     }
 
     tracing::info!(
-        "Loaded {} processor(s) from {}",
+        "Staged {} processor(s) from {}",
         registered_count,
         project_path.display()
     );

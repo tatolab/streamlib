@@ -319,6 +319,12 @@ pub enum RuntimeEvent {
     RuntimeDidRegisterProcessorType {
         processor_type: SchemaIdent,
     },
+    /// Emitted when a processor type is unregistered from the factory
+    /// (`remove_module`). Additive variant — appended so existing msgpack
+    /// consumers keep decoding earlier variants unchanged.
+    RuntimeDidUnregisterProcessorType {
+        processor_type: SchemaIdent,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

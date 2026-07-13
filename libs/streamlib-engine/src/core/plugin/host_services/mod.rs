@@ -836,6 +836,17 @@ unsafe extern "C" fn host_schema_register(
             let yaml = unsafe {
                 std::str::from_utf8_unchecked(std::slice::from_raw_parts(yaml_ptr, yaml_len))
             };
+            // A cdylib registration prologue runs synchronously inside the
+            // module loader's `(decl.register)(...)` call, which installs a
+            // thread-local staging sink — registrations land in the load's
+            // staging buffer and only reach the global registry at the
+            // whole-load commit. No sink ⇒ direct-to-global (unchanged).
+            if crate::core::runtime::stage_schema_via_active_cdylib_sink(
+                canonical_id,
+                yaml,
+            ) {
+                return;
+            }
             crate::core::embedded_schemas::register_schema(canonical_id.to_string(), yaml);
         },
         (),
@@ -858,6 +869,18 @@ unsafe extern "C" fn host_schema_lookup(
                     canonical_id_len,
                 ))
             };
+            // Overlay the active load's staging buffer (if a cdylib
+            // registration is running on this thread) so a prologue sees
+            // schemas its own load staged but hasn't committed yet.
+            if let Some(staged_yaml) =
+                crate::core::runtime::lookup_schema_via_active_cdylib_sink(
+                    canonical_id,
+                )
+            {
+                let bytes = staged_yaml.as_bytes();
+                result_callback(result_userdata, bytes.as_ptr(), bytes.len());
+                return;
+            }
             match crate::core::embedded_schemas::get_embedded_schema_definition(canonical_id) {
                 Some(yaml) => {
                     let bytes = yaml.as_bytes();
@@ -972,6 +995,20 @@ unsafe extern "C" fn host_processor_register(
             // side; the cdylib is pinned via `LOADED_PLUGIN_LIBRARIES`, so
             // the pointer outlives the host's usage.
             let vtable_ref: &'static ProcessorVTable = unsafe { &*vtable };
+
+            // A cdylib registration prologue runs synchronously inside the
+            // module loader's `(decl.register)(...)` call, which installs a
+            // thread-local staging sink — the registration lands in the
+            // load's staging buffer and only reaches the global registry
+            // at the whole-load commit. No sink ⇒ direct-to-global
+            // (unchanged).
+            let descriptor = match crate::core::runtime::stage_processor_via_active_cdylib_sink(
+                descriptor, vtable_ref,
+            )
+            {
+                Ok(()) => return 0,
+                Err(descriptor) => descriptor,
+            };
 
             // Cdylib-resident registration — the vtable's function
             // pointers target the cdylib's address space, so

@@ -89,6 +89,12 @@ impl PackageResolutionCompletionSignal {
         self.outcome_published.notify_all();
     }
 
+    /// Publish [`ConcurrentPackageLoadOutcome::Committed`]. Called by the
+    /// whole-load commit after the ledger records are written.
+    pub(super) fn publish_committed(&self) {
+        self.publish(ConcurrentPackageLoadOutcome::Committed);
+    }
+
     /// Block until the outcome is published or `timeout` elapses.
     /// `None` means timeout — the caller surfaces a typed error.
     pub(crate) fn wait_for_outcome(
@@ -138,6 +144,11 @@ pub(super) enum SingleVersionGateOutcome {
     ProceedAsFirstResolution,
     /// Already committed at the same version — requirer recorded; skip.
     SkipAlreadyCommittedSameVersion,
+    /// In flight on THIS load (a same-load diamond re-encounter) —
+    /// requirer recorded; skip with no wait entry. Waiting on the owner
+    /// would be waiting on ourselves: this load's placeholders only flip
+    /// at its own whole-load commit, which runs after the wait phase.
+    SkipOwnedByThisLoad,
     /// In flight on a concurrent load at the same version — requirer
     /// recorded; skip locally and verify the owner's outcome at the end
     /// of this walk via the carried signal.
@@ -243,6 +254,16 @@ impl ResolutionMemo {
                 owner_load_id,
                 ..
             } => {
+                if *owner_load_id == load_id {
+                    tracing::debug!(
+                        package = %pkg_ref,
+                        version = %on_disk_version,
+                        "single-version gate: same version in flight on THIS \
+                         load (diamond re-encounter) — skipping with no wait \
+                         entry",
+                    );
+                    return Ok(SingleVersionGateOutcome::SkipOwnedByThisLoad);
+                }
                 tracing::debug!(
                     package = %pkg_ref,
                     version = %on_disk_version,
@@ -258,34 +279,59 @@ impl ResolutionMemo {
         }
     }
 
-    /// Flip this package's in-flight placeholder to a committed record
-    /// and publish [`ConcurrentPackageLoadOutcome::Committed`]. Requirers
-    /// accumulated on the placeholder while in flight are preserved.
-    fn commit_in_flight_resolution(&self, pkg_ref: &streamlib_idents::PackageRef) {
-        let signal = {
-            let mut packages = self.packages.lock();
-            match packages.remove(pkg_ref) {
-                Some(PackageResolutionState::InFlightPlaceholder {
-                    record,
-                    completion_signal,
-                    ..
-                }) => {
-                    packages.insert(
-                        pkg_ref.clone(),
-                        PackageResolutionState::Committed { record },
-                    );
-                    Some(completion_signal)
-                }
-                // Defensive: only the owning walk commits its placeholder.
-                Some(other) => {
-                    packages.insert(pkg_ref.clone(), other);
-                    None
-                }
-                None => None,
+    /// Flip this package's in-flight placeholder to a committed record.
+    /// Returns the record (final requirer list, read under the same lock
+    /// as the flip) plus the completion signal for the caller to publish
+    /// AFTER its ledger writes land — publishing is deliberately not done
+    /// here so a waiter never observes `Committed` before the ledger.
+    /// Requirers accumulated on the placeholder while in flight are
+    /// preserved on the committed record.
+    pub(super) fn flip_in_flight_placeholder_to_committed(
+        &self,
+        pkg_ref: &streamlib_idents::PackageRef,
+    ) -> Option<(
+        ResolvedPackageRecord,
+        Arc<PackageResolutionCompletionSignal>,
+    )> {
+        let mut packages = self.packages.lock();
+        match packages.remove(pkg_ref) {
+            Some(PackageResolutionState::InFlightPlaceholder {
+                record,
+                completion_signal,
+                ..
+            }) => {
+                let record_for_caller = record.clone();
+                packages.insert(pkg_ref.clone(), PackageResolutionState::Committed { record });
+                Some((record_for_caller, completion_signal))
             }
-        };
-        if let Some(signal) = signal {
-            signal.publish(ConcurrentPackageLoadOutcome::Committed);
+            // Defensive: only the owning load flips its placeholder.
+            Some(other) => {
+                packages.insert(pkg_ref.clone(), other);
+                None
+            }
+            None => None,
+        }
+    }
+
+    /// Whether the package is currently mid-resolution on some load.
+    pub(crate) fn is_package_in_flight(&self, pkg_ref: &streamlib_idents::PackageRef) -> bool {
+        matches!(
+            self.packages.lock().get(pkg_ref),
+            Some(PackageResolutionState::InFlightPlaceholder { .. })
+        )
+    }
+
+    /// Remove a package's committed resolution so a later `add_module`
+    /// re-resolves it from scratch. Used by `remove_module`; in-flight
+    /// placeholders are never removed here (removal refuses while a load
+    /// is in flight).
+    pub(crate) fn remove_committed_resolution(&self, pkg_ref: &streamlib_idents::PackageRef) {
+        let mut packages = self.packages.lock();
+        if matches!(
+            packages.get(pkg_ref),
+            Some(PackageResolutionState::Committed { .. })
+        ) {
+            packages.remove(pkg_ref);
         }
     }
 
@@ -345,13 +391,21 @@ impl ResolutionMemo {
             _ => None,
         }
     }
+
+    /// Test observability: every package ref with any resolution state.
+    #[cfg(test)]
+    pub(crate) fn resolved_package_refs(&self) -> Vec<streamlib_idents::PackageRef> {
+        self.packages.lock().keys().cloned().collect()
+    }
 }
 
 /// RAII cleanup for an armed in-flight placeholder: any failure exit
-/// between the gate and the commit drops this guard, which removes the
-/// placeholder and publishes `Failed` — the memo can never wedge in a
-/// permanent "resolving" state, and concurrent skippers fail loudly.
-struct InFlightPlaceholderGuard<'memo> {
+/// between the gate and the whole-load commit drops this guard, which
+/// removes the placeholder and publishes `Failed` — the memo can never
+/// wedge in a permanent "resolving" state, and concurrent skippers fail
+/// loudly. Guards accumulate on the walk context and are consumed by the
+/// whole-load commit, which flips each placeholder then disarms.
+pub(super) struct InFlightPlaceholderGuard<'memo> {
     resolution_memo: &'memo ResolutionMemo,
     package: Option<streamlib_idents::PackageRef>,
 }
@@ -364,10 +418,18 @@ impl<'memo> InFlightPlaceholderGuard<'memo> {
         }
     }
 
-    fn commit(mut self) {
-        if let Some(package) = self.package.take() {
-            self.resolution_memo.commit_in_flight_resolution(&package);
-        }
+    /// The package this guard's placeholder covers. `None` only after
+    /// [`Self::disarm`], which consumes the guard.
+    pub(super) fn package_ref(&self) -> &streamlib_idents::PackageRef {
+        self.package
+            .as_ref()
+            .expect("guard queried after disarm — commit consumes the guard")
+    }
+
+    /// Neutralize the guard after its placeholder has been flipped to
+    /// committed. Dropping without disarm publishes `Failed`.
+    pub(super) fn disarm(mut self) {
+        self.package.take();
     }
 }
 
@@ -400,80 +462,75 @@ fn describe_requirers(requirers: &[RequirerRecord]) -> String {
         .join(", ")
 }
 
+/// Everything one top-level module load threads through its recursive
+/// dependency walk: the immutable per-load inputs (node, orchestrator,
+/// memo, staging buffer, lockfile / link context) plus the mutable
+/// accumulation the whole-load commit consumes (armed placeholder
+/// guards, skipped-in-flight wait entries, committed-dependency requirer
+/// edges).
+pub(super) struct ModuleLoadWalkContext<'load> {
+    pub iceoryx2_node: &'load Iceoryx2Node,
+    pub orchestrator: Option<&'load Arc<dyn BuildOrchestrator>>,
+    pub sink: &'load dyn BuildEventSink,
+    pub resolution_memo: &'load ResolutionMemo,
+    pub load_id: u64,
+    pub locked: Option<&'load LockedResolution>,
+    pub link: Option<&'load ActiveLinkedCheckout>,
+    /// Per-load registration staging buffer — nothing lands in the
+    /// global registries until the whole-load commit.
+    pub staging: &'load Arc<super::staging::ModuleLoadRegistrationStaging>,
+    /// Every [`PackageRef`] currently on the recursion stack (O(1)
+    /// membership for cycle detection).
+    ///
+    /// [`PackageRef`]: streamlib_idents::PackageRef
+    pub seen: HashSet<streamlib_idents::PackageRef>,
+    /// Recursion path in insertion order, so the dependency-cycle error
+    /// carries the actual edge that re-entered.
+    pub path: Vec<streamlib_idents::PackageRef>,
+    /// Dependencies skipped because a CONCURRENT load had them in flight
+    /// — verified at the end of the top-level walk.
+    pub skipped_in_flight: Vec<SkippedInFlightDependency>,
+    /// Armed placeholder guards for every package THIS load resolved —
+    /// flipped + disarmed by the whole-load commit; dropped (abandon +
+    /// `Failed` published) on any failure exit.
+    pub armed_placeholder_guards: Vec<InFlightPlaceholderGuard<'load>>,
+    /// `(dependency, requirer)` edges into packages an EARLIER load
+    /// committed — appended onto their ledger records at commit.
+    pub committed_dependency_requirer_edges: Vec<(
+        streamlib_idents::PackageRef,
+        streamlib_idents::PackageRef,
+    )>,
+}
+
 /// Recursive worker: resolves the [`Strategy`] to a source, materializes
 /// via the injected [`BuildOrchestrator`] when a build is required,
-/// validates the manifest's identity + version range, registers the
+/// validates the manifest's identity + version range, stages the
 /// package's schemas, walks dependencies (each routed through this same
-/// helper), then registers the package's processors.
-///
-/// `seen` tracks every [`PackageRef`] currently on the recursion stack
-/// (O(1) membership); `path` preserves insertion order so the
-/// dependency-cycle error carries the actual edge that re-entered.
-/// `resolution_memo` is the runtime-lifetime single-version record
-/// shared across every `add_module` call — the gate that turns a
-/// diamond version divergence into a typed
-/// [`AddModuleError::SingleVersionConflict`] instead of a silent
-/// double-registration. `load_id` identifies the top-level load this
-/// walk belongs to; `skipped_in_flight` accumulates dependencies this
-/// walk skipped because a concurrent load had them in flight — verified
-/// at the end of the top-level walk.
-///
-/// [`PackageRef`]: streamlib_idents::PackageRef
-#[allow(clippy::too_many_arguments)]
+/// helper), then stages the package's processors. Nothing is applied to
+/// the global registries here — the whole-load commit does that after
+/// the entire walk succeeds.
 pub(super) fn add_module_recursively(
-    iceoryx2_node: &Iceoryx2Node,
-    orchestrator: Option<&Arc<dyn BuildOrchestrator>>,
-    sink: &dyn BuildEventSink,
+    walk_context: &mut ModuleLoadWalkContext<'_>,
     module: streamlib_idents::ModuleIdent,
     strategy: Strategy,
-    seen: &mut HashSet<streamlib_idents::PackageRef>,
-    path: &mut Vec<streamlib_idents::PackageRef>,
-    resolution_memo: &ResolutionMemo,
-    load_id: u64,
-    skipped_in_flight: &mut Vec<SkippedInFlightDependency>,
-    locked: Option<&LockedResolution>,
-    link: Option<&ActiveLinkedCheckout>,
 ) -> std::result::Result<(), AddModuleError> {
     let pkg_ref = module.package_ref();
-    if !seen.insert(pkg_ref.clone()) {
-        let mut cycle = path.clone();
+    if !walk_context.seen.insert(pkg_ref.clone()) {
+        let mut cycle = walk_context.path.clone();
         cycle.push(pkg_ref);
         return Err(AddModuleError::DependencyCycleDetected { cycle });
     }
-    path.push(pkg_ref.clone());
-    let result = add_module_recursive_body(
-        iceoryx2_node,
-        orchestrator,
-        sink,
-        module,
-        strategy,
-        seen,
-        path,
-        resolution_memo,
-        load_id,
-        skipped_in_flight,
-        locked,
-        link,
-    );
-    seen.remove(&pkg_ref);
-    path.pop();
+    walk_context.path.push(pkg_ref.clone());
+    let result = add_module_recursive_body(walk_context, module, strategy);
+    walk_context.seen.remove(&pkg_ref);
+    walk_context.path.pop();
     result
 }
 
-#[allow(clippy::too_many_arguments)]
 fn add_module_recursive_body(
-    iceoryx2_node: &Iceoryx2Node,
-    orchestrator: Option<&Arc<dyn BuildOrchestrator>>,
-    sink: &dyn BuildEventSink,
+    walk_context: &mut ModuleLoadWalkContext<'_>,
     module: streamlib_idents::ModuleIdent,
     strategy: Strategy,
-    seen: &mut HashSet<streamlib_idents::PackageRef>,
-    path: &mut Vec<streamlib_idents::PackageRef>,
-    resolution_memo: &ResolutionMemo,
-    load_id: u64,
-    skipped_in_flight: &mut Vec<SkippedInFlightDependency>,
-    locked: Option<&LockedResolution>,
-    link: Option<&ActiveLinkedCheckout>,
 ) -> std::result::Result<(), AddModuleError> {
     use crate::core::config::ProjectConfig;
 
@@ -484,12 +541,12 @@ fn add_module_recursive_body(
     // when present, redirects a checkout-present package to the linked
     // checkout regardless of `strategy` (npm-link semantics; locked runs pass
     // `None`).
-    let manifest_dir = match resolve_strategy_to_source(&strategy, &pkg_ref, link)? {
+    let manifest_dir = match resolve_strategy_to_source(&strategy, &pkg_ref, walk_context.link)? {
         ResolvedSource::Ready(dir) => dir,
-        ResolvedSource::NeedsBuild(request) => match orchestrator {
+        ResolvedSource::NeedsBuild(request) => match walk_context.orchestrator {
             // An orchestrator is wired — materialize (fetch/build/stage).
             Some(orch) => {
-                let staged = orch.materialize(&request, sink).map_err(|e| {
+                let staged = orch.materialize(&request, walk_context.sink).map_err(|e| {
                     AddModuleError::MaterializeFailed {
                         package: pkg_ref.clone(),
                         detail: e.to_string(),
@@ -521,7 +578,8 @@ fn add_module_recursive_body(
     // checkout from the checkout (the load-time half of the zero-registry dev
     // loop). `link` is `None` on locked runs / no active link → unchanged.
     let config =
-        ProjectConfig::load_with_link(&manifest_dir, link.map(|l| l.checkout())).map_err(|e| {
+        ProjectConfig::load_with_link(&manifest_dir, walk_context.link.map(|l| l.checkout()))
+            .map_err(|e| {
             AddModuleError::ManifestLoadFailed {
                 module: module.clone(),
                 source_path: manifest_dir.clone(),
@@ -584,14 +642,33 @@ fn add_module_recursive_body(
     // on a CONCURRENT load, the skip is recorded in `skipped_in_flight`
     // and the owner's outcome is verified at the end of this walk —
     // nobody ever blocks mid-walk, so concurrent walks cannot deadlock.
+    let requirer_package =
+        (walk_context.path.len() >= 2).then(|| walk_context.path[walk_context.path.len() - 2].clone());
     let requirer = RequirerRecord {
-        requirer: (path.len() >= 2).then(|| path[path.len() - 2].clone()),
+        requirer: requirer_package.clone(),
         declared_range: module.version.clone(),
     };
-    match resolution_memo.gate(load_id, &pkg_ref, on_disk_version, &manifest_dir, requirer)? {
-        SingleVersionGateOutcome::SkipAlreadyCommittedSameVersion => return Ok(()),
+    match walk_context.resolution_memo.gate(
+        walk_context.load_id,
+        &pkg_ref,
+        on_disk_version,
+        &manifest_dir,
+        requirer,
+    )? {
+        SingleVersionGateOutcome::SkipAlreadyCommittedSameVersion => {
+            // The package belongs to an EARLIER committed load; record the
+            // requirer edge so this load's commit appends it onto the
+            // dependency's ledger record.
+            if let Some(requirer_package) = requirer_package {
+                walk_context
+                    .committed_dependency_requirer_edges
+                    .push((pkg_ref.clone(), requirer_package));
+            }
+            return Ok(());
+        }
+        SingleVersionGateOutcome::SkipOwnedByThisLoad => return Ok(()),
         SingleVersionGateOutcome::SkipInFlightSameVersion(completion_signal) => {
-            skipped_in_flight.push(SkippedInFlightDependency {
+            walk_context.skipped_in_flight.push(SkippedInFlightDependency {
                 package: pkg_ref.clone(),
                 version: on_disk_version,
                 completion_signal,
@@ -601,19 +678,23 @@ fn add_module_recursive_body(
         SingleVersionGateOutcome::ProceedAsFirstResolution => {}
     }
 
-    // The placeholder is armed: any failure exit below drops the guard,
-    // which removes the placeholder and publishes `Failed` — a retried
-    // add_module re-runs the full resolution, and concurrent loads that
-    // skipped this package fail loudly instead of assuming it registered.
-    let placeholder_guard = InFlightPlaceholderGuard::arm(resolution_memo, pkg_ref.clone());
+    // The placeholder is armed: any failure exit below drops the guard
+    // (via the walk context), which removes the placeholder and publishes
+    // `Failed` — a retried add_module re-runs the full resolution, and
+    // concurrent loads that skipped this package fail loudly instead of
+    // assuming it registered. On success the whole-load commit flips the
+    // placeholder and disarms.
+    let placeholder_guard =
+        InFlightPlaceholderGuard::arm(walk_context.resolution_memo, pkg_ref.clone());
+    walk_context.armed_placeholder_guards.push(placeholder_guard);
 
-    // Schemas are leaves — register before recursing into deps.
-    register_package_schemas(&manifest_dir, &config).map_err(|e| {
-        AddModuleError::LoadProjectFailed {
+    // Schemas are leaves — stage before recursing into deps.
+    register_package_schemas(&manifest_dir, &config, walk_context.staging, &pkg_ref).map_err(
+        |e| AddModuleError::LoadProjectFailed {
             module: module.clone(),
             source: Box::new(e),
-        }
-    })?;
+        },
+    )?;
 
     // Walk transitive deps, each routed through this same helper.
     //
@@ -624,7 +705,7 @@ fn add_module_recursive_body(
     // doesn't pin is a stale-lockfile hard error, not a silent live
     // resolve.
     for (dep_ref, spec) in &config.dependencies {
-        let (dep_ident, dep_strategy) = match locked {
+        let (dep_ident, dep_strategy) = match walk_context.locked {
             Some(lock) => lock.resolve(dep_ref, &pkg_ref.to_string())?,
             None => derive_dep_strategy_and_ident(&manifest_dir, dep_ref, spec, &config.patch)
                 .map_err(|e| AddModuleError::LoadProjectFailed {
@@ -637,46 +718,24 @@ fn add_module_recursive_body(
             dep_ident,
             dep_strategy
         );
-        add_module_recursively(
-            iceoryx2_node,
-            orchestrator,
-            sink,
-            dep_ident,
-            dep_strategy,
-            seen,
-            path,
-            resolution_memo,
-            load_id,
-            skipped_in_flight,
-            locked,
-            link,
-        )?;
+        add_module_recursively(walk_context, dep_ident, dep_strategy)?;
     }
 
-    // Now register this package's own processors. Thread the active link so a
+    // Now stage this package's own processors. Thread the active link so a
     // config schema dep present in the checkout resolves from the checkout too
     // (load-time zero-registry dev loop); `None` off a link → unchanged.
     register_manifest_processors(
-        iceoryx2_node,
+        walk_context.iceoryx2_node,
         &manifest_dir,
         &config,
-        link.map(|l| l.checkout()),
+        walk_context.link.map(|l| l.checkout()),
+        walk_context.staging,
+        &pkg_ref,
     )
     .map_err(|e| AddModuleError::LoadProjectFailed {
         module: module.clone(),
         source: Box::new(e),
     })?;
-
-    // Registration + the transitive walk succeeded — flip the in-flight
-    // placeholder to a committed record and publish `Committed` to any
-    // concurrent loads that skipped this package. Note that registration
-    // itself is NOT transactional: schemas / processors registered before
-    // a later failure remain in the process-global registries (no module
-    // unload / rollback exists yet), so retrying a multi-processor
-    // package that failed partway can hit "already registered". The
-    // guard's commit-after-success still guarantees the memo never claims
-    // a package resolved when its load didn't complete.
-    placeholder_guard.commit();
 
     Ok(())
 }

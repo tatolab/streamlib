@@ -144,8 +144,9 @@ pub struct Runner {
     /// version divergence — or two successive / concurrent `add_module`s
     /// resolving different concrete versions of the same package —
     /// surfaces as [`AddModuleError::SingleVersionConflict`] instead of a
-    /// silent double-registration. Lives for the runtime's lifetime
-    /// (there is no module unload today); dropped with the [`Runner`].
+    /// silent double-registration. Lives for the runtime's lifetime;
+    /// [`Runner::remove_module`] clears a removed package's entry so a
+    /// later `add_module` re-resolves it from scratch.
     /// The memo is Runner-scoped while the schema / processor registries
     /// it protects are process-global statics — a second [`Runner`] in
     /// the same process carries its own memo and does not see this one's

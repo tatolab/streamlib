@@ -12,6 +12,16 @@
 //! which lives outside the engine. Loads run eagerly on the runtime's
 //! existing tokio handle and surface as [`AddedModule`] futures.
 //!
+//! Registration is transactional per top-level load: the walk stages
+//! every schema / processor / dylib registration into a per-load
+//! [`staging::ModuleLoadRegistrationStaging`] buffer, and a single
+//! whole-load commit applies it under the module-registry commit lock.
+//! A failed load drops the staging — the global registries are
+//! byte-equivalent to before the attempt (dylib images are the one
+//! deliberate exception: retained for the process lifetime, never
+//! `dlclose`d). [`Runner::remove_module`] unloads a committed package
+//! via the [`ledger`].
+//!
 //! Files in this directory:
 //!
 //! - [`errors`] — `AddModuleError`, `RemoveModuleError` typed enums.
@@ -22,10 +32,16 @@
 //!   [`ModuleLoadEvent`].
 //! - [`recursive_walker`] — recursive transitive-dep walk, cycle
 //!   detection, per-dep strategy derivation, and the materialize step.
-//! - [`processor_registration`] — manifest-driven processor registration.
-//! - [`schema_registration`] — manifest-driven schema registration.
+//! - [`processor_registration`] — manifest-driven processor staging.
+//! - [`schema_registration`] — manifest-driven schema staging.
+//! - [`staging`] — per-load registration staging buffer, the
+//!   thread-local cdylib registration sink, the commit, and the
+//!   process-lifetime plugin-image retention.
+//! - [`ledger`] — process-global record of committed loads consumed by
+//!   [`Runner::remove_module`].
 //! - [`slpkg`] — `.slpkg` archive extraction.
 //!
+//! [`Runner::remove_module`]: super::Runner::remove_module
 //! [`Runner::add_module`]: super::Runner::add_module
 //! [`Runner::add_module_with`]: super::Runner::add_module_with
 //! [`Runner::await_modules`]: super::Runner::await_modules
@@ -43,12 +59,14 @@ use crate::iceoryx2::Iceoryx2Node;
 mod added_module;
 mod build_orchestrator;
 mod errors;
+mod ledger;
 mod locked;
 mod processor_registration;
 mod recursive_walker;
 mod schema_registration;
 mod slpkg;
 mod source;
+mod staging;
 
 #[cfg(test)]
 mod tests;
@@ -64,6 +82,11 @@ pub use processor_registration::host_target_triple;
 pub(crate) use recursive_walker::ResolutionMemo;
 pub use slpkg::extract_slpkg_to_cache;
 pub use source::{ArtifactChecksum, SemVerRange, Strategy};
+pub use staging::loaded_plugin_library_count;
+pub(crate) use staging::{
+    lookup_schema_via_active_cdylib_sink, stage_processor_via_active_cdylib_sink,
+    stage_schema_via_active_cdylib_sink,
+};
 
 use added_module::MODULE_EVENT_CHANNEL_CAPACITY;
 
@@ -114,8 +137,13 @@ static NEXT_MODULE_LOAD_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::At
 
 /// The blocking body of a single module load. Runs on `spawn_blocking`:
 /// it resolves the strategy, materializes via the orchestrator when a
-/// build is required (blocking), recursively loads transitive deps, and
-/// registers schemas + processors. Emits terminal events on `events`.
+/// build is required (blocking), recursively walks transitive deps
+/// staging every registration, and — only after the ENTIRE walk
+/// succeeded — commits the staged registrations to the global
+/// registries in one step. A failure at any point drops the staging:
+/// the registries are byte-equivalent to before the attempt (dylib
+/// images are retained for the process lifetime). Emits terminal events
+/// on `events`.
 fn run_module_load(
     iceoryx2_node: Iceoryx2Node,
     orchestrator: Option<Arc<dyn BuildOrchestrator>>,
@@ -134,9 +162,6 @@ fn run_module_load(
         ident: module.clone(),
         events: events.clone(),
     };
-    let mut seen: HashSet<streamlib_idents::PackageRef> = HashSet::new();
-    let mut path: Vec<streamlib_idents::PackageRef> = Vec::new();
-    let mut skipped_in_flight: Vec<recursive_walker::SkippedInFlightDependency> = Vec::new();
 
     // Discover an active `streamlib link` once per top-level load, from the
     // process working directory (the consumer's run dir, where `streamlib link`
@@ -155,31 +180,39 @@ fn run_module_load(
         }
     };
 
-    let result = recursive_walker::add_module_recursively(
-        &iceoryx2_node,
-        orchestrator.as_ref(),
-        &sink,
-        module.clone(),
-        strategy,
-        &mut seen,
-        &mut path,
-        &resolution_memo,
+    let staging = staging::ModuleLoadRegistrationStaging::new();
+    let mut walk_context = recursive_walker::ModuleLoadWalkContext {
+        iceoryx2_node: &iceoryx2_node,
+        orchestrator: orchestrator.as_ref(),
+        sink: &sink,
+        resolution_memo: &resolution_memo,
         load_id,
-        &mut skipped_in_flight,
-        locked.as_deref(),
-        link.as_ref(),
-    );
+        locked: locked.as_deref(),
+        link: link.as_ref(),
+        staging: &staging,
+        seen: HashSet::new(),
+        path: Vec::new(),
+        skipped_in_flight: Vec::new(),
+        armed_placeholder_guards: Vec::new(),
+        committed_dependency_requirer_edges: Vec::new(),
+    };
+
+    let result =
+        recursive_walker::add_module_recursively(&mut walk_context, module.clone(), strategy);
     // End-of-walk verification: this walk skipped some packages because a
     // CONCURRENT load had them in flight at the same version. Before
-    // reporting success, verify each owner actually committed — an owner
-    // that failed (or wedged) means this load's graph is missing a
-    // registration, and Ok would be a false success. Mid-walk nobody ever
-    // blocks; these waits depend only on other loads' per-package commits,
-    // which flip as their subtrees unwind without needing this waiter —
-    // structurally deadlock-free.
+    // committing, verify each owner actually committed — an owner that
+    // failed (or wedged) means this load's graph is missing a
+    // registration, and Ok would be a false success. Same-load diamond
+    // re-encounters never land here (the gate's SkipOwnedByThisLoad arm),
+    // so a load never waits on itself. Two loads that each skipped a
+    // package the OTHER owns wait on each other here — that mutual skip
+    // is bounded by the timeout and surfaces as the typed
+    // `ConcurrentLoadOfSkippedDependencyTimedOut`. The wait runs BEFORE
+    // the commit lock is taken — commit never blocks on another load.
     let result = result.and_then(|()| {
         use recursive_walker::{ConcurrentPackageLoadOutcome, SKIPPED_IN_FLIGHT_WAIT_TIMEOUT};
-        for skipped in skipped_in_flight {
+        for skipped in std::mem::take(&mut walk_context.skipped_in_flight) {
             match skipped
                 .completion_signal
                 .wait_for_outcome(SKIPPED_IN_FLIGHT_WAIT_TIMEOUT)
@@ -204,6 +237,14 @@ fn run_module_load(
     });
     match result {
         Ok(()) => {
+            // Whole-load commit: apply staged registrations, write the
+            // ledger, flip the memo placeholders, publish `Committed`.
+            staging::commit_module_load_registrations(
+                &staging,
+                walk_context.armed_placeholder_guards,
+                walk_context.committed_dependency_requirer_edges,
+                &resolution_memo,
+            );
             let _ = events.send(ModuleLoadEvent::Completed {
                 ident: module.clone(),
                 took: start.elapsed(),
@@ -211,6 +252,11 @@ fn run_module_load(
             Ok(LoadedModule { ident: module })
         }
         Err(e) => {
+            // Rollback = drop: the armed placeholder guards abandon their
+            // memo placeholders (publishing `Failed` to concurrent
+            // skippers) and the staging buffer discards schemas +
+            // processors while retaining dylib images.
+            drop(walk_context);
             let _ = events.send(ModuleLoadEvent::Failed {
                 ident: module.clone(),
                 error: e.to_string(),
@@ -481,18 +527,157 @@ impl Runner {
         }
     }
 
-    /// Unload a previously-added module.
+    /// Unload a previously-added module: remove its processor and schema
+    /// registrations from the global registries, drop its ledger record,
+    /// and clear its resolution-memo entry so a later [`Runner::add_module`]
+    /// re-resolves it from scratch. The module's dylib images stay
+    /// retained for the process lifetime (`dlclose` is never called) —
+    /// unload means registration removal, not image unmapping.
     ///
-    /// **Not yet implemented** — module-level unload requires the
-    /// hot-reload lifecycle work that's out of scope for the current
-    /// All-Dynamic Package Loading milestone. Returns
-    /// [`RemoveModuleError::HotReloadLifecycleNotYetImplemented`]
-    /// without altering runtime state.
+    /// Typed refusals ([`RemoveModuleError`]) leave every registry
+    /// exactly as it was: the module isn't loaded (or the loaded version
+    /// doesn't satisfy the requested range), a load of it is still in
+    /// flight, other loaded modules still require it (removal never
+    /// cascades), or graph processors still instantiate its types.
+    ///
+    /// [`Runner::add_module`]: Self::add_module
+    #[tracing::instrument(skip(self), fields(module = %module))]
     pub fn remove_module(
         &self,
         module: streamlib_idents::ModuleIdent,
     ) -> std::result::Result<(), RemoveModuleError> {
-        Err(RemoveModuleError::HotReloadLifecycleNotYetImplemented { module })
+        let pkg_ref = module.package_ref();
+
+        // Serialize against module-load commits and other removals. Every
+        // step below is brief; nothing here waits on another load.
+        let _commit_guard = staging::MODULE_REGISTRY_COMMIT_LOCK.lock();
+
+        // (1) A load of this module still in flight — as a top-level load
+        // on this Runner, or as a dependency mid-walk on any load sharing
+        // this Runner's resolution memo.
+        if self.loading_modules.lock().contains_key(&pkg_ref)
+            || self.resolution_memo.is_package_in_flight(&pkg_ref)
+        {
+            return Err(RemoveModuleError::LoadInFlight { module });
+        }
+
+        // Ledger lookup + version-range check.
+        let record_summary = ledger::with_loaded_module_registration_record(&pkg_ref, |record| {
+            (
+                record.version,
+                record.required_by.clone(),
+                record.processor_idents.clone(),
+            )
+        });
+        let Some((loaded_version, required_by, processor_idents)) = record_summary else {
+            return Err(RemoveModuleError::ModuleNotLoaded {
+                module,
+                loaded_version: None,
+            });
+        };
+        if !module.version.matches(loaded_version) {
+            return Err(RemoveModuleError::ModuleNotLoaded {
+                module,
+                loaded_version: Some(loaded_version),
+            });
+        }
+
+        // (2) Other loaded modules still require this one — no cascade.
+        if !required_by.is_empty() {
+            return Err(RemoveModuleError::RequiredByLoadedModules {
+                module,
+                requirers: required_by,
+            });
+        }
+
+        // (3) In-use check, TOCTOU-closing shape: FIRST unregister the
+        // module's processor types (so a racing `add_processor` gets a
+        // registry miss instead of instantiating a half-removed type),
+        // THEN scan this Runner's graph; if any node still carries one of
+        // the removed types, RESTORE the registrations and refuse. Nodes
+        // marked pending-deletion are excluded — the graph has committed
+        // to removing them and the compiler never spawns one.
+        let unregistered = crate::core::processors::PROCESSOR_REGISTRY
+            .unregister_processor_types(&processor_idents);
+        let removed_type_set: std::collections::HashSet<&crate::core::descriptors::SchemaIdent> =
+            processor_idents.iter().collect();
+        let processors_in_use: Vec<(
+            crate::core::graph::ProcessorUniqueId,
+            crate::core::descriptors::SchemaIdent,
+        )> = self.compiler.scope(|graph, _tx| {
+            use crate::core::graph::GraphNodeWithComponents;
+            graph
+                .traversal()
+                .v(())
+                .iter()
+                .filter(|node| {
+                    removed_type_set.contains(&node.processor_type)
+                        && !node.has::<crate::core::graph::PendingDeletionComponent>()
+                })
+                .map(|node| (node.id.clone(), node.processor_type.clone()))
+                .collect()
+        });
+        if !processors_in_use.is_empty() {
+            crate::core::processors::PROCESSOR_REGISTRY
+                .reinstate_unregistered_processor_types(unregistered);
+            let (processor_ids, mut processor_types): (Vec<_>, Vec<_>) =
+                processors_in_use.into_iter().unzip();
+            processor_types.sort_by_key(|t| t.to_string());
+            processor_types.dedup();
+            return Err(RemoveModuleError::ProcessorsInUse {
+                module,
+                processor_ids,
+                processor_types,
+            });
+        }
+
+        // Point of no return — the ledger record is consumed below and
+        // every remaining step is infallible.
+        let record = ledger::remove_loaded_module_registration_record(&pkg_ref)
+            .expect("ledger record present above; commit lock held throughout");
+
+        // (4) Schema removal. Legacy reverse-DNS ids (no `@org/name/`
+        // prefix) can be registered by multiple packages, so they are
+        // deliberately left in place; package-owned `@org/name/Type` ids
+        // are removed.
+        for schema_id in &record.schema_ids {
+            if schema_id.starts_with('@') {
+                crate::core::embedded_schemas::unregister_schema(schema_id);
+            } else {
+                tracing::debug!(
+                    schema = %schema_id,
+                    module = %pkg_ref,
+                    "remove_module: leaving legacy reverse-DNS schema id in \
+                     place (potentially shared across packages)",
+                );
+            }
+        }
+
+        // (5) Clear this Runner's resolution-memo entry so a later
+        // add_module re-resolves the package from scratch.
+        self.resolution_memo.remove_committed_resolution(&pkg_ref);
+
+        // (6) Announce each removed processor type.
+        for processor_type in &record.processor_idents {
+            crate::core::pubsub::PUBSUB.publish(
+                crate::core::pubsub::topics::RUNTIME_GLOBAL,
+                &crate::core::pubsub::Event::RuntimeGlobal(
+                    crate::core::pubsub::RuntimeEvent::RuntimeDidUnregisterProcessorType {
+                        processor_type: processor_type.clone(),
+                    },
+                ),
+            );
+        }
+
+        tracing::info!(
+            module = %pkg_ref,
+            version = %record.version,
+            processors = record.processor_idents.len(),
+            schemas = record.schema_ids.len(),
+            "remove_module: unloaded (dylib images retained for the \
+             process lifetime)",
+        );
+        Ok(())
     }
 
     /// The set of modules whose loads have not yet settled. Used by

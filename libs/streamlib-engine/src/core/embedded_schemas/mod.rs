@@ -70,6 +70,12 @@ pub fn register_schema(canonical_id: impl Into<String>, body: impl Into<Arc<str>
     guard.insert(canonical, body);
 }
 
+/// Remove a schema's registry entry by exact canonical identifier.
+/// Host-side only — used by `remove_module`; no-op when absent.
+pub(crate) fn unregister_schema(canonical_id: &str) {
+    SCHEMA_REGISTRY.write().remove(canonical_id);
+}
+
 /// Get the schema's YAML body for a canonical identifier.
 ///
 /// Accepts both unversioned (`@tatolab/core/VideoFrame`) and versioned

@@ -416,26 +416,73 @@ impl From<AddModuleError> for Error {
     }
 }
 
-/// Per-failure-mode error returned by [`Runner::remove_module`].
-///
-/// Today the only variant is the milestone-deferral marker; new
-/// variants land when the hot-reload lifecycle work ships.
+/// Per-failure-mode error returned by [`Runner::remove_module`]. Every
+/// variant leaves the runtime's registries exactly as they were.
 ///
 /// [`Runner::remove_module`]: super::super::Runner::remove_module
 #[derive(Debug, thiserror::Error)]
 pub enum RemoveModuleError {
-    /// Module unload requires the hot-reload lifecycle work that's
-    /// explicitly out of scope for the current All-Dynamic Package
-    /// Loading milestone. Calling `remove_module` returns this without
-    /// altering any runtime state.
+    /// No committed load matches the requested module — either the
+    /// package was never loaded (`loaded_version: None`) or the loaded
+    /// version doesn't satisfy the requested range (`loaded_version`
+    /// names what IS loaded).
     #[error(
-        "remove_module('{module}') is not yet implemented — \
-         hot-reload lifecycle is deferred to a future milestone. \
-         The runtime currently supports load-only, runtime-lifetime \
-         module registration."
+        "remove_module('{module}'): {}. Load the module first via \
+         add_module, or request a range matching the loaded version.",
+        match loaded_version {
+            Some(v) => format!("the loaded version {v} does not satisfy the requested range"),
+            None => "no loaded module matches".to_string(),
+        }
     )]
-    HotReloadLifecycleNotYetImplemented {
+    ModuleNotLoaded {
         module: streamlib_idents::ModuleIdent,
+        loaded_version: Option<streamlib_idents::SemVer>,
+    },
+
+    /// A load of this module is still in flight — removal would race the
+    /// walk. Await the pending load (e.g. via [`Runner::await_modules`]),
+    /// then retry.
+    ///
+    /// [`Runner::await_modules`]: super::super::Runner::await_modules
+    #[error(
+        "remove_module('{module}'): a load of this module is still in \
+         flight. Await the pending load (Runner::await_modules), then \
+         retry the removal."
+    )]
+    LoadInFlight {
+        module: streamlib_idents::ModuleIdent,
+    },
+
+    /// Other loaded modules still declare this module as a dependency.
+    /// Removal never cascades — remove the requirers first, then retry.
+    #[error(
+        "remove_module('{module}'): still required by loaded module(s) {}. \
+         Removal never cascades — remove_module each requirer first, then \
+         retry.",
+        requirers.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ")
+    )]
+    RequiredByLoadedModules {
+        module: streamlib_idents::ModuleIdent,
+        requirers: Vec<streamlib_idents::PackageRef>,
+    },
+
+    /// Graph nodes still instantiate this module's processor types.
+    /// Remove those processors from the graph
+    /// ([`RuntimeOperations::remove_processor`]), then retry.
+    ///
+    /// [`RuntimeOperations::remove_processor`]: crate::core::runtime::RuntimeOperations::remove_processor
+    #[error(
+        "remove_module('{module}'): {} graph processor(s) still use its \
+         processor type(s): [{}] (types: [{}]). Remove those processors \
+         from the graph first, then retry.",
+        processor_ids.len(),
+        processor_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", "),
+        processor_types.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ")
+    )]
+    ProcessorsInUse {
+        module: streamlib_idents::ModuleIdent,
+        processor_ids: Vec<crate::core::graph::ProcessorUniqueId>,
+        processor_types: Vec<crate::core::descriptors::SchemaIdent>,
     },
 }
 
