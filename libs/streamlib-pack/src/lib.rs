@@ -835,6 +835,20 @@ fn collect_source_tree(pkg_dir: &Path, files: &mut Vec<(String, PathBuf)>) -> Re
 /// stream to locate the produced cdylib. Cargo's own fingerprint
 /// short-circuits when nothing changed — and catches out-of-package /
 /// transitive changes a package-local check cannot.
+/// The `STREAMLIB_LINK_CHECKOUT` value a relocated build threads to its package
+/// `build.rs`: the checkout path when a link is active, or EMPTY (the
+/// suppression sentinel [`streamlib_idents::ResolverOptions::from_env_or_marker`]
+/// honors) when not. Setting it unconditionally keeps the orchestrator
+/// authoritative over link state — the relocated `build.rs` trusts this env and
+/// never re-derives the link from a stray `.streamlib/link.json` up-tree of the
+/// staged crate dir.
+fn link_checkout_env_value(link_checkout: Option<&Path>) -> &std::ffi::OsStr {
+    match link_checkout {
+        Some(checkout) => checkout.as_os_str(),
+        None => std::ffi::OsStr::new(""),
+    }
+}
+
 fn cargo_build_streaming(
     pkg_dir: &Path,
     cargo_name: &str,
@@ -858,16 +872,25 @@ fn cargo_build_streaming(
         command.arg("--config").arg(config_file);
     }
     // Thread the active `streamlib link` checkout to the package's `build.rs`
-    // schema-dep codegen, which reads it via `ResolverOptions::from_env` and
-    // resolves a dep present in `<checkout>/packages/<name>` from the checkout —
-    // the schema-dep half of the zero-registry dev loop, mirroring the cargo
-    // `[patch]` above for the crate half. `build.rs` runs as a child of this
-    // `cargo build`, so an env var set here reaches it. `None` (every
-    // non-linked / locked / distribution build) sets nothing, leaving schema
-    // resolution byte-identical to before.
-    if let Some(checkout) = link_checkout {
-        command.env(streamlib_idents::LINK_CHECKOUT_ENV, checkout);
-    }
+    // schema-dep codegen, which reads it via `ResolverOptions::from_env_or_marker`
+    // and resolves a dep present in `<checkout>/packages/<name>` from the
+    // checkout — the schema-dep half of the zero-registry dev loop, mirroring the
+    // cargo `[patch]` above for the crate half. `build.rs` runs as a child of
+    // this `cargo build`, so an env var set here reaches it.
+    //
+    // The env is set UNCONDITIONALLY so the orchestrator stays authoritative
+    // over link state: this is a relocated build (the package is staged into the
+    // streamlib-home cache, whose `.streamlib` dir name collides with the
+    // link-state dir), so `build.rs`'s marker walk-up from `CARGO_MANIFEST_DIR`
+    // could otherwise cross into a stray `.streamlib/link.json` up-tree and
+    // silently redirect a locked / distribution build to a dev checkout. Setting
+    // the checkout when a link is active, and EMPTY (the suppression sentinel
+    // `from_env_or_marker` honors) when not, means the relocated `build.rs`
+    // trusts this env and never re-derives link state from the marker.
+    command.env(
+        streamlib_idents::LINK_CHECKOUT_ENV,
+        link_checkout_env_value(link_checkout),
+    );
     command
         .arg("--message-format=json-render-diagnostics")
         .arg("-p")
@@ -1257,6 +1280,28 @@ mod tests {
     use super::*;
     use streamlib_cargo_build::{host_dylib_extension, host_target_triple};
     use tempfile::tempdir;
+
+    /// A relocated build sets `STREAMLIB_LINK_CHECKOUT` UNCONDITIONALLY — the
+    /// checkout when a link is active, EMPTY (never absent) otherwise — so the
+    /// orchestrator stays authoritative and the staged `build.rs` never
+    /// re-derives the link from a stray marker up-tree. Mentally-revert the
+    /// `None => ""` arm (leave the env unset for a non-linked build) and the
+    /// empty-assert fails, proving the suppression sentinel is emitted.
+    #[test]
+    fn relocated_build_link_env_value_is_checkout_or_empty_never_absent() {
+        assert_eq!(
+            link_checkout_env_value(None),
+            std::ffi::OsStr::new(""),
+            "a non-linked relocated build must set the EMPTY suppression sentinel, \
+             not leave the env unset"
+        );
+        let checkout = Path::new("/opt/streamlib-checkout");
+        assert_eq!(
+            link_checkout_env_value(Some(checkout)),
+            checkout.as_os_str(),
+            "an active link threads the checkout path through as the override"
+        );
+    }
 
     fn slpkg_opts(no_build: bool) -> AssembleOptions {
         AssembleOptions {

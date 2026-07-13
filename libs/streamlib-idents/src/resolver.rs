@@ -139,10 +139,16 @@ pub struct ResolverOptions {
     /// redirect, completing the zero-registry dev loop. `None` (the dominant
     /// case) leaves resolution byte-identical to a non-linked build: absent
     /// packages, and every dep when no link is active, resolve by version from
-    /// the store / registry (or via a dev path patch). Populated from
-    /// [`crate::LINK_CHECKOUT_ENV`] by [`ResolverOptions::from_env`]; locked
-    /// runs never set it (the orchestrator withholds it), preserving
-    /// reproducibility.
+    /// the store / registry (or via a dev path patch). Populated at the
+    /// compile-time codegen boundary by [`ResolverOptions::from_env_or_marker`]
+    /// — **marker-first** (the `.streamlib/link.json` a `streamlib link` wrote,
+    /// discovered by walking up from the crate dir) with
+    /// [`crate::LINK_CHECKOUT_ENV`] as an explicit override. A locked run or an
+    /// orchestrator-driven distribution build stays `None`: locked runs never
+    /// build (so no codegen boundary runs), and the orchestrator sets the env
+    /// to empty to suppress marker discovery for a relocated build, preserving
+    /// reproducibility. [`resolve_with`] reads this field only; it never
+    /// consults the marker or the environment.
     pub link_checkout: Option<PathBuf>,
 }
 
@@ -160,18 +166,109 @@ impl ResolverOptions {
             link_checkout: link_checkout_from_env(),
         }
     }
+
+    /// The compile-time codegen-boundary constructor: like [`from_env`], but
+    /// resolves the active `streamlib link` checkout **marker-first** — walking
+    /// up from `manifest_dir` for the `.streamlib/link.json` a `streamlib link`
+    /// wrote — with [`crate::LINK_CHECKOUT_ENV`] as an explicit override. Build
+    /// scripts, the `#[processor]` macro, and `streamlib generate` use this so a
+    /// directly-`cargo build`-ed linked app resolves its schema deps from the
+    /// checkout with no env var to export by hand.
+    ///
+    /// Env precedence over the marker is what preserves the load-bearing
+    /// suppression boundary: the build orchestrator sets the env for every
+    /// relocated build (the checkout path when a link is active, empty to
+    /// suppress otherwise), so a distribution / locked-materialization build
+    /// never re-derives link state from a stray marker up-tree of the
+    /// relocated crate dir. Unit tests construct [`ResolverOptions`] directly to
+    /// stay hermetic.
+    ///
+    /// [`from_env`]: ResolverOptions::from_env
+    pub fn from_env_or_marker(manifest_dir: &Path) -> Self {
+        Self {
+            cache_dir: None,
+            registry: RegistryConfig::from_env(),
+            link_checkout: link_checkout_env_or_marker(manifest_dir),
+        }
+    }
 }
 
 /// Read the active `streamlib link` checkout from [`crate::LINK_CHECKOUT_ENV`],
 /// returning `None` when unset/empty — the codegen-boundary read that makes
 /// `resolve_with` link-aware without the pure resolver ever touching the
 /// environment. The orchestrator sets this env on a linked package's `cargo
-/// build` (and withholds it for locked/distribution builds), so a `build.rs`
-/// schema-dep codegen redirects to the checkout only when a link is active.
+/// build` (and sets it to empty for locked/distribution builds), so a
+/// `build.rs` schema-dep codegen redirects to the checkout only when a link is
+/// active. Used by [`ResolverOptions::from_env`]; the marker-first boundary
+/// ([`ResolverOptions::from_env_or_marker`]) layers `.streamlib/link.json`
+/// discovery under an absent env.
 fn link_checkout_from_env() -> Option<PathBuf> {
     std::env::var_os(crate::LINK_CHECKOUT_ENV)
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())
+}
+
+/// Resolve the active `streamlib link` checkout for a compile-time codegen
+/// boundary — **marker-first with env override**, `var_os` distinguishing
+/// unset from set-empty:
+///
+/// * [`crate::LINK_CHECKOUT_ENV`] **set to a non-empty path** ⇒ that path (an
+///   explicit override — a dev exporting it, or the build orchestrator
+///   threading the discovered checkout for a relocated build).
+/// * [`crate::LINK_CHECKOUT_ENV`] **set to empty** ⇒ `None` (suppression) with
+///   NO marker discovery. The orchestrator sets this for a locked / distribution
+///   build so a relocated `cargo build` never re-derives link state from a stray
+///   `.streamlib/link.json` up-tree of the relocated crate dir — the
+///   streamlib-home cache the orchestrator relocates into shares the
+///   `.streamlib` dir name with the link-state dir, so an unconditional walk-up
+///   would otherwise collide.
+/// * [`crate::LINK_CHECKOUT_ENV`] **unset** ⇒ walk up from `manifest_dir` for
+///   `.streamlib/link.json` and take its checkout — the direct-`cargo build`
+///   path with no env exported.
+///
+/// The env read still keeps the pure resolver env-free: this runs at the
+/// codegen boundary only ([`ResolverOptions::from_env_or_marker`]).
+fn link_checkout_env_or_marker(manifest_dir: &Path) -> Option<PathBuf> {
+    match std::env::var_os(crate::LINK_CHECKOUT_ENV) {
+        Some(raw) => {
+            let path = PathBuf::from(raw);
+            if path.as_os_str().is_empty() {
+                None
+            } else {
+                Some(path)
+            }
+        }
+        None => link_checkout_from_marker(manifest_dir),
+    }
+}
+
+/// Walk up from `manifest_dir` for a `streamlib link` marker
+/// (`.streamlib/link.json`) and return its recorded checkout. `None` when no
+/// marker is found; a corrupt marker is logged and treated as no link (never a
+/// silent redirect to a suspect checkout — the resolve then fails loud if the
+/// dep is otherwise unresolvable).
+fn link_checkout_from_marker(manifest_dir: &Path) -> Option<PathBuf> {
+    match crate::link_marker::find_and_load_active_link(manifest_dir) {
+        Ok(Some((marker, manifest))) => {
+            tracing::debug!(
+                marker = %marker.display(),
+                checkout = %manifest.checkout.display(),
+                "streamlib link marker discovered at codegen boundary — resolving \
+                 schema deps from the linked checkout"
+            );
+            Some(manifest.checkout)
+        }
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!(
+                start = %manifest_dir.display(),
+                error = %e,
+                "streamlib link marker present but unreadable — ignoring for schema \
+                 resolution (run `streamlib unlink` then re-link to repair)"
+            );
+            None
+        }
+    }
 }
 
 /// Resolve a `streamlib.yaml` at `root_dir` and every transitive dependency
@@ -1901,5 +1998,204 @@ dependencies:
                 None => std::env::remove_var(crate::LINK_CHECKOUT_ENV),
             }
         }
+    }
+
+    /// Write a `.streamlib/link.json` marker at `root` recording `checkout` —
+    /// the shape `streamlib link --engine` persists, enough for
+    /// `find_and_load_active_link` walk-up discovery.
+    fn write_link_marker(root: &Path, checkout: &Path) {
+        use crate::link_marker::{
+            LINK_MANIFEST_FILE, LINK_STATE_DIR, LinkManifest, LinkTransactionState,
+        };
+        let dir = root.join(LINK_STATE_DIR);
+        std::fs::create_dir_all(&dir).unwrap();
+        let manifest = LinkManifest {
+            checkout: checkout.to_path_buf(),
+            python_sdk_path: checkout.join("libs/streamlib-python"),
+            deno_sdk_entrypoint_path: checkout.join("libs/streamlib-deno/mod.ts"),
+            linked_at: "2026-01-01T00:00:00Z".into(),
+            linked_crate_count: 1,
+            state: LinkTransactionState::Active,
+            files: Vec::new(),
+        };
+        std::fs::write(
+            dir.join(LINK_MANIFEST_FILE),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// Run `f` with `STREAMLIB_LINK_CHECKOUT` forced to `value` (`None` ⇒
+    /// unset), restoring the prior value afterward. Restores BEFORE returning
+    /// the computed value so a later failed assert can't leak the env.
+    fn with_link_checkout_env<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
+        // SAFETY: every caller is `#[serial]`, so the env-mutating tests are
+        // mutually exclusive and no other thread reads the env concurrently.
+        let prev = std::env::var_os(crate::LINK_CHECKOUT_ENV);
+        unsafe {
+            match value {
+                Some(v) => std::env::set_var(crate::LINK_CHECKOUT_ENV, v),
+                None => std::env::remove_var(crate::LINK_CHECKOUT_ENV),
+            }
+        }
+        let out = f();
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var(crate::LINK_CHECKOUT_ENV, v),
+                None => std::env::remove_var(crate::LINK_CHECKOUT_ENV),
+            }
+        }
+        out
+    }
+
+    /// Marker-first discovery: with `STREAMLIB_LINK_CHECKOUT` unset, a
+    /// `.streamlib/link.json` up-tree of the manifest dir supplies the checkout
+    /// — the direct-`cargo build` fix (no env to export by hand).
+    #[test]
+    #[serial_test::serial]
+    fn from_env_or_marker_discovers_marker_when_env_unset() {
+        let tmp = tempfile::tempdir().unwrap();
+        let checkout = tmp.path().join("streamlib-checkout");
+        write_link_marker(tmp.path(), &checkout);
+        let nested = tmp.path().join("app").join("crate-dir");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let got = with_link_checkout_env(None, || {
+            ResolverOptions::from_env_or_marker(&nested).link_checkout
+        });
+        assert_eq!(
+            got,
+            Some(checkout),
+            "an up-tree marker must supply the checkout when the env is unset"
+        );
+    }
+
+    /// Explicit env overrides the marker: a set (non-empty) env wins, so a dev
+    /// who exports `STREAMLIB_LINK_CHECKOUT` (or the orchestrator threading the
+    /// discovered checkout for a relocated build) is authoritative.
+    #[test]
+    #[serial_test::serial]
+    fn from_env_or_marker_env_overrides_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let marker_checkout = tmp.path().join("marker-checkout");
+        write_link_marker(tmp.path(), &marker_checkout);
+        let nested = tmp.path().join("app");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let got = with_link_checkout_env(Some("/explicit/override"), || {
+            ResolverOptions::from_env_or_marker(&nested).link_checkout
+        });
+        assert_eq!(
+            got,
+            Some(PathBuf::from("/explicit/override")),
+            "a non-empty env must win over the marker"
+        );
+        assert_ne!(
+            got,
+            Some(marker_checkout),
+            "the override must not defer to the marker's checkout"
+        );
+    }
+
+    /// THE suppression boundary. The orchestrator sets the env to EMPTY for a
+    /// relocated / locked / distribution build. Even with a stray
+    /// `.streamlib/link.json` up-tree (the streamlib-home cache the orchestrator
+    /// relocates into shares the `.streamlib` dir name with the link-state dir),
+    /// an empty env must NOT redirect to the checkout. Mentally-revert the
+    /// empty-suppression branch — fall through to marker discovery — and this
+    /// asserts `Some(checkout)` and fails, proving the fix did not reintroduce
+    /// the mixed-build hazard.
+    #[test]
+    #[serial_test::serial]
+    fn from_env_or_marker_empty_env_suppresses_stray_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let checkout = tmp.path().join("stray-checkout");
+        write_link_marker(tmp.path(), &checkout);
+        // Mimic the relocated-build crate dir under a streamlib-home cache whose
+        // own `.streamlib` dir sits beneath the marker's `.streamlib`.
+        let relocated = tmp
+            .path()
+            .join("home")
+            .join(".streamlib")
+            .join("cache")
+            .join("packages")
+            .join("pkg-1.0.0");
+        std::fs::create_dir_all(&relocated).unwrap();
+        // Precondition: the marker IS discoverable up-tree, so suppression (not
+        // absence) is what yields `None`.
+        assert!(
+            crate::link_marker::find_active_link_marker(&relocated).is_some(),
+            "test setup: a marker must be present up-tree"
+        );
+
+        let got = with_link_checkout_env(Some(""), || {
+            ResolverOptions::from_env_or_marker(&relocated).link_checkout
+        });
+        assert_eq!(
+            got, None,
+            "empty env is the suppression sentinel — a relocated/locked/distribution \
+             build must not redirect to a checkout even with a marker up-tree"
+        );
+    }
+
+    /// Neither channel active: no marker up-tree and no env ⇒ no redirect. The
+    /// dominant non-linked build stays byte-identical to before.
+    #[test]
+    #[serial_test::serial]
+    fn from_env_or_marker_no_marker_no_env_is_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let nested = tmp.path().join("app");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let got = with_link_checkout_env(None, || {
+            ResolverOptions::from_env_or_marker(&nested).link_checkout
+        });
+        assert_eq!(
+            got, None,
+            "no marker and no env must leave link_checkout unset"
+        );
+    }
+
+    /// End-to-end: marker discovery → `from_env_or_marker` → `resolve_with`
+    /// resolves a by-version dep from the linked checkout's `packages/` tree
+    /// with NO env exported — the full direct-`cargo build` path the fix
+    /// delivers (mirrors the codegen boundary `build.rs` drives). Mentally-revert
+    /// marker discovery (`link_checkout_from_marker` returns `None`) and the dep
+    /// falls through to the by-version path with no registry configured, so the
+    /// resolve errors and `.expect` panics — the redirect is locked.
+    #[test]
+    #[serial_test::serial]
+    fn marker_first_resolves_dep_from_linked_checkout_without_env() {
+        let tmp = tempfile::tempdir().unwrap();
+        let checkout = tmp.path().join("checkout");
+        write_checkout_package(&checkout, "core", "core", "1.0.0");
+
+        // The app root carries the marker; a nested crate dir builds under it.
+        let app_root = tmp.path().join("app");
+        write_link_marker(&app_root, &checkout);
+        let crate_dir = app_root.join("crates").join("app-lib");
+        write_streamlib_yaml(&crate_dir, "dependencies:\n  \"@tatolab/core\": \"^1.0.0\"\n");
+
+        let res = with_link_checkout_env(None, || {
+            let opts = ResolverOptions::from_env_or_marker(&crate_dir);
+            resolve_with(&crate_dir, &opts)
+        })
+        .expect("marker-discovered checkout must resolve the by-version dep");
+
+        let core = res.packages.get("@tatolab/core").unwrap();
+        assert!(
+            matches!(core.source, ResolvedSource::Path { .. }),
+            "core must resolve from the linked checkout, got {:?}",
+            core.source
+        );
+        assert!(
+            core.root_dir.starts_with(&checkout),
+            "core.root_dir must be under the checkout, got {}",
+            core.root_dir.display()
+        );
+        assert_eq!(
+            core.manifest.package.as_ref().unwrap().version.to_string(),
+            "1.0.0"
+        );
     }
 }

@@ -239,6 +239,17 @@ pub fn run_cargo_build(
     if matches!(profile, CargoProfile::Release) {
         command.arg("--release");
     }
+    // Suppress `streamlib link` marker discovery for this build. Every caller
+    // builds a relocated, link-unaware artifact (the native FFI host from an
+    // extracted registry `.crate`), so its `build.rs` schema-dep codegen must
+    // never redirect to a dev checkout. Setting the env to empty is the
+    // suppression sentinel `ResolverOptions::from_env_or_marker` honors: env
+    // present ⇒ authoritative, empty ⇒ no marker walk-up. Scoped to this child
+    // command (mirroring `streamlib_pack::cargo_build_streaming`), so it is
+    // safe under the orchestrator's concurrent materialization — unlike a
+    // process-global `set_var`. Harmless today (these cdylibs carry no
+    // jtd-codegen `build.rs`); it closes the footgun if one is ever added.
+    command.env(streamlib_idents::LINK_CHECKOUT_ENV, "");
     let output = command
         .arg("--message-format=json")
         .arg("-p")

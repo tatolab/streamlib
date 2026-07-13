@@ -261,14 +261,19 @@ fn load_processor_schema(
         || schema.config.is_some();
 
     let config_schema_id = if needs_resolution {
-        // Macro expansion is a build-time codegen boundary: read the registry
-        // config from the environment (STREAMLIB_REGISTRY_URL / STREAMLIB_REGISTRY_URL) so a
-        // standalone, registry-only package resolves its bare-name schema deps
-        // (e.g. @tatolab/core) from the registry instead of failing as
-        // RegistryNotConfigured.
+        // Macro expansion is a compile-time codegen boundary: read the registry
+        // config from the environment (STREAMLIB_REGISTRY_URL) so a standalone,
+        // registry-only package resolves its bare-name schema deps (e.g.
+        // @tatolab/core) from the registry instead of failing as
+        // RegistryNotConfigured, AND resolve the active `streamlib link` checkout
+        // marker-first (from `manifest_dir_path`) so a directly-`cargo build`-ed
+        // linked app resolves those bare-name deps from the checkout with no env
+        // exported — the macro half of the fix `build.rs` gets, needed whenever
+        // the app defines a Rust `#[processor]` with a bare-name config/port
+        // schema owned by a linked dep.
         let resolved = streamlib_idents::resolve_with(
             manifest_dir_path,
-            &streamlib_idents::ResolverOptions::from_env(),
+            &streamlib_idents::ResolverOptions::from_env_or_marker(manifest_dir_path),
         )
         .map_err(|e| {
             syn::Error::new_spanned(

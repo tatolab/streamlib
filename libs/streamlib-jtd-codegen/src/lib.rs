@@ -111,11 +111,17 @@ pub fn generate(opts: GenerateOptions) -> Result<()> {
     } = opts;
 
     if let Some(project_dir) = project_dir {
-        // `from_env` picks up the static registry config (STREAMLIB_REGISTRY_URL
-        // / STREAMLIB_REGISTRY_URL) so `streamlib generate` resolves registry schema deps;
-        // the pure resolver itself never reads env.
-        let resolved = streamlib_idents::resolve_with(&project_dir, &ResolverOptions::from_env())
-            .context("Failed to resolve streamlib.yaml dependency graph")?;
+        // `from_env_or_marker` picks up the static registry config
+        // (STREAMLIB_REGISTRY_URL) so `streamlib generate` resolves registry
+        // schema deps, and resolves the active `streamlib link` checkout
+        // marker-first (walking up from `project_dir`) with STREAMLIB_LINK_CHECKOUT
+        // as an explicit override — so `streamlib generate` on a linked app
+        // resolves its schema deps from the checkout with no env exported, the
+        // same boundary `build.rs` uses. The pure resolver itself never reads
+        // env or the marker.
+        let resolved =
+            streamlib_idents::resolve_with(&project_dir, &ResolverOptions::from_env_or_marker(&project_dir))
+                .context("Failed to resolve streamlib.yaml dependency graph")?;
 
         if write_lockfile && !resolved.packages.is_empty() {
             let lockfile = resolved.to_lockfile();

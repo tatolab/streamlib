@@ -82,15 +82,32 @@ fn run_for_rust_crate_inner() -> Result<()> {
         streamlib_idents::REGISTRY_URL_ENV
     );
 
-    // `from_env` reads STREAMLIB_REGISTRY_URL so a registry-cached crate
-    // resolves its schema deps (e.g. `@tatolab/escalate`) from the configured
-    // static registry, and STREAMLIB_LINK_CHECKOUT so a package built under an
-    // active `streamlib link` resolves a dep present in the checkout's
-    // `packages/` tree from the checkout (the zero-registry dev loop). The env
-    // read lives here at the build-script boundary, not inside the pure
-    // resolver.
-    let resolved = streamlib_idents::resolve_with(&crate_dir, &ResolverOptions::from_env())
-        .context("Failed to resolve streamlib.yaml dependency graph")?;
+    // For a direct `cargo build` (env unset), the link is discovered from the
+    // `.streamlib/link.json` marker below, not the env — so also watch the
+    // marker so `streamlib unlink` (marker removed) or a re-link (checkout
+    // changed) re-runs codegen. `streamlib link` also rewrites the consumer's
+    // `.cargo/config.toml`, which forces a rebuild on its own, so this is
+    // belt-and-suspenders for the marker file itself.
+    if let Some(marker) =
+        streamlib_idents::link_marker::find_active_link_marker(&crate_dir)
+    {
+        println!("cargo:rerun-if-changed={}", marker.display());
+    }
+
+    // `from_env_or_marker` reads STREAMLIB_REGISTRY_URL so a registry-cached
+    // crate resolves its schema deps (e.g. `@tatolab/escalate`) from the
+    // configured static registry, and resolves the active `streamlib link`
+    // checkout MARKER-FIRST — walking up from `CARGO_MANIFEST_DIR` for
+    // `.streamlib/link.json` — with STREAMLIB_LINK_CHECKOUT as an explicit
+    // override. So a directly-`cargo build`-ed linked app resolves a dep present
+    // in the checkout's `packages/` tree from the checkout (the zero-registry
+    // dev loop) with NO env exported; the orchestrator still sets the env
+    // (checkout, or empty to suppress) for a relocated build so it stays
+    // authoritative. The env / marker read lives here at the build-script
+    // boundary, not inside the pure resolver.
+    let resolved =
+        streamlib_idents::resolve_with(&crate_dir, &ResolverOptions::from_env_or_marker(&crate_dir))
+            .context("Failed to resolve streamlib.yaml dependency graph")?;
 
     emit_rerun_directives(&crate_dir, &resolved);
 
