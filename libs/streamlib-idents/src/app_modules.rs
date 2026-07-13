@@ -481,7 +481,9 @@ fn stage_source_contents(
                 path: path.clone(),
                 detail: format!("canonicalizing source folder: {e}"),
             })?;
-            copy_folder_contents(&canonical, staging_dir)?;
+            let mut visited_source_dirs = std::collections::HashSet::new();
+            visited_source_dirs.insert(canonical.clone());
+            copy_folder_contents(&canonical, staging_dir, &mut visited_source_dirs)?;
             let label = canonical.display().to_string();
             Ok((LockfileSource::Path { path: canonical }, label))
         }
@@ -661,7 +663,15 @@ fn promote_staged_package_root(
 
 /// Recursively copy a folder source's contents into `dest_dir`, skipping
 /// [`FOLDER_COPY_EXCLUDED_DIR_NAMES`] directories and staging residue.
-fn copy_folder_contents(source_dir: &Path, dest_dir: &Path) -> Result<(), AppModulesError> {
+/// `visited_source_dirs` is the canonicalized recursion *stack* (entries are
+/// removed on the way back out), so a self- or ancestor-referential symlink
+/// is a loud error instead of infinite recursion while a diamond (two
+/// symlinks to the same external dir) still copies.
+fn copy_folder_contents(
+    source_dir: &Path,
+    dest_dir: &Path,
+    visited_source_dirs: &mut std::collections::HashSet<PathBuf>,
+) -> Result<(), AppModulesError> {
     let io_err = |path: &Path, detail: String| AppModulesError::Io {
         path: path.to_path_buf(),
         detail,
@@ -686,7 +696,7 @@ fn copy_folder_contents(source_dir: &Path, dest_dir: &Path) -> Result<(), AppMod
         if file_type.is_dir() {
             std::fs::create_dir_all(&dst)
                 .map_err(|e| io_err(&dst, format!("creating directory: {e}")))?;
-            copy_folder_contents(&src, &dst)?;
+            copy_folder_contents(&src, &dst, visited_source_dirs)?;
         } else if file_type.is_symlink() {
             // Resolve symlinks to their contents — the materialized package
             // must be self-contained (no dangling links to the source tree).
@@ -698,9 +708,19 @@ fn copy_folder_contents(source_dir: &Path, dest_dir: &Path) -> Result<(), AppMod
                 src.parent().unwrap_or(source_dir).join(target)
             };
             if resolved.is_dir() {
+                let canonical_target = std::fs::canonicalize(&resolved)
+                    .map_err(|e| io_err(&src, format!("resolving symlink target: {e}")))?;
+                if !visited_source_dirs.insert(canonical_target.clone()) {
+                    return Err(io_err(
+                        &src,
+                        "symlink cycle detected while copying the folder source".to_string(),
+                    ));
+                }
                 std::fs::create_dir_all(&dst)
                     .map_err(|e| io_err(&dst, format!("creating directory: {e}")))?;
-                copy_folder_contents(&resolved, &dst)?;
+                let copy_result = copy_folder_contents(&resolved, &dst, visited_source_dirs);
+                visited_source_dirs.remove(&canonical_target);
+                copy_result?;
             } else {
                 std::fs::copy(&resolved, &dst)
                     .map_err(|e| io_err(&src, format!("copying symlink target: {e}")))?;
@@ -997,6 +1017,77 @@ mod tests {
         assert!(!report.package_dir.join(".git").exists());
         assert!(!report.package_dir.join("target").exists());
         assert!(report.package_dir.join("streamlib.yaml").is_file());
+    }
+
+    #[test]
+    fn folder_add_with_symlink_cycle_errors_instead_of_recursing() {
+        // A self-referential symlink inside the source folder must be a loud
+        // error, not infinite recursion. Mentally revert the visited-stack
+        // guard in `copy_folder_contents` and this test never terminates.
+        let src = tempfile::tempdir().unwrap();
+        write_package_folder(src.path(), "tatolab", "camera", "2.0.0");
+        std::os::unix::fs::symlink(src.path(), src.path().join("loop")).unwrap();
+
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let err = app
+            .add_package(
+                &AddPackageSource::Folder {
+                    path: src.path().to_path_buf(),
+                },
+                &AddPackageOptions::default(),
+            )
+            .expect_err("a symlink cycle must fail loud");
+        assert!(
+            err.to_string().contains("symlink cycle"),
+            "expected a symlink-cycle error, got {err:?}"
+        );
+        assert_no_partial_state(&app, &[], None);
+    }
+
+    #[test]
+    fn folder_add_follows_non_cyclic_symlinks_into_contents() {
+        // A benign symlink (file + external dir) is resolved into real
+        // contents — the materialized package is self-contained.
+        let external = tempfile::tempdir().unwrap();
+        std::fs::write(external.path().join("extra.txt"), b"extra").unwrap();
+        let src = tempfile::tempdir().unwrap();
+        write_package_folder(src.path(), "tatolab", "camera", "2.0.0");
+        std::os::unix::fs::symlink(
+            external.path().join("extra.txt"),
+            src.path().join("linked.txt"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(external.path(), src.path().join("linked_dir")).unwrap();
+
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let report = app
+            .add_package(
+                &AddPackageSource::Folder {
+                    path: src.path().to_path_buf(),
+                },
+                &AddPackageOptions::default(),
+            )
+            .expect("benign symlinks must copy through");
+        assert_eq!(
+            std::fs::read(report.package_dir.join("linked.txt")).unwrap(),
+            b"extra"
+        );
+        assert_eq!(
+            std::fs::read(report.package_dir.join("linked_dir/extra.txt")).unwrap(),
+            b"extra"
+        );
+        assert!(
+            !report
+                .package_dir
+                .join("linked_dir")
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "materialized contents must be real files, not links"
+        );
     }
 
     #[test]

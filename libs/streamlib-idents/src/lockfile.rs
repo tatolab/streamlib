@@ -9,13 +9,14 @@ use std::path::{Path, PathBuf};
 use crate::error::{ResolverError, ResolverResult};
 use crate::semver::SemVer;
 
-/// `streamlib.lock` — content-hash-pinned resolved package set.
+/// Content-hash-pinned resolved package set — the wire shape shared by the
+/// codegen ([`CODEGEN_LOCKFILE_NAME`]), application ([`APP_LOCKFILE_NAME`]),
+/// and per-app modules ([`MODULES_LOCKFILE_NAME`]) lockfiles.
 ///
 /// Wire shape: a single `version: 1` followed by a `packages` map keyed by
 /// the canonical `"@org/name"` string. Each entry is the resolved
-/// concrete location + content hash so a fresh checkout reconstructs the
-/// same generated bindings byte-for-byte. `BTreeMap` (not `HashMap`)
-/// keeps the lockfile diff-stable across regenerations.
+/// concrete location + content hash. `BTreeMap` (not `HashMap`) keeps the
+/// lockfile diff-stable across regenerations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Lockfile {
@@ -209,11 +210,19 @@ pub fn write_modules_lockfile(path: &Path, lockfile: &Lockfile) -> ResolverResul
         path: path.to_path_buf(),
         source,
     };
+    // pid + a process-local counter so two concurrent writers (including two
+    // threads in the same process) never share a temp path.
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
     let file_name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| MODULES_LOCKFILE_NAME.to_string());
-    let tmp = path.with_file_name(format!(".{file_name}.partial-{}", std::process::id()));
+    let tmp = path.with_file_name(format!(
+        ".{file_name}.partial-{}-{}",
+        std::process::id(),
+        WRITE_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
     std::fs::write(&tmp, &out).map_err(io_err)?;
     std::fs::rename(&tmp, path).map_err(io_err)?;
     Ok(())
