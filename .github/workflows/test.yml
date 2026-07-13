@@ -1,59 +1,15 @@
 name: Test
 
-# DISABLED: Temporarily disabled to reduce GitHub Actions costs
-# To re-enable, uncomment the triggers below
 on:
-  workflow_dispatch:  # Manual trigger only
-  # pull_request:
-  # push:
-  #   branches: [main]
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  rust-tests:
-    name: Rust Tests (macOS)
-    runs-on: macos-14  # macOS for Apple-specific code
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: brew install opus pkg-config
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Cache Cargo
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Run clippy
-        run: cargo clippy --workspace --features debug-overlay --bins --lib -- -D warnings
-
-      - name: Build workspace
-        run: cargo build --workspace --features debug-overlay
-
-      - name: Run tests
-        run: cargo test --workspace --features debug-overlay --lib
-
-      - name: Build examples
-        run: |
-          cargo build -p camera-display
-          cargo build -p whep-player
-          cargo build -p microphone-reverb-speaker
-
   rust-tests-linux:
     name: Rust Tests (Linux)
     runs-on: ubuntu-latest
@@ -62,21 +18,27 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install system dependencies
+        # `-p streamlib` pulls streamlib-engine, whose build.rs compiles GLSL
+        # compute shaders with glslc and generates JTD bindings; the Linux
+        # engine dep set links Vulkan. Minimal subset — no GPU/codec backends.
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             pkg-config \
             protobuf-compiler \
             libvulkan-dev \
-            libopus-dev \
-            libasound2-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavutil-dev \
-            libswscale-dev \
-            libswresample-dev \
-            libavfilter-dev \
-            libavdevice-dev
+            glslc
+
+      - name: Install jtd-codegen
+        # The engine's build.rs invokes the upstream jtd-codegen binary
+        # (v0.4.1) to generate typed bindings from JTD schemas — see
+        # libs/streamlib-jtd-codegen/src/lib.rs for the version contract. The
+        # streamlib-engine build fails without it.
+        run: |
+          curl -sSL https://github.com/jsontypedef/json-typedef-codegen/releases/download/v0.4.1/x86_64-unknown-linux-gnu.zip -o /tmp/jtd-codegen.zip
+          unzip -q /tmp/jtd-codegen.zip -d /tmp/jtd-codegen
+          sudo install -m 0755 /tmp/jtd-codegen/jtd-codegen /usr/local/bin/jtd-codegen
+          jtd-codegen --version
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -84,25 +46,29 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cache Cargo
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+
+      # Serverless registry: the workspace declares `vulkanalia = { registry =
+      # "tatolab" }`, so `-p streamlib` (→ engine → vulkanalia on Linux) cannot
+      # build without the fork fetchable. Emit it + reshape into a cargo
+      # local-registry `[source]` replacement (no HTTP server) so the `--locked`
+      # builds below resolve the fork offline. Runs before every cargo command.
+      - name: Mirror vulkanalia fork (serverless cargo [source] replacement)
+        uses: ./.github/actions/cargo-fork-mirror
 
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy -p streamlib --features ffmpeg -- -D warnings
-
-      - name: Check streamlib
-        run: cargo check -p streamlib
-
-      - name: Check streamlib with FFmpeg
-        run: cargo check -p streamlib --features ffmpeg
+        run: cargo clippy --locked -p streamlib -- -D warnings
 
       - name: Run unit tests
-        run: cargo test -p streamlib --lib
+        run: cargo test --locked -p streamlib --lib
