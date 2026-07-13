@@ -41,8 +41,8 @@ pub use manifest::{
     SchemaEntry,
 };
 pub use registry::{
-    DEFAULT_REGISTRY_URL, REGISTRY_URL_ENV, RELEASE_MANIFEST_CHANNEL, RELEASE_MANIFEST_FILE,
-    RegistryClient, RegistryConfig, select_version,
+    DEFAULT_REGISTRY_URL, LINK_CHECKOUT_ENV, REGISTRY_URL_ENV, RELEASE_MANIFEST_CHANNEL,
+    RELEASE_MANIFEST_FILE, RegistryClient, RegistryConfig, select_version,
 };
 pub use release::{
     RELEASE_MANIFEST_FORMAT, ReleaseManifest, ReleaseManifestMember, crates_missing_from_release,

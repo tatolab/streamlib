@@ -369,21 +369,29 @@ pub fn assemble_artifact(
     opts: &AssembleOptions,
     sink: &dyn PackEventSink,
 ) -> Result<AssembleOutcome> {
-    assemble_artifact_with_cargo_config(pkg_dir, target, opts, sink, &[])
+    assemble_artifact_with_cargo_config(pkg_dir, target, opts, sink, &[], None)
 }
 
-/// [`assemble_artifact`], plus extra cargo `--config <file>` TOML files merged
-/// into the Rust cdylib build. The build orchestrator passes the consumer's
-/// `streamlib link`-emitted `.cargo/config.toml` here so a staged package
-/// cdylib resolves its `streamlib*` crate deps from the linked checkout (the
-/// `[patch."<index>"]` block) instead of the registry — host + plugin built
-/// from one source tree. Empty slice ⇒ identical to [`assemble_artifact`].
+/// [`assemble_artifact`], plus the two `streamlib link` toolchain overrides the
+/// build orchestrator threads when a link is active:
+///
+/// - `cargo_config_files` — extra cargo `--config <file>` TOML files (the
+///   consumer's `streamlib link`-emitted `.cargo/config.toml`) so a staged
+///   package cdylib resolves its `streamlib*` **crate** deps from the linked
+///   checkout (the `[patch."<index>"]` block) instead of the registry.
+/// - `link_checkout` — the linked checkout path, threaded to the package's
+///   `build.rs` via [`streamlib_idents::LINK_CHECKOUT_ENV`] so its **schema**
+///   deps resolve from `<checkout>/packages/<name>` too — completing the
+///   zero-registry dev loop (host + plugin + schemas from one source tree).
+///
+/// Empty slice + `None` ⇒ identical to [`assemble_artifact`].
 pub fn assemble_artifact_with_cargo_config(
     pkg_dir: &Path,
     target: &AssembleTarget,
     opts: &AssembleOptions,
     sink: &dyn PackEventSink,
     cargo_config_files: &[PathBuf],
+    link_checkout: Option<&Path>,
 ) -> Result<AssembleOutcome> {
     let config = streamlib_cargo_build::read_minimal_project_config(pkg_dir)
         .context("Failed to read streamlib.yaml")?
@@ -524,6 +532,7 @@ pub fn assemble_artifact_with_cargo_config(
                 opts.profile,
                 sink,
                 cargo_config_files,
+                link_checkout,
             )?;
             sink.finished("rust");
             rebuilt = true;
@@ -834,6 +843,7 @@ fn cargo_build_streaming(
     profile: CargoProfile,
     sink: &dyn PackEventSink,
     cargo_config_files: &[PathBuf],
+    link_checkout: Option<&Path>,
 ) -> Result<PathBuf> {
     let mut command = Command::new("cargo");
     command.arg("build");
@@ -847,6 +857,17 @@ fn cargo_build_streaming(
     // build dir, so the injected patch wins.
     for config_file in cargo_config_files {
         command.arg("--config").arg(config_file);
+    }
+    // Thread the active `streamlib link` checkout to the package's `build.rs`
+    // schema-dep codegen, which reads it via `ResolverOptions::from_env` and
+    // resolves a dep present in `<checkout>/packages/<name>` from the checkout —
+    // the schema-dep half of the zero-registry dev loop, mirroring the cargo
+    // `[patch]` above for the crate half. `build.rs` runs as a child of this
+    // `cargo build`, so an env var set here reaches it. `None` (every
+    // non-linked / locked / distribution build) sets nothing, leaving schema
+    // resolution byte-identical to before.
+    if let Some(checkout) = link_checkout {
+        command.env(streamlib_idents::LINK_CHECKOUT_ENV, checkout);
     }
     command
         .arg("--message-format=json-render-diagnostics")
@@ -1289,6 +1310,7 @@ mod tests {
             &slpkg_opts(false),
             &(),
             &[PathBuf::from("/nonexistent/cargo-override.toml")],
+            None,
         )
         .expect("with-cargo-config assemble must succeed (config ignored, no Rust)");
 
