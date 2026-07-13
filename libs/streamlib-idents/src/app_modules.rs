@@ -734,9 +734,14 @@ fn sweep_orphan_staging_entries(modules_dir: &Path) {
         let Some(rest) = file_name.strip_prefix(APP_MODULES_STAGING_PREFIX) else {
             continue;
         };
-        // `.staging-<pid>-<seq>` (fresh) or `.staging-replaced-<pid>-<nanos>`
-        // (a promote backup); the pid is the first numeric field either way.
+        // `.staging-<pid>-<seq>` (fresh add), `.staging-link-<pid>-<seq>`
+        // (fresh link), or `.staging-replaced-<pid>-<nanos>` (a promote
+        // backup); the pid is the first numeric field after stripping any
+        // non-numeric flavor prefix. Both prefixes must be peeled or a
+        // current-process `link-` staging entry parses its pid as "link" ⇒
+        // `None` and the same-process guard below would wrongly sweep it.
         let rest = rest.strip_prefix("replaced-").unwrap_or(rest);
+        let rest = rest.strip_prefix("link-").unwrap_or(rest);
         let embedded_pid: Option<u32> = rest.split('-').next().and_then(|s| s.parse().ok());
         // Never delete an entry owned by THIS live process — that would race a
         // concurrent same-process add. An unparseable pid is treated as an
@@ -1019,7 +1024,10 @@ fn promote_staged_package_root(
 
     // Displace previous contents into a staging-prefixed sibling so a failed
     // swap can restore them instead of leaving the slot empty.
-    let displaced = if package_dir.exists() {
+    // `symlink_metadata` (not `exists`) so a DANGLING symlink slot — a prior
+    // link whose checkout was deleted — is still detected as an occupied slot
+    // and reported as replaced, rather than slipping through as "absent".
+    let displaced = if std::fs::symlink_metadata(package_dir).is_ok() {
         let backup = modules_dir.join(format!(
             "{APP_MODULES_STAGING_PREFIX}replaced-{}-{}",
             std::process::id(),
@@ -1961,13 +1969,19 @@ mod tests {
         let orphan_backup =
             modules_dir.join(format!("{APP_MODULES_STAGING_PREFIX}replaced-1-999"));
         std::fs::create_dir_all(&orphan_backup).unwrap();
-        // A staging dir owned by THIS live process must be spared (protects a
-        // concurrent same-process add).
+        // Staging entries owned by THIS live process must be spared (protects
+        // a concurrent same-process add/link) — both the add-flavored
+        // `.staging-<pid>-*` and the link-flavored `.staging-link-<pid>-*`.
         let mine = modules_dir.join(format!(
             "{APP_MODULES_STAGING_PREFIX}{}-424242",
             std::process::id()
         ));
         std::fs::create_dir_all(&mine).unwrap();
+        let mine_link = modules_dir.join(format!(
+            "{APP_MODULES_STAGING_PREFIX}link-{}-424243",
+            std::process::id()
+        ));
+        std::os::unix::fs::symlink(src.path(), &mine_link).unwrap();
 
         app.add_package(
             &AddPackageSource::Folder {
@@ -1980,7 +1994,14 @@ mod tests {
         // Mentally revert the sweep and both orphans survive → this fails.
         assert!(!orphan.exists(), "orphan staging dir must be swept");
         assert!(!orphan_backup.exists(), "orphan promote backup must be swept");
-        assert!(mine.exists(), "current-process staging dir must be spared");
+        assert!(mine.exists(), "current-process add staging dir must be spared");
+        // Mentally revert the `link-` prefix strip in the sweep and the pid
+        // parses as "link" ⇒ None ⇒ this current-process link staging entry is
+        // wrongly swept → this fails.
+        assert!(
+            std::fs::symlink_metadata(&mine_link).is_ok(),
+            "current-process link staging entry must be spared"
+        );
     }
 
     #[test]
@@ -2203,6 +2224,44 @@ mod tests {
             lock.packages.get("@tatolab/camera").unwrap().source,
             LockfileSource::Link { .. }
         ));
+        assert_no_partial_state(
+            &app,
+            &["@tatolab/camera"],
+            Some(&std::fs::read(app.lockfile_path()).unwrap()),
+        );
+    }
+
+    #[test]
+    fn relink_over_dangling_symlink_reports_replaced() {
+        // Relinking over a slot whose prior link dangles (checkout deleted)
+        // must report the replace and land a fresh symlink. Mentally revert
+        // the `symlink_metadata` displaced-detection in
+        // `promote_staged_package_root` to `exists()` and the dangling slot
+        // reads as absent → replaced_existing would be false.
+        let first_checkout = tempfile::tempdir().unwrap();
+        write_package_folder(first_checkout.path(), "tatolab", "camera", "2.0.0");
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let first = app.link_package(first_checkout.path()).unwrap();
+        // Delete the first checkout: the slot symlink now dangles.
+        std::fs::remove_dir_all(first_checkout.path()).unwrap();
+        assert!(
+            std::fs::symlink_metadata(&first.package_dir)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+
+        // Relink from a fresh checkout of the same package.
+        let second_checkout = tempfile::tempdir().unwrap();
+        write_package_folder(second_checkout.path(), "tatolab", "camera", "2.0.0");
+        let canonical = std::fs::canonicalize(second_checkout.path()).unwrap();
+        let second = app.link_package(second_checkout.path()).unwrap();
+        assert!(
+            second.replaced_existing,
+            "relink over a dangling symlink must report the replace"
+        );
+        assert_symlink_to(&second.package_dir, &canonical);
         assert_no_partial_state(
             &app,
             &["@tatolab/camera"],
