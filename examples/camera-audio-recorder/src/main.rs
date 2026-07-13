@@ -12,13 +12,14 @@
 //! macOS/iOS-only: the Linux MP4 writer (`@tatolab/mp4`'s `LinuxMp4Writer`)
 //! does not yet accept an audio input, so there is no Linux path for an
 //! audio+video recorder, and the pipeline still uses the deprecated
-//! compile-time typed-struct API rather than runtime `add_module` /
-//! `ProcessorSpec`.
+//! compile-time typed-struct API rather than the runtime graph API
+//! (`add_processor` + `processor_type_ref!`).
 //!
 //! When the Linux MP4 writer gains an audio input, restore the
-//! `Camera + AudioCapture → Mp4Writer` pipeline from git history and load
-//! `@tatolab/camera` + `@tatolab/audio` + `@tatolab/mp4` via
-//! `Strategy::Registry` like the other examples.
+//! `Camera + AudioCapture → Mp4Writer` pipeline from git history and reference
+//! each processor with `processor_type_ref!` (no version, no load call); each
+//! provider's package resolves from this app's `streamlib_modules/` folder,
+//! populated by `./setup.sh`.
 
 fn main() {
     eprintln!(

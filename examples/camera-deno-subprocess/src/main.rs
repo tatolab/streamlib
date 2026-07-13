@@ -19,57 +19,34 @@
 //! cargo run -p camera-deno-subprocess
 //! ```
 
-use std::path::PathBuf;
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::module_ident_any_version;
+use streamlib::sdk::processor_type_ref;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::{BuildPolicy, Runner, SemVerRange, Strategy};
-use streamlib::sdk::RunnerAutoBuild;
-use streamlib::sdk::schema_ident;
+use streamlib::sdk::runtime::Runner;
 
 fn main() -> Result<()> {
     let runtime = Runner::with_auto_build()?;
 
-    // 1. Resolve `@tatolab/camera` and `@tatolab/display` from the static registry
-    //    generic registry by version — the cross-repo consumer path. The
-    //    orchestrator pulls each `.slpkg` and builds it from source on the
-    //    host. Registry endpoint comes from `STREAMLIB_REGISTRY_URL` (or
-    //    `STREAMLIB_REGISTRY_URL`).
-    let registry = || Strategy::Registry {
-        version_req: SemVerRange::Any,
-        build: BuildPolicy::IfStale,
-    };
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), registry())?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "display"), registry())?;
+    // No module-loading call: `@tatolab/camera`, `@tatolab/display`, and this
+    // example's own `./deno` package all live in this app's
+    // `streamlib_modules/` folder (populated by `./setup.sh`). The runtime
+    // lazily discovers + loads each on the first `processor_type_ref!` reference.
 
-    // 2. Load this example's own Deno sub-package — it lives at `./deno`
-    //    relative to this example (it ships in this repo, not the registry),
-    //    so we resolve it by its manifest directory. The recursive dep walker
-    //    follows its own dependencies.
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    runtime.add_module_with_blocking(
-        module_ident_any_version!("tatolab", "camera-deno-subprocess"),
-        Strategy::Path { path: manifest_dir.join("deno"), build: BuildPolicy::IfStale },
-    )?;
-
-    // 3. Add processors
+    // Add processors
     let camera = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "camera", "Camera", "1.0.0"),
+        processor_type_ref!("tatolab", "camera", "Camera"),
         serde_json::json!({}),
     ))?;
 
     let halftone = runtime.add_processor(ProcessorSpec::new(
-        streamlib::sdk::schema_ident_any_version!(
-            "tatolab",
-            "camera-deno-subprocess",
-            "HalftoneProcessor"
-        )?,
+        processor_type_ref!("tatolab", "camera-deno-subprocess", "HalftoneProcessor"),
         serde_json::json!({}),
     ))?;
 
     let display = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "display", "Display", "1.0.0"),
+        processor_type_ref!("tatolab", "display", "Display"),
         serde_json::json!({
             "width": 1920,
             "height": 1080,

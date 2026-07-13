@@ -3,38 +3,26 @@
 
 //! Camera → Display Pipeline Example
 //!
-//! Loads `@tatolab/camera`, `@tatolab/display`, and `@tatolab/api-server`
-//! at runtime, wires camera → display, and exposes the runtime's REST
-//! API on `http://127.0.0.1:9000`.
+//! Wires `@tatolab/camera` → `@tatolab/display` and exposes the runtime's
+//! REST API (`@tatolab/api-server`) on `http://127.0.0.1:9000`.
 //!
-//! Packages build automatically on `cargo run` via the build orchestrator.
-//!` so the
-//! runtime can resolve each cdylib at load time.
+//! There is no module-loading call in this app: every processor's package
+//! lives in this app's `streamlib_modules/` folder (populated by
+//! `./setup.sh`), and the runtime lazily discovers + loads each one on the
+//! first `processor_type_ref!` reference. The reference sites carry no
+//! version — `processor_type_ref!` resolves to the installed provider.
 
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::module_ident_any_version;
+use streamlib::sdk::processor_type_ref;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::{BuildPolicy, Runner, SemVerRange, Strategy};
-use streamlib::sdk::RunnerAutoBuild;
-use streamlib::sdk::schema_ident;
+use streamlib::sdk::runtime::Runner;
 
 fn main() -> Result<()> {
     println!("=== Camera → Display Pipeline ===\n");
 
     let runtime = Runner::with_auto_build()?;
-
-    // Resolve every package from the static generic store by version — the
-    // cross-repo consumer path. The orchestrator pulls each `.slpkg` and builds
-    // it from source on the host. Registry endpoint comes from
-    // `STREAMLIB_REGISTRY_URL`.
-    let registry = || Strategy::Registry {
-        version_req: SemVerRange::Any,
-        build: BuildPolicy::IfStale,
-    };
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), registry())?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "display"), registry())?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "api-server"), registry())?;
 
     println!("📷 Adding camera processor...");
     let device_id = std::env::var("STREAMLIB_CAMERA_DEVICE").ok();
@@ -55,14 +43,14 @@ fn main() -> Result<()> {
         camera_config.insert("max_height".into(), serde_json::Value::from(h));
     }
     let camera = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "camera", "Camera", "1.0.0"),
+        processor_type_ref!("tatolab", "camera", "Camera"),
         serde_json::Value::Object(camera_config),
     ))?;
     println!("✓ Camera added: {}\n", camera);
 
     println!("🖥️  Adding display processor...");
     let display = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "display", "Display", "1.0.0"),
+        processor_type_ref!("tatolab", "display", "Display"),
         serde_json::json!({
             "width": 1920,
             "height": 1080,
@@ -73,7 +61,7 @@ fn main() -> Result<()> {
 
     println!("🌐 Adding API server processor...");
     runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "api-server", "ApiServer", "1.0.0"),
+        processor_type_ref!("tatolab", "api-server", "ApiServer"),
         serde_json::json!({
             "host": "127.0.0.1",
             "port": 9000,

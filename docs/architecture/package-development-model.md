@@ -29,7 +29,7 @@ running process.
 ```
    dev loop                         install seam                 distribution loop
    ────────                         ────────────                 ─────────────────
-   streamlib link <checkout>                                     streamlib pkg publish
+   streamlib link --engine <co>                                  streamlib pkg publish
      whole-tree toolchain            streamlib install            assemble .slpkg + catalog
      overrides (cargo/uv/deno)   ─▶    resolve range→concrete  ◀─   → atomic staged release
      → working-tree source            materialize + lock            (manifest written last)
@@ -43,9 +43,12 @@ running process.
 
 ## The dev loop — whole-tree link
 
-`streamlib link <CHECKOUT>` points a consumer at a local streamlib checkout;
-`streamlib unlink` restores every touched file byte-identically; bare
-`streamlib link` prints status. Implementation:
+`streamlib link --engine <CHECKOUT>` points a consumer's *entire* streamlib SDK
+surface at a local streamlib checkout; `streamlib unlink --engine` restores every
+touched file byte-identically; bare `streamlib link --engine` prints status.
+(The unqualified `streamlib link <path>` is a different verb — the per-app
+package symlink into `streamlib_modules/`, covered under the install seam
+below.) Implementation:
 [`libs/streamlib-cli/src/commands/link.rs`](../../libs/streamlib-cli/src/commands/link.rs)
 plus the shared marker in
 [`libs/streamlib-idents/src/link_marker.rs`](../../libs/streamlib-idents/src/link_marker.rs)
@@ -76,15 +79,19 @@ definition a release uses — so a whole-tree link and a release always agree
 on which crates exist. Whole-tree consistency is by construction: a single
 checkout never mixes published versions.
 
-*Link-aware module resolution (npm-link semantics).* With an active link, the
-engine module loader resolves any `@org/name` present in the linked checkout's
-`packages/` tree **from the checkout, regardless of the caller's
-[`Strategy`]** — including an explicit `add_module(ident, registry())`. A
-linked name takes precedence (the dominant example shape calls
-`registry()`; overriding only the *default* strategy would miss it, so editing
-a linked package and re-running would not reflect the edit). A package **not**
-in the checkout is untouched — it resolves from its declared strategy — so
-registry strategies stay available for everything the checkout doesn't
+*Link-aware module resolution (npm-link semantics).* With an active engine
+link, the module loader resolves any `@org/name` present in the linked
+checkout's `packages/` tree **from the checkout, regardless of the caller's
+[`Strategy`]** — including an explicit `add_module(ident, registry())`. A linked
+name takes precedence: this matters for the power-caller path that still passes
+an explicit `Strategy` to `add_module`, because overriding only the *default*
+strategy would miss it, so editing a linked package and re-running would not
+reflect the edit. (App code today rarely calls `add_module` at all — it
+references processors version-free with `processor_type_ref!` and the runtime
+lazily discovers the provider from `streamlib_modules/`; see the install seam
+below. The explicit-`Strategy` path is a power-caller escape hatch.) A package
+**not** in the checkout is untouched — it resolves from its declared strategy —
+so registry strategies stay available for everything the checkout doesn't
 provide. Discovery is from the process working directory (the run dir, where
 the marker sits); a corrupt marker is a loud `AddModuleError::LinkStateCorrupt`,
 never a silent skip. A **locked run** (`add_modules_from_lockfile`) ignores
@@ -378,10 +385,14 @@ reproducing the lock.
 
 At load time, `Strategy::InstalledCache` (the bare `Runner::add_module`
 default) probes `<cwd>/streamlib_modules/@org/name` **before** the
-installed-package cache; an active `streamlib link` still outranks both
-(precedence: link > app modules > installed cache). Locked runs are
-unaffected — they resolve pinned `Strategy::Path` edges and never consult
-the modules folder. The programmatic `install()` remains the
+installed-package cache; an active engine `streamlib link --engine` still
+outranks both (precedence: link > app modules > installed cache). The same
+`streamlib_modules/` probe backs **lazy discovery**: app code that references a
+processor version-free (`processor_type_ref!("org","pkg","Type")`) and never
+calls `add_module` triggers a discovery of the providing package in
+`streamlib_modules/` on the first reference, which loads it on demand — the
+no-load-call shape every example uses. Locked runs are unaffected — they
+resolve pinned `Strategy::Path` edges and never consult the modules folder. The programmatic `install()` remains the
 whole-`streamlib.yaml`-tree front door; `add` / `link` / `streamlib install`
 are the per-app `streamlib_modules/` operations.
 

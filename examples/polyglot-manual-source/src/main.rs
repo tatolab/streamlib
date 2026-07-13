@@ -37,13 +37,12 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use streamlib::sdk::descriptors::SchemaIdent;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::error::Error;
-use streamlib::sdk::module_ident_any_version;
-use streamlib::sdk::processors::ProcessorSpec;
+use streamlib::sdk::processor_type_ref;
+use streamlib::sdk::processors::{ProcessorSpec, ProcessorTypeReference};
 use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::RunnerAutoBuild;
 
 const RUN_DURATION: Duration = Duration::from_secs(2);
@@ -54,10 +53,8 @@ const INTERVAL_MS: u32 = 33;
 /// gate robust against CI jitter.
 const MIN_FRAMES_RECEIVED: u32 = 20;
 
-const COUNTING_SINK_PLUGIN_DYLIB: &str = "libpolyglot_manual_source_counting_sink_plugin.so";
-
-fn counting_sink_processor_ident() -> Result<SchemaIdent> {
-    streamlib::sdk::schema_ident_any_version!(
+fn counting_sink_processor_ref() -> ProcessorTypeReference {
+    processor_type_ref!(
         "tatolab",
         "polyglot-manual-source-counting-sink",
         "PolyglotManualSourceCountingSink"
@@ -92,14 +89,12 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_ident(self) -> Result<SchemaIdent> {
+    fn processor_ref(self) -> ProcessorTypeReference {
         match self {
-            Self::Python => streamlib::sdk::schema_ident_any_version!(
-                "tatolab",
-                "polyglot-manual-source",
-                "PolyglotManualSource"
-            ),
-            Self::Deno => streamlib::sdk::schema_ident_any_version!(
+            Self::Python => {
+                processor_type_ref!("tatolab", "polyglot-manual-source", "PolyglotManualSource")
+            }
+            Self::Deno => processor_type_ref!(
                 "tatolab",
                 "polyglot-manual-source-deno",
                 "PolyglotManualSource"
@@ -170,37 +165,16 @@ fn run() -> Result<SinkReport> {
 
     let runtime = Runner::with_auto_build()?;
 
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
-    // Stage the counting-sink plugin's cdylib into `./plugin/lib/`
-    // before loading the plugin sub-package. The plugin lives in the
-    // sibling `plugin/` sub-package with its own `streamlib.yaml`;
-    // `add_module_with(..., Path)` will look for the
-    // staged `*.so` in `plugin/lib/`. Mirrors the camera-rust-plugin
-    // pattern.
-    let plugin_dir = manifest_dir.join("plugin");
-    stage_plugin_dylib(&plugin_dir)?;
-
-    // Load the plugin + sibling Python + sibling Deno sub-packages via
-    // explicit add_module_with calls. The runner picks which polyglot
-    // processor to instantiate via `schema_ident_any_version!` based
-    // on `--runtime`.
-    runtime.add_module_with_blocking(
-        module_ident_any_version!("tatolab", "polyglot-manual-source-counting-sink"),
-        Strategy::Path { path: plugin_dir.clone(), build: BuildPolicy::IfStale },
-    )?;
-    runtime.add_module_with_blocking(
-        module_ident_any_version!("tatolab", "polyglot-manual-source"),
-        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::IfStale },
-    )?;
-    runtime.add_module_with_blocking(
-        module_ident_any_version!("tatolab", "polyglot-manual-source-deno"),
-        Strategy::Path { path: manifest_dir.join("deno"), build: BuildPolicy::IfStale },
-    )?;
+    // No module-loading calls: the counting-sink plugin plus the
+    // example-local `./python` + `./deno` polyglot source packages all live
+    // in this app's `streamlib_modules/` folder (populated by `./setup.sh`).
+    // The runtime lazily discovers + loads each on the first
+    // `processor_type_ref!` reference; the runner picks the Python or Deno
+    // provider by `--runtime`.
 
     // 3. Add processors.
     let manual = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_ident()?,
+        runtime_kind.processor_ref(),
         serde_json::json!({
             "interval_ms": INTERVAL_MS,
         }),
@@ -208,7 +182,7 @@ fn run() -> Result<SinkReport> {
     println!("+ ManualSource: {manual}");
 
     let sink = runtime.add_processor(ProcessorSpec::new(
-        counting_sink_processor_ident()?,
+        counting_sink_processor_ref(),
         // Sink reads its output path from `SINK_OUTPUT_ENV_VAR` set above —
         // pass an empty config so the macro-derived `EmptyConfig` (the
         // default for processors without a YAML config schema) deserializes
@@ -236,48 +210,6 @@ fn run() -> Result<SinkReport> {
         )));
     }
     Ok(report)
-}
-
-/// Locate the built plugin cdylib in the workspace target dir and copy
-/// it under `plugin/lib/` so the plugin sub-package's
-/// `add_module_with(..., Path)` load finds it. Mirrors
-/// the `camera-rust-plugin` example.
-fn stage_plugin_dylib(plugin_dir: &std::path::Path) -> Result<()> {
-    let lib_dir = plugin_dir.join("lib");
-    std::fs::create_dir_all(&lib_dir).map_err(|e| {
-        Error::Configuration(format!(
-            "failed to create plugin lib dir {}: {e}",
-            lib_dir.display(),
-        ))
-    })?;
-
-    // This example is its own workspace root (the `plugin/` cdylib is a member),
-    // so `cargo build -p ...-counting-sink-plugin` writes the dylib into this
-    // crate's own `target/` dir.
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let target_dir = manifest_dir.join("target");
-    let candidates = [
-        target_dir.join("debug").join(COUNTING_SINK_PLUGIN_DYLIB),
-        target_dir.join("release").join(COUNTING_SINK_PLUGIN_DYLIB),
-    ];
-    let source = candidates.iter().find(|p| p.exists()).ok_or_else(|| {
-        Error::Configuration(format!(
-            "counting-sink plugin dylib not found. Build it first:\n  \
-             cargo build -p polyglot-manual-source-counting-sink-plugin\n\
-             Looked in:\n  {}\n  {}",
-            candidates[0].display(),
-            candidates[1].display(),
-        ))
-    })?;
-    let dest = lib_dir.join(COUNTING_SINK_PLUGIN_DYLIB);
-    std::fs::copy(source, &dest).map_err(|e| {
-        Error::Configuration(format!(
-            "failed to copy {} → {}: {e}",
-            source.display(),
-            dest.display(),
-        ))
-    })?;
-    Ok(())
 }
 
 fn read_sink_report(path: &std::path::Path) -> Result<SinkReport> {

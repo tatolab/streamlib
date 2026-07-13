@@ -1,10 +1,12 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Engine-free grayscale-compute plugin — a Rust-backed processor loaded as
-//! a cdylib via `runtime.add_module_with(..., Strategy::Path)` against this
-//! crate's `streamlib.yaml`. The cdylib's `STREAMLIB_PLUGIN` callback
-//! registers the `GrayscaleCompute` processor with the host registry.
+//! Engine-free grayscale-compute plugin — a Rust-backed cdylib processor. The
+//! package is linked into the consuming app's `streamlib_modules/` (via
+//! `streamlib link ./plugin`) and the runtime lazily discovers + loads this
+//! cdylib on the first `processor_type_ref!` reference to it; its
+//! `STREAMLIB_PLUGIN` callback then registers the `GrayscaleCompute` processor
+//! with the host registry.
 //!
 //! Unlike `camera-rust-plugin` (which links the `streamlib` engine facade),
 //! this plugin depends ONLY on the engine-free `streamlib-plugin-sdk`. It

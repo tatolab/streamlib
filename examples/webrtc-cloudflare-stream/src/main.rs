@@ -27,15 +27,13 @@ use streamlib::sdk::error::Result;
 #[cfg(target_os = "linux")]
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 #[cfg(target_os = "linux")]
-use streamlib::sdk::module_ident_any_version;
-#[cfg(target_os = "linux")]
 use streamlib::sdk::permissions::{request_audio_permission, request_camera_permission};
+#[cfg(target_os = "linux")]
+use streamlib::sdk::processor_type_ref;
 #[cfg(target_os = "linux")]
 use streamlib::sdk::processors::ProcessorSpec;
 #[cfg(target_os = "linux")]
-use streamlib::sdk::runtime::{BuildPolicy, Runner, SemVerRange, Strategy};
-#[cfg(target_os = "linux")]
-use streamlib::sdk::schema_ident_any_version;
+use streamlib::sdk::runtime::Runner;
 
 #[cfg(target_os = "linux")]
 use crate::_generated_::tatolab__audio::audio_channel_converter_config::Mode;
@@ -65,19 +63,13 @@ fn main() -> Result<()> {
 
     let runtime = Runner::with_auto_build()?;
 
-    // Resolve every package from the static generic store by version — the
-    // cross-repo consumer path. The orchestrator pulls each `.slpkg` and builds
-    // it from source on the host. Registry endpoint comes from
-    // `STREAMLIB_REGISTRY_URL`.
-    let registry = || Strategy::Registry {
-        version_req: SemVerRange::Any,
-        build: BuildPolicy::IfStale,
-    };
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "audio"), registry())?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), registry())?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h264"), registry())?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "opus"), registry())?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "webrtc"), registry())?;
+    // No module-loading calls: every processor's package
+    // (`@tatolab/{audio,camera,h264,opus,webrtc}`) lives in this app's
+    // `streamlib_modules/` folder (populated by `./setup.sh`), and the runtime
+    // lazily discovers + loads each on the first `processor_type_ref!`
+    // reference. The typed config structs below are generated at build time by
+    // `streamlib-jtd-codegen` (see build.rs) from the schemas declared in
+    // `streamlib.yaml`.
 
     println!("🔒 Requesting camera permission...");
     if !request_camera_permission()? {
@@ -103,7 +95,7 @@ fn main() -> Result<()> {
 
     println!("📹 Adding camera processor...");
     let camera = runtime.add_processor(ProcessorSpec::new(
-        schema_ident_any_version!("tatolab", "camera", "Camera")?,
+        processor_type_ref!("tatolab", "camera", "Camera"),
         serde_json::to_value(CameraConfig::default())
             .map_err(|e| streamlib::sdk::error::Error::Configuration(e.to_string()))?,
     ))?;
@@ -114,7 +106,7 @@ fn main() -> Result<()> {
 
     println!("🎬 Adding H.264 encoder...");
     let h264_encoder = runtime.add_processor(ProcessorSpec::new(
-        schema_ident_any_version!("tatolab", "h264", "H264Encoder")?,
+        processor_type_ref!("tatolab", "h264", "H264Encoder"),
         serde_json::to_value(H264EncoderConfig {
             width: Some(video_width),
             height: Some(video_height),
@@ -133,7 +125,7 @@ fn main() -> Result<()> {
     // Audio pipeline is optional — skip if no audio device is available.
     println!("🎤 Adding audio capture processor...");
     let audio_pipeline = match runtime.add_processor(ProcessorSpec::new(
-        schema_ident_any_version!("tatolab", "audio", "AudioCapture")?,
+        processor_type_ref!("tatolab", "audio", "AudioCapture"),
         serde_json::to_value(AudioCaptureConfig { device_id: None })
             .map_err(|e| streamlib::sdk::error::Error::Configuration(e.to_string()))?,
     )) {
@@ -141,7 +133,7 @@ fn main() -> Result<()> {
             println!("✓ Audio capture added (mono @ 24kHz)\n");
 
             let resampler = runtime.add_processor(ProcessorSpec::new(
-                schema_ident_any_version!("tatolab", "audio", "AudioResampler")?,
+                processor_type_ref!("tatolab", "audio", "AudioResampler"),
                 serde_json::to_value(AudioResamplerConfig {
                     source_sample_rate: 24000,
                     target_sample_rate: 48000,
@@ -151,7 +143,7 @@ fn main() -> Result<()> {
             ))?;
 
             let channel_converter = runtime.add_processor(ProcessorSpec::new(
-                schema_ident_any_version!("tatolab", "audio", "AudioChannelConverter")?,
+                processor_type_ref!("tatolab", "audio", "AudioChannelConverter"),
                 serde_json::to_value(AudioChannelConverterConfig {
                     mode: Mode::Duplicate,
                     output_channels: None,
@@ -160,7 +152,7 @@ fn main() -> Result<()> {
             ))?;
 
             let rechunker = runtime.add_processor(ProcessorSpec::new(
-                schema_ident_any_version!("tatolab", "audio", "BufferRechunker")?,
+                processor_type_ref!("tatolab", "audio", "BufferRechunker"),
                 serde_json::to_value(BufferRechunkerConfig {
                     target_buffer_size: 960,
                 })
@@ -168,7 +160,7 @@ fn main() -> Result<()> {
             ))?;
 
             let opus_encoder = runtime.add_processor(ProcessorSpec::new(
-                schema_ident_any_version!("tatolab", "opus", "OpusEncoder")?,
+                processor_type_ref!("tatolab", "opus", "OpusEncoder"),
                 serde_json::to_value(OpusEncoderConfig {
                     bitrate_bps: Some(audio_bitrate),
                 })
@@ -194,7 +186,7 @@ fn main() -> Result<()> {
 
     println!("🌐 Adding WebRTC WHIP streaming processor...");
     let webrtc = runtime.add_processor(ProcessorSpec::new(
-        schema_ident_any_version!("tatolab", "webrtc", "WebrtcWhip")?,
+        processor_type_ref!("tatolab", "webrtc", "WebrtcWhip"),
         serde_json::to_value(WebrtcWhipConfig {
             whip: Whip {
                 endpoint_url: whip_url.to_string(),

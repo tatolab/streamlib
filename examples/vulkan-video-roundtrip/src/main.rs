@@ -13,17 +13,17 @@
 //!   cargo run -p vulkan-video-roundtrip -- h264 [device] [seconds]
 //!   cargo run -p vulkan-video-roundtrip -- h265 /dev/video2 10
 //!
-//! Packages build automatically on `cargo run` via the build orchestrator,
-//! resolved from the static generic store by version so the runtime can
-//! find each cdylib at load time.
+//! There is no module-loading call in this app: `@tatolab/camera`,
+//! `@tatolab/display`, `@tatolab/h264`, and `@tatolab/h265` live in this app's
+//! `streamlib_modules/` folder (populated by `./setup.sh`) and the runtime
+//! lazily discovers + loads each on the first `processor_type_ref!` reference.
 
 use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::module_ident_any_version;
+use streamlib::sdk::processor_type_ref;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::{BuildPolicy, Runner, SemVerRange, Strategy};
-use streamlib::sdk::schema_ident;
+use streamlib::sdk::runtime::Runner;
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -37,22 +37,6 @@ fn main() -> Result<()> {
     println!("Duration: {duration_secs}s\n");
 
     let runtime = Runner::with_auto_build()?;
-
-    // Resolve every package from the static generic store by version — the
-    // cross-repo consumer path. The orchestrator pulls each `.slpkg` and builds
-    // it from source on the host. `@tatolab/core` is pulled in transitively by
-    // each — its wire-vocabulary schemas (`EncodedVideoFrame.max_payload_bytes`
-    // in particular) are load-bearing for iceoryx2 publisher sizing. Registry
-    // endpoint comes from `STREAMLIB_REGISTRY_URL`.
-    let registry = || Strategy::Registry {
-        version_req: SemVerRange::Any,
-        build: BuildPolicy::IfStale,
-    };
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), registry())?;
-    runtime
-        .add_module_with_blocking(module_ident_any_version!("tatolab", "display"), registry())?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h264"), registry())?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h265"), registry())?;
 
     // --- Camera ---
     // STREAMLIB_CAMERA_MAX_WIDTH / STREAMLIB_CAMERA_MAX_HEIGHT cap V4L2
@@ -76,7 +60,7 @@ fn main() -> Result<()> {
         camera_config.insert("max_height".into(), serde_json::Value::from(h));
     }
     let camera = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "camera", "Camera", "1.0.0"),
+        processor_type_ref!("tatolab", "camera", "Camera"),
         serde_json::Value::Object(camera_config),
     ))?;
     println!("+ Camera: {camera}");
@@ -92,9 +76,9 @@ fn main() -> Result<()> {
         encoder_config.insert("effort_level".into(), serde_json::Value::from(e));
     }
     let encoder_ident = if is_h265 {
-        schema_ident!("tatolab", "h265", "H265Encoder", "1.0.0")
+        processor_type_ref!("tatolab", "h265", "H265Encoder")
     } else {
-        schema_ident!("tatolab", "h264", "H264Encoder", "1.0.0")
+        processor_type_ref!("tatolab", "h264", "H264Encoder")
     };
     let encoder = runtime.add_processor(ProcessorSpec::new(
         encoder_ident,
@@ -104,9 +88,9 @@ fn main() -> Result<()> {
 
     // --- Decoder ---
     let decoder_ident = if is_h265 {
-        schema_ident!("tatolab", "h265", "H265Decoder", "1.0.0")
+        processor_type_ref!("tatolab", "h265", "H265Decoder")
     } else {
-        schema_ident!("tatolab", "h264", "H264Decoder", "1.0.0")
+        processor_type_ref!("tatolab", "h264", "H264Decoder")
     };
     let decoder =
         runtime.add_processor(ProcessorSpec::new(decoder_ident, serde_json::json!({})))?;
@@ -114,7 +98,7 @@ fn main() -> Result<()> {
 
     // --- Display ---
     let display = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "display", "Display", "1.0.0"),
+        processor_type_ref!("tatolab", "display", "Display"),
         serde_json::json!({
             "width": 1920,
             "height": 1080,

@@ -45,7 +45,6 @@ use streamlib::sdk::context::{
     RayTracingKernelRegisterDecl, RayTracingKernelRunDispatch, RayTracingShaderGroupWire,
     RayTracingShaderStageWire, TlasRegisterDecl,
 };
-use streamlib::sdk::descriptors::SchemaIdent;
 use streamlib::sdk::engine::host_rhi::{
     GeometryInstanceFlagsKHR, HostVulkanDevice, HostVulkanTexture, TlasInstanceDesc,
     VulkanAccelerationStructure, VulkanRayTracingKernel, VulkanTextureReadback,
@@ -53,15 +52,14 @@ use streamlib::sdk::engine::host_rhi::{
 use streamlib::sdk::error::Error;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::module_ident_any_version;
-use streamlib::sdk::processors::ProcessorSpec;
+use streamlib::sdk::processor_type_ref;
+use streamlib::sdk::processors::{ProcessorSpec, ProcessorTypeReference};
 use streamlib::sdk::rhi::{
     RayTracingBindingSpec, RayTracingKernelDescriptor, RayTracingPushConstants,
     RayTracingShaderGroup, RayTracingShaderStageFlags, RayTracingStage, Texture, TextureDescriptor,
     TextureFormat, TextureReadbackDescriptor, TextureSourceLayout, TextureUsages, VulkanLayout,
 };
-use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
-use streamlib::sdk::schema_ident;
+use streamlib::sdk::runtime::Runner;
 
 /// Compiled SPIR-V for the ray-generation shader.
 const SCENE_RGEN_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/scene.rgen.spv"));
@@ -103,14 +101,12 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_ident(self) -> Result<SchemaIdent> {
+    fn processor_ref(self) -> ProcessorTypeReference {
         match self {
-            Self::Python => streamlib::sdk::schema_ident_any_version!(
-                "tatolab",
-                "polyglot-vulkan-ray-tracing",
-                "VulkanRayTracing"
-            ),
-            Self::Deno => streamlib::sdk::schema_ident_any_version!(
+            Self::Python => {
+                processor_type_ref!("tatolab", "polyglot-vulkan-ray-tracing", "VulkanRayTracing")
+            }
+            Self::Deno => processor_type_ref!(
                 "tatolab",
                 "polyglot-vulkan-ray-tracing-deno",
                 "VulkanRayTracingProcessor"
@@ -594,45 +590,19 @@ fn main() -> Result<()> {
         });
     }
 
-    // Load the BgraFileSource processor from `@tatolab/debug-utilities`
-    // built on demand from source by the orchestrator.
-    runtime.add_module_with_blocking(
-        module_ident_any_version!("tatolab", "debug-utilities"),
-        streamlib::sdk::runtime::Strategy::Registry {
-            version_req: streamlib::sdk::runtime::SemVerRange::Any,
-            build: streamlib::sdk::runtime::BuildPolicy::IfStale,
-        },
-    )?;
-
-    // Load the polyglot processors via explicit add_module_with calls.
-    // The Python and Deno sub-packages are example-local (siblings of
-    // this example crate) and not workspace-staged, so each is
-    // resolved by its manifest directory. The recursive dep walker
-    // follows each sub-package's own dependencies. The runner picks
-    // which one to instantiate via `schema_ident_any_version!` based
-    // on `--runtime`.
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    runtime.add_module_with_blocking(
-        module_ident_any_version!("tatolab", "polyglot-vulkan-ray-tracing"),
-        Strategy::Path {
-            path: manifest_dir.join("python"),
-            build: BuildPolicy::IfStale,
-        },
-    )?;
-    runtime.add_module_with_blocking(
-        module_ident_any_version!("tatolab", "polyglot-vulkan-ray-tracing-deno"),
-        Strategy::Path {
-            path: manifest_dir.join("deno"),
-            build: BuildPolicy::IfStale,
-        },
-    )?;
+    // No module-loading calls: `@tatolab/debug-utilities` (the
+    // `BgraFileSource` trigger) and the example-local `./python` +
+    // `./deno` polyglot packages all live in this app's
+    // `streamlib_modules/` folder (populated by `./setup.sh`). The runtime
+    // lazily discovers + loads each on the first `processor_type_ref!`
+    // reference; the runner picks the Python or Deno provider by `--runtime`.
 
     let fixture_path = write_trigger_fixture().map_err(Error::Configuration)?;
     let fixture_path_str = fixture_path
         .to_str()
         .ok_or_else(|| Error::Configuration("fixture path has non-utf8 component".into()))?;
     let source = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "debug-utilities", "BgraFileSource", "1.0.0"),
+        processor_type_ref!("tatolab", "debug-utilities", "BgraFileSource"),
         serde_json::json!({
             "file_path": fixture_path_str,
             "width": 4,
@@ -657,7 +627,7 @@ fn main() -> Result<()> {
         "rchit_spv_hex": bytes_to_hex(SCENE_RCHIT_SPV),
     });
     let rt = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_ident()?,
+        runtime_kind.processor_ref(),
         rt_config,
     ))?;
     println!("+ Vulkan ray-tracing processor: {rt}");

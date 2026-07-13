@@ -33,12 +33,12 @@
 //! continuous processors, each self-paced by the runner's MonotonicTimer,
 //! no camera / display / Vulkan. The point is venv isolation, not GPU.
 //!
-//! Prerequisite: the per-package venv installs `streamlib` from the static registry
-//! pypi registry by version (it is declared like any dependency, not
-//! injected). The host environment must therefore expose the static registry pypi
-//! index to `uv` via a container-level `UV_INDEX` / `pip.conf`, e.g.
-//!   UV_INDEX="tatolab=file:///path/to/registry-tree/pypi/simple"
-//! numpy resolves from public PyPI normally (a truly-external dep).
+//! Prerequisite: each package's `python/pyproject.toml` declares `streamlib`
+//! like any dependency (it is not injected). The SDK resolves by version from
+//! PyPI once published; for local development `streamlib link --engine`
+//! (run by `./setup.sh`) points `uv` at the in-repo SDK instead, so no registry
+//! configuration is needed. numpy resolves from public PyPI normally (a
+//! truly-external dep).
 //!
 //! Run:
 //!   cargo run -p polyglot-venv-isolation-scenario
@@ -49,47 +49,34 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use streamlib::sdk::descriptors::{ModuleIdent, SchemaIdent};
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::module_ident_any_version;
-use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
 use streamlib::sdk::RunnerAutoBuild;
+use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::processor_type_ref;
+use streamlib::sdk::processors::{ProcessorSpec, ProcessorTypeReference};
+use streamlib::sdk::runtime::Runner;
 
 const RUN_DURATION: Duration = Duration::from_secs(2);
 
-/// One package under test: its module ident, the processor schema, the
-/// numpy version its pyproject pins, and the example-local source dir.
-/// `module_ident` / `processor_ident` are fns because the
-/// `module_ident_any_version!` / `schema_ident_any_version!` macros take
-/// string literals (they parse the org / name at compile time), so each
-/// package gets its own literal-arg constructor.
+/// One package under test: the processor schema and the numpy version its
+/// pyproject pins. `processor_ref` is a fn because the `processor_type_ref!`
+/// macro takes string literals (it parses the org / name at compile time), so
+/// each package gets its own literal-arg constructor.
 struct PackageUnderTest {
     label: &'static str,
-    module_ident: fn() -> ModuleIdent,
-    processor_ident: fn() -> Result<SchemaIdent>,
+    processor_ref: fn() -> ProcessorTypeReference,
     expected_numpy: &'static str,
-    source_subdir: &'static str,
 }
 
-fn pkg_a_module() -> ModuleIdent {
-    module_ident_any_version!("tatolab", "polyglot-venv-isolation-pkg-a")
-}
-
-fn pkg_a_ident() -> Result<SchemaIdent> {
-    streamlib::sdk::schema_ident_any_version!(
+fn pkg_a_ref() -> ProcessorTypeReference {
+    processor_type_ref!(
         "tatolab",
         "polyglot-venv-isolation-pkg-a",
         "NumpyVersionReporter"
     )
 }
 
-fn pkg_b_module() -> ModuleIdent {
-    module_ident_any_version!("tatolab", "polyglot-venv-isolation-pkg-b")
-}
-
-fn pkg_b_ident() -> Result<SchemaIdent> {
-    streamlib::sdk::schema_ident_any_version!(
+fn pkg_b_ref() -> ProcessorTypeReference {
+    processor_type_ref!(
         "tatolab",
         "polyglot-venv-isolation-pkg-b",
         "NumpyVersionReporter"
@@ -99,17 +86,13 @@ fn pkg_b_ident() -> Result<SchemaIdent> {
 const PACKAGES: &[PackageUnderTest] = &[
     PackageUnderTest {
         label: "pkg-a",
-        module_ident: pkg_a_module,
-        processor_ident: pkg_a_ident,
+        processor_ref: pkg_a_ref,
         expected_numpy: "1.26.4",
-        source_subdir: "pkg-a/python",
     },
     PackageUnderTest {
         label: "pkg-b",
-        module_ident: pkg_b_module,
-        processor_ident: pkg_b_ident,
+        processor_ref: pkg_b_ref,
         expected_numpy: "2.1.3",
-        source_subdir: "pkg-b/python",
     },
 ];
 
@@ -127,7 +110,6 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<()> {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let pid = std::process::id();
 
     println!("=== Polyglot per-package venv isolation scenario ===");
@@ -135,31 +117,24 @@ fn run() -> Result<()> {
 
     let runtime = Runner::with_auto_build()?;
 
+    // No module-loading call: this example's two example-local Python packages
+    // (`./pkg-a/python` + `./pkg-b/python`, each pinning its own conflicting
+    // numpy) live in this app's `streamlib_modules/` folder (populated by
+    // `./setup.sh`). The runtime lazily discovers + loads each on the first
+    // `processor_type_ref!` reference, provisioning each package's own venv.
+
     // Per-package output files the processors write their observed numpy
     // version into.
     let mut output_files: Vec<PathBuf> = Vec::with_capacity(PACKAGES.len());
 
     for pkg in PACKAGES {
-        // Each Python sub-package is example-local (a sibling of this
-        // example crate) and not workspace-staged, so it is resolved by
-        // its manifest directory. `IfStale` triggers the build
-        // orchestrator's materialize tail, which provisions the
-        // package's own `{staged}/.venv` with its own pinned numpy.
-        runtime.add_module_with_blocking(
-            (pkg.module_ident)(),
-            Strategy::Path {
-                path: manifest_dir.join(pkg.source_subdir),
-                build: BuildPolicy::IfStale,
-            },
-        )?;
-
         let output_file = std::env::temp_dir()
             .join(format!("polyglot-venv-isolation-{}-{pid}.json", pkg.label));
         let _ = std::fs::remove_file(&output_file);
         println!("{} output file: {}", pkg.label, output_file.display());
 
         let processor = runtime.add_processor(ProcessorSpec::new(
-            (pkg.processor_ident)()?,
+            (pkg.processor_ref)(),
             serde_json::json!({
                 "output_file": output_file.to_string_lossy(),
             }),

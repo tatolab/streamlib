@@ -1,11 +1,12 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-# Standalone, registry-only example (headed to its own repo). Every dependency
-# resolves from the static registry by version, and the empty `[workspace]` table
-# makes this its own workspace root so it builds off-tree. Loads
-# `@tatolab/camera` + `@tatolab/display` + `@tatolab/h264` + `@tatolab/h265`
-# at runtime via `Strategy::Registry`.
+# Standalone example (headed to its own repo). The `streamlib` SDK resolves by
+# version, and the empty `[workspace]` table makes this its own workspace root so
+# it builds off-tree. The processor packages (`@tatolab/camera`,
+# `@tatolab/display`, `@tatolab/h264`, `@tatolab/h265`) are NOT Cargo deps — they
+# live in this app's `streamlib_modules/` folder (run `./setup.sh` once) and the
+# runtime lazily discovers + loads them. See README.md.
 [package]
 name = "vulkan-video-roundtrip"
 version = "0.1.0"
@@ -13,7 +14,9 @@ edition = "2024"
 publish = false
 
 [dependencies]
-streamlib = { version = "0.4.33-dev.5" }
+# SDK by version; not published to crates.io yet, so `./setup.sh` runs
+# `streamlib link --engine <checkout>` to point it at the in-repo SDK.
+streamlib = { version = "0.6" }
 serde_json = "1"
 anyhow = "1.0.100"
 

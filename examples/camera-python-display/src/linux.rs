@@ -45,10 +45,9 @@
 //! Display.
 //!
 //! `CrtFilmGrain` and `BlendingCompositor` are in-process Rust
-//! processors that live in the sibling `effects/` package. The runner
-//! stages that cdylib at `effects/lib/<host_triple>/` and registers
-//! the package via `runtime.add_module_with_blocking(...,
-//! Strategy::Path)`. Their graphics-kernel
+//! processors that live in the sibling `effects/` package, linked into
+//! this app's `streamlib_modules/` by `./setup.sh` and lazily loaded by
+//! the runtime on first reference. Their graphics-kernel
 //! wrappers hand-roll synchronous fence-blocked dispatch with internal
 //! layout-barrier management — a pattern the engine deliberately
 //! doesn't expose because it's wrong-shape for production hot-paths.
@@ -58,8 +57,6 @@
 //! single-pattern principle these adapters ride and
 //! `docs/architecture/subprocess-rhi-parity.md` for the carve-out the
 //! cdylib's consumer-rhi import path stays inside.
-
-use std::path::PathBuf;
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -71,12 +68,11 @@ use streamlib::sdk::engine::host_rhi::HostVulkanTimelineSemaphore;
 use streamlib::sdk::rhi::TextureFormat;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::error::Error;
-use streamlib::sdk::module_ident_any_version;
+use streamlib::sdk::processor_type_ref;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::{BuildPolicy, Runner, SemVerRange, Strategy};
+use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::RunnerAutoBuild;
-use streamlib::sdk::schema_ident;
 use streamlib_adapter_abi::SurfaceId;
 use streamlib_consumer_rhi::VulkanLayout;
 
@@ -126,43 +122,12 @@ pub fn main() -> Result<()> {
 
     let runtime = Runner::with_auto_build()?;
 
-    // Stage the sibling effects cdylib at `effects/lib/<host_triple>/`
-    // so `Strategy::Path` picks it up via
-    // the same triple-keyed convention `streamlib pack` produces.
-    // The effects package is example-local (not a workspace-staged
-    // package), so the canonical `the build orchestrator` doesn't
-    // stage it; the runner handles its own copy step. The user is
-    // expected to have run `cargo build -p camera-python-display-effects`
-    // beforehand.
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let effects_dir = manifest_dir.join("effects");
-    stage_effects_cdylib(&effects_dir)?;
-
-    // Resolve `@tatolab/camera` + `@tatolab/display` from the static registry generic
-    // registry by version — the cross-repo consumer path. The orchestrator
-    // downloads each `.slpkg` and prefers a matching prebuilt or builds the
-    // bundled source on the host. Endpoint comes from `STREAMLIB_REGISTRY_URL`
-    //; run with e.g.
-    // `STREAMLIB_REGISTRY_URL=file:///path/to/registry-tree`. The example-local
-    // effects + Python sub-packages stay path-resolved (they aren't
-    // published — they're this example's own code).
-    runtime.add_module_with_blocking(
-        module_ident_any_version!("tatolab", "camera"),
-        Strategy::Registry { version_req: SemVerRange::Any, build: BuildPolicy::IfStale },
-    )?;
-    runtime.add_module_with_blocking(
-        module_ident_any_version!("tatolab", "display"),
-        Strategy::Registry { version_req: SemVerRange::Any, build: BuildPolicy::IfStale },
-    )?;
-    runtime.add_module_with_blocking(
-        module_ident_any_version!("tatolab", "camera-python-display-effects"),
-        Strategy::Path { path: effects_dir.clone(), build: BuildPolicy::IfStale },
-    )?;
-    runtime.add_module_with_blocking(
-        module_ident_any_version!("tatolab", "cyberpunk-processor"),
-        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::IfStale },
-    )?;
-    println!("✓ Loaded packages (camera, display, effects, cyberpunk-processor)\n");
+    // No module-loading calls: the in-repo `@tatolab/camera` +
+    // `@tatolab/display` siblings and this example's own `./effects` (Rust
+    // cdylib) + `./python` (`@tatolab/cyberpunk-processor`) packages all live in
+    // this app's `streamlib_modules/` folder (populated by `./setup.sh`). The
+    // runtime lazily discovers + loads each on the first `processor_type_ref!`
+    // reference — no manual cdylib staging.
 
     // OpenGL + Skia DMA-BUF render-target output surfaces stay as setup
     // hooks (one-shot pre-allocation; no per-frame host work). Each
@@ -261,7 +226,7 @@ pub fn main() -> Result<()> {
         None => serde_json::json!({}),
     };
     let camera = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "camera", "Camera", "1.0.0"),
+        processor_type_ref!("tatolab", "camera", "Camera"),
         camera_config,
     ))?;
     println!("✓ Camera added: {camera}\n");
@@ -278,7 +243,7 @@ pub fn main() -> Result<()> {
     // config (1920x1080) matches the camera processor's output.
     println!("🚛 Adding camera→cuda copy processor (host-pipeline producer)...");
     let camera_to_cuda = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "camera", "CameraToCudaCopy", "1.0.0"),
+        processor_type_ref!("tatolab", "camera", "CameraToCudaCopy"),
         serde_json::json!({}),
     ))?;
     println!("✓ Camera→CUDA copy added: {camera_to_cuda}\n");
@@ -288,11 +253,11 @@ pub fn main() -> Result<()> {
     // opengl DMA-BUF surface, emits the surface UUID downstream.
     println!("🐍 Adding Python avatar character (subprocess, PyTorch pose + ModernGL)...");
     let avatar = runtime.add_processor(ProcessorSpec::new(
-        streamlib::sdk::schema_ident_any_version!(
+        processor_type_ref!(
             "tatolab",
             "cyberpunk-processor",
             "AvatarCharacter"
-        )?,
+        ),
         serde_json::json!({
             "cuda_camera_surface_id": AVATAR_CAMERA_CUDA_SURFACE_ID,
             "opengl_output_surface_uuid": AVATAR_OUTPUT_SURFACE_UUID,
@@ -308,11 +273,11 @@ pub fn main() -> Result<()> {
     // SkiaContext.acquire_write.
     println!("🐍 Adding Python cyberpunk lower third (subprocess, Skia-on-GL)...");
     let lower_third = runtime.add_processor(ProcessorSpec::new(
-        streamlib::sdk::schema_ident_any_version!(
+        processor_type_ref!(
             "tatolab",
             "cyberpunk-processor",
             "CyberpunkLowerThird"
-        )?,
+        ),
         serde_json::json!({
             "output_surface_uuid": LOWER_THIRD_OUTPUT_SURFACE_UUID,
             "width": SURFACE_WIDTH,
@@ -325,11 +290,11 @@ pub fn main() -> Result<()> {
     // as lower-third — distinct UUID, same allocation pattern.
     println!("🐍 Adding Python cyberpunk watermark (subprocess, Skia-on-GL)...");
     let watermark = runtime.add_processor(ProcessorSpec::new(
-        streamlib::sdk::schema_ident_any_version!(
+        processor_type_ref!(
             "tatolab",
             "cyberpunk-processor",
             "CyberpunkWatermark"
-        )?,
+        ),
         serde_json::json!({
             "output_surface_uuid": WATERMARK_OUTPUT_SURFACE_UUID,
             "width": SURFACE_WIDTH,
@@ -344,11 +309,11 @@ pub fn main() -> Result<()> {
     // display refresh rate.
     println!("🎨 Adding blending compositor (parallel layer blending)...");
     let blending = runtime.add_processor(ProcessorSpec::new(
-        streamlib::sdk::schema_ident_any_version!(
+        processor_type_ref!(
             "tatolab",
             "camera-python-display-effects",
             "BlendingCompositor"
-        )?,
+        ),
         serde_json::Value::Null,
     ))?;
     println!("✓ Blending compositor added: {blending}\n");
@@ -356,11 +321,11 @@ pub fn main() -> Result<()> {
     // CrtFilmGrain — Rust ReactiveProcessor from the effects package.
     println!("📺 Adding CRT/film-grain post-effect...");
     let crt = runtime.add_processor(ProcessorSpec::new(
-        streamlib::sdk::schema_ident_any_version!(
+        processor_type_ref!(
             "tatolab",
             "camera-python-display-effects",
             "CrtFilmGrain"
-        )?,
+        ),
         serde_json::Value::Null,
     ))?;
     println!("✓ CRT/film-grain added: {crt}\n");
@@ -372,11 +337,11 @@ pub fn main() -> Result<()> {
     // into the host-pre-registered GLITCH_OUTPUT_SURFACE_UUID.
     println!("🐍 Adding Python cyberpunk glitch (subprocess, OpenGL fragment shader)...");
     let glitch = runtime.add_processor(ProcessorSpec::new(
-        streamlib::sdk::schema_ident_any_version!(
+        processor_type_ref!(
             "tatolab",
             "cyberpunk-processor",
             "CyberpunkGlitch"
-        )?,
+        ),
         serde_json::json!({
             "output_surface_uuid": GLITCH_OUTPUT_SURFACE_UUID,
             "width": SURFACE_WIDTH,
@@ -388,7 +353,7 @@ pub fn main() -> Result<()> {
     // Display processor (Vulkan swapchain).
     println!("🖥️  Adding display processor...");
     let display = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "display", "Display", "1.0.0"),
+        processor_type_ref!("tatolab", "display", "Display"),
         serde_json::json!({
             "width": SURFACE_WIDTH,
             "height": SURFACE_HEIGHT,
@@ -462,74 +427,6 @@ pub fn main() -> Result<()> {
     runtime.wait_for_signal()?;
 
     println!("\n✓ Pipeline stopped gracefully");
-    Ok(())
-}
-
-/// Copy the sibling effects cdylib into `effects/lib/<host_triple>/`
-/// so the `Path` resolver picks it up via the same
-/// triple-keyed convention `streamlib pack` produces. The effects
-/// package is example-local (not a workspace-staged package); the
-/// canonical `the build orchestrator` doesn't stage it, so the
-/// runner does its own copy. Mirror of the camera-rust-plugin
-/// stage step.
-fn stage_effects_cdylib(effects_dir: &std::path::Path) -> Result<()> {
-    let host_triple = streamlib::sdk::runtime::host_target_triple();
-    let triple_lib_dir = effects_dir.join("lib").join(host_triple);
-    std::fs::create_dir_all(&triple_lib_dir).map_err(|e| {
-        Error::Configuration(format!(
-            "Failed to create effects lib dir {}: {}",
-            triple_lib_dir.display(),
-            e
-        ))
-    })?;
-
-    // The example is a standalone cargo workspace (its own root with `effects`
-    // as a member), so `cargo build -p camera-python-display-effects` outputs
-    // to `<example>/target/`. The workspace root is the effects dir's parent
-    // (the example root) — NOT three levels up at the monorepo root, which is
-    // where this looked before the example was de-worked into its own repo.
-    let workspace_root = effects_dir.parent().ok_or_else(|| {
-        Error::Configuration("Failed to derive workspace root from effects dir".into())
-    })?;
-
-    let dylib_name = if cfg!(target_os = "macos") {
-        "libcamera_python_display_effects.dylib"
-    } else if cfg!(target_os = "windows") {
-        "camera_python_display_effects.dll"
-    } else {
-        "libcamera_python_display_effects.so"
-    };
-
-    let debug_dylib = workspace_root.join("target").join("debug").join(dylib_name);
-    let release_dylib = workspace_root
-        .join("target")
-        .join("release")
-        .join(dylib_name);
-
-    let source_dylib = if debug_dylib.exists() {
-        &debug_dylib
-    } else if release_dylib.exists() {
-        &release_dylib
-    } else {
-        return Err(Error::Configuration(format!(
-            "effects cdylib not found.\n  \
-             Build it first: cargo build -p camera-python-display-effects\n  \
-             Looked in:\n    {}\n    {}",
-            debug_dylib.display(),
-            release_dylib.display()
-        )));
-    };
-
-    let dest_dylib = triple_lib_dir.join(dylib_name);
-    std::fs::copy(source_dylib, &dest_dylib).map_err(|e| {
-        Error::Configuration(format!(
-            "Failed to copy effects dylib from {} to {}: {}",
-            source_dylib.display(),
-            dest_dylib.display(),
-            e
-        ))
-    })?;
-    println!("✓ Staged effects cdylib at {}", dest_dylib.display());
     Ok(())
 }
 

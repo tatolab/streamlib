@@ -8,14 +8,17 @@ edition = "2024"
 publish = false
 build = "build.rs"
 
+# The `streamlib*` SDK crates resolve by version. They aren't published to
+# crates.io yet, so `./setup.sh` runs `streamlib link --engine <checkout>` to
+# point them at the in-repo SDK for local development.
 [dependencies]
-streamlib = { version = "0.4.33-dev.5" }
-streamlib-adapter-abi = { version = "0.4.33-dev.5" }
+streamlib = { version = "0.6" }
+streamlib-adapter-abi = { version = "0.6" }
 serde_json = "1.0"
 png = "0.17"
 parking_lot = "0.12"
 sha2 = { version = "0.10", features = ["std"] }
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib-adapter-vulkan = { version = "0.4.33-dev.5" }
+streamlib-adapter-vulkan = { version = "0.6" }
 
 [workspace]

@@ -20,19 +20,18 @@
 //! `force_bad_surface_id` config so resolve_surface fails deterministically on
 //! every frame — the pipeline must still shut down cleanly.
 //!
-//! Both Python and Deno sub-packages are loaded declaratively via the
-//! runner's `streamlib.yaml` (no separate pack step required).
-
-use std::path::PathBuf;
+//! There is no module-loading call: every processor's package (`@tatolab/camera`,
+//! `@tatolab/display`, and this example's own `./python` + `./deno` polyglot
+//! packages) lives in this app's `streamlib_modules/` folder (populated by
+//! `./setup.sh`), and the runtime lazily discovers + loads each on the first
+//! `processor_type_ref!` reference.
 
 use streamlib::sdk::RunnerAutoBuild;
-use streamlib::sdk::descriptors::SchemaIdent;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::module_ident_any_version;
-use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
-use streamlib::sdk::schema_ident;
+use streamlib::sdk::processor_type_ref;
+use streamlib::sdk::processors::{ProcessorSpec, ProcessorTypeReference};
+use streamlib::sdk::runtime::Runner;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeKind {
@@ -58,14 +57,14 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_ident(self) -> Result<SchemaIdent> {
+    fn processor_ref(self) -> ProcessorTypeReference {
         match self {
-            Self::Python => streamlib::sdk::schema_ident_any_version!(
+            Self::Python => processor_type_ref!(
                 "tatolab",
                 "polyglot-dma-buf-consumer",
                 "DmaBufConsumer"
             ),
-            Self::Deno => streamlib::sdk::schema_ident_any_version!(
+            Self::Deno => processor_type_ref!(
                 "tatolab",
                 "polyglot-dma-buf-consumer-deno",
                 "DmaBufConsumer"
@@ -116,50 +115,14 @@ fn main() -> Result<()> {
 
     let runtime = Runner::with_auto_build()?;
 
-    // Load `@tatolab/camera` and `@tatolab/display` via the default
-    // resolver chain . Both must
-    // have been staged via `the build orchestrator
-    //` first.
-    runtime.add_module_with_blocking(
-        module_ident_any_version!("tatolab", "camera"),
-        streamlib::sdk::runtime::Strategy::Registry {
-            version_req: streamlib::sdk::runtime::SemVerRange::Any,
-            build: streamlib::sdk::runtime::BuildPolicy::IfStale,
-        },
-    )?;
-    runtime.add_module_with_blocking(
-        module_ident_any_version!("tatolab", "display"),
-        streamlib::sdk::runtime::Strategy::Registry {
-            version_req: streamlib::sdk::runtime::SemVerRange::Any,
-            build: streamlib::sdk::runtime::BuildPolicy::IfStale,
-        },
-    )?;
-
-    // Load the polyglot processors via explicit add_module_with calls.
-    // The Python and Deno sub-packages are example-local (siblings of
-    // this example crate) and not workspace-staged, so each is
-    // resolved by its manifest directory. The recursive dep walker
-    // follows each sub-package's own dependencies. The runner picks
-    // which one to instantiate via `schema_ident_any_version!` based
-    // on `--runtime`.
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    runtime.add_module_with_blocking(
-        module_ident_any_version!("tatolab", "polyglot-dma-buf-consumer"),
-        Strategy::Path {
-            path: manifest_dir.join("python"),
-            build: BuildPolicy::IfStale,
-        },
-    )?;
-    runtime.add_module_with_blocking(
-        module_ident_any_version!("tatolab", "polyglot-dma-buf-consumer-deno"),
-        Strategy::Path {
-            path: manifest_dir.join("deno"),
-            build: BuildPolicy::IfStale,
-        },
-    )?;
+    // No module-loading call: `@tatolab/camera`, `@tatolab/display`, and this
+    // example's own `./python` + `./deno` polyglot packages all live in this
+    // app's `streamlib_modules/` folder (populated by `./setup.sh`). The runtime
+    // lazily discovers + loads each on the first `processor_type_ref!`
+    // reference; the runner picks the Python or Deno consumer by `--runtime`.
 
     let camera = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "camera", "Camera", "1.0.0"),
+        processor_type_ref!("tatolab", "camera", "Camera"),
         serde_json::json!({ "device_id": device }),
     ))?;
     println!("+ Camera: {camera}");
@@ -168,13 +131,13 @@ fn main() -> Result<()> {
         "force_bad_surface_id": negative,
     });
     let consumer = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_ident()?,
+        runtime_kind.processor_ref(),
         consumer_config,
     ))?;
     println!("+ Consumer: {consumer}");
 
     let display = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "display", "Display", "1.0.0"),
+        processor_type_ref!("tatolab", "display", "Display"),
         serde_json::json!({
             "width": 1920,
             "height": 1080,

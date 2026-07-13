@@ -18,10 +18,10 @@
 //! Sibling of `polyglot-cuda-inference` (which validates the DLPack
 //! `VkBuffer` flat-tensor path). The Rust runner sits at the example
 //! root and the Python processor lives in a sibling `python/`
-//! sub-package with its own `streamlib.yaml`; the runner calls
-//! `Runner::add_module_with(..., Strategy::Path)`
-//! at startup to register the Python processor against its
-//! manifest directory.
+//! sub-package with its own `streamlib.yaml`; it lives in this app's
+//! `streamlib_modules/` folder (populated by `./setup.sh`) and the
+//! runtime lazily discovers + loads it on the first `processor_type_ref!`
+//! reference — no module-loading call in app code.
 //!
 //! Run:
 //!   cargo run -p cuda-fisheye-detection-scenario -- \
@@ -38,7 +38,6 @@ use std::time::Duration;
 
 use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::context::GpuContext;
-use streamlib::sdk::descriptors::SchemaIdent;
 use streamlib::sdk::engine::host_rhi::{
     HostMarker, HostVulkanBuffer, HostVulkanTexture, HostVulkanTimelineSemaphore, ImageCopyRegion,
     RhiCommandRecorder, VulkanAccess, VulkanStage,
@@ -46,10 +45,10 @@ use streamlib::sdk::engine::host_rhi::{
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostSurfaceStoreExt, HostTextureExt};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::module_ident_any_version;
+use streamlib::sdk::processor_type_ref;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::rhi::{StorageBuffer, Texture, TextureDescriptor, TextureFormat, VulkanLayout};
-use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
+use streamlib::sdk::runtime::Runner;
 use streamlib_adapter_abi::SurfaceId;
 use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostImageSurfaceRegistration};
 
@@ -147,30 +146,11 @@ fn main() -> Result<()> {
         });
     }
 
-    // Resolve `@tatolab/debug-utilities` (the BgraFileSource trigger) from the
-    // static registry by version.
-    runtime.add_module_with_blocking(
-        module_ident_any_version!("tatolab", "debug-utilities"),
-        streamlib::sdk::runtime::Strategy::Registry {
-            version_req: streamlib::sdk::runtime::SemVerRange::Any,
-            build: BuildPolicy::IfStale,
-        },
-    )?;
-
-    // Load the Python sub-package via an explicit add_module_with
-    // call. The Python sub-package is example-local (sibling of this
-    // example crate) and not workspace-staged, so it's resolved by
-    // its manifest directory. The recursive dep walker follows the
-    // sub-package's own dependencies (`@tatolab/core` resolved from the
-    // registry by version).
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    runtime.add_module_with_blocking(
-        module_ident_any_version!("tatolab", "cuda-fisheye-python"),
-        Strategy::Path {
-            path: manifest_dir.join("python"),
-            build: BuildPolicy::IfStale,
-        },
-    )?;
+    // No module-loading calls: `@tatolab/debug-utilities` (the
+    // `BgraFileSource` trigger) and the example-local `./python` package
+    // (`@tatolab/cuda-fisheye-python`) live in this app's `streamlib_modules/`
+    // folder (populated by `./setup.sh`). The runtime lazily discovers +
+    // loads each on the first `processor_type_ref!` reference.
 
     // Trigger source — emits a tiny BGRA fixture frame whose contents
     // are unused. The polyglot processor runs against the
@@ -178,7 +158,7 @@ fn main() -> Result<()> {
     // pixel buffer. Same shape as `polyglot-cuda-inference`.
     let fixture_path = write_trigger_fixture().map_err(Error::Configuration)?;
     let source = runtime.add_processor(ProcessorSpec::new(
-        streamlib::sdk::schema_ident_any_version!("tatolab", "debug-utilities", "BgraFileSource")?,
+        processor_type_ref!("tatolab", "debug-utilities", "BgraFileSource"),
         serde_json::json!({
             "file_path": fixture_path
                 .to_str()
@@ -191,11 +171,11 @@ fn main() -> Result<()> {
     ))?;
     println!("+ BgraFileSource: {source}");
 
-    let undistort_ident: SchemaIdent = streamlib::sdk::schema_ident_any_version!(
+    let undistort_ident = processor_type_ref!(
         "tatolab",
         "cuda-fisheye-python",
         "CudaFisheyeUndistortion"
-    )?;
+    );
     let reference_path = cache_subpath("warped-reference.rgba").map_err(Error::Configuration)?;
     let stages_dir = output_png
         .parent()

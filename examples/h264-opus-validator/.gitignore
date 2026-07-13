@@ -1,0 +1,10 @@
+# Rust build artifacts
+/target/
+Cargo.lock
+
+# Generated media (ffmpeg scratch + muxed output)
+temp_video.mp4
+temp_audio.aac
+output.mp4
+*.mp4
+*.aac

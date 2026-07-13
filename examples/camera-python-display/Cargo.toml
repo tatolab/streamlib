@@ -1,13 +1,15 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-# Standalone, registry-only example (headed to its own repo). Every dependency
-# resolves from the static registry by version. This crate is its own workspace
-# root and includes the sibling `effects/` cdylib plugin as a member so the
-# runner can `cargo build -p camera-python-display-effects` and stage it.
+# Standalone example (headed to its own repo). This crate is its own workspace
+# root and includes the sibling `effects/` cdylib package as a member. The SDK
+# resolves by version; the processor packages (`@tatolab/camera`,
+# `@tatolab/display`, the example-local `./effects` and `./python`) are linked
+# into this app's `streamlib_modules/` by `./setup.sh` and lazily discovered by
+# the runtime. See README.md.
 [package]
 name = "camera-python-display"
-version = "0.4.33-dev.2"
+version = "0.1.0"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 license = "BUSL-1.1"
@@ -30,17 +32,17 @@ streamlib-consumer-rhi = { workspace = true }
 members = ["effects"]
 
 [workspace.package]
-version = "0.4.33-dev.2"
+version = "0.1.0"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 license = "BUSL-1.1"
 
 [workspace.dependencies]
-streamlib = { version = "0.5" }
-streamlib-jtd-codegen = { version = "0.5" }
-streamlib-plugin-abi = { version = "0.5" }
-streamlib-adapter-abi = { version = "0.5" }
-streamlib-consumer-rhi = { version = "0.5" }
+streamlib = { version = "0.6" }
+streamlib-jtd-codegen = { version = "0.6" }
+streamlib-plugin-abi = { version = "0.6" }
+streamlib-adapter-abi = { version = "0.6" }
+streamlib-consumer-rhi = { version = "0.6" }
 tracing = { version = "0.1.41", features = ["release_max_level_debug"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }

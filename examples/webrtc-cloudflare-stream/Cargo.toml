@@ -1,12 +1,16 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-# Standalone, registry-only example (headed to its own repo). Every dependency
-# resolves from the static registry by version, and the empty `[workspace]` table
-# makes this its own workspace root so it builds off-tree. Loads
-# `@tatolab/{audio,camera,h264,opus,webrtc}` at runtime via `Strategy::Registry`;
-# the build-time jtd-codegen generates typed configs from the schemas declared
-# in `streamlib.yaml` (Linux-only example — WHIP streaming to Cloudflare Stream).
+# Standalone example (headed to its own repo). The `streamlib` SDK resolves by
+# version, and the empty `[workspace]` table makes this its own workspace root so
+# it builds off-tree. The processor packages it uses
+# (`@tatolab/{audio,camera,h264,opus,webrtc}`) are NOT Cargo deps — they live in
+# this app's `streamlib_modules/` folder (run `./setup.sh` once) and the runtime
+# lazily discovers + loads them at runtime. The build-time jtd-codegen generates
+# typed config structs from the schemas declared in `streamlib.yaml`, resolving
+# schema deps from the checkout via `STREAMLIB_LINK_CHECKOUT` (set by
+# `./setup.sh`'s `streamlib link --engine`). Linux-only example — WHIP streaming
+# to Cloudflare Stream. See README.md.
 [package]
 name = "webrtc-cloudflare-stream"
 version = "0.1.0"
@@ -14,10 +18,16 @@ edition = "2024"
 publish = false
 
 [build-dependencies]
-streamlib-jtd-codegen = { version = "0.4.33-dev.5" }
+# The SDK codegen crate is resolved by version (same link-by-checkout dev loop
+# as the `streamlib` dep below).
+streamlib-jtd-codegen = { version = "0.6" }
 
 [dependencies]
-streamlib = { version = "0.4.33-dev.5" }
+# The SDK is resolved by version. It is not published to crates.io yet, so for
+# local development `./setup.sh` runs `streamlib link --engine <checkout>` to
+# point this dep at the in-repo SDK. Once the SDK publishes, the bare version
+# resolves with no link step.
+streamlib = { version = "0.6" }
 tokio = { version = "1.48.0", features = ["full"] }
 anyhow = "1.0.100"
 libc = "0.2"

@@ -8,11 +8,10 @@
 
 use futures_util::StreamExt;
 use std::sync::Arc;
-use streamlib::sdk::module_ident_any_version;
+use streamlib::sdk::processor_type_ref;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::RunnerAutoBuild;
-use streamlib::sdk::schema_ident;
 
 use streamlib::sdk::error::Result;
 use tokio::sync::Mutex;
@@ -28,19 +27,19 @@ async fn main() -> Result<()> {
     // Runner::with_auto_build() auto-detects tokio context and uses the current handle
     let runtime = Runner::with_auto_build()?;
 
-    // Load `@tatolab/api-server` and `@tatolab/debug-utilities` at runtime.
-    // SimplePassthrough lives in debug-utilities — the demo POSTs
-    // `"processor_type": "SimplePassthroughProcessor"` through the API
-    // server's dynamic-registry endpoint and that resolution only
-    // succeeds if the processor is present in PROCESSOR_REGISTRY,
-    // which add_module populates via the cdylib registration.
-    runtime.add_module_with(module_ident_any_version!("tatolab", "api-server"), streamlib::sdk::runtime::Strategy::Registry { version_req: streamlib::sdk::runtime::SemVerRange::Any, build: streamlib::sdk::runtime::BuildPolicy::IfStale }).await?;
-    runtime.add_module_with(module_ident_any_version!("tatolab", "debug-utilities"), streamlib::sdk::runtime::Strategy::Registry { version_req: streamlib::sdk::runtime::SemVerRange::Any, build: streamlib::sdk::runtime::BuildPolicy::IfStale }).await?;
+    // No module-loading calls: `@tatolab/api-server` and
+    // `@tatolab/debug-utilities` both live in this app's `streamlib_modules/`
+    // folder (populated by `./setup.sh`). The API server is lazily discovered +
+    // loaded on the `processor_type_ref!` reference below. SimplePassthrough
+    // lives in debug-utilities — the demo POSTs
+    // `"processor_type": "SimplePassthroughProcessor"` through the API server's
+    // dynamic-registry endpoint, and that resolution needs debug-utilities
+    // present in `streamlib_modules/` so the runtime can discover the provider.
 
     // Add the API server processor
     println!("Adding API server processor...");
     let _api_server = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "api-server", "ApiServer", "1.0.0"),
+        processor_type_ref!("tatolab", "api-server", "ApiServer"),
         serde_json::json!({
             "host": "127.0.0.1",
             "port": 9000,

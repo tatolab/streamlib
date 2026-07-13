@@ -1,10 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Camera-python-display effects package — Rust-backed processors
-//! loaded as a cdylib via `runtime.add_module_with_blocking(...,
-//! Strategy::Path)` against this crate's
-//! `streamlib.yaml`.
+//! Camera-python-display effects package — Rust-backed cdylib processors
+//! (`BlendingCompositor`, `CrtFilmGrain`). The package is linked into the
+//! consuming app's `streamlib_modules/` (via `streamlib link ./effects`) and
+//! the runtime lazily discovers + loads this cdylib on the first
+//! `processor_type_ref!` reference to one of its processors.
 
 #[allow(non_snake_case, unused_imports, dead_code, clippy::all)]
 mod _generated_ {

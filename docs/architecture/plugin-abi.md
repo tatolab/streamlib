@@ -542,8 +542,9 @@ land.
 ### Dlopen integration
 
 The `libs/streamlib-engine/tests/load_project_dylib_*.rs` suite
-loads `examples/camera-rust-plugin` (or a tailored test fixture)
-through `runtime.add_module_with(ident, ModuleResolverStrategy::ManifestDirectory { path })`
+stages `packages/camera` / `packages/test-fixtures` into a tmpdir and
+loads the built cdylib through
+`runtime.add_module_with_blocking(ident, Strategy::Path { path, build })`
 and exercises the full
 ABI roundtrip: cdylib registers via `STREAMLIB_PLUGIN` → host
 populates `HostServices` → cdylib instantiates a processor →
@@ -611,8 +612,9 @@ Revisit this doc and the structural decisions when:
 - **SDK façade**: `libs/streamlib-sdk/src/lib.rs` for the safe
   surface cdylibs Cargo-dep through.
 - **Reference cdylib**: `examples/camera-rust-plugin/` — the
-  in-tree end-to-end smoke harness, loaded by every dlopen
-  integration test.
+  in-tree end-to-end smoke example of a facade cdylib plugin. (The
+  dlopen integration tests themselves stage `packages/camera` /
+  `packages/test-fixtures`, not this example.)
 - **Companion docs**:
   - [`adapter-runtime-integration.md`](adapter-runtime-integration.md) —
     how surface adapters ride this ABI to expose host-allocated
