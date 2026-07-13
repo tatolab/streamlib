@@ -549,6 +549,71 @@ fn expand_schema_ident_any_version(
     })
 }
 
+/// `processor_type_ref!("org", "package", "Type")` — a **version-free**
+/// processor-type reference for the lazy-discovery world (app code that never
+/// calls `add_module`).
+///
+/// Expands to a `ProcessorTypeReference::ResolveToInstalled` value with no
+/// version and **no registry lookup at the call site**, so the reference
+/// reaches `add_processor`'s lazy hook and resolves to the single installed
+/// provider — loading its package from `streamlib_modules/` on first
+/// reference. This is the canonical form for referencing a processor by
+/// `@org/package/Type` with no version.
+///
+/// Distinct from [`schema_ident_any_version!`], which resolves a `SchemaIdent`
+/// *now* against the already-registered processor types (the post-`add_module`
+/// / power-caller form). Reach for `processor_type_ref!` when you want lazy
+/// loading; reach for `schema_ident_any_version!` when the provider is already
+/// registered.
+///
+/// ```ignore
+/// // No version at the reference site, no `?`, no add_module call:
+/// runtime.add_processor(streamlib::sdk::processors::ProcessorSpec::new(
+///     streamlib::sdk::processor_type_ref!("tatolab", "camera", "Camera"),
+///     serde_json::json!({}),
+/// ))?;
+/// ```
+#[proc_macro]
+pub fn processor_type_ref(input: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(input as SchemaIdentAnyVersionArgs);
+    match expand_processor_type_ref(&args) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+fn expand_processor_type_ref(
+    args: &SchemaIdentAnyVersionArgs,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let org_str = args.org.value();
+    let package_str = args.package.value();
+    let type_str = args.type_name.value();
+
+    Org::new(&org_str).map_err(|e| {
+        syn::Error::new(args.org.span(), format!("invalid org `{}`: {}", org_str, e))
+    })?;
+    Package::new(&package_str).map_err(|e| {
+        syn::Error::new(
+            args.package.span(),
+            format!("invalid package `{}`: {}", package_str, e),
+        )
+    })?;
+    TypeName::new(&type_str).map_err(|e| {
+        syn::Error::new(
+            args.type_name.span(),
+            format!("invalid type name `{}`: {}", type_str, e),
+        )
+    })?;
+
+    Ok(quote! {
+        ::streamlib::sdk::processors::ProcessorTypeReference::ResolveToInstalled {
+            org: ::streamlib::sdk::descriptors::Org::new(#org_str).expect("validated by macro"),
+            package: ::streamlib::sdk::descriptors::Package::new(#package_str).expect("validated by macro"),
+            r#type: ::streamlib::sdk::descriptors::TypeName::new(#type_str).expect("validated by macro"),
+        }
+    })
+}
+
 struct SchemaIdentArgs {
     org: LitStr,
     package: LitStr,

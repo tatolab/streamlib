@@ -641,12 +641,15 @@ fn generate_processor_impl_from_schema(
             /// Create a [`ProcessorSpec`](__streamlib_sdk::processors::ProcessorSpec)
             /// for adding this processor to a runtime.
             pub fn node(config: #config_type) -> __streamlib_sdk::processors::ProcessorSpec {
-                __streamlib_sdk::processors::ProcessorSpec {
-                    name: Self::schema_ident(),
-                    config: __streamlib_sdk::serde_json::to_value(&config)
+                // Version-pinned reference to this processor's own compiled-in
+                // version. `ProcessorSpec::new` takes the SchemaIdent directly
+                // on the engine-free SDK and via `From<SchemaIdent>` on the
+                // engine SDK (where `name` is a `ProcessorTypeReference`).
+                __streamlib_sdk::processors::ProcessorSpec::new(
+                    Self::schema_ident(),
+                    __streamlib_sdk::serde_json::to_value(&config)
                         .expect("Config serialization failed"),
-                    display_name: None,
-                }
+                )
             }
 
             /// Returns the execution mode for this processor.

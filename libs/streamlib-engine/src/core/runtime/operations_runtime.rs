@@ -52,9 +52,10 @@ async fn add_processor_impl(
         );
     };
 
-    // Hold the ident so we can surface a typed `UnknownProcessorType` error
-    // if the registry doesn't know this type — `spec` is moved into `add_v`.
-    let ident_for_err = spec.name.clone();
+    // Hold a diagnostic ident so we can surface a typed `UnknownProcessorType`
+    // error if the registry doesn't know this type — `spec` is moved into
+    // `add_v`. A version-free reference projects to `(org, package, type)@0.0.0`.
+    let ident_for_err = spec.name.to_diagnostic_ident();
 
     let processor_id = compiler.scope(|graph, tx| -> Result<ProcessorUniqueId> {
         let node_id = graph
