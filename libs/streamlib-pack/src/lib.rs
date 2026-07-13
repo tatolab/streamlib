@@ -835,18 +835,21 @@ fn collect_source_tree(pkg_dir: &Path, files: &mut Vec<(String, PathBuf)>) -> Re
 /// stream to locate the produced cdylib. Cargo's own fingerprint
 /// short-circuits when nothing changed — and catches out-of-package /
 /// transitive changes a package-local check cannot.
-/// The `STREAMLIB_LINK_CHECKOUT` value a relocated build threads to its package
-/// `build.rs`: the checkout path when a link is active, or EMPTY (the
-/// suppression sentinel [`streamlib_idents::ResolverOptions::from_env_or_marker`]
-/// honors) when not. Setting it unconditionally keeps the orchestrator
-/// authoritative over link state — the relocated `build.rs` trusts this env and
-/// never re-derives the link from a stray `.streamlib/link.json` up-tree of the
-/// staged crate dir.
-fn link_checkout_env_value(link_checkout: Option<&Path>) -> &std::ffi::OsStr {
-    match link_checkout {
+/// Set `STREAMLIB_LINK_CHECKOUT` on `command` for a relocated `cargo build` —
+/// the checkout path when a link is active, or EMPTY (the suppression sentinel
+/// [`streamlib_idents::ResolverOptions::from_env_or_marker`] honors) when not.
+/// BOTH arms call `command.env`, so the env is set UNCONDITIONALLY: that keeps
+/// the orchestrator authoritative over link state, so the relocated `build.rs`
+/// trusts this env and never re-derives the link from a stray
+/// `.streamlib/link.json` up-tree of the staged crate dir. Reverting the `None`
+/// arm to "leave the env unset" reintroduces the mixed-build hazard — locked by
+/// `cargo_build_sets_link_checkout_env_unconditionally`.
+fn apply_link_checkout_env(command: &mut Command, link_checkout: Option<&Path>) {
+    let value: &std::ffi::OsStr = match link_checkout {
         Some(checkout) => checkout.as_os_str(),
         None => std::ffi::OsStr::new(""),
-    }
+    };
+    command.env(streamlib_idents::LINK_CHECKOUT_ENV, value);
 }
 
 fn cargo_build_streaming(
@@ -878,19 +881,14 @@ fn cargo_build_streaming(
     // cargo `[patch]` above for the crate half. `build.rs` runs as a child of
     // this `cargo build`, so an env var set here reaches it.
     //
-    // The env is set UNCONDITIONALLY so the orchestrator stays authoritative
-    // over link state: this is a relocated build (the package is staged into the
-    // streamlib-home cache, whose `.streamlib` dir name collides with the
-    // link-state dir), so `build.rs`'s marker walk-up from `CARGO_MANIFEST_DIR`
-    // could otherwise cross into a stray `.streamlib/link.json` up-tree and
-    // silently redirect a locked / distribution build to a dev checkout. Setting
-    // the checkout when a link is active, and EMPTY (the suppression sentinel
-    // `from_env_or_marker` honors) when not, means the relocated `build.rs`
-    // trusts this env and never re-derives link state from the marker.
-    command.env(
-        streamlib_idents::LINK_CHECKOUT_ENV,
-        link_checkout_env_value(link_checkout),
-    );
+    // The env is set UNCONDITIONALLY (see `apply_link_checkout_env`) so the
+    // orchestrator stays authoritative over link state: this is a relocated
+    // build (the package is staged into the streamlib-home cache, whose
+    // `.streamlib` dir name collides with the link-state dir), so `build.rs`'s
+    // marker walk-up from `CARGO_MANIFEST_DIR` could otherwise cross into a stray
+    // `.streamlib/link.json` up-tree and silently redirect a locked /
+    // distribution build to a dev checkout.
+    apply_link_checkout_env(&mut command, link_checkout);
     command
         .arg("--message-format=json-render-diagnostics")
         .arg("-p")
@@ -1281,24 +1279,39 @@ mod tests {
     use streamlib_cargo_build::{host_dylib_extension, host_target_triple};
     use tempfile::tempdir;
 
-    /// A relocated build sets `STREAMLIB_LINK_CHECKOUT` UNCONDITIONALLY — the
-    /// checkout when a link is active, EMPTY (never absent) otherwise — so the
-    /// orchestrator stays authoritative and the staged `build.rs` never
-    /// re-derives the link from a stray marker up-tree. Mentally-revert the
-    /// `None => ""` arm (leave the env unset for a non-linked build) and the
-    /// empty-assert fails, proving the suppression sentinel is emitted.
+    /// A relocated `cargo build` gets `STREAMLIB_LINK_CHECKOUT` set on its
+    /// `Command` UNCONDITIONALLY — the checkout when a link is active, EMPTY
+    /// (present, never absent) otherwise — so the orchestrator stays
+    /// authoritative and the staged `build.rs` never re-derives the link from a
+    /// stray marker up-tree. Inspecting the built `Command`'s env via
+    /// `get_envs()` locks the CALL SITE, not just a value mapping: mentally-revert
+    /// `apply_link_checkout_env`'s `None` arm to "leave the env unset" (the exact
+    /// mixed-build regression) and the `Some(Some(""))` assertion below fails,
+    /// because the env would be absent from `get_envs()` rather than present-empty.
     #[test]
-    fn relocated_build_link_env_value_is_checkout_or_empty_never_absent() {
+    fn cargo_build_sets_link_checkout_env_unconditionally() {
+        use std::ffi::OsStr;
+        let key = OsStr::new(streamlib_idents::LINK_CHECKOUT_ENV);
+
+        // No active link ⇒ env PRESENT and EMPTY (the suppression sentinel).
+        let mut no_link = Command::new("true");
+        apply_link_checkout_env(&mut no_link, None);
+        let got = no_link.get_envs().find(|(k, _)| *k == key).map(|(_, v)| v);
         assert_eq!(
-            link_checkout_env_value(None),
-            std::ffi::OsStr::new(""),
-            "a non-linked relocated build must set the EMPTY suppression sentinel, \
-             not leave the env unset"
+            got,
+            Some(Some(OsStr::new(""))),
+            "a non-linked relocated build must SET the EMPTY sentinel on the \
+             command, not leave the env unset"
         );
+
+        // Active link ⇒ the checkout path is threaded through as the override.
+        let mut linked = Command::new("true");
         let checkout = Path::new("/opt/streamlib-checkout");
+        apply_link_checkout_env(&mut linked, Some(checkout));
+        let got = linked.get_envs().find(|(k, _)| *k == key).map(|(_, v)| v);
         assert_eq!(
-            link_checkout_env_value(Some(checkout)),
-            checkout.as_os_str(),
+            got,
+            Some(Some(checkout.as_os_str())),
             "an active link threads the checkout path through as the override"
         );
     }

@@ -2176,11 +2176,26 @@ dependencies:
         let crate_dir = app_root.join("crates").join("app-lib");
         write_streamlib_yaml(&crate_dir, "dependencies:\n  \"@tatolab/core\": \"^1.0.0\"\n");
 
+        // Clear the registry env too so the mentally-revert is deterministic:
+        // with marker discovery reverted, the bare `^1.0.0` dep would fall
+        // through to by-version resolution and — with no registry — fail
+        // `RegistryNotConfigured`, so `.expect` panics. Without this, a stray
+        // `STREAMLIB_REGISTRY_URL` in the shell could send the reverted path to a
+        // live fetch instead. The positive assertion (Path from the checkout)
+        // holds regardless, since the link short-circuit precedes the registry.
+        // SAFETY: `#[serial]` + `with_link_checkout_env` serialize env mutation.
+        let prev_registry = std::env::var_os(crate::REGISTRY_URL_ENV);
+        unsafe { std::env::remove_var(crate::REGISTRY_URL_ENV) };
         let res = with_link_checkout_env(None, || {
             let opts = ResolverOptions::from_env_or_marker(&crate_dir);
             resolve_with(&crate_dir, &opts)
-        })
-        .expect("marker-discovered checkout must resolve the by-version dep");
+        });
+        unsafe {
+            if let Some(v) = prev_registry {
+                std::env::set_var(crate::REGISTRY_URL_ENV, v);
+            }
+        }
+        let res = res.expect("marker-discovered checkout must resolve the by-version dep");
 
         let core = res.packages.get("@tatolab/core").unwrap();
         assert!(
