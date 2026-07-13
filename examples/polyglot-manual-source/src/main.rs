@@ -53,8 +53,6 @@ const INTERVAL_MS: u32 = 33;
 /// gate robust against CI jitter.
 const MIN_FRAMES_RECEIVED: u32 = 20;
 
-const COUNTING_SINK_PLUGIN_DYLIB: &str = "libpolyglot_manual_source_counting_sink_plugin.so";
-
 fn counting_sink_processor_ref() -> ProcessorTypeReference {
     processor_type_ref!(
         "tatolab",
@@ -167,16 +165,6 @@ fn run() -> Result<SinkReport> {
 
     let runtime = Runner::with_auto_build()?;
 
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
-    // Stage the counting-sink plugin's cdylib into `./plugin/lib/` before
-    // the runtime discovers the plugin sub-package. The plugin lives in the
-    // sibling `plugin/` sub-package with its own `streamlib.yaml`; the
-    // runtime resolves the staged `*.so` from `plugin/lib/` when it loads the
-    // linked package. Mirrors the camera-rust-plugin pattern.
-    let plugin_dir = manifest_dir.join("plugin");
-    stage_plugin_dylib(&plugin_dir)?;
-
     // No module-loading calls: the counting-sink plugin plus the
     // example-local `./python` + `./deno` polyglot source packages all live
     // in this app's `streamlib_modules/` folder (populated by `./setup.sh`).
@@ -222,48 +210,6 @@ fn run() -> Result<SinkReport> {
         )));
     }
     Ok(report)
-}
-
-/// Locate the built plugin cdylib in the workspace target dir and copy
-/// it under `plugin/lib/` so the runtime finds the staged `*.so` when it
-/// loads the linked plugin sub-package. Mirrors the `camera-rust-plugin`
-/// example.
-fn stage_plugin_dylib(plugin_dir: &std::path::Path) -> Result<()> {
-    let lib_dir = plugin_dir.join("lib");
-    std::fs::create_dir_all(&lib_dir).map_err(|e| {
-        Error::Configuration(format!(
-            "failed to create plugin lib dir {}: {e}",
-            lib_dir.display(),
-        ))
-    })?;
-
-    // This example is its own workspace root (the `plugin/` cdylib is a member),
-    // so `cargo build -p ...-counting-sink-plugin` writes the dylib into this
-    // crate's own `target/` dir.
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let target_dir = manifest_dir.join("target");
-    let candidates = [
-        target_dir.join("debug").join(COUNTING_SINK_PLUGIN_DYLIB),
-        target_dir.join("release").join(COUNTING_SINK_PLUGIN_DYLIB),
-    ];
-    let source = candidates.iter().find(|p| p.exists()).ok_or_else(|| {
-        Error::Configuration(format!(
-            "counting-sink plugin dylib not found. Build it first:\n  \
-             cargo build -p polyglot-manual-source-counting-sink-plugin\n\
-             Looked in:\n  {}\n  {}",
-            candidates[0].display(),
-            candidates[1].display(),
-        ))
-    })?;
-    let dest = lib_dir.join(COUNTING_SINK_PLUGIN_DYLIB);
-    std::fs::copy(source, &dest).map_err(|e| {
-        Error::Configuration(format!(
-            "failed to copy {} → {}: {e}",
-            source.display(),
-            dest.display(),
-        ))
-    })?;
-    Ok(())
 }
 
 fn read_sink_report(path: &std::path::Path) -> Result<SinkReport> {
