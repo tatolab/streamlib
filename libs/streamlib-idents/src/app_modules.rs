@@ -593,10 +593,11 @@ fn locate_staged_package_root(
             .filter_map(|e| e.ok())
             .map(|e| e.path())
             .collect();
-        if let [single] = entries.as_slice() {
-            if single.is_dir() && single.join(Manifest::FILE_NAME).is_file() {
-                return Ok(single.clone());
-            }
+        if let [single] = entries.as_slice()
+            && single.is_dir()
+            && single.join(Manifest::FILE_NAME).is_file()
+        {
+            return Ok(single.clone());
         }
     }
     Err(AppModulesError::InvalidPackage {
