@@ -37,6 +37,9 @@ members = [
     "libs/streamlib-python-native", # FFI cdylib for Python subprocess iceoryx2 access
     "libs/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC
     "libs/streamlib-moq",        # MoQ-over-QUIC transport library (sessions + catalog); the @tatolab/moq package's processors + the api-server build on it
+    "libs/tatolab-vulkanalia",     # Vendored vulkanalia fork (Apache-2.0) — see docs/architecture/vendored-vulkanalia.md
+    "libs/tatolab-vulkanalia-sys", # Vendored vulkanalia-sys fork (Apache-2.0) — see docs/architecture/vendored-vulkanalia.md
+    "libs/tatolab-vulkanalia-vma", # Vendored vulkanalia-vma fork (Apache-2.0, VMA 3.3.0 + Vulkan-Headers 1.4.309) — see docs/architecture/vendored-vulkanalia.md
     # `examples/*` and `packages/*` are NOT workspace members. They are
     # standalone, registry-only units (each headed to its own repo): every
     # dependency — the streamlib SDK, package crates, adapters — resolves
@@ -122,12 +125,13 @@ objc2-core-graphics = "0.3.2"
 objc2-vision = "0.3.2"
 libc = "0.2.177"
 
-# Vulkan bindings (tatolab fork for the VMA 3.3.0 patch). Resolved by version
-# from the static registry — the fork shares crates.io version numbers, so the
-# `registry = "tatolab"` annotation (not a distinct version) is what selects the
-# fork over upstream. See docs/architecture/static-registry.md.
-vulkanalia = { version = "0.35.0", registry = "tatolab", features = ["libloading", "provisional", "window"] }
-vulkanalia-vma = { version = "0.9.0", registry = "tatolab" }
+# Vulkan bindings (vendored tatolab fork — VMA 3.3.0 + Vulkan-Headers 1.4.309
+# patches; Apache-2.0). The `package =` renames keep `use vulkanalia::` code
+# untouched while the workspace resolves the vendored crates by path locally
+# and by `version` + `registry` in a published closure. See
+# docs/architecture/vendored-vulkanalia.md.
+vulkanalia = { package = "tatolab-vulkanalia", path = "libs/tatolab-vulkanalia", version = "0.35.0", registry = "tatolab", features = ["libloading", "provisional", "window"] }
+vulkanalia-vma = { package = "tatolab-vulkanalia-vma", path = "libs/tatolab-vulkanalia-vma", version = "0.9.0", registry = "tatolab" }
 
 # SPIR-V reflection for descriptor-set-layout validation in the compute-kernel RHI.
 rspirv-reflect = "0.9.0"

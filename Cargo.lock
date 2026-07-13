@@ -1204,6 +1204,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
+name = "doxygen-rs"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "415b6ec780d34dcf624666747194393603d0373b7141eef01d12ee58881507d9"
+dependencies = [
+ "phf",
+]
+
+[[package]]
 name = "dpi"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3580,6 +3589,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "phf"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fd6780a80ae0c52cc120a26a1a42c1ae51b247a253e4e06113d23d2c2edd078"
+dependencies = [
+ "phf_macros",
+ "phf_shared",
+]
+
+[[package]]
+name = "phf_generator"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c80231409c20246a13fddb31776fb942c38553c51e871f8cbd687a4cfb5843d"
+dependencies = [
+ "phf_shared",
+ "rand 0.8.5",
+]
+
+[[package]]
+name = "phf_macros"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f84ac04429c13a7ff43785d75ad27569f2951ce0ffd30a3321230db2fc727216"
+dependencies = [
+ "phf_generator",
+ "phf_shared",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "phf_shared"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67eabc2ef2a60eb7faa00097bd1ffdb5bd28e62bf39990626a582201b7a754e5"
+dependencies = [
+ "siphasher",
+]
+
+[[package]]
 name = "pin-project"
 version = "1.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4872,10 +4923,10 @@ dependencies = [
  "streamlib-consumer-rhi",
  "streamlib-engine",
  "streamlib-surface-client",
+ "tatolab-vulkanalia",
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
- "vulkanalia",
 ]
 
 [[package]]
@@ -4896,9 +4947,9 @@ dependencies = [
  "streamlib-consumer-rhi",
  "streamlib-engine",
  "streamlib-surface-client",
+ "tatolab-vulkanalia",
  "tracing",
  "tracing-subscriber",
- "vulkanalia",
 ]
 
 [[package]]
@@ -4914,10 +4965,10 @@ dependencies = [
  "streamlib-consumer-rhi",
  "streamlib-engine",
  "streamlib-surface-client",
+ "tatolab-vulkanalia",
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
- "vulkanalia",
 ]
 
 [[package]]
@@ -4938,9 +4989,9 @@ dependencies = [
  "streamlib-consumer-rhi",
  "streamlib-engine",
  "streamlib-surface-client",
+ "tatolab-vulkanalia",
  "tracing",
  "tracing-subscriber",
- "vulkanalia",
 ]
 
 [[package]]
@@ -4961,10 +5012,10 @@ dependencies = [
  "streamlib-consumer-rhi",
  "streamlib-engine",
  "streamlib-surface-client",
+ "tatolab-vulkanalia",
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
- "vulkanalia",
 ]
 
 [[package]]
@@ -4989,10 +5040,10 @@ dependencies = [
  "streamlib-consumer-rhi",
  "streamlib-engine",
  "streamlib-surface-client",
+ "tatolab-vulkanalia",
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
- "vulkanalia",
 ]
 
 [[package]]
@@ -5013,10 +5064,10 @@ dependencies = [
  "streamlib-consumer-rhi",
  "streamlib-engine",
  "streamlib-surface-client",
+ "tatolab-vulkanalia",
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
- "vulkanalia",
 ]
 
 [[package]]
@@ -5037,9 +5088,9 @@ dependencies = [
  "streamlib-consumer-rhi",
  "streamlib-engine",
  "streamlib-surface-client",
+ "tatolab-vulkanalia",
  "tracing",
  "tracing-subscriber",
- "vulkanalia",
 ]
 
 [[package]]
@@ -5113,9 +5164,9 @@ version = "0.6.0"
 dependencies = [
  "libc",
  "streamlib-surface-client",
+ "tatolab-vulkanalia",
  "thiserror 2.0.18",
  "tracing",
- "vulkanalia",
 ]
 
 [[package]]
@@ -5203,6 +5254,8 @@ dependencies = [
  "streamlib-plugin-abi",
  "streamlib-processor-schema",
  "streamlib-surface-client",
+ "tatolab-vulkanalia",
+ "tatolab-vulkanalia-vma",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -5213,8 +5266,6 @@ dependencies = [
  "ureq",
  "utoipa",
  "uuid",
- "vulkanalia",
- "vulkanalia-vma",
  "winit",
  "zbus",
  "zip",
@@ -5509,6 +5560,36 @@ dependencies = [
  "filetime",
  "libc",
  "xattr",
+]
+
+[[package]]
+name = "tatolab-vulkanalia"
+version = "0.35.0"
+dependencies = [
+ "cocoa",
+ "libloading 0.8.9",
+ "metal 0.32.0",
+ "objc",
+ "raw-window-handle",
+ "tatolab-vulkanalia-sys",
+]
+
+[[package]]
+name = "tatolab-vulkanalia-sys"
+version = "0.35.0"
+dependencies = [
+ "bitflags 1.3.2",
+]
+
+[[package]]
+name = "tatolab-vulkanalia-vma"
+version = "0.9.0"
+dependencies = [
+ "bindgen 0.71.1",
+ "bitflags 2.11.0",
+ "cc",
+ "doxygen-rs",
+ "tatolab-vulkanalia",
 ]
 
 [[package]]
@@ -6132,40 +6213,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "zune-jpeg",
-]
-
-[[package]]
-name = "vulkanalia"
-version = "0.35.0"
-source = "sparse+https://registry.tatolab.com/cargo/"
-checksum = "4de872d936f05cf1616c798ccfda8ea3947b30576e45c999f4d981887ee741ef"
-dependencies = [
- "cocoa",
- "libloading 0.8.9",
- "metal 0.32.0",
- "objc",
- "raw-window-handle",
- "vulkanalia-sys",
-]
-
-[[package]]
-name = "vulkanalia-sys"
-version = "0.35.0"
-source = "sparse+https://registry.tatolab.com/cargo/"
-checksum = "876995ec92cdce5818b5502dbf4c8467df125568e070da19c05b7d15be39a5c4"
-dependencies = [
- "bitflags 1.3.2",
-]
-
-[[package]]
-name = "vulkanalia-vma"
-version = "0.9.0"
-source = "sparse+https://registry.tatolab.com/cargo/"
-checksum = "ab1de2d3cfecf285a8675d17112fcaa97a5db378ad97373732f60e9c9930898d"
-dependencies = [
- "bitflags 2.11.0",
- "cc",
- "vulkanalia",
 ]
 
 [[package]]
