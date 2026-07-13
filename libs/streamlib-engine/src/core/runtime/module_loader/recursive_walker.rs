@@ -516,12 +516,17 @@ fn add_module_recursive_body(
     let on_disk_version = read_version_from_manifest_dir(&manifest_dir)?;
 
     // Read the manifest; authoritative source of identity for the
-    // package at the resolved location.
+    // package at the resolved location. Thread the active link so the
+    // manifest's bare-name schema-dep resolution resolves a dep present in the
+    // checkout from the checkout (the load-time half of the zero-registry dev
+    // loop). `link` is `None` on locked runs / no active link → unchanged.
     let config =
-        ProjectConfig::load(&manifest_dir).map_err(|e| AddModuleError::ManifestLoadFailed {
-            module: module.clone(),
-            source_path: manifest_dir.clone(),
-            detail: e.to_string(),
+        ProjectConfig::load_with_link(&manifest_dir, link.map(|l| l.checkout())).map_err(|e| {
+            AddModuleError::ManifestLoadFailed {
+                module: module.clone(),
+                source_path: manifest_dir.clone(),
+                detail: e.to_string(),
+            }
         })?;
 
     config
@@ -648,12 +653,18 @@ fn add_module_recursive_body(
         )?;
     }
 
-    // Now register this package's own processors.
-    register_manifest_processors(iceoryx2_node, &manifest_dir, &config).map_err(|e| {
-        AddModuleError::LoadProjectFailed {
-            module: module.clone(),
-            source: Box::new(e),
-        }
+    // Now register this package's own processors. Thread the active link so a
+    // config schema dep present in the checkout resolves from the checkout too
+    // (load-time zero-registry dev loop); `None` off a link → unchanged.
+    register_manifest_processors(
+        iceoryx2_node,
+        &manifest_dir,
+        &config,
+        link.map(|l| l.checkout()),
+    )
+    .map_err(|e| AddModuleError::LoadProjectFailed {
+        module: module.clone(),
+        source: Box::new(e),
     })?;
 
     // Registration + the transitive walk succeeded — flip the in-flight

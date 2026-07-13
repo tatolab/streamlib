@@ -162,6 +162,7 @@ pub(super) fn register_manifest_processors(
     iceoryx2_node: &Iceoryx2Node,
     project_path: &std::path::Path,
     config: &crate::core::config::ProjectConfig,
+    link_checkout: Option<&std::path::Path>,
 ) -> Result<()> {
     use super::schema_registration::resolve_config_schema_canonical_id;
     use crate::core::ProcessorDescriptor;
@@ -206,15 +207,18 @@ pub(super) fn register_manifest_processors(
     // declares a config block.
     let config_resolved: Option<streamlib_idents::ResolvedPackages> =
         if config.processors.iter().any(|p| p.config.is_some()) {
+            // Runtime package-load boundary — read the registry config from the
+            // environment so a registry-only package resolves its schema deps
+            // from the registry (not a dev path patch). An active `streamlib
+            // link` (threaded by the module loader) additionally redirects a
+            // schema dep present in the checkout to the checkout — the load-time
+            // half of the zero-registry dev loop; `None` leaves this unchanged.
+            let mut resolver_options = streamlib_idents::ResolverOptions::from_env();
+            if let Some(checkout) = link_checkout {
+                resolver_options.link_checkout = Some(checkout.to_path_buf());
+            }
             Some(
-                streamlib_idents::resolve_with(
-                    project_path,
-                    // Runtime package-load boundary — read the registry config
-                    // from the environment so a registry-only package resolves
-                    // its schema deps from the registry (not a dev path patch).
-                    &streamlib_idents::ResolverOptions::from_env(),
-                )
-                .map_err(|e| {
+                streamlib_idents::resolve_with(project_path, &resolver_options).map_err(|e| {
                     Error::Configuration(format!(
                         "failed to resolve manifest dependencies for bare-name \
                          config schema lookup at {}: {}",
