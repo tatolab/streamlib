@@ -428,6 +428,12 @@ async fn async_main(cli: Cli) -> Result<()> {
             force,
         }) => {
             if engine {
+                if name.is_some() {
+                    anyhow::bail!(
+                        "`unlink --engine` takes no package name (it removes the whole-tree \
+                         engine link); drop the name or drop --engine"
+                    );
+                }
                 if dir.is_some() {
                     anyhow::bail!("--dir applies only to a package unlink, not `unlink --engine`");
                 }

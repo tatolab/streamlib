@@ -162,6 +162,20 @@ fn link_a_non_directory_is_rejected() {
 }
 
 #[test]
+fn unlink_name_with_engine_is_a_usage_error() {
+    // `unlink --engine` removes the whole-tree engine link and takes no
+    // package name; a stray positional must bail rather than be silently
+    // ignored (symmetric with the --dir / --force / --skip-verify guards).
+    let out = run(&["unlink", "@tatolab/foo", "--engine"]);
+    assert!(!out.status.success(), "unlink <name> --engine must fail");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("takes no package name"),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
 fn bare_link_without_path_or_engine_is_a_usage_error() {
     // Pre-1.0: the old `link` (bare = engine link) shape is gone. A bare
     // `link` with no path and no `--engine` is a loud error.
