@@ -143,6 +143,58 @@ fn python_renderer_matches_captured_golden_vulkanalia_vma() {
     );
 }
 
+#[test]
+fn python_renderer_orients_renamed_deps_per_the_index_format() {
+    // Per the cargo index format, a `package = ...`-renamed dep's index entry
+    // carries the RENAME in `name` (feature references like `dep/feat`
+    // resolve against it) and the real published crate in `package`. The
+    // vendored tatolab-vulkanalia* crates are the first closure members with
+    // renamed sibling deps; getting the orientation backwards makes cargo
+    // reject the depending crate's whole index entry as invalid at resolve
+    // time (`version X's index entry is invalid`).
+    let tmp = tempfile::tempdir().unwrap();
+    let manifest = tmp.path().join("renamed.Cargo.toml");
+    std::fs::write(
+        &manifest,
+        r#"[package]
+name = "tatolab-vulkanalia"
+version = "0.35.0"
+edition = "2024"
+
+[features]
+default = ["std"]
+std = ["vulkanalia-sys/std"]
+
+[dependencies.vulkanalia-sys]
+version = "0.35"
+package = "tatolab-vulkanalia-sys"
+default-features = false
+registry-index = "sparse+https://registry.tatolab.com/cargo/"
+"#,
+    )
+    .unwrap();
+    let rendered = render_line(
+        "tatolab-vulkanalia",
+        "0.35.0",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        &manifest,
+    );
+    let v: serde_json::Value = serde_json::from_str(rendered.trim()).unwrap();
+    let deps = v["deps"].as_array().unwrap();
+    let sys = deps
+        .iter()
+        .find(|d| d["name"] == "vulkanalia-sys")
+        .expect("dep entry keyed by the RENAME, matching the [features] reference");
+    assert_eq!(
+        sys["package"], "tatolab-vulkanalia-sys",
+        "the real published crate name goes in `package`"
+    );
+    assert!(
+        sys.get("registry").is_none(),
+        "same-registry (registry-index-carrying) dep must omit `registry`"
+    );
+}
+
 /// The index-path grammar exists in TWO implementations — Rust
 /// `cargo_index_path` (xtask closure emit) and bash `cargo_idx_path`
 /// (`scripts/registry/cargo-idx-path.sh`, the standalone shell helper). Feed

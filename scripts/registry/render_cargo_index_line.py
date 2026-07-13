@@ -93,8 +93,16 @@ def dep_entries(manifest: dict) -> list:
             features = list(spec.get("features", []))
             optional = bool(spec.get("optional", False))
             default_features = bool(spec.get("default-features", True))
+            # Per the cargo index format, `name` is the name the depending
+            # crate USES (the rename when `package = ...` is present — the
+            # manifest's dep-table key), and `package` carries the real
+            # published crate name. Feature references like `dep/feat` in the
+            # crate's `[features]` resolve against `name`, so getting this
+            # orientation wrong makes cargo reject the WHOLE index entry as
+            # invalid (e.g. `std = ["vulkanalia-sys/std"]` with no dep NAMED
+            # `vulkanalia-sys`).
             entry = {
-                "name": real_name,
+                "name": dep_name,
                 "req": req,
                 "features": features,
                 "optional": optional,
@@ -108,9 +116,9 @@ def dep_entries(manifest: dict) -> list:
             # registry" (matches registry daemon's index output).
             if "registry-index" not in spec:
                 entry["registry"] = CRATES_IO_INDEX
-            # Preserve the local alias when the dep was renamed via `package`.
+            # The real published crate name when the dep was renamed.
             if real_name != dep_name:
-                entry["package"] = dep_name
+                entry["package"] = real_name
             entries.append(entry)
     return entries
 
