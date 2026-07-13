@@ -11,7 +11,9 @@ daemon. See
 
 | Script | What it does |
 |---|---|
-| `emit-static-fork.sh` | Package the `tatolab/vulkanalia` fork (`vulkanalia`, `-sys`, `-vma`) into a cargo sparse subtree. The daemon-free bootstrap: the workspace declares `vulkanalia = { registry = "tatolab" }`, so cargo cannot resolve until the fork is fetchable. Emitted from a standalone clone (the fork depends only on crates.io + itself). |
+| `emit-static-fork.sh` | Package the `tatolab/vulkanalia` fork (`vulkanalia`, `-sys`, `-vma`) into a cargo sparse subtree, running `normalize_fork_crate.py` on each crate. The daemon-free bootstrap: the workspace declares `vulkanalia = { registry = "tatolab" }`, so cargo cannot resolve until the fork is fetchable. Emitted from a standalone clone (the fork depends only on crates.io + itself). |
+| `normalize_fork_crate.py` | Rewrite the ephemeral serving-port URL baked into a fork `.crate` (packaged `Cargo.toml` `registry-index` + bundled `Cargo.lock` `source`) to the canonical `[registries.tatolab]` index, strip `.cargo_vcs_info.json`, and re-gzip with a hand-framed deterministic header — so the tarball checksum is port-independent and reproduces the committed `Cargo.lock` on any emit host. |
+| `emit-cargo-local-registry.sh` | Reshape an emitted cargo **sparse** subtree into a cargo **local-registry** (`index/<shard>` + flat `.crate`s, no `config.json`) so cargo resolves the `tatolab` registry over a `file://` `[source]` replacement with **no HTTP server**. The serverless resolve CI uses (via the `cargo-fork-mirror` composite action) and the offline path an external consumer rides. |
 | `render_cargo_index_line.py` | Render one cargo sparse-index NDJSON line from a `.crate`'s bundled manifest — the single source of truth for the index-line shape. |
 | `cargo-idx-path.sh` | Compute a crate's RFC 2141 sparse-index shard path (`serde → se/rd/serde`), sourced by `emit-static-fork.sh`. |
 | `serve-static-registry.sh` | Serve an emitted tree with `python3 -m http.server` and print the consumer configuration (the manual configure-a-consumer path; a `streamlib registry use <dir>` verb is planned). |
@@ -40,5 +42,11 @@ prints the consumer env (`STREAMLIB_REGISTRY_URL=file://<dir>`,
 `UV_INDEX=file://<dir>/pypi/simple`, the cargo `[source]` replacement, and the
 npm `.npmrc` line). A `streamlib registry use <dir>` verb that writes that
 cargo/npm config into the consumer and auto-serves npm on localhost is planned.
-cargo/npm read over a static HTTP mount (sparse + npm are HTTP-only);
-pypi + `.slpkg` read straight off `file://`.
+npm reads over a static HTTP mount (HTTP-only); pypi + `.slpkg` read straight
+off `file://`. cargo has two shapes: a `sparse+http` `[source]` replacement over
+the served mount, **or** a serverless `local-registry` `file://` replacement
+built by reshaping the sparse tree with `emit-cargo-local-registry.sh` (no
+server — what CI + `--locked --offline` resolves use). Both keep the canonical
+source id in `Cargo.lock`; see
+[`docs/architecture/static-registry.md`](../../docs/architecture/static-registry.md)
+→ "Consuming a tree".

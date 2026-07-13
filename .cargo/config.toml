@@ -6,13 +6,18 @@ xtask = "run --package xtask --"
 # The `tatolab` registry: the streamlib SDK crate chain + the vulkanalia fork
 # resolve by version from the static file-tree registry. This canonical index
 # URL is baked into every consumer's Cargo.lock; it does NOT need to be live —
-# offline / local resolution works against a mirror of the tree. To resolve
-# from a local folder or any other mount, serve it (scripts/registry/
-# serve-static-registry.sh <dir>) and add a cargo `[source]` replacement
-# pointing `tatolab` at the served mount — source-replacement keeps this
-# canonical source id in the lockfile (see docs/architecture/static-registry.md).
-# `CARGO_REGISTRIES_TATOLAB_INDEX` is the env-override alternative. A `streamlib
-# registry use <dir>` verb that emits the replacement is planned. Reads are
-# anonymous (tokenless); the tree is served by any dumb HTTP mount.
+# offline / local resolution works against a mirror of the tree. Two ways to
+# point cargo at a mirror, both via a `[source]` replacement that keeps this
+# canonical source id in the lockfile (see docs/architecture/static-registry.md):
+#   - serverless: reshape the emitted sparse tree into a cargo `local-registry`
+#     (scripts/registry/emit-cargo-local-registry.sh) and replace `tatolab` with
+#     a `local-registry = "<dir>"` source — resolves `--locked --offline` with no
+#     server. This is the CI path (`.github/actions/cargo-fork-mirror`).
+#   - served: serve the tree (scripts/registry/serve-static-registry.sh <dir>)
+#     and replace `tatolab` with a `sparse+http://…` source.
+# Do NOT also set `CARGO_REGISTRIES_TATOLAB_INDEX` — an env index override
+# shadows a `[source]` replacement and rewrites the fork's source id in the
+# lockfile. A `streamlib registry use <dir>` verb that emits the replacement is
+# planned. Reads are anonymous (tokenless).
 [registries.tatolab]
 index = "sparse+https://registry.tatolab.com/cargo/"

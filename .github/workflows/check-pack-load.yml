@@ -79,18 +79,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-pack-load-
 
-      # Daemon-free registry resolve: the workspace build resolves the
-      # `vulkanalia` fork from `registry = "tatolab"`. Serve it as a static tree
-      # (no registry daemon, offline) so the pack-then-load build resolves.
-      - name: Serve static vulkanalia fork registry
-        uses: ./.github/actions/serve-static-fork
+      # Serverless registry resolve: the workspace build resolves the
+      # `vulkanalia` fork from `registry = "tatolab"`. Emit it + reshape into a
+      # cargo local-registry `[source]` replacement (no HTTP server) so the
+      # pack-then-load build resolves `--locked` offline.
+      - name: Mirror vulkanalia fork (serverless cargo [source] replacement)
+        uses: ./.github/actions/cargo-fork-mirror
 
       # The Rust-impl leg loads a SOURCE-ONLY `.slpkg` (`pkg build`'s
       # distribution shape), so the orchestrator builds `streamlib-network`
       # on this host — resolving streamlib-plugin-sdk & friends from the
-      # registry. Emit the workspace release closure into the served static
-      # tree so that resolve is daemon-free too (the emit's atomic flip
-      # replaces the fork-only tree with fork + closure).
+      # registry. Emit the workspace release closure into the static tree, then
+      # re-reshape it into the serverless cargo local-registry mirror so the
+      # orchestrator's out-of-tree resolve rides the same `[source]` replacement
+      # (the emit's atomic flip replaces the fork-only tree with fork + closure).
       - name: Emit closure crates into the static registry
         run: |
           # Force a fresh `cargo package` for every closure crate. The `target`
@@ -103,8 +105,20 @@ jobs:
           # structural check can't catch. Content-addressed verification is the
           # real fix; clearing the dir here is the belt-and-suspenders stop-gap.
           rm -rf target/package
-          VULKANALIA_DIR=/tmp/vulkanalia-fork             cargo run -q -p xtask -- static-registry emit               --out "$STREAMLIB_STATIC_REGISTRY_DIR"               --base-url "$STATIC_FORK_URL"               --cargo-closure --no-pypi --no-npm --no-slpkg
-          curl -fsS "$STATIC_FORK_URL/cargo/st/re/streamlib-plugin-sdk" >/dev/null             || { echo "closure crate not fetchable from the static tree"; exit 1; }
+          VULKANALIA_DIR=/tmp/vulkanalia-fork \
+            cargo run --locked -q -p xtask -- static-registry emit \
+              --out "$STREAMLIB_STATIC_REGISTRY_DIR" \
+              --base-url "http://127.0.0.1:8799" \
+              --cargo-closure --no-pypi --no-npm --no-slpkg
+          # The atomic flip above replaced $STREAMLIB_STATIC_REGISTRY_DIR
+          # wholesale, dropping the cargo-local-registry/ the composite action
+          # built. Re-reshape the now fork+closure sparse tree back into the
+          # mirror the [source] replacement points at, so the out-of-tree
+          # streamlib-network build resolves streamlib-plugin-sdk + the fork.
+          scripts/registry/emit-cargo-local-registry.sh \
+            "$STREAMLIB_STATIC_REGISTRY_DIR" "$STREAMLIB_STATIC_REGISTRY_DIR/cargo-local-registry"
+          test -f "$STREAMLIB_STATIC_REGISTRY_DIR/cargo-local-registry/index/st/re/streamlib-plugin-sdk" \
+            || { echo "closure crate streamlib-plugin-sdk not in the local-registry mirror"; exit 1; }
 
       - name: cargo test pack_then_load_smoke
-        run: cargo test --test pack_then_load_smoke -p streamlib-engine
+        run: cargo test --locked --test pack_then_load_smoke -p streamlib-engine
