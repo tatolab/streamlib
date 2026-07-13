@@ -112,6 +112,7 @@ fn tree_shake_emits_only_root_declared_schemas() {
         schema_dir: None,
         workspace_root: tmp.path().to_path_buf(),
         write_lockfile: false,
+        link_checkout: None,
     })
     .expect("generate root codegen");
 

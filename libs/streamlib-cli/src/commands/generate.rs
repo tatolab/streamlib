@@ -21,6 +21,15 @@ pub fn run(
     schema_file: Option<PathBuf>,
     schema_dir: Option<PathBuf>,
 ) -> Result<()> {
+    // The user-facing `streamlib generate` resolves the active `streamlib link`
+    // checkout MARKER-FIRST from the project dir (with STREAMLIB_LINK_CHECKOUT as
+    // an override) — a dev running `streamlib generate` in their linked app dir
+    // picks up the link with no env exported. (The build orchestrator's
+    // in-process codegen supplies its own authoritative link state instead of
+    // marker discovery; see `streamlib_jtd_codegen::generate`.)
+    let link_checkout = project_dir
+        .as_deref()
+        .and_then(|dir| streamlib_idents::ResolverOptions::from_env_or_marker(dir).link_checkout);
     generate(GenerateOptions {
         runtime,
         output,
@@ -29,6 +38,7 @@ pub fn run(
         schema_dir,
         workspace_root: workspace_root()?,
         write_lockfile: true,
+        link_checkout,
     })
 }
 

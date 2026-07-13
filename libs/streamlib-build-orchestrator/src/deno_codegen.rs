@@ -30,10 +30,22 @@ use crate::build_failed;
 
 /// Generate the staged Deno package's `_generated_/` wire vocabulary.
 ///
+/// `link_checkout` is the orchestrator's authoritative active-link checkout
+/// (checkout when linked, `None` on distribution), threaded to codegen so the
+/// package's schema deps resolve from the checkout under a link. It is NOT
+/// re-derived from the marker — `project_dir` here is the relocated staged cache
+/// dir, so a marker walk-up could cross into a stray `.streamlib/link.json` and
+/// redirect a distribution build to a dev checkout (see
+/// [`streamlib_jtd_codegen::generate`]).
+///
 /// No-op (returns `Ok(())`) when the staged package declares no TypeScript
 /// runtime processors.
-#[tracing::instrument(skip(temp_dir), fields(temp_dir = %temp_dir.display(), package = %package_label))]
-pub fn provision_deno_typescript(temp_dir: &Path, package_label: &str) -> Result<(), BuildError> {
+#[tracing::instrument(skip(temp_dir, link_checkout), fields(temp_dir = %temp_dir.display(), package = %package_label))]
+pub fn provision_deno_typescript(
+    temp_dir: &Path,
+    link_checkout: Option<&Path>,
+    package_label: &str,
+) -> Result<(), BuildError> {
     let config = match build::read_minimal_project_config(temp_dir) {
         Ok(Some(config)) => config,
         Ok(None) => return Ok(()),
@@ -78,6 +90,10 @@ pub fn provision_deno_typescript(temp_dir: &Path, package_label: &str) -> Result
         // here is byproduct (the per-package fingerprint is the staleness
         // oracle, not a lockfile).
         write_lockfile: false,
+        // Authoritative link state from the orchestrator (checkout when linked,
+        // `None` on distribution) — never marker-re-derived from this relocated
+        // `temp_dir`.
+        link_checkout: link_checkout.map(|p| p.to_path_buf()),
     })
     .map_err(|e| {
         build_failed(
@@ -147,7 +163,7 @@ mod tests {
             "package:\n  org: tatolab\n  name: schemas-only\n  version: 0.1.0\nschemas:\n  T:\n    file: schemas/t.yaml\n",
         )
         .unwrap();
-        provision_deno_typescript(dir.path(), "schemas-only").unwrap();
+        provision_deno_typescript(dir.path(), None, "schemas-only").unwrap();
         assert!(
             !dir.path().join("_generated_").exists(),
             "non-Deno package must not get a _generated_ directory"
@@ -178,7 +194,7 @@ mod tests {
         .unwrap();
         std::fs::write(dir.path().join("t.ts"), b"export default class {}").unwrap();
 
-        provision_deno_typescript(dir.path(), "ts").unwrap();
+        provision_deno_typescript(dir.path(), None, "ts").unwrap();
 
         let generated = dir.path().join("_generated_");
         assert!(generated.is_dir(), "_generated_ must be created");

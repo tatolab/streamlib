@@ -39,11 +39,19 @@ use streamlib_engine::core::runtime::BuildError;
 /// resolves the SDK from the checkout instead of the registry — the cargo
 /// `[patch]` mirror on the Python side. `None` ⇒ registry resolution.
 ///
+/// `link_checkout` is that same active-link checkout root, threaded to the
+/// in-venv `_generated_` codegen so the SDK's schema deps resolve from the
+/// checkout under a link. It is the orchestrator's authoritative link state,
+/// NOT re-derived from the marker — a relocated venv codegen must not walk up
+/// out of the staged cache into a stray marker (see
+/// [`streamlib_jtd_codegen::generate`]). `None` ⇒ registry resolution.
+///
 /// No-op (returns `Ok(())`) when the staged package has no Python runtime.
-#[tracing::instrument(skip(temp_dir, link_python_sdk), fields(temp_dir = %temp_dir.display(), package = %package_label))]
+#[tracing::instrument(skip(temp_dir, link_python_sdk, link_checkout), fields(temp_dir = %temp_dir.display(), package = %package_label))]
 pub fn provision_python_venv(
     temp_dir: &Path,
     link_python_sdk: Option<&Path>,
+    link_checkout: Option<&Path>,
     package_label: &str,
 ) -> Result<(), BuildError> {
     if !staged_package_has_python(temp_dir) {
@@ -138,7 +146,7 @@ pub fn provision_python_venv(
     }
 
     // ---- codegen: populate streamlib/_generated_ in the venv ----
-    ensure_streamlib_generated_in_venv(&venv_python, package_label)?;
+    ensure_streamlib_generated_in_venv(&venv_python, link_checkout, package_label)?;
 
     // ---- compileall: pre-warm .pyc ----
     precompile_venv(&venv_python, &venv_dir, package_label)?;
@@ -168,6 +176,7 @@ pub(crate) fn staged_package_has_python(temp_dir: &Path) -> bool {
 /// dependency.
 fn ensure_streamlib_generated_in_venv(
     venv_python: &Path,
+    link_checkout: Option<&Path>,
     package_label: &str,
 ) -> Result<(), BuildError> {
     let probe = Command::new(venv_python)
@@ -235,6 +244,10 @@ fn ensure_streamlib_generated_in_venv(
         schema_dir: None,
         workspace_root: streamlib_dir,
         write_lockfile: false,
+        // Authoritative link state from the orchestrator (checkout when linked,
+        // `None` on distribution) — never marker-re-derived from this relocated
+        // venv dir.
+        link_checkout: link_checkout.map(|p| p.to_path_buf()),
     })
     .map_err(|e| {
         build_failed(
@@ -520,7 +533,8 @@ packages = ["python"]
         // schemas-only or Rust-only package.
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join("streamlib.yaml"), "package:\n  name: x\n").unwrap();
-        provision_python_venv(temp.path(), None, "tatolab/x").expect("no-python must be a no-op");
+        provision_python_venv(temp.path(), None, None, "tatolab/x")
+            .expect("no-python must be a no-op");
         assert!(
             !temp.path().join(".venv").exists(),
             "no venv must be created for a non-Python staged package"
@@ -546,7 +560,7 @@ packages = ["python"]
         let temp = tempfile::tempdir().unwrap();
         write_staged_python_package(temp.path(), &sdk);
 
-        provision_python_venv(temp.path(), None, "tatolab/mypkg")
+        provision_python_venv(temp.path(), None, None, "tatolab/mypkg")
             .expect("provision must succeed offline against the fixture SDK");
 
         // Contract: interpreter at exactly {temp_dir}/.venv/bin/python.
@@ -660,7 +674,7 @@ packages = ["python"]
         )
         .unwrap();
 
-        provision_python_venv(staged.path(), Some(&sdk), "tatolab/mypkg")
+        provision_python_venv(staged.path(), Some(&sdk), None, "tatolab/mypkg")
             .expect("provision must succeed against the linked fixture SDK");
 
         // The staged pyproject got the override injected…

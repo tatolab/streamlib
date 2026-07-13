@@ -82,6 +82,15 @@ pub struct GenerateOptions {
     /// write `streamlib-codegen.lock` next to `streamlib.yaml`. Defaults to
     /// `true`.
     pub write_lockfile: bool,
+    /// Active `streamlib link` checkout for schema-dep resolution, supplied
+    /// EXPLICITLY by the caller — NOT re-derived from the marker inside
+    /// [`generate`]. The user-facing `streamlib generate` CLI passes the
+    /// marker-discovered checkout ([`streamlib_idents::ResolverOptions::from_env_or_marker`],
+    /// CWD/project-anchored); the build orchestrator's in-process codegen passes
+    /// its own authoritative link state (the checkout when a link is active,
+    /// `None` on a distribution build) so a relocated codegen never walks up out
+    /// of the staged cache dir into a stray marker. `None` ⇒ no link redirect.
+    pub link_checkout: Option<PathBuf>,
 }
 
 impl Default for GenerateOptions {
@@ -94,6 +103,7 @@ impl Default for GenerateOptions {
             schema_dir: None,
             workspace_root: PathBuf::new(),
             write_lockfile: true,
+            link_checkout: None,
         }
     }
 }
@@ -108,20 +118,26 @@ pub fn generate(opts: GenerateOptions) -> Result<()> {
         schema_dir,
         workspace_root: _,
         write_lockfile,
+        link_checkout,
     } = opts;
 
     if let Some(project_dir) = project_dir {
-        // `from_env_or_marker` picks up the static registry config
-        // (STREAMLIB_REGISTRY_URL) so `streamlib generate` resolves registry
-        // schema deps, and resolves the active `streamlib link` checkout
-        // marker-first (walking up from `project_dir`) with STREAMLIB_LINK_CHECKOUT
-        // as an explicit override — so `streamlib generate` on a linked app
-        // resolves its schema deps from the checkout with no env exported, the
-        // same boundary `build.rs` uses. The pure resolver itself never reads
-        // env or the marker.
-        let resolved =
-            streamlib_idents::resolve_with(&project_dir, &ResolverOptions::from_env_or_marker(&project_dir))
-                .context("Failed to resolve streamlib.yaml dependency graph")?;
+        // `from_env` picks up the static registry config (STREAMLIB_REGISTRY_URL)
+        // so a registry-cached crate resolves registry schema deps. The active
+        // `streamlib link` checkout is supplied EXPLICITLY by the caller
+        // (`link_checkout`), NOT re-derived from the marker here: the user-facing
+        // `streamlib generate` CLI passes the marker-discovered checkout
+        // (CWD/project-anchored via `ResolverOptions::from_env_or_marker`), while
+        // the build orchestrator's in-process codegen passes its own
+        // authoritative link state (checkout when linked, `None` on a
+        // distribution build). That authority split keeps a relocated
+        // orchestrator codegen from walking up out of the staged cache dir into a
+        // stray `.streamlib/link.json` and redirecting a distribution build to a
+        // dev checkout. The pure resolver never reads env or the marker.
+        let mut resolver_options = ResolverOptions::from_env();
+        resolver_options.link_checkout = link_checkout;
+        let resolved = streamlib_idents::resolve_with(&project_dir, &resolver_options)
+            .context("Failed to resolve streamlib.yaml dependency graph")?;
 
         if write_lockfile && !resolved.packages.is_empty() {
             let lockfile = resolved.to_lockfile();
