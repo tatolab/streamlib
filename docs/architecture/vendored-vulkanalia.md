@@ -21,6 +21,23 @@ renames, so every consumer keeps writing `use vulkanalia::…` /
 zero registry configuration — the crates resolve by `path` like any
 other workspace member.
 
+## Drift guard — no in-place edits, no fmt sweeps
+
+`cargo xtask check-vendored-vulkanalia` pins one deterministic content
+hash per vendored crate dir (recorded in
+`xtask/src/check_vendored_vulkanalia.rs`, run by the check-boundaries CI
+workflow and by `cargo test -p xtask`). Any byte change — an edit, a
+reformat, an added/removed/renamed file — fails with a message naming
+the drifted dir. This is the enforcement behind the verbatim-copy
+contract; prose alone cannot stop a routine workspace `cargo fmt --all`
+sweep from rewriting vendored sources (`cargo fmt --check` already
+disagrees with the vendored formatting, and no stable rustfmt exclusion
+mechanism exists — `rustfmt.toml`'s `ignore` is nightly-only). There is
+no `cargo fmt` CI gate today; if one is ever added it must skip the
+three vendored dirs explicitly (e.g. run `cargo fmt -p <crate>` on
+non-vendored members), with this hash guard as the backstop. Workspace
+fmt sweeps must exclude `libs/tatolab-vulkanalia*`.
+
 ## License
 
 The vendored crates are **Apache-2.0** (upstream vulkanalia's license;
@@ -121,6 +138,11 @@ mechanical:
 3. Re-apply the manifest edits (package renames, `[lib]` names, sibling
    dep rewrites — diff against the previous vendored manifests).
 4. Record the new rev + submodule SHAs in the Provenance section above.
-5. `cargo check -p tatolab-vulkanalia-vma` (catches no_std breakage
+5. Re-capture the drift-guard hashes: run
+   `cargo xtask check-vendored-vulkanalia` — it fails printing the new
+   per-dir hashes — and update `VENDORED_TREES` in
+   `xtask/src/check_vendored_vulkanalia.rs` with them **in the same
+   commit** as the re-vendor.
+6. `cargo check -p tatolab-vulkanalia-vma` (catches no_std breakage
    standalone builds hit that workspace builds mask), then the workspace
    test baseline per `docs/testing-baseline.md`.

@@ -25,6 +25,7 @@ pub mod check_no_streamlib_metadata;
 pub mod check_package_version_drift;
 pub mod check_processor_spec_new;
 pub mod check_schema_versions;
+pub mod check_vendored_vulkanalia;
 pub mod lint_logging;
 pub mod manifest_schema;
 
@@ -196,6 +197,15 @@ enum Commands {
     /// republish" section of `docs/architecture/static-registry.md`.
     CheckAbiRepublish,
 
+    /// Drift trip-wire for the vendored vulkanalia fork trees
+    /// (`libs/tatolab-vulkanalia{,-sys,-vma}`): hashes each vendored crate
+    /// dir and fails on any byte change vs. the recorded hash — the guard
+    /// against accidental in-place edits (a workspace `cargo fmt --all`
+    /// sweep is the classic cause). Deliberate re-vendors update the
+    /// recorded hashes in the same commit per
+    /// `docs/architecture/vendored-vulkanalia.md`.
+    CheckVendoredVulkanalia,
+
     /// Emit a daemon-free STATIC registry tree (cargo sparse + pypi-simple +
     /// npm + `.slpkg` generic) for the current workspace release into a
     /// directory served identically over `file://` (slpkg, pypi) or a dumb
@@ -284,6 +294,7 @@ fn main() -> Result<()> {
         Commands::CheckConsumerRhiRepr => check_consumer_rhi_repr::run(&workspace_root()?)?,
         Commands::CheckDeviceWaitIdle => check_device_wait_idle::run(&workspace_root()?)?,
         Commands::CheckAbiRepublish => check_abi_republish::run(&workspace_root()?)?,
+        Commands::CheckVendoredVulkanalia => check_vendored_vulkanalia::run(&workspace_root()?)?,
         Commands::CheckPackageVersionDrift { fix } => {
             check_package_version_drift::run(&workspace_root()?, fix)?
         }

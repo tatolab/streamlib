@@ -57,5 +57,17 @@ jobs:
       - name: cargo xtask check-boundaries
         run: cargo run --locked -q -p xtask -- check-boundaries
 
+      # Drift trip-wire for the vendored vulkanalia trees
+      # (libs/tatolab-vulkanalia*): any byte change vs. the recorded hashes
+      # fails — the guard against a workspace fmt sweep (or any stray edit)
+      # silently rewriting vendored sources. Deliberate re-vendors update
+      # the recorded hashes in the same commit; see
+      # docs/architecture/vendored-vulkanalia.md.
+      - name: cargo xtask check-vendored-vulkanalia
+        run: cargo run --locked -q -p xtask -- check-vendored-vulkanalia
+
       - name: cargo test -p xtask check_boundaries (fixture tests)
         run: cargo test --locked -p xtask check_boundaries
+
+      - name: cargo test -p xtask check_vendored_vulkanalia (fixture tests)
+        run: cargo test --locked -p xtask check_vendored_vulkanalia

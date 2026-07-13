@@ -311,10 +311,22 @@ const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
         kind: AllowKind::PathSegment,
         rationale: "tests bring up real Vulkan devices for end-to-end validation",
     },
-    // The vendored fork crates themselves (libs/tatolab-vulkanalia{,-sys,-vma})
-    // — vendored fork source; it IS the Vulkan surface the RHI rides.
+    // The vendored fork crates themselves — vendored fork source; it IS the
+    // Vulkan surface the RHI rides. Anchored to the three EXACT dirs
+    // (trailing slash) so a future libs/tatolab-vulkanalia-extras/ crate
+    // does not silently inherit the exemption.
     AllowEntry {
-        path: "libs/tatolab-vulkanalia",
+        path: "libs/tatolab-vulkanalia/",
+        kind: AllowKind::PathPrefix,
+        rationale: "vendored vulkanalia fork source — it IS the Vulkan surface",
+    },
+    AllowEntry {
+        path: "libs/tatolab-vulkanalia-sys/",
+        kind: AllowKind::PathPrefix,
+        rationale: "vendored vulkanalia fork source — it IS the Vulkan surface",
+    },
+    AllowEntry {
+        path: "libs/tatolab-vulkanalia-vma/",
         kind: AllowKind::PathPrefix,
         rationale: "vendored vulkanalia fork source — it IS the Vulkan surface",
     },
@@ -426,8 +438,21 @@ const VULKANALIA_CARGO_DEP_ALLOWLIST: &[AllowEntry] = &[
     //
     // The vendored fork crates declare vulkanalia sibling deps by
     // construction — vendored fork source; it IS the Vulkan surface.
+    // Anchored to the three EXACT dirs (trailing slash) so a future
+    // libs/tatolab-vulkanalia-extras/ crate does not silently inherit
+    // the exemption.
     AllowEntry {
-        path: "libs/tatolab-vulkanalia",
+        path: "libs/tatolab-vulkanalia/",
+        kind: AllowKind::PathPrefix,
+        rationale: "vendored vulkanalia fork source — it IS the Vulkan surface",
+    },
+    AllowEntry {
+        path: "libs/tatolab-vulkanalia-sys/",
+        kind: AllowKind::PathPrefix,
+        rationale: "vendored vulkanalia fork source — it IS the Vulkan surface",
+    },
+    AllowEntry {
+        path: "libs/tatolab-vulkanalia-vma/",
         kind: AllowKind::PathPrefix,
         rationale: "vendored vulkanalia fork source — it IS the Vulkan surface",
     },
@@ -603,11 +628,26 @@ const VULKANALIA_FORK_RATIONALE: &str = "all vulkanalia / vulkanalia-sys / vulka
 /// The vendored fork crates' own sibling deps (`tatolab-vulkanalia` →
 /// `tatolab-vulkanalia-sys`, `tatolab-vulkanalia-vma` → `tatolab-vulkanalia`)
 /// cannot be workspace-inherited — the workspace deps ARE these crates.
-const VULKANALIA_FORK_ALLOWLIST: &[AllowEntry] = &[AllowEntry {
-    path: "libs/tatolab-vulkanalia",
-    kind: AllowKind::PathPrefix,
-    rationale: "vendored vulkanalia fork source — sibling deps are path+version+registry by construction",
-}];
+/// Anchored to the three EXACT dirs (trailing slash) so a future
+/// `libs/tatolab-vulkanalia-extras/` crate does not silently inherit the
+/// exemption.
+const VULKANALIA_FORK_ALLOWLIST: &[AllowEntry] = &[
+    AllowEntry {
+        path: "libs/tatolab-vulkanalia/",
+        kind: AllowKind::PathPrefix,
+        rationale: "vendored vulkanalia fork source — sibling deps are path+version+registry by construction",
+    },
+    AllowEntry {
+        path: "libs/tatolab-vulkanalia-sys/",
+        kind: AllowKind::PathPrefix,
+        rationale: "vendored vulkanalia fork source — sibling deps are path+version+registry by construction",
+    },
+    AllowEntry {
+        path: "libs/tatolab-vulkanalia-vma/",
+        kind: AllowKind::PathPrefix,
+        rationale: "vendored vulkanalia fork source — sibling deps are path+version+registry by construction",
+    },
+];
 
 fn check_vulkanalia_uses_workspace_fork(
     project_root: &Path,
@@ -629,17 +669,36 @@ fn check_vulkanalia_uses_workspace_fork(
         for (section, dep_name, dep_value, line_no) in
             iter_dep_entries_with_values(&parsed, &content)
         {
-            if !is_vulkanalia_dep(&dep_name) {
+            // Match the dep-table KEY and the value's `package =` rename —
+            // `foo = { package = "tatolab-vulkanalia", path = "…" }` grants
+            // the same raw Vulkan surface under an arbitrary key.
+            let package_rename = dep_value
+                .get("package")
+                .and_then(|v| v.as_str())
+                .filter(|pkg| is_vulkanalia_dep(pkg));
+            if !is_vulkanalia_dep(&dep_name) && package_rename.is_none() {
                 continue;
             }
             if dep_is_workspace_inherited(&dep_value) {
                 continue;
             }
+            let display_name = match package_rename {
+                Some(pkg) if !is_vulkanalia_dep(&dep_name) => {
+                    format!("{dep_name} (package = \"{pkg}\")")
+                }
+                _ => dep_name.clone(),
+            };
             violations.push(Violation {
                 path: rel.to_path_buf(),
                 line_no,
-                line_text: format!("[{}] {} = ... (not `workspace = true`)", section, dep_name),
-                matched_pattern: format!("{} bypasses workspace fork in [{}]", dep_name, section),
+                line_text: format!(
+                    "[{}] {} = ... (not `workspace = true`)",
+                    section, display_name
+                ),
+                matched_pattern: format!(
+                    "{} bypasses workspace fork in [{}]",
+                    display_name, section
+                ),
                 check: CHECK_VULKANALIA_FORK,
                 rationale: VULKANALIA_FORK_RATIONALE,
             });
@@ -1330,6 +1389,82 @@ vulkanalia = { package = "tatolab-vulkanalia", version = "0.35", path = "../tato
             hits.is_empty(),
             "vendored fork dirs should be exempt from checks 2 and 5: {:?}",
             hits
+        );
+    }
+
+    #[test]
+    fn vendored_dir_lookalike_does_not_inherit_exemptions() {
+        let dir = empty_workspace();
+        // The vendored-dir exemptions are anchored to the three EXACT dirs;
+        // a hypothetical libs/tatolab-vulkanalia-extras/ crate must NOT
+        // silently inherit them in either check 2 or check 5.
+        write_fixture(
+            dir.path(),
+            "libs/tatolab-vulkanalia-extras/src/lib.rs",
+            "use vulkanalia::vk;\n",
+        );
+        write_fixture(
+            dir.path(),
+            "libs/tatolab-vulkanalia-extras/Cargo.toml",
+            r#"[package]
+name = "tatolab-vulkanalia-extras"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+vulkanalia = { package = "tatolab-vulkanalia", version = "0.35", path = "../tatolab-vulkanalia", registry = "tatolab" }
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report.violations.iter().any(|v| v.check == CHECK_VULKANALIA
+                && v.path
+                    .to_string_lossy()
+                    .contains("tatolab-vulkanalia-extras")),
+            "lookalike dir must trip check 2, got {:?}",
+            report.violations,
+        );
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_VULKANALIA_FORK
+                    && v.path
+                        .to_string_lossy()
+                        .contains("tatolab-vulkanalia-extras")),
+            "lookalike dir must trip check 5, got {:?}",
+            report.violations,
+        );
+    }
+
+    #[test]
+    fn rejects_package_rename_bypass_in_member() {
+        let dir = empty_workspace();
+        // `foo = { package = "tatolab-vulkanalia", … }` grants the same raw
+        // Vulkan surface under an arbitrary dep key — check 5 must match the
+        // value's `package` field, not just the dep-table key.
+        write_fixture(
+            dir.path(),
+            "libs/streamlib-adapter-vulkan/Cargo.toml",
+            r#"[package]
+name = "streamlib-adapter-vulkan"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+foo = { package = "tatolab-vulkanalia", path = "../tatolab-vulkanalia", version = "0.35" }
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_VULKANALIA_FORK
+                    && v.matched_pattern
+                        .contains("package = \"tatolab-vulkanalia\"")),
+            "expected workspace-fork violation for the package= rename bypass, got {:?}",
+            report.violations,
         );
     }
 
