@@ -13,7 +13,7 @@
 use std::path::Path;
 
 use streamlib_idents::{CatalogClient, Org, Package, PackageRef, SemVer};
-use streamlib_pack::static_registry::{EmitEcosystems, EmitOptions, emit_static_registry};
+use streamlib_pack::static_registry::{EmitOptions, emit_static_registry};
 
 fn write(dir: &Path, rel: &str, body: &str) {
     let path = dir.join(rel);
@@ -106,14 +106,7 @@ fn real_emit_writes_catalog_inside_the_flipped_tree() {
     emit_static_registry(&EmitOptions {
         workspace_root: workspace,
         out: out.clone(),
-        base_url: "http://127.0.0.1:9".into(),
         dev: None,
-        ecosystems: EmitEcosystems {
-            cargo_closure: false,
-            pypi: false,
-            npm: false,
-            slpkg: true,
-        },
     })
     .expect("real emit path (slpkg + catalog + manifest) succeeds");
 
