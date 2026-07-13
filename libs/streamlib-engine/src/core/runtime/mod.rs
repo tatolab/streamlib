@@ -14,7 +14,7 @@ mod status;
 pub use install::{InstallError, InstallOptions, InstallReport, install};
 pub use streamlib_idents::app_modules::{
     APP_MODULES_DIR_NAME, AddPackageOptions, AddPackageReport, AddPackageSource, AppModulesDir,
-    AppModulesError, RemovePackageReport,
+    AppModulesError, LinkPackageReport, RemovePackageReport, UnlinkPackageReport,
 };
 pub use module_loader::{
     AddModuleError, AddedModule, ArtifactChecksum, BuildError, BuildEvent, BuildEventSink,

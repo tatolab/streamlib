@@ -125,12 +125,61 @@ pub struct RemovePackageReport {
     pub lockfile_entry_removed: bool,
 }
 
+/// Outcome of a successful [`AppModulesDir::link_package`].
+#[derive(Debug, Clone)]
+pub struct LinkPackageReport {
+    /// The canonical `@org/name`, read from the linked checkout's manifest.
+    pub package: PackageRef,
+    /// The version declared by the linked checkout's manifest at link time.
+    pub version: SemVer,
+    /// The `streamlib_modules/@org/name` symlink that now points at the
+    /// checkout.
+    pub package_dir: PathBuf,
+    /// The canonical checkout path the symlink targets.
+    pub link_target: PathBuf,
+    /// The modules lockfile that was updated.
+    pub lockfile_path: PathBuf,
+    /// Content hash of the checkout at link time — a point-in-time snapshot,
+    /// since a linked checkout's contents are live and may drift afterward.
+    pub content_hash: String,
+    /// The source recorded in the lockfile entry ([`LockfileSource::Link`]).
+    pub source: LockfileSource,
+    /// `true` when an existing `streamlib_modules/@org/name` slot (a prior
+    /// link or an added copy) was replaced.
+    pub replaced_existing: bool,
+}
+
+/// Outcome of a successful [`AppModulesDir::unlink_package`].
+#[derive(Debug, Clone)]
+pub struct UnlinkPackageReport {
+    /// The canonical `@org/name` that was unlinked.
+    pub package: PackageRef,
+    /// The `streamlib_modules/@org/name` slot that was targeted.
+    pub package_dir: PathBuf,
+    /// The checkout the removed link pointed at, when the dropped lockfile
+    /// entry recorded a [`LockfileSource::Link`].
+    pub link_target: Option<PathBuf>,
+    /// `true` when the symlink existed on disk and was removed.
+    pub link_removed: bool,
+    /// `true` when a lockfile entry existed and was removed.
+    pub lockfile_entry_removed: bool,
+}
+
 /// Per-failure-mode error from the per-app modules primitive.
 #[derive(Debug, thiserror::Error)]
 pub enum AppModulesError {
     /// The spec names nothing on disk.
     #[error("source '{spec}' not found on disk")]
     SourceNotFound { spec: String },
+
+    /// The `streamlib link` path is not a directory. Link takes a local
+    /// package checkout folder — archives and URLs are `streamlib add` only.
+    #[error(
+        "link path '{}' is not a directory — `streamlib link` takes a local package \
+         checkout folder (use `streamlib add` for an archive or URL)",
+        path.display()
+    )]
+    LinkPathNotADirectory { path: PathBuf },
 
     /// An `@org/name`-shaped spec was passed where a byte source is required.
     #[error(
@@ -187,6 +236,19 @@ pub enum AppModulesError {
         detail: String,
     },
 
+    /// Creating the symlink for a `streamlib link` into `streamlib_modules/`
+    /// failed.
+    #[error(
+        "creating the link {} -> {} failed: {detail}",
+        link_path.display(),
+        target.display()
+    )]
+    SymlinkCreateFailed {
+        link_path: PathBuf,
+        target: PathBuf,
+        detail: String,
+    },
+
     /// Reading the modules lockfile failed (present but unreadable/corrupt).
     #[error("reading the modules lockfile at {} failed: {detail}", lockfile_path.display())]
     LockfileReadFailed {
@@ -206,6 +268,24 @@ pub enum AppModulesError {
     NotInstalled {
         package: PackageRef,
         modules_dir: PathBuf,
+    },
+
+    /// `streamlib unlink` was called on a package that is not linked. When
+    /// `present_as_added_copy` is `true` the slot holds an added (copied)
+    /// package — remove it with `streamlib remove`, not `unlink`.
+    #[error(
+        "'{package}' is not linked in {}{}",
+        modules_dir.display(),
+        if *present_as_added_copy {
+            " — it is present as an added copy; use `streamlib remove` to remove it"
+        } else {
+            ""
+        }
+    )]
+    NotLinked {
+        package: PackageRef,
+        modules_dir: PathBuf,
+        present_as_added_copy: bool,
     },
 
     /// Filesystem operation failed.
@@ -381,7 +461,10 @@ impl AppModulesDir {
         let mut lockfile = self.read_lockfile()?;
         let removed_entry = lockfile.packages.remove(&package.to_string());
         let package_dir = self.package_dir(package);
-        let package_dir_exists = package_dir.is_dir();
+        // `symlink_metadata` detects a symlink slot (a linked package) too,
+        // without following it — a linked slot is removable via `remove`, and
+        // only the symlink is unlinked, never the linked checkout.
+        let package_dir_exists = std::fs::symlink_metadata(&package_dir).is_ok();
 
         if removed_entry.is_none() && !package_dir_exists {
             return Err(AppModulesError::NotInstalled {
@@ -394,7 +477,7 @@ impl AppModulesDir {
         // entry pointing at a gone folder — the healed direction — rather
         // than an unrecorded folder).
         let package_dir_removed = if package_dir_exists {
-            std::fs::remove_dir_all(&package_dir).map_err(|e| AppModulesError::Io {
+            remove_dir_entry_all(&package_dir).map_err(|e| AppModulesError::Io {
                 path: package_dir.clone(),
                 detail: format!("removing package dir: {e}"),
             })?;
@@ -432,6 +515,202 @@ impl AppModulesDir {
             lockfile_entry_removed,
         })
     }
+
+    /// Symlink a local package checkout into `streamlib_modules/@org/name` and
+    /// record it in the modules lockfile as a [`LockfileSource::Link`]. Same
+    /// primitive as [`add_package`](Self::add_package) — "make this package
+    /// present" — but materialized as a symlink instead of a copy, so edits in
+    /// the checkout are live on the next run with no re-add. Identity is read
+    /// from the checkout's own manifest; re-linking (or linking over an added
+    /// copy) replaces the slot cleanly. Never builds.
+    #[tracing::instrument(skip(self), fields(app_root = %self.app_root.display(), source = %source_folder.display()))]
+    pub fn link_package(
+        &self,
+        source_folder: &Path,
+    ) -> Result<LinkPackageReport, AppModulesError> {
+        // Validate the source is a directory BEFORE touching the modules dir,
+        // so a bad link path leaves zero filesystem residue.
+        if !source_folder.is_dir() {
+            return Err(AppModulesError::LinkPathNotADirectory {
+                path: source_folder.to_path_buf(),
+            });
+        }
+        let canonical = std::fs::canonicalize(source_folder).map_err(|e| AppModulesError::Io {
+            path: source_folder.to_path_buf(),
+            detail: format!("canonicalizing link source: {e}"),
+        })?;
+        let source_label = canonical.display().to_string();
+
+        // Identity + version come from the checkout's OWN manifest — the caller
+        // supplies only the path.
+        let manifest =
+            Manifest::load(&canonical).map_err(|e| AppModulesError::InvalidPackage {
+                source_label: source_label.clone(),
+                detail: e.to_string(),
+            })?;
+        let package_meta =
+            manifest
+                .package
+                .as_ref()
+                .ok_or_else(|| AppModulesError::MissingPackageIdentity {
+                    source_label: source_label.clone(),
+                })?;
+        let package = PackageRef::new(package_meta.org.clone(), package_meta.name.clone());
+        let version = package_meta.version;
+
+        // Point-in-time content hash of the checkout. A linked checkout is
+        // live, so this snapshots what was linked rather than pinning it.
+        let content_hash = content_hash_for_package_dir(&canonical).map_err(|e| {
+            AppModulesError::InvalidPackage {
+                source_label: source_label.clone(),
+                detail: format!("hashing checkout contents: {e}"),
+            }
+        })?;
+
+        let modules_dir = self.modules_dir();
+        std::fs::create_dir_all(&modules_dir).map_err(|e| AppModulesError::Io {
+            path: modules_dir.clone(),
+            detail: format!("creating modules dir: {e}"),
+        })?;
+        sweep_orphan_staging_entries(&modules_dir);
+
+        // Stage the symlink beside the final slot, then atomically promote it
+        // into `@org/name` (same displace-restore path add_package uses) so a
+        // failed swap never leaves the slot empty and re-linking is clean.
+        let staging = StagingSymlink::create(&modules_dir, &canonical)?;
+        let package_dir = self.package_dir(&package);
+        let replaced_existing =
+            promote_staged_package_root(staging.path(), &package_dir, &modules_dir)?;
+        drop(staging); // the symlink was renamed into place; nothing to clean
+
+        let lock_source = LockfileSource::Link {
+            path: canonical.clone(),
+        };
+        let lockfile_path = self.lockfile_path();
+        let mut lockfile = self.read_lockfile()?;
+        lockfile.packages.insert(
+            package.to_string(),
+            LockfileEntry {
+                version,
+                source: lock_source.clone(),
+                content_hash: content_hash.clone(),
+            },
+        );
+        write_modules_lockfile(&lockfile_path, &lockfile).map_err(|e| {
+            AppModulesError::LockfileWriteFailed {
+                lockfile_path: lockfile_path.clone(),
+                detail: e.to_string(),
+            }
+        })?;
+
+        tracing::info!(
+            package = %package,
+            %version,
+            link = %package_dir.display(),
+            target = %canonical.display(),
+            replaced = replaced_existing,
+            "link_package: symlinked checkout into streamlib_modules"
+        );
+        Ok(LinkPackageReport {
+            package,
+            version,
+            package_dir,
+            link_target: canonical,
+            lockfile_path,
+            content_hash,
+            source: lock_source,
+            replaced_existing,
+        })
+    }
+
+    /// Reverse a [`link_package`](Self::link_package): remove the
+    /// `streamlib_modules/@org/name` symlink (never following it into the
+    /// checkout) and drop its lockfile entry, dropping the slot back to
+    /// nothing. The linked checkout on disk is untouched.
+    /// [`AppModulesError::NotLinked`] when the package is not currently
+    /// linked — including when the slot holds an added copy (which
+    /// `streamlib remove` handles instead).
+    #[tracing::instrument(skip(self), fields(app_root = %self.app_root.display(), package = %package))]
+    pub fn unlink_package(
+        &self,
+        package: &PackageRef,
+    ) -> Result<UnlinkPackageReport, AppModulesError> {
+        let modules_dir = self.modules_dir();
+        if modules_dir.is_dir() {
+            sweep_orphan_staging_entries(&modules_dir);
+        }
+
+        let package_dir = self.package_dir(package);
+        // `symlink_metadata` does NOT follow the link, so a dangling link is
+        // still detected as a symlink slot.
+        let slot_meta = std::fs::symlink_metadata(&package_dir).ok();
+        let slot_is_symlink = slot_meta
+            .as_ref()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
+        let slot_is_real_dir = slot_meta
+            .as_ref()
+            .map(|m| m.file_type().is_dir())
+            .unwrap_or(false);
+
+        let mut lockfile = self.read_lockfile()?;
+        let key = package.to_string();
+        let entry_link_target = match lockfile.packages.get(&key).map(|e| &e.source) {
+            Some(LockfileSource::Link { path }) => Some(path.clone()),
+            _ => None,
+        };
+
+        // A package is "linked" iff its slot is a symlink OR its lock entry
+        // records a Link source (the symlink may already be gone — healed).
+        if !slot_is_symlink && entry_link_target.is_none() {
+            return Err(AppModulesError::NotLinked {
+                package: package.clone(),
+                modules_dir: self.modules_dir(),
+                present_as_added_copy: slot_is_real_dir,
+            });
+        }
+
+        // Remove the symlink (or a dangling one's residue). `remove_dir_entry_all`
+        // unlinks a symlink without following it, so the checkout is untouched.
+        let link_removed = if slot_meta.is_some() {
+            remove_dir_entry_all(&package_dir).map_err(|e| AppModulesError::Io {
+                path: package_dir.clone(),
+                detail: format!("removing link: {e}"),
+            })?;
+            // Hygiene: drop the `@org` parent when this was its last package.
+            if let Some(org_dir) = package_dir.parent() {
+                let _ = std::fs::remove_dir(org_dir);
+            }
+            true
+        } else {
+            false
+        };
+
+        let lockfile_entry_removed = lockfile.packages.remove(&key).is_some();
+        if lockfile_entry_removed {
+            let lockfile_path = self.lockfile_path();
+            write_modules_lockfile(&lockfile_path, &lockfile).map_err(|e| {
+                AppModulesError::LockfileWriteFailed {
+                    lockfile_path,
+                    detail: e.to_string(),
+                }
+            })?;
+        }
+
+        tracing::info!(
+            package = %package,
+            link_removed,
+            entry_removed = lockfile_entry_removed,
+            "unlink_package: removed link from streamlib_modules"
+        );
+        Ok(UnlinkPackageReport {
+            package: package.clone(),
+            package_dir,
+            link_target: entry_link_target,
+            link_removed,
+            lockfile_entry_removed,
+        })
+    }
 }
 
 /// Best-effort sweep of orphaned `.staging-*` entries in `modules_dir` —
@@ -466,7 +745,9 @@ fn sweep_orphan_staging_entries(modules_dir: &Path) {
             continue;
         }
         let path = entry.path();
-        if let Err(e) = std::fs::remove_dir_all(&path) {
+        // A `.staging-link-*` orphan is a symlink; `remove_dir_entry_all`
+        // unlinks it without following into a linked checkout.
+        if let Err(e) = remove_dir_entry_all(&path) {
             tracing::debug!(
                 dir = %path.display(),
                 error = %e,
@@ -507,6 +788,69 @@ impl Drop for StagingDir {
     fn drop(&mut self) {
         if self.path.exists() {
             let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+/// Remove a `streamlib_modules/` entry and everything under it: a symlink is
+/// unlinked (never followed into its target), a real directory is recursively
+/// removed, a plain file is deleted, and an already-absent path is a no-op.
+/// The symlink case is why `streamlib link` slots can't go through
+/// `remove_dir_all` directly — that would refuse a symlink (or, worse on
+/// older toolchains, delete the linked checkout's contents).
+fn remove_dir_entry_all(path: &Path) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) => {
+            if meta.file_type().is_dir() {
+                std::fs::remove_dir_all(path)
+            } else {
+                // Symlink (to a dir or file) or a plain file: unlink the entry
+                // itself without following it.
+                std::fs::remove_file(path)
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// A `.staging-*` symlink pointing at a link target, removed on drop
+/// (best-effort, unlink-not-follow) unless already promoted away.
+struct StagingSymlink {
+    path: PathBuf,
+}
+
+impl StagingSymlink {
+    fn create(modules_dir: &Path, target: &Path) -> Result<Self, AppModulesError> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static STAGE_SEQ: AtomicU64 = AtomicU64::new(0);
+        let path = modules_dir.join(format!(
+            "{APP_MODULES_STAGING_PREFIX}link-{}-{}",
+            std::process::id(),
+            STAGE_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::os::unix::fs::symlink(target, &path).map_err(|e| {
+            AppModulesError::SymlinkCreateFailed {
+                link_path: path.clone(),
+                target: target.to_path_buf(),
+                detail: e.to_string(),
+            }
+        })?;
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for StagingSymlink {
+    fn drop(&mut self) {
+        // `symlink_metadata` succeeds for a still-present (possibly dangling)
+        // staging symlink; if the promote consumed it via rename, this is a
+        // no-op.
+        if std::fs::symlink_metadata(&self.path).is_ok() {
+            let _ = std::fs::remove_file(&self.path);
         }
     }
 }
@@ -694,7 +1038,9 @@ fn promote_staged_package_root(
     match std::fs::rename(staged_package_root, package_dir) {
         Ok(()) => {
             if let Some(backup) = displaced {
-                let _ = std::fs::remove_dir_all(&backup);
+                // The displaced previous slot may be a symlink (a prior link
+                // being replaced); unlink it rather than recursing into it.
+                let _ = remove_dir_entry_all(&backup);
                 Ok(true)
             } else {
                 Ok(false)
@@ -1745,6 +2091,353 @@ mod tests {
                 .packages
                 .contains_key("@tatolab/camera")
         );
+    }
+
+    // =====================================================================
+    // Link / unlink
+    // =====================================================================
+
+    /// The linked slot is a symlink pointing at the canonical checkout.
+    fn assert_symlink_to(slot: &Path, expected_target: &Path) {
+        let meta = std::fs::symlink_metadata(slot)
+            .unwrap_or_else(|e| panic!("slot {} missing: {e}", slot.display()));
+        assert!(
+            meta.file_type().is_symlink(),
+            "slot {} must be a symlink, not a copy",
+            slot.display()
+        );
+        assert_eq!(
+            std::fs::read_link(slot).unwrap(),
+            expected_target,
+            "symlink target mismatch"
+        );
+    }
+
+    #[test]
+    fn link_symlinks_checkout_and_locks_link_source() {
+        let checkout = tempfile::tempdir().unwrap();
+        write_package_folder(checkout.path(), "tatolab", "camera", "2.0.0");
+        let canonical = std::fs::canonicalize(checkout.path()).unwrap();
+
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let report = app.link_package(checkout.path()).expect("link must succeed");
+
+        assert_eq!(report.package, pkg_ref("tatolab", "camera"));
+        assert_eq!(report.version, SemVer::new(2, 0, 0));
+        assert!(!report.replaced_existing);
+        assert_eq!(report.package_dir, app.package_dir(&report.package));
+        assert_eq!(report.link_target, canonical);
+        // The slot is a symlink to the checkout (NOT a copy).
+        assert_symlink_to(&report.package_dir, &canonical);
+        // Files resolve through the link.
+        assert!(report.package_dir.join("streamlib.yaml").is_file());
+
+        // Lock records a Link source pointing at the canonical checkout.
+        let lock = app.read_lockfile().unwrap();
+        let entry = lock.packages.get("@tatolab/camera").expect("locked");
+        assert_eq!(entry.version, SemVer::new(2, 0, 0));
+        match &entry.source {
+            LockfileSource::Link { path } => assert_eq!(path, &canonical),
+            other => panic!("expected Link source, got {other:?}"),
+        }
+        assert_no_partial_state(
+            &app,
+            &["@tatolab/camera"],
+            Some(&std::fs::read(app.lockfile_path()).unwrap()),
+        );
+    }
+
+    #[test]
+    fn link_reflects_checkout_edits_live() {
+        // The whole point of link: an edit in the checkout is visible through
+        // the slot with no re-link, because the slot is a live symlink.
+        let checkout = tempfile::tempdir().unwrap();
+        write_package_folder(checkout.path(), "tatolab", "camera", "2.0.0");
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let report = app.link_package(checkout.path()).unwrap();
+
+        // Edit the checkout AFTER linking.
+        std::fs::write(checkout.path().join("added_after_link.txt"), b"live").unwrap();
+        assert_eq!(
+            std::fs::read(report.package_dir.join("added_after_link.txt")).unwrap(),
+            b"live",
+            "an edit in the checkout must be live through the link"
+        );
+    }
+
+    #[test]
+    fn link_identity_comes_from_manifest_not_dir_name() {
+        // A checkout named `weird-dir` declaring @tatolab/camera lands at
+        // streamlib_modules/@tatolab/camera.
+        let parent = tempfile::tempdir().unwrap();
+        let weird = parent.path().join("weird-dir");
+        write_package_folder(&weird, "tatolab", "camera", "2.0.0");
+
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let report = app.link_package(&weird).unwrap();
+        assert!(report.package_dir.ends_with("streamlib_modules/@tatolab/camera"));
+        assert_symlink_to(&report.package_dir, &std::fs::canonicalize(&weird).unwrap());
+    }
+
+    #[test]
+    fn relink_replaces_cleanly_with_one_lock_entry() {
+        let checkout = tempfile::tempdir().unwrap();
+        write_package_folder(checkout.path(), "tatolab", "camera", "2.0.0");
+        let canonical = std::fs::canonicalize(checkout.path()).unwrap();
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+
+        let first = app.link_package(checkout.path()).unwrap();
+        assert!(!first.replaced_existing);
+        let second = app.link_package(checkout.path()).unwrap();
+        assert!(second.replaced_existing, "relink must report the replace");
+        assert_symlink_to(&second.package_dir, &canonical);
+
+        // Exactly one lock entry, still a Link, no orphan/staging residue.
+        let lock = app.read_lockfile().unwrap();
+        assert_eq!(lock.packages.len(), 1);
+        assert!(matches!(
+            lock.packages.get("@tatolab/camera").unwrap().source,
+            LockfileSource::Link { .. }
+        ));
+        assert_no_partial_state(
+            &app,
+            &["@tatolab/camera"],
+            Some(&std::fs::read(app.lockfile_path()).unwrap()),
+        );
+    }
+
+    #[test]
+    fn link_over_existing_added_copy_replaces_with_symlink() {
+        // Precedence: linking a package whose slot already holds an ADDED
+        // (copied) package replaces the copy with a symlink — last write wins,
+        // consistent with re-add. The lock flips Path -> Link.
+        let checkout = tempfile::tempdir().unwrap();
+        write_package_folder(checkout.path(), "tatolab", "camera", "2.0.0");
+        let canonical = std::fs::canonicalize(checkout.path()).unwrap();
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+
+        // First an add (a real copied dir).
+        let added = app
+            .add_package(
+                &AddPackageSource::Folder {
+                    path: checkout.path().to_path_buf(),
+                },
+                &AddPackageOptions::default(),
+            )
+            .unwrap();
+        assert!(
+            !added
+                .package_dir
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "add must materialize a real copy"
+        );
+        assert!(matches!(
+            app.read_lockfile().unwrap().packages.get("@tatolab/camera").unwrap().source,
+            LockfileSource::Path { .. }
+        ));
+
+        // Now link over it.
+        let linked = app.link_package(checkout.path()).unwrap();
+        assert!(linked.replaced_existing, "link over add must report replace");
+        assert_symlink_to(&linked.package_dir, &canonical);
+        let lock = app.read_lockfile().unwrap();
+        assert_eq!(lock.packages.len(), 1);
+        assert!(matches!(
+            lock.packages.get("@tatolab/camera").unwrap().source,
+            LockfileSource::Link { .. }
+        ));
+        assert_no_partial_state(
+            &app,
+            &["@tatolab/camera"],
+            Some(&std::fs::read(app.lockfile_path()).unwrap()),
+        );
+    }
+
+    #[test]
+    fn link_non_package_dir_is_typed_error_with_no_residue() {
+        // A directory with no streamlib.yaml is not a package.
+        let not_a_pkg = tempfile::tempdir().unwrap();
+        std::fs::write(not_a_pkg.path().join("readme.txt"), b"hi").unwrap();
+
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let err = app
+            .link_package(not_a_pkg.path())
+            .expect_err("linking a non-package dir must fail");
+        assert!(matches!(err, AppModulesError::InvalidPackage { .. }), "{err:?}");
+        assert_no_partial_state(&app, &[], None);
+    }
+
+    #[test]
+    fn link_manifest_without_identity_is_missing_identity_with_no_residue() {
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("streamlib.yaml"), "dependencies: {}\n").unwrap();
+
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let err = app
+            .link_package(src.path())
+            .expect_err("identity-less manifest must fail");
+        assert!(
+            matches!(err, AppModulesError::MissingPackageIdentity { .. }),
+            "{err:?}"
+        );
+        assert_no_partial_state(&app, &[], None);
+    }
+
+    #[test]
+    fn link_non_directory_path_is_typed_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("camera.slpkg");
+        std::fs::write(&file, b"archive-not-a-folder").unwrap();
+
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let err = app
+            .link_package(&file)
+            .expect_err("linking a file must fail");
+        assert!(
+            matches!(err, AppModulesError::LinkPathNotADirectory { .. }),
+            "{err:?}"
+        );
+        assert_no_partial_state(&app, &[], None);
+    }
+
+    #[test]
+    fn unlink_removes_symlink_and_lock_entry_leaving_checkout_intact() {
+        let checkout = tempfile::tempdir().unwrap();
+        write_package_folder(checkout.path(), "tatolab", "camera", "2.0.0");
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let linked = app.link_package(checkout.path()).unwrap();
+
+        let report = app.unlink_package(&pkg_ref("tatolab", "camera")).unwrap();
+        assert!(report.link_removed);
+        assert!(report.lockfile_entry_removed);
+        assert_eq!(
+            report.link_target.as_deref(),
+            Some(std::fs::canonicalize(checkout.path()).unwrap().as_path())
+        );
+        // Symlink gone, lock entry gone.
+        assert!(std::fs::symlink_metadata(&linked.package_dir).is_err());
+        assert!(
+            !app.read_lockfile()
+                .unwrap()
+                .packages
+                .contains_key("@tatolab/camera")
+        );
+        // The linked checkout on disk is untouched.
+        assert!(checkout.path().join("streamlib.yaml").is_file());
+        assert_no_partial_state(&app, &[], Some(&std::fs::read(app.lockfile_path()).unwrap()));
+    }
+
+    #[test]
+    fn unlink_non_linked_added_copy_is_typed_error_and_copy_survives() {
+        let src = tempfile::tempdir().unwrap();
+        write_package_folder(src.path(), "tatolab", "camera", "2.0.0");
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let added = app
+            .add_package(
+                &AddPackageSource::Folder {
+                    path: src.path().to_path_buf(),
+                },
+                &AddPackageOptions::default(),
+            )
+            .unwrap();
+
+        let err = app
+            .unlink_package(&pkg_ref("tatolab", "camera"))
+            .expect_err("unlinking an added copy must fail loud");
+        match err {
+            AppModulesError::NotLinked {
+                present_as_added_copy,
+                ..
+            } => assert!(present_as_added_copy, "must flag the added-copy case"),
+            other => panic!("expected NotLinked, got {other:?}"),
+        }
+        // The added copy and its lock entry are untouched.
+        assert!(added.package_dir.join("streamlib.yaml").is_file());
+        assert!(
+            app.read_lockfile()
+                .unwrap()
+                .packages
+                .contains_key("@tatolab/camera")
+        );
+    }
+
+    #[test]
+    fn unlink_absent_package_is_not_linked_error() {
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let err = app
+            .unlink_package(&pkg_ref("tatolab", "never-linked"))
+            .expect_err("unlinking an absent package must fail loud");
+        match err {
+            AppModulesError::NotLinked {
+                present_as_added_copy,
+                ..
+            } => assert!(!present_as_added_copy),
+            other => panic!("expected NotLinked, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unlink_dangling_link_heals_symlink_and_entry() {
+        // Link, then delete the checkout out from under the symlink. Unlink
+        // still removes the dangling symlink and its lock entry.
+        let checkout = tempfile::tempdir().unwrap();
+        write_package_folder(checkout.path(), "tatolab", "camera", "2.0.0");
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let linked = app.link_package(checkout.path()).unwrap();
+
+        // The symlink now dangles.
+        std::fs::remove_dir_all(checkout.path()).unwrap();
+        assert!(
+            std::fs::symlink_metadata(&linked.package_dir)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "slot is still a (now dangling) symlink"
+        );
+
+        let report = app.unlink_package(&pkg_ref("tatolab", "camera")).unwrap();
+        assert!(report.link_removed);
+        assert!(report.lockfile_entry_removed);
+        assert!(std::fs::symlink_metadata(&linked.package_dir).is_err());
+    }
+
+    #[test]
+    fn remove_on_linked_slot_unlinks_without_deleting_checkout() {
+        // `remove` works on a linked slot too — it unlinks the symlink via the
+        // shared entry-removal helper and never follows into the checkout.
+        // Mentally revert `remove_dir_entry_all` to `remove_dir_all` and this
+        // either errors on the symlink or deletes the checkout contents.
+        let checkout = tempfile::tempdir().unwrap();
+        write_package_folder(checkout.path(), "tatolab", "camera", "2.0.0");
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let linked = app.link_package(checkout.path()).unwrap();
+
+        let report = app.remove_package(&pkg_ref("tatolab", "camera")).unwrap();
+        assert!(report.package_dir_removed);
+        assert!(report.lockfile_entry_removed);
+        assert!(std::fs::symlink_metadata(&linked.package_dir).is_err());
+        // Critically: the linked checkout's contents survive.
+        assert!(
+            checkout.path().join("streamlib.yaml").is_file(),
+            "remove must unlink the symlink, never delete the checkout"
+        );
+        assert!(checkout.path().join("schemas/foo_frame.yaml").is_file());
     }
 
     // =====================================================================
