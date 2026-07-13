@@ -282,6 +282,7 @@ impl PolyglotBuildOrchestrator {
         if let Some(link) = &active_link {
             tracing::info!(
                 package = %pkg_label,
+                checkout = %link.checkout.display(),
                 cargo_config = ?link.consumer_cargo_config,
                 python_sdk = %link.python_sdk_path.display(),
                 "streamlib link active — building staged package against the linked checkout"
@@ -292,6 +293,11 @@ impl PolyglotBuildOrchestrator {
             .and_then(|l| l.consumer_cargo_config.clone())
             .into_iter()
             .collect();
+        // The checkout is threaded to the package's `build.rs` schema-dep
+        // codegen (via `STREAMLIB_LINK_CHECKOUT`) so schema deps resolve from
+        // the checkout too — the schema half of the dev loop that the cargo
+        // `[patch]` above covers for crate deps. `None` off a link ⇒ unchanged.
+        let link_checkout = active_link.as_ref().map(|l| l.checkout.as_path());
 
         let adapter = EngineSinkAdapter(sink);
         let outcome = assemble_artifact_with_cargo_config(
@@ -307,6 +313,7 @@ impl PolyglotBuildOrchestrator {
             },
             &adapter,
             &cargo_config_files,
+            link_checkout,
         )
         .map_err(|e| {
             let _ = std::fs::remove_dir_all(&temp_dir);
@@ -521,6 +528,12 @@ fn atomic_swap(temp: &Path, final_path: &Path) -> anyhow::Result<()> {
 /// checkout instead of the registry.
 #[derive(Debug)]
 struct ActiveBuildLink {
+    /// The canonicalized linked checkout root. Threaded to the staged package's
+    /// `cargo build` via [`streamlib_idents::LINK_CHECKOUT_ENV`] so the
+    /// package's `build.rs` schema-dep codegen resolves a dep present in
+    /// `<checkout>/packages/<name>` from the checkout — the schema half of the
+    /// zero-registry dev loop, mirroring the cargo `[patch]` (crate half) below.
+    checkout: PathBuf,
     /// The consumer's `streamlib link`-emitted `.cargo/config.toml`, when
     /// present — carries the `[patch."<index>"]` block redirecting every
     /// `streamlib*` crate at the checkout. `None` when the consumer has no
@@ -565,6 +578,7 @@ fn discover_active_build_link_from(
         .map(|consumer_root| consumer_root.join(".cargo").join("config.toml"))
         .filter(|cfg| cfg.is_file());
     Ok(Some(ActiveBuildLink {
+        checkout: manifest.checkout,
         consumer_cargo_config,
         python_sdk_path: manifest.python_sdk_path,
     }))
@@ -1026,6 +1040,12 @@ mod tests {
         let link = discover_active_build_link_from(consumer.path(), "tatolab/x")
             .unwrap()
             .expect("active link must be discovered");
+        assert_eq!(
+            link.checkout.as_path(),
+            checkout.path(),
+            "must carry the checkout root — threaded to build.rs schema-dep codegen \
+             via STREAMLIB_LINK_CHECKOUT so schema deps resolve from the checkout"
+        );
         assert_eq!(
             link.consumer_cargo_config,
             Some(consumer.path().join(".cargo").join("config.toml")),

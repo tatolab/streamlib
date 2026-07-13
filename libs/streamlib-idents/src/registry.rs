@@ -50,6 +50,17 @@ const VERSION_INDEX_FILE: &str = "index.json";
 /// for a local / offline mirror, or `http(s)://…` for a static HTTP mount.
 pub const REGISTRY_URL_ENV: &str = "STREAMLIB_REGISTRY_URL";
 
+/// Environment variable carrying the absolute path of an active `streamlib
+/// link` checkout. Set by the build orchestrator on the staged package's
+/// `cargo build` when a link is active, so a package's `build.rs` schema-dep
+/// codegen resolves a dep present in `<checkout>/packages/<name>` from the
+/// checkout (the zero-registry dev loop) instead of the by-version store.
+/// Unset — the dominant case — leaves resolution byte-identical to before.
+/// Read by [`ResolverOptions::from_env`], never on the pure resolution path.
+///
+/// [`ResolverOptions::from_env`]: crate::ResolverOptions::from_env
+pub const LINK_CHECKOUT_ENV: &str = "STREAMLIB_LINK_CHECKOUT";
+
 /// Default tree-root URL for the first-party static registry — the sensible
 /// default the CLI writes into a consumer's configuration (`streamlib
 /// registry use` / `streamlib install`) when no tree is named. It is a

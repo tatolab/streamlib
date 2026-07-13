@@ -133,6 +133,17 @@ pub struct ResolverOptions {
     /// environment. Codegen entry points (build scripts, `streamlib
     /// generate`) populate it via [`ResolverOptions::from_env`].
     pub registry: Option<RegistryConfig>,
+    /// Active `streamlib link` checkout, when a link is in effect. `Some`
+    /// redirects any dependency present in `<checkout>/packages/<name>` to that
+    /// checkout source — the schema-dep mirror of the module loader's link
+    /// redirect, completing the zero-registry dev loop. `None` (the dominant
+    /// case) leaves resolution byte-identical to a non-linked build: absent
+    /// packages, and every dep when no link is active, resolve by version from
+    /// the store / registry (or via a dev path patch). Populated from
+    /// [`crate::LINK_CHECKOUT_ENV`] by [`ResolverOptions::from_env`]; locked
+    /// runs never set it (the orchestrator withholds it), preserving
+    /// reproducibility.
+    pub link_checkout: Option<PathBuf>,
 }
 
 impl ResolverOptions {
@@ -146,8 +157,21 @@ impl ResolverOptions {
         Self {
             cache_dir: None,
             registry: RegistryConfig::from_env(),
+            link_checkout: link_checkout_from_env(),
         }
     }
+}
+
+/// Read the active `streamlib link` checkout from [`crate::LINK_CHECKOUT_ENV`],
+/// returning `None` when unset/empty — the codegen-boundary read that makes
+/// `resolve_with` link-aware without the pure resolver ever touching the
+/// environment. The orchestrator sets this env on a linked package's `cargo
+/// build` (and withholds it for locked/distribution builds), so a `build.rs`
+/// schema-dep codegen redirects to the checkout only when a link is active.
+fn link_checkout_from_env() -> Option<PathBuf> {
+    std::env::var_os(crate::LINK_CHECKOUT_ENV)
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
 }
 
 /// Resolve a `streamlib.yaml` at `root_dir` and every transitive dependency
@@ -177,6 +201,13 @@ pub fn resolve_with(
     // into a live fetch. `None` means "no registry" — a `Registry` dep then
     // fails loud with `RegistryNotConfigured`.
     let registry = options.registry.as_ref();
+
+    // Active `streamlib link` checkout (a non-locked build only; the
+    // orchestrator withholds it for locked/distribution builds). When `Some`, a
+    // dep present in the checkout's `packages/` tree resolves from there — the
+    // schema-dep mirror of the module loader's link redirect. `None` (the
+    // dominant case) ⇒ resolution byte-identical to before.
+    let link_checkout = options.link_checkout.as_deref();
 
     let root = build_resolved_package(root_manifest, root_dir.to_path_buf(), ResolvedSource::Root)?;
 
@@ -229,6 +260,7 @@ pub fn resolve_with(
                 &patch,
                 &cache_dir,
                 registry,
+                link_checkout,
             )?;
 
             check_resolved_id_matches(&resolved, &dep_id, &consumer_dir)?;
@@ -253,6 +285,7 @@ struct QueueEntry {
     patch: BTreeMap<PackageRef, DependencySpec>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_one(
     consumer_dir: &Path,
     dep_ref: &PackageRef,
@@ -261,7 +294,35 @@ fn resolve_one(
     patch: &BTreeMap<PackageRef, DependencySpec>,
     cache_dir: &Path,
     registry: Option<&RegistryConfig>,
+    link_checkout: Option<&Path>,
 ) -> ResolverResult<ResolvedPackage> {
+    // Link-aware short-circuit — the schema-dep mirror of the module loader's
+    // `streamlib link` redirect (npm-link precedence): when a link is active
+    // and this dep is present in the checkout's `packages/<name>` tree, resolve
+    // it from the checkout, overriding whatever `dependencies:` / `patch:`
+    // declared. Absent-from-checkout falls through to the by-version / patch
+    // path below, and `link_checkout` is `None` for every non-linked build
+    // (and every locked run), so this branch changes nothing off the dev loop.
+    // Discovery of the link itself (the `.streamlib/link.json` marker) happens
+    // once in the build orchestrator; here we only look a dep up within the
+    // already-resolved checkout path.
+    if let Some(checkout) = link_checkout
+        && let Some(pkg_dir) = checkout_package_dir(checkout, dep_ref)?
+    {
+        tracing::info!(
+            dependency = dep_id,
+            checkout = %checkout.display(),
+            source = %pkg_dir.display(),
+            "streamlib link active — resolving schema dep from linked checkout \
+             (overriding declared spec)"
+        );
+        let manifest = Manifest::load(&pkg_dir)?;
+        return build_resolved_package(
+            manifest,
+            pkg_dir.clone(),
+            ResolvedSource::Path { relative: pkg_dir },
+        );
+    }
     // Consumer's `patch:` table overrides the dep declaration when present —
     // Cargo `[patch.crates-io]` semantics: `dependencies:` declares *what* the
     // consumer needs, `patch:` declares *which copy* to use.
@@ -313,6 +374,66 @@ fn resolve_one(
         DependencySpec::Registry(reg) => {
             resolve_registry_dependency(dep_ref, dep_id, reg, cache_dir, registry)
         }
+    }
+}
+
+/// If `dep_ref` (`@org/name`) is present in the linked checkout's `packages/`
+/// tree, return its source dir. The match is by the manifest's declared
+/// `package.org` + `package.name` (not the directory name), so a package whose
+/// directory differs from its name still resolves. `Ok(None)` when the dep is
+/// absent — the caller then resolves it by version / patch, unchanged.
+///
+/// This mirrors the module loader's `ActiveLinkedCheckout::checkout_package_dir`
+/// (`core/runtime/module_loader/source.rs`); the two live in different crates
+/// (engine vs. idents) and can't share the type, but the lookup shape is the
+/// same so a linked package and its linked schema deps resolve from one tree.
+fn checkout_package_dir(checkout: &Path, dep_ref: &PackageRef) -> ResolverResult<Option<PathBuf>> {
+    let packages_root = checkout.join("packages");
+    if !packages_root.is_dir() {
+        return Ok(None);
+    }
+    // Fast path: the standard monorepo layout is `packages/<name>`.
+    let by_name = packages_root.join(dep_ref.name.as_str());
+    if manifest_declares_package(&by_name, dep_ref) {
+        return Ok(Some(by_name));
+    }
+    // Fallback: scan for a package dir whose manifest declares this ident
+    // (covers a package whose directory name differs from its package name).
+    let entries = std::fs::read_dir(&packages_root).map_err(|e| ResolverError::Io {
+        path: packages_root.clone(),
+        source: e,
+    })?;
+    for entry in entries {
+        let dir = entry
+            .map_err(|e| ResolverError::Io {
+                path: packages_root.clone(),
+                source: e,
+            })?
+            .path();
+        if dir == by_name || !dir.is_dir() {
+            continue;
+        }
+        if manifest_declares_package(&dir, dep_ref) {
+            return Ok(Some(dir));
+        }
+    }
+    Ok(None)
+}
+
+/// Whether the `streamlib.yaml` at `dir` declares a package whose org + name
+/// equal `dep_ref`. A missing / unreadable / malformed manifest is treated as
+/// "no match" — this dir just isn't the package we're looking for; a genuine
+/// manifest error surfaces on the real resolve path with a precise message.
+fn manifest_declares_package(dir: &Path, dep_ref: &PackageRef) -> bool {
+    if !dir.join(Manifest::FILE_NAME).exists() {
+        return false;
+    }
+    match Manifest::load(dir) {
+        Ok(m) => m
+            .package
+            .as_ref()
+            .is_some_and(|p| p.org == dep_ref.org && p.name == dep_ref.name),
+        Err(_) => false,
     }
 }
 
@@ -995,6 +1116,7 @@ dependencies:
         let opts = ResolverOptions {
             cache_dir: Some(tmp.path().join("cache")),
             registry: None,
+            link_checkout: None,
         };
         let err = resolve_with(&root, &opts).unwrap_err();
         assert!(
@@ -1057,6 +1179,7 @@ dependencies:
             registry: Some(crate::RegistryConfig {
                 base_url: format!("file://{}", mirror.display()),
             }),
+            link_checkout: None,
         };
         let res = resolve_with(&root, &opts).unwrap();
         let escalate = res.packages.get("@tatolab/escalate").unwrap();
@@ -1137,6 +1260,7 @@ patch:
             registry: Some(crate::RegistryConfig {
                 base_url: format!("file://{}", mirror.display()),
             }),
+            link_checkout: None,
         };
         let res = resolve_with(&root, &opts).unwrap();
         let escalate = res.packages.get("@tatolab/escalate").unwrap();
@@ -1189,6 +1313,7 @@ patch:
             registry: Some(crate::RegistryConfig {
                 base_url: format!("file://{}", mirror.display()),
             }),
+            link_checkout: None,
         };
         let res = resolve_with(&root, &opts).unwrap();
         let escalate = res.packages.get("@tatolab/escalate").unwrap();
@@ -1234,6 +1359,7 @@ dependencies:
             registry: Some(crate::RegistryConfig {
                 base_url: format!("file://{}", mirror.display()),
             }),
+            link_checkout: None,
         };
         let err = resolve_with(&root, &opts).unwrap_err();
         assert!(
@@ -1273,6 +1399,7 @@ dependencies:
         let opts = ResolverOptions {
             cache_dir: Some(cache),
             registry: None,
+            link_checkout: None,
         };
         let res = resolve_with(&root, &opts).unwrap();
         let core = res.packages.get("@tatolab/core").unwrap();
@@ -1503,5 +1630,276 @@ schemas: {}
             err,
             ResolverError::BareSchemaNameUnresolved { .. }
         ));
+    }
+
+    // =====================================================================
+    // Link-aware schema-dep resolution (`ResolverOptions::link_checkout`)
+    //
+    // The schema-dep mirror of the module loader's `streamlib link` redirect:
+    // when a link is active, a dep present in the checkout's `packages/<name>`
+    // tree resolves from the checkout (dev loop, zero-registry); absent-from-
+    // checkout and no-link resolve by version from the store (distribution).
+    // =====================================================================
+
+    /// Write a minimal `@tatolab/<name>` schema `.slpkg` into a `file://`
+    /// mirror's generic store at `<mirror>/slpkg/<name>/<version>/<name>.slpkg`.
+    fn write_pkg_slpkg(mirror: &Path, name: &str, version: &str) {
+        use std::io::Write;
+        let dir = mirror.join("slpkg").join(name).join(version);
+        std::fs::create_dir_all(&dir).unwrap();
+        let archive = dir.join(format!("{name}.slpkg"));
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+        let opts = zip::write::SimpleFileOptions::default();
+        zip.start_file(Manifest::FILE_NAME, opts).unwrap();
+        zip.write_all(
+            format!("package:\n  org: tatolab\n  name: {name}\n  version: {version}\n").as_bytes(),
+        )
+        .unwrap();
+        zip.finish().unwrap();
+    }
+
+    /// Write `<checkout>/packages/<dir_name>/streamlib.yaml` declaring the
+    /// package `@tatolab/<pkg_name>` at `version` — the linked-checkout layout
+    /// the resolver looks a dep up in.
+    fn write_checkout_package(checkout: &Path, dir_name: &str, pkg_name: &str, version: &str) {
+        let pkg = checkout.join("packages").join(dir_name);
+        write_streamlib_yaml(
+            &pkg,
+            &format!("package:\n  org: tatolab\n  name: {pkg_name}\n  version: {version}\n"),
+        );
+    }
+
+    fn registry_opts(
+        cache: &Path,
+        mirror: &Path,
+        link_checkout: Option<PathBuf>,
+    ) -> ResolverOptions {
+        ResolverOptions {
+            cache_dir: Some(cache.to_path_buf()),
+            registry: Some(crate::RegistryConfig {
+                base_url: format!("file://{}", mirror.display()),
+            }),
+            link_checkout,
+        }
+    }
+
+    /// Dev loop, link active: a schema dep present in the linked checkout's
+    /// `packages/<name>` resolves FROM the checkout, overriding the declared
+    /// version range — even though the registry holds a *different* version.
+    /// This is the zero-registry dev loop for schema deps. Mentally revert the
+    /// link-aware short-circuit in `resolve_one` and the resolve falls back to
+    /// the registry (1.2.0, `Registry` source), failing both assertions.
+    #[test]
+    fn link_active_resolves_schema_dep_from_checkout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mirror = tmp.path().join("mirror");
+        // Registry holds a DIFFERENT version so the source-of-truth is unambiguous.
+        write_pkg_slpkg(&mirror, "core", "1.2.0");
+        // The linked checkout carries @tatolab/core at 1.0.0.
+        let checkout = tmp.path().join("checkout");
+        write_checkout_package(&checkout, "core", "core", "1.0.0");
+
+        let root = tmp.path().join("project");
+        write_streamlib_yaml(&root, "dependencies:\n  \"@tatolab/core\": \"^1.0.0\"\n");
+
+        let opts = registry_opts(&tmp.path().join("cache"), &mirror, Some(checkout.clone()));
+        let res = resolve_with(&root, &opts).unwrap();
+        let core = res.packages.get("@tatolab/core").unwrap();
+        assert!(
+            matches!(core.source, ResolvedSource::Path { .. }),
+            "linked dep must resolve from the checkout (Path), got {:?}",
+            core.source
+        );
+        assert_eq!(
+            core.manifest.package.as_ref().unwrap().version.to_string(),
+            "1.0.0",
+            "must be the checkout's version, not the registry's 1.2.0"
+        );
+        assert!(
+            core.root_dir.starts_with(&checkout),
+            "resolved root_dir must be inside the checkout: {}",
+            core.root_dir.display()
+        );
+    }
+
+    /// No link (`link_checkout: None`): even with a checkout present on disk,
+    /// resolution is byte-identical to before — the dep resolves by version
+    /// from the store, never the checkout. Locks the link-GATING guardrail
+    /// (the checkout is consulted ONLY when a link is active).
+    #[test]
+    fn no_link_ignores_checkout_and_resolves_from_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mirror = tmp.path().join("mirror");
+        write_pkg_slpkg(&mirror, "core", "1.2.0");
+        // A checkout exists on disk and carries core, but no link is active.
+        let checkout = tmp.path().join("checkout");
+        write_checkout_package(&checkout, "core", "core", "1.0.0");
+
+        let root = tmp.path().join("project");
+        write_streamlib_yaml(&root, "dependencies:\n  \"@tatolab/core\": \"^1.0.0\"\n");
+
+        let opts = registry_opts(&tmp.path().join("cache"), &mirror, None);
+        let res = resolve_with(&root, &opts).unwrap();
+        let core = res.packages.get("@tatolab/core").unwrap();
+        assert!(
+            matches!(core.source, ResolvedSource::Registry { .. }),
+            "without a link the dep must resolve from the store, got {:?}",
+            core.source
+        );
+        assert_eq!(
+            core.manifest.package.as_ref().unwrap().version.to_string(),
+            "1.2.0",
+            "must be the registry's version — the on-disk checkout is ignored with no link"
+        );
+    }
+
+    /// Link active but the dep is ABSENT from the checkout's `packages/` tree:
+    /// resolution falls through to the by-version store (distribution loop),
+    /// unchanged. A checkout that doesn't carry a given dep must not break it.
+    #[test]
+    fn link_active_dep_absent_from_checkout_falls_back_to_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mirror = tmp.path().join("mirror");
+        write_pkg_slpkg(&mirror, "core", "1.2.0");
+        // Checkout exists and has a packages/ tree, but carries a DIFFERENT
+        // package (not core).
+        let checkout = tmp.path().join("checkout");
+        write_checkout_package(&checkout, "camera", "camera", "1.0.0");
+
+        let root = tmp.path().join("project");
+        write_streamlib_yaml(&root, "dependencies:\n  \"@tatolab/core\": \"^1.0.0\"\n");
+
+        let opts = registry_opts(&tmp.path().join("cache"), &mirror, Some(checkout));
+        let res = resolve_with(&root, &opts).unwrap();
+        let core = res.packages.get("@tatolab/core").unwrap();
+        assert!(
+            matches!(core.source, ResolvedSource::Registry { .. }),
+            "a dep absent from the checkout must fall back to the store, got {:?}",
+            core.source
+        );
+        assert_eq!(
+            core.manifest.package.as_ref().unwrap().version.to_string(),
+            "1.2.0"
+        );
+    }
+
+    /// The checkout lookup matches by the manifest's declared package ident,
+    /// not the directory name: a dep whose checkout directory differs from its
+    /// package name still resolves from the checkout (the scan-fallback branch
+    /// of `checkout_package_dir`).
+    #[test]
+    fn link_checkout_matches_by_manifest_ident_not_dir_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mirror = tmp.path().join("mirror");
+        write_pkg_slpkg(&mirror, "core", "1.2.0");
+        // Directory is `wire-vocab`, but the manifest declares @tatolab/core.
+        let checkout = tmp.path().join("checkout");
+        write_checkout_package(&checkout, "wire-vocab", "core", "1.0.0");
+
+        let root = tmp.path().join("project");
+        write_streamlib_yaml(&root, "dependencies:\n  \"@tatolab/core\": \"^1.0.0\"\n");
+
+        let opts = registry_opts(&tmp.path().join("cache"), &mirror, Some(checkout.clone()));
+        let res = resolve_with(&root, &opts).unwrap();
+        let core = res.packages.get("@tatolab/core").unwrap();
+        assert!(
+            matches!(core.source, ResolvedSource::Path { .. }),
+            "got {:?}",
+            core.source
+        );
+        assert_eq!(
+            core.manifest.package.as_ref().unwrap().version.to_string(),
+            "1.0.0"
+        );
+        assert!(
+            core.root_dir.ends_with("wire-vocab"),
+            "must resolve the scan-matched dir, got {}",
+            core.root_dir.display()
+        );
+    }
+
+    /// The link redirect threads through the whole dependency walk: a linked
+    /// package AND its transitive schema deps all resolve from the checkout.
+    #[test]
+    fn link_checkout_threads_through_transitive_deps() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mirror = tmp.path().join("mirror");
+        // Registry holds different versions of both, so the source is unambiguous.
+        write_pkg_slpkg(&mirror, "core", "1.2.0");
+        write_pkg_slpkg(&mirror, "h264", "0.9.0");
+
+        let checkout = tmp.path().join("checkout");
+        write_checkout_package(&checkout, "core", "core", "1.0.0");
+        // h264 (in the checkout) depends on core.
+        write_streamlib_yaml(
+            &checkout.join("packages").join("h264"),
+            r#"
+package:
+  org: tatolab
+  name: h264
+  version: 0.4.0
+dependencies:
+  "@tatolab/core": "^1.0.0"
+"#,
+        );
+
+        let root = tmp.path().join("project");
+        write_streamlib_yaml(&root, "dependencies:\n  \"@tatolab/h264\": \"^0.4.0\"\n");
+
+        let opts = registry_opts(&tmp.path().join("cache"), &mirror, Some(checkout.clone()));
+        let res = resolve_with(&root, &opts).unwrap();
+
+        let h264 = res.packages.get("@tatolab/h264").unwrap();
+        let core = res.packages.get("@tatolab/core").unwrap();
+        assert!(
+            matches!(h264.source, ResolvedSource::Path { .. }),
+            "h264: {:?}",
+            h264.source
+        );
+        assert!(
+            matches!(core.source, ResolvedSource::Path { .. }),
+            "core: {:?}",
+            core.source
+        );
+        assert_eq!(
+            h264.manifest.package.as_ref().unwrap().version.to_string(),
+            "0.4.0"
+        );
+        assert_eq!(
+            core.manifest.package.as_ref().unwrap().version.to_string(),
+            "1.0.0"
+        );
+        assert!(core.root_dir.starts_with(&checkout));
+    }
+
+    /// `ResolverOptions::from_env` reads the checkout from
+    /// [`crate::LINK_CHECKOUT_ENV`]; unset/empty ⇒ `None`. Locks the
+    /// codegen-boundary env read the build orchestrator threads through.
+    #[test]
+    #[serial_test::serial]
+    fn from_env_reads_link_checkout() {
+        // SAFETY: `#[serial]` makes the env-mutating tests mutually exclusive.
+        let prev = std::env::var_os(crate::LINK_CHECKOUT_ENV);
+        unsafe {
+            std::env::set_var(crate::LINK_CHECKOUT_ENV, "/opt/streamlib-checkout");
+        }
+        assert_eq!(
+            ResolverOptions::from_env().link_checkout,
+            Some(PathBuf::from("/opt/streamlib-checkout"))
+        );
+        unsafe {
+            std::env::set_var(crate::LINK_CHECKOUT_ENV, "");
+        }
+        assert_eq!(
+            ResolverOptions::from_env().link_checkout,
+            None,
+            "empty env must read as None"
+        );
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var(crate::LINK_CHECKOUT_ENV, v),
+                None => std::env::remove_var(crate::LINK_CHECKOUT_ENV),
+            }
+        }
     }
 }

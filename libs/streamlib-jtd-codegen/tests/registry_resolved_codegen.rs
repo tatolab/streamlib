@@ -99,6 +99,7 @@ schemas:
             registry: Some(RegistryConfig {
                 base_url: format!("file://{}", mirror.display()),
             }),
+            link_checkout: None,
         },
     )
     .expect("registry resolution must succeed without a path patch");
@@ -188,6 +189,7 @@ schemas:
             registry: Some(RegistryConfig {
                 base_url: format!("file://{}", mirror.display()),
             }),
+            link_checkout: None,
         },
     )
     .expect("absent dev path patch must fall back to registry resolution");

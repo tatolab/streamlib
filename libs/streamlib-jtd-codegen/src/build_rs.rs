@@ -69,10 +69,26 @@ fn run_for_rust_crate_inner() -> Result<()> {
         );
     }
 
-    // `from_env` reads STREAMLIB_REGISTRY_URL / STREAMLIB_REGISTRY_URL so a registry-cached
-    // crate resolves its schema deps (e.g. `@tatolab/escalate`) from the
-    // configured static registry — the env read lives here at the build-script
-    // boundary, not inside the pure resolver.
+    // Re-run codegen when the resolution-driving environment changes: toggling
+    // an active `streamlib link` (STREAMLIB_LINK_CHECKOUT) or the registry
+    // (STREAMLIB_REGISTRY_URL) must re-resolve schema deps rather than reuse a
+    // resolution cargo cached under the prior environment.
+    println!(
+        "cargo:rerun-if-env-changed={}",
+        streamlib_idents::LINK_CHECKOUT_ENV
+    );
+    println!(
+        "cargo:rerun-if-env-changed={}",
+        streamlib_idents::REGISTRY_URL_ENV
+    );
+
+    // `from_env` reads STREAMLIB_REGISTRY_URL so a registry-cached crate
+    // resolves its schema deps (e.g. `@tatolab/escalate`) from the configured
+    // static registry, and STREAMLIB_LINK_CHECKOUT so a package built under an
+    // active `streamlib link` resolves a dep present in the checkout's
+    // `packages/` tree from the checkout (the zero-registry dev loop). The env
+    // read lives here at the build-script boundary, not inside the pure
+    // resolver.
     let resolved = streamlib_idents::resolve_with(&crate_dir, &ResolverOptions::from_env())
         .context("Failed to resolve streamlib.yaml dependency graph")?;
 

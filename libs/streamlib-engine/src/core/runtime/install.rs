@@ -124,6 +124,10 @@ pub fn install(
     let resolver_options = ResolverOptions {
         cache_dir: options.resolver_cache_dir.clone(),
         registry,
+        // Install is the reproducible distribution seam: it resolves range →
+        // concrete and pins a lockfile, so it is deliberately NOT link-aware — a
+        // dev-loop `streamlib link` override must never leak into a lockfile.
+        link_checkout: None,
     };
 
     tracing::info!(root = %root_dir.display(), "install: resolving package graph");

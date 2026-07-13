@@ -88,6 +88,21 @@ impl ProjectConfig {
     /// Downstream consumers (graph wiring, iceoryx2 service open,
     /// json-schema render) operate on `Specific` only.
     pub fn load(project_path: &Path) -> Result<Self> {
+        Self::load_with_link(project_path, None)
+    }
+
+    /// [`Self::load`], made link-aware for the runtime package-load path.
+    ///
+    /// When `link_checkout` is `Some` (a non-locked run under an active
+    /// `streamlib link`), the bare-name schema-resolution pass resolves a
+    /// schema dep present in `<checkout>/packages/<name>` from the checkout —
+    /// the load-time mirror of the build-time redirect, so a linked package
+    /// loaded from its staged cache dir with `STREAMLIB_REGISTRY_URL` unset
+    /// still resolves `@tatolab/core` (the zero-registry dev loop). `None`
+    /// (every other caller, and every locked run) is byte-identical to before.
+    /// The module loader threads its already-discovered, `is_locked`-gated
+    /// checkout here.
+    pub fn load_with_link(project_path: &Path, link_checkout: Option<&Path>) -> Result<Self> {
         let config_path = project_path.join(Self::FILE_NAME);
 
         let content = std::fs::read_to_string(&config_path).map_err(|e| {
@@ -98,7 +113,7 @@ impl ProjectConfig {
             Error::Configuration(format!("Failed to parse {}: {}", config_path.display(), e))
         })?;
 
-        config.resolve_bare_schema_refs(project_path)?;
+        config.resolve_bare_schema_refs(project_path, link_checkout)?;
 
         tracing::info!("Loaded project config from {}", config_path.display());
         Ok(config)
@@ -110,7 +125,11 @@ impl ProjectConfig {
     /// against the manifest's `schemas:` map (#767). No-op when there
     /// are no `Named` references in scope (saves the resolver invocation
     /// cost on `any`-only / config-less manifests).
-    fn resolve_bare_schema_refs(&mut self, project_path: &Path) -> Result<()> {
+    fn resolve_bare_schema_refs(
+        &mut self,
+        project_path: &Path,
+        link_checkout: Option<&Path>,
+    ) -> Result<()> {
         use streamlib_processor_schema::PortSchemaSpec;
 
         let needs_resolution = self.processors.iter().any(|p| {
@@ -126,21 +145,25 @@ impl ProjectConfig {
         }
 
         // Runtime package-load boundary: read the registry config from the
-        // environment (STREAMLIB_REGISTRY_URL / STREAMLIB_REGISTRY_URL) so a standalone,
-        // registry-only package resolves its schema deps (e.g. @tatolab/core)
-        // from the registry instead of failing as RegistryNotConfigured.
-        let resolved = streamlib_idents::resolve_with(
-            project_path,
-            &streamlib_idents::ResolverOptions::from_env(),
-        )
-        .map_err(|e| {
-            Error::Configuration(format!(
-                "failed to resolve manifest dependencies for bare-name \
+        // environment (STREAMLIB_REGISTRY_URL) so a standalone, registry-only
+        // package resolves its schema deps (e.g. @tatolab/core) from the
+        // registry instead of failing as RegistryNotConfigured. An active
+        // `streamlib link` (threaded by the module loader) additionally
+        // redirects a schema dep present in the checkout to the checkout — the
+        // load-time half of the zero-registry dev loop; `None` is unchanged.
+        let mut resolver_options = streamlib_idents::ResolverOptions::from_env();
+        if let Some(checkout) = link_checkout {
+            resolver_options.link_checkout = Some(checkout.to_path_buf());
+        }
+        let resolved =
+            streamlib_idents::resolve_with(project_path, &resolver_options).map_err(|e| {
+                Error::Configuration(format!(
+                    "failed to resolve manifest dependencies for bare-name \
                  schema lookup at {}: {}",
-                project_path.display(),
-                e
-            ))
-        })?;
+                    project_path.display(),
+                    e
+                ))
+            })?;
 
         for proc in &mut self.processors {
             for port in proc.inputs.iter_mut().chain(proc.outputs.iter_mut()) {
@@ -589,5 +612,147 @@ processors:
         assert_eq!(config.processors[0].name, "Grayscale");
         assert_eq!(config.processors[0].inputs.len(), 1);
         assert_eq!(config.processors[0].outputs.len(), 1);
+    }
+
+    /// Removes the resolution-driving env for a test's duration and restores it
+    /// after, so a stray `STREAMLIB_REGISTRY_URL` / `STREAMLIB_LINK_CHECKOUT` in
+    /// the shell can't make the load-time link tests non-deterministic.
+    struct CleanResolutionEnv {
+        prev_registry: Option<std::ffi::OsString>,
+        prev_link: Option<std::ffi::OsString>,
+    }
+    impl CleanResolutionEnv {
+        fn new() -> Self {
+            let prev_registry = std::env::var_os("STREAMLIB_REGISTRY_URL");
+            let prev_link = std::env::var_os("STREAMLIB_LINK_CHECKOUT");
+            // SAFETY: the tests using this guard are `#[serial]`, so no other
+            // thread races the process-global environment for its lifetime.
+            unsafe {
+                std::env::remove_var("STREAMLIB_REGISTRY_URL");
+                std::env::remove_var("STREAMLIB_LINK_CHECKOUT");
+            }
+            Self {
+                prev_registry,
+                prev_link,
+            }
+        }
+    }
+    impl Drop for CleanResolutionEnv {
+        fn drop(&mut self) {
+            unsafe {
+                match self.prev_registry.take() {
+                    Some(v) => std::env::set_var("STREAMLIB_REGISTRY_URL", v),
+                    None => std::env::remove_var("STREAMLIB_REGISTRY_URL"),
+                }
+                match self.prev_link.take() {
+                    Some(v) => std::env::set_var("STREAMLIB_LINK_CHECKOUT", v),
+                    None => std::env::remove_var("STREAMLIB_LINK_CHECKOUT"),
+                }
+            }
+        }
+    }
+
+    /// Write a consumer manifest whose port declares a `Named` `VideoFrame`
+    /// imported from `@tatolab/core` (a bare version dep, NO patch) — the shape
+    /// that forces the load-time bare-name resolution to walk the dep graph.
+    fn write_named_port_consumer(dir: &Path) {
+        std::fs::write(
+            dir.join("streamlib.yaml"),
+            r#"
+package:
+  org: tatolab
+  name: consumer
+  version: 1.0.0
+dependencies:
+  "@tatolab/core":
+    version: ^1.0.0
+schemas:
+  VideoFrame:
+    package: "@tatolab/core"
+processors:
+  - name: Consumer
+    version: 1.0.0
+    description: d
+    runtime: rust
+    execution: manual
+    inputs:
+      - name: in0
+        schema: VideoFrame
+    outputs: []
+"#,
+        )
+        .unwrap();
+    }
+
+    /// Write `<checkout>/packages/core` declaring the `VideoFrame` Local schema.
+    fn write_checkout_core(checkout: &Path) {
+        let core = checkout.join("packages").join("core");
+        std::fs::create_dir_all(core.join("schemas")).unwrap();
+        std::fs::write(
+            core.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: core\n  version: 1.0.0\nschemas:\n  VideoFrame:\n    file: schemas/video_frame.yaml\n",
+        )
+        .unwrap();
+        std::fs::write(
+            core.join("schemas/video_frame.yaml"),
+            "metadata:\n  type: VideoFrame\nproperties: {}\n",
+        )
+        .unwrap();
+    }
+
+    /// Load-time dev loop: `load_with_link` with an active checkout resolves a
+    /// bare-name schema dep from the checkout's `packages/core` with ZERO
+    /// registry configured — the load-time half of the zero-registry loop. The
+    /// `Named` port is rewritten to a `Specific` ident owned by `@tatolab/core`.
+    /// Mentally revert the `link_checkout` threading in `resolve_bare_schema_refs`
+    /// (or pass `None`, as the sibling test does) and this fails
+    /// `RegistryNotConfigured` — locking that the checkout is what resolved it.
+    #[test]
+    #[serial_test::serial]
+    fn load_with_link_resolves_bare_schema_from_checkout_zero_registry() {
+        use streamlib_processor_schema::PortSchemaSpec;
+        let _env = CleanResolutionEnv::new();
+        let tmp = TempDir::new().unwrap();
+        let consumer = tmp.path().join("consumer");
+        std::fs::create_dir_all(&consumer).unwrap();
+        write_named_port_consumer(&consumer);
+        let checkout = tmp.path().join("checkout");
+        write_checkout_core(&checkout);
+
+        let config = ProjectConfig::load_with_link(&consumer, Some(checkout.as_path())).expect(
+            "linked load must resolve the bare-name schema from the checkout, zero registry",
+        );
+        let port = &config.processors[0].inputs[0];
+        match &port.schema {
+            PortSchemaSpec::Specific(ident) => {
+                assert_eq!(ident.to_string(), "@tatolab/core/VideoFrame@1.0.0")
+            }
+            other => panic!("port schema must be resolved to a Specific ident, got {other:?}"),
+        }
+    }
+
+    /// Load-time distribution guardrail: with NO link (`None`) and no registry,
+    /// the same manifest fails `RegistryNotConfigured` — the checkout on disk is
+    /// ignored without a link, so the no-link path is byte-identical to before.
+    /// This is also the mental-revert of the positive test above.
+    #[test]
+    #[serial_test::serial]
+    fn load_without_link_ignores_checkout_and_needs_registry() {
+        let _env = CleanResolutionEnv::new();
+        let tmp = TempDir::new().unwrap();
+        let consumer = tmp.path().join("consumer");
+        std::fs::create_dir_all(&consumer).unwrap();
+        write_named_port_consumer(&consumer);
+        // A checkout carrying core exists on disk, but no link is threaded.
+        let checkout = tmp.path().join("checkout");
+        write_checkout_core(&checkout);
+
+        let err = ProjectConfig::load_with_link(&consumer, None)
+            .expect_err("without a link + no registry, the bare version dep must fail loud");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("no registry is configured") || msg.contains("cannot be resolved"),
+            "expected a registry-not-configured failure, got: {msg}"
+        );
     }
 }
