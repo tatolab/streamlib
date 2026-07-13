@@ -30,7 +30,7 @@ running process.
    dev loop                         install seam                 distribution loop
    ────────                         ────────────                 ─────────────────
    streamlib link <checkout>                                     streamlib pkg publish
-     whole-tree toolchain            streamlib install            compute_release_closure
+     whole-tree toolchain            streamlib install            assemble .slpkg + catalog
      overrides (cargo/uv/deno)   ─▶    resolve range→concrete  ◀─   → atomic staged release
      → working-tree source            materialize + lock            (manifest written last)
                                        → streamlib-app.lock
@@ -248,20 +248,23 @@ locked run bypasses `patch:` entirely and resolves from the lockfile.
 
 ## The distribution loop — atomic release
 
-A release is cut with `streamlib pkg publish` (one package to the registry)
-or, for the whole workspace surface (crate chain, SDKs, packages, static
-tree), the publish tooling under `scripts/registry/` and `cargo xtask
+A package release is cut with `streamlib pkg publish` (one package to the
+`.slpkg` generic store) or, for the whole `packages/*` surface, `cargo xtask
 static-registry emit`; everything below is what those commands do under the
-hood.
+hood. SDK / library-crate publishing to the real public registries is a
+separate, gated release step — the custom cargo registry that used to serve
+the SDK by version was removed; internal cross-crate deps resolve by `path`.
 
 **Closure by definition.** `compute_release_closure(workspace_root)`
 ([`libs/streamlib-pack/src/lib.rs`](../../libs/streamlib-pack/src/lib.rs))
-is the *single* definition of "the set of crates a release publishes":
-workspace member ∧ linkable name (`streamlib*` or `vulkan-jpeg`) ∧ has a
-library target ∧ publishable, returned in topological publish order. There
-is no "SDK-subset vs. all-libs" switch — `streamlib-plugin-sdk` /
-`vulkan-jpeg` are members by definition, so a release can't silently omit a
-crate a human forgot to flag.
+is the *single* definition of "the linkable crate set":
+workspace member ∧ linkable name (`streamlib*` / `vulkan-jpeg` /
+`tatolab-vulkanalia*`) ∧ has a library target ∧ publishable, returned in
+topological order. There is no "SDK-subset vs. all-libs" switch —
+`streamlib-plugin-sdk` / `vulkan-jpeg` are members by definition. It is the
+crate set `streamlib link` overrides (and the set a future SDK release would
+publish); the `.slpkg` emit no longer consults it (a `.slpkg` release
+publishes packages, not crates).
 
 **Manifest-last atomicity.** A `ReleaseManifest`
 ([`libs/streamlib-idents/src/release.rs`](../../libs/streamlib-idents/src/release.rs))
@@ -279,29 +282,19 @@ a cryptic "failed to select a version for `streamlib-plugin-sdk`" deep in
 cargo / `streamlib-macros` version unification (the symptom this replaces).
 The check rides *inside* materialize, so install fails before cargo runs.
 
-**Two backends, one read shape.** Distribution has a hosted-registry backend
-and a plain static-file-tree backend behind one tokenless read shape (sparse
-index + tarballs + `.slpkg` generic store + catalog). The static tree —
-what CI and local `file://` resolution use — is documented in
-[`static-registry.md`](static-registry.md); its catalog surface (a queryable
-processor / port / schema index a visual editor browses without downloading
-packages) is documented there too. The static file tree is the only registry
-backend; the by-version resolution model (`{ path, version, registry }`,
-schema-package resolution, the anonymous version index) is documented in
-[`static-registry.md`](static-registry.md). CI resolves
-against the static file tree; to reproduce a CI resolve locally, serve an
-emitted tree per [`static-registry.md` § Consuming a
-tree](static-registry.md#consuming-a-tree).
+**One backend, one read shape.** Package distribution is a plain static file
+tree — the `.slpkg` generic store + catalog — behind one tokenless read shape,
+served over `file://` or a dumb HTTP mount. It is documented in
+[`static-registry.md`](static-registry.md), including its catalog surface (a
+queryable processor / port / schema index a visual editor browses without
+downloading packages). CI resolves against the static file tree; to reproduce
+a CI resolve locally, serve an emitted tree per [`static-registry.md` §
+Consuming a tree](static-registry.md#consuming-a-tree).
 
-One gap the static path closes: on a hosted-registry read path, a partial
-crate set uploaded at a version *above* the newest manifest'd version — with
-no manifest of its own — is invisible to `assert_release_complete` (which
-keys on manifest'd versions and proceeds when no manifest covers a pin), yet
-cargo's sparse index could still resolve a caret pin up to that higher
-partial version. The static tree removes the window entirely: crates and the
-release manifest land in one atomic whole-tree `renameat2(RENAME_EXCHANGE)`
-staged swap (`publish_staged_tree`), so no state ever exists where partial
-crate versions sit above the newest manifest.
+The atomic staged swap closes the mid-publish window: every `.slpkg` and the
+release manifest land in one whole-tree `renameat2(RENAME_EXCHANGE)` staged
+swap (`publish_staged_tree`), so no state ever exists where a partial package
+set sits above the newest manifest.
 
 ## The install seam
 
@@ -434,11 +427,6 @@ Stated honestly; verify against current code before relying on any.
   offline locked run is not separately gated, so "an installed polyglot app
   runs fully offline at process spawn" is, to the best of our current
   knowledge, unverified.
-- **pypi / npm emit has narrower CI coverage than cargo / slpkg.** The
-  daemon-free registry gate resolves `.slpkg` (`file://`) and the cargo fork
-  tree end-to-end and exercises the completeness negative gate, but the xtask
-  emit smoke runs `--no-pypi --no-npm --no-slpkg`; the pypi-simple and npm
-  renderers are exercised by unit tests, not a full `file://` resolve in CI.
 - **Deploy lockfiles don't pin checkouts.** Link-mode registry-dep
   redirection lives at the toolchain layer. A lockfile produced from a linked
   or path-declared tree records `path:` sources (a working-tree path), not an

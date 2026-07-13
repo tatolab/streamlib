@@ -79,7 +79,9 @@ The vendored copy is byte-identical to the fork rev except:
 1. **Manifest edits** — package renames, `[lib]` name pins,
    `readme = "README.md"` (the fork pointed at a repo-root README),
    sibling deps rewritten to
-   `{ package = "tatolab-…", path = "../tatolab-…", version, registry = "tatolab" }`,
+   `{ package = "tatolab-…", path = "../tatolab-…", version }` (resolved by
+   `path` in-workspace; the custom `registry = "tatolab"` key was removed with
+   the cargo registry in #1322),
    and `[lib] doctest = false` on `tatolab-vulkanalia` (its `bytecode.rs`
    doctests `include_bytes!` shader fixtures from the fork repo's
    `tutorial/` + `examples/` dirs, which the trim rule drops; the unit

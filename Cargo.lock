@@ -4806,7 +4806,6 @@ name = "streamlib-build-orchestrator"
 version = "0.6.0"
 dependencies = [
  "anyhow",
- "libc",
  "serde_json",
  "serial_test",
  "streamlib-cargo-build",

@@ -1,5 +1,17 @@
 # `cargo package` is byte-deterministic EXCEPT `.cargo_vcs_info.json`
 
+> **Superseded in-tree 2026-07-13 (#1322).** The streamlib machinery this
+> learning describes — `libs/streamlib-pack/src/crate_tarball.rs`, the
+> `emit_cargo_closure` cargo-tree emitter, `finalize_crate_tarball`, the
+> byte-stable-`.crate` normalization — was deleted with the custom cargo
+> registry (`.crate` tarballs are no longer emitted). The learning is
+> **retained, not deleted**: the underlying `cargo package` non-determinism is
+> a real cargo behavior that recurs the moment the SDK / library crates
+> publish to crates.io (deferred, #1323), where the same `.cargo_vcs_info.json`
+> commit-sha churn changes the published `.crate` checksum. The fix pattern
+> below (strip the entry post-hoc + re-gzip with a fixed header) is the
+> portable lesson; the in-tree file/function references are historical.
+
 ## Symptom
 
 Emitting the static registry tree twice from the same source produces
