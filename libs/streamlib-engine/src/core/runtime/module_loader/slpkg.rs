@@ -44,25 +44,45 @@ pub fn extract_slpkg_to_cache(slpkg_path: &std::path::Path) -> Result<std::path:
         package.version,
     );
 
+    // Reuse the already-read bytes — extract into the derived cache slot.
+    extract_zip_bytes_to_dir(&slpkg_bytes, &cache_dir, slpkg_path)?;
+    Ok(cache_dir)
+}
+
+/// Extract a .slpkg ZIP archive into an explicit destination directory,
+/// overwriting it if present. Unlike [`extract_slpkg_to_cache`] the
+/// destination is caller-chosen (a final cache slot, or a temp staging dir a
+/// caller promotes into the cache only after an identity check passes), so the
+/// archive's own `package:` identity does not decide where the bytes land.
+/// Rejects path-traversal entries.
+pub fn extract_slpkg_to_dir(slpkg_path: &std::path::Path, dest_dir: &std::path::Path) -> Result<()> {
+    let slpkg_bytes = std::fs::read(slpkg_path).map_err(|e| {
+        Error::Configuration(format!("Failed to read {}: {}", slpkg_path.display(), e))
+    })?;
+    extract_zip_bytes_to_dir(&slpkg_bytes, dest_dir, slpkg_path)
+}
+
+/// Extract every entry of the in-memory `.slpkg` ZIP `slpkg_bytes` into
+/// `dest_dir` (cleared first, always-overwrite), rejecting path-traversal
+/// entries. `source_label` names the archive in `tracing` / error text only.
+fn extract_zip_bytes_to_dir(
+    slpkg_bytes: &[u8],
+    dest_dir: &std::path::Path,
+    source_label: &std::path::Path,
+) -> Result<()> {
     // Always overwrite
-    if cache_dir.exists() {
-        std::fs::remove_dir_all(&cache_dir)
+    if dest_dir.exists() {
+        std::fs::remove_dir_all(dest_dir)
             .map_err(|e| Error::Configuration(format!("Failed to clear cache dir: {}", e)))?;
     }
 
-    tracing::info!(
-        "Extracting {} to {}",
-        slpkg_path.display(),
-        cache_dir.display()
-    );
-    std::fs::create_dir_all(&cache_dir)
+    tracing::info!("Extracting {} to {}", source_label.display(), dest_dir.display());
+    std::fs::create_dir_all(dest_dir)
         .map_err(|e| Error::Configuration(format!("Failed to create cache dir: {}", e)))?;
 
-    // Re-open archive (cursor consumed by manifest read)
-    let cursor = std::io::Cursor::new(&slpkg_bytes);
-    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| {
-        Error::Configuration(format!("Failed to re-open .slpkg archive: {}", e))
-    })?;
+    let cursor = std::io::Cursor::new(slpkg_bytes);
+    let mut archive = zip::ZipArchive::new(cursor)
+        .map_err(|e| Error::Configuration(format!("Failed to open .slpkg archive: {}", e)))?;
 
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).map_err(|e| {
@@ -79,7 +99,7 @@ pub fn extract_slpkg_to_cache(slpkg_path: &std::path::Path) -> Result<std::path:
             )));
         }
 
-        let output_path = cache_dir.join(&file_name);
+        let output_path = dest_dir.join(&file_name);
 
         if let Some(parent) = output_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
@@ -96,5 +116,5 @@ pub fn extract_slpkg_to_cache(slpkg_path: &std::path::Path) -> Result<std::path:
         })?;
     }
 
-    Ok(cache_dir)
+    Ok(())
 }

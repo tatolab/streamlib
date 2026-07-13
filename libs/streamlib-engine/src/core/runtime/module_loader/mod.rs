@@ -62,7 +62,7 @@ pub use errors::{AddModuleError, RemoveModuleError};
 pub(crate) use locked::LockedResolution;
 pub use processor_registration::host_target_triple;
 pub(crate) use recursive_walker::ResolutionMemo;
-pub use slpkg::extract_slpkg_to_cache;
+pub use slpkg::{extract_slpkg_to_cache, extract_slpkg_to_dir};
 pub use source::{ArtifactChecksum, SemVerRange, Strategy};
 
 use added_module::MODULE_EVENT_CHANNEL_CAPACITY;

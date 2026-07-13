@@ -184,10 +184,23 @@ async fn download_to_temp(url: &str) -> Result<std::path::PathBuf> {
         .bytes()
         .await
         .with_context(|| "Failed to read response body")?;
-    let temp_path = std::env::temp_dir().join("streamlib-add-download.slpkg");
+    let temp_path = std::env::temp_dir().join(unique_download_temp_filename());
     std::fs::write(&temp_path, &bytes)
         .with_context(|| format!("Failed to write temp file {}", temp_path.display()))?;
     Ok(temp_path)
+}
+
+/// A unique temp filename for a URL-add download — pid + a process-local
+/// counter so two concurrent URL-adds (even in the same process) never write
+/// to the same path and clobber each other.
+fn unique_download_temp_filename() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static DOWNLOAD_SEQ: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "streamlib-add-download-{}-{}.slpkg",
+        std::process::id(),
+        DOWNLOAD_SEQ.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 #[cfg(test)]
@@ -222,6 +235,22 @@ mod tests {
         // ambiguous across orgs and must be rejected.
         assert!(parse_canonical_package_ref("foo").is_err());
         assert!(parse_canonical_package_ref("@tatolab/foo").is_ok());
+    }
+
+    #[test]
+    fn unique_download_temp_filename_is_distinct_and_pid_scoped() {
+        let a = unique_download_temp_filename();
+        let b = unique_download_temp_filename();
+        // Two successive calls must never collide — the whole point of the fix
+        // (two concurrent URL-adds must not clobber one download temp file).
+        // Mentally-revert to a fixed name and this fails.
+        assert_ne!(a, b, "concurrent URL-add downloads must not share a temp filename");
+        let pid = std::process::id().to_string();
+        assert!(
+            a.contains(&pid) && b.contains(&pid),
+            "temp filename must be pid-scoped: {a} / {b}"
+        );
+        assert!(a.ends_with(".slpkg") && b.ends_with(".slpkg"));
     }
 
     #[test]

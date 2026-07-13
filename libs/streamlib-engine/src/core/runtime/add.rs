@@ -37,7 +37,9 @@ use streamlib_idents::{
 use super::module_loader::host_target_triple;
 use super::{BuildEventSink, BuildOrchestrator, BuildPolicy, BuildRequest, BuildSource};
 use crate::core::config::{InstalledPackageEntry, InstalledPackageManifest};
-use crate::core::streamlib_home::{get_cached_package_dir, get_streamlib_data_dir};
+use crate::core::streamlib_home::{
+    get_cached_package_dir, get_cached_package_dir_for_name_version, get_streamlib_data_dir,
+};
 
 /// Knobs for [`add`]. Defaults are the ordinary "add this package" posture —
 /// resolve the registry with the zero-env default fallback, extract into the
@@ -108,6 +110,18 @@ pub enum AddError {
     /// Extracting the `.slpkg` archive into the package cache failed.
     #[error("extracting {} failed: {detail}", archive.display())]
     Extract { archive: PathBuf, detail: String },
+
+    /// Promoting the temp-extracted package into its cache slot (the atomic
+    /// rename that runs only after the identity check passes) failed.
+    #[error(
+        "promoting the extracted package for '{package}' into its cache slot {} failed: {detail}",
+        cache_dir.display()
+    )]
+    Promote {
+        package: PackageRef,
+        cache_dir: PathBuf,
+        detail: String,
+    },
 
     /// The materialized package's `streamlib.yaml` failed to parse or lacked a
     /// `package:` block, so its identity/metadata couldn't be read.
@@ -242,7 +256,9 @@ pub fn add(
         // selected version, so the materialized package's own manifest MUST
         // declare that same identity — reconcile so a mis-published `.slpkg`
         // (its `package:` block disagreeing with its store location) fails loud
-        // instead of silently recording a divergent identity.
+        // instead of silently recording a divergent identity. The identity
+        // check gates promotion of the temp extraction into the cache slot, so
+        // a mismatch also leaves no orphaned slot behind.
         let (_ref, _version, staged_dir) = materialize_and_record(
             extracted,
             orchestrator,
@@ -276,7 +292,7 @@ pub fn add_slpkg(
     orchestrator: &dyn BuildOrchestrator,
     sink: &dyn BuildEventSink,
 ) -> std::result::Result<AddReport, AddError> {
-    let extracted = extract_slpkg(archive)?;
+    let extracted = extract_slpkg_to_temp(archive)?;
     // A local artifact has no external identity to reconcile against — its
     // `package:` block IS the identity — so no `expected` check.
     let (package, version, cache_dir) = materialize_and_record(
@@ -355,8 +371,9 @@ fn resolve_registry(options: &AddOptions) -> RegistryConfig {
 }
 
 /// Download the selected version's `.slpkg`, persist it into the resolver
-/// cache, and extract it into the package cache slot. Returns the extracted
-/// directory.
+/// cache, and extract it into a temp staging dir (promoted into the cache slot
+/// by [`materialize_and_record`] only after the identity check passes).
+/// Returns the temp dir.
 fn download_and_extract(
     client: &RegistryClient<'_>,
     pkg_ref: &PackageRef,
@@ -371,12 +388,13 @@ fn download_and_extract(
         })?;
     tracing::debug!(%url, bytes = bytes.len(), "add: downloaded .slpkg");
     let archive = persist_slpkg(pkg_ref, version, &bytes)?;
-    extract_slpkg(&archive)
+    extract_slpkg_to_temp(&archive)
 }
 
 /// Persist downloaded `.slpkg` bytes into
 /// `<STREAMLIB_HOME>/.streamlib/resolver-cache/add/` so
-/// [`extract_slpkg`] can read them, with an atomic temp-then-rename publish.
+/// [`extract_slpkg_to_temp`] can read them, with an atomic temp-then-rename
+/// publish.
 fn persist_slpkg(
     pkg_ref: &PackageRef,
     version: SemVer,
@@ -397,47 +415,110 @@ fn persist_slpkg(
     Ok(target)
 }
 
-/// Extract a `.slpkg` archive into its package cache slot, mapping the engine
-/// error into an [`AddError::Extract`] that names the archive.
-fn extract_slpkg(archive: &Path) -> std::result::Result<PathBuf, AddError> {
-    super::extract_slpkg_to_cache(archive).map_err(|e| AddError::Extract {
-        archive: archive.to_path_buf(),
-        detail: e.to_string(),
-    })
+/// Extract a `.slpkg` archive into a fresh temp staging dir under the
+/// package-cache parent — the same directory the final cache slots live in, so
+/// [`materialize_and_record`]'s later promotion is an atomic same-filesystem
+/// rename. The temp dir is NOT a cache slot; it is promoted into
+/// `cache/packages/<name>-<version>` only after the identity check passes, so a
+/// mis-published `.slpkg` never leaves an orphaned slot. The partial extraction
+/// is cleaned up on error.
+fn extract_slpkg_to_temp(archive: &Path) -> std::result::Result<PathBuf, AddError> {
+    let temp_dir = temp_stage_dir();
+    super::module_loader::extract_slpkg_to_dir(archive, &temp_dir).map_err(|e| {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        AddError::Extract {
+            archive: archive.to_path_buf(),
+            detail: e.to_string(),
+        }
+    })?;
+    Ok(temp_dir)
 }
 
-/// Materialize an extracted package directory through the orchestrator, then
-/// record it in `packages.yaml`. Reads the package's identity + metadata from
-/// its own `streamlib.yaml` (the authoritative source for what was
-/// materialized). When `expected` is `Some`, the manifest's identity must
-/// match it or [`AddError::IdentityMismatch`] is returned **before** anything
-/// is recorded — the registry path passes the requested `(pkg_ref, version)`
-/// so a mis-published `.slpkg` can't silently record a divergent identity; a
-/// local `.slpkg` passes `None` (its own manifest IS the identity). Returns
+/// A unique temp staging directory under `cache/packages/` — pid + a
+/// process-local counter keep concurrent adds (including two in the same
+/// process) from colliding on the staging path.
+fn temp_stage_dir() -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static STAGE_SEQ: AtomicU64 = AtomicU64::new(0);
+    get_cached_package_dir(&format!(
+        ".tmp-add-{}-{}",
+        std::process::id(),
+        STAGE_SEQ.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
+/// Promote a temp-extracted package dir into its final cache slot with an
+/// atomic rename, clearing any pre-existing slot first. Cleans up the temp dir
+/// on failure so a promote error never strands it. Called only after the
+/// identity check has passed, so writing `cache/packages/<name>-<version>` is
+/// gated solely by that check — a rejected package leaves no cache slot.
+fn promote_extracted_dir(
+    temp_dir: &Path,
+    cache_slot: &Path,
+    package: &PackageRef,
+) -> std::result::Result<(), AddError> {
+    let promote_err = |detail: String| {
+        let _ = std::fs::remove_dir_all(temp_dir);
+        AddError::Promote {
+            package: package.clone(),
+            cache_dir: cache_slot.to_path_buf(),
+            detail,
+        }
+    };
+    if cache_slot.exists() {
+        std::fs::remove_dir_all(cache_slot)
+            .map_err(|e| promote_err(format!("clearing the existing slot: {e}")))?;
+    }
+    if let Some(parent) = cache_slot.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            promote_err(format!("creating the cache parent {}: {e}", parent.display()))
+        })?;
+    }
+    std::fs::rename(temp_dir, cache_slot)
+        .map_err(|e| promote_err(format!("renaming {} into place: {e}", temp_dir.display())))?;
+    Ok(())
+}
+
+/// Reconcile a temp-extracted package dir's identity, promote it into its cache
+/// slot, materialize it through the orchestrator, and record it in
+/// `packages.yaml`. Reads the package's identity + metadata from its own
+/// `streamlib.yaml` (the authoritative source for what was materialized).
+///
+/// When `expected` is `Some`, the manifest's identity must match it or
+/// [`AddError::IdentityMismatch`] is returned **before** the extraction is
+/// promoted into the cache — the registry path passes the requested
+/// `(pkg_ref, version)` so a mis-published `.slpkg` can't silently record a
+/// divergent identity, and the failed add leaves no orphan slot (the temp dir
+/// is removed). A local `.slpkg` passes `None` (its own manifest IS the
+/// identity). On a version-upgrade re-add the superseded version's cache slot
+/// is evicted after the new record is durable. Returns
 /// `(package, version, staged_dir)`.
 fn materialize_and_record(
-    extracted_dir: PathBuf,
+    temp_extracted_dir: PathBuf,
     orchestrator: &dyn BuildOrchestrator,
     sink: &dyn BuildEventSink,
     policy: BuildPolicy,
     installed_from: String,
     expected: Option<(&PackageRef, SemVer)>,
 ) -> std::result::Result<(PackageRef, SemVer, PathBuf), AddError> {
-    let meta = Manifest::load(&extracted_dir)
+    let meta = Manifest::load(&temp_extracted_dir)
         .map_err(|e| AddError::ManifestRead {
-            dir: extracted_dir.clone(),
+            dir: temp_extracted_dir.clone(),
             detail: e.to_string(),
         })?
         .package
         .ok_or_else(|| AddError::ManifestRead {
-            dir: extracted_dir.clone(),
+            dir: temp_extracted_dir.clone(),
             detail: "manifest has no `package:` block".into(),
         })?;
     let package = PackageRef::new(meta.org.clone(), meta.name.clone());
     let version = meta.version;
 
+    // Identity gate — the sole promotion gate. A mismatch removes the temp
+    // extraction and returns before anything lands in the cache slot.
     if let Some((expected_ref, expected_version)) = expected {
         if &package != expected_ref || version != expected_version {
+            let _ = std::fs::remove_dir_all(&temp_extracted_dir);
             return Err(AddError::IdentityMismatch {
                 requested: expected_ref.clone(),
                 requested_version: expected_version,
@@ -447,9 +528,14 @@ fn materialize_and_record(
         }
     }
 
+    // Promote the temp extraction into the package's cache slot now that the
+    // identity check has passed.
+    let cache_slot = get_cached_package_dir_for_name_version(package.name.as_str(), version);
+    promote_extracted_dir(&temp_extracted_dir, &cache_slot, &package)?;
+
     let request = BuildRequest {
         package: package.clone(),
-        source: BuildSource::PackageDir(extracted_dir),
+        source: BuildSource::PackageDir(cache_slot),
         policy,
         host_triple: host_target_triple().to_string(),
     };
@@ -466,10 +552,20 @@ fn materialize_and_record(
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
 
+    // Record the new entry, then evict any superseded version's cache slot. A
+    // version-upgrade re-add replaces the `packages.yaml` entry (`add` replaces
+    // same-ref), so the previous version's slot would otherwise linger on disk.
+    // The evict is conditional on a *different* slot key so a same-version
+    // re-materialize (the evicted-slot self-heal path) never deletes the slot
+    // it just promoted.
     let mut manifest =
         InstalledPackageManifest::load().map_err(|e| AddError::LoadManifest {
             detail: e.to_string(),
         })?;
+    let superseded_slot = manifest
+        .find_by_ref(&package)
+        .filter(|e| e.cache_dir != cache_key)
+        .map(|e| get_cached_package_dir(&e.cache_dir));
     manifest.add(InstalledPackageEntry {
         name: package.clone(),
         version,
@@ -481,6 +577,26 @@ fn materialize_and_record(
     manifest.save().map_err(|e| AddError::SaveManifest {
         detail: e.to_string(),
     })?;
+
+    if let Some(old_slot) = superseded_slot {
+        if old_slot.is_dir() {
+            match std::fs::remove_dir_all(&old_slot) {
+                Ok(()) => tracing::info!(
+                    package = %package,
+                    slot = %old_slot.display(),
+                    "add: evicted superseded version cache slot"
+                ),
+                // Disk hygiene only — the new version is already recorded and
+                // durable, so a failed evict must not fail the add.
+                Err(e) => tracing::warn!(
+                    package = %package,
+                    slot = %old_slot.display(),
+                    error = %e,
+                    "add: failed to evict superseded version cache slot (leaving it in place)"
+                ),
+            }
+        }
+    }
 
     Ok((package, version, staged.staged_dir))
 }
@@ -878,5 +994,100 @@ mod tests {
             .unwrap()
             .find_by_ref(&pr)
             .is_none());
+    }
+
+    /// The list of `cache/packages/` slot names currently on disk.
+    fn cache_slots() -> Vec<String> {
+        let dir = get_streamlib_data_dir().join("cache").join("packages");
+        match std::fs::read_dir(&dir) {
+            Ok(rd) => {
+                let mut names: Vec<String> = rd
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect();
+                names.sort();
+                names
+            }
+            Err(_) => Vec::new(),
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn add_identity_mismatch_leaves_no_orphan_cache_slot() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = sandbox_home(home.path());
+        let tree = tempfile::tempdir().unwrap();
+        // Store location says foo@1.1.0, but the `.slpkg`'s manifest declares
+        // `bar` — a mis-published package (same setup as the fail-loud test).
+        let dir = tree.path().join("slpkg").join("foo").join("1.1.0");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_slpkg(&dir.join("foo.slpkg"), "tatolab", "bar", "1.1.0");
+
+        let pr = pkg_ref("tatolab", "foo");
+        let req = SemVerRange::from_str("^1.0.0").unwrap();
+        let err = add(&pr, &req, &MockOrchestrator, &NullSink, &opts(tree.path()))
+            .expect_err("a mis-published .slpkg must fail loud");
+        assert!(matches!(err, AddError::IdentityMismatch { .. }), "got {err:?}");
+
+        // The identity check is the sole promotion gate: no slot may survive in
+        // cache/packages — not the `bar-1.1.0` orphan the old extract-to-slot
+        // path left, not a `foo-1.1.0` slot, not the `.tmp-add-*` staging dir.
+        // Mentally-revert the extract-to-temp-then-promote (extract straight
+        // into the cache slot) and `bar-1.1.0` reappears here → this fails.
+        let leftover = cache_slots();
+        assert!(
+            leftover.is_empty(),
+            "IdentityMismatch must leave no cache/packages slot, found: {leftover:?}"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn add_version_upgrade_evicts_superseded_slot() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = sandbox_home(home.path());
+        let tree = tempfile::tempdir().unwrap();
+        scratch_tree(tree.path(), "tatolab", "foo", &["1.0.0", "2.0.0"], None);
+        let pr = pkg_ref("tatolab", "foo");
+
+        // First add pins 1.0.0 — caret `^1.0.0` excludes the 2.0.0 major bump.
+        let first = add(
+            &pr,
+            &SemVerRange::from_str("^1.0.0").unwrap(),
+            &MockOrchestrator,
+            &NullSink,
+            &opts(tree.path()),
+        )
+        .unwrap();
+        assert_eq!(first.version, SemVer::new(1, 0, 0));
+        assert!(first.cache_dir.ends_with("cache/packages/foo-1.0.0"));
+        assert_eq!(cache_slots(), vec!["foo-1.0.0".to_string()]);
+
+        // Upgrade to 2.0.0.
+        let second = add(
+            &pr,
+            &SemVerRange::from_str("^2.0.0").unwrap(),
+            &MockOrchestrator,
+            &NullSink,
+            &opts(tree.path()),
+        )
+        .unwrap();
+        assert_eq!(second.version, SemVer::new(2, 0, 0));
+        assert!(second.cache_dir.ends_with("cache/packages/foo-2.0.0"));
+
+        // Exactly one foo slot survives — the superseded foo-1.0.0 slot is
+        // evicted. Mentally-revert the evict and both foo-1.0.0 and foo-2.0.0
+        // remain → two slots → this fails.
+        assert_eq!(
+            cache_slots(),
+            vec!["foo-2.0.0".to_string()],
+            "the superseded version's cache slot must be evicted on upgrade"
+        );
+
+        // packages.yaml records the single upgraded entry.
+        let manifest = InstalledPackageManifest::load().unwrap();
+        assert_eq!(manifest.packages.iter().filter(|e| e.name == pr).count(), 1);
+        assert_eq!(manifest.find_by_ref(&pr).unwrap().version, SemVer::new(2, 0, 0));
     }
 }
