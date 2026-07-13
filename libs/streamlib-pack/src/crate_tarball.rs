@@ -1,11 +1,13 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Integrity-verified reuse + byte-stable normalization of `cargo package`
+//! Integrity-verified emission + byte-stable normalization of `cargo package`
 //! crate tarballs.
 //!
-//! - [`verify_crate_tarball`] structurally validates a `.crate` before reuse,
-//!   [`obtain_crate_tarball`] reuses a verified one or repackages on failure.
+//! - [`verify_crate_tarball`] structurally validates a `.crate`;
+//!   [`obtain_crate_tarball`] always repackages via `cargo package` — the
+//!   source of truth for crate bytes — and verifies the fresh artifact, so a
+//!   content-stale `target/package` leftover is never emitted.
 //! - [`normalize_crate_tarball`] rewrites a `.crate` into a form whose bytes are
 //!   a pure function of source content, and [`finalize_crate_tarball`] pairs
 //!   that with an immutability guard so re-emitting an unchanged release yields
@@ -54,8 +56,8 @@ pub enum CrateTarballIntegrityError {
 /// trailer check), every tar entry enumerates to EOF, the crate's
 /// `{name}-{version}/Cargo.toml` entry is present, and — when `expected_sha256`
 /// is given — the tarball bytes hash to it. The checksum arm is exercised by
-/// the tests and reserved for the byte-stable-emission follow-up; the emit
-/// reuse path calls with `None`.
+/// the tests and reserved for the byte-stable-emission follow-up; the emit's
+/// post-repackage integrity check calls with `None`.
 pub fn verify_crate_tarball(
     path: &Path,
     name: &str,
@@ -115,63 +117,40 @@ pub fn verify_crate_tarball(
     Ok(())
 }
 
-/// How [`obtain_crate_tarball`] produced the verified tarball.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CrateTarballProvenance {
-    /// A pre-existing candidate verified and was reused — `repackage` never ran.
-    ReusedVerified,
-    /// The tarball was (re)packaged via `repackage`. `discarded_corrupt` is
-    /// true when a pre-existing candidate failed verification and was deleted
-    /// first.
-    Repackaged { discarded_corrupt: bool },
-}
-
-/// Ensure a verified `.crate` exists at `candidate` for `(name, version)`,
-/// reusing a structurally-valid pre-existing tarball or invoking `repackage`
-/// to produce a fresh one.
+/// Produce a fresh, structurally-verified `.crate` at `candidate` for
+/// `(name, version)` by always invoking `repackage` (`cargo package`).
 ///
-/// - candidate verifies → reuse, `repackage` is skipped.
-/// - candidate exists but fails → log the typed reason, delete it, `repackage`,
-///   and verify the fresh artifact.
-/// - candidate absent → `repackage` and verify the fresh artifact.
+/// `cargo package` is the single source of truth for crate bytes:
+/// `target/package/<crate>-<version>.crate` is cargo scratch, **not** a
+/// streamlib-managed content cache. Any pre-existing artifact is dropped up
+/// front and `repackage` always runs, so the emitted `.crate` always reflects
+/// current source at that version — a structurally-valid but content-stale
+/// leftover (e.g. an old-ABI tarball cached under a version whose source has
+/// since moved) can never be handed back verbatim. Dropping the leftover first
+/// also means a `repackage` that returns `Ok` without writing surfaces as a
+/// hard verification error rather than silently verifying stale bytes.
 ///
-/// A freshly-packaged artifact that still fails verification is a hard error
-/// (a `cargo package` / toolchain bug), surfaced loudly rather than emitted
-/// into the tree.
+/// A freshly-packaged artifact that fails verification is a hard error (a
+/// `cargo package` / toolchain bug), surfaced loudly rather than emitted into
+/// the tree.
 pub fn obtain_crate_tarball(
     candidate: &Path,
     name: &str,
     version: &str,
     repackage: impl FnOnce() -> anyhow::Result<()>,
-) -> anyhow::Result<CrateTarballProvenance> {
-    let discarded_corrupt = if candidate.is_file() {
-        match verify_crate_tarball(candidate, name, version, None) {
-            Ok(()) => {
-                tracing::debug!(
-                    crate_name = name,
-                    version,
-                    path = %candidate.display(),
-                    "reusing verified crate tarball"
-                );
-                return Ok(CrateTarballProvenance::ReusedVerified);
-            }
-            Err(error) => {
-                tracing::warn!(
-                    crate_name = name,
-                    version,
-                    path = %candidate.display(),
-                    %error,
-                    "cached crate tarball failed integrity verification; repackaging"
-                );
-                std::fs::remove_file(candidate).with_context(|| {
-                    format!("remove corrupt crate tarball {}", candidate.display())
-                })?;
-                true
-            }
+) -> anyhow::Result<()> {
+    // `target/package` is cargo scratch, never a trusted cache: drop any
+    // pre-existing artifact so `repackage` owns the bytes we verify and a
+    // no-write repackage can't be masked by a stale leftover.
+    match std::fs::remove_file(candidate) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("remove stale crate scratch tarball {}", candidate.display())
+            });
         }
-    } else {
-        false
-    };
+    }
 
     repackage().with_context(|| format!("repackage crate {name} {version}"))?;
 
@@ -182,7 +161,7 @@ pub fn obtain_crate_tarball(
         )
     })?;
 
-    Ok(CrateTarballProvenance::Repackaged { discarded_corrupt })
+    Ok(())
 }
 
 /// The vcs-info entry cargo embeds inside a `.crate` when packaging from a git
@@ -235,8 +214,8 @@ fn canonical_tar_bytes(path: &Path, name: &str, version: &str) -> anyhow::Result
 /// Rewrite the `.crate` at `path` into its byte-stable canonical form for
 /// `(name, version)`: strip `.cargo_vcs_info.json` and re-gzip with a fixed
 /// header (MTIME 0, no embedded filename). Idempotent — re-normalizing an
-/// already-normalized crate reproduces identical bytes, so the emit reuse path
-/// can re-run it on a cached tarball.
+/// already-normalized crate reproduces identical bytes, so re-emitting a crate
+/// at an unchanged version yields byte-identical output.
 pub fn normalize_crate_tarball(path: &Path, name: &str, version: &str) -> anyhow::Result<()> {
     let canonical = canonical_tar_bytes(path, name, version)?;
     let mut encoder = GzBuilder::new()
@@ -339,16 +318,42 @@ mod tests {
         format!("[package]\nname = \"{name}\"\nversion = \"{version}\"\n")
     }
 
-    /// Write a valid `.crate` (Cargo.toml + a source file) at `path`.
-    fn write_valid_crate(path: &Path, name: &str, version: &str) {
+    /// Write a valid `.crate` (Cargo.toml + a source file) at `path` whose
+    /// `src/lib.rs` carries `lib_contents` — the distinguishing marker used to
+    /// prove which source a `.crate` was built from.
+    fn write_valid_crate_with_lib(path: &Path, name: &str, version: &str, lib_contents: &[u8]) {
         let manifest = manifest_bytes(name, version);
         let manifest_entry = format!("{name}-{version}/Cargo.toml");
         let lib_entry = format!("{name}-{version}/src/lib.rs");
         let raw = build_tar_bytes(&[
             (manifest_entry.as_str(), manifest.as_bytes()),
-            (lib_entry.as_str(), b"// lib\n"),
+            (lib_entry.as_str(), lib_contents),
         ]);
         gzip_to_file(path, &raw);
+    }
+
+    /// Write a valid `.crate` (Cargo.toml + a source file) at `path`.
+    fn write_valid_crate(path: &Path, name: &str, version: &str) {
+        write_valid_crate_with_lib(path, name, version, b"// lib\n");
+    }
+
+    /// Read back the `{name}-{version}/src/lib.rs` bytes from a `.crate` — the
+    /// source marker, for asserting which source a `.crate` was built from.
+    fn crate_lib_contents(path: &Path, name: &str, version: &str) -> Vec<u8> {
+        let want = format!("{name}-{version}/src/lib.rs");
+        let bytes = std::fs::read(path).unwrap();
+        let mut decoded = Vec::new();
+        GzDecoder::new(&bytes[..]).read_to_end(&mut decoded).unwrap();
+        let mut archive = tar::Archive::new(&decoded[..]);
+        for entry in archive.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            if entry.path().unwrap().to_string_lossy() == want {
+                let mut data = Vec::new();
+                entry.read_to_end(&mut data).unwrap();
+                return data;
+            }
+        }
+        panic!("crate {} missing lib entry {want}", path.display());
     }
 
     fn candidate_path(dir: &Path, name: &str, version: &str) -> PathBuf {
@@ -418,27 +423,54 @@ mod tests {
         verify_crate_tarball(&path, "streamlib-x", "0.5.0", None).unwrap();
     }
 
+    /// KEY (exit criterion): a structurally-VALID but content-STALE cached
+    /// tarball is NOT trusted — `repackage` always runs and the final artifact
+    /// is the fresh source, never the stale cache. This is the exact defect
+    /// that turned `pack → load` red (an ABI-4 `.crate` cached under a version
+    /// whose source moved to ABI 5, re-emitted verbatim).
+    ///
+    /// Mental revert: restore the `if candidate.is_file() { verify → return }`
+    /// fast-path and the closure never runs — `repackaged` stays false and the
+    /// final bytes equal the stale cache — so both assertions fail.
     #[test]
-    fn obtain_reuses_verified_without_repackaging() {
+    fn obtain_always_repackages_ignoring_valid_cached_tarball() {
         let dir = tempdir().unwrap();
         let path = candidate_path(dir.path(), "streamlib-x", "0.5.0");
-        write_valid_crate(&path, "streamlib-x", "0.5.0");
+        // A pre-existing candidate that is structurally VALID (verifies clean)
+        // but built from STALE source.
+        write_valid_crate_with_lib(&path, "streamlib-x", "0.5.0", b"// STALE source\n");
+        verify_crate_tarball(&path, "streamlib-x", "0.5.0", None)
+            .expect("sanity: the stale cache is structurally valid, so the old fast-path WOULD reuse it");
+        let stale_bytes = std::fs::read(&path).unwrap();
 
         let repackaged = Cell::new(false);
-        let provenance = obtain_crate_tarball(&path, "streamlib-x", "0.5.0", || {
+        obtain_crate_tarball(&path, "streamlib-x", "0.5.0", || {
             repackaged.set(true);
+            // Fresh `cargo package` writes DIFFERENT bytes at the same version.
+            write_valid_crate_with_lib(&path, "streamlib-x", "0.5.0", b"// FRESH source\n");
             Ok(())
         })
         .unwrap();
 
-        assert_eq!(provenance, CrateTarballProvenance::ReusedVerified);
-        assert!(!repackaged.get(), "repackage closure must NOT run for a verified reuse");
+        assert!(
+            repackaged.get(),
+            "a structurally-valid cached tarball must NOT be trusted — repackage always runs"
+        );
+        let final_bytes = std::fs::read(&path).unwrap();
+        assert_ne!(
+            final_bytes, stale_bytes,
+            "the emitted artifact must be the fresh package, never the stale cache"
+        );
+        assert_eq!(
+            crate_lib_contents(&path, "streamlib-x", "0.5.0"),
+            b"// FRESH source\n",
+            "the emitted artifact must carry current source"
+        );
+        verify_crate_tarball(&path, "streamlib-x", "0.5.0", None).unwrap();
     }
 
-    /// Core negative test: a truncated cached tarball is discarded and
-    /// repackaged. Mentally reverting the fix (verify → `is_file()`) makes the
-    /// truncated file "trusted", so `repackage` would never run and this test
-    /// fails.
+    /// A corrupt pre-existing candidate is likewise dropped and repackaged into
+    /// a valid fresh artifact (no error from the leftover).
     #[test]
     fn obtain_repackages_truncated_cached_tarball() {
         let dir = tempdir().unwrap();
@@ -454,12 +486,10 @@ mod tests {
             .unwrap()
             .set_len(20)
             .unwrap();
-
-        // The truncated file is genuinely rejected by the verifier.
         assert!(verify_crate_tarball(&path, "streamlib-x", "0.5.0", None).is_err());
 
         let repackaged = Cell::new(false);
-        let provenance = obtain_crate_tarball(&path, "streamlib-x", "0.5.0", || {
+        obtain_crate_tarball(&path, "streamlib-x", "0.5.0", || {
             repackaged.set(true);
             write_valid_crate(&path, "streamlib-x", "0.5.0");
             Ok(())
@@ -467,10 +497,6 @@ mod tests {
         .unwrap();
 
         assert!(repackaged.get(), "repackage MUST run for a corrupt cached tarball");
-        assert_eq!(
-            provenance,
-            CrateTarballProvenance::Repackaged { discarded_corrupt: true }
-        );
         // Final artifact is valid.
         verify_crate_tarball(&path, "streamlib-x", "0.5.0", None).unwrap();
     }
@@ -534,7 +560,7 @@ mod tests {
         assert!(!path.exists());
 
         let repackaged = Cell::new(false);
-        let provenance = obtain_crate_tarball(&path, "streamlib-x", "0.5.0", || {
+        obtain_crate_tarball(&path, "streamlib-x", "0.5.0", || {
             repackaged.set(true);
             write_valid_crate(&path, "streamlib-x", "0.5.0");
             Ok(())
@@ -542,10 +568,6 @@ mod tests {
         .unwrap();
 
         assert!(repackaged.get());
-        assert_eq!(
-            provenance,
-            CrateTarballProvenance::Repackaged { discarded_corrupt: false }
-        );
         verify_crate_tarball(&path, "streamlib-x", "0.5.0", None).unwrap();
     }
 

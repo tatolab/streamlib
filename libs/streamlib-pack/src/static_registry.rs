@@ -491,14 +491,14 @@ fn emit_cargo_closure(opts: &EmitOptions, staging: &Path) -> Result<()> {
             .workspace_root
             .join("target/package")
             .join(crate_artifact_filename(&c.name, &version));
-        // Reuse a previously-packaged `.crate` only after structural
-        // verification (a truncated leftover from an aborted emit is
-        // discarded + repackaged, never trusted). A verified reuse skips
-        // `cargo package` — and with it that crate's live registry-dep
-        // validation — but the emitted index line is rendered from the
-        // reused tarball's own manifest, so the tree stays correct; a
-        // per-version tarball is treated as immutable for reuse.
-        let provenance = crate::crate_tarball::obtain_crate_tarball(
+        // Always repackage: freshness is owned by `cargo package`, the single
+        // source of truth for crate bytes. `target/package` is cargo scratch,
+        // not a trusted content cache — so a structurally-valid but
+        // content-stale leftover (e.g. an old-ABI tarball cached under a
+        // version whose source has since moved) is never emitted verbatim.
+        // The fresh package validates its own live registry-dep set, and the
+        // emitted index line is rendered from its bundled manifest.
+        crate::crate_tarball::obtain_crate_tarball(
             &crate_file,
             &c.name,
             &version,
@@ -522,8 +522,7 @@ fn emit_cargo_closure(opts: &EmitOptions, staging: &Path) -> Result<()> {
         tracing::info!(
             crate_name = %c.name,
             version = %version,
-            ?provenance,
-            "static-registry cargo-closure crate tarball obtained"
+            "static-registry cargo-closure crate tarball repackaged"
         );
         // Normalize the tarball to a byte-stable, source-only form (strip the
         // git-HEAD-derived `.cargo_vcs_info.json`, re-gzip with a fixed header)

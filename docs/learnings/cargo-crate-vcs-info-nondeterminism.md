@@ -49,11 +49,20 @@ mode / uid / gid and GNU long-name handling are inherited, not
 synthesized), and re-gzip with a fixed header (MTIME 0, no embedded
 filename). The result is a pure function of source content.
 
-The normalize step must be **idempotent** — a registry emit reuses a
-previously-packaged `.crate` from `target/package/` across runs, so
-normalize re-runs on an already-stripped crate and must reproduce
+The normalize step must be **idempotent** — re-emitting a crate at an
+unchanged version must reproduce byte-identical output (no sparse-index or
+consumer-lockfile churn), and the same-version immutability guard fingerprints
+both the freshly packaged crate and the prior *served* crate through the same
+normalization, so a legacy already-stripped served crate must re-normalize to
 identical bytes. Cloning cargo's headers and re-emitting through the same
 `tar` writer each time makes it a fixed point.
+
+> ~~a registry emit reuses a previously-packaged `.crate` from `target/package/`
+> across runs, so normalize re-runs on an already-stripped crate~~ — Superseded
+> 2026-07-12: the closure emit no longer reuses `target/package` as a content
+> cache; `obtain_crate_tarball` always repackages each crate from source
+> (`target/package` is cargo scratch). Idempotency is still required, but for
+> the served-tree fingerprint comparison above, not for a cross-run reuse path.
 
 Two consequences worth pinning with tests:
 
