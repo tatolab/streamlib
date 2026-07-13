@@ -119,6 +119,14 @@ jobs:
             "$STREAMLIB_STATIC_REGISTRY_DIR" "$STREAMLIB_STATIC_REGISTRY_DIR/cargo-local-registry"
           test -f "$STREAMLIB_STATIC_REGISTRY_DIR/cargo-local-registry/index/st/re/streamlib-plugin-sdk" \
             || { echo "closure crate streamlib-plugin-sdk not in the local-registry mirror"; exit 1; }
+          # The `--cargo-closure` emit's inner `cargo package` runs in the
+          # workspace root with CARGO_REGISTRIES_TATOLAB_INDEX pointed at its own
+          # ephemeral staging server, which REWRITES the committed Cargo.lock's
+          # fork `source` to that ephemeral URL. Restore the pristine committed
+          # lock so the strict `cargo test --locked` below resolves the fork from
+          # the canonical-source-id mirror instead of tripping "cannot update the
+          # lock file" (a dirtied lock, which --offline does NOT fix).
+          git restore Cargo.lock
 
       - name: cargo test pack_then_load_smoke
         run: cargo test --locked --test pack_then_load_smoke -p streamlib-engine
