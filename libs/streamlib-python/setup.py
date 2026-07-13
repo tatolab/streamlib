@@ -94,7 +94,7 @@ def _stage_manifest_into_package(build_lib):
 
     The runtime layer regenerates `_generated_/` from the SDK's own
     `streamlib.yaml`, so the installed package must carry it (the source keeps
-    it at the project root, beside `streamlib.lock`). Staging it into the build
+    it at the project root, beside `streamlib-codegen.lock`). Staging it into the build
     output lands it at `site-packages/streamlib/streamlib.yaml` for the engine
     to drive codegen from after install. Best-effort: absent in some ad-hoc
     builds, and the runtime layer fails loud if it's genuinely needed and

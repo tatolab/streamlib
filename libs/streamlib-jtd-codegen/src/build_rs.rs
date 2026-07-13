@@ -120,7 +120,7 @@ fn emit_rerun_directives(crate_dir: &Path, resolved: &ResolvedPackages) {
         crate_dir.join("streamlib.yaml").display()
     );
 
-    let lock = crate_dir.join("streamlib.lock");
+    let lock = crate_dir.join(streamlib_idents::CODEGEN_LOCKFILE_NAME);
     if lock.exists() {
         println!("cargo:rerun-if-changed={}", lock.display());
     }

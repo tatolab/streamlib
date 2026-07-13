@@ -5,7 +5,7 @@
 # and the usual build/cache cruft explicitly so a stray on-disk tree from a
 # local build never leaks into the distribution.
 include python/streamlib/py.typed
-include streamlib.yaml streamlib.lock setup.py
+include streamlib.yaml streamlib-codegen.lock setup.py
 prune python/streamlib/_generated_
 prune python/streamlib/tests
 global-exclude __pycache__ *.py[cod] *.so

@@ -92,7 +92,7 @@ Surfaces this rule covers:
 - Graph JSON (the runtime's serialized pipeline graph).
 - Embedded-schema lookup keys (replaces `embedded_schemas.rs`'s
   `match` on string).
-- Lockfile entries (`streamlib.lock`).
+- Lockfile entries (`streamlib-codegen.lock`).
 
 The `Display` impl on `SchemaIdent` produces the joined `@org/pkg/Type@v`
 form for human-facing surfaces (logs, error messages, CLI output).
@@ -145,18 +145,18 @@ A CI lint (`cargo xtask check-schema-versions`, wired into
 `.github/workflows/check-schema-versions.yml`) rejects any schema
 YAML declaring a top-level `version` key.
 
-### Decision 4 — `streamlib.lock` for content-hash resolution
+### Decision 4 — `streamlib-codegen.lock` for content-hash resolution
 
 Every project that consumes packages (applications, examples) writes
-a `streamlib.lock` next to its `streamlib.yaml`. The lockfile is
+a `streamlib-codegen.lock` next to its `streamlib.yaml`. The lockfile is
 content-hash-pinned and diff-stable (sorted `BTreeMap` keys), so a
 fresh checkout reconstructs the same generated bindings byte-for-byte.
 
 Discipline (mirrors `Cargo.lock`):
 
-- **Commit `streamlib.lock`** in applications, examples, and any
+- **Commit `streamlib-codegen.lock`** in applications, examples, and any
   non-publishable consumer.
-- **Don't commit `streamlib.lock`** in publishable libraries — they
+- **Don't commit `streamlib-codegen.lock`** in publishable libraries — they
   inherit their consumer's lock.
 
 ### Decision 5 — `@tatolab/core` is the canonical wire vocabulary
@@ -268,7 +268,9 @@ appears.
 
 ## Lockfile shape
 
-`streamlib.lock` is the resolved-set companion to `streamlib.yaml`.
+`streamlib-codegen.lock` is the resolved-set companion to `streamlib.yaml`.
+(The plain `streamlib.lock` name belongs to the per-app modules lockfile —
+see `package-development-model.md`.)
 Wire shape:
 
 ```yaml
@@ -312,7 +314,7 @@ matches the lockfile's inputs.
 
 Code generation runs in three passes:
 
-1. **Resolve** — read `streamlib.yaml` + `streamlib.lock`, walk the
+1. **Resolve** — read `streamlib.yaml` + `streamlib-codegen.lock`, walk the
    dependency graph, produce the full set of `(SchemaIdent, JtdSchema)`
    pairs to generate.
 2. **Substitute → generate → substitute back.**

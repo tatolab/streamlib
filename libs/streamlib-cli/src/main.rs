@@ -179,7 +179,8 @@ enum Commands {
 
         /// `streamlib.yaml`-driven mode: directory containing the manifest.
         /// The resolver walks declared dependencies and codegen ingests the
-        /// resulting set, writing `streamlib.lock` next to the manifest.
+        /// resulting set, writing `streamlib-codegen.lock` next to the
+        /// manifest.
         #[arg(long, group = "input")]
         project_dir: Option<PathBuf>,
 

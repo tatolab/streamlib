@@ -349,14 +349,15 @@ tampered / republished-in-place hole. Slot paths are re-derived by the shared
 the single `cache/packages/{name}-{version}` convention also used by `.slpkg`
 extraction, registry resolution, and orchestrator staging.
 
-**Two lockfiles, two lifecycles.** Both serialize the same `Lockfile` wire
+**Three lockfiles, three lifecycles.** All serialize the same `Lockfile` wire
 shape ([`libs/streamlib-idents/src/lockfile.rs`](../../libs/streamlib-idents/src/lockfile.rs))
 but are distinct files with distinct headers:
 
 | File | Written by | Pins |
 |---|---|---|
-| `streamlib.lock` (`LOCKFILE_NAME`) | `streamlib generate` / jtd-codegen | the *schema* set that reconstructs generated bindings byte-for-byte |
+| `streamlib-codegen.lock` (`CODEGEN_LOCKFILE_NAME`) | `streamlib generate` / jtd-codegen | the *schema* set that reconstructs generated bindings byte-for-byte |
 | `streamlib-app.lock` (`APP_LOCKFILE_NAME`) | `streamlib install` | the *runtime package* set an installed app loads offline |
+| `streamlib.lock` (`MODULES_LOCKFILE_NAME`) | `streamlib add` / `streamlib remove` | the packages materialized into the app's `streamlib_modules/` folder (identity, source, content hash) |
 
 **Resolver handoff — deliberately two resolvers.** Range logic lives only at
 install (`resolve_with`); concrete enforcement lives only at run
