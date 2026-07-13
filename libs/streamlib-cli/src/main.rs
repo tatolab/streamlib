@@ -78,25 +78,22 @@ enum Commands {
         action: SchemasCommands,
     },
 
-    /// Resolve + materialize + lock an application's package tree.
+    /// Reproduce this app's streamlib_modules/ folder from its committed
+    /// streamlib.lock — exactly, hash-verified, and offline.
     ///
-    /// Run from a project root (a directory with `streamlib.yaml`). Resolves
-    /// the full transitive dependency tree range→concrete, materializes every
-    /// package into the installed-package cache (building cdylibs, provisioning
-    /// venvs, pre-building the subprocess native hosts), and writes an
-    /// application lockfile. A subsequent run loads the pinned set offline via
-    /// `Runner::add_modules_from_lockfile`.
-    ///
-    /// To adopt a single published package (resolve by version + materialize
-    /// into the local cache) rather than resolve a project tree, use
-    /// `streamlib add`.
+    /// Install is the container/CI preinstall seam: `add`/`link` decide what's
+    /// in the environment and record it in `streamlib.lock`; `install`
+    /// reproduces that decision elsewhere (a fresh checkout, an image build)
+    /// with no resolution decisions. Each byte-source entry (folder / archive /
+    /// URL) is re-materialized and re-verified against its recorded content
+    /// hash; a linked entry's symlink is re-created (a gone checkout target is
+    /// an error — a dev link isn't reproducible on another machine). Never
+    /// builds.
     Install {
-        /// Project directory (default: current working directory).
-        project_dir: Option<PathBuf>,
-
-        /// Lockfile output path (default: <project_dir>/streamlib-app.lock).
+        /// App root to anchor streamlib_modules/ + streamlib.lock at
+        /// (default: current working directory, no walk-up).
         #[arg(long)]
-        lockfile: Option<PathBuf>,
+        dir: Option<PathBuf>,
     },
 
     /// Bring any valid streamlib package into this app's streamlib_modules/
@@ -372,10 +369,7 @@ async fn async_main(cli: Cli) -> Result<()> {
                 commands::schema::validate_processor(&path)?
             }
         },
-        Some(Commands::Install {
-            project_dir,
-            lockfile,
-        }) => commands::install::run(project_dir.as_deref(), lockfile)?,
+        Some(Commands::Install { dir }) => commands::install::install(dir.as_deref())?,
         Some(Commands::Add {
             spec,
             dir,
