@@ -405,6 +405,39 @@ pub enum AddModuleError {
         expected: String,
         actual: String,
     },
+
+    /// The manifest for `package` declares two subprocess (Python /
+    /// TypeScript) processors that compose the SAME structured
+    /// `processor_type` ident — a duplicate short name within one
+    /// `processors:` list. Refused at end-of-walk, before any staged
+    /// registration is committed, so the load leaves zero partial state.
+    /// Give each processor a distinct PascalCase short name.
+    #[error(
+        "Manifest for '{package}' declares processor type '{processor_type}' \
+         more than once (two subprocess processors compose the same ident). \
+         Give each processor a distinct PascalCase short name."
+    )]
+    DuplicateProcessorTypeInModule {
+        package: streamlib_idents::PackageRef,
+        processor_type: crate::core::descriptors::SchemaIdent,
+    },
+
+    /// A subprocess (Python / TypeScript) processor `package` declares
+    /// composes a `processor_type` ident that is ALREADY present in the
+    /// global processor registry (registered by other code — e.g. a
+    /// direct `register_dynamic`, or a prior load of the same ident that
+    /// wasn't removed). Refused at end-of-walk, before any staged
+    /// registration is committed, so the load leaves zero partial state.
+    /// Remove the existing registration first, or rename the processor.
+    #[error(
+        "Processor type '{processor_type}' declared by '{package}' is already \
+         registered in the runtime. Remove the existing registration \
+         (remove_module) or give the processor a distinct short name."
+    )]
+    ProcessorTypeAlreadyRegistered {
+        package: streamlib_idents::PackageRef,
+        processor_type: crate::core::descriptors::SchemaIdent,
+    },
 }
 
 impl From<AddModuleError> for Error {

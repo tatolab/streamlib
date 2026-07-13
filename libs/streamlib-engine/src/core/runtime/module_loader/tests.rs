@@ -2601,13 +2601,15 @@ processors:
     // =====================================================================
 
     /// Byte-equivalence snapshot of every registry a module load touches:
-    /// schema bodies, processor descriptors, ledger packages, and the
-    /// calling Runner's resolution-memo package set. Two snapshots compare
-    /// equal iff a failed load left zero residue.
+    /// schema bodies, processor descriptors, the processor factory's
+    /// port-schema universe, ledger packages, and the calling Runner's
+    /// resolution-memo package set. Two snapshots compare equal iff a
+    /// failed load left zero residue.
     #[derive(Debug, PartialEq, Eq)]
     struct RegistrySnapshot {
         schema_bodies_by_canonical_id: std::collections::BTreeMap<String, String>,
         processor_descriptor_debug_by_ident: std::collections::BTreeMap<String, String>,
+        port_schema_universe: std::collections::BTreeSet<String>,
         ledger_packages: std::collections::BTreeSet<String>,
         resolution_memo_packages: std::collections::BTreeSet<String>,
     }
@@ -2630,6 +2632,11 @@ processors:
                 .into_iter()
                 .map(|desc| (desc.name.to_string(), format!("{desc:?}")))
                 .collect();
+            let port_schema_universe = crate::core::processors::PROCESSOR_REGISTRY
+                .known_schemas()
+                .into_iter()
+                .map(|spec| format!("{spec:?}"))
+                .collect();
             let ledger_packages = ledger::loaded_module_registration_ledger_packages()
                 .into_iter()
                 .map(|p| p.to_string())
@@ -2642,6 +2649,7 @@ processors:
             Self {
                 schema_bodies_by_canonical_id,
                 processor_descriptor_debug_by_ident,
+                port_schema_universe,
                 ledger_packages,
                 resolution_memo_packages,
             }
@@ -2846,6 +2854,146 @@ processors:
             .is_none(),
             "the package's schema must not be visible after the failure"
         );
+    }
+
+    /// Two subprocess (TypeScript) processors declared with the SAME
+    /// short name compose the same `processor_type` ident. The end-of-walk
+    /// Dynamic-collision gate must fail the load loud with a typed
+    /// `DuplicateProcessorTypeInModule`, leaving zero residue — never a
+    /// silently-incomplete Ok (which the old commit-time `register_dynamic`
+    /// Err + bug-grade-log-and-continue would have produced). Mentally
+    /// revert `validate_no_dynamic_processor_collisions` and this fails:
+    /// the load returns Ok with only the first processor registered.
+    #[test]
+    #[serial]
+    fn duplicate_dynamic_processor_name_fails_loud_zero_residue() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = HomeGuard::install(home.path());
+        let runtime = Runner::new().expect("Runner::new");
+        let tmp = tempfile::tempdir().unwrap();
+        let pkg = tmp.path().join("txn-dupname");
+        std::fs::create_dir_all(&pkg).unwrap();
+        // Both processors share the name TxnDupProcessor → identical ident.
+        std::fs::write(
+            pkg.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: txn-dupname\n  version: \"1.0.0\"\n\
+             processors:\n\
+             \x20 - name: TxnDupProcessor\n\
+             \x20   version: 1.0.0\n\
+             \x20   runtime: typescript\n\
+             \x20   entrypoint: main.ts\n\
+             \x20   execution: manual\n\
+             \x20 - name: TxnDupProcessor\n\
+             \x20   version: 1.0.0\n\
+             \x20   runtime: typescript\n\
+             \x20   entrypoint: main.ts\n\
+             \x20   execution: manual\n",
+        )
+        .unwrap();
+
+        let before = RegistrySnapshot::capture(&runtime.resolution_memo);
+        let err = runtime
+            .add_module_with_blocking(
+                tatolab_ident("txn-dupname"),
+                path_strategy_never_build(&pkg),
+            )
+            .expect_err("a duplicate subprocess processor name must fail the load");
+        assert!(
+            matches!(
+                err,
+                AddModuleError::DuplicateProcessorTypeInModule { ref package, ref processor_type }
+                    if package.name.as_str() == "txn-dupname"
+                        && processor_type.r#type.as_str() == "TxnDupProcessor"
+            ),
+            "expected DuplicateProcessorTypeInModule, got: {err:?}",
+        );
+        let after = RegistrySnapshot::capture(&runtime.resolution_memo);
+        assert_eq!(
+            before, after,
+            "a duplicate-name load must leave zero registry residue"
+        );
+        assert!(
+            !crate::core::processors::PROCESSOR_REGISTRY
+                .list_registered()
+                .iter()
+                .any(|d| d.name.r#type.as_str() == "TxnDupProcessor"),
+            "neither copy of the duplicated processor may be registered"
+        );
+    }
+
+    /// A subprocess processor whose composed ident is ALREADY globally
+    /// registered (by non-module-load code) must be refused with the typed
+    /// `ProcessorTypeAlreadyRegistered`, zero residue. Locks the (b) arm of
+    /// the collision gate.
+    #[test]
+    #[serial]
+    fn dynamic_processor_colliding_with_global_registration_fails_loud() {
+        use crate::core::descriptors::{ProcessorDescriptor, SchemaIdent, TypeName};
+
+        let home = tempfile::tempdir().unwrap();
+        let _guard = HomeGuard::install(home.path());
+        let runtime = Runner::new().expect("Runner::new");
+
+        // Pre-register @tatolab/txn-global/TxnGlobalProcessor@1.0.0 out of
+        // band, so a later module load that composes the same ident collides.
+        let colliding_ident = SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("txn-global").unwrap(),
+            TypeName::new("TxnGlobalProcessor").unwrap(),
+            SemVer::new(1, 0, 0),
+        );
+        crate::core::processors::PROCESSOR_REGISTRY
+            .register_dynamic(
+                ProcessorDescriptor::new(colliding_ident.clone(), "pre-registered collision"),
+                Box::new(|_node| {
+                    Err(crate::core::Error::Configuration(
+                        "test constructor never invoked".into(),
+                    ))
+                }),
+            )
+            .expect("out-of-band pre-registration must succeed");
+
+        let tmp = tempfile::tempdir().unwrap();
+        let pkg = tmp.path().join("txn-global");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(
+            pkg.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: txn-global\n  version: \"1.0.0\"\n\
+             processors:\n\
+             \x20 - name: TxnGlobalProcessor\n\
+             \x20   version: 1.0.0\n\
+             \x20   runtime: typescript\n\
+             \x20   entrypoint: main.ts\n\
+             \x20   execution: manual\n",
+        )
+        .unwrap();
+
+        let before = RegistrySnapshot::capture(&runtime.resolution_memo);
+        let err = runtime
+            .add_module_with_blocking(
+                tatolab_ident("txn-global"),
+                path_strategy_never_build(&pkg),
+            )
+            .expect_err("a globally-colliding subprocess processor must fail the load");
+        assert!(
+            matches!(
+                err,
+                AddModuleError::ProcessorTypeAlreadyRegistered { ref processor_type, .. }
+                    if processor_type.r#type.as_str() == "TxnGlobalProcessor"
+            ),
+            "expected ProcessorTypeAlreadyRegistered, got: {err:?}",
+        );
+        let after = RegistrySnapshot::capture(&runtime.resolution_memo);
+        assert_eq!(
+            before, after,
+            "a globally-colliding load must leave zero residue (the pre-registered \
+             ident stays, nothing new lands)"
+        );
+
+        // Cleanup: unregister the out-of-band ident so the process-global
+        // registry is clean for later #[serial] tests.
+        crate::core::processors::PROCESSOR_REGISTRY
+            .unregister_processor_types(std::slice::from_ref(&colliding_ident));
     }
 
     /// Same-load diamond regression: A→{B,C}→D resolves D once, with no
@@ -3187,8 +3335,6 @@ processors:
     #[test]
     #[serial]
     fn remove_module_processors_in_use_then_removable_after_graph_removal() {
-        use crate::core::runtime::RuntimeOperations;
-
         let home = tempfile::tempdir().unwrap();
         let _guard = HomeGuard::install(home.path());
         let runtime = Runner::new().expect("Runner::new");

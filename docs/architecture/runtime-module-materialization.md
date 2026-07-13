@@ -243,10 +243,24 @@ per-load staging buffer (`ModuleLoadRegistrationStaging`), and a single
 **whole-load commit** applies it after the ENTIRE transitive walk
 succeeded. The invariant: **visible ⇒ permanently committed**. A load
 that fails at any phase (manifest parse, schema read, dep walk, dlopen,
-declared-but-not-registered validation, processor construction) drops
-the staging buffer — the schema and processor registries are
-byte-equivalent to before the attempt, so a retried `add_module`
-re-runs the full resolution with zero "already registered" residue.
+declared-but-not-registered validation, processor construction, or the
+end-of-walk processor-collision gate below) drops the staging buffer —
+the schema and processor registries are byte-equivalent to before the
+attempt, so a retried `add_module` re-runs the full resolution with zero
+"already registered" residue.
+
+One end-of-walk gate runs before the commit lock is taken: a staged
+subprocess (Python / TypeScript) processor whose composed
+`processor_type` ident is **duplicated within the load** or **already
+present in the global registry** fails the whole load loud with a typed
+`AddModuleError` (`DuplicateProcessorTypeInModule` /
+`ProcessorTypeAlreadyRegistered`). Without it, a manifest declaring two
+same-named subprocess processors would stage the ident twice and the
+second `register_dynamic` would error mid-commit — after the first
+already applied — yielding a silently-incomplete load that returned Ok.
+(Rust/vtable duplicates are idempotently deduped at commit and need no
+gate.) This gate is what makes the commit itself
+infallible-by-construction.
 
 Cdylib registrations are intercepted at the host-services layer: the
 loader installs a thread-local staging sink around the plugin's
@@ -319,7 +333,13 @@ as it was — when:
   `add_processor` gets a registry miss, never a half-removed type),
   the graph is scanned, and on a hit the registrations are restored
   before the error returns. Nodes already marked pending-deletion are
-  excluded — the compiler never spawns one.
+  excluded — the compiler never spawns one. During the brief
+  unregister-scan-restore window of a *refused* in-use removal, a
+  concurrent same-type `add_processor` can transiently observe the
+  registry miss and fail with the typed `UnknownProcessorType` — a
+  recoverable `Err` (retry after the removal returns), consistent with
+  the same-process-registry multi-Runner limitation noted below, not a
+  registry corruption.
 
 The commit ledger (`LOADED_MODULE_REGISTRATION_LEDGER`, process-global,
 keyed by `@org/name`) records what each committed package registered —

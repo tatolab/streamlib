@@ -235,6 +235,14 @@ fn run_module_load(
         }
         Ok(())
     });
+    // Fold the end-of-walk Dynamic-processor collision gate into the
+    // result BEFORE the commit lock: a manifest declaring two same-named
+    // subprocess processors (or one colliding with an already-registered
+    // ident) fails loud here with a typed error, so the whole load rolls
+    // back with zero residue instead of committing a partial set. This is
+    // what makes the commit itself infallible-by-construction.
+    let result =
+        result.and_then(|()| staging.validate_no_dynamic_processor_collisions());
     match result {
         Ok(()) => {
             // Whole-load commit: apply staged registrations, write the

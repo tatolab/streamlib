@@ -143,6 +143,61 @@ impl ModuleLoadRegistrationStaging {
             .any(|staged| staged.descriptor.name == *ident)
     }
 
+    /// End-of-walk gate for subprocess (`Dynamic`-kind) processors:
+    /// reject a staged Dynamic processor ident that is duplicated within
+    /// this load OR already present in the global processor registry.
+    ///
+    /// Rust/VTable duplicates are silently deduped at commit
+    /// (`register_via_vtable` skips a duplicate ident), but a Dynamic
+    /// duplicate makes `register_dynamic` error at commit — after other
+    /// staged items already applied — which would yield a
+    /// silently-incomplete load that returned Ok. Catching it here, before
+    /// the commit lock is taken, keeps the whole load fail-loud with zero
+    /// residue (the walk-context guards abandon the staged state on the
+    /// error exit). This is what makes the commit genuinely
+    /// infallible-by-construction; the commit-time `register_dynamic` Err
+    /// path remains as defensive dead code.
+    pub(super) fn validate_no_dynamic_processor_collisions(
+        &self,
+    ) -> std::result::Result<(), super::errors::AddModuleError> {
+        let processors = self.processors.lock();
+        for (index, staged) in processors.iter().enumerate() {
+            if !matches!(
+                staged.kind,
+                StagedProcessorRegistrationKind::Dynamic { .. }
+            ) {
+                continue;
+            }
+            let ident = &staged.descriptor.name;
+            // (a) Duplicate within this load — collides with ANY other
+            // staged processor of the same ident (Dynamic or VTable),
+            // scanning only earlier entries so the collision is reported
+            // once, against the first occurrence.
+            if processors
+                .iter()
+                .take(index)
+                .any(|earlier| earlier.descriptor.name == *ident)
+            {
+                return Err(super::errors::AddModuleError::DuplicateProcessorTypeInModule {
+                    package: staged.owner_package.clone(),
+                    processor_type: ident.clone(),
+                });
+            }
+            // (b) Already globally registered by non-module-load code. A
+            // staged ident is never globally visible mid-walk (staging is
+            // per-load), and the single-version gate prevents re-staging a
+            // package's own already-committed idents, so a hit here is a
+            // genuine external collision `register_dynamic` would reject.
+            if crate::core::processors::PROCESSOR_REGISTRY.is_registered(ident) {
+                return Err(super::errors::AddModuleError::ProcessorTypeAlreadyRegistered {
+                    package: staged.owner_package.clone(),
+                    processor_type: ident.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Latest staged body for a canonical schema id (cdylib registration
     /// prologues may look up schemas their own package just staged).
     pub(super) fn staged_schema_body(&self, canonical_id: &str) -> Option<Arc<str>> {
