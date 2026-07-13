@@ -601,13 +601,26 @@ fn emit_pypi(opts: &EmitOptions, staging: &Path, target: &str) -> Result<()> {
     if !out.status.success() {
         anyhow::bail!("uv build --sdist failed: {}", String::from_utf8_lossy(&out.stderr).trim());
     }
-    // Enumerate the produced sdist(s) and render the simple index.
+    // Enumerate the produced sdist(s), normalize each to a byte-stable,
+    // source-only form, and render the simple index. `uv build --sdist` stamps
+    // the build wall-clock into build-generated entries' tar mtimes + the gzip
+    // MTIME header (measured — file contents + entry order are already stable),
+    // so re-emitting an unchanged release would otherwise churn the sha256 hash
+    // in the simple index. `opts.out` still holds the previous complete served
+    // tree during this staged emit (the flip runs after the closure returns),
+    // so the prior sdist of the same name is the immutability reference; a
+    // source change under a published version is refused. The returned sha256
+    // is the normalized artifact's — the simple-index `#sha256=` hash.
     let mut files = Vec::new();
     for entry in std::fs::read_dir(&packages)? {
         let path = entry?.path();
         if path.extension().and_then(|e| e.to_str()) == Some("gz") {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
-            let sha = sha256_hex(&path)?;
+            let served = opts.out.join("pypi").join("packages").join(&name);
+            let sha = crate::tarball::finalize_tar_gz(
+                &path,
+                served.exists().then_some(served.as_path()),
+            )?;
             files.push((name, sha));
         }
     }
@@ -655,6 +668,19 @@ fn emit_npm(opts: &EmitOptions, staging: &Path, target: &str) -> Result<()> {
         anyhow::bail!("deno pack failed: {}", String::from_utf8_lossy(&out.stderr).trim());
     }
     let tarball_filename = tgz.file_name().unwrap().to_string_lossy().into_owned();
+    // Normalize to a byte-stable, source-only tgz and refuse a source change
+    // under an already-published version. `deno pack` is already byte-
+    // deterministic (measured: fixed epoch-0 tar mtime, uid/gid 0, zeroed gzip
+    // MTIME), so normalization is an idempotent lossless pass; the immutability
+    // guard is what the pass adds. `opts.out` still holds the previous complete
+    // served tree during this staged emit, so the prior tgz of the same name is
+    // the reference. The shasum + integrity below are computed over the
+    // normalized bytes so the packument matches the served artifact.
+    let served_tgz = opts.out.join("npm").join("tarballs").join(&tarball_filename);
+    crate::tarball::finalize_tar_gz(
+        &tgz,
+        served_tgz.exists().then_some(served_tgz.as_path()),
+    )?;
     // npm integrity fields — shasum is sha1, integrity is base64(sha512).
     let bytes = std::fs::read(&tgz)?;
     let shasum = {
