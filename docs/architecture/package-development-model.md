@@ -115,13 +115,27 @@ leaves the backups for `unlink` recovery. The marker records per-file
 teardown. A crash mid-apply leaves state `Applying`; a later `link` refuses
 with `TornLinkState` pointing at `unlink`.
 
-**Post-link verification.** Unless `--skip-verify`, `link` runs
-`cargo metadata --offline` and asserts every `streamlib*` / `vulkan-jpeg`
-package resolves to a path source under the checkout; if a
-semver-incompatible consumer requirement made cargo silently ignore the
-`[patch]`, verification names the offending crates, the whole link rolls
-back, and `LinkVerificationFailed` tells the user to fix the requirement or
-re-run with `--skip-verify`.
+**Post-link verification + stale-lock remedy.** Unless `--skip-verify`,
+`link` runs `cargo metadata --offline` and asserts every `streamlib*` /
+`vulkan-jpeg` package resolves to a path source under the checkout. Two
+things can make cargo ignore the freshly-emitted `[patch]`, and they need
+opposite remedies:
+
+- *A pre-existing consumer `Cargo.lock`.* Cargo honors an existing lock over
+  a newly-added `[patch]`, so the streamlib crates keep resolving to their
+  registry pins — a re-lock, not a version-requirement change, is the fix.
+  `link` owns that step: it transparently re-locks exactly the crates that
+  failed to redirect (`cargo update -p <each>`), records the mutated
+  `Cargo.lock` as a link-managed file (`record_relocked_lockfile` — snapshot
+  + backup + manifest entry, so `unlink` restores it byte-identically), and
+  re-verifies. If the automatic re-lock itself can't run, `link` leaves the
+  patch applied (unchanged lock) and returns `StaleConsumerLockRelockFailed`
+  naming the lockfile and the exact `cargo update` command to finish it.
+- *A semver-incompatible consumer requirement.* When the crates STILL resolve
+  from the registry after re-locking (or there is no lock to blame), the
+  checkout's versions genuinely don't satisfy the requirements — the whole
+  link rolls back and `LinkVerificationFailed` names the offending crates and
+  points at the version requirements (or `--skip-verify`).
 
 **Tri-state.** Link state is `LinkTransactionState::{Applying, Active}` plus
 marker-absence (three states, surfaced by `status`). Per-file, `unlink`
@@ -129,14 +143,17 @@ classifies each touched file into `RestoreAction::{Skip, RestoreOriginal,
 RemoveCreated}`; a file the user modified while linked refuses with
 `UnlinkRefusedModifiedFile` unless `--force`.
 
-**Overrides never leak into an artifact.** All three edits land in
-*toolchain config* files — never a lockfile. `streamlib pkg build` /
-`publish` refuse while any link marker exists up-tree
-(`ensure_no_active_link_for_pack` → `PackRefusedWhileLinked`), and the build
-orchestrator re-injects the checkout overrides when it materializes a linked
-package — the consumer's `[patch]` cargo config into the cdylib build and the
-uv-source override (`apply_link_override`) into the venv — so a
-cargo-patched-but-venv-from-registry mixed state can't occur.
+**Overrides never leak into an artifact.** The three toolchain-config edits
+land in *config* files — never a lockfile. The only lockfile `link` may write
+is the consumer's own `Cargo.lock`, transparently re-locked to make the
+`[patch]` take effect (above) and restored byte-identically by `unlink`.
+Neither escapes the dev tree: `streamlib pkg build` / `publish` refuse while
+any link marker exists up-tree (`ensure_no_active_link_for_pack` →
+`PackRefusedWhileLinked`), and the build orchestrator re-injects the checkout
+overrides when it materializes a linked package — the consumer's `[patch]`
+cargo config into the cdylib build and the uv-source override
+(`apply_link_override`) into the venv — so a cargo-patched-but-venv-from-registry
+mixed state can't occur.
 
 **What link deliberately does not solve.** Developing against one *specific
 published* version — link is all-or-nothing against a single checkout. That

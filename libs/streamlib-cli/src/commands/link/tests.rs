@@ -611,6 +611,167 @@ fn real_link_offline_e2e_link_refresh_unlink_roundtrip() {
         "cargo config must be byte-identical after unlink"
     );
     assert!(!consumer.join(LINK_STATE_DIR).exists());
-    // Cargo.lock may be created by the verification resolve — it's a build
-    // artifact of the consumer, not a link-managed manifest.
+    // Cargo.lock may be created by the verification resolve; when the [patch]
+    // is honored without a re-lock (as here) it is not link-managed. The
+    // stale-lock re-lock path that DOES manage it is covered by the focused
+    // tests below.
+}
+
+// ---------------------------------------------------------------------------
+// Stale-lock remedy: transparent re-lock + byte-clean lockfile management.
+// ---------------------------------------------------------------------------
+
+/// Simulate the re-lock outcome without a live cargo invocation: establish the
+/// link, then hand `record_relocked_lockfile` a mutated `Cargo.lock`. The
+/// managed lockfile must restore byte-identically across cycles.
+#[test]
+fn relocked_cargo_lock_is_recorded_and_restored_byte_clean_across_cycles() {
+    let tmp = tempfile::tempdir().unwrap();
+    let consumer = tmp.path().canonicalize().unwrap();
+    write_full_consumer(&consumer);
+    let lockfile = consumer.join("Cargo.lock");
+    let original_lock = b"# registry-born lock\nversion = 4\n".to_vec();
+    std::fs::write(&lockfile, &original_lock).unwrap();
+
+    let cargo = consumer.join(".cargo").join("config.toml");
+    let orig_cargo = std::fs::read(&cargo).unwrap();
+
+    for cycle in 0..2 {
+        // Pre-link snapshot (what unlink must restore the lock to).
+        let snapshot = std::fs::read(&lockfile).unwrap();
+        assert_eq!(snapshot, original_lock, "cycle {cycle}: lock must be original pre-link");
+
+        link_with_fixed_crates(&consumer, &PathBuf::from("/checkout"));
+
+        // A real `cargo update -p …` would rewrite the lock; simulate that.
+        std::fs::write(&lockfile, format!("# re-locked cycle {cycle}\nversion = 4\n")).unwrap();
+        record_relocked_lockfile(&consumer, &lockfile, Some(snapshot)).unwrap();
+
+        // The manifest now carries a Cargo.lock entry alongside the 3 configs.
+        let manifest = load_active_manifest(&consumer).unwrap().unwrap();
+        assert!(
+            manifest.files.iter().any(|f| f.path == PathBuf::from("Cargo.lock")),
+            "cycle {cycle}: manifest must record the re-locked Cargo.lock"
+        );
+
+        unlink(&consumer, false).unwrap();
+
+        // Byte-clean: the lock AND the config are back to their pre-link bytes.
+        assert_eq!(
+            std::fs::read(&lockfile).unwrap(),
+            original_lock,
+            "cycle {cycle}: Cargo.lock must be restored byte-identically"
+        );
+        assert_eq!(std::fs::read(&cargo).unwrap(), orig_cargo, "cycle {cycle}: cargo config");
+        assert!(!consumer.join(LINK_STATE_DIR).exists(), "cycle {cycle}: state gone");
+    }
+}
+
+/// A `Cargo.lock` that did not exist pre-link (created by the verify resolve +
+/// re-lock) is recorded as `!existed_before` and removed on unlink.
+#[test]
+fn relocked_cargo_lock_created_by_link_is_removed_on_unlink() {
+    let tmp = tempfile::tempdir().unwrap();
+    let consumer = tmp.path().canonicalize().unwrap();
+    // Cargo config only — no pre-existing Cargo.lock.
+    let cargo = consumer.join(".cargo");
+    std::fs::create_dir_all(&cargo).unwrap();
+    std::fs::write(
+        cargo.join("config.toml"),
+        format!("[registries.tatolab]\nindex = \"{INDEX_URL}\"\n"),
+    )
+    .unwrap();
+    let lockfile = consumer.join("Cargo.lock");
+    assert!(!lockfile.exists());
+
+    link_with_fixed_crates(&consumer, &PathBuf::from("/checkout"));
+
+    // verify's `cargo metadata` + the re-lock create the lock; record with no
+    // pre-link original.
+    std::fs::write(&lockfile, "# freshly created + re-locked\nversion = 4\n").unwrap();
+    record_relocked_lockfile(&consumer, &lockfile, None).unwrap();
+
+    unlink(&consumer, false).unwrap();
+    assert!(!lockfile.exists(), "a Cargo.lock the link created must be removed on unlink");
+    assert!(!consumer.join(LINK_STATE_DIR).exists());
+}
+
+/// A user edit to the re-locked `Cargo.lock` during the link window is refused
+/// without `--force` and discarded (restored to pre-link) with it — the lock
+/// rides the same tri-state teardown as every other managed file.
+#[test]
+fn unlink_refuses_a_user_modified_relocked_lock_without_force() {
+    let tmp = tempfile::tempdir().unwrap();
+    let consumer = tmp.path().canonicalize().unwrap();
+    write_full_consumer(&consumer);
+    let lockfile = consumer.join("Cargo.lock");
+    let original_lock = b"# original\nversion = 4\n".to_vec();
+    std::fs::write(&lockfile, &original_lock).unwrap();
+
+    link_with_fixed_crates(&consumer, &PathBuf::from("/checkout"));
+    std::fs::write(&lockfile, "# re-locked\nversion = 4\n").unwrap();
+    record_relocked_lockfile(&consumer, &lockfile, Some(original_lock.clone())).unwrap();
+
+    // User hand-edits the lock while linked.
+    std::fs::write(&lockfile, "# user edit\nversion = 4\n").unwrap();
+
+    let err = unlink(&consumer, false).unwrap_err();
+    assert!(matches!(err, LinkError::UnlinkRefusedModifiedFile { .. }), "got {err:?}");
+    assert!(marker_path(&consumer).is_file(), "refusal must preserve link state");
+
+    unlink(&consumer, true).unwrap();
+    assert_eq!(std::fs::read(&lockfile).unwrap(), original_lock, "force restores pre-link lock");
+    assert!(!consumer.join(LINK_STATE_DIR).exists());
+}
+
+/// The re-lock command surfaced to the operator names the consumer's manifest
+/// and each crate that failed to redirect.
+#[test]
+fn relock_command_string_names_manifest_and_each_target() {
+    let cmd = relock_command_string(Path::new("/app"), &["streamlib", "streamlib-idents"]);
+    assert_eq!(
+        cmd,
+        "cargo update --manifest-path /app/Cargo.toml -p streamlib -p streamlib-idents"
+    );
+}
+
+/// When the transparent re-lock can't run, the error names the lockfile and the
+/// exact command — not a version-requirement misdiagnosis.
+#[test]
+fn stale_lock_relock_failed_error_names_lockfile_and_command() {
+    let err = LinkError::StaleConsumerLockRelockFailed {
+        lockfile: PathBuf::from("/app/Cargo.lock"),
+        crates: "streamlib, streamlib-idents".to_string(),
+        command: "cargo update --manifest-path /app/Cargo.toml -p streamlib -p streamlib-idents"
+            .to_string(),
+        detail: "offline: cargo update failed; online: no network".to_string(),
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("/app/Cargo.lock"), "names the lockfile: {msg}");
+    assert!(
+        msg.contains("cargo update --manifest-path /app/Cargo.toml -p streamlib -p streamlib-idents"),
+        "names the exact command: {msg}"
+    );
+    assert!(msg.contains("streamlib unlink"), "offers the escape: {msg}");
+    // The whole point: the cause is the lock, not the version requirements.
+    assert!(!msg.contains("version requirement"), "must not misdiagnose: {msg}");
+}
+
+/// The rolled-back verification error carries the accurate cause and the
+/// `--skip-verify` escape, and drops the old stale-lock misdiagnosis.
+#[test]
+fn link_verification_failed_message_is_actionable_and_not_the_old_misdiagnosis() {
+    let err = LinkError::LinkVerificationFailed {
+        detail: "these streamlib crates resolve from the registry, not the checkout — the \
+                 checkout's versions don't satisfy the consumer's version requirements: \
+                 streamlib@0.6.0"
+            .to_string(),
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("--skip-verify"), "offers the escape: {msg}");
+    assert!(msg.contains("streamlib@0.6.0"), "names the offending crate: {msg}");
+    assert!(
+        !msg.contains("Fix the consumer's version requirements so the checkout's crate versions"),
+        "must drop the old misdiagnosing phrasing: {msg}"
+    );
 }
