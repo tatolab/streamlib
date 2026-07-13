@@ -7,12 +7,18 @@
 //! (the distribution shape — no prebuilt cdylib), hand the bundle
 //! back to a fresh `Runner`, and assert the loaded artifacts
 //! (processors for Rust-impl packages, schemas for the canonical
-//! schemas-only package) land in the runtime registries. The
-//! Rust-impl leg exercises the FULL consumer story: the loader
-//! builds the bundled source on this host via the build
-//! orchestrator, resolving every dep from the configured registry
-//! (`CARGO_REGISTRIES_TATOLAB_INDEX` points cargo at the static registry
-//! tree; check-pack-load CI serves the static tree).
+//! schemas-only package) land in the runtime registries.
+//!
+//! The schemas-only leg is the file-based gate that runs in CI: it
+//! packs + loads a `.slpkg` with no cdylib and no cargo build, so it
+//! needs no by-version SDK resolution. The Rust-impl leg exercises the
+//! FULL consumer story — the loader builds the bundled source on this
+//! host via the build orchestrator, resolving the SDK crate chain by
+//! version — but is `#[ignore]`d until an out-of-tree by-version SDK
+//! source exists again (the custom cargo registry was removed in #1322;
+//! see the leg's `#[ignore]` reason). Rust-cdylib load coverage in the
+//! meantime lives in `load_project_dylib_*` (in-workspace fixture,
+//! dlopen).
 //!
 //! Mentally-revert lock summary (each maps to a specific test):
 //! - Drop *any one* processor from `streamlib-network`'s
@@ -120,16 +126,28 @@ fn pkg_build_slpkg(cli: &Path, pkg_dir: &Path, slpkg: &Path) {
 
 #[test]
 #[serial]
+#[ignore = "out-of-tree Rust `.slpkg` build needs the SDK by version, which the \
+            custom cargo registry used to serve (removed in #1322); SDK publish to \
+            real registries is deferred (#1323) and this leg's rework onto \
+            `streamlib link --engine` is tracked by #1338. Rust-cdylib load coverage \
+            meanwhile lives in the `load_project_dylib_*` dlopen integration tests, \
+            which build the fixture in-workspace and exercise the full \
+            STREAMLIB_PLUGIN → setup/process/teardown roundtrip."]
 fn pack_then_load_rust_package_registers_processors() {
     // Rust-impl gate: `pkg build` packs `@tatolab/network` (small dep
-    // graph, no GPU / audio hardware, registry-only Cargo deps) into a
-    // source-only `.slpkg` straight from its package dir — packages/*
-    // are standalone workspaces, NOT members of the repo workspace, so
-    // there is no `cargo -p streamlib-network` to lean on. Loading the
-    // source-only box makes the orchestrator build it on this host,
-    // resolving streamlib-plugin-sdk & friends from the configured
-    // registry — the real consumer story. Both exported processors must
-    // land in `PROCESSOR_REGISTRY` after `Runner::add_module_with`.
+    // graph, no GPU / audio hardware) into a source-only `.slpkg`
+    // straight from its package dir — packages/* are standalone
+    // workspaces, NOT members of the repo workspace, so there is no
+    // `cargo -p streamlib-network` to lean on. Loading the source-only
+    // box makes the orchestrator build it on this host, resolving
+    // streamlib-plugin-sdk & friends by version — the real consumer
+    // story. Both exported processors must land in `PROCESSOR_REGISTRY`
+    // after `Runner::add_module_with`.
+    //
+    // IGNORED (see the `#[ignore]` reason above): with the custom cargo
+    // registry gone and SDK publishing deferred, the out-of-tree build
+    // has no by-version SDK source. Re-enable when #1323 (real-registry
+    // publish) or #1338 (`streamlib link --engine` rework) lands.
     let cli = build_streamlib_cli();
 
     let tmp = tempfile::tempdir().unwrap();

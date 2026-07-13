@@ -1,26 +1,31 @@
 name: Check Pack → Load
 
-# Foundation gate for the All-Dynamic Package Loading distribution
-# model: `streamlib pack` produces a `.slpkg`, `Runner::load_package`
-# consumes it, and the package's processors + schemas land in the
-# runtime registries. Any mismatch between the pack producer side
-# (`libs/streamlib-cli/src/commands/pack.rs`) and the load consumer
-# side (`Runner::load_package` / `extract_slpkg_to_cache` in
-# `libs/streamlib-engine/src/core/runtime/runtime.rs`) surfaces here
-# before the broader example sweep / container smoke test would
-# amplify the failure.
+# Foundation gate for the file-based package distribution model:
+# `streamlib pkg build` produces a `.slpkg`, `Runner::add_module_with`
+# consumes it from a file, and the package's schemas (schemas-only
+# package) land in the runtime registries. Any mismatch between the
+# pack producer side (`libs/streamlib-cli/src/commands/pkg.rs`) and the
+# load consumer side (`Strategy::Slpkg` / `extract_slpkg_to_cache` in
+# `libs/streamlib-engine/src/core/runtime/`) surfaces here before the
+# broader example sweep / container smoke test would amplify it.
 #
 # Covers:
-#   - One Rust-impl package (`@tatolab/network`): pack-then-load
-#     populates `PROCESSOR_REGISTRY` with the package's processors
-#     via the `STREAMLIB_PLUGIN` callback.
-#   - One schemas-only package (`@tatolab/core`): exercises the
-#     no-cdylib branch — pack emits no `lib/` entries, load_package
-#     walks the `schemas:` map and registers each canonical schema.
+#   - The `.slpkg` store + catalog renderers + gapless atomic
+#     staged-swap + completeness negative gate (`cargo test -p
+#     streamlib-pack`).
+#   - One schemas-only package (`@tatolab/core`): pack-then-add-from-file
+#     exercises the no-cdylib branch — `pkg build` emits no `lib/`
+#     entries, the loader walks the `schemas:` map and registers each
+#     canonical schema. Pure file-based; no by-version SDK resolution.
 #   - Negative paths: missing slpkg, foreign-triple-only slpkg.
 #
-# Companion to the container smoke workflow (covered separately) —
-# this gate runs in workspace CI without container infrastructure.
+# The Rust-impl leg (`@tatolab/network`, which cargo-builds a cdylib
+# out-of-tree and needs the SDK by version) is `#[ignore]`d — the
+# custom cargo registry that served it was removed (#1322); SDK publish
+# to real registries is deferred (#1323) and the leg's rework onto
+# `streamlib link --engine` is tracked by #1338. Rust-cdylib load
+# coverage meanwhile lives in the `load_project_dylib_*` dlopen
+# integration tests.
 
 on:
   pull_request:
@@ -30,7 +35,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  STREAMLIB_STATIC_REGISTRY_DIR: /tmp/streamlib-static-registry
 
 jobs:
   pack-then-load-smoke:
@@ -41,10 +45,9 @@ jobs:
 
       - name: Install system dependencies
         # The pack-then-load test builds `streamlib-cli` (depends on
-        # the full SDK) and `streamlib-network` (a Rust-impl package
-        # producing a real cdylib). Both inherit the engine's Linux
-        # dep set; minimal subset covers them without dragging in the
-        # GPU/codec backends.
+        # the full SDK) and `streamlib-engine`. Both inherit the
+        # engine's Linux dep set; minimal subset covers them without
+        # dragging in the GPU/codec backends.
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -80,69 +83,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-pack-load-
 
-      # The Rust-impl leg loads a SOURCE-ONLY `.slpkg` (`pkg build`'s
-      # distribution shape), so the orchestrator builds `streamlib-network`
-      # on this host — resolving streamlib-plugin-sdk & friends (including the
-      # vendored tatolab-vulkanalia* crates, ordinary closure members) from the
-      # registry. The workspace itself resolves vulkanalia by path — no
-      # registry bootstrap is needed to build xtask or run the emit.
-      - name: Emit closure crates into the static registry
-        run: |
-          # Force a fresh `cargo package` for every closure crate. The `target`
-          # dir is cached across runs (see the Cache Cargo step), and the emit
-          # reuses target/package/<crate>-<version>.crate after STRUCTURAL-only
-          # verification. A stale-content tarball at an unchanged version
-          # (e.g. an ABI-4 streamlib-plugin-abi cached under a version the
-          # source has since moved to ABI 5) would be re-emitted verbatim while
-          # the host compiles the new source — a same-version content skew the
-          # structural check can't catch. Content-addressed verification is the
-          # real fix; clearing the dir here is the belt-and-suspenders stop-gap.
-          rm -rf target/package
-          cargo run --locked -q -p xtask -- static-registry emit \
-            --out "$STREAMLIB_STATIC_REGISTRY_DIR" \
-            --base-url "http://127.0.0.1:8799" \
-            --cargo-closure --no-pypi --no-npm --no-slpkg
-          # Reshape the sparse tree into a serverless cargo local-registry the
-          # out-of-tree streamlib-network build resolves streamlib-plugin-sdk
-          # + tatolab-vulkanalia* from over the [source] replacement below.
-          scripts/registry/emit-cargo-local-registry.sh \
-            "$STREAMLIB_STATIC_REGISTRY_DIR" "$STREAMLIB_STATIC_REGISTRY_DIR/cargo-local-registry"
-          test -f "$STREAMLIB_STATIC_REGISTRY_DIR/cargo-local-registry/index/st/re/streamlib-plugin-sdk" \
-            || { echo "closure crate streamlib-plugin-sdk not in the local-registry mirror"; exit 1; }
-          test -f "$STREAMLIB_STATIC_REGISTRY_DIR/cargo-local-registry/index/ta/to/tatolab-vulkanalia" \
-            || { echo "closure crate tatolab-vulkanalia not in the local-registry mirror"; exit 1; }
-          # Belt-and-suspenders: the committed lock carries no tatolab-registry
-          # source lines anymore (the vendored crates resolve by path), but the
-          # `--cargo-closure` emit's inner `cargo package` runs with
-          # CARGO_REGISTRIES_TATOLAB_INDEX pointed at its own ephemeral staging
-          # server and historically rewrote lock source lines. Restore the
-          # pristine committed lock so the strict `cargo test --locked` below
-          # never trips "cannot update the lock file" on a dirtied lock.
-          git restore Cargo.lock
+      # `.slpkg` store + catalog renderers, atomic staged-swap, and the
+      # completeness negative gate (folded in from the retired
+      # static-registry workflow).
+      - name: cargo test -p streamlib-pack
+        run: cargo test --locked -p streamlib-pack
 
-      - name: Configure the serverless [source] replacement (global cargo config)
-        # GLOBAL config (not the repo .cargo/config.toml) so the out-of-tree
-        # `cargo` build (check-pack-load's staged .slpkg, which
-        # config-discovers from its own temp cwd) sees the replacement. The
-        # workspace build itself doesn't need it — vulkanalia resolves by
-        # path — but the staged package's `registry = "tatolab"` deps do.
-        # Deliberately NO CARGO_REGISTRIES_TATOLAB_INDEX export — an env index
-        # override shadows the `[source]` replacement and rewrites source ids
-        # in the staged package's lockfile.
-        run: |
-          set -euo pipefail
-          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
-          mkdir -p "$cargo_home"
-          lr="$(cd "$STREAMLIB_STATIC_REGISTRY_DIR/cargo-local-registry" && pwd)"
-          {
-            printf '\n[registries.tatolab]\n'
-            printf 'index = "sparse+https://registry.tatolab.com/cargo/"\n'
-            printf '\n[source.tatolab]\n'
-            printf 'registry = "sparse+https://registry.tatolab.com/cargo/"\n'
-            printf 'replace-with = "tatolab-local-registry"\n'
-            printf '\n[source.tatolab-local-registry]\n'
-            printf 'local-registry = "%s"\n' "$lr"
-          } >> "$cargo_home/config.toml"
-
+      # File-based pack → add-from-file smoke: the schemas-only leg + the
+      # negative paths run by default; the Rust-impl leg is `#[ignore]`d
+      # (see the header + the test's `#[ignore]` reason).
       - name: cargo test pack_then_load_smoke
         run: cargo test --locked --test pack_then_load_smoke -p streamlib-engine
