@@ -45,7 +45,8 @@ pub enum Strategy {
     /// populated by `streamlib add`) first, then the installed-package cache
     /// (`<STREAMLIB_HOME>/.streamlib/cache/packages/...`). Never builds a
     /// package that carries a matching prebuilt. The default for bare
-    /// [`Runner::add_module`] and for transitive registry-flavored deps.
+    /// top-level [`Runner::add_module`] loads (transitive registry-flavored
+    /// deps map to [`Strategy::Registry`] instead).
     /// Precedence: active `streamlib link` > app modules > installed cache.
     ///
     /// [`Runner::add_module`]: super::super::Runner::add_module
