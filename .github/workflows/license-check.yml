@@ -26,7 +26,16 @@ jobs:
             if ! sed -n "${check_line}p" "$file" | grep -q "// Copyright (c) 2025 Jonathan Fontanez"; then
               missing_files+=("$file")
             fi
-          done < <(find libs examples -name "*.rs" -print0)
+          # The three vendored vulkanalia fork dirs are Apache-2.0 verbatim
+          # copies and deliberately carry NO BUSL headers — see
+          # docs/architecture/vendored-vulkanalia.md and CLAUDE.md's
+          # licensing exception. Exact-dir exclusions (a future
+          # libs/tatolab-vulkanalia-extras/ crate would NOT be excluded).
+          done < <(find libs examples -name "*.rs" \
+            -not -path "libs/tatolab-vulkanalia/*" \
+            -not -path "libs/tatolab-vulkanalia-sys/*" \
+            -not -path "libs/tatolab-vulkanalia-vma/*" \
+            -print0)
 
           if [ ${#missing_files[@]} -ne 0 ]; then
             echo "❌ The following files are missing the required copyright header:"
