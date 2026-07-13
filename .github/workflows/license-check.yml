@@ -57,7 +57,7 @@ jobs:
           missing_files=()
           while IFS= read -r -d '' file; do
             # Shebang-aware: executable scripts start with `#!`; the copyright
-            # header then sits on line 2 (e.g. scripts/registry/*.py).
+            # header then sits on line 2 (any `#!`-prefixed Python script).
             if head -1 "$file" | grep -q '^#!'; then
               check_line=2
             else

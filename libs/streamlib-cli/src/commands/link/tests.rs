@@ -6,8 +6,6 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 
-const INDEX_URL: &str = "sparse+https://registry.tatolab.com/cargo/";
-
 /// Absolute path of the real streamlib workspace this test binary was built in
 /// (`<root>/libs/streamlib-cli` → `<root>`). It is a genuine streamlib
 /// checkout, so checkout-facing paths exercise real behavior offline.
@@ -19,16 +17,14 @@ fn workspace_checkout() -> PathBuf {
         .to_path_buf()
 }
 
-/// A consumer dir carrying its own tatolab registry config, a pyproject, and a
+/// A consumer dir carrying its own cargo config, a pyproject, and a
 /// deno.json — the three manifest types link mode overrides.
 fn write_full_consumer(root: &Path) {
     let cargo_dir = root.join(".cargo");
     std::fs::create_dir_all(&cargo_dir).unwrap();
     std::fs::write(
         cargo_dir.join("config.toml"),
-        format!(
-            "# consumer cargo config\n[registries.tatolab]\nindex = \"{INDEX_URL}\"\n\n[alias]\nb = \"build\"\n"
-        ),
+        "# consumer cargo config\n[alias]\nb = \"build\"\n",
     )
     .unwrap();
     std::fs::write(
@@ -59,7 +55,7 @@ fn fake_crate_set() -> BTreeMap<String, PathBuf> {
 /// Drive the full transaction (manifest-first, apply, flip) with a fixed
 /// crate set — the real flow minus cargo-metadata derivation + verification.
 fn link_with_fixed_crates(consumer_root: &Path, checkout: &Path) {
-    establish_link(consumer_root, checkout, INDEX_URL, &fake_crate_set()).unwrap();
+    establish_link(consumer_root, checkout, &fake_crate_set()).unwrap();
 }
 
 fn marker_path(consumer: &Path) -> PathBuf {
@@ -98,12 +94,13 @@ fn link_then_unlink_is_byte_clean_and_idempotent_across_cycles() {
         );
         let linked_cargo = std::fs::read_to_string(&cargo).unwrap();
         assert!(
-            linked_cargo.contains(&format!("[patch.\"{INDEX_URL}\"]")),
-            "cycle {cycle}: cargo config must carry the patch section:\n{linked_cargo}"
+            linked_cargo.contains("[patch.crates-io]"),
+            "cycle {cycle}: cargo config must carry the crates-io patch section:\n{linked_cargo}"
         );
         assert!(linked_cargo.contains("streamlib-idents"));
         assert!(linked_cargo.contains(CARGO_PATCH_MARKER));
-        assert!(linked_cargo.contains("[registries.tatolab]"));
+        // The consumer's pre-existing cargo config is preserved alongside the patch.
+        assert!(linked_cargo.contains("[alias]"));
         assert!(
             std::fs::read_to_string(&pyproject)
                 .unwrap()
@@ -142,30 +139,23 @@ fn link_then_unlink_is_byte_clean_and_idempotent_across_cycles() {
 
 #[test]
 fn unlink_deletes_a_cargo_config_it_created_and_prunes_the_dir() {
-    // Registry index lives in a PARENT dir; the consumer has no .cargo of its
-    // own, so link CREATES consumer/.cargo/config.toml and unlink must remove
-    // it and prune the empty .cargo dir.
+    // The consumer has no `.cargo` of its own, so link CREATES
+    // consumer/.cargo/config.toml (the `[patch.crates-io]` block) and unlink
+    // must remove it and prune the empty .cargo dir.
     let tmp = tempfile::tempdir().unwrap();
     let outer = tmp.path().canonicalize().unwrap();
-    let outer_cargo = outer.join(".cargo");
-    std::fs::create_dir_all(&outer_cargo).unwrap();
-    std::fs::write(
-        outer_cargo.join("config.toml"),
-        format!("[registries.tatolab]\nindex = \"{INDEX_URL}\"\n"),
-    )
-    .unwrap();
-
     let consumer = outer.join("app");
     std::fs::create_dir_all(&consumer).unwrap();
 
-    // Discovery must find the parent's index (no home fallback involved).
-    assert_eq!(
-        discover_registry_index_with_home(&consumer, None).unwrap(),
-        INDEX_URL
-    );
-
     link_with_fixed_crates(&consumer, &PathBuf::from("/checkout"));
-    assert!(consumer.join(".cargo").join("config.toml").is_file());
+    let created = consumer.join(".cargo").join("config.toml");
+    assert!(created.is_file());
+    assert!(
+        std::fs::read_to_string(&created)
+            .unwrap()
+            .contains("[patch.crates-io]"),
+        "link must create the crates-io patch config"
+    );
 
     unlink(&consumer, false).unwrap();
     assert!(
@@ -173,8 +163,6 @@ fn unlink_deletes_a_cargo_config_it_created_and_prunes_the_dir() {
         ".cargo we created must be pruned"
     );
     assert!(!consumer.join(LINK_STATE_DIR).exists());
-    // Parent config untouched.
-    assert!(outer_cargo.join("config.toml").is_file());
 }
 
 #[test]
@@ -217,41 +205,15 @@ fn link_to_a_dir_without_cargo_toml_is_rejected() {
 }
 
 #[test]
-fn missing_registry_index_errors_actionably() {
-    // Injectable home (None) makes this assertion environment-independent.
-    let tmp = tempfile::tempdir().unwrap();
-    let consumer = tmp.path().canonicalize().unwrap();
-    let cargo = consumer.join(".cargo");
-    std::fs::create_dir_all(&cargo).unwrap();
-    std::fs::write(cargo.join("config.toml"), "[alias]\nb = \"build\"\n").unwrap();
-
-    let err = discover_registry_index_with_home(&consumer, None);
-    assert!(
-        matches!(err, Err(LinkError::RegistryIndexNotConfigured)),
-        "got {err:?}"
-    );
-}
-
-#[test]
 fn pyproject_and_deno_overrides_are_presence_gated() {
     let tmp = tempfile::tempdir().unwrap();
     let consumer = tmp.path().canonicalize().unwrap();
     // Cargo config only — no pyproject, no deno.json.
     let cargo = consumer.join(".cargo");
     std::fs::create_dir_all(&cargo).unwrap();
-    std::fs::write(
-        cargo.join("config.toml"),
-        format!("[registries.tatolab]\nindex = \"{INDEX_URL}\"\n"),
-    )
-    .unwrap();
+    std::fs::write(cargo.join("config.toml"), "[alias]\nb = \"build\"\n").unwrap();
 
-    let edits = plan_edits(
-        &consumer,
-        &PathBuf::from("/checkout"),
-        INDEX_URL,
-        &fake_crate_set(),
-    )
-    .unwrap();
+    let edits = plan_edits(&consumer, &PathBuf::from("/checkout"), &fake_crate_set()).unwrap();
     assert_eq!(edits.len(), 1, "only the cargo config should be planned");
     assert_eq!(
         edits[0].rel_path,
@@ -281,7 +243,7 @@ fn deno_jsonc_with_comments_is_rejected_cleanly() {
     std::fs::create_dir_all(&cargo).unwrap();
     std::fs::write(
         cargo.join("config.toml"),
-        format!("[registries.tatolab]\nindex = \"{INDEX_URL}\"\n"),
+        "[alias]\nb = \"build\"\n",
     )
     .unwrap();
     std::fs::write(
@@ -291,9 +253,7 @@ fn deno_jsonc_with_comments_is_rejected_cleanly() {
     .unwrap();
     let err = plan_edits(
         &consumer,
-        &PathBuf::from("/checkout"),
-        INDEX_URL,
-        &fake_crate_set(),
+        &PathBuf::from("/checkout"),        &fake_crate_set(),
     )
     .unwrap_err();
     assert!(
@@ -330,9 +290,7 @@ fn concurrent_second_link_is_refused_by_exclusive_marker_create() {
 
     let err = establish_link(
         &consumer,
-        &PathBuf::from("/checkout"),
-        INDEX_URL,
-        &fake_crate_set(),
+        &PathBuf::from("/checkout"),        &fake_crate_set(),
     )
     .unwrap_err();
     assert!(
@@ -353,7 +311,7 @@ fn torn_applying_state_refuses_relink_and_plain_unlink_recovers() {
     // Torn state against a real (canonicalizable) checkout so `link()` reaches
     // the state gate.
     let real_checkout = workspace_checkout();
-    let edits = plan_edits(&consumer, &real_checkout, INDEX_URL, &fake_crate_set()).unwrap();
+    let edits = plan_edits(&consumer, &real_checkout, &fake_crate_set()).unwrap();
     let manifest = build_link_manifest(&real_checkout, 2, &edits);
     write_manifest_excl(&consumer, &manifest).unwrap();
     // (crash here — no edits, no backups)
@@ -381,7 +339,7 @@ fn crash_after_edits_before_state_flip_is_recovered_by_unlink() {
     let orig_cargo = std::fs::read(&cargo).unwrap();
 
     let checkout = PathBuf::from("/checkout");
-    let edits = plan_edits(&consumer, &checkout, INDEX_URL, &fake_crate_set()).unwrap();
+    let edits = plan_edits(&consumer, &checkout, &fake_crate_set()).unwrap();
     let manifest = build_link_manifest(&checkout, 2, &edits);
     write_manifest_excl(&consumer, &manifest).unwrap();
     apply_transaction(&consumer, &edits).unwrap();
@@ -425,9 +383,7 @@ fn apply_failure_on_the_last_edit_rolls_back_earlier_edits_byte_identically() {
 
     let err = establish_link(
         &consumer,
-        &PathBuf::from("/checkout"),
-        INDEX_URL,
-        &fake_crate_set(),
+        &PathBuf::from("/checkout"),        &fake_crate_set(),
     )
     .unwrap_err();
     assert!(matches!(err, LinkError::Io { .. }), "got {err:?}");
@@ -459,7 +415,7 @@ fn incomplete_rollback_preserves_backups_and_link_state() {
     let deno = consumer.join("deno.json");
 
     let checkout = PathBuf::from("/checkout");
-    let edits = plan_edits(&consumer, &checkout, INDEX_URL, &fake_crate_set()).unwrap();
+    let edits = plan_edits(&consumer, &checkout, &fake_crate_set()).unwrap();
     let manifest = build_link_manifest(&checkout, 2, &edits);
     write_manifest_excl(&consumer, &manifest).unwrap();
 
@@ -648,10 +604,12 @@ fn derive_linkable_crates_selects_the_streamlib_sdk_closure() {
 
 #[test]
 fn real_link_offline_e2e_link_refresh_unlink_roundtrip() {
-    // T3: the real `link()` composition path — index discovery, live crate
-    // derivation, transactional emission, post-link cargo verification,
-    // same-checkout refresh (derive-before-unlink), byte-clean unlink —
-    // against the actual workspace checkout, fully offline.
+    // T3: the real `link()` composition path — live crate derivation,
+    // transactional emission, post-link cargo verification (the
+    // `[patch.crates-io]` redirect resolving to the checkout), same-checkout
+    // refresh (derive-before-unlink), byte-clean unlink — against the actual
+    // workspace checkout, fully offline. The consumer deps `streamlib-idents`
+    // by bare version (crates-io source) so `[patch.crates-io]` redirects it.
     let checkout = workspace_checkout();
     let tmp = tempfile::tempdir().unwrap();
     let consumer = tmp.path().canonicalize().unwrap();
@@ -659,7 +617,7 @@ fn real_link_offline_e2e_link_refresh_unlink_roundtrip() {
     std::fs::create_dir_all(&cargo_dir).unwrap();
     std::fs::write(
         cargo_dir.join("config.toml"),
-        format!("[registries.tatolab]\nindex = \"{INDEX_URL}\"\n"),
+        "[alias]\nb = \"build\"\n",
     )
     .unwrap();
     std::fs::create_dir_all(consumer.join("src")).unwrap();
@@ -667,7 +625,7 @@ fn real_link_offline_e2e_link_refresh_unlink_roundtrip() {
     std::fs::write(
         consumer.join("Cargo.toml"),
         "[package]\nname = \"link-e2e-consumer\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
-         publish = false\n[dependencies]\nstreamlib-idents = { version = \"0.5\", registry = \"tatolab\" }\n[workspace]\n",
+         publish = false\n[dependencies]\nstreamlib-idents = \"0.6\"\n[workspace]\n",
     )
     .unwrap();
     let orig_config = std::fs::read(cargo_dir.join("config.toml")).unwrap();
@@ -798,7 +756,7 @@ fn relocked_cargo_lock_created_by_link_is_removed_on_unlink() {
     std::fs::create_dir_all(&cargo).unwrap();
     std::fs::write(
         cargo.join("config.toml"),
-        format!("[registries.tatolab]\nindex = \"{INDEX_URL}\"\n"),
+        "[alias]\nb = \"build\"\n",
     )
     .unwrap();
     let lockfile = consumer.join("Cargo.lock");

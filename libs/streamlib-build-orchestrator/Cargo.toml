@@ -17,18 +17,12 @@ thiserror = { workspace = true }
 serde_json = { workspace = true }
 toml_edit = { workspace = true }
 ureq = { workspace = true }
-streamlib-engine = { path = "../streamlib-engine", version = "0.6.0", registry = "tatolab" }
-streamlib-cargo-build = { path = "../streamlib-cargo-build", version = "0.6.0", registry = "tatolab" }
-streamlib-pack = { path = "../streamlib-pack", version = "0.6.0", registry = "tatolab" }
-streamlib-idents = { path = "../streamlib-idents", version = "0.6.0", registry = "tatolab" }
-streamlib-plugin-abi = { path = "../streamlib-plugin-abi", version = "0.6.0", registry = "tatolab" }
-streamlib-jtd-codegen = { path = "../streamlib-jtd-codegen", version = "0.6.0", registry = "tatolab" }
-
-# libc is unix-only (PR_SET_PDEATHSIG in the `registry serve` helper). Keep this
-# target table LAST so its header scopes only `libc` — the streamlib path deps
-# above must stay in the platform-agnostic [dependencies].
-[target.'cfg(unix)'.dependencies]
-libc = { workspace = true }
+streamlib-engine = { path = "../streamlib-engine", version = "0.6.0" }
+streamlib-cargo-build = { path = "../streamlib-cargo-build", version = "0.6.0" }
+streamlib-pack = { path = "../streamlib-pack", version = "0.6.0" }
+streamlib-idents = { path = "../streamlib-idents", version = "0.6.0" }
+streamlib-plugin-abi = { path = "../streamlib-plugin-abi", version = "0.6.0" }
+streamlib-jtd-codegen = { path = "../streamlib-jtd-codegen", version = "0.6.0" }
 
 [dev-dependencies]
 tempfile = "3.14"

@@ -103,14 +103,6 @@ pub mod sdk {
     #[cfg(feature = "auto-build")]
     pub use streamlib_build_orchestrator::PolyglotBuildOrchestrator;
 
-    /// Registry toolchain-config surface — the programmatic form of the
-    /// `streamlib registry use` / `streamlib registry serve` CLI verbs
-    /// ([`registry::use_registry`], [`registry::serve_registry`]). Behind the
-    /// `auto-build` feature (the orchestrator crate that owns the toolchain
-    /// integration).
-    #[cfg(feature = "auto-build")]
-    pub use streamlib_build_orchestrator::registry;
-
     /// Extension constructor (behind the `auto-build` feature) that builds
     /// a [`runtime::Runner`] with the default [`PolyglotBuildOrchestrator`]
     /// already wired — the common dev / runtime-authoring path. The engine

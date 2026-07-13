@@ -28,9 +28,9 @@ use std::path::Path;
 /// Updated only on a deliberate re-vendor / documented local patch, in the
 /// same commit that changes the tree.
 const VENDORED_TREES: &[(&str, u64)] = &[
-    ("libs/tatolab-vulkanalia", 0x44e8_ffb0_efab_7072),
+    ("libs/tatolab-vulkanalia", 0x7508_cfa2_9c2b_b9c7),
     ("libs/tatolab-vulkanalia-sys", 0xef46_fa14_69b6_8757),
-    ("libs/tatolab-vulkanalia-vma", 0x34f1_1b99_fb20_bfa4),
+    ("libs/tatolab-vulkanalia-vma", 0xac41_8fe4_7384_c0c9),
 ];
 
 /// FNV-1a 64 — deterministic (platform/version-stable), matching the

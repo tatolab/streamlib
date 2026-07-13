@@ -15,6 +15,12 @@ use streamlib_idents::link_marker::{
 /// Human-facing greppability marker on the emitted cargo `[patch]` block.
 const CARGO_PATCH_MARKER: &str =
     "# streamlib-link — managed by `streamlib link`; removed by `streamlib unlink`";
+/// The cargo `[patch.<source>]` source the link overrides. Internal cross-crate
+/// deps + an out-of-tree consumer's `streamlib` deps resolve from crates.io (by
+/// bare `version`), so the link patches `crates-io`. `[patch.crates-io]` is a
+/// source replacement — cargo uses the patch's `path` and never queries
+/// crates.io, so it works even though the SDK isn't published there yet.
+const CARGO_PATCH_SOURCE: &str = "crates-io";
 /// Checkout-relative path of the Python SDK (uv editable source target).
 const PYTHON_SDK_REL: &str = "libs/streamlib-python";
 /// Checkout-relative path of the Deno SDK entrypoint module.
@@ -47,14 +53,6 @@ pub enum LinkError {
          concurrently, or a previous link was interrupted; run `streamlib unlink` first"
     )]
     LinkMarkerAlreadyExists { path: PathBuf },
-
-    /// No `[registries.tatolab].index` is discoverable from the consumer's cargo config.
-    #[error(
-        "no `[registries.tatolab]` registry index found in this consumer's cargo config (looked in \
-         `.cargo/config.toml` walking up from the consumer root and in `~/.cargo/config.toml`); a \
-         streamlib consumer must configure the tatolab registry before linking"
-    )]
-    RegistryIndexNotConfigured,
 
     /// `cargo metadata` on the checkout failed or produced no linkable crates.
     #[error("could not derive the linkable crate set from `{checkout}`: {detail}")]
@@ -191,7 +189,6 @@ pub fn link(consumer_root: &Path, checkout: &Path, skip_verify: bool) -> Result<
 
     // Derive everything failure-prone BEFORE tearing down an existing link, so
     // a failed derivation preserves the working link on a refresh.
-    let index_url = discover_registry_index(&consumer_root)?;
     let crates = derive_linkable_crates(&checkout)?;
     if crates.is_empty() {
         return Err(LinkError::CrateSetDerivation {
@@ -215,7 +212,7 @@ pub fn link(consumer_root: &Path, checkout: &Path, skip_verify: bool) -> Result<
     // snapshot is what `unlink` restores it to, keeping teardown byte-clean.
     let original_cargo_lock = read_optional_bytes(&consumer_root.join("Cargo.lock"))?;
 
-    let edits = establish_link(&consumer_root, &checkout, &index_url, &crates)?;
+    let edits = establish_link(&consumer_root, &checkout, &crates)?;
 
     println!("Linked streamlib → {}", checkout.display());
     println!("  Cargo crates redirected: {}", crates.len());
@@ -467,57 +464,6 @@ fn overwrite_manifest(consumer_root: &Path, manifest: &LinkManifest) -> Result<(
     let path = consumer_root.join(LINK_STATE_DIR).join(LINK_MANIFEST_FILE);
     let body = manifest_json(manifest, &path)?;
     std::fs::write(&path, body).map_err(|e| LinkError::io(&path, e))
-}
-
-/// Discover the consumer's effective `[registries.tatolab].index` string the way
-/// cargo does: closest `.cargo/config.toml` (walking up) wins, then the home
-/// cargo config.
-fn discover_registry_index(consumer_root: &Path) -> Result<String, LinkError> {
-    discover_registry_index_with_home(consumer_root, dirs::home_dir().as_deref())
-}
-
-/// [`discover_registry_index`] with an injectable home dir (`None` disables
-/// the home fallback) so tests are environment-independent.
-fn discover_registry_index_with_home(
-    consumer_root: &Path,
-    home: Option<&Path>,
-) -> Result<String, LinkError> {
-    let mut dir = Some(consumer_root);
-    while let Some(d) = dir {
-        for name in [".cargo/config.toml", ".cargo/config"] {
-            let candidate = d.join(name);
-            if let Some(idx) = read_tatolab_index(&candidate)? {
-                return Ok(idx);
-            }
-        }
-        dir = d.parent();
-    }
-    if let Some(home) = home {
-        for name in [".cargo/config.toml", ".cargo/config"] {
-            if let Some(idx) = read_tatolab_index(&home.join(name))? {
-                return Ok(idx);
-            }
-        }
-    }
-    Err(LinkError::RegistryIndexNotConfigured)
-}
-
-/// Read `registries.tatolab.index` from a cargo config file, if present.
-fn read_tatolab_index(path: &Path) -> Result<Option<String>, LinkError> {
-    if !path.is_file() {
-        return Ok(None);
-    }
-    let body = std::fs::read_to_string(path).map_err(|e| LinkError::io(path, e))?;
-    let doc: toml::Value = toml::from_str(&body).map_err(|e| LinkError::ManifestParse {
-        path: path.to_path_buf(),
-        detail: e.to_string(),
-    })?;
-    Ok(doc
-        .get("registries")
-        .and_then(|r| r.get("tatolab"))
-        .and_then(|g| g.get("index"))
-        .and_then(|i| i.as_str())
-        .map(|s| s.to_string()))
 }
 
 /// Run `cargo metadata` and parse its JSON output.
@@ -828,10 +774,9 @@ fn record_relocked_lockfile(
 fn establish_link(
     consumer_root: &Path,
     checkout: &Path,
-    index_url: &str,
     crates: &BTreeMap<String, PathBuf>,
 ) -> Result<Vec<PlannedEdit>, LinkError> {
-    let edits = plan_edits(consumer_root, checkout, index_url, crates)?;
+    let edits = plan_edits(consumer_root, checkout, crates)?;
     let mut manifest = build_link_manifest(checkout, crates.len(), &edits);
 
     // Manifest-first: the full plan is on disk (O_EXCL) before any edit, so a
@@ -903,13 +848,12 @@ fn unwind_failed_transaction(
 fn plan_edits(
     consumer_root: &Path,
     checkout: &Path,
-    index_url: &str,
     crates: &BTreeMap<String, PathBuf>,
 ) -> Result<Vec<PlannedEdit>, LinkError> {
     let mut edits = Vec::new();
 
-    // 1. Cargo config `[patch."<index>"]` — always emitted.
-    edits.push(plan_cargo_config_edit(consumer_root, index_url, crates)?);
+    // 1. Cargo config `[patch.crates-io]` — always emitted.
+    edits.push(plan_cargo_config_edit(consumer_root, crates)?);
 
     // 2. Python SDK via `[tool.uv.sources]` — only when the consumer has a pyproject.
     let pyproject = consumer_root.join("pyproject.toml");
@@ -931,7 +875,6 @@ fn plan_edits(
 
 fn plan_cargo_config_edit(
     consumer_root: &Path,
-    index_url: &str,
     crates: &BTreeMap<String, PathBuf>,
 ) -> Result<PlannedEdit, LinkError> {
     let abs_path = consumer_root.join(".cargo").join("config.toml");
@@ -950,8 +893,8 @@ fn plan_cargo_config_edit(
                 detail: e.to_string(),
             })?;
 
-    // Build `[patch."<index>"]` with one path entry per crate. `patch` is an
-    // implicit parent table so only the `[patch."url"]` header is emitted.
+    // Build `[patch.crates-io]` with one path entry per crate. `patch` is an
+    // implicit parent table so only the `[patch.crates-io]` header is emitted.
     let mut patch_target = toml_edit::Table::new();
     for (name, dir) in crates {
         let mut entry = toml_edit::InlineTable::new();
@@ -979,7 +922,7 @@ fn plan_cargo_config_edit(
             path: abs_path.clone(),
             detail: "`patch` exists but is not a table".to_string(),
         })?;
-    patch.insert(index_url, toml_edit::Item::Table(patch_target));
+    patch.insert(CARGO_PATCH_SOURCE, toml_edit::Item::Table(patch_target));
 
     Ok(PlannedEdit {
         rel_path,

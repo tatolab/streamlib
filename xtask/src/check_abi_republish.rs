@@ -5,12 +5,12 @@
 //!
 //! `STREAMLIB_ABI_VERSION` (in `streamlib-plugin-abi`) is the C-ABI contract a
 //! `dlopen`-loaded package cdylib and the source-built host must agree on. A
-//! package resolves the *published* `streamlib` SDK by version from the static
-//! registry; the host builds from source. If the ABI constant moves without a
-//! coordinated SDK republish (a new workspace version + every package pin
-//! bumped so the registry serves an SDK at the new ABI), a registry-resolved
-//! cdylib is correctly refused at load with `PluginAbiVersionMismatch` — the
-//! handshake working as designed on a genuine version skew.
+//! package resolves the *published* `streamlib` SDK by version; the host builds
+//! from source. If the ABI constant moves without a coordinated SDK republish
+//! (a new workspace version + every package pin bumped so the published SDK is
+//! at the new ABI), a cdylib built against the old SDK is correctly refused at
+//! load with `PluginAbiVersionMismatch` — the handshake working as designed on
+//! a genuine version skew.
 //!
 //! This lint fails a PR that changes the ABI constant without also changing the
 //! `[workspace.package]` version — the first, mechanical half of that
@@ -80,10 +80,10 @@ pub fn evaluate(abi_changed: bool, workspace_version_changed: bool) -> Result<()
              [workspace.package] version in Cargo.toml did not. An ABI bump is \
              a breaking plugin-ABI change and requires a coordinated SDK \
              republish: bump the workspace version, bump every package's \
-             streamlib* pin to match, and re-emit the closure — otherwise a \
-             registry-resolved package cdylib is refused at load with \
-             PluginAbiVersionMismatch. See the \"Release / ABI republish\" \
-             section of docs/architecture/static-registry.md."
+             streamlib* pin to match, and republish the SDK — otherwise a \
+             cdylib built against the old SDK is refused at load with \
+             PluginAbiVersionMismatch. See the \"ABI-version bump\" section of \
+             docs/architecture/static-registry.md."
         ))
     } else {
         Ok(())

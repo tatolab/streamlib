@@ -4806,7 +4806,6 @@ name = "streamlib-build-orchestrator"
 version = "0.6.0"
 dependencies = [
  "anyhow",
- "libc",
  "serde_json",
  "serial_test",
  "streamlib-cargo-build",
@@ -5069,17 +5068,13 @@ name = "streamlib-pack"
 version = "0.6.0"
 dependencies = [
  "anyhow",
- "flate2",
  "libc",
  "serde",
  "serde_json",
  "serde_yaml",
- "sha1",
- "sha2",
  "streamlib-cargo-build",
  "streamlib-idents",
  "streamlib-processor-schema",
- "tar",
  "tempfile",
  "thiserror 2.0.18",
  "toml 0.8.23",

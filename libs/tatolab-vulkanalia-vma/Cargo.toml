@@ -33,7 +33,7 @@ bind = ["bindgen", "doxygen-rs"]
 [dependencies]
 
 bitflags = "2"
-vulkanalia = { package = "tatolab-vulkanalia", version = "0.35", path = "../tatolab-vulkanalia", registry = "tatolab", default-features = false }
+vulkanalia = { package = "tatolab-vulkanalia", version = "0.35", path = "../tatolab-vulkanalia", default-features = false }
 
 [build-dependencies]
 

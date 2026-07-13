@@ -356,7 +356,10 @@ StreamLib-authored **or customized** artifact is resolved **by version** —
 never by relative `path` or git `[patch]` in anything a consumer sees:
 
 - **SDK libraries** (rust `streamlib` crate chain, python pkg, deno module) →
-  the backend's cargo / pypi / npm registries.
+  ~~the backend's cargo / pypi / npm registries.~~ the real public registries
+  (crates.io / PyPI / npm), as a separate, gated release step (deferred).
+  Superseded 2026-07-13 (#1322): the custom cargo/pypi/npm registry emulation
+  was removed; in-repo, internal cross-crate deps resolve by `path`.
 - **Packages** (polyglot streamlib packages) → **source-only `.slpkg`** via
   `streamlib pkg build` / `streamlib pkg publish` → the generic store.
 - **`streamlib.yaml` schema deps** (e.g. `@tatolab/escalate`) → resolved from
@@ -364,33 +367,41 @@ never by relative `path` or git `[patch]` in anything a consumer sees:
 - **Truly-external untouched deps** (serde, tokio, …) keep resolving from
   their normal public registries.
 
-Distribution has **one backend behind a tokenless read shape**: a plain static
-file tree (sparse index + tarballs + `.slpkg` + catalog), served by any dumb
-HTTP mount or read over `file://`.
+Package distribution has **one backend behind a tokenless read shape**: a plain
+static file tree (`.slpkg` generic store + catalog), served by any dumb HTTP
+mount or read over `file://`.
 > Note (2026-07-12): the static file tree is the **only** registry
 > backend. A prior design had a second, hosted-daemon backend behind the same
 > read shape — that daemon, its publish scripts, and its hosted read/write
 > client arms were removed entirely. Do not re-introduce a hosted-daemon
 > backend; the static tree + `file://` / dumb-HTTP-mount read shape fully
-> covers distribution. The by-version resolution shape below is unchanged.
+> covers `.slpkg` distribution.
 
-The static tree is what CI and local `file://` resolution use. Rust internal
-cross-crate deps use `{ path = "../foo", version = "x.y", registry = "tatolab"
-}` — the `path` is a dev-only affordance cargo strips from the published
-manifest; `registry` (the `tatolab` registry, canonical index
-`sparse+https://registry.tatolab.com/cargo/`) is required or cargo defaults to
-crates.io. Releases are **atomic** (`compute_release_closure` is
-the one definition of "what a release publishes"; the release manifest is
-written last as the completion marker) and a consumer **detects a partial
-release** up front rather than failing deep in version unification.
+The static tree is what CI and local `file://` resolution use.
+> ~~Rust internal cross-crate deps use `{ path = "../foo", version = "x.y",
+> registry = "tatolab" }` — the `path` is a dev-only affordance cargo strips
+> from the published manifest; `registry` (the `tatolab` registry, canonical
+> index `sparse+https://registry.tatolab.com/cargo/`) is required or cargo
+> defaults to crates.io.~~ — Superseded 2026-07-13 (#1322). The custom cargo
+> registry was removed; Rust internal cross-crate deps use `{ path = "../foo",
+> version = "x.y" }` and resolve by `path` in-workspace (a cold clone builds
+> with zero registry config). An out-of-tree consumer resolves the SDK by bare
+> `version` from crates.io once the SDK is published there (deferred); until
+> then `streamlib link --engine` provides it locally.
+Package releases are **atomic** (the `.slpkg` release manifest is written last
+as the completion marker) and a consumer **detects a partial release** up front
+rather than failing deep in version unification.
 
 **Dev loop — two intents.** Don't introduce new persistent relative-path /
 git-`[patch]` cross-crate deps in a manifest. For local development use one of
 the sanctioned loops instead:
 
 - **All-local WIP against one checkout** → `streamlib link <checkout>` emits
-  whole-tree cargo `[patch]` / uv-source / deno-import-map overrides at the
-  toolchain layer; it is transactional, greppable, restored byte-identically
+  whole-tree cargo `[patch.crates-io]` / uv-source / deno-import-map overrides
+  at the toolchain layer (the SDK deps resolve from crates.io by bare
+  `version`, so `[patch.crates-io]` redirects them to the checkout — a source
+  replacement that works offline even though the SDK isn't published to
+  crates.io yet); it is transactional, greppable, restored byte-identically
   by `streamlib unlink`, and refused entry into any published `.slpkg`.
 - **Against a specific *published* version** → publish a `-dev.N` version the
   consumer bumps to. The monorepo still builds itself in-place (the dev

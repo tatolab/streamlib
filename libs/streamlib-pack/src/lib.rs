@@ -46,9 +46,7 @@ use streamlib_processor_schema::ProcessorLanguage;
 pub use streamlib_cargo_build::CargoProfile;
 
 pub mod catalog;
-pub mod crate_tarball;
 pub mod static_registry;
-pub mod tarball;
 
 // The `streamlib link` marker schema + discovery moved to `streamlib-idents`
 // (its natural home alongside the manifest/lockfile types) so the engine module

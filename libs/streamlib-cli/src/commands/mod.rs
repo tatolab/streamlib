@@ -7,6 +7,5 @@ pub mod install;
 pub mod link;
 pub mod logs;
 pub mod pkg;
-pub mod registry;
 pub mod schema;
 pub mod setup;

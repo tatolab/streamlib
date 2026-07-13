@@ -41,7 +41,7 @@ window = ["raw-window-handle", "cocoa", "metal", "objc"]
 
 libloading = { version = "0.8.5", optional = true }
 raw-window-handle = { version = "0.6", optional = true }
-vulkanalia-sys = { package = "tatolab-vulkanalia-sys", version = "0.35", path = "../tatolab-vulkanalia-sys", registry = "tatolab", default-features = false }
+vulkanalia-sys = { package = "tatolab-vulkanalia-sys", version = "0.35", path = "../tatolab-vulkanalia-sys", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 

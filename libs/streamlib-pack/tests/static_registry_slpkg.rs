@@ -176,7 +176,7 @@ fn removed_slpkg_from_tree_is_rejected_at_download() {
 /// tree and assert the consumer-side checks reject it.
 #[test]
 fn emitted_tree_truncation_is_rejected_by_consumer_checks() {
-    use streamlib_pack::static_registry::{EmitEcosystems, EmitOptions, emit_static_registry};
+    use streamlib_pack::static_registry::{EmitOptions, emit_static_registry};
 
     // Minimal fake workspace: empty cargo workspace + one schemas-only
     // package (no cargo build at assemble time).
@@ -214,16 +214,9 @@ fn emitted_tree_truncation_is_rejected_by_consumer_checks() {
     emit_static_registry(&EmitOptions {
         workspace_root: ws.clone(),
         out: out.clone(),
-        base_url: "http://127.0.0.1:9".into(), // unused by the slpkg ecosystem
         dev: None,
-        ecosystems: EmitEcosystems {
-            cargo_closure: false,
-            pypi: false,
-            npm: false,
-            slpkg: true,
-        },
     })
-    .expect("slpkg-only emit against the fake workspace must succeed");
+    .expect("slpkg emit against the fake workspace must succeed");
 
     // The REAL emitted manifest is fetchable + lists the package.
     let cfg = file_config(&out);

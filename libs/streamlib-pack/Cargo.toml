@@ -19,20 +19,11 @@ serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 toml = { workspace = true }
 toml_edit = { workspace = true }
-sha2 = { workspace = true }
-# npm packument `dist.shasum` is a legacy sha1 of the tarball; `dist.integrity`
-# is the modern sha512 (from sha2). Both feed the static-registry npm emit.
-sha1 = { workspace = true }
 tempfile = { workspace = true }
 zip = "2.2"
-# Structural integrity verification of `cargo package` `.crate` tarballs
-# (gzip-tar) before the static-registry cargo-closure emit reuses them —
-# see `crate_tarball`.
-flate2 = "1"
-tar = "0.4"
-streamlib-cargo-build = { path = "../streamlib-cargo-build", version = "0.6.0", registry = "tatolab" }
-streamlib-processor-schema = { path = "../streamlib-processor-schema", version = "0.6.0", registry = "tatolab" }
-streamlib-idents = { path = "../streamlib-idents", version = "0.6.0", registry = "tatolab" }
+streamlib-cargo-build = { path = "../streamlib-cargo-build", version = "0.6.0" }
+streamlib-processor-schema = { path = "../streamlib-processor-schema", version = "0.6.0" }
+streamlib-idents = { path = "../streamlib-idents", version = "0.6.0" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Gapless atomic directory swap (renameat2 RENAME_EXCHANGE) for the static

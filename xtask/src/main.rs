@@ -206,49 +206,28 @@ enum Commands {
     /// `docs/architecture/vendored-vulkanalia.md`.
     CheckVendoredVulkanalia,
 
-    /// Emit a daemon-free STATIC registry tree (cargo sparse + pypi-simple +
-    /// npm + `.slpkg` generic) for the current workspace release into a
-    /// directory served identically over `file://` (slpkg, pypi) or a dumb
-    /// static HTTP mount (cargo, npm). No registry daemon, no token. See
-    /// `docs/architecture/static-registry.md`.
+    /// Emit a daemon-free STATIC `.slpkg` registry tree (generic store +
+    /// catalog + release manifest) for the current workspace's `packages/*`
+    /// into a directory served over `file://` or a dumb static HTTP mount. No
+    /// registry daemon, no token. See `docs/architecture/static-registry.md`.
     #[command(subcommand)]
     StaticRegistry(StaticRegistryAction),
 }
 
 #[derive(Subcommand)]
 enum StaticRegistryAction {
-    /// Emit the full four-ecosystem tree into `--out`, flipped in atomically
-    /// once the release manifest lands.
+    /// Emit the `.slpkg` store + catalog + release manifest into `--out`,
+    /// flipped in atomically once the release manifest lands.
     Emit {
         /// Target directory for the served tree (built in a staging sibling
         /// and moved in atomically).
         #[arg(long)]
         out: PathBuf,
-        /// `-dev.N` prerelease suffix for the release manifest + SDK
-        /// artifacts (matches `--dev N` on the publish scripts). The cargo
-        /// closure always emits at the crates' ACTUAL manifest versions —
-        /// a dev closure emit expects the workspace manifests already
-        /// bumped (the publish scripts' bump/restore convention).
+        /// `-dev.N` prerelease suffix for the release manifest. A dev emit
+        /// expects the workspace / package manifests already bumped (the
+        /// publish scripts' bump/restore convention).
         #[arg(long)]
         dev: Option<u32>,
-        /// Absolute base URL the cargo + npm mounts are served at (sparse/npm
-        /// are HTTP-only by spec; baked into config.json + packuments).
-        #[arg(long, default_value = "http://127.0.0.1:8000")]
-        base_url: String,
-        /// Also package + emit the workspace release-closure crates into the
-        /// cargo tree (heavy — off by default). Includes the vendored
-        /// tatolab-vulkanalia* crates as ordinary closure members.
-        #[arg(long)]
-        cargo_closure: bool,
-        /// Skip the pypi-simple tree.
-        #[arg(long)]
-        no_pypi: bool,
-        /// Skip the npm tree.
-        #[arg(long)]
-        no_npm: bool,
-        /// Skip the `.slpkg` store + release manifest.
-        #[arg(long)]
-        no_slpkg: bool,
     },
 }
 
@@ -305,29 +284,12 @@ fn main() -> Result<()> {
                 .with_context(|| format!("stripping path patches from {}", dir.display()))?;
             tracing::info!(dir = %dir.display(), "stripped path-flavor patch entries from streamlib.yaml");
         }
-        Commands::StaticRegistry(StaticRegistryAction::Emit {
-            out,
-            dev,
-            base_url,
-            cargo_closure,
-            no_pypi,
-            no_npm,
-            no_slpkg,
-        }) => {
-            use streamlib_pack::static_registry::{
-                EmitEcosystems, EmitOptions, emit_static_registry,
-            };
+        Commands::StaticRegistry(StaticRegistryAction::Emit { out, dev }) => {
+            use streamlib_pack::static_registry::{EmitOptions, emit_static_registry};
             emit_static_registry(&EmitOptions {
                 workspace_root: workspace_root()?,
                 out,
-                base_url,
                 dev,
-                ecosystems: EmitEcosystems {
-                    cargo_closure,
-                    pypi: !no_pypi,
-                    npm: !no_npm,
-                    slpkg: !no_slpkg,
-                },
             })?
         }
     }

@@ -17,7 +17,7 @@ default = []
 backend-vulkan = ["streamlib/backend-vulkan"]
 
 [dependencies]
-streamlib = { version = "0.4.33-dev.5", registry = "tatolab" }
+streamlib = { version = "0.4.33-dev.5" }
 serde_json = "1.0"
 
 [workspace]
