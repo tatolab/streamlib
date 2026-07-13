@@ -303,21 +303,56 @@ release manifest land in one atomic whole-tree `renameat2(RENAME_EXCHANGE)`
 staged swap (`publish_staged_tree`), so no state ever exists where partial
 crate versions sit above the newest manifest.
 
-## The install seam — install / run split
+## The install seam
 
-Install and run are distinct operations with the application lockfile as the
-only handoff.
+Three distinct operations reproduce or resolve a package set, keyed by which
+lockfile they touch.
 
-**`install` — resolve + materialize + lock.**
+**`streamlib install` — reproduce `streamlib_modules/` from `streamlib.lock`.**
+`AppModulesDir::install_from_lockfile()`
+([`libs/streamlib-idents/src/app_modules.rs`](../../libs/streamlib-idents/src/app_modules.rs),
+re-exported through `streamlib::sdk::runtime`, CLI `streamlib install`) reads
+the committed `streamlib.lock` (`MODULES_LOCKFILE_NAME`) and repopulates the
+app's own `streamlib_modules/@org/name/` folder **exactly** — no resolution
+decisions. This is the container/CI preinstall seam: `add`/`link` decide what's
+in the environment; `install` reproduces that decision elsewhere (a fresh
+checkout, an image build). Each byte-source entry (path / archive / url) is
+re-materialized through the same stage → validate → promote machinery `add`
+uses and re-verified against its recorded `content_hash` — *before* promote, so
+a mismatch leaves no partial slot (`InstallContentHashMismatch`); an
+`archive`/`url` entry additionally re-checks the recorded `archive_sha256`
+(`InstallArchiveHashMismatch`). A `link` entry's symlink is re-created iff its
+checkout target still exists; a gone target is a typed
+`InstallDanglingLinkTarget` — a dev link is inherently non-reproducible on
+another machine. It is per-package-atomic and fail-fast: a failure names the
+package (`InstallSourceUnavailable` for a gone path/archive/offline url), leaves
+already-reproduced packages in place, and never rewrites the lockfile; a re-run
+is idempotent. `path`/`link` sources reproduce only where their recorded local
+paths exist, so a portable install relies on `url`/`archive` entries (or a
+vendored folder copied into the image directly).
+
+> ~~`install` — resolve + materialize + lock. `install(...)` (CLI `streamlib
+> install`) runs the shared `resolve_with` (range→concrete), materializes each
+> resolved package through the orchestrator, and writes the lockfile.~~ —
+> Superseded 2026-07-13: the CLI `streamlib install` verb now reproduces
+> `streamlib_modules/` from `streamlib.lock` (above). The
+> resolve + materialize → `streamlib-app.lock` flow survives as the
+> **programmatic** `install()` seam (next), no longer surfaced as a CLI verb.
+
+**`install()` — resolve + materialize + lock (programmatic seam).**
 `install(root_dir, orchestrator, sink, options)`
 ([`libs/streamlib-engine/src/core/runtime/install.rs`](../../libs/streamlib-engine/src/core/runtime/install.rs),
-CLI `streamlib install`) runs the shared `resolve_with` (range→concrete),
-materializes each resolved package through the orchestrator, and writes the
-lockfile. The release-completeness check *rides* materialize — a partial
-registry release fails install before any lockfile is written. Network at
-install time is expected.
+`streamlib::sdk::runtime::install`) runs the shared `resolve_with`
+(range→concrete) over a project's `streamlib.yaml`, materializes each resolved
+package through the orchestrator, and writes `streamlib-app.lock`
+(`APP_LOCKFILE_NAME`). The release-completeness check *rides* materialize — a
+partial registry release fails install before any lockfile is written. Network
+at install time is expected. A locked run (`add_modules_from_lockfile`, below)
+then loads the pinned set offline. This is the whole-`streamlib.yaml`-tree seam,
+distinct from the per-app `streamlib_modules/` reproduction above and consuming
+a distinct lockfile.
 
-**`add` / `remove` — per-app package adoption (the node_modules model).**
+**`add` / `remove` / `link` — per-app package adoption (the node_modules model).**
 `AppModulesDir::add_package(source, options)`
 ([`libs/streamlib-idents/src/app_modules.rs`](../../libs/streamlib-idents/src/app_modules.rs),
 re-exported through `streamlib::sdk::runtime`, CLI `streamlib add`) brings
@@ -341,14 +376,19 @@ involvement, so each app directory is atomic and self-contained.
 `remove_package(pkg_ref)` (CLI `streamlib remove`) reverses it: delete the
 package folder, then drop its lockfile entry (folder first, so a crash
 leaves the healed direction — an entry pointing at a gone folder).
+`link_package(checkout)` (CLI `streamlib link`) is `add` with a symlink
+instead of a copy — recorded as a `LockfileSource::Link` — so checkout edits
+are live on the next run; `streamlib install` re-creates that symlink when
+reproducing the lock.
 
 At load time, `Strategy::InstalledCache` (the bare `Runner::add_module`
 default) probes `<cwd>/streamlib_modules/@org/name` **before** the
 installed-package cache; an active `streamlib link` still outranks both
 (precedence: link > app modules > installed cache). Locked runs are
 unaffected — they resolve pinned `Strategy::Path` edges and never consult
-the modules folder. `install` remains the whole-app-tree front door; `add`
-is the per-package one.
+the modules folder. The programmatic `install()` remains the
+whole-`streamlib.yaml`-tree front door; `add` / `link` / `streamlib install`
+are the per-app `streamlib_modules/` operations.
 
 **Locked run — offline, pinned, verified.**
 `Runner::add_modules_from_lockfile` builds a `LockedResolution` from the
@@ -374,8 +414,8 @@ but are distinct files with distinct headers:
 | File | Written by | Pins |
 |---|---|---|
 | `streamlib-codegen.lock` (`CODEGEN_LOCKFILE_NAME`) | `streamlib generate` / jtd-codegen | the *schema* set that reconstructs generated bindings byte-for-byte |
-| `streamlib-app.lock` (`APP_LOCKFILE_NAME`) | `streamlib install` | the *runtime package* set an installed app loads offline |
-| `streamlib.lock` (`MODULES_LOCKFILE_NAME`) | `streamlib add` / `streamlib remove` | the packages materialized into the app's `streamlib_modules/` folder (identity, source, content hash) |
+| `streamlib-app.lock` (`APP_LOCKFILE_NAME`) | the programmatic `install()` (`sdk::runtime::install`) | the *runtime package* set an installed app loads offline |
+| `streamlib.lock` (`MODULES_LOCKFILE_NAME`) | `streamlib add` / `streamlib remove` / `streamlib link` (read back by `streamlib install`) | the packages materialized into the app's `streamlib_modules/` folder (identity, source, content hash) |
 
 **Resolver handoff — deliberately two resolvers.** Range logic lives only at
 install (`resolve_with`); concrete enforcement lives only at run
