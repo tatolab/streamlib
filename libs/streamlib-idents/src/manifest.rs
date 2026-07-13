@@ -49,8 +49,12 @@ pub struct Manifest {
     /// Path-flavor entries are dev-time overrides only — `streamlib pack`
     /// rejects yamls whose `patch:` table contains any `path:` entries
     /// (mirrors `npm publish` / `cargo publish` rejecting path deps).
-    /// Path patches are validated strictly at parse time: a missing path
-    /// is a hard error so the dev knows immediately to fix the manifest.
+    /// A path patch is a dev-loop-only affordance: at resolve time the
+    /// resolver uses it only when its target exists on disk (the monorepo
+    /// dev loop) and otherwise falls back to resolving the declared
+    /// `dependencies:` version from the registry, so a path patch that
+    /// ships in a published artifact never breaks a standalone consumer
+    /// (the two-loops distribution model).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub patch: BTreeMap<PackageRef, DependencySpec>,
 

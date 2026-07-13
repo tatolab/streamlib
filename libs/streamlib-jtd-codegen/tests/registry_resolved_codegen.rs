@@ -128,3 +128,85 @@ schemas:
         "expected escalate_request.rs under tatolab__escalate/ (registry-resolved External owner context); got files: {files:?}"
     );
 }
+
+/// The faithful standalone-consumption E2E for issue #1307: a consumer
+/// manifest carries the EXACT shape `streamlib-engine`'s `streamlib.yaml`
+/// ships — a bare registry range in `dependencies:` PLUS a monorepo-relative
+/// `patch: { path }` dev override PLUS an `External` schema import. For a
+/// standalone consumer the patch target does not exist, so the resolver must
+/// fall back to resolving the declared version from the registry and codegen
+/// must still emit the imported type. This is the #1276 docker container's
+/// runtime path minus the cargo build. Before the fix, the absent dev path
+/// patch made the resolve fail with `PathDependencyNotFound`.
+#[test]
+fn registry_resolved_codegen_falls_back_when_dev_path_patch_absent() {
+    let test_name = "registry_resolved_codegen_falls_back_when_dev_path_patch_absent";
+    if skip_unless_jtd_codegen_available(test_name) {
+        return;
+    }
+
+    let tmp = TempDir::new().expect("temp dir");
+    let mirror = tmp.path().join("mirror");
+    write_slpkg(&mirror, "escalate", "1.0.0", "EscalateRequest");
+    write_slpkg(&mirror, "escalate", "1.2.0", "EscalateRequest");
+
+    // Consumer manifest with the engine's exact shape: bare range dep +
+    // dev-time path patch (whose target is absent for a standalone consumer)
+    // + External schema import.
+    let root_dir = tmp.path().join("consumer");
+    fs::create_dir_all(&root_dir).unwrap();
+    fs::write(
+        root_dir.join("streamlib.yaml"),
+        r#"
+package:
+  org: tatolab
+  name: consumer
+  version: 0.6.0
+dependencies:
+  "@tatolab/escalate": "^1.0.0"
+patch:
+  "@tatolab/escalate":
+    path: ../packages/escalate
+schemas:
+  EscalateRequest:
+    package: "@tatolab/escalate"
+"#,
+    )
+    .unwrap();
+
+    let resolved = resolve_with(
+        &root_dir,
+        &ResolverOptions {
+            cache_dir: Some(tmp.path().join("cache")),
+            registry: Some(RegistryConfig {
+                base_url: format!("file://{}", mirror.display()),
+            }),
+        },
+    )
+    .expect("absent dev path patch must fall back to registry resolution");
+
+    let escalate = resolved
+        .packages
+        .get("@tatolab/escalate")
+        .expect("escalate resolved from registry despite the path patch");
+    assert_eq!(
+        escalate.manifest.package.as_ref().unwrap().version.to_string(),
+        "1.2.0"
+    );
+
+    let output = TempDir::new().expect("output temp dir");
+    generate_from_resolved(&resolved, RuntimeTarget::Rust, output.path())
+        .expect("codegen from registry-resolved packages");
+
+    let files: Vec<String> = collect_files(output.path(), &[])
+        .into_iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect();
+
+    assert!(
+        files
+            .iter()
+            .any(|f| f.contains("tatolab__escalate") && f.ends_with("escalate_request.rs")),
+        "expected escalate_request.rs under tatolab__escalate/ after path-patch fallback; got files: {files:?}"
+    );
+}

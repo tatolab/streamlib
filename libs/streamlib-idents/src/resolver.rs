@@ -266,13 +266,38 @@ fn resolve_one(
     cache_dir: &Path,
     registry: Option<&RegistryConfig>,
 ) -> ResolverResult<ResolvedPackage> {
-    // Consumer's `patch:` table overrides the dep declaration when present.
-    // Mirrors Cargo's `[patch.crates-io]` semantics: dependencies declare
-    // *what* the consumer needs, the patch table declares *which copy* to
-    // use. Path-flavor patches resolve relative to the consumer's manifest
-    // dir; missing paths fail loudly so the dev knows to fix the
-    // declaration (npm/wrangler-style strict validation).
-    let effective_spec = patch.get(dep_ref).unwrap_or(spec);
+    // Consumer's `patch:` table overrides the dep declaration when present —
+    // Cargo `[patch.crates-io]` semantics: `dependencies:` declares *what* the
+    // consumer needs, `patch:` declares *which copy* to use.
+    //
+    // A path patch is a **dev-loop-only** affordance (the two-loops model in
+    // docs/architecture/package-development-model.md). It ships inside the
+    // published artifact, but its monorepo-relative target only exists in a dev
+    // checkout:
+    //   * dev loop     — target exists → the patch wins (byte-identical to an
+    //                    in-tree resolve).
+    //   * distribution — target absent (a standalone consumer of the published
+    //                    crate) → fall back to the declared `spec`, resolving
+    //                    the dep by version from the configured registry /
+    //                    `.slpkg` store.
+    // A path declared directly in `dependencies:` (no patch) still fails loud
+    // with `PathDependencyNotFound` when absent — there is no version range to
+    // fall back to, and a missing direct path source is a genuine error.
+    let effective_spec = match patch.get(dep_ref) {
+        Some(DependencySpec::Path(path_dep))
+            if !path_dependency_absolute_path(consumer_dir, path_dep).exists() =>
+        {
+            tracing::debug!(
+                dependency = dep_id,
+                patch_path = %path_dependency_absolute_path(consumer_dir, path_dep).display(),
+                "dev path patch target absent; falling back to declared version spec \
+                 (two-loops distribution resolution)"
+            );
+            spec
+        }
+        Some(patched) => patched,
+        None => spec,
+    };
     match effective_spec {
         DependencySpec::Path(path_dep) => {
             resolve_path_dependency(consumer_dir, dep_id, path_dep, cache_dir)
@@ -323,17 +348,28 @@ fn resolve_registry_dependency(
     build_resolved_package(manifest, extracted, ResolvedSource::Registry { url })
 }
 
+/// Absolute path a [`PathDependency`] resolves to, relative to `consumer_dir`
+/// (an absolute `path:` value passes through unchanged). Shared by
+/// [`resolve_path_dependency`] and the dev-patch-fallback existence check in
+/// [`resolve_one`] so both agree on exactly which path a patch names.
+fn path_dependency_absolute_path(
+    consumer_dir: &Path,
+    path_dep: &crate::manifest::PathDependency,
+) -> PathBuf {
+    if path_dep.path.is_absolute() {
+        path_dep.path.clone()
+    } else {
+        consumer_dir.join(&path_dep.path)
+    }
+}
+
 fn resolve_path_dependency(
     consumer_dir: &Path,
     dep_id: &str,
     path_dep: &crate::manifest::PathDependency,
     cache_dir: &Path,
 ) -> ResolverResult<ResolvedPackage> {
-    let abs = if path_dep.path.is_absolute() {
-        path_dep.path.clone()
-    } else {
-        consumer_dir.join(&path_dep.path)
-    };
+    let abs = path_dependency_absolute_path(consumer_dir, path_dep);
     if !abs.exists() {
         return Err(ResolverError::PathDependencyNotFound {
             name: dep_id.to_string(),
@@ -1039,6 +1075,118 @@ dependencies:
         let entry = lock.packages.get("@tatolab/escalate").unwrap();
         assert_eq!(entry.version.to_string(), "1.2.0");
         assert!(matches!(entry.source, LockfileSource::Registry { .. }));
+    }
+
+    /// Write a minimal escalate schema `.slpkg` into a `file://` mirror's
+    /// generic store at `<mirror>/slpkg/escalate/<version>/escalate.slpkg`.
+    fn write_escalate_slpkg(mirror: &Path, version: &str) {
+        use std::io::Write;
+        let dir = mirror.join("slpkg").join("escalate").join(version);
+        std::fs::create_dir_all(&dir).unwrap();
+        let archive = dir.join("escalate.slpkg");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+        let opts = zip::write::SimpleFileOptions::default();
+        zip.start_file(Manifest::FILE_NAME, opts).unwrap();
+        zip.write_all(
+            format!(
+                "package:\n  org: tatolab\n  name: escalate\n  version: {version}\nschemas:\n  EscalateRequest:\n    file: schemas/EscalateRequest.yaml\n"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        zip.start_file("schemas/EscalateRequest.yaml", opts).unwrap();
+        zip.write_all(b"metadata:\n  name: EscalateRequest\nproperties: {}\n")
+            .unwrap();
+        zip.finish().unwrap();
+    }
+
+    /// Distribution loop: a dev path patch whose target is absent (the shape
+    /// `streamlib-engine`'s manifest ships — a bare registry range in
+    /// `dependencies:` overridden by a monorepo-relative `patch: { path }`
+    /// that doesn't exist for a standalone consumer) falls back to resolving
+    /// the declared version from the registry rather than failing with
+    /// `PathDependencyNotFound`. This is the regression lock for the fix:
+    /// reverting the fallback makes the patched Path spec authoritative and
+    /// the resolve panics on the missing path.
+    #[test]
+    fn dev_path_patch_absent_falls_back_to_registry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mirror = tmp.path().join("mirror");
+        write_escalate_slpkg(&mirror, "1.0.0");
+        write_escalate_slpkg(&mirror, "1.2.0");
+
+        let root = tmp.path().join("project");
+        write_streamlib_yaml(
+            &root,
+            r#"
+dependencies:
+  "@tatolab/escalate": "^1.0.0"
+patch:
+  "@tatolab/escalate":
+    path: ../packages/escalate
+"#,
+        );
+
+        let opts = ResolverOptions {
+            cache_dir: Some(tmp.path().join("cache")),
+            registry: Some(crate::RegistryConfig {
+                base_url: format!("file://{}", mirror.display()),
+            }),
+        };
+        let res = resolve_with(&root, &opts).unwrap();
+        let escalate = res.packages.get("@tatolab/escalate").unwrap();
+        // Resolved from the registry (patch path was absent), highest-in-range.
+        assert!(matches!(escalate.source, ResolvedSource::Registry { .. }));
+        assert_eq!(
+            escalate.manifest.package.as_ref().unwrap().version.to_string(),
+            "1.2.0"
+        );
+    }
+
+    /// Dev loop: when the path patch's target DOES exist (the monorepo
+    /// checkout), the patch still wins over the registry — byte-identical to
+    /// pre-fix behavior. A different local version proves the local path, not
+    /// the registry copy, was resolved.
+    #[test]
+    fn dev_path_patch_present_wins_over_registry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mirror = tmp.path().join("mirror");
+        // Registry holds 1.2.0; the local dev checkout is a different version
+        // so the source of truth is unambiguous.
+        write_escalate_slpkg(&mirror, "1.2.0");
+
+        let local = tmp.path().join("packages").join("escalate");
+        write_streamlib_yaml(
+            &local,
+            "package:\n  org: tatolab\n  name: escalate\n  version: 1.5.0\n",
+        );
+
+        let root = tmp.path().join("project");
+        write_streamlib_yaml(
+            &root,
+            r#"
+dependencies:
+  "@tatolab/escalate": "^1.0.0"
+patch:
+  "@tatolab/escalate":
+    path: ../packages/escalate
+"#,
+        );
+
+        let opts = ResolverOptions {
+            cache_dir: Some(tmp.path().join("cache")),
+            registry: Some(crate::RegistryConfig {
+                base_url: format!("file://{}", mirror.display()),
+            }),
+        };
+        let res = resolve_with(&root, &opts).unwrap();
+        let escalate = res.packages.get("@tatolab/escalate").unwrap();
+        // Local path patch won; the registry's 1.2.0 was NOT consulted.
+        assert!(matches!(escalate.source, ResolvedSource::Path { .. }));
+        assert_eq!(
+            escalate.manifest.package.as_ref().unwrap().version.to_string(),
+            "1.5.0"
+        );
     }
 
     #[test]
