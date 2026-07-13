@@ -95,9 +95,7 @@ impl ReleaseClosure {
 /// requires a library target and a publishable `publish` setting — see
 /// [`compute_release_closure`].
 pub fn is_linkable_crate_name(name: &str) -> bool {
-    name.starts_with("streamlib")
-        || name == "vulkan-jpeg"
-        || name.starts_with("tatolab-vulkanalia")
+    name.starts_with("streamlib") || name == "vulkan-jpeg" || name.starts_with("tatolab-vulkanalia")
 }
 
 /// The library-target kinds a publishable crate must expose. A crate with
