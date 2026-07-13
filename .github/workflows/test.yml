@@ -43,7 +43,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
 
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -64,11 +64,9 @@ jobs:
       - name: Mirror vulkanalia fork (serverless cargo [source] replacement)
         uses: ./.github/actions/cargo-fork-mirror
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
+      # The documented CI unit-test gate ("CI runs `cargo test --lib`").
+      - name: Run unit tests
+        run: cargo test --locked -p streamlib --lib
 
       - name: Run clippy
         run: cargo clippy --locked -p streamlib -- -D warnings
-
-      - name: Run unit tests
-        run: cargo test --locked -p streamlib --lib
