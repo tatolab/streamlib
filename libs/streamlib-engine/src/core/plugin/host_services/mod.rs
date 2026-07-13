@@ -841,10 +841,7 @@ unsafe extern "C" fn host_schema_register(
             // thread-local staging sink — registrations land in the load's
             // staging buffer and only reach the global registry at the
             // whole-load commit. No sink ⇒ direct-to-global (unchanged).
-            if crate::core::runtime::stage_schema_via_active_cdylib_sink(
-                canonical_id,
-                yaml,
-            ) {
+            if crate::core::runtime::stage_schema_via_active_cdylib_sink(canonical_id, yaml) {
                 return;
             }
             crate::core::embedded_schemas::register_schema(canonical_id.to_string(), yaml);
@@ -873,9 +870,7 @@ unsafe extern "C" fn host_schema_lookup(
             // registration is running on this thread) so a prologue sees
             // schemas its own load staged but hasn't committed yet.
             if let Some(staged_yaml) =
-                crate::core::runtime::lookup_schema_via_active_cdylib_sink(
-                    canonical_id,
-                )
+                crate::core::runtime::lookup_schema_via_active_cdylib_sink(canonical_id)
             {
                 let bytes = staged_yaml.as_bytes();
                 result_callback(result_userdata, bytes.as_ptr(), bytes.len());
@@ -1004,8 +999,7 @@ unsafe extern "C" fn host_processor_register(
             // (unchanged).
             let descriptor = match crate::core::runtime::stage_processor_via_active_cdylib_sink(
                 descriptor, vtable_ref,
-            )
-            {
+            ) {
                 Ok(()) => return 0,
                 Err(descriptor) => descriptor,
             };

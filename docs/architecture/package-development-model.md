@@ -214,8 +214,13 @@ waits on a `PackageResolutionCompletionSignal` at the *end* of the walk
 deadlock-free (no thread blocks holding the packages lock). A concrete
 version mismatch raises `SingleVersionConflict { package, existing_version,
 existing_required_by, conflicting_version, conflicting_required_by }`.
-`InFlightPlaceholderGuard` is RAII: commit on success, remove-and-publish-
-`Failed` on drop.
+`InFlightPlaceholderGuard` is RAII: flipped-to-committed by the load's
+whole-load commit on success (registration is transactional — see
+[`runtime-module-materialization.md`](runtime-module-materialization.md)),
+remove-and-publish-`Failed` on drop. A same-load re-encounter of its own
+in-flight placeholder (a diamond) skips with no wait entry;
+`Runner::remove_module` clears a removed package's committed entry so a
+later `add_module` re-resolves it.
 
 **Flat-global by IPC necessity.** The shared msgpack wire vocabulary means
 two packages on different `@tatolab/core` schema versions would emit

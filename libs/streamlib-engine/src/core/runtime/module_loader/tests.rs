@@ -2597,6 +2597,739 @@ processors:
     }
 
     // =====================================================================
+    // Transactional registration: a failed load leaves zero partial state
+    // =====================================================================
+
+    /// Byte-equivalence snapshot of every registry a module load touches:
+    /// schema bodies, processor descriptors, ledger packages, and the
+    /// calling Runner's resolution-memo package set. Two snapshots compare
+    /// equal iff a failed load left zero residue.
+    #[derive(Debug, PartialEq, Eq)]
+    struct RegistrySnapshot {
+        schema_bodies_by_canonical_id: std::collections::BTreeMap<String, String>,
+        processor_descriptor_debug_by_ident: std::collections::BTreeMap<String, String>,
+        ledger_packages: std::collections::BTreeSet<String>,
+        resolution_memo_packages: std::collections::BTreeSet<String>,
+    }
+
+    impl RegistrySnapshot {
+        fn capture(resolution_memo: &ResolutionMemo) -> Self {
+            let schema_bodies_by_canonical_id =
+                crate::core::embedded_schemas::list_embedded_schema_names()
+                    .into_iter()
+                    .map(|name| {
+                        let body =
+                            crate::core::embedded_schemas::get_embedded_schema_definition(&name)
+                                .map(|b| b.to_string())
+                                .unwrap_or_default();
+                        (name, body)
+                    })
+                    .collect();
+            let processor_descriptor_debug_by_ident = crate::core::processors::PROCESSOR_REGISTRY
+                .list_registered()
+                .into_iter()
+                .map(|desc| (desc.name.to_string(), format!("{desc:?}")))
+                .collect();
+            let ledger_packages = ledger::loaded_module_registration_ledger_packages()
+                .into_iter()
+                .map(|p| p.to_string())
+                .collect();
+            let resolution_memo_packages = resolution_memo
+                .resolved_package_refs()
+                .into_iter()
+                .map(|p| p.to_string())
+                .collect();
+            Self {
+                schema_bodies_by_canonical_id,
+                processor_descriptor_debug_by_ident,
+                ledger_packages,
+                resolution_memo_packages,
+            }
+        }
+    }
+
+    fn tatolab_ident(name: &str) -> ModuleIdent {
+        ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new(name).unwrap())
+    }
+
+    fn path_strategy_never_build(dir: &std::path::Path) -> Strategy {
+        Strategy::Path {
+            path: dir.to_path_buf(),
+            build: BuildPolicy::NeverBuild,
+        }
+    }
+
+    /// Failure injected at the SCHEMA phase, after the first schema file
+    /// staged: the second schema file has no `metadata` block, so the walk
+    /// fails mid-schema-staging. Zero residue; the fixed package reloads.
+    #[test]
+    #[serial]
+    fn failed_load_at_schema_phase_leaves_zero_registry_residue() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = HomeGuard::install(home.path());
+        let runtime = Runner::new().expect("Runner::new");
+        let tmp = tempfile::tempdir().unwrap();
+        let pkg = tmp.path().join("txn-schema-fail");
+        std::fs::create_dir_all(pkg.join("schemas")).unwrap();
+        // BTreeMap key order stages TxnAGoodSchema BEFORE TxnBBadSchema
+        // fails — the injection point sits after partial staging.
+        std::fs::write(
+            pkg.join("schemas/a_good.yaml"),
+            "metadata:\n  type: TxnAGoodSchema\n",
+        )
+        .unwrap();
+        std::fs::write(pkg.join("schemas/b_bad.yaml"), "properties: {}\n").unwrap();
+        std::fs::write(
+            pkg.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: txn-schema-fail\n  version: \"1.0.0\"\n\
+             schemas:\n  TxnAGoodSchema:\n    file: schemas/a_good.yaml\n\
+             \x20 TxnBBadSchema:\n    file: schemas/b_bad.yaml\n",
+        )
+        .unwrap();
+
+        let before = RegistrySnapshot::capture(&runtime.resolution_memo);
+        runtime
+            .add_module_with_blocking(
+                tatolab_ident("txn-schema-fail"),
+                path_strategy_never_build(&pkg),
+            )
+            .expect_err("a schema without a metadata block must fail the load");
+        let after = RegistrySnapshot::capture(&runtime.resolution_memo);
+        assert_eq!(
+            before, after,
+            "a failed load must leave the registries byte-equivalent to \
+             before the attempt"
+        );
+        assert!(
+            crate::core::embedded_schemas::get_embedded_schema_definition(
+                "@tatolab/txn-schema-fail/TxnAGoodSchema"
+            )
+            .is_none(),
+            "the schema staged before the failure must not be visible"
+        );
+
+        // Fix the broken schema; the same package must now load cleanly.
+        std::fs::write(
+            pkg.join("schemas/b_bad.yaml"),
+            "metadata:\n  type: TxnBBadSchema\n",
+        )
+        .unwrap();
+        runtime
+            .add_module_with_blocking(
+                tatolab_ident("txn-schema-fail"),
+                path_strategy_never_build(&pkg),
+            )
+            .expect("reload of the fixed package must succeed");
+        assert!(
+            crate::core::embedded_schemas::get_embedded_schema_definition(
+                "@tatolab/txn-schema-fail/TxnAGoodSchema"
+            )
+            .is_some(),
+            "both schemas must be visible after the successful reload"
+        );
+    }
+
+    /// Failure injected at the DEP-WALK phase: the root's schemas staged,
+    /// then a dependency with no manifest fails the walk. The root's
+    /// schemas must not be visible.
+    #[test]
+    #[serial]
+    fn failed_load_at_dep_walk_phase_rolls_back_root_schemas() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = HomeGuard::install(home.path());
+        let runtime = Runner::new().expect("Runner::new");
+        runtime.set_build_orchestrator(LoadAsIsOrchestrator);
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("txn-depfail-root");
+        std::fs::create_dir_all(root.join("schemas")).unwrap();
+        std::fs::write(
+            root.join("schemas/root_schema.yaml"),
+            "metadata:\n  type: TxnDepFailRootSchema\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: txn-depfail-root\n  version: \"1.0.0\"\n\
+             schemas:\n  TxnDepFailRootSchema:\n    file: schemas/root_schema.yaml\n\
+             dependencies:\n  \"@tatolab/txn-depfail-missing\":\n    path: ../missing\n",
+        )
+        .unwrap();
+
+        let before = RegistrySnapshot::capture(&runtime.resolution_memo);
+        runtime
+            .add_module_with_blocking(
+                tatolab_ident("txn-depfail-root"),
+                path_strategy_never_build(&root),
+            )
+            .expect_err("a dep with no manifest must fail the load");
+        let after = RegistrySnapshot::capture(&runtime.resolution_memo);
+        assert_eq!(before, after, "dep-walk failure must leave zero residue");
+        assert!(
+            crate::core::embedded_schemas::get_embedded_schema_definition(
+                "@tatolab/txn-depfail-root/TxnDepFailRootSchema"
+            )
+            .is_none(),
+            "the root's schemas (staged before the dep walk) must not be visible"
+        );
+    }
+
+    /// Write a package with one schema + two TypeScript processors where
+    /// the SECOND processor's config schema is unresolvable — the walk
+    /// stages the schema and the first processor, then fails.
+    fn write_processor_phase_failure_package(pkg: &std::path::Path) {
+        std::fs::create_dir_all(pkg.join("schemas")).unwrap();
+        std::fs::write(
+            pkg.join("schemas/txn_proc_config.yaml"),
+            "metadata:\n  type: TxnProcConfigSchema\n",
+        )
+        .unwrap();
+        std::fs::write(
+            pkg.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: txn-procfail\n  version: \"1.0.0\"\n\
+             schemas:\n  TxnProcConfigSchema:\n    file: schemas/txn_proc_config.yaml\n\
+             processors:\n\
+             \x20 - name: TxnAlphaProcessor\n\
+             \x20   version: 1.0.0\n\
+             \x20   runtime: typescript\n\
+             \x20   entrypoint: main.ts\n\
+             \x20   execution: manual\n\
+             \x20   config:\n\
+             \x20     name: config\n\
+             \x20     schema: TxnProcConfigSchema\n\
+             \x20 - name: TxnBetaProcessor\n\
+             \x20   version: 1.0.0\n\
+             \x20   runtime: typescript\n\
+             \x20   entrypoint: main.ts\n\
+             \x20   execution: manual\n\
+             \x20   config:\n\
+             \x20     name: config\n\
+             \x20     schema: TxnMissingConfigSchema\n",
+        )
+        .unwrap();
+    }
+
+    /// Failure injected at the PROCESSOR phase, after the first processor
+    /// staged: no processors and no schemas may be visible.
+    #[test]
+    #[serial]
+    fn failed_load_at_processor_phase_rolls_back_schemas_and_processors() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = HomeGuard::install(home.path());
+        let runtime = Runner::new().expect("Runner::new");
+        let tmp = tempfile::tempdir().unwrap();
+        let pkg = tmp.path().join("txn-procfail");
+        write_processor_phase_failure_package(&pkg);
+
+        let before = RegistrySnapshot::capture(&runtime.resolution_memo);
+        runtime
+            .add_module_with_blocking(
+                tatolab_ident("txn-procfail"),
+                path_strategy_never_build(&pkg),
+            )
+            .expect_err("an unresolvable config schema must fail the load");
+        let after = RegistrySnapshot::capture(&runtime.resolution_memo);
+        assert_eq!(
+            before, after,
+            "processor-phase failure must leave zero residue"
+        );
+        assert!(
+            !crate::core::processors::PROCESSOR_REGISTRY
+                .list_registered()
+                .iter()
+                .any(|d| d.name.r#type.as_str() == "TxnAlphaProcessor"),
+            "the processor staged before the failure must not be visible"
+        );
+        assert!(
+            crate::core::embedded_schemas::get_embedded_schema_definition(
+                "@tatolab/txn-procfail/TxnProcConfigSchema"
+            )
+            .is_none(),
+            "the package's schema must not be visible after the failure"
+        );
+    }
+
+    /// Same-load diamond regression: A→{B,C}→D resolves D once, with no
+    /// self-wait. With the whole-load memo commit, D's placeholder stays
+    /// in flight for the entire walk — the second encounter (via C) must
+    /// take the SkipOwnedByThisLoad arm. Mentally revert that arm and the
+    /// load records a wait entry against its OWN completion signal, which
+    /// only publishes after the wait phase — the timeout below fires.
+    #[test]
+    #[serial]
+    fn same_load_diamond_dependency_registers_once_without_self_wait() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = HomeGuard::install(home.path());
+        let runtime = Runner::new().expect("Runner::new");
+        let counts = std::sync::Arc::new(parking_lot::Mutex::new(std::collections::HashMap::<
+            std::path::PathBuf,
+            usize,
+        >::new()));
+        runtime.set_build_orchestrator(MaterializeCountingOrchestrator {
+            counts: std::sync::Arc::clone(&counts),
+        });
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("a");
+        let b = tmp.path().join("b");
+        let c = tmp.path().join("c");
+        let d = tmp.path().join("d");
+        let e = tmp.path().join("e");
+        for p in [&a, &b, &c, &d, &e] {
+            std::fs::create_dir_all(p).unwrap();
+        }
+        std::fs::write(
+            a.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: diamond-a\n  version: \"1.0.0\"\n\
+             dependencies:\n  \"@tatolab/diamond-b\":\n    path: ../b\n\
+             \x20 \"@tatolab/diamond-c\":\n    path: ../c\n",
+        )
+        .unwrap();
+        std::fs::write(
+            b.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: diamond-b\n  version: \"1.0.0\"\n\
+             dependencies:\n  \"@tatolab/diamond-d\":\n    path: ../d\n",
+        )
+        .unwrap();
+        std::fs::write(
+            c.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: diamond-c\n  version: \"1.0.0\"\n\
+             dependencies:\n  \"@tatolab/diamond-d\":\n    path: ../d\n",
+        )
+        .unwrap();
+        // D carries a sub-dependency E. Materialization runs BEFORE the
+        // single-version gate (the gate needs the resolved on-disk
+        // version), so D itself materializes once per encounter by
+        // design — E's materialize count is the "subtree walked once"
+        // witness.
+        std::fs::create_dir_all(d.join("schemas")).unwrap();
+        std::fs::write(
+            d.join("schemas/diamond_d_schema.yaml"),
+            "metadata:\n  type: DiamondDSchema\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: diamond-d\n  version: \"1.0.0\"\n\
+             schemas:\n  DiamondDSchema:\n    file: schemas/diamond_d_schema.yaml\n\
+             dependencies:\n  \"@tatolab/diamond-e\":\n    path: ../e\n",
+        )
+        .unwrap();
+        write_schemas_only_manifest(&e, "tatolab", "diamond-e", "1.0.0", None);
+
+        let added =
+            runtime.add_module_with(tatolab_ident("diamond-a"), path_strategy_never_build(&a));
+        let handle = runtime.tokio_runtime_variant.handle();
+        let result = handle
+            .block_on(async {
+                tokio::time::timeout(std::time::Duration::from_secs(30), added).await
+            })
+            .expect(
+                "diamond load must complete without waiting on itself — a \
+                 timeout here is the SkipOwnedByThisLoad regression",
+            );
+        result.expect("diamond load must succeed");
+
+        assert_eq!(
+            count_materializations_for_dir_named(&counts, "e"),
+            1,
+            "D's subtree must be walked exactly once"
+        );
+        let d_ref = streamlib_idents::PackageRef::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("diamond-d").unwrap(),
+        );
+        let record = runtime
+            .resolution_memo
+            .committed_record(&d_ref)
+            .expect("D must be committed");
+        assert_eq!(
+            record.required_by.len(),
+            2,
+            "both diamond branches must be recorded as requirers"
+        );
+        assert!(
+            crate::core::embedded_schemas::get_embedded_schema_definition(
+                "@tatolab/diamond-d/DiamondDSchema"
+            )
+            .is_some(),
+            "D's schema must be registered exactly once via the commit"
+        );
+    }
+
+    /// Semantic strengthening: a skipped dependency only counts as
+    /// committed when its owner's WHOLE load commits. The owner (TA) walks
+    /// shared dep D successfully, then fails at its OWN processor phase —
+    /// the waiter (TB) must get ConcurrentLoadOfSkippedDependencyFailed,
+    /// and D must be fully rolled back. Under the old per-subtree commit
+    /// semantics D would have committed when its subtree unwound and TB
+    /// would have succeeded over a registration that no longer exists.
+    #[test]
+    #[serial]
+    fn concurrent_load_root_failure_after_shared_dep_walked_fails_waiter() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = HomeGuard::install(home.path());
+        let pkg_root = tempfile::tempdir().unwrap();
+        let ta = pkg_root.path().join("ta");
+        let tb = pkg_root.path().join("tb");
+        let d = pkg_root.path().join("d");
+        let e = pkg_root.path().join("e");
+        for p in [&ta, &tb, &d, &e] {
+            std::fs::create_dir_all(p).unwrap();
+        }
+        // TA: deps {D, E} (D sorts before E), plus a processor whose
+        // config schema is unresolvable — TA's own processor phase fails
+        // AFTER both dep subtrees walked.
+        std::fs::write(
+            ta.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: conc-root-ta\n  version: \"0.1.0\"\n\
+             dependencies:\n  \"@tatolab/conc-root-d\":\n    path: ../d\n\
+             \x20 \"@tatolab/conc-root-e\":\n    path: ../e\n\
+             processors:\n\
+             \x20 - name: ConcRootFailingProcessor\n\
+             \x20   version: 1.0.0\n\
+             \x20   runtime: typescript\n\
+             \x20   entrypoint: main.ts\n\
+             \x20   execution: manual\n\
+             \x20   config:\n\
+             \x20     name: config\n\
+             \x20     schema: ConcRootNoSuchConfigSchema\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tb.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: conc-root-tb\n  version: \"0.1.0\"\n\
+             dependencies:\n  \"@tatolab/conc-root-d\":\n    path: ../d\n",
+        )
+        .unwrap();
+        write_schemas_only_manifest(
+            &d,
+            "tatolab",
+            "conc-root-d",
+            "1.0.0",
+            Some("ConcRootDSchema"),
+        );
+        write_schemas_only_manifest(&e, "tatolab", "conc-root-e", "1.0.0", None);
+
+        let runtime = Runner::new().expect("Runner::new");
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        runtime.set_build_orchestrator(GatedSubDependencyOrchestrator {
+            gated_dir_name: "e".to_string(),
+            release: parking_lot::Mutex::new(Some(release_rx)),
+            fail_after_release: false,
+        });
+
+        let d_ref = streamlib_idents::PackageRef::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("conc-root-d").unwrap(),
+        );
+        let added_ta = runtime.add_module_with(
+            tatolab_ident("conc-root-ta"),
+            path_strategy_never_build(&ta),
+        );
+        assert!(
+            poll_until(std::time::Duration::from_secs(10), || {
+                runtime.resolution_memo.in_flight_requirer_count(&d_ref) == Some(1)
+            }),
+            "TA must hold D in flight (whole-load commit) while blocked on E",
+        );
+        let added_tb = runtime.add_module_with(
+            tatolab_ident("conc-root-tb"),
+            path_strategy_never_build(&tb),
+        );
+        assert!(
+            poll_until(std::time::Duration::from_secs(10), || {
+                runtime.resolution_memo.in_flight_requirer_count(&d_ref) == Some(2)
+            }),
+            "TB must record its requirer on D's in-flight placeholder",
+        );
+        release_tx.send(()).unwrap();
+
+        let handle = runtime.tokio_runtime_variant.handle();
+        let (result_ta, result_tb) = handle.block_on(async { tokio::join!(added_ta, added_tb) });
+        let owner_err = result_ta
+            .expect_err("TA must fail at its own processor phase after D's subtree walked");
+        assert!(
+            matches!(owner_err, AddModuleError::LoadProjectFailed { .. }),
+            "TA must surface the config-schema resolution failure, got: {owner_err:?}",
+        );
+        let waiter_err = result_tb.expect_err(
+            "TB must fail loudly when the owner's WHOLE load fails — even \
+             though D's own subtree walked cleanly",
+        );
+        assert!(
+            matches!(
+                waiter_err,
+                AddModuleError::ConcurrentLoadOfSkippedDependencyFailed { ref package, version }
+                    if package.name.as_str() == "conc-root-d"
+                        && version == SemVer::new(1, 0, 0)
+            ),
+            "expected ConcurrentLoadOfSkippedDependencyFailed for D, got: {waiter_err:?}",
+        );
+        assert!(
+            !runtime.resolution_memo.contains_package(&d_ref),
+            "the failed owner's guards must clear D's placeholder",
+        );
+        assert!(
+            crate::core::embedded_schemas::get_embedded_schema_definition(
+                "@tatolab/conc-root-d/ConcRootDSchema"
+            )
+            .is_none(),
+            "D's schema must be rolled back with the owner's whole load",
+        );
+    }
+
+    // =====================================================================
+    // remove_module
+    // =====================================================================
+
+    #[test]
+    #[serial]
+    fn remove_module_version_range_mismatch_names_loaded_version() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = HomeGuard::install(home.path());
+        let runtime = Runner::new().expect("Runner::new");
+        let tmp = tempfile::tempdir().unwrap();
+        let pkg = tmp.path().join("rm-range");
+        std::fs::create_dir_all(&pkg).unwrap();
+        write_schemas_only_manifest(&pkg, "tatolab", "rm-range", "1.0.0", None);
+        runtime
+            .add_module_with_blocking(tatolab_ident("rm-range"), path_strategy_never_build(&pkg))
+            .expect("load must succeed");
+
+        let err = runtime
+            .remove_module(ModuleIdent::new(
+                Org::new("tatolab").unwrap(),
+                Package::new("rm-range").unwrap(),
+                SemVerRange::Caret(SemVer::new(2, 0, 0)),
+            ))
+            .expect_err("a non-matching range must refuse");
+        assert!(
+            matches!(
+                err,
+                RemoveModuleError::ModuleNotLoaded { loaded_version: Some(v), .. }
+                    if v == SemVer::new(1, 0, 0)
+            ),
+            "got: {err:?}",
+        );
+
+        // Cleanup for later #[serial] tests: matching range removes.
+        runtime
+            .remove_module(tatolab_ident("rm-range"))
+            .expect("matching range must remove");
+    }
+
+    #[test]
+    #[serial]
+    fn remove_module_refuses_required_dependency_then_removes_in_order() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = HomeGuard::install(home.path());
+        let runtime = Runner::new().expect("Runner::new");
+        runtime.set_build_orchestrator(LoadAsIsOrchestrator);
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("rm-root");
+        let dep = tmp.path().join("rm-dep");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&dep).unwrap();
+        std::fs::write(
+            root.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: rm-root\n  version: \"1.0.0\"\n\
+             dependencies:\n  \"@tatolab/rm-dep\":\n    path: ../rm-dep\n",
+        )
+        .unwrap();
+        write_schemas_only_manifest(&dep, "tatolab", "rm-dep", "1.0.0", Some("RmDepSchema"));
+
+        runtime
+            .add_module_with_blocking(tatolab_ident("rm-root"), path_strategy_never_build(&root))
+            .expect("root+dep load must succeed");
+
+        // Dep removal refused while the root requires it — no cascade.
+        let err = runtime
+            .remove_module(tatolab_ident("rm-dep"))
+            .expect_err("dep removal must refuse while the root requires it");
+        assert!(
+            matches!(
+                err,
+                RemoveModuleError::RequiredByLoadedModules { ref requirers, .. }
+                    if requirers.iter().any(|r| r.name.as_str() == "rm-root")
+            ),
+            "got: {err:?}",
+        );
+        assert!(
+            crate::core::embedded_schemas::get_embedded_schema_definition(
+                "@tatolab/rm-dep/RmDepSchema"
+            )
+            .is_some(),
+            "a refused removal must leave the dep's schema registered"
+        );
+
+        // Root first, then the dep — requirer pruning unblocks the dep.
+        runtime
+            .remove_module(tatolab_ident("rm-root"))
+            .expect("root removal must succeed");
+        runtime
+            .remove_module(tatolab_ident("rm-dep"))
+            .expect("dep removal must succeed after the root was removed");
+        assert!(
+            crate::core::embedded_schemas::get_embedded_schema_definition(
+                "@tatolab/rm-dep/RmDepSchema"
+            )
+            .is_none(),
+            "the removed dep's schema must be unregistered"
+        );
+
+        // The full graph reloads cleanly after removal.
+        runtime
+            .add_module_with_blocking(tatolab_ident("rm-root"), path_strategy_never_build(&root))
+            .expect("reload after removal must succeed");
+        runtime.remove_module(tatolab_ident("rm-root")).unwrap();
+        runtime.remove_module(tatolab_ident("rm-dep")).unwrap();
+    }
+
+    #[test]
+    #[serial]
+    fn remove_module_processors_in_use_then_removable_after_graph_removal() {
+        use crate::core::runtime::RuntimeOperations;
+
+        let home = tempfile::tempdir().unwrap();
+        let _guard = HomeGuard::install(home.path());
+        let runtime = Runner::new().expect("Runner::new");
+        let tmp = tempfile::tempdir().unwrap();
+        let pkg = tmp.path().join("rm-inuse");
+        std::fs::create_dir_all(pkg.join("schemas")).unwrap();
+        std::fs::write(
+            pkg.join("schemas/rm_inuse_config.yaml"),
+            "metadata:\n  type: RmInUseConfigSchema\n",
+        )
+        .unwrap();
+        std::fs::write(
+            pkg.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: rm-inuse\n  version: \"1.0.0\"\n\
+             schemas:\n  RmInUseConfigSchema:\n    file: schemas/rm_inuse_config.yaml\n\
+             processors:\n\
+             \x20 - name: RmInUseProcessor\n\
+             \x20   version: 1.0.0\n\
+             \x20   runtime: typescript\n\
+             \x20   entrypoint: main.ts\n\
+             \x20   execution: manual\n\
+             \x20   config:\n\
+             \x20     name: config\n\
+             \x20     schema: RmInUseConfigSchema\n",
+        )
+        .unwrap();
+
+        runtime
+            .add_module_with_blocking(tatolab_ident("rm-inuse"), path_strategy_never_build(&pkg))
+            .expect("processor package load must succeed");
+
+        let descriptor = crate::core::processors::PROCESSOR_REGISTRY
+            .list_registered()
+            .into_iter()
+            .find(|d| d.name.r#type.as_str() == "RmInUseProcessor")
+            .expect("RmInUseProcessor must be registered");
+        let spec = crate::core::processors::ProcessorSpec::new(
+            descriptor.name.clone(),
+            serde_json::json!({}),
+        );
+        let processor_id = runtime
+            .add_processor(spec.clone())
+            .expect("add_processor against the loaded type must succeed");
+
+        // In use: the graph node blocks removal, and the refusal restores
+        // the registration (a follow-up add_processor still works).
+        let err = runtime
+            .remove_module(tatolab_ident("rm-inuse"))
+            .expect_err("removal must refuse while a graph node uses the type");
+        match &err {
+            RemoveModuleError::ProcessorsInUse {
+                processor_ids,
+                processor_types,
+                ..
+            } => {
+                assert!(processor_ids.contains(&processor_id));
+                assert!(
+                    processor_types
+                        .iter()
+                        .any(|t| t.r#type.as_str() == "RmInUseProcessor")
+                );
+            }
+            other => panic!("expected ProcessorsInUse, got {other:?}"),
+        }
+        assert!(
+            crate::core::processors::PROCESSOR_REGISTRY.is_registered(&descriptor.name),
+            "a refused removal must restore the processor registration"
+        );
+
+        // Remove the graph node; module removal now succeeds.
+        runtime
+            .remove_processor(&processor_id)
+            .expect("remove_processor must succeed");
+        runtime
+            .remove_module(tatolab_ident("rm-inuse"))
+            .expect("module removal must succeed after the graph node is gone");
+
+        // Post-removal add_processor gets the typed registry miss.
+        let err = runtime
+            .add_processor(spec)
+            .expect_err("add_processor after removal must miss the registry");
+        assert!(
+            matches!(err, crate::core::Error::UnknownProcessorType { .. }),
+            "expected UnknownProcessorType, got: {err:?}",
+        );
+    }
+
+    /// Load/unload/reload ×2 of the same package on one Runner: the
+    /// registry snapshot after every reload equals the snapshot after the
+    /// first load.
+    #[test]
+    #[serial]
+    fn load_unload_reload_cycle_is_registry_idempotent() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = HomeGuard::install(home.path());
+        let runtime = Runner::new().expect("Runner::new");
+        let tmp = tempfile::tempdir().unwrap();
+        let pkg = tmp.path().join("cycle-pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+        write_schemas_only_manifest(
+            &pkg,
+            "tatolab",
+            "cycle-pkg",
+            "1.0.0",
+            Some("CyclePkgSchema"),
+        );
+
+        runtime
+            .add_module_with_blocking(tatolab_ident("cycle-pkg"), path_strategy_never_build(&pkg))
+            .expect("first load must succeed");
+        let after_first_load = RegistrySnapshot::capture(&runtime.resolution_memo);
+
+        for cycle in 0..2 {
+            runtime
+                .remove_module(tatolab_ident("cycle-pkg"))
+                .unwrap_or_else(|e| panic!("cycle {cycle}: remove must succeed: {e:?}"));
+            assert!(
+                crate::core::embedded_schemas::get_embedded_schema_definition(
+                    "@tatolab/cycle-pkg/CyclePkgSchema"
+                )
+                .is_none(),
+                "cycle {cycle}: schema must be gone after removal"
+            );
+            runtime
+                .add_module_with_blocking(
+                    tatolab_ident("cycle-pkg"),
+                    path_strategy_never_build(&pkg),
+                )
+                .unwrap_or_else(|e| panic!("cycle {cycle}: reload must succeed: {e:?}"));
+            let after_reload = RegistrySnapshot::capture(&runtime.resolution_memo);
+            assert_eq!(
+                after_first_load, after_reload,
+                "cycle {cycle}: reload must reproduce the first load's registry state"
+            );
+        }
+
+        // Leave the process-global registries clean for later tests.
+        runtime.remove_module(tatolab_ident("cycle-pkg")).unwrap();
+    }
+
+    // =====================================================================
     // install / run split (#1221)
     //
     // Exercises the full resolver handoff: `install` resolves range→concrete,

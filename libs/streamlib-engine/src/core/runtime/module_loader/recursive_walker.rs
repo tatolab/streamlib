@@ -301,7 +301,10 @@ impl ResolutionMemo {
                 ..
             }) => {
                 let record_for_caller = record.clone();
-                packages.insert(pkg_ref.clone(), PackageResolutionState::Committed { record });
+                packages.insert(
+                    pkg_ref.clone(),
+                    PackageResolutionState::Committed { record },
+                );
                 Some((record_for_caller, completion_signal))
             }
             // Defensive: only the owning load flips its placeholder.
@@ -496,10 +499,8 @@ pub(super) struct ModuleLoadWalkContext<'load> {
     pub armed_placeholder_guards: Vec<InFlightPlaceholderGuard<'load>>,
     /// `(dependency, requirer)` edges into packages an EARLIER load
     /// committed — appended onto their ledger records at commit.
-    pub committed_dependency_requirer_edges: Vec<(
-        streamlib_idents::PackageRef,
-        streamlib_idents::PackageRef,
-    )>,
+    pub committed_dependency_requirer_edges:
+        Vec<(streamlib_idents::PackageRef, streamlib_idents::PackageRef)>,
 }
 
 /// Recursive worker: resolves the [`Strategy`] to a source, materializes
@@ -579,13 +580,11 @@ fn add_module_recursive_body(
     // loop). `link` is `None` on locked runs / no active link → unchanged.
     let config =
         ProjectConfig::load_with_link(&manifest_dir, walk_context.link.map(|l| l.checkout()))
-            .map_err(|e| {
-            AddModuleError::ManifestLoadFailed {
+            .map_err(|e| AddModuleError::ManifestLoadFailed {
                 module: module.clone(),
                 source_path: manifest_dir.clone(),
                 detail: e.to_string(),
-            }
-        })?;
+            })?;
 
     config
         .check_streamlib_version_compatibility()
@@ -642,8 +641,8 @@ fn add_module_recursive_body(
     // on a CONCURRENT load, the skip is recorded in `skipped_in_flight`
     // and the owner's outcome is verified at the end of this walk —
     // nobody ever blocks mid-walk, so concurrent walks cannot deadlock.
-    let requirer_package =
-        (walk_context.path.len() >= 2).then(|| walk_context.path[walk_context.path.len() - 2].clone());
+    let requirer_package = (walk_context.path.len() >= 2)
+        .then(|| walk_context.path[walk_context.path.len() - 2].clone());
     let requirer = RequirerRecord {
         requirer: requirer_package.clone(),
         declared_range: module.version.clone(),
@@ -668,11 +667,13 @@ fn add_module_recursive_body(
         }
         SingleVersionGateOutcome::SkipOwnedByThisLoad => return Ok(()),
         SingleVersionGateOutcome::SkipInFlightSameVersion(completion_signal) => {
-            walk_context.skipped_in_flight.push(SkippedInFlightDependency {
-                package: pkg_ref.clone(),
-                version: on_disk_version,
-                completion_signal,
-            });
+            walk_context
+                .skipped_in_flight
+                .push(SkippedInFlightDependency {
+                    package: pkg_ref.clone(),
+                    version: on_disk_version,
+                    completion_signal,
+                });
             return Ok(());
         }
         SingleVersionGateOutcome::ProceedAsFirstResolution => {}
@@ -686,7 +687,9 @@ fn add_module_recursive_body(
     // placeholder and disarms.
     let placeholder_guard =
         InFlightPlaceholderGuard::arm(walk_context.resolution_memo, pkg_ref.clone());
-    walk_context.armed_placeholder_guards.push(placeholder_guard);
+    walk_context
+        .armed_placeholder_guards
+        .push(placeholder_guard);
 
     // Schemas are leaves — stage before recursing into deps.
     register_package_schemas(&manifest_dir, &config, walk_context.staging, &pkg_ref).map_err(

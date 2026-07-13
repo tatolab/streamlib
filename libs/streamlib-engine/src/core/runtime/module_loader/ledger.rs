@@ -33,7 +33,9 @@ pub(super) fn insert_loaded_module_registration_record(
     package: streamlib_idents::PackageRef,
     record: LoadedModuleRegistrationRecord,
 ) {
-    LOADED_MODULE_REGISTRATION_LEDGER.lock().insert(package, record);
+    LOADED_MODULE_REGISTRATION_LEDGER
+        .lock()
+        .insert(package, record);
 }
 
 /// Append a requirer edge onto an already-committed package's record.
@@ -90,5 +92,9 @@ pub(super) fn remove_loaded_module_registration_record(
 /// Test observability: the set of committed package refs.
 #[cfg(test)]
 pub(crate) fn loaded_module_registration_ledger_packages() -> Vec<streamlib_idents::PackageRef> {
-    LOADED_MODULE_REGISTRATION_LEDGER.lock().keys().cloned().collect()
+    LOADED_MODULE_REGISTRATION_LEDGER
+        .lock()
+        .keys()
+        .cloned()
+        .collect()
 }

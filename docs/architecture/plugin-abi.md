@@ -431,6 +431,25 @@ version, different transitive resolution, same first-order layout"; the
 fully sound fix is the PluginAbiObject lift of the remaining raw-`Arc`
 slots, which removes the transit entirely.
 
+### Image lifetime — `dlclose` is never called
+
+A dlopen'd plugin image is retained for the **process lifetime**,
+unconditionally: on a successful load, on a load that fails after
+`register` ran, and on `Runner::remove_module`. Registered
+`&'static ProcessorVTable`s, `'static` descriptor strings handed
+across the plugin ABI, and the bridge state `install_host_services`
+wrote into the cdylib's statics all point into the mapped image —
+unmapping it would dangle them behind safe interfaces. "Unloading a
+module" therefore means **registration removal** (its processor types
+and package-owned schemas leave the host registries; the module loader's
+ledger and memo entries clear), never image unmapping. Retained images
+are recorded per (path, load) and never deduplicated by path — a
+rebuilt plugin at the same path is a new image, and dropping the
+"duplicate" handle would `dlclose` a live image out from under its
+vtables. A reload after `remove_module` dlopens the path again and
+re-runs `register`; `install_host_services` is idempotent, so
+re-installing over a retained image is safe.
+
 ### What crosses the wire
 
 - C primitives (`u32`, `i32`, `i64`, `u64`, `f32`, `f64`, `bool` as

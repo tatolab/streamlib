@@ -312,8 +312,7 @@ pub(super) fn commit_module_load_registrations(
     // (1) Staged plugin images → process-lifetime retention. First, so
     // vtable pointers are backed by retained images before any processor
     // registration referencing them becomes globally visible.
-    let staged_libraries: Vec<StagedPluginLibrary> =
-        staging.libraries.lock().drain(..).collect();
+    let staged_libraries: Vec<StagedPluginLibrary> = staging.libraries.lock().drain(..).collect();
     let mut dylib_paths_by_owner: std::collections::HashMap<
         streamlib_idents::PackageRef,
         Vec<std::path::PathBuf>,
