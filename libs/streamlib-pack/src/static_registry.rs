@@ -34,8 +34,9 @@ use std::process::Command;
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use streamlib_idents::{
-    render_catalog_index_ndjson, schema_jtd_file_name, CatalogIndexLine, PackageRef, RegistryClient,
-    RegistryConfig, ReleaseManifest, ReleaseManifestMember, SemVer, CATALOG_INDEX_PATH,
+    parse_catalog_index_ndjson, render_catalog_index_ndjson, schema_jtd_file_name, CatalogIndexLine,
+    PackageRef, RegistryClient, RegistryConfig, ReleaseManifest, ReleaseManifestMember, SemVer,
+    CATALOG_INDEX_PATH,
 };
 
 use crate::catalog::{build_package_catalog, build_sibling_versions};
@@ -903,6 +904,48 @@ pub fn write_package_catalog(
                 .with_context(|| format!("write {}", path.display()))?;
         }
     }
+    Ok(())
+}
+
+/// Merge one package's catalog index lines into the tree-wide aggregate
+/// `catalog/index.ndjson`, so an incremental `streamlib pkg publish` keeps the
+/// aggregate in step with the per-package catalog it just wrote — matching the
+/// per-processor shape the whole-tree emit renders.
+///
+/// The whole-tree emit accumulates every package's lines and writes the
+/// aggregate once ([`emit_slpkg_and_manifest`]); a single-package publish has
+/// only its own lines, so it read-merge-writes instead: the existing aggregate
+/// is read (absent ⇒ empty, self-healing like the per-package version index),
+/// every line owned by this `(package, version)` is dropped, `new_lines` is
+/// appended, and the file is rewritten. Dropping-then-appending makes a
+/// republish of the same `(package, version)` replace its lines rather than
+/// duplicate them, and drops the stale line of a processor removed on a
+/// republish. `tree_root` is the registry tree root (the directory holding
+/// `slpkg/` and `catalog/`).
+pub fn merge_catalog_index_lines(
+    tree_root: &Path,
+    package: &PackageRef,
+    version: &SemVer,
+    new_lines: &[CatalogIndexLine],
+) -> Result<()> {
+    let index_path = tree_root.join(CATALOG_INDEX_PATH);
+    let mut lines: Vec<CatalogIndexLine> = match std::fs::read(&index_path) {
+        Ok(body) => parse_catalog_index_ndjson(&body),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => {
+            return Err(anyhow::Error::new(e))
+                .with_context(|| format!("read {}", index_path.display()))
+        }
+    };
+    lines.retain(|line| !(&line.package == package && &line.version == version));
+    lines.extend(new_lines.iter().cloned());
+
+    if let Some(parent) = index_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create {}", parent.display()))?;
+    }
+    std::fs::write(&index_path, render_catalog_index_ndjson(&lines))
+        .with_context(|| format!("write {}", index_path.display()))?;
     Ok(())
 }
 

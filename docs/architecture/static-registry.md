@@ -272,13 +272,45 @@ owns the registry protocol; assembly lives in `streamlib-pack`
 ([`catalog.rs`](../../libs/streamlib-pack/src/catalog.rs),
 `build_package_catalog`).
 
-Three on-disk shapes, all written during the same atomic emit:
+Three on-disk shapes:
 
 | Path | Contents |
 |---|---|
 | `catalog/index.ndjson` | Aggregate processor palette — one `CatalogIndexLine` per processor across all packages (`CATALOG_INDEX_PATH`). |
 | `slpkg/<name>/<version>/<name>.catalog.json` | One package's `PackageCatalog` (its processors, ports, config), keyed by **full** published version. |
 | `slpkg/<name>/<core>/schemas/<Type>.jtd.json` | One schema's JTD document, keyed by **release-core** version. |
+
+### Two write paths, one shape
+
+Both the whole-tree emit and a single-package publish write the same three
+shapes through the same assembler (`build_package_catalog`) and per-package
+writer (`write_package_catalog`), so the per-package `<name>.catalog.json` +
+owned JTDs a client fetches are byte-identical regardless of which path wrote
+them. The aggregate differs only in breadth: an emit rewrites it as a
+single-version snapshot of the source tree, while incremental publishing
+accumulates a line per processor per **published** version — consistent with
+the versioned `slpkg/` store, which keeps every published version fetchable.
+
+- **Whole-tree `static-registry emit`** builds the catalog for every
+  `packages/*` dir and writes the aggregate **whole** (accumulate all lines,
+  write `catalog/index.ndjson` once) during the atomic staged flip.
+- **`streamlib pkg build` / `pkg publish`** (a single package) writes that
+  package's `<name>.catalog.json` + owned JTDs beside the `.slpkg` it just
+  uploaded, then **read-merge-writes** the aggregate
+  (`merge_catalog_index_lines`): read the existing `catalog/index.ndjson`
+  (absent ⇒ empty, self-healing like the per-package version index), drop
+  every line owned by the publishing `(package, version)`, append the fresh
+  lines, rewrite. Dropping-then-appending makes a republish of the same
+  version replace rather than duplicate, and drops the stale line of a
+  processor removed on a republish. A publish is not atomic the way an emit
+  is — it writes the store, index, and catalog in sequence.
+
+  External schema references resolve against the sibling packages next to the
+  one being published (the emit's `packages/` enumeration, applied to the
+  package's parent directory); an external ref whose owning dependency isn't
+  locally resolvable surfaces a typed `CatalogError` (e.g. `ExternalDepMissing`)
+  **before** any bytes land, so a publish either writes a fully-resolved
+  catalog or fails loud.
 
 ### The version asymmetry
 
