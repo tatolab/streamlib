@@ -2,26 +2,3 @@
 
 [alias]
 xtask = "run --package xtask --"
-
-# The `tatolab` registry: the streamlib SDK crate chain resolves by version
-# from the static file-tree registry in OUT-OF-TREE consumer builds (a staged
-# .slpkg's `registry = "tatolab"` deps, an external app). The WORKSPACE itself
-# never needs it — internal cross-crate deps (and the vendored
-# libs/tatolab-vulkanalia* crates) carry a `path` that wins locally, so a cold
-# clone builds with zero registry configuration. This canonical index URL is
-# baked into consumers' lockfiles; it does NOT need to be live — offline /
-# local resolution works against a mirror of the tree. Two ways to point cargo
-# at a mirror, both via a `[source]` replacement that keeps this canonical
-# source id in the lockfile (see docs/architecture/static-registry.md):
-#   - serverless: reshape the emitted sparse tree into a cargo `local-registry`
-#     (scripts/registry/emit-cargo-local-registry.sh) and replace `tatolab` with
-#     a `local-registry = "<dir>"` source — resolves `--locked --offline` with no
-#     server. This is the CI path (check-pack-load's out-of-tree build).
-#   - served: serve the tree (scripts/registry/serve-static-registry.sh <dir>)
-#     and replace `tatolab` with a `sparse+http://…` source.
-# Do NOT also set `CARGO_REGISTRIES_TATOLAB_INDEX` — an env index override
-# shadows a `[source]` replacement and rewrites source ids in the lockfile. A
-# `streamlib registry use <dir>` verb that emits the replacement is planned.
-# Reads are anonymous (tokenless).
-[registries.tatolab]
-index = "sparse+https://registry.tatolab.com/cargo/"

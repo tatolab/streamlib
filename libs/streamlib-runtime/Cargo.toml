@@ -17,7 +17,7 @@ path = "src/main.rs"
 [dependencies]
 # Engine + SDK. The API server (and every other processor) is loaded at
 # runtime through the all-dynamic module loader, not linked here.
-streamlib = { path = "../streamlib-sdk", version = "0.6.0", registry = "tatolab" }
+streamlib = { path = "../streamlib-sdk", version = "0.6.0" }
 
 # CLI argument parsing
 clap = { version = "4.5", features = ["derive"] }

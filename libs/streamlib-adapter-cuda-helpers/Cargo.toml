@@ -42,11 +42,11 @@ default = []
 cuda = ["dep:cudarc"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib = { path = "../streamlib-sdk", version = "0.6.0", registry = "tatolab" }
-streamlib-engine = { path = "../streamlib-engine", version = "0.6.0", registry = "tatolab" }
-streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.6.0", registry = "tatolab" }
-streamlib-adapter-cuda = { path = "../streamlib-adapter-cuda", version = "0.6.0", registry = "tatolab" }
-streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.6.0", registry = "tatolab" }
+streamlib = { path = "../streamlib-sdk", version = "0.6.0" }
+streamlib-engine = { path = "../streamlib-engine", version = "0.6.0" }
+streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.6.0" }
+streamlib-adapter-cuda = { path = "../streamlib-adapter-cuda", version = "0.6.0" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.6.0" }
 vulkanalia.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

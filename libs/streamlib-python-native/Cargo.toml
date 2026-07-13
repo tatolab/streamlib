@@ -15,7 +15,7 @@ name = "streamlib_python_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.6.0", registry = "tatolab" }
+streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.6.0" }
 iceoryx2 = "0.8.1"
 libc.workspace = true
 rmp-serde = "1.3"
@@ -32,12 +32,12 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.6.0", registry = "tatolab" }
+streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.6.0" }
 # Subprocess-side OpenGl runtime (#530). Reuses the host adapter crate's
 # EglRuntime + OpenGlSurfaceAdapter so subprocess code never re-derives EGL
 # bring-up or DMA-BUF → GL_TEXTURE_2D import.
-streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.6.0", registry = "tatolab" }
-streamlib-adapter-opengl = { path = "../streamlib-adapter-opengl", version = "0.6.0", registry = "tatolab" }
+streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.6.0" }
+streamlib-adapter-opengl = { path = "../streamlib-adapter-opengl", version = "0.6.0" }
 # Subprocess-side Vulkan runtime (#531). Reuses the host adapter crate's
 # `VulkanSurfaceAdapter` against a subprocess-local `ConsumerVulkanDevice`
 # from the consumer RHI carve-out: same timeline-wait, same layout-transition,
@@ -45,13 +45,13 @@ streamlib-adapter-opengl = { path = "../streamlib-adapter-opengl", version = "0.
 # not apply because this VkDevice is created before any other in-process
 # Vulkan device has active GPU work — see
 # `docs/learnings/nvidia-dual-vulkan-device-crash.md`.
-streamlib-adapter-vulkan = { path = "../streamlib-adapter-vulkan", version = "0.6.0", registry = "tatolab" }
+streamlib-adapter-vulkan = { path = "../streamlib-adapter-vulkan", version = "0.6.0" }
 # Consumer-side RHI carve-out — `ConsumerVulkanDevice`,
 # `ConsumerVulkanTexture`, the `VulkanRhiDevice` trait, etc. The cdylib
 # does NOT depend on `streamlib` (full crate); the FullAccess capability
 # boundary is type-system enforced by what `streamlib-consumer-rhi`
 # exposes vs. what it doesn't.
-streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.6.0", registry = "tatolab" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.6.0" }
 # Subprocess-side cpu-readback runtime (#562). Same shape as
 # adapter-vulkan / adapter-opengl: the adapter is generic over device
 # flavor, and this cdylib instantiates it against the consumer-side
@@ -59,7 +59,7 @@ streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.6.0"
 # Per-acquire `vkCmdCopyImageToBuffer` runs host-side and is triggered
 # via a thin `run_cpu_readback_copy` escalate IPC; the consumer waits
 # on the imported timeline through the carve-out.
-streamlib-adapter-cpu-readback = { path = "../streamlib-adapter-cpu-readback", version = "0.6.0", registry = "tatolab" }
+streamlib-adapter-cpu-readback = { path = "../streamlib-adapter-cpu-readback", version = "0.6.0" }
 # Subprocess-side CUDA runtime (#589). Same single-pattern shape as the
 # other adapters: generic over `D: VulkanRhiDevice`, instantiated here
 # against `ConsumerVulkanDevice`. The cdylib re-imports the OPAQUE_FD
@@ -67,7 +67,7 @@ streamlib-adapter-cpu-readback = { path = "../streamlib-adapter-cpu-readback", v
 # `cudaImportExternalSemaphore` and hands DLPack capsules back to
 # Python. No per-acquire IPC; the host's pipeline writes into the
 # OPAQUE_FD `VkBuffer` and signals the shared timeline ambiently.
-streamlib-adapter-cuda = { path = "../streamlib-adapter-cuda", version = "0.6.0", registry = "tatolab" }
+streamlib-adapter-cuda = { path = "../streamlib-adapter-cuda", version = "0.6.0" }
 # CUDA bindings. Linux-only (the cuda module is `#[cfg(target_os =
 # "linux")]`), `fallback-dynamic-loading` means libcuda.so is dlopen'd
 # at runtime so a build host without a CUDA toolkit can still link the
