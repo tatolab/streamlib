@@ -239,33 +239,50 @@ resolutions/builds before the caller awaits anything.
 ## Lazy plugin auto-discovery — no load call in app code
 
 App code never calls `add_module`. When `add_processor(ProcessorSpec::new(
-type, cfg))` references a processor type that isn't registered yet, the
+reference, cfg))` references a processor type that isn't registered yet, the
 runtime **discovers and loads the providing package on first reference**
 from the app's `streamlib_modules/` folder — the gstreamer plugin-host
 model applied to a per-app module folder. `add_module` /
 `add_module_with(Strategy)` survive as an embedding / power-caller escape
 hatch, not a step common app code takes.
 
-The trigger is the same registry miss `add_v` already detects. Before a
-processor node is added, `add_processor` checks
-`PROCESSOR_REGISTRY.port_info(&spec.name)`. On a hit the type is already
-available and nothing loads — which is exactly why a **second reference
-to a type from an already-loaded package never reloads** the plugin. On a
-miss the runtime runs lazy discovery:
+`ProcessorSpec::new` takes a `ProcessorTypeReference`, which is either
+**version-free** or **version-pinned**:
+
+- **Version-free** (`processor_type_ref!("org", "package", "Type")`) — the
+  canonical form for the no-`add_module` world. It carries only
+  `(org, package, type)`, runs **no registry lookup at the call site**, and
+  reaches the lazy hook to resolve against whatever version the installed
+  provider registers. This is what lets an app reference `@org/package/Type`
+  with **no version anywhere in its code**.
+- **Version-pinned** (`schema_ident!(...)`, or any `SchemaIdent` via `From`) —
+  a concrete `SchemaIdent` including a version; resolution is version-exact.
+
+(`schema_ident_any_version!` is a third, distinct tool: it resolves a
+`SchemaIdent` *now* against the **already-registered** types — for apps that
+called `add_module` first — and does not trigger lazy loading.)
+
+Before a processor node is added, `add_processor` runs the lazy hook, which
+asks whether the referenced type is already registered — the exact
+`SchemaIdent` for a version-pinned reference, or the installed
+`(org, package, type)` tuple for a version-free one. When it is, nothing
+loads — which is exactly why a **second reference to a type from an
+already-loaded package never reloads** the plugin. Otherwise the runtime runs
+lazy discovery:
 
 1. **Discover.** Scan `<app-modules-root>/streamlib_modules/@org/name/streamlib.yaml`,
    matching each manifest's `package:` org + name and its declared
-   processor short names against the referenced ident's `org` / `package`
-   / `type`. Discovery resolves the *provider package* by
-   `(org, package, type)` and ignores the reference-site version — the
-   installed version is pinned in `streamlib.lock` at `streamlib add`
-   time. The **terminal type resolution is still version-exact**, though:
-   `add_v` / `PROCESSOR_REGISTRY.port_info` match the referenced
-   `SchemaIdent` including its version. So a reference whose version
-   differs from the installed package's version loads the provider but
-   then resolves to `UnknownProcessorType`. A fully version-free
-   reference form is not available yet — a `SchemaIdent` at the
-   reference site still carries a concrete version.
+   processor short names against the referenced `org` / `package` / `type`.
+   Discovery resolves the *provider package* by `(org, package, type)` and
+   ignores any reference-site version — the installed version is pinned in
+   `streamlib.lock` at `streamlib add` time. **Terminal type resolution then
+   matches the reference form:** a version-free reference resolves to the
+   single installed provider's registered ident
+   (`resolve_installed_processor_type`), so it never loads-then-misses; a
+   version-pinned reference stays version-exact
+   (`PROCESSOR_REGISTRY.port_info` on the exact `SchemaIdent`), so a pin whose
+   version differs from the installed package's loads the provider but then
+   resolves to `UnknownProcessorType`.
 2. **Load.** Resolve the single matching package to
    `add_module_with(ModuleIdent, Strategy::InstalledCache)` and drive it
    through the **transactional load path** below. `InstalledCache` probes

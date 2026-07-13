@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::descriptors::SchemaIdent;
+use crate::core::processors::ProcessorTypeReference;
 
 /// Specification for creating a processor.
 ///
@@ -11,8 +11,9 @@ use crate::core::descriptors::SchemaIdent;
 /// Internal details (id, ports) are resolved by the runtime.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProcessorSpec {
-    /// Structured processor identity (matches the registered key in [`PROCESSOR_REGISTRY`](crate::core::processors::PROCESSOR_REGISTRY)).
-    pub name: SchemaIdent,
+    /// How the processor type is referenced: a version-pinned [`SchemaIdent`](crate::core::descriptors::SchemaIdent)
+    /// or a version-free reference resolved to the installed provider at add time.
+    pub name: ProcessorTypeReference,
     /// Configuration as JSON value.
     pub config: serde_json::Value,
     /// Display name override. If `None`, defaults to the processor's PascalCase short name.
@@ -21,9 +22,12 @@ pub struct ProcessorSpec {
 }
 
 impl ProcessorSpec {
-    pub fn new(name: SchemaIdent, config: serde_json::Value) -> Self {
+    /// Build a spec from a processor-type reference (a version-pinned
+    /// [`SchemaIdent`](crate::core::descriptors::SchemaIdent) via
+    /// [`From`], or a version-free [`ProcessorTypeReference`]) and a JSON config.
+    pub fn new(name: impl Into<ProcessorTypeReference>, config: serde_json::Value) -> Self {
         Self {
-            name,
+            name: name.into(),
             config,
             display_name: None,
         }
@@ -39,7 +43,7 @@ impl ProcessorSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::descriptors::{Org, Package, SemVer, TypeName};
+    use crate::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 
     fn ident(org: &str, pkg: &str, ty: &str, v: SemVer) -> SchemaIdent {
         SchemaIdent::new(
@@ -112,6 +116,60 @@ mod tests {
         )
         .with_display_name("Camera A");
         assert_eq!(spec.display_name.as_deref(), Some("Camera A"));
+    }
+
+    /// A `SchemaIdent` still constructs a spec (via `From<SchemaIdent>`),
+    /// landing as a version-pinned reference — the #1325 call-site shape is
+    /// unchanged.
+    #[test]
+    fn schema_ident_builds_version_pinned_spec() {
+        let spec = ProcessorSpec::new(
+            ident("tatolab", "core", "VideoFrame", SemVer::new(1, 0, 0)),
+            serde_json::Value::Null,
+        );
+        assert!(matches!(
+            spec.name,
+            ProcessorTypeReference::VersionPinned(_)
+        ));
+    }
+
+    /// A version-free reference builds a spec that carries no version at the
+    /// reference site — the shape that reaches the lazy hook.
+    #[test]
+    fn version_free_reference_builds_resolve_to_installed_spec() {
+        let spec = ProcessorSpec::new(
+            ProcessorTypeReference::ResolveToInstalled {
+                org: Org::new("tatolab").unwrap(),
+                package: Package::new("camera").unwrap(),
+                r#type: TypeName::new("Camera").unwrap(),
+            },
+            serde_json::json!({"fps": 30}),
+        );
+        assert!(matches!(
+            spec.name,
+            ProcessorTypeReference::ResolveToInstalled { .. }
+        ));
+        // The wire carries the three-key form, no version key.
+        let value = serde_json::to_value(&spec).unwrap();
+        assert!(value["name"].get("version").is_none());
+        assert_eq!(value["name"]["type"], "Camera");
+    }
+
+    /// The version-free spec round-trips over msgpack (the plugin-ABI wire)
+    /// with full value equality.
+    #[test]
+    fn version_free_spec_msgpack_round_trip() {
+        let spec = ProcessorSpec::new(
+            ProcessorTypeReference::ResolveToInstalled {
+                org: Org::new("tatolab").unwrap(),
+                package: Package::new("camera").unwrap(),
+                r#type: TypeName::new("Camera").unwrap(),
+            },
+            serde_json::json!({"width": 1920}),
+        );
+        let bytes = rmp_serde::to_vec_named(&spec).expect("encode");
+        let back: ProcessorSpec = rmp_serde::from_slice(&bytes).expect("decode");
+        assert_eq!(spec, back);
     }
 
     /// msgpack `to_vec_named` → `from_slice` round-trip preserves full

@@ -10,6 +10,7 @@ pub mod __generated_private;
 
 mod processor_instance_factory;
 mod processor_spec;
+mod processor_type_reference;
 // Re-export graph types — `ProcessorState` and `ProcessorStateComponent`
 // live in `core::graph` (#786); kept as a re-export here so the public
 // `streamlib::sdk::processors::ProcessorState` path stays stable.
@@ -28,6 +29,7 @@ pub use processor_instance_factory::{
     DynamicProcessorConstructorFn, PROCESSOR_REGISTRY, ProcessorInstance, ProcessorInstanceFactory,
 };
 pub use processor_spec::ProcessorSpec;
+pub use processor_type_reference::ProcessorTypeReference;
 
 /// Empty config type for processors that don't need configuration.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]

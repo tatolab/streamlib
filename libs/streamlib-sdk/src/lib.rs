@@ -189,11 +189,14 @@ pub mod sdk {
     pub use streamlib_engine::ConfigDescriptor;
 
     /// `streamlib::sdk::schema_ident_any_version!("org", "package", "Type")` —
-    /// **canonical, default form** for naming a processor at a call site.
+    /// resolve a `SchemaIdent` **now** against the **already-registered**
+    /// processor types (the post-`add_module` / power-caller form).
     /// Validates `(org, package, type)` at compile time; resolves the
     /// version at runtime against the global processor registry,
     /// picking the highest registered `SemVer` (Cargo / npm convention).
-    /// Returns `Result<SchemaIdent, streamlib::sdk::error::Error>`.
+    /// Returns `Result<SchemaIdent, streamlib::sdk::error::Error>`. For a
+    /// version-free reference that lazily loads its provider from
+    /// `streamlib_modules/`, use [`processor_type_ref!`] instead.
     pub use streamlib_engine::schema_ident_any_version;
 
     /// `streamlib::sdk::schema_ident!("org", "package", "Type", "1.0.0")` —
@@ -203,6 +206,19 @@ pub mod sdk {
     /// newer-but-compatible registered versions; otherwise prefer
     /// [`schema_ident_any_version!`].
     pub use streamlib_engine::schema_ident;
+
+    /// `streamlib::sdk::processor_type_ref!("org", "package", "Type")` — a
+    /// **version-free** processor-type reference for the lazy-discovery world
+    /// (app code that never calls `add_module`). Validates `(org, package,
+    /// type)` at compile time and expands to a
+    /// [`ProcessorTypeReference::ResolveToInstalled`](processors::ProcessorTypeReference)
+    /// with no version and **no registry lookup at the call site**, so the
+    /// reference reaches `add_processor`'s lazy hook and resolves to the
+    /// single installed provider — loading its package from
+    /// `streamlib_modules/` on first reference. This is the canonical form for
+    /// referencing a processor by `@org/package/Type` with no version; prefer
+    /// it over [`schema_ident_any_version!`] when you want lazy loading.
+    pub use streamlib_engine::processor_type_ref;
 
     /// `streamlib::sdk::module_ident!("org", "name", "^1.0.0")` —
     /// imperative-API module identifier with a pinned semver range.

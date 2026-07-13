@@ -705,14 +705,14 @@ impl Runner {
 /// Build the recoverable [`Error::LazyModuleLoadFailed`] for a discovered
 /// package that failed to load, naming the type and its providing package.
 fn lazy_module_load_failed(
-    processor_type: &crate::core::descriptors::SchemaIdent,
+    processor_type: &crate::core::processors::ProcessorTypeReference,
     error: AddModuleError,
 ) -> crate::core::error::Error {
     crate::core::error::Error::LazyModuleLoadFailed {
-        processor_type: processor_type.clone(),
+        processor_type: processor_type.to_diagnostic_ident(),
         package: streamlib_idents::PackageRef::new(
-            processor_type.org.clone(),
-            processor_type.package.clone(),
+            processor_type.org().clone(),
+            processor_type.package().clone(),
         ),
         detail: error.to_string(),
     }
@@ -748,21 +748,39 @@ impl Runner {
     /// declares it). An ambiguous discovery is a typed `Err`.
     fn begin_lazy_provider_load(
         &self,
-        processor_type: &crate::core::descriptors::SchemaIdent,
+        processor_type: &crate::core::processors::ProcessorTypeReference,
     ) -> std::result::Result<Option<AddedModule>, crate::core::error::Error> {
-        if crate::core::processors::PROCESSOR_REGISTRY
-            .port_info(processor_type)
-            .is_some()
-        {
+        use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorTypeReference};
+        // Fast path: already registered? A version-pinned reference checks the
+        // exact ident (unchanged #1325 behavior); a version-free reference
+        // checks the installed `(org, package, type)` tuple.
+        let already_registered = match processor_type {
+            ProcessorTypeReference::VersionPinned(ident) => {
+                PROCESSOR_REGISTRY.port_info(ident).is_some()
+            }
+            ProcessorTypeReference::ResolveToInstalled {
+                org,
+                package,
+                r#type,
+            } => PROCESSOR_REGISTRY
+                .resolve_installed_processor_type(org, package, r#type)
+                .is_some(),
+        };
+        if already_registered {
             return Ok(None);
         }
         let Some(app_modules_root) = source::app_modules_root() else {
             return Ok(None);
         };
-        match lazy_discovery::resolve_providing_module(&app_modules_root, processor_type)? {
-            Some(module_ident) => {
-                Ok(Some(self.add_module_with(module_ident, Strategy::InstalledCache)))
-            }
+        // Discovery ignores the reference-site version and matches on
+        // `(org, package, type)`; it takes a concrete `SchemaIdent` only for
+        // its diagnostics, so a version-free reference projects to
+        // `(org, package, type)@0.0.0`.
+        let discovery_ident = processor_type.to_diagnostic_ident();
+        match lazy_discovery::resolve_providing_module(&app_modules_root, &discovery_ident)? {
+            Some(module_ident) => Ok(Some(
+                self.add_module_with(module_ident, Strategy::InstalledCache),
+            )),
             None => Ok(None),
         }
     }
@@ -777,7 +795,7 @@ impl Runner {
     #[tracing::instrument(skip(self), fields(processor_type = %processor_type))]
     pub(crate) async fn lazily_load_provider_for_processor_type(
         &self,
-        processor_type: &crate::core::descriptors::SchemaIdent,
+        processor_type: &crate::core::processors::ProcessorTypeReference,
     ) -> Option<crate::core::error::Error> {
         match self.begin_lazy_provider_load(processor_type) {
             Ok(Some(added)) => match added.await {
@@ -794,7 +812,7 @@ impl Runner {
     /// where the load future cannot be `.await`ed inline.
     pub(crate) fn lazily_load_provider_for_processor_type_blocking(
         &self,
-        processor_type: &crate::core::descriptors::SchemaIdent,
+        processor_type: &crate::core::processors::ProcessorTypeReference,
     ) -> Option<crate::core::error::Error> {
         let added = match self.begin_lazy_provider_load(processor_type) {
             Ok(Some(added)) => added,
@@ -850,13 +868,15 @@ mod lazy_load_error_tests {
             streamlib_idents::TypeName::new("Camera").unwrap(),
             streamlib_idents::SemVer::new(1, 0, 0),
         );
+        let type_ref =
+            crate::core::processors::ProcessorTypeReference::from(processor_type.clone());
         let underlying = AddModuleError::ModuleNotFound {
             package: streamlib_idents::PackageRef::new(
                 streamlib_idents::Org::new("tatolab").unwrap(),
                 streamlib_idents::Package::new("camera").unwrap(),
             ),
         };
-        match lazy_module_load_failed(&processor_type, underlying) {
+        match lazy_module_load_failed(&type_ref, underlying) {
             crate::core::error::Error::LazyModuleLoadFailed {
                 processor_type: reported_type,
                 package,
@@ -865,6 +885,39 @@ mod lazy_load_error_tests {
                 assert_eq!(reported_type, processor_type);
                 assert_eq!(package.to_string(), "@tatolab/camera");
                 assert!(!detail.is_empty(), "the underlying reason must be carried");
+            }
+            other => panic!("expected LazyModuleLoadFailed, got {other:?}"),
+        }
+    }
+
+    /// A version-free reference still derives the providing package `@org/name`
+    /// from the reference's org + package, with the diagnostic type rendered at
+    /// the `0.0.0` version-free placeholder.
+    #[test]
+    fn lazy_module_load_failed_projects_version_free_reference() {
+        let type_ref = crate::core::processors::ProcessorTypeReference::ResolveToInstalled {
+            org: streamlib_idents::Org::new("tatolab").unwrap(),
+            package: streamlib_idents::Package::new("camera").unwrap(),
+            r#type: streamlib_idents::TypeName::new("Camera").unwrap(),
+        };
+        let underlying = AddModuleError::ModuleNotFound {
+            package: streamlib_idents::PackageRef::new(
+                streamlib_idents::Org::new("tatolab").unwrap(),
+                streamlib_idents::Package::new("camera").unwrap(),
+            ),
+        };
+        match lazy_module_load_failed(&type_ref, underlying) {
+            crate::core::error::Error::LazyModuleLoadFailed {
+                processor_type: reported_type,
+                package,
+                ..
+            } => {
+                assert_eq!(package.to_string(), "@tatolab/camera");
+                assert_eq!(reported_type.r#type.as_str(), "Camera");
+                assert_eq!(
+                    reported_type.version,
+                    streamlib_idents::SemVer::new(0, 0, 0)
+                );
             }
             other => panic!("expected LazyModuleLoadFailed, got {other:?}"),
         }

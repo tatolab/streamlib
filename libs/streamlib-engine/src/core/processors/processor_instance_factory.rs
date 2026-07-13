@@ -1281,38 +1281,71 @@ impl ProcessorInstanceFactory {
         self.descriptors.read().values().cloned().collect()
     }
 
-    /// Resolve `(org, package, type)` against the registry by picking the
-    /// highest-`SemVer` match across all registered idents. Returns
-    /// [`Error::UnknownProcessorType`] when nothing matches.
+    /// The highest-`SemVer` registered ident matching `(org, package, type)`,
+    /// or `None` when nothing matches. Shared tuple-scan behind
+    /// [`Self::resolve_any_version`] and
+    /// [`Self::resolve_installed_processor_type`].
     ///
     /// Iterates over `descriptors` (the truth for registered idents),
     /// not `registrations`, so subprocess-only processors registered via
     /// [`Self::register_descriptor_only`] participate in resolution.
+    fn highest_registered_for_tuple(
+        &self,
+        org: &crate::core::descriptors::Org,
+        package: &crate::core::descriptors::Package,
+        type_name: &crate::core::descriptors::TypeName,
+    ) -> Option<SchemaIdent> {
+        self.descriptors
+            .read()
+            .keys()
+            .filter(|id| &id.org == org && &id.package == package && &id.r#type == type_name)
+            .max_by_key(|id| id.version)
+            .cloned()
+    }
+
+    /// Resolve `(org, package, type)` against the registry by picking the
+    /// highest-`SemVer` match across all registered idents. Returns
+    /// [`Error::UnknownProcessorType`] when nothing matches.
     pub fn resolve_any_version(
         &self,
         org: &crate::core::descriptors::Org,
         package: &crate::core::descriptors::Package,
         type_name: &crate::core::descriptors::TypeName,
     ) -> Result<SchemaIdent> {
-        let descriptors = self.descriptors.read();
-        let highest = descriptors
-            .keys()
-            .filter(|id| &id.org == org && &id.package == package && &id.r#type == type_name)
-            .max_by_key(|id| id.version.clone())
-            .cloned();
-        highest.ok_or_else(|| Error::UnknownProcessorType {
-            // No version was supplied; we render the search target as
-            // `(org, package, type)@0.0.0` so the diagnostic still names
-            // the offending tuple. Callers who want the exact "any
-            // version" semantics in the message string should match on
-            // the variant and re-render.
-            ident: SchemaIdent::new(
-                org.clone(),
-                package.clone(),
-                type_name.clone(),
-                crate::core::descriptors::SemVer::new(0, 0, 0),
-            ),
-        })
+        self.highest_registered_for_tuple(org, package, type_name)
+            .ok_or_else(|| Error::UnknownProcessorType {
+                // No version was supplied; we render the search target as
+                // `(org, package, type)@0.0.0` so the diagnostic still names
+                // the offending tuple. Callers who want the exact "any
+                // version" semantics in the message string should match on
+                // the variant and re-render.
+                ident: SchemaIdent::new(
+                    org.clone(),
+                    package.clone(),
+                    type_name.clone(),
+                    crate::core::descriptors::SemVer::new(0, 0, 0),
+                ),
+            })
+    }
+
+    /// Resolve a version-free reference to the concrete [`SchemaIdent`] of the
+    /// single installed provider for `(org, package, type)`, or `None` when no
+    /// provider is registered.
+    ///
+    /// The one-installed-version-per-package invariant means at most one
+    /// version is registered for a tuple in a process; if more than one
+    /// somehow is, the highest `SemVer` wins deterministically. This is the
+    /// terminal resolution for a version-free
+    /// [`ProcessorTypeReference::ResolveToInstalled`](crate::core::processors::ProcessorTypeReference),
+    /// distinct from [`Self::resolve_any_version`] (which the version-omitting
+    /// call-site macro uses against already-registered types).
+    pub fn resolve_installed_processor_type(
+        &self,
+        org: &crate::core::descriptors::Org,
+        package: &crate::core::descriptors::Package,
+        type_name: &crate::core::descriptors::TypeName,
+    ) -> Option<SchemaIdent> {
+        self.highest_registered_for_tuple(org, package, type_name)
     }
 
     /// All known port-schema specs from registered processor ports,
@@ -1483,6 +1516,48 @@ mod tests {
             }
             other => panic!("expected UnknownProcessorType, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn resolve_installed_processor_type_returns_the_single_installed_version() {
+        // Terminal resolution for a version-free reference: with one installed
+        // version, resolve to it; with nothing registered, `None` (the
+        // genuinely-absent case the caller degrades to `UnknownProcessorType`).
+        let factory = ProcessorInstanceFactory::new();
+        let org = Org::new("acme").unwrap();
+        let pkg = Package::new("core").unwrap();
+        let ty = TypeName::new("Camera").unwrap();
+
+        // Nothing registered → None.
+        assert!(
+            factory
+                .resolve_installed_processor_type(&org, &pkg, &ty)
+                .is_none(),
+            "an absent tuple must resolve to None"
+        );
+
+        // Register the single installed version.
+        let installed = ident("acme", "core", "Camera", SemVer::new(2, 3, 4));
+        factory
+            .register_descriptor_only(unit_descriptor(installed.clone()))
+            .unwrap();
+
+        // A version-free resolve returns the concrete installed ident.
+        assert_eq!(
+            factory.resolve_installed_processor_type(&org, &pkg, &ty),
+            Some(installed),
+            "must resolve to the installed version's concrete ident"
+        );
+
+        // A different type in the same package still resolves to None — the
+        // resolve is tuple-scoped, not a loose match.
+        let other_ty = TypeName::new("Display").unwrap();
+        assert!(
+            factory
+                .resolve_installed_processor_type(&org, &pkg, &other_ty)
+                .is_none(),
+            "a different type must not resolve"
+        );
     }
 
     #[test]
