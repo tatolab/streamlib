@@ -289,6 +289,7 @@ impl AppModulesDir {
             path: modules_dir.clone(),
             detail: format!("creating modules dir: {e}"),
         })?;
+        sweep_orphan_staging_entries(&modules_dir);
 
         // Stage: materialize the source's bytes into a `.staging-*` sibling of
         // the final slot (same filesystem ⇒ the promote is an atomic rename).
@@ -372,6 +373,11 @@ impl AppModulesDir {
         &self,
         package: &PackageRef,
     ) -> Result<RemovePackageReport, AppModulesError> {
+        let modules_dir = self.modules_dir();
+        if modules_dir.is_dir() {
+            sweep_orphan_staging_entries(&modules_dir);
+        }
+
         let mut lockfile = self.read_lockfile()?;
         let removed_entry = lockfile.packages.remove(&package.to_string());
         let package_dir = self.package_dir(package);
@@ -425,6 +431,48 @@ impl AppModulesDir {
             package_dir_removed,
             lockfile_entry_removed,
         })
+    }
+}
+
+/// Best-effort sweep of orphaned `.staging-*` entries in `modules_dir` —
+/// residue from an add/remove that was `SIGKILL`ed mid-promote (a clean
+/// error path removes its own staging via [`StagingDir`]'s `Drop`). Only
+/// entries whose embedded pid is NOT the current process are removed, so a
+/// concurrent same-process add's in-flight staging dir is never deleted;
+/// cross-process concurrent adds to one app root are unsupported
+/// (last-writer-wins), so sweeping another process's staging entry is
+/// acceptable. A removal failure is logged and ignored — the sweep is
+/// hygiene, never a correctness gate.
+fn sweep_orphan_staging_entries(modules_dir: &Path) {
+    let current_pid = std::process::id();
+    let entries = match std::fs::read_dir(modules_dir) {
+        Ok(read_dir) => read_dir,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        let Some(rest) = file_name.strip_prefix(APP_MODULES_STAGING_PREFIX) else {
+            continue;
+        };
+        // `.staging-<pid>-<seq>` (fresh) or `.staging-replaced-<pid>-<nanos>`
+        // (a promote backup); the pid is the first numeric field either way.
+        let rest = rest.strip_prefix("replaced-").unwrap_or(rest);
+        let embedded_pid: Option<u32> = rest.split('-').next().and_then(|s| s.parse().ok());
+        // Never delete an entry owned by THIS live process — that would race a
+        // concurrent same-process add. An unparseable pid is treated as an
+        // orphan and swept.
+        if embedded_pid == Some(current_pid) {
+            continue;
+        }
+        let path = entry.path();
+        if let Err(e) = std::fs::remove_dir_all(&path) {
+            tracing::debug!(
+                dir = %path.display(),
+                error = %e,
+                "sweep_orphan_staging_entries: failed to remove orphan staging dir"
+            );
+        }
     }
 }
 
@@ -1477,6 +1525,116 @@ mod tests {
         assert!(matches!(err, AppModulesError::ExtractFailed { .. }), "{err:?}");
         assert_no_partial_state(&app, &[], None);
         assert!(!app_root.path().join("escape.txt").exists());
+    }
+
+    #[test]
+    fn add_tar_with_absolute_symlink_is_extract_failed_with_no_residue() {
+        // A hostile archive whose symlink targets an absolute host path must
+        // be refused, with nothing materialized — the self-contained contract.
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("evil.tar.gz");
+        let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut builder = tar::Builder::new(encoder);
+        let body = b"manifest";
+        let mut fh = tar::Header::new_gnu();
+        fh.set_size(body.len() as u64);
+        fh.set_mode(0o644);
+        fh.set_cksum();
+        builder
+            .append_data(&mut fh, "streamlib.yaml", body.as_slice())
+            .unwrap();
+        let mut lh = tar::Header::new_gnu();
+        lh.set_entry_type(tar::EntryType::Symlink);
+        lh.set_size(0);
+        lh.set_mode(0o777);
+        builder.append_link(&mut lh, "passwd", "/etc/passwd").unwrap();
+        std::fs::write(&archive, builder.into_inner().unwrap().finish().unwrap()).unwrap();
+
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let err = app
+            .add_package(
+                &AddPackageSource::Archive { path: archive },
+                &AddPackageOptions::default(),
+            )
+            .expect_err("absolute-target symlink tar must fail");
+        assert!(matches!(err, AppModulesError::ExtractFailed { .. }), "{err:?}");
+        assert_no_partial_state(&app, &[], None);
+    }
+
+    #[test]
+    fn add_tar_with_internal_relative_symlink_succeeds() {
+        // A benign internal symlink is allowed; the package materializes and
+        // locks normally.
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("ok.tar.gz");
+        let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut builder = tar::Builder::new(encoder);
+        for (path, body) in [
+            ("streamlib.yaml", manifest_yaml("tatolab", "camera", "2.0.0")),
+            ("schemas/foo_frame.yaml", SCHEMA_YAML.to_string()),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append_data(&mut header, path, body.as_bytes()).unwrap();
+        }
+        let mut lh = tar::Header::new_gnu();
+        lh.set_entry_type(tar::EntryType::Symlink);
+        lh.set_size(0);
+        lh.set_mode(0o777);
+        builder.append_link(&mut lh, "alias.yaml", "streamlib.yaml").unwrap();
+        std::fs::write(&archive, builder.into_inner().unwrap().finish().unwrap()).unwrap();
+
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let report = app
+            .add_package(
+                &AddPackageSource::Archive { path: archive },
+                &AddPackageOptions::default(),
+            )
+            .expect("internal relative symlink must be allowed");
+        assert_eq!(report.package, pkg_ref("tatolab", "camera"));
+        assert!(report.package_dir.join("streamlib.yaml").is_file());
+    }
+
+    #[test]
+    fn add_sweeps_orphan_staging_dirs_but_spares_current_process_entries() {
+        let src = tempfile::tempdir().unwrap();
+        write_package_folder(src.path(), "tatolab", "camera", "2.0.0");
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let modules_dir = app.modules_dir();
+        std::fs::create_dir_all(&modules_dir).unwrap();
+
+        // A crashed prior run's orphan (a pid that isn't this process).
+        let orphan = modules_dir.join(format!("{APP_MODULES_STAGING_PREFIX}1-0"));
+        std::fs::create_dir_all(&orphan).unwrap();
+        std::fs::write(orphan.join("junk"), b"stale").unwrap();
+        let orphan_backup =
+            modules_dir.join(format!("{APP_MODULES_STAGING_PREFIX}replaced-1-999"));
+        std::fs::create_dir_all(&orphan_backup).unwrap();
+        // A staging dir owned by THIS live process must be spared (protects a
+        // concurrent same-process add).
+        let mine = modules_dir.join(format!(
+            "{APP_MODULES_STAGING_PREFIX}{}-424242",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&mine).unwrap();
+
+        app.add_package(
+            &AddPackageSource::Folder {
+                path: src.path().to_path_buf(),
+            },
+            &AddPackageOptions::default(),
+        )
+        .unwrap();
+
+        // Mentally revert the sweep and both orphans survive → this fails.
+        assert!(!orphan.exists(), "orphan staging dir must be swept");
+        assert!(!orphan_backup.exists(), "orphan promote backup must be swept");
+        assert!(mine.exists(), "current-process staging dir must be spared");
     }
 
     #[test]

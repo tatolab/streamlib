@@ -37,6 +37,19 @@ pub enum ArchiveError {
     #[error("archive entry '{entry}' in '{source_label}' escapes the extraction directory")]
     PathTraversal { source_label: String, entry: String },
 
+    /// A symlink (or hard link) entry targets an absolute path or a path that
+    /// escapes the package root — breaking the self-contained-materialization
+    /// contract.
+    #[error(
+        "symlink entry '{entry}' in '{source_label}' targets '{target}', which is absolute \
+         or escapes the package root"
+    )]
+    SymlinkEscape {
+        source_label: String,
+        entry: String,
+        target: String,
+    },
+
     /// Writing an extracted entry to disk failed.
     #[error("extracting '{entry}' from '{source_label}' failed: {detail}")]
     EntryWriteFailed {
@@ -98,8 +111,16 @@ pub fn extract_zip_bytes_to_dir(
 
     // Validate every entry path BEFORE any bytes land, so a traversal entry
     // anywhere in the archive leaves no partial extraction behind.
+    //
+    // This decode path materializes EVERY entry — including symlink-flagged
+    // ones — as a regular file (`File::create` + `io::copy` of the entry
+    // content, never `symlink()`), so a zip cannot mint a real symlink that
+    // escapes the slot. The symlink-target check below is contract
+    // defense-in-depth: it refuses an absolute / escaping link target so the
+    // materialized package never carries a host-path reference, matching the
+    // tar path's guarantee.
     for i in 0..archive.len() {
-        let entry = archive
+        let mut entry = archive
             .by_index(i)
             .map_err(|e| malformed(format!("reading archive entry {i}: {e}")))?;
         let entry_name = entry.name().to_string();
@@ -108,6 +129,20 @@ pub fn extract_zip_bytes_to_dir(
                 source_label: source_label.to_string(),
                 entry: entry_name,
             });
+        }
+        if entry.is_symlink() {
+            let mut target = String::new();
+            std::io::Read::read_to_string(&mut entry, &mut target).map_err(|e| {
+                malformed(format!("reading symlink target for {entry_name}: {e}"))
+            })?;
+            let target = target.trim();
+            if symlink_target_escapes_root(&entry_name, target) {
+                return Err(ArchiveError::SymlinkEscape {
+                    source_label: source_label.to_string(),
+                    entry: entry_name,
+                    target: target.to_string(),
+                });
+            }
         }
     }
 
@@ -181,6 +216,27 @@ pub fn extract_tar_gz_bytes_to_dir(
                     entry: entry_name,
                 });
             }
+            // Reject symlink / hard-link entries whose target is absolute or
+            // escapes the package root. `unpack_in` creates real symlinks, so
+            // an unguarded absolute-target link would point at an arbitrary
+            // host path (e.g. /etc/passwd) inside the materialized package.
+            // Internal relative links are permitted (they stay self-contained).
+            let entry_type = entry.header().entry_type();
+            if entry_type.is_symlink() || entry_type.is_hard_link() {
+                let link_target = entry.link_name().map_err(|e| {
+                    malformed(format!("reading symlink target for {entry_name}: {e}"))
+                })?;
+                if let Some(target) = link_target {
+                    let target_str = target.to_string_lossy().into_owned();
+                    if symlink_target_escapes_root(&entry_name, &target_str) {
+                        return Err(ArchiveError::SymlinkEscape {
+                            source_label: source_label.to_string(),
+                            entry: entry_name,
+                            target: target_str,
+                        });
+                    }
+                }
+            }
         }
     }
 
@@ -224,6 +280,44 @@ fn is_path_traversal(entry_name: &str) -> bool {
         || Path::new(entry_name)
             .components()
             .any(|c| matches!(c, std::path::Component::ParentDir))
+}
+
+/// Whether a symlink entry's `target` escapes the extraction root when
+/// resolved relative to the entry's own directory. Absolute targets, and
+/// relative targets whose `..` components climb above the root, both escape.
+fn symlink_target_escapes_root(entry_name: &str, target: &str) -> bool {
+    use std::path::Component;
+    let target_path = Path::new(target);
+    if target_path.is_absolute() {
+        return true;
+    }
+    // Depth starts at the entry's parent directory (relative to root); the
+    // link target's components then walk from there. A negative depth means
+    // the target climbed above the root.
+    let mut depth: i64 = 0;
+    if let Some(parent) = Path::new(entry_name).parent() {
+        for comp in parent.components() {
+            match comp {
+                Component::Normal(_) => depth += 1,
+                Component::ParentDir => depth -= 1,
+                _ => {}
+            }
+        }
+    }
+    for comp in target_path.components() {
+        match comp {
+            Component::Normal(_) => depth += 1,
+            Component::CurDir => {}
+            Component::ParentDir => {
+                depth -= 1;
+                if depth < 0 {
+                    return true;
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => return true,
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -396,5 +490,100 @@ mod tests {
             matches!(err, ArchiveError::Malformed { kind: "tar.gz", .. }),
             "{err:?}"
         );
+    }
+
+    /// A `.tar.gz` with one regular file plus a symlink entry `link_path` →
+    /// `target`.
+    fn tar_gz_with_symlink(link_path: &str, target: &str) -> Vec<u8> {
+        let encoder =
+            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut builder = tar::Builder::new(encoder);
+        let body = b"manifest";
+        let mut fh = tar::Header::new_gnu();
+        fh.set_size(body.len() as u64);
+        fh.set_mode(0o644);
+        fh.set_cksum();
+        builder
+            .append_data(&mut fh, "streamlib.yaml", body.as_slice())
+            .unwrap();
+        let mut lh = tar::Header::new_gnu();
+        lh.set_entry_type(tar::EntryType::Symlink);
+        lh.set_size(0);
+        lh.set_mode(0o777);
+        // `append_link` sets the path, link name, and checksum.
+        builder.append_link(&mut lh, link_path, target).unwrap();
+        builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn tar_gz_rejects_absolute_target_symlink_with_no_residue() {
+        let bytes = tar_gz_with_symlink("passwd", "/etc/passwd");
+        let parent = tempfile::tempdir().unwrap();
+        let dest = parent.path().join("extraction");
+        let err = extract_tar_gz_bytes_to_dir(&bytes, &dest, "evil.tar.gz")
+            .expect_err("absolute-target symlink must be rejected");
+        assert!(matches!(err, ArchiveError::SymlinkEscape { .. }), "{err:?}");
+        assert!(!dest.exists(), "no partial extraction may survive");
+    }
+
+    #[test]
+    fn tar_gz_rejects_escaping_relative_symlink() {
+        let bytes = tar_gz_with_symlink("link", "../../etc/passwd");
+        let parent = tempfile::tempdir().unwrap();
+        let dest = parent.path().join("extraction");
+        let err = extract_tar_gz_bytes_to_dir(&bytes, &dest, "evil.tar.gz")
+            .expect_err("escaping relative symlink must be rejected");
+        assert!(matches!(err, ArchiveError::SymlinkEscape { .. }), "{err:?}");
+        assert!(!dest.exists());
+    }
+
+    #[test]
+    fn tar_gz_allows_internal_relative_symlink() {
+        // A link that stays inside the package root materializes as a real,
+        // self-contained symlink.
+        let bytes = tar_gz_with_symlink("alias.yaml", "streamlib.yaml");
+        let dest = tempfile::tempdir().unwrap();
+        extract_tar_gz_bytes_to_dir(&bytes, dest.path(), "ok.tar.gz")
+            .expect("internal relative symlink must be allowed");
+        let link = dest.path().join("alias.yaml");
+        assert!(
+            link.symlink_metadata().unwrap().file_type().is_symlink(),
+            "internal link must survive as a symlink"
+        );
+        // And it resolves to the sibling manifest content.
+        assert_eq!(std::fs::read(&link).unwrap(), b"manifest");
+    }
+
+    #[test]
+    fn zip_rejects_absolute_target_symlink_with_no_residue() {
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut cursor);
+            let opts = zip::write::FileOptions::<()>::default();
+            writer.start_file("streamlib.yaml", opts).unwrap();
+            writer.write_all(b"manifest").unwrap();
+            writer.add_symlink("passwd", "/etc/passwd", opts).unwrap();
+            writer.finish().unwrap();
+        }
+        let bytes = cursor.into_inner();
+        let parent = tempfile::tempdir().unwrap();
+        let dest = parent.path().join("extraction");
+        let err = extract_zip_bytes_to_dir(&bytes, &dest, "evil.zip")
+            .expect_err("absolute-target zip symlink must be rejected");
+        assert!(matches!(err, ArchiveError::SymlinkEscape { .. }), "{err:?}");
+        assert!(!dest.exists(), "no partial extraction may survive");
+    }
+
+    #[test]
+    fn symlink_target_escape_classifier_covers_the_cases() {
+        // Absolute → escape.
+        assert!(symlink_target_escapes_root("link", "/etc/passwd"));
+        // Climbs above root → escape.
+        assert!(symlink_target_escapes_root("link", "../foo"));
+        assert!(symlink_target_escapes_root("a/link", "../../foo"));
+        // Stays inside → allowed.
+        assert!(!symlink_target_escapes_root("link", "streamlib.yaml"));
+        assert!(!symlink_target_escapes_root("a/link", "../streamlib.yaml"));
+        assert!(!symlink_target_escapes_root("a/b/link", "../../c/d.yaml"));
     }
 }

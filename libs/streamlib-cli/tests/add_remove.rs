@@ -131,6 +131,32 @@ fn add_folder_and_slpkg_then_remove_via_app_modules() {
 }
 
 #[test]
+fn add_folder_with_expect_sha256_warns_on_stderr_but_succeeds() {
+    let pkg = tempfile::tempdir().unwrap();
+    write_foo_package(pkg.path());
+    let app_root = tempfile::tempdir().unwrap();
+
+    let out = run(&[
+        "add",
+        pkg.path().to_str().unwrap(),
+        "--dir",
+        app_root.path().to_str().unwrap(),
+        "--expect-sha256",
+        &"ab".repeat(32),
+    ]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // A folder source has no archive bytes; the sha pin is a no-op and must be
+    // called out on stderr rather than silently ignored, but the add succeeds.
+    assert!(out.status.success(), "folder add must still succeed: {stderr}");
+    assert!(
+        stderr.contains("--expect-sha256 is ignored for a folder source"),
+        "expected a stderr warning, got: {stderr}"
+    );
+    assert!(stdout.contains("Added @tatolab/foo v1.1.0"), "stdout: {stdout}");
+}
+
+#[test]
 fn add_registry_coordinate_gets_guidance_error() {
     let app_root = tempfile::tempdir().unwrap();
     let out = run(&[

@@ -26,6 +26,14 @@ use streamlib_idents::PackageRef;
 pub fn add(spec: &str, dir: Option<&Path>, expect_sha256: Option<&str>) -> Result<()> {
     let app = app_modules_dir(dir)?;
     let source = AddPackageSource::detect(spec).map_err(|e| anyhow::anyhow!("{e}"))?;
+    // A folder source has no archive bytes to hash, so `--expect-sha256` is a
+    // no-op there — warn rather than silently ignoring it.
+    if expect_sha256.is_some() && matches!(source, AddPackageSource::Folder { .. }) {
+        eprintln!(
+            "warning: --expect-sha256 is ignored for a folder source (no archive bytes to \
+             verify); it applies only to archive and URL sources"
+        );
+    }
     println!("Adding {spec}…");
 
     let options = AddPackageOptions {
