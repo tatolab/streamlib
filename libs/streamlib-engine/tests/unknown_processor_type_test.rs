@@ -40,10 +40,7 @@ fn add_processor_with_unknown_type_returns_typed_error() {
         Err(Error::UnknownProcessorType { ident: returned }) => {
             assert_eq!(returned, ident);
         }
-        other => panic!(
-            "expected Err(UnknownProcessorType), got {:?}",
-            other
-        ),
+        other => panic!("expected Err(UnknownProcessorType), got {:?}", other),
     }
 }
 
@@ -117,9 +114,6 @@ fn graph_snapshot_validate_rejects_unknown_processor_type() {
             assert_eq!(ident.r#type.as_str(), "DefinitelyNotARegisteredProcessor");
             assert_eq!(ident.package.as_str(), "ghost-package");
         }
-        other => panic!(
-            "expected Err(UnknownProcessorType), got {:?}",
-            other
-        ),
+        other => panic!("expected Err(UnknownProcessorType), got {:?}", other),
     }
 }

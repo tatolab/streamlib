@@ -10,7 +10,7 @@
 
 use crate::vulkan::video::vk_video_encoder::vk_encoder_dpb_h265::VkEncDpbH265;
 use crate::vulkan::video::vk_video_encoder::vk_video_encoder::{
-    VkVideoEncodeFrameInfo, VkVideoEncoder, CodecType,
+    CodecType, VkVideoEncodeFrameInfo, VkVideoEncoder,
 };
 
 // ---------------------------------------------------------------------------
@@ -66,7 +66,10 @@ pub struct VkVideoEncodeFrameInfoH265 {
 impl Default for VkVideoEncodeFrameInfoH265 {
     fn default() -> Self {
         Self {
-            base: VkVideoEncodeFrameInfo { codec: CodecType::H265, ..Default::default() },
+            base: VkVideoEncodeFrameInfo {
+                codec: CodecType::H265,
+                ..Default::default()
+            },
             nalu_slice_segment_entry_count: 1,
             sps_video_parameter_set_id: 0,
             pps_seq_parameter_set_id: 0,

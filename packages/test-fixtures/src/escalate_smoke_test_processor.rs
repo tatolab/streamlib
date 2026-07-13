@@ -44,14 +44,12 @@
 //!   - "OK" — escalate round-trip + all four method calls succeeded.
 //!   - "ERR:<message>" — any step failed.
 
-use streamlib::sdk::context::{
-    RuntimeContextFullAccess, RuntimeContextLimitedAccess,
-};
+#[cfg(target_os = "linux")]
+use streamlib::engine_internal::sdk::rhi::VulkanLayout;
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
 use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
-#[cfg(target_os = "linux")]
-use streamlib::engine_internal::sdk::rhi::VulkanLayout;
 
 #[streamlib::sdk::processor("EscalateSmokeTestProcessor")]
 pub struct EscalateSmokeTest {}
@@ -85,24 +83,18 @@ impl ManualProcessor for EscalateSmokeTest::Processor {
             full.wait_device_idle()?;
 
             // Bucket C — inherited LimitedAccess dispatch.
-            let (_pool_id, _pb) =
-                full.acquire_pixel_buffer(64, 64, PixelFormat::Rgba32)?;
+            let (_pool_id, _pb) = full.acquire_pixel_buffer(64, 64, PixelFormat::Rgba32)?;
 
             // Bucket B — FullAccess vtable slot returning a Texture
             // we can hand to register_texture_with_layout below.
-            let (id, texture) =
-                full.acquire_output_texture(64, 64, TextureFormat::Rgba8Unorm)?;
+            let (id, texture) = full.acquire_output_texture(64, 64, TextureFormat::Rgba8Unorm)?;
 
             // Bucket C — inherited LimitedAccess dispatch with an
             // explicit non-UNDEFINED layout to exercise the layout
             // argument path. Picks SHADER_READ_ONLY_OPTIMAL as a
             // representative non-default value.
             #[cfg(target_os = "linux")]
-            full.register_texture_with_layout(
-                &id,
-                texture,
-                VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
-            );
+            full.register_texture_with_layout(&id, texture, VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
             #[cfg(not(target_os = "linux"))]
             {
                 // VulkanLayout doesn't exist on non-Linux; on those
@@ -119,9 +111,8 @@ impl ManualProcessor for EscalateSmokeTest::Processor {
             Ok(()) => "OK".to_string(),
             Err(e) => format!("ERR:{e}"),
         };
-        std::fs::write(&output_path, &line).map_err(|e| {
-            Error::Runtime(format!("EscalateSmokeTest: write {output_path}: {e}"))
-        })?;
+        std::fs::write(&output_path, &line)
+            .map_err(|e| Error::Runtime(format!("EscalateSmokeTest: write {output_path}: {e}")))?;
         Ok(())
     }
 

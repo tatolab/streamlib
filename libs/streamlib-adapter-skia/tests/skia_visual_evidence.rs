@@ -29,15 +29,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
-use skia_safe::{
-    gradient_shader, Color, Color4f, Paint, PaintStyle, Path, Point, Rect, TileMode,
-};
-use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
+use skia_safe::{Color, Color4f, Paint, PaintStyle, Path, Point, Rect, TileMode, gradient_shader};
 use streamlib::sdk::context::GpuContext;
+use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
 use streamlib::sdk::rhi::TextureFormat;
 use streamlib_adapter_abi::{
-    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState,
-    SurfaceTransportHandle, SurfaceUsage,
+    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
+    SurfaceUsage,
 };
 use streamlib_adapter_skia::SkiaSurfaceAdapter;
 use streamlib_adapter_vulkan::{HostSurfaceRegistration, VulkanLayout, VulkanSurfaceAdapter};
@@ -94,12 +92,10 @@ fn skia_visual_evidence() {
     // `acquire_write` is exercised below, so `produce_done` is the
     // timeline the assertion tracks.
     let produce_done = Arc::new(
-        HostVulkanTimelineSemaphore::new(host_device.device(), 0)
-            .expect("produce_done timeline"),
+        HostVulkanTimelineSemaphore::new(host_device.device(), 0).expect("produce_done timeline"),
     );
     let consume_done = Arc::new(
-        HostVulkanTimelineSemaphore::new(host_device.device(), 0)
-            .expect("consume_done timeline"),
+        HostVulkanTimelineSemaphore::new(host_device.device(), 0).expect("consume_done timeline"),
     );
     let timeline = Arc::clone(&produce_done);
     let surface_id = 0xe0e1_e0e1;
@@ -154,21 +150,13 @@ fn skia_visual_evidence() {
         ring.set_style(PaintStyle::Stroke);
         ring.set_stroke_width(8.0);
         ring.set_anti_alias(true);
-        canvas.draw_circle(
-            Point::new(W as f32 * 0.5, H as f32 * 0.5),
-            180.0,
-            &ring,
-        );
+        canvas.draw_circle(Point::new(W as f32 * 0.5, H as f32 * 0.5), 180.0, &ring);
 
         // Filled red disc (center, large) — same shape as the
         // round-trip test's pixel assertion uses
         let mut disc = Paint::new(Color4f::new(0.95, 0.15, 0.20, 1.0), None);
         disc.set_anti_alias(true);
-        canvas.draw_circle(
-            Point::new(W as f32 * 0.5, H as f32 * 0.5),
-            120.0,
-            &disc,
-        );
+        canvas.draw_circle(Point::new(W as f32 * 0.5, H as f32 * 0.5), 120.0, &disc);
 
         // Semi-transparent magenta lens (alpha blending)
         let mut lens = Paint::new(Color4f::new(0.85, 0.20, 0.85, 0.55), None);
@@ -217,10 +205,7 @@ fn skia_visual_evidence() {
             let mut tile = Paint::default();
             tile.set_color(*color);
             let x0 = 16.0 + i as f32 * 22.0;
-            canvas.draw_rect(
-                Rect::new(x0, strip_y, x0 + 18.0, strip_y + strip_h),
-                &tile,
-            );
+            canvas.draw_rect(Rect::new(x0, strip_y, x0 + 18.0, strip_y + strip_h), &tile);
         }
 
         // Small reference glyphs in the corners — proves edges are
@@ -247,10 +232,7 @@ fn skia_visual_evidence() {
 
     // === Save PNG ===================================================
     write_bgra_as_png(&pixels, W, H, &png_path);
-    println!(
-        "[skia_visual_evidence] wrote {}",
-        png_path.display()
-    );
+    println!("[skia_visual_evidence] wrote {}", png_path.display());
 }
 
 fn host_readback_bgra(
@@ -339,7 +321,11 @@ fn host_readback_bgra(
                 .build(),
         )
         .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
-        .image_extent(vk::Extent3D { width, height, depth: 1 })
+        .image_extent(vk::Extent3D {
+            width,
+            height,
+            depth: 1,
+        })
         .build();
     let regions = [region];
     unsafe {
@@ -387,8 +373,7 @@ fn write_bgra_as_png(bgra: &[u8], width: u32, height: u32, path: &std::path::Pat
     for px in rgba.chunks_exact_mut(4) {
         px.swap(0, 2);
     }
-    let file = File::create(path)
-        .unwrap_or_else(|e| panic!("create {}: {e}", path.display()));
+    let file = File::create(path).unwrap_or_else(|e| panic!("create {}: {e}", path.display()));
     let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);

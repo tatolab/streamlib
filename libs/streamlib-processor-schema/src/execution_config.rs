@@ -62,8 +62,7 @@ mod tests {
             ExecutionConfig::manual(),
         ] {
             let bytes = rmp_serde::to_vec_named(&cfg).expect("encode");
-            let back: ExecutionConfig =
-                rmp_serde::from_slice(&bytes).expect("decode");
+            let back: ExecutionConfig = rmp_serde::from_slice(&bytes).expect("decode");
             assert_eq!(cfg, back, "round-trip mismatch for {:?}", cfg);
         }
     }

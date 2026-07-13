@@ -28,8 +28,8 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use streamlib_error::{Error, Result};
 use streamlib_plugin_abi::{InputMailboxesVTable, OutputWriterVTable};
 
@@ -370,8 +370,7 @@ impl InputMailboxes {
             )
         };
         if rc != 0 {
-            let msg =
-                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             return Err(Error::Link(format!(
                 "InputMailboxes::read_raw(port='{}') failed: {}",
                 port, msg

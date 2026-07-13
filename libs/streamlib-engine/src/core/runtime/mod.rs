@@ -12,15 +12,13 @@ mod runtime;
 mod runtime_unique_id;
 mod status;
 
-pub use add::{
-    add, add_slpkg, remove, AddError, AddOptions, AddReport, RemoveError, RemoveReport,
-};
-pub use install::{install, InstallError, InstallOptions, InstallReport};
+pub use add::{AddError, AddOptions, AddReport, RemoveError, RemoveReport, add, add_slpkg, remove};
+pub use install::{InstallError, InstallOptions, InstallReport, install};
 pub use module_loader::{
-    extract_slpkg_to_cache, host_target_triple, AddModuleError, AddedModule, ArtifactChecksum,
-    BuildError, BuildEvent, BuildEventSink, BuildOrchestrator, BuildPolicy, BuildRequest,
-    BuildSource, BuildStream, LoadedModule, ModuleLoadEvent, RemoveModuleError, SemVerRange,
-    StagedArtifact, Strategy,
+    AddModuleError, AddedModule, ArtifactChecksum, BuildError, BuildEvent, BuildEventSink,
+    BuildOrchestrator, BuildPolicy, BuildRequest, BuildSource, BuildStream, LoadedModule,
+    ModuleLoadEvent, RemoveModuleError, SemVerRange, StagedArtifact, Strategy,
+    extract_slpkg_to_cache, host_target_triple,
 };
 pub use operations::{BoxFuture, RuntimeOperations};
 pub use runtime::Runner;

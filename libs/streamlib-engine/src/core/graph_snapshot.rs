@@ -40,7 +40,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::core::descriptors::SchemaIdent;
-use crate::core::{ProcessorSpec, Result, Error};
+use crate::core::{Error, ProcessorSpec, Result};
 
 /// Round-trippable JSON shape for a runtime's graph.
 ///
@@ -345,10 +345,7 @@ mod tests {
             structured_type("CameraProcessor"),
         );
         let snap = GraphSnapshot::from_json_str(&json).unwrap();
-        assert_eq!(
-            snap.processors[0].display_name.as_deref(),
-            Some("Camera A")
-        );
+        assert_eq!(snap.processors[0].display_name.as_deref(), Some("Camera A"));
         let spec = snap.processors[0].to_processor_spec();
         assert_eq!(spec.display_name.as_deref(), Some("Camera A"));
 
@@ -481,10 +478,7 @@ mod tests {
             Err(Error::UnknownProcessorType { ident }) => {
                 assert_eq!(ident.r#type.as_str(), "DefinitelyNotARegisteredProcessor");
             }
-            other => panic!(
-                "expected UnknownProcessorType, got {:?}",
-                other
-            ),
+            other => panic!("expected UnknownProcessorType, got {:?}", other),
         }
     }
 }

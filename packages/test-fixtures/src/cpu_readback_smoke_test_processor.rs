@@ -28,26 +28,22 @@
 //!     succeeded.
 //!   - "ERR:<message>" — any step failed.
 
-use streamlib::sdk::context::{
-    RuntimeContextFullAccess, RuntimeContextLimitedAccess,
-};
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
 
 #[cfg(target_os = "linux")]
 use std::sync::Arc;
 #[cfg(target_os = "linux")]
-use streamlib::sdk::engine::host_rhi::{
-    HostMarker, HostVulkanBuffer, HostVulkanTimelineSemaphore,
-};
-#[cfg(target_os = "linux")]
 use streamlib::sdk::engine::HostTextureExt;
+#[cfg(target_os = "linux")]
+use streamlib::sdk::engine::host_rhi::{HostMarker, HostVulkanBuffer, HostVulkanTimelineSemaphore};
 #[cfg(target_os = "linux")]
 use streamlib::sdk::rhi::TextureFormat;
 #[cfg(target_os = "linux")]
 use streamlib_adapter_abi::{
-    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState,
-    SurfaceTransportHandle, SurfaceUsage,
+    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
+    SurfaceUsage,
 };
 #[cfg(target_os = "linux")]
 use streamlib_adapter_cpu_readback::{
@@ -77,9 +73,7 @@ impl ManualProcessor for CpuReadbackSmokeTest::Processor {
             Err(e) => format!("ERR:{e}"),
         };
         std::fs::write(&output_path, &line).map_err(|e| {
-            Error::Runtime(format!(
-                "CpuReadbackSmokeTest: write {output_path}: {e}"
-            ))
+            Error::Runtime(format!("CpuReadbackSmokeTest: write {output_path}: {e}"))
         })?;
         Ok(())
     }
@@ -87,12 +81,9 @@ impl ManualProcessor for CpuReadbackSmokeTest::Processor {
     #[cfg(not(target_os = "linux"))]
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let output_path = self.config.output_path.clone();
-        std::fs::write(&output_path, "ERR:cpu-readback smoke is linux-only")
-            .map_err(|e| {
-                Error::Runtime(format!(
-                    "CpuReadbackSmokeTest: write {output_path}: {e}"
-                ))
-            })?;
+        std::fs::write(&output_path, "ERR:cpu-readback smoke is linux-only").map_err(|e| {
+            Error::Runtime(format!("CpuReadbackSmokeTest: write {output_path}: {e}"))
+        })?;
         Ok(())
     }
 
@@ -141,40 +132,32 @@ fn run_smoke<const W: u32, const H: u32>(
     // cdylib-reachable constructor.
     let staging_bytes = (W as u64) * (H as u64) * 4u64;
     let staging = HostVulkanBuffer::new(&host_device, staging_bytes)
-        .map_err(|e| {
-            Error::GpuError(format!("HostVulkanBuffer::new: {e}"))
-        })?;
+        .map_err(|e| Error::GpuError(format!("HostVulkanBuffer::new: {e}")))?;
     let staging_arc = Arc::new(staging);
 
     // Step 4: allocate two exportable timeline semaphores
     // (produce_done + consume_done — single-writer-per-edge per
     // `docs/architecture/adapter-timeline-single-writer.md`).
-    let produce_done = HostVulkanTimelineSemaphore::new_exportable(
-        host_device.device(),
-        0,
-    )
-    .map_err(|e| {
-        Error::GpuError(format!(
-            "HostVulkanTimelineSemaphore::new_exportable (produce_done): {e}"
-        ))
-    })?;
+    let produce_done = HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+        .map_err(|e| {
+            Error::GpuError(format!(
+                "HostVulkanTimelineSemaphore::new_exportable (produce_done): {e}"
+            ))
+        })?;
     let produce_done_arc = Arc::new(produce_done);
-    let consume_done = HostVulkanTimelineSemaphore::new_exportable(
-        host_device.device(),
-        0,
-    )
-    .map_err(|e| {
-        Error::GpuError(format!(
-            "HostVulkanTimelineSemaphore::new_exportable (consume_done): {e}"
-        ))
-    })?;
+    let consume_done = HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+        .map_err(|e| {
+            Error::GpuError(format!(
+                "HostVulkanTimelineSemaphore::new_exportable (consume_done): {e}"
+            ))
+        })?;
     let consume_done_arc = Arc::new(consume_done);
 
     // Step 5: construct CpuReadbackSurfaceAdapter against the same
     // device.
-    let trigger = Arc::new(InProcessCpuReadbackCopyTrigger::new(
-        Arc::clone(&host_device),
-    )) as Arc<dyn CpuReadbackCopyTrigger<HostMarker>>;
+    let trigger = Arc::new(InProcessCpuReadbackCopyTrigger::new(Arc::clone(
+        &host_device,
+    ))) as Arc<dyn CpuReadbackCopyTrigger<HostMarker>>;
     let adapter = Arc::new(CpuReadbackSurfaceAdapter::new(
         Arc::clone(&host_device),
         trigger,
@@ -211,11 +194,9 @@ fn run_smoke<const W: u32, const H: u32>(
         SurfaceTransportHandle::empty(),
         SurfaceSyncState::default(),
     );
-    let mut guard = adapter.acquire_write(&surface).map_err(|e| {
-        Error::GpuError(format!(
-            "CpuReadbackSurfaceAdapter::acquire_write: {e:?}"
-        ))
-    })?;
+    let mut guard = adapter
+        .acquire_write(&surface)
+        .map_err(|e| Error::GpuError(format!("CpuReadbackSurfaceAdapter::acquire_write: {e:?}")))?;
     let bytes_written = {
         let view = guard.view_mut();
         let plane = view.plane_mut(0);

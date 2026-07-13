@@ -13,10 +13,10 @@ use serial_test::serial;
 use tempfile::TempDir;
 
 use crate::core::logging::{
-    event::{LogLevel, RuntimeLogEvent, Source, SCHEMA_VERSION},
+    LoggingTunables, StreamlibLoggingConfig,
+    event::{LogLevel, RuntimeLogEvent, SCHEMA_VERSION, Source},
     init::init_for_tests,
     paths::{log_dir, runtime_log_path},
-    LoggingTunables, StreamlibLoggingConfig,
 };
 use crate::core::runtime::RuntimeUniqueId;
 
@@ -57,8 +57,7 @@ fn jsonl_file_created_on_runtime_new() {
     set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("Rtest1"));
-    let config =
-        StreamlibLoggingConfig::for_runtime("test", Arc::clone(&runtime_id));
+    let config = StreamlibLoggingConfig::for_runtime("test", Arc::clone(&runtime_id));
     let guard = init_for_tests(config).unwrap();
 
     tracing::info!(pipeline_id = "p1", processor_id = "pr1", "hi");
@@ -530,9 +529,11 @@ fn intercepted_fd2_uses_channel_fd2() {
 
     let events = read_jsonl(&path);
     assert!(
-        events.iter().any(|e| e.message == "stderr-interception-line"
-            && e.intercepted
-            && e.channel.as_deref() == Some("fd2")),
+        events
+            .iter()
+            .any(|e| e.message == "stderr-interception-line"
+                && e.intercepted
+                && e.channel.as_deref() == Some("fd2")),
         "expected intercepted record with channel=fd2; got {:#?}",
         events
     );
@@ -824,8 +825,7 @@ fn warn_and_error_never_stripped() {
         events
     );
     assert!(
-        tracing::level_filters::STATIC_MAX_LEVEL
-            >= tracing::level_filters::LevelFilter::INFO,
+        tracing::level_filters::STATIC_MAX_LEVEL >= tracing::level_filters::LevelFilter::INFO,
         "STATIC_MAX_LEVEL must always admit warn!/error!; got {:?}",
         tracing::level_filters::STATIC_MAX_LEVEL
     );

@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use schemars::JsonSchema;
 use schemars::r#gen::SchemaGenerator;
 use schemars::schema::{InstanceType, Schema, SchemaObject};
-use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Cow;
 use std::cmp::Ordering;
@@ -154,7 +154,7 @@ fn parse_prerelease(full: &str, suffix: &str) -> IdentResult<Prerelease> {
             return Err(IdentError::InvalidSemVer(
                 full.to_string(),
                 format!("unknown prerelease channel `{other}` (only `dev` and `rc` are valid)"),
-            ))
+            ));
         }
     };
     // Digits-only, not `u32::from_str` leniency — `+4` would otherwise parse
@@ -506,10 +506,19 @@ mod tests {
     #[test]
     fn prerelease_parse_display_round_trip() {
         for (s, expected) in [
-            ("1.2.3-dev.4", SemVer::new_prerelease(1, 2, 3, PrereleaseKind::Dev, 4)),
-            ("0.4.33-rc.1", SemVer::new_prerelease(0, 4, 33, PrereleaseKind::Rc, 1)),
+            (
+                "1.2.3-dev.4",
+                SemVer::new_prerelease(1, 2, 3, PrereleaseKind::Dev, 4),
+            ),
+            (
+                "0.4.33-rc.1",
+                SemVer::new_prerelease(0, 4, 33, PrereleaseKind::Rc, 1),
+            ),
             ("1.2.3", SemVer::new(1, 2, 3)),
-            ("1.1.3-dev.0", SemVer::new_prerelease(1, 1, 3, PrereleaseKind::Dev, 0)),
+            (
+                "1.1.3-dev.0",
+                SemVer::new_prerelease(1, 1, 3, PrereleaseKind::Dev, 0),
+            ),
         ] {
             let parsed = SemVer::from_dotted(s).unwrap();
             assert_eq!(parsed, expected, "parse `{s}`");

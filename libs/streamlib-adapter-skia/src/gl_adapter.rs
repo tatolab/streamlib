@@ -19,15 +19,15 @@
 use std::sync::{Arc, Mutex};
 
 use skia_safe::gpu::{
-    self, backend_textures, direct_contexts, gl as gpu_gl, surfaces, Mipmapped, Protected,
-    SurfaceOrigin,
+    self, Mipmapped, Protected, SurfaceOrigin, backend_textures, direct_contexts, gl as gpu_gl,
+    surfaces,
 };
 use skia_safe::{AlphaType, ColorSpace, ColorType};
 use streamlib_adapter_abi::{
     AdapterError, GlWritable, ReadGuard, StreamlibSurface, SurfaceAdapter, SurfaceFormat,
     SurfaceId, WriteGuard,
 };
-use streamlib_adapter_opengl::{EglRuntime, OpenGlSurfaceAdapter, GL_TEXTURE_2D};
+use streamlib_adapter_opengl::{EglRuntime, GL_TEXTURE_2D, OpenGlSurfaceAdapter};
 
 use crate::error::SkiaAdapterError;
 use crate::gl_view::{SkiaGlReadView, SkiaGlWriteView};
@@ -56,11 +56,11 @@ impl SkiaGlSurfaceAdapter {
     /// interface or the DirectContext can't be created.
     pub fn new(inner: Arc<OpenGlSurfaceAdapter>) -> Result<Self, SkiaAdapterError> {
         let egl = Arc::clone(inner.runtime());
-        let _current = egl.lock_make_current().map_err(|e| {
-            SkiaAdapterError::DirectContextBuildFailed {
-                reason: format!("lock_make_current: {e}"),
-            }
-        })?;
+        let _current =
+            egl.lock_make_current()
+                .map_err(|e| SkiaAdapterError::DirectContextBuildFailed {
+                    reason: format!("lock_make_current: {e}"),
+                })?;
         // Build a Skia GL `Interface` with proc resolution routed
         // through `EglRuntime::get_proc_address` (i.e.
         // `eglGetProcAddress` under the hood). The closure is borrowed
@@ -68,12 +68,11 @@ impl SkiaGlSurfaceAdapter {
         // resolved fn pointers into its own internal proc table during
         // interface construction, so the closure (and its captured
         // `&EglRuntime`) does not need to outlive this call.
-        let interface = skia_safe::gpu::gl::Interface::new_load_with(|sym| {
-            egl.get_proc_address(sym)
-        })
-        .ok_or_else(|| SkiaAdapterError::DirectContextBuildFailed {
-            reason: "skia_safe::gpu::gl::Interface::new_load_with returned None".into(),
-        })?;
+        let interface =
+            skia_safe::gpu::gl::Interface::new_load_with(|sym| egl.get_proc_address(sym))
+                .ok_or_else(|| SkiaAdapterError::DirectContextBuildFailed {
+                    reason: "skia_safe::gpu::gl::Interface::new_load_with returned None".into(),
+                })?;
         let direct_context = direct_contexts::make_gl(interface, None).ok_or_else(|| {
             SkiaAdapterError::DirectContextBuildFailed {
                 reason: "skia_safe::gpu::direct_contexts::make_gl returned None".into(),
@@ -115,11 +114,12 @@ impl SkiaGlSurfaceAdapter {
             }
         })?;
 
-        let _current = self.egl.lock_make_current().map_err(|e| {
-            AdapterError::BackendRejected {
+        let _current = self
+            .egl
+            .lock_make_current()
+            .map_err(|e| AdapterError::BackendRejected {
                 reason: format!("lock_make_current (acquire_write): {e}"),
-            }
-        })?;
+            })?;
 
         let backend_texture = build_backend_texture(
             texture_id,
@@ -128,11 +128,12 @@ impl SkiaGlSurfaceAdapter {
             surface.format,
         );
 
-        let mut ctx_guard = self.direct_context.lock().map_err(|_| {
-            AdapterError::BackendRejected {
-                reason: "Skia DirectContext mutex poisoned".into(),
-            }
-        })?;
+        let mut ctx_guard =
+            self.direct_context
+                .lock()
+                .map_err(|_| AdapterError::BackendRejected {
+                    reason: "Skia DirectContext mutex poisoned".into(),
+                })?;
         let skia_surface = surfaces::wrap_backend_texture(
             &mut ctx_guard.0,
             &backend_texture,
@@ -175,11 +176,12 @@ impl SkiaGlSurfaceAdapter {
             }
         })?;
 
-        let _current = self.egl.lock_make_current().map_err(|e| {
-            AdapterError::BackendRejected {
+        let _current = self
+            .egl
+            .lock_make_current()
+            .map_err(|e| AdapterError::BackendRejected {
                 reason: format!("lock_make_current (acquire_read): {e}"),
-            }
-        })?;
+            })?;
 
         let backend_texture = build_backend_texture(
             texture_id,
@@ -188,11 +190,12 @@ impl SkiaGlSurfaceAdapter {
             surface.format,
         );
 
-        let mut ctx_guard = self.direct_context.lock().map_err(|_| {
-            AdapterError::BackendRejected {
-                reason: "Skia DirectContext mutex poisoned".into(),
-            }
-        })?;
+        let mut ctx_guard =
+            self.direct_context
+                .lock()
+                .map_err(|_| AdapterError::BackendRejected {
+                    reason: "Skia DirectContext mutex poisoned".into(),
+                })?;
         let image = skia_safe::gpu::images::borrow_texture_from(
             &mut ctx_guard.0,
             &backend_texture,

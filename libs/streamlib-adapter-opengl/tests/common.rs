@@ -12,14 +12,14 @@ use std::sync::Arc;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
 use streamlib::sdk::context::GpuContext;
-use streamlib::sdk::rhi::{Texture, TextureDescriptor, TextureFormat, TextureUsages};
 use streamlib::sdk::engine::host_rhi::HostVulkanTexture;
+use streamlib::sdk::rhi::{Texture, TextureDescriptor, TextureFormat, TextureUsages};
 use streamlib_adapter_abi::{
     StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState, SurfaceTransportHandle,
     SurfaceUsage,
 };
 use streamlib_adapter_opengl::{
-    EglRuntime, HostSurfaceRegistration, OpenGlSurfaceAdapter, DRM_FORMAT_ARGB8888,
+    DRM_FORMAT_ARGB8888, EglRuntime, HostSurfaceRegistration, OpenGlSurfaceAdapter,
 };
 
 pub fn try_init_runtime() -> Option<(GpuContext, Arc<EglRuntime>)> {
@@ -102,16 +102,11 @@ impl HostFixture {
     ) -> Result<RegisteredSurface, String> {
         let vulkan_device = self.gpu.device().vulkan_device();
         let desc = TextureDescriptor::new(width, height, TextureFormat::Bgra8Unorm).with_usage(
-            TextureUsages::TEXTURE_BINDING
-                | TextureUsages::COPY_DST
-                | TextureUsages::COPY_SRC,
+            TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::COPY_SRC,
         );
-        let host_texture = HostVulkanTexture::new_render_target_dma_buf(
-            vulkan_device,
-            &desc,
-            &[modifier],
-        )
-        .map_err(|e| format!("HostVulkanTexture::new_render_target_dma_buf failed: {e}"))?;
+        let host_texture =
+            HostVulkanTexture::new_render_target_dma_buf(vulkan_device, &desc, &[modifier])
+                .map_err(|e| format!("HostVulkanTexture::new_render_target_dma_buf failed: {e}"))?;
 
         let dma_buf_fd = host_texture
             .export_dma_buf_fd()
@@ -237,11 +232,7 @@ pub struct RegisteredSurface {
 /// Common helper: acquire write through the Vulkan adapter, clear the
 /// VkImage to a known color, release. Used by tests that need the
 /// host to seed a known pattern before exercising the GL side.
-pub fn host_write_clear_color(
-    gpu: &GpuContext,
-    surface: &RegisteredSurface,
-    color: [f32; 4],
-) {
+pub fn host_write_clear_color(gpu: &GpuContext, surface: &RegisteredSurface, color: [f32; 4]) {
     use vulkanalia::prelude::v1_4::*;
     use vulkanalia::vk;
 
@@ -249,7 +240,11 @@ pub fn host_write_clear_color(
     let dev = device.device();
     let queue = device.queue();
     let qf = device.queue_family_index();
-    let image = surface.texture.vulkan_inner().image().expect("image handle");
+    let image = surface
+        .texture
+        .vulkan_inner()
+        .image()
+        .expect("image handle");
 
     let pool = unsafe {
         dev.create_command_pool(
@@ -301,7 +296,9 @@ pub fn host_write_clear_color(
         )
         .build();
     let bs = [to_transfer];
-    let dep = vk::DependencyInfo::builder().image_memory_barriers(&bs).build();
+    let dep = vk::DependencyInfo::builder()
+        .image_memory_barriers(&bs)
+        .build();
     unsafe { dev.cmd_pipeline_barrier2(cmd, &dep) };
 
     let clear_value = vk::ClearColorValue { float32: color };
@@ -344,12 +341,18 @@ pub fn host_write_clear_color(
         )
         .build();
     let bs2 = [to_general];
-    let dep2 = vk::DependencyInfo::builder().image_memory_barriers(&bs2).build();
+    let dep2 = vk::DependencyInfo::builder()
+        .image_memory_barriers(&bs2)
+        .build();
     unsafe { dev.cmd_pipeline_barrier2(cmd, &dep2) };
 
     unsafe { dev.end_command_buffer(cmd) }.expect("end_command_buffer");
-    let cmd_infos = [vk::CommandBufferSubmitInfo::builder().command_buffer(cmd).build()];
-    let submits = [vk::SubmitInfo2::builder().command_buffer_infos(&cmd_infos).build()];
+    let cmd_infos = [vk::CommandBufferSubmitInfo::builder()
+        .command_buffer(cmd)
+        .build()];
+    let submits = [vk::SubmitInfo2::builder()
+        .command_buffer_infos(&cmd_infos)
+        .build()];
     unsafe { device.submit_to_queue(queue, &submits, vk::Fence::null()) }.expect("submit");
     unsafe { dev.queue_wait_idle(queue) }.expect("queue_wait_idle");
     unsafe { dev.destroy_command_pool(pool, None) };
@@ -365,7 +368,11 @@ pub fn host_readback(gpu: &GpuContext, surface: &RegisteredSurface) -> Vec<u8> {
     let dev = device.device();
     let queue = device.queue();
     let qf = device.queue_family_index();
-    let image = surface.texture.vulkan_inner().image().expect("image handle");
+    let image = surface
+        .texture
+        .vulkan_inner()
+        .image()
+        .expect("image handle");
     let bytes = (surface.width as u64) * (surface.height as u64) * 4;
 
     // Staging buffer (HOST_VISIBLE | HOST_COHERENT).
@@ -455,7 +462,9 @@ pub fn host_readback(gpu: &GpuContext, surface: &RegisteredSurface) -> Vec<u8> {
         )
         .build();
     let bs = [to_src];
-    let dep = vk::DependencyInfo::builder().image_memory_barriers(&bs).build();
+    let dep = vk::DependencyInfo::builder()
+        .image_memory_barriers(&bs)
+        .build();
     unsafe { dev.cmd_pipeline_barrier2(cmd, &dep) };
 
     let copy = vk::BufferImageCopy::builder()
@@ -507,17 +516,23 @@ pub fn host_readback(gpu: &GpuContext, surface: &RegisteredSurface) -> Vec<u8> {
         )
         .build();
     let bs2 = [to_general];
-    let dep2 = vk::DependencyInfo::builder().image_memory_barriers(&bs2).build();
+    let dep2 = vk::DependencyInfo::builder()
+        .image_memory_barriers(&bs2)
+        .build();
     unsafe { dev.cmd_pipeline_barrier2(cmd, &dep2) };
 
     unsafe { dev.end_command_buffer(cmd) }.expect("end_command_buffer");
-    let cmd_infos = [vk::CommandBufferSubmitInfo::builder().command_buffer(cmd).build()];
-    let submits = [vk::SubmitInfo2::builder().command_buffer_infos(&cmd_infos).build()];
+    let cmd_infos = [vk::CommandBufferSubmitInfo::builder()
+        .command_buffer(cmd)
+        .build()];
+    let submits = [vk::SubmitInfo2::builder()
+        .command_buffer_infos(&cmd_infos)
+        .build()];
     unsafe { device.submit_to_queue(queue, &submits, vk::Fence::null()) }.expect("submit");
     unsafe { dev.queue_wait_idle(queue) }.expect("queue_wait_idle");
 
-    let mapped = unsafe { dev.map_memory(mem, 0, bytes, vk::MemoryMapFlags::empty()) }
-        .expect("map_memory");
+    let mapped =
+        unsafe { dev.map_memory(mem, 0, bytes, vk::MemoryMapFlags::empty()) }.expect("map_memory");
     let slice = unsafe { std::slice::from_raw_parts(mapped as *const u8, bytes as usize) };
     let out = slice.to_vec();
     unsafe { dev.unmap_memory(mem) };
@@ -526,4 +541,3 @@ pub fn host_readback(gpu: &GpuContext, surface: &RegisteredSurface) -> Vec<u8> {
     unsafe { dev.free_memory(mem, None) };
     out
 }
-

@@ -6,17 +6,17 @@
 //! Tests verify Graph operates as a standalone data structure.
 //! Engine-shared TestMock processors live in [`crate::core::test_support`].
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use serde_json::{json, Value as JsonValue};
+use serde_json::{Value as JsonValue, json};
 
+use crate::core::JsonSerializableComponent;
 use crate::core::graph::{Graph, GraphEdgeWithComponents, GraphNodeWithComponents};
 use crate::core::processors::ProcessorState;
 use crate::core::test_support::{
-    ensure_test_mocks_registered, MockInputOnlyProcessor, MockOutputOnlyProcessor, MockProcessor,
+    MockInputOnlyProcessor, MockOutputOnlyProcessor, MockProcessor, ensure_test_mocks_registered,
 };
-use crate::core::JsonSerializableComponent;
 
 /// Construct a fresh `Graph` with the engine-internal test mock
 /// processors registered in `PROCESSOR_REGISTRY`. Tests use this in
@@ -557,12 +557,14 @@ mod component_ops {
             .id
             .to_string();
 
-        assert!(!graph
-            .traversal()
-            .v(id.as_str())
-            .first()
-            .unwrap()
-            .has::<MockState>());
+        assert!(
+            !graph
+                .traversal()
+                .v(id.as_str())
+                .first()
+                .unwrap()
+                .has::<MockState>()
+        );
 
         graph
             .traversal_mut()
@@ -571,12 +573,14 @@ mod component_ops {
             .unwrap()
             .insert(MockState::default());
 
-        assert!(graph
-            .traversal()
-            .v(id.as_str())
-            .first()
-            .unwrap()
-            .has::<MockState>());
+        assert!(
+            graph
+                .traversal()
+                .v(id.as_str())
+                .first()
+                .unwrap()
+                .has::<MockState>()
+        );
     }
 
     #[test]
@@ -606,12 +610,14 @@ mod component_ops {
 
         assert!(removed.is_some());
         assert_eq!(removed.unwrap().0, ProcessorState::Running);
-        assert!(!graph
-            .traversal()
-            .v(id.as_str())
-            .first()
-            .unwrap()
-            .has::<MockState>());
+        assert!(
+            !graph
+                .traversal()
+                .v(id.as_str())
+                .first()
+                .unwrap()
+                .has::<MockState>()
+        );
     }
 
     #[test]

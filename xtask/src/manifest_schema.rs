@@ -15,7 +15,7 @@
 //!   plus magic-comment + schema-validation checks across every committed
 //!   `streamlib.yaml`.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use std::path::{Path, PathBuf};
 use streamlib_processor_schema::StreamlibYaml;
 
@@ -137,8 +137,8 @@ pub fn check(workspace_root: &Path) -> Result<()> {
 
     let mut problems = Vec::new();
     for path in &yamls {
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("read {}", path.display()))?;
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
         if extract_schema_directive(&text).is_none() {
             problems.push(ManifestProblem {
                 path: path.clone(),
@@ -156,10 +156,8 @@ pub fn check(workspace_root: &Path) -> Result<()> {
                 continue;
             }
         };
-        let json_value: serde_json::Value =
-            serde_json::to_value(&yaml_value).with_context(|| {
-                format!("convert {} to JSON for validation", path.display())
-            })?;
+        let json_value: serde_json::Value = serde_json::to_value(&yaml_value)
+            .with_context(|| format!("convert {} to JSON for validation", path.display()))?;
         let errors: Vec<String> = validator
             .iter_errors(&json_value)
             .map(|err| format!("{} at {}", err, err.instance_path))
@@ -187,7 +185,10 @@ pub fn check(workspace_root: &Path) -> Result<()> {
         yamls.len()
     );
     for problem in &problems {
-        let rel = problem.path.strip_prefix(workspace_root).unwrap_or(&problem.path);
+        let rel = problem
+            .path
+            .strip_prefix(workspace_root)
+            .unwrap_or(&problem.path);
         match &problem.kind {
             ProblemKind::MissingMagicComment => {
                 eprintln!(
@@ -200,11 +201,7 @@ pub fn check(workspace_root: &Path) -> Result<()> {
                 eprintln!("  {}: invalid YAML: {}", rel.display(), err);
             }
             ProblemKind::SchemaViolation(errors) => {
-                eprintln!(
-                    "  {}: {} schema violation(s):",
-                    rel.display(),
-                    errors.len()
-                );
+                eprintln!("  {}: {} schema violation(s):", rel.display(), errors.len());
                 for err in errors {
                     eprintln!("    - {}", err);
                 }

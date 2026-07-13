@@ -73,7 +73,9 @@ fn canonical_tar_bytes(path: &Path) -> anyhow::Result<Vec<u8>> {
             .set_groupname("")
             .context("clear tar entry groupname")?;
         let mut data = Vec::new();
-        entry.read_to_end(&mut data).context("read tar entry data")?;
+        entry
+            .read_to_end(&mut data)
+            .context("read tar entry data")?;
         builder
             .append_data(&mut header, &entry_path, &data[..])
             .context("re-append tar entry")?;
@@ -190,7 +192,9 @@ mod tests {
     fn entry_names(path: &Path) -> Vec<String> {
         let bytes = std::fs::read(path).unwrap();
         let mut decoded = Vec::new();
-        GzDecoder::new(&bytes[..]).read_to_end(&mut decoded).unwrap();
+        GzDecoder::new(&bytes[..])
+            .read_to_end(&mut decoded)
+            .unwrap();
         let mut archive = tar::Archive::new(&decoded[..]);
         archive
             .entries()
@@ -204,7 +208,9 @@ mod tests {
     fn entry_meta(path: &Path) -> Vec<(String, u64, u64, u64, Vec<u8>)> {
         let bytes = std::fs::read(path).unwrap();
         let mut decoded = Vec::new();
-        GzDecoder::new(&bytes[..]).read_to_end(&mut decoded).unwrap();
+        GzDecoder::new(&bytes[..])
+            .read_to_end(&mut decoded)
+            .unwrap();
         let mut archive = tar::Archive::new(&decoded[..]);
         archive
             .entries()
@@ -238,9 +244,27 @@ mod tests {
     /// mtimes + build user + the gzip MTIME header vary. Used by the byte-
     /// stability tests to model two independent emits.
     const SDIST_CONTENT: &[(&str, u32, u64, u64, &[u8])] = &[
-        ("streamlib-0.5.0/PKG-INFO", 0o644, 0, 0, b"Metadata-Version: 2.1\n"),
-        ("streamlib-0.5.0/pyproject.toml", 0o664, 0, 0, b"[project]\nname='x'\n"),
-        ("streamlib-0.5.0/python/streamlib/__init__.py", 0o664, 0, 0, b"# init\n"),
+        (
+            "streamlib-0.5.0/PKG-INFO",
+            0o644,
+            0,
+            0,
+            b"Metadata-Version: 2.1\n",
+        ),
+        (
+            "streamlib-0.5.0/pyproject.toml",
+            0o664,
+            0,
+            0,
+            b"[project]\nname='x'\n",
+        ),
+        (
+            "streamlib-0.5.0/python/streamlib/__init__.py",
+            0o664,
+            0,
+            0,
+            b"# init\n",
+        ),
     ];
 
     /// Normalize zeroes mtime + canonicalizes ownership, keeps contents +
@@ -254,8 +278,20 @@ mod tests {
         write_tar_gz(
             &path,
             &[
-                ("streamlib-0.5.0/PKG-INFO", 0o644, 1_700_000_123, 1000, b"meta\n"),
-                ("streamlib-0.5.0/src/lib.py", 0o664, 1_699_999_888, 1000, b"# src\n"),
+                (
+                    "streamlib-0.5.0/PKG-INFO",
+                    0o644,
+                    1_700_000_123,
+                    1000,
+                    b"meta\n",
+                ),
+                (
+                    "streamlib-0.5.0/src/lib.py",
+                    0o664,
+                    1_699_999_888,
+                    1000,
+                    b"# src\n",
+                ),
             ],
             Compression::default(),
             1_700_000_123,
@@ -370,7 +406,13 @@ mod tests {
         );
         write_tar_gz(
             &fresh,
-            &[("streamlib-0.5.0/mod.py", 0o644, 222, 2000, b"# source B - CHANGED\n")],
+            &[(
+                "streamlib-0.5.0/mod.py",
+                0o644,
+                222,
+                2000,
+                b"# source B - CHANGED\n",
+            )],
             Compression::best(),
             222,
         );
@@ -396,14 +438,26 @@ mod tests {
         // Served tree is legacy: real (non-zero) mtimes + a real build user.
         write_tar_gz(
             &served,
-            &[("streamlib-0.5.0/mod.py", 0o644, 111, 1000, b"# stable source\n")],
+            &[(
+                "streamlib-0.5.0/mod.py",
+                0o644,
+                111,
+                1000,
+                b"# stable source\n",
+            )],
             Compression::default(),
             111,
         );
         std::fs::copy(&served, &served_copy).unwrap();
         write_tar_gz(
             &fresh,
-            &[("streamlib-0.5.0/mod.py", 0o644, 999, 2000, b"# stable source\n")],
+            &[(
+                "streamlib-0.5.0/mod.py",
+                0o644,
+                999,
+                2000,
+                b"# stable source\n",
+            )],
             Compression::best(),
             999,
         );
@@ -471,7 +525,10 @@ mod tests {
             std::fs::read(&b).unwrap(),
             "two real-tool emits of identical source must normalize byte-identically"
         );
-        assert_eq!(tar_gz_content_fingerprint(&a).unwrap(), tar_gz_content_fingerprint(&b).unwrap());
+        assert_eq!(
+            tar_gz_content_fingerprint(&a).unwrap(),
+            tar_gz_content_fingerprint(&b).unwrap()
+        );
 
         // Normalizing a second copy of the same source reproduces the same
         // fingerprint (idempotence over a real artifact).
@@ -507,6 +564,9 @@ mod tests {
             .into_iter()
             .map(|(n, _mt, _u, _g, d)| (n, d))
             .collect();
-        assert_eq!(after, before, "normalize must preserve entry paths + contents");
+        assert_eq!(
+            after, before,
+            "normalize must preserve entry paths + contents"
+        );
     }
 }

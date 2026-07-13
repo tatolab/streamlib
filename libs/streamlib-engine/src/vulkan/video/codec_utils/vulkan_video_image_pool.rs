@@ -91,7 +91,10 @@ impl Default for VulkanVideoImagePoolNode {
                 s_type: vk::StructureType::VIDEO_PICTURE_RESOURCE_INFO_KHR,
                 next: std::ptr::null(),
                 coded_offset: vk::Offset2D { x: 0, y: 0 },
-                coded_extent: vk::Extent2D { width: 0, height: 0 },
+                coded_extent: vk::Extent2D {
+                    width: 0,
+                    height: 0,
+                },
                 base_array_layer: 0,
                 image_view_binding: vk::ImageView::null(),
                 ..unsafe { std::mem::zeroed() }
@@ -191,41 +194,41 @@ impl VulkanVideoImagePoolNode {
         value: u64,
         stage_mask: vk::PipelineStageFlags2,
         device_index: u32,
-    ) -> vk::SemaphoreSubmitInfo { unsafe {
-        if self.timeline_semaphore == vk::Semaphore::null() {
-            let mut type_info = vk::SemaphoreTypeCreateInfo::builder()
-                .semaphore_type(vk::SemaphoreType::TIMELINE)
-                .initial_value(0);
+    ) -> vk::SemaphoreSubmitInfo {
+        unsafe {
+            if self.timeline_semaphore == vk::Semaphore::null() {
+                let mut type_info = vk::SemaphoreTypeCreateInfo::builder()
+                    .semaphore_type(vk::SemaphoreType::TIMELINE)
+                    .initial_value(0);
 
-            let create_info = vk::SemaphoreCreateInfo::builder().push_next(
-                &mut type_info,
-            );
+                let create_info = vk::SemaphoreCreateInfo::builder().push_next(&mut type_info);
 
-            match device.create_semaphore(&create_info, None) {
-                Ok(sem) => {
-                    self.timeline_semaphore = sem;
-                    self.semaphore_submit_info = vk::SemaphoreSubmitInfo {
-                        s_type: vk::StructureType::SEMAPHORE_SUBMIT_INFO,
-                        next: std::ptr::null(),
-                        semaphore: sem,
-                        value: 0,
-                        stage_mask: vk::PipelineStageFlags2::empty(),
-                        device_index: 0,
-                        ..std::mem::zeroed()
-                    };
-                }
-                Err(_) => {
-                    return empty_semaphore_submit_info();
+                match device.create_semaphore(&create_info, None) {
+                    Ok(sem) => {
+                        self.timeline_semaphore = sem;
+                        self.semaphore_submit_info = vk::SemaphoreSubmitInfo {
+                            s_type: vk::StructureType::SEMAPHORE_SUBMIT_INFO,
+                            next: std::ptr::null(),
+                            semaphore: sem,
+                            value: 0,
+                            stage_mask: vk::PipelineStageFlags2::empty(),
+                            device_index: 0,
+                            ..std::mem::zeroed()
+                        };
+                    }
+                    Err(_) => {
+                        return empty_semaphore_submit_info();
+                    }
                 }
             }
+
+            self.semaphore_submit_info.value = value;
+            self.semaphore_submit_info.stage_mask = stage_mask;
+            self.semaphore_submit_info.device_index = device_index;
+
+            self.semaphore_submit_info
         }
-
-        self.semaphore_submit_info.value = value;
-        self.semaphore_submit_info.stage_mask = stage_mask;
-        self.semaphore_submit_info.device_index = device_index;
-
-        self.semaphore_submit_info
-    }}
+    }
 
     /// Populate this node with an image.
     ///
@@ -253,8 +256,7 @@ impl VulkanVideoImagePoolNode {
 
         self.current_image_layout = vk::ImageLayout::UNDEFINED;
         self.recreate_image = false;
-        self.picture_resource_info.s_type =
-            vk::StructureType::VIDEO_PICTURE_RESOURCE_INFO_KHR;
+        self.picture_resource_info.s_type = vk::StructureType::VIDEO_PICTURE_RESOURCE_INFO_KHR;
         self.picture_resource_info.coded_offset = vk::Offset2D { x: 0, y: 0 };
         self.picture_resource_info.coded_extent = vk::Extent2D {
             width: image_create_extent.width,
@@ -277,8 +279,7 @@ impl VulkanVideoImagePoolNode {
     ) -> Self {
         let mut node = Self::new();
         node.current_image_layout = initial_layout;
-        node.picture_resource_info.s_type =
-            vk::StructureType::VIDEO_PICTURE_RESOURCE_INFO_KHR;
+        node.picture_resource_info.s_type = vk::StructureType::VIDEO_PICTURE_RESOURCE_INFO_KHR;
         node.picture_resource_info.coded_offset = vk::Offset2D { x: 0, y: 0 };
         node.picture_resource_info.coded_extent = extent;
         node.picture_resource_info.base_array_layer = 0;
@@ -304,18 +305,20 @@ impl VulkanVideoImagePoolNode {
     ///
     /// If a timeline semaphore was created, `device` must be the same device
     /// that was used to create it.
-    pub unsafe fn deinit(&mut self, device: Option<&vulkanalia::Device>) { unsafe {
-        self.image_resource_view = None;
+    pub unsafe fn deinit(&mut self, device: Option<&vulkanalia::Device>) {
+        unsafe {
+            self.image_resource_view = None;
 
-        if self.timeline_semaphore != vk::Semaphore::null() {
-            if let Some(dev) = device {
-                dev.destroy_semaphore(self.timeline_semaphore, None);
+            if self.timeline_semaphore != vk::Semaphore::null() {
+                if let Some(dev) = device {
+                    dev.destroy_semaphore(self.timeline_semaphore, None);
+                }
+                self.timeline_semaphore = vk::Semaphore::null();
             }
-            self.timeline_semaphore = vk::Semaphore::null();
-        }
 
-        self.semaphore_submit_info = empty_semaphore_submit_info();
-    }}
+            self.semaphore_submit_info = empty_semaphore_submit_info();
+        }
+    }
 
     // -- private helpers --
 
@@ -685,9 +688,12 @@ impl VulkanVideoImagePool {
 
         if let Some(idx) = available_index {
             // Ensure the image is created / up-to-date.
-            if let Err(_) =
-                Self::get_image_set_new_layout(&mut inner, idx, new_image_layout, &mut image_factory)
-            {
+            if let Err(_) = Self::get_image_set_new_layout(
+                &mut inner,
+                idx,
+                new_image_layout,
+                &mut image_factory,
+            ) {
                 // Creation failed — put the slot back.
                 inner.available_pool_nodes |= 1u64 << idx;
                 return None;
@@ -720,13 +726,15 @@ impl VulkanVideoImagePool {
     ///
     /// `device` must be the device that was used to create any timeline
     /// semaphores in the pool nodes.
-    pub unsafe fn deinit(&self, device: Option<&vulkanalia::Device>) { unsafe {
-        let mut inner = self.inner.lock().expect("pool lock poisoned");
-        for ndx in 0..inner.pool_size as usize {
-            inner.image_resources[ndx].deinit(device);
+    pub unsafe fn deinit(&self, device: Option<&vulkanalia::Device>) {
+        unsafe {
+            let mut inner = self.inner.lock().expect("pool lock poisoned");
+            for ndx in 0..inner.pool_size as usize {
+                inner.image_resources[ndx].deinit(device);
+            }
+            inner.pool_size = 0;
         }
-        inner.pool_size = 0;
-    }}
+    }
 
     /// Number of images the pool is configured for.
     pub fn size(&self) -> u32 {
@@ -847,7 +855,10 @@ mod tests {
     }
 
     /// A trivial factory that always succeeds.
-    fn ok_factory(index: u32, _: &ImageCreateInfoSnapshot) -> Result<ImageResourceHandle, vk::Result> {
+    fn ok_factory(
+        index: u32,
+        _: &ImageCreateInfoSnapshot,
+    ) -> Result<ImageResourceHandle, vk::Result> {
         Ok(dummy_handle(index))
     }
 
@@ -936,9 +947,10 @@ mod tests {
         assert_ne!(h1.index(), h2.index());
 
         // Pool is now exhausted.
-        assert!(pool
-            .get_available_image(vk::ImageLayout::VIDEO_DECODE_DST_KHR, ok_factory)
-            .is_none());
+        assert!(
+            pool.get_available_image(vk::ImageLayout::VIDEO_DECODE_DST_KHR, ok_factory)
+                .is_none()
+        );
 
         // Drop h1 — it returns to the pool.
         let idx1 = h1.index();
@@ -1069,7 +1081,10 @@ mod tests {
         assert!(node.image_exist());
         assert_eq!(node.parent_index, -1);
         assert!(node.parent.is_none());
-        assert_eq!(node.current_image_layout, vk::ImageLayout::TRANSFER_DST_OPTIMAL);
+        assert_eq!(
+            node.current_image_layout,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL
+        );
         assert_eq!(node.picture_resource_info.coded_extent.width, 1280);
         assert_eq!(node.picture_resource_info.coded_extent.height, 720);
     }

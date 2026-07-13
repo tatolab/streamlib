@@ -10,7 +10,7 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use streamlib_plugin_abi::{SurfaceStoreVTable, SURFACE_STORE_VTABLE_LAYOUT_VERSION};
+use streamlib_plugin_abi::{SURFACE_STORE_VTABLE_LAYOUT_VERSION, SurfaceStoreVTable};
 
 use super::host_callbacks;
 use super::run_host_extern_c;
@@ -25,15 +25,15 @@ use super::shared::wire::{slice_from_raw, write_err, write_id_bytes};
 // alive for the duration of the dispatch.
 
 #[inline]
-unsafe fn ss_inner(handle: *const c_void) -> Option<&'static crate::core::context::surface_store::SurfaceStoreInner> {
+unsafe fn ss_inner(
+    handle: *const c_void,
+) -> Option<&'static crate::core::context::surface_store::SurfaceStoreInner> {
     if handle.is_null() {
         None
     } else {
         // SAFETY: caller-supplied contract: `handle` is
         // `Arc::into_raw(Arc<SurfaceStoreInner>)`-shaped.
-        Some(unsafe {
-            &*(handle as *const crate::core::context::surface_store::SurfaceStoreInner)
-        })
+        Some(unsafe { &*(handle as *const crate::core::context::surface_store::SurfaceStoreInner) })
     }
 }
 
@@ -200,10 +200,7 @@ unsafe extern "C" fn host_ss_check_out(
             match inner.check_out(id_str) {
                 Ok(pb) => {
                     unsafe {
-                        std::ptr::write(
-                            out_pixel_buffer as *mut crate::core::rhi::PixelBuffer,
-                            pb,
-                        );
+                        std::ptr::write(out_pixel_buffer as *mut crate::core::rhi::PixelBuffer, pb);
                     }
                     0
                 }
@@ -314,10 +311,7 @@ unsafe extern "C" fn host_ss_lookup_buffer(
             match inner.lookup_buffer(pool_id) {
                 Ok(pb) => {
                     unsafe {
-                        std::ptr::write(
-                            out_pixel_buffer as *mut crate::core::rhi::PixelBuffer,
-                            pb,
-                        );
+                        std::ptr::write(out_pixel_buffer as *mut crate::core::rhi::PixelBuffer, pb);
                     }
                     0
                 }
@@ -726,7 +720,6 @@ unsafe extern "C" fn host_ss_update_image_layout(
     1
 }
 
-
 /// Static [`SurfaceStoreVTable`] installed once per process. Paired
 /// with the per-SurfaceStore handle returned by
 /// [`HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE`]`::surface_store`.
@@ -918,9 +911,7 @@ mod surface_store_vtable_tier1_wire_format_tests {
             )
         };
         assert_eq!(rc, 1);
-        assert!(
-            err_buf_as_str(&buf, len).contains("register_buffer: null handle"),
-        );
+        assert!(err_buf_as_str(&buf, len).contains("register_buffer: null handle"),);
     }
 
     #[test]
@@ -940,9 +931,7 @@ mod surface_store_vtable_tier1_wire_format_tests {
             )
         };
         assert_eq!(rc, 1);
-        assert!(
-            err_buf_as_str(&buf, len).contains("lookup_buffer: null handle"),
-        );
+        assert!(err_buf_as_str(&buf, len).contains("lookup_buffer: null handle"),);
     }
 
     #[test]
@@ -987,9 +976,7 @@ mod surface_store_vtable_tier1_wire_format_tests {
             )
         };
         assert_eq!(rc, 1);
-        assert!(
-            err_buf_as_str(&buf, len).contains("register_texture: null handle"),
-        );
+        assert!(err_buf_as_str(&buf, len).contains("register_texture: null handle"),);
     }
 
     #[cfg(target_os = "linux")]
@@ -1011,8 +998,9 @@ mod surface_store_vtable_tier1_wire_format_tests {
             )
         };
         assert_eq!(rc, 1);
-        assert!(err_buf_as_str(&buf, len)
-            .contains("register_pixel_buffer_with_timeline: null handle"));
+        assert!(
+            err_buf_as_str(&buf, len).contains("register_pixel_buffer_with_timeline: null handle")
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -1035,9 +1023,7 @@ mod surface_store_vtable_tier1_wire_format_tests {
             )
         };
         assert_eq!(rc, 1);
-        assert!(
-            err_buf_as_str(&buf, len).contains("lookup_texture: null handle"),
-        );
+        assert!(err_buf_as_str(&buf, len).contains("lookup_texture: null handle"),);
     }
 
     #[cfg(target_os = "linux")]
@@ -1057,8 +1043,7 @@ mod surface_store_vtable_tier1_wire_format_tests {
             )
         };
         assert_eq!(rc, 1);
-        assert!(err_buf_as_str(&buf, len)
-            .contains("update_image_layout: null handle"));
+        assert!(err_buf_as_str(&buf, len).contains("update_image_layout: null handle"));
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -1080,8 +1065,9 @@ mod surface_store_vtable_tier1_wire_format_tests {
             )
         };
         assert_eq!(rc, 1);
-        assert!(err_buf_as_str(&buf, len)
-            .contains("register_texture: not available on this platform"));
+        assert!(
+            err_buf_as_str(&buf, len).contains("register_texture: not available on this platform")
+        );
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -1102,9 +1088,10 @@ mod surface_store_vtable_tier1_wire_format_tests {
             )
         };
         assert_eq!(rc, 1);
-        assert!(err_buf_as_str(&buf, len).contains(
-            "register_pixel_buffer_with_timeline: not available on this platform"
-        ));
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("register_pixel_buffer_with_timeline: not available on this platform")
+        );
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -1127,8 +1114,9 @@ mod surface_store_vtable_tier1_wire_format_tests {
             )
         };
         assert_eq!(rc, 1);
-        assert!(err_buf_as_str(&buf, len)
-            .contains("lookup_texture: not available on this platform"));
+        assert!(
+            err_buf_as_str(&buf, len).contains("lookup_texture: not available on this platform")
+        );
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -1148,7 +1136,9 @@ mod surface_store_vtable_tier1_wire_format_tests {
             )
         };
         assert_eq!(rc, 1);
-        assert!(err_buf_as_str(&buf, len)
-            .contains("update_image_layout: not available on this platform"));
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("update_image_layout: not available on this platform")
+        );
     }
 }

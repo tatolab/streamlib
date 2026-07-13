@@ -28,14 +28,14 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use tempfile::TempDir;
 use tracing::subscriber::{DefaultGuard, NoSubscriber};
 
 use streamlib_engine::core::runtime::RuntimeUniqueId;
 use streamlib_engine::logging::{
-    init_for_tests, LogLevel, LoggingTunables, RuntimeLogEvent, StreamlibLoggingConfig,
-    StreamlibLoggingGuard,
+    LogLevel, LoggingTunables, RuntimeLogEvent, StreamlibLoggingConfig, StreamlibLoggingGuard,
+    init_for_tests,
 };
 
 fn install_pathway(tmp: &TempDir, runtime_id: &str) -> StreamlibLoggingGuard {

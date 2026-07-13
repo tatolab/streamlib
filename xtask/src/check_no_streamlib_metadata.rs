@@ -26,12 +26,7 @@ const SCAN_PARENTS: &[&str] = &["libs", "packages", "examples", "xtask"];
 
 /// Path components that should never be walked (build outputs, dependency
 /// caches, generated bindings).
-const SKIP_PATH_FRAGMENTS: &[&str] = &[
-    "/target/",
-    "/_generated_/",
-    "/node_modules/",
-    "/.git/",
-];
+const SKIP_PATH_FRAGMENTS: &[&str] = &["/target/", "/_generated_/", "/node_modules/", "/.git/"];
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum LintViolation {
@@ -44,9 +39,7 @@ pub fn run(workspace_root: &Path) -> Result<()> {
     let violations = lint_workspace(workspace_root)?;
 
     if violations.is_empty() {
-        println!(
-            "✓ check-no-streamlib-metadata: no pre-#402 metadata blocks detected"
-        );
+        println!("✓ check-no-streamlib-metadata: no pre-#402 metadata blocks detected");
         return Ok(());
     }
 
@@ -98,7 +91,10 @@ fn scan_dir(dir: &Path, violations: &mut Vec<LintViolation>) -> Result<()> {
             continue;
         }
         let path_str = path.to_string_lossy();
-        if SKIP_PATH_FRAGMENTS.iter().any(|frag| path_str.contains(frag)) {
+        if SKIP_PATH_FRAGMENTS
+            .iter()
+            .any(|frag| path_str.contains(frag))
+        {
             continue;
         }
         let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
@@ -114,15 +110,15 @@ fn scan_dir(dir: &Path, violations: &mut Vec<LintViolation>) -> Result<()> {
 }
 
 fn check_cargo_toml(path: &Path, violations: &mut Vec<LintViolation>) -> Result<()> {
-    let body = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read {}", path.display()))?;
-    if body
-        .lines()
-        .any(|line| line.trim_start().starts_with("[package.metadata.streamlib]"))
-        || body
-            .lines()
-            .any(|line| line.trim_start().starts_with("[workspace.metadata.streamlib]"))
-    {
+    let body =
+        fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
+    if body.lines().any(|line| {
+        line.trim_start()
+            .starts_with("[package.metadata.streamlib]")
+    }) || body.lines().any(|line| {
+        line.trim_start()
+            .starts_with("[workspace.metadata.streamlib]")
+    }) {
         violations.push(LintViolation::PackageMetadataStreamlib {
             file: path.to_path_buf(),
         });
@@ -131,8 +127,8 @@ fn check_cargo_toml(path: &Path, violations: &mut Vec<LintViolation>) -> Result<
 }
 
 fn check_pyproject_toml(path: &Path, violations: &mut Vec<LintViolation>) -> Result<()> {
-    let body = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read {}", path.display()))?;
+    let body =
+        fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
     if body
         .lines()
         .any(|line| line.trim_start().starts_with("[tool.streamlib]"))
@@ -145,8 +141,8 @@ fn check_pyproject_toml(path: &Path, violations: &mut Vec<LintViolation>) -> Res
 }
 
 fn check_deno_json(path: &Path, violations: &mut Vec<LintViolation>) -> Result<()> {
-    let body = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read {}", path.display()))?;
+    let body =
+        fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
     // Strip line comments so deno.jsonc users aren't ambushed by a key
     // mention inside a comment.
     let stripped: String = body
@@ -205,7 +201,11 @@ mod tests {
             "libs/foo/pyproject.toml",
             "[project]\nname = \"foo\"\n",
         );
-        write(tmp.path(), "libs/foo/deno.json", "{\n  \"name\": \"foo\"\n}\n");
+        write(
+            tmp.path(),
+            "libs/foo/deno.json",
+            "{\n  \"name\": \"foo\"\n}\n",
+        );
 
         let violations = lint_workspace(tmp.path()).unwrap();
         assert!(violations.is_empty(), "got {violations:?}");
@@ -249,7 +249,10 @@ mod tests {
         );
         let violations = lint_workspace(tmp.path()).unwrap();
         assert_eq!(violations.len(), 1);
-        assert!(matches!(&violations[0], LintViolation::ToolStreamlib { .. }));
+        assert!(matches!(
+            &violations[0],
+            LintViolation::ToolStreamlib { .. }
+        ));
     }
 
     #[test]
@@ -262,7 +265,10 @@ mod tests {
         );
         let violations = lint_workspace(tmp.path()).unwrap();
         assert_eq!(violations.len(), 1);
-        assert!(matches!(&violations[0], LintViolation::DenoStreamlibKey { .. }));
+        assert!(matches!(
+            &violations[0],
+            LintViolation::DenoStreamlibKey { .. }
+        ));
     }
 
     #[test]

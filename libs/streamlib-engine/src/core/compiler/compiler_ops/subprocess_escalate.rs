@@ -28,9 +28,8 @@ use crate::_generated_::tatolab__escalate::escalate_request::{
     EscalateRequestAcquireImage, EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture,
     EscalateRequestLog, EscalateRequestLogLevel, EscalateRequestLogSource,
     EscalateRequestRegisterAccelerationStructureBlas,
-    EscalateRequestRegisterAccelerationStructureTlas,
-    EscalateRequestRegisterComputeKernel, EscalateRequestRegisterGraphicsKernel,
-    EscalateRequestRegisterGraphicsKernelBindingKind,
+    EscalateRequestRegisterAccelerationStructureTlas, EscalateRequestRegisterComputeKernel,
+    EscalateRequestRegisterGraphicsKernel, EscalateRequestRegisterGraphicsKernelBindingKind,
     EscalateRequestRegisterGraphicsKernelPipelineState,
     EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat,
     EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp,
@@ -61,28 +60,27 @@ use crate::_generated_::tatolab__escalate::escalate_response::{
     EscalateResponseContended, EscalateResponseErr, EscalateResponseOk,
 };
 use crate::_generated_::{EscalateRequest, EscalateResponse};
-use crate::core::context::{PooledTextureHandle, TexturePoolDescriptor};
 use crate::core::context::GpuContextLimitedAccess;
 #[cfg(target_os = "linux")]
 use crate::core::context::{
     BlasRegisterDecl, BlendFactorWire, BlendOpWire, ComputeKernelBridge, CpuReadbackBridge,
-    CpuReadbackCopyDirection, CullModeWire, DepthCompareOpWire, DepthFormatWire,
-    DynamicStateWire, FrontFaceWire, GraphicsBindingDecl, GraphicsBindingKindWire,
-    GraphicsBindingValue, GraphicsDrawSpec, GraphicsIndexBufferBinding, GraphicsKernelBridge,
-    GraphicsKernelRegisterDecl, GraphicsKernelRunDraw, GraphicsPipelineStateWire,
-    GraphicsVertexBufferBinding, IndexTypeWire, PolygonModeWire, PrimitiveTopologyWire,
-    RayTracingBindingDecl, RayTracingBindingKindWire, RayTracingBindingValue,
-    RayTracingKernelBridge, RayTracingKernelRegisterDecl, RayTracingKernelRunDispatch,
-    RayTracingShaderGroupWire, RayTracingShaderStageWire, RayTracingStageDecl,
-    ScissorRectWire, TlasInstanceDeclWire, TlasRegisterDecl, VertexAttributeFormatWire,
-    VertexInputAttributeDecl, VertexInputBindingDecl, VertexInputRateWire, ViewportWire,
-    RAY_TRACING_STAGE_INDEX_NONE,
+    CpuReadbackCopyDirection, CullModeWire, DepthCompareOpWire, DepthFormatWire, DynamicStateWire,
+    FrontFaceWire, GraphicsBindingDecl, GraphicsBindingKindWire, GraphicsBindingValue,
+    GraphicsDrawSpec, GraphicsIndexBufferBinding, GraphicsKernelBridge, GraphicsKernelRegisterDecl,
+    GraphicsKernelRunDraw, GraphicsPipelineStateWire, GraphicsVertexBufferBinding, IndexTypeWire,
+    PolygonModeWire, PrimitiveTopologyWire, RAY_TRACING_STAGE_INDEX_NONE, RayTracingBindingDecl,
+    RayTracingBindingKindWire, RayTracingBindingValue, RayTracingKernelBridge,
+    RayTracingKernelRegisterDecl, RayTracingKernelRunDispatch, RayTracingShaderGroupWire,
+    RayTracingShaderStageWire, RayTracingStageDecl, ScissorRectWire, TlasInstanceDeclWire,
+    TlasRegisterDecl, VertexAttributeFormatWire, VertexInputAttributeDecl, VertexInputBindingDecl,
+    VertexInputRateWire, ViewportWire,
 };
-use crate::core::logging::{push_polyglot_record, LogLevel, LogRecord, Source};
-use crate::core::rhi::{PixelFormat, PixelBuffer, TextureFormat, TextureUsages};
+use crate::core::context::{PooledTextureHandle, TexturePoolDescriptor};
+use crate::core::logging::{LogLevel, LogRecord, Source, push_polyglot_record};
+use crate::core::rhi::{PixelBuffer, PixelFormat, TextureFormat, TextureUsages};
 
 #[cfg(test)]
-use crate::core::error::{Result, Error};
+use crate::core::error::{Error, Result};
 
 /// Wire tag marking a message as an escalate request. Bridges demux on this
 /// before falling through to lifecycle dispatch.
@@ -321,8 +319,8 @@ pub(crate) fn handle_escalate_op(
                     }));
                 }
             };
-            let desc = TexturePoolDescriptor::new(width, height, parsed_format)
-                .with_usage(parsed_usage);
+            let desc =
+                TexturePoolDescriptor::new(width, height, parsed_format).with_usage(parsed_usage);
             #[cfg(target_os = "linux")]
             let acquired = sandbox.escalate(|full| {
                 let texture = full.acquire_texture(&desc)?;
@@ -339,12 +337,7 @@ pub(crate) fn handle_escalate_op(
             Some(match acquired {
                 #[cfg(target_os = "linux")]
                 Ok((handle_id, texture, produce_done, consume_done)) => {
-                    registry.insert_texture(
-                        handle_id.clone(),
-                        texture,
-                        produce_done,
-                        consume_done,
-                    );
+                    registry.insert_texture(handle_id.clone(), texture, produce_done, consume_done);
                     EscalateResponse::Ok(EscalateResponseOk {
                         request_id: rid,
                         handle_id,
@@ -397,11 +390,8 @@ pub(crate) fn handle_escalate_op(
                 // an acquire_texture concern); here the host knows the exact
                 // set because the consumer is always a render-target adapter.
                 let acquired = sandbox.escalate(|full| {
-                    let texture = full.acquire_render_target_dma_buf_image(
-                        width,
-                        height,
-                        parsed_format,
-                    )?;
+                    let texture =
+                        full.acquire_render_target_dma_buf_image(width, height, parsed_format)?;
                     let (handle_id, produce_done, consume_done) =
                         assign_image_handle_id(full, &texture)?;
                     Ok((handle_id, texture, produce_done, consume_done))
@@ -442,7 +432,9 @@ pub(crate) fn handle_escalate_op(
                 let _ = (width, height, format);
                 Some(EscalateResponse::Err(EscalateResponseErr {
                     request_id: rid,
-                    message: "acquire_image is only available on Linux (DMA-BUF render-target path)".to_string(),
+                    message:
+                        "acquire_image is only available on Linux (DMA-BUF render-target path)"
+                            .to_string(),
                 }))
             }
         }
@@ -453,7 +445,12 @@ pub(crate) fn handle_escalate_op(
         }) => {
             #[cfg(target_os = "linux")]
             {
-                Some(handle_run_cpu_readback_copy(sandbox, rid, &surface_id, direction))
+                Some(handle_run_cpu_readback_copy(
+                    sandbox,
+                    rid,
+                    &surface_id,
+                    direction,
+                ))
             }
             #[cfg(not(target_os = "linux"))]
             {
@@ -579,32 +576,34 @@ pub(crate) fn handle_escalate_op(
         EscalateRequest::RegisterAccelerationStructureBlas(req) => {
             #[cfg(target_os = "linux")]
             {
-                Some(handle_register_acceleration_structure_blas(sandbox, rid, req))
+                Some(handle_register_acceleration_structure_blas(
+                    sandbox, rid, req,
+                ))
             }
             #[cfg(not(target_os = "linux"))]
             {
                 let _ = req;
                 Some(EscalateResponse::Err(EscalateResponseErr {
                     request_id: rid,
-                    message:
-                        "register_acceleration_structure_blas is only available on Linux"
-                            .to_string(),
+                    message: "register_acceleration_structure_blas is only available on Linux"
+                        .to_string(),
                 }))
             }
         }
         EscalateRequest::RegisterAccelerationStructureTlas(req) => {
             #[cfg(target_os = "linux")]
             {
-                Some(handle_register_acceleration_structure_tlas(sandbox, rid, req))
+                Some(handle_register_acceleration_structure_tlas(
+                    sandbox, rid, req,
+                ))
             }
             #[cfg(not(target_os = "linux"))]
             {
                 let _ = req;
                 Some(EscalateResponse::Err(EscalateResponseErr {
                     request_id: rid,
-                    message:
-                        "register_acceleration_structure_tlas is only available on Linux"
-                            .to_string(),
+                    message: "register_acceleration_structure_tlas is only available on Linux"
+                        .to_string(),
                 }))
             }
         }
@@ -618,8 +617,7 @@ pub(crate) fn handle_escalate_op(
                 let _ = req;
                 Some(EscalateResponse::Err(EscalateResponseErr {
                     request_id: rid,
-                    message: "register_ray_tracing_kernel is only available on Linux"
-                        .to_string(),
+                    message: "register_ray_tracing_kernel is only available on Linux".to_string(),
                 }))
             }
         }
@@ -848,26 +846,20 @@ fn assign_image_handle_id(
     let handle_id = Uuid::new_v4().to_string();
     let host_device = full.host_vulkan_device_arc()?;
     let produce_done = Arc::new(
-        crate::vulkan::rhi::HostVulkanTimelineSemaphore::new_exportable(
-            host_device.device(),
-            0,
-        )
-        .map_err(|e| {
-            crate::core::error::Error::GpuError(format!(
-                "assign_image_handle_id: new_exportable (produce_done): {e}"
-            ))
-        })?,
+        crate::vulkan::rhi::HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+            .map_err(|e| {
+                crate::core::error::Error::GpuError(format!(
+                    "assign_image_handle_id: new_exportable (produce_done): {e}"
+                ))
+            })?,
     );
     let consume_done = Arc::new(
-        crate::vulkan::rhi::HostVulkanTimelineSemaphore::new_exportable(
-            host_device.device(),
-            0,
-        )
-        .map_err(|e| {
-            crate::core::error::Error::GpuError(format!(
-                "assign_image_handle_id: new_exportable (consume_done): {e}"
-            ))
-        })?,
+        crate::vulkan::rhi::HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+            .map_err(|e| {
+                crate::core::error::Error::GpuError(format!(
+                    "assign_image_handle_id: new_exportable (consume_done): {e}"
+                ))
+            })?,
     );
     if let Some(store) = full.surface_store() {
         // Render-target images are freshly allocated and unwritten at
@@ -1012,9 +1004,7 @@ where
     let signaled = match bridge_call(bridge.as_ref(), surface_id) {
         Ok(Some(v)) => v,
         Ok(None) => {
-            return EscalateResponse::Contended(EscalateResponseContended {
-                request_id: rid,
-            });
+            return EscalateResponse::Contended(EscalateResponseContended { request_id: rid });
         }
         Err(msg) => {
             return EscalateResponse::Err(EscalateResponseErr {
@@ -1152,8 +1142,7 @@ fn handle_run_compute_kernel(
     let bridge: Arc<dyn ComputeKernelBridge> = match sandbox.escalate(|full| {
         full.compute_kernel_bridge().ok_or_else(|| {
             crate::core::error::Error::Configuration(
-                "run_compute_kernel: no ComputeKernelBridge registered on GpuContext"
-                    .to_string(),
+                "run_compute_kernel: no ComputeKernelBridge registered on GpuContext".to_string(),
             )
         })
     }) {
@@ -1505,9 +1494,7 @@ fn handle_register_acceleration_structure_blas(
         Err(e) => {
             return EscalateResponse::Err(EscalateResponseErr {
                 request_id: rid,
-                message: format!(
-                    "register_acceleration_structure_blas: vertices_hex decode: {e}"
-                ),
+                message: format!("register_acceleration_structure_blas: vertices_hex decode: {e}"),
             });
         }
     };
@@ -1531,9 +1518,7 @@ fn handle_register_acceleration_structure_blas(
         Err(e) => {
             return EscalateResponse::Err(EscalateResponseErr {
                 request_id: rid,
-                message: format!(
-                    "register_acceleration_structure_blas: indices_hex decode: {e}"
-                ),
+                message: format!("register_acceleration_structure_blas: indices_hex decode: {e}"),
             });
         }
     };
@@ -1587,9 +1572,7 @@ fn handle_register_acceleration_structure_blas(
         }),
         Err(msg) => EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
-            message: format!(
-                "register_acceleration_structure_blas bridge call failed: {msg}"
-            ),
+            message: format!("register_acceleration_structure_blas bridge call failed: {msg}"),
         }),
     }
 }
@@ -1620,10 +1603,9 @@ fn handle_register_acceleration_structure_tlas(
     if req.instances.is_empty() {
         return EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
-            message:
-                "register_acceleration_structure_tlas: instances must not be empty (TLAS \
+            message: "register_acceleration_structure_tlas: instances must not be empty (TLAS \
                  requires at least one instance per Vulkan spec)"
-                    .to_string(),
+                .to_string(),
         });
     }
     let mut instances: Vec<TlasInstanceDeclWire> = Vec::with_capacity(req.instances.len());
@@ -1698,9 +1680,7 @@ fn handle_register_acceleration_structure_tlas(
         }),
         Err(msg) => EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
-            message: format!(
-                "register_acceleration_structure_tlas bridge call failed: {msg}"
-            ),
+            message: format!("register_acceleration_structure_tlas bridge call failed: {msg}"),
         }),
     }
 }
@@ -2111,11 +2091,15 @@ fn graphics_pipeline_state_from_wire(
         }
     };
     let depth_compare_op = depth_compare_op_from_wire(p.depth_compare_op);
-    let color_blend_src_color_factor = blend_factor_from_wire_src_color(p.color_blend_src_color_factor);
-    let color_blend_dst_color_factor = blend_factor_from_wire_dst_color(p.color_blend_dst_color_factor);
+    let color_blend_src_color_factor =
+        blend_factor_from_wire_src_color(p.color_blend_src_color_factor);
+    let color_blend_dst_color_factor =
+        blend_factor_from_wire_dst_color(p.color_blend_dst_color_factor);
     let color_blend_color_op = blend_op_from_wire_color(p.color_blend_color_op);
-    let color_blend_src_alpha_factor = blend_factor_from_wire_src_alpha(p.color_blend_src_alpha_factor);
-    let color_blend_dst_alpha_factor = blend_factor_from_wire_dst_alpha(p.color_blend_dst_alpha_factor);
+    let color_blend_src_alpha_factor =
+        blend_factor_from_wire_src_alpha(p.color_blend_src_alpha_factor);
+    let color_blend_dst_alpha_factor =
+        blend_factor_from_wire_dst_alpha(p.color_blend_dst_alpha_factor);
     let color_blend_alpha_op = blend_op_from_wire_alpha(p.color_blend_alpha_op);
     let attachment_depth_format = p.attachment_depth_format.map(|d| match d {
         EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat::D16Unorm => {
@@ -2245,37 +2229,55 @@ macro_rules! blend_op_match {
 fn blend_factor_from_wire_src_color(
     f: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor,
 ) -> BlendFactorWire {
-    blend_factor_match!(EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor, f)
+    blend_factor_match!(
+        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor,
+        f
+    )
 }
 #[cfg(target_os = "linux")]
 fn blend_factor_from_wire_dst_color(
     f: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor,
 ) -> BlendFactorWire {
-    blend_factor_match!(EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor, f)
+    blend_factor_match!(
+        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor,
+        f
+    )
 }
 #[cfg(target_os = "linux")]
 fn blend_factor_from_wire_src_alpha(
     f: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor,
 ) -> BlendFactorWire {
-    blend_factor_match!(EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor, f)
+    blend_factor_match!(
+        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor,
+        f
+    )
 }
 #[cfg(target_os = "linux")]
 fn blend_factor_from_wire_dst_alpha(
     f: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor,
 ) -> BlendFactorWire {
-    blend_factor_match!(EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor, f)
+    blend_factor_match!(
+        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor,
+        f
+    )
 }
 #[cfg(target_os = "linux")]
 fn blend_op_from_wire_color(
     o: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp,
 ) -> BlendOpWire {
-    blend_op_match!(EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp, o)
+    blend_op_match!(
+        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp,
+        o
+    )
 }
 #[cfg(target_os = "linux")]
 fn blend_op_from_wire_alpha(
     o: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp,
 ) -> BlendOpWire {
-    blend_op_match!(EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp, o)
+    blend_op_match!(
+        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp,
+        o
+    )
 }
 
 /// Decode lowercase hex into bytes, returning a clean error message on
@@ -2563,7 +2565,10 @@ mod tests {
         assert_eq!(decode_hex("").unwrap(), Vec::<u8>::new());
         assert_eq!(decode_hex("00").unwrap(), vec![0u8]);
         assert_eq!(decode_hex("ff").unwrap(), vec![0xff]);
-        assert_eq!(decode_hex("DeAdBeEf").unwrap(), vec![0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!(
+            decode_hex("DeAdBeEf").unwrap(),
+            vec![0xde, 0xad, 0xbe, 0xef]
+        );
         assert_eq!(
             decode_hex("0123456789abcdef").unwrap(),
             vec![0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]
@@ -2726,11 +2731,8 @@ mod tests {
 
     #[test]
     fn parse_texture_usages_combines_tokens() {
-        let usage = parse_texture_usages(&[
-            "texture_binding".to_string(),
-            "copy_src".to_string(),
-        ])
-        .expect("known tokens");
+        let usage = parse_texture_usages(&["texture_binding".to_string(), "copy_src".to_string()])
+            .expect("known tokens");
         assert!(usage.contains(TextureUsages::TEXTURE_BINDING));
         assert!(usage.contains(TextureUsages::COPY_SRC));
         assert!(!usage.contains(TextureUsages::STORAGE_BINDING));
@@ -2879,11 +2881,12 @@ mod tests {
             };
             let registry = EscalateHandleRegistry::new();
 
-            let req = EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
-                request_id: "req-try-contended".into(),
-                surface_id: "1".into(),
-                direction: EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer,
-            });
+            let req =
+                EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
+                    request_id: "req-try-contended".into(),
+                    surface_id: "1".into(),
+                    direction: EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer,
+                });
             let response = handle_escalate_op(&sandbox, &registry, req)
                 .expect("try_run_cpu_readback_copy always produces a response");
             match response {
@@ -2904,11 +2907,12 @@ mod tests {
             };
             let registry = EscalateHandleRegistry::new();
 
-            let req = EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
-                request_id: "req-try-err".into(),
-                surface_id: "1".into(),
-                direction: EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer,
-            });
+            let req =
+                EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
+                    request_id: "req-try-err".into(),
+                    surface_id: "1".into(),
+                    direction: EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer,
+                });
             let response = handle_escalate_op(&sandbox, &registry, req)
                 .expect("try_run_cpu_readback_copy always produces a response");
             match response {
@@ -2935,17 +2939,22 @@ mod tests {
             };
             let registry = EscalateHandleRegistry::new();
 
-            let req = EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
-                request_id: "req-try-no-bridge".into(),
-                surface_id: "1".into(),
-                direction: EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer,
-            });
+            let req =
+                EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
+                    request_id: "req-try-no-bridge".into(),
+                    surface_id: "1".into(),
+                    direction: EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer,
+                });
             let response = handle_escalate_op(&sandbox, &registry, req)
                 .expect("try_run_cpu_readback_copy always produces a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-try-no-bridge");
-                    assert!(err.message.contains("CpuReadbackBridge"), "got: {}", err.message);
+                    assert!(
+                        err.message.contains("CpuReadbackBridge"),
+                        "got: {}",
+                        err.message
+                    );
                 }
                 other => panic!("expected Err response, got {other:?}"),
             }
@@ -2961,11 +2970,12 @@ mod tests {
             };
             let registry = EscalateHandleRegistry::new();
 
-            let req = EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
-                request_id: "req-try-bad-id".into(),
-                surface_id: "abc".into(),
-                direction: EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer,
-            });
+            let req =
+                EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
+                    request_id: "req-try-bad-id".into(),
+                    surface_id: "abc".into(),
+                    direction: EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer,
+                });
             let response = handle_escalate_op(&sandbox, &registry, req)
                 .expect("try_run_cpu_readback_copy always produces a response");
             match response {
@@ -2995,9 +3005,7 @@ mod tests {
         use super::EscalateHandleRegistry;
         use std::sync::{Arc, Mutex};
 
-        use crate::core::context::{
-            ComputeKernelBridge, GpuContext, GpuContextLimitedAccess,
-        };
+        use crate::core::context::{ComputeKernelBridge, GpuContext, GpuContextLimitedAccess};
 
         /// Synthetic bridge: returns SHA-256(spv) hex on register and
         /// records the (kernel_id, surface_uuid, push, dispatch) tuple
@@ -3099,15 +3107,14 @@ mod tests {
                 }
             };
             let registry = EscalateHandleRegistry::new();
-            let req = EscalateRequest::RegisterComputeKernel(
-                EscalateRequestRegisterComputeKernel {
+            let req =
+                EscalateRequest::RegisterComputeKernel(EscalateRequestRegisterComputeKernel {
                     request_id: "req-reg-1".to_string(),
                     spv_hex: "deadbeef".to_string(),
                     push_constant_size: 0,
-                },
-            );
-            let response = handle_escalate_op(&sandbox, &registry, req)
-                .expect("must produce a response");
+                });
+            let response =
+                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-reg-1");
@@ -3117,9 +3124,7 @@ mod tests {
                         err.message
                     );
                 }
-                other => panic!(
-                    "expected Err when no bridge registered, got {other:?}"
-                ),
+                other => panic!("expected Err when no bridge registered, got {other:?}"),
             }
         }
 
@@ -3135,19 +3140,17 @@ mod tests {
                 }
             };
             let registry = EscalateHandleRegistry::new();
-            let req = EscalateRequest::RunComputeKernel(
-                EscalateRequestRunComputeKernel {
-                    request_id: "req-run-1".to_string(),
-                    kernel_id: "abc".to_string(),
-                    surface_uuid: "uuid-1".to_string(),
-                    push_constants_hex: "".to_string(),
-                    group_count_x: 1,
-                    group_count_y: 1,
-                    group_count_z: 1,
-                },
-            );
-            let response = handle_escalate_op(&sandbox, &registry, req)
-                .expect("must produce a response");
+            let req = EscalateRequest::RunComputeKernel(EscalateRequestRunComputeKernel {
+                request_id: "req-run-1".to_string(),
+                kernel_id: "abc".to_string(),
+                surface_uuid: "uuid-1".to_string(),
+                push_constants_hex: "".to_string(),
+                group_count_x: 1,
+                group_count_y: 1,
+                group_count_z: 1,
+            });
+            let response =
+                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-run-1");
@@ -3157,9 +3160,7 @@ mod tests {
                         err.message
                     );
                 }
-                other => panic!(
-                    "expected Err when no bridge registered, got {other:?}"
-                ),
+                other => panic!("expected Err when no bridge registered, got {other:?}"),
             }
         }
 
@@ -3176,23 +3177,18 @@ mod tests {
                 }
             };
             let registry = EscalateHandleRegistry::new();
-            let req = EscalateRequest::RegisterComputeKernel(
-                EscalateRequestRegisterComputeKernel {
+            let req =
+                EscalateRequest::RegisterComputeKernel(EscalateRequestRegisterComputeKernel {
                     request_id: "req-reg-bad".to_string(),
                     spv_hex: "xyz123".to_string(), // non-hex character
                     push_constant_size: 0,
-                },
-            );
-            let response = handle_escalate_op(&sandbox, &registry, req)
-                .expect("must produce a response");
+                });
+            let response =
+                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-reg-bad");
-                    assert!(
-                        err.message.contains("spv_hex"),
-                        "got: {}",
-                        err.message
-                    );
+                    assert!(err.message.contains("spv_hex"), "got: {}", err.message);
                 }
                 other => panic!("expected Err for malformed hex, got {other:?}"),
             }
@@ -3211,26 +3207,22 @@ mod tests {
             let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
                 Some(s) => s,
                 None => {
-                    println!(
-                        "run_with_invalid_push_constants_hex_returns_err: no GPU — skipping"
-                    );
+                    println!("run_with_invalid_push_constants_hex_returns_err: no GPU — skipping");
                     return;
                 }
             };
             let registry = EscalateHandleRegistry::new();
-            let req = EscalateRequest::RunComputeKernel(
-                EscalateRequestRunComputeKernel {
-                    request_id: "req-run-bad".to_string(),
-                    kernel_id: "abc".to_string(),
-                    surface_uuid: "uuid-1".to_string(),
-                    push_constants_hex: "xyz".to_string(), // odd-length + non-hex
-                    group_count_x: 1,
-                    group_count_y: 1,
-                    group_count_z: 1,
-                },
-            );
-            let response = handle_escalate_op(&sandbox, &registry, req)
-                .expect("must produce a response");
+            let req = EscalateRequest::RunComputeKernel(EscalateRequestRunComputeKernel {
+                request_id: "req-run-bad".to_string(),
+                kernel_id: "abc".to_string(),
+                surface_uuid: "uuid-1".to_string(),
+                push_constants_hex: "xyz".to_string(), // odd-length + non-hex
+                group_count_x: 1,
+                group_count_y: 1,
+                group_count_z: 1,
+            });
+            let response =
+                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-run-bad");
@@ -3265,13 +3257,11 @@ mod tests {
             };
             let registry = EscalateHandleRegistry::new();
             let make_req = |rid: &str| {
-                EscalateRequest::RegisterComputeKernel(
-                    EscalateRequestRegisterComputeKernel {
-                        request_id: rid.to_string(),
-                        spv_hex: "deadbeefcafebabe".to_string(),
-                        push_constant_size: 0,
-                    },
-                )
+                EscalateRequest::RegisterComputeKernel(EscalateRequestRegisterComputeKernel {
+                    request_id: rid.to_string(),
+                    spv_hex: "deadbeefcafebabe".to_string(),
+                    push_constant_size: 0,
+                })
             };
             let first = handle_escalate_op(&sandbox, &registry, make_req("r1"))
                 .expect("first register must produce a response");
@@ -3291,10 +3281,7 @@ mod tests {
                 }
                 other => panic!("second register expected Ok, got {other:?}"),
             };
-            assert_eq!(
-                id1, id2,
-                "identical SPIR-V must produce the same kernel_id"
-            );
+            assert_eq!(id1, id2, "identical SPIR-V must produce the same kernel_id");
         }
 
         /// Different SPIR-V must produce different `kernel_id`s.
@@ -3311,20 +3298,18 @@ mod tests {
                 }
             };
             let registry = EscalateHandleRegistry::new();
-            let req_a = EscalateRequest::RegisterComputeKernel(
-                EscalateRequestRegisterComputeKernel {
+            let req_a =
+                EscalateRequest::RegisterComputeKernel(EscalateRequestRegisterComputeKernel {
                     request_id: "ra".to_string(),
                     spv_hex: "deadbeef".to_string(),
                     push_constant_size: 0,
-                },
-            );
-            let req_b = EscalateRequest::RegisterComputeKernel(
-                EscalateRequestRegisterComputeKernel {
+                });
+            let req_b =
+                EscalateRequest::RegisterComputeKernel(EscalateRequestRegisterComputeKernel {
                     request_id: "rb".to_string(),
                     spv_hex: "cafebabe".to_string(),
                     push_constant_size: 0,
-                },
-            );
+                });
             let resp_a = match handle_escalate_op(&sandbox, &registry, req_a)
                 .expect("must produce a response")
             {
@@ -3354,26 +3339,22 @@ mod tests {
             let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
                 Some(s) => s,
                 None => {
-                    println!(
-                        "run_with_unregistered_kernel_id_returns_err: no GPU — skipping"
-                    );
+                    println!("run_with_unregistered_kernel_id_returns_err: no GPU — skipping");
                     return;
                 }
             };
             let registry = EscalateHandleRegistry::new();
-            let req = EscalateRequest::RunComputeKernel(
-                EscalateRequestRunComputeKernel {
-                    request_id: "req-run-bad-id".to_string(),
-                    kernel_id: "never-registered-id".to_string(),
-                    surface_uuid: "uuid-1".to_string(),
-                    push_constants_hex: "".to_string(),
-                    group_count_x: 1,
-                    group_count_y: 1,
-                    group_count_z: 1,
-                },
-            );
-            let response = handle_escalate_op(&sandbox, &registry, req)
-                .expect("must produce a response");
+            let req = EscalateRequest::RunComputeKernel(EscalateRequestRunComputeKernel {
+                request_id: "req-run-bad-id".to_string(),
+                kernel_id: "never-registered-id".to_string(),
+                surface_uuid: "uuid-1".to_string(),
+                push_constants_hex: "".to_string(),
+                group_count_x: 1,
+                group_count_y: 1,
+                group_count_z: 1,
+            });
+            let response =
+                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-run-bad-id");
@@ -3384,9 +3365,7 @@ mod tests {
                         err.message
                     );
                 }
-                other => panic!(
-                    "expected Err for unregistered kernel_id, got {other:?}"
-                ),
+                other => panic!("expected Err for unregistered kernel_id, got {other:?}"),
             }
         }
 
@@ -3409,30 +3388,26 @@ mod tests {
             let registry = EscalateHandleRegistry::new();
 
             // Register first so the bridge has the kernel_id cached.
-            let reg = EscalateRequest::RegisterComputeKernel(
-                EscalateRequestRegisterComputeKernel {
+            let reg =
+                EscalateRequest::RegisterComputeKernel(EscalateRequestRegisterComputeKernel {
                     request_id: "reg".to_string(),
                     spv_hex: "abcdef0123456789".to_string(),
                     push_constant_size: 8,
-                },
-            );
-            let kernel_id =
-                match handle_escalate_op(&sandbox, &registry, reg).unwrap() {
-                    EscalateResponse::Ok(ok) => ok.handle_id,
-                    other => panic!("register expected Ok, got {other:?}"),
-                };
+                });
+            let kernel_id = match handle_escalate_op(&sandbox, &registry, reg).unwrap() {
+                EscalateResponse::Ok(ok) => ok.handle_id,
+                other => panic!("register expected Ok, got {other:?}"),
+            };
 
-            let run = EscalateRequest::RunComputeKernel(
-                EscalateRequestRunComputeKernel {
-                    request_id: "run".to_string(),
-                    kernel_id: kernel_id.clone(),
-                    surface_uuid: "surface-xyz".to_string(),
-                    push_constants_hex: "00112233aabbccdd".to_string(),
-                    group_count_x: 4,
-                    group_count_y: 5,
-                    group_count_z: 6,
-                },
-            );
+            let run = EscalateRequest::RunComputeKernel(EscalateRequestRunComputeKernel {
+                request_id: "run".to_string(),
+                kernel_id: kernel_id.clone(),
+                surface_uuid: "surface-xyz".to_string(),
+                push_constants_hex: "00112233aabbccdd".to_string(),
+                group_count_x: 4,
+                group_count_y: 5,
+                group_count_z: 6,
+            });
             let response = handle_escalate_op(&sandbox, &registry, run).unwrap();
             match response {
                 EscalateResponse::Ok(ok) => {
@@ -3479,8 +3454,8 @@ mod tests {
             EscalateRequestRunGraphicsDrawVertexBuffer, EscalateRequestRunGraphicsDrawViewport,
         };
         use crate::core::context::{
-            GpuContext, GpuContextLimitedAccess, GraphicsKernelBridge,
-            GraphicsKernelRegisterDecl, GraphicsKernelRunDraw,
+            GpuContext, GpuContextLimitedAccess, GraphicsKernelBridge, GraphicsKernelRegisterDecl,
+            GraphicsKernelRunDraw,
         };
 
         /// Synthetic bridge — registers any caller-provided vertex+fragment
@@ -3551,11 +3526,13 @@ mod tests {
                 Ok(id)
             }
 
-            fn run_draw(
-                &self,
-                draw: &GraphicsKernelRunDraw,
-            ) -> std::result::Result<(), String> {
-                if !self.registered.lock().unwrap().contains_key(&draw.kernel_id) {
+            fn run_draw(&self, draw: &GraphicsKernelRunDraw) -> std::result::Result<(), String> {
+                if !self
+                    .registered
+                    .lock()
+                    .unwrap()
+                    .contains_key(&draw.kernel_id)
+                {
                     return Err(format!(
                         "kernel_id '{}' not registered with this bridge",
                         draw.kernel_id
@@ -3683,10 +3660,12 @@ mod tests {
             };
             let registry = EscalateHandleRegistry::new();
             let req = EscalateRequest::RegisterGraphicsKernel(make_register_req(
-                "req-reg-1", "deadbeef", "cafebabe",
+                "req-reg-1",
+                "deadbeef",
+                "cafebabe",
             ));
-            let response = handle_escalate_op(&sandbox, &registry, req)
-                .expect("must produce a response");
+            let response =
+                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-reg-1");
@@ -3711,10 +3690,12 @@ mod tests {
             };
             let registry = EscalateHandleRegistry::new();
             let req = EscalateRequest::RunGraphicsDraw(make_run_req(
-                "req-run-1", "kernel-x", "surface-y",
+                "req-run-1",
+                "kernel-x",
+                "surface-y",
             ));
-            let response = handle_escalate_op(&sandbox, &registry, req)
-                .expect("must produce a response");
+            let response =
+                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-run-1");
@@ -3740,10 +3721,12 @@ mod tests {
             };
             let registry = EscalateHandleRegistry::new();
             let req = EscalateRequest::RegisterGraphicsKernel(make_register_req(
-                "req-bad-v", "xyz123", "cafebabe",
+                "req-bad-v",
+                "xyz123",
+                "cafebabe",
             ));
-            let response = handle_escalate_op(&sandbox, &registry, req)
-                .expect("must produce a response");
+            let response =
+                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-bad-v");
@@ -3774,10 +3757,12 @@ mod tests {
             };
             let registry = EscalateHandleRegistry::new();
             let req = EscalateRequest::RegisterGraphicsKernel(make_register_req(
-                "req-bad-f", "deadbeef", "qq",
+                "req-bad-f",
+                "deadbeef",
+                "qq",
             ));
-            let response = handle_escalate_op(&sandbox, &registry, req)
-                .expect("must produce a response");
+            let response =
+                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-bad-f");
@@ -3798,21 +3783,16 @@ mod tests {
             let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
                 Some(s) => s,
                 None => {
-                    println!(
-                        "run_with_invalid_push_constants_hex_returns_err: no GPU — skipping"
-                    );
+                    println!("run_with_invalid_push_constants_hex_returns_err: no GPU — skipping");
                     return;
                 }
             };
             let registry = EscalateHandleRegistry::new();
             let mut req = make_run_req("req-bad-push", "kernel-x", "surface-y");
             req.push_constants_hex = "xyz".to_string();
-            let response = handle_escalate_op(
-                &sandbox,
-                &registry,
-                EscalateRequest::RunGraphicsDraw(req),
-            )
-            .expect("must produce a response");
+            let response =
+                handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(req))
+                    .expect("must produce a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-bad-push");
@@ -3846,12 +3826,9 @@ mod tests {
                 surface_uuid: "vb-uuid".to_string(),
                 offset: "not-a-number".to_string(),
             }];
-            let response = handle_escalate_op(
-                &sandbox,
-                &registry,
-                EscalateRequest::RunGraphicsDraw(req),
-            )
-            .expect("must produce a response");
+            let response =
+                handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(req))
+                    .expect("must produce a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-bad-vb");
@@ -3894,7 +3871,10 @@ mod tests {
                 EscalateResponse::Ok(ok) => ok.handle_id,
                 other => panic!("second register expected Ok, got {other:?}"),
             };
-            assert_eq!(id1, id2, "identical descriptor must produce the same kernel_id");
+            assert_eq!(
+                id1, id2,
+                "identical descriptor must produce the same kernel_id"
+            );
         }
 
         #[test]
@@ -3924,7 +3904,10 @@ mod tests {
                 EscalateResponse::Ok(ok) => ok.handle_id,
                 other => panic!("expected Ok, got {other:?}"),
             };
-            assert_ne!(id_a, id_b, "different vertex SPIR-V must produce different kernel_ids");
+            assert_ne!(
+                id_a, id_b,
+                "different vertex SPIR-V must produce different kernel_ids"
+            );
         }
 
         /// Lock in the wire→domain pipeline-state translation. Mentally
@@ -3937,19 +3920,16 @@ mod tests {
         #[test]
         fn pipeline_state_translates_every_enum_arm() {
             use crate::core::context::{
-                BlendFactorWire, BlendOpWire, CullModeWire, DepthCompareOpWire,
-                DepthFormatWire, DynamicStateWire, FrontFaceWire, GraphicsBindingKindWire,
-                PolygonModeWire, PrimitiveTopologyWire, VertexAttributeFormatWire,
-                VertexInputRateWire,
+                BlendFactorWire, BlendOpWire, CullModeWire, DepthCompareOpWire, DepthFormatWire,
+                DynamicStateWire, FrontFaceWire, GraphicsBindingKindWire, PolygonModeWire,
+                PrimitiveTopologyWire, VertexAttributeFormatWire, VertexInputRateWire,
             };
 
             let bridge = RecordingGraphicsBridge::new();
             let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
                 Some(s) => s,
                 None => {
-                    println!(
-                        "pipeline_state_translates_every_enum_arm: no GPU — skipping"
-                    );
+                    println!("pipeline_state_translates_every_enum_arm: no GPU — skipping");
                     return;
                 }
             };
@@ -3960,9 +3940,7 @@ mod tests {
             // chosen to be DIFFERENT from the matching default so a
             // wrong arm in the translation would land in the wrong
             // wire-mirror variant and the assertion would fail.
-            let mut req = make_register_req(
-                "req-translate", "deadbeef", "cafebabe",
-            );
+            let mut req = make_register_req("req-translate", "deadbeef", "cafebabe");
             req.bindings = vec![EscalateRequestRegisterGraphicsKernelBinding {
                 binding: 7,
                 kind: EscalateRequestRegisterGraphicsKernelBindingKind::UniformBuffer,
@@ -4012,8 +3990,7 @@ mod tests {
                 EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::OneMinusConstantAlpha;
             req.pipeline_state.color_blend_alpha_op =
                 EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp::Max;
-            req.pipeline_state.attachment_color_formats =
-                vec!["bgra8_unorm_srgb".to_string()];
+            req.pipeline_state.attachment_color_formats = vec!["bgra8_unorm_srgb".to_string()];
             req.pipeline_state.attachment_depth_format = Some(
                 EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat::D32Sfloat,
             );
@@ -4108,9 +4085,7 @@ mod tests {
             let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
                 Some(s) => s,
                 None => {
-                    println!(
-                        "run_with_unregistered_kernel_id_returns_err: no GPU — skipping"
-                    );
+                    println!("run_with_unregistered_kernel_id_returns_err: no GPU — skipping");
                     return;
                 }
             };
@@ -4120,8 +4095,8 @@ mod tests {
                 "never-registered",
                 "surface-y",
             ));
-            let response = handle_escalate_op(&sandbox, &registry, req)
-                .expect("must produce a response");
+            let response =
+                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-bad-id");
@@ -4206,12 +4181,9 @@ mod tests {
                 height: 240,
             });
 
-            let response = handle_escalate_op(
-                &sandbox,
-                &registry,
-                EscalateRequest::RunGraphicsDraw(run),
-            )
-            .unwrap();
+            let response =
+                handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(run))
+                    .unwrap();
             match response {
                 EscalateResponse::Ok(ok) => {
                     assert_eq!(ok.request_id, "run");
@@ -4285,9 +4257,9 @@ mod tests {
             EscalateRequestRunRayTracingKernelBinding,
         };
         use crate::core::context::{
-            BlasRegisterDecl, GpuContext, GpuContextLimitedAccess, RayTracingKernelBridge,
-            RayTracingKernelRegisterDecl, RayTracingKernelRunDispatch, TlasRegisterDecl,
-            RAY_TRACING_STAGE_INDEX_NONE,
+            BlasRegisterDecl, GpuContext, GpuContextLimitedAccess, RAY_TRACING_STAGE_INDEX_NONE,
+            RayTracingKernelBridge, RayTracingKernelRegisterDecl, RayTracingKernelRunDispatch,
+            TlasRegisterDecl,
         };
 
         /// Synthetic bridge — accepts any caller-provided BLAS/TLAS/kernel
@@ -4544,8 +4516,8 @@ mod tests {
                 &vertex_hex(TRIANGLE_VERTS),
                 &index_hex(TRIANGLE_INDICES),
             ));
-            let response = handle_escalate_op(&sandbox, &registry, req)
-                .expect("must produce a response");
+            let response =
+                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-blas-1");
@@ -4577,8 +4549,8 @@ mod tests {
                 "xyz123",
                 &index_hex(TRIANGLE_INDICES),
             ));
-            let response = handle_escalate_op(&sandbox, &registry, req)
-                .expect("must produce a response");
+            let response =
+                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-bad-v");
@@ -4609,8 +4581,8 @@ mod tests {
                 &"00".repeat(11),
                 &index_hex(TRIANGLE_INDICES),
             ));
-            let response = handle_escalate_op(&sandbox, &registry, req)
-                .expect("must produce a response");
+            let response =
+                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-misaligned-v");
@@ -4620,9 +4592,7 @@ mod tests {
                         err.message
                     );
                 }
-                other => panic!(
-                    "expected Err for misaligned vertex blob, got {other:?}"
-                ),
+                other => panic!("expected Err for misaligned vertex blob, got {other:?}"),
             }
             assert_eq!(bridge.blas_count(), 0);
         }
@@ -4646,8 +4616,8 @@ mod tests {
                 &vertex_hex(TRIANGLE_VERTS),
                 &"00".repeat(8),
             ));
-            let response = handle_escalate_op(&sandbox, &registry, req)
-                .expect("must produce a response");
+            let response =
+                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-misaligned-i");
@@ -4657,9 +4627,7 @@ mod tests {
                         err.message
                     );
                 }
-                other => panic!(
-                    "expected Err for misaligned index blob, got {other:?}"
-                ),
+                other => panic!("expected Err for misaligned index blob, got {other:?}"),
             }
             assert_eq!(bridge.blas_count(), 0);
         }
@@ -4680,8 +4648,8 @@ mod tests {
                 &vertex_hex(TRIANGLE_VERTS),
                 &index_hex(TRIANGLE_INDICES),
             ));
-            let resp1 = handle_escalate_op(&sandbox, &registry, req1)
-                .expect("must produce a response");
+            let resp1 =
+                handle_escalate_op(&sandbox, &registry, req1).expect("must produce a response");
             let id1 = match resp1 {
                 EscalateResponse::Ok(ok) => {
                     assert_eq!(ok.request_id, "req-blas-a");
@@ -4695,8 +4663,8 @@ mod tests {
                 &vertex_hex(TRIANGLE_VERTS),
                 &index_hex(TRIANGLE_INDICES),
             ));
-            let resp2 = handle_escalate_op(&sandbox, &registry, req2)
-                .expect("must produce a response");
+            let resp2 =
+                handle_escalate_op(&sandbox, &registry, req2).expect("must produce a response");
             let id2 = match resp2 {
                 EscalateResponse::Ok(ok) => ok.handle_id,
                 other => panic!("expected Ok on re-register, got {other:?}"),
@@ -4714,20 +4682,18 @@ mod tests {
             EscalateRequestRegisterAccelerationStructureTlas {
                 request_id: request_id.to_string(),
                 label: "test-tlas".to_string(),
-                instances: vec![
-                    EscalateRequestRegisterAccelerationStructureTlasInstance {
-                        blas_id: blas_id.to_string(),
-                        transform: vec![
-                            1.0, 0.0, 0.0, 0.0, // row 0
-                            0.0, 1.0, 0.0, 0.0, // row 1
-                            0.0, 0.0, 1.0, 0.0, // row 2
-                        ],
-                        custom_index: 7,
-                        mask: 0xff,
-                        sbt_record_offset: 0,
-                        flags: 0,
-                    },
-                ],
+                instances: vec![EscalateRequestRegisterAccelerationStructureTlasInstance {
+                    blas_id: blas_id.to_string(),
+                    transform: vec![
+                        1.0, 0.0, 0.0, 0.0, // row 0
+                        0.0, 1.0, 0.0, 0.0, // row 1
+                        0.0, 0.0, 1.0, 0.0, // row 2
+                    ],
+                    custom_index: 7,
+                    mask: 0xff,
+                    sbt_record_offset: 0,
+                    flags: 0,
+                }],
             }
         }
 
@@ -4757,9 +4723,7 @@ mod tests {
                     assert_eq!(err.request_id, "req-bad-tx");
                     assert!(err.message.contains("transform"), "got: {}", err.message);
                 }
-                other => panic!(
-                    "expected Err for wrong-length transform, got {other:?}"
-                ),
+                other => panic!("expected Err for wrong-length transform, got {other:?}"),
             }
             assert_eq!(bridge.tlas_count(), 0);
         }
@@ -4770,9 +4734,7 @@ mod tests {
             let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
                 Some(s) => s,
                 None => {
-                    println!(
-                        "register_tlas_with_oversized_mask_returns_err: no GPU — skipping"
-                    );
+                    println!("register_tlas_with_oversized_mask_returns_err: no GPU — skipping");
                     return;
                 }
             };
@@ -4801,9 +4763,7 @@ mod tests {
             let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
                 Some(s) => s,
                 None => {
-                    println!(
-                        "register_tlas_succeeds_after_blas: no GPU — skipping"
-                    );
+                    println!("register_tlas_succeeds_after_blas: no GPU — skipping");
                     return;
                 }
             };
@@ -4814,18 +4774,18 @@ mod tests {
                 &vertex_hex(TRIANGLE_VERTS),
                 &index_hex(TRIANGLE_INDICES),
             ));
-            let blas_resp = handle_escalate_op(&sandbox, &registry, blas_req)
-                .expect("must produce a response");
+            let blas_resp =
+                handle_escalate_op(&sandbox, &registry, blas_req).expect("must produce a response");
             let blas_id = match blas_resp {
                 EscalateResponse::Ok(ok) => ok.handle_id,
                 other => panic!("expected Ok for BLAS register, got {other:?}"),
             };
             // 2. Now register a TLAS pointing at it.
-            let tlas_req = EscalateRequest::RegisterAccelerationStructureTlas(
-                make_tlas_req("req-tlas", &blas_id),
-            );
-            let tlas_resp = handle_escalate_op(&sandbox, &registry, tlas_req)
-                .expect("must produce a response");
+            let tlas_req = EscalateRequest::RegisterAccelerationStructureTlas(make_tlas_req(
+                "req-tlas", &blas_id,
+            ));
+            let tlas_resp =
+                handle_escalate_op(&sandbox, &registry, tlas_req).expect("must produce a response");
             let tlas_id = match tlas_resp {
                 EscalateResponse::Ok(ok) => {
                     assert_eq!(ok.request_id, "req-tlas");
@@ -4858,9 +4818,7 @@ mod tests {
             let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
                 Some(s) => s,
                 None => {
-                    println!(
-                        "register_tlas_with_unknown_blas_id_returns_err: no GPU — skipping"
-                    );
+                    println!("register_tlas_with_unknown_blas_id_returns_err: no GPU — skipping");
                     return;
                 }
             };
@@ -4869,8 +4827,8 @@ mod tests {
                 "req-tlas-bad",
                 "definitely-not-a-real-blas-id",
             ));
-            let response = handle_escalate_op(&sandbox, &registry, req)
-                .expect("must produce a response");
+            let response =
+                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-tlas-bad");
@@ -4880,18 +4838,14 @@ mod tests {
                         err.message
                     );
                 }
-                other => panic!(
-                    "expected Err for unknown blas_id, got {other:?}"
-                ),
+                other => panic!("expected Err for unknown blas_id, got {other:?}"),
             }
             assert_eq!(bridge.tlas_count(), 0);
         }
 
         // ----- Kernel register + run tests ------------------------------
 
-        fn make_kernel_req(
-            request_id: &str,
-        ) -> EscalateRequestRegisterRayTracingKernel {
+        fn make_kernel_req(request_id: &str) -> EscalateRequestRegisterRayTracingKernel {
             EscalateRequestRegisterRayTracingKernel {
                 request_id: request_id.to_string(),
                 label: "test-rt-kernel".to_string(),
@@ -4953,10 +4907,7 @@ mod tests {
             }
         }
 
-        fn make_run_req(
-            request_id: &str,
-            kernel_id: &str,
-        ) -> EscalateRequestRunRayTracingKernel {
+        fn make_run_req(request_id: &str, kernel_id: &str) -> EscalateRequestRunRayTracingKernel {
             EscalateRequestRunRayTracingKernel {
                 request_id: request_id.to_string(),
                 kernel_id: kernel_id.to_string(),
@@ -4984,16 +4935,14 @@ mod tests {
             let sandbox = match make_sandbox_with_bridge(None) {
                 Some(s) => s,
                 None => {
-                    println!(
-                        "register_kernel_without_bridge_returns_err: no GPU — skipping"
-                    );
+                    println!("register_kernel_without_bridge_returns_err: no GPU — skipping");
                     return;
                 }
             };
             let registry = EscalateHandleRegistry::new();
             let req = EscalateRequest::RegisterRayTracingKernel(make_kernel_req("req-k-1"));
-            let response = handle_escalate_op(&sandbox, &registry, req)
-                .expect("must produce a response");
+            let response =
+                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-k-1");
@@ -5037,9 +4986,7 @@ mod tests {
                         err.message
                     );
                 }
-                other => panic!(
-                    "expected Err for bad stage SPIR-V hex, got {other:?}"
-                ),
+                other => panic!("expected Err for bad stage SPIR-V hex, got {other:?}"),
             }
             assert_eq!(bridge.kernel_count(), 0);
         }
@@ -5101,18 +5048,16 @@ mod tests {
                 }
             };
             let registry = EscalateHandleRegistry::new();
-            let req1 =
-                EscalateRequest::RegisterRayTracingKernel(make_kernel_req("req-k-a"));
-            let resp1 = handle_escalate_op(&sandbox, &registry, req1)
-                .expect("must produce a response");
+            let req1 = EscalateRequest::RegisterRayTracingKernel(make_kernel_req("req-k-a"));
+            let resp1 =
+                handle_escalate_op(&sandbox, &registry, req1).expect("must produce a response");
             let id1 = match resp1 {
                 EscalateResponse::Ok(ok) => ok.handle_id,
                 other => panic!("expected Ok, got {other:?}"),
             };
-            let req2 =
-                EscalateRequest::RegisterRayTracingKernel(make_kernel_req("req-k-b"));
-            let resp2 = handle_escalate_op(&sandbox, &registry, req2)
-                .expect("must produce a response");
+            let req2 = EscalateRequest::RegisterRayTracingKernel(make_kernel_req("req-k-b"));
+            let resp2 =
+                handle_escalate_op(&sandbox, &registry, req2).expect("must produce a response");
             let id2 = match resp2 {
                 EscalateResponse::Ok(ok) => ok.handle_id,
                 other => panic!("expected Ok, got {other:?}"),
@@ -5140,12 +5085,9 @@ mod tests {
                 }
             };
             let registry = EscalateHandleRegistry::new();
-            let req = EscalateRequest::RunRayTracingKernel(make_run_req(
-                "req-run-1",
-                "kernel-x",
-            ));
-            let response = handle_escalate_op(&sandbox, &registry, req)
-                .expect("must produce a response");
+            let req = EscalateRequest::RunRayTracingKernel(make_run_req("req-run-1", "kernel-x"));
+            let response =
+                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-run-1");
@@ -5189,9 +5131,7 @@ mod tests {
                         err.message
                     );
                 }
-                other => panic!(
-                    "expected Err for malformed push hex, got {other:?}"
-                ),
+                other => panic!("expected Err for malformed push hex, got {other:?}"),
             }
             assert!(bridge.runs().is_empty());
         }
@@ -5202,9 +5142,7 @@ mod tests {
             let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
                 Some(s) => s,
                 None => {
-                    println!(
-                        "run_kernel_with_unknown_kernel_id_returns_err: no GPU — skipping"
-                    );
+                    println!("run_kernel_with_unknown_kernel_id_returns_err: no GPU — skipping");
                     return;
                 }
             };
@@ -5213,8 +5151,8 @@ mod tests {
                 "req-run-x",
                 "definitely-not-a-real-kernel-id",
             ));
-            let response = handle_escalate_op(&sandbox, &registry, req)
-                .expect("must produce a response");
+            let response =
+                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-run-x");
@@ -5224,9 +5162,7 @@ mod tests {
                         err.message
                     );
                 }
-                other => panic!(
-                    "expected Err for unknown kernel_id, got {other:?}"
-                ),
+                other => panic!("expected Err for unknown kernel_id, got {other:?}"),
             }
             assert!(bridge.runs().is_empty());
         }
@@ -5243,8 +5179,7 @@ mod tests {
             };
             let registry = EscalateHandleRegistry::new();
             // 1. Register the kernel.
-            let kernel_req =
-                EscalateRequest::RegisterRayTracingKernel(make_kernel_req("req-k"));
+            let kernel_req = EscalateRequest::RegisterRayTracingKernel(make_kernel_req("req-k"));
             let kernel_resp = handle_escalate_op(&sandbox, &registry, kernel_req)
                 .expect("must produce a response");
             let kernel_id = match kernel_resp {
@@ -5252,12 +5187,10 @@ mod tests {
                 other => panic!("expected Ok for kernel register, got {other:?}"),
             };
             // 2. Now dispatch it.
-            let run_req = EscalateRequest::RunRayTracingKernel(make_run_req(
-                "req-run-k",
-                &kernel_id,
-            ));
-            let run_resp = handle_escalate_op(&sandbox, &registry, run_req)
-                .expect("must produce a response");
+            let run_req =
+                EscalateRequest::RunRayTracingKernel(make_run_req("req-run-k", &kernel_id));
+            let run_resp =
+                handle_escalate_op(&sandbox, &registry, run_req).expect("must produce a response");
             match run_resp {
                 EscalateResponse::Ok(ok) => {
                     assert_eq!(ok.request_id, "req-run-k");
@@ -5356,13 +5289,12 @@ mod tests {
         let sandbox = GpuContextLimitedAccess::new(gpu);
         let registry = EscalateHandleRegistry::new();
 
-        let acquire =
-            EscalateRequest::AcquirePixelBuffer(EscalateRequestAcquirePixelBuffer {
-                request_id: "req-1".to_string(),
-                width: 320,
-                height: 240,
-                format: "bgra".to_string(),
-            });
+        let acquire = EscalateRequest::AcquirePixelBuffer(EscalateRequestAcquirePixelBuffer {
+            request_id: "req-1".to_string(),
+            width: 320,
+            height: 240,
+            format: "bgra".to_string(),
+        });
         let response = handle_escalate_op(&sandbox, &registry, acquire)
             .expect("acquire_pixel_buffer must produce a response");
         let buffer_handle_id = match response {
@@ -5384,17 +5316,13 @@ mod tests {
         };
         assert_eq!(registry.handle_count(), 1);
 
-        let acquire_tex =
-            EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
-                request_id: "req-tex".to_string(),
-                width: 256,
-                height: 128,
-                format: "rgba8_unorm".to_string(),
-                usage: vec![
-                    "texture_binding".to_string(),
-                    "copy_src".to_string(),
-                ],
-            });
+        let acquire_tex = EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
+            request_id: "req-tex".to_string(),
+            width: 256,
+            height: 128,
+            format: "rgba8_unorm".to_string(),
+            usage: vec!["texture_binding".to_string(), "copy_src".to_string()],
+        });
         let response = handle_escalate_op(&sandbox, &registry, acquire_tex)
             .expect("acquire_texture must produce a response");
         let texture_handle_id = match response {
@@ -5406,7 +5334,10 @@ mod tests {
                 let usage = ok.usage.as_deref().expect("acquire_texture sets usage");
                 assert!(usage.iter().any(|u| u == "texture_binding"));
                 assert!(usage.iter().any(|u| u == "copy_src"));
-                assert!(!ok.handle_id.is_empty(), "texture handle id should not be empty");
+                assert!(
+                    !ok.handle_id.is_empty(),
+                    "texture handle id should not be empty"
+                );
                 assert_ne!(
                     ok.handle_id, buffer_handle_id,
                     "texture and buffer should get distinct handle ids"
@@ -5433,7 +5364,9 @@ mod tests {
                 assert_eq!(ok.request_id, "req-tex-rel");
                 assert_eq!(ok.handle_id, texture_handle_id);
             }
-            EscalateResponse::Err(err) => panic!("release_handle (texture) failed: {}", err.message),
+            EscalateResponse::Err(err) => {
+                panic!("release_handle (texture) failed: {}", err.message)
+            }
             EscalateResponse::Contended(_) => panic!("release_handle must never return Contended"),
         }
         assert_eq!(registry.handle_count(), 1);
@@ -5454,11 +5387,10 @@ mod tests {
         }
         assert_eq!(registry.handle_count(), 0);
 
-        let release_unknown =
-            EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
-                request_id: "req-3".to_string(),
-                handle_id: "never-existed".to_string(),
-            });
+        let release_unknown = EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
+            request_id: "req-3".to_string(),
+            handle_id: "never-existed".to_string(),
+        });
         match handle_escalate_op(&sandbox, &registry, release_unknown)
             .expect("release_handle must produce a response")
         {
@@ -5488,8 +5420,8 @@ mod tests {
         use tempfile::TempDir;
 
         use crate::core::logging::{
-            init_for_tests, LogLevel, RuntimeLogEvent, Source,
-            StreamlibLoggingConfig, StreamlibLoggingGuard,
+            LogLevel, RuntimeLogEvent, Source, StreamlibLoggingConfig, StreamlibLoggingGuard,
+            init_for_tests,
         };
         use crate::core::runtime::RuntimeUniqueId;
 
@@ -5587,7 +5519,11 @@ mod tests {
             let (_tmp, guard) = install_logging("RlogOpLv");
             let path = guard.jsonl_path().unwrap().to_path_buf();
 
-            dispatch_log(sample_log("42", "2026-04-23T14:00:00Z", EscalateRequestLogLevel::Warn));
+            dispatch_log(sample_log(
+                "42",
+                "2026-04-23T14:00:00Z",
+                EscalateRequestLogLevel::Warn,
+            ));
 
             drop(guard);
 
@@ -5847,11 +5783,11 @@ mod tests {
 
         use super::*;
         use crate::core::compiler::compiler_ops::subprocess_bridge::{
-            spawn_fd_line_reader, EscalateTransport,
+            EscalateTransport, spawn_fd_line_reader,
         };
         use crate::core::logging::{
-            init_for_tests, LogLevel, RuntimeLogEvent, Source,
-            StreamlibLoggingConfig, StreamlibLoggingGuard,
+            LogLevel, RuntimeLogEvent, Source, StreamlibLoggingConfig, StreamlibLoggingGuard,
+            init_for_tests,
         };
         use crate::core::runtime::RuntimeUniqueId;
         use serial_test::serial;
@@ -5894,9 +5830,7 @@ mod tests {
             contents
                 .lines()
                 .filter(|l| !l.is_empty())
-                .map(|l| {
-                    serde_json::from_str::<RuntimeLogEvent>(l).expect("valid JSONL")
-                })
+                .map(|l| serde_json::from_str::<RuntimeLogEvent>(l).expect("valid JSONL"))
                 .collect()
         }
 
@@ -5949,9 +5883,7 @@ mod tests {
                 let parsed = match try_parse_escalate_request(&value) {
                     Some(Ok(op)) => op,
                     Some(Err(e)) => panic!("escalate decode failed: {}", e.message),
-                    None => panic!(
-                        "python subprocess only sends escalate traffic; got {value}"
-                    ),
+                    None => panic!("python subprocess only sends escalate traffic; got {value}"),
                 };
                 // For log ops we only need to drive the wire-decode →
                 // sink path. Non-log ops are not expected from the
@@ -6009,9 +5941,7 @@ log.shutdown()
             let frames = match run_and_drain(&snippet) {
                 Some(n) => n,
                 None => {
-                    println!(
-                        "python3 or streamlib-python source missing — skipping"
-                    );
+                    println!("python3 or streamlib-python source missing — skipping");
                     return;
                 }
             };
@@ -6022,17 +5952,12 @@ log.shutdown()
             let events = read_jsonl(&path);
             let record = events
                 .iter()
-                .find(|e| {
-                    e.source == Source::Python && e.message == "hi from python"
-                })
+                .find(|e| e.source == Source::Python && e.message == "hi from python")
                 .unwrap_or_else(|| panic!("no python record; got {events:#?}"));
             assert_eq!(record.level, LogLevel::Info);
             assert_eq!(record.pipeline_id.as_deref(), Some("pl-test"));
             assert_eq!(record.processor_id.as_deref(), Some("pr-test"));
-            assert_eq!(
-                record.attrs.get("count").and_then(|v| v.as_i64()),
-                Some(7)
-            );
+            assert_eq!(record.attrs.get("count").and_then(|v| v.as_i64()), Some(7));
             assert!(record.host_ts > 0);
         }
 
@@ -6102,8 +6027,7 @@ log.shutdown()
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
-            let mut transport =
-                EscalateTransport::attach(&mut command).expect("attach transport");
+            let mut transport = EscalateTransport::attach(&mut command).expect("attach transport");
 
             let mut child = command.spawn().expect("spawn python3");
             transport.release_child_end();
@@ -6136,14 +6060,13 @@ log.shutdown()
 import os
 os.write(1, b"hi from c\n")
 "#;
-            let (mut child, _sock) =
-                match spawn_python_with_host_fd_readers(snippet, "pr-fd1") {
-                    Some(v) => v,
-                    None => {
-                        println!("python3 missing — skipping");
-                        return;
-                    }
-                };
+            let (mut child, _sock) = match spawn_python_with_host_fd_readers(snippet, "pr-fd1") {
+                Some(v) => v,
+                None => {
+                    println!("python3 missing — skipping");
+                    return;
+                }
+            };
 
             // Wait for child to exit and for the fd1 reader thread to
             // flush the final line into the JSONL worker queue.
@@ -6161,11 +6084,7 @@ os.write(1, b"hi from c\n")
                         && e.source == Source::Python
                         && e.message == "hi from c"
                 })
-                .unwrap_or_else(|| {
-                    panic!(
-                        "no fd1-intercepted record for python; got {events:#?}"
-                    )
-                });
+                .unwrap_or_else(|| panic!("no fd1-intercepted record for python; got {events:#?}"));
             assert_eq!(record.level, LogLevel::Warn);
             assert_eq!(record.processor_id.as_deref(), Some("pr-fd1"));
         }
@@ -6184,14 +6103,13 @@ os.write(1, b"hi from c\n")
 import os
 os.write(2, b"stderr after transport move\n")
 "#;
-            let (mut child, _sock) =
-                match spawn_python_with_host_fd_readers(snippet, "pr-fd2") {
-                    Some(v) => v,
-                    None => {
-                        println!("python3 missing — skipping");
-                        return;
-                    }
-                };
+            let (mut child, _sock) = match spawn_python_with_host_fd_readers(snippet, "pr-fd2") {
+                Some(v) => v,
+                None => {
+                    println!("python3 missing — skipping");
+                    return;
+                }
+            };
 
             let _ = child.wait();
             std::thread::sleep(Duration::from_millis(200));
@@ -6207,11 +6125,7 @@ os.write(2, b"stderr after transport move\n")
                         && e.source == Source::Python
                         && e.message == "stderr after transport move"
                 })
-                .unwrap_or_else(|| {
-                    panic!(
-                        "no fd2-intercepted record for python; got {events:#?}"
-                    )
-                });
+                .unwrap_or_else(|| panic!("no fd2-intercepted record for python; got {events:#?}"));
             assert_eq!(record.level, LogLevel::Warn);
             assert_eq!(record.processor_id.as_deref(), Some("pr-fd2"));
         }
@@ -6234,11 +6148,11 @@ os.write(2, b"stderr after transport move\n")
 
         use super::*;
         use crate::core::compiler::compiler_ops::subprocess_bridge::{
-            spawn_fd_line_reader, EscalateTransport,
+            EscalateTransport, spawn_fd_line_reader,
         };
         use crate::core::logging::{
-            init_for_tests, LogLevel, RuntimeLogEvent, Source,
-            StreamlibLoggingConfig, StreamlibLoggingGuard,
+            LogLevel, RuntimeLogEvent, Source, StreamlibLoggingConfig, StreamlibLoggingGuard,
+            init_for_tests,
         };
         use crate::core::runtime::RuntimeUniqueId;
         use serial_test::serial;
@@ -6280,9 +6194,7 @@ os.write(2, b"stderr after transport move\n")
             contents
                 .lines()
                 .filter(|l| !l.is_empty())
-                .map(|l| {
-                    serde_json::from_str::<RuntimeLogEvent>(l).expect("valid JSONL")
-                })
+                .map(|l| serde_json::from_str::<RuntimeLogEvent>(l).expect("valid JSONL"))
                 .collect()
         }
 
@@ -6291,14 +6203,9 @@ os.write(2, b"stderr after transport move\n")
         /// sets the processor context, installs the writer, and runs the
         /// caller-supplied `body` inside a top-level async IIFE. Writes
         /// the script to a temp file inside `tmp` and returns its path.
-        fn write_helper_script(
-            tmp: &TempDir,
-            sdk_path: &std::path::Path,
-            body: &str,
-        ) -> PathBuf {
+        fn write_helper_script(tmp: &TempDir, sdk_path: &std::path::Path, body: &str) -> PathBuf {
             let log_url = format!("file://{}/log.ts", sdk_path.display());
-            let escalate_url =
-                format!("file://{}/escalate.ts", sdk_path.display());
+            let escalate_url = format!("file://{}/escalate.ts", sdk_path.display());
             let script = format!(
                 r#"// auto-generated test helper
 import * as log from "{log_url}";
@@ -6382,9 +6289,7 @@ await log.shutdown();
                 let parsed = match try_parse_escalate_request(&value) {
                     Some(Ok(op)) => op,
                     Some(Err(e)) => panic!("escalate decode failed: {}", e.message),
-                    None => panic!(
-                        "deno subprocess only sends escalate traffic; got {value}"
-                    ),
+                    None => panic!("deno subprocess only sends escalate traffic; got {value}"),
                 };
                 if let EscalateRequest::Log(log_op) = parsed {
                     push_polyglot_record(log_record_from_wire(log_op));
@@ -6420,9 +6325,7 @@ await log.shutdown();
             let frames = match run_and_drain(body) {
                 Some(n) => n,
                 None => {
-                    println!(
-                        "deno or streamlib-deno source missing — skipping"
-                    );
+                    println!("deno or streamlib-deno source missing — skipping");
                     return;
                 }
             };
@@ -6433,17 +6336,12 @@ await log.shutdown();
             let events = read_jsonl(&path);
             let record = events
                 .iter()
-                .find(|e| {
-                    e.source == Source::Deno && e.message == "hi from deno"
-                })
+                .find(|e| e.source == Source::Deno && e.message == "hi from deno")
                 .unwrap_or_else(|| panic!("no deno record; got {events:#?}"));
             assert_eq!(record.level, LogLevel::Info);
             assert_eq!(record.pipeline_id.as_deref(), Some("pl-test"));
             assert_eq!(record.processor_id.as_deref(), Some("pr-test"));
-            assert_eq!(
-                record.attrs.get("count").and_then(|v| v.as_i64()),
-                Some(7)
-            );
+            assert_eq!(record.attrs.get("count").and_then(|v| v.as_i64()), Some(7));
             assert!(record.host_ts > 0);
         }
 
@@ -6498,8 +6396,7 @@ await log.shutdown();
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
-            let mut transport =
-                EscalateTransport::attach(&mut command).expect("attach transport");
+            let mut transport = EscalateTransport::attach(&mut command).expect("attach transport");
 
             let mut child = command.spawn().expect("spawn deno");
             transport.release_child_end();
@@ -6528,14 +6425,13 @@ await log.shutdown();
             let path = guard.jsonl_path().unwrap().to_path_buf();
 
             let snippet = r#"Deno.stdout.writeSync(new TextEncoder().encode("hi from deno\n"));"#;
-            let (mut child, _sock) =
-                match spawn_deno_with_host_fd_readers(snippet, "pr-fd1-deno") {
-                    Some(v) => v,
-                    None => {
-                        println!("deno missing — skipping");
-                        return;
-                    }
-                };
+            let (mut child, _sock) = match spawn_deno_with_host_fd_readers(snippet, "pr-fd1-deno") {
+                Some(v) => v,
+                None => {
+                    println!("deno missing — skipping");
+                    return;
+                }
+            };
 
             let _ = child.wait();
             std::thread::sleep(Duration::from_millis(200));
@@ -6551,11 +6447,7 @@ await log.shutdown();
                         && e.source == Source::Deno
                         && e.message == "hi from deno"
                 })
-                .unwrap_or_else(|| {
-                    panic!(
-                        "no fd1-intercepted record for deno; got {events:#?}"
-                    )
-                });
+                .unwrap_or_else(|| panic!("no fd1-intercepted record for deno; got {events:#?}"));
             assert_eq!(record.level, LogLevel::Warn);
             assert_eq!(record.processor_id.as_deref(), Some("pr-fd1-deno"));
         }
@@ -6570,14 +6462,13 @@ await log.shutdown();
             let path = guard.jsonl_path().unwrap().to_path_buf();
 
             let snippet = r#"Deno.stderr.writeSync(new TextEncoder().encode("stderr after transport move\n"));"#;
-            let (mut child, _sock) =
-                match spawn_deno_with_host_fd_readers(snippet, "pr-fd2-deno") {
-                    Some(v) => v,
-                    None => {
-                        println!("deno missing — skipping");
-                        return;
-                    }
-                };
+            let (mut child, _sock) = match spawn_deno_with_host_fd_readers(snippet, "pr-fd2-deno") {
+                Some(v) => v,
+                None => {
+                    println!("deno missing — skipping");
+                    return;
+                }
+            };
 
             let _ = child.wait();
             std::thread::sleep(Duration::from_millis(200));
@@ -6593,11 +6484,7 @@ await log.shutdown();
                         && e.source == Source::Deno
                         && e.message == "stderr after transport move"
                 })
-                .unwrap_or_else(|| {
-                    panic!(
-                        "no fd2-intercepted record for deno; got {events:#?}"
-                    )
-                });
+                .unwrap_or_else(|| panic!("no fd2-intercepted record for deno; got {events:#?}"));
             assert_eq!(record.level, LogLevel::Warn);
             assert_eq!(record.processor_id.as_deref(), Some("pr-fd2-deno"));
         }

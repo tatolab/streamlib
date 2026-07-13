@@ -113,9 +113,8 @@ unsafe extern "C" fn audio_clock_shim_tick_trampoline(
             // SAFETY: `user_data` was supplied by `AudioClockShim::on_tick`
             // and is a `*mut Box<dyn Fn(AudioTickContext) + Send + Sync>`. The
             // pointer is valid until `audio_clock_shim_drop_trampoline` runs.
-            let closure = unsafe {
-                &*(user_data as *const Box<dyn Fn(AudioTickContext) + Send + Sync>)
-            };
+            let closure =
+                unsafe { &*(user_data as *const Box<dyn Fn(AudioTickContext) + Send + Sync>) };
             let ctx = AudioTickContext {
                 timestamp_ns: repr.timestamp_ns,
                 samples_needed: repr.samples_needed as usize,
@@ -139,9 +138,8 @@ unsafe extern "C" fn audio_clock_shim_drop_trampoline(user_data: *mut c_void) {
             }
             // SAFETY: pair with `Box::into_raw` in `AudioClockShim::on_tick`.
             unsafe {
-                let _ = Box::from_raw(
-                    user_data as *mut Box<dyn Fn(AudioTickContext) + Send + Sync>,
-                );
+                let _ =
+                    Box::from_raw(user_data as *mut Box<dyn Fn(AudioTickContext) + Send + Sync>);
             }
         },
         (),

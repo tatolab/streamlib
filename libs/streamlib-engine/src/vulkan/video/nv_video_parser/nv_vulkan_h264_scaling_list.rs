@@ -81,7 +81,7 @@ pub const FLAT_4X4_16: [[u8; 4]; 4] = [
 
 /// Default 4x4 intra scaling matrix (Table 7-3).
 pub const DEFAULT_4X4_INTRA: [[u8; 4]; 4] = [
-    [ 6, 13, 20, 28],
+    [6, 13, 20, 28],
     [13, 20, 28, 32],
     [20, 28, 32, 37],
     [28, 32, 37, 42],
@@ -109,7 +109,7 @@ pub const FLAT_8X8_16: [[u8; 8]; 8] = [
 
 /// Default 8x8 intra scaling matrix (Table 7-5).
 pub const DEFAULT_8X8_INTRA: [[u8; 8]; 8] = [
-    [ 6, 10, 13, 16, 18, 23, 25, 27],
+    [6, 10, 13, 16, 18, 23, 25, 27],
     [10, 11, 16, 18, 23, 25, 27, 29],
     [13, 16, 18, 23, 25, 27, 29, 31],
     [16, 18, 23, 25, 27, 29, 31, 33],
@@ -121,7 +121,7 @@ pub const DEFAULT_8X8_INTRA: [[u8; 8]; 8] = [
 
 /// Default 8x8 inter scaling matrix (Table 7-6).
 pub const DEFAULT_8X8_INTER: [[u8; 8]; 8] = [
-    [ 9, 13, 15, 17, 19, 21, 22, 24],
+    [9, 13, 15, 17, 19, 21, 22, 24],
     [13, 13, 17, 19, 21, 22, 24, 25],
     [15, 17, 19, 21, 22, 24, 25, 27],
     [17, 19, 21, 22, 24, 25, 27, 28],
@@ -138,21 +138,91 @@ pub const DEFAULT_8X8_INTER: [[u8; 8]; 8] = [
 /// 4x4 zigzag scan order (Table 8-12).
 /// Each entry is (row, col) for scan position k = 0..15.
 const ZIGZAG_MAP_4X4: [(usize, usize); 16] = [
-    (0,0), (0,1), (1,0), (2,0), (1,1), (0,2), (0,3), (1,2),
-    (2,1), (3,0), (3,1), (2,2), (1,3), (2,3), (3,2), (3,3),
+    (0, 0),
+    (0, 1),
+    (1, 0),
+    (2, 0),
+    (1, 1),
+    (0, 2),
+    (0, 3),
+    (1, 2),
+    (2, 1),
+    (3, 0),
+    (3, 1),
+    (2, 2),
+    (1, 3),
+    (2, 3),
+    (3, 2),
+    (3, 3),
 ];
 
 /// 8x8 zigzag scan order (Table 8-12a).
 /// Each entry is (row, col) for scan position k = 0..63.
 const ZIGZAG_MAP_8X8: [(usize, usize); 64] = [
-    (0,0), (0,1), (1,0), (2,0), (1,1), (0,2), (0,3), (1,2),
-    (2,1), (3,0), (4,0), (3,1), (2,2), (1,3), (0,4), (0,5),
-    (1,4), (2,3), (3,2), (4,1), (5,0), (6,0), (5,1), (4,2),
-    (3,3), (2,4), (1,5), (0,6), (0,7), (1,6), (2,5), (3,4),
-    (4,3), (5,2), (6,1), (7,0), (7,1), (6,2), (5,3), (4,4),
-    (3,5), (2,6), (1,7), (2,7), (3,6), (4,5), (5,4), (6,3),
-    (7,2), (7,3), (6,4), (5,5), (4,6), (3,7), (4,7), (5,6),
-    (6,5), (7,4), (7,5), (6,6), (5,7), (6,7), (7,6), (7,7),
+    (0, 0),
+    (0, 1),
+    (1, 0),
+    (2, 0),
+    (1, 1),
+    (0, 2),
+    (0, 3),
+    (1, 2),
+    (2, 1),
+    (3, 0),
+    (4, 0),
+    (3, 1),
+    (2, 2),
+    (1, 3),
+    (0, 4),
+    (0, 5),
+    (1, 4),
+    (2, 3),
+    (3, 2),
+    (4, 1),
+    (5, 0),
+    (6, 0),
+    (5, 1),
+    (4, 2),
+    (3, 3),
+    (2, 4),
+    (1, 5),
+    (0, 6),
+    (0, 7),
+    (1, 6),
+    (2, 5),
+    (3, 4),
+    (4, 3),
+    (5, 2),
+    (6, 1),
+    (7, 0),
+    (7, 1),
+    (6, 2),
+    (5, 3),
+    (4, 4),
+    (3, 5),
+    (2, 6),
+    (1, 7),
+    (2, 7),
+    (3, 6),
+    (4, 5),
+    (5, 4),
+    (6, 3),
+    (7, 2),
+    (7, 3),
+    (6, 4),
+    (5, 5),
+    (4, 6),
+    (3, 7),
+    (4, 7),
+    (5, 6),
+    (6, 5),
+    (7, 4),
+    (7, 5),
+    (6, 6),
+    (5, 7),
+    (6, 7),
+    (7, 6),
+    (7, 7),
 ];
 
 // ---------------------------------------------------------------------------
@@ -235,7 +305,11 @@ pub fn set_sps_scaling_lists_h264(
         let list_type = seq.scaling_list_type[i];
         if list_type != ScalingListType::NotPresent {
             if list_type == ScalingListType::UseDefault {
-                let default = if i < 3 { &DEFAULT_4X4_INTRA } else { &DEFAULT_4X4_INTER };
+                let default = if i < 3 {
+                    &DEFAULT_4X4_INTRA
+                } else {
+                    &DEFAULT_4X4_INTER
+                };
                 matrix_copy_4x4(&mut weight_scale_4x4[i], default);
             } else {
                 weight_scale_4x4[i] = matrix_from_list_4x4(&seq.scaling_list_4x4[i]);
@@ -243,7 +317,11 @@ pub fn set_sps_scaling_lists_h264(
         } else {
             // Fall-back rule set A
             if i == 0 || i == 3 {
-                let default = if i < 3 { &DEFAULT_4X4_INTRA } else { &DEFAULT_4X4_INTER };
+                let default = if i < 3 {
+                    &DEFAULT_4X4_INTRA
+                } else {
+                    &DEFAULT_4X4_INTER
+                };
                 matrix_copy_4x4(&mut weight_scale_4x4[i], default);
             } else {
                 // Copy from previous list — must clone to avoid borrow conflict.
@@ -259,14 +337,22 @@ pub fn set_sps_scaling_lists_h264(
         let list_type = seq.scaling_list_type[i];
         if list_type != ScalingListType::NotPresent {
             if list_type == ScalingListType::UseDefault {
-                let default = if i < 7 { &DEFAULT_8X8_INTRA } else { &DEFAULT_8X8_INTER };
+                let default = if i < 7 {
+                    &DEFAULT_8X8_INTRA
+                } else {
+                    &DEFAULT_8X8_INTER
+                };
                 matrix_copy_8x8(&mut weight_scale_8x8[idx], default);
             } else {
                 weight_scale_8x8[idx] = matrix_from_list_8x8(&seq.scaling_list_8x8[idx]);
             }
         } else {
             // Fall-back rule set A
-            let default = if i < 7 { &DEFAULT_8X8_INTRA } else { &DEFAULT_8X8_INTER };
+            let default = if i < 7 {
+                &DEFAULT_8X8_INTRA
+            } else {
+                &DEFAULT_8X8_INTER
+            };
             matrix_copy_8x8(&mut weight_scale_8x8[idx], default);
         }
     }
@@ -320,7 +406,11 @@ pub fn set_pps_scaling_lists_h264(
         let list_type = pic.scaling_list_type[i];
         if list_type != ScalingListType::NotPresent {
             if list_type == ScalingListType::UseDefault {
-                let default = if i < 3 { &DEFAULT_4X4_INTRA } else { &DEFAULT_4X4_INTER };
+                let default = if i < 3 {
+                    &DEFAULT_4X4_INTRA
+                } else {
+                    &DEFAULT_4X4_INTER
+                };
                 matrix_copy_4x4(&mut weight_scale_4x4[i], default);
             } else {
                 weight_scale_4x4[i] = matrix_from_list_4x4(&pic.scaling_list_4x4[i]);
@@ -328,7 +418,11 @@ pub fn set_pps_scaling_lists_h264(
         } else if !seq_scaling_matrix_present_flag {
             // Fall-back rule set A
             if i == 0 || i == 3 {
-                let default = if i < 3 { &DEFAULT_4X4_INTRA } else { &DEFAULT_4X4_INTER };
+                let default = if i < 3 {
+                    &DEFAULT_4X4_INTRA
+                } else {
+                    &DEFAULT_4X4_INTER
+                };
                 matrix_copy_4x4(&mut weight_scale_4x4[i], default);
             } else {
                 let prev = weight_scale_4x4[i - 1];
@@ -351,14 +445,22 @@ pub fn set_pps_scaling_lists_h264(
         let list_type = pic.scaling_list_type[i];
         if list_type != ScalingListType::NotPresent {
             if list_type == ScalingListType::UseDefault {
-                let default = if i < 7 { &DEFAULT_8X8_INTRA } else { &DEFAULT_8X8_INTER };
+                let default = if i < 7 {
+                    &DEFAULT_8X8_INTRA
+                } else {
+                    &DEFAULT_8X8_INTER
+                };
                 matrix_copy_8x8(&mut weight_scale_8x8[idx], default);
             } else {
                 weight_scale_8x8[idx] = matrix_from_list_8x8(&pic.scaling_list_8x8[idx]);
             }
         } else if !seq_scaling_matrix_present_flag {
             // Fall-back rule set A
-            let default = if i < 7 { &DEFAULT_8X8_INTRA } else { &DEFAULT_8X8_INTER };
+            let default = if i < 7 {
+                &DEFAULT_8X8_INTRA
+            } else {
+                &DEFAULT_8X8_INTER
+            };
             matrix_copy_8x8(&mut weight_scale_8x8[idx], default);
         } else {
             // Fall-back rule set B
@@ -677,9 +779,7 @@ mod tests {
         let mut w4 = [[[0u8; 4]; 4]; 6];
         let mut w8 = [[[0u8; 8]; 8]; 2];
 
-        let result = set_pps_scaling_lists_h264(
-            None, true, &sps_w4, &sps_w8, &mut w4, &mut w8,
-        );
+        let result = set_pps_scaling_lists_h264(None, true, &sps_w4, &sps_w8, &mut w4, &mut w8);
         assert!(!result);
         assert_eq!(w4, sps_w4);
         assert_eq!(w8, sps_w8);
@@ -692,9 +792,7 @@ mod tests {
         let mut w4 = [[[0u8; 4]; 4]; 6];
         let mut w8 = [[[0u8; 8]; 8]; 2];
 
-        let result = set_pps_scaling_lists_h264(
-            None, false, &sps_w4, &sps_w8, &mut w4, &mut w8,
-        );
+        let result = set_pps_scaling_lists_h264(None, false, &sps_w4, &sps_w8, &mut w4, &mut w8);
         assert!(!result);
         for m in &w4 {
             assert_eq!(*m, FLAT_4X4_16);
@@ -722,9 +820,8 @@ mod tests {
 
         let mut w4 = [[[0u8; 4]; 4]; 6];
         let mut w8 = [[[0u8; 8]; 8]; 2];
-        let result = set_pps_scaling_lists_h264(
-            Some(&pps), true, &sps_w4, &sps_w8, &mut w4, &mut w8,
-        );
+        let result =
+            set_pps_scaling_lists_h264(Some(&pps), true, &sps_w4, &sps_w8, &mut w4, &mut w8);
         assert!(result);
 
         // i=0: from SPS[0]
@@ -757,9 +854,7 @@ mod tests {
 
         let mut w4 = [[[0u8; 4]; 4]; 6];
         let mut w8 = [[[0u8; 8]; 8]; 2];
-        set_pps_scaling_lists_h264(
-            Some(&pps), false, &sps_w4, &sps_w8, &mut w4, &mut w8,
-        );
+        set_pps_scaling_lists_h264(Some(&pps), false, &sps_w4, &sps_w8, &mut w4, &mut w8);
 
         assert_eq!(w4[0], DEFAULT_4X4_INTRA);
         assert_eq!(w4[1], DEFAULT_4X4_INTRA);
@@ -829,9 +924,7 @@ mod tests {
 
         let mut w4 = [[[0u8; 4]; 4]; 6];
         let mut w8 = [[[0u8; 8]; 8]; 2];
-        let result = set_seq_pic_scaling_lists_h264(
-            Some(&sps), Some(&pps), &mut w4, &mut w8,
-        );
+        let result = set_seq_pic_scaling_lists_h264(Some(&sps), Some(&pps), &mut w4, &mut w8);
         assert!(result);
 
         for i in 0..3 {

@@ -5,8 +5,8 @@
 //! [`MockAdapter`] — proves the fixture is internally consistent and
 //! gives 3rd-party adapter authors a working template to copy.
 
-use streamlib_adapter_abi::testing::{empty_surface, run_conformance, MockAdapter};
 use streamlib_adapter_abi::SurfaceAdapter;
+use streamlib_adapter_abi::testing::{MockAdapter, empty_surface, run_conformance};
 
 #[test]
 fn mock_adapter_passes_conformance_suite() {

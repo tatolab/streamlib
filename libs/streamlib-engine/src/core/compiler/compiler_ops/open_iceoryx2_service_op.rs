@@ -9,20 +9,20 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
+use crate::core::PortSchemaSpec;
+use crate::core::ProcessorUniqueId;
 use crate::core::context::RuntimeContext;
 use crate::core::embedded_schemas::{
     max_payload_bytes_for_port_spec, max_queued_messages_for_port_spec, overflow_for_input_port,
 };
-use crate::core::error::{Result, Error};
+use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkState, LinkStateComponent,
     LinkUniqueId, ProcessorInstanceComponent, SubprocessHandleComponent,
 };
 use crate::core::json_schema::SchemaIdentOutput;
-use crate::core::processors::{ProcessorInstance, PROCESSOR_REGISTRY};
-use crate::core::PortSchemaSpec;
-use crate::core::ProcessorUniqueId;
-use crate::iceoryx2::{SchemaIdentWire, MAX_FANIN_PER_DESTINATION};
+use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorInstance};
+use crate::iceoryx2::{MAX_FANIN_PER_DESTINATION, SchemaIdentWire};
 
 /// Render a port's structured schema spec as the JSON value embedded in the
 /// subprocess wiring envelope: a structured `SchemaIdentOutput` object for
@@ -160,9 +160,10 @@ pub fn open_iceoryx2_service(
     runtime_ctx: &Arc<RuntimeContext>,
 ) -> Result<()> {
     let (from_port, to_port) = {
-        let link = graph.traversal_mut().e(link_id).first().ok_or_else(|| {
-            Error::LinkNotFound(format!("Link '{}' not found in graph", link_id))
-        })?;
+        let link =
+            graph.traversal_mut().e(link_id).first().ok_or_else(|| {
+                Error::LinkNotFound(format!("Link '{}' not found in graph", link_id))
+            })?;
         (link.from_port().clone(), link.to_port().clone())
     };
 
@@ -283,12 +284,7 @@ fn reject_overcap_destination_fanin(
     graph: &mut Graph,
     dest_proc_id: &ProcessorUniqueId,
 ) -> Result<()> {
-    let fanin = graph
-        .traversal_mut()
-        .v(dest_proc_id)
-        .in_e()
-        .iter()
-        .count();
+    let fanin = graph.traversal_mut().v(dest_proc_id).in_e().iter().count();
     if fanin > MAX_FANIN_PER_DESTINATION {
         return Err(Error::Configuration(format!(
             "destination processor '{}' would have {} upstream sources, \
@@ -724,7 +720,11 @@ fn open_iceoryx2_subprocess_to_rust(
             }));
             tracing::debug!(
                 "Stored output wiring on Deno processor '{}': port='{}', dest_port='{}', dest_service='{}', schema='{}'",
-                source_proc_id, source_port, dest_port, service_name, output_schema
+                source_proc_id,
+                source_port,
+                dest_port,
+                service_name,
+                output_schema
             );
         } else if let Some(python_native_host) = source_guard
             .as_any_mut()
@@ -743,7 +743,11 @@ fn open_iceoryx2_subprocess_to_rust(
                 }));
             tracing::debug!(
                 "Stored output wiring on Python native processor '{}': port='{}', dest_port='{}', dest_service='{}', schema='{}'",
-                source_proc_id, source_port, dest_port, service_name, output_schema
+                source_proc_id,
+                source_port,
+                dest_port,
+                service_name,
+                output_schema
             );
         }
     }
@@ -1215,43 +1219,43 @@ mod tests {
         // Register an output-only source whose `out` port carries `carries`,
         // then return its processor ident. A closure (not a nested `fn`) so
         // the test's `use` imports are in scope.
-        let register_source = |type_name: &str, pkg: &str, carries: PortSchemaSpec| -> SchemaIdent {
-            let ident = SchemaIdent::new(
-                Org::new("tatolab").unwrap(),
-                Package::new(pkg).unwrap(),
-                TypeName::new(type_name).unwrap(),
-                SemVer::new(1, 0, 0),
-            );
-            let descriptor = ProcessorDescriptor {
-                name: ident.clone(),
-                description: "qdepth source mock".into(),
-                version: "1.0.0".into(),
-                repository: String::new(),
-                runtime: ProcessorRuntime::Rust,
-                entrypoint: None,
-                config_schema: None,
-                scheduling: ProcessorScheduling::default(),
-                inputs: Vec::new(),
-                outputs: vec![PortDescriptor::iceoryx2(
-                    "out",
-                    "carries a depth-tagged frame",
-                    carries,
-                )],
-                examples: CodeExamples::default(),
+        let register_source =
+            |type_name: &str, pkg: &str, carries: PortSchemaSpec| -> SchemaIdent {
+                let ident = SchemaIdent::new(
+                    Org::new("tatolab").unwrap(),
+                    Package::new(pkg).unwrap(),
+                    TypeName::new(type_name).unwrap(),
+                    SemVer::new(1, 0, 0),
+                );
+                let descriptor = ProcessorDescriptor {
+                    name: ident.clone(),
+                    description: "qdepth source mock".into(),
+                    version: "1.0.0".into(),
+                    repository: String::new(),
+                    runtime: ProcessorRuntime::Rust,
+                    entrypoint: None,
+                    config_schema: None,
+                    scheduling: ProcessorScheduling::default(),
+                    inputs: Vec::new(),
+                    outputs: vec![PortDescriptor::iceoryx2(
+                        "out",
+                        "carries a depth-tagged frame",
+                        carries,
+                    )],
+                    examples: CodeExamples::default(),
+                };
+                PROCESSOR_REGISTRY
+                    .register_descriptor_only(descriptor)
+                    .expect("register_descriptor_only accepts a fresh ident");
+                ident
             };
-            PROCESSOR_REGISTRY
-                .register_descriptor_only(descriptor)
-                .expect("register_descriptor_only accepts a fresh ident");
-            ident
-        };
 
         let shallow_src = register_source(
             "QDepthShallowSource",
             "test-qdepth-shallow-src",
             shallow_schema,
         );
-        let deep_src =
-            register_source("QDepthDeepSource", "test-qdepth-deep-src", deep_schema);
+        let deep_src = register_source("QDepthDeepSource", "test-qdepth-deep-src", deep_schema);
 
         let mut graph = Graph::new();
         let dest_id = add_mock_input_only(&mut graph);

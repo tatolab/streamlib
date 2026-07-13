@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::apple::iosurface;
-use crate::core::rhi::{GpuDevice, RhiCommandQueue, PixelBuffer, Texture};
-use crate::core::{Result, Error};
+use crate::core::rhi::{GpuDevice, PixelBuffer, RhiCommandQueue, Texture};
+use crate::core::{Error, Result};
 use metal::foreign_types::ForeignTypeRef;
 use objc2_core_video::CVPixelBuffer;
 use objc2_io_surface::IOSurface;

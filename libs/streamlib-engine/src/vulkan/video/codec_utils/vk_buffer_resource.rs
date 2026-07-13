@@ -14,11 +14,11 @@
 //! - Methods that mutate the buffer take `&mut self`; the C++ relies on interior
 //!   mutability via the dispatch table and mapped pointer.
 
+use std::ptr;
+use std::sync::Arc;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia_vma::{self as vma, Alloc};
-use std::ptr;
-use std::sync::Arc;
 
 /// Alignment helper: round `value` up to the next multiple of `alignment`.
 ///
@@ -103,7 +103,9 @@ impl DeviceMemory {
 
     #[inline]
     fn get_device_memory(&self) -> vk::DeviceMemory {
-        self.allocator.get_allocation_info(self.allocation).deviceMemory
+        self.allocator
+            .get_allocation_info(self.allocation)
+            .deviceMemory
     }
 
     #[inline]
@@ -133,12 +135,7 @@ impl DeviceMemory {
         Some(ptr as *const u8)
     }
 
-    fn memset_data(
-        &self,
-        value: u32,
-        offset: vk::DeviceSize,
-        size: vk::DeviceSize,
-    ) -> i64 {
+    fn memset_data(&self, value: u32, offset: vk::DeviceSize, size: vk::DeviceSize) -> i64 {
         if let Some(ptr) = self.check_access(offset, size) {
             unsafe {
                 ptr::write_bytes(ptr, value as u8, size as usize);
@@ -191,11 +188,7 @@ impl DeviceMemory {
         }
     }
 
-    fn copy_data_to_memory(
-        &self,
-        data: &[u8],
-        memory_offset: vk::DeviceSize,
-    ) -> vk::Result {
+    fn copy_data_to_memory(&self, data: &[u8], memory_offset: vk::DeviceSize) -> vk::Result {
         if let Some(dst) = self.check_access(memory_offset, data.len() as vk::DeviceSize) {
             unsafe {
                 ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len());
@@ -396,12 +389,7 @@ impl VkBufferResource {
     // -- Copy / memset operations -------------------------------------------
 
     /// Fill buffer region with `value` (CPU memset).
-    pub fn memset_data(
-        &self,
-        value: u32,
-        offset: vk::DeviceSize,
-        size: vk::DeviceSize,
-    ) -> i64 {
+    pub fn memset_data(&self, value: u32, offset: vk::DeviceSize, size: vk::DeviceSize) -> i64 {
         if size == 0 {
             return 0;
         }
@@ -560,48 +548,47 @@ impl VkBufferResource {
         new_size: vk::DeviceSize,
         copy_size: vk::DeviceSize,
         copy_offset: vk::DeviceSize,
-    ) -> vk::DeviceSize { unsafe {
-        if self.buffer_size >= new_size {
-            return self.buffer_size;
-        }
+    ) -> vk::DeviceSize {
+        unsafe {
+            if self.buffer_size >= new_size {
+                return self.buffer_size;
+            }
 
-        // Read old data if needed
-        let init_data: Option<Vec<u8>> = if copy_size > 0 {
-            if let Some(mem) = &self.device_memory {
-                let mut max_size: vk::DeviceSize = 0;
-                if let Some(ptr) = mem.get_read_only_data_ptr(copy_offset, &mut max_size) {
-                    debug_assert!(copy_size <= max_size);
-                    let mut buf = vec![0u8; copy_size as usize];
-                    ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), copy_size as usize);
-                    Some(buf)
+            // Read old data if needed
+            let init_data: Option<Vec<u8>> = if copy_size > 0 {
+                if let Some(mem) = &self.device_memory {
+                    let mut max_size: vk::DeviceSize = 0;
+                    if let Some(ptr) = mem.get_read_only_data_ptr(copy_offset, &mut max_size) {
+                        debug_assert!(copy_size <= max_size);
+                        let mut buf = vec![0u8; copy_size as usize];
+                        ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), copy_size as usize);
+                        Some(buf)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
             } else {
                 None
-            }
-        } else {
-            None
-        };
+            };
 
-        let (new_buffer, new_offset, new_device_memory, aligned_size) = match Self::create_buffer(
-            &self.config,
-            new_size,
-            init_data.as_deref(),
-        ) {
-            Ok(v) => v,
-            Err(_) => return 0,
-        };
+            let (new_buffer, new_offset, new_device_memory, aligned_size) =
+                match Self::create_buffer(&self.config, new_size, init_data.as_deref()) {
+                    Ok(v) => v,
+                    Err(_) => return 0,
+                };
 
-        self.deinitialize();
+            self.deinitialize();
 
-        self.buffer = new_buffer;
-        self.device_memory = Some(new_device_memory);
-        self.buffer_offset = new_offset;
-        self.buffer_size = aligned_size;
+            self.buffer = new_buffer;
+            self.device_memory = Some(new_device_memory);
+            self.buffer_offset = new_offset;
+            self.buffer_size = aligned_size;
 
-        aligned_size
-    }}
+            aligned_size
+        }
+    }
 
     /// Clone this buffer's configuration into a new `VkBufferResource`,
     /// optionally copying data.
@@ -617,7 +604,11 @@ impl VkBufferResource {
             if let Some((ptr, _max)) = self.get_data_ptr(copy_offset) {
                 let mut buf = vec![0u8; copy_size as usize];
                 unsafe {
-                    ptr::copy_nonoverlapping(ptr as *const u8, buf.as_mut_ptr(), copy_size as usize);
+                    ptr::copy_nonoverlapping(
+                        ptr as *const u8,
+                        buf.as_mut_ptr(),
+                        copy_size as usize,
+                    );
                 }
                 Some(buf)
             } else {
@@ -748,8 +739,8 @@ impl VkBufferResource {
 
         let mut alloc_flags = vma::AllocationCreateFlags::empty();
         if is_host_visible {
-            alloc_flags |=
-                vma::AllocationCreateFlags::MAPPED | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE;
+            alloc_flags |= vma::AllocationCreateFlags::MAPPED
+                | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE;
         }
 
         let alloc_opts = vma::AllocationOptions {

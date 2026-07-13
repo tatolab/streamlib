@@ -18,13 +18,10 @@
 use std::sync::{Arc, OnceLock};
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
-use streamlib::sdk::engine::host_rhi::{
-    HostMarker,
-    HostVulkanDevice,
-    HostVulkanBuffer,
-    HostVulkanTimelineSemaphore,
-};
 use streamlib::sdk::context::GpuContext;
+use streamlib::sdk::engine::host_rhi::{
+    HostMarker, HostVulkanBuffer, HostVulkanDevice, HostVulkanTimelineSemaphore,
+};
 use streamlib::sdk::error::Error;
 use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
 use streamlib_adapter_abi::{
@@ -32,8 +29,8 @@ use streamlib_adapter_abi::{
     SurfaceUsage,
 };
 use streamlib_adapter_cpu_readback::{
-    CpuReadbackContext, CpuReadbackCopyTrigger, CpuReadbackSurfaceAdapter,
-    HostSurfaceRegistration, InProcessCpuReadbackCopyTrigger, VulkanLayout,
+    CpuReadbackContext, CpuReadbackCopyTrigger, CpuReadbackSurfaceAdapter, HostSurfaceRegistration,
+    InProcessCpuReadbackCopyTrigger, VulkanLayout,
 };
 
 /// Convenience alias — every host-side test instantiates the adapter
@@ -155,10 +152,11 @@ impl HostFixture {
             let plane_h = surface_format.plane_height(height, plane_idx);
             let plane_bpp = surface_format.plane_bytes_per_pixel(plane_idx);
             let pf = staging_pixel_format_for(surface_format, plane_idx);
-            let pb = HostVulkanBuffer::new(self.adapter.device(), (plane_w as u64) * (plane_h as u64) * (plane_bpp as u64))
-            .map_err(|e| {
-                Error::GpuError(format!("staging plane {plane_idx}: {e}"))
-            })?;
+            let pb = HostVulkanBuffer::new(
+                self.adapter.device(),
+                (plane_w as u64) * (plane_h as u64) * (plane_bpp as u64),
+            )
+            .map_err(|e| Error::GpuError(format!("staging plane {plane_idx}: {e}")))?;
             staging_planes.push(Arc::new(pb));
         }
 
@@ -184,9 +182,7 @@ impl HostFixture {
                     height,
                 },
             )
-            .map_err(|e| {
-                Error::GpuError(format!("register_host_surface: {e:?}"))
-            })?;
+            .map_err(|e| Error::GpuError(format!("register_host_surface: {e:?}")))?;
         Ok(StreamlibSurface::new(
             surface_id,
             width,

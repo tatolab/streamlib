@@ -15,11 +15,11 @@
 //! app `streamlib.yaml`, and no application lockfile.
 
 use anyhow::{Context, Result};
-use streamlib::sdk::runtime::{
-    add as sdk_add, add_slpkg as sdk_add_slpkg, remove as sdk_remove, AddOptions, AddReport,
-    BuildEvent, BuildEventSink, BuildStream,
-};
 use streamlib::sdk::PolyglotBuildOrchestrator;
+use streamlib::sdk::runtime::{
+    AddOptions, AddReport, BuildEvent, BuildEventSink, BuildStream, add as sdk_add,
+    add_slpkg as sdk_add_slpkg, remove as sdk_remove,
+};
 use streamlib_idents::{CatalogSchemaRef, PackageRef, SemVerRange};
 
 /// Routes the orchestrator's build diagnostics to the CLI's stdout/stderr
@@ -52,8 +52,14 @@ pub async fn add(spec: &str) -> Result<()> {
         println!("Adding {pkg_ref} ({version_req})…");
         // Zero-env by default: AddOptions::default() resolves the registry from
         // the environment, else the first-party DEFAULT_REGISTRY_URL.
-        sdk_add(&pkg_ref, &version_req, &orchestrator, &sink, &AddOptions::default())
-            .map_err(|e| anyhow::anyhow!("add failed: {e}"))?
+        sdk_add(
+            &pkg_ref,
+            &version_req,
+            &orchestrator,
+            &sink,
+            &AddOptions::default(),
+        )
+        .map_err(|e| anyhow::anyhow!("add failed: {e}"))?
     } else if spec.starts_with("http://") || spec.starts_with("https://") {
         let path = download_to_temp(spec).await?;
         println!("Adding {}…", path.display());
@@ -90,7 +96,11 @@ pub fn remove(name: &str) -> Result<()> {
 /// Pretty-print the add outcome plus the catalog-backed discovery summary.
 fn print_add_report(report: &AddReport) {
     println!();
-    let verb = if report.already_present { "Already added" } else { "Added" };
+    let verb = if report.already_present {
+        "Already added"
+    } else {
+        "Added"
+    };
     println!("{verb} {} v{}", report.package, report.version);
     println!("  Cache: {}", report.cache_dir.display());
 
@@ -244,7 +254,10 @@ mod tests {
         // Two successive calls must never collide — the whole point of the fix
         // (two concurrent URL-adds must not clobber one download temp file).
         // Mentally-revert to a fixed name and this fails.
-        assert_ne!(a, b, "concurrent URL-add downloads must not share a temp filename");
+        assert_ne!(
+            a, b,
+            "concurrent URL-add downloads must not share a temp filename"
+        );
         let pid = std::process::id().to_string();
         assert!(
             a.contains(&pid) && b.contains(&pid),

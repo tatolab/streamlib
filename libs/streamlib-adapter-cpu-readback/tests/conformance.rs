@@ -21,7 +21,7 @@ use std::sync::Arc;
 use streamlib::sdk::engine::HostTextureExt;
 
 use streamlib::sdk::engine::host_rhi::{HostMarker, HostVulkanBuffer, HostVulkanTimelineSemaphore};
-use streamlib::sdk::rhi::{TextureFormat};
+use streamlib::sdk::rhi::TextureFormat;
 use streamlib_adapter_abi::testing::{empty_surface, run_conformance};
 use streamlib_adapter_abi::{
     AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId,
@@ -34,9 +34,7 @@ struct ConformanceFactory<'a> {
     fixture: &'a HostFixture,
 }
 
-impl<'a> streamlib_adapter_abi::testing::ConformanceSurfaceFactory
-    for ConformanceFactory<'a>
-{
+impl<'a> streamlib_adapter_abi::testing::ConformanceSurfaceFactory for ConformanceFactory<'a> {
     fn make(&self, id: SurfaceId) -> StreamlibSurface {
         self.fixture.register_surface(id, 64, 64)
     }
@@ -47,9 +45,7 @@ fn cpu_readback_adapter_passes_run_conformance() {
     let fixture = match HostFixture::try_new() {
         Some(f) => f,
         None => {
-            println!(
-                "cpu-readback conformance: skipping — no Vulkan device available"
-            );
+            println!("cpu-readback conformance: skipping — no Vulkan device available");
             return;
         }
     };
@@ -71,9 +67,7 @@ fn duplicate_registration_returns_surface_already_registered() {
     let fixture = match HostFixture::try_new() {
         Some(f) => f,
         None => {
-            println!(
-                "cpu-readback duplicate-registration: skipping — no Vulkan device available"
-            );
+            println!("cpu-readback duplicate-registration: skipping — no Vulkan device available");
             return;
         }
     };
@@ -89,8 +83,11 @@ fn duplicate_registration_returns_surface_already_registered() {
         .expect("acquire_render_target_dma_buf_image");
     let texture_arc = Arc::clone(stream_texture.vulkan_inner());
     let staging = Arc::new(
-        HostVulkanBuffer::new(fixture.adapter.device(), (64 as u64) * (64 as u64) * (4 as u64))
-            .expect("staging plane"),
+        HostVulkanBuffer::new(
+            fixture.adapter.device(),
+            (64 as u64) * (64 as u64) * (4 as u64),
+        )
+        .expect("staging plane"),
     );
     let produce_done = Arc::new(
         HostVulkanTimelineSemaphore::new(fixture.adapter.device().device(), 0)

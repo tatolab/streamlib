@@ -22,29 +22,25 @@
 //!   - "OK\n<width>x<height>\nvk_image=0x<hex>" on full round-trip.
 //!   - "ERR:<message>" on any step failure.
 
-use streamlib::sdk::context::{
-    RuntimeContextFullAccess, RuntimeContextLimitedAccess,
-};
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
 
 #[cfg(target_os = "linux")]
 use std::sync::Arc;
 #[cfg(target_os = "linux")]
-use streamlib::sdk::engine::host_rhi::HostVulkanTimelineSemaphore;
-#[cfg(target_os = "linux")]
 use streamlib::sdk::engine::HostTextureExt;
+#[cfg(target_os = "linux")]
+use streamlib::sdk::engine::host_rhi::HostVulkanTimelineSemaphore;
 #[cfg(target_os = "linux")]
 use streamlib::sdk::rhi::TextureFormat;
 #[cfg(target_os = "linux")]
 use streamlib_adapter_abi::{
-    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState,
-    SurfaceTransportHandle, SurfaceUsage, VulkanWritable,
+    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
+    SurfaceUsage, VulkanWritable,
 };
 #[cfg(target_os = "linux")]
-use streamlib_adapter_vulkan::{
-    HostSurfaceRegistration, VulkanLayout, VulkanSurfaceAdapter,
-};
+use streamlib_adapter_vulkan::{HostSurfaceRegistration, VulkanLayout, VulkanSurfaceAdapter};
 
 #[streamlib::sdk::processor("VulkanSmokeTestProcessor")]
 pub struct VulkanSmokeTest {}
@@ -67,11 +63,8 @@ impl ManualProcessor for VulkanSmokeTest::Processor {
             }
             Err(e) => format!("ERR:{e}"),
         };
-        std::fs::write(&output_path, &line).map_err(|e| {
-            Error::Runtime(format!(
-                "VulkanSmokeTest: write {output_path}: {e}"
-            ))
-        })?;
+        std::fs::write(&output_path, &line)
+            .map_err(|e| Error::Runtime(format!("VulkanSmokeTest: write {output_path}: {e}")))?;
         Ok(())
     }
 
@@ -79,11 +72,7 @@ impl ManualProcessor for VulkanSmokeTest::Processor {
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let output_path = self.config.output_path.clone();
         std::fs::write(&output_path, "ERR:vulkan smoke is linux-only")
-            .map_err(|e| {
-                Error::Runtime(format!(
-                    "VulkanSmokeTest: write {output_path}: {e}"
-                ))
-            })?;
+            .map_err(|e| Error::Runtime(format!("VulkanSmokeTest: write {output_path}: {e}")))?;
         Ok(())
     }
 
@@ -120,11 +109,8 @@ fn run_smoke(
     let full = ctx.gpu_full_access();
 
     let host_device = full.host_vulkan_device_arc()?;
-    let stream_texture = full.acquire_render_target_dma_buf_image(
-        width,
-        height,
-        TextureFormat::Bgra8Unorm,
-    )?;
+    let stream_texture =
+        full.acquire_render_target_dma_buf_image(width, height, TextureFormat::Bgra8Unorm)?;
     let texture_arc = stream_texture.host_vulkan_texture_arc()?;
 
     // Single-writer-per-edge per
@@ -171,17 +157,13 @@ fn run_smoke(
         SurfaceTransportHandle::empty(),
         SurfaceSyncState::default(),
     );
-    let guard = adapter.acquire_write(&surface).map_err(|e| {
-        Error::GpuError(format!(
-            "VulkanSurfaceAdapter::acquire_write: {e:?}"
-        ))
-    })?;
+    let guard = adapter
+        .acquire_write(&surface)
+        .map_err(|e| Error::GpuError(format!("VulkanSurfaceAdapter::acquire_write: {e:?}")))?;
     let view = guard.view();
     let vk_image_raw = view.vk_image().0;
     if vk_image_raw == 0 {
-        return Err(Error::GpuError(
-            "vk_image() returned a null handle".into(),
-        ));
+        return Err(Error::GpuError("vk_image() returned a null handle".into()));
     }
     drop(guard);
     drop(adapter);

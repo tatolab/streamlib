@@ -18,15 +18,17 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use super::super::shared::handle_as_gpu_context;
 use super::super::super::run_host_extern_c;
 use super::super::super::shared::wire::{slice_from_raw, write_err};
+use super::super::shared::handle_as_gpu_context;
 
 // -------------------------------------------------------------------------
 // Texture Arc-handle lifecycle
 // -------------------------------------------------------------------------
 
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clone_texture(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clone_texture(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_lim_clone_texture",
         || {
@@ -46,7 +48,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clo
     )
 }
 
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_texture(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_texture(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_lim_drop_texture",
         || {
@@ -87,9 +91,8 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_tex
                 // `&TextureInner` does not touch the refcount — the
                 // caller's `Texture` keeps the Arc alive for the duration
                 // of this dispatch.
-                let inner = unsafe {
-                    &*(texture_handle as *const crate::core::rhi::texture::TextureInner)
-                };
+                let inner =
+                    unsafe { &*(texture_handle as *const crate::core::rhi::texture::TextureInner) };
                 match inner.inner.export_dma_buf_fd() {
                     Ok(fd) => i64::from(fd),
                     Err(_) => -1,
@@ -112,7 +115,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_tex
 // PooledTextureHandle lifecycle — drop-only (v4)
 // -------------------------------------------------------------------------
 
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_pooled_texture_handle(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_pooled_texture_handle(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_lim_drop_pooled_texture_handle",
         || {
@@ -164,9 +169,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_reg
             // SAFETY: same shape as above; from_raw + the bump above
             // gives us a fresh Arc with the right refcount.
             let texture_arc = unsafe {
-                Arc::from_raw(
-                    texture_handle as *const crate::core::rhi::texture::TextureInner,
-                )
+                Arc::from_raw(texture_handle as *const crate::core::rhi::texture::TextureInner)
             };
             let inner_ref = &*texture_arc;
             let width = inner_ref.width();
@@ -174,10 +177,12 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_reg
             let format = inner_ref.format();
             // Re-wrap into a Texture via the host's from_arc_into_raw
             // helper — leaks the Arc back into the texture cache shape.
-            let texture =
-                crate::core::rhi::texture::Texture::from_arc_into_raw(
-                    texture_arc, width, height, format,
-                );
+            let texture = crate::core::rhi::texture::Texture::from_arc_into_raw(
+                texture_arc,
+                width,
+                height,
+                format,
+            );
             let id_bytes = unsafe { slice_from_raw(id_ptr, id_len) };
             let id_str = match std::str::from_utf8(id_bytes) {
                 Ok(s) => s,
@@ -244,11 +249,21 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_acq
         "host_gpu_lim_acquire_texture",
         || -> i32 {
             let Some(gpu) = (unsafe { handle_as_gpu_context(handle) }) else {
-                write_err("acquire_texture: null gpu handle", err_buf, err_buf_cap, err_len);
+                write_err(
+                    "acquire_texture: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
                 return 1;
             };
             if out_pooled_handle.is_null() {
-                write_err("acquire_texture: null out_pooled_handle", err_buf, err_buf_cap, err_len);
+                write_err(
+                    "acquire_texture: null out_pooled_handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
                 return 1;
             }
             let format = match format_raw {
@@ -265,8 +280,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_acq
                     return 1;
                 }
             };
-            let usage =
-                streamlib_consumer_rhi::TextureUsages::from_bits_truncate(usage_bits);
+            let usage = streamlib_consumer_rhi::TextureUsages::from_bits_truncate(usage_bits);
             let desc = crate::core::context::TexturePoolDescriptor {
                 width,
                 height,
@@ -281,8 +295,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_acq
                     // after this — its Drop runs `drop_pooled_texture_handle`.
                     unsafe {
                         std::ptr::write(
-                            out_pooled_handle
-                                as *mut crate::core::context::PooledTextureHandle,
+                            out_pooled_handle as *mut crate::core::context::PooledTextureHandle,
                             pooled,
                         );
                     }
@@ -357,10 +370,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_res
                     // caller (cdylib) owns it after this — its Drop
                     // runs `drop_texture`.
                     unsafe {
-                        std::ptr::write(
-                            out_texture as *mut crate::core::rhi::Texture,
-                            texture,
-                        );
+                        std::ptr::write(out_texture as *mut crate::core::rhi::Texture, texture);
                     }
                     0
                 }
@@ -416,8 +426,7 @@ mod tier1_wire_format_tests {
         // `-1` (= `Option::None` in the Rust-side wrapper) without
         // panicking and without touching the null pointer.
         let fd = unsafe {
-            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE
-                .texture_native_dma_buf_fd)(std::ptr::null())
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.texture_native_dma_buf_fd)(std::ptr::null())
         };
         assert_eq!(
             fd, -1,

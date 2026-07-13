@@ -4,10 +4,10 @@
 //! Object-safe wrapper for GeneratedProcessor - DO NOT USE DIRECTLY.
 
 use super::GeneratedProcessor;
-use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use crate::core::execution::ExecutionConfig;
 use crate::core::ProcessorDescriptor;
 use crate::core::Result;
+use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use crate::core::execution::ExecutionConfig;
 
 /// Object-safe version of [`GeneratedProcessor`] for dynamic dispatch.
 ///
@@ -136,11 +136,7 @@ where
         output_writer: Option<crate::iceoryx2::OutputWriter>,
         input_mailboxes: Option<crate::iceoryx2::InputMailboxes>,
     ) -> crate::core::Result<()> {
-        <Self as GeneratedProcessor>::set_iceoryx2_resources(
-            self,
-            output_writer,
-            input_mailboxes,
-        )
+        <Self as GeneratedProcessor>::set_iceoryx2_resources(self, output_writer, input_mailboxes)
     }
 
     fn iceoryx2_output_writer_inner(

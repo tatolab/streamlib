@@ -3,22 +3,22 @@
 
 //! Vulkan device implementation for RHI.
 
-use std::ffi::{c_char, CStr};
-use std::sync::{Arc, Mutex};
+use std::ffi::{CStr, c_char};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
-use vulkanalia::loader::{LibloadingLoader, LIBRARY};
+use vma::Alloc as _;
+use vulkanalia::loader::{LIBRARY, LibloadingLoader};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk::{self, KhrSwapchainExtensionDeviceCommands};
 use vulkanalia_vma as vma;
-use vma::Alloc as _;
 
 use crate::core::rhi::TextureDescriptor;
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 
 #[cfg(target_os = "linux")]
 use super::drm_modifier_probe::{self, DrmModifierTable};
-use super::{HostMarker, VulkanCommandQueue, VulkanRhiDevice, HostVulkanTexture};
+use super::{HostMarker, HostVulkanTexture, VulkanCommandQueue, VulkanRhiDevice};
 
 /// Best-effort hint about which third-party GPU compute libraries are
 /// **available to integrate against this device**. Probed once at
@@ -385,10 +385,14 @@ impl ExportPoolSentinel {
     /// Must be called before the allocator is destroyed.
     unsafe fn destroy(self, allocator: &vma::Allocator) {
         match self {
-            Self::Buffer { buffer, allocation, .. } => unsafe {
+            Self::Buffer {
+                buffer, allocation, ..
+            } => unsafe {
                 allocator.destroy_buffer(buffer, allocation);
             },
-            Self::Image { image, allocation, .. } => unsafe {
+            Self::Image {
+                image, allocation, ..
+            } => unsafe {
                 allocator.destroy_image(image, allocation);
             },
         }
@@ -413,9 +417,8 @@ impl HostVulkanDevice {
     /// removes that footgun for every consumer at the engine layer.
     pub fn new() -> Result<Arc<Self>> {
         // 1. Load Vulkan entry points via libloading
-        let loader = unsafe { LibloadingLoader::new(LIBRARY) }.map_err(|e| {
-            Error::GpuError(format!("Failed to load Vulkan library: {e}"))
-        })?;
+        let loader = unsafe { LibloadingLoader::new(LIBRARY) }
+            .map_err(|e| Error::GpuError(format!("Failed to load Vulkan library: {e}")))?;
         let entry = unsafe { vulkanalia::Entry::new(loader) }.map_err(|e| {
             Error::GpuError(format!(
                 "Failed to load Vulkan. On macOS, ensure MoltenVK is installed: {e}"
@@ -423,10 +426,9 @@ impl HostVulkanDevice {
         })?;
 
         // 2. Enumerate available instance extensions
-        let available_extensions = unsafe { entry.enumerate_instance_extension_properties(None) }
-            .map_err(|e| {
-                Error::GpuError(format!("Failed to enumerate extensions: {e}"))
-            })?;
+        let available_extensions =
+            unsafe { entry.enumerate_instance_extension_properties(None) }
+                .map_err(|e| Error::GpuError(format!("Failed to enumerate extensions: {e}")))?;
 
         let available_ext_names: Vec<&CStr> = available_extensions
             .iter()
@@ -534,8 +536,7 @@ impl HostVulkanDevice {
             .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
             .unwrap_or(false);
         if want_validation {
-            let layers = unsafe { entry.enumerate_instance_layer_properties() }
-                .unwrap_or_default();
+            let layers = unsafe { entry.enumerate_instance_layer_properties() }.unwrap_or_default();
             let layer_present = layers.iter().any(|l| {
                 let name = unsafe { CStr::from_ptr(l.layer_name.as_ptr()) };
                 name == validation_layer_name.as_c_str()
@@ -599,8 +600,7 @@ impl HostVulkanDevice {
         // See `docs/architecture/third-party-gpu-backends.md` and the
         // `ThirdPartyGpuCapabilities` struct doc for the "when to lift
         // to engine-tier" trigger as siblings arrive.
-        let third_party_gpu_capabilities =
-            ThirdPartyGpuCapabilities::probe(device_props.vendor_id);
+        let third_party_gpu_capabilities = ThirdPartyGpuCapabilities::probe(device_props.vendor_id);
 
         // 5b. Query VkPhysicalDeviceIDProperties::deviceUUID via
         //     vkGetPhysicalDeviceProperties2. CUDA-Vulkan interop matches
@@ -672,11 +672,7 @@ impl HostVulkanDevice {
         let video_encode_queue_family_index = queue_families
             .iter()
             .enumerate()
-            .find(|(_, props)| {
-                props
-                    .queue_flags
-                    .contains(vk::QueueFlags::VIDEO_ENCODE_KHR)
-            })
+            .find(|(_, props)| props.queue_flags.contains(vk::QueueFlags::VIDEO_ENCODE_KHR))
             .map(|(idx, _)| idx as u32);
 
         if let Some(ve_family) = video_encode_queue_family_index {
@@ -689,11 +685,7 @@ impl HostVulkanDevice {
         let video_decode_queue_family_index = queue_families
             .iter()
             .enumerate()
-            .find(|(_, props)| {
-                props
-                    .queue_flags
-                    .contains(vk::QueueFlags::VIDEO_DECODE_KHR)
-            })
+            .find(|(_, props)| props.queue_flags.contains(vk::QueueFlags::VIDEO_DECODE_KHR))
             .map(|(idx, _)| idx as u32);
 
         if let Some(vd_family) = video_decode_queue_family_index {
@@ -720,10 +712,12 @@ impl HostVulkanDevice {
 
         // 7. Create logical device with required extensions
         let queue_priorities = [1.0f32];
-        let mut queue_create_infos = vec![vk::DeviceQueueCreateInfo::builder()
-            .queue_family_index(queue_family_index)
-            .queue_priorities(&queue_priorities)
-            .build()];
+        let mut queue_create_infos = vec![
+            vk::DeviceQueueCreateInfo::builder()
+                .queue_family_index(queue_family_index)
+                .queue_priorities(&queue_priorities)
+                .build(),
+        ];
 
         // Request separate video encode/decode queues if they're different families
         let mut requested_families = vec![queue_family_index];
@@ -937,8 +931,7 @@ impl HostVulkanDevice {
 
         #[cfg(target_os = "linux")]
         let has_video_encode = {
-            let has_video_queue =
-                available_device_ext_names.contains(&c"VK_KHR_video_queue");
+            let has_video_queue = available_device_ext_names.contains(&c"VK_KHR_video_queue");
             let has_video_encode_queue =
                 available_device_ext_names.contains(&c"VK_KHR_video_encode_queue");
             let has_video_encode_h264 =
@@ -991,8 +984,7 @@ impl HostVulkanDevice {
         // Check for Vulkan Video decode extensions
         #[cfg(target_os = "linux")]
         let has_video_decode = {
-            let has_video_queue =
-                available_device_ext_names.contains(&c"VK_KHR_video_queue");
+            let has_video_queue = available_device_ext_names.contains(&c"VK_KHR_video_queue");
             let has_video_decode_queue =
                 available_device_ext_names.contains(&c"VK_KHR_video_decode_queue");
             let has_video_decode_h264 =
@@ -1076,20 +1068,26 @@ impl HostVulkanDevice {
         // Enable dynamic rendering, timeline semaphore, and synchronization2 features on Linux.
         // Synchronization2 is a mandatory dependency of VK_KHR_video_encode_queue.
         #[cfg(target_os = "linux")]
-        let mut dynamic_rendering_features =
-            vk::PhysicalDeviceDynamicRenderingFeatures::builder().dynamic_rendering(true).build();
+        let mut dynamic_rendering_features = vk::PhysicalDeviceDynamicRenderingFeatures::builder()
+            .dynamic_rendering(true)
+            .build();
 
         #[cfg(target_os = "linux")]
         let mut timeline_semaphore_features =
-            vk::PhysicalDeviceTimelineSemaphoreFeatures::builder().timeline_semaphore(true).build();
+            vk::PhysicalDeviceTimelineSemaphoreFeatures::builder()
+                .timeline_semaphore(true)
+                .build();
 
         #[cfg(target_os = "linux")]
-        let mut synchronization2_features =
-            vk::PhysicalDeviceSynchronization2Features::builder().synchronization2(true).build();
+        let mut synchronization2_features = vk::PhysicalDeviceSynchronization2Features::builder()
+            .synchronization2(true)
+            .build();
 
         #[cfg(target_os = "linux")]
         let mut video_maintenance1_features =
-            vk::PhysicalDeviceVideoMaintenance1FeaturesKHR::builder().video_maintenance1(true).build();
+            vk::PhysicalDeviceVideoMaintenance1FeaturesKHR::builder()
+                .video_maintenance1(true)
+                .build();
 
         // samplerYcbcrConversion is required to create NV12 image views / samplers
         // with VK_KHR_sampler_ycbcr_conversion (core in 1.1) on the codec layer's path.
@@ -1163,26 +1161,23 @@ impl HostVulkanDevice {
 
         // 8b. Get the video encode queue (if available)
         let video_encode_queue = if supports_video_encode {
-            video_encode_queue_family_index.map(|ve_family| unsafe {
-                device.get_device_queue(ve_family, 0)
-            })
+            video_encode_queue_family_index
+                .map(|ve_family| unsafe { device.get_device_queue(ve_family, 0) })
         } else {
             None
         };
 
         // 8c. Get the video decode queue (if available)
         let video_decode_queue = if supports_video_decode {
-            video_decode_queue_family_index.map(|vd_family| unsafe {
-                device.get_device_queue(vd_family, 0)
-            })
+            video_decode_queue_family_index
+                .map(|vd_family| unsafe { device.get_device_queue(vd_family, 0) })
         } else {
             None
         };
 
         // 8d. Get the dedicated compute queue (if available)
-        let compute_queue = compute_queue_family_index.map(|cq_family| unsafe {
-            device.get_device_queue(cq_family, 0)
-        });
+        let compute_queue = compute_queue_family_index
+            .map(|cq_family| unsafe { device.get_device_queue(cq_family, 0) });
 
         // 9. Query memory properties (kept for DMA-BUF import path)
         let memory_properties =
@@ -1316,17 +1311,15 @@ impl HostVulkanDevice {
             dma_buf_image_tiled_export_info,
         ) = if supports_external_memory {
             // BGRA8_UNORM in Vulkan = ARGB8888 in DRM.
-            let bgra_modifiers = drm_modifier_table
-                .rt_modifiers(drm_modifier_probe::fourcc::DRM_FORMAT_ARGB8888);
+            let bgra_modifiers =
+                drm_modifier_table.rt_modifiers(drm_modifier_probe::fourcc::DRM_FORMAT_ARGB8888);
             match Self::create_dma_buf_pools(
                 &allocator,
                 &device,
                 &memory_properties,
                 bgra_modifiers,
             ) {
-                Ok((bp, ip, tp, bi, ii, ti)) => {
-                    (Some(bp), Some(ip), tp, Some(bi), Some(ii), ti)
-                }
+                Ok((bp, ip, tp, bi, ii, ti)) => (Some(bp), Some(ip), tp, Some(bi), Some(ii), ti),
                 Err(e) => {
                     tracing::warn!(
                         "DMA-BUF export pools could not be created — falling back to \
@@ -1352,9 +1345,13 @@ impl HostVulkanDevice {
             has_ray_tracing_pipeline,
             {
                 #[cfg(target_os = "linux")]
-                { dma_buf_buffer_pool.is_some() }
+                {
+                    dma_buf_buffer_pool.is_some()
+                }
                 #[cfg(not(target_os = "linux"))]
-                { false }
+                {
+                    false
+                }
             }
         );
 
@@ -1406,8 +1403,7 @@ impl HostVulkanDevice {
             #[cfg(target_os = "linux")]
             _opaque_fd_buffer_export_info: opaque_fd_buffer_export_info,
             #[cfg(target_os = "linux")]
-            _opaque_fd_buffer_export_info_device_local:
-                opaque_fd_buffer_export_info_device_local,
+            _opaque_fd_buffer_export_info_device_local: opaque_fd_buffer_export_info_device_local,
             #[cfg(target_os = "linux")]
             _opaque_fd_image_export_info: opaque_fd_image_export_info,
             physical_device_uuid,
@@ -1643,8 +1639,8 @@ impl HostVulkanDevice {
     /// for the run-and-revert protocol.
     #[cfg(target_os = "linux")]
     fn prewarm_export_pools(device: &Arc<Self>) -> Result<Vec<ExportPoolSentinel>> {
-        use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
         use super::{HostVulkanBuffer, HostVulkanTexture};
+        use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
 
         const PROBE_W: u32 = 8;
         const PROBE_H: u32 = 8;
@@ -1656,12 +1652,11 @@ impl HostVulkanDevice {
         //    Allocate-and-drop: compositor swapchain DMA-BUF imports
         //    keep the kernel state alive for the process's lifetime.
         if device.dma_buf_buffer_pool().is_some() {
-            let probe = HostVulkanBuffer::new(device, (PROBE_W as u64) * (PROBE_H as u64) * (PROBE_BPP as u64))
-            .map_err(|e| {
-                Error::GpuError(format!(
-                    "DMA-BUF buffer pool pre-warm failed: {e}"
-                ))
-            })?;
+            let probe = HostVulkanBuffer::new(
+                device,
+                (PROBE_W as u64) * (PROBE_H as u64) * (PROBE_BPP as u64),
+            )
+            .map_err(|e| Error::GpuError(format!("DMA-BUF buffer pool pre-warm failed: {e}")))?;
             drop(probe);
         }
 
@@ -1673,11 +1668,8 @@ impl HostVulkanDevice {
                         | TextureUsages::COPY_SRC
                         | TextureUsages::COPY_DST,
                 );
-            let probe = HostVulkanTexture::new(device, &desc).map_err(|e| {
-                Error::GpuError(format!(
-                    "DMA-BUF image pool pre-warm failed: {e}"
-                ))
-            })?;
+            let probe = HostVulkanTexture::new(device, &desc)
+                .map_err(|e| Error::GpuError(format!("DMA-BUF image pool pre-warm failed: {e}")))?;
             drop(probe);
         }
 
@@ -1691,24 +1683,20 @@ impl HostVulkanDevice {
                 .drm_modifier_table()
                 .rt_modifiers(drm_modifier_probe::fourcc::DRM_FORMAT_ARGB8888);
             if !bgra_modifiers.is_empty() {
-                let desc =
-                    TextureDescriptor::new(PROBE_W, PROBE_H, TextureFormat::Bgra8Unorm)
-                        .with_usage(
-                            TextureUsages::RENDER_ATTACHMENT
-                                | TextureUsages::TEXTURE_BINDING
-                                | TextureUsages::COPY_SRC
-                                | TextureUsages::COPY_DST,
-                        );
-                let probe = HostVulkanTexture::new_render_target_dma_buf(
-                    device,
-                    &desc,
-                    bgra_modifiers,
-                )
-                .map_err(|e| {
-                    Error::GpuError(format!(
-                        "tiled DMA-BUF image pool pre-warm failed: {e}"
-                    ))
-                })?;
+                let desc = TextureDescriptor::new(PROBE_W, PROBE_H, TextureFormat::Bgra8Unorm)
+                    .with_usage(
+                        TextureUsages::RENDER_ATTACHMENT
+                            | TextureUsages::TEXTURE_BINDING
+                            | TextureUsages::COPY_SRC
+                            | TextureUsages::COPY_DST,
+                    );
+                let probe =
+                    HostVulkanTexture::new_render_target_dma_buf(device, &desc, bgra_modifiers)
+                        .map_err(|e| {
+                            Error::GpuError(format!(
+                                "tiled DMA-BUF image pool pre-warm failed: {e}"
+                            ))
+                        })?;
                 drop(probe);
             }
         }
@@ -1782,12 +1770,8 @@ impl HostVulkanDevice {
         //    without competing with consumer-class allocations on
         //    NVIDIA's cumulative OPAQUE_FD byte budget.
         if let Some(pool) = device.opaque_fd_image_pool() {
-            let sentinel = make_opaque_fd_image_sentinel(
-                pool,
-                "opaque_fd_image",
-                PROBE_W,
-                PROBE_H,
-            )?;
+            let sentinel =
+                make_opaque_fd_image_sentinel(pool, "opaque_fd_image", PROBE_W, PROBE_H)?;
             sentinels.push(sentinel);
         }
 
@@ -1801,7 +1785,6 @@ impl HostVulkanDevice {
         tracing::info!("HostVulkanDevice export pools pre-warmed");
         Ok(sentinels)
     }
-
 }
 
 /// Allocate one OPAQUE_FD-exportable buffer through the given VMA
@@ -1847,8 +1830,8 @@ fn make_opaque_fd_buffer_sentinel(
         ..Default::default()
     };
 
-    let (buffer, allocation) = unsafe { pool.create_buffer(buffer_info, &alloc_opts) }
-        .map_err(|e| {
+    let (buffer, allocation) =
+        unsafe { pool.create_buffer(buffer_info, &alloc_opts) }.map_err(|e| {
             Error::GpuError(format!(
                 "OPAQUE_FD export pool '{label}' sentinel allocation failed \
                  (size={size}): {e}"
@@ -1922,8 +1905,8 @@ fn make_opaque_fd_image_sentinel(
         ..Default::default()
     };
 
-    let (image, allocation) = unsafe { pool.create_image(image_info, &alloc_opts) }
-        .map_err(|e| {
+    let (image, allocation) =
+        unsafe { pool.create_image(image_info, &alloc_opts) }.map_err(|e| {
             Error::GpuError(format!(
                 "OPAQUE_FD image export pool '{label}' sentinel allocation failed \
                  ({width}x{height}): {e}"
@@ -1959,7 +1942,11 @@ fn probe_tiled_dma_buf_memory_type(
     let probe_image_info = vk::ImageCreateInfo::builder()
         .image_type(vk::ImageType::_2D)
         .format(vk::Format::B8G8R8A8_UNORM)
-        .extent(vk::Extent3D { width: 64, height: 64, depth: 1 })
+        .extent(vk::Extent3D {
+            width: 64,
+            height: 64,
+            depth: 1,
+        })
         .mip_levels(1)
         .array_layers(1)
         .samples(vk::SampleCountFlags::_1)
@@ -1976,11 +1963,7 @@ fn probe_tiled_dma_buf_memory_type(
         .push_next(&mut probe_external_info);
 
     let probe_image = unsafe { device.create_image(&probe_image_info, None) }
-        .map_err(|e| {
-            Error::GpuError(format!(
-                "tiled-DMA-BUF probe vkCreateImage failed: {e}"
-            ))
-        })?;
+        .map_err(|e| Error::GpuError(format!("tiled-DMA-BUF probe vkCreateImage failed: {e}")))?;
 
     let mem_reqs = unsafe { device.get_image_memory_requirements(probe_image) };
     unsafe { device.destroy_image(probe_image, None) };
@@ -2064,16 +2047,10 @@ impl HostVulkanDevice {
             ..Default::default()
         };
         let buffer_mem_type_idx = unsafe {
-            allocator.find_memory_type_index_for_buffer_info(
-                probe_buffer_info,
-                &probe_buffer_alloc_opts,
-            )
+            allocator
+                .find_memory_type_index_for_buffer_info(probe_buffer_info, &probe_buffer_alloc_opts)
         }
-        .map_err(|e| {
-            Error::GpuError(format!(
-                "find memory type for DMA-BUF buffer pool: {e}"
-            ))
-        })?;
+        .map_err(|e| Error::GpuError(format!("find memory type for DMA-BUF buffer pool: {e}")))?;
 
         // ── Find memory type for DEVICE_LOCAL DMA-BUF exportable images ──
         // Same rationale: the real image (`HostVulkanTexture::new`) carries
@@ -2084,7 +2061,11 @@ impl HostVulkanDevice {
         let probe_image_info = vk::ImageCreateInfo::builder()
             .image_type(vk::ImageType::_2D)
             .format(vk::Format::B8G8R8A8_UNORM)
-            .extent(vk::Extent3D { width: 64, height: 64, depth: 1 })
+            .extent(vk::Extent3D {
+                width: 64,
+                height: 64,
+                depth: 1,
+            })
             .mip_levels(1)
             .array_layers(1)
             .samples(vk::SampleCountFlags::_1)
@@ -2103,16 +2084,10 @@ impl HostVulkanDevice {
             ..Default::default()
         };
         let image_mem_type_idx = unsafe {
-            allocator.find_memory_type_index_for_image_info(
-                probe_image_info,
-                &probe_image_alloc_opts,
-            )
+            allocator
+                .find_memory_type_index_for_image_info(probe_image_info, &probe_image_alloc_opts)
         }
-        .map_err(|e| {
-            Error::GpuError(format!(
-                "find memory type for DMA-BUF image pool: {e}"
-            ))
-        })?;
+        .map_err(|e| Error::GpuError(format!("find memory type for DMA-BUF image pool: {e}")))?;
 
         // ── Box the VkExportMemoryAllocateInfo structs (need stable pointers) ──
         let mut buffer_export_info = Box::new(
@@ -2253,16 +2228,9 @@ impl HostVulkanDevice {
             ..Default::default()
         };
         let mem_type_idx = unsafe {
-            allocator.find_memory_type_index_for_buffer_info(
-                probe_buffer_info,
-                &probe_alloc_opts,
-            )
+            allocator.find_memory_type_index_for_buffer_info(probe_buffer_info, &probe_alloc_opts)
         }
-        .map_err(|e| {
-            Error::GpuError(format!(
-                "find memory type for OPAQUE_FD buffer pool: {e}"
-            ))
-        })?;
+        .map_err(|e| Error::GpuError(format!("find memory type for OPAQUE_FD buffer pool: {e}")))?;
 
         let mut export_info = Box::new(
             vk::ExportMemoryAllocateInfo::builder()
@@ -2314,10 +2282,7 @@ impl HostVulkanDevice {
             ..Default::default()
         };
         let mem_type_idx = unsafe {
-            allocator.find_memory_type_index_for_buffer_info(
-                probe_buffer_info,
-                &probe_alloc_opts,
-            )
+            allocator.find_memory_type_index_for_buffer_info(probe_buffer_info, &probe_alloc_opts)
         }
         .map_err(|e| {
             Error::GpuError(format!(
@@ -2334,9 +2299,7 @@ impl HostVulkanDevice {
         pool_options = pool_options.push_next(export_info.as_mut());
         pool_options.memory_type_index = mem_type_idx;
         let pool = allocator.create_pool(&pool_options).map_err(|e| {
-            Error::GpuError(format!(
-                "create DEVICE_LOCAL OPAQUE_FD buffer pool: {e}"
-            ))
+            Error::GpuError(format!("create DEVICE_LOCAL OPAQUE_FD buffer pool: {e}"))
         })?;
 
         tracing::info!(
@@ -2406,16 +2369,9 @@ impl HostVulkanDevice {
             ..Default::default()
         };
         let mem_type_idx = unsafe {
-            allocator.find_memory_type_index_for_image_info(
-                probe_image_info,
-                &probe_alloc_opts,
-            )
+            allocator.find_memory_type_index_for_image_info(probe_image_info, &probe_alloc_opts)
         }
-        .map_err(|e| {
-            Error::GpuError(format!(
-                "find memory type for OPAQUE_FD image pool: {e}"
-            ))
-        })?;
+        .map_err(|e| Error::GpuError(format!("find memory type for OPAQUE_FD image pool: {e}")))?;
 
         let mut export_info = Box::new(
             vk::ExportMemoryAllocateInfo::builder()
@@ -2684,7 +2640,9 @@ impl HostVulkanDevice {
         submits: &[vk::SubmitInfo2],
         fence: vk::Fence,
     ) -> Result<()> {
-        let _lock = self.mutex_for_queue(queue).lock()
+        let _lock = self
+            .mutex_for_queue(queue)
+            .lock()
             .unwrap_or_else(|e| e.into_inner());
         unsafe { self.device.queue_submit2(queue, submits, fence) }
             .map(|_| ())
@@ -2697,7 +2655,9 @@ impl HostVulkanDevice {
         queue: vk::Queue,
         present_info: &vk::PresentInfoKHR,
     ) -> std::result::Result<vk::SuccessCode, vk::ErrorCode> {
-        let _lock = self.mutex_for_queue(queue).lock()
+        let _lock = self
+            .mutex_for_queue(queue)
+            .lock()
             .unwrap_or_else(|e| e.into_inner());
         unsafe { self.device.queue_present_khr(queue, present_info) }
     }
@@ -2726,11 +2686,26 @@ impl HostVulkanDevice {
         // only ever take ONE queue mutex, so any order here is deadlock-
         // safe against them; this order matches struct-field declaration
         // for readability.
-        let _g = self.graphics_queue_mutex.lock().unwrap_or_else(|e| e.into_inner());
-        let _t = self.transfer_queue_mutex.lock().unwrap_or_else(|e| e.into_inner());
-        let _c = self.compute_queue_mutex.lock().unwrap_or_else(|e| e.into_inner());
-        let _ve = self.video_encode_queue_mutex.lock().unwrap_or_else(|e| e.into_inner());
-        let _vd = self.video_decode_queue_mutex.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = self
+            .graphics_queue_mutex
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _t = self
+            .transfer_queue_mutex
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _c = self
+            .compute_queue_mutex
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ve = self
+            .video_encode_queue_mutex
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _vd = self
+            .video_decode_queue_mutex
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let _dev = self.device_mutex.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { self.device.device_wait_idle() }
             .map_err(|e| Error::GpuError(format!("device_wait_idle failed: {e}")))
@@ -2823,7 +2798,8 @@ impl HostVulkanDevice {
                     .flags(vk::CommandPoolCreateFlags::TRANSIENT),
                 None,
             )
-        }.map_err(|e| Error::GpuError(format!("upload cmd pool: {e}")))?;
+        }
+        .map_err(|e| Error::GpuError(format!("upload cmd pool: {e}")))?;
 
         let cb = unsafe {
             device.allocate_command_buffers(
@@ -2832,12 +2808,15 @@ impl HostVulkanDevice {
                     .level(vk::CommandBufferLevel::PRIMARY)
                     .command_buffer_count(1),
             )
-        }.map_err(|e| Error::GpuError(format!("upload cmd buf: {e}")))?[0];
+        }
+        .map_err(|e| Error::GpuError(format!("upload cmd buf: {e}")))?[0];
 
         let fence = unsafe { device.create_fence(&vk::FenceCreateInfo::default(), None) }
             .map_err(|e| Error::GpuError(format!("upload fence: {e}")))?;
 
-        unsafe { self.record_and_submit_buffer_to_image(cb, fence, src_buffer, dst_image, width, height) }?;
+        unsafe {
+            self.record_and_submit_buffer_to_image(cb, fence, src_buffer, dst_image, width, height)
+        }?;
 
         unsafe { device.destroy_fence(fence, None) };
         unsafe { device.destroy_command_pool(pool, None) };
@@ -2878,7 +2857,9 @@ impl HostVulkanDevice {
         unsafe { device.reset_command_buffer(cb, vk::CommandBufferResetFlags::empty()) }
             .map_err(|e| Error::GpuError(format!("amortized upload reset cb: {e}")))?;
 
-        unsafe { self.record_and_submit_buffer_to_image(cb, fence, src_buffer, dst_image, width, height) }
+        unsafe {
+            self.record_and_submit_buffer_to_image(cb, fence, src_buffer, dst_image, width, height)
+        }
     }
 
     /// Shared by [`Self::upload_buffer_to_image`] and
@@ -2906,7 +2887,8 @@ impl HostVulkanDevice {
                 &vk::CommandBufferBeginInfo::builder()
                     .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
             )
-        }.map_err(|e| Error::GpuError(format!("begin cb: {e}")))?;
+        }
+        .map_err(|e| Error::GpuError(format!("begin cb: {e}")))?;
 
         // Barrier: UNDEFINED → TRANSFER_DST
         let barrier_to_dst = vk::ImageMemoryBarrier2::builder()
@@ -2927,8 +2909,7 @@ impl HostVulkanDevice {
                 layer_count: 1,
             });
         let barriers_to_dst = [barrier_to_dst];
-        let dep_to_dst = vk::DependencyInfo::builder()
-            .image_memory_barriers(&barriers_to_dst);
+        let dep_to_dst = vk::DependencyInfo::builder().image_memory_barriers(&barriers_to_dst);
         unsafe { device.cmd_pipeline_barrier2(cb, &dep_to_dst) };
 
         // Copy buffer → image
@@ -2943,12 +2924,19 @@ impl HostVulkanDevice {
                 layer_count: 1,
             },
             image_offset: vk::Offset3D::default(),
-            image_extent: vk::Extent3D { width, height, depth: 1 },
+            image_extent: vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            },
         };
         unsafe {
             device.cmd_copy_buffer_to_image(
-                cb, src_buffer, dst_image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL, &[region],
+                cb,
+                src_buffer,
+                dst_image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[region],
             )
         };
 
@@ -2971,8 +2959,7 @@ impl HostVulkanDevice {
                 layer_count: 1,
             });
         let barriers_to_read = [barrier_to_read];
-        let dep_to_read = vk::DependencyInfo::builder()
-            .image_memory_barriers(&barriers_to_read);
+        let dep_to_read = vk::DependencyInfo::builder().image_memory_barriers(&barriers_to_read);
         unsafe { device.cmd_pipeline_barrier2(cb, &dep_to_read) };
 
         unsafe { device.end_command_buffer(cb) }
@@ -3029,9 +3016,7 @@ impl HostVulkanDevice {
     /// `VkPhysicalDeviceRayTracingPipelinePropertiesKHR` snapshot
     /// queried at device construction. `Some(_)` whenever
     /// [`Self::supports_ray_tracing_pipeline`] is true.
-    pub fn ray_tracing_pipeline_properties(
-        &self,
-    ) -> Option<RayTracingPipelineProperties> {
+    pub fn ray_tracing_pipeline_properties(&self) -> Option<RayTracingPipelineProperties> {
         self.ray_tracing_properties
     }
 
@@ -3099,11 +3084,7 @@ impl HostVulkanDevice {
     /// [`crate::core::context::GpuContext::resolve_texture_registration_by_surface_id`]
     /// calls this to align the consumer-side VkImage tracker with the
     /// surface-share IPC's `current_image_layout` (#633).
-    pub fn acquire_from_foreign(
-        &self,
-        image: vk::Image,
-        target: vk::ImageLayout,
-    ) -> Result<()> {
+    pub fn acquire_from_foreign(&self, image: vk::Image, target: vk::ImageLayout) -> Result<()> {
         if target == vk::ImageLayout::UNDEFINED {
             return Ok(());
         }
@@ -3129,9 +3110,7 @@ impl HostVulkanDevice {
             .src_stage_mask(vk::PipelineStageFlags2::NONE)
             .src_access_mask(vk::AccessFlags2::empty())
             .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-            .dst_access_mask(
-                vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
-            )
+            .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)
             .old_layout(src_layout)
             .new_layout(target)
             .src_queue_family_index(src_qf)
@@ -3150,10 +3129,7 @@ impl HostVulkanDevice {
     /// (including any chained pNext structs they keep alive on their
     /// own stack); this helper handles command-pool/buffer/fence
     /// creation, submit, wait, and teardown.
-    fn submit_one_shot_image_barriers(
-        &self,
-        barriers: &[vk::ImageMemoryBarrier2],
-    ) -> Result<()> {
+    fn submit_one_shot_image_barriers(&self, barriers: &[vk::ImageMemoryBarrier2]) -> Result<()> {
         use crate::core::Error;
 
         let device = self.device();
@@ -3183,8 +3159,8 @@ impl HostVulkanDevice {
             Error::GpuError(format!("qfot cmd buf: {e}"))
         })?[0];
 
-        let fence = unsafe { device.create_fence(&vk::FenceCreateInfo::default(), None) }
-            .map_err(|e| {
+        let fence =
+            unsafe { device.create_fence(&vk::FenceCreateInfo::default(), None) }.map_err(|e| {
                 unsafe { device.destroy_command_pool(pool, None) };
                 Error::GpuError(format!("qfot fence: {e}"))
             })?;
@@ -3223,7 +3199,9 @@ impl HostVulkanDevice {
 
     /// Get the VMA allocator for GPU memory management.
     pub fn allocator(&self) -> &Arc<vma::Allocator> {
-        self.allocator.as_ref().expect("VMA allocator not initialized")
+        self.allocator
+            .as_ref()
+            .expect("VMA allocator not initialized")
     }
 
     /// Import external memory from a DMA-BUF file descriptor.
@@ -3257,7 +3235,9 @@ impl HostVulkanDevice {
         let count = self.live_allocation_count.fetch_add(1, Ordering::Relaxed) + 1;
         tracing::debug!(
             "HostVulkanDevice: DMA-BUF memory imported ({} bytes, type={}, live={})",
-            allocation_size, memory_type_index, count
+            allocation_size,
+            memory_type_index,
+            count
         );
 
         Ok(memory)
@@ -3362,7 +3342,8 @@ impl HostVulkanDevice {
         size: vk::DeviceSize,
     ) -> Result<*mut u8> {
         let ptr = unsafe {
-            self.device.map_memory(memory, 0, size, vk::MemoryMapFlags::empty())
+            self.device
+                .map_memory(memory, 0, size, vk::MemoryMapFlags::empty())
         }
         .map_err(|e| Error::GpuError(format!("Failed to map device memory: {e}")))?;
         Ok(ptr as *mut u8)
@@ -3454,7 +3435,10 @@ mod tests {
         }
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_device_creation() {
         let device = match try_create_device() {
@@ -3466,7 +3450,10 @@ mod tests {
         println!("Vulkan device created: {}", device.name());
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_queue_family_discovery() {
         let device = match try_create_device() {
@@ -3487,7 +3474,10 @@ mod tests {
     /// vendor-id check; mentally-revertible (delete the
     /// `vendor_id != 0x10DE` check in `new()` and this test fails on
     /// NVIDIA hardware). Skips when no Vulkan device is available.
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn supports_cross_device_dma_buf_probe_matches_vendor_blocklist() {
         let device = match try_create_device() {
@@ -3581,7 +3571,10 @@ mod tests {
     /// Issue #633 — `supports_qfot_acquire_unmodified` must equal the
     /// `has_acquire_unmodified` extension probe from `new()`.
     /// Trait-method route must agree with the inherent method.
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn supports_qfot_acquire_unmodified_consistent_across_inherent_and_trait() {
         let device = match try_create_device() {
@@ -3608,22 +3601,27 @@ mod tests {
     /// drivers may tolerate it silently. Real GPU-correctness for
     /// QFOT comes from E2E scenarios run with
     /// `VK_LOADER_LAYERS_ENABLE=*validation*`.
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn host_acquire_from_foreign_undefined_target_is_noop() {
         let device = match try_create_device() {
             Some(d) => d,
             None => return,
         };
-        let result =
-            device.acquire_from_foreign(vk::Image::null(), vk::ImageLayout::UNDEFINED);
+        let result = device.acquire_from_foreign(vk::Image::null(), vk::ImageLayout::UNDEFINED);
         assert!(
             result.is_ok(),
             "acquire_from_foreign with target=UNDEFINED must short-circuit Ok"
         );
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_vma_allocator_created() {
         let device = match try_create_device() {
@@ -3648,7 +3646,10 @@ mod tests {
     /// structure level so CI catches it without needing the manual
     /// Cam Link 4K reproducer.
     #[cfg(target_os = "linux")]
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn opaque_fd_export_sentinels_retained_for_each_supported_pool() {
         let device = match try_create_device() {
@@ -3672,9 +3673,7 @@ mod tests {
             expected_labels.push("opaque_fd_image");
         }
         if expected_labels.is_empty() {
-            println!(
-                "Skipping — no OPAQUE_FD pools on this driver, so no sentinels expected"
-            );
+            println!("Skipping — no OPAQUE_FD pools on this driver, so no sentinels expected");
             return;
         }
 
@@ -3742,7 +3741,10 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_dma_buf_import_round_trip() {
         use vulkanalia::vk::KhrExternalMemoryFdExtensionDeviceCommands;
@@ -3775,10 +3777,9 @@ mod tests {
             ..Default::default()
         };
 
-        let (buffer, allocation) = unsafe {
-            device.allocator().create_buffer(buffer_info, &alloc_opts)
-        }
-        .expect("create exportable buffer via VMA");
+        let (buffer, allocation) =
+            unsafe { device.allocator().create_buffer(buffer_info, &alloc_opts) }
+                .expect("create exportable buffer via VMA");
 
         // Get allocation info to access the underlying DeviceMemory for export
         let alloc_info = device.allocator().get_allocation_info(allocation);
@@ -3790,21 +3791,22 @@ mod tests {
             .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
             .build();
 
-        let fd = unsafe { device.device().get_memory_fd_khr(&get_fd_info) }
-            .expect("export DMA-BUF fd");
+        let fd =
+            unsafe { device.device().get_memory_fd_khr(&get_fd_info) }.expect("export DMA-BUF fd");
 
         assert!(fd >= 0, "DMA-BUF fd must be non-negative, got {fd}");
         println!("Exported DMA-BUF fd: {fd}");
 
         // Import the fd back
         let mem_reqs = unsafe { device.device().get_buffer_memory_requirements(buffer) };
-        let _imported = device.import_dma_buf_memory(
-            fd,
-            mem_reqs.size.max(buffer_size),
-            mem_reqs.memory_type_bits,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )
-        .expect("import DMA-BUF memory");
+        let _imported = device
+            .import_dma_buf_memory(
+                fd,
+                mem_reqs.size.max(buffer_size),
+                mem_reqs.memory_type_bits,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            )
+            .expect("import DMA-BUF memory");
 
         println!("DMA-BUF import round-trip passed");
 
@@ -3813,7 +3815,10 @@ mod tests {
         unsafe { device.allocator().destroy_buffer(buffer, allocation) };
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_physical_device_supports_vulkan_1_4() {
         let device = match try_create_device() {

@@ -33,8 +33,8 @@
 #[path = "common.rs"]
 mod common;
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use streamlib::sdk::engine::host_rhi::HostVulkanDevice;
@@ -77,12 +77,11 @@ fn submit_noop_and_wait(device: &HostVulkanDevice) -> Result<(), String> {
         .build();
     unsafe { raw.begin_command_buffer(cmd, &begin_info) }
         .map_err(|e| format!("begin_command_buffer: {e}"))?;
-    unsafe { raw.end_command_buffer(cmd) }
-        .map_err(|e| format!("end_command_buffer: {e}"))?;
+    unsafe { raw.end_command_buffer(cmd) }.map_err(|e| format!("end_command_buffer: {e}"))?;
 
     let fence_info = vk::FenceCreateInfo::builder().build();
-    let fence = unsafe { raw.create_fence(&fence_info, None) }
-        .map_err(|e| format!("create_fence: {e}"))?;
+    let fence =
+        unsafe { raw.create_fence(&fence_info, None) }.map_err(|e| format!("create_fence: {e}"))?;
 
     let cmd_infos = [vk::CommandBufferSubmitInfo::builder()
         .command_buffer(cmd)

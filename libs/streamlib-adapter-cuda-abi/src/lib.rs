@@ -292,7 +292,6 @@ pub struct CudaSurfaceAdapterVTable {
     // -----------------------------------------------------------------
     // Handle lifetime
     // -----------------------------------------------------------------
-
     /// Take a borrowed handle (typically minted by the host's
     /// runtime context when wiring the cdylib-side `CudaContext`
     /// PluginAbiObject) and return a new owned handle with an Arc refcount
@@ -312,7 +311,6 @@ pub struct CudaSurfaceAdapterVTable {
     // -----------------------------------------------------------------
     // Registry management (inherent on CudaSurfaceAdapter)
     // -----------------------------------------------------------------
-
     /// Register a buffer-flavored surface with the adapter.
     ///
     /// `pixel_buffer_handle` is an
@@ -391,11 +389,8 @@ pub struct CudaSurfaceAdapterVTable {
     /// Drop a registered surface (either flavor). Idempotent —
     /// missing entries return 0 via `*out_was_present = 0`. Calls
     /// against a null handle return 0 with `*out_was_present = 0`.
-    pub unregister_host_surface: unsafe extern "C" fn(
-        handle: *const c_void,
-        surface_id: u64,
-        out_was_present: *mut u32,
-    ),
+    pub unregister_host_surface:
+        unsafe extern "C" fn(handle: *const c_void, surface_id: u64, out_was_present: *mut u32),
 
     /// Snapshot the adapter's registry size (number of currently-
     /// registered surfaces, either flavor). Returns 0 on null
@@ -407,7 +402,6 @@ pub struct CudaSurfaceAdapterVTable {
     // -----------------------------------------------------------------
     // SurfaceAdapter trait methods (buffer flavor)
     // -----------------------------------------------------------------
-
     /// Blocking read acquire (buffer flavor).
     ///
     /// `surface_ptr` is a `*const StreamlibSurface` borrowed from
@@ -471,7 +465,6 @@ pub struct CudaSurfaceAdapterVTable {
     // -----------------------------------------------------------------
     // Image-flavor acquire methods
     // -----------------------------------------------------------------
-
     /// Blocking acquire of read-only image access — the
     /// `cudaTextureObject_t` side of CUDA's texture interop.
     ///
@@ -526,7 +519,6 @@ pub struct CudaSurfaceAdapterVTable {
     // -----------------------------------------------------------------
     // Release (shared between buffer + image flavors)
     // -----------------------------------------------------------------
-
     /// Sealed: signal the release-side timeline semaphore for a
     /// read. Called by the cdylib's `ReadGuard::drop` (buffer
     /// flavor) and `CudaTextureGuard::drop` (image flavor) — both

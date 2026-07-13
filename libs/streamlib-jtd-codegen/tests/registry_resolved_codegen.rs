@@ -24,8 +24,8 @@ use std::io::Write;
 use std::path::Path;
 
 use common::{collect_files, skip_unless_jtd_codegen_available};
-use streamlib_idents::{resolve_with, RegistryConfig, ResolverOptions};
-use streamlib_jtd_codegen::{generate_from_resolved, RuntimeTarget};
+use streamlib_idents::{RegistryConfig, ResolverOptions, resolve_with};
+use streamlib_jtd_codegen::{RuntimeTarget, generate_from_resolved};
 use tempfile::TempDir;
 
 /// Build a schema-package `.slpkg` at `<root>/slpkg/<name>/<version>/<name>.slpkg`
@@ -45,7 +45,8 @@ fn write_slpkg(tree_root: &Path, name: &str, version: &str, schema_type: &str) {
         .as_bytes(),
     )
     .unwrap();
-    zip.start_file(format!("schemas/{schema_type}.yaml"), opts).unwrap();
+    zip.start_file(format!("schemas/{schema_type}.yaml"), opts)
+        .unwrap();
     zip.write_all(
         format!(
             "metadata:\n  type: {schema_type}\noptionalProperties:\n  request_id:\n    type: string\n"
@@ -108,7 +109,13 @@ schemas:
         .get("@tatolab/escalate")
         .expect("escalate resolved from registry");
     assert_eq!(
-        escalate.manifest.package.as_ref().unwrap().version.to_string(),
+        escalate
+            .manifest
+            .package
+            .as_ref()
+            .unwrap()
+            .version
+            .to_string(),
         "1.2.0"
     );
 
@@ -190,7 +197,13 @@ schemas:
         .get("@tatolab/escalate")
         .expect("escalate resolved from registry despite the path patch");
     assert_eq!(
-        escalate.manifest.package.as_ref().unwrap().version.to_string(),
+        escalate
+            .manifest
+            .package
+            .as_ref()
+            .unwrap()
+            .version
+            .to_string(),
         "1.2.0"
     );
 

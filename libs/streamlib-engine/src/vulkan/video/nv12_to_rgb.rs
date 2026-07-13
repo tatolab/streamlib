@@ -110,156 +110,158 @@ impl Nv12ToRgbConverter {
         compute_queue_family: u32,
         compute_queue: vk::Queue,
         decode_queue_family: u32,
-    ) -> Result<Self, VideoError> { unsafe {
-        let device = ctx.device().clone();
-        let allocator = ctx.allocator().clone();
-        let host_device = ctx.host_device().clone();
+    ) -> Result<Self, VideoError> {
+        unsafe {
+            let device = ctx.device().clone();
+            let allocator = ctx.allocator().clone();
+            let host_device = ctx.host_device().clone();
 
-        // --- 1. YCbCr conversion (BT.709, ITU narrow range) ---
-        let ycbcr_conversion = device.create_sampler_ycbcr_conversion(
-            &vk::SamplerYcbcrConversionCreateInfo::builder()
-                .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
-                .ycbcr_model(vk::SamplerYcbcrModelConversion::YCBCR_709)
-                .ycbcr_range(vk::SamplerYcbcrRange::ITU_NARROW)
-                .components(vk::ComponentMapping {
-                    r: vk::ComponentSwizzle::IDENTITY,
-                    g: vk::ComponentSwizzle::IDENTITY,
-                    b: vk::ComponentSwizzle::IDENTITY,
-                    a: vk::ComponentSwizzle::IDENTITY,
+            // --- 1. YCbCr conversion (BT.709, ITU narrow range) ---
+            let ycbcr_conversion = device.create_sampler_ycbcr_conversion(
+                &vk::SamplerYcbcrConversionCreateInfo::builder()
+                    .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
+                    .ycbcr_model(vk::SamplerYcbcrModelConversion::YCBCR_709)
+                    .ycbcr_range(vk::SamplerYcbcrRange::ITU_NARROW)
+                    .components(vk::ComponentMapping {
+                        r: vk::ComponentSwizzle::IDENTITY,
+                        g: vk::ComponentSwizzle::IDENTITY,
+                        b: vk::ComponentSwizzle::IDENTITY,
+                        a: vk::ComponentSwizzle::IDENTITY,
+                    })
+                    .x_chroma_offset(vk::ChromaLocation::MIDPOINT)
+                    .y_chroma_offset(vk::ChromaLocation::MIDPOINT)
+                    .chroma_filter(vk::Filter::LINEAR)
+                    .force_explicit_reconstruction(false),
+                None,
+            )?;
+
+            // --- 2. Sampler with YCbCr conversion ---
+            let mut ycbcr_info =
+                vk::SamplerYcbcrConversionInfo::builder().conversion(ycbcr_conversion);
+
+            let sampler = device.create_sampler(
+                &vk::SamplerCreateInfo::builder()
+                    .mag_filter(vk::Filter::LINEAR)
+                    .min_filter(vk::Filter::LINEAR)
+                    .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .push_next(&mut ycbcr_info),
+                None,
+            )?;
+
+            // --- 3. Compute kernel via the engine RHI, with the YCbCr
+            // sampler baked into the descriptor-set layout as an immutable
+            // sampler. Lifetime contract: `sampler` is destroyed manually
+            // in `Self::drop` (after `device_wait_idle`, before
+            // `self.kernel` auto-drops). Vulkan spec permits this order —
+            // `vkDestroyDescriptorSetLayout` does not dereference the
+            // sampler handles a layout was created with via
+            // `pImmutableSamplers`; the handles are used at
+            // descriptor-write / dispatch time only, and `device_wait_idle`
+            // guarantees there is none of that in flight.
+            let kernel = VulkanComputeKernel::new_with_immutable_samplers(
+                ctx.host_device(),
+                &ComputeKernelDescriptor {
+                    label: "nv12_to_rgb",
+                    spv: SHADER_SPIRV,
+                    bindings: BINDINGS,
+                    push_constant_size: std::mem::size_of::<PushConstants>() as u32,
+                },
+                &[(0, sampler)],
+            )?;
+
+            // --- 4. RGBA output image ---
+            let queue_families = [compute_queue_family, decode_queue_family];
+            let concurrent = compute_queue_family != decode_queue_family;
+
+            let mut rgba_image_info = vk::ImageCreateInfo::builder()
+                .image_type(vk::ImageType::_2D)
+                .format(vk::Format::R8G8B8A8_UNORM)
+                .extent(vk::Extent3D {
+                    width,
+                    height,
+                    depth: 1,
                 })
-                .x_chroma_offset(vk::ChromaLocation::MIDPOINT)
-                .y_chroma_offset(vk::ChromaLocation::MIDPOINT)
-                .chroma_filter(vk::Filter::LINEAR)
-                .force_explicit_reconstruction(false),
-            None,
-        )?;
+                .mip_levels(1)
+                .array_layers(1)
+                .samples(vk::SampleCountFlags::_1)
+                .tiling(vk::ImageTiling::OPTIMAL)
+                .usage(
+                    vk::ImageUsageFlags::STORAGE
+                        | vk::ImageUsageFlags::TRANSFER_SRC
+                        | vk::ImageUsageFlags::SAMPLED,
+                )
+                .initial_layout(vk::ImageLayout::UNDEFINED);
 
-        // --- 2. Sampler with YCbCr conversion ---
-        let mut ycbcr_info = vk::SamplerYcbcrConversionInfo::builder()
-            .conversion(ycbcr_conversion);
+            if concurrent {
+                rgba_image_info = rgba_image_info
+                    .sharing_mode(vk::SharingMode::CONCURRENT)
+                    .queue_family_indices(&queue_families);
+            } else {
+                rgba_image_info = rgba_image_info.sharing_mode(vk::SharingMode::EXCLUSIVE);
+            }
 
-        let sampler = device.create_sampler(
-            &vk::SamplerCreateInfo::builder()
-                .mag_filter(vk::Filter::LINEAR)
-                .min_filter(vk::Filter::LINEAR)
-                .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                .push_next(&mut ycbcr_info),
-            None,
-        )?;
+            let alloc_options = vma::AllocationOptions {
+                required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                ..Default::default()
+            };
+            let (rgba_image, rgba_allocation) =
+                allocator.create_image(rgba_image_info, &alloc_options)?;
 
-        // --- 3. Compute kernel via the engine RHI, with the YCbCr
-        // sampler baked into the descriptor-set layout as an immutable
-        // sampler. Lifetime contract: `sampler` is destroyed manually
-        // in `Self::drop` (after `device_wait_idle`, before
-        // `self.kernel` auto-drops). Vulkan spec permits this order —
-        // `vkDestroyDescriptorSetLayout` does not dereference the
-        // sampler handles a layout was created with via
-        // `pImmutableSamplers`; the handles are used at
-        // descriptor-write / dispatch time only, and `device_wait_idle`
-        // guarantees there is none of that in flight.
-        let kernel = VulkanComputeKernel::new_with_immutable_samplers(
-            ctx.host_device(),
-            &ComputeKernelDescriptor {
-                label: "nv12_to_rgb",
-                spv: SHADER_SPIRV,
-                bindings: BINDINGS,
-                push_constant_size: std::mem::size_of::<PushConstants>() as u32,
-            },
-            &[(0, sampler)],
-        )?;
+            // --- 5. RGBA image view ---
+            let rgba_view = device.create_image_view(
+                &vk::ImageViewCreateInfo::builder()
+                    .image(rgba_image)
+                    .view_type(vk::ImageViewType::_2D)
+                    .format(vk::Format::R8G8B8A8_UNORM)
+                    .subresource_range(vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    }),
+                None,
+            )?;
 
-        // --- 4. RGBA output image ---
-        let queue_families = [compute_queue_family, decode_queue_family];
-        let concurrent = compute_queue_family != decode_queue_family;
+            // --- 6. Command pool / buffer / fence ---
+            let command_pool = device.create_command_pool(
+                &vk::CommandPoolCreateInfo::builder()
+                    .queue_family_index(compute_queue_family)
+                    .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
+                None,
+            )?;
 
-        let mut rgba_image_info = vk::ImageCreateInfo::builder()
-            .image_type(vk::ImageType::_2D)
-            .format(vk::Format::R8G8B8A8_UNORM)
-            .extent(vk::Extent3D {
+            let command_buffer = device.allocate_command_buffers(
+                &vk::CommandBufferAllocateInfo::builder()
+                    .command_pool(command_pool)
+                    .level(vk::CommandBufferLevel::PRIMARY)
+                    .command_buffer_count(1),
+            )?[0];
+
+            let fence = device.create_fence(&vk::FenceCreateInfo::default(), None)?;
+
+            Ok(Self {
+                device,
+                allocator,
+                ycbcr_conversion,
+                sampler,
+                kernel,
+                rgba_image,
+                rgba_allocation,
+                rgba_view,
+                command_pool,
+                command_buffer,
+                fence,
+                compute_queue,
+                _compute_queue_family: compute_queue_family,
+                host_device,
                 width,
                 height,
-                depth: 1,
             })
-            .mip_levels(1)
-            .array_layers(1)
-            .samples(vk::SampleCountFlags::_1)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(
-                vk::ImageUsageFlags::STORAGE
-                    | vk::ImageUsageFlags::TRANSFER_SRC
-                    | vk::ImageUsageFlags::SAMPLED,
-            )
-            .initial_layout(vk::ImageLayout::UNDEFINED);
-
-        if concurrent {
-            rgba_image_info = rgba_image_info
-                .sharing_mode(vk::SharingMode::CONCURRENT)
-                .queue_family_indices(&queue_families);
-        } else {
-            rgba_image_info = rgba_image_info.sharing_mode(vk::SharingMode::EXCLUSIVE);
         }
-
-        let alloc_options = vma::AllocationOptions {
-            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            ..Default::default()
-        };
-        let (rgba_image, rgba_allocation) =
-            allocator.create_image(rgba_image_info, &alloc_options)?;
-
-        // --- 5. RGBA image view ---
-        let rgba_view = device.create_image_view(
-            &vk::ImageViewCreateInfo::builder()
-                .image(rgba_image)
-                .view_type(vk::ImageViewType::_2D)
-                .format(vk::Format::R8G8B8A8_UNORM)
-                .subresource_range(vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                }),
-            None,
-        )?;
-
-        // --- 6. Command pool / buffer / fence ---
-        let command_pool = device.create_command_pool(
-            &vk::CommandPoolCreateInfo::builder()
-                .queue_family_index(compute_queue_family)
-                .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
-            None,
-        )?;
-
-        let command_buffer = device.allocate_command_buffers(
-            &vk::CommandBufferAllocateInfo::builder()
-                .command_pool(command_pool)
-                .level(vk::CommandBufferLevel::PRIMARY)
-                .command_buffer_count(1),
-        )?[0];
-
-        let fence = device.create_fence(&vk::FenceCreateInfo::default(), None)?;
-
-        Ok(Self {
-            device,
-            allocator,
-            ycbcr_conversion,
-            sampler,
-            kernel,
-            rgba_image,
-            rgba_allocation,
-            rgba_view,
-            command_pool,
-            command_buffer,
-            fence,
-            compute_queue,
-            _compute_queue_family: compute_queue_family,
-            host_device,
-            width,
-            height,
-        })
-    }}
+    }
 
     /// Convert an NV12 DPB image layer to RGBA.
     ///
@@ -277,152 +279,148 @@ impl Nv12ToRgbConverter {
         nv12_image: vk::Image,
         array_layer: u32,
         src_layout: vk::ImageLayout,
-    ) -> Result<(vk::Image, vk::ImageView), VideoError> { unsafe {
-        // Create a sampled view for this layer with YCbCr conversion info.
-        // The YCbCr conversion chained on the view must match the immutable
-        // sampler's conversion exactly (VUID-VkImageView/VkSampler-format-..).
-        let mut ycbcr_info = vk::SamplerYcbcrConversionInfo::builder()
-            .conversion(self.ycbcr_conversion);
+    ) -> Result<(vk::Image, vk::ImageView), VideoError> {
+        unsafe {
+            // Create a sampled view for this layer with YCbCr conversion info.
+            // The YCbCr conversion chained on the view must match the immutable
+            // sampler's conversion exactly (VUID-VkImageView/VkSampler-format-..).
+            let mut ycbcr_info =
+                vk::SamplerYcbcrConversionInfo::builder().conversion(self.ycbcr_conversion);
 
-        let nv12_sampled_view = self.device.create_image_view(
-            &vk::ImageViewCreateInfo::builder()
+            let nv12_sampled_view = self.device.create_image_view(
+                &vk::ImageViewCreateInfo::builder()
+                    .image(nv12_image)
+                    .view_type(vk::ImageViewType::_2D)
+                    .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
+                    .subresource_range(vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: array_layer,
+                        layer_count: 1,
+                    })
+                    .push_next(&mut ycbcr_info),
+                None,
+            )?;
+
+            let cb = self.command_buffer;
+
+            // --- Stage descriptor writes ---
+            // Binding 0: COMBINED_IMAGE_SAMPLER with view-only write (sampler
+            // is the immutable YCbCr one baked into the descriptor-set
+            // layout; Vulkan ignores the sampler field in the write).
+            // Binding 1: STORAGE_IMAGE for RGBA output.
+            self.kernel
+                .set_combined_image_sampler_view(0, nv12_sampled_view)?;
+            self.kernel.set_storage_image_view(1, self.rgba_view)?;
+            self.kernel.set_push_constants_value(&PushConstants {
+                resolution: [self.width as i32, self.height as i32],
+            })?;
+
+            self.device
+                .reset_command_buffer(cb, vk::CommandBufferResetFlags::empty())?;
+            self.device.begin_command_buffer(
+                cb,
+                &vk::CommandBufferBeginInfo::builder()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+            )?;
+
+            // --- Barrier: NV12 source → SHADER_READ_ONLY_OPTIMAL ---
+            let barrier_nv12 = vk::ImageMemoryBarrier2::builder()
+                .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+                .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
+                .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+                .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
+                .old_layout(src_layout)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .image(nv12_image)
-                .view_type(vk::ImageViewType::_2D)
-                .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
                 .subresource_range(vk::ImageSubresourceRange {
                     aspect_mask: vk::ImageAspectFlags::COLOR,
                     base_mip_level: 0,
                     level_count: 1,
                     base_array_layer: array_layer,
                     layer_count: 1,
-                })
-                .push_next(&mut ycbcr_info),
-            None,
-        )?;
+                });
 
-        let cb = self.command_buffer;
+            // --- Barrier: RGBA output UNDEFINED → GENERAL (for compute writes) ---
+            let barrier_rgba = vk::ImageMemoryBarrier2::builder()
+                .src_stage_mask(vk::PipelineStageFlags2::NONE)
+                .src_access_mask(vk::AccessFlags2::empty())
+                .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+                .dst_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::GENERAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(self.rgba_image)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                });
 
-        // --- Stage descriptor writes ---
-        // Binding 0: COMBINED_IMAGE_SAMPLER with view-only write (sampler
-        // is the immutable YCbCr one baked into the descriptor-set
-        // layout; Vulkan ignores the sampler field in the write).
-        // Binding 1: STORAGE_IMAGE for RGBA output.
-        self.kernel
-            .set_combined_image_sampler_view(0, nv12_sampled_view)?;
-        self.kernel.set_storage_image_view(1, self.rgba_view)?;
-        self.kernel.set_push_constants_value(&PushConstants {
-            resolution: [self.width as i32, self.height as i32],
-        })?;
+            let pre_barriers = [barrier_nv12, barrier_rgba];
+            let pre_dep = vk::DependencyInfo::builder().image_memory_barriers(&pre_barriers);
+            self.device.cmd_pipeline_barrier2(cb, &pre_dep);
 
-        self.device
-            .reset_command_buffer(cb, vk::CommandBufferResetFlags::empty())?;
-        self.device.begin_command_buffer(
-            cb,
-            &vk::CommandBufferBeginInfo::builder()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-        )?;
-
-        // --- Barrier: NV12 source → SHADER_READ_ONLY_OPTIMAL ---
-        let barrier_nv12 = vk::ImageMemoryBarrier2::builder()
-            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-            .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
-            .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-            .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
-            .old_layout(src_layout)
-            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(nv12_image)
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: array_layer,
-                layer_count: 1,
-            });
-
-        // --- Barrier: RGBA output UNDEFINED → GENERAL (for compute writes) ---
-        let barrier_rgba = vk::ImageMemoryBarrier2::builder()
-            .src_stage_mask(vk::PipelineStageFlags2::NONE)
-            .src_access_mask(vk::AccessFlags2::empty())
-            .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-            .dst_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
-            .old_layout(vk::ImageLayout::UNDEFINED)
-            .new_layout(vk::ImageLayout::GENERAL)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(self.rgba_image)
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: 0,
-                layer_count: 1,
-            });
-
-        let pre_barriers = [barrier_nv12, barrier_rgba];
-        let pre_dep = vk::DependencyInfo::builder()
-            .image_memory_barriers(&pre_barriers);
-        self.device.cmd_pipeline_barrier2(cb, &pre_dep);
-
-        // --- Bind compute pipeline + push descriptors + push constants + dispatch ---
-        // Each thread handles one pixel, workgroup is 8x8.
-        let group_x = (self.width + 7) / 8;
-        let group_y = (self.height + 7) / 8;
-        self.kernel
-            .record(cb, group_x, group_y, 1)
-            .map_err(|e| {
+            // --- Bind compute pipeline + push descriptors + push constants + dispatch ---
+            // Each thread handles one pixel, workgroup is 8x8.
+            let group_x = (self.width + 7) / 8;
+            let group_y = (self.height + 7) / 8;
+            self.kernel.record(cb, group_x, group_y, 1).map_err(|e| {
                 VideoError::Engine(format!("nv12_to_rgb kernel record failed: {e}"))
             })?;
 
-        // --- Barrier: RGBA GENERAL → TRANSFER_SRC_OPTIMAL (for readback) ---
-        let barrier_to_transfer = vk::ImageMemoryBarrier2::builder()
-            .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-            .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
-            .dst_stage_mask(vk::PipelineStageFlags2::COPY)
-            .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
-            .old_layout(vk::ImageLayout::GENERAL)
-            .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(self.rgba_image)
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: 0,
-                layer_count: 1,
-            });
+            // --- Barrier: RGBA GENERAL → TRANSFER_SRC_OPTIMAL (for readback) ---
+            let barrier_to_transfer = vk::ImageMemoryBarrier2::builder()
+                .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+                .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
+                .dst_stage_mask(vk::PipelineStageFlags2::COPY)
+                .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
+                .old_layout(vk::ImageLayout::GENERAL)
+                .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(self.rgba_image)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                });
 
-        let post_barriers = [barrier_to_transfer];
-        let post_dep = vk::DependencyInfo::builder()
-            .image_memory_barriers(&post_barriers);
-        self.device.cmd_pipeline_barrier2(cb, &post_dep);
+            let post_barriers = [barrier_to_transfer];
+            let post_dep = vk::DependencyInfo::builder().image_memory_barriers(&post_barriers);
+            self.device.cmd_pipeline_barrier2(cb, &post_dep);
 
-        self.device.end_command_buffer(cb)?;
+            self.device.end_command_buffer(cb)?;
 
-        // --- Submit and wait ---
-        let cb_submit = vk::CommandBufferSubmitInfo::builder()
-            .command_buffer(cb)
-            .build();
-        let cb_submits = [cb_submit];
-        let submit = vk::SubmitInfo2::builder()
-            .command_buffer_infos(&cb_submits)
-            .build();
+            // --- Submit and wait ---
+            let cb_submit = vk::CommandBufferSubmitInfo::builder()
+                .command_buffer(cb)
+                .build();
+            let cb_submits = [cb_submit];
+            let submit = vk::SubmitInfo2::builder()
+                .command_buffer_infos(&cb_submits)
+                .build();
 
-        self.device.reset_fences(&[self.fence])?;
-        self.host_device
-            .submit_to_queue(self.compute_queue, &[submit], self.fence)
-            .map_err(VideoError::from)?;
-        self.device
-            .wait_for_fences(&[self.fence], true, u64::MAX)?;
+            self.device.reset_fences(&[self.fence])?;
+            self.host_device
+                .submit_to_queue(self.compute_queue, &[submit], self.fence)
+                .map_err(VideoError::from)?;
+            self.device.wait_for_fences(&[self.fence], true, u64::MAX)?;
 
-        // Destroy temporary view
-        self.device
-            .destroy_image_view(nv12_sampled_view, None);
+            // Destroy temporary view
+            self.device.destroy_image_view(nv12_sampled_view, None);
 
-        Ok((self.rgba_image, self.rgba_view))
-    }}
+            Ok((self.rgba_image, self.rgba_view))
+        }
+    }
 
     /// Returns the RGBA output image handle.
     pub fn rgba_image(&self) -> vk::Image {
@@ -492,7 +490,10 @@ mod tests {
 
     #[test]
     fn test_spirv_embedded() {
-        assert!(!SHADER_SPIRV.is_empty(), "SPIR-V bytecode must not be empty");
+        assert!(
+            !SHADER_SPIRV.is_empty(),
+            "SPIR-V bytecode must not be empty"
+        );
         assert!(
             SHADER_SPIRV.len() % 4 == 0,
             "SPIR-V size must be multiple of 4"

@@ -207,15 +207,24 @@ mod tests {
             4
         );
         assert_eq!(
-            offset_of!(VulkanRayTracingKernelMethodsVTable, set_acceleration_structure),
+            offset_of!(
+                VulkanRayTracingKernelMethodsVTable,
+                set_acceleration_structure
+            ),
             8
         );
         assert_eq!(
-            offset_of!(VulkanRayTracingKernelMethodsVTable, set_storage_buffer_pixel),
+            offset_of!(
+                VulkanRayTracingKernelMethodsVTable,
+                set_storage_buffer_pixel
+            ),
             16
         );
         assert_eq!(
-            offset_of!(VulkanRayTracingKernelMethodsVTable, set_storage_buffer_storage),
+            offset_of!(
+                VulkanRayTracingKernelMethodsVTable,
+                set_storage_buffer_storage
+            ),
             24
         );
         assert_eq!(

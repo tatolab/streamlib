@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use streamlib_cargo_build::{
-    host_dylib_extension, host_target_triple, run_cargo_build, CargoProfile,
+    CargoProfile, host_dylib_extension, host_target_triple, run_cargo_build,
 };
 use streamlib_engine::core::runtime::BuildError;
 
@@ -175,8 +175,12 @@ pub(crate) fn ensure_native_host(
     let build_root = streamlib_engine::core::get_streamlib_data_dir()
         .join("cache")
         .join("native-build");
-    std::fs::create_dir_all(&build_root)
-        .map_err(|e| other(runtime.crate_name(), format!("create native-build dir: {e}")))?;
+    std::fs::create_dir_all(&build_root).map_err(|e| {
+        other(
+            runtime.crate_name(),
+            format!("create native-build dir: {e}"),
+        )
+    })?;
     let crate_dir = build_root.join(format!("{}-{}", runtime.crate_name(), version));
     let _ = std::fs::remove_dir_all(&crate_dir);
     extract_crate_tarball(&crate_bytes, &build_root)
@@ -191,12 +195,19 @@ pub(crate) fn ensure_native_host(
     // fail: "current package believes it's in a workspace when it's not").
     {
         let manifest = crate_dir.join("Cargo.toml");
-        let mut toml = std::fs::read_to_string(&manifest)
-            .map_err(|e| other(runtime.crate_name(), format!("read extracted Cargo.toml: {e}")))?;
+        let mut toml = std::fs::read_to_string(&manifest).map_err(|e| {
+            other(
+                runtime.crate_name(),
+                format!("read extracted Cargo.toml: {e}"),
+            )
+        })?;
         if !toml.contains("[workspace]") {
             toml.push_str("\n[workspace]\n");
             std::fs::write(&manifest, &toml).map_err(|e| {
-                other(runtime.crate_name(), format!("write standalone Cargo.toml: {e}"))
+                other(
+                    runtime.crate_name(),
+                    format!("write standalone Cargo.toml: {e}"),
+                )
             })?;
         }
     }
@@ -209,8 +220,12 @@ pub(crate) fn ensure_native_host(
         .map_err(|e| build_failed(runtime.crate_name(), format!("cargo build: {e}")))?;
 
     // 4. Install into the cache + write the version stamp.
-    std::fs::create_dir_all(&cache_root)
-        .map_err(|e| other(runtime.crate_name(), format!("create native cache dir: {e}")))?;
+    std::fs::create_dir_all(&cache_root).map_err(|e| {
+        other(
+            runtime.crate_name(),
+            format!("create native cache dir: {e}"),
+        )
+    })?;
     std::fs::copy(&cdylib, &dest).map_err(|e| {
         other(
             runtime.crate_name(),

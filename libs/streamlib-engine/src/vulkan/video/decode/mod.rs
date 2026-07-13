@@ -11,28 +11,28 @@
 //! Supporting types ([`DecodeSubmitInfo`], [`DecodedFrame`], [`ReferenceSlot`],
 //! etc.) are shared with [`VkVideoDecoder`].
 
-mod types;
-mod session;
 mod h264;
 mod h265;
+mod session;
+mod types;
 
 #[cfg(test)]
 mod tests;
 
 pub use types::*;
 
-use vulkanalia::prelude::v1_4::*;
-use vulkanalia::vk;
-use vulkanalia_vma::{self as vma, Alloc};
 use std::ptr;
 use std::sync::Arc;
 use tracing::{debug, info};
+use vulkanalia::prelude::v1_4::*;
+use vulkanalia::vk;
+use vulkanalia_vma::{self as vma, Alloc};
 
 use crate::vulkan::video::nv_video_parser::vulkan_h264_decoder::{
-    VulkanH264Decoder, MAX_DPB_SIZE as H264_MAX_DPB_SIZE,
+    MAX_DPB_SIZE as H264_MAX_DPB_SIZE, VulkanH264Decoder,
 };
 use crate::vulkan::video::nv_video_parser::vulkan_h265_decoder::{
-    VulkanH265Decoder, HEVC_DPB_SIZE,
+    HEVC_DPB_SIZE, VulkanH265Decoder,
 };
 use crate::vulkan::video::video_context::{VideoContext, VideoError};
 
@@ -185,16 +185,18 @@ impl SimpleDecoder {
         let decode_queue = host_device.video_decode_queue().ok_or_else(|| {
             VideoError::BitstreamError(
                 "host device has no video decode queue family — \
-                 GPU does not support Vulkan Video decode".into(),
+                 GPU does not support Vulkan Video decode"
+                    .into(),
             )
         })?;
-        let decode_queue_family = host_device
-            .video_decode_queue_family_index()
-            .ok_or_else(|| {
-                VideoError::BitstreamError(
-                    "host device exposes decode queue but no queue family index".into(),
-                )
-            })?;
+        let decode_queue_family =
+            host_device
+                .video_decode_queue_family_index()
+                .ok_or_else(|| {
+                    VideoError::BitstreamError(
+                        "host device exposes decode queue but no queue family index".into(),
+                    )
+                })?;
         let host_arc: Arc<crate::vulkan::rhi::HostVulkanDevice> = Arc::clone(&host_device);
 
         Self::from_host_device(
@@ -237,31 +239,38 @@ impl SimpleDecoder {
         // Load Vulkan for the Entry field (required by struct, not used for external path).
         let entry = unsafe {
             vulkanalia::Entry::new(
-                vulkanalia::loader::LibloadingLoader::new(vulkanalia::loader::LIBRARY)
-                    .map_err(|e| VideoError::BitstreamError(format!("Failed to load Vulkan loader: {}", e)))?,
-            ).map_err(|e| VideoError::BitstreamError(format!("Failed to load Vulkan: {}", e)))?
+                vulkanalia::loader::LibloadingLoader::new(vulkanalia::loader::LIBRARY).map_err(
+                    |e| VideoError::BitstreamError(format!("Failed to load Vulkan loader: {}", e)),
+                )?,
+            )
+            .map_err(|e| VideoError::BitstreamError(format!("Failed to load Vulkan: {}", e)))?
         };
 
         let transfer_pool = unsafe {
-            device.create_command_pool(
-                &vk::CommandPoolCreateInfo::builder()
-                    .queue_family_index(transfer_queue_family)
-                    .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
-                None,
-            ).map_err(VideoError::from)?
+            device
+                .create_command_pool(
+                    &vk::CommandPoolCreateInfo::builder()
+                        .queue_family_index(transfer_queue_family)
+                        .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
+                    None,
+                )
+                .map_err(VideoError::from)?
         };
 
         let transfer_cb = unsafe {
-            device.allocate_command_buffers(
-                &vk::CommandBufferAllocateInfo::builder()
-                    .command_pool(transfer_pool)
-                    .level(vk::CommandBufferLevel::PRIMARY)
-                    .command_buffer_count(1),
-            ).map_err(VideoError::from)?[0]
+            device
+                .allocate_command_buffers(
+                    &vk::CommandBufferAllocateInfo::builder()
+                        .command_pool(transfer_pool)
+                        .level(vk::CommandBufferLevel::PRIMARY)
+                        .command_buffer_count(1),
+                )
+                .map_err(VideoError::from)?[0]
         };
 
         let transfer_fence = unsafe {
-            device.create_fence(&vk::FenceCreateInfo::default(), None)
+            device
+                .create_fence(&vk::FenceCreateInfo::default(), None)
                 .map_err(VideoError::from)?
         };
 
@@ -307,7 +316,6 @@ impl SimpleDecoder {
             host_device,
         })
     }
-
 
     /// Feed arbitrary bytes of H.264 Annex B bitstream data.
     ///
@@ -387,7 +395,11 @@ impl SimpleDecoder {
                     }
                     19 | 20 => {
                         // IDR_W_RADL (19) or IDR_N_LP (20)
-                        debug!("H265 NAL: IDR slice type {} ({} bytes)", nal_type, nal.len());
+                        debug!(
+                            "H265 NAL: IDR slice type {} ({} bytes)",
+                            nal_type,
+                            nal.len()
+                        );
                         if let Some(frame) = self.handle_h265_slice(nal, true)? {
                             frames.push(frame);
                         }
@@ -402,7 +414,11 @@ impl SimpleDecoder {
                         }
                     }
                     _ => {
-                        debug!("H265 NAL: type {} ({} bytes) -- skipped", nal_type, nal.len());
+                        debug!(
+                            "H265 NAL: type {} ({} bytes) -- skipped",
+                            nal_type,
+                            nal.len()
+                        );
                     }
                 }
             } else {
@@ -665,7 +681,9 @@ impl SimpleDecoder {
 
         if self.readback_staging.as_ref().map_or(true, |s| s.2 < total) {
             if let Some((buf, alloc, _, _)) = self.readback_staging.take() {
-                unsafe { self.ctx.allocator().destroy_buffer(buf, alloc); }
+                unsafe {
+                    self.ctx.allocator().destroy_buffer(buf, alloc);
+                }
             }
             let buf_info = vk::BufferCreateInfo::builder()
                 .size(total)
@@ -679,7 +697,8 @@ impl SimpleDecoder {
                 ..Default::default()
             };
             let (buf, alloc) = unsafe {
-                self.ctx.allocator()
+                self.ctx
+                    .allocator()
                     .create_buffer(buf_info, &alloc_opts)
                     .map_err(VideoError::from)?
             };
@@ -696,7 +715,9 @@ impl SimpleDecoder {
 
         if self.rgba_staging.as_ref().map_or(true, |s| s.2 < total) {
             if let Some((buf, alloc, _, _)) = self.rgba_staging.take() {
-                unsafe { self.ctx.allocator().destroy_buffer(buf, alloc); }
+                unsafe {
+                    self.ctx.allocator().destroy_buffer(buf, alloc);
+                }
             }
             let buf_info = vk::BufferCreateInfo::builder()
                 .size(total)
@@ -710,7 +731,8 @@ impl SimpleDecoder {
                 ..Default::default()
             };
             let (buf, alloc) = unsafe {
-                self.ctx.allocator()
+                self.ctx
+                    .allocator()
                     .create_buffer(buf_info, &alloc_opts)
                     .map_err(VideoError::from)?
             };
@@ -734,7 +756,9 @@ impl SimpleDecoder {
 
         // Wait for the GPU to finish writing to the staging buffer
         if let Some(ref mut vk_dec) = self.vk_decoder {
-            unsafe { vk_dec.wait_for_decode()?; }
+            unsafe {
+                vk_dec.wait_for_decode()?;
+            }
         }
 
         // RGBA path: run NV12→RGBA GPU compute conversion, then readback RGBA
@@ -760,15 +784,16 @@ impl SimpleDecoder {
 
             // Copy RGBA image → staging buffer via transfer command buffer
             unsafe {
-                self.device.reset_command_buffer(
-                    self.transfer_cb,
-                    vk::CommandBufferResetFlags::empty(),
-                ).map_err(VideoError::from)?;
-                self.device.begin_command_buffer(
-                    self.transfer_cb,
-                    &vk::CommandBufferBeginInfo::builder()
-                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-                ).map_err(VideoError::from)?;
+                self.device
+                    .reset_command_buffer(self.transfer_cb, vk::CommandBufferResetFlags::empty())
+                    .map_err(VideoError::from)?;
+                self.device
+                    .begin_command_buffer(
+                        self.transfer_cb,
+                        &vk::CommandBufferBeginInfo::builder()
+                            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+                    )
+                    .map_err(VideoError::from)?;
 
                 let copy_region = vk::BufferImageCopy {
                     buffer_offset: 0,
@@ -796,8 +821,12 @@ impl SimpleDecoder {
                     &[copy_region],
                 );
 
-                self.device.end_command_buffer(self.transfer_cb).map_err(VideoError::from)?;
-                self.device.reset_fences(&[self.transfer_fence]).map_err(VideoError::from)?;
+                self.device
+                    .end_command_buffer(self.transfer_cb)
+                    .map_err(VideoError::from)?;
+                self.device
+                    .reset_fences(&[self.transfer_fence])
+                    .map_err(VideoError::from)?;
                 let cb_submit = vk::CommandBufferSubmitInfo::builder()
                     .command_buffer(self.transfer_cb)
                     .build();
@@ -805,16 +834,12 @@ impl SimpleDecoder {
                 let submit_info = vk::SubmitInfo2::builder()
                     .command_buffer_infos(&cb_submits)
                     .build();
-                self.host_device.submit_to_queue(
-                    self.transfer_queue,
-                    &[submit_info],
-                    self.transfer_fence,
-                ).map_err(VideoError::from)?;
-                self.device.wait_for_fences(
-                    &[self.transfer_fence],
-                    true,
-                    u64::MAX,
-                ).map_err(VideoError::from)?;
+                self.host_device
+                    .submit_to_queue(self.transfer_queue, &[submit_info], self.transfer_fence)
+                    .map_err(VideoError::from)?;
+                self.device
+                    .wait_for_fences(&[self.transfer_fence], true, u64::MAX)
+                    .map_err(VideoError::from)?;
             }
 
             // Read RGBA data from staging buffer
@@ -950,8 +975,8 @@ mod color_vui_helper_tests {
 
     #[test]
     fn full_range_alone_returns_some_vui() {
-        let vui = build_color_vui(None, None, None, Some(true))
-            .expect("non-empty axis yields Some");
+        let vui =
+            build_color_vui(None, None, None, Some(true)).expect("non-empty axis yields Some");
         assert_eq!(vui.full_range, Some(true));
         assert!(vui.primaries.is_none());
     }

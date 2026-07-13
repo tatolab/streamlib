@@ -13,7 +13,7 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use streamlib_plugin_abi::{RuntimeContextVTable, RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION};
+use streamlib_plugin_abi::{RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION, RuntimeContextVTable};
 
 use crate::core::context::{RuntimeContext, SharedAudioClock};
 use crate::core::runtime::RuntimeOperations;
@@ -273,9 +273,7 @@ mod runtime_context_vtable_null_handle_guards {
 
     #[test]
     fn should_process_returns_false_on_null_ctx() {
-        let v = unsafe {
-            (HOST_RUNTIME_CONTEXT_VTABLE.should_process)(std::ptr::null())
-        };
+        let v = unsafe { (HOST_RUNTIME_CONTEXT_VTABLE.should_process)(std::ptr::null()) };
         assert!(!v, "halt-on-failure is the conservative default");
     }
 
@@ -289,9 +287,7 @@ mod runtime_context_vtable_null_handle_guards {
     /// the implementor to revisit.
     #[test]
     fn gpu_full_access_returns_null_unconditionally_today() {
-        let p = unsafe {
-            (HOST_RUNTIME_CONTEXT_VTABLE.gpu_full_access)(std::ptr::null())
-        };
+        let p = unsafe { (HOST_RUNTIME_CONTEXT_VTABLE.gpu_full_access)(std::ptr::null()) };
         assert!(p.is_null());
     }
 
@@ -300,25 +296,19 @@ mod runtime_context_vtable_null_handle_guards {
     /// guard — the wrapper ignores `_ctx`).
     #[test]
     fn gpu_limited_access_returns_null_unconditionally_today() {
-        let p = unsafe {
-            (HOST_RUNTIME_CONTEXT_VTABLE.gpu_limited_access)(std::ptr::null())
-        };
+        let p = unsafe { (HOST_RUNTIME_CONTEXT_VTABLE.gpu_limited_access)(std::ptr::null()) };
         assert!(p.is_null());
     }
 
     #[test]
     fn audio_clock_handle_returns_null_on_null_ctx() {
-        let p = unsafe {
-            (HOST_RUNTIME_CONTEXT_VTABLE.audio_clock_handle)(std::ptr::null())
-        };
+        let p = unsafe { (HOST_RUNTIME_CONTEXT_VTABLE.audio_clock_handle)(std::ptr::null()) };
         assert!(p.is_null());
     }
 
     #[test]
     fn runtime_ops_handle_returns_null_on_null_ctx() {
-        let p = unsafe {
-            (HOST_RUNTIME_CONTEXT_VTABLE.runtime_ops_handle)(std::ptr::null())
-        };
+        let p = unsafe { (HOST_RUNTIME_CONTEXT_VTABLE.runtime_ops_handle)(std::ptr::null()) };
         assert!(p.is_null());
     }
 }

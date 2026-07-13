@@ -15,8 +15,8 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use streamlib::sdk::runtime::{install, BuildEvent, BuildEventSink, BuildStream, InstallOptions};
 use streamlib::sdk::PolyglotBuildOrchestrator;
+use streamlib::sdk::runtime::{BuildEvent, BuildEventSink, BuildStream, InstallOptions, install};
 
 /// Routes the orchestrator's build diagnostics to the CLI's stdout/stderr
 /// during `install` (mirrors `streamlib add`'s interactive progress).
@@ -64,7 +64,10 @@ pub fn run(project_dir: Option<&Path>, lockfile_path: Option<PathBuf>) -> Result
         );
     }
 
-    println!("Resolving + materializing package graph at {}...", root.display());
+    println!(
+        "Resolving + materializing package graph at {}...",
+        root.display()
+    );
     let orchestrator = PolyglotBuildOrchestrator::default();
     let sink = CliBuildSink;
     let options = InstallOptions {

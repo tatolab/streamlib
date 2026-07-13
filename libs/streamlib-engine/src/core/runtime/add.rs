@@ -30,8 +30,8 @@
 use std::path::{Path, PathBuf};
 
 use streamlib_idents::{
-    select_version, CatalogClient, Manifest, PackageCatalog, PackageRef, RegistryClient,
-    RegistryConfig, ResolverError, SemVer, SemVerRange, DEFAULT_REGISTRY_URL,
+    CatalogClient, DEFAULT_REGISTRY_URL, Manifest, PackageCatalog, PackageRef, RegistryClient,
+    RegistryConfig, ResolverError, SemVer, SemVerRange, select_version,
 };
 
 use super::module_loader::host_target_triple;
@@ -250,7 +250,9 @@ pub fn add(
         tracing::info!(version = %selected, "add: already present at selected version — skipping materialize");
         (dir, true)
     } else {
-        let policy = options.materialize_policy.unwrap_or(BuildPolicy::AlwaysBuild);
+        let policy = options
+            .materialize_policy
+            .unwrap_or(BuildPolicy::AlwaysBuild);
         let extracted = download_and_extract(&client, pkg_ref, selected)?;
         // The registry download path is keyed by the requested `pkg_ref` + the
         // selected version, so the materialized package's own manifest MUST
@@ -319,10 +321,9 @@ pub fn add_slpkg(
 /// matches.
 #[tracing::instrument(fields(package = %pkg_ref))]
 pub fn remove(pkg_ref: &PackageRef) -> std::result::Result<RemoveReport, RemoveError> {
-    let mut manifest =
-        InstalledPackageManifest::load().map_err(|e| RemoveError::LoadManifest {
-            detail: e.to_string(),
-        })?;
+    let mut manifest = InstalledPackageManifest::load().map_err(|e| RemoveError::LoadManifest {
+        detail: e.to_string(),
+    })?;
     let entry = manifest
         .remove_by_ref(pkg_ref)
         .ok_or_else(|| RemoveError::NotInstalled {
@@ -379,13 +380,14 @@ fn download_and_extract(
     pkg_ref: &PackageRef,
     version: SemVer,
 ) -> std::result::Result<PathBuf, AddError> {
-    let (bytes, url) = client
-        .download_slpkg(pkg_ref, version)
-        .map_err(|source| AddError::Download {
-            package: pkg_ref.clone(),
-            version,
-            source,
-        })?;
+    let (bytes, url) =
+        client
+            .download_slpkg(pkg_ref, version)
+            .map_err(|source| AddError::Download {
+                package: pkg_ref.clone(),
+                version,
+                source,
+            })?;
     tracing::debug!(%url, bytes = bytes.len(), "add: downloaded .slpkg");
     let archive = persist_slpkg(pkg_ref, version, &bytes)?;
     extract_slpkg_to_temp(&archive)
@@ -408,8 +410,13 @@ fn persist_slpkg(
     std::fs::create_dir_all(&dir)
         .map_err(|e| persist_err(format!("creating {} : {e}", dir.display())))?;
     let target = dir.join(format!("{}-{}.slpkg", pkg_ref.name.as_str(), version));
-    let tmp = dir.join(format!("{}-{}.slpkg.partial", pkg_ref.name.as_str(), version));
-    std::fs::write(&tmp, bytes).map_err(|e| persist_err(format!("writing {} : {e}", tmp.display())))?;
+    let tmp = dir.join(format!(
+        "{}-{}.slpkg.partial",
+        pkg_ref.name.as_str(),
+        version
+    ));
+    std::fs::write(&tmp, bytes)
+        .map_err(|e| persist_err(format!("writing {} : {e}", tmp.display())))?;
     std::fs::rename(&tmp, &target)
         .map_err(|e| persist_err(format!("publishing {} : {e}", target.display())))?;
     Ok(target)
@@ -471,7 +478,10 @@ fn promote_extracted_dir(
     }
     if let Some(parent) = cache_slot.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
-            promote_err(format!("creating the cache parent {}: {e}", parent.display()))
+            promote_err(format!(
+                "creating the cache parent {}: {e}",
+                parent.display()
+            ))
         })?;
     }
     std::fs::rename(temp_dir, cache_slot)
@@ -539,12 +549,13 @@ fn materialize_and_record(
         policy,
         host_triple: host_target_triple().to_string(),
     };
-    let staged = orchestrator
-        .materialize(&request, sink)
-        .map_err(|source| AddError::Materialize {
-            package: package.clone(),
-            source,
-        })?;
+    let staged =
+        orchestrator
+            .materialize(&request, sink)
+            .map_err(|source| AddError::Materialize {
+                package: package.clone(),
+                source,
+            })?;
 
     let cache_key = staged
         .staged_dir
@@ -558,10 +569,9 @@ fn materialize_and_record(
     // The evict is conditional on a *different* slot key so a same-version
     // re-materialize (the evicted-slot self-heal path) never deletes the slot
     // it just promoted.
-    let mut manifest =
-        InstalledPackageManifest::load().map_err(|e| AddError::LoadManifest {
-            detail: e.to_string(),
-        })?;
+    let mut manifest = InstalledPackageManifest::load().map_err(|e| AddError::LoadManifest {
+        detail: e.to_string(),
+    })?;
     let superseded_slot = manifest
         .find_by_ref(&package)
         .filter(|e| e.cache_dir != cache_key)
@@ -651,7 +661,9 @@ mod tests {
             let dir = match &request.source {
                 BuildSource::PackageDir(p) => p.clone(),
                 other => {
-                    return Err(super::super::BuildError::UnsupportedSource(format!("{other:?}")))
+                    return Err(super::super::BuildError::UnsupportedSource(format!(
+                        "{other:?}"
+                    )));
                 }
             };
             Ok(super::super::StagedArtifact {
@@ -707,8 +719,8 @@ mod tests {
     fn write_slpkg(dest: &Path, org: &str, name: &str, version: &str) {
         let file = std::fs::File::create(dest).unwrap();
         let mut zip = zip::ZipWriter::new(file);
-        let opts =
-            zip::write::FileOptions::<()>::default().compression_method(zip::CompressionMethod::Stored);
+        let opts = zip::write::FileOptions::<()>::default()
+            .compression_method(zip::CompressionMethod::Stored);
         zip.start_file("streamlib.yaml", opts).unwrap();
         std::io::Write::write_all(&mut zip, manifest_yaml(org, name, version).as_bytes()).unwrap();
         zip.finish().unwrap();
@@ -788,7 +800,13 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let _guard = sandbox_home(home.path());
         let tree = tempfile::tempdir().unwrap();
-        scratch_tree(tree.path(), "tatolab", "foo", &["1.0.0", "1.1.0"], Some("1.1.0"));
+        scratch_tree(
+            tree.path(),
+            "tatolab",
+            "foo",
+            &["1.0.0", "1.1.0"],
+            Some("1.1.0"),
+        );
 
         let pr = pkg_ref("tatolab", "foo");
         let req = SemVerRange::from_str("^1.0.0").unwrap();
@@ -859,7 +877,10 @@ mod tests {
         assert!(!first.already_present);
 
         let second = add(&pr, &req, &MockOrchestrator, &NullSink, &opts(tree.path())).unwrap();
-        assert!(second.already_present, "re-add at same version must be a no-op");
+        assert!(
+            second.already_present,
+            "re-add at same version must be a no-op"
+        );
         assert_eq!(second.version, SemVer::new(1, 1, 0));
         // Still exactly one entry — `add` replaces same-ref, never duplicates.
         let manifest = InstalledPackageManifest::load().unwrap();
@@ -882,7 +903,9 @@ mod tests {
 
         // Mentally-revert the `fetch_catalog` call (return None) and this
         // assertion fails — it locks that the summary is actually read.
-        let catalog = report.catalog.expect("catalog present on a catalog-carrying tree");
+        let catalog = report
+            .catalog
+            .expect("catalog present on a catalog-carrying tree");
         assert_eq!(catalog.processors.len(), 1);
         let proc = &catalog.processors[0];
         assert_eq!(proc.name, "Foo");
@@ -925,7 +948,12 @@ mod tests {
         assert_eq!(report.version, SemVer::new(1, 1, 0));
         assert!(report.cache_dir_removed);
         assert!(!report.cache_dir.exists(), "cache slot must be gone");
-        assert!(InstalledPackageManifest::load().unwrap().find_by_ref(&pr).is_none());
+        assert!(
+            InstalledPackageManifest::load()
+                .unwrap()
+                .find_by_ref(&pr)
+                .is_none()
+        );
     }
 
     #[test]
@@ -935,7 +963,10 @@ mod tests {
         let _guard = sandbox_home(home.path());
         let pr = pkg_ref("tatolab", "never-installed");
         let err = remove(&pr).expect_err("removing an absent package must fail loud");
-        assert!(matches!(err, RemoveError::NotInstalled { .. }), "got {err:?}");
+        assert!(
+            matches!(err, RemoveError::NotInstalled { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -958,7 +989,10 @@ mod tests {
         // second add would report `already_present = true` pointing at a gone
         // slot. With the guard it re-materializes and the slot is loadable again.
         let second = add(&pr, &req, &MockOrchestrator, &NullSink, &opts(tree.path())).unwrap();
-        assert!(!second.already_present, "an evicted slot must re-materialize");
+        assert!(
+            !second.already_present,
+            "an evicted slot must re-materialize"
+        );
         assert!(second.cache_dir.join("streamlib.yaml").is_file());
     }
 
@@ -990,10 +1024,12 @@ mod tests {
             other => panic!("expected IdentityMismatch, got {other:?}"),
         }
         // Nothing recorded on the failed add.
-        assert!(InstalledPackageManifest::load()
-            .unwrap()
-            .find_by_ref(&pr)
-            .is_none());
+        assert!(
+            InstalledPackageManifest::load()
+                .unwrap()
+                .find_by_ref(&pr)
+                .is_none()
+        );
     }
 
     /// The list of `cache/packages/` slot names currently on disk.
@@ -1028,7 +1064,10 @@ mod tests {
         let req = SemVerRange::from_str("^1.0.0").unwrap();
         let err = add(&pr, &req, &MockOrchestrator, &NullSink, &opts(tree.path()))
             .expect_err("a mis-published .slpkg must fail loud");
-        assert!(matches!(err, AddError::IdentityMismatch { .. }), "got {err:?}");
+        assert!(
+            matches!(err, AddError::IdentityMismatch { .. }),
+            "got {err:?}"
+        );
 
         // The identity check is the sole promotion gate: no slot may survive in
         // cache/packages — not the `bar-1.1.0` orphan the old extract-to-slot
@@ -1088,6 +1127,9 @@ mod tests {
         // packages.yaml records the single upgraded entry.
         let manifest = InstalledPackageManifest::load().unwrap();
         assert_eq!(manifest.packages.iter().filter(|e| e.name == pr).count(), 1);
-        assert_eq!(manifest.find_by_ref(&pr).unwrap().version, SemVer::new(2, 0, 0));
+        assert_eq!(
+            manifest.find_by_ref(&pr).unwrap().version,
+            SemVer::new(2, 0, 0)
+        );
     }
 }

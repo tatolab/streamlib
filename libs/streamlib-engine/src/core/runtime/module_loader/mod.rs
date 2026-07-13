@@ -36,8 +36,8 @@ use std::time::Instant;
 
 use tokio::sync::{broadcast, mpsc};
 
-use super::runtime::TokioRuntimeVariant;
 use super::Runner;
+use super::runtime::TokioRuntimeVariant;
 use crate::iceoryx2::Iceoryx2Node;
 
 mod added_module;
@@ -374,9 +374,9 @@ impl Runner {
         }
         let added = self.add_modules_from_lockfile(lockfile_path)?;
         match &self.tokio_runtime_variant {
-            TokioRuntimeVariant::OwnedTokioRuntime(rt) => rt.block_on(async {
-                self.await_modules(added, |_| {}).await
-            }),
+            TokioRuntimeVariant::OwnedTokioRuntime(rt) => {
+                rt.block_on(async { self.await_modules(added, |_| {}).await })
+            }
             TokioRuntimeVariant::ExternalTokioHandle(_) => unreachable!("guarded above"),
         }
     }

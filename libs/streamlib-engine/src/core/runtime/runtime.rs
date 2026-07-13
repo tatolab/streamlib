@@ -2,16 +2,16 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use std::ops::ControlFlow;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::Mutex;
 use serde::Serialize;
 
-use super::graph_change_listener::GraphChangeListener;
 use super::RuntimeOperations;
 use super::RuntimeStatus;
 use super::RuntimeUniqueId;
+use super::graph_change_listener::GraphChangeListener;
 use crate::core::compiler::{Compiler, PendingOperation};
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 use crate::core::context::SoftwareAudioClock;
@@ -24,8 +24,8 @@ use crate::core::graph::{
 };
 use crate::core::processors::ProcessorSpec;
 use crate::core::processors::ProcessorState;
-use crate::core::pubsub::{topics, Event, EventListener, ProcessorEvent, RuntimeEvent, PUBSUB};
-use crate::core::{InputLinkPortRef, OutputLinkPortRef, Result, Error};
+use crate::core::pubsub::{Event, EventListener, PUBSUB, ProcessorEvent, RuntimeEvent, topics};
+use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 use crate::iceoryx2::Iceoryx2Node;
 
 /// Storage variant for tokio runtime in Runner.
@@ -89,9 +89,8 @@ pub struct Runner {
     /// so `stop()` can drop it deterministically; the `Drop` impl on
     /// `UnixSocketSurfaceService` removes the socket file.
     #[cfg(target_os = "linux")]
-    pub(crate) surface_service: Arc<
-        Mutex<Option<crate::linux::surface_share::UnixSocketSurfaceService>>,
-    >,
+    pub(crate) surface_service:
+        Arc<Mutex<Option<crate::linux::surface_share::UnixSocketSurfaceService>>>,
     /// Path of the per-runtime surface-sharing socket
     /// (`$XDG_RUNTIME_DIR/streamlib-<runtime_uuid>.sock`).
     #[cfg(target_os = "linux")]
@@ -123,9 +122,8 @@ pub struct Runner {
     ///
     /// [`BuildPolicy`]: crate::core::runtime::module_loader::BuildPolicy
     /// [`setup_hooks`]: Self::setup_hooks
-    pub(crate) build_orchestrator: Arc<
-        Mutex<Option<Arc<dyn crate::core::runtime::module_loader::BuildOrchestrator>>>,
-    >,
+    pub(crate) build_orchestrator:
+        Arc<Mutex<Option<Arc<dyn crate::core::runtime::module_loader::BuildOrchestrator>>>>,
     /// Modules whose loads have not yet settled, keyed by canonical
     /// `@org/name` with the owning load's id. Inserted when
     /// [`Runner::add_module`] spawns a load; removed when that same
@@ -133,7 +131,12 @@ pub struct Runner {
     /// can't untrack a later load of the same package ref).
     /// [`Runner::start`] refuses to run the graph while any entry remains.
     pub(crate) loading_modules: Arc<
-        Mutex<std::collections::HashMap<streamlib_idents::PackageRef, (u64, streamlib_idents::ModuleIdent)>>,
+        Mutex<
+            std::collections::HashMap<
+                streamlib_idents::PackageRef,
+                (u64, streamlib_idents::ModuleIdent),
+            >,
+        >,
     >,
     /// Runtime-lifetime single-version-per-package resolution memo, keyed
     /// by `@org/name`. Populated by the live module walker on every
@@ -210,13 +213,12 @@ impl Runner {
         // interface contract) and `streamlib::sdk::logging` for the
         // implementation.
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
-        let _logging_guard = crate::core::logging::init(
-            crate::core::logging::StreamlibLoggingConfig::for_runtime(
+        let _logging_guard =
+            crate::core::logging::init(crate::core::logging::StreamlibLoggingConfig::for_runtime(
                 format!("runtime:{}", runtime_id),
                 Arc::clone(&runtime_id),
-            ),
-        )
-        .map_err(|e| Error::Runtime(format!("Failed to initialize logging: {}", e)))?;
+            ))
+            .map_err(|e| Error::Runtime(format!("Failed to initialize logging: {}", e)))?;
         tracing::info!("Creating Runner with ID: {}", runtime_id);
 
         // Get STREAMLIB_HOME and run init hooks (once per process)
@@ -256,8 +258,7 @@ impl Runner {
         // its polyglot subprocesses connect to via STREAMLIB_SURFACE_SOCKET.
         // No external daemon is required.
         #[cfg(target_os = "linux")]
-        let (surface_service, surface_socket_path) =
-            bring_up_surface_service(&runtime_id)?;
+        let (surface_service, surface_socket_path) = bring_up_surface_service(&runtime_id)?;
 
         // Create Arc-wrapped components
         let compiler = Arc::new(Compiler::new());
@@ -293,9 +294,7 @@ impl Runner {
             pipeline_name: Arc::new(Mutex::new(None)),
             build_orchestrator: Arc::new(Mutex::new(None)),
             loading_modules: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            resolution_memo: Arc::new(
-                crate::core::runtime::module_loader::ResolutionMemo::new(),
-            ),
+            resolution_memo: Arc::new(crate::core::runtime::module_loader::ResolutionMemo::new()),
         }))
     }
 
@@ -389,8 +388,8 @@ impl Runner {
         processor_id: &ProcessorUniqueId,
         config: C,
     ) -> Result<()> {
-        let config_json = serde_json::to_value(&config)
-            .map_err(|e| crate::core::Error::Config(e.to_string()))?;
+        let config_json =
+            serde_json::to_value(&config).map_err(|e| crate::core::Error::Config(e.to_string()))?;
 
         // Update config in graph and queue operation
         self.compiler.scope(|graph, tx| {
@@ -438,10 +437,12 @@ impl Runner {
         // yet). Await pending loads — e.g. via `await_modules` — first.
         let pending = self.pending_module_loads();
         if !pending.is_empty() {
-            return Err(crate::core::runtime::module_loader::AddModuleError::ModulesStillLoading {
-                idents: pending,
-            }
-            .into());
+            return Err(
+                crate::core::runtime::module_loader::AddModuleError::ModulesStillLoading {
+                    idents: pending,
+                }
+                .into(),
+            );
         }
 
         *self.status.lock() = RuntimeStatus::Starting;
@@ -503,10 +504,7 @@ impl Runner {
             // `SurfaceStore::new` constructs the PluginAbiObject from a fresh
             // `Arc<SurfaceStoreInner>`. Method dispatch goes through
             // the host's `SurfaceStoreVTable`.
-            let surface_store = SurfaceStore::new(
-                socket_path.clone(),
-                self.runtime_id.to_string(),
-            );
+            let surface_store = SurfaceStore::new(socket_path.clone(), self.runtime_id.to_string());
             surface_store.connect().map_err(|e| {
                 Error::Runtime(format!(
                     "Failed to connect to runtime-internal surface-sharing service at {}: {}",
@@ -558,7 +556,9 @@ impl Runner {
                     audio_clock_config.sample_rate,
                     audio_clock_config.buffer_size
                 );
-                Arc::new(crate::linux::LinuxTimerFdAudioClock::new(audio_clock_config))
+                Arc::new(crate::linux::LinuxTimerFdAudioClock::new(
+                    audio_clock_config,
+                ))
             }
             #[cfg(not(any(target_os = "macos", target_os = "linux")))]
             {
@@ -901,10 +901,7 @@ impl Runner {
     {
         // Install signal handlers
         crate::core::signals::install_signal_handlers().map_err(|e| {
-            crate::core::Error::Configuration(format!(
-                "Failed to install signal handlers: {}",
-                e
-            ))
+            crate::core::Error::Configuration(format!("Failed to install signal handlers: {}", e))
         })?;
 
         let shutdown_flag = Arc::new(AtomicBool::new(false));
@@ -1178,9 +1175,16 @@ impl Runner {
     ) -> Result<()> {
         let snapshot = crate::core::graph_snapshot::GraphSnapshot::from_json_file(path)?;
         if let Some(name) = &snapshot.name {
-            tracing::info!("Loading pipeline '{}' (resolving modules) from {}", name, path.display());
+            tracing::info!(
+                "Loading pipeline '{}' (resolving modules) from {}",
+                name,
+                path.display()
+            );
         } else {
-            tracing::info!("Loading pipeline (resolving modules) from {}", path.display());
+            tracing::info!(
+                "Loading pipeline (resolving modules) from {}",
+                path.display()
+            );
         }
         self.load_graph_snapshot_with_resolving(&snapshot).await
     }
@@ -1199,9 +1203,7 @@ impl Runner {
     /// display name differs from its processor type's PascalCase
     /// short name — i.e. only when a caller explicitly overrode the
     /// default — so the user-intent distinction survives round-trips.
-    pub fn save_graph_snapshot(
-        &self,
-    ) -> Result<crate::core::graph_snapshot::GraphSnapshot> {
+    pub fn save_graph_snapshot(&self) -> Result<crate::core::graph_snapshot::GraphSnapshot> {
         use std::collections::HashMap;
 
         use crate::core::graph_snapshot::{
@@ -1230,8 +1232,8 @@ impl Runner {
 
                 id_to_alias.insert(node.id.to_string(), alias.clone());
 
-                let display_name = (node.display_name.as_str() != short)
-                    .then(|| node.display_name.clone());
+                let display_name =
+                    (node.display_name.as_str() != short).then(|| node.display_name.clone());
 
                 processors.push(ProcessorDefinition {
                     alias,
@@ -1298,7 +1300,6 @@ impl Runner {
     pub fn pipeline_name(&self) -> Option<String> {
         self.pipeline_name.lock().clone()
     }
-
 }
 
 /// PascalCase → camelCase for snapshot alias generation.
@@ -1316,7 +1317,6 @@ fn pascal_to_camel(short: &str) -> String {
         None => String::new(),
     }
 }
-
 
 /// Compute the per-runtime surface-sharing socket path, refuse to start if
 /// another live runtime is already bound there, clean up an orphan socket
@@ -1339,8 +1339,8 @@ fn bring_up_surface_service(
         )
     })?;
 
-    let socket_path = std::path::PathBuf::from(xdg_runtime_dir)
-        .join(format!("streamlib-{}.sock", runtime_id));
+    let socket_path =
+        std::path::PathBuf::from(xdg_runtime_dir).join(format!("streamlib-{}.sock", runtime_id));
 
     if socket_path.exists() {
         match std::os::unix::net::UnixStream::connect(&socket_path) {
@@ -1438,7 +1438,6 @@ mod tests {
         );
     }
 
-
     #[cfg(target_os = "linux")]
     #[test]
     #[serial]
@@ -1454,8 +1453,6 @@ mod tests {
             slack
         );
     }
-
-
 
     #[test]
     #[serial]
@@ -1509,7 +1506,7 @@ mod tests {
     mod runtime_internal_surface_share {
         use super::*;
         use std::os::unix::net::UnixStream;
-        use streamlib_surface_client::{send_request_with_fds, MAX_DMA_BUF_PLANES};
+        use streamlib_surface_client::{MAX_DMA_BUF_PLANES, send_request_with_fds};
 
         /// Replace XDG_RUNTIME_DIR with a fresh tempdir for the duration of the
         /// closure. Tests using this must be `#[serial]` so no other runtime
@@ -1557,9 +1554,8 @@ mod tests {
                     "op": "check_out",
                     "surface_id": "ping-no-such-surface",
                 });
-                let (resp, fds) =
-                    send_request_with_fds(&stream, &req, &[], MAX_DMA_BUF_PLANES)
-                        .expect("round-trip");
+                let (resp, fds) = send_request_with_fds(&stream, &req, &[], MAX_DMA_BUF_PLANES)
+                    .expect("round-trip");
                 assert!(fds.is_empty());
                 assert!(
                     resp.get("error").and_then(|v| v.as_str()).is_some(),
@@ -1619,9 +1615,8 @@ mod tests {
                         "op": "check_out",
                         "surface_id": "no-such",
                     });
-                    let (resp, _) =
-                        send_request_with_fds(&stream, &req, &[], MAX_DMA_BUF_PLANES)
-                            .expect("round-trip");
+                    let (resp, _) = send_request_with_fds(&stream, &req, &[], MAX_DMA_BUF_PLANES)
+                        .expect("round-trip");
                     assert!(resp.get("error").is_some());
                 }
             });
@@ -1656,7 +1651,6 @@ mod tests {
             });
         }
 
-
         #[test]
         #[serial]
         fn stale_socket_from_dead_runtime_is_cleaned_up() {
@@ -1685,12 +1679,15 @@ mod tests {
                     }
                 }
 
-                let runtime = runtime_result.expect(
-                    "runtime should clean up an orphan socket and bind successfully",
-                );
+                let runtime = runtime_result
+                    .expect("runtime should clean up an orphan socket and bind successfully");
                 let bound = runtime.surface_socket_path();
                 assert_eq!(bound, stale_path.as_path());
-                assert!(bound.exists(), "service should be bound at {}", bound.display());
+                assert!(
+                    bound.exists(),
+                    "service should be bound at {}",
+                    bound.display()
+                );
 
                 // The path is now a Unix socket, not a regular file — connect
                 // should succeed against the runtime-internal service.
@@ -1699,12 +1696,10 @@ mod tests {
                     "op": "check_out",
                     "surface_id": "no-such",
                 });
-                let (resp, _) =
-                    send_request_with_fds(&stream, &req, &[], MAX_DMA_BUF_PLANES)
-                        .expect("round-trip");
+                let (resp, _) = send_request_with_fds(&stream, &req, &[], MAX_DMA_BUF_PLANES)
+                    .expect("round-trip");
                 assert!(resp.get("error").is_some());
             });
         }
     }
-
 }

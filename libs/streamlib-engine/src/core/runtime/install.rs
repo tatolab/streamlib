@@ -22,7 +22,7 @@
 use std::path::{Path, PathBuf};
 
 use streamlib_idents::{
-    resolve_with, PackageRef, RegistryConfig, ResolvedPackage, ResolverOptions, SemVer,
+    PackageRef, RegistryConfig, ResolvedPackage, ResolverOptions, SemVer, resolve_with,
 };
 
 use super::module_loader::host_target_triple;
@@ -120,22 +120,18 @@ pub fn install(
     sink: &dyn BuildEventSink,
     options: &InstallOptions,
 ) -> std::result::Result<InstallReport, InstallError> {
-    let registry = options
-        .registry
-        .clone()
-        .or_else(RegistryConfig::from_env);
+    let registry = options.registry.clone().or_else(RegistryConfig::from_env);
     let resolver_options = ResolverOptions {
         cache_dir: options.resolver_cache_dir.clone(),
         registry,
     };
 
     tracing::info!(root = %root_dir.display(), "install: resolving package graph");
-    let resolved = resolve_with(root_dir, &resolver_options).map_err(|source| {
-        InstallError::Resolve {
+    let resolved =
+        resolve_with(root_dir, &resolver_options).map_err(|source| InstallError::Resolve {
             root_dir: root_dir.to_path_buf(),
             source,
-        }
-    })?;
+        })?;
 
     let policy = options.materialize_policy.unwrap_or(BuildPolicy::IfStale);
     let update_manifest = options.update_installed_manifest.unwrap_or(true);
@@ -144,9 +140,11 @@ pub fn install(
     // root (no `[package]`) is the consumer, not a package to stage — skip
     // it; every dependency is a real package.
     let mut installed = if update_manifest {
-        Some(InstalledPackageManifest::load().map_err(|e| InstallError::UpdateManifest {
-            detail: e.to_string(),
-        })?)
+        Some(
+            InstalledPackageManifest::load().map_err(|e| InstallError::UpdateManifest {
+                detail: e.to_string(),
+            })?,
+        )
     } else {
         None
     };
@@ -173,12 +171,12 @@ pub fn install(
             policy,
             host_triple: host_target_triple().to_string(),
         };
-        let staged = orchestrator
-            .materialize(&request, sink)
-            .map_err(|source| InstallError::Materialize {
+        let staged = orchestrator.materialize(&request, sink).map_err(|source| {
+            InstallError::Materialize {
                 package: pkg_ref.clone(),
                 source,
-            })?;
+            }
+        })?;
 
         let staged_hash = streamlib_idents::content_hash_for_package_dir(&staged.staged_dir)
             .map_err(|source| InstallError::Resolve {
@@ -233,7 +231,9 @@ pub fn install(
     let mut packages: Vec<(PackageRef, SemVer)> = resolved
         .packages
         .values()
-        .filter_map(|p| package_ref_of(p).map(|r| (r, p.manifest.package.as_ref().unwrap().version)))
+        .filter_map(|p| {
+            package_ref_of(p).map(|r| (r, p.manifest.package.as_ref().unwrap().version))
+        })
         .collect();
     packages.sort_by(|a, b| a.0.to_string().cmp(&b.0.to_string()));
 
@@ -286,9 +286,7 @@ fn rfc3339_from_unix_secs(secs: u64) -> String {
     let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
     let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
     let year = if m <= 2 { y + 1 } else { y };
-    format!(
-        "{year:04}-{m:02}-{d:02}T{hour:02}:{minute:02}:{second:02}Z"
-    )
+    format!("{year:04}-{m:02}-{d:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
 /// Human-readable provenance for the installed-manifest `installed_from`
@@ -313,8 +311,14 @@ mod tests {
         // Mentally-revert: any off-by-one in the civil-from-days math shifts
         // these known instants, so the equality pins the algorithm.
         assert_eq!(rfc3339_from_unix_secs(0), "1970-01-01T00:00:00Z");
-        assert_eq!(rfc3339_from_unix_secs(1_700_000_000), "2023-11-14T22:13:20Z");
+        assert_eq!(
+            rfc3339_from_unix_secs(1_700_000_000),
+            "2023-11-14T22:13:20Z"
+        );
         // A leap day (2024-02-29) — the algorithm must place it correctly.
-        assert_eq!(rfc3339_from_unix_secs(1_709_208_000), "2024-02-29T12:00:00Z");
+        assert_eq!(
+            rfc3339_from_unix_secs(1_709_208_000),
+            "2024-02-29T12:00:00Z"
+        );
     }
 }

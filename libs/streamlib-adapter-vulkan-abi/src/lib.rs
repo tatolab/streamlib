@@ -252,7 +252,6 @@ pub struct VulkanSurfaceAdapterVTable {
     // -----------------------------------------------------------------
     // Handle lifetime
     // -----------------------------------------------------------------
-
     /// Take a borrowed handle (typically minted by the host's
     /// runtime context when wiring the cdylib-side `VulkanContext`
     /// PluginAbiObject) and return a new owned handle with an Arc refcount
@@ -272,7 +271,6 @@ pub struct VulkanSurfaceAdapterVTable {
     // -----------------------------------------------------------------
     // Registry management (inherent on VulkanSurfaceAdapter)
     // -----------------------------------------------------------------
-
     /// Register a surface with the adapter.
     ///
     /// `texture_handle` is an
@@ -312,11 +310,8 @@ pub struct VulkanSurfaceAdapterVTable {
     /// Drop a registered surface from the adapter. Idempotent —
     /// missing entries return 0 via `*out_was_present = 0`. Calls
     /// against a null handle return 0 with `*out_was_present = 0`.
-    pub unregister_host_surface: unsafe extern "C" fn(
-        handle: *const c_void,
-        surface_id: u64,
-        out_was_present: *mut u32,
-    ),
+    pub unregister_host_surface:
+        unsafe extern "C" fn(handle: *const c_void, surface_id: u64, out_was_present: *mut u32),
 
     /// Snapshot the adapter's registry size (number of currently-
     /// registered surfaces). Returns 0 on null handle. Used for
@@ -327,7 +322,6 @@ pub struct VulkanSurfaceAdapterVTable {
     // -----------------------------------------------------------------
     // SurfaceAdapter trait methods
     // -----------------------------------------------------------------
-
     /// Blocking read acquire.
     ///
     /// `surface_ptr` is a `*const StreamlibSurface` borrowed from
@@ -398,7 +392,6 @@ pub struct VulkanSurfaceAdapterVTable {
     // -----------------------------------------------------------------
     // Cross-process publishing helpers
     // -----------------------------------------------------------------
-
     /// Producer-side QFOT release for cross-process publishing.
     /// Wraps [`streamlib_adapter_vulkan::VulkanSurfaceAdapter::release_to_foreign`].
     ///
@@ -418,7 +411,6 @@ pub struct VulkanSurfaceAdapterVTable {
     // -----------------------------------------------------------------
     // Per-surface descriptor accessors
     // -----------------------------------------------------------------
-
     /// Resolve the full [`VkImageInfoRepr`] descriptor for a
     /// registered surface. Sets `*out_found = 1` and writes the
     /// descriptor on hit; `*out_found = 0` on miss (in which case
@@ -434,7 +426,6 @@ pub struct VulkanSurfaceAdapterVTable {
     // -----------------------------------------------------------------
     // Power-user raw handles
     // -----------------------------------------------------------------
-
     /// Snapshot the underlying device's raw Vulkan handles. The
     /// handles are valid for the lifetime of the device; the
     /// caller MUST NOT outlive the runtime that owns it. There is
@@ -555,17 +546,32 @@ mod tests {
         assert_eq!(offset_of!(VulkanSurfaceAdapterVTable, _reserved_padding), 4);
         assert_eq!(offset_of!(VulkanSurfaceAdapterVTable, clone_handle), 8);
         assert_eq!(offset_of!(VulkanSurfaceAdapterVTable, drop_handle), 16);
-        assert_eq!(offset_of!(VulkanSurfaceAdapterVTable, register_host_surface), 24);
-        assert_eq!(offset_of!(VulkanSurfaceAdapterVTable, unregister_host_surface), 32);
+        assert_eq!(
+            offset_of!(VulkanSurfaceAdapterVTable, register_host_surface),
+            24
+        );
+        assert_eq!(
+            offset_of!(VulkanSurfaceAdapterVTable, unregister_host_surface),
+            32
+        );
         assert_eq!(offset_of!(VulkanSurfaceAdapterVTable, registered_count), 40);
         assert_eq!(offset_of!(VulkanSurfaceAdapterVTable, acquire_read), 48);
         assert_eq!(offset_of!(VulkanSurfaceAdapterVTable, acquire_write), 56);
         assert_eq!(offset_of!(VulkanSurfaceAdapterVTable, try_acquire_read), 64);
-        assert_eq!(offset_of!(VulkanSurfaceAdapterVTable, try_acquire_write), 72);
+        assert_eq!(
+            offset_of!(VulkanSurfaceAdapterVTable, try_acquire_write),
+            72
+        );
         assert_eq!(offset_of!(VulkanSurfaceAdapterVTable, end_read_access), 80);
         assert_eq!(offset_of!(VulkanSurfaceAdapterVTable, end_write_access), 88);
-        assert_eq!(offset_of!(VulkanSurfaceAdapterVTable, release_to_foreign), 96);
-        assert_eq!(offset_of!(VulkanSurfaceAdapterVTable, surface_image_info), 104);
+        assert_eq!(
+            offset_of!(VulkanSurfaceAdapterVTable, release_to_foreign),
+            96
+        );
+        assert_eq!(
+            offset_of!(VulkanSurfaceAdapterVTable, surface_image_info),
+            104
+        );
         assert_eq!(offset_of!(VulkanSurfaceAdapterVTable, raw_handles), 112);
     }
 

@@ -19,11 +19,11 @@
 #[path = "common.rs"]
 mod common;
 
+use streamlib::sdk::engine::HostTextureExt;
 use streamlib::sdk::rhi::TextureFormat;
 use streamlib_adapter_abi::testing::{empty_surface, run_conformance};
 use streamlib_adapter_abi::{AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceId};
-use streamlib_adapter_opengl::{HostSurfaceRegistration, DRM_FORMAT_ARGB8888};
-use streamlib::sdk::engine::HostTextureExt;
+use streamlib_adapter_opengl::{DRM_FORMAT_ARGB8888, HostSurfaceRegistration};
 
 use common::HostFixture;
 
@@ -109,4 +109,3 @@ fn duplicate_registration_returns_surface_already_registered() {
         other => panic!("expected SurfaceAlreadyRegistered, got {other:?}"),
     }
 }
-

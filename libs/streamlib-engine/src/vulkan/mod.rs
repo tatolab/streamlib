@@ -11,5 +11,5 @@ pub mod video;
 // Re-exports for public API (intentionally exposed for external use)
 #[allow(unused_imports)]
 pub use rhi::{
-    VulkanBlitter, VulkanCommandBuffer, VulkanCommandQueue, HostVulkanDevice, HostVulkanTexture,
+    HostVulkanDevice, HostVulkanTexture, VulkanBlitter, VulkanCommandBuffer, VulkanCommandQueue,
 };

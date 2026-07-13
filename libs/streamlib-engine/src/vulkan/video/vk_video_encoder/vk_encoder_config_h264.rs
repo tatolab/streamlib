@@ -68,25 +68,196 @@ pub struct LevelLimits {
 
 /// H.264 level limits table (Table A-1 from the H.264 specification).
 pub static LEVEL_LIMITS_H264: &[LevelLimits] = &[
-    LevelLimits { level_idc: 10, max_mbps: 1485, max_fs: 99, max_dpb: 148.5, max_br: 64, max_cpb: 175, max_vmv_r: 64, level: 0 },     // 1.0
-    LevelLimits { level_idc: 11, max_mbps: 3000, max_fs: 396, max_dpb: 337.5, max_br: 192, max_cpb: 500, max_vmv_r: 128, level: 1 },   // 1.1
-    LevelLimits { level_idc: 12, max_mbps: 6000, max_fs: 396, max_dpb: 891.0, max_br: 384, max_cpb: 1000, max_vmv_r: 128, level: 2 },  // 1.2
-    LevelLimits { level_idc: 13, max_mbps: 11880, max_fs: 396, max_dpb: 891.0, max_br: 768, max_cpb: 2000, max_vmv_r: 128, level: 3 }, // 1.3
-    LevelLimits { level_idc: 20, max_mbps: 11880, max_fs: 396, max_dpb: 891.0, max_br: 2000, max_cpb: 2000, max_vmv_r: 128, level: 4 },  // 2.0
-    LevelLimits { level_idc: 21, max_mbps: 19800, max_fs: 792, max_dpb: 1782.0, max_br: 4000, max_cpb: 4000, max_vmv_r: 256, level: 5 }, // 2.1
-    LevelLimits { level_idc: 22, max_mbps: 20250, max_fs: 1620, max_dpb: 3037.5, max_br: 4000, max_cpb: 4000, max_vmv_r: 256, level: 6 }, // 2.2
-    LevelLimits { level_idc: 30, max_mbps: 40500, max_fs: 1620, max_dpb: 3037.5, max_br: 10000, max_cpb: 10000, max_vmv_r: 256, level: 7 }, // 3.0
-    LevelLimits { level_idc: 31, max_mbps: 108000, max_fs: 3600, max_dpb: 6750.0, max_br: 14000, max_cpb: 14000, max_vmv_r: 512, level: 8 }, // 3.1
-    LevelLimits { level_idc: 32, max_mbps: 216000, max_fs: 5120, max_dpb: 7680.0, max_br: 20000, max_cpb: 20000, max_vmv_r: 512, level: 9 }, // 3.2
-    LevelLimits { level_idc: 40, max_mbps: 245760, max_fs: 8192, max_dpb: 12288.0, max_br: 20000, max_cpb: 25000, max_vmv_r: 512, level: 10 }, // 4.0
-    LevelLimits { level_idc: 41, max_mbps: 245760, max_fs: 8192, max_dpb: 12288.0, max_br: 50000, max_cpb: 62500, max_vmv_r: 512, level: 11 }, // 4.1
-    LevelLimits { level_idc: 42, max_mbps: 522240, max_fs: 8704, max_dpb: 13056.0, max_br: 50000, max_cpb: 62500, max_vmv_r: 512, level: 12 }, // 4.2
-    LevelLimits { level_idc: 50, max_mbps: 589824, max_fs: 22080, max_dpb: 41400.0, max_br: 135000, max_cpb: 135000, max_vmv_r: 512, level: 13 }, // 5.0
-    LevelLimits { level_idc: 51, max_mbps: 983040, max_fs: 36864, max_dpb: 69120.0, max_br: 240000, max_cpb: 240000, max_vmv_r: 512, level: 14 }, // 5.1
-    LevelLimits { level_idc: 52, max_mbps: 2073600, max_fs: 36864, max_dpb: 69120.0, max_br: 240000, max_cpb: 240000, max_vmv_r: 512, level: 15 }, // 5.2
-    LevelLimits { level_idc: 60, max_mbps: 4177920, max_fs: 139264, max_dpb: 261120.0, max_br: 240000, max_cpb: 240000, max_vmv_r: 8192, level: 16 }, // 6.0
-    LevelLimits { level_idc: 61, max_mbps: 8355840, max_fs: 139264, max_dpb: 261120.0, max_br: 480000, max_cpb: 480000, max_vmv_r: 8192, level: 17 }, // 6.1
-    LevelLimits { level_idc: 62, max_mbps: 16711680, max_fs: 139264, max_dpb: 261120.0, max_br: 800000, max_cpb: 800000, max_vmv_r: 8192, level: 18 }, // 6.2
+    LevelLimits {
+        level_idc: 10,
+        max_mbps: 1485,
+        max_fs: 99,
+        max_dpb: 148.5,
+        max_br: 64,
+        max_cpb: 175,
+        max_vmv_r: 64,
+        level: 0,
+    }, // 1.0
+    LevelLimits {
+        level_idc: 11,
+        max_mbps: 3000,
+        max_fs: 396,
+        max_dpb: 337.5,
+        max_br: 192,
+        max_cpb: 500,
+        max_vmv_r: 128,
+        level: 1,
+    }, // 1.1
+    LevelLimits {
+        level_idc: 12,
+        max_mbps: 6000,
+        max_fs: 396,
+        max_dpb: 891.0,
+        max_br: 384,
+        max_cpb: 1000,
+        max_vmv_r: 128,
+        level: 2,
+    }, // 1.2
+    LevelLimits {
+        level_idc: 13,
+        max_mbps: 11880,
+        max_fs: 396,
+        max_dpb: 891.0,
+        max_br: 768,
+        max_cpb: 2000,
+        max_vmv_r: 128,
+        level: 3,
+    }, // 1.3
+    LevelLimits {
+        level_idc: 20,
+        max_mbps: 11880,
+        max_fs: 396,
+        max_dpb: 891.0,
+        max_br: 2000,
+        max_cpb: 2000,
+        max_vmv_r: 128,
+        level: 4,
+    }, // 2.0
+    LevelLimits {
+        level_idc: 21,
+        max_mbps: 19800,
+        max_fs: 792,
+        max_dpb: 1782.0,
+        max_br: 4000,
+        max_cpb: 4000,
+        max_vmv_r: 256,
+        level: 5,
+    }, // 2.1
+    LevelLimits {
+        level_idc: 22,
+        max_mbps: 20250,
+        max_fs: 1620,
+        max_dpb: 3037.5,
+        max_br: 4000,
+        max_cpb: 4000,
+        max_vmv_r: 256,
+        level: 6,
+    }, // 2.2
+    LevelLimits {
+        level_idc: 30,
+        max_mbps: 40500,
+        max_fs: 1620,
+        max_dpb: 3037.5,
+        max_br: 10000,
+        max_cpb: 10000,
+        max_vmv_r: 256,
+        level: 7,
+    }, // 3.0
+    LevelLimits {
+        level_idc: 31,
+        max_mbps: 108000,
+        max_fs: 3600,
+        max_dpb: 6750.0,
+        max_br: 14000,
+        max_cpb: 14000,
+        max_vmv_r: 512,
+        level: 8,
+    }, // 3.1
+    LevelLimits {
+        level_idc: 32,
+        max_mbps: 216000,
+        max_fs: 5120,
+        max_dpb: 7680.0,
+        max_br: 20000,
+        max_cpb: 20000,
+        max_vmv_r: 512,
+        level: 9,
+    }, // 3.2
+    LevelLimits {
+        level_idc: 40,
+        max_mbps: 245760,
+        max_fs: 8192,
+        max_dpb: 12288.0,
+        max_br: 20000,
+        max_cpb: 25000,
+        max_vmv_r: 512,
+        level: 10,
+    }, // 4.0
+    LevelLimits {
+        level_idc: 41,
+        max_mbps: 245760,
+        max_fs: 8192,
+        max_dpb: 12288.0,
+        max_br: 50000,
+        max_cpb: 62500,
+        max_vmv_r: 512,
+        level: 11,
+    }, // 4.1
+    LevelLimits {
+        level_idc: 42,
+        max_mbps: 522240,
+        max_fs: 8704,
+        max_dpb: 13056.0,
+        max_br: 50000,
+        max_cpb: 62500,
+        max_vmv_r: 512,
+        level: 12,
+    }, // 4.2
+    LevelLimits {
+        level_idc: 50,
+        max_mbps: 589824,
+        max_fs: 22080,
+        max_dpb: 41400.0,
+        max_br: 135000,
+        max_cpb: 135000,
+        max_vmv_r: 512,
+        level: 13,
+    }, // 5.0
+    LevelLimits {
+        level_idc: 51,
+        max_mbps: 983040,
+        max_fs: 36864,
+        max_dpb: 69120.0,
+        max_br: 240000,
+        max_cpb: 240000,
+        max_vmv_r: 512,
+        level: 14,
+    }, // 5.1
+    LevelLimits {
+        level_idc: 52,
+        max_mbps: 2073600,
+        max_fs: 36864,
+        max_dpb: 69120.0,
+        max_br: 240000,
+        max_cpb: 240000,
+        max_vmv_r: 512,
+        level: 15,
+    }, // 5.2
+    LevelLimits {
+        level_idc: 60,
+        max_mbps: 4177920,
+        max_fs: 139264,
+        max_dpb: 261120.0,
+        max_br: 240000,
+        max_cpb: 240000,
+        max_vmv_r: 8192,
+        level: 16,
+    }, // 6.0
+    LevelLimits {
+        level_idc: 61,
+        max_mbps: 8355840,
+        max_fs: 139264,
+        max_dpb: 261120.0,
+        max_br: 480000,
+        max_cpb: 480000,
+        max_vmv_r: 8192,
+        level: 17,
+    }, // 6.1
+    LevelLimits {
+        level_idc: 62,
+        max_mbps: 16711680,
+        max_fs: 139264,
+        max_dpb: 261120.0,
+        max_br: 800000,
+        max_cpb: 800000,
+        max_vmv_r: 8192,
+        level: 18,
+    }, // 6.2
 ];
 
 // ---------------------------------------------------------------------------
@@ -241,7 +412,7 @@ impl EncoderConfigH264 {
     ) -> (u32, u16, u16) {
         // SAR table (subset of H.264 Table E-1)
         static SAR_TABLE: &[(u32, u32, u32)] = &[
-            (1, 1, 1),   // SQUARE
+            (1, 1, 1), // SQUARE
             (12, 11, 2),
             (10, 11, 3),
             (16, 11, 4),
@@ -288,9 +459,7 @@ impl EncoderConfigH264 {
             use_8x8_transform = false;
         } else {
             // Autoselect
-            if self.profile_idc == h264_profile::INVALID
-                || self.profile_idc >= h264_profile::HIGH
-            {
+            if self.profile_idc == h264_profile::INVALID || self.profile_idc >= h264_profile::HIGH {
                 use_8x8_transform = true;
             }
         }
@@ -313,9 +482,7 @@ impl EncoderConfigH264 {
             }
 
             // Upgrade to HIGH_444_PREDICTIVE for lossless or 4:4:4
-            if self.base.input.chroma_subsampling
-                == vk::VideoChromaSubsamplingFlagsKHR::_444
-            {
+            if self.base.input.chroma_subsampling == vk::VideoChromaSubsamplingFlagsKHR::_444 {
                 self.profile_idc = h264_profile::HIGH_444_PREDICTIVE;
             }
         }
@@ -329,13 +496,12 @@ impl EncoderConfigH264 {
             self.hrd_bitrate
         };
 
-        let frame_rate = if self.base.frame_rate_numerator > 0
-            && self.base.frame_rate_denominator > 0
-        {
-            self.base.frame_rate_numerator as f64 / self.base.frame_rate_denominator as f64
-        } else {
-            FRAME_RATE_NUM_DEFAULT as f64 / FRAME_RATE_DEN_DEFAULT as f64
-        };
+        let frame_rate =
+            if self.base.frame_rate_numerator > 0 && self.base.frame_rate_denominator > 0 {
+                self.base.frame_rate_numerator as f64 / self.base.frame_rate_denominator as f64
+            } else {
+                FRAME_RATE_NUM_DEFAULT as f64 / FRAME_RATE_DEN_DEFAULT as f64
+            };
 
         self.level_idc = self.determine_level(
             self.base.dpb_count as u8,
@@ -357,12 +523,12 @@ impl EncoderConfigH264 {
         }
 
         let level_dpb_size = ((1024.0 * LEVEL_LIMITS_H264[level_idx].max_dpb)
-            / (self.pic_width_in_mbs as f64
-                * self.pic_height_in_map_units as f64
-                * 384.0)) as u8;
+            / (self.pic_width_in_mbs as f64 * self.pic_height_in_map_units as f64 * 384.0))
+            as u8;
 
         let level_dpb_size = level_dpb_size.min(
-            crate::vulkan::video::vk_video_encoder::vk_encoder_config::DEFAULT_MAX_NUM_REF_FRAMES as u8,
+            crate::vulkan::video::vk_video_encoder::vk_encoder_config::DEFAULT_MAX_NUM_REF_FRAMES
+                as u8,
         );
 
         let dpb_size = if self.base.dpb_count < 1 {
@@ -394,8 +560,9 @@ impl EncoderConfigH264 {
         };
 
         // 800 instead of 1000 for BD compliance at level 4.1
-        level_bit_rate =
-            level_bit_rate.max(LEVEL_LIMITS_H264[level_idx].max_br * 800).min(120_000_000);
+        level_bit_rate = level_bit_rate
+            .max(LEVEL_LIMITS_H264[level_idx].max_br * 800)
+            .min(120_000_000);
 
         if self.base.average_bitrate == 0 {
             self.base.average_bitrate = if self.hrd_bitrate != 0 {
@@ -411,9 +578,9 @@ impl EncoderConfigH264 {
             {
                 self.hrd_bitrate = (self.base.average_bitrate * 3).min(level_bit_rate);
                 if self.base.vbv_buffer_size != 0 {
-                    self.hrd_bitrate = self.hrd_bitrate.min(
-                        (self.base.vbv_buffer_size * 2).max(self.base.average_bitrate),
-                    );
+                    self.hrd_bitrate = self
+                        .hrd_bitrate
+                        .min((self.base.vbv_buffer_size * 2).max(self.base.average_bitrate));
                 }
             } else {
                 self.hrd_bitrate = self.base.average_bitrate;
@@ -431,9 +598,7 @@ impl EncoderConfigH264 {
         if self.base.vbv_buffer_size == 0 {
             self.base.vbv_buffer_size =
                 (LEVEL_LIMITS_H264[level_idx].max_cpb * 1000).min(120_000_000);
-            if self.base.rate_control_mode
-                != vk::VideoEncodeRateControlModeFlagsKHR::DISABLED
-            {
+            if self.base.rate_control_mode != vk::VideoEncodeRateControlModeFlagsKHR::DISABLED {
                 if (self.base.vbv_buffer_size >> 3) > self.hrd_bitrate {
                     self.base.vbv_buffer_size = self.hrd_bitrate << 3;
                 }
@@ -522,11 +687,11 @@ impl EncoderConfigH264 {
 /// Map a raw H.264 profile_idc integer to the vulkanalia StdVideoH264ProfileIdc.
 pub fn profile_idc_to_std_video(profile_idc: u32) -> vk::video::StdVideoH264ProfileIdc {
     match profile_idc {
-        66  => vk::video::STD_VIDEO_H264_PROFILE_IDC_BASELINE,
-        77  => vk::video::STD_VIDEO_H264_PROFILE_IDC_MAIN,
+        66 => vk::video::STD_VIDEO_H264_PROFILE_IDC_BASELINE,
+        77 => vk::video::STD_VIDEO_H264_PROFILE_IDC_MAIN,
         100 => vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH,
         244 => vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH_444_PREDICTIVE,
-        _   => vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH,
+        _ => vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH,
     }
 }
 
@@ -622,19 +787,40 @@ mod tests {
 
     #[test]
     fn test_profile_idc_to_std_video() {
-        assert_eq!(profile_idc_to_std_video(66), vk::video::STD_VIDEO_H264_PROFILE_IDC_BASELINE);
-        assert_eq!(profile_idc_to_std_video(77), vk::video::STD_VIDEO_H264_PROFILE_IDC_MAIN);
-        assert_eq!(profile_idc_to_std_video(100), vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH);
-        assert_eq!(profile_idc_to_std_video(244), vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH_444_PREDICTIVE);
+        assert_eq!(
+            profile_idc_to_std_video(66),
+            vk::video::STD_VIDEO_H264_PROFILE_IDC_BASELINE
+        );
+        assert_eq!(
+            profile_idc_to_std_video(77),
+            vk::video::STD_VIDEO_H264_PROFILE_IDC_MAIN
+        );
+        assert_eq!(
+            profile_idc_to_std_video(100),
+            vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH
+        );
+        assert_eq!(
+            profile_idc_to_std_video(244),
+            vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH_444_PREDICTIVE
+        );
         // Unknown falls back to HIGH
-        assert_eq!(profile_idc_to_std_video(999), vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH);
+        assert_eq!(
+            profile_idc_to_std_video(999),
+            vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH
+        );
     }
 
     #[test]
     fn test_level_index_to_std_video() {
         // Table index 0 = Level 1.0, index 11 = Level 4.1
-        assert_eq!(level_index_to_std_video(0), vk::video::STD_VIDEO_H264_LEVEL_IDC_1_0);
-        assert_eq!(level_index_to_std_video(11), vk::video::STD_VIDEO_H264_LEVEL_IDC_4_1);
+        assert_eq!(
+            level_index_to_std_video(0),
+            vk::video::STD_VIDEO_H264_LEVEL_IDC_1_0
+        );
+        assert_eq!(
+            level_index_to_std_video(11),
+            vk::video::STD_VIDEO_H264_LEVEL_IDC_4_1
+        );
     }
 
     #[test]
@@ -644,16 +830,16 @@ mod tests {
         cfg.level_idc = 11; // Level 4.1
 
         let state = cfg.build_sps_pps_state(
-            640, 480,  // aligned
-            640, 480,  // config (no crop needed)
-            3,         // max_num_ref_frames
-            0,         // log2_max_frame_num_minus4
-            4,         // log2_max_pic_order_cnt_lsb_minus4
+            640, 480, // aligned
+            640, 480, // config (no crop needed)
+            3,   // max_num_ref_frames
+            0,   // log2_max_frame_num_minus4
+            4,   // log2_max_pic_order_cnt_lsb_minus4
         );
 
         assert_eq!(state.sps_info.profile_idc, h264_profile::HIGH);
         assert_eq!(state.sps_info.level_idc, 11);
-        assert_eq!(state.sps_info.pic_width_in_mbs_minus1, 39);  // 640/16 - 1
+        assert_eq!(state.sps_info.pic_width_in_mbs_minus1, 39); // 640/16 - 1
         assert_eq!(state.sps_info.pic_height_in_map_units_minus1, 29); // 480/16 - 1
         assert_eq!(state.sps_info.max_num_ref_frames, 3);
         assert!(!state.sps_info.frame_cropping_flag);
@@ -672,8 +858,8 @@ mod tests {
         cfg.level_idc = 11;
 
         let state = cfg.build_sps_pps_state(
-            640, 496,  // aligned (padded from 480)
-            640, 480,  // config
+            640, 496, // aligned (padded from 480)
+            640, 480, // config
             3, 0, 4,
         );
 

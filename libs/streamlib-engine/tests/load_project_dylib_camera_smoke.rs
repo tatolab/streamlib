@@ -97,7 +97,7 @@ use serde_json::json;
 use serial_test::serial;
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
+use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
 use streamlib::sdk::schema_ident;
 use streamlib_engine::core::runtime::host_target_triple;
 
@@ -141,7 +141,10 @@ fn dlopen_camera_processor_completes_lifecycle_against_vivid() {
         "so"
     };
     let dylib_name = format!("libstreamlib_camera.{dylib_ext}");
-    let built_dylib = workspace_root.join("target").join("debug").join(&dylib_name);
+    let built_dylib = workspace_root
+        .join("target")
+        .join("debug")
+        .join(&dylib_name);
     assert!(
         built_dylib.exists(),
         "camera cdylib not at expected path: {}",
@@ -183,7 +186,10 @@ fn dlopen_camera_processor_completes_lifecycle_against_vivid() {
     runtime
         .add_module_with_blocking(
             module_ident_any_version!("tatolab", "camera"),
-            Strategy::Path { path: camera_dst.clone(), build: BuildPolicy::NeverBuild },
+            Strategy::Path {
+                path: camera_dst.clone(),
+                build: BuildPolicy::NeverBuild,
+            },
         )
         .expect("add_module_with must succeed against the camera cdylib");
 

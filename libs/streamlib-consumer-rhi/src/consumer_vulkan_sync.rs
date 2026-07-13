@@ -84,13 +84,17 @@ impl ConsumerVulkanTimelineSemaphore {
             .semaphores(&semaphores)
             .values(&values)
             .build();
-        unsafe { self.vulkan_device.device().wait_semaphores(&info, timeout_ns) }
-            .map(|_| ())
-            .map_err(|e| {
-                ConsumerRhiError::Gpu(format!(
-                    "wait_semaphores(value={value}, timeout_ns={timeout_ns}): {e}"
-                ))
-            })
+        unsafe {
+            self.vulkan_device
+                .device()
+                .wait_semaphores(&info, timeout_ns)
+        }
+        .map(|_| ())
+        .map_err(|e| {
+            ConsumerRhiError::Gpu(format!(
+                "wait_semaphores(value={value}, timeout_ns={timeout_ns}): {e}"
+            ))
+        })
     }
 
     /// Host-side signal: advance the counter to `value` from the CPU.
@@ -106,16 +110,18 @@ impl ConsumerVulkanTimelineSemaphore {
             .semaphore(self.semaphore)
             .value(value)
             .build();
-        unsafe { self.vulkan_device.device().signal_semaphore(&info) }.map_err(|e| {
-            ConsumerRhiError::Gpu(format!("signal_semaphore(value={value}): {e}"))
-        })
+        unsafe { self.vulkan_device.device().signal_semaphore(&info) }
+            .map_err(|e| ConsumerRhiError::Gpu(format!("signal_semaphore(value={value}): {e}")))
     }
 
     /// Read the timeline counter via `vkGetSemaphoreCounterValue`.
     pub fn current_value(&self) -> Result<u64> {
-        unsafe { self.vulkan_device.device().get_semaphore_counter_value(self.semaphore) }.map_err(
-            |e| ConsumerRhiError::Gpu(format!("get_semaphore_counter_value: {e}")),
-        )
+        unsafe {
+            self.vulkan_device
+                .device()
+                .get_semaphore_counter_value(self.semaphore)
+        }
+        .map_err(|e| ConsumerRhiError::Gpu(format!("get_semaphore_counter_value: {e}")))
     }
 
     /// Raw `vk::Semaphore` handle for inclusion in queue submit infos.

@@ -8,19 +8,19 @@ use std::os::fd::OwnedFd;
 
 use parking_lot::{Mutex, RwLock};
 
-use crate::core::compiler::scheduling::{scheduling_strategy_for_processor, SchedulingStrategy};
+use crate::core::compiler::scheduling::{SchedulingStrategy, scheduling_strategy_for_processor};
 use crate::core::context::{
     GpuContext, GpuContextLimitedAccess, RuntimeContext, RuntimeContextFullAccess,
 };
 use crate::core::descriptors::ProcessorRuntime;
-use crate::core::error::{Result, Error};
+use crate::core::error::{Error, Result};
 use crate::core::execution::run_processor_loop;
 use crate::core::graph::{
     Graph, GraphNodeWithComponents, ProcessorInstanceComponent, ProcessorPauseGateComponent,
     ProcessorReadyBarrierComponent, ProcessorUniqueId, ShutdownChannelComponent, StateComponent,
     SubprocessHandleComponent, ThreadHandleComponent,
 };
-use crate::core::processors::{ProcessorInstanceFactory, ProcessorState, PROCESSOR_REGISTRY};
+use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorInstanceFactory, ProcessorState};
 
 /// Spawn a processor thread.
 ///
@@ -174,11 +174,7 @@ fn spawn_dedicated_thread(
             let current_thread = std::thread::current();
             let thread_id = current_thread.id();
 
-            tracing::info!(
-                "[{}] Thread started: id={:?}",
-                proc_id_clone,
-                thread_id
-            );
+            tracing::info!("[{}] Thread started: id={:?}", proc_id_clone, thread_id);
 
             // Apply thread priority (platform-specific)
             // Skip for Manual mode - real work runs on OS-managed callback threads
@@ -278,28 +274,27 @@ fn spawn_dedicated_thread(
                     }
                 };
 
-                let (shutdown_rx, shutdown_eventfd) = match node
-                    .get_mut::<ShutdownChannelComponent>()
-                {
-                    Some(channel) => {
-                        let rx = match channel.take_receiver() {
-                            Some(rx) => rx,
-                            None => {
-                                tracing::error!(
-                                    "[{}] Shutdown receiver already taken",
-                                    proc_id_clone
-                                );
-                                return;
-                            }
-                        };
-                        let eventfd = clone_shutdown_eventfd(channel, &proc_id_clone);
-                        (rx, eventfd)
-                    }
-                    None => {
-                        tracing::error!("[{}] No ShutdownChannelComponent", proc_id_clone);
-                        return;
-                    }
-                };
+                let (shutdown_rx, shutdown_eventfd) =
+                    match node.get_mut::<ShutdownChannelComponent>() {
+                        Some(channel) => {
+                            let rx = match channel.take_receiver() {
+                                Some(rx) => rx,
+                                None => {
+                                    tracing::error!(
+                                        "[{}] Shutdown receiver already taken",
+                                        proc_id_clone
+                                    );
+                                    return;
+                                }
+                            };
+                            let eventfd = clone_shutdown_eventfd(channel, &proc_id_clone);
+                            (rx, eventfd)
+                        }
+                        None => {
+                            tracing::error!("[{}] No ShutdownChannelComponent", proc_id_clone);
+                            return;
+                        }
+                    };
 
                 let pause_gate_inner = match node.get::<ProcessorPauseGateComponent>() {
                     Some(pg) => pg.clone_inner(),
@@ -416,9 +411,9 @@ where
 {
     let _ = gpu;
     match runtime {
-        ProcessorRuntime::Rust
-        | ProcessorRuntime::Python
-        | ProcessorRuntime::TypeScript => setup_body(),
+        ProcessorRuntime::Rust | ProcessorRuntime::Python | ProcessorRuntime::TypeScript => {
+            setup_body()
+        }
     }
 }
 

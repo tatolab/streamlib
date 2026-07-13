@@ -321,7 +321,12 @@ impl VkEncDpbH264 {
             }
         }
 
-        self.calculate_poc(pic_info, sps_pic_order_cnt_type, sps_log2_max_frame_num_minus4, sps_log2_max_pic_order_cnt_lsb_minus4);
+        self.calculate_poc(
+            pic_info,
+            sps_pic_order_cnt_type,
+            sps_log2_max_frame_num_minus4,
+            sps_log2_max_pic_order_cnt_lsb_minus4,
+        );
         self.calculate_pic_num(pic_info, sps_log2_max_frame_num_minus4);
 
         self.curr_dpb_idx
@@ -331,7 +336,10 @@ impl VkEncDpbH264 {
     pub fn get_current_dpb_entry(&self) -> (u32, i32) {
         let idx = self.curr_dpb_idx as usize;
         debug_assert!(idx < MAX_DPB_SLOTS || idx == MAX_DPB_SLOTS);
-        (self.dpb[idx].pic_info_frame_num, self.dpb[idx].pic_info_pic_order_cnt)
+        (
+            self.dpb[idx].pic_info_frame_num,
+            self.dpb[idx].pic_info_pic_order_cnt,
+        )
     }
 
     /// Get the updated frame_num and PicOrderCnt.
@@ -361,7 +369,10 @@ impl VkEncDpbH264 {
 
     /// Check if a specific reference picture is corrupted.
     pub fn is_ref_pic_corrupted(&self, dpb_idx: i32) -> bool {
-        if dpb_idx >= 0 && (dpb_idx as usize) < MAX_DPB_SLOTS && self.dpb[dpb_idx as usize].state != DpbStateH264::Empty as u32 {
+        if dpb_idx >= 0
+            && (dpb_idx as usize) < MAX_DPB_SLOTS
+            && self.dpb[dpb_idx as usize].state != DpbStateH264::Empty as u32
+        {
             return self.dpb[dpb_idx as usize].frame_is_corrupted;
         }
         false
@@ -404,7 +415,10 @@ impl VkEncDpbH264 {
 
     /// Get picture timestamp for a DPB index.
     pub fn get_picture_timestamp(&self, dpb_idx: i32) -> u64 {
-        if dpb_idx >= 0 && (dpb_idx as usize) < MAX_DPB_SLOTS && self.dpb[dpb_idx as usize].state != DpbStateH264::Empty as u32 {
+        if dpb_idx >= 0
+            && (dpb_idx as usize) < MAX_DPB_SLOTS
+            && self.dpb[dpb_idx as usize].state != DpbStateH264::Empty as u32
+        {
             return self.dpb[dpb_idx as usize].time_stamp;
         }
         0
@@ -420,7 +434,10 @@ impl VkEncDpbH264 {
 
     /// Get dirty intra-refresh regions for a DPB slot.
     pub fn get_dirty_intra_refresh_regions(&self, dpb_idx: i32) -> u32 {
-        if dpb_idx >= 0 && (dpb_idx as usize) < MAX_DPB_SLOTS && self.dpb[dpb_idx as usize].state != DpbStateH264::Empty as u32 {
+        if dpb_idx >= 0
+            && (dpb_idx as usize) < MAX_DPB_SLOTS
+            && self.dpb[dpb_idx as usize].state != DpbStateH264::Empty as u32
+        {
             return self.dpb[dpb_idx as usize].dirty_intra_refresh_regions;
         }
         0
@@ -435,16 +452,31 @@ impl VkEncDpbH264 {
     }
 
     /// Fill standard reference info for a DPB slot.
-    pub fn fill_std_reference_info(&self, dpb_idx: u8, pic_order_cnt: &mut i32, is_long_term: &mut bool, long_term_frame_idx: &mut i32) {
+    pub fn fill_std_reference_info(
+        &self,
+        dpb_idx: u8,
+        pic_order_cnt: &mut i32,
+        is_long_term: &mut bool,
+        long_term_frame_idx: &mut i32,
+    ) {
         debug_assert!((dpb_idx as usize) < MAX_DPB_SLOTS);
         let entry = &self.dpb[dpb_idx as usize];
         *is_long_term = entry.top_field_marking == MARKING_LONG;
         *pic_order_cnt = entry.pic_info_pic_order_cnt;
-        *long_term_frame_idx = if *is_long_term { entry.long_term_frame_idx } else { -1 };
+        *long_term_frame_idx = if *is_long_term {
+            entry.long_term_frame_idx
+        } else {
+            -1
+        };
     }
 
     /// Get PicNum with minimum POC.
-    pub fn get_pic_num_x_with_min_poc(&self, view_id: u32, field_pic_flag: bool, bottom_field: bool) -> i32 {
+    pub fn get_pic_num_x_with_min_poc(
+        &self,
+        view_id: u32,
+        field_pic_flag: bool,
+        bottom_field: bool,
+    ) -> i32 {
         let mut poc_min = INF_MAX;
         let mut min_idx: i32 = -1;
         for i in 0..MAX_DPB_SLOTS {
@@ -476,12 +508,18 @@ impl VkEncDpbH264 {
     }
 
     /// Get PicNum with minimum FrameNumWrap.
-    pub fn get_pic_num_x_with_min_frame_num_wrap(&self, view_id: u32, field_pic_flag: bool, bottom_field: bool) -> i32 {
+    pub fn get_pic_num_x_with_min_frame_num_wrap(
+        &self,
+        view_id: u32,
+        field_pic_flag: bool,
+        bottom_field: bool,
+    ) -> i32 {
         let mut min_frame_num_wrap = 65536i32;
         let mut min_idx: i32 = -1;
         for i in 0..MAX_DPB_SLOTS {
             if self.dpb[i].view_id == view_id
-                && (self.dpb[i].top_field_marking == MARKING_SHORT || self.dpb[i].bottom_field_marking == MARKING_SHORT)
+                && (self.dpb[i].top_field_marking == MARKING_SHORT
+                    || self.dpb[i].bottom_field_marking == MARKING_SHORT)
                 && self.dpb[i].frame_num_wrap < min_frame_num_wrap
             {
                 min_idx = i as i32;
@@ -500,7 +538,10 @@ impl VkEncDpbH264 {
 
     /// Get PicNum for a specific DPB index.
     pub fn get_pic_num(&self, dpb_idx: i32, bottom_field: bool) -> i32 {
-        if dpb_idx >= 0 && (dpb_idx as usize) < MAX_DPB_SLOTS && self.dpb[dpb_idx as usize].state != DpbStateH264::Empty as u32 {
+        if dpb_idx >= 0
+            && (dpb_idx as usize) < MAX_DPB_SLOTS
+            && self.dpb[dpb_idx as usize].state != DpbStateH264::Empty as u32
+        {
             return if bottom_field {
                 self.dpb[dpb_idx as usize].bottom_pic_num
             } else {
@@ -544,9 +585,11 @@ impl VkEncDpbH264 {
         }
         for i in 0..MAX_DPB_SLOTS {
             let top_ok = (self.dpb[i].state & DpbStateH264::Top as u32) == 0
-                || (!self.dpb[i].top_needed_for_output && self.dpb[i].top_field_marking == MARKING_UNUSED);
+                || (!self.dpb[i].top_needed_for_output
+                    && self.dpb[i].top_field_marking == MARKING_UNUSED);
             let bot_ok = (self.dpb[i].state & DpbStateH264::Bottom as u32) == 0
-                || (!self.dpb[i].bottom_needed_for_output && self.dpb[i].bottom_field_marking == MARKING_UNUSED);
+                || (!self.dpb[i].bottom_needed_for_output
+                    && self.dpb[i].bottom_field_marking == MARKING_UNUSED);
             if top_ok && bot_ok {
                 self.dpb[i].state = DpbStateH264::Empty as u32;
             }
@@ -594,11 +637,15 @@ impl VkEncDpbH264 {
             let mut poc_min2 = INF_MAX;
             let mut min_foc2: i32 = -1;
             for i in 0..MAX_DPB_SLOTS {
-                if (self.dpb[i].state & DpbStateH264::Top as u32) != 0 && self.dpb[i].top_foc <= poc_min2 {
+                if (self.dpb[i].state & DpbStateH264::Top as u32) != 0
+                    && self.dpb[i].top_foc <= poc_min2
+                {
                     poc_min2 = self.dpb[i].top_foc;
                     min_foc2 = i as i32;
                 }
-                if (self.dpb[i].state & DpbStateH264::Bottom as u32) != 0 && self.dpb[i].bottom_foc <= poc_min2 {
+                if (self.dpb[i].state & DpbStateH264::Bottom as u32) != 0
+                    && self.dpb[i].bottom_foc <= poc_min2
+                {
                     poc_min2 = self.dpb[i].bottom_foc;
                     min_foc2 = i as i32;
                 }
@@ -609,7 +656,13 @@ impl VkEncDpbH264 {
         }
     }
 
-    fn calculate_poc(&mut self, pic_info: &PicInfoH264, poc_type: u32, log2_max_frame_num_m4: u32, log2_max_poc_lsb_m4: u32) {
+    fn calculate_poc(
+        &mut self,
+        pic_info: &PicInfoH264,
+        poc_type: u32,
+        log2_max_frame_num_m4: u32,
+        log2_max_poc_lsb_m4: u32,
+    ) {
         if poc_type == 0 {
             self.calculate_poc_type0(pic_info, log2_max_poc_lsb_m4);
         } else {
@@ -617,7 +670,8 @@ impl VkEncDpbH264 {
         }
         let idx = self.curr_dpb_idx as usize;
         if !pic_info.field_pic_flag || self.dpb[idx].complementary_field_pair {
-            self.dpb[idx].pic_info_pic_order_cnt = cmp::min(self.dpb[idx].top_foc, self.dpb[idx].bottom_foc);
+            self.dpb[idx].pic_info_pic_order_cnt =
+                cmp::min(self.dpb[idx].top_foc, self.dpb[idx].bottom_foc);
         } else if !pic_info.bottom_field_flag {
             self.dpb[idx].pic_info_pic_order_cnt = self.dpb[idx].top_foc;
         } else {
@@ -720,10 +774,15 @@ impl VkEncDpbH264 {
         }
     }
 
-    fn sliding_window_memory_management(&mut self, pic_info: &PicInfoH264, sps_max_num_ref_frames: u32) {
+    fn sliding_window_memory_management(
+        &mut self,
+        pic_info: &PicInfoH264,
+        sps_max_num_ref_frames: u32,
+    ) {
         let idx = self.curr_dpb_idx as usize;
         if pic_info.field_pic_flag
-            && ((!pic_info.bottom_field_flag && self.dpb[idx].bottom_field_marking == MARKING_SHORT)
+            && ((!pic_info.bottom_field_flag
+                && self.dpb[idx].bottom_field_marking == MARKING_SHORT)
                 || (pic_info.bottom_field_flag && self.dpb[idx].top_field_marking == MARKING_SHORT))
         {
             if !pic_info.bottom_field_flag {
@@ -737,14 +796,18 @@ impl VkEncDpbH264 {
             let mut num_short = 0i32;
             let mut num_long = 0i32;
             for i in 0..MAX_DPB_SLOTS {
-                if self.dpb[i].top_field_marking == MARKING_SHORT || self.dpb[i].bottom_field_marking == MARKING_SHORT {
+                if self.dpb[i].top_field_marking == MARKING_SHORT
+                    || self.dpb[i].bottom_field_marking == MARKING_SHORT
+                {
                     num_short += 1;
                     if self.dpb[i].frame_num_wrap < min_frame_num_wrap {
                         imin = i;
                         min_frame_num_wrap = self.dpb[i].frame_num_wrap;
                     }
                 }
-                if self.dpb[i].top_field_marking == MARKING_LONG || self.dpb[i].bottom_field_marking == MARKING_LONG {
+                if self.dpb[i].top_field_marking == MARKING_LONG
+                    || self.dpb[i].bottom_field_marking == MARKING_LONG
+                {
                     num_long += 1;
                 }
             }
@@ -834,9 +897,14 @@ impl VkEncDpbH264 {
                     m = v;
                 }
             }
-            if i1 < 0 { break; }
+            if i1 < 0 {
+                break;
+            }
             list[k].dpb_index = i1;
-            if m == INF_MIN { k += 1; break; }
+            if m == INF_MIN {
+                k += 1;
+                break;
+            }
             n = m - 1;
             k += 1;
         }
@@ -868,7 +936,9 @@ impl VkEncDpbH264 {
                     m = v;
                 }
             }
-            if i1 < 0 { break; }
+            if i1 < 0 {
+                break;
+            }
             list[k].dpb_index = i1;
             n = m;
             k += 1;
@@ -896,11 +966,7 @@ impl VkEncDpbH264 {
     /// For non-IDR reference pictures, applies sliding window memory management.
     /// Returns the DPB slot index where the picture was stored, or -1 for
     /// non-reference pictures.
-    pub fn dpb_picture_end(
-        &mut self,
-        pic_info: &PicInfoH264,
-        sps_max_num_ref_frames: u32,
-    ) -> i8 {
+    pub fn dpb_picture_end(&mut self, pic_info: &PicInfoH264, sps_max_num_ref_frames: u32) -> i8 {
         let temp_idx = MAX_DPB_SLOTS;
 
         if pic_info.is_idr {
@@ -973,14 +1039,14 @@ impl VkEncDpbH264 {
 
         // Short-term descending by PicNum
         let k = self.sort_list_descending(
-            &mut temp_list, 0, INF_MAX,
-            sort_check_short_term_p_frame, false,
+            &mut temp_list,
+            0,
+            INF_MAX,
+            sort_check_short_term_p_frame,
+            false,
         );
         // Long-term ascending by LongTermPicNum
-        let k = self.sort_list_ascending(
-            &mut temp_list, k, -1,
-            sort_check_long_term_frame, false,
-        );
+        let k = self.sort_list_ascending(&mut temp_list, k, -1, sort_check_long_term_frame, false);
 
         let count = k.min(16);
         lists.ref_pic_list_count[0] = count as u32;
@@ -1003,17 +1069,20 @@ impl VkEncDpbH264 {
 
         // L0: short-term POC <= current descending, then POC > current ascending, then long-term
         let k = self.sort_list_descending(
-            &mut temp_list0, 0, current_poc,
-            sort_check_short_term_b_frame, false,
+            &mut temp_list0,
+            0,
+            current_poc,
+            sort_check_short_term_b_frame,
+            false,
         );
         let k = self.sort_list_ascending(
-            &mut temp_list0, k, current_poc,
-            sort_check_short_term_b_frame, false,
+            &mut temp_list0,
+            k,
+            current_poc,
+            sort_check_short_term_b_frame,
+            false,
         );
-        let k = self.sort_list_ascending(
-            &mut temp_list0, k, -1,
-            sort_check_long_term_frame, false,
-        );
+        let k = self.sort_list_ascending(&mut temp_list0, k, -1, sort_check_long_term_frame, false);
         let count0 = k.min(16);
         lists.ref_pic_list_count[0] = count0 as u32;
         for i in 0..count0 {
@@ -1023,17 +1092,20 @@ impl VkEncDpbH264 {
 
         // L1: short-term POC > current ascending, then POC <= current descending, then long-term
         let k = self.sort_list_ascending(
-            &mut temp_list1, 0, current_poc,
-            sort_check_short_term_b_frame, false,
+            &mut temp_list1,
+            0,
+            current_poc,
+            sort_check_short_term_b_frame,
+            false,
         );
         let k = self.sort_list_descending(
-            &mut temp_list1, k, current_poc,
-            sort_check_short_term_b_frame, false,
+            &mut temp_list1,
+            k,
+            current_poc,
+            sort_check_short_term_b_frame,
+            false,
         );
-        let k = self.sort_list_ascending(
-            &mut temp_list1, k, -1,
-            sort_check_long_term_frame, false,
-        );
+        let k = self.sort_list_ascending(&mut temp_list1, k, -1, sort_check_long_term_frame, false);
         let count1 = k.min(16);
         lists.ref_pic_list_count[1] = count1 as u32;
         for i in 0..count1 {

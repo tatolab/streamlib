@@ -21,34 +21,34 @@ mod resolver;
 mod semver;
 
 pub use catalog::{
-    package_catalog_file_name, parse_catalog_index_ndjson, render_catalog_index_ndjson,
-    schema_jtd_file_name, CatalogClient, CatalogConfig, CatalogIndexLine, CatalogPort,
-    CatalogProcessor, CatalogRuntime, CatalogSchemaRef, PackageCatalog, CATALOG_INDEX_PATH,
+    CATALOG_INDEX_PATH, CatalogClient, CatalogConfig, CatalogIndexLine, CatalogPort,
+    CatalogProcessor, CatalogRuntime, CatalogSchemaRef, PackageCatalog, package_catalog_file_name,
+    parse_catalog_index_ndjson, render_catalog_index_ndjson, schema_jtd_file_name,
 };
 
 pub use error::{IdentError, IdentResult, ResolverError, ResolverResult};
 pub use git::fetch_git;
 pub use ident::{
-    validate_org, validate_package, validate_type, ModuleIdent, Org, Package, PackageRef,
-    SchemaIdent, TypeName,
+    ModuleIdent, Org, Package, PackageRef, SchemaIdent, TypeName, validate_org, validate_package,
+    validate_type,
 };
 pub use lockfile::{
+    APP_LOCKFILE_NAME, LOCKFILE_NAME, Lockfile, LockfileEntry, LockfileSource,
     compute_content_hash, hash_content, read_lockfile, write_app_lockfile, write_lockfile,
-    Lockfile, LockfileEntry, LockfileSource, APP_LOCKFILE_NAME, LOCKFILE_NAME,
 };
 pub use manifest::{
     DependencySpec, GitDependency, Manifest, PackageMetadata, PathDependency, RegistryDependency,
     SchemaEntry,
 };
 pub use registry::{
-    select_version, RegistryClient, RegistryConfig, DEFAULT_REGISTRY_URL,
-    RELEASE_MANIFEST_CHANNEL, RELEASE_MANIFEST_FILE, REGISTRY_URL_ENV,
+    DEFAULT_REGISTRY_URL, REGISTRY_URL_ENV, RELEASE_MANIFEST_CHANNEL, RELEASE_MANIFEST_FILE,
+    RegistryClient, RegistryConfig, select_version,
 };
 pub use release::{
-    crates_missing_from_release, ReleaseManifest, ReleaseManifestMember, RELEASE_MANIFEST_FORMAT,
+    RELEASE_MANIFEST_FORMAT, ReleaseManifest, ReleaseManifestMember, crates_missing_from_release,
 };
 pub use resolver::{
-    content_hash_for_package_dir, resolve, resolve_bare_schema_name, resolve_with,
     ResolvedPackage, ResolvedPackages, ResolvedSource, ResolverOptions,
+    content_hash_for_package_dir, resolve, resolve_bare_schema_name, resolve_with,
 };
 pub use semver::{Prerelease, PrereleaseKind, SemVer, SemVerRange};

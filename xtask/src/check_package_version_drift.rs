@@ -49,17 +49,25 @@ pub fn run(workspace_root: &Path, fix: bool) -> Result<()> {
         if drifts.is_empty() {
             println!("✓ check-package-version-drift --fix: nothing to fix");
         } else {
-            println!("✓ check-package-version-drift --fix: {} package(s) synced", drifts.len());
+            println!(
+                "✓ check-package-version-drift --fix: {} package(s) synced",
+                drifts.len()
+            );
         }
         return Ok(());
     }
 
     if drifts.is_empty() {
-        println!("✓ check-package-version-drift: every package Cargo.toml matches its streamlib.yaml version");
+        println!(
+            "✓ check-package-version-drift: every package Cargo.toml matches its streamlib.yaml version"
+        );
         return Ok(());
     }
 
-    eprintln!("✗ check-package-version-drift: {} package(s) drift", drifts.len());
+    eprintln!(
+        "✗ check-package-version-drift: {} package(s) drift",
+        drifts.len()
+    );
     for d in &drifts {
         eprintln!(
             "  {}: Cargo.toml `[package].version` = {} but streamlib.yaml `package.version` = {} — run `cargo xtask check-package-version-drift --fix`",
@@ -117,8 +125,8 @@ pub fn scan(workspace_root: &Path) -> Result<Vec<VersionDrift>> {
 /// The literal `[package].version` string in a `Cargo.toml`, or `None` when
 /// the version is workspace-inherited (`version.workspace = true`) or absent.
 fn cargo_literal_version(cargo_path: &Path) -> Result<Option<String>> {
-    let body = fs::read_to_string(cargo_path)
-        .with_context(|| format!("read {}", cargo_path.display()))?;
+    let body =
+        fs::read_to_string(cargo_path).with_context(|| format!("read {}", cargo_path.display()))?;
     let doc: toml::Value =
         toml::from_str(&body).with_context(|| format!("parse {}", cargo_path.display()))?;
     let version = doc
@@ -161,15 +169,14 @@ fn manifest_package_version(manifest_path: &Path) -> Result<Option<String>> {
 fn apply_fix(drift: &VersionDrift) -> Result<()> {
     let body = fs::read_to_string(&drift.cargo_path)
         .with_context(|| format!("read {}", drift.cargo_path.display()))?;
-    let rewritten =
-        streamlib_pack::rewrite_cargo_package_version(&body, &drift.manifest_version)
-            .with_context(|| format!("rewrite {}", drift.cargo_path.display()))?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "{}: no `[package].version` to rewrite",
-                    drift.cargo_path.display()
-                )
-            })?;
+    let rewritten = streamlib_pack::rewrite_cargo_package_version(&body, &drift.manifest_version)
+        .with_context(|| format!("rewrite {}", drift.cargo_path.display()))?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{}: no `[package].version` to rewrite",
+                drift.cargo_path.display()
+            )
+        })?;
     fs::write(&drift.cargo_path, rewritten)
         .with_context(|| format!("write {}", drift.cargo_path.display()))?;
     Ok(())
@@ -191,8 +198,7 @@ mod tests {
         }
     }
 
-    const MANIFEST_1_0_0: &str =
-        "package:\n  org: tatolab\n  name: foo\n  version: 1.0.0\n";
+    const MANIFEST_1_0_0: &str = "package:\n  org: tatolab\n  name: foo\n  version: 1.0.0\n";
 
     #[test]
     fn detects_and_names_drift() {
@@ -270,12 +276,22 @@ mod tests {
             MANIFEST_1_0_0,
         );
         run(root.path(), true).unwrap();
-        let cargo =
-            fs::read_to_string(root.path().join(PACKAGES_DIR).join("foo").join("Cargo.toml"))
-                .unwrap();
+        let cargo = fs::read_to_string(
+            root.path()
+                .join(PACKAGES_DIR)
+                .join("foo")
+                .join("Cargo.toml"),
+        )
+        .unwrap();
         assert!(cargo.contains("version = \"1.0.0\""), "got: {cargo}");
-        assert!(cargo.contains("# keep me"), "comment preserved, got: {cargo}");
-        assert!(cargo.contains("[dependencies]"), "unrelated tables preserved");
+        assert!(
+            cargo.contains("# keep me"),
+            "comment preserved, got: {cargo}"
+        );
+        assert!(
+            cargo.contains("[dependencies]"),
+            "unrelated tables preserved"
+        );
         assert!(scan(root.path()).unwrap().is_empty());
         // Second --fix is a no-op (idempotent).
         run(root.path(), true).unwrap();

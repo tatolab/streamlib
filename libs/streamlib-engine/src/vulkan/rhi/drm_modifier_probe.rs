@@ -22,7 +22,7 @@
 //! surface a `GpuError`).
 
 use std::collections::HashMap;
-use std::ffi::{c_char, c_void, CStr, CString};
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::sync::Arc;
 
 use libloading::Library;
@@ -110,10 +110,7 @@ impl DrmModifierTable {
 
     /// Number of probed formats with at least one RT-capable modifier.
     pub fn formats_with_rt_modifier(&self) -> usize {
-        self.rt_modifiers
-            .values()
-            .filter(|v| !v.is_empty())
-            .count()
+        self.rt_modifiers.values().filter(|v| !v.is_empty()).count()
     }
 
     /// Sampler-only modifiers for a DRM FOURCC (EGL `external_only=TRUE`),
@@ -165,7 +162,11 @@ mod egl {
 struct EglFns {
     _lib: Arc<Library>,
     egl_get_display: unsafe extern "C" fn(egl::EGLNativeDisplayType) -> egl::EGLDisplay,
-    egl_initialize: unsafe extern "C" fn(egl::EGLDisplay, *mut egl::EGLint, *mut egl::EGLint) -> egl::EGLBoolean,
+    egl_initialize: unsafe extern "C" fn(
+        egl::EGLDisplay,
+        *mut egl::EGLint,
+        *mut egl::EGLint,
+    ) -> egl::EGLBoolean,
     egl_terminate: unsafe extern "C" fn(egl::EGLDisplay) -> egl::EGLBoolean,
     egl_query_string: unsafe extern "C" fn(egl::EGLDisplay, egl::EGLint) -> *const c_char,
     egl_get_proc_address: unsafe extern "C" fn(*const c_char) -> *mut c_void,
@@ -175,11 +176,11 @@ struct EglFns {
     egl_query_dma_buf_modifiers: Option<
         unsafe extern "C" fn(
             egl::EGLDisplay,
-            egl::EGLint,                  // format (DRM FOURCC)
-            egl::EGLint,                  // max_modifiers (0 to query count)
-            *mut egl::EGLuint64KHR,       // modifiers out
-            *mut egl::EGLBoolean,         // external_only out (per-modifier)
-            *mut egl::EGLint,             // num_modifiers out
+            egl::EGLint,            // format (DRM FOURCC)
+            egl::EGLint,            // max_modifiers (0 to query count)
+            *mut egl::EGLuint64KHR, // modifiers out
+            *mut egl::EGLBoolean,   // external_only out (per-modifier)
+            *mut egl::EGLint,       // num_modifiers out
         ) -> egl::EGLBoolean,
     >,
 }
@@ -192,10 +193,11 @@ impl EglFns {
         let lib = Arc::new(lib);
 
         unsafe fn sym<T: Copy>(lib: &Library, name: &'static [u8]) -> Result<T, ProbeError> {
-            let symbol: libloading::Symbol<T> = unsafe { lib.get(name) }
-                .map_err(|_| ProbeError::SymbolMissing(
+            let symbol: libloading::Symbol<T> = unsafe { lib.get(name) }.map_err(|_| {
+                ProbeError::SymbolMissing(
                     std::str::from_utf8(&name[..name.len().saturating_sub(1)]).unwrap_or("?"),
-                ))?;
+                )
+            })?;
             Ok(*symbol)
         }
 
@@ -262,11 +264,7 @@ fn partition_modifiers_by_external_only(
 ) -> (Vec<u64>, Vec<u64>) {
     let mut rt: Vec<u64> = Vec::new();
     let mut sampler_only: Vec<u64> = Vec::new();
-    for (m, ext) in modifiers
-        .iter()
-        .zip(external_only.iter())
-        .take(returned)
-    {
+    for (m, ext) in modifiers.iter().zip(external_only.iter()).take(returned) {
         if *ext == egl::EGL_FALSE {
             rt.push(*m);
         } else {
@@ -329,10 +327,11 @@ pub fn probe_with_formats(formats: &[u32]) -> Result<DrmModifierTable, ProbeErro
     if exts_ptr.is_null() {
         return Err(ProbeError::ExtensionMissing);
     }
-    let exts = unsafe { CStr::from_ptr(exts_ptr) }
-        .to_str()
-        .unwrap_or("");
-    if !exts.split_whitespace().any(|tok| tok == "EGL_EXT_image_dma_buf_import_modifiers") {
+    let exts = unsafe { CStr::from_ptr(exts_ptr) }.to_str().unwrap_or("");
+    if !exts
+        .split_whitespace()
+        .any(|tok| tok == "EGL_EXT_image_dma_buf_import_modifiers")
+    {
         return Err(ProbeError::ExtensionMissing);
     }
 
@@ -392,11 +391,8 @@ pub fn probe_with_formats(formats: &[u32]) -> Result<DrmModifierTable, ProbeErro
             return Err(ProbeError::QueryFailed(fourcc, err));
         }
 
-        let (rt, sampler_only) = partition_modifiers_by_external_only(
-            &modifiers,
-            &external_only,
-            returned as usize,
-        );
+        let (rt, sampler_only) =
+            partition_modifiers_by_external_only(&modifiers, &external_only, returned as usize);
 
         tracing::info!(
             "drm_modifier_probe: fourcc 0x{:08x} → {} modifier(s) total, {} render-target-capable, {} sampler-only",
@@ -445,9 +441,11 @@ mod tests {
     fn empty_table_reports_no_sampler_only_modifiers() {
         let table = DrmModifierTable::empty();
         assert!(!table.has_sampler_only_modifier(fourcc::DRM_FORMAT_ABGR8888));
-        assert!(table
-            .sampler_only_modifiers(fourcc::DRM_FORMAT_ABGR8888)
-            .is_empty());
+        assert!(
+            table
+                .sampler_only_modifiers(fourcc::DRM_FORMAT_ABGR8888)
+                .is_empty()
+        );
     }
 
     /// Synthetic-input partition test: exercises the
@@ -460,17 +458,12 @@ mod tests {
     #[test]
     fn partition_modifiers_routes_external_only_true_to_sampler_only_list() {
         let modifiers: [u64; 4] = [
-            DRM_FORMAT_MOD_LINEAR,        // sampler-only on NVIDIA
-            0x0030_0000_0000_0000,        // arbitrary tiled — RT
-            0x0030_0000_1234_5678,        // arbitrary tiled — RT
-            0x0030_0000_dead_beef,        // arbitrary — sampler-only
+            DRM_FORMAT_MOD_LINEAR, // sampler-only on NVIDIA
+            0x0030_0000_0000_0000, // arbitrary tiled — RT
+            0x0030_0000_1234_5678, // arbitrary tiled — RT
+            0x0030_0000_dead_beef, // arbitrary — sampler-only
         ];
-        let external_only = [
-            egl::EGL_TRUE,
-            egl::EGL_FALSE,
-            egl::EGL_FALSE,
-            egl::EGL_TRUE,
-        ];
+        let external_only = [egl::EGL_TRUE, egl::EGL_FALSE, egl::EGL_FALSE, egl::EGL_TRUE];
         let (rt, sampler_only) =
             partition_modifiers_by_external_only(&modifiers, &external_only, 4);
         assert_eq!(
@@ -541,10 +534,7 @@ mod tests {
         match probe_default_display() {
             Ok(table) => {
                 let n = table.formats_with_rt_modifier();
-                println!(
-                    "EGL probe ok: {} format(s) with RT modifiers",
-                    n
-                );
+                println!("EGL probe ok: {} format(s) with RT modifiers", n);
                 // Don't assert n>0 — vivid-only / headless CI may legitimately
                 // return zero formats. The probe ran without panic; that is
                 // the assertion.
@@ -560,14 +550,8 @@ mod tests {
     /// otherwise corrupt every modifier query for the affected format.
     #[test]
     fn fourcc_constants_are_ascii_packed() {
-        assert_eq!(
-            &fourcc::DRM_FORMAT_ARGB8888.to_le_bytes(),
-            b"AR24",
-        );
-        assert_eq!(
-            &fourcc::DRM_FORMAT_ABGR8888.to_le_bytes(),
-            b"AB24",
-        );
+        assert_eq!(&fourcc::DRM_FORMAT_ARGB8888.to_le_bytes(), b"AR24",);
+        assert_eq!(&fourcc::DRM_FORMAT_ABGR8888.to_le_bytes(), b"AB24",);
         assert_eq!(&fourcc::DRM_FORMAT_NV12.to_le_bytes(), b"NV12");
     }
 }

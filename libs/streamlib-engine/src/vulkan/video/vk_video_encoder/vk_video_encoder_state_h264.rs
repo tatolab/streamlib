@@ -194,7 +194,10 @@ mod tests {
             vk::VideoSessionKHR::null(),
             0,
             false,
-            vk::Extent2D { width: 0, height: 0 },
+            vk::Extent2D {
+                width: 0,
+                height: 0,
+            },
         );
         assert_eq!(info.sps_count, 1);
         assert_eq!(info.pps_count, 1);

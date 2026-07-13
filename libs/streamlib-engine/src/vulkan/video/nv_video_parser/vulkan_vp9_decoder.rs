@@ -386,7 +386,10 @@ impl<'a> BitstreamReader<'a> {
 
     /// Return remaining bits.
     pub fn remaining_bits(&self) -> usize {
-        self.data.len().saturating_mul(8).saturating_sub(self.bit_offset)
+        self.data
+            .len()
+            .saturating_mul(8)
+            .saturating_sub(self.bit_offset)
     }
 }
 
@@ -636,8 +639,7 @@ impl VulkanVp9Decoder {
                     self.pic_data.ref_frame_idx[i] = bs.u(3) as u8;
                     let sign_bias = bs.u(1) as u8;
                     // STD_VIDEO_VP9_REFERENCE_NAME_LAST_FRAME = 1
-                    self.pic_data.std_picture_info.ref_frame_sign_bias_mask |=
-                        sign_bias << (1 + i);
+                    self.pic_data.std_picture_info.ref_frame_sign_bias_mask |= sign_bias << (1 + i);
                 }
 
                 self.parse_frame_and_render_size_with_refs(bs);
@@ -665,18 +667,26 @@ impl VulkanVp9Decoder {
         // refresh_frame_context / frame_parallel_decoding_mode
         if !self.pic_data.std_picture_info.flags.error_resilient_mode {
             self.pic_data.std_picture_info.flags.refresh_frame_context = bs.u(1) != 0;
-            self.pic_data.std_picture_info.flags.frame_parallel_decoding_mode = bs.u(1) != 0;
+            self.pic_data
+                .std_picture_info
+                .flags
+                .frame_parallel_decoding_mode = bs.u(1) != 0;
         } else {
             self.pic_data.std_picture_info.flags.refresh_frame_context = false;
-            self.pic_data.std_picture_info.flags.frame_parallel_decoding_mode = true;
+            self.pic_data
+                .std_picture_info
+                .flags
+                .frame_parallel_decoding_mode = true;
         }
 
         self.pic_data.std_picture_info.frame_context_idx = bs.u(2) as u8;
 
-        if self.pic_data.frame_is_intra || self.pic_data.std_picture_info.flags.error_resilient_mode {
+        if self.pic_data.frame_is_intra || self.pic_data.std_picture_info.flags.error_resilient_mode
+        {
             // setup_past_independence() — clear previous segment data
             self.pic_data.std_segmentation.feature_enabled = [0u8; VP9_MAX_SEGMENTS];
-            self.pic_data.std_segmentation.feature_data = [[0i16; VP9_SEG_LVL_MAX]; VP9_MAX_SEGMENTS];
+            self.pic_data.std_segmentation.feature_data =
+                [[0i16; VP9_SEG_LVL_MAX]; VP9_MAX_SEGMENTS];
             self.pic_data.std_picture_info.frame_context_idx = 0;
         }
 
@@ -692,14 +702,13 @@ impl VulkanVp9Decoder {
         self.pic_data.tiles_offset =
             self.pic_data.compressed_header_offset + self.pic_data.compressed_header_size;
 
-        self.pic_data.chroma_format =
-            if self.pic_data.std_color_config.subsampling_x == 1
-                && self.pic_data.std_color_config.subsampling_y == 1
-            {
-                1
-            } else {
-                0
-            };
+        self.pic_data.chroma_format = if self.pic_data.std_color_config.subsampling_x == 1
+            && self.pic_data.std_color_config.subsampling_y == 1
+        {
+            1
+        } else {
+            0
+        };
 
         true
     }
@@ -763,10 +772,7 @@ impl VulkanVp9Decoder {
     ///
     /// Corresponds to `VulkanVP9Decoder::ParseFrameAndRenderSize()`.
     /// Note: Does NOT call compute_image_size — caller must do that.
-    fn parse_frame_and_render_size_static(
-        pic_data: &mut Vp9PictureData,
-        bs: &mut BitstreamReader,
-    ) {
+    fn parse_frame_and_render_size_static(pic_data: &mut Vp9PictureData, bs: &mut BitstreamReader) {
         pic_data.frame_width = bs.u(16) + 1;
         pic_data.frame_height = bs.u(16) + 1;
 
@@ -852,8 +858,7 @@ impl VulkanVp9Decoder {
     ///
     /// Corresponds to `VulkanVP9Decoder::ParseLoopFilterParams()`.
     fn parse_loop_filter_params(&mut self, bs: &mut BitstreamReader) {
-        if self.pic_data.frame_is_intra
-            || self.pic_data.std_picture_info.flags.error_resilient_mode
+        if self.pic_data.frame_is_intra || self.pic_data.std_picture_info.flags.error_resilient_mode
         {
             // setup_past_independence() for loop filter params
             self.loop_filter_ref_deltas = [0i8; VP9_MAX_REF_FRAMES];
@@ -929,11 +934,7 @@ impl VulkanVp9Decoder {
     fn read_delta_q(bs: &mut BitstreamReader) -> i32 {
         if bs.u(1) != 0 {
             let delta = bs.u(4) as i32;
-            if bs.u(1) != 0 {
-                -delta
-            } else {
-                delta
-            }
+            if bs.u(1) != 0 { -delta } else { delta }
         } else {
             0
         }
@@ -1564,40 +1565,40 @@ mod tests {
             }
         }
 
-        push_bits(&mut bitvec, 0b10, 2);      // frame_marker
-        push_bits(&mut bitvec, 0, 1);          // profile low bit
-        push_bits(&mut bitvec, 0, 1);          // profile high bit
-        push_bits(&mut bitvec, 0, 1);          // show_existing_frame
-        push_bits(&mut bitvec, 0, 1);          // frame_type (KEY=0)
-        push_bits(&mut bitvec, 1, 1);          // show_frame
-        push_bits(&mut bitvec, 0, 1);          // error_resilient_mode
-        push_bits(&mut bitvec, 0x498342, 24);  // sync code
-        push_bits(&mut bitvec, 0b001, 3);      // color_space (BT.601)
-        push_bits(&mut bitvec, 0, 1);          // color_range
+        push_bits(&mut bitvec, 0b10, 2); // frame_marker
+        push_bits(&mut bitvec, 0, 1); // profile low bit
+        push_bits(&mut bitvec, 0, 1); // profile high bit
+        push_bits(&mut bitvec, 0, 1); // show_existing_frame
+        push_bits(&mut bitvec, 0, 1); // frame_type (KEY=0)
+        push_bits(&mut bitvec, 1, 1); // show_frame
+        push_bits(&mut bitvec, 0, 1); // error_resilient_mode
+        push_bits(&mut bitvec, 0x498342, 24); // sync code
+        push_bits(&mut bitvec, 0b001, 3); // color_space (BT.601)
+        push_bits(&mut bitvec, 0, 1); // color_range
         // subsampling is implicit for profile 0
-        push_bits(&mut bitvec, 15, 16);        // frame_width - 1 = 15
-        push_bits(&mut bitvec, 15, 16);        // frame_height - 1 = 15
-        push_bits(&mut bitvec, 0, 1);          // render_and_frame_size_different = 0
+        push_bits(&mut bitvec, 15, 16); // frame_width - 1 = 15
+        push_bits(&mut bitvec, 15, 16); // frame_height - 1 = 15
+        push_bits(&mut bitvec, 0, 1); // render_and_frame_size_different = 0
         // refresh_frame_context (since error_resilient=0)
-        push_bits(&mut bitvec, 0, 1);          // refresh_frame_context
-        push_bits(&mut bitvec, 0, 1);          // frame_parallel_decoding_mode
-        push_bits(&mut bitvec, 0, 2);          // frame_context_idx
+        push_bits(&mut bitvec, 0, 1); // refresh_frame_context
+        push_bits(&mut bitvec, 0, 1); // frame_parallel_decoding_mode
+        push_bits(&mut bitvec, 0, 2); // frame_context_idx
         // loop filter
-        push_bits(&mut bitvec, 0, 6);          // loop_filter_level
-        push_bits(&mut bitvec, 0, 3);          // loop_filter_sharpness
-        push_bits(&mut bitvec, 0, 1);          // loop_filter_delta_enabled
+        push_bits(&mut bitvec, 0, 6); // loop_filter_level
+        push_bits(&mut bitvec, 0, 3); // loop_filter_sharpness
+        push_bits(&mut bitvec, 0, 1); // loop_filter_delta_enabled
         // quantization
-        push_bits(&mut bitvec, 0, 8);          // base_q_idx
-        push_bits(&mut bitvec, 0, 1);          // delta_q_y_dc present
-        push_bits(&mut bitvec, 0, 1);          // delta_q_uv_dc present
-        push_bits(&mut bitvec, 0, 1);          // delta_q_uv_ac present
+        push_bits(&mut bitvec, 0, 8); // base_q_idx
+        push_bits(&mut bitvec, 0, 1); // delta_q_y_dc present
+        push_bits(&mut bitvec, 0, 1); // delta_q_uv_dc present
+        push_bits(&mut bitvec, 0, 1); // delta_q_uv_ac present
         // segmentation
-        push_bits(&mut bitvec, 0, 1);          // segmentation_enabled
+        push_bits(&mut bitvec, 0, 1); // segmentation_enabled
         // tile info
         // sb64_cols = 1, min_log2=0, max_log2=0, so no increment bits
-        push_bits(&mut bitvec, 0, 1);          // tile_rows_log2
+        push_bits(&mut bitvec, 0, 1); // tile_rows_log2
         // compressed_header_size
-        push_bits(&mut bitvec, 0, 16);         // compressed_header_size
+        push_bits(&mut bitvec, 0, 16); // compressed_header_size
 
         // Pack bits into bytes
         let byte_len = (bitvec.len() + 7) / 8;
@@ -1624,7 +1625,10 @@ mod tests {
         assert_eq!(dec.pic_data.std_picture_info.refresh_frame_flags, 0xFF);
         assert!(dec.pic_data.frame_is_intra);
         assert_eq!(dec.pic_data.std_color_config.bit_depth, 8);
-        assert_eq!(dec.pic_data.std_color_config.color_space, Vp9ColorSpace::Bt601);
+        assert_eq!(
+            dec.pic_data.std_color_config.color_space,
+            Vp9ColorSpace::Bt601
+        );
         assert_eq!(dec.pic_data.chroma_format, 1);
     }
 

@@ -10,11 +10,11 @@
 
 use crate::apple::time::mach_now_ns;
 use crate::core::context::{AudioClock, AudioClockConfig, AudioTickCallback, AudioTickContext};
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 use parking_lot::Mutex;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 // =============================================================================
 // GCD FFI Bindings
@@ -203,9 +203,7 @@ impl AudioClock for CoreAudioClock {
             unsafe { dispatch_source_create(dispatch_source_type_timer(), 0, 0, self.queue) };
 
         if timer_source.is_null() {
-            return Err(Error::Runtime(
-                "Failed to create GCD timer source".into(),
-            ));
+            return Err(Error::Runtime("Failed to create GCD timer source".into()));
         }
 
         // Set timer to fire at interval with minimal leeway for precision

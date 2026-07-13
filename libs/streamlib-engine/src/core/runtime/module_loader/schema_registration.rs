@@ -85,12 +85,9 @@ pub(super) fn resolve_config_schema_canonical_id(
         )
     })?;
 
-    let (owner, schema_path) = streamlib_idents::resolve_bare_schema_name(
-        resolved,
-        &resolved.root,
-        &config.schema,
-    )
-    .map_err(|e| format!("bare-name resolution failed: {}", e))?;
+    let (owner, schema_path) =
+        streamlib_idents::resolve_bare_schema_name(resolved, &resolved.root, &config.schema)
+            .map_err(|e| format!("bare-name resolution failed: {}", e))?;
 
     let owner_pkg = owner
         .manifest
@@ -182,7 +179,10 @@ fn canonical_identifier_for_schema(
 /// suffix grammar can't drift between the two strippers.
 fn strip_legacy_semver_suffix(name: &str) -> &str {
     if let Some(at_pos) = name.rfind('@') {
-        if name[at_pos + 1..].parse::<streamlib_idents::SemVer>().is_ok() {
+        if name[at_pos + 1..]
+            .parse::<streamlib_idents::SemVer>()
+            .is_ok()
+        {
             return &name[..at_pos];
         }
     }

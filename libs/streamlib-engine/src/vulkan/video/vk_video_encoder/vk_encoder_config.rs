@@ -15,7 +15,9 @@
 use vulkanalia::vk;
 
 use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::ConstQpSettings;
-use crate::vulkan::video::vk_video_encoder::vk_video_gop_structure::{FrameType, VkVideoGopStructure};
+use crate::vulkan::video::vk_video_encoder::vk_video_gop_structure::{
+    FrameType, VkVideoGopStructure,
+};
 
 /// Map bits-per-pixel to `VkVideoComponentBitDepthFlagBitsKHR`.
 ///
@@ -178,7 +180,8 @@ impl EncoderInputFileHandler {
                 3.0
             };
 
-        self.frame_size = (width as f64 * height as f64 * num_bytes as f64 * sampling_factor) as u32;
+        self.frame_size =
+            (width as f64 * height as f64 * num_bytes as f64 * sampling_factor) as u32;
         self.curr_frame_offset = 0;
         self.frame_size
     }
@@ -702,12 +705,8 @@ mod tests {
     #[test]
     fn test_frame_geometry() {
         let mut handler = EncoderInputFileHandler::default();
-        let size = handler.set_frame_geometry(
-            1920,
-            1080,
-            8,
-            vk::VideoChromaSubsamplingFlagsKHR::_420,
-        );
+        let size =
+            handler.set_frame_geometry(1920, 1080, 8, vk::VideoChromaSubsamplingFlagsKHR::_420);
         // 1920*1080 * 1 * 1.5 = 3110400
         assert_eq!(size, 3110400);
     }

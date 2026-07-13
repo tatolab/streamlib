@@ -22,9 +22,7 @@ fn stride_is_tightly_packed_width_times_bpp() {
     let fixture = match HostFixture::try_new() {
         Some(f) => f,
         None => {
-            println!(
-                "stride_is_tightly_packed: skipping — no Vulkan device available"
-            );
+            println!("stride_is_tightly_packed: skipping — no Vulkan device available");
             return;
         }
     };
@@ -91,7 +89,12 @@ fn unaligned_widths_round_trip_byte_exact() {
             for x in 0..width as usize {
                 let v = ((y * width as usize + x) & 0xFF) as u8;
                 let idx = (y * width as usize + x) * 4;
-                bytes[idx..idx + 4].copy_from_slice(&[v, v.wrapping_add(1), v.wrapping_add(2), v.wrapping_add(3)]);
+                bytes[idx..idx + 4].copy_from_slice(&[
+                    v,
+                    v.wrapping_add(1),
+                    v.wrapping_add(2),
+                    v.wrapping_add(3),
+                ]);
             }
         }
     }

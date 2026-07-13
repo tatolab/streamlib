@@ -136,7 +136,6 @@ pub struct GpuContextFullAccessVTable {
     // -------------------------------------------------------------------------
     // Handle lifetime (drop-only — !Clone invariant)
     // -------------------------------------------------------------------------
-
     /// Release an owned `GpuContextFullAccess` handle. Host runs
     /// `Box::from_raw + drop` on the `Box<Arc<GpuContext>>`-shaped
     /// handle (host mode) or invalidates the C3 scope token. Calling
@@ -146,7 +145,6 @@ pub struct GpuContextFullAccessVTable {
     // -------------------------------------------------------------------------
     // VulkanComputeKernel return-type lifetime
     // -------------------------------------------------------------------------
-
     /// Bump the refcount on a `VulkanComputeKernel` PluginAbiObject handle.
     /// Called by the cdylib's `Clone for VulkanComputeKernel`. Host
     /// runs `Arc::increment_strong_count(handle as *const VulkanComputeKernelInner)`
@@ -161,7 +159,6 @@ pub struct GpuContextFullAccessVTable {
     // -------------------------------------------------------------------------
     // VulkanGraphicsKernel return-type lifetime
     // -------------------------------------------------------------------------
-
     /// Bump the refcount on a `VulkanGraphicsKernel` PluginAbiObject handle.
     /// Host runs `Arc::increment_strong_count(handle as *const VulkanGraphicsKernelInner)`.
     pub clone_graphics_kernel: unsafe extern "C" fn(handle: *const c_void),
@@ -172,7 +169,6 @@ pub struct GpuContextFullAccessVTable {
     // -------------------------------------------------------------------------
     // VulkanRayTracingKernel return-type lifetime
     // -------------------------------------------------------------------------
-
     /// Bump the refcount on a `VulkanRayTracingKernel` PluginAbiObject handle.
     /// Host runs `Arc::increment_strong_count(handle as *const VulkanRayTracingKernelInner)`.
     pub clone_ray_tracing_kernel: unsafe extern "C" fn(handle: *const c_void),
@@ -183,7 +179,6 @@ pub struct GpuContextFullAccessVTable {
     // -------------------------------------------------------------------------
     // TextureRing return-type lifetime
     // -------------------------------------------------------------------------
-
     /// Bump the refcount on a `TextureRing` PluginAbiObject handle.
     /// Host runs `Arc::increment_strong_count(handle as *const TextureRingInner)`.
     pub clone_texture_ring: unsafe extern "C" fn(handle: *const c_void),
@@ -194,7 +189,6 @@ pub struct GpuContextFullAccessVTable {
     // -------------------------------------------------------------------------
     // RhiColorConverter return-type lifetime (v4)
     // -------------------------------------------------------------------------
-
     /// Bump the refcount on a `RhiColorConverter` handle. Host runs
     /// `Arc::increment_strong_count(handle as *const RhiColorConverterInner)`.
     pub clone_color_converter: unsafe extern "C" fn(handle: *const c_void),
@@ -205,7 +199,6 @@ pub struct GpuContextFullAccessVTable {
     // -------------------------------------------------------------------------
     // VulkanAccelerationStructure return-type lifetime (v4)
     // -------------------------------------------------------------------------
-
     /// Bump the refcount on a `VulkanAccelerationStructure` handle.
     pub clone_acceleration_structure: unsafe extern "C" fn(handle: *const c_void),
 
@@ -215,7 +208,6 @@ pub struct GpuContextFullAccessVTable {
     // -------------------------------------------------------------------------
     // RhiCommandRecorder return-type lifetime (v4)
     // -------------------------------------------------------------------------
-
     /// Bump the refcount on a `RhiCommandRecorder` handle.
     pub clone_command_recorder: unsafe extern "C" fn(handle: *const c_void),
 
@@ -225,7 +217,6 @@ pub struct GpuContextFullAccessVTable {
     // -------------------------------------------------------------------------
     // Kernel construction
     // -------------------------------------------------------------------------
-
     /// Create a compute kernel from a SPIR-V shader and binding
     /// declaration. On success writes a fresh
     /// `Arc<VulkanComputeKernel>`-shaped opaque handle into
@@ -291,7 +282,6 @@ pub struct GpuContextFullAccessVTable {
     // Render-target surface allocation (Phase C3 — Linux-only privileged
     // primitive)
     // -------------------------------------------------------------------------
-
     /// Allocate a render-target-capable DMA-BUF-backed `VkImage` from
     /// the host's privileged surface path. The cdylib's
     /// `GpuContextFullAccess::acquire_render_target_dma_buf_image`
@@ -321,7 +311,6 @@ pub struct GpuContextFullAccessVTable {
     // the host's `escalate_scope_registry::with_scope` before dispatching to
     // the resolved `Arc<GpuContext>`.
     // -------------------------------------------------------------------------
-
     /// Block until the GPU device drains every in-flight submission.
     /// Returns 0 on success, non-zero with an error message on failure
     /// (invalid scope token, `vkDeviceWaitIdle` failure, etc.).
@@ -475,7 +464,6 @@ pub struct GpuContextFullAccessVTable {
     // -------------------------------------------------------------------------
     // v5 (#914): GPU capability query — read-once-at-setup struct
     // -------------------------------------------------------------------------
-
     /// Populate a [`crate::GpuCapabilitiesRepr`] with vendor name + capability
     /// bools. Read-once-at-setup pattern: cdylibs (camera, future
     /// plugins) need device-vendor branching and external-memory /
@@ -494,7 +482,6 @@ pub struct GpuContextFullAccessVTable {
     // -------------------------------------------------------------------------
     // v6 (#914 / #920): Timeline-semaphore construction primitive
     // -------------------------------------------------------------------------
-
     /// Construct a timeline semaphore with the given `initial_value`.
     /// On success writes
     /// `Arc::into_raw(Arc<HostVulkanTimelineSemaphore>)` into
@@ -518,7 +505,6 @@ pub struct GpuContextFullAccessVTable {
     // -------------------------------------------------------------------------
     // v7 (#914 / #921): V4L2 DMA-BUF FD import as SSBO
     // -------------------------------------------------------------------------
-
     /// Import a V4L2 (or otherwise externally-allocated) DMA-BUF FD
     /// as a `StorageBuffer` (SSBO-shaped). On success writes the
     /// `StorageBuffer` PluginAbiObject struct (32 bytes, layout-stable from
@@ -542,7 +528,6 @@ pub struct GpuContextFullAccessVTable {
     // -------------------------------------------------------------------------
     // v8: cdylib-reachable HostVulkanDevice Arc accessor (#1004)
     // -------------------------------------------------------------------------
-
     /// Clone the host's `Arc<HostVulkanDevice>` and return the raw
     /// `Arc::into_raw` pointer on success.
     ///
@@ -569,13 +554,11 @@ pub struct GpuContextFullAccessVTable {
     /// processor code shouldn't reach for this — the higher-level
     /// FullAccess vtable methods (kernel construction, buffer/texture
     /// allocation) cover the supported plugin ABI surface.
-    pub host_vulkan_device_arc:
-        unsafe extern "C" fn(gpu_handle: *const c_void) -> *const c_void,
+    pub host_vulkan_device_arc: unsafe extern "C" fn(gpu_handle: *const c_void) -> *const c_void,
 
     // -------------------------------------------------------------------------
     // v10: cdylib-reachable HostVulkanTexture Arc accessor.
     // -------------------------------------------------------------------------
-
     /// Clone the host's `Arc<HostVulkanTexture>` backing a `Texture`
     /// PluginAbiObject and return the raw `Arc::into_raw` pointer on success.
     ///
@@ -676,17 +659,11 @@ mod tests {
             88
         );
         assert_eq!(
-            offset_of!(
-                GpuContextFullAccessVTable,
-                clone_acceleration_structure
-            ),
+            offset_of!(GpuContextFullAccessVTable, clone_acceleration_structure),
             96
         );
         assert_eq!(
-            offset_of!(
-                GpuContextFullAccessVTable,
-                drop_acceleration_structure
-            ),
+            offset_of!(GpuContextFullAccessVTable, drop_acceleration_structure),
             104
         );
         assert_eq!(
@@ -731,16 +708,10 @@ mod tests {
             176
         );
         assert_eq!(
-            offset_of!(
-                GpuContextFullAccessVTable,
-                upload_pixel_buffer_as_texture
-            ),
+            offset_of!(GpuContextFullAccessVTable, upload_pixel_buffer_as_texture),
             184
         );
-        assert_eq!(
-            offset_of!(GpuContextFullAccessVTable, color_converter),
-            192
-        );
+        assert_eq!(offset_of!(GpuContextFullAccessVTable, color_converter), 192);
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, create_command_recorder),
             200
@@ -751,10 +722,7 @@ mod tests {
         );
         assert_eq!(offset_of!(GpuContextFullAccessVTable, build_tlas), 216);
         assert_eq!(
-            offset_of!(
-                GpuContextFullAccessVTable,
-                supports_ray_tracing_pipeline
-            ),
+            offset_of!(GpuContextFullAccessVTable, supports_ray_tracing_pipeline),
             224
         );
         assert_eq!(

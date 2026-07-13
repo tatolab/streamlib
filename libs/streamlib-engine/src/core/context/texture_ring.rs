@@ -88,11 +88,7 @@ impl TextureRingSlot {
     /// headroom; tripping the panic indicates the producer started
     /// minting non-UUID identifiers and the budget needs a real
     /// re-think (not silent truncation).
-    pub(crate) fn new(
-        texture: Texture,
-        surface_id: &str,
-        slot_index: u32,
-    ) -> Self {
+    pub(crate) fn new(texture: Texture, surface_id: &str, slot_index: u32) -> Self {
         let bytes = surface_id.as_bytes();
         assert!(
             bytes.len() <= TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES,
@@ -127,11 +123,8 @@ impl TextureRingSlot {
         // via `TextureRingSlot::new`). `surface_id_len` is bounded
         // by `TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES` per the
         // assertion in `new`.
-        let len = (self.surface_id_len as usize)
-            .min(TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES);
-        unsafe {
-            std::str::from_utf8_unchecked(&self.surface_id_bytes[..len])
-        }
+        let len = (self.surface_id_len as usize).min(TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES);
+        unsafe { std::str::from_utf8_unchecked(&self.surface_id_bytes[..len]) }
     }
 
     /// Index of this slot within the ring's slot vector. Public for
@@ -303,9 +296,11 @@ impl TextureRingInner {
             ))
         })?;
         use crate::host_rhi::{HostPixelBufferRefExt, HostTextureExt};
-        let image = slot.texture.vulkan_inner().image().ok_or_else(|| {
-            Error::GpuError("TextureRing slot texture has no VkImage".into())
-        })?;
+        let image = slot
+            .texture
+            .vulkan_inner()
+            .image()
+            .ok_or_else(|| Error::GpuError("TextureRing slot texture has no VkImage".into()))?;
         let src_buffer = pixel_buffer.buffer_ref().vulkan_inner().buffer();
         unsafe {
             self.gpu.device().inner.upload_buffer_to_image_amortized(
@@ -355,9 +350,11 @@ impl TextureRingInner {
             ))
         })?;
         use crate::host_rhi::{HostPixelBufferRefExt, HostTextureExt};
-        let image = slot.texture.vulkan_inner().image().ok_or_else(|| {
-            Error::GpuError("TextureRing slot texture has no VkImage".into())
-        })?;
+        let image = slot
+            .texture
+            .vulkan_inner()
+            .image()
+            .ok_or_else(|| Error::GpuError("TextureRing slot texture has no VkImage".into()))?;
         let src_buffer = pixel_buffer.buffer_ref().vulkan_inner().buffer();
         unsafe {
             self.gpu.device().inner.upload_buffer_to_image_amortized(
@@ -370,10 +367,8 @@ impl TextureRingInner {
             )?;
         }
         // upload_buffer_to_image leaves the image in SHADER_READ_ONLY_OPTIMAL.
-        self.gpu.update_texture_registration_layout(
-            surface_id,
-            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
-        );
+        self.gpu
+            .update_texture_registration_layout(surface_id, VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
         Ok(())
     }
 
@@ -484,10 +479,8 @@ impl TextureRing {
         let cached_height = arc.height();
         let cached_format = arc.format() as u32;
         let handle = Arc::into_raw(arc) as *const c_void;
-        let vtable =
-            crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
-        let methods_vtable =
-            crate::core::plugin::host_services::host_texture_ring_methods_vtable();
+        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
+        let methods_vtable = crate::core::plugin::host_services::host_texture_ring_methods_vtable();
         Self {
             handle,
             vtable,
@@ -648,8 +641,7 @@ impl TextureRing {
             )
         };
         if status != 0 {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             return Err(Error::GpuError(msg));
         }
         Ok(slot_from_out_params(
@@ -749,8 +741,7 @@ impl TextureRing {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -956,7 +947,10 @@ mod tests {
             .collect();
         // Rotation visits every slot exactly once across `len()` calls.
         assert_eq!(
-            first_ids.iter().collect::<std::collections::BTreeSet<_>>().len(),
+            first_ids
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
             3,
             "expected three distinct surface_ids across the first {} acquire_next calls",
             ring.len()
@@ -1135,7 +1129,8 @@ mod tests {
         // Warm-up
         for _ in 0..16 {
             let slot = ring.acquire_next();
-            ring.copy_pixel_buffer_to_slot(&slot, &pixel_buffer, W, H).unwrap();
+            ring.copy_pixel_buffer_to_slot(&slot, &pixel_buffer, W, H)
+                .unwrap();
         }
         for _ in 0..16 {
             let slot = ring.acquire_next();
@@ -1148,7 +1143,8 @@ mod tests {
         let t0 = Instant::now();
         for _ in 0..ITERS {
             let slot = ring.acquire_next();
-            ring.copy_pixel_buffer_to_slot(&slot, &pixel_buffer, W, H).unwrap();
+            ring.copy_pixel_buffer_to_slot(&slot, &pixel_buffer, W, H)
+                .unwrap();
         }
         let amortized_total = t0.elapsed();
 
@@ -1297,8 +1293,7 @@ mod tests {
             "surface_id must not contain NUL bytes; got {sid:?}"
         );
         assert!(
-            sid.chars()
-                .all(|c| c.is_ascii_hexdigit() || c == '-'),
+            sid.chars().all(|c| c.is_ascii_hexdigit() || c == '-'),
             "surface_id must be UUID-shaped (hex + dashes); got {sid:?}"
         );
         assert_eq!(

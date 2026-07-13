@@ -14,7 +14,7 @@
 
 use crate::apple::corevideo_ffi::CVPixelBufferRef;
 use crate::core::rhi::PixelBuffer;
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 use std::ffi::c_void;
 
 // =============================================================================

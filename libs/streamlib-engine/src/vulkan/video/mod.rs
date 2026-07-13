@@ -13,26 +13,26 @@
 //! the engine RHI-integrated `from_full_access` constructors.
 
 // --- Public API ---
-pub mod video_context;
 pub mod decode;
 pub mod encode;
-pub mod rgb_to_nv12;
 pub mod nv12_to_rgb;
+pub mod rgb_to_nv12;
+pub mod video_context;
 
 // Public codec types — re-exported at the engine `crate::vulkan::video::*`
 // surface and pulled through to `streamlib::sdk::engine::video::*`.
-pub use video_context::{VideoContext, VideoError, VideoResult};
-pub use decode::{DecodedFrame, SimpleDecoder, SimpleDecoderConfig, SimpleDecodedFrame};
+pub use decode::{DecodedFrame, SimpleDecodedFrame, SimpleDecoder, SimpleDecoderConfig};
+pub use encode::{Codec, EncodePacket, Preset, SimpleEncoder, SimpleEncoderConfig};
 pub use encode::{EncodedOutput, FrameType};
-pub use encode::{SimpleEncoder, SimpleEncoderConfig, EncodePacket, Codec, Preset};
-pub use encode::{color_vui, H273ColorVui};
-pub use rgb_to_nv12::RgbToNv12Converter;
+pub use encode::{H273ColorVui, color_vui};
 pub use nv12_to_rgb::Nv12ToRgbConverter;
+pub use rgb_to_nv12::RgbToNv12Converter;
+pub use video_context::{VideoContext, VideoError, VideoResult};
 
 // --- Internal modules (ported 1-to-1 from nvpro C++) ---
 pub mod codec_utils;
+pub mod frame_buffer;
 pub mod nv_video_parser;
 pub mod vk_video_decoder;
 pub mod vk_video_encoder;
 pub mod vk_video_parser;
-pub mod frame_buffer;

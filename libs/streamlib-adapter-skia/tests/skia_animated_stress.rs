@@ -44,15 +44,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
-use skia_safe::{
-    gradient_shader, Color4f, Paint, PaintStyle, Path, Point, Rect, TileMode,
-};
-use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
+use skia_safe::{Color4f, Paint, PaintStyle, Path, Point, Rect, TileMode, gradient_shader};
 use streamlib::sdk::context::GpuContext;
+use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
 use streamlib::sdk::rhi::TextureFormat;
 use streamlib_adapter_abi::{
-    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState,
-    SurfaceTransportHandle, SurfaceUsage,
+    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
+    SurfaceUsage,
 };
 use streamlib_adapter_skia::SkiaSurfaceAdapter;
 use streamlib_adapter_vulkan::{HostSurfaceRegistration, VulkanLayout, VulkanSurfaceAdapter};
@@ -114,12 +112,10 @@ fn skia_animated_stress() {
     // only exercises `acquire_write` so `produce_done` is the
     // timeline whose counter tracks frames.
     let produce_done = Arc::new(
-        HostVulkanTimelineSemaphore::new(host_device.device(), 0)
-            .expect("produce_done timeline"),
+        HostVulkanTimelineSemaphore::new(host_device.device(), 0).expect("produce_done timeline"),
     );
     let consume_done = Arc::new(
-        HostVulkanTimelineSemaphore::new(host_device.device(), 0)
-            .expect("consume_done timeline"),
+        HostVulkanTimelineSemaphore::new(host_device.device(), 0).expect("consume_done timeline"),
     );
     let timeline = Arc::clone(&produce_done);
     let surface_id = 0xa11_a11a;
@@ -163,17 +159,28 @@ fn skia_animated_stress() {
     let mut ffmpeg = Command::new(ffmpeg_bin)
         .args([
             "-y",
-            "-loglevel", "error",
-            "-f", "rawvideo",
-            "-pix_fmt", "bgra",
-            "-s", &format!("{}x{}", W, H),
-            "-r", &FPS.to_string(),
-            "-i", "-",
-            "-c:v", "libx264",
-            "-pix_fmt", "yuv420p",
-            "-preset", "veryfast",
-            "-crf", "20",
-            "-movflags", "+faststart",
+            "-loglevel",
+            "error",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "bgra",
+            "-s",
+            &format!("{}x{}", W, H),
+            "-r",
+            &FPS.to_string(),
+            "-i",
+            "-",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "20",
+            "-movflags",
+            "+faststart",
             mp4_path.to_str().expect("mp4 path utf-8"),
         ])
         .stdin(Stdio::piped())
@@ -203,7 +210,7 @@ fn skia_animated_stress() {
             let canvas = view.surface_mut().canvas();
             draw_animated_frame(canvas, t);
         } // guard drops → flush_and_submit_surface(SyncCpu::Yes) → inner
-          // adapter end_write_access → host-signal timeline value f+1.
+        // adapter end_write_access → host-signal timeline value f+1.
         let adapter_elapsed = adapter_start.elapsed();
         adapter_times.push(adapter_elapsed);
 
@@ -214,15 +221,12 @@ fn skia_animated_stress() {
         if (f as usize) == hero_frame_index {
             hero_pixels = Some(pixels.clone());
         }
-        ffmpeg_stdin
-            .write_all(&pixels)
-            .expect("ffmpeg stdin write");
+        ffmpeg_stdin.write_all(&pixels).expect("ffmpeg stdin write");
 
         if (f + 1) % 120 == 0 {
             let wall = run_start.elapsed().as_secs_f32();
             let adapter_avg_ms =
-                adapter_times.iter().sum::<Duration>().as_secs_f32() * 1000.0
-                    / (f as f32 + 1.0);
+                adapter_times.iter().sum::<Duration>().as_secs_f32() * 1000.0 / (f as f32 + 1.0);
             println!(
                 "[skia_animated_stress] frame {:>4}/{} wall={:>5.1}s adapter_avg={:>5.2}ms timeline={}",
                 f + 1,
@@ -237,26 +241,18 @@ fn skia_animated_stress() {
     // Close stdin → ffmpeg finalizes the MP4.
     drop(ffmpeg_stdin);
     let ffmpeg_status = ffmpeg.wait().expect("ffmpeg wait");
-    assert!(ffmpeg_status.success(), "ffmpeg encode failed: {ffmpeg_status:?}");
+    assert!(
+        ffmpeg_status.success(),
+        "ffmpeg encode failed: {ffmpeg_status:?}"
+    );
 
     // === Stats ======================================================
     let total = run_start.elapsed();
     let total_s = total.as_secs_f32();
     let adapter_total: Duration = adapter_times.iter().sum();
-    let adapter_avg_ms =
-        adapter_total.as_secs_f32() * 1000.0 / FRAME_COUNT as f32;
-    let adapter_min_ms = adapter_times
-        .iter()
-        .min()
-        .unwrap()
-        .as_secs_f32()
-        * 1000.0;
-    let adapter_max_ms = adapter_times
-        .iter()
-        .max()
-        .unwrap()
-        .as_secs_f32()
-        * 1000.0;
+    let adapter_avg_ms = adapter_total.as_secs_f32() * 1000.0 / FRAME_COUNT as f32;
+    let adapter_min_ms = adapter_times.iter().min().unwrap().as_secs_f32() * 1000.0;
+    let adapter_max_ms = adapter_times.iter().max().unwrap().as_secs_f32() * 1000.0;
     let mut sorted = adapter_times.clone();
     sorted.sort_unstable();
     let p50_ms = sorted[FRAME_COUNT as usize / 2].as_secs_f32() * 1000.0;
@@ -413,15 +409,9 @@ fn draw_animated_frame(canvas: &skia_safe::Canvas, t: f32) {
     let strip_h = 14.0;
     for i in 0..7 {
         let mut tile = Paint::default();
-        tile.set_color4f(
-            hsl(t * 120.0 + i as f32 * 51.0, 0.95, 0.55),
-            None,
-        );
+        tile.set_color4f(hsl(t * 120.0 + i as f32 * 51.0, 0.95, 0.55), None);
         let x0 = 16.0 + i as f32 * 22.0;
-        canvas.draw_rect(
-            Rect::new(x0, strip_y, x0 + 18.0, strip_y + strip_h),
-            &tile,
-        );
+        canvas.draw_rect(Rect::new(x0, strip_y, x0 + 18.0, strip_y + strip_h), &tile);
     }
 }
 
@@ -533,7 +523,11 @@ fn host_readback_bgra(
                 .build(),
         )
         .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
-        .image_extent(vk::Extent3D { width, height, depth: 1 })
+        .image_extent(vk::Extent3D {
+            width,
+            height,
+            depth: 1,
+        })
         .build();
     let regions = [region];
     unsafe {
@@ -580,8 +574,7 @@ fn write_bgra_as_png(bgra: &[u8], width: u32, height: u32, path: &std::path::Pat
     for px in rgba.chunks_exact_mut(4) {
         px.swap(0, 2);
     }
-    let file = File::create(path)
-        .unwrap_or_else(|e| panic!("create {}: {e}", path.display()));
+    let file = File::create(path).unwrap_or_else(|e| panic!("create {}: {e}", path.display()));
     let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);

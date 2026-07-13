@@ -3,7 +3,7 @@
 
 //! Texture cache for creating texture views from pixel buffers.
 
-use super::{PixelFormat, PixelBuffer};
+use super::{PixelBuffer, PixelFormat};
 use crate::core::Result;
 
 /// Creates texture views from pixel buffers.

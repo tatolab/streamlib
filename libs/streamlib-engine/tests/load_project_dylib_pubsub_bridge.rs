@@ -22,17 +22,17 @@
 
 use std::path::Path;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use serial_test::serial;
-use streamlib::sdk::pubsub::{topics, Event, EventListener, RuntimeEvent, PUBSUB};
-use streamlib::sdk::module_ident_any_version;
-use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
 use streamlib::sdk::RunnerAutoBuild;
+use streamlib::sdk::module_ident_any_version;
+use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, RuntimeEvent, topics};
+use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
 use streamlib_engine::core::runtime::host_target_triple;
 
 fn copy_dir_contents(src: &Path, dst: &Path) {
@@ -56,11 +56,7 @@ fn build_and_stage_test_fixtures_dylib() -> (tempfile::TempDir, std::path::PathB
         .unwrap();
 
     let status = std::process::Command::new(env!("CARGO"))
-        .args([
-            "build",
-            "-p",
-            "streamlib-test-fixtures",
-        ])
+        .args(["build", "-p", "streamlib-test-fixtures"])
         .status()
         .expect("invoking cargo build");
     assert!(
@@ -76,7 +72,10 @@ fn build_and_stage_test_fixtures_dylib() -> (tempfile::TempDir, std::path::PathB
         "so"
     };
     let dylib_name = format!("libstreamlib_test_fixtures.{}", dylib_ext);
-    let built_dylib = workspace_root.join("target").join("debug").join(&dylib_name);
+    let built_dylib = workspace_root
+        .join("target")
+        .join("debug")
+        .join(&dylib_name);
     assert!(
         built_dylib.exists(),
         "cdylib expected at {} after cargo build",
@@ -142,17 +141,19 @@ fn plugin_register_pubsub_event_reaches_host_subscriber() {
     // thread opens its iceoryx2 service before the publish (per the
     // pubsub-lazy-init-silent-noop learning's setup-time recipe).
     let matched = Arc::new(AtomicUsize::new(0));
-    let listener_arc: Arc<Mutex<dyn EventListener>> =
-        Arc::new(Mutex::new(CountingListener {
-            matched: Arc::clone(&matched),
-        }));
+    let listener_arc: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(CountingListener {
+        matched: Arc::clone(&matched),
+    }));
     PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener_arc));
     std::thread::sleep(Duration::from_millis(200));
 
     runtime
         .add_module_with_blocking(
             module_ident_any_version!("tatolab", "test-fixtures"),
-            Strategy::Path { path: fixtures_dst.clone(), build: BuildPolicy::NeverBuild },
+            Strategy::Path {
+                path: fixtures_dst.clone(),
+                build: BuildPolicy::NeverBuild,
+            },
         )
         .expect("add_module_with must succeed");
 

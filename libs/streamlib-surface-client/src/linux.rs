@@ -333,7 +333,11 @@ mod tests {
 
         let name = std::ffi::CString::new("streamlib-surface-client-test").unwrap();
         let fd = unsafe { libc::memfd_create(name.as_ptr(), 0) };
-        assert!(fd >= 0, "memfd_create failed: {}", std::io::Error::last_os_error());
+        assert!(
+            fd >= 0,
+            "memfd_create failed: {}",
+            std::io::Error::last_os_error()
+        );
         let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
         file.write_all(contents).expect("memfd write");
         file.seek(SeekFrom::Start(0)).expect("memfd rewind");
@@ -471,7 +475,11 @@ mod tests {
 
         let (received_payload, received_fds) = server.join().expect("server thread");
         assert_eq!(received_payload, payload);
-        assert_eq!(received_fds.len(), MAX_DMA_BUF_PLANES, "all planes delivered");
+        assert_eq!(
+            received_fds.len(),
+            MAX_DMA_BUF_PLANES,
+            "all planes delivered"
+        );
         for (i, fd) in received_fds.iter().enumerate() {
             assert!(*fd >= 0);
             assert_eq!(

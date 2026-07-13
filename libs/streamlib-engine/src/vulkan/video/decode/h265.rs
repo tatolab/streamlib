@@ -3,18 +3,17 @@
 
 //! H.265-specific NAL handling: VPS/SPS/PPS parsing, slice decode submission.
 
-use vulkanalia::vk;
 use tracing::{debug, warn};
+use vulkanalia::vk;
 
 use crate::vulkan::video::nv_video_parser::vulkan_h265_decoder::{
-    self as h265dec, BitstreamReader as H265BitstreamReader,
-    NalUnitType as H265NalUnitType, VulkanH265Decoder,
-    HEVC_DPB_SIZE, MAX_NUM_PPS, MAX_NUM_SPS, MAX_NUM_VPS,
+    self as h265dec, BitstreamReader as H265BitstreamReader, HEVC_DPB_SIZE, MAX_NUM_PPS,
+    MAX_NUM_SPS, MAX_NUM_VPS, NalUnitType as H265NalUnitType, VulkanH265Decoder,
 };
 use crate::vulkan::video::video_context::VideoError;
 
-use super::{SimpleDecoder, PendingFrame};
 use super::types::*;
+use super::{PendingFrame, SimpleDecoder};
 
 impl SimpleDecoder {
     // ------------------------------------------------------------------
@@ -45,7 +44,10 @@ impl SimpleDecoder {
                 parser.vpss[vps_id] = Some(boxed);
             }
         } else {
-            debug!("H265 VPS cached but parse failed ({} bytes)", vps_nalu.len());
+            debug!(
+                "H265 VPS cached but parse failed ({} bytes)",
+                vps_nalu.len()
+            );
         }
         Ok(())
     }
@@ -63,9 +65,8 @@ impl SimpleDecoder {
         let mut reader = H265BitstreamReader::new(&rbsp);
 
         // Full SPS parse
-        let sps = VulkanH265Decoder::parse_sps(&mut reader).ok_or_else(|| {
-            VideoError::BitstreamError("Failed to parse H.265 SPS".into())
-        })?;
+        let sps = VulkanH265Decoder::parse_sps(&mut reader)
+            .ok_or_else(|| VideoError::BitstreamError("Failed to parse H.265 SPS".into()))?;
 
         let width = sps.pic_width_in_luma_samples;
         let height = sps.pic_height_in_luma_samples;
@@ -115,9 +116,8 @@ impl SimpleDecoder {
         let mut reader = H265BitstreamReader::new(&rbsp);
 
         let parser = self.h265_parser.as_mut().unwrap();
-        let pps = VulkanH265Decoder::parse_pps(&mut reader, &parser.spss).ok_or_else(|| {
-            VideoError::BitstreamError("Failed to parse H.265 PPS".into())
-        })?;
+        let pps = VulkanH265Decoder::parse_pps(&mut reader, &parser.spss)
+            .ok_or_else(|| VideoError::BitstreamError("Failed to parse H.265 PPS".into()))?;
 
         let pps_id = pps.pps_pic_parameter_set_id as usize;
         debug!(
@@ -188,9 +188,7 @@ impl SimpleDecoder {
             &sps,
             &pps,
         )
-        .ok_or_else(|| {
-            VideoError::BitstreamError("Failed to parse H.265 slice header".into())
-        })?;
+        .ok_or_else(|| VideoError::BitstreamError("Failed to parse H.265 slice header".into()))?;
 
         // Mutable borrow for POC calculation, RPS derivation, and DPB management
         let parser = self.h265_parser.as_mut().unwrap();
@@ -206,7 +204,9 @@ impl SimpleDecoder {
         parser.dpb_picture_start(&pps, &slh);
 
         // Read back the computed POC and RPS results
-        let poc_val = parser.dpb_cur.map_or(0, |idx| parser.dpb[idx].pic_order_cnt_val);
+        let poc_val = parser
+            .dpb_cur
+            .map_or(0, |idx| parser.dpb[idx].pic_order_cnt_val);
         let num_poc_st_curr_before = parser.num_poc_st_curr_before;
         let num_poc_st_curr_after = parser.num_poc_st_curr_after;
         let num_poc_lt_curr = parser.num_poc_lt_curr;
@@ -230,7 +230,9 @@ impl SimpleDecoder {
             let idx = parser.ref_pic_set_st_curr_before[i];
             let poc = if idx >= 0 && (idx as usize) < HEVC_DPB_SIZE {
                 parser.dpb[idx as usize].pic_order_cnt_val
-            } else { 0 };
+            } else {
+                0
+            };
             st_before[i] = (idx, poc);
         }
         let mut st_after = [(0i8, 0i32); 16];
@@ -239,7 +241,9 @@ impl SimpleDecoder {
             let idx = parser.ref_pic_set_st_curr_after[i];
             let poc = if idx >= 0 && (idx as usize) < HEVC_DPB_SIZE {
                 parser.dpb[idx as usize].pic_order_cnt_val
-            } else { 0 };
+            } else {
+                0
+            };
             st_after[i] = (idx, poc);
         }
         let mut lt_curr_arr = [(0i8, 0i32); 16];
@@ -248,7 +252,9 @@ impl SimpleDecoder {
             let idx = parser.ref_pic_set_lt_curr[i];
             let poc = if idx >= 0 && (idx as usize) < HEVC_DPB_SIZE {
                 parser.dpb[idx as usize].pic_order_cnt_val
-            } else { 0 };
+            } else {
+                0
+            };
             lt_curr_arr[i] = (idx, poc);
         }
 
@@ -265,11 +271,16 @@ impl SimpleDecoder {
             }
             let slot = self.h265_dpb_to_slot[dpb_idx as usize];
             if slot < 0 {
-                warn!(dpb_idx, poc, "st_before entry has no physical slot mapping!");
+                warn!(
+                    dpb_idx,
+                    poc, "st_before entry has no physical slot mapping!"
+                );
                 skipped_refs += 1;
                 continue;
             }
-            let view_opt = self.vk_decoder.as_ref()
+            let view_opt = self
+                .vk_decoder
+                .as_ref()
                 .and_then(|vk_dec| vk_dec.dpb_slot_image_view(slot as usize));
             if let Some(view) = view_opt {
                 ref_slots.push(ReferenceSlot {
@@ -302,7 +313,9 @@ impl SimpleDecoder {
             if slot < 0 {
                 continue;
             }
-            let view_opt = self.vk_decoder.as_ref()
+            let view_opt = self
+                .vk_decoder
+                .as_ref()
                 .and_then(|vk_dec| vk_dec.dpb_slot_image_view(slot as usize));
             if let Some(view) = view_opt {
                 ref_slots.push(ReferenceSlot {
@@ -326,7 +339,9 @@ impl SimpleDecoder {
             if slot < 0 {
                 continue;
             }
-            let view_opt = self.vk_decoder.as_ref()
+            let view_opt = self
+                .vk_decoder
+                .as_ref()
                 .and_then(|vk_dec| vk_dec.dpb_slot_image_view(slot as usize));
             if let Some(view) = view_opt {
                 ref_slots.push(ReferenceSlot {
@@ -371,16 +386,20 @@ impl SimpleDecoder {
         let vk_dec_ref = self.vk_decoder.as_ref().ok_or_else(|| {
             VideoError::BitstreamError("VkVideoDecoder not available for H.265 decode".into())
         })?;
-        let setup_view = vk_dec_ref.dpb_slot_image_view(setup_slot)
-            .ok_or_else(|| VideoError::BitstreamError(
-                format!("VkVideoDecoder DPB slot {} not available", setup_slot),
-            ))?;
+        let setup_view = vk_dec_ref.dpb_slot_image_view(setup_slot).ok_or_else(|| {
+            VideoError::BitstreamError(format!(
+                "VkVideoDecoder DPB slot {} not available",
+                setup_slot
+            ))
+        })?;
         let setup_image = vk_dec_ref.dpb_image();
         let session_params = vk_dec_ref.session_parameters();
 
         // Diagnostic: log decode submission details for first 10 frames
         if self.frame_counter < 10 {
-            let ref_info_str: Vec<String> = ref_slots.iter().zip(ref_pic_infos.iter())
+            let ref_info_str: Vec<String> = ref_slots
+                .iter()
+                .zip(ref_pic_infos.iter())
                 .map(|(s, r)| format!("slot{}(poc={})", s.slot_index, r.pic_order_cnt_val))
                 .collect();
             debug!(
@@ -408,7 +427,10 @@ impl SimpleDecoder {
         // Diagnostic: dump first bytes for debugging
         if self.frame_counter < 5 {
             let hex: String = bitstream_buf[..bitstream_buf.len().min(20)]
-                .iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ");
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<Vec<_>>()
+                .join(" ");
             debug!(
                 frame = self.frame_counter,
                 total_len = bitstream_buf.len(),
@@ -423,7 +445,9 @@ impl SimpleDecoder {
         let mut active_slot_list = Vec::with_capacity(self.dpb_slot_in_use.len());
         for (i, &in_use) in self.dpb_slot_in_use.iter().enumerate() {
             if in_use && i != setup_slot {
-                let view_opt = self.vk_decoder.as_ref()
+                let view_opt = self
+                    .vk_decoder
+                    .as_ref()
                     .and_then(|vk_dec| vk_dec.dpb_slot_image_view(i));
                 if let Some(view) = view_opt {
                     active_slot_list.push(ReferenceSlot {
@@ -620,15 +644,29 @@ impl SimpleDecoder {
 
         // Parse profile_tier_level(true, max_sub_layers_minus1)
         // Fixed part: 2 + 1 + 5 + 32 + 4 + 44 + 8 = 96 bits
-        if r.u(2).is_none() { return (0, 0); } // general_profile_space
-        if r.u(1).is_none() { return (0, 0); } // general_tier_flag
-        if r.u(5).is_none() { return (0, 0); } // general_profile_idc
-        if r.u(32).is_none() { return (0, 0); } // general_profile_compatibility_flag[32]
+        if r.u(2).is_none() {
+            return (0, 0);
+        } // general_profile_space
+        if r.u(1).is_none() {
+            return (0, 0);
+        } // general_tier_flag
+        if r.u(5).is_none() {
+            return (0, 0);
+        } // general_profile_idc
+        if r.u(32).is_none() {
+            return (0, 0);
+        } // general_profile_compatibility_flag[32]
         // progressive, interlaced, non_packed, frame_only = 4 bits
-        if r.u(4).is_none() { return (0, 0); }
+        if r.u(4).is_none() {
+            return (0, 0);
+        }
         // 44 reserved zero bits (constraint flags)
-        if r.u(32).is_none() { return (0, 0); }
-        if r.u(12).is_none() { return (0, 0); }
+        if r.u(32).is_none() {
+            return (0, 0);
+        }
+        if r.u(12).is_none() {
+            return (0, 0);
+        }
         let _general_level_idc = r.u(8);
 
         // Sub-layer flags (if max_sub_layers_minus1 > 0)
@@ -652,9 +690,15 @@ impl SimpleDecoder {
                 // compatibility_flags(32), progressive+interlaced+non_packed+frame_only(4),
                 // 44 reserved bits, level_idc(8) -- but level is separate
                 // total = 2+1+5+32+4+44 = 88 bits for profile part
-                if r.u(32).is_none() { return (0, 0); }
-                if r.u(32).is_none() { return (0, 0); }
-                if r.u(24).is_none() { return (0, 0); }
+                if r.u(32).is_none() {
+                    return (0, 0);
+                }
+                if r.u(32).is_none() {
+                    return (0, 0);
+                }
+                if r.u(24).is_none() {
+                    return (0, 0);
+                }
             }
             if sub_layer_level_present[i] {
                 let _ = r.u(8); // sub_layer_level_idc
@@ -702,35 +746,69 @@ impl SimpleDecoder {
 
         // Same parsing as parse_h265_sps_dimensions up to width/height
         let _ = r.u(4); // vps_id
-        let max_sub = match r.u(3) { Some(v) => v, None => return 2 };
+        let max_sub = match r.u(3) {
+            Some(v) => v,
+            None => return 2,
+        };
         let _ = r.u(1); // temporal_id_nesting
 
         // profile_tier_level
-        r.u(2); r.u(1); r.u(5); r.u(32); r.u(4); r.u(32); r.u(12); r.u(8);
+        r.u(2);
+        r.u(1);
+        r.u(5);
+        r.u(32);
+        r.u(4);
+        r.u(32);
+        r.u(12);
+        r.u(8);
         // Sub-layer flags
         let mut slp = [false; 6];
         let mut sll = [false; 6];
-        for i in 0..max_sub as usize { slp[i] = r.u(1) == Some(1); sll[i] = r.u(1) == Some(1); }
-        if max_sub > 0 { for _ in max_sub..8 { let _ = r.u(2); } }
         for i in 0..max_sub as usize {
-            if slp[i] { r.u(32); r.u(32); r.u(24); }
-            if sll[i] { r.u(8); }
+            slp[i] = r.u(1) == Some(1);
+            sll[i] = r.u(1) == Some(1);
+        }
+        if max_sub > 0 {
+            for _ in max_sub..8 {
+                let _ = r.u(2);
+            }
+        }
+        for i in 0..max_sub as usize {
+            if slp[i] {
+                r.u(32);
+                r.u(32);
+                r.u(24);
+            }
+            if sll[i] {
+                r.u(8);
+            }
         }
 
         let _ = r.ue(); // sps_id
         let chroma = r.ue().unwrap_or(1);
-        if chroma == 3 { let _ = r.u(1); }
+        if chroma == 3 {
+            let _ = r.u(1);
+        }
         let _ = r.ue(); // width
         let _ = r.ue(); // height
         let conf_win = r.u(1).unwrap_or(0);
-        if conf_win != 0 { r.ue(); r.ue(); r.ue(); r.ue(); }
+        if conf_win != 0 {
+            r.ue();
+            r.ue();
+            r.ue();
+            r.ue();
+        }
         let _ = r.ue(); // bd_luma
         let _ = r.ue(); // bd_chroma
         let _ = r.ue(); // log2_max_poc
 
         // sps_sub_layer_ordering_info_present_flag
         let sub_layer_ordering = r.u(1).unwrap_or(0);
-        let loops = if sub_layer_ordering != 0 { max_sub + 1 } else { 1 };
+        let loops = if sub_layer_ordering != 0 {
+            max_sub + 1
+        } else {
+            1
+        };
         for _ in 0..loops {
             let _ = r.ue(); // max_dec_pic_buffering_minus1
             let _ = r.ue(); // max_num_reorder_pics

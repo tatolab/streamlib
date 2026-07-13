@@ -132,9 +132,7 @@ impl TextureRegistration {
     /// inner alive.
     pub fn texture(&self) -> &Texture {
         if self.handle.is_null() || self.vtable.is_null() {
-            panic!(
-                "TextureRegistration::texture() called on a null-handle registration"
-            );
+            panic!("TextureRegistration::texture() called on a null-handle registration");
         }
         // SAFETY: vtable + handle were paired at construction; the
         // callback returns a `*const Texture` pointer (typed as
@@ -240,8 +238,8 @@ mod layout_tests {
 #[cfg(target_os = "linux")]
 mod tests {
     use super::*;
-    use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
     use crate::core::context::GpuContext;
+    use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
     use std::thread;
 
     fn fresh_texture() -> Option<Texture> {

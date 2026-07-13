@@ -22,7 +22,7 @@ use streamlib_plugin_abi::{
     SourceLayoutInfoRepr,
 };
 
-use crate::color::{yuv_to_rgb_matrix, ColorSpaceKind, ResolvedColorInfo, TransferId};
+use crate::color::{ColorSpaceKind, ResolvedColorInfo, TransferId, yuv_to_rgb_matrix};
 use crate::rhi::{StorageBuffer, Texture, VulkanComputeKernel};
 
 /// Push-constants struct matching the converter shader's
@@ -252,9 +252,7 @@ impl RhiColorConverter {
         // VulkanComputeKernel methods vtable to assemble its own
         // PluginAbiObject from the host-returned inner handle.
         let callbacks = crate::plugin::host_callbacks().ok_or_else(|| {
-            Error::GpuError(
-                "prepare_buffer_to_image_storage: host callbacks not installed".into(),
-            )
+            Error::GpuError("prepare_buffer_to_image_storage: host callbacks not installed".into())
         })?;
         let parent_vtable = callbacks.gpu_context_full_access_vtable;
         let kernel_methods_vtable = callbacks.vulkan_compute_kernel_methods_vtable;

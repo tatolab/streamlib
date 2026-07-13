@@ -8,9 +8,9 @@ use std::sync::Arc;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 
-use super::{VulkanCommandBuffer, HostVulkanDevice};
+use super::{HostVulkanDevice, VulkanCommandBuffer};
 
 /// Vulkan command queue wrapper.
 ///
@@ -24,7 +24,11 @@ pub struct VulkanCommandQueue {
 
 impl VulkanCommandQueue {
     /// Create a new command queue wrapper.
-    pub fn new(vulkan_device: Arc<HostVulkanDevice>, queue: vk::Queue, queue_family_index: u32) -> Self {
+    pub fn new(
+        vulkan_device: Arc<HostVulkanDevice>,
+        queue: vk::Queue,
+        queue_family_index: u32,
+    ) -> Self {
         let device = vulkan_device.device().clone();
 
         // Create command pool for this queue family
@@ -53,9 +57,7 @@ impl VulkanCommandQueue {
             .build();
 
         let command_buffers = unsafe { self.device.allocate_command_buffers(&alloc_info) }
-            .map_err(|e| {
-                Error::GpuError(format!("Failed to allocate command buffer: {e}"))
-            })?;
+            .map_err(|e| Error::GpuError(format!("Failed to allocate command buffer: {e}")))?;
 
         let command_buffer = command_buffers[0];
 
@@ -102,7 +104,10 @@ mod tests {
     use super::*;
     use crate::vulkan::rhi::HostVulkanDevice;
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_creates_command_buffer() {
         let device = match HostVulkanDevice::new() {
@@ -115,10 +120,17 @@ mod tests {
 
         let queue = device.create_command_queue_wrapper();
         let result = queue.create_command_buffer();
-        assert!(result.is_ok(), "command buffer allocation must succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "command buffer allocation must succeed: {:?}",
+            result.err()
+        );
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_empty_command_buffer_commit_and_wait_completes() {
         let device = match HostVulkanDevice::new() {

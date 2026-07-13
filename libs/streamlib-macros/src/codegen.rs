@@ -1076,8 +1076,7 @@ mod processor_struct_emit_tests {
     #[test]
     fn from_config_initializer_does_not_construct_audio_converter() {
         let schema = minimal_schema();
-        let rendered =
-            generate_from_config_from_schema(&schema, &None, &[]).to_string();
+        let rendered = generate_from_config_from_schema(&schema, &None, &[]).to_string();
         assert!(
             !rendered.contains("ProcessorAudioConverter"),
             "from_config must not reference ProcessorAudioConverter — got: {}",

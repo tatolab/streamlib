@@ -68,10 +68,7 @@ pub fn run(workspace_root: &Path) -> Result<()> {
         );
         return Ok(());
     }
-    eprintln!(
-        "✗ check-no-reverse-dns: {} violation(s)",
-        violations.len()
-    );
+    eprintln!("✗ check-no-reverse-dns: {} violation(s)", violations.len());
     for v in &violations {
         eprintln!(
             "  {}:{}: legacy reverse-DNS literal `{}` — use the structured `@org/package/Type` identifier instead. See docs/architecture/schema-identity-and-packaging.md",
@@ -102,11 +99,17 @@ fn scan_dir(dir: &Path, violations: &mut Vec<LintViolation>) -> Result<()> {
             continue;
         }
         let path_str = path.to_string_lossy();
-        if SKIP_PATH_FRAGMENTS.iter().any(|frag| path_str.contains(frag)) {
+        if SKIP_PATH_FRAGMENTS
+            .iter()
+            .any(|frag| path_str.contains(frag))
+        {
             continue;
         }
         let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-        if SKIP_FILE_SUFFIXES.iter().any(|sfx| file_name.ends_with(sfx)) {
+        if SKIP_FILE_SUFFIXES
+            .iter()
+            .any(|sfx| file_name.ends_with(sfx))
+        {
             continue;
         }
         let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -118,13 +121,9 @@ fn scan_dir(dir: &Path, violations: &mut Vec<LintViolation>) -> Result<()> {
     Ok(())
 }
 
-fn scan_file(
-    path: &Path,
-    extension: &str,
-    violations: &mut Vec<LintViolation>,
-) -> Result<()> {
-    let body = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read {}", path.display()))?;
+fn scan_file(path: &Path, extension: &str, violations: &mut Vec<LintViolation>) -> Result<()> {
+    let body =
+        fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
     if body.contains(ALLOW_FILE_PRAGMA) {
         return Ok(());
     }
@@ -226,12 +225,7 @@ impl<'ast, 'a> Visit<'ast> for RustVisitor<'a> {
 
 /// Non-Rust file scan: strip line comments, search each line for banned
 /// prefixes, capture the surrounding identifier-shaped token.
-fn scan_line_based(
-    path: &Path,
-    body: &str,
-    extension: &str,
-    violations: &mut Vec<LintViolation>,
-) {
+fn scan_line_based(path: &Path, body: &str, extension: &str, violations: &mut Vec<LintViolation>) {
     let comment_prefix = match extension {
         "yaml" | "yml" | "toml" => "#",
         "json" | "jsonc" => "//",
@@ -244,11 +238,7 @@ fn scan_line_based(
                 let tail = &scanned[pos..];
                 let end = tail
                     .find(|c: char| {
-                        !c.is_ascii_alphanumeric()
-                            && c != '.'
-                            && c != '_'
-                            && c != '@'
-                            && c != '-'
+                        !c.is_ascii_alphanumeric() && c != '.' && c != '_' && c != '@' && c != '-'
                     })
                     .unwrap_or(tail.len());
                 let literal = tail[..end].to_string();

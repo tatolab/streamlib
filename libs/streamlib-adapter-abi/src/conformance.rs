@@ -124,9 +124,7 @@ where
             .expect("acquire_read for contention test must succeed");
         match adapter.acquire_write(&s) {
             Err(AdapterError::WriteContended { .. }) => {}
-            Err(other) => panic!(
-                "expected WriteContended while a read is held, got {other:?}"
-            ),
+            Err(other) => panic!("expected WriteContended while a read is held, got {other:?}"),
             Ok(_) => panic!("acquire_write must fail while a read is held"),
         }
         drop(read_guard);
@@ -140,9 +138,7 @@ where
             .expect("first acquire_write for contention test must succeed");
         match adapter.acquire_write(&s) {
             Err(AdapterError::WriteContended { .. }) => {}
-            Err(other) => panic!(
-                "expected WriteContended while a write is held, got {other:?}"
-            ),
+            Err(other) => panic!("expected WriteContended while a write is held, got {other:?}"),
             Ok(_) => panic!("acquire_write must fail while another write is held"),
         }
         drop(write_guard);
@@ -156,12 +152,10 @@ where
             .expect("acquire_write for try_acquire_read test must succeed");
         match adapter.try_acquire_read(&s) {
             Ok(None) => {}
-            Ok(Some(_)) => panic!(
-                "try_acquire_read must NOT acquire while a writer is held"
-            ),
-            Err(other) => panic!(
-                "try_acquire_read must return Ok(None) on contention, got Err({other:?})"
-            ),
+            Ok(Some(_)) => panic!("try_acquire_read must NOT acquire while a writer is held"),
+            Err(other) => {
+                panic!("try_acquire_read must return Ok(None) on contention, got Err({other:?})")
+            }
         }
         drop(writer);
         match adapter.try_acquire_read(&s) {
@@ -181,12 +175,10 @@ where
             .expect("acquire_read for try_acquire_write test must succeed");
         match adapter.try_acquire_write(&s) {
             Ok(None) => {}
-            Ok(Some(_)) => panic!(
-                "try_acquire_write must NOT acquire while a reader is held"
-            ),
-            Err(other) => panic!(
-                "try_acquire_write must return Ok(None) on contention, got Err({other:?})"
-            ),
+            Ok(Some(_)) => panic!("try_acquire_write must NOT acquire while a reader is held"),
+            Err(other) => {
+                panic!("try_acquire_write must return Ok(None) on contention, got Err({other:?})")
+            }
         }
         drop(reader);
     }

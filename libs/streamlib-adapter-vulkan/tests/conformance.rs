@@ -17,8 +17,8 @@
 use std::sync::Arc;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
-use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
 use streamlib::sdk::context::GpuContext;
+use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
 use streamlib::sdk::rhi::TextureFormat;
 use streamlib_adapter_abi::testing::{empty_surface, run_conformance};
 use streamlib_adapter_abi::{
@@ -83,9 +83,7 @@ struct ConformanceFactory<'a> {
     gpu: &'a GpuContext,
 }
 
-impl<'a> streamlib_adapter_abi::testing::ConformanceSurfaceFactory
-    for ConformanceFactory<'a>
-{
+impl<'a> streamlib_adapter_abi::testing::ConformanceSurfaceFactory for ConformanceFactory<'a> {
     fn make(&self, id: SurfaceId) -> StreamlibSurface {
         register_one(self.adapter, self.gpu, id)
     }
@@ -122,7 +120,9 @@ fn duplicate_registration_returns_surface_already_registered() {
     let gpu = match try_init_gpu() {
         Some(g) => g,
         None => {
-            println!("vulkan-adapter duplicate-registration: skipping — no Vulkan device available");
+            println!(
+                "vulkan-adapter duplicate-registration: skipping — no Vulkan device available"
+            );
             return;
         }
     };

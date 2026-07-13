@@ -32,10 +32,10 @@
 use std::path::Path;
 
 use serial_test::serial;
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::module_ident_any_version;
-use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
-use streamlib::sdk::RunnerAutoBuild;
+use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
 use streamlib_engine::core::runtime::host_target_triple;
 
 fn copy_dir_contents(src: &Path, dst: &Path) {
@@ -83,10 +83,7 @@ fn build_tampered_cdylib(feature: &str) -> std::path::PathBuf {
     } else {
         "so"
     };
-    let dylib_name = format!(
-        "libstreamlib_test_fixtures_abi_mismatch.{}",
-        dylib_ext
-    );
+    let dylib_name = format!("libstreamlib_test_fixtures_abi_mismatch.{}", dylib_ext);
     workspace_root()
         .join("target")
         .join("debug")
@@ -130,7 +127,10 @@ fn load_tampered_module(project_dir: &Path) -> Error {
     runtime
         .add_module_with_blocking(
             module_ident_any_version!("tatolab", "test-fixtures-abi-mismatch"),
-            Strategy::Path { path: project_dir.to_path_buf(), build: BuildPolicy::NeverBuild },
+            Strategy::Path {
+                path: project_dir.to_path_buf(),
+                build: BuildPolicy::NeverBuild,
+            },
         )
         .expect_err("add_module_with must REJECT a tampered declaration")
         .into()

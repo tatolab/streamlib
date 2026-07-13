@@ -8,7 +8,7 @@ use vulkanalia::vk;
 #[cfg(target_os = "linux")]
 use vulkanalia::vk::KhrExternalSemaphoreFdExtensionDeviceCommands;
 
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 
 /// Vulkan semaphore wrapper for synchronization.
 ///
@@ -53,9 +53,7 @@ impl VulkanSemaphore {
         mtl_shared_event: *const std::ffi::c_void,
     ) -> Result<Self> {
         if mtl_shared_event.is_null() {
-            return Err(Error::GpuError(
-                "Cannot import null MTLSharedEvent".into(),
-            ));
+            return Err(Error::GpuError("Cannot import null MTLSharedEvent".into()));
         }
 
         // Create import info for Metal shared event
@@ -258,11 +256,7 @@ impl HostVulkanTimelineSemaphore {
         Self::create(device, initial_value, true)
     }
 
-    fn create(
-        device: &vulkanalia::Device,
-        initial_value: u64,
-        exportable: bool,
-    ) -> Result<Self> {
+    fn create(device: &vulkanalia::Device, initial_value: u64, exportable: bool) -> Result<Self> {
         let mut type_info = vk::SemaphoreTypeCreateInfo::builder()
             .semaphore_type(vk::SemaphoreType::TIMELINE)
             .initial_value(initial_value)
@@ -366,9 +360,8 @@ impl HostVulkanTimelineSemaphore {
             .semaphore(self.semaphore)
             .handle_type(vk::ExternalSemaphoreHandleTypeFlags::OPAQUE_FD)
             .build();
-        let fd = unsafe { self.device.get_semaphore_fd_khr(&info) }.map_err(|e| {
-            Error::GpuError(format!("vkGetSemaphoreFdKHR failed: {e}"))
-        })?;
+        let fd = unsafe { self.device.get_semaphore_fd_khr(&info) }
+            .map_err(|e| Error::GpuError(format!("vkGetSemaphoreFdKHR failed: {e}")))?;
         Ok(fd)
     }
 
@@ -426,8 +419,7 @@ impl HostVulkanTimelineSemaphore {
     /// wait needs. The handle stays in the wire format for
     /// cross-slot consistency.
     fn wait_via_vtable(&self, value: u64, timeout_ns: u64) -> Result<()> {
-        let vtable =
-            crate::core::plugin::host_services::host_gpu_context_limited_access_vtable();
+        let vtable = crate::core::plugin::host_services::host_gpu_context_limited_access_vtable();
         if vtable.is_null() {
             return Err(Error::GpuError(
                 "HostVulkanTimelineSemaphore::wait: cdylib mode but \
@@ -452,8 +444,7 @@ impl HostVulkanTimelineSemaphore {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -473,17 +464,15 @@ impl HostVulkanTimelineSemaphore {
             .semaphore(self.semaphore)
             .value(value)
             .build();
-        unsafe { self.device.signal_semaphore(&info) }.map_err(|e| {
-            Error::GpuError(format!("vkSignalSemaphore(value={value}): {e}"))
-        })
+        unsafe { self.device.signal_semaphore(&info) }
+            .map_err(|e| Error::GpuError(format!("vkSignalSemaphore(value={value}): {e}")))
     }
 
     /// Read the current timeline counter value via
     /// `vkGetSemaphoreCounterValue`. Used by tests and progress reporting.
     pub fn current_value(&self) -> Result<u64> {
-        unsafe { self.device.get_semaphore_counter_value(self.semaphore) }.map_err(|e| {
-            Error::GpuError(format!("vkGetSemaphoreCounterValue: {e}"))
-        })
+        unsafe { self.device.get_semaphore_counter_value(self.semaphore) }
+            .map_err(|e| Error::GpuError(format!("vkGetSemaphoreCounterValue: {e}")))
     }
 
     /// Raw `vk::Semaphore` handle for inclusion in queue submit infos.
@@ -533,7 +522,10 @@ mod tests {
     use super::*;
     use crate::vulkan::rhi::HostVulkanDevice;
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_semaphore_creation() {
         let device = match HostVulkanDevice::new() {
@@ -550,7 +542,10 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn timeline_semaphore_host_signal_advances_counter() {
         let device = match HostVulkanDevice::new() {
@@ -574,7 +569,10 @@ mod tests {
     /// Cross-process import is exercised by the surface-adapter
     /// integration tests in `streamlib-adapter-vulkan`.
     #[cfg(target_os = "linux")]
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn timeline_semaphore_exports_valid_opaque_fd() {
         let device = match HostVulkanDevice::new() {
@@ -596,7 +594,10 @@ mod tests {
         unsafe { libc::close(fd) };
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_fence_creation() {
         let device = match HostVulkanDevice::new() {

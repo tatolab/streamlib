@@ -155,8 +155,7 @@ fn scan_dir(dir: &Path) -> Result<Vec<Violation>> {
 }
 
 fn scan_file(path: &Path, violations: &mut Vec<Violation>) -> Result<()> {
-    let body = fs::read_to_string(path)
-        .with_context(|| format!("read {}", path.display()))?;
+    let body = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     if body.contains(ALLOW_FILE_PRAGMA) {
         return Ok(());
     }
@@ -236,7 +235,9 @@ fn has_explicit_repr(attrs: &[syn::Attribute]) -> bool {
 fn all_variants_are_unit(
     variants: &syn::punctuated::Punctuated<syn::Variant, syn::token::Comma>,
 ) -> bool {
-    variants.iter().all(|v| matches!(v.fields, syn::Fields::Unit))
+    variants
+        .iter()
+        .all(|v| matches!(v.fields, syn::Fields::Unit))
 }
 
 fn has_transparent_or_c_repr(attrs: &[syn::Attribute]) -> bool {
@@ -343,7 +344,10 @@ pub(crate) enum CrateLocalOk { A, B }
 "#,
         );
         let v = scan_dir(tmp.path()).unwrap();
-        assert!(v.is_empty(), "private/crate-local enums are not FFI surface: {v:?}");
+        assert!(
+            v.is_empty(),
+            "private/crate-local enums are not FFI surface: {v:?}"
+        );
     }
 
     #[test]
@@ -392,7 +396,10 @@ pub enum WouldOtherwiseFlag { A, B }
 "#,
         );
         let v = scan_dir(tmp.path()).unwrap();
-        assert!(v.is_empty(), "allow-file pragma should skip the file: {v:?}");
+        assert!(
+            v.is_empty(),
+            "allow-file pragma should skip the file: {v:?}"
+        );
     }
 
     #[test]

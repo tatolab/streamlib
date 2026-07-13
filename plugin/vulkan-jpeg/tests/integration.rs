@@ -230,7 +230,9 @@ fn parses_complex_rgb_4_2_0() {
     // Cross-check: zune-jpeg accepts the same bitstream. If we accept it
     // and zune doesn't (or vice versa), one of us is wrong.
     let mut zune = zune_jpeg::JpegDecoder::new(&bytes);
-    let pixels = zune.decode().expect("zune-jpeg should accept this bitstream");
+    let pixels = zune
+        .decode()
+        .expect("zune-jpeg should accept this bitstream");
     assert!(!pixels.is_empty());
 }
 
@@ -289,7 +291,10 @@ fn progressive_sof_rejected() {
         .expect("solid_grayscale should contain SOF0");
     bytes[pos + 1] = 0xC2;
     let err = decode(&bytes).unwrap_err();
-    assert!(matches!(err, JpegError::UnsupportedSof { marker: 0xC2, .. }));
+    assert!(matches!(
+        err,
+        JpegError::UnsupportedSof { marker: 0xC2, .. }
+    ));
 }
 
 #[test]
@@ -381,7 +386,9 @@ fn parses_with_restart_intervals() {
     let mut encoder = Encoder::new(&mut bytes, QUALITY);
     encoder.set_sampling_factor(SamplingFactor::R_4_2_0);
     encoder.set_restart_interval(2);
-    encoder.encode(&pixels, width, height, ColorType::Rgb).unwrap();
+    encoder
+        .encode(&pixels, width, height, ColorType::Rgb)
+        .unwrap();
 
     // Confirm the encoder actually emitted DRI; otherwise the test is vacuous.
     assert!(
@@ -396,7 +403,8 @@ fn parses_with_restart_intervals() {
     // Cross-validate against zune-jpeg to make sure restart handling
     // didn't desynchronize the entropy stream.
     let mut zune = zune_jpeg::JpegDecoder::new(&bytes);
-    zune.decode().expect("zune-jpeg accepts restart-bearing JPEG");
+    zune.decode()
+        .expect("zune-jpeg accepts restart-bearing JPEG");
 }
 
 #[test]

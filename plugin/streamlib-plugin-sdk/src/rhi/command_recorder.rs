@@ -24,8 +24,8 @@
 
 use std::ffi::c_void;
 
-use streamlib_error::{Error, Result};
 use streamlib_consumer_rhi::VulkanLayout;
+use streamlib_error::{Error, Result};
 use streamlib_plugin_abi::{GpuContextFullAccessVTable, RhiCommandRecorderMethodsVTable};
 
 use crate::rhi::{Texture, VulkanAccess, VulkanComputeKernel, VulkanStage};

@@ -11,7 +11,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use streamlib_jtd_codegen::{generate, GenerateOptions, RuntimeTarget};
+use streamlib_jtd_codegen::{GenerateOptions, RuntimeTarget, generate};
 
 /// Run `streamlib generate`.
 pub fn run(

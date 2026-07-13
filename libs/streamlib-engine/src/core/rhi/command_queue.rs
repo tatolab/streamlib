@@ -129,8 +129,7 @@ impl RhiCommandQueue {
             // SAFETY: host signaled success and wrote a valid CommandBuffer.
             Ok(unsafe { out_cb.assume_init() })
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(crate::core::Error::GpuError(msg))
         }
     }

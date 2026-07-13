@@ -145,14 +145,8 @@ mod tests {
         // Total = 32 bytes, align = 8.
         assert_eq!(size_of::<TextureRingMethodsVTable>(), 32);
         assert_eq!(align_of::<TextureRingMethodsVTable>(), 8);
-        assert_eq!(
-            offset_of!(TextureRingMethodsVTable, layout_version),
-            0
-        );
-        assert_eq!(
-            offset_of!(TextureRingMethodsVTable, _reserved_padding),
-            4
-        );
+        assert_eq!(offset_of!(TextureRingMethodsVTable, layout_version), 0);
+        assert_eq!(offset_of!(TextureRingMethodsVTable, _reserved_padding), 4);
         assert_eq!(offset_of!(TextureRingMethodsVTable, acquire_next), 8);
         assert_eq!(
             offset_of!(TextureRingMethodsVTable, copy_pixel_buffer_to_slot),

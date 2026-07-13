@@ -3,8 +3,8 @@
 
 use std::ffi::c_void;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use streamlib_plugin_abi::RuntimeContextVTable;
 
@@ -286,7 +286,11 @@ impl RuntimeContext {
             return f();
         }
 
-        tracing::debug!("[run_on_runtime_thread_blocking] on background thread ({:?} '{}'), dispatching to runtime thread and waiting", thread_id, thread_name);
+        tracing::debug!(
+            "[run_on_runtime_thread_blocking] on background thread ({:?} '{}'), dispatching to runtime thread and waiting",
+            thread_id,
+            thread_name
+        );
         let (tx, rx) = channel();
 
         dispatch2::DispatchQueue::main().exec_async(move || {
@@ -794,17 +798,12 @@ impl<'a> RuntimeContextFullAccess<'a> {
     /// (a `setup()` body that itself calls `escalate(...)`) is
     /// rejected at the gate level — see
     /// [`crate::core::context::escalate_gate::EscalateGate`].
-    pub(crate) fn with_cdylib_scope<F, T>(
-        &self,
-        f: F,
-    ) -> crate::core::error::Result<T>
+    pub(crate) fn with_cdylib_scope<F, T>(&self, f: F) -> crate::core::error::Result<T>
     where
         F: FnOnce(&RuntimeContextFullAccess<'_>) -> crate::core::error::Result<T>,
     {
-        use super::escalate_scope_registry::{
-            begin_escalate_scope, end_escalate_scope_draining,
-        };
-        use std::panic::{catch_unwind, AssertUnwindSafe};
+        use super::escalate_scope_registry::{begin_escalate_scope, end_escalate_scope_draining};
+        use std::panic::{AssertUnwindSafe, catch_unwind};
 
         // Build the Arc<GpuContext> that backs the scope. The
         // LimitedAccess's `host_inner` deref reaches the boxed
@@ -1003,12 +1002,7 @@ unsafe fn vtable_copy_processor_id(
     let mut scratch = [0u8; 64];
     let mut written: usize = 0;
     let required = unsafe {
-        ((*vtable).processor_id_copy)(
-            handle,
-            scratch.as_mut_ptr(),
-            scratch.len(),
-            &mut written,
-        )
+        ((*vtable).processor_id_copy)(handle, scratch.as_mut_ptr(), scratch.len(), &mut written)
     };
     if required < 0 {
         return None;
@@ -1036,7 +1030,6 @@ unsafe impl<'a> Send for RuntimeContextFullAccess<'a> {}
 unsafe impl<'a> Sync for RuntimeContextFullAccess<'a> {}
 unsafe impl<'a> Send for RuntimeContextLimitedAccess<'a> {}
 unsafe impl<'a> Sync for RuntimeContextLimitedAccess<'a> {}
-
 
 #[cfg(test)]
 mod capability_view_tests {
@@ -1152,17 +1145,16 @@ mod with_cdylib_scope_tests {
         // `GpuContextFullAccess::new(host_gpu.clone())` (the Boxed
         // shape) — this assertion fails because the closure sees
         // `HandleKind::Boxed`, which is exactly the bug #1072 fixes.
-        let result: crate::core::error::Result<()> =
-            outer_ctx.with_cdylib_scope(|cdylib_ctx| {
-                assert_eq!(
-                    cdylib_ctx.gpu_full.handle_kind,
-                    HandleKind::ScopeToken,
-                    "{TEST}: cdylib-scope sibling must hold a ScopeToken \
+        let result: crate::core::error::Result<()> = outer_ctx.with_cdylib_scope(|cdylib_ctx| {
+            assert_eq!(
+                cdylib_ctx.gpu_full.handle_kind,
+                HandleKind::ScopeToken,
+                "{TEST}: cdylib-scope sibling must hold a ScopeToken \
                      FullAccess — this is the engine-fix invariant #1072 \
                      relies on"
-                );
-                Ok(())
-            });
+            );
+            Ok(())
+        });
         result.unwrap_or_else(|e| panic!("{TEST}: with_cdylib_scope returned err: {e}"));
     }
 }
@@ -1207,7 +1199,10 @@ mod layout_tests {
         assert_eq!(offset_of!(RuntimeContextFullAccess<'static>, handle), 0);
         assert_eq!(offset_of!(RuntimeContextFullAccess<'static>, vtable), 8);
         assert_eq!(offset_of!(RuntimeContextFullAccess<'static>, gpu_full), 16);
-        assert_eq!(offset_of!(RuntimeContextFullAccess<'static>, gpu_limited), 56);
+        assert_eq!(
+            offset_of!(RuntimeContextFullAccess<'static>, gpu_limited),
+            56
+        );
     }
 
     #[test]
@@ -1221,6 +1216,9 @@ mod layout_tests {
         assert_eq!(align_of::<RuntimeContextLimitedAccess<'static>>(), 8);
         assert_eq!(offset_of!(RuntimeContextLimitedAccess<'static>, handle), 0);
         assert_eq!(offset_of!(RuntimeContextLimitedAccess<'static>, vtable), 8);
-        assert_eq!(offset_of!(RuntimeContextLimitedAccess<'static>, gpu_limited), 16);
+        assert_eq!(
+            offset_of!(RuntimeContextLimitedAccess<'static>, gpu_limited),
+            16
+        );
     }
 }

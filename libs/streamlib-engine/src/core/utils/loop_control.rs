@@ -1,11 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::pubsub::{topics, Event, EventListener, RuntimeEvent, PUBSUB};
 use crate::core::Result;
+use crate::core::pubsub::{Event, EventListener, PUBSUB, RuntimeEvent, topics};
 use parking_lot::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Control flow for shutdown-aware loops.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,9 +101,9 @@ mod tests {
     #[serial]
     fn test_shutdown_event_exits_loop() {
         use crate::iceoryx2::Iceoryx2Node;
+        use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::mpsc;
-        use std::sync::Arc;
         use std::time::Duration;
 
         // Ensure PUBSUB has an iceoryx2 backend. Use a process-unique runtime_id

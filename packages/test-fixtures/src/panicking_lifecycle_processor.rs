@@ -29,9 +29,7 @@
 //! assertion. The wrapper's `catch_unwind` is the engine-tier
 //! invariant; mentally reverting it would abort the test process.
 
-use streamlib::sdk::context::{
-    RuntimeContextFullAccess, RuntimeContextLimitedAccess,
-};
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::Result;
 use streamlib::sdk::processors::{ContinuousProcessor, ManualProcessor};
 

@@ -38,8 +38,8 @@ use std::sync::Arc;
 
 use streamlib_adapter_abi::{StreamlibSurface, SurfaceAdapter};
 use streamlib_adapter_opengl_abi::{
-    HostSurfaceRegistrationRepr, OpenGlSurfaceAdapterVTable, OpenGlViewRepr,
-    OPENGL_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION,
+    HostSurfaceRegistrationRepr, OPENGL_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION,
+    OpenGlSurfaceAdapterVTable, OpenGlViewRepr,
 };
 
 use crate::adapter::OpenGlSurfaceAdapter;
@@ -341,10 +341,7 @@ unsafe fn run_acquire<F>(
     body: F,
 ) -> i32
 where
-    F: FnOnce(
-        &OpenGlSurfaceAdapter,
-        &StreamlibSurface,
-    ) -> Result<Option<OpenGlViewRepr>, String>,
+    F: FnOnce(&OpenGlSurfaceAdapter, &StreamlibSurface) -> Result<Option<OpenGlViewRepr>, String>,
 {
     run_host_extern_c(
         callback_name,
@@ -382,8 +379,7 @@ where
             // SAFETY: caller asserts the pointer is a borrowed
             // StreamlibSurface from its own stack/heap, valid for
             // the duration of the call.
-            let surface: &StreamlibSurface =
-                unsafe { &*(surface_ptr as *const StreamlibSurface) };
+            let surface: &StreamlibSurface = unsafe { &*(surface_ptr as *const StreamlibSurface) };
             match body(adapter, surface) {
                 Ok(Some(view)) => {
                     if !out_view.is_null() {
@@ -755,7 +751,10 @@ mod tier1_null_handle_tests {
         };
         assert_eq!(rc, 1);
         let msg = err_msg(&buf, len);
-        assert!(msg.contains("acquire_read: null adapter handle"), "got: {msg}");
+        assert!(
+            msg.contains("acquire_read: null adapter handle"),
+            "got: {msg}"
+        );
     }
 
     #[test]

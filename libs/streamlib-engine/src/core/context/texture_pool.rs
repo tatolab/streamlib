@@ -5,8 +5,8 @@
 
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use parking_lot::{Condvar, Mutex};
 use streamlib_plugin_abi::GpuContextLimitedAccessVTable;
@@ -14,7 +14,7 @@ use streamlib_plugin_abi::GpuContextLimitedAccessVTable;
 use crate::core::rhi::{
     GpuDevice, NativeTextureHandle, Texture, TextureDescriptor, TextureFormat, TextureUsages,
 };
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 
 /// Request descriptor for acquiring a pooled texture.
 #[derive(Clone, Debug)]
@@ -374,9 +374,7 @@ impl PooledTextureHandle {
         }
         // SAFETY: `self.handle` is `Box::into_raw(Box<PooledTextureHandleInner>)`
         // (see `from_parts`); the Box keeps the inner alive until Drop runs.
-        unsafe {
-            (*(self.handle as *const PooledTextureHandleInner)).slot_id
-        }
+        unsafe { (*(self.handle as *const PooledTextureHandleInner)).slot_id }
     }
 
     /// Get the IOSurface ID for cross-framework sharing.

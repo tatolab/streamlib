@@ -11,7 +11,9 @@ use vulkanalia::vk::Handle;
 
 use super::color_vui::H273ColorVui;
 use crate::vulkan::video::video_context::{VideoError, VideoResult};
-use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{align_size, H264_MB_SIZE_ALIGNMENT};
+use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{
+    H264_MB_SIZE_ALIGNMENT, align_size,
+};
 use crate::vulkan::video::vk_video_encoder::vk_video_gop_structure::{
     FrameType as GopFrameType, VkVideoGopStructure,
 };
@@ -460,7 +462,7 @@ impl SimpleEncoderConfig {
             (RateControlMode::Cqp, 0, 0, qp, qp + 2, qp + 4)
         } else {
             match self.preset {
-                Preset::Fast   => (RateControlMode::Cqp, 0, 0, 20, 22, 24),
+                Preset::Fast => (RateControlMode::Cqp, 0, 0, 20, 22, 24),
                 Preset::Medium => (RateControlMode::Cqp, 0, 0, 18, 18, 20),
                 Preset::Quality => (RateControlMode::Cqp, 0, 0, 15, 15, 17),
             }
@@ -469,10 +471,10 @@ impl SimpleEncoderConfig {
         // GOP size and IDR period.
         let (gop_size, idr_period, num_b) = if self.streaming {
             let idr_p = self.idr_interval_secs * self.fps;
-            (idr_p, idr_p, 0u8)  // No B-frames in streaming (latency)
+            (idr_p, idr_p, 0u8) // No B-frames in streaming (latency)
         } else {
             match self.preset {
-                Preset::Fast   => (30, 60, 0),
+                Preset::Fast => (30, 60, 0),
                 Preset::Medium => (30, 60, 0),
                 Preset::Quality => (60, 120, 0),
             }
@@ -482,7 +484,9 @@ impl SimpleEncoderConfig {
         // GOP / QP / B-frames). An explicit value wins; otherwise use the
         // codec-specific real-time default. The session clamps against
         // VkVideoEncodeCapabilitiesKHR::max_quality_levels as a safety floor.
-        let effort = self.effort_level.unwrap_or_else(|| default_effort_level(self.codec));
+        let effort = self
+            .effort_level
+            .unwrap_or_else(|| default_effort_level(self.codec));
 
         EncodeConfig {
             width: self.width,
@@ -513,7 +517,7 @@ impl SimpleEncoderConfig {
             enc_cfg.gop_size.min(255) as u8,
             enc_cfg.idr_period as i32,
             enc_cfg.num_b_frames,
-            1,  // temporal_layer_count
+            1, // temporal_layer_count
             GopFrameType::P,
             GopFrameType::P,
             false,

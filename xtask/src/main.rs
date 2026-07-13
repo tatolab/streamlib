@@ -11,7 +11,7 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use streamlib_jtd_codegen::{generate, GenerateOptions, RuntimeTarget};
+use streamlib_jtd_codegen::{GenerateOptions, RuntimeTarget, generate};
 
 pub mod check_abi_republish;
 pub mod check_boundaries;
@@ -275,9 +275,7 @@ fn main() -> Result<()> {
         Commands::LintLogging => lint_logging::run(&workspace_root()?)?,
         Commands::CheckBoundaries => check_boundaries::run(&workspace_root()?)?,
         Commands::CheckSchemaVersions => check_schema_versions::run(&workspace_root()?)?,
-        Commands::CheckNoStreamlibMetadata => {
-            check_no_streamlib_metadata::run(&workspace_root()?)?
-        }
+        Commands::CheckNoStreamlibMetadata => check_no_streamlib_metadata::run(&workspace_root()?)?,
         Commands::CheckNoReverseDns => check_no_reverse_dns::run(&workspace_root()?)?,
         Commands::CheckNoInventorySubmit => check_no_inventory_submit::run(&workspace_root()?)?,
         Commands::CheckProcessorSpecNew => check_processor_spec_new::run(&workspace_root()?)?,
@@ -285,9 +283,7 @@ fn main() -> Result<()> {
         Commands::CheckNoEscalateInLifecycle => {
             check_no_escalate_in_lifecycle::run(&workspace_root()?)?
         }
-        Commands::CheckConsumerRhiRepr => {
-            check_consumer_rhi_repr::run(&workspace_root()?)?
-        }
+        Commands::CheckConsumerRhiRepr => check_consumer_rhi_repr::run(&workspace_root()?)?,
         Commands::CheckDeviceWaitIdle => check_device_wait_idle::run(&workspace_root()?)?,
         Commands::CheckAbiRepublish => check_abi_republish::run(&workspace_root()?)?,
         Commands::CheckPackageVersionDrift { fix } => {
@@ -296,9 +292,8 @@ fn main() -> Result<()> {
         Commands::EmitManifestSchema => manifest_schema::emit(&workspace_root()?)?,
         Commands::CheckManifestSchema => manifest_schema::check(&workspace_root()?)?,
         Commands::StripPublishManifest { dir } => {
-            streamlib_pack::strip_path_patches_in_dir(&dir).with_context(|| {
-                format!("stripping path patches from {}", dir.display())
-            })?;
+            streamlib_pack::strip_path_patches_in_dir(&dir)
+                .with_context(|| format!("stripping path patches from {}", dir.display()))?;
             tracing::info!(dir = %dir.display(), "stripped path-flavor patch entries from streamlib.yaml");
         }
         Commands::StaticRegistry(StaticRegistryAction::Emit {
@@ -312,7 +307,7 @@ fn main() -> Result<()> {
             no_slpkg,
         }) => {
             use streamlib_pack::static_registry::{
-                emit_static_registry, EmitEcosystems, EmitOptions,
+                EmitEcosystems, EmitOptions, emit_static_registry,
             };
             emit_static_registry(&EmitOptions {
                 workspace_root: workspace_root()?,

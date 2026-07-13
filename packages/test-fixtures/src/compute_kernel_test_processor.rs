@@ -67,8 +67,7 @@ use streamlib::sdk::rhi::{ComputeBindingKind, ComputeBindingSpec, ComputeKernelD
 /// SPIR-V for the `output[i] = input[i] * 2` reference kernel.
 /// Compiled from `shaders/cpu_ref_doubler.comp` by this crate's
 /// `build.rs` and staged at `OUT_DIR/cpu_ref_doubler.spv`.
-const CPU_REF_DOUBLER_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/cpu_ref_doubler.spv"));
+const CPU_REF_DOUBLER_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cpu_ref_doubler.spv"));
 
 const CPU_REF_DOUBLER_BINDINGS: &[ComputeBindingSpec] = &[
     ComputeBindingSpec {
@@ -99,9 +98,8 @@ impl ManualProcessor for ComputeKernelTest::Processor {
             Ok(()) => format!("OK\n{element_count}"),
             Err(e) => format!("ERR:{e}"),
         };
-        std::fs::write(&output_path, &line).map_err(|e| {
-            Error::Runtime(format!("ComputeKernelTest: write {output_path}: {e}"))
-        })?;
+        std::fs::write(&output_path, &line)
+            .map_err(|e| Error::Runtime(format!("ComputeKernelTest: write {output_path}: {e}")))?;
         Ok(())
     }
 
@@ -187,10 +185,7 @@ fn run_compute_kernel_round_trip(
     // would let an "output never written" regression pass.
     {
         let input_slice = unsafe {
-            std::slice::from_raw_parts_mut(
-                input.mapped_ptr() as *mut u32,
-                element_count as usize,
-            )
+            std::slice::from_raw_parts_mut(input.mapped_ptr() as *mut u32, element_count as usize)
         };
         for (i, slot) in input_slice.iter_mut().enumerate() {
             *slot = (i as u32) + 1;
@@ -203,10 +198,7 @@ fn run_compute_kernel_round_trip(
     // range is [2, 2*count]; 0xDEADBEEF is well outside.
     {
         let output_slice = unsafe {
-            std::slice::from_raw_parts_mut(
-                output.mapped_ptr() as *mut u32,
-                element_count as usize,
-            )
+            std::slice::from_raw_parts_mut(output.mapped_ptr() as *mut u32, element_count as usize)
         };
         for slot in output_slice.iter_mut() {
             *slot = 0xDEADBEEFu32;
@@ -233,10 +225,7 @@ fn run_compute_kernel_round_trip(
     // at the first mismatch so the error message names the offending
     // index without dumping the entire buffer.
     let output_slice = unsafe {
-        std::slice::from_raw_parts(
-            output.mapped_ptr() as *const u32,
-            element_count as usize,
-        )
+        std::slice::from_raw_parts(output.mapped_ptr() as *const u32, element_count as usize)
     };
     for i in 0..element_count {
         let expected = ((i as u32) + 1) * 2u32;

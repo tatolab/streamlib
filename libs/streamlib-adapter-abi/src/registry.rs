@@ -335,9 +335,8 @@ mod tests {
     #[test]
     fn snapshot_error_does_not_mutate_counters() {
         let r = registry_with(1);
-        let res = r.try_begin_read::<(), _>(1, |_| {
-            Err(AdapterError::SurfaceNotFound { surface_id: 1 })
-        });
+        let res =
+            r.try_begin_read::<(), _>(1, |_| Err(AdapterError::SurfaceNotFound { surface_id: 1 }));
         assert!(matches!(
             res,
             Err(AdapterError::SurfaceNotFound { surface_id: 1 })
@@ -357,10 +356,7 @@ mod tests {
         // a read closure would be wrong; this test just confirms the
         // snapshot return value is plumbed through.
         let r = registry_with(1);
-        let token = r
-            .try_begin_read(1, |_state| Ok(42_u64))
-            .unwrap()
-            .unwrap();
+        let token = r.try_begin_read(1, |_state| Ok(42_u64)).unwrap().unwrap();
         assert_eq!(token, 42);
         r.with(1, |s| assert_eq!(s.read_holders, 1)).unwrap();
     }

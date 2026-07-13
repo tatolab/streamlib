@@ -13,7 +13,7 @@
 //! declarations, and from that point on the caller binds resources by
 //! slot via simple typed setters.
 
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 
 /// Shader stages that contribute to a ray-tracing pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -184,10 +184,7 @@ impl RayTracingBindingSpec {
         }
     }
 
-    pub const fn acceleration_structure(
-        binding: u32,
-        stages: RayTracingShaderStageFlags,
-    ) -> Self {
+    pub const fn acceleration_structure(binding: u32, stages: RayTracingShaderStageFlags) -> Self {
         Self {
             binding,
             kind: RayTracingBindingKind::AccelerationStructure,
@@ -415,8 +412,8 @@ mod tests {
 
     #[test]
     fn shader_stage_flags_compose_via_bitor() {
-        let combined = RayTracingShaderStageFlags::CLOSEST_HIT
-            | RayTracingShaderStageFlags::ANY_HIT;
+        let combined =
+            RayTracingShaderStageFlags::CLOSEST_HIT | RayTracingShaderStageFlags::ANY_HIT;
         assert!(combined.contains(RayTracingShaderStageFlags::CLOSEST_HIT));
         assert!(combined.contains(RayTracingShaderStageFlags::ANY_HIT));
         assert!(!combined.contains(RayTracingShaderStageFlags::RAYGEN));

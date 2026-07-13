@@ -42,7 +42,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use streamlib_plugin_abi::OutputWriterVTable;
 
-use super::{FrameHeader, SchemaIdentWire, FRAME_HEADER_SIZE};
+use super::{FRAME_HEADER_SIZE, FrameHeader, SchemaIdentWire};
 use crate::core::error::{Error, Result};
 use crate::core::media_clock::MediaClock;
 
@@ -126,8 +126,13 @@ impl OutputWriterInner {
         for conn in port_connections {
             let total_len = FRAME_HEADER_SIZE + data.len();
             let mut frame = vec![0u8; total_len];
-            FrameHeader::new(&conn.dest_port, conn.schema_ident, timestamp_ns, data.len() as u32)
-                .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
+            FrameHeader::new(
+                &conn.dest_port,
+                conn.schema_ident,
+                timestamp_ns,
+                data.len() as u32,
+            )
+            .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
             frame[FRAME_HEADER_SIZE..].copy_from_slice(data);
 
             let sample = conn
@@ -249,10 +254,7 @@ impl OutputWriter {
     /// `ProcessorVTable::set_iceoryx2_resources` host wiring to
     /// patch an existing PluginAbiObject's fields without owning a typed
     /// `Arc<OutputWriterInner>`.
-    pub(crate) fn from_raw_parts(
-        handle: *const c_void,
-        vtable: *const OutputWriterVTable,
-    ) -> Self {
+    pub(crate) fn from_raw_parts(handle: *const c_void, vtable: *const OutputWriterVTable) -> Self {
         Self { handle, vtable }
     }
 
@@ -485,7 +487,11 @@ mod tests {
         assert!(!writer.is_configured());
         let err = writer.write_raw("any_port", b"data", 0).unwrap_err();
         let msg = format!("{}", err);
-        assert!(msg.contains("not wired"), "unexpected error message: {}", msg);
+        assert!(
+            msg.contains("not wired"),
+            "unexpected error message: {}",
+            msg
+        );
         assert!(!writer.has_port("any_port"));
     }
 

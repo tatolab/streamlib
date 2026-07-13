@@ -42,6 +42,7 @@
 //! either a missing output file (cdylib panicked at the FFI
 //! boundary) or `ERR:<message>` in the file.
 
+use streamlib::engine_internal::core::context::TexturePoolDescriptor;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
@@ -52,7 +53,6 @@ use streamlib::sdk::rhi::{
     MultisampleState, PrimitiveTopology, RasterizationState, TextureFormat, TextureUsages,
     VertexInputState,
 };
-use streamlib::engine_internal::core::context::TexturePoolDescriptor;
 
 /// SPIR-V for the smoke-test vertex stage. Compiled by `build.rs`.
 const SMOKE_VERT_SPV: &[u8] =
@@ -85,9 +85,7 @@ impl ManualProcessor for GraphicsKernelSmokeTest::Processor {
             Err(e) => format!("ERR:{e}"),
         };
         std::fs::write(&output_path, &line).map_err(|e| {
-            Error::Runtime(format!(
-                "GraphicsKernelSmokeTest: write {output_path}: {e}"
-            ))
+            Error::Runtime(format!("GraphicsKernelSmokeTest: write {output_path}: {e}"))
         })?;
         Ok(())
     }
@@ -169,8 +167,7 @@ fn run_graphics_kernel_smoke(ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
             bindings: SMOKE_BINDINGS,
             push_constants: GraphicsPushConstants {
                 size: SMOKE_PUSH_CONSTANT_SIZE,
-                stages: GraphicsShaderStageFlags::VERTEX
-                    | GraphicsShaderStageFlags::FRAGMENT,
+                stages: GraphicsShaderStageFlags::VERTEX | GraphicsShaderStageFlags::FRAGMENT,
             },
             pipeline_state,
             descriptor_sets_in_flight: 1,

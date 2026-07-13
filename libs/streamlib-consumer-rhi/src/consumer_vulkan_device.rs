@@ -33,11 +33,11 @@
 //! consumer only submits at acquire/release boundaries while the host
 //! is paused).
 
-use std::ffi::{c_char, CStr};
+use std::ffi::{CStr, c_char};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use vulkanalia::loader::{LibloadingLoader, LIBRARY};
+use vulkanalia::loader::{LIBRARY, LibloadingLoader};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
@@ -134,10 +134,13 @@ impl ConsumerVulkanDevice {
             .map_err(|e| ConsumerRhiError::Gpu(format!("Failed to create Vulkan instance: {e}")))?;
 
         // Physical device — prefer DISCRETE_GPU, fall back to first available.
-        let physical_devices = unsafe { instance.enumerate_physical_devices() }
-            .map_err(|e| ConsumerRhiError::Gpu(format!("Failed to enumerate physical devices: {e}")))?;
+        let physical_devices = unsafe { instance.enumerate_physical_devices() }.map_err(|e| {
+            ConsumerRhiError::Gpu(format!("Failed to enumerate physical devices: {e}"))
+        })?;
         if physical_devices.is_empty() {
-            return Err(ConsumerRhiError::Gpu("No Vulkan physical devices found".into()));
+            return Err(ConsumerRhiError::Gpu(
+                "No Vulkan physical devices found".into(),
+            ));
         }
         let physical_device = physical_devices
             .iter()
@@ -149,8 +152,9 @@ impl ConsumerVulkanDevice {
             .unwrap_or(physical_devices[0]);
 
         let device_props = unsafe { instance.get_physical_device_properties(physical_device) };
-        let device_name =
-            unsafe { CStr::from_ptr(device_props.device_name.as_ptr()) }.to_string_lossy().into_owned();
+        let device_name = unsafe { CStr::from_ptr(device_props.device_name.as_ptr()) }
+            .to_string_lossy()
+            .into_owned();
 
         // Extract VkPhysicalDeviceIDProperties::deviceUUID via
         // vkGetPhysicalDeviceProperties2. Used by CUDA / OpenCL interop
@@ -172,7 +176,9 @@ impl ConsumerVulkanDevice {
             .enumerate()
             .find(|(_, props)| props.queue_flags.contains(vk::QueueFlags::GRAPHICS))
             .map(|(idx, _)| idx as u32)
-            .ok_or_else(|| ConsumerRhiError::Gpu("No graphics queue family on consumer device".into()))?;
+            .ok_or_else(|| {
+                ConsumerRhiError::Gpu("No graphics queue family on consumer device".into())
+            })?;
 
         // Required device extensions. All four are mandatory on the
         // carve-out path — refusing to construct the device on a driver
@@ -180,7 +186,9 @@ impl ConsumerVulkanDevice {
         let available_device_ext_names: Vec<&CStr> = unsafe {
             instance
                 .enumerate_device_extension_properties(physical_device, None)
-                .map_err(|e| ConsumerRhiError::Gpu(format!("enumerate_device_extension_properties: {e}")))?
+                .map_err(|e| {
+                    ConsumerRhiError::Gpu(format!("enumerate_device_extension_properties: {e}"))
+                })?
         }
         .iter()
         .map(|ext| unsafe { CStr::from_ptr(ext.extension_name.as_ptr()) })
@@ -236,10 +244,9 @@ impl ConsumerVulkanDevice {
         let mut timeline_features = vk::PhysicalDeviceTimelineSemaphoreFeatures::builder()
             .timeline_semaphore(true)
             .build();
-        let mut dynamic_rendering_features =
-            vk::PhysicalDeviceDynamicRenderingFeatures::builder()
-                .dynamic_rendering(true)
-                .build();
+        let mut dynamic_rendering_features = vk::PhysicalDeviceDynamicRenderingFeatures::builder()
+            .dynamic_rendering(true)
+            .build();
         // samplerYcbcrConversion: required to import NV12 textures on the
         // consumer side (multi-plane sampler-ycbcr support is core 1.1
         // but gated by the feature flag).
@@ -257,7 +264,9 @@ impl ConsumerVulkanDevice {
             .build();
 
         let device = unsafe { instance.create_device(physical_device, &device_create_info, None) }
-            .map_err(|e| ConsumerRhiError::Gpu(format!("Failed to create consumer logical device: {e}")))?;
+            .map_err(|e| {
+                ConsumerRhiError::Gpu(format!("Failed to create consumer logical device: {e}"))
+            })?;
 
         let queue = unsafe { device.get_device_queue(queue_family_index, 0) };
         let memory_properties =
@@ -412,7 +421,9 @@ impl ConsumerVulkanDevice {
         let count = self.live_allocation_count.fetch_add(1, Ordering::Relaxed) + 1;
         tracing::debug!(
             "ConsumerVulkanDevice: imported DMA-BUF ({} bytes, type={}, live={})",
-            allocation_size, memory_type_index, count
+            allocation_size,
+            memory_type_index,
+            count
         );
 
         Ok(memory)
@@ -462,7 +473,9 @@ impl ConsumerVulkanDevice {
         let count = self.live_allocation_count.fetch_add(1, Ordering::Relaxed) + 1;
         tracing::debug!(
             "ConsumerVulkanDevice: imported OPAQUE_FD ({} bytes, type={}, live={})",
-            allocation_size, memory_type_index, count
+            allocation_size,
+            memory_type_index,
+            count
         );
 
         Ok(memory)
@@ -608,11 +621,7 @@ impl ConsumerVulkanDevice {
     /// One-shot synchronous submit; the fence wait is the simple correct
     /// shape because the next consumer GPU work assumes the new layout
     /// is visible.
-    pub fn acquire_from_foreign(
-        &self,
-        image: vk::Image,
-        target: vk::ImageLayout,
-    ) -> Result<()> {
+    pub fn acquire_from_foreign(&self, image: vk::Image, target: vk::ImageLayout) -> Result<()> {
         if target == vk::ImageLayout::UNDEFINED {
             return Ok(());
         }
@@ -636,9 +645,7 @@ impl ConsumerVulkanDevice {
             .src_stage_mask(vk::PipelineStageFlags2::NONE)
             .src_access_mask(vk::AccessFlags2::empty())
             .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-            .dst_access_mask(
-                vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
-            )
+            .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)
             .old_layout(src_layout)
             .new_layout(target)
             .src_queue_family_index(src_qf)
@@ -657,10 +664,7 @@ impl ConsumerVulkanDevice {
     /// any chained pNext structs they need to keep alive); this helper
     /// handles command-pool/buffer/fence creation, submit, wait, and
     /// teardown.
-    fn submit_one_shot_image_barriers(
-        &self,
-        barriers: &[vk::ImageMemoryBarrier2],
-    ) -> Result<()> {
+    fn submit_one_shot_image_barriers(&self, barriers: &[vk::ImageMemoryBarrier2]) -> Result<()> {
         let device = &self.device;
 
         let pool = unsafe {
@@ -686,8 +690,8 @@ impl ConsumerVulkanDevice {
             ConsumerRhiError::Gpu(format!("qfot cmd buf: {e}"))
         })?[0];
 
-        let fence = unsafe { device.create_fence(&vk::FenceCreateInfo::default(), None) }
-            .map_err(|e| {
+        let fence =
+            unsafe { device.create_fence(&vk::FenceCreateInfo::default(), None) }.map_err(|e| {
                 unsafe { device.destroy_command_pool(pool, None) };
                 ConsumerRhiError::Gpu(format!("qfot fence: {e}"))
             })?;
@@ -777,11 +781,7 @@ impl VulkanRhiDevice for ConsumerVulkanDevice {
         ConsumerVulkanDevice::release_to_foreign(self, image, src_layout, dst_layout)
     }
 
-    fn acquire_from_foreign(
-        &self,
-        image: vk::Image,
-        target: vk::ImageLayout,
-    ) -> Result<()> {
+    fn acquire_from_foreign(&self, image: vk::Image, target: vk::ImageLayout) -> Result<()> {
         ConsumerVulkanDevice::acquire_from_foreign(self, image, target)
     }
 }
@@ -890,8 +890,7 @@ mod tests {
         };
         // A null VkImage is fine here because the no-op short-circuits
         // before any handle is dereferenced.
-        let result =
-            device.acquire_from_foreign(vk::Image::null(), vk::ImageLayout::UNDEFINED);
+        let result = device.acquire_from_foreign(vk::Image::null(), vk::ImageLayout::UNDEFINED);
         assert!(
             result.is_ok(),
             "acquire_from_foreign with target=UNDEFINED must short-circuit Ok"

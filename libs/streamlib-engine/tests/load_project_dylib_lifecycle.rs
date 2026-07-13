@@ -20,10 +20,10 @@
 use std::path::Path;
 
 use serial_test::serial;
-use streamlib::sdk::module_ident_any_version;
-use streamlib::sdk::processors::{ProcessorInstance, PROCESSOR_REGISTRY};
-use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
 use streamlib::sdk::RunnerAutoBuild;
+use streamlib::sdk::module_ident_any_version;
+use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorInstance};
+use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
 use streamlib_engine::core::graph::ProcessorNode;
 use streamlib_engine::core::runtime::host_target_triple;
 
@@ -52,11 +52,7 @@ fn dylib_processor_create_and_drop_round_trips_through_vtable() {
     // Build test-fixtures with the `plugin` feature so the cdylib carries
     // the `STREAMLIB_PLUGIN` symbol.
     let status = std::process::Command::new(env!("CARGO"))
-        .args([
-            "build",
-            "-p",
-            "streamlib-test-fixtures",
-        ])
+        .args(["build", "-p", "streamlib-test-fixtures"])
         .status()
         .expect("invoking cargo build");
     assert!(
@@ -72,7 +68,10 @@ fn dylib_processor_create_and_drop_round_trips_through_vtable() {
         "so"
     };
     let dylib_name = format!("libstreamlib_test_fixtures.{}", dylib_ext);
-    let built_dylib = workspace_root.join("target").join("debug").join(&dylib_name);
+    let built_dylib = workspace_root
+        .join("target")
+        .join("debug")
+        .join(&dylib_name);
 
     let tmp = tempfile::tempdir().unwrap();
     let fixtures_src = workspace_root.join("packages/test-fixtures");
@@ -104,7 +103,10 @@ fn dylib_processor_create_and_drop_round_trips_through_vtable() {
     runtime
         .add_module_with_blocking(
             module_ident_any_version!("tatolab", "test-fixtures"),
-            Strategy::Path { path: fixtures_dst.clone(), build: BuildPolicy::NeverBuild },
+            Strategy::Path {
+                path: fixtures_dst.clone(),
+                build: BuildPolicy::NeverBuild,
+            },
         )
         .expect("add_module_with must succeed against a real test-fixtures cdylib");
 

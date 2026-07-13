@@ -85,11 +85,7 @@ pub fn bt2390_eetf_per_channel(linear_norm: f32, peak_in_nits: f32, peak_out_nit
 /// (no expansion needed) — it normalizes by the peak ratio so that
 /// the SDR content stays at the same absolute nits in the smaller
 /// target range.
-pub fn bt2446a_inverse_per_channel(
-    linear_norm: f32,
-    peak_in_nits: f32,
-    peak_out_nits: f32,
-) -> f32 {
+pub fn bt2446a_inverse_per_channel(linear_norm: f32, peak_in_nits: f32, peak_out_nits: f32) -> f32 {
     if peak_out_nits <= peak_in_nits {
         return linear_norm * peak_in_nits / peak_out_nits;
     }

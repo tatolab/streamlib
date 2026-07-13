@@ -14,7 +14,7 @@
 
 use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 
 use super::TextureFormat;
 
@@ -565,8 +565,10 @@ pub struct DrawIndexedCall {
 pub fn derive_bindings_from_spirv_multistage(
     stages: &[GraphicsStage<'_>],
 ) -> Result<(Vec<GraphicsBindingSpec>, GraphicsPushConstants)> {
-    let mut merged: std::collections::BTreeMap<u32, (GraphicsBindingKind, GraphicsShaderStageFlags)> =
-        std::collections::BTreeMap::new();
+    let mut merged: std::collections::BTreeMap<
+        u32,
+        (GraphicsBindingKind, GraphicsShaderStageFlags),
+    > = std::collections::BTreeMap::new();
     let mut push_size: u32 = 0;
     let mut push_stages = GraphicsShaderStageFlags::NONE;
 
@@ -599,7 +601,9 @@ pub fn derive_bindings_from_spirv_multistage(
                         stage.stage, info.ty
                     ))
                 })?;
-                let entry = merged.entry(binding).or_insert((kind, GraphicsShaderStageFlags::NONE));
+                let entry = merged
+                    .entry(binding)
+                    .or_insert((kind, GraphicsShaderStageFlags::NONE));
                 if entry.0 != kind {
                     return Err(Error::GpuError(format!(
                         "Graphics kernel: binding {binding} kind conflict — {:?} vs {:?} (introduced by {:?})",

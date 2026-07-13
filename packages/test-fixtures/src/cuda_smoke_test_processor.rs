@@ -27,9 +27,7 @@
 //!   - "SKIP:<reason>" when OPAQUE_FD pool unavailable.
 //!   - "ERR:<msg>" on any other step failure.
 
-use streamlib::sdk::context::{
-    RuntimeContextFullAccess, RuntimeContextLimitedAccess,
-};
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
 
@@ -39,13 +37,11 @@ use std::sync::Arc;
 use streamlib::sdk::engine::host_rhi::{HostVulkanBuffer, HostVulkanTimelineSemaphore};
 #[cfg(target_os = "linux")]
 use streamlib_adapter_abi::{
-    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState,
-    SurfaceTransportHandle, SurfaceUsage,
+    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
+    SurfaceUsage,
 };
 #[cfg(target_os = "linux")]
-use streamlib_adapter_cuda::{
-    CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout,
-};
+use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
 
 #[streamlib::sdk::processor("CudaSmokeTestProcessor")]
 pub struct CudaSmokeTest {}
@@ -69,11 +65,8 @@ impl ManualProcessor for CudaSmokeTest::Processor {
             Ok(SmokeOutcome::SkipOpaqueFd(reason)) => format!("SKIP:{reason}"),
             Err(e) => format!("ERR:{e}"),
         };
-        std::fs::write(&output_path, &line).map_err(|e| {
-            Error::Runtime(format!(
-                "CudaSmokeTest: write {output_path}: {e}"
-            ))
-        })?;
+        std::fs::write(&output_path, &line)
+            .map_err(|e| Error::Runtime(format!("CudaSmokeTest: write {output_path}: {e}")))?;
         Ok(())
     }
 
@@ -81,11 +74,7 @@ impl ManualProcessor for CudaSmokeTest::Processor {
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let output_path = self.config.output_path.clone();
         std::fs::write(&output_path, "SKIP:cuda smoke is linux-only")
-            .map_err(|e| {
-                Error::Runtime(format!(
-                    "CudaSmokeTest: write {output_path}: {e}"
-                ))
-            })?;
+            .map_err(|e| Error::Runtime(format!("CudaSmokeTest: write {output_path}: {e}")))?;
         Ok(())
     }
 
@@ -138,36 +127,23 @@ fn run_smoke(
     }
 
     let staging_bytes = (width as u64) * (height as u64) * 4u64;
-    let staging = HostVulkanBuffer::new_opaque_fd_export(
-        &host_device,
-        staging_bytes,
-    )
-    .map_err(|e| {
-        Error::GpuError(format!(
-            "HostVulkanBuffer::new_opaque_fd_export: {e}"
-        ))
-    })?;
+    let staging = HostVulkanBuffer::new_opaque_fd_export(&host_device, staging_bytes)
+        .map_err(|e| Error::GpuError(format!("HostVulkanBuffer::new_opaque_fd_export: {e}")))?;
     let staging_arc = Arc::new(staging);
 
-    let produce_done = HostVulkanTimelineSemaphore::new_exportable(
-        host_device.device(),
-        0,
-    )
-    .map_err(|e| {
-        Error::GpuError(format!(
-            "HostVulkanTimelineSemaphore::new_exportable (produce_done): {e}"
-        ))
-    })?;
+    let produce_done = HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+        .map_err(|e| {
+            Error::GpuError(format!(
+                "HostVulkanTimelineSemaphore::new_exportable (produce_done): {e}"
+            ))
+        })?;
     let produce_done_arc = Arc::new(produce_done);
-    let consume_done = HostVulkanTimelineSemaphore::new_exportable(
-        host_device.device(),
-        0,
-    )
-    .map_err(|e| {
-        Error::GpuError(format!(
-            "HostVulkanTimelineSemaphore::new_exportable (consume_done): {e}"
-        ))
-    })?;
+    let consume_done = HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+        .map_err(|e| {
+            Error::GpuError(format!(
+                "HostVulkanTimelineSemaphore::new_exportable (consume_done): {e}"
+            ))
+        })?;
     let consume_done_arc = Arc::new(consume_done);
 
     let adapter = Arc::new(CudaSurfaceAdapter::new(Arc::clone(&host_device)));
@@ -182,9 +158,7 @@ fn run_smoke(
             },
         )
         .map_err(|e| {
-            Error::GpuError(format!(
-                "CudaSurfaceAdapter::register_host_surface: {e:?}"
-            ))
+            Error::GpuError(format!("CudaSurfaceAdapter::register_host_surface: {e:?}"))
         })?;
 
     let surface = StreamlibSurface::new(
@@ -196,11 +170,9 @@ fn run_smoke(
         SurfaceTransportHandle::empty(),
         SurfaceSyncState::default(),
     );
-    let guard = adapter.acquire_write(&surface).map_err(|e| {
-        Error::GpuError(format!(
-            "CudaSurfaceAdapter::acquire_write: {e:?}"
-        ))
-    })?;
+    let guard = adapter
+        .acquire_write(&surface)
+        .map_err(|e| Error::GpuError(format!("CudaSurfaceAdapter::acquire_write: {e:?}")))?;
     let view = guard.view();
     // `vk::Buffer` displays as `Handle(0x<hex>)`; format via Debug
     // to avoid pulling vulkanalia into the test-fixtures crate.

@@ -95,7 +95,12 @@ fn build_sparse_probecrate_tree(tree: &Path) {
 
 #[test]
 fn consumer_resolves_offline_via_emitted_stanza() {
-    for (bin, flag) in [("cargo", "--version"), ("bash", "--version"), ("tar", "--version"), ("sha256sum", "--version")] {
+    for (bin, flag) in [
+        ("cargo", "--version"),
+        ("bash", "--version"),
+        ("tar", "--version"),
+        ("sha256sum", "--version"),
+    ] {
         if !tool_on_path(bin, flag) {
             eprintln!("skipping: `{bin}` not on PATH");
             return;
@@ -103,7 +108,10 @@ fn consumer_resolves_offline_via_emitted_stanza() {
     }
     let scripts_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/registry");
     if !scripts_dir.join("emit-cargo-local-registry.sh").is_file() {
-        eprintln!("skipping: reshape script not present at {}", scripts_dir.display());
+        eprintln!(
+            "skipping: reshape script not present at {}",
+            scripts_dir.display()
+        );
         return;
     }
 
@@ -121,7 +129,11 @@ fn consumer_resolves_offline_via_emitted_stanza() {
          [workspace]\n",
     )
     .unwrap();
-    std::fs::write(consumer.path().join("src").join("main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(
+        consumer.path().join("src").join("main.rs"),
+        "fn main() {}\n",
+    )
+    .unwrap();
 
     // `registry use <tree>` — reshape + write the [source] replacement. Zero
     // manual config after this call.
@@ -135,7 +147,10 @@ fn consumer_resolves_offline_via_emitted_stanza() {
     )
     .expect("use_registry must configure the consumer");
     assert!(
-        matches!(report.cargo_replacement, CargoReplacementSource::LocalRegistry(_)),
+        matches!(
+            report.cargo_replacement,
+            CargoReplacementSource::LocalRegistry(_)
+        ),
         "a local tree must yield a serverless local-registry replacement"
     );
 
@@ -160,7 +175,10 @@ fn consumer_resolves_offline_via_emitted_stanza() {
     // The lockfile resolved probecrate AND kept the CANONICAL source id (the
     // localhost / local path never leaks into Cargo.lock).
     let lock = std::fs::read_to_string(consumer.path().join("Cargo.lock")).unwrap();
-    assert!(lock.contains("name = \"probecrate\""), "probecrate not in lockfile:\n{lock}");
+    assert!(
+        lock.contains("name = \"probecrate\""),
+        "probecrate not in lockfile:\n{lock}"
+    );
     // A named registry records its canonical index URL directly (no
     // `registry+` prefix, which is crates-io-only). The point is the same:
     // source replacement kept the CANONICAL id, not the local mirror.
@@ -168,6 +186,12 @@ fn consumer_resolves_offline_via_emitted_stanza() {
         lock.contains("source = \"sparse+https://registry.tatolab.com/cargo/\""),
         "canonical source id not preserved in lockfile:\n{lock}"
     );
-    assert!(!lock.contains("127.0.0.1"), "localhost leaked into lockfile:\n{lock}");
-    assert!(!lock.contains(".streamlib"), "local mirror path leaked into lockfile:\n{lock}");
+    assert!(
+        !lock.contains("127.0.0.1"),
+        "localhost leaked into lockfile:\n{lock}"
+    );
+    assert!(
+        !lock.contains(".streamlib"),
+        "local mirror path leaked into lockfile:\n{lock}"
+    );
 }

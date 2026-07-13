@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::thread;
 
 use streamlib_surface_client::{
-    recv_message_with_fds, send_message_with_fds, MAX_DMA_BUF_PLANES, MAX_SCM_RIGHTS_FDS,
+    MAX_DMA_BUF_PLANES, MAX_SCM_RIGHTS_FDS, recv_message_with_fds, send_message_with_fds,
 };
 
 use super::state::{
@@ -55,8 +55,12 @@ impl UnixSocketSurfaceService {
                 .map_err(|e| format!("Failed to create socket directory: {}", e))?;
         }
 
-        let listener = UnixListener::bind(&self.socket_path)
-            .map_err(|e| format!("Failed to bind Unix socket at {:?}: {}", self.socket_path, e))?;
+        let listener = UnixListener::bind(&self.socket_path).map_err(|e| {
+            format!(
+                "Failed to bind Unix socket at {:?}: {}",
+                self.socket_path, e
+            )
+        })?;
 
         listener
             .set_nonblocking(true)
@@ -123,11 +127,8 @@ fn run_listener(
                 let state = state.clone();
                 thread::spawn(move || {
                     let mut connection_runtime_id: Option<String> = None;
-                    let conn_result = handle_client_connection(
-                        stream,
-                        state.clone(),
-                        &mut connection_runtime_id,
-                    );
+                    let conn_result =
+                        handle_client_connection(stream, state.clone(), &mut connection_runtime_id);
                     if let Err(e) = conn_result {
                         tracing::debug!("[Surface share] Client connection ended: {}", e);
                     }
@@ -138,8 +139,7 @@ fn run_listener(
                     // doesn't leak the backing. Same-process connections (host
                     // runtime publishing to its own service) skip the watchdog
                     // — those surfaces are intentionally long-lived.
-                    if let Some(runtime_id) = connection_runtime_id.filter(|_| is_subprocess_peer)
-                    {
+                    if let Some(runtime_id) = connection_runtime_id.filter(|_| is_subprocess_peer) {
                         cleanup_runtime_surfaces(&state, &runtime_id);
                     }
                 });
@@ -187,7 +187,10 @@ fn handle_client_connection(
             recv_message_with_fds(&stream, msg_len, MAX_SCM_RIGHTS_FDS)?;
 
         let request: serde_json::Value = serde_json::from_slice(&json_bytes).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Invalid JSON: {}", e))
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Invalid JSON: {}", e),
+            )
         })?;
 
         let op = request.get("op").and_then(|v| v.as_str()).unwrap_or("");
@@ -353,7 +356,12 @@ fn handle_register(
 ) -> (serde_json::Value, Vec<RawFd>) {
     let surface_id = match request.get("surface_id").and_then(|v| v.as_str()) {
         Some(id) => id,
-        None => return (serde_json::json!({"error": "missing surface_id"}), Vec::new()),
+        None => {
+            return (
+                serde_json::json!({"error": "missing surface_id"}),
+                Vec::new(),
+            );
+        }
     };
 
     let runtime_id = request
@@ -436,7 +444,7 @@ fn handle_register(
                         "error": "plane_sizes/plane_offsets/plane_strides length mismatch"
                     }),
                     Vec::new(),
-                )
+                );
             }
         };
     let drm_format_modifier = request
@@ -446,7 +454,10 @@ fn handle_register(
 
     let width = request.get("width").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
     let height = request.get("height").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-    let format = request.get("format").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let format = request
+        .get("format")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
     let resource_type = request
         .get("resource_type")
         .and_then(|v| v.as_str())
@@ -582,12 +593,22 @@ fn handle_lookup(
 ) -> (serde_json::Value, Vec<RawFd>) {
     let surface_id = match request.get("surface_id").and_then(|v| v.as_str()) {
         Some(id) => id,
-        None => return (serde_json::json!({"error": "missing surface_id"}), Vec::new()),
+        None => {
+            return (
+                serde_json::json!({"error": "missing surface_id"}),
+                Vec::new(),
+            );
+        }
     };
 
     let checkout = match state.get_surface_planes(surface_id) {
         Some(planes) => planes,
-        None => return (serde_json::json!({"error": "surface not found"}), Vec::new()),
+        None => {
+            return (
+                serde_json::json!({"error": "surface not found"}),
+                Vec::new(),
+            );
+        }
     };
 
     // Dup each stored fd so the kernel-delivered fds in the peer's table are
@@ -646,7 +667,12 @@ fn handle_lookup(
     let surfaces = state.get_surfaces();
     let metadata = surfaces.iter().find(|s| s.surface_id == surface_id);
     let (width, height, format, resource_type) = match metadata {
-        Some(m) => (m.width, m.height, m.format.as_str(), m.resource_type.as_str()),
+        Some(m) => (
+            m.width,
+            m.height,
+            m.format.as_str(),
+            m.resource_type.as_str(),
+        ),
         None => (0, 0, "unknown", "pixel_buffer"),
     };
     (
@@ -688,19 +714,21 @@ fn handle_update_layout(
 ) -> (serde_json::Value, Vec<RawFd>) {
     let surface_id = match request.get("surface_id").and_then(|v| v.as_str()) {
         Some(id) => id,
-        None => return (serde_json::json!({"error": "missing surface_id"}), Vec::new()),
+        None => {
+            return (
+                serde_json::json!({"error": "missing surface_id"}),
+                Vec::new(),
+            );
+        }
     };
 
-    let layout = match request
-        .get("current_image_layout")
-        .and_then(|v| v.as_i64())
-    {
+    let layout = match request.get("current_image_layout").and_then(|v| v.as_i64()) {
         Some(v) => v as i32,
         None => {
             return (
                 serde_json::json!({"error": "missing current_image_layout"}),
                 Vec::new(),
-            )
+            );
         }
     };
 
@@ -714,7 +742,12 @@ fn handle_unregister(
 ) -> (serde_json::Value, Vec<RawFd>) {
     let surface_id = match request.get("surface_id").and_then(|v| v.as_str()) {
         Some(id) => id,
-        None => return (serde_json::json!({"error": "missing surface_id"}), Vec::new()),
+        None => {
+            return (
+                serde_json::json!({"error": "missing surface_id"}),
+                Vec::new(),
+            );
+        }
     };
 
     let runtime_id = request
@@ -763,7 +796,7 @@ fn handle_check_in(
                         "error": "plane_sizes/plane_offsets/plane_strides length mismatch"
                     }),
                     Vec::new(),
-                )
+                );
             }
         };
     let drm_format_modifier = request
@@ -773,7 +806,10 @@ fn handle_check_in(
 
     let width = request.get("width").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
     let height = request.get("height").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-    let format = request.get("format").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let format = request
+        .get("format")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
     let resource_type = request
         .get("resource_type")
         .and_then(|v| v.as_str())
@@ -914,7 +950,11 @@ mod tests {
 
         let name = std::ffi::CString::new("streamlib-runtime-surface-share-test").unwrap();
         let fd = unsafe { libc::memfd_create(name.as_ptr(), 0) };
-        assert!(fd >= 0, "memfd_create failed: {}", std::io::Error::last_os_error());
+        assert!(
+            fd >= 0,
+            "memfd_create failed: {}",
+            std::io::Error::last_os_error()
+        );
         let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
         file.write_all(contents).expect("memfd write");
         file.seek(SeekFrom::Start(0)).expect("memfd rewind");
@@ -986,9 +1026,18 @@ mod tests {
         let (check_out_resp, check_out_fds) =
             send_request_with_fds(&stream, &check_out_req, &[], MAX_DMA_BUF_PLANES)
                 .expect("check_out request");
-        assert_eq!(check_out_resp.get("width").and_then(|v| v.as_u64()), Some(640));
-        assert_eq!(check_out_resp.get("height").and_then(|v| v.as_u64()), Some(480));
-        assert_eq!(check_out_resp.get("format").and_then(|v| v.as_str()), Some("Bgra32"));
+        assert_eq!(
+            check_out_resp.get("width").and_then(|v| v.as_u64()),
+            Some(640)
+        );
+        assert_eq!(
+            check_out_resp.get("height").and_then(|v| v.as_u64()),
+            Some(480)
+        );
+        assert_eq!(
+            check_out_resp.get("format").and_then(|v| v.as_str()),
+            Some("Bgra32")
+        );
         assert_eq!(check_out_fds.len(), 1, "single-plane: exactly one fd");
         let received_fd = check_out_fds[0];
         assert!(received_fd >= 0);
@@ -1156,8 +1205,8 @@ mod tests {
             "plane_offsets": [0u64],
             "plane_strides": [0u64],
         });
-        let (opaque_resp, _) = send_request_with_fds(&stream, &opaque_req, &[send_fd], 0)
-            .expect("check_in opaque_fd");
+        let (opaque_resp, _) =
+            send_request_with_fds(&stream, &opaque_req, &[send_fd], 0).expect("check_in opaque_fd");
         unsafe { libc::close(send_fd) };
         let opaque_surface_id = opaque_resp
             .get("surface_id")
@@ -1170,9 +1219,8 @@ mod tests {
                 "op": "check_out",
                 "surface_id": opaque_surface_id,
             });
-            let (resp, fds) =
-                send_request_with_fds(&stream, &req, &[], MAX_DMA_BUF_PLANES)
-                    .expect("check_out opaque_fd");
+            let (resp, fds) = send_request_with_fds(&stream, &req, &[], MAX_DMA_BUF_PLANES)
+                .expect("check_out opaque_fd");
             for fd in &fds {
                 unsafe { libc::close(*fd) };
             }
@@ -1200,8 +1248,8 @@ mod tests {
             "plane_strides": [0u64],
             // no handle_type — must default to "dma_buf"
         });
-        let (legacy_resp, _) = send_request_with_fds(&stream, &legacy_req, &[send_fd2], 0)
-            .expect("check_in legacy");
+        let (legacy_resp, _) =
+            send_request_with_fds(&stream, &legacy_req, &[send_fd2], 0).expect("check_in legacy");
         unsafe { libc::close(send_fd2) };
         let legacy_surface_id = legacy_resp
             .get("surface_id")
@@ -1214,9 +1262,8 @@ mod tests {
                 "op": "check_out",
                 "surface_id": legacy_surface_id,
             });
-            let (resp, fds) =
-                send_request_with_fds(&stream, &req, &[], MAX_DMA_BUF_PLANES)
-                    .expect("check_out legacy");
+            let (resp, fds) = send_request_with_fds(&stream, &req, &[], MAX_DMA_BUF_PLANES)
+                .expect("check_out legacy");
             for fd in &fds {
                 unsafe { libc::close(*fd) };
             }
@@ -1279,8 +1326,8 @@ mod tests {
             "plane_strides": [pitch],
             "drm_format_modifier": chosen_modifier,
         });
-        let (resp, _) = send_request_with_fds(&stream, &req, &[send_fd], 0)
-            .expect("check_in request");
+        let (resp, _) =
+            send_request_with_fds(&stream, &req, &[send_fd], 0).expect("check_in request");
         unsafe { libc::close(send_fd) };
         let surface_id = resp
             .get("surface_id")
@@ -1300,7 +1347,9 @@ mod tests {
         }
 
         assert_eq!(
-            lookup_resp.get("drm_format_modifier").and_then(|v| v.as_u64()),
+            lookup_resp
+                .get("drm_format_modifier")
+                .and_then(|v| v.as_u64()),
             Some(chosen_modifier),
             "modifier round-trip: lookup must echo the registered value verbatim",
         );
@@ -1552,11 +1601,7 @@ mod tests {
         // only on the helper's own input-validation step. A successful
         // send (regardless of subsequent response shape) proves the cap
         // edge is accepted.
-        let send_result = send_message_with_fds(
-            &stream,
-            req.to_string().as_bytes(),
-            &fds,
-        );
+        let send_result = send_message_with_fds(&stream, req.to_string().as_bytes(), &fds);
         assert!(
             send_result.is_ok(),
             "wire helper must accept exactly MAX_SCM_RIGHTS_FDS={} fds; got {:?}",
@@ -1613,8 +1658,8 @@ mod tests {
             "vk_image_usage": 0x4Fu32,
             "vk_image_allocation_size": 16_777_216u64,
         });
-        let (register_resp, _) = send_request_with_fds(&stream, &register_req, &[send_fd], 0)
-            .expect("register request");
+        let (register_resp, _) =
+            send_request_with_fds(&stream, &register_req, &[send_fd], 0).expect("register request");
         unsafe { libc::close(send_fd) };
         assert_eq!(
             register_resp.get("success").and_then(|v| v.as_bool()),
@@ -1717,8 +1762,8 @@ mod tests {
             "resource_type": "texture",
             // No vk_image_* fields — exercise the defaults path.
         });
-        let (register_resp, _) = send_request_with_fds(&stream, &register_req, &[send_fd], 0)
-            .expect("register request");
+        let (register_resp, _) =
+            send_request_with_fds(&stream, &register_req, &[send_fd], 0).expect("register request");
         unsafe { libc::close(send_fd) };
         assert_eq!(
             register_resp.get("success").and_then(|v| v.as_bool()),
@@ -1823,8 +1868,8 @@ mod tests {
             "resource_type": "texture",
             "current_image_layout": 1,
         });
-        let (register_resp, _) = send_request_with_fds(&stream, &register_req, &[send_fd], 0)
-            .expect("register request");
+        let (register_resp, _) =
+            send_request_with_fds(&stream, &register_req, &[send_fd], 0).expect("register request");
         unsafe { libc::close(send_fd) };
         assert_eq!(
             register_resp.get("success").and_then(|v| v.as_bool()),
@@ -1844,7 +1889,9 @@ mod tests {
             unsafe { libc::close(*fd) };
         }
         assert_eq!(
-            lookup_resp.get("current_image_layout").and_then(|v| v.as_i64()),
+            lookup_resp
+                .get("current_image_layout")
+                .and_then(|v| v.as_i64()),
             Some(1),
             "lookup must echo the producer-declared layout"
         );
@@ -1854,8 +1901,8 @@ mod tests {
             "surface_id": "layout-rt",
             "current_image_layout": 5,
         });
-        let (update_resp, _) = send_request_with_fds(&stream, &update_req, &[], 0)
-            .expect("update_layout request");
+        let (update_resp, _) =
+            send_request_with_fds(&stream, &update_req, &[], 0).expect("update_layout request");
         assert_eq!(
             update_resp.get("success").and_then(|v| v.as_bool()),
             Some(true),
@@ -1870,7 +1917,9 @@ mod tests {
             unsafe { libc::close(*fd) };
         }
         assert_eq!(
-            lookup_resp.get("current_image_layout").and_then(|v| v.as_i64()),
+            lookup_resp
+                .get("current_image_layout")
+                .and_then(|v| v.as_i64()),
             Some(5),
             "subsequent lookup must see post-update layout"
         );

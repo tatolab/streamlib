@@ -44,11 +44,7 @@ pub trait ComputeKernelBridge: Send + Sync {
     ///
     /// `push_constant_size` is validated against the shader's
     /// reflected push-constant range; a mismatch returns an error.
-    fn register(
-        &self,
-        spv: &[u8],
-        push_constant_size: u32,
-    ) -> Result<String, String>;
+    fn register(&self, spv: &[u8], push_constant_size: u32) -> Result<String, String>;
 
     /// Dispatch a previously-registered kernel against the surface
     /// registered under `surface_uuid`.

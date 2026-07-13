@@ -12,13 +12,13 @@
 
 use std::path::PathBuf;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
 use streamlib::sdk::schema_ident;
-use streamlib::sdk::RunnerAutoBuild;
 
 #[derive(Parser)]
 #[command(name = "streamlib-runtime")]
@@ -135,7 +135,9 @@ async fn run(args: Args) -> Result<()> {
         // Resolving variant: pull + build any referenced package from the
         // registry so a snapshot is self-contained (the runtime only
         // pre-loads the api-server at boot).
-        runtime.load_graph_snapshot_from_path_with_resolving(path).await?;
+        runtime
+            .load_graph_snapshot_from_path_with_resolving(path)
+            .await?;
     }
 
     runtime.start()?;

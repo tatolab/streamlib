@@ -68,17 +68,14 @@ impl VulkanAccess {
     /// Prefer this over the umbrella `SHADER_READ` when the only access is
     /// fragment-stage sampling — the validation layers track the narrower
     /// flag and the documented intent travels with the barrier.
-    pub const SHADER_SAMPLED_READ: Self =
-        Self(vk::AccessFlags2::SHADER_SAMPLED_READ.bits());
+    pub const SHADER_SAMPLED_READ: Self = Self(vk::AccessFlags2::SHADER_SAMPLED_READ.bits());
     pub const SHADER_WRITE: Self = Self(vk::AccessFlags2::SHADER_WRITE.bits());
     pub const TRANSFER_READ: Self = Self(vk::AccessFlags2::TRANSFER_READ.bits());
     pub const TRANSFER_WRITE: Self = Self(vk::AccessFlags2::TRANSFER_WRITE.bits());
     pub const HOST_READ: Self = Self(vk::AccessFlags2::HOST_READ.bits());
     pub const HOST_WRITE: Self = Self(vk::AccessFlags2::HOST_WRITE.bits());
-    pub const COLOR_ATTACHMENT_READ: Self =
-        Self(vk::AccessFlags2::COLOR_ATTACHMENT_READ.bits());
-    pub const COLOR_ATTACHMENT_WRITE: Self =
-        Self(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE.bits());
+    pub const COLOR_ATTACHMENT_READ: Self = Self(vk::AccessFlags2::COLOR_ATTACHMENT_READ.bits());
+    pub const COLOR_ATTACHMENT_WRITE: Self = Self(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE.bits());
     pub const MEMORY_READ: Self = Self(vk::AccessFlags2::MEMORY_READ.bits());
     pub const MEMORY_WRITE: Self = Self(vk::AccessFlags2::MEMORY_WRITE.bits());
 

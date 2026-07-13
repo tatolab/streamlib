@@ -12,7 +12,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use streamlib_jtd_codegen::{generate, GenerateOptions, RuntimeTarget};
+use streamlib_jtd_codegen::{GenerateOptions, RuntimeTarget, generate};
 
 /// True when `jtd-codegen --version` succeeds. The codegen pipeline shells
 /// out to the binary, so tests that exercise the real pipeline are no-ops
@@ -75,11 +75,7 @@ pub fn run_project_codegen(runtime: RuntimeTarget, output: &Path) {
 
 /// Run codegen for a single schema file (used by the cross-language test
 /// to keep the loop tight against one representative schema).
-pub fn run_single_schema_codegen(
-    runtime: RuntimeTarget,
-    schema_file: &Path,
-    output: &Path,
-) {
+pub fn run_single_schema_codegen(runtime: RuntimeTarget, schema_file: &Path, output: &Path) {
     generate(GenerateOptions {
         runtime,
         output: output.to_path_buf(),
@@ -116,11 +112,7 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<PathBuf>, exclude_basenames: &[&s
         if path.is_dir() {
             walk(root, &path, out, exclude_basenames);
         } else {
-            out.push(
-                path.strip_prefix(root)
-                    .expect("strip_prefix")
-                    .to_path_buf(),
-            );
+            out.push(path.strip_prefix(root).expect("strip_prefix").to_path_buf());
         }
     }
 }

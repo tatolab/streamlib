@@ -139,14 +139,14 @@ pub fn derive_config_descriptor(input: DeriveInput) -> Result<TokenStream> {
                 return Err(Error::new(
                     input.ident.span(),
                     "ConfigDescriptor can only be derived for structs with named fields or unit structs",
-                ))
+                ));
             }
         },
         _ => {
             return Err(Error::new(
                 input.ident.span(),
                 "ConfigDescriptor can only be derived for structs",
-            ))
+            ));
         }
     };
 

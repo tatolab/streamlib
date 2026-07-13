@@ -146,24 +146,20 @@ fn run_shim_test(lib_path: PathBuf, prefix: &str, flavor: ConnectFlavor) {
     let gpu_surface_release: libloading::Symbol<unsafe extern "C" fn(*mut c_void)> =
         unsafe { lib.get(format!("{}gpu_surface_release", prefix).as_bytes()) }
             .expect("gpu_surface_release");
-    let gpu_surface_plane_count: libloading::Symbol<
-        unsafe extern "C" fn(*const c_void) -> u32,
-    > = unsafe { lib.get(format!("{}gpu_surface_plane_count", prefix).as_bytes()) }
-        .expect("gpu_surface_plane_count");
+    let gpu_surface_plane_count: libloading::Symbol<unsafe extern "C" fn(*const c_void) -> u32> =
+        unsafe { lib.get(format!("{}gpu_surface_plane_count", prefix).as_bytes()) }
+            .expect("gpu_surface_plane_count");
     let gpu_surface_plane_size: libloading::Symbol<
         unsafe extern "C" fn(*const c_void, u32) -> u64,
     > = unsafe { lib.get(format!("{}gpu_surface_plane_size", prefix).as_bytes()) }
         .expect("gpu_surface_plane_size");
-    let gpu_surface_plane_mmap: libloading::Symbol<
-        unsafe extern "C" fn(*mut c_void, u32) -> i32,
-    > = unsafe { lib.get(format!("{}gpu_surface_plane_mmap", prefix).as_bytes()) }
-        .expect("gpu_surface_plane_mmap");
+    let gpu_surface_plane_mmap: libloading::Symbol<unsafe extern "C" fn(*mut c_void, u32) -> i32> =
+        unsafe { lib.get(format!("{}gpu_surface_plane_mmap", prefix).as_bytes()) }
+            .expect("gpu_surface_plane_mmap");
     let gpu_surface_plane_base_address: libloading::Symbol<
         unsafe extern "C" fn(*const c_void, u32) -> *mut u8,
-    > = unsafe {
-        lib.get(format!("{}gpu_surface_plane_base_address", prefix).as_bytes())
-    }
-    .expect("gpu_surface_plane_base_address");
+    > = unsafe { lib.get(format!("{}gpu_surface_plane_base_address", prefix).as_bytes()) }
+        .expect("gpu_surface_plane_base_address");
 
     let socket_path_c = CString::new(socket_path.to_str().expect("path utf8")).unwrap();
     let handle = match flavor {
@@ -301,9 +297,7 @@ fn rust_surface_store_resolve_surface_multi_plane() {
     // the global; duplicate calls across tests are accepted via
     // `OnceLock::get_or_init`.
     if GpuContext::init_for_platform_sync().is_err() {
-        eprintln!(
-            "rust_surface_store_resolve_surface_multi_plane: no Vulkan device — skipping"
-        );
+        eprintln!("rust_surface_store_resolve_surface_multi_plane: no Vulkan device — skipping");
         return;
     }
 

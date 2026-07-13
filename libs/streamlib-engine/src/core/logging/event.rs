@@ -178,7 +178,10 @@ mod tests {
     #[test]
     fn source_and_level_serialize_lowercase() {
         assert_eq!(serde_json::to_string(&Source::Rust).unwrap(), "\"rust\"");
-        assert_eq!(serde_json::to_string(&Source::Python).unwrap(), "\"python\"");
+        assert_eq!(
+            serde_json::to_string(&Source::Python).unwrap(),
+            "\"python\""
+        );
         assert_eq!(serde_json::to_string(&Source::Deno).unwrap(), "\"deno\"");
         assert_eq!(serde_json::to_string(&LogLevel::Warn).unwrap(), "\"warn\"");
     }

@@ -22,7 +22,11 @@ fn make_memfd_with(contents: &[u8]) -> RawFd {
 
     let name = std::ffi::CString::new("streamlib-surface-share-crash-helper").unwrap();
     let fd = unsafe { libc::memfd_create(name.as_ptr(), 0) };
-    assert!(fd >= 0, "memfd_create failed: {}", std::io::Error::last_os_error());
+    assert!(
+        fd >= 0,
+        "memfd_create failed: {}",
+        std::io::Error::last_os_error()
+    );
     let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
     file.write_all(contents).expect("memfd write");
     file.seek(SeekFrom::Start(0)).expect("memfd rewind");
@@ -33,8 +37,8 @@ fn main() {
     let socket_path = std::env::var_os("STREAMLIB_SURFACE_SOCKET")
         .map(std::path::PathBuf::from)
         .expect("STREAMLIB_SURFACE_SOCKET must be set");
-    let runtime_id = std::env::var("STREAMLIB_RUNTIME_ID")
-        .expect("STREAMLIB_RUNTIME_ID must be set");
+    let runtime_id =
+        std::env::var("STREAMLIB_RUNTIME_ID").expect("STREAMLIB_RUNTIME_ID must be set");
 
     let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
     let send_fd = make_memfd_with(b"crash-helper-fixture-payload");
@@ -47,8 +51,7 @@ fn main() {
         "format": "Bgra32",
         "resource_type": "pixel_buffer",
     });
-    let (resp, _) =
-        send_request_with_fds(&stream, &req, &[send_fd], 0).expect("check_in request");
+    let (resp, _) = send_request_with_fds(&stream, &req, &[send_fd], 0).expect("check_in request");
     unsafe { libc::close(send_fd) };
     let surface_id = resp
         .get("surface_id")

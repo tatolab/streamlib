@@ -61,25 +61,31 @@
 //! surfaces here as either a missing output file (cdylib panicked at
 //! the FFI boundary) or `ERR:<message>` in the file.
 
+use streamlib::engine_internal::core::context::TexturePoolDescriptor;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
-use streamlib::engine_internal::core::context::TexturePoolDescriptor;
 
 /// SPIR-V for the smoke-test ray-gen stage. Compiled by `build.rs`.
 #[cfg(target_os = "linux")]
-const SMOKE_RGEN_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/ray_tracing_kernel_smoke_rgen.spv"));
+const SMOKE_RGEN_SPV: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/ray_tracing_kernel_smoke_rgen.spv"
+));
 
 /// SPIR-V for the smoke-test miss stage. Compiled by `build.rs`.
 #[cfg(target_os = "linux")]
-const SMOKE_RMISS_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/ray_tracing_kernel_smoke_rmiss.spv"));
+const SMOKE_RMISS_SPV: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/ray_tracing_kernel_smoke_rmiss.spv"
+));
 
 /// SPIR-V for the smoke-test closest-hit stage. Compiled by `build.rs`.
 #[cfg(target_os = "linux")]
-const SMOKE_RCHIT_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/ray_tracing_kernel_smoke_rchit.spv"));
+const SMOKE_RCHIT_SPV: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/ray_tracing_kernel_smoke_rchit.spv"
+));
 
 #[cfg(target_os = "linux")]
 const SMOKE_SURFACE_SIZE: u32 = 64;
@@ -138,11 +144,7 @@ fn run_ray_tracing_kernel_smoke(ctx: &RuntimeContextFullAccess<'_>) -> Result<()
     let gpu_limited = ctx.gpu_limited_access();
 
     // Single triangle centered at the origin in the XY plane.
-    let vertices: Vec<f32> = vec![
-        0.0, -0.5, 0.0,
-        -0.5, 0.5, 0.0,
-        0.5, 0.5, 0.0,
-    ];
+    let vertices: Vec<f32> = vec![0.0, -0.5, 0.0, -0.5, 0.5, 0.0, 0.5, 0.5, 0.0];
     let indices: Vec<u32> = vec![0, 1, 2];
 
     // Manual-mode start() takes FullAccess directly; the engine
@@ -175,8 +177,7 @@ fn run_ray_tracing_kernel_smoke(ctx: &RuntimeContextFullAccess<'_>) -> Result<()
     // Build BLAS + TLAS + kernel — all FullAccess-privileged, all
     // dispatch directly through the wrapped scope.
     let (kernel, tlas) = (|| -> Result<_> {
-        let blas = full
-            .build_triangles_blas("rt-smoke-blas", &vertices, &indices)?;
+        let blas = full.build_triangles_blas("rt-smoke-blas", &vertices, &indices)?;
         let instances = vec![TlasInstanceDesc::identity(blas)];
         let tlas = full.build_tlas("rt-smoke-tlas", &instances)?;
 
@@ -194,10 +195,7 @@ fn run_ray_tracing_kernel_smoke(ctx: &RuntimeContextFullAccess<'_>) -> Result<()
             },
         ];
         let bindings = [
-            RayTracingBindingSpec::acceleration_structure(
-                0,
-                RayTracingShaderStageFlags::RAYGEN,
-            ),
+            RayTracingBindingSpec::acceleration_structure(0, RayTracingShaderStageFlags::RAYGEN),
             RayTracingBindingSpec::storage_image(1, RayTracingShaderStageFlags::RAYGEN),
         ];
         let push_constants = RayTracingPushConstants {

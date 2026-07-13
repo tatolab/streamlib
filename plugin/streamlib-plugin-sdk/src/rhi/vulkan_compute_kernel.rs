@@ -58,11 +58,7 @@ impl VulkanComputeKernel {
     /// [`crate::context::GpuContextFullAccess::acquire_storage_buffer`].
     /// Dispatches through the per-type methods vtable's
     /// `set_storage_buffer_storage` slot.
-    pub fn set_storage_buffer_storage(
-        &self,
-        binding: u32,
-        buffer: &StorageBuffer,
-    ) -> Result<()> {
+    pub fn set_storage_buffer_storage(&self, binding: u32, buffer: &StorageBuffer) -> Result<()> {
         if self.methods_vtable.is_null() {
             return Err(Error::GpuError(
                 "set_storage_buffer_storage: kernel methods vtable is null".into(),

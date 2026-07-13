@@ -199,15 +199,16 @@ impl HostVulkanVideoSession {
         // Linux cannot race.
         let _device_lock = vulkan_device.lock_device();
 
-        let raw_session = unsafe { device.create_video_session_khr(&create_info, None) }
-            .map_err(|e| Error::GpuError(format!(
-                "video session '{}': create_video_session_khr failed: {e}",
-                descriptor.label,
-            )))?;
+        let raw_session =
+            unsafe { device.create_video_session_khr(&create_info, None) }.map_err(|e| {
+                Error::GpuError(format!(
+                    "video session '{}': create_video_session_khr failed: {e}",
+                    descriptor.label,
+                ))
+            })?;
 
-        let bind_result = unsafe {
-            Self::allocate_and_bind_memory(device, allocator, raw_session, descriptor)
-        };
+        let bind_result =
+            unsafe { Self::allocate_and_bind_memory(device, allocator, raw_session, descriptor) };
         let allocations = match bind_result {
             Ok(a) => a,
             Err(e) => {
@@ -271,13 +272,15 @@ impl HostVulkanVideoSession {
         raw_session: vk::VideoSessionKHR,
         descriptor: &VideoSessionDescriptor<'_>,
     ) -> Result<Vec<vma::Allocation>> {
-        let mem_requirements = unsafe {
-            device.get_video_session_memory_requirements_khr(raw_session)
-        }
-        .map_err(|e| Error::GpuError(format!(
-            "video session '{}': get_video_session_memory_requirements_khr failed: {e}",
-            descriptor.label,
-        )))?;
+        let mem_requirements =
+            unsafe { device.get_video_session_memory_requirements_khr(raw_session) }.map_err(
+                |e| {
+                    Error::GpuError(format!(
+                        "video session '{}': get_video_session_memory_requirements_khr failed: {e}",
+                        descriptor.label,
+                    ))
+                },
+            )?;
 
         if mem_requirements.len() > MAX_BOUND_MEMORY {
             return Err(Error::GpuError(format!(
@@ -308,16 +311,15 @@ impl HostVulkanVideoSession {
                 ..Default::default()
             };
 
-            let allocation = unsafe {
-                allocator.allocate_memory(req.memory_requirements, &alloc_options)
-            }
-            .map_err(|e| {
-                Self::free_partial(allocator, &mut allocations);
-                Error::GpuError(format!(
-                    "video session '{}': allocate_memory for binding {} failed: {e}",
-                    descriptor.label, req.memory_bind_index,
-                ))
-            })?;
+            let allocation =
+                unsafe { allocator.allocate_memory(req.memory_requirements, &alloc_options) }
+                    .map_err(|e| {
+                        Self::free_partial(allocator, &mut allocations);
+                        Error::GpuError(format!(
+                            "video session '{}': allocate_memory for binding {} failed: {e}",
+                            descriptor.label, req.memory_bind_index,
+                        ))
+                    })?;
 
             let alloc_info = allocator.get_allocation_info(allocation);
             allocations.push(allocation);
@@ -332,14 +334,13 @@ impl HostVulkanVideoSession {
             );
         }
 
-        unsafe { device.bind_video_session_memory_khr(raw_session, &bind_infos) }
-            .map_err(|e| {
-                Self::free_partial(allocator, &mut allocations);
-                Error::GpuError(format!(
-                    "video session '{}': bind_video_session_memory_khr failed: {e}",
-                    descriptor.label,
-                ))
-            })?;
+        unsafe { device.bind_video_session_memory_khr(raw_session, &bind_infos) }.map_err(|e| {
+            Self::free_partial(allocator, &mut allocations);
+            Error::GpuError(format!(
+                "video session '{}': bind_video_session_memory_khr failed: {e}",
+                descriptor.label,
+            ))
+        })?;
 
         Ok(allocations)
     }
@@ -404,8 +405,8 @@ impl HostVulkanVideoSessionParameters {
             .map(|t| t.handle)
             .unwrap_or(vk::VideoSessionParametersKHR::null());
 
-        let mut params_create = vk::VideoSessionParametersCreateInfoKHR::builder()
-            .video_session(session_handle);
+        let mut params_create =
+            vk::VideoSessionParametersCreateInfoKHR::builder().video_session(session_handle);
         if template_handle != vk::VideoSessionParametersKHR::null() {
             params_create = params_create.video_session_parameters_template(template_handle);
         }
@@ -435,11 +436,10 @@ impl HostVulkanVideoSessionParameters {
                 h264_dec_add = vk::VideoDecodeH264SessionParametersAddInfoKHR::builder()
                     .std_sp_ss(sps)
                     .std_pp_ss(pps);
-                h264_dec_params =
-                    vk::VideoDecodeH264SessionParametersCreateInfoKHR::builder()
-                        .max_std_sps_count(*max_std_sps_count)
-                        .max_std_pps_count(*max_std_pps_count)
-                        .parameters_add_info(&h264_dec_add);
+                h264_dec_params = vk::VideoDecodeH264SessionParametersCreateInfoKHR::builder()
+                    .max_std_sps_count(*max_std_sps_count)
+                    .max_std_pps_count(*max_std_pps_count)
+                    .parameters_add_info(&h264_dec_add);
                 params_create = params_create.push_next(&mut h264_dec_params);
             }
             VideoSessionParametersAddInfo::DecodeH265 {
@@ -454,12 +454,11 @@ impl HostVulkanVideoSessionParameters {
                     .std_vp_ss(vps)
                     .std_sp_ss(sps)
                     .std_pp_ss(pps);
-                h265_dec_params =
-                    vk::VideoDecodeH265SessionParametersCreateInfoKHR::builder()
-                        .max_std_vps_count(*max_std_vps_count)
-                        .max_std_sps_count(*max_std_sps_count)
-                        .max_std_pps_count(*max_std_pps_count)
-                        .parameters_add_info(&h265_dec_add);
+                h265_dec_params = vk::VideoDecodeH265SessionParametersCreateInfoKHR::builder()
+                    .max_std_vps_count(*max_std_vps_count)
+                    .max_std_sps_count(*max_std_sps_count)
+                    .max_std_pps_count(*max_std_pps_count)
+                    .parameters_add_info(&h265_dec_add);
                 params_create = params_create.push_next(&mut h265_dec_params);
             }
             VideoSessionParametersAddInfo::EncodeH264 {
@@ -471,11 +470,10 @@ impl HostVulkanVideoSessionParameters {
                 h264_enc_add = vk::VideoEncodeH264SessionParametersAddInfoKHR::builder()
                     .std_sp_ss(sps)
                     .std_pp_ss(pps);
-                h264_enc_params =
-                    vk::VideoEncodeH264SessionParametersCreateInfoKHR::builder()
-                        .max_std_sps_count(*max_std_sps_count)
-                        .max_std_pps_count(*max_std_pps_count)
-                        .parameters_add_info(&h264_enc_add);
+                h264_enc_params = vk::VideoEncodeH264SessionParametersCreateInfoKHR::builder()
+                    .max_std_sps_count(*max_std_sps_count)
+                    .max_std_pps_count(*max_std_pps_count)
+                    .parameters_add_info(&h264_enc_add);
                 params_create = params_create.push_next(&mut h264_enc_params);
             }
             VideoSessionParametersAddInfo::EncodeH265 {
@@ -490,12 +488,11 @@ impl HostVulkanVideoSessionParameters {
                     .std_vp_ss(vps)
                     .std_sp_ss(sps)
                     .std_pp_ss(pps);
-                h265_enc_params =
-                    vk::VideoEncodeH265SessionParametersCreateInfoKHR::builder()
-                        .max_std_vps_count(*max_std_vps_count)
-                        .max_std_sps_count(*max_std_sps_count)
-                        .max_std_pps_count(*max_std_pps_count)
-                        .parameters_add_info(&h265_enc_add);
+                h265_enc_params = vk::VideoEncodeH265SessionParametersCreateInfoKHR::builder()
+                    .max_std_vps_count(*max_std_vps_count)
+                    .max_std_sps_count(*max_std_sps_count)
+                    .max_std_pps_count(*max_std_pps_count)
+                    .parameters_add_info(&h265_enc_add);
                 params_create = params_create.push_next(&mut h265_enc_params);
             }
         }
@@ -607,19 +604,40 @@ fn std_header_version_for_codec(
     const STD_VIDEO_VERSION_1_0_0: u32 = 1 << 22;
 
     if codec_op == vk::VideoCodecOperationFlagsKHR::DECODE_H264 {
-        Ok(make_ext(b"VK_STD_vulkan_video_codec_h264_decode\0", STD_VIDEO_VERSION_1_0_0))
+        Ok(make_ext(
+            b"VK_STD_vulkan_video_codec_h264_decode\0",
+            STD_VIDEO_VERSION_1_0_0,
+        ))
     } else if codec_op == vk::VideoCodecOperationFlagsKHR::DECODE_H265 {
-        Ok(make_ext(b"VK_STD_vulkan_video_codec_h265_decode\0", STD_VIDEO_VERSION_1_0_0))
+        Ok(make_ext(
+            b"VK_STD_vulkan_video_codec_h265_decode\0",
+            STD_VIDEO_VERSION_1_0_0,
+        ))
     } else if codec_op == vk::VideoCodecOperationFlagsKHR::DECODE_AV1 {
-        Ok(make_ext(b"VK_STD_vulkan_video_codec_av1_decode\0", STD_VIDEO_VERSION_1_0_0))
+        Ok(make_ext(
+            b"VK_STD_vulkan_video_codec_av1_decode\0",
+            STD_VIDEO_VERSION_1_0_0,
+        ))
     } else if codec_op == vk::VideoCodecOperationFlagsKHR::DECODE_VP9 {
-        Ok(make_ext(b"VK_STD_vulkan_video_codec_vp9_decode\0", STD_VIDEO_VERSION_1_0_0))
+        Ok(make_ext(
+            b"VK_STD_vulkan_video_codec_vp9_decode\0",
+            STD_VIDEO_VERSION_1_0_0,
+        ))
     } else if codec_op == vk::VideoCodecOperationFlagsKHR::ENCODE_H264 {
-        Ok(make_ext(b"VK_STD_vulkan_video_codec_h264_encode\0", STD_VIDEO_VERSION_1_0_0))
+        Ok(make_ext(
+            b"VK_STD_vulkan_video_codec_h264_encode\0",
+            STD_VIDEO_VERSION_1_0_0,
+        ))
     } else if codec_op == vk::VideoCodecOperationFlagsKHR::ENCODE_H265 {
-        Ok(make_ext(b"VK_STD_vulkan_video_codec_h265_encode\0", STD_VIDEO_VERSION_1_0_0))
+        Ok(make_ext(
+            b"VK_STD_vulkan_video_codec_h265_encode\0",
+            STD_VIDEO_VERSION_1_0_0,
+        ))
     } else if codec_op == vk::VideoCodecOperationFlagsKHR::ENCODE_AV1 {
-        Ok(make_ext(b"VK_STD_vulkan_video_codec_av1_encode\0", STD_VIDEO_VERSION_1_0_0))
+        Ok(make_ext(
+            b"VK_STD_vulkan_video_codec_av1_encode\0",
+            STD_VIDEO_VERSION_1_0_0,
+        ))
     } else {
         Err(Error::GpuError(format!(
             "unsupported codec_operation {:?} for video session creation",
@@ -713,7 +731,10 @@ mod tests {
         VideoSessionCreateInfoSnapshot {
             queue_family_index: 0,
             picture_format: vk::Format::G8_B8R8_2PLANE_420_UNORM,
-            max_coded_extent: vk::Extent2D { width: 1920, height: 1080 },
+            max_coded_extent: vk::Extent2D {
+                width: 1920,
+                height: 1080,
+            },
             reference_picture_format: vk::Format::G8_B8R8_2PLANE_420_UNORM,
             max_dpb_slots: 16,
             max_active_reference_pictures: 16,
@@ -728,7 +749,10 @@ mod tests {
             video_profile: vk::VideoProfileInfoKHR::default(),
             codec_operation: vk::VideoCodecOperationFlagsKHR::DECODE_H264,
             picture_format: vk::Format::G8_B8R8_2PLANE_420_UNORM,
-            max_coded_extent: vk::Extent2D { width: 1920, height: 1080 },
+            max_coded_extent: vk::Extent2D {
+                width: 1920,
+                height: 1080,
+            },
             reference_pictures_format: vk::Format::G8_B8R8_2PLANE_420_UNORM,
             max_dpb_slots: 16,
             max_active_reference_pictures: 16,
@@ -750,7 +774,10 @@ mod tests {
     fn snapshot_compatible_when_descriptor_under_all_caps() {
         let snap = baseline_snapshot();
         let mut desc = baseline_descriptor();
-        desc.max_coded_extent = vk::Extent2D { width: 1280, height: 720 };
+        desc.max_coded_extent = vk::Extent2D {
+            width: 1280,
+            height: 720,
+        };
         desc.max_dpb_slots = 8;
         desc.max_active_reference_pictures = 4;
         assert!(snapshot_is_compatible(
@@ -903,7 +930,10 @@ mod tests {
             video_profile,
             codec_operation: vk::VideoCodecOperationFlagsKHR::DECODE_H264,
             picture_format: vk::Format::G8_B8R8_2PLANE_420_UNORM,
-            max_coded_extent: vk::Extent2D { width: 1920, height: 1080 },
+            max_coded_extent: vk::Extent2D {
+                width: 1920,
+                height: 1080,
+            },
             reference_pictures_format: vk::Format::G8_B8R8_2PLANE_420_UNORM,
             max_dpb_slots: 17,
             max_active_reference_pictures: 16,

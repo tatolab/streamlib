@@ -148,8 +148,7 @@ fn compile_shaders() {
     {
         let test_sampled_image_src = "src/vulkan/rhi/shaders/test_sampled_image.comp";
         println!("cargo:rerun-if-changed={}", test_sampled_image_src);
-        let dst_path: PathBuf =
-            Path::new(&out_dir).join("test_sampled_image.spv");
+        let dst_path: PathBuf = Path::new(&out_dir).join("test_sampled_image.spv");
         let status = Command::new("glslc")
             .arg("-fshader-stage=compute")
             .arg("-O")

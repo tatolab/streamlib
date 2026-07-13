@@ -13,8 +13,7 @@
 //! (`docs/learnings/slpkg-raw-device-rhi-construction.md`).
 
 use streamlib_plugin_abi::{
-    fingerprint_fold_bytes, fingerprint_fold_u64, fingerprint_init,
-    PLUGIN_ABI_LAYOUT_FINGERPRINT,
+    PLUGIN_ABI_LAYOUT_FINGERPRINT, fingerprint_fold_bytes, fingerprint_fold_u64, fingerprint_init,
 };
 
 /// Human-readable identity of this engine build: engine version, rustc

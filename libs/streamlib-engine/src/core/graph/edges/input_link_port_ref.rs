@@ -45,8 +45,7 @@ mod tests {
     /// `Runtime::connect` calls.
     #[test]
     fn msgpack_round_trip_preserves_full_value() {
-        let port_ref =
-            InputLinkPortRef::new(ProcessorUniqueId::from("Pdisplay"), "video_in");
+        let port_ref = InputLinkPortRef::new(ProcessorUniqueId::from("Pdisplay"), "video_in");
         let bytes = rmp_serde::to_vec_named(&port_ref).expect("encode");
         let back: InputLinkPortRef = rmp_serde::from_slice(&bytes).expect("decode");
         assert_eq!(port_ref, back);
@@ -54,8 +53,7 @@ mod tests {
 
     #[test]
     fn msgpack_round_trip_empty_port_name() {
-        let port_ref =
-            InputLinkPortRef::new(ProcessorUniqueId::from("P0"), "");
+        let port_ref = InputLinkPortRef::new(ProcessorUniqueId::from("P0"), "");
         let bytes = rmp_serde::to_vec_named(&port_ref).expect("encode");
         let back: InputLinkPortRef = rmp_serde::from_slice(&bytes).expect("decode");
         assert_eq!(port_ref, back);

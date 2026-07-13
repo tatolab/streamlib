@@ -30,15 +30,11 @@
 /// target string violated the xtask check-boundaries top-level-shortcut
 /// rule, so the canonical helper lives under the crate's own path.)
 #[inline]
-pub fn run_host_extern_c<F, T>(
-    callback_name: &'static str,
-    body: F,
-    default_on_panic: T,
-) -> T
+pub fn run_host_extern_c<F, T>(callback_name: &'static str, body: F, default_on_panic: T) -> T
 where
     F: FnOnce() -> T,
 {
-    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     match catch_unwind(AssertUnwindSafe(body)) {
         Ok(value) => value,
         Err(payload) => {
@@ -70,25 +66,37 @@ mod run_host_extern_c_panic_safety_net_tests {
 
     #[test]
     fn panic_with_static_str_returns_default_i32() {
-        let rc = run_host_extern_c("cb_static_str", || -> i32 {
-            panic!("static-str panic");
-        }, 7);
+        let rc = run_host_extern_c(
+            "cb_static_str",
+            || -> i32 {
+                panic!("static-str panic");
+            },
+            7,
+        );
         assert_eq!(rc, 7);
     }
 
     #[test]
     fn panic_with_string_returns_default_i32() {
-        let rc = run_host_extern_c("cb_string", || -> i32 {
-            panic!("{}", String::from("dynamic-string panic"));
-        }, 9);
+        let rc = run_host_extern_c(
+            "cb_string",
+            || -> i32 {
+                panic!("{}", String::from("dynamic-string panic"));
+            },
+            9,
+        );
         assert_eq!(rc, 9);
     }
 
     #[test]
     fn panic_with_non_string_payload_returns_default_i32() {
-        let rc = run_host_extern_c("cb_non_string", || -> i32 {
-            std::panic::panic_any(0xDEADu16);
-        }, 11);
+        let rc = run_host_extern_c(
+            "cb_non_string",
+            || -> i32 {
+                std::panic::panic_any(0xDEADu16);
+            },
+            11,
+        );
         assert_eq!(rc, 11);
     }
 
@@ -100,16 +108,24 @@ mod run_host_extern_c_panic_safety_net_tests {
 
     #[test]
     fn panic_with_unit_default_returns_unit() {
-        let _: () = run_host_extern_c("cb_unit", || -> () {
-            panic!("unit-default panic");
-        }, ());
+        let _: () = run_host_extern_c(
+            "cb_unit",
+            || -> () {
+                panic!("unit-default panic");
+            },
+            (),
+        );
     }
 
     #[test]
     fn panic_with_null_ptr_default_returns_null() {
-        let ptr = run_host_extern_c("cb_null_ptr", || -> *const u8 {
-            panic!("null-ptr default panic");
-        }, std::ptr::null());
+        let ptr = run_host_extern_c(
+            "cb_null_ptr",
+            || -> *const u8 {
+                panic!("null-ptr default panic");
+            },
+            std::ptr::null(),
+        );
         assert!(ptr.is_null());
     }
 }

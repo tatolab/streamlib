@@ -102,9 +102,7 @@ impl MoqRelayConfig {
 ///
 /// Bypasses `ClientBuilder` to configure [`quinn::TransportConfig`] directly,
 /// setting a 4-second keep-alive interval (< Cloudflare's ~10-15s idle timeout).
-fn create_webtransport_client(
-    tls_disable_verify: bool,
-) -> Result<web_transport::quinn::Client> {
+fn create_webtransport_client(tls_disable_verify: bool) -> Result<web_transport::quinn::Client> {
     let provider = web_transport::quinn::crypto::default_provider();
 
     let crypto = if tls_disable_verify {
@@ -118,9 +116,9 @@ fn create_webtransport_client(
         let mut roots = rustls::RootCertStore::empty();
         let native_certs = rustls_native_certs::load_native_certs();
         for cert in native_certs.certs {
-            roots.add(cert).map_err(|e| {
-                Error::Runtime(format!("Failed to add root cert: {e}"))
-            })?;
+            roots
+                .add(cert)
+                .map_err(|e| Error::Runtime(format!("Failed to add root cert: {e}")))?;
         }
         rustls::ClientConfig::builder_with_provider(provider)
             .with_protocol_versions(&[&rustls::version::TLS13])
@@ -132,10 +130,8 @@ fn create_webtransport_client(
     let mut crypto = crypto;
     crypto.alpn_protocols = vec![b"h3".to_vec()];
 
-    let quic_client_config =
-        quinn::crypto::rustls::QuicClientConfig::try_from(crypto).map_err(|e| {
-            Error::Runtime(format!("QUIC client config failed: {e}"))
-        })?;
+    let quic_client_config = quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
+        .map_err(|e| Error::Runtime(format!("QUIC client config failed: {e}")))?;
 
     let mut client_config = quinn::ClientConfig::new(Arc::new(quic_client_config));
 
@@ -143,11 +139,13 @@ fn create_webtransport_client(
     transport.keep_alive_interval(Some(Duration::from_secs(4)));
     client_config.transport_config(Arc::new(transport));
 
-    let endpoint = quinn::Endpoint::client("[::]:0".parse().unwrap()).map_err(|e| {
-        Error::Runtime(format!("QUIC endpoint creation failed: {e}"))
-    })?;
+    let endpoint = quinn::Endpoint::client("[::]:0".parse().unwrap())
+        .map_err(|e| Error::Runtime(format!("QUIC endpoint creation failed: {e}")))?;
 
-    tracing::info!(keep_alive_secs = 4, "QUIC transport configured with keep-alive");
+    tracing::info!(
+        keep_alive_secs = 4,
+        "QUIC transport configured with keep-alive"
+    );
 
     Ok(web_transport::quinn::Client::new(endpoint, client_config))
 }
@@ -170,22 +168,20 @@ impl MoqPublishSession {
         let url = config.full_url()?;
         let client = create_webtransport_client(config.tls_disable_verify)?;
 
-        let wt_session = client.connect(url).await.map_err(|e| {
-            Error::Runtime(format!("MoQ WebTransport connect failed: {e}"))
-        })?;
+        let wt_session = client
+            .connect(url)
+            .await
+            .map_err(|e| Error::Runtime(format!("MoQ WebTransport connect failed: {e}")))?;
 
         let wt_session: web_transport::Session = wt_session.into();
 
-        let (session, mut publisher, _subscriber) =
-            moq_transport::session::Session::connect(
-                wt_session,
-                None,
-                moq_transport::session::Transport::WebTransport,
-            )
-            .await
-            .map_err(|e| {
-                Error::Runtime(format!("MoQ session connect failed: {e}"))
-            })?;
+        let (session, mut publisher, _subscriber) = moq_transport::session::Session::connect(
+            wt_session,
+            None,
+            moq_transport::session::Transport::WebTransport,
+        )
+        .await
+        .map_err(|e| Error::Runtime(format!("MoQ session connect failed: {e}")))?;
 
         let session_task = tokio::spawn(async move {
             if let Err(e) = session.run().await {
@@ -197,9 +193,8 @@ impl MoqPublishSession {
 
         // Namespace must be a non-empty broadcast name. Publisher and
         // subscriber must use the exact same namespace.
-        let namespace = moq_transport::coding::TrackNamespace::from_utf8_path(
-            &config.broadcast_path,
-        );
+        let namespace =
+            moq_transport::coding::TrackNamespace::from_utf8_path(&config.broadcast_path);
         let (tracks_writer, tracks_request, tracks_reader) =
             moq_transport::serve::Tracks::new(namespace).produce();
 
@@ -244,14 +239,14 @@ impl MoqPublishSession {
         payload: &[u8],
         is_keyframe: bool,
     ) -> Result<()> {
-        let needs_new_subgroup = is_keyframe
-            || !self.active_subgroup_writers.contains_key(track_name);
+        let needs_new_subgroup =
+            is_keyframe || !self.active_subgroup_writers.contains_key(track_name);
 
         if needs_new_subgroup {
             let subgroups_writer = self.ensure_track_subgroups_writer(track_name)?;
-            let subgroup = subgroups_writer.append(0).map_err(|e| {
-                Error::Runtime(format!("Failed to create MoQ subgroup: {e}"))
-            })?;
+            let subgroup = subgroups_writer
+                .append(0)
+                .map_err(|e| Error::Runtime(format!("Failed to create MoQ subgroup: {e}")))?;
             self.active_subgroup_writers
                 .insert(track_name.to_string(), subgroup);
         }
@@ -306,22 +301,20 @@ impl MoqSubscribeSession {
         let url = config.full_url()?;
         let client = create_webtransport_client(config.tls_disable_verify)?;
 
-        let wt_session = client.connect(url).await.map_err(|e| {
-            Error::Runtime(format!("MoQ WebTransport connect failed: {e}"))
-        })?;
+        let wt_session = client
+            .connect(url)
+            .await
+            .map_err(|e| Error::Runtime(format!("MoQ WebTransport connect failed: {e}")))?;
 
         let wt_session: web_transport::Session = wt_session.into();
 
-        let (session, _publisher, subscriber) =
-            moq_transport::session::Session::connect(
-                wt_session,
-                None,
-                moq_transport::session::Transport::WebTransport,
-            )
-            .await
-            .map_err(|e| {
-                Error::Runtime(format!("MoQ session connect failed: {e}"))
-            })?;
+        let (session, _publisher, subscriber) = moq_transport::session::Session::connect(
+            wt_session,
+            None,
+            moq_transport::session::Transport::WebTransport,
+        )
+        .await
+        .map_err(|e| Error::Runtime(format!("MoQ session connect failed: {e}")))?;
 
         let session_task = tokio::spawn(async move {
             if let Err(e) = session.run().await {
@@ -331,9 +324,8 @@ impl MoqSubscribeSession {
             }
         });
 
-        let namespace = moq_transport::coding::TrackNamespace::from_utf8_path(
-            &config.broadcast_path,
-        );
+        let namespace =
+            moq_transport::coding::TrackNamespace::from_utf8_path(&config.broadcast_path);
 
         tracing::info!(
             broadcast = %config.broadcast_path,
@@ -351,16 +343,14 @@ impl MoqSubscribeSession {
 
     /// Subscribe to a specific track within the broadcast.
     pub fn subscribe_track(&self, track_name: &str) -> Result<MoqTrackReader> {
-        let (writer, reader) = moq_transport::serve::Track::new(
-            self.namespace.clone(),
-            track_name.to_string(),
-        )
-        .produce();
+        let (writer, reader) =
+            moq_transport::serve::Track::new(self.namespace.clone(), track_name.to_string())
+                .produce();
 
         let mut subscriber = self.subscriber.clone();
         let track_name_owned = track_name.to_string();
-        let handle = tokio::runtime::Handle::try_current()
-            .unwrap_or_else(|_| self.tokio_handle.clone());
+        let handle =
+            tokio::runtime::Handle::try_current().unwrap_or_else(|_| self.tokio_handle.clone());
         let _subscribe_task = handle.spawn(async move {
             if let Err(e) = subscriber.subscribe(writer).await {
                 tracing::debug!(
@@ -390,9 +380,11 @@ impl MoqTrackReader {
     /// Wait for the next subgroup. Returns `None` when the track ends.
     pub async fn next_subgroup(&mut self) -> Result<Option<MoqSubgroupReader>> {
         if self.subgroups_reader.is_none() {
-            let mode = self.track_reader.mode().await.map_err(|e| {
-                Error::Runtime(format!("MoQ track mode error: {e}"))
-            })?;
+            let mode = self
+                .track_reader
+                .mode()
+                .await
+                .map_err(|e| Error::Runtime(format!("MoQ track mode error: {e}")))?;
 
             match mode {
                 moq_transport::serve::TrackReaderMode::Subgroups(reader) => {
@@ -410,9 +402,7 @@ impl MoqTrackReader {
         match reader.next().await {
             Ok(Some(subgroup)) => Ok(Some(MoqSubgroupReader { inner: subgroup })),
             Ok(None) => Ok(None),
-            Err(e) => Err(Error::Runtime(format!(
-                "MoQ subgroup read error: {e}"
-            ))),
+            Err(e) => Err(Error::Runtime(format!("MoQ subgroup read error: {e}"))),
         }
     }
 }
@@ -425,9 +415,10 @@ pub struct MoqSubgroupReader {
 impl MoqSubgroupReader {
     /// Read the next frame. Returns `None` when the subgroup ends.
     pub async fn read_frame(&mut self) -> Result<Option<bytes::Bytes>> {
-        self.inner.read_next().await.map_err(|e| {
-            Error::Runtime(format!("MoQ frame read error: {e}"))
-        })
+        self.inner
+            .read_next()
+            .await
+            .map_err(|e| Error::Runtime(format!("MoQ frame read error: {e}")))
     }
 }
 
@@ -457,30 +448,36 @@ impl SharedMoqSessions {
     }
 
     pub async fn get_publish_session(&self) -> Result<Arc<Mutex<MoqPublishSession>>> {
-        let session = self.publish_session.get_or_try_init(|| async {
-            let config = MoqRelayConfig {
-                relay_endpoint_url: self.relay_url.clone(),
-                broadcast_path: self.broadcast_path.clone(),
-                tls_disable_verify: false,
-                timeout_ms: 10000,
-            };
-            let session = MoqPublishSession::connect(config).await?;
-            Ok::<_, Error>(Arc::new(Mutex::new(session)))
-        }).await?;
+        let session = self
+            .publish_session
+            .get_or_try_init(|| async {
+                let config = MoqRelayConfig {
+                    relay_endpoint_url: self.relay_url.clone(),
+                    broadcast_path: self.broadcast_path.clone(),
+                    tls_disable_verify: false,
+                    timeout_ms: 10000,
+                };
+                let session = MoqPublishSession::connect(config).await?;
+                Ok::<_, Error>(Arc::new(Mutex::new(session)))
+            })
+            .await?;
         Ok(Arc::clone(session))
     }
 
     pub async fn get_subscribe_session(&self) -> Result<Arc<MoqSubscribeSession>> {
-        let session = self.subscribe_session.get_or_try_init(|| async {
-            let config = MoqRelayConfig {
-                relay_endpoint_url: self.relay_url.clone(),
-                broadcast_path: self.broadcast_path.clone(),
-                tls_disable_verify: false,
-                timeout_ms: 10000,
-            };
-            let session = MoqSubscribeSession::connect(config).await?;
-            Ok::<_, Error>(Arc::new(session))
-        }).await?;
+        let session = self
+            .subscribe_session
+            .get_or_try_init(|| async {
+                let config = MoqRelayConfig {
+                    relay_endpoint_url: self.relay_url.clone(),
+                    broadcast_path: self.broadcast_path.clone(),
+                    tls_disable_verify: false,
+                    timeout_ms: 10000,
+                };
+                let session = MoqSubscribeSession::connect(config).await?;
+                Ok::<_, Error>(Arc::new(session))
+            })
+            .await?;
         Ok(Arc::clone(session))
     }
 
@@ -588,8 +585,8 @@ mod tests {
         let created = sessions_for_runtime(&id);
         created.register_published_track("audio");
 
-        let looked_up = try_sessions_for_runtime(&id)
-            .expect("sessions_for_runtime created an entry");
+        let looked_up =
+            try_sessions_for_runtime(&id).expect("sessions_for_runtime created an entry");
         assert_eq!(looked_up.broadcast_path(), created.broadcast_path());
         assert!(
             looked_up

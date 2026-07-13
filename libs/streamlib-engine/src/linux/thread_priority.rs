@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::execution::ThreadPriority;
 use crate::core::Result;
+use crate::core::execution::ThreadPriority;
 use crate::linux::rtkit;
 
 /// Apply thread priority to the current thread.
@@ -30,9 +30,7 @@ pub fn apply_thread_priority(priority: ThreadPriority) -> Result<()> {
 fn set_realtime_priority() -> Result<()> {
     match rtkit::make_current_thread_realtime() {
         Ok(()) => {
-            tracing::info!(
-                "Applied real-time thread priority via rtkit (SCHED_RR at policy max)"
-            );
+            tracing::info!("Applied real-time thread priority via rtkit (SCHED_RR at policy max)");
             return Ok(());
         }
         Err(e) => {
@@ -69,7 +67,7 @@ fn set_high_priority() -> Result<()> {
 /// thread continues on its current scheduling class rather than
 /// aborting setup.
 fn set_realtime_priority_direct() -> Result<()> {
-    use libc::{pthread_self, pthread_setschedparam, sched_param, SCHED_FIFO};
+    use libc::{SCHED_FIFO, pthread_self, pthread_setschedparam, sched_param};
 
     unsafe {
         let thread = pthread_self();
@@ -92,7 +90,7 @@ fn set_realtime_priority_direct() -> Result<()> {
 }
 
 fn set_high_priority_direct() -> Result<()> {
-    use libc::{pthread_self, pthread_setschedparam, sched_param, SCHED_RR};
+    use libc::{SCHED_RR, pthread_self, pthread_setschedparam, sched_param};
 
     unsafe {
         let thread = pthread_self();

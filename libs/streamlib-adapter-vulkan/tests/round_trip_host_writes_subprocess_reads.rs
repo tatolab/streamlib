@@ -170,7 +170,9 @@ fn host_clear_image(
         )
         .build();
     let bs = [to_transfer];
-    let dep = vk::DependencyInfo::builder().image_memory_barriers(&bs).build();
+    let dep = vk::DependencyInfo::builder()
+        .image_memory_barriers(&bs)
+        .build();
     unsafe { dev.cmd_pipeline_barrier2(cmd, &dep) };
 
     let value = vk::ClearColorValue { float32: color };
@@ -209,7 +211,9 @@ fn host_clear_image(
         )
         .build();
     let bs2 = [to_general];
-    let dep2 = vk::DependencyInfo::builder().image_memory_barriers(&bs2).build();
+    let dep2 = vk::DependencyInfo::builder()
+        .image_memory_barriers(&bs2)
+        .build();
     unsafe { dev.cmd_pipeline_barrier2(cmd, &dep2) };
 
     unsafe { dev.end_command_buffer(cmd) }.expect("end cmd");

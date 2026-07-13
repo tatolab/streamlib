@@ -3,10 +3,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::super::components::{
-    default_component_serializers, default_components, ComponentMap, ComponentSerializer,
-};
 use super::super::LinkUniqueId;
+use super::super::components::{
+    ComponentMap, ComponentSerializer, default_component_serializers, default_components,
+};
 use super::super::{GraphEdgeWithComponents, GraphWeight};
 use super::LinkCapacity;
 use super::{InputLinkPortRef, LinkState, OutputLinkPortRef};

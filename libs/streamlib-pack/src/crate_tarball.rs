@@ -194,7 +194,10 @@ fn canonical_tar_bytes(path: &Path, name: &str, version: &str) -> anyhow::Result
         .with_context(|| format!("read crate tar entries {}", path.display()))?;
     for entry in entries {
         let mut entry = entry.context("read crate tar entry")?;
-        let entry_path = entry.path().context("read crate tar entry path")?.into_owned();
+        let entry_path = entry
+            .path()
+            .context("read crate tar entry path")?
+            .into_owned();
         if entry_path.to_string_lossy() == vcs_entry {
             continue;
         }
@@ -203,7 +206,9 @@ fn canonical_tar_bytes(path: &Path, name: &str, version: &str) -> anyhow::Result
         // long-name (GNU extension) handling is applied for the resolved path.
         let mut header = entry.header().clone();
         let mut data = Vec::new();
-        entry.read_to_end(&mut data).context("read crate tar entry data")?;
+        entry
+            .read_to_end(&mut data)
+            .context("read crate tar entry data")?;
         builder
             .append_data(&mut header, &entry_path, &data[..])
             .context("re-append crate tar entry")?;
@@ -224,7 +229,9 @@ pub fn normalize_crate_tarball(path: &Path, name: &str, version: &str) -> anyhow
     encoder
         .write_all(&canonical)
         .context("gzip canonical crate tar")?;
-    let gzipped = encoder.finish().context("finish gzip canonical crate tar")?;
+    let gzipped = encoder
+        .finish()
+        .context("finish gzip canonical crate tar")?;
     std::fs::write(path, &gzipped)
         .with_context(|| format!("write normalized crate tarball {}", path.display()))?;
     Ok(())
@@ -234,11 +241,7 @@ pub fn normalize_crate_tarball(path: &Path, name: &str, version: &str) -> anyhow
 /// a compression-independent fingerprint of source content. Two crates built
 /// from identical source but a different git HEAD (or a different gzip level)
 /// share a fingerprint; a real source change is a different fingerprint.
-pub fn crate_content_fingerprint(
-    path: &Path,
-    name: &str,
-    version: &str,
-) -> anyhow::Result<String> {
+pub fn crate_content_fingerprint(path: &Path, name: &str, version: &str) -> anyhow::Result<String> {
     let canonical = canonical_tar_bytes(path, name, version)?;
     let mut hasher = Sha256::new();
     hasher.update(&canonical);
@@ -287,8 +290,8 @@ pub fn finalize_crate_tarball(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flate2::write::GzEncoder;
     use flate2::Compression;
+    use flate2::write::GzEncoder;
     use std::cell::Cell;
     use std::io::Write;
     use std::path::PathBuf;
@@ -343,7 +346,9 @@ mod tests {
         let want = format!("{name}-{version}/src/lib.rs");
         let bytes = std::fs::read(path).unwrap();
         let mut decoded = Vec::new();
-        GzDecoder::new(&bytes[..]).read_to_end(&mut decoded).unwrap();
+        GzDecoder::new(&bytes[..])
+            .read_to_end(&mut decoded)
+            .unwrap();
         let mut archive = tar::Archive::new(&decoded[..]);
         for entry in archive.entries().unwrap() {
             let mut entry = entry.unwrap();
@@ -380,8 +385,9 @@ mod tests {
         vcs_sha1: &str,
     ) {
         let manifest = manifest_bytes(name, version);
-        let vcs_json =
-            format!("{{\n  \"git\": {{\n    \"sha1\": \"{vcs_sha1}\"\n  }},\n  \"path_in_vcs\": \"\"\n}}");
+        let vcs_json = format!(
+            "{{\n  \"git\": {{\n    \"sha1\": \"{vcs_sha1}\"\n  }},\n  \"path_in_vcs\": \"\"\n}}"
+        );
         let vcs_entry = format!("{name}-{version}/.cargo_vcs_info.json");
         let manifest_entry = format!("{name}-{version}/Cargo.toml");
         let lib_entry = format!("{name}-{version}/src/lib.rs");
@@ -399,7 +405,9 @@ mod tests {
     fn crate_entry_names(path: &Path) -> Vec<String> {
         let bytes = std::fs::read(path).unwrap();
         let mut decoded = Vec::new();
-        GzDecoder::new(&bytes[..]).read_to_end(&mut decoded).unwrap();
+        GzDecoder::new(&bytes[..])
+            .read_to_end(&mut decoded)
+            .unwrap();
         let mut archive = tar::Archive::new(&decoded[..]);
         archive
             .entries()
@@ -439,8 +447,9 @@ mod tests {
         // A pre-existing candidate that is structurally VALID (verifies clean)
         // but built from STALE source.
         write_valid_crate_with_lib(&path, "streamlib-x", "0.5.0", b"// STALE source\n");
-        verify_crate_tarball(&path, "streamlib-x", "0.5.0", None)
-            .expect("sanity: the stale cache is structurally valid, so the old fast-path WOULD reuse it");
+        verify_crate_tarball(&path, "streamlib-x", "0.5.0", None).expect(
+            "sanity: the stale cache is structurally valid, so the old fast-path WOULD reuse it",
+        );
         let stale_bytes = std::fs::read(&path).unwrap();
 
         let repackaged = Cell::new(false);
@@ -479,7 +488,10 @@ mod tests {
 
         // Truncate to a small prefix — mid gzip stream, unmistakably corrupt.
         let full = std::fs::metadata(&path).unwrap().len();
-        assert!(full > 40, "sanity: a real crate tarball is larger than the gzip header");
+        assert!(
+            full > 40,
+            "sanity: a real crate tarball is larger than the gzip header"
+        );
         std::fs::OpenOptions::new()
             .write(true)
             .open(&path)
@@ -496,7 +508,10 @@ mod tests {
         })
         .unwrap();
 
-        assert!(repackaged.get(), "repackage MUST run for a corrupt cached tarball");
+        assert!(
+            repackaged.get(),
+            "repackage MUST run for a corrupt cached tarball"
+        );
         // Final artifact is valid.
         verify_crate_tarball(&path, "streamlib-x", "0.5.0", None).unwrap();
     }
@@ -507,7 +522,10 @@ mod tests {
         let path = candidate_path(dir.path(), "streamlib-x", "0.5.0");
         std::fs::write(&path, b"").unwrap();
         let err = verify_crate_tarball(&path, "streamlib-x", "0.5.0", None).unwrap_err();
-        assert!(matches!(err, CrateTarballIntegrityError::GzipInvalid(_)), "got {err:?}");
+        assert!(
+            matches!(err, CrateTarballIntegrityError::GzipInvalid(_)),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -538,7 +556,10 @@ mod tests {
             Some("0000000000000000000000000000000000000000000000000000000000000000"),
         )
         .unwrap_err();
-        assert!(matches!(err, CrateTarballIntegrityError::ChecksumMismatch { .. }), "got {err:?}");
+        assert!(
+            matches!(err, CrateTarballIntegrityError::ChecksumMismatch { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -583,7 +604,10 @@ mod tests {
             std::fs::write(&path, b"not a gzip tarball").unwrap();
             Ok(())
         });
-        assert!(result.is_err(), "a still-corrupt repackage must be a hard error");
+        assert!(
+            result.is_err(),
+            "a still-corrupt repackage must be a hard error"
+        );
     }
 
     /// The verifier reads the tar layer to EOF: a tar truncated *after* the
@@ -613,7 +637,10 @@ mod tests {
         gzip_to_file(&path, &raw[..keep]);
 
         let err = verify_crate_tarball(&path, "streamlib-x", "0.5.0", None).unwrap_err();
-        assert!(matches!(err, CrateTarballIntegrityError::TarInvalid(_)), "got {err:?}");
+        assert!(
+            matches!(err, CrateTarballIntegrityError::TarInvalid(_)),
+            "got {err:?}"
+        );
     }
 
     /// A gzip stream whose trailer is truncated fails even though every entry's
@@ -633,7 +660,10 @@ mod tests {
             .set_len(full - 8)
             .unwrap();
         let err = verify_crate_tarball(&path, "streamlib-x", "0.5.0", None).unwrap_err();
-        assert!(matches!(err, CrateTarballIntegrityError::GzipInvalid(_)), "got {err:?}");
+        assert!(
+            matches!(err, CrateTarballIntegrityError::GzipInvalid(_)),
+            "got {err:?}"
+        );
     }
 
     /// Normalizing strips `.cargo_vcs_info.json`, leaves a still-valid `.crate`,
@@ -705,8 +735,20 @@ mod tests {
         let dir = tempdir().unwrap();
         let served = candidate_path(dir.path(), "streamlib-x", "0.5.0");
         let fresh = dir.path().join("streamlib-x-0.5.0-fresh.crate");
-        write_crate_with_vcs(&served, "streamlib-x", "0.5.0", b"// source A\n", "aaaaaaaa");
-        write_crate_with_vcs(&fresh, "streamlib-x", "0.5.0", b"// source B - CHANGED\n", "bbbbbbbb");
+        write_crate_with_vcs(
+            &served,
+            "streamlib-x",
+            "0.5.0",
+            b"// source A\n",
+            "aaaaaaaa",
+        );
+        write_crate_with_vcs(
+            &fresh,
+            "streamlib-x",
+            "0.5.0",
+            b"// source B - CHANGED\n",
+            "bbbbbbbb",
+        );
 
         let err = finalize_crate_tarball(&fresh, "streamlib-x", "0.5.0", Some(served.as_path()))
             .unwrap_err();
@@ -727,9 +769,21 @@ mod tests {
         let served_copy = dir.path().join("streamlib-x-0.5.0-servedcopy.crate");
         let fresh = dir.path().join("streamlib-x-0.5.0-fresh.crate");
         // Served tree is legacy (un-normalized: still carries vcs-info).
-        write_crate_with_vcs(&served, "streamlib-x", "0.5.0", b"// stable source\n", "aaaaaaaa");
+        write_crate_with_vcs(
+            &served,
+            "streamlib-x",
+            "0.5.0",
+            b"// stable source\n",
+            "aaaaaaaa",
+        );
         std::fs::copy(&served, &served_copy).unwrap();
-        write_crate_with_vcs(&fresh, "streamlib-x", "0.5.0", b"// stable source\n", "bbbbbbbb");
+        write_crate_with_vcs(
+            &fresh,
+            "streamlib-x",
+            "0.5.0",
+            b"// stable source\n",
+            "bbbbbbbb",
+        );
 
         // The normalized checksum the served tree *should* carry.
         normalize_crate_tarball(&served_copy, "streamlib-x", "0.5.0").unwrap();
@@ -763,7 +817,13 @@ mod tests {
         let dir = tempdir().unwrap();
         // Same source, vcs "aaaa", default compression.
         let a = candidate_path(dir.path(), "streamlib-x", "0.5.0");
-        write_crate_with_vcs(&a, "streamlib-x", "0.5.0", b"// identical source\n", "aaaaaaaa");
+        write_crate_with_vcs(
+            &a,
+            "streamlib-x",
+            "0.5.0",
+            b"// identical source\n",
+            "aaaaaaaa",
+        );
         // Same source, vcs "bbbb", a DIFFERENT compression level → different bytes.
         let raw_b = build_tar_bytes(&[
             (

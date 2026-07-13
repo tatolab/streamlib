@@ -26,8 +26,8 @@ use streamlib_adapter_abi::{ReadGuard, WriteGuard};
 use streamlib_adapter_opengl::{EglRuntime, OpenGlSurfaceAdapter};
 
 use crate::skia_internal::{
-    assert_skia_views_not_cpu_readable, drop_skia_image_under_lock,
-    flush_and_drop_skia_surface, SyncDirectContext,
+    SyncDirectContext, assert_skia_views_not_cpu_readable, drop_skia_image_under_lock,
+    flush_and_drop_skia_surface,
 };
 
 /// Write view for the GL-backed Skia adapter.

@@ -19,7 +19,6 @@ use super::run_host_extern_c;
 use super::shared::borrow::make_pixel_buffer_borrow;
 use super::shared::wire::write_err;
 
-
 // =============================================================================
 // TextureRingMethodsVTable wrappers (issue #947 — slot PluginAbiObject + method
 // dispatch). Each wrapper reconstructs the ring borrow from the raw
@@ -200,9 +199,8 @@ unsafe extern "C" fn host_texture_ring_copy_pixel_buffer_to_slot(
                 );
                 return 1;
             }
-            let id_len = (surface_id_len as usize).min(
-                crate::core::context::TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES,
-            );
+            let id_len = (surface_id_len as usize)
+                .min(crate::core::context::TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES);
             let id_bytes = unsafe { std::slice::from_raw_parts(surface_id_bytes, id_len) };
             let Ok(surface_id) = std::str::from_utf8(id_bytes) else {
                 write_err(
@@ -214,13 +212,9 @@ unsafe extern "C" fn host_texture_ring_copy_pixel_buffer_to_slot(
                 return 1;
             };
             let borrow = make_pixel_buffer_borrow(pixel_buffer_handle);
-            match ring.copy_pixel_buffer_to_slot_by_index(
-                slot_index,
-                surface_id,
-                &*borrow,
-                width,
-                height,
-            ) {
+            match ring
+                .copy_pixel_buffer_to_slot_by_index(slot_index, surface_id, &*borrow, width, height)
+            {
                 Ok(()) => 0,
                 Err(e) => {
                     write_err(
@@ -256,12 +250,7 @@ unsafe extern "C" fn host_texture_ring_slot(
         "host_texture_ring_slot",
         || -> i32 {
             let Some(ring) = (unsafe { handle_as_texture_ring(ring_handle) }) else {
-                write_err(
-                    "slot: null ring handle",
-                    err_buf,
-                    err_buf_cap,
-                    err_len,
-                );
+                write_err("slot: null ring handle", err_buf, err_buf_cap, err_len);
                 return 1;
             };
             if out_texture_handle.is_null()
@@ -423,8 +412,7 @@ mod texture_ring_methods_vtable_null_tests {
         let mut w: u32 = 0;
         let mut hgt: u32 = 0;
         let mut fmt: u32 = 0;
-        let mut id_bytes = [0u8;
-            crate::core::context::TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES];
+        let mut id_bytes = [0u8; crate::core::context::TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES];
         let mut id_len: u32 = 0;
         let mut slot_index: u32 = 0;
         let rc = unsafe {
@@ -469,8 +457,7 @@ mod texture_ring_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("copy_pixel_buffer_to_slot: null ring handle"),
+            err_buf_as_str(&buf, len).contains("copy_pixel_buffer_to_slot: null ring handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -483,8 +470,7 @@ mod texture_ring_methods_vtable_null_tests {
         let mut w: u32 = 0;
         let mut hgt: u32 = 0;
         let mut fmt: u32 = 0;
-        let mut id_bytes = [0u8;
-            crate::core::context::TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES];
+        let mut id_bytes = [0u8; crate::core::context::TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES];
         let mut id_len: u32 = 0;
         let mut slot_index: u32 = 0;
         let rc = unsafe {

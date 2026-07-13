@@ -20,9 +20,9 @@ use streamlib::sdk::descriptors::{
     Org, Package, PortDescriptor, PortSchemaSpec, ProcessorDescriptor, SchemaIdent, SemVer,
     TypeName,
 };
-use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::processors::{ProcessorSpec, PROCESSOR_REGISTRY};
+use streamlib::sdk::graph_snapshot::GraphSnapshot;
+use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
 
 fn ident(short: &str) -> SchemaIdent {
@@ -40,18 +40,8 @@ fn ident(short: &str) -> SchemaIdent {
 fn register_test_type(short: &str, input: &str, output: &str) -> SchemaIdent {
     let id = ident(short);
     let descriptor = ProcessorDescriptor::new(id.clone(), "snapshot round-trip test")
-        .with_input(PortDescriptor::new(
-            input,
-            "",
-            PortSchemaSpec::Any,
-            false,
-        ))
-        .with_output(PortDescriptor::new(
-            output,
-            "",
-            PortSchemaSpec::Any,
-            false,
-        ));
+        .with_input(PortDescriptor::new(input, "", PortSchemaSpec::Any, false))
+        .with_output(PortDescriptor::new(output, "", PortSchemaSpec::Any, false));
     // Idempotent across `serial_test` runs — second register returns
     // `Error::Configuration("Processor 'X' already registered")` which
     // we ignore.
@@ -97,10 +87,7 @@ fn imperative_build_save_load_save_is_byte_equivalent() {
     let snap2 = r2.save_graph_snapshot().unwrap();
     let json2 = snap2.to_json_string().unwrap();
 
-    assert_eq!(
-        json1, json2,
-        "second save must byte-equal the first save"
-    );
+    assert_eq!(json1, json2, "second save must byte-equal the first save");
 
     // Pipeline name survived the round-trip without explicit threading.
     assert_eq!(snap2.name.as_deref(), Some("rt-fixture"));
@@ -123,11 +110,7 @@ fn save_side_regenerates_aliases_on_collision() {
         .unwrap();
 
     let snap = runtime.save_graph_snapshot().unwrap();
-    let aliases: Vec<&str> = snap
-        .processors
-        .iter()
-        .map(|p| p.alias.as_str())
-        .collect();
+    let aliases: Vec<&str> = snap.processors.iter().map(|p| p.alias.as_str()).collect();
     assert_eq!(
         aliases,
         vec!["cameraProc", "cameraProc_2", "cameraProc_3"],

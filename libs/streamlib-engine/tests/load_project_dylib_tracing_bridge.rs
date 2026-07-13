@@ -26,9 +26,9 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use serial_test::serial;
-use streamlib::sdk::module_ident_any_version;
-use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
 use streamlib::sdk::RunnerAutoBuild;
+use streamlib::sdk::module_ident_any_version;
+use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
 use streamlib_engine::core::runtime::host_target_triple;
 
 fn copy_dir_contents(src: &Path, dst: &Path) {
@@ -52,11 +52,7 @@ fn build_and_stage_test_fixtures_dylib() -> (tempfile::TempDir, std::path::PathB
         .unwrap();
 
     let status = std::process::Command::new(env!("CARGO"))
-        .args([
-            "build",
-            "-p",
-            "streamlib-test-fixtures",
-        ])
+        .args(["build", "-p", "streamlib-test-fixtures"])
         .status()
         .expect("invoking cargo build");
     assert!(
@@ -72,7 +68,10 @@ fn build_and_stage_test_fixtures_dylib() -> (tempfile::TempDir, std::path::PathB
         "so"
     };
     let dylib_name = format!("libstreamlib_test_fixtures.{}", dylib_ext);
-    let built_dylib = workspace_root.join("target").join("debug").join(&dylib_name);
+    let built_dylib = workspace_root
+        .join("target")
+        .join("debug")
+        .join(&dylib_name);
     assert!(
         built_dylib.exists(),
         "cdylib expected at {} after cargo build",
@@ -114,18 +113,18 @@ fn plugin_register_tracing_event_reaches_host_jsonl() {
     let (_tmp, fixtures_dst) = build_and_stage_test_fixtures_dylib();
 
     let runtime = Runner::with_auto_build().unwrap();
-    let jsonl_path = runtime
-        .jsonl_log_path()
-        .map(|p| p.to_path_buf())
-        .expect(
-            "host runtime must own a JSONL log file — tracing bridge cannot be \
+    let jsonl_path = runtime.jsonl_log_path().map(|p| p.to_path_buf()).expect(
+        "host runtime must own a JSONL log file — tracing bridge cannot be \
              verified without one",
-        );
+    );
 
     runtime
         .add_module_with_blocking(
             module_ident_any_version!("tatolab", "test-fixtures"),
-            Strategy::Path { path: fixtures_dst.clone(), build: BuildPolicy::NeverBuild },
+            Strategy::Path {
+                path: fixtures_dst.clone(),
+                build: BuildPolicy::NeverBuild,
+            },
         )
         .expect("add_module_with must succeed");
 

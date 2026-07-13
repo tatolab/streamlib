@@ -27,12 +27,12 @@
 #[path = "common.rs"]
 mod common;
 
+use streamlib::sdk::engine::HostGpuDeviceExt;
 use streamlib::sdk::engine::host_rhi::drm_modifier_probe;
 use streamlib_adapter_abi::{AdapterError, SurfaceAdapter};
 use streamlib_adapter_opengl::GL_TEXTURE_EXTERNAL_OES;
-use streamlib::sdk::engine::HostGpuDeviceExt;
 
-use common::{host_write_clear_color, HostFixture, RegisteredSurface};
+use common::{HostFixture, RegisteredSurface, host_write_clear_color};
 
 const VERTEX_SRC: &str = r#"#version 330 core
 out vec2 v_uv;
@@ -156,14 +156,11 @@ fn external_oes_view_target_and_write_rejection() {
         ),
         Err(AdapterError::BackendRejected { reason }) => {
             assert!(
-                reason.contains("GL_TEXTURE_EXTERNAL_OES")
-                    || reason.contains("EXTERNAL_OES"),
+                reason.contains("GL_TEXTURE_EXTERNAL_OES") || reason.contains("EXTERNAL_OES"),
                 "BackendRejected reason should mention EXTERNAL_OES, got: {reason}"
             );
         }
-        Err(e) => panic!(
-            "acquire_write should fail with BackendRejected, got: {e:?}"
-        ),
+        Err(e) => panic!("acquire_write should fail with BackendRejected, got: {e:?}"),
     }
 }
 
@@ -187,10 +184,7 @@ fn sample_external_oes_through_surface(
         .expect("acquire_read");
     let texture_id = guard.view().gl_texture_id();
 
-    let _current = fixture
-        .egl
-        .lock_make_current()
-        .expect("lock_make_current");
+    let _current = fixture.egl.lock_make_current().expect("lock_make_current");
     unsafe {
         // The shader uses `texture2D(samplerExternalOES, vec2)` — the
         // GLES2-era overload that NVIDIA's desktop-GL driver honors in
@@ -199,11 +193,12 @@ fn sample_external_oes_through_surface(
         // EXTERNAL_OES contract; do NOT skip past it. Drivers that
         // genuinely lack `GL_OES_EGL_image_external` would already have
         // rejected `EglRuntime::new` upstream of this point.
-        let prog = compile_program(FRAGMENT_SRC_EXTERNAL_OES)
-            .expect("FRAGMENT_SRC_EXTERNAL_OES must compile on a driver \
+        let prog = compile_program(FRAGMENT_SRC_EXTERNAL_OES).expect(
+            "FRAGMENT_SRC_EXTERNAL_OES must compile on a driver \
                      that exposed GL_OES_EGL_image_external during EglRuntime \
                      construction — failure here is a regression in either \
-                     the shader or the adapter's EXTERNAL_OES contract");
+                     the shader or the adapter's EXTERNAL_OES contract",
+        );
 
         // Build a probe RGBA8 texture + FBO of width×height.
         let mut probe_tex: u32 = 0;
@@ -300,9 +295,7 @@ fn sample_external_oes_round_trip() {
     let fixture = match HostFixture::try_new() {
         Some(f) => f,
         None => {
-            println!(
-                "sample_external_oes_round_trip: skipping — no Vulkan or no EGL"
-            );
+            println!("sample_external_oes_round_trip: skipping — no Vulkan or no EGL");
             return;
         }
     };
@@ -376,26 +369,25 @@ fn sample_external_oes_round_trip_sampler_only_modifier() {
 
     let width = 64;
     let height = 64;
-    let surface = match fixture.register_external_oes_surface_with_modifier(
-        9, width, height, modifier,
-    ) {
-        Ok(s) => s,
-        Err(e) => {
-            // Allocation against this specific sampler-only modifier may
-            // legitimately fail (e.g. driver advertises the modifier for
-            // EGL import but Vulkan's
-            // `VkImageDrmFormatModifierListCreateInfoEXT` cannot honor it
-            // for SAMPLED+TRANSFER usage). Skip rather than fail — the
-            // path the issue cares about is the GL-side import, not the
-            // Vulkan-side allocator's modifier acceptance.
-            println!(
-                "sample_external_oes_round_trip_sampler_only_modifier: \
+    let surface =
+        match fixture.register_external_oes_surface_with_modifier(9, width, height, modifier) {
+            Ok(s) => s,
+            Err(e) => {
+                // Allocation against this specific sampler-only modifier may
+                // legitimately fail (e.g. driver advertises the modifier for
+                // EGL import but Vulkan's
+                // `VkImageDrmFormatModifierListCreateInfoEXT` cannot honor it
+                // for SAMPLED+TRANSFER usage). Skip rather than fail — the
+                // path the issue cares about is the GL-side import, not the
+                // Vulkan-side allocator's modifier acceptance.
+                println!(
+                    "sample_external_oes_round_trip_sampler_only_modifier: \
                  skipping — host VkImage allocation refused modifier \
                  0x{modifier:016x}: {e}"
-            );
-            return;
-        }
-    };
+                );
+                return;
+            }
+        };
 
     host_write_clear_color(&fixture.gpu, &surface, [0.25, 0.5, 0.75, 1.0]);
 

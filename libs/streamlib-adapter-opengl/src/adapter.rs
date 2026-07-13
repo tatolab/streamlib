@@ -25,12 +25,13 @@ use streamlib_adapter_abi::{
 use tracing::{instrument, warn};
 
 use crate::egl::{
-    EglRuntime, EglRuntimeError, EGL_DMA_BUF_PLANE0_FD_EXT, EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT,
+    EGL_DMA_BUF_PLANE0_FD_EXT, EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT,
     EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, EGL_DMA_BUF_PLANE0_OFFSET_EXT,
-    EGL_DMA_BUF_PLANE0_PITCH_EXT, EGL_HEIGHT, EGL_LINUX_DRM_FOURCC_EXT, EGL_WIDTH,
+    EGL_DMA_BUF_PLANE0_PITCH_EXT, EGL_HEIGHT, EGL_LINUX_DRM_FOURCC_EXT, EGL_WIDTH, EglRuntime,
+    EglRuntimeError,
 };
 use crate::state::{HostSurfaceRegistration, SurfaceState};
-use crate::view::{OpenGlReadView, OpenGlWriteView, GL_TEXTURE_2D, GL_TEXTURE_EXTERNAL_OES};
+use crate::view::{GL_TEXTURE_2D, GL_TEXTURE_EXTERNAL_OES, OpenGlReadView, OpenGlWriteView};
 
 /// OpenGL/EGL [`SurfaceAdapter`] implementation.
 ///
@@ -249,7 +250,11 @@ impl OpenGlSurfaceAdapter {
                 // Best-effort cleanup. If we can't make-current we
                 // leak the texture id and EGLImage for the lifetime
                 // of the runtime — better than panicking.
-                warn!(?e, surface_id = id, "could not make-current to clean up unregistered surface");
+                warn!(
+                    ?e,
+                    surface_id = id,
+                    "could not make-current to clean up unregistered surface"
+                );
             }
         }
         true
@@ -269,10 +274,7 @@ impl OpenGlSurfaceAdapter {
             .try_begin_read(surface.id, |state| Ok((state.texture, state.target)))
     }
 
-    fn try_begin_write(
-        &self,
-        surface: &StreamlibSurface,
-    ) -> Result<Option<u32>, AdapterError> {
+    fn try_begin_write(&self, surface: &StreamlibSurface) -> Result<Option<u32>, AdapterError> {
         // Write acquires only apply to render-target-capable
         // (`GL_TEXTURE_2D`) surfaces; the external-OES path is
         // sample-only by construction (FBO color-attachment binding
@@ -307,7 +309,10 @@ impl Drop for OpenGlSurfaceAdapter {
                 });
             }
             Err(e) => {
-                warn!(?e, "could not make-current during adapter drop — leaking GL textures");
+                warn!(
+                    ?e,
+                    "could not make-current during adapter drop — leaking GL textures"
+                );
                 // Without a current context we can't safely delete the
                 // GL textures or EGLImages. Drop the entries anyway so
                 // we don't keep them alive past the adapter; the GL
@@ -404,7 +409,10 @@ impl SurfaceAdapter for OpenGlSurfaceAdapter {
             state.read_holders = state.read_holders.saturating_sub(1);
         });
         if updated.is_none() {
-            warn!(?surface_id, "end_read_access on unknown surface — racing unregister");
+            warn!(
+                ?surface_id,
+                "end_read_access on unknown surface — racing unregister"
+            );
         }
         // Reads that just sample don't need a flush; if the caller
         // wrote uniforms or did indirect work they're responsible for
@@ -418,7 +426,10 @@ impl SurfaceAdapter for OpenGlSurfaceAdapter {
             state.write_held = false;
         });
         if updated.is_none() {
-            warn!(?surface_id, "end_write_access on unknown surface — racing unregister");
+            warn!(
+                ?surface_id,
+                "end_write_access on unknown surface — racing unregister"
+            );
             return;
         }
 
@@ -431,7 +442,11 @@ impl SurfaceAdapter for OpenGlSurfaceAdapter {
                 gl::Finish();
             },
             Err(e) => {
-                warn!(?e, ?surface_id, "could not make-current on write release — host may see partial writes");
+                warn!(
+                    ?e,
+                    ?surface_id,
+                    "could not make-current on write release — host may see partial writes"
+                );
             }
         }
     }

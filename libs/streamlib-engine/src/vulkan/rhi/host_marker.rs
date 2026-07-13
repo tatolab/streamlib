@@ -15,7 +15,7 @@
 //! re-exported from `streamlib_consumer_rhi`.
 
 #[cfg(target_os = "linux")]
-use streamlib_consumer_rhi::{private as consumer_rhi_private, DevicePrivilege};
+use streamlib_consumer_rhi::{DevicePrivilege, private as consumer_rhi_private};
 
 /// Privilege marker for host-side Vulkan resources — full RHI access
 /// (allocation, queue submit, modifier choice, kernel construction,

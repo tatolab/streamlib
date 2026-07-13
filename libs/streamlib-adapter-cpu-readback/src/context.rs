@@ -22,10 +22,10 @@
 
 use std::sync::Arc;
 
-use streamlib_consumer_rhi::VulkanRhiDevice;
 use streamlib_adapter_abi::{
     AdapterError, ReadGuard, StreamlibSurface, SurfaceAdapter, WriteGuard,
 };
+use streamlib_consumer_rhi::VulkanRhiDevice;
 
 use crate::adapter::CpuReadbackSurfaceAdapter;
 

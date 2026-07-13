@@ -12,13 +12,13 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use vma::Alloc as _;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia::vk::{
     KhrSurfaceExtensionInstanceCommands as _, KhrSwapchainExtensionDeviceCommands as _,
 };
 use vulkanalia_vma as vma;
-use vma::Alloc as _;
 
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -111,7 +111,11 @@ fn alloc_dma_buf_image_via_vma(
     let image_info = vk::ImageCreateInfo::builder()
         .image_type(vk::ImageType::_2D)
         .format(vk::Format::B8G8R8A8_UNORM)
-        .extent(vk::Extent3D { width, height, depth: 1 })
+        .extent(vk::Extent3D {
+            width,
+            height,
+            depth: 1,
+        })
         .mip_levels(1)
         .array_layers(1)
         .samples(vk::SampleCountFlags::_1)
@@ -138,7 +142,11 @@ fn alloc_internal_image_via_vma(
     let image_info = vk::ImageCreateInfo::builder()
         .image_type(vk::ImageType::_2D)
         .format(vk::Format::B8G8R8A8_UNORM)
-        .extent(vk::Extent3D { width, height, depth: 1 })
+        .extent(vk::Extent3D {
+            width,
+            height,
+            depth: 1,
+        })
         .mip_levels(1)
         .array_layers(1)
         .samples(vk::SampleCountFlags::_1)
@@ -225,8 +233,7 @@ impl ApplicationHandler for SwapchainTestApp {
         let window = match event_loop.create_window(attrs) {
             Ok(w) => w,
             Err(e) => {
-                self.outcome.lock().unwrap().setup_skipped =
-                    Some(format!("create_window: {e}"));
+                self.outcome.lock().unwrap().setup_skipped = Some(format!("create_window: {e}"));
                 event_loop.exit();
                 return;
             }
@@ -239,8 +246,7 @@ impl ApplicationHandler for SwapchainTestApp {
         } {
             Ok(s) => s,
             Err(e) => {
-                self.outcome.lock().unwrap().setup_skipped =
-                    Some(format!("create_surface: {e}"));
+                self.outcome.lock().unwrap().setup_skipped = Some(format!("create_surface: {e}"));
                 event_loop.exit();
                 return;
             }
@@ -254,8 +260,7 @@ impl ApplicationHandler for SwapchainTestApp {
             }
             Err(e) => {
                 unsafe { instance.destroy_surface_khr(surface, None) };
-                self.outcome.lock().unwrap().setup_skipped =
-                    Some(format!("create_swapchain: {e}"));
+                self.outcome.lock().unwrap().setup_skipped = Some(format!("create_swapchain: {e}"));
                 event_loop.exit();
                 return;
             }
@@ -268,12 +273,7 @@ impl ApplicationHandler for SwapchainTestApp {
         event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
     }
 
-    fn window_event(
-        &mut self,
-        _event_loop: &ActiveEventLoop,
-        _id: WindowId,
-        _event: WindowEvent,
-    ) {
+    fn window_event(&mut self, _event_loop: &ActiveEventLoop, _id: WindowId, _event: WindowEvent) {
         // We don't need to handle window events for the test
     }
 
@@ -363,7 +363,11 @@ impl SwapchainTestApp {
         let compute_img_info = vk::ImageCreateInfo::builder()
             .image_type(vk::ImageType::_2D)
             .format(vk::Format::R8G8B8A8_UNORM)
-            .extent(vk::Extent3D { width: self.width, height: self.height, depth: 1 })
+            .extent(vk::Extent3D {
+                width: self.width,
+                height: self.height,
+                depth: 1,
+            })
             .mip_levels(1)
             .array_layers(1)
             .samples(vk::SampleCountFlags::_1)
@@ -510,7 +514,11 @@ impl SwapchainTestApp {
         let probe_image_info = vk::ImageCreateInfo::builder()
             .image_type(vk::ImageType::_2D)
             .format(vk::Format::B8G8R8A8_UNORM)
-            .extent(vk::Extent3D { width: 64, height: 64, depth: 1 })
+            .extent(vk::Extent3D {
+                width: 64,
+                height: 64,
+                depth: 1,
+            })
             .mip_levels(1)
             .array_layers(1)
             .samples(vk::SampleCountFlags::_1)
@@ -599,7 +607,11 @@ impl SwapchainTestApp {
             let img_info = vk::ImageCreateInfo::builder()
                 .image_type(vk::ImageType::_2D)
                 .format(vk::Format::B8G8R8A8_UNORM)
-                .extent(vk::Extent3D { width: self.width, height: self.height, depth: 1 })
+                .extent(vk::Extent3D {
+                    width: self.width,
+                    height: self.height,
+                    depth: 1,
+                })
                 .mip_levels(1)
                 .array_layers(1)
                 .samples(vk::SampleCountFlags::_1)
@@ -685,15 +697,13 @@ fn create_swapchain(
         return Err("graphics queue family does not support presentation".into());
     }
 
-    let caps = unsafe {
-        instance.get_physical_device_surface_capabilities_khr(physical_device, surface)
-    }
-    .map_err(|e| format!("surface capabilities: {e}"))?;
+    let caps =
+        unsafe { instance.get_physical_device_surface_capabilities_khr(physical_device, surface) }
+            .map_err(|e| format!("surface capabilities: {e}"))?;
 
-    let formats = unsafe {
-        instance.get_physical_device_surface_formats_khr(physical_device, surface)
-    }
-    .map_err(|e| format!("surface formats: {e}"))?;
+    let formats =
+        unsafe { instance.get_physical_device_surface_formats_khr(physical_device, surface) }
+            .map_err(|e| format!("surface formats: {e}"))?;
 
     let format = formats
         .iter()
@@ -762,7 +772,10 @@ fn try_create_device() -> Option<Arc<HostVulkanDevice>> {
 
 /// BASELINE: without swapchain, even the broken VMA config works.
 /// Proves the bug requires a swapchain to manifest.
-#[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
 #[test]
 fn test_baseline_no_swapchain_broken_config_works() {
     let device = match try_create_device() {
@@ -813,7 +826,10 @@ fn test_baseline_no_swapchain_broken_config_works() {
 ///   1. BUG REPRO: broken VMA config + swapchain → at least one alloc must fail
 ///   2. FIX (clean VMA): internal allocs via plain VMA → all succeed
 ///   3. FIX (VMA pools): export allocs via custom pools → all succeed
-#[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
 #[test]
 fn test_swapchain_allocation_scenarios() {
     let device = match try_create_device() {
@@ -861,9 +877,14 @@ fn test_swapchain_allocation_scenarios() {
                 outcome.failure_messages
             );
             if total_failures > 0 {
-                println!("  ✓ Bug reproduced — {} allocation failures observed", total_failures);
+                println!(
+                    "  ✓ Bug reproduced — {} allocation failures observed",
+                    total_failures
+                );
             } else {
-                println!("  ⚠ Bug did NOT reproduce in isolation (expected — needs production pipeline state)");
+                println!(
+                    "  ⚠ Bug did NOT reproduce in isolation (expected — needs production pipeline state)"
+                );
             }
         }
     } else {

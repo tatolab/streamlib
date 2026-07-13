@@ -14,7 +14,7 @@
 
 use std::ffi::c_void;
 
-use streamlib_plugin_abi::{AudioClockVTable, AUDIO_CLOCK_VTABLE_LAYOUT_VERSION};
+use streamlib_plugin_abi::{AUDIO_CLOCK_VTABLE_LAYOUT_VERSION, AudioClockVTable};
 
 use crate::core::context::SharedAudioClock;
 
@@ -266,9 +266,8 @@ mod audio_clock_vtable_null_handle_guards {
         // Build a tiny clock just for this test. Drops at the end
         // of the function, firing the bridge's Drop (which fires
         // drop_user_data exactly once if the fix holds).
-        let clock: SharedAudioClock = StdArc::new(SoftwareAudioClock::new(
-            AudioClockConfig::new(48_000, 512),
-        ));
+        let clock: SharedAudioClock =
+            StdArc::new(SoftwareAudioClock::new(AudioClockConfig::new(48_000, 512)));
         let handle = &clock as *const SharedAudioClock as *const c_void;
         unsafe {
             (HOST_AUDIO_CLOCK_VTABLE.on_tick)(

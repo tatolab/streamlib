@@ -270,12 +270,8 @@ pub fn run_cargo_build(
         );
     }
 
-    let stdout = String::from_utf8(output.stdout).with_context(|| {
-        format!(
-            "cargo build output for {} was not valid UTF-8",
-            cargo_name
-        )
-    })?;
+    let stdout = String::from_utf8(output.stdout)
+        .with_context(|| format!("cargo build output for {} was not valid UTF-8", cargo_name))?;
 
     parse_cargo_artifact_for_cdylib(&stdout, cargo_name, dylib_ext)?.ok_or_else(|| {
         anyhow::anyhow!(
@@ -402,8 +398,6 @@ pub fn has_typescript_runtime_processors(config: &ProjectConfigMinimal) -> bool 
         .any(|p| matches!(p.runtime.language, ProcessorLanguage::TypeScript))
 }
 
-
-
 /// Canonical staged-directory name for a package: `<org>__<name>` with
 /// no `@` literal so the path is filesystem-safe across every
 /// supported host. The corresponding wire-form id is `@<org>/<name>`.
@@ -414,10 +408,6 @@ pub fn has_typescript_runtime_processors(config: &ProjectConfigMinimal) -> bool 
 pub fn staged_package_dir_name(org: &str, name: &str) -> String {
     format!("{}__{}", org, name)
 }
-
-
-
-
 
 #[cfg(test)]
 mod tests {
@@ -543,12 +533,32 @@ vulkan-jpeg = {version = ">=0.5.1", registry = "tatolab"}
         assert_eq!(
             got,
             vec![
-                ("streamlib-jtd-codegen".to_string(), "=0.5.1".to_string(), "0.5.1".to_string()),
-                ("streamlib-macros".to_string(), "^0.5.1".to_string(), "0.5.1".to_string()),
+                (
+                    "streamlib-jtd-codegen".to_string(),
+                    "=0.5.1".to_string(),
+                    "0.5.1".to_string()
+                ),
+                (
+                    "streamlib-macros".to_string(),
+                    "^0.5.1".to_string(),
+                    "0.5.1".to_string()
+                ),
                 // renamed via `package = "streamlib-plugin-abi"`
-                ("streamlib-plugin-abi".to_string(), "=0.5.1".to_string(), "0.5.1".to_string()),
-                ("streamlib-plugin-sdk".to_string(), "0.5.1".to_string(), "0.5.1".to_string()),
-                ("vulkan-jpeg".to_string(), ">=0.5.1".to_string(), "0.5.1".to_string()),
+                (
+                    "streamlib-plugin-abi".to_string(),
+                    "=0.5.1".to_string(),
+                    "0.5.1".to_string()
+                ),
+                (
+                    "streamlib-plugin-sdk".to_string(),
+                    "0.5.1".to_string(),
+                    "0.5.1".to_string()
+                ),
+                (
+                    "vulkan-jpeg".to_string(),
+                    ">=0.5.1".to_string(),
+                    "0.5.1".to_string()
+                ),
             ],
             "tatolab pins must include normal/build/cfg-target deps (renamed via \
              `package`), carry the raw req, strip range operators for the floor, \
@@ -585,8 +595,8 @@ members = ["foo"]
 "#,
         )
         .unwrap();
-        let err = read_cargo_package_name(dir.path())
-            .expect_err("workspace-only Cargo.toml must error");
+        let err =
+            read_cargo_package_name(dir.path()).expect_err("workspace-only Cargo.toml must error");
         let msg = format!("{err}");
         assert!(
             msg.contains("[package].name"),
@@ -597,8 +607,7 @@ members = ["foo"]
     #[test]
     fn read_cargo_package_name_errors_when_cargo_toml_missing() {
         let dir = tempdir().unwrap();
-        let err = read_cargo_package_name(dir.path())
-            .expect_err("missing Cargo.toml must error");
+        let err = read_cargo_package_name(dir.path()).expect_err("missing Cargo.toml must error");
         let msg = format!("{err}");
         assert!(
             msg.contains("Cargo.toml"),
@@ -623,8 +632,7 @@ members = ["foo"]
 {"reason":"compiler-artifact","target":{"name":"grayscale_plugin","kind":["cdylib"]},"filenames":["/tmp/target/release/libgrayscale_plugin.so","/tmp/target/release/libgrayscale_plugin.d"]}
 {"reason":"build-finished","success":true}
 "#;
-        let found =
-            parse_cargo_artifact_for_cdylib(json, "grayscale-plugin", "so").unwrap();
+        let found = parse_cargo_artifact_for_cdylib(json, "grayscale-plugin", "so").unwrap();
         assert_eq!(
             found,
             Some(PathBuf::from("/tmp/target/release/libgrayscale_plugin.so"))
@@ -640,8 +648,7 @@ members = ["foo"]
         let json = r#"
 {"reason":"compiler-artifact","target":{"name":"grayscale-plugin","kind":["cdylib"]},"filenames":["/tmp/libgrayscale_plugin.so"]}
 "#;
-        let found =
-            parse_cargo_artifact_for_cdylib(json, "grayscale-plugin", "so").unwrap();
+        let found = parse_cargo_artifact_for_cdylib(json, "grayscale-plugin", "so").unwrap();
         assert_eq!(found, Some(PathBuf::from("/tmp/libgrayscale_plugin.so")));
     }
 
@@ -650,8 +657,7 @@ members = ["foo"]
         let json = r#"
 {"reason":"compiler-artifact","target":{"name":"some-other","kind":["cdylib"]},"filenames":["/tmp/libother.so"]}
 "#;
-        let found =
-            parse_cargo_artifact_for_cdylib(json, "grayscale-plugin", "so").unwrap();
+        let found = parse_cargo_artifact_for_cdylib(json, "grayscale-plugin", "so").unwrap();
         assert!(found.is_none());
     }
 
@@ -662,8 +668,7 @@ members = ["foo"]
         let json = r#"
 {"reason":"compiler-artifact","target":{"name":"grayscale-plugin","kind":["lib"]},"filenames":["/tmp/libgrayscale_plugin.rlib"]}
 "#;
-        let found =
-            parse_cargo_artifact_for_cdylib(json, "grayscale-plugin", "so").unwrap();
+        let found = parse_cargo_artifact_for_cdylib(json, "grayscale-plugin", "so").unwrap();
         assert!(found.is_none());
     }
 
@@ -676,13 +681,9 @@ members = ["foo"]
 {"reason":"compiler-artifact","target":{"name":"grayscale_plugin","kind":["cdylib"]},"filenames":["/tmp/libgrayscale_plugin.so"]}
 not-json-at-all
 "#;
-        let found =
-            parse_cargo_artifact_for_cdylib(json, "grayscale-plugin", "so").unwrap();
+        let found = parse_cargo_artifact_for_cdylib(json, "grayscale-plugin", "so").unwrap();
         assert_eq!(found, Some(PathBuf::from("/tmp/libgrayscale_plugin.so")));
     }
-
-
-
 
     #[test]
     fn staged_package_dir_name_uses_double_underscore_no_at_literal() {
@@ -697,10 +698,4 @@ not-json-at-all
             "vendor__fancy-plugin",
         );
     }
-
-
-
-
-
-
 }

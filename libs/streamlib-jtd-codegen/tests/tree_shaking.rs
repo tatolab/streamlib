@@ -23,7 +23,7 @@ use std::fs;
 use std::path::Path;
 
 use common::{collect_files, skip_unless_jtd_codegen_available};
-use streamlib_jtd_codegen::{generate, GenerateOptions, RuntimeTarget};
+use streamlib_jtd_codegen::{GenerateOptions, RuntimeTarget, generate};
 use tempfile::TempDir;
 
 const ROOT_MANIFEST: &str = r#"
@@ -88,7 +88,11 @@ fn tree_shake_emits_only_root_declared_schemas() {
     let root_dir = tmp.path().join("root");
     let dep_dir = tmp.path().join("dep");
 
-    write_project(&root_dir, ROOT_MANIFEST, &[("schemas/foo.yaml", FOO_SCHEMA)]);
+    write_project(
+        &root_dir,
+        ROOT_MANIFEST,
+        &[("schemas/foo.yaml", FOO_SCHEMA)],
+    );
     write_project(
         &dep_dir,
         DEP_MANIFEST,
@@ -139,12 +143,16 @@ fn tree_shake_emits_only_root_declared_schemas() {
     // locks in that External entries carry the OWNING package's context,
     // not the root's.
     assert!(
-        files.iter().any(|f| f.contains("example__dep") && f.ends_with("bar_from_dep.rs")),
+        files
+            .iter()
+            .any(|f| f.contains("example__dep") && f.ends_with("bar_from_dep.rs")),
         "expected bar_from_dep.rs under example__dep/ subdir (External owner context); got files: {:?}",
         files
     );
     assert!(
-        files.iter().any(|f| f.contains("example__root") && f.ends_with("foo.rs")),
+        files
+            .iter()
+            .any(|f| f.contains("example__root") && f.ends_with("foo.rs")),
         "expected foo.rs under example__root/ subdir (root owner context); got files: {:?}",
         files
     );

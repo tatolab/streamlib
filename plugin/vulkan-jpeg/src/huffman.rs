@@ -18,7 +18,9 @@ impl HuffmanClass {
         match value {
             0 => Ok(HuffmanClass::Dc),
             1 => Ok(HuffmanClass::Ac),
-            _ => Err(JpegError::MalformedHuffmanTable("class must be 0 (DC) or 1 (AC)")),
+            _ => Err(JpegError::MalformedHuffmanTable(
+                "class must be 0 (DC) or 1 (AC)",
+            )),
         }
     }
 }

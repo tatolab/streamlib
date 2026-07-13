@@ -60,11 +60,11 @@ use std::ffi::c_void;
 use std::sync::OnceLock;
 
 use streamlib_plugin_abi::{
-    AudioClockVTable, GpuContextFullAccessVTable, GpuContextLimitedAccessVTable, HostHandle,
-    HostInterest, HostLogLevel, HostServices, ProcessorVTable, RuntimeContextVTable,
-    RuntimeOpsVTable, SurfaceStoreVTable, GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION,
-    HOST_SERVICES_LAYOUT_VERSION, PROCESSOR_VTABLE_LAYOUT_VERSION,
-    SURFACE_STORE_VTABLE_LAYOUT_VERSION,
+    AudioClockVTable, GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, GpuContextFullAccessVTable,
+    GpuContextLimitedAccessVTable, HOST_SERVICES_LAYOUT_VERSION, HostHandle, HostInterest,
+    HostLogLevel, HostServices, PROCESSOR_VTABLE_LAYOUT_VERSION, ProcessorVTable,
+    RuntimeContextVTable, RuntimeOpsVTable, SURFACE_STORE_VTABLE_LAYOUT_VERSION,
+    SurfaceStoreVTable,
 };
 
 // tokio is not exposed across the ABI. Lifecycle methods are
@@ -90,38 +90,36 @@ mod surface_store;
 mod texture_ring;
 mod vulkan_kernels;
 pub use acceleration_structure::{
-    host_vulkan_acceleration_structure_methods_vtable,
     HOST_VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE,
+    host_vulkan_acceleration_structure_methods_vtable,
 };
-pub use audio_clock::{host_audio_clock_vtable, HOST_AUDIO_CLOCK_VTABLE};
+pub use audio_clock::{HOST_AUDIO_CLOCK_VTABLE, host_audio_clock_vtable};
 pub use color_converter::{
-    host_rhi_color_converter_methods_vtable, HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE,
+    HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE, host_rhi_color_converter_methods_vtable,
 };
 pub use command_recorder::{
-    host_rhi_command_recorder_methods_vtable, HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE,
+    HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE, host_rhi_command_recorder_methods_vtable,
 };
 pub use compute_kernel::{
-    host_vulkan_compute_kernel_methods_vtable, HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE,
+    HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE, host_vulkan_compute_kernel_methods_vtable,
 };
 pub use gpu_context::{
-    host_gpu_context_full_access_vtable, host_gpu_context_limited_access_vtable,
     HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE, HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE,
+    host_gpu_context_full_access_vtable, host_gpu_context_limited_access_vtable,
 };
-pub use input_mailboxes::host_input_mailboxes_vtable;
 use input_mailboxes::HOST_INPUT_MAILBOXES_VTABLE;
-pub use output_writer::host_output_writer_vtable;
+pub use input_mailboxes::host_input_mailboxes_vtable;
 use output_writer::HOST_OUTPUT_WRITER_VTABLE;
-pub use runtime_context::{host_runtime_context_vtable, HOST_RUNTIME_CONTEXT_VTABLE};
+pub use output_writer::host_output_writer_vtable;
+pub use runtime_context::{HOST_RUNTIME_CONTEXT_VTABLE, host_runtime_context_vtable};
 pub use runtime_ops::{
-    host_runtime_ops_vtable, install_host_runtime_tokio_handle, HOST_RUNTIME_OPS_VTABLE,
+    HOST_RUNTIME_OPS_VTABLE, host_runtime_ops_vtable, install_host_runtime_tokio_handle,
 };
-pub use surface_store::{host_surface_store_vtable, HOST_SURFACE_STORE_VTABLE};
-pub use texture_ring::{host_texture_ring_methods_vtable, HOST_TEXTURE_RING_METHODS_VTABLE};
+pub use surface_store::{HOST_SURFACE_STORE_VTABLE, host_surface_store_vtable};
+pub use texture_ring::{HOST_TEXTURE_RING_METHODS_VTABLE, host_texture_ring_methods_vtable};
 pub use vulkan_kernels::{
-    host_vulkan_graphics_kernel_methods_vtable,
-    host_vulkan_ray_tracing_kernel_methods_vtable,
-    HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE,
-    HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE,
+    HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE, HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE,
+    host_vulkan_graphics_kernel_methods_vtable, host_vulkan_ray_tracing_kernel_methods_vtable,
 };
 
 // =============================================================================
@@ -176,11 +174,7 @@ pub struct HostCallbacks {
         host: HostHandle,
         canonical_id_ptr: *const u8,
         canonical_id_len: usize,
-        result_callback: extern "C" fn(
-            userdata: *mut c_void,
-            yaml_ptr: *const u8,
-            yaml_len: usize,
-        ),
+        result_callback: extern "C" fn(userdata: *mut c_void, yaml_ptr: *const u8, yaml_len: usize),
         result_userdata: *mut c_void,
     ),
     pub iceoryx_log_emit: unsafe extern "C" fn(
@@ -282,16 +276,14 @@ pub struct HostCallbacks {
     /// the vtable is null. Sourced from
     /// [`HostServices::output_writer_vtable`] at install time
     /// (issue #894).
-    pub output_writer_vtable:
-        *const streamlib_plugin_abi::OutputWriterVTable,
+    pub output_writer_vtable: *const streamlib_plugin_abi::OutputWriterVTable,
     /// Host-installed [`InputMailboxesVTable`] pointer. May be
     /// null when the host doesn't wire iceoryx2 transport; cdylib's
     /// `InputMailboxes` PluginAbiObject methods short-circuit cleanly when
     /// the vtable is null. Sourced from
     /// [`HostServices::input_mailboxes_vtable`] at install time
     /// (issue #894).
-    pub input_mailboxes_vtable:
-        *const streamlib_plugin_abi::InputMailboxesVTable,
+    pub input_mailboxes_vtable: *const streamlib_plugin_abi::InputMailboxesVTable,
 }
 
 // Safety: every field is a fn pointer or a raw pointer the host
@@ -342,9 +334,7 @@ pub fn host_callbacks() -> Option<&'static HostCallbacks> {
 ///
 /// `host_services_ptr` must point at a [`HostServices`] value
 /// initialized by the host. The host's loader guarantees this.
-pub unsafe fn install_host_services(
-    host_services_ptr: *const c_void,
-) -> Option<RegisterHelper> {
+pub unsafe fn install_host_services(host_services_ptr: *const c_void) -> Option<RegisterHelper> {
     if host_services_ptr.is_null() {
         return None;
     }
@@ -439,11 +429,8 @@ pub unsafe fn install_host_services(
         // SAFETY: same shape as the other vtable validations. Null
         // is allowed (host has no GpuContext); only non-null pointers
         // are version-validated.
-        let v = unsafe {
-            (*services.vulkan_compute_kernel_methods_vtable).layout_version
-        };
-        if v != streamlib_plugin_abi::VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION
-        {
+        let v = unsafe { (*services.vulkan_compute_kernel_methods_vtable).layout_version };
+        if v != streamlib_plugin_abi::VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION {
             return None;
         }
     }
@@ -451,11 +438,8 @@ pub unsafe fn install_host_services(
         // SAFETY: same shape as the other vtable validations. Null
         // is allowed (host has no GpuContext); only non-null pointers
         // are version-validated.
-        let v = unsafe {
-            (*services.vulkan_graphics_kernel_methods_vtable).layout_version
-        };
-        if v != streamlib_plugin_abi::VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION
-        {
+        let v = unsafe { (*services.vulkan_graphics_kernel_methods_vtable).layout_version };
+        if v != streamlib_plugin_abi::VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION {
             return None;
         }
     }
@@ -463,11 +447,8 @@ pub unsafe fn install_host_services(
         // SAFETY: same shape as the other vtable validations. Null
         // is allowed (host has no GpuContext); only non-null pointers
         // are version-validated.
-        let v = unsafe {
-            (*services.vulkan_ray_tracing_kernel_methods_vtable).layout_version
-        };
-        if v != streamlib_plugin_abi::VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION
-        {
+        let v = unsafe { (*services.vulkan_ray_tracing_kernel_methods_vtable).layout_version };
+        if v != streamlib_plugin_abi::VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION {
             return None;
         }
     }
@@ -478,11 +459,8 @@ pub unsafe fn install_host_services(
         // SAFETY: same shape as the other vtable validations. Null
         // is allowed (host has no GpuContext); only non-null pointers
         // are version-validated.
-        let v = unsafe {
-            (*services.vulkan_acceleration_structure_methods_vtable).layout_version
-        };
-        if v != streamlib_plugin_abi::VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION
-        {
+        let v = unsafe { (*services.vulkan_acceleration_structure_methods_vtable).layout_version };
+        if v != streamlib_plugin_abi::VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION {
             return None;
         }
     }
@@ -490,11 +468,8 @@ pub unsafe fn install_host_services(
         // SAFETY: same shape as the other vtable validations. Null
         // is allowed (host has no GpuContext); only non-null pointers
         // are version-validated.
-        let v = unsafe {
-            (*services.rhi_color_converter_methods_vtable).layout_version
-        };
-        if v != streamlib_plugin_abi::RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION
-        {
+        let v = unsafe { (*services.rhi_color_converter_methods_vtable).layout_version };
+        if v != streamlib_plugin_abi::RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION {
             return None;
         }
     }
@@ -502,11 +477,8 @@ pub unsafe fn install_host_services(
         // SAFETY: same shape as the other vtable validations. Null
         // is allowed (host has no GpuContext); only non-null pointers
         // are version-validated.
-        let v = unsafe {
-            (*services.rhi_command_recorder_methods_vtable).layout_version
-        };
-        if v != streamlib_plugin_abi::RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION
-        {
+        let v = unsafe { (*services.rhi_command_recorder_methods_vtable).layout_version };
+        if v != streamlib_plugin_abi::RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION {
             return None;
         }
     }
@@ -546,18 +518,13 @@ pub unsafe fn install_host_services(
         surface_store_vtable: services.surface_store_vtable,
         gpu_context_full_access_vtable: services.gpu_context_full_access_vtable,
         texture_ring_methods_vtable: services.texture_ring_methods_vtable,
-        vulkan_compute_kernel_methods_vtable: services
-            .vulkan_compute_kernel_methods_vtable,
-        vulkan_graphics_kernel_methods_vtable: services
-            .vulkan_graphics_kernel_methods_vtable,
-        vulkan_ray_tracing_kernel_methods_vtable: services
-            .vulkan_ray_tracing_kernel_methods_vtable,
+        vulkan_compute_kernel_methods_vtable: services.vulkan_compute_kernel_methods_vtable,
+        vulkan_graphics_kernel_methods_vtable: services.vulkan_graphics_kernel_methods_vtable,
+        vulkan_ray_tracing_kernel_methods_vtable: services.vulkan_ray_tracing_kernel_methods_vtable,
         vulkan_acceleration_structure_methods_vtable: services
             .vulkan_acceleration_structure_methods_vtable,
-        rhi_color_converter_methods_vtable: services
-            .rhi_color_converter_methods_vtable,
-        rhi_command_recorder_methods_vtable: services
-            .rhi_command_recorder_methods_vtable,
+        rhi_color_converter_methods_vtable: services.rhi_color_converter_methods_vtable,
+        rhi_command_recorder_methods_vtable: services.rhi_command_recorder_methods_vtable,
         output_writer_vtable: services.output_writer_vtable,
         input_mailboxes_vtable: services.input_mailboxes_vtable,
     };
@@ -1085,13 +1052,11 @@ fn emit_via_host_dispatch(
     message: &str,
     fields: &serde_json::Value,
 ) {
-    use crate::core::logging::push_polyglot_record;
     use crate::core::logging::LogRecord;
+    use crate::core::logging::push_polyglot_record;
 
     let attrs = match fields {
-        serde_json::Value::Object(map) => {
-            map.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
-        }
+        serde_json::Value::Object(map) => map.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
         _ => std::collections::BTreeMap::new(),
     };
 
@@ -1136,23 +1101,21 @@ fn emit_via_host_dispatch(
 /// implementations.
 pub mod runtime_facing {
     use super::{
-        host_iceoryx_log_emit, host_processor_register, host_pubsub_publish, host_schema_lookup,
-        host_schema_register, host_tracing_emit, host_tracing_enabled,
-        host_tracing_register_callsite, HostServiceImpls, HOST_AUDIO_CLOCK_VTABLE,
-        HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE, HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE,
-        HOST_INPUT_MAILBOXES_VTABLE, HOST_OUTPUT_WRITER_VTABLE,
-        HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE,
+        HOST_AUDIO_CLOCK_VTABLE, HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE,
+        HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE, HOST_INPUT_MAILBOXES_VTABLE,
+        HOST_OUTPUT_WRITER_VTABLE, HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE,
         HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE, HOST_RUNTIME_CONTEXT_VTABLE,
-        HOST_RUNTIME_OPS_VTABLE, HOST_SURFACE_STORE_VTABLE,
-        HOST_TEXTURE_RING_METHODS_VTABLE, HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE,
-        HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE,
-        HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE,
+        HOST_RUNTIME_OPS_VTABLE, HOST_SURFACE_STORE_VTABLE, HOST_TEXTURE_RING_METHODS_VTABLE,
         HOST_VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE,
+        HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE, HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE,
+        HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE, HostServiceImpls, host_iceoryx_log_emit,
+        host_processor_register, host_pubsub_publish, host_schema_lookup, host_schema_register,
+        host_tracing_emit, host_tracing_enabled, host_tracing_register_callsite,
     };
     use std::ffi::c_void;
     use std::sync::OnceLock;
 
-    use streamlib_plugin_abi::{HostServices, HOST_SERVICES_LAYOUT_VERSION};
+    use streamlib_plugin_abi::{HOST_SERVICES_LAYOUT_VERSION, HostServices};
 
     /// Heap-allocated service impl table, leaked once per process.
     /// The `HostServices.host` opaque pointer points at this.
@@ -1195,18 +1158,14 @@ pub mod runtime_facing {
             surface_store_vtable: &HOST_SURFACE_STORE_VTABLE,
             gpu_context_full_access_vtable: &HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE,
             texture_ring_methods_vtable: &HOST_TEXTURE_RING_METHODS_VTABLE,
-            vulkan_compute_kernel_methods_vtable:
-                &HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE,
-            vulkan_graphics_kernel_methods_vtable:
-                &HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE,
+            vulkan_compute_kernel_methods_vtable: &HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE,
+            vulkan_graphics_kernel_methods_vtable: &HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE,
             vulkan_ray_tracing_kernel_methods_vtable:
                 &HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE,
             vulkan_acceleration_structure_methods_vtable:
                 &HOST_VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE,
-            rhi_color_converter_methods_vtable:
-                &HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE,
-            rhi_command_recorder_methods_vtable:
-                &HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE,
+            rhi_color_converter_methods_vtable: &HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE,
+            rhi_command_recorder_methods_vtable: &HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE,
             output_writer_vtable: &HOST_OUTPUT_WRITER_VTABLE,
             input_mailboxes_vtable: &HOST_INPUT_MAILBOXES_VTABLE,
         }
@@ -1228,16 +1187,3 @@ pub mod runtime_facing {
 // `tests/` under the `streamlib/hardware-tests` feature. The dlopen
 // integration test that exercises the full cdylib → vtable → host chain
 // arrives with C3.
-
-
-
-
-
-
-
-
-
-
-
-
-

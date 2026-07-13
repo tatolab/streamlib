@@ -345,10 +345,7 @@ pub trait GraphicsKernelBridge: Send + Sync {
     /// Identical descriptors must collide on `kernel_id` for the
     /// register-cache to work; differing descriptors should not
     /// collide, but the bridge — not the trait — owns that contract.
-    fn register(
-        &self,
-        decl: &GraphicsKernelRegisterDecl,
-    ) -> Result<String, String>;
+    fn register(&self, decl: &GraphicsKernelRegisterDecl) -> Result<String, String>;
 
     /// Run one draw against a previously-registered kernel.
     ///
@@ -358,8 +355,5 @@ pub trait GraphicsKernelBridge: Send + Sync {
     /// Errors include unrecognized `kernel_id`, surface lookup
     /// failure, push-constant size mismatch, and Vulkan submit
     /// failure.
-    fn run_draw(
-        &self,
-        draw: &GraphicsKernelRunDraw,
-    ) -> Result<(), String>;
+    fn run_draw(&self, draw: &GraphicsKernelRunDraw) -> Result<(), String>;
 }

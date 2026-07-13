@@ -154,7 +154,9 @@ fn load_project_config(pkg_dir: &Path) -> Result<ProjectConfigMinimal, CatalogEr
 /// directories (each a `packages/<name>/`). Directories without a
 /// `streamlib.yaml` or without a `[package]` block are skipped — only
 /// publishable packages participate in external-ref resolution.
-pub fn build_sibling_versions(pkg_dirs: &[std::path::PathBuf]) -> Result<SiblingVersions, CatalogError> {
+pub fn build_sibling_versions(
+    pkg_dirs: &[std::path::PathBuf],
+) -> Result<SiblingVersions, CatalogError> {
     let mut out = SiblingVersions::new();
     for dir in pkg_dirs {
         if !dir.join(Manifest::FILE_NAME).is_file() {
@@ -181,16 +183,25 @@ pub fn build_package_catalog(
     let manifest = load_manifest(pkg_dir)?;
     let config = load_project_config(pkg_dir)?;
 
-    let pkg_meta = manifest.package.as_ref().ok_or_else(|| CatalogError::NotAPackage {
-        path: pkg_dir.join(Manifest::FILE_NAME),
-    })?;
+    let pkg_meta = manifest
+        .package
+        .as_ref()
+        .ok_or_else(|| CatalogError::NotAPackage {
+            path: pkg_dir.join(Manifest::FILE_NAME),
+        })?;
     let owner_ref = PackageRef::new(pkg_meta.org.clone(), pkg_meta.name.clone());
     let owner_version = pkg_meta.version;
 
     // Resolve every processor's config + ports.
     let mut processors = Vec::with_capacity(config.processors.len());
     for proc in &config.processors {
-        processors.push(build_processor(proc, &owner_ref, owner_version, &manifest, siblings)?);
+        processors.push(build_processor(
+            proc,
+            &owner_ref,
+            owner_version,
+            &manifest,
+            siblings,
+        )?);
     }
 
     let catalog = PackageCatalog {
@@ -344,11 +355,14 @@ fn resolve_named_internal(
         Some(map) => match map.get(type_name) {
             Some(SchemaEntry::Local { .. }) => Ok(local_ident(owner, type_name, owner_version)),
             Some(SchemaEntry::External { package: dep_ref }) => {
-                let dep = siblings.get(dep_ref).ok_or_else(|| CatalogError::ExternalDepMissing {
-                    package: root_package.clone(),
-                    type_name: type_name.as_str().to_string(),
-                    dep: dep_ref.to_string(),
-                })?;
+                let dep =
+                    siblings
+                        .get(dep_ref)
+                        .ok_or_else(|| CatalogError::ExternalDepMissing {
+                            package: root_package.clone(),
+                            type_name: type_name.as_str().to_string(),
+                            dep: dep_ref.to_string(),
+                        })?;
                 // Guard against a mutually- or self-referential external chain
                 // (A → B → A) — otherwise the recursion never terminates. The
                 // contract is "resolution never panics"; a cycle surfaces as a
@@ -383,7 +397,12 @@ fn resolve_named_internal(
 }
 
 fn local_ident(owner: &PackageRef, type_name: &TypeName, version: SemVer) -> SchemaIdent {
-    SchemaIdent::new(owner.org.clone(), owner.name.clone(), type_name.clone(), version)
+    SchemaIdent::new(
+        owner.org.clone(),
+        owner.name.clone(),
+        type_name.clone(),
+        version,
+    )
 }
 
 fn unresolved(
@@ -436,7 +455,9 @@ fn collect_owned_schema_jtd(
                         source: e,
                     })?
                     .filter_map(|e| e.ok().map(|e| e.path()))
-                    .filter(|p| matches!(p.extension().and_then(|s| s.to_str()), Some("yaml" | "yml")))
+                    .filter(|p| {
+                        matches!(p.extension().and_then(|s| s.to_str()), Some("yaml" | "yml"))
+                    })
                     .collect();
                 files.sort();
                 for path in files {
@@ -604,10 +625,16 @@ processors:
 
         let passthrough = &arts.catalog.processors[1];
         assert_eq!(passthrough.runtime, CatalogRuntime::Python);
-        assert_eq!(passthrough.entrypoint.as_deref(), Some("src.pass:PassThrough"));
+        assert_eq!(
+            passthrough.entrypoint.as_deref(),
+            Some("src.pass:PassThrough")
+        );
         // `any` port stays a wildcard.
         assert_eq!(passthrough.inputs[0].schema, CatalogSchemaRef::Any);
-        assert_eq!(passthrough.inputs[0].read_mode.as_deref(), Some("skip_to_latest"));
+        assert_eq!(
+            passthrough.inputs[0].read_mode.as_deref(),
+            Some("skip_to_latest")
+        );
     }
 
     #[test]
@@ -615,7 +642,11 @@ processors:
         let (_tmp, cam_dir, siblings) = two_package_tree();
         let arts = build_package_catalog(&cam_dir, &siblings).unwrap();
         // Camera owns CameraConfig (Local) but NOT VideoFrame (External → core owns it).
-        let owned: Vec<&str> = arts.schema_jtd.iter().map(|s| s.type_name.as_str()).collect();
+        let owned: Vec<&str> = arts
+            .schema_jtd
+            .iter()
+            .map(|s| s.type_name.as_str())
+            .collect();
         assert_eq!(owned, vec!["CameraConfig"]);
         // The JTD is the YAML re-encoded as JSON.
         assert_eq!(arts.schema_jtd[0].json["metadata"]["type"], "CameraConfig");
@@ -708,7 +739,9 @@ schemas:
         let siblings = build_sibling_versions(&[a_dir.clone(), b_dir]).unwrap();
         let err = build_package_catalog(&a_dir, &siblings).unwrap_err();
         match err {
-            CatalogError::SchemaResolutionCycle { type_name, chain, .. } => {
+            CatalogError::SchemaResolutionCycle {
+                type_name, chain, ..
+            } => {
                 assert_eq!(type_name, "Loop");
                 assert!(chain.contains("@tatolab/a"));
                 assert!(chain.contains("@tatolab/b"));
@@ -745,8 +778,15 @@ schemas:
         let siblings = build_sibling_versions(&[dir.clone()]).unwrap();
         let arts = build_package_catalog(&dir, &siblings).unwrap();
         assert!(arts.catalog.processors.is_empty(), "no processors declared");
-        assert!(arts.index_lines.is_empty(), "no index lines for a schema-only package");
-        let owned: Vec<&str> = arts.schema_jtd.iter().map(|s| s.type_name.as_str()).collect();
+        assert!(
+            arts.index_lines.is_empty(),
+            "no index lines for a schema-only package"
+        );
+        let owned: Vec<&str> = arts
+            .schema_jtd
+            .iter()
+            .map(|s| s.type_name.as_str())
+            .collect();
         assert_eq!(owned, vec!["VideoFrame"], "owned JTDs still emitted");
     }
 
@@ -794,7 +834,10 @@ processors:
         // Idents: release-core projected.
         let cfg = arts.catalog.processors[0].config.as_ref().unwrap();
         assert_eq!(cfg.schema.to_string(), "@tatolab/widget/WidgetConfig@2.1.0");
-        let port = arts.catalog.processors[0].outputs[0].schema.schema().unwrap();
+        let port = arts.catalog.processors[0].outputs[0]
+            .schema
+            .schema()
+            .unwrap();
         assert_eq!(port.version, SemVer::new(2, 1, 0));
     }
 
@@ -824,11 +867,19 @@ processors:
     schema: MysteryType
 "#,
         );
-        write(&dir, "schemas/known.yaml", "metadata:\n  type: KnownType\nproperties: {}\n");
+        write(
+            &dir,
+            "schemas/known.yaml",
+            "metadata:\n  type: KnownType\nproperties: {}\n",
+        );
         let siblings = build_sibling_versions(&[dir.clone()]).unwrap();
         let err = build_package_catalog(&dir, &siblings).unwrap_err();
         match err {
-            CatalogError::UnresolvedNamedSchema { type_name, processor, .. } => {
+            CatalogError::UnresolvedNamedSchema {
+                type_name,
+                processor,
+                ..
+            } => {
                 assert_eq!(type_name, "MysteryType");
                 assert_eq!(processor, "Widget");
             }
@@ -843,7 +894,10 @@ processors:
     fn external_ref_version_is_the_dependencys_not_the_importers() {
         let (_tmp, cam_dir, siblings) = two_package_tree();
         let arts = build_package_catalog(&cam_dir, &siblings).unwrap();
-        let video = arts.catalog.processors[0].outputs[0].schema.schema().unwrap();
+        let video = arts.catalog.processors[0].outputs[0]
+            .schema
+            .schema()
+            .unwrap();
         assert_eq!(video.version, SemVer::new(1, 4, 0)); // core's version
         assert_ne!(video.version, SemVer::new(2, 1, 0)); // NOT camera's version
     }

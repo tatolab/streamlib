@@ -18,20 +18,20 @@
 //! All submits ride [`super::HostVulkanDevice::submit_to_queue`] — same
 //! per-queue mutex everything else uses.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::Mutex;
+use vma::Alloc as _;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia_vma as vma;
-use vma::Alloc as _;
 
 use crate::core::rhi::{
     ReadbackTicket, Texture, TextureFormat, TextureReadbackDescriptor, TextureReadbackError,
     TextureSourceLayout,
 };
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 use crate::host_rhi::HostTextureExt;
 
 use super::HostVulkanDevice;
@@ -126,14 +126,14 @@ impl VulkanTextureReadback {
         };
 
         let allocator = vulkan_device.allocator();
-        let (staging_buffer, staging_allocation) =
-            unsafe { allocator.create_buffer(buffer_info, &alloc_opts) }.map_err(|e| {
-                TextureReadbackError::StagingBufferAlloc {
-                    label: label.clone(),
-                    size: bytes,
-                    cause: e.to_string(),
-                }
-            })?;
+        let (staging_buffer, staging_allocation) = unsafe {
+            allocator.create_buffer(buffer_info, &alloc_opts)
+        }
+        .map_err(|e| TextureReadbackError::StagingBufferAlloc {
+            label: label.clone(),
+            size: bytes,
+            cause: e.to_string(),
+        })?;
 
         let alloc_info = allocator.get_allocation_info(staging_allocation);
         let mapped_ptr = alloc_info.pMappedData.cast::<u8>();
@@ -280,13 +280,14 @@ impl VulkanTextureReadback {
         // panics under `host_callbacks().is_some()`. Route through the
         // `host_vulkan_texture_arc` FullAccess slot so cdylib callers don't
         // trip the panic guard.
-        let host_texture = texture.host_vulkan_texture_arc().map_err(|e| {
-            TextureReadbackError::Submit {
-                label: self.label.clone(),
-                what: "host_vulkan_texture_arc",
-                cause: e.to_string(),
-            }
-        })?;
+        let host_texture =
+            texture
+                .host_vulkan_texture_arc()
+                .map_err(|e| TextureReadbackError::Submit {
+                    label: self.label.clone(),
+                    what: "host_vulkan_texture_arc",
+                    cause: e.to_string(),
+                })?;
         let image = host_texture.image().ok_or_else(|| {
             TextureReadbackError::TextureMissingVulkanImage {
                 label: self.label.clone(),
@@ -341,11 +342,13 @@ impl VulkanTextureReadback {
         ticket: ReadbackTicket,
     ) -> std::result::Result<Option<&[u8]>, TextureReadbackError> {
         self.validate_ticket(ticket)?;
-        let current = unsafe { self.device.get_semaphore_counter_value(self.timeline) }
-            .map_err(|e| TextureReadbackError::Submit {
-                label: self.label.clone(),
-                what: "vkGetSemaphoreCounterValue",
-                cause: e.to_string(),
+        let current =
+            unsafe { self.device.get_semaphore_counter_value(self.timeline) }.map_err(|e| {
+                TextureReadbackError::Submit {
+                    label: self.label.clone(),
+                    what: "vkGetSemaphoreCounterValue",
+                    cause: e.to_string(),
+                }
             })?;
         if current < ticket.counter {
             return Ok(None);
@@ -527,7 +530,8 @@ impl VulkanTextureReadback {
             let pre_dep = vk::DependencyInfo::builder()
                 .image_memory_barriers(&pre_barriers)
                 .build();
-            self.device.cmd_pipeline_barrier2(self.command_buffer, &pre_dep);
+            self.device
+                .cmd_pipeline_barrier2(self.command_buffer, &pre_dep);
 
             // Copy.
             let copy = vk::BufferImageCopy::builder()
@@ -594,7 +598,8 @@ impl VulkanTextureReadback {
                 .image_memory_barriers(&post_image)
                 .buffer_memory_barriers(&post_buffer)
                 .build();
-            self.device.cmd_pipeline_barrier2(self.command_buffer, &post_dep);
+            self.device
+                .cmd_pipeline_barrier2(self.command_buffer, &post_dep);
 
             self.device
                 .end_command_buffer(self.command_buffer)
@@ -744,7 +749,8 @@ mod tests {
             other => panic!("test fixture only supports 8-bit RGBA/BGRA, got {other:?}"),
         };
         let staging =
-            HostVulkanBuffer::new(device, (width as u64) * (height as u64) * (bpp as u64)).expect("staging");
+            HostVulkanBuffer::new(device, (width as u64) * (height as u64) * (bpp as u64))
+                .expect("staging");
         unsafe {
             let mut p = staging.mapped_ptr();
             for y in 0..height {
@@ -825,7 +831,9 @@ mod tests {
                 )
                 .build();
             let bs = [to_dst];
-            let dep = vk::DependencyInfo::builder().image_memory_barriers(&bs).build();
+            let dep = vk::DependencyInfo::builder()
+                .image_memory_barriers(&bs)
+                .build();
             dev.cmd_pipeline_barrier2(cmd, &dep);
 
             let copy = vk::BufferImageCopy::builder()
@@ -839,7 +847,11 @@ mod tests {
                         .build(),
                 )
                 .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
-                .image_extent(vk::Extent3D { width, height, depth: 1 })
+                .image_extent(vk::Extent3D {
+                    width,
+                    height,
+                    depth: 1,
+                })
                 .build();
             let regions = [copy];
             dev.cmd_copy_buffer_to_image(
@@ -870,12 +882,18 @@ mod tests {
                 )
                 .build();
             let bs2 = [to_general];
-            let dep2 = vk::DependencyInfo::builder().image_memory_barriers(&bs2).build();
+            let dep2 = vk::DependencyInfo::builder()
+                .image_memory_barriers(&bs2)
+                .build();
             dev.cmd_pipeline_barrier2(cmd, &dep2);
 
             dev.end_command_buffer(cmd).expect("end");
-            let cmd_infos = [vk::CommandBufferSubmitInfo::builder().command_buffer(cmd).build()];
-            let submits = [vk::SubmitInfo2::builder().command_buffer_infos(&cmd_infos).build()];
+            let cmd_infos = [vk::CommandBufferSubmitInfo::builder()
+                .command_buffer(cmd)
+                .build()];
+            let submits = [vk::SubmitInfo2::builder()
+                .command_buffer_infos(&cmd_infos)
+                .build()];
             device
                 .submit_to_queue(queue, &submits, vk::Fence::null())
                 .expect("submit fill");
@@ -888,10 +906,16 @@ mod tests {
 
     /// Positive: round-trip a known pattern through the readback
     /// primitive on a 32x32 texture.
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn submit_then_wait_returns_expected_bytes() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         let width = 32u32;
         let height = 32u32;
         let pattern = |x: u32, y: u32| {
@@ -935,10 +959,16 @@ mod tests {
     /// Positive: multiple submits sequentially on a single handle. After
     /// each wait, the next submit must succeed and the bytes reflect
     /// the (re-filled) texture.
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn multiple_sequential_submits_work() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         let width = 16u32;
         let height = 16u32;
         let readback = VulkanTextureReadback::new(
@@ -963,7 +993,9 @@ mod tests {
             };
             let texture =
                 make_filled_texture(&device, width, height, TextureFormat::Bgra8Unorm, pattern);
-            let ticket = readback.submit(&texture, TextureSourceLayout::General).expect("submit");
+            let ticket = readback
+                .submit(&texture, TextureSourceLayout::General)
+                .expect("submit");
             let bytes = readback.wait_and_read(ticket, u64::MAX).expect("wait");
             for y in 0..height {
                 for x in 0..width {
@@ -979,17 +1011,19 @@ mod tests {
     }
 
     /// Negative: descriptor / texture mismatch must error at submit time.
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn rejects_descriptor_mismatch() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
-        let texture = make_filled_texture(
-            &device,
-            32,
-            32,
-            TextureFormat::Bgra8Unorm,
-            |_, _| [0, 0, 0, 0xFF],
-        );
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
+        let texture = make_filled_texture(&device, 32, 32, TextureFormat::Bgra8Unorm, |_, _| {
+            [0, 0, 0, 0xFF]
+        });
 
         // Wrong width.
         let readback = VulkanTextureReadback::new(
@@ -1006,7 +1040,10 @@ mod tests {
             .submit(&texture, TextureSourceLayout::General)
             .err()
             .expect("expected mismatch");
-        assert!(matches!(err, TextureReadbackError::DescriptorMismatch { .. }));
+        assert!(matches!(
+            err,
+            TextureReadbackError::DescriptorMismatch { .. }
+        ));
 
         // Wrong format.
         let readback = VulkanTextureReadback::new(
@@ -1023,22 +1060,27 @@ mod tests {
             .submit(&texture, TextureSourceLayout::General)
             .err()
             .expect("expected mismatch");
-        assert!(matches!(err, TextureReadbackError::DescriptorMismatch { .. }));
+        assert!(matches!(
+            err,
+            TextureReadbackError::DescriptorMismatch { .. }
+        ));
     }
 
     /// Negative: a second submit before the first ticket is waited
     /// returns InFlight.
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn second_submit_before_wait_errors_in_flight() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
-        let texture = make_filled_texture(
-            &device,
-            32,
-            32,
-            TextureFormat::Bgra8Unorm,
-            |_, _| [1, 2, 3, 4],
-        );
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
+        let texture = make_filled_texture(&device, 32, 32, TextureFormat::Bgra8Unorm, |_, _| {
+            [1, 2, 3, 4]
+        });
         let readback = VulkanTextureReadback::new(
             &device,
             &TextureReadbackDescriptor {
@@ -1049,7 +1091,9 @@ mod tests {
             },
         )
         .expect("readback");
-        let ticket = readback.submit(&texture, TextureSourceLayout::General).expect("first");
+        let ticket = readback
+            .submit(&texture, TextureSourceLayout::General)
+            .expect("first");
         let err = readback
             .submit(&texture, TextureSourceLayout::General)
             .err()
@@ -1060,17 +1104,19 @@ mod tests {
     }
 
     /// Negative: a ticket from one handle is rejected by another.
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn foreign_ticket_rejected() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
-        let texture = make_filled_texture(
-            &device,
-            16,
-            16,
-            TextureFormat::Bgra8Unorm,
-            |_, _| [0, 0, 0, 0xFF],
-        );
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
+        let texture = make_filled_texture(&device, 16, 16, TextureFormat::Bgra8Unorm, |_, _| {
+            [0, 0, 0, 0xFF]
+        });
         let rb1 = VulkanTextureReadback::new(
             &device,
             &TextureReadbackDescriptor {
@@ -1091,7 +1137,9 @@ mod tests {
             },
         )
         .expect("rb2");
-        let ticket = rb1.submit(&texture, TextureSourceLayout::General).expect("submit");
+        let ticket = rb1
+            .submit(&texture, TextureSourceLayout::General)
+            .expect("submit");
         // rb2 doesn't own this ticket — should reject.
         let err = rb2.try_read(ticket).err().expect("expected foreign");
         assert!(matches!(err, TextureReadbackError::ForeignTicket { .. }));
@@ -1099,10 +1147,16 @@ mod tests {
     }
 
     /// Negative: try_read with no in-flight submission errors NoSubmission.
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn try_read_with_no_submission_errors_no_submission() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         let readback = VulkanTextureReadback::new(
             &device,
             &TextureReadbackDescriptor {
@@ -1117,24 +1171,29 @@ mod tests {
             handle_id: readback.handle_id,
             counter: 1,
         };
-        let err = readback.try_read(ticket).err().expect("expected no submission");
+        let err = readback
+            .try_read(ticket)
+            .err()
+            .expect("expected no submission");
         assert!(matches!(err, TextureReadbackError::NoSubmission { .. }));
     }
 
     /// Multiple readback handles can be in flight concurrently.
     /// Validates the design assertion that parallel readbacks are
     /// achieved by holding N handles, not by parallelism on one.
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn multiple_handles_can_be_in_flight_concurrently() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
-        let texture = make_filled_texture(
-            &device,
-            16,
-            16,
-            TextureFormat::Bgra8Unorm,
-            |x, y| [(x as u8), (y as u8), (x as u8) ^ (y as u8), 0xFF],
-        );
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
+        let texture = make_filled_texture(&device, 16, 16, TextureFormat::Bgra8Unorm, |x, y| {
+            [(x as u8), (y as u8), (x as u8) ^ (y as u8), 0xFF]
+        });
         let rb1 = VulkanTextureReadback::new(
             &device,
             &TextureReadbackDescriptor {
@@ -1155,18 +1214,28 @@ mod tests {
             },
         )
         .expect("rb2");
-        let t1 = rb1.submit(&texture, TextureSourceLayout::General).expect("submit 1");
-        let t2 = rb2.submit(&texture, TextureSourceLayout::General).expect("submit 2");
+        let t1 = rb1
+            .submit(&texture, TextureSourceLayout::General)
+            .expect("submit 1");
+        let t2 = rb2
+            .submit(&texture, TextureSourceLayout::General)
+            .expect("submit 2");
         // Both tickets must wait + read independently.
         let _ = rb1.wait_and_read(t1, u64::MAX).expect("read 1");
         let _ = rb2.wait_and_read(t2, u64::MAX).expect("read 2");
     }
 
     /// Drop on an idle handle must not panic.
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn drop_on_idle_handle_no_panic() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         let readback = VulkanTextureReadback::new(
             &device,
             &TextureReadbackDescriptor {
@@ -1183,10 +1252,16 @@ mod tests {
     /// Bytes-per-pixel for Bgra8Unorm and Rgba8Unorm: descriptor sizes
     /// match the staging buffer and constructed handles report the
     /// expected dimensions.
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn descriptor_sizes_and_metadata_round_trip() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         let descriptor = TextureReadbackDescriptor {
             label: "rt-meta",
             format: TextureFormat::Bgra8Unorm,

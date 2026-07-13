@@ -195,11 +195,14 @@ pub fn scan_workspace(workspace_root: &Path) -> Result<Vec<Violation>> {
             // by ends_with on the to_string_lossy form to keep the
             // table portable.
             let relpath_str = relpath.to_string_lossy().replace('\\', "/");
-            if ALLOWLIST.iter().any(|(suffix, _)| relpath_str.ends_with(suffix)) {
+            if ALLOWLIST
+                .iter()
+                .any(|(suffix, _)| relpath_str.ends_with(suffix))
+            {
                 continue;
             }
-            let src = fs::read_to_string(abs)
-                .with_context(|| format!("reading {}", abs.display()))?;
+            let src =
+                fs::read_to_string(abs).with_context(|| format!("reading {}", abs.display()))?;
             let file = match syn::parse_file(&src) {
                 Ok(f) => f,
                 // Skip files that don't parse (e.g., generated code
@@ -267,8 +270,7 @@ struct FileVisitor<'a> {
 impl<'ast, 'a> Visit<'ast> for FileVisitor<'a> {
     fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
         let fn_name = item.sig.ident.to_string();
-        if LIFECYCLE_FN_NAMES.contains(&fn_name.as_str())
-            && takes_lifecycle_full_access(&item.sig)
+        if LIFECYCLE_FN_NAMES.contains(&fn_name.as_str()) && takes_lifecycle_full_access(&item.sig)
         {
             scan_for_escalate(&item.block, &fn_name, &self.file_path, self.violations);
         }
@@ -277,8 +279,7 @@ impl<'ast, 'a> Visit<'ast> for FileVisitor<'a> {
 
     fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
         let fn_name = item.sig.ident.to_string();
-        if LIFECYCLE_FN_NAMES.contains(&fn_name.as_str())
-            && takes_lifecycle_full_access(&item.sig)
+        if LIFECYCLE_FN_NAMES.contains(&fn_name.as_str()) && takes_lifecycle_full_access(&item.sig)
         {
             scan_for_escalate(&item.block, &fn_name, &self.file_path, self.violations);
         }

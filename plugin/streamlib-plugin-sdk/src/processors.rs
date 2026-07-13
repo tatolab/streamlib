@@ -12,7 +12,7 @@
 //! `#[repr(C)]` [`RuntimeContext`](crate::context) views and return
 //! [`streamlib_error::Result`].
 
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value as JsonValue;
 
 use streamlib_error::{Error, Result};
@@ -20,9 +20,7 @@ use streamlib_processor_schema::descriptors::ProcessorDescriptor;
 use streamlib_processor_schema::{ExecutionConfig, SchemaIdent};
 
 use crate::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use crate::iceoryx2::{
-    InputMailboxes, InputMailboxesInner, OutputWriter, OutputWriterInner,
-};
+use crate::iceoryx2::{InputMailboxes, InputMailboxesInner, OutputWriter, OutputWriterInner};
 
 // =============================================================================
 // Config

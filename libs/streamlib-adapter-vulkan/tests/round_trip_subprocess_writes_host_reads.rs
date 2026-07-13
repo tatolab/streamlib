@@ -111,15 +111,19 @@ fn host_readback(
         .build();
     let buffer = unsafe { dev.create_buffer(&buffer_info, None) }.expect("create_buffer");
     let mem_req = unsafe { dev.get_buffer_memory_requirements(buffer) };
-    let mem_props =
-        unsafe { device.instance().get_physical_device_memory_properties(device.physical_device()) };
-    let needed =
-        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+    let mem_props = unsafe {
+        device
+            .instance()
+            .get_physical_device_memory_properties(device.physical_device())
+    };
+    let needed = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
     let mem_type_idx = (0..mem_props.memory_type_count)
         .find(|i| {
             let bit = 1u32 << i;
             (mem_req.memory_type_bits & bit) != 0
-                && mem_props.memory_types[*i as usize].property_flags.contains(needed)
+                && mem_props.memory_types[*i as usize]
+                    .property_flags
+                    .contains(needed)
         })
         .expect("host-visible memory type");
     let alloc = vk::MemoryAllocateInfo::builder()
@@ -181,7 +185,9 @@ fn host_readback(
         )
         .build();
     let bs = [to_src];
-    let dep = vk::DependencyInfo::builder().image_memory_barriers(&bs).build();
+    let dep = vk::DependencyInfo::builder()
+        .image_memory_barriers(&bs)
+        .build();
     unsafe { dev.cmd_pipeline_barrier2(cmd, &dep) };
 
     let copy = vk::BufferImageCopy::builder()
@@ -191,7 +197,11 @@ fn host_readback(
                 .layer_count(1)
                 .build(),
         )
-        .image_extent(vk::Extent3D { width, height, depth: 1 })
+        .image_extent(vk::Extent3D {
+            width,
+            height,
+            depth: 1,
+        })
         .build();
     let regions = [copy];
     unsafe {
@@ -214,8 +224,8 @@ fn host_readback(
     unsafe { device.submit_to_queue(queue, &submits, vk::Fence::null()) }.expect("submit");
     unsafe { dev.queue_wait_idle(queue) }.expect("queue_wait_idle");
 
-    let mapped = unsafe { dev.map_memory(mem, 0, bytes, vk::MemoryMapFlags::empty()) }
-        .expect("map_memory");
+    let mapped =
+        unsafe { dev.map_memory(mem, 0, bytes, vk::MemoryMapFlags::empty()) }.expect("map_memory");
     let slice = unsafe { std::slice::from_raw_parts(mapped as *const u8, bytes as usize) };
     let out = slice.to_vec();
     unsafe { dev.unmap_memory(mem) };

@@ -11,12 +11,14 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use streamlib::engine_internal::core::ProjectConfig;
 use streamlib::engine_internal::core::InstalledPackageManifest;
+use streamlib::engine_internal::core::ProjectConfig;
 use streamlib_idents::{RegistryClient, RegistryConfig};
 use streamlib_pack::catalog::{build_package_catalog, build_sibling_versions};
 use streamlib_pack::static_registry::{merge_catalog_index_lines, write_package_catalog};
-use streamlib_pack::{assemble_artifact, AssembleOptions, AssembleTarget, CargoProfile, PathDepPolicy};
+use streamlib_pack::{
+    AssembleOptions, AssembleTarget, CargoProfile, PathDepPolicy, assemble_artifact,
+};
 
 /// Build THIS package (the current working directory) into a source-only
 /// `.slpkg`. Pure source bundling — no compilation, no prebuilt cdylib,
@@ -92,8 +94,7 @@ pub fn publish() -> Result<()> {
     let outcome = assemble_source_slpkg(&package_dir, tmp.path())?;
     let bytes = std::fs::read(tmp.path()).context("read packed .slpkg")?;
 
-    let pkg_ref =
-        streamlib_idents::PackageRef::new(package.org.clone(), package.name.clone());
+    let pkg_ref = streamlib_idents::PackageRef::new(package.org.clone(), package.name.clone());
     let client = RegistryClient::new(&registry);
     println!(
         "Publishing {} v{} ({} bytes) to {}…",
@@ -186,7 +187,12 @@ pub fn clean() -> Result<()> {
             let p = entry.path();
             if p.extension().and_then(|e| e.to_str()) == Some("slpkg") {
                 if std::fs::remove_file(&p).is_ok() {
-                    removed.push(p.file_name().unwrap_or_default().to_string_lossy().into_owned());
+                    removed.push(
+                        p.file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned(),
+                    );
                 }
             }
         }
@@ -195,7 +201,10 @@ pub fn clean() -> Result<()> {
     if lib.is_dir() && std::fs::remove_dir_all(&lib).is_ok() {
         removed.push("lib/".to_string());
     }
-    for cand in [dir.join("_generated_"), dir.join("python").join("_generated_")] {
+    for cand in [
+        dir.join("_generated_"),
+        dir.join("python").join("_generated_"),
+    ] {
         if cand.is_dir() && std::fs::remove_dir_all(&cand).is_ok() {
             let rel = cand.strip_prefix(&dir).unwrap_or(&cand);
             removed.push(format!("{}/", rel.display()));
@@ -223,7 +232,11 @@ fn resolve_slpkg_output(package_dir: &Path, output: Option<&Path>) -> Result<std
                 .package
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("streamlib.yaml missing [package] section"))?;
-            Ok(package_dir.join(format!("{}-{}.slpkg", package.name.as_str(), package.version)))
+            Ok(package_dir.join(format!(
+                "{}-{}.slpkg",
+                package.name.as_str(),
+                package.version
+            )))
         }
     }
 }
@@ -353,4 +366,3 @@ pub fn list() -> Result<()> {
 
     Ok(())
 }
-

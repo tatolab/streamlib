@@ -18,10 +18,10 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 use serial_test::serial;
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
-use streamlib::sdk::RunnerAutoBuild;
+use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
 use streamlib::sdk::schema_ident;
 use streamlib_engine::core::runtime::host_target_triple;
 
@@ -48,11 +48,7 @@ fn dlopen_processor_round_trips_cuda_adapter() {
         .unwrap();
 
     let status = std::process::Command::new(env!("CARGO"))
-        .args([
-            "build",
-            "-p",
-            "streamlib-test-fixtures",
-        ])
+        .args(["build", "-p", "streamlib-test-fixtures"])
         .status()
         .expect("invoking cargo build");
     assert!(status.success(), "cargo build must succeed");
@@ -65,7 +61,10 @@ fn dlopen_processor_round_trips_cuda_adapter() {
         "so"
     };
     let dylib_name = format!("libstreamlib_test_fixtures.{}", dylib_ext);
-    let built_dylib = workspace_root.join("target").join("debug").join(&dylib_name);
+    let built_dylib = workspace_root
+        .join("target")
+        .join("debug")
+        .join(&dylib_name);
 
     let tmp = tempfile::tempdir().unwrap();
     let fixtures_src = workspace_root.join("packages/test-fixtures");
@@ -100,7 +99,10 @@ fn dlopen_processor_round_trips_cuda_adapter() {
     runtime
         .add_module_with_blocking(
             module_ident_any_version!("tatolab", "test-fixtures"),
-            Strategy::Path { path: fixtures_dst.clone(), build: BuildPolicy::NeverBuild },
+            Strategy::Path {
+                path: fixtures_dst.clone(),
+                build: BuildPolicy::NeverBuild,
+            },
         )
         .expect("add_module_with must succeed");
 
@@ -120,9 +122,7 @@ fn dlopen_processor_round_trips_cuda_adapter() {
         ))
         .expect("add_processor must succeed");
 
-    runtime
-        .start()
-        .expect("runtime.start() must succeed");
+    runtime.start().expect("runtime.start() must succeed");
 
     let deadline = Instant::now() + Duration::from_secs(10);
     while !output_path.exists() && Instant::now() < deadline {
@@ -152,11 +152,12 @@ fn dlopen_processor_round_trips_cuda_adapter() {
 
     // Format: "OK\n<w>x<h>\nvk_buffer=Buffer(0x<hex>)"
     let lines: Vec<&str> = contents.lines().collect();
-    assert!(
-        lines.len() >= 3,
-        "expected 3 lines, got {contents:?}"
+    assert!(lines.len() >= 3, "expected 3 lines, got {contents:?}");
+    assert_eq!(
+        lines[0], "OK",
+        "first line must be 'OK', got {:?}",
+        lines[0]
     );
-    assert_eq!(lines[0], "OK", "first line must be 'OK', got {:?}", lines[0]);
     assert_eq!(
         lines[1], "64x64",
         "second line must be dims, got {:?}",

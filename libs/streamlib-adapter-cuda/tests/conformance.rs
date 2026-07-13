@@ -22,7 +22,9 @@ use std::sync::Arc;
 use streamlib::sdk::engine::HostGpuDeviceExt;
 
 use streamlib::sdk::context::GpuContext;
-use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanBuffer, HostVulkanTimelineSemaphore};
+use streamlib::sdk::engine::host_rhi::{
+    HostVulkanBuffer, HostVulkanDevice, HostVulkanTimelineSemaphore,
+};
 use streamlib_adapter_abi::testing::{empty_surface, run_conformance};
 use streamlib_adapter_abi::{
     AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId, SurfaceSyncState,
@@ -46,8 +48,9 @@ fn register_one(
     id: SurfaceId,
 ) -> Result<StreamlibSurface, String> {
     let host_device = Arc::clone(adapter.device());
-    let pixel_buffer = HostVulkanBuffer::new_opaque_fd_export(&host_device, (W as u64) * (H as u64) * (4 as u64))
-    .map_err(|e| format!("HostVulkanBuffer::new_opaque_fd_export: {e}"))?;
+    let pixel_buffer =
+        HostVulkanBuffer::new_opaque_fd_export(&host_device, (W as u64) * (H as u64) * (4 as u64))
+            .map_err(|e| format!("HostVulkanBuffer::new_opaque_fd_export: {e}"))?;
     let produce_done = HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
         .map_err(|e| format!("HostVulkanTimelineSemaphore::new_exportable: {e}"))?;
     let consume_done = HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
@@ -119,38 +122,31 @@ fn duplicate_registration_returns_surface_already_registered() {
     let gpu = match try_init_gpu() {
         Some(g) => g,
         None => {
-            println!(
-                "cuda-adapter duplicate-registration: skipping — no Vulkan device available"
-            );
+            println!("cuda-adapter duplicate-registration: skipping — no Vulkan device available");
             return;
         }
     };
     let host_device = Arc::clone(gpu.device().vulkan_device());
     if host_device.opaque_fd_buffer_pool().is_none() {
-        println!(
-            "cuda-adapter duplicate-registration: skipping — OPAQUE_FD pool unavailable"
-        );
+        println!("cuda-adapter duplicate-registration: skipping — OPAQUE_FD pool unavailable");
         return;
     }
     let adapter = CudaSurfaceAdapter::new(Arc::clone(&host_device));
     let id: SurfaceId = 0xfeed_face;
     if register_one(&adapter, id).is_err() {
-        println!(
-            "cuda-adapter duplicate-registration: skipping — first registration failed"
-        );
+        println!("cuda-adapter duplicate-registration: skipping — first registration failed");
         return;
     }
     // Build a second registration's resources directly so the typed
     // AdapterError variant survives back to this test (the local
     // `register_one` helper wraps errors in `String` for ergonomics).
-    let pixel_buffer = HostVulkanBuffer::new_opaque_fd_export(&host_device, (W as u64) * (H as u64) * (4 as u64))
-    .expect("second pixel buffer");
-    let produce_done =
-        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-            .expect("second produce_done");
-    let consume_done =
-        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-            .expect("second consume_done");
+    let pixel_buffer =
+        HostVulkanBuffer::new_opaque_fd_export(&host_device, (W as u64) * (H as u64) * (4 as u64))
+            .expect("second pixel buffer");
+    let produce_done = HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+        .expect("second produce_done");
+    let consume_done = HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+        .expect("second consume_done");
     let result = adapter.register_host_surface(
         id,
         streamlib_adapter_cuda::HostSurfaceRegistration {
@@ -188,7 +184,13 @@ fn unregister_returns_true_on_first_call_false_on_second() {
         println!("cuda-adapter unregister: skipping — registration failed");
         return;
     }
-    assert!(adapter.unregister_host_surface(id), "first unregister should succeed");
-    assert!(!adapter.unregister_host_surface(id), "second unregister should fail");
+    assert!(
+        adapter.unregister_host_surface(id),
+        "first unregister should succeed"
+    );
+    assert!(
+        !adapter.unregister_host_surface(id),
+        "second unregister should fail"
+    );
     assert_eq!(adapter.registered_count(), 0);
 }

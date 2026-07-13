@@ -10,8 +10,8 @@
 //! `<out>/slpkg/streamlib-release/<V>/manifest.json`).
 
 use streamlib_idents::{
-    crates_missing_from_release, Org, Package, PackageRef, RegistryClient, RegistryConfig,
-    ReleaseManifest, ReleaseManifestMember, SemVer, SemVerRange,
+    Org, Package, PackageRef, RegistryClient, RegistryConfig, ReleaseManifest,
+    ReleaseManifestMember, SemVer, SemVerRange, crates_missing_from_release,
 };
 
 /// A `file://` registry config rooted at the tree root (the dir holding
@@ -37,10 +37,18 @@ fn emit_complete_tree(root: &std::path::Path) -> std::path::PathBuf {
     let client = RegistryClient::new(&cfg);
 
     client
-        .upload_slpkg(&pkg_ref("camera"), SemVer::new(1, 0, 0), b"camera-slpkg-bytes")
+        .upload_slpkg(
+            &pkg_ref("camera"),
+            SemVer::new(1, 0, 0),
+            b"camera-slpkg-bytes",
+        )
         .unwrap();
     client
-        .upload_slpkg(&pkg_ref("display"), SemVer::new(1, 0, 0), b"display-slpkg-bytes")
+        .upload_slpkg(
+            &pkg_ref("display"),
+            SemVer::new(1, 0, 0),
+            b"display-slpkg-bytes",
+        )
         .unwrap();
 
     let mut manifest = ReleaseManifest::new(
@@ -56,7 +64,9 @@ fn emit_complete_tree(root: &std::path::Path) -> std::path::PathBuf {
         ReleaseManifestMember::new("@tatolab/display", "1.0.0"),
     ];
     // Written LAST — the completion marker.
-    client.upload_release_manifest("tatolab", &manifest).unwrap();
+    client
+        .upload_release_manifest("tatolab", &manifest)
+        .unwrap();
     root.to_path_buf()
 }
 
@@ -68,8 +78,14 @@ fn complete_tree_resolves_offline_and_completeness_passes() {
     let client = RegistryClient::new(&cfg);
 
     // The consumer lists releases + fetches the manifest with NO daemon, NO token.
-    assert_eq!(client.list_release_versions("tatolab").unwrap(), vec![SemVer::new(0, 5, 1)]);
-    let manifest = client.fetch_release_manifest("tatolab", "0.5.1").unwrap().unwrap();
+    assert_eq!(
+        client.list_release_versions("tatolab").unwrap(),
+        vec![SemVer::new(0, 5, 1)]
+    );
+    let manifest = client
+        .fetch_release_manifest("tatolab", "0.5.1")
+        .unwrap()
+        .unwrap();
 
     // Consumer's direct crate pins are all satisfied → complete release.
     let pins = vec![
@@ -82,9 +98,14 @@ fn complete_tree_resolves_offline_and_completeness_passes() {
     );
 
     // Both package .slpkgs download from the file:// store.
-    let (bytes, url) = client.download_slpkg(&pkg_ref("camera"), SemVer::new(1, 0, 0)).unwrap();
+    let (bytes, url) = client
+        .download_slpkg(&pkg_ref("camera"), SemVer::new(1, 0, 0))
+        .unwrap();
     assert_eq!(bytes, b"camera-slpkg-bytes");
-    assert!(url.ends_with("/slpkg/camera/1.0.0/camera.slpkg"), "url: {url}");
+    assert!(
+        url.ends_with("/slpkg/camera/1.0.0/camera.slpkg"),
+        "url: {url}"
+    );
 }
 
 #[test]
@@ -104,7 +125,10 @@ fn truncated_release_manifest_is_rejected_by_completeness_check() {
     partial.packages = vec![ReleaseManifestMember::new("@tatolab/camera", "1.0.0")];
     client.upload_release_manifest("tatolab", &partial).unwrap();
 
-    let manifest = client.fetch_release_manifest("tatolab", "0.5.1").unwrap().unwrap();
+    let manifest = client
+        .fetch_release_manifest("tatolab", "0.5.1")
+        .unwrap()
+        .unwrap();
     let pins = vec![
         req("streamlib-plugin-sdk", "^0.5.0"),
         req("vulkan-jpeg", "^0.5.0"),
@@ -138,7 +162,12 @@ fn removed_slpkg_from_tree_is_rejected_at_download() {
         "download of a truncated member must fail naming it; got: {msg}"
     );
     // list_versions for the removed package is now empty (no version dir).
-    assert!(client.list_versions(&pkg_ref("display")).unwrap().is_empty());
+    assert!(
+        client
+            .list_versions(&pkg_ref("display"))
+            .unwrap()
+            .is_empty()
+    );
 }
 
 /// The truncation gate proven against the manifest `emit_static_registry`
@@ -147,7 +176,7 @@ fn removed_slpkg_from_tree_is_rejected_at_download() {
 /// tree and assert the consumer-side checks reject it.
 #[test]
 fn emitted_tree_truncation_is_rejected_by_consumer_checks() {
-    use streamlib_pack::static_registry::{emit_static_registry, EmitEcosystems, EmitOptions};
+    use streamlib_pack::static_registry::{EmitEcosystems, EmitOptions, emit_static_registry};
 
     // Minimal fake workspace: empty cargo workspace + one schemas-only
     // package (no cargo build at assemble time).
@@ -200,15 +229,26 @@ fn emitted_tree_truncation_is_rejected_by_consumer_checks() {
     // The REAL emitted manifest is fetchable + lists the package.
     let cfg = file_config(&out);
     let client = RegistryClient::new(&cfg);
-    assert_eq!(client.list_release_versions("tatolab").unwrap(), vec![SemVer::new(0, 9, 0)]);
-    let manifest = client.fetch_release_manifest("tatolab", "0.9.0").unwrap().unwrap();
+    assert_eq!(
+        client.list_release_versions("tatolab").unwrap(),
+        vec![SemVer::new(0, 9, 0)]
+    );
+    let manifest = client
+        .fetch_release_manifest("tatolab", "0.9.0")
+        .unwrap()
+        .unwrap();
     assert!(
-        manifest.packages.iter().any(|m| m.name == "@tatolab/demopkg" && m.version == "1.0.0"),
+        manifest
+            .packages
+            .iter()
+            .any(|m| m.name == "@tatolab/demopkg" && m.version == "1.0.0"),
         "the emitted manifest must list the assembled package; got {:?}",
         manifest.packages
     );
     // And the .slpkg artifact itself downloads.
-    let (bytes, _) = client.download_slpkg(&pkg_ref("demopkg"), SemVer::new(1, 0, 0)).unwrap();
+    let (bytes, _) = client
+        .download_slpkg(&pkg_ref("demopkg"), SemVer::new(1, 0, 0))
+        .unwrap();
     assert!(!bytes.is_empty());
 
     // TRUNCATE the emitted tree: remove the package's artifacts post-flip.
@@ -216,9 +256,27 @@ fn emitted_tree_truncation_is_rejected_by_consumer_checks() {
 
     // The manifest still claims the member, but the tree can't serve it —
     // the consumer fails loudly at download instead of half-resolving.
-    let manifest = client.fetch_release_manifest("tatolab", "0.9.0").unwrap().unwrap();
-    assert!(manifest.packages.iter().any(|m| m.name == "@tatolab/demopkg"));
-    let err = client.download_slpkg(&pkg_ref("demopkg"), SemVer::new(1, 0, 0)).unwrap_err();
-    assert!(err.to_string().contains("demopkg"), "truncated member must be named: {err}");
-    assert!(client.list_versions(&pkg_ref("demopkg")).unwrap().is_empty());
+    let manifest = client
+        .fetch_release_manifest("tatolab", "0.9.0")
+        .unwrap()
+        .unwrap();
+    assert!(
+        manifest
+            .packages
+            .iter()
+            .any(|m| m.name == "@tatolab/demopkg")
+    );
+    let err = client
+        .download_slpkg(&pkg_ref("demopkg"), SemVer::new(1, 0, 0))
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("demopkg"),
+        "truncated member must be named: {err}"
+    );
+    assert!(
+        client
+            .list_versions(&pkg_ref("demopkg"))
+            .unwrap()
+            .is_empty()
+    );
 }

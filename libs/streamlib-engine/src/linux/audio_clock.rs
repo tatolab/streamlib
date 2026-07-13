@@ -4,10 +4,10 @@
 #![allow(dead_code)]
 
 use crate::core::context::{AudioClock, AudioClockConfig, AudioTickCallback, AudioTickContext};
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 use parking_lot::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
 
 /// Linux audio clock using `timerfd_create(CLOCK_MONOTONIC)` for drift-free timing.
@@ -77,10 +77,7 @@ impl AudioClock for LinuxTimerFdAudioClock {
                 tracing::info!("[LinuxTimerFdAudioClock] Stopped");
             })
             .map_err(|e| {
-                Error::Runtime(format!(
-                    "Failed to spawn audio clock timerfd thread: {}",
-                    e
-                ))
+                Error::Runtime(format!("Failed to spawn audio clock timerfd thread: {}", e))
             })?;
 
         *self.thread_handle.lock() = Some(handle);
@@ -169,8 +166,7 @@ fn run_timerfd_loop(
     start_sec += interval_sec;
 
     // Record the start time in nanoseconds for timestamp calculation
-    let start_time_ns =
-        now.tv_sec as i64 * 1_000_000_000 + now.tv_nsec as i64;
+    let start_time_ns = now.tv_sec as i64 * 1_000_000_000 + now.tv_nsec as i64;
 
     // Set timerfd with TFD_TIMER_ABSTIME for drift-free repeats
     let timer_spec = libc::itimerspec {
@@ -214,9 +210,7 @@ fn run_timerfd_loop(
         events: libc::EPOLLIN as u32,
         u64: 0,
     };
-    let ctl_ret = unsafe {
-        libc::epoll_ctl(epoll_fd, libc::EPOLL_CTL_ADD, timer_fd, &mut event)
-    };
+    let ctl_ret = unsafe { libc::epoll_ctl(epoll_fd, libc::EPOLL_CTL_ADD, timer_fd, &mut event) };
     if ctl_ret < 0 {
         unsafe {
             libc::close(epoll_fd);
@@ -249,10 +243,7 @@ fn run_timerfd_loop(
                 libc::close(epoll_fd);
                 libc::close(timer_fd);
             }
-            return Err(Error::Runtime(format!(
-                "epoll_wait failed: {}",
-                err
-            )));
+            return Err(Error::Runtime(format!("epoll_wait failed: {}", err)));
         }
 
         if nfds == 0 {
@@ -279,10 +270,7 @@ fn run_timerfd_loop(
                 libc::close(epoll_fd);
                 libc::close(timer_fd);
             }
-            return Err(Error::Runtime(format!(
-                "timerfd read failed: {}",
-                err
-            )));
+            return Err(Error::Runtime(format!("timerfd read failed: {}", err)));
         }
 
         // Get current time for timestamp
@@ -291,8 +279,7 @@ fn run_timerfd_loop(
             tv_nsec: 0,
         };
         unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut current_time) };
-        let current_ns =
-            current_time.tv_sec as i64 * 1_000_000_000 + current_time.tv_nsec as i64;
+        let current_ns = current_time.tv_sec as i64 * 1_000_000_000 + current_time.tv_nsec as i64;
         let elapsed_ns = current_ns - start_time_ns;
 
         if expirations > 1 {

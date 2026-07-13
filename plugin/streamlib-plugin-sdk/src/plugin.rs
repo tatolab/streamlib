@@ -26,10 +26,10 @@ use std::ffi::c_void;
 use std::sync::OnceLock;
 
 use streamlib_plugin_abi::{
-    AudioClockVTable, GpuContextFullAccessVTable, GpuContextLimitedAccessVTable, HostHandle,
-    HostInterest, HostLogLevel, HostServices, ProcessorVTable, RuntimeContextVTable,
-    RuntimeOpsVTable, SurfaceStoreVTable, GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION,
-    HOST_SERVICES_LAYOUT_VERSION, SURFACE_STORE_VTABLE_LAYOUT_VERSION,
+    AudioClockVTable, GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, GpuContextFullAccessVTable,
+    GpuContextLimitedAccessVTable, HOST_SERVICES_LAYOUT_VERSION, HostHandle, HostInterest,
+    HostLogLevel, HostServices, ProcessorVTable, RuntimeContextVTable, RuntimeOpsVTable,
+    SURFACE_STORE_VTABLE_LAYOUT_VERSION, SurfaceStoreVTable,
 };
 
 pub mod forwarding_subscriber;
@@ -94,11 +94,7 @@ pub struct HostCallbacks {
         host: HostHandle,
         canonical_id_ptr: *const u8,
         canonical_id_len: usize,
-        result_callback: extern "C" fn(
-            userdata: *mut c_void,
-            yaml_ptr: *const u8,
-            yaml_len: usize,
-        ),
+        result_callback: extern "C" fn(userdata: *mut c_void, yaml_ptr: *const u8, yaml_len: usize),
         result_userdata: *mut c_void,
     ),
     pub iceoryx_log_emit: unsafe extern "C" fn(
@@ -285,11 +281,12 @@ pub unsafe fn install_host_services(host_services_ptr: *const c_void) -> Option<
             return None;
         }
     }
-    if !services.vulkan_acceleration_structure_methods_vtable.is_null() {
+    if !services
+        .vulkan_acceleration_structure_methods_vtable
+        .is_null()
+    {
         // SAFETY: same shape as the other vtable validations.
-        let v = unsafe {
-            (*services.vulkan_acceleration_structure_methods_vtable).layout_version
-        };
+        let v = unsafe { (*services.vulkan_acceleration_structure_methods_vtable).layout_version };
         if v != streamlib_plugin_abi::VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION {
             return None;
         }
@@ -342,8 +339,7 @@ pub unsafe fn install_host_services(host_services_ptr: *const c_void) -> Option<
         texture_ring_methods_vtable: services.texture_ring_methods_vtable,
         vulkan_compute_kernel_methods_vtable: services.vulkan_compute_kernel_methods_vtable,
         vulkan_graphics_kernel_methods_vtable: services.vulkan_graphics_kernel_methods_vtable,
-        vulkan_ray_tracing_kernel_methods_vtable: services
-            .vulkan_ray_tracing_kernel_methods_vtable,
+        vulkan_ray_tracing_kernel_methods_vtable: services.vulkan_ray_tracing_kernel_methods_vtable,
         vulkan_acceleration_structure_methods_vtable: services
             .vulkan_acceleration_structure_methods_vtable,
         rhi_color_converter_methods_vtable: services.rhi_color_converter_methods_vtable,

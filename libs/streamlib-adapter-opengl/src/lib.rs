@@ -37,9 +37,8 @@ mod view;
 pub use adapter::OpenGlSurfaceAdapter;
 pub use context::OpenGlContext;
 pub use egl::{
-    EglRuntime, EglRuntimeError, OwnedMakeCurrentGuard, DRM_FORMAT_ABGR8888,
-    DRM_FORMAT_ARGB8888,
+    DRM_FORMAT_ABGR8888, DRM_FORMAT_ARGB8888, EglRuntime, EglRuntimeError, OwnedMakeCurrentGuard,
 };
 pub use host_vtable::host_opengl_surface_adapter_vtable;
 pub use state::HostSurfaceRegistration;
-pub use view::{OpenGlReadView, OpenGlWriteView, GL_TEXTURE_2D, GL_TEXTURE_EXTERNAL_OES};
+pub use view::{GL_TEXTURE_2D, GL_TEXTURE_EXTERNAL_OES, OpenGlReadView, OpenGlWriteView};

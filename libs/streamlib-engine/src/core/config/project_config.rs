@@ -3,7 +3,7 @@
 
 //! Project-level configuration via `streamlib.yaml`.
 
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -457,7 +457,11 @@ dependencies:
 
         let config = ProjectConfig::load(dir.path()).unwrap();
         assert_eq!(config.dependencies.len(), 1);
-        match config.dependencies.get(&pkg_ref("tatolab", "core")).unwrap() {
+        match config
+            .dependencies
+            .get(&pkg_ref("tatolab", "core"))
+            .unwrap()
+        {
             DependencySpec::Registry(r) => {
                 assert_eq!(r.version.to_string(), "^1.0.0");
             }

@@ -142,10 +142,7 @@ mod tests {
         assert_eq!(offset_of!(RayTracingBindingSpecRepr, binding), 0);
         assert_eq!(offset_of!(RayTracingBindingSpecRepr, kind), 4);
         assert_eq!(offset_of!(RayTracingBindingSpecRepr, stages), 8);
-        assert_eq!(
-            offset_of!(RayTracingBindingSpecRepr, _reserved_padding),
-            12
-        );
+        assert_eq!(offset_of!(RayTracingBindingSpecRepr, _reserved_padding), 12);
     }
 
     #[test]
@@ -177,39 +174,18 @@ mod tests {
         assert_eq!(align_of::<RayTracingKernelDescriptorRepr>(), 8);
         assert_eq!(offset_of!(RayTracingKernelDescriptorRepr, label_ptr), 0);
         assert_eq!(offset_of!(RayTracingKernelDescriptorRepr, label_len), 8);
-        assert_eq!(
-            offset_of!(RayTracingKernelDescriptorRepr, stages_ptr),
-            16
-        );
-        assert_eq!(
-            offset_of!(RayTracingKernelDescriptorRepr, stages_len),
-            24
-        );
-        assert_eq!(
-            offset_of!(RayTracingKernelDescriptorRepr, groups_ptr),
-            32
-        );
-        assert_eq!(
-            offset_of!(RayTracingKernelDescriptorRepr, groups_len),
-            40
-        );
-        assert_eq!(
-            offset_of!(RayTracingKernelDescriptorRepr, bindings_ptr),
-            48
-        );
-        assert_eq!(
-            offset_of!(RayTracingKernelDescriptorRepr, bindings_len),
-            56
-        );
+        assert_eq!(offset_of!(RayTracingKernelDescriptorRepr, stages_ptr), 16);
+        assert_eq!(offset_of!(RayTracingKernelDescriptorRepr, stages_len), 24);
+        assert_eq!(offset_of!(RayTracingKernelDescriptorRepr, groups_ptr), 32);
+        assert_eq!(offset_of!(RayTracingKernelDescriptorRepr, groups_len), 40);
+        assert_eq!(offset_of!(RayTracingKernelDescriptorRepr, bindings_ptr), 48);
+        assert_eq!(offset_of!(RayTracingKernelDescriptorRepr, bindings_len), 56);
         assert_eq!(
             offset_of!(RayTracingKernelDescriptorRepr, push_constants),
             64
         );
         assert_eq!(
-            offset_of!(
-                RayTracingKernelDescriptorRepr,
-                max_recursion_depth
-            ),
+            offset_of!(RayTracingKernelDescriptorRepr, max_recursion_depth),
             72
         );
         assert_eq!(

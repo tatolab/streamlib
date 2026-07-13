@@ -25,13 +25,13 @@ use streamlib_plugin_sdk::sdk::rhi::{
     VulkanStage,
 };
 
+use crate::JpegColorSource;
 use crate::backend::{JpegBackendKind, JpegDecodeBackend};
 use crate::color::JpegColorInfo;
 use crate::kernel::{
-    worst_case_coefficient_buffer_bytes_420, JpegDecodeKernel, QUANT_TABLE_BUFFER_BYTES,
+    JpegDecodeKernel, QUANT_TABLE_BUFFER_BYTES, worst_case_coefficient_buffer_bytes_420,
 };
 use crate::simple_decoder::{JpegDecodeOutput, MAX_FRAMES_IN_FLIGHT};
-use crate::JpegColorSource;
 
 /// Cross-vendor Vulkan-compute JPEG decode backend.
 pub struct VulkanComputeBackend {

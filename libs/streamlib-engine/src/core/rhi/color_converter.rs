@@ -12,15 +12,13 @@
 //! changes cost one [`set_push_constants_value`] call rather than a
 //! pipeline rebuild.
 
-use crate::core::color::{
-    yuv_to_rgb_matrix, ColorSpaceKind, ResolvedColorInfo, TransferId,
-};
+use crate::core::color::{ColorSpaceKind, ResolvedColorInfo, TransferId, yuv_to_rgb_matrix};
 use crate::core::rhi::PixelFormat;
 
 #[cfg(target_os = "linux")]
-use crate::core::rhi::Texture;
-#[cfg(target_os = "linux")]
 use crate::core::Result;
+#[cfg(target_os = "linux")]
+use crate::core::rhi::Texture;
 
 /// Push-constants struct matching the converter shader's
 /// `layout(push_constant, std430)` block.
@@ -226,7 +224,8 @@ impl RhiColorConverterInner {
         dst: &Texture,
         info: &ResolvedColorInfo,
     ) -> Result<()> {
-        self.inner.convert_buffer_to_image_storage(src, src_layout, dst, info)
+        self.inner
+            .convert_buffer_to_image_storage(src, src_layout, dst, info)
     }
 
     /// [`crate::core::rhi::PixelBuffer`]-shape source variant.
@@ -238,7 +237,8 @@ impl RhiColorConverterInner {
         dst: &Texture,
         info: &ResolvedColorInfo,
     ) -> Result<()> {
-        self.inner.convert_buffer_to_image_pixel(src, src_layout, dst, info)
+        self.inner
+            .convert_buffer_to_image_pixel(src, src_layout, dst, info)
     }
 
     /// Bind source / destination / push-constants on the buffer→image
@@ -352,8 +352,7 @@ pub struct RhiColorConverter {
     /// Parent vtable for plugin ABI Clone/Drop dispatch.
     pub(crate) vtable: *const streamlib_plugin_abi::GpuContextFullAccessVTable,
     /// Per-type vtable for plugin ABI method dispatch.
-    pub(crate) methods_vtable:
-        *const streamlib_plugin_abi::RhiColorConverterMethodsVTable,
+    pub(crate) methods_vtable: *const streamlib_plugin_abi::RhiColorConverterMethodsVTable,
     /// Cached `#[repr(u32)]` `PixelFormat` discriminant for the source
     /// format. Set at construction; fixed for the converter's lifetime.
     /// Mirrors `Texture::format_raw` so the cdylib's `src_format()`
@@ -378,8 +377,7 @@ impl RhiColorConverter {
         let cached_src_format_raw = arc.src_format() as u32;
         let cached_dst_format_raw = arc.dst_format() as u32;
         let handle = std::sync::Arc::into_raw(arc) as *const std::ffi::c_void;
-        let vtable =
-            crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
+        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
         let methods_vtable =
             crate::core::plugin::host_services::host_rhi_color_converter_methods_vtable();
         Self {
@@ -417,9 +415,8 @@ impl RhiColorConverter {
         info: &ResolvedColorInfo,
     ) -> Result<()> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_convert_buffer_to_image_storage_via_vtable(
-                src, src_layout, dst, info,
-            );
+            return self
+                .dispatch_convert_buffer_to_image_storage_via_vtable(src, src_layout, dst, info);
         }
         self.host_inner()
             .convert_buffer_to_image_storage(src, src_layout, dst, info)
@@ -437,9 +434,8 @@ impl RhiColorConverter {
         info: &ResolvedColorInfo,
     ) -> Result<()> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_convert_buffer_to_image_pixel_via_vtable(
-                src, src_layout, dst, info,
-            );
+            return self
+                .dispatch_convert_buffer_to_image_pixel_via_vtable(src, src_layout, dst, info);
         }
         self.host_inner()
             .convert_buffer_to_image_pixel(src, src_layout, dst, info)
@@ -489,27 +485,21 @@ impl RhiColorConverter {
         use crate::core::Error;
         if self.methods_vtable.is_null() {
             return Err(Error::GpuError(
-                "prepare_buffer_to_image_storage: color converter methods vtable is null"
-                    .into(),
+                "prepare_buffer_to_image_storage: color converter methods vtable is null".into(),
             ));
         }
         // The cdylib needs the parent FullAccess vtable and the per-
         // type VulkanComputeKernel methods vtable to assemble its own
         // PluginAbiObject from the host-returned inner handle. Both come from
         // `host_callbacks()` — populated at plugin install time.
-        let callbacks =
-            crate::core::plugin::host_services::host_callbacks().ok_or_else(|| {
-                Error::GpuError(
-                    "prepare_buffer_to_image_storage: host callbacks not installed"
-                        .into(),
-                )
-            })?;
+        let callbacks = crate::core::plugin::host_services::host_callbacks().ok_or_else(|| {
+            Error::GpuError("prepare_buffer_to_image_storage: host callbacks not installed".into())
+        })?;
         let parent_vtable = callbacks.gpu_context_full_access_vtable;
         let kernel_methods_vtable = callbacks.vulkan_compute_kernel_methods_vtable;
         if parent_vtable.is_null() {
             return Err(Error::GpuError(
-                "prepare_buffer_to_image_storage: GpuContextFullAccess vtable is null"
-                    .into(),
+                "prepare_buffer_to_image_storage: GpuContextFullAccess vtable is null".into(),
             ));
         }
 
@@ -546,10 +536,7 @@ impl RhiColorConverter {
             )
         };
         if status != 0 {
-            let msg = String::from_utf8_lossy(
-                &err_buf[..err_len.min(err_buf.len())],
-            )
-            .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             return Err(Error::GpuError(msg));
         }
         if out_kernel.is_null() {
@@ -588,22 +575,17 @@ impl RhiColorConverter {
         use crate::core::Error;
         if self.methods_vtable.is_null() {
             return Err(Error::GpuError(
-                "prepare_buffer_to_image_pixel: color converter methods vtable is null"
-                    .into(),
+                "prepare_buffer_to_image_pixel: color converter methods vtable is null".into(),
             ));
         }
-        let callbacks =
-            crate::core::plugin::host_services::host_callbacks().ok_or_else(|| {
-                Error::GpuError(
-                    "prepare_buffer_to_image_pixel: host callbacks not installed".into(),
-                )
-            })?;
+        let callbacks = crate::core::plugin::host_services::host_callbacks().ok_or_else(|| {
+            Error::GpuError("prepare_buffer_to_image_pixel: host callbacks not installed".into())
+        })?;
         let parent_vtable = callbacks.gpu_context_full_access_vtable;
         let kernel_methods_vtable = callbacks.vulkan_compute_kernel_methods_vtable;
         if parent_vtable.is_null() {
             return Err(Error::GpuError(
-                "prepare_buffer_to_image_pixel: GpuContextFullAccess vtable is null"
-                    .into(),
+                "prepare_buffer_to_image_pixel: GpuContextFullAccess vtable is null".into(),
             ));
         }
 
@@ -640,9 +622,7 @@ impl RhiColorConverter {
             )
         };
         if status != 0 {
-            let msg =
-                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                    .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             return Err(Error::GpuError(msg));
         }
         if out_kernel.is_null() {
@@ -673,8 +653,7 @@ impl RhiColorConverter {
         use crate::core::Error;
         if self.methods_vtable.is_null() {
             return Err(Error::GpuError(
-                "convert_buffer_to_image_storage: color converter methods vtable is null"
-                    .into(),
+                "convert_buffer_to_image_storage: color converter methods vtable is null".into(),
             ));
         }
         let layout_repr = streamlib_plugin_abi::SourceLayoutInfoRepr {
@@ -706,8 +685,7 @@ impl RhiColorConverter {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -723,8 +701,7 @@ impl RhiColorConverter {
         use crate::core::Error;
         if self.methods_vtable.is_null() {
             return Err(Error::GpuError(
-                "convert_buffer_to_image_pixel: color converter methods vtable is null"
-                    .into(),
+                "convert_buffer_to_image_pixel: color converter methods vtable is null".into(),
             ));
         }
         let layout_repr = streamlib_plugin_abi::SourceLayoutInfoRepr {
@@ -756,8 +733,7 @@ impl RhiColorConverter {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -824,12 +800,8 @@ fn pixel_format_from_raw(raw: u32) -> PixelFormat {
         x if x == PixelFormat::Rgba32 as u32 => PixelFormat::Rgba32,
         x if x == PixelFormat::Argb32 as u32 => PixelFormat::Argb32,
         x if x == PixelFormat::Rgba64 as u32 => PixelFormat::Rgba64,
-        x if x == PixelFormat::Nv12VideoRange as u32 => {
-            PixelFormat::Nv12VideoRange
-        }
-        x if x == PixelFormat::Nv12FullRange as u32 => {
-            PixelFormat::Nv12FullRange
-        }
+        x if x == PixelFormat::Nv12VideoRange as u32 => PixelFormat::Nv12VideoRange,
+        x if x == PixelFormat::Nv12FullRange as u32 => PixelFormat::Nv12FullRange,
         x if x == PixelFormat::Uyvy422 as u32 => PixelFormat::Uyvy422,
         x if x == PixelFormat::Yuyv422 as u32 => PixelFormat::Yuyv422,
         x if x == PixelFormat::Gray8 as u32 => PixelFormat::Gray8,
@@ -880,7 +852,10 @@ impl std::fmt::Debug for RhiColorConverter {
 #[cfg(target_os = "macos")]
 impl RhiColorConverterInner {
     #[allow(dead_code)]
-    pub(crate) fn new_macos_stub(src: PixelFormat, dst: PixelFormat) -> Result<Self, crate::core::Error> {
+    pub(crate) fn new_macos_stub(
+        src: PixelFormat,
+        dst: PixelFormat,
+    ) -> Result<Self, crate::core::Error> {
         let _ = (src, dst);
         Err(crate::core::Error::NotSupported(
             "RhiColorConverter not yet implemented on macOS".into(),
@@ -959,7 +934,10 @@ mod tests {
         assert_eq!(pc.width, 1920);
         assert_eq!(pc.height, 1080);
         // Transfer matches → bypass flag.
-        assert_eq!(pc.flags & ColorConverterPushConstants::FLAG_APPLY_TRANSFER, 0);
+        assert_eq!(
+            pc.flags & ColorConverterPushConstants::FLAG_APPLY_TRANSFER,
+            0
+        );
     }
 
     /// BT.601 full-range resolves to canonical webcam matrix and zero
@@ -1001,7 +979,10 @@ mod tests {
             1080,
             SourceLayoutInfo::nv12_tight(1920, 1080),
         );
-        assert_ne!(pc.flags & ColorConverterPushConstants::FLAG_APPLY_TRANSFER, 0);
+        assert_ne!(
+            pc.flags & ColorConverterPushConstants::FLAG_APPLY_TRANSFER,
+            0
+        );
         assert_eq!(pc.transfer_in, TransferId::Pq as u32);
         assert_eq!(pc.transfer_out, TransferId::Srgb as u32);
     }

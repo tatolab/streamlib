@@ -203,19 +203,13 @@ pub trait RayTracingKernelBridge: Send + Sync {
     /// implementation choice; AS construction is rare enough in
     /// practice that the bridge can simply build a fresh BLAS and
     /// return a fresh id.
-    fn register_blas(
-        &self,
-        decl: &BlasRegisterDecl,
-    ) -> Result<String, String>;
+    fn register_blas(&self, decl: &BlasRegisterDecl) -> Result<String, String>;
 
     /// Build a top-level acceleration structure from a list of
     /// instances referencing previously-registered BLASes. Returns a
     /// stable `as_id`. The TLAS implementation must keep the
     /// referenced BLASes alive for its lifetime (Vulkan spec).
-    fn register_tlas(
-        &self,
-        decl: &TlasRegisterDecl,
-    ) -> Result<String, String>;
+    fn register_tlas(&self, decl: &TlasRegisterDecl) -> Result<String, String>;
 
     /// Register a ray-tracing kernel. Returns a stable `kernel_id` —
     /// re-registering an identical descriptor (same SPIR-V stages,
@@ -226,10 +220,7 @@ pub trait RayTracingKernelBridge: Send + Sync {
     /// The recommended `kernel_id` shape is SHA-256 hex over a
     /// canonical byte representation of the inputs that *materially*
     /// determine the host-side `VulkanRayTracingKernel`.
-    fn register_kernel(
-        &self,
-        decl: &RayTracingKernelRegisterDecl,
-    ) -> Result<String, String>;
+    fn register_kernel(&self, decl: &RayTracingKernelRegisterDecl) -> Result<String, String>;
 
     /// Run one trace against a previously-registered kernel.
     ///
@@ -240,8 +231,5 @@ pub trait RayTracingKernelBridge: Send + Sync {
     /// buffer + fence. Errors include unrecognized `kernel_id`,
     /// target lookup failure, push-constant size mismatch, and
     /// Vulkan submit failure.
-    fn run_kernel(
-        &self,
-        dispatch: &RayTracingKernelRunDispatch,
-    ) -> Result<(), String>;
+    fn run_kernel(&self, dispatch: &RayTracingKernelRunDispatch) -> Result<(), String>;
 }

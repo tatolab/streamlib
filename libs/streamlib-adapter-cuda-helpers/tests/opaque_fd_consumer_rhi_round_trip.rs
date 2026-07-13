@@ -46,24 +46,22 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serial_test::serial;
-use streamlib::sdk::rhi::PixelFormat;
 use streamlib::sdk::engine::host_rhi::{
-    HostVulkanDevice,
-    HostVulkanBuffer,
-    HostVulkanTimelineSemaphore,
+    HostVulkanBuffer, HostVulkanDevice, HostVulkanTimelineSemaphore,
 };
 use streamlib::sdk::engine::linux_surface_share::{SurfaceShareState, UnixSocketSurfaceService};
+use streamlib::sdk::rhi::PixelFormat;
 use streamlib_adapter_abi::{
     StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
     SurfaceUsage,
 };
 use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
 use streamlib_consumer_rhi::{
-    ConsumerVulkanDevice, ConsumerVulkanBuffer, ConsumerVulkanTimelineSemaphore,
+    ConsumerVulkanBuffer, ConsumerVulkanDevice, ConsumerVulkanTimelineSemaphore,
     PixelFormat as ConsumerPixelFormat,
 };
 use streamlib_surface_client::{
-    connect_to_surface_share_socket, send_request_with_fds, MAX_DMA_BUF_PLANES,
+    MAX_DMA_BUF_PLANES, connect_to_surface_share_socket, send_request_with_fds,
 };
 
 const W: u32 = 32;
@@ -107,33 +105,32 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
     }
 
     // ── Phase 1: host allocates OPAQUE_FD VkBuffer + timeline ──────────
-    let host_buffer = match HostVulkanBuffer::new_opaque_fd_export(&host_device, (W as u64) * (H as u64) * (BPP as u64)) {
+    let host_buffer = match HostVulkanBuffer::new_opaque_fd_export(
+        &host_device,
+        (W as u64) * (H as u64) * (BPP as u64),
+    ) {
         Ok(b) => Arc::new(b),
         Err(e) => {
             println!("stage6: new_opaque_fd_export failed: {e} — skipping");
             return;
         }
     };
-    let host_produce_done = match HostVulkanTimelineSemaphore::new_exportable(
-        host_device.device(),
-        0,
-    ) {
-        Ok(t) => Arc::new(t),
-        Err(e) => {
-            println!("stage6: produce_done new_exportable failed: {e} — skipping");
-            return;
-        }
-    };
-    let host_consume_done = match HostVulkanTimelineSemaphore::new_exportable(
-        host_device.device(),
-        0,
-    ) {
-        Ok(t) => Arc::new(t),
-        Err(e) => {
-            println!("stage6: consume_done new_exportable failed: {e} — skipping");
-            return;
-        }
-    };
+    let host_produce_done =
+        match HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0) {
+            Ok(t) => Arc::new(t),
+            Err(e) => {
+                println!("stage6: produce_done new_exportable failed: {e} — skipping");
+                return;
+            }
+        };
+    let host_consume_done =
+        match HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0) {
+            Ok(t) => Arc::new(t),
+            Err(e) => {
+                println!("stage6: consume_done new_exportable failed: {e} — skipping");
+                return;
+            }
+        };
     let buffer_size = host_buffer.size() as usize;
     assert_eq!(buffer_size, (W * H * BPP) as usize);
 
@@ -142,11 +139,7 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
     // SAFETY: HOST_VISIBLE | HOST_COHERENT — the mapped pointer is valid
     // for the buffer's lifetime; we hold an Arc through this whole test.
     unsafe {
-        std::ptr::copy_nonoverlapping(
-            pattern.as_ptr(),
-            host_buffer.mapped_ptr(),
-            buffer_size,
-        );
+        std::ptr::copy_nonoverlapping(pattern.as_ptr(), host_buffer.mapped_ptr(), buffer_size);
     }
     // Signal produce_done value 1 — represents "host has finished writing".
     // produce_done is the producer-signaled timeline; consume_done stays at 0
@@ -173,8 +166,7 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
         .export_opaque_fd()
         .expect("export_opaque_fd consume_done");
 
-    let host_stream =
-        connect_to_surface_share_socket(&socket_path).expect("host connect");
+    let host_stream = connect_to_surface_share_socket(&socket_path).expect("host connect");
     let register_req = serde_json::json!({
         "op": "register",
         "surface_id": SURFACE_ID,
@@ -210,8 +202,7 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
     drop(host_stream);
 
     // ── Phase 4: consumer connects + looks up surface ──────────────────
-    let consumer_stream =
-        connect_to_surface_share_socket(&socket_path).expect("consumer connect");
+    let consumer_stream = connect_to_surface_share_socket(&socket_path).expect("consumer connect");
     let lookup_req = serde_json::json!({
         "op": "lookup",
         "surface_id": SURFACE_ID,
@@ -230,12 +221,16 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
         "Stage 4 wire-format: register/lookup must round-trip handle_type",
     );
     assert_eq!(
-        lookup_resp.get("has_produce_done_fd").and_then(|v| v.as_bool()),
+        lookup_resp
+            .get("has_produce_done_fd")
+            .and_then(|v| v.as_bool()),
         Some(true),
         "produce_done FD must be advertised in the lookup response",
     );
     assert_eq!(
-        lookup_resp.get("has_consume_done_fd").and_then(|v| v.as_bool()),
+        lookup_resp
+            .get("has_consume_done_fd")
+            .and_then(|v| v.as_bool()),
         Some(true),
         "consume_done FD must be advertised in the lookup response",
     );
@@ -270,7 +265,11 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
 
     // FD ownership semantics: `from_opaque_fd` and `from_imported_opaque_fd`
     // transfer fd ownership to the Vulkan driver on success.
-    let consumer_buffer = ConsumerVulkanBuffer::from_opaque_fd(&consumer_device, consumer_memory_fd, buffer_size as vulkanalia::vk::DeviceSize);
+    let consumer_buffer = ConsumerVulkanBuffer::from_opaque_fd(
+        &consumer_device,
+        consumer_memory_fd,
+        buffer_size as vulkanalia::vk::DeviceSize,
+    );
     let consumer_buffer = match consumer_buffer {
         Ok(b) => Arc::new(b),
         Err(e) => {
@@ -321,11 +320,11 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
     // Both VkDevices map the same underlying GPU memory via the OPAQUE_FD.
     // SAFETY: same as the host write — the consumer's mapped pointer is
     // valid for the buffer's lifetime (we hold the Arc).
-    let consumer_view = unsafe {
-        std::slice::from_raw_parts(consumer_buffer.mapped_ptr(), buffer_size)
-    };
+    let consumer_view =
+        unsafe { std::slice::from_raw_parts(consumer_buffer.mapped_ptr(), buffer_size) };
     assert_eq!(
-        consumer_view, &pattern[..],
+        consumer_view,
+        &pattern[..],
         "consumer-rhi's OPAQUE_FD-imported VkBuffer must observe the same \
          bytes the host wrote through its own mapped pointer"
     );

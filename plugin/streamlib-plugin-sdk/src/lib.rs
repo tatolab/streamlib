@@ -48,8 +48,8 @@ pub mod sdk {
     /// `descriptors::{SchemaIdent, ProcessorDescriptor, …}` paths resolve.
     pub mod descriptors {
         pub use streamlib_processor_schema::descriptors::{
-            port_schema_spec_wire, CodeExamples, ConfigDescriptor, ConfigField, PortDescriptor,
-            ProcessorDescriptor, ProcessorRuntime,
+            CodeExamples, ConfigDescriptor, ConfigField, PortDescriptor, ProcessorDescriptor,
+            ProcessorRuntime, port_schema_spec_wire,
         };
         pub use streamlib_processor_schema::{
             ModuleIdent, Org, Package, PortSchemaSpec, ProcessorScheduling, SchemaIdent, SemVer,
@@ -67,10 +67,10 @@ pub mod sdk {
     pub use serde_json;
 
     // ---- Procedural macros (real-name, no aliasing) ----
-    /// `#[streamlib_plugin_sdk::sdk::processor("…")]` attribute macro.
-    pub use streamlib_macros::processor;
     /// `#[derive(ConfigDescriptor)]` derive macro.
     pub use streamlib_macros::ConfigDescriptor;
+    /// `#[streamlib_plugin_sdk::sdk::processor("…")]` attribute macro.
+    pub use streamlib_macros::processor;
     pub use streamlib_macros::{
         module_ident, module_ident_any_version, module_ident_joined,
         module_ident_joined_any_version, schema_ident, schema_ident_any_version,
@@ -98,20 +98,21 @@ pub mod sdk {
     #[cfg(target_os = "linux")]
     pub mod rhi {
         pub use crate::rhi::{
-            pixel_format_color_kind, AttachmentFormats, BlendFactor, BlendOp,
+            AttachmentFormats, BlendFactor, BlendOp, COLOR_CONVERTER_PUSH_CONSTANT_SIZE,
             ColorBlendAttachment, ColorBlendState, ColorConverterPushConstants, ColorWriteMask,
             ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, CullMode,
             DepthCompareOp, DepthFormat, DepthStencilState, DrawCall, DrawIndexedCall, FrontFace,
-            GraphicsBindingKind, GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor,
-            GraphicsPipelineState, GraphicsPushConstants, GraphicsShaderStage,
-            GraphicsShaderStageFlags, GraphicsStage, ImageCopyRegion, IndexType, MultisampleState,
-            NativeTextureHandle, OffscreenColorTarget, OffscreenDraw, PixelFormat, PolygonMode,
-            PrimitiveTopology, RasterizationState, RhiColorConverter, RhiCommandRecorder,
-            ScissorRect, SourceLayoutInfo, StorageBuffer, Texture, TextureDescriptor, TextureFormat,
+            GraphicsBindingKind, GraphicsBindingSpec, GraphicsDynamicState,
+            GraphicsKernelDescriptor, GraphicsPipelineState, GraphicsPushConstants,
+            GraphicsShaderStage, GraphicsShaderStageFlags, GraphicsStage, ImageCopyRegion,
+            IndexType, MultisampleState, NativeTextureHandle, OffscreenColorTarget, OffscreenDraw,
+            PixelFormat, PolygonMode, PrimitiveTopology, RasterizationState, RhiColorConverter,
+            RhiCommandRecorder, ScissorRect, SourceLayoutInfo, StorageBuffer,
+            TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES, Texture, TextureDescriptor, TextureFormat,
             TextureRing, TextureRingSlot, TextureUsages, VertexAttributeFormat,
             VertexInputAttribute, VertexInputBinding, VertexInputRate, VertexInputState, Viewport,
             VulkanAccess, VulkanComputeKernel, VulkanGraphicsKernel, VulkanLayout, VulkanStage,
-            COLOR_CONVERTER_PUSH_CONSTANT_SIZE, TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES,
+            pixel_format_color_kind,
         };
     }
 
@@ -122,10 +123,10 @@ pub mod sdk {
     /// engine facade's `sdk::color` (the GPU-relevant subset).
     pub mod color {
         pub use crate::color::{
-            bt709_to_linear, from_linear, hlg_to_linear, linear_to_bt709, linear_to_hlg,
-            linear_to_pq, linear_to_srgb, pq_to_linear, srgb_to_linear, to_linear,
-            yuv_to_rgb_matrix, ColorSpaceKind, MatrixId, PrimariesId, RangeId, ResolvedColorInfo,
-            TransferId, YuvToRgbDecomposition,
+            ColorSpaceKind, MatrixId, PrimariesId, RangeId, ResolvedColorInfo, TransferId,
+            YuvToRgbDecomposition, bt709_to_linear, from_linear, hlg_to_linear, linear_to_bt709,
+            linear_to_hlg, linear_to_pq, linear_to_srgb, pq_to_linear, srgb_to_linear, to_linear,
+            yuv_to_rgb_matrix,
         };
     }
 
@@ -133,12 +134,12 @@ pub mod sdk {
     /// Mode traits, `Config`, `EmptyConfig`, `ProcessorSpec`, the port
     /// markers, and the macro-targeted `__generated_private::GeneratedProcessor`.
     pub mod processors {
-        pub use crate::processors::{
-            Config, ConfigValidationError, ContinuousProcessor, DynGeneratedProcessor,
-            EmptyConfig, GeneratedProcessor, InputPortMarker, ManualProcessor, OutputPortMarker,
-            PortMarker, ProcessorSpec, ReactiveProcessor,
-        };
         pub use crate::processors::__generated_private;
+        pub use crate::processors::{
+            Config, ConfigValidationError, ContinuousProcessor, DynGeneratedProcessor, EmptyConfig,
+            GeneratedProcessor, InputPortMarker, ManualProcessor, OutputPortMarker, PortMarker,
+            ProcessorSpec, ReactiveProcessor,
+        };
         /// Re-export so the macro's `sdk::processors::PortSchemaSpec` path
         /// resolves (the macro emits port-spec construction against it).
         pub use streamlib_processor_schema::PortSchemaSpec;
@@ -158,8 +159,8 @@ pub mod sdk {
     /// `export_plugin!` resolves into. Re-exports the ABI's `HostServices`
     /// + layout-version const for the macro's payload handling.
     pub mod plugin {
-        pub use crate::plugin::{install_host_services, RegisterHelper};
-        pub use streamlib_plugin_abi::{HostServices, HOST_SERVICES_LAYOUT_VERSION};
+        pub use crate::plugin::{RegisterHelper, install_host_services};
+        pub use streamlib_plugin_abi::{HOST_SERVICES_LAYOUT_VERSION, HostServices};
 
         // ---- Build-fingerprint handshake constants ----
         //

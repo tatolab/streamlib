@@ -45,9 +45,7 @@ pub struct StartCodeFinder {
 impl Default for StartCodeFinder {
     /// Matches the C++ initialization: `m_BitBfr = (uint32_t)~0`.
     fn default() -> Self {
-        Self {
-            bit_bfr: !0u32,
-        }
+        Self { bit_bfr: !0u32 }
     }
 }
 
@@ -325,8 +323,7 @@ impl ByteStreamParser {
                 self.buffer.ensure_capacity(end + data_used);
                 let copy_len = data_used.min(self.buffer.len() - end);
                 if copy_len > 0 {
-                    self.buffer
-                        .copy_from_slice(end, &remaining[..copy_len]);
+                    self.buffer.copy_from_slice(end, &remaining[..copy_len]);
                 }
                 self.nalu.end_offset += copy_len as i64;
                 self.parsed_bytes += copy_len as i64;
@@ -336,12 +333,14 @@ impl ByteStreamParser {
 
             if result.found {
                 if self.nalu.start_offset == 0 {
-                    self.nalu_start_location =
-                        self.parsed_bytes - self.nalu.end_offset;
+                    self.nalu_start_location = self.parsed_bytes - self.nalu.end_offset;
                 }
                 // Remove the trailing 0x00 0x00 0x01 from this NAL unit.
-                self.nalu.end_offset =
-                    if self.nalu.end_offset >= 3 { self.nalu.end_offset - 3 } else { 0 };
+                self.nalu.end_offset = if self.nalu.end_offset >= 3 {
+                    self.nalu.end_offset - 3
+                } else {
+                    0
+                };
 
                 // Record the completed NAL unit (if non-empty).
                 if self.nalu.end_offset > self.nalu.start_offset {
@@ -369,8 +368,7 @@ impl ByteStreamParser {
         // Handle end-of-picture / end-of-stream.
         if pck.eop || pck.eos {
             if self.nalu.start_offset == 0 {
-                self.nalu_start_location =
-                    self.parsed_bytes - self.nalu.end_offset;
+                self.nalu_start_location = self.parsed_bytes - self.nalu.end_offset;
             }
 
             // Emit remaining NAL unit (the one after the last start code).
@@ -561,9 +559,7 @@ mod tests {
 
     #[test]
     fn epb_removal_multiple() {
-        let input = [
-            0xAA, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0xBB,
-        ];
+        let input = [0xAA, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0xBB];
         let rbsp = remove_emulation_prevention_bytes(&input);
         assert_eq!(rbsp, vec![0xAA, 0x00, 0x00, 0x00, 0x00, 0xBB]);
     }
@@ -630,9 +626,9 @@ mod tests {
         // start | NAL1 | start | NAL2 | EOP
         let data = [
             0x00, 0x00, 0x01, // start code 1
-            0x67, 0x42,       // NAL 1 payload (SPS-ish)
+            0x67, 0x42, // NAL 1 payload (SPS-ish)
             0x00, 0x00, 0x01, // start code 2
-            0x68, 0xCE,       // NAL 2 payload (PPS-ish)
+            0x68, 0xCE, // NAL 2 payload (PPS-ish)
         ];
         let pck = BitstreamPacket {
             data: &data,

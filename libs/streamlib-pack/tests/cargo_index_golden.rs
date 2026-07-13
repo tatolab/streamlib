@@ -87,7 +87,10 @@ fn python_renderer_matches_captured_golden_vulkanalia() {
         &golden_cksum(&golden),
         &fixtures_dir().join("vulkanalia-0.35.0.Cargo.toml"),
     );
-    assert_eq!(rendered, golden, "renderer output drifted from the captured golden");
+    assert_eq!(
+        rendered, golden,
+        "renderer output drifted from the captured golden"
+    );
 
     // Explicit locks on the load-bearing rules (redundant with byte-equality,
     // spelled out so a future golden re-capture can't silently lose them):
@@ -121,14 +124,23 @@ fn python_renderer_matches_captured_golden_vulkanalia_vma() {
         &golden_cksum(&golden),
         &fixtures_dir().join("vulkanalia-vma-0.9.0.Cargo.toml"),
     );
-    assert_eq!(rendered, golden, "renderer output drifted from the captured golden");
+    assert_eq!(
+        rendered, golden,
+        "renderer output drifted from the captured golden"
+    );
 
     let v: serde_json::Value = serde_json::from_str(rendered.trim()).unwrap();
     let deps = v["deps"].as_array().unwrap();
     let cc = deps.iter().find(|d| d["name"] == "cc").unwrap();
-    assert_eq!(cc["kind"], "build", "build-dependencies must carry kind=build");
+    assert_eq!(
+        cc["kind"], "build",
+        "build-dependencies must carry kind=build"
+    );
     let vk = deps.iter().find(|d| d["name"] == "vulkanalia").unwrap();
-    assert!(vk.get("registry").is_none(), "fork-sibling dep must omit `registry`");
+    assert!(
+        vk.get("registry").is_none(),
+        "fork-sibling dep must omit `registry`"
+    );
 }
 
 /// The index-path grammar exists in TWO implementations — Rust

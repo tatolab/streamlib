@@ -42,8 +42,8 @@ use std::sync::Arc;
 
 use streamlib_adapter_abi::{StreamlibSurface, SurfaceAdapter};
 use streamlib_adapter_cuda_abi::{
-    CudaBufferViewRepr, CudaImageViewRepr, CudaSurfaceAdapterVTable, TextureFormatRepr,
-    CUDA_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION,
+    CUDA_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION, CudaBufferViewRepr, CudaImageViewRepr,
+    CudaSurfaceAdapterVTable, TextureFormatRepr,
 };
 use streamlib_consumer_rhi::{DevicePrivilege, VulkanLayout, VulkanRhiDevice};
 use vulkanalia::vk::Handle;
@@ -57,8 +57,8 @@ use crate::state::{HostImageSurfaceRegistration, HostSurfaceRegistration};
 /// The vtable is `const`-initialized per `D` monomorphization;
 /// every call for the same `D` returns the same pointer. Multiple
 /// `D`s coexist in the same host process with their own vtables.
-pub fn host_cuda_surface_adapter_vtable<D: VulkanRhiDevice + 'static>(
-) -> *const CudaSurfaceAdapterVTable {
+pub fn host_cuda_surface_adapter_vtable<D: VulkanRhiDevice + 'static>()
+-> *const CudaSurfaceAdapterVTable {
     &MonoVTable::<D>::VTABLE
 }
 
@@ -235,7 +235,9 @@ unsafe extern "C" fn host_register_host_surface<D: VulkanRhiDevice + 'static>(
                 Arc::increment_strong_count(
                     pixel_buffer_handle as *const <D::Privilege as DevicePrivilege>::Buffer,
                 );
-                Arc::from_raw(pixel_buffer_handle as *const <D::Privilege as DevicePrivilege>::Buffer)
+                Arc::from_raw(
+                    pixel_buffer_handle as *const <D::Privilege as DevicePrivilege>::Buffer,
+                )
             };
             let produce_done: Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore> = unsafe {
                 Arc::increment_strong_count(
@@ -468,8 +470,7 @@ where
             // SAFETY: caller asserts the pointer is a borrowed
             // StreamlibSurface from its own stack/heap, valid for
             // the duration of the call.
-            let surface: &StreamlibSurface =
-                unsafe { &*(surface_ptr as *const StreamlibSurface) };
+            let surface: &StreamlibSurface = unsafe { &*(surface_ptr as *const StreamlibSurface) };
             match body(adapter, surface) {
                 Ok(Some(view)) => {
                     if !out_view.is_null() {
@@ -549,8 +550,7 @@ where
                 }
                 return 1;
             }
-            let surface: &StreamlibSurface =
-                unsafe { &*(surface_ptr as *const StreamlibSurface) };
+            let surface: &StreamlibSurface = unsafe { &*(surface_ptr as *const StreamlibSurface) };
             match body(adapter, surface) {
                 Ok(Some(view)) => {
                     if !out_view.is_null() {

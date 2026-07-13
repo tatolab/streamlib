@@ -14,9 +14,9 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use super::super::shared::handle_as_gpu_context;
 use super::super::super::run_host_extern_c;
 use super::super::super::shared::wire::write_err;
+use super::super::shared::handle_as_gpu_context;
 
 /// Begin an escalate scope on the supplied `gpu_handle`. Mints a
 /// unique opaque token via
@@ -92,7 +92,8 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_esc
             // `docs/learnings/concurrent-vkdevicewaitidle-threading.md`.
             // `None` = stale / never-issued token: a silent no-op (the
             // gate was never claimed by this token).
-            match crate::core::context::escalate_scope_registry::end_escalate_scope_draining(token) {
+            match crate::core::context::escalate_scope_registry::end_escalate_scope_draining(token)
+            {
                 None | Some(Ok(())) => 0,
                 Some(Err(e)) => {
                     write_err(
@@ -150,9 +151,7 @@ mod gpu_lim_escalate_vtable_tests {
     /// Free a host_handle minted by `make_host_handle` — pairs with
     /// the `Box::into_raw`.
     unsafe fn free_host_handle(handle: *const c_void) {
-        let _ = unsafe {
-            Box::from_raw(handle as *mut Arc<crate::core::context::GpuContext>)
-        };
+        let _ = unsafe { Box::from_raw(handle as *mut Arc<crate::core::context::GpuContext>) };
     }
 
     #[test]
@@ -170,7 +169,10 @@ mod gpu_lim_escalate_vtable_tests {
         };
         assert_eq!(rc, 1);
         let msg = err_buf_as_str(&buf, len);
-        assert!(msg.contains("escalate_begin: null gpu handle"), "got: {msg}");
+        assert!(
+            msg.contains("escalate_begin: null gpu handle"),
+            "got: {msg}"
+        );
         assert!(token.is_null(), "scope token must not be written on error");
     }
 
@@ -325,13 +327,11 @@ mod gpu_lim_escalate_vtable_tests {
         }
         assert!(!token.is_null());
 
-        let mut out: crate::core::rhi::texture::Texture =
-            unsafe { std::mem::zeroed() };
+        let mut out: crate::core::rhi::texture::Texture = unsafe { std::mem::zeroed() };
         let mut buf2 = [0u8; 256];
         let mut len2 = 0usize;
         let rc = unsafe {
-            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE
-                .acquire_render_target_dma_buf_image)(
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.acquire_render_target_dma_buf_image)(
                 token,
                 64,
                 64,
@@ -412,13 +412,11 @@ mod gpu_lim_escalate_vtable_tests {
 
         // Token is now stale — using it on any FullAccess callback
         // returns "invalid escalate scope".
-        let mut out: crate::core::rhi::texture::Texture =
-            unsafe { std::mem::zeroed() };
+        let mut out: crate::core::rhi::texture::Texture = unsafe { std::mem::zeroed() };
         let mut buf2 = [0u8; 256];
         let mut len2 = 0usize;
         let rc = unsafe {
-            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE
-                .acquire_render_target_dma_buf_image)(
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.acquire_render_target_dma_buf_image)(
                 token,
                 64,
                 64,
@@ -432,13 +430,10 @@ mod gpu_lim_escalate_vtable_tests {
         assert_eq!(rc, 1);
         let msg = err_buf_as_str(&buf2, len2);
         assert!(
-            msg.contains(
-                "acquire_render_target_dma_buf_image: invalid escalate scope"
-            ),
+            msg.contains("acquire_render_target_dma_buf_image: invalid escalate scope"),
             "got: {msg}"
         );
 
         unsafe { free_host_handle(handle) };
     }
 }
-

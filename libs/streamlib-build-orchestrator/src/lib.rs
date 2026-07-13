@@ -54,8 +54,8 @@ use streamlib_engine::core::runtime::{
     BuildSource, BuildStream, StagedArtifact,
 };
 use streamlib_pack::{
-    assemble_artifact_with_cargo_config, AssembleOptions, AssembleTarget, PackEventSink, PackStream,
-    PathDepPolicy,
+    AssembleOptions, AssembleTarget, PackEventSink, PackStream, PathDepPolicy,
+    assemble_artifact_with_cargo_config,
 };
 
 /// Monotonic counter for unique per-build temp dir names (process-local;
@@ -121,7 +121,7 @@ impl BuildOrchestrator for PolyglotBuildOrchestrator {
                 return Err(BuildError::UnsupportedSource(format!(
                     "slpkg archive {} — extraction is the engine's job, not the builder's",
                     p.display()
-                )))
+                )));
             }
             // Remote fetch is a build-service concern (future streamlibd),
             // not the in-process builder's.
@@ -129,7 +129,7 @@ impl BuildOrchestrator for PolyglotBuildOrchestrator {
                 return Err(BuildError::UnsupportedSource(format!(
                     "remote source {url} — the in-process orchestrator builds local \
                      sources only; a build-service orchestrator handles remotes"
-                )))
+                )));
             }
         };
         self.materialize_package_dir(request, &pkg_dir, sink)
@@ -164,10 +164,12 @@ impl PolyglotBuildOrchestrator {
         let config = build::read_minimal_project_config(pkg_dir)
             .map_err(|e| other(&pkg_label, format!("reading streamlib.yaml: {e}")))?
             .ok_or_else(|| other(&pkg_label, "no streamlib.yaml at source dir".into()))?;
-        let package = config
-            .package
-            .as_ref()
-            .ok_or_else(|| other(&pkg_label, "streamlib.yaml missing [package] section".into()))?;
+        let package = config.package.as_ref().ok_or_else(|| {
+            other(
+                &pkg_label,
+                "streamlib.yaml missing [package] section".into(),
+            )
+        })?;
         let cache_slot = streamlib_engine::core::get_cached_package_dir_for_name_version(
             package.name.as_str(),
             package.version,
@@ -536,8 +538,12 @@ struct ActiveBuildLink {
 /// crates from the checkout, some from the registry), the exact failure mode
 /// link mode exists to prevent.
 fn discover_active_build_link(pkg_label: &str) -> Result<Option<ActiveBuildLink>, BuildError> {
-    let cwd = std::env::current_dir()
-        .map_err(|e| other(pkg_label, format!("resolving current working directory: {e}")))?;
+    let cwd = std::env::current_dir().map_err(|e| {
+        other(
+            pkg_label,
+            format!("resolving current working directory: {e}"),
+        )
+    })?;
     discover_active_build_link_from(&cwd, pkg_label)
 }
 
@@ -687,12 +693,17 @@ mod tests {
             .materialize(&request(src.path(), BuildPolicy::IfStale), &NoopSink)
             .expect("schemas-only must materialize");
 
-        let expected =
-            streamlib_engine::core::get_cached_package_dir("schemas-only-0.1.0");
-        assert_eq!(staged.staged_dir, expected, "must stage into the package cache");
+        let expected = streamlib_engine::core::get_cached_package_dir("schemas-only-0.1.0");
+        assert_eq!(
+            staged.staged_dir, expected,
+            "must stage into the package cache"
+        );
         assert!(staged.staged_dir.join("streamlib.yaml").is_file());
         assert!(staged.staged_dir.join("schemas/test_schema.yaml").is_file());
-        assert!(!staged.rebuilt, "no compiler ran for a schemas-only package");
+        assert!(
+            !staged.rebuilt,
+            "no compiler ran for a schemas-only package"
+        );
         assert!(
             staged.staged_dir.join(SIDECAR_NAME).is_file(),
             "sidecar must be written for the IfStale skip-check"
@@ -735,8 +746,8 @@ mod tests {
         let third = orch
             .materialize(&request(src.path(), BuildPolicy::IfStale), &NoopSink)
             .unwrap();
-        let restaged = std::fs::read_to_string(third.staged_dir.join("schemas/test_schema.yaml"))
-            .unwrap();
+        let restaged =
+            std::fs::read_to_string(third.staged_dir.join("schemas/test_schema.yaml")).unwrap();
         assert!(
             restaged.contains("2048"),
             "edited schema must be re-staged into the cache, got: {restaged}"
@@ -748,11 +759,7 @@ mod tests {
     /// Used to compare two generated-code trees for an exact file-set +
     /// content match.
     fn collect_tree(dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
-        fn walk(
-            dir: &Path,
-            root: &Path,
-            out: &mut std::collections::BTreeMap<String, Vec<u8>>,
-        ) {
+        fn walk(dir: &Path, root: &Path, out: &mut std::collections::BTreeMap<String, Vec<u8>>) {
             for entry in std::fs::read_dir(dir).unwrap() {
                 let entry = entry.unwrap();
                 let path = entry.path();
@@ -842,7 +849,10 @@ mod tests {
             .unwrap()
             .filter_map(|e| e.ok())
             .any(|e| e.file_name() != "__init__.py");
-        assert!(populated, "_generated_ must be populated after first materialize");
+        assert!(
+            populated,
+            "_generated_ must be populated after first materialize"
+        );
 
         // Plant a sentinel in the staged cache slot. A skip leaves it; a
         // re-stage (atomic_swap → remove_dir_all + rename) destroys it.
@@ -888,7 +898,12 @@ mod tests {
         );
         // The re-staged slot is freshly provisioned: venv present again.
         assert!(
-            third.staged_dir.join(".venv").join("bin").join("python").exists(),
+            third
+                .staged_dir
+                .join(".venv")
+                .join("bin")
+                .join("python")
+                .exists(),
             "re-staged slot must carry a freshly provisioned venv"
         );
     }
@@ -991,9 +1006,11 @@ mod tests {
     #[test]
     fn discover_build_link_none_without_marker() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(discover_active_build_link_from(dir.path(), "tatolab/x")
-            .unwrap()
-            .is_none());
+        assert!(
+            discover_active_build_link_from(dir.path(), "tatolab/x")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1080,7 +1097,10 @@ mod tests {
         let prev_url = std::env::var("STREAMLIB_REGISTRY_URL").ok();
         let prev_py_lib = std::env::var("STREAMLIB_PYTHON_NATIVE_LIB").ok();
         unsafe {
-            std::env::set_var("STREAMLIB_REGISTRY_URL", format!("file://{}", dir.display()));
+            std::env::set_var(
+                "STREAMLIB_REGISTRY_URL",
+                format!("file://{}", dir.display()),
+            );
             std::env::remove_var("STREAMLIB_PYTHON_NATIVE_LIB");
         }
         let out = f();
@@ -1183,7 +1203,11 @@ streamlib-plugin-sdk = {version = "0.5.0", registry = "tatolab"}
                 .expect_err("partial release must fail the materialize pre-check")
         });
         match err {
-            BuildError::IncompleteRelease { missing, release_version, .. } => {
+            BuildError::IncompleteRelease {
+                missing,
+                release_version,
+                ..
+            } => {
                 assert_eq!(release_version, "0.5.1");
                 assert!(
                     missing.contains("streamlib-plugin-sdk"),
@@ -1218,7 +1242,11 @@ streamlib-plugin-sdk = {version = "0.5.0", registry = "tatolab"}
             .expect_err("partial release must fail the native-host pre-check")
         });
         match err {
-            BuildError::IncompleteRelease { missing, release_version, .. } => {
+            BuildError::IncompleteRelease {
+                missing,
+                release_version,
+                ..
+            } => {
                 assert_eq!(release_version, "0.5.1");
                 assert!(
                     missing.contains("streamlib-python-native"),

@@ -7,11 +7,11 @@
 //! (encode or decode). The buffer is backed by host-visible device memory so the
 //! CPU can read/write the bitstream while the GPU can consume/produce it.
 
+use std::ptr;
+use std::sync::Arc;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia_vma::{self as vma, Alloc};
-use std::ptr;
-use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // VulkanBitstreamBuffer — trait (port of the C++ pure-virtual base class)
@@ -71,10 +71,8 @@ pub trait VulkanBitstreamBuffer {
 
     /// Get a read-only pointer to the mapped buffer data at `offset`.
     /// On success sets `max_size` to the remaining bytes from `offset`.
-    fn get_read_only_data_ptr(
-        &self,
-        offset: vk::DeviceSize,
-    ) -> Option<(*const u8, vk::DeviceSize)>;
+    fn get_read_only_data_ptr(&self, offset: vk::DeviceSize)
+    -> Option<(*const u8, vk::DeviceSize)>;
 
     fn flush_range(&self, offset: vk::DeviceSize, size: vk::DeviceSize);
     fn invalidate_range(&self, offset: vk::DeviceSize, size: vk::DeviceSize);
@@ -217,10 +215,8 @@ impl VulkanBitstreamBufferImpl {
         // VMA creates the buffer, finds a suitable memory type (preferring
         // HOST_CACHED, falling back automatically), allocates, binds, and maps
         // — all in one call.
-        let (buffer, allocation) = unsafe {
-            self.allocator
-                .create_buffer(create_info, &alloc_options)?
-        };
+        let (buffer, allocation) =
+            unsafe { self.allocator.create_buffer(create_info, &alloc_options)? };
 
         // Retrieve the persistently mapped pointer from the allocation info.
         let info = self.allocator.get_allocation_info(allocation);
@@ -283,7 +279,10 @@ impl VulkanBitstreamBufferImpl {
         // The mapped pointer covers the whole allocation starting at 0.
         // `buffer_offset` is the offset of our buffer within that allocation.
         // We add the caller's logical offset on top.
-        Some(unsafe { self.device_memory_ptr.add((self.buffer_offset + offset) as usize) })
+        Some(unsafe {
+            self.device_memory_ptr
+                .add((self.buffer_offset + offset) as usize)
+        })
     }
 
     /// Port of the private `CopyDataToBuffer(pData, size, &dstBufferOffset)`
@@ -427,7 +426,11 @@ impl VulkanBitstreamBuffer for VulkanBitstreamBufferImpl {
                     return -1;
                 }
                 unsafe {
-                    ptr::copy_nonoverlapping(src_ptr as *const u8, dst[dst_start..].as_mut_ptr(), count);
+                    ptr::copy_nonoverlapping(
+                        src_ptr as *const u8,
+                        dst[dst_start..].as_mut_ptr(),
+                        count,
+                    );
                 }
                 size as i64
             }
@@ -490,11 +493,9 @@ impl VulkanBitstreamBuffer for VulkanBitstreamBufferImpl {
             return;
         }
         unsafe {
-            let _ = self.allocator.flush_allocation(
-                self.allocation,
-                self.buffer_offset + offset,
-                size,
-            );
+            let _ =
+                self.allocator
+                    .flush_allocation(self.allocation, self.buffer_offset + offset, size);
         }
     }
 
@@ -667,24 +668,28 @@ impl VulkanBitstreamBufferStream {
     ///
     /// # Safety
     /// Caller must ensure `index < max_size`.
-    pub unsafe fn read(&self, index: vk::DeviceSize) -> u8 { unsafe {
-        debug_assert!(!self.data_ptr.is_null());
-        debug_assert!(index < self.max_size);
-        *self.data_ptr.add(index as usize)
-    }}
+    pub unsafe fn read(&self, index: vk::DeviceSize) -> u8 {
+        unsafe {
+            debug_assert!(!self.data_ptr.is_null());
+            debug_assert!(index < self.max_size);
+            *self.data_ptr.add(index as usize)
+        }
+    }
 
     /// Write a byte at the given index, updating the high-water mark.
     ///
     /// # Safety
     /// Caller must ensure `index < max_size`.
-    pub unsafe fn write(&mut self, index: vk::DeviceSize, value: u8) { unsafe {
-        debug_assert!(!self.data_ptr.is_null());
-        debug_assert!(index < self.max_size);
-        if index > self.max_access_location {
-            self.max_access_location = index;
+    pub unsafe fn write(&mut self, index: vk::DeviceSize, value: u8) {
+        unsafe {
+            debug_assert!(!self.data_ptr.is_null());
+            debug_assert!(index < self.max_size);
+            if index > self.max_access_location {
+                self.max_access_location = index;
+            }
+            *self.data_ptr.add(index as usize) = value;
         }
-        *self.data_ptr.add(index as usize) = value;
-    }}
+    }
 
     pub fn is_valid(&self) -> bool {
         !self.data_ptr.is_null() && self.max_size != 0 && self.bitstream_buffer.is_some()

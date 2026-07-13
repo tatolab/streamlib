@@ -17,9 +17,9 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use super::super::shared::handle_as_gpu_context;
 use super::super::super::run_host_extern_c;
 use super::super::super::shared::wire::write_err;
+use super::super::shared::handle_as_gpu_context;
 
 pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_set_video_source_timeline_semaphore(
     handle: *const c_void,
@@ -43,8 +43,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_set
                 // the caller's Arc strong-count is unchanged.
                 // Mirrors the `host_gpu_lim_register_texture` pattern
                 // for borrowed `Arc<TextureInner>`-shaped handles.
-                let ptr = timeline_handle
-                    as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore;
+                let ptr = timeline_handle as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore;
                 unsafe {
                     Arc::increment_strong_count(ptr);
                 }
@@ -124,8 +123,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_wai
                 // itself — otherwise the host would re-dispatch
                 // through the vtable into infinite recursion.
                 let timeline = unsafe {
-                    &*(timeline_handle
-                        as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore)
+                    &*(timeline_handle as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore)
                 };
                 match timeline.wait_direct(value, timeout_ns) {
                     Ok(()) => 0,
@@ -212,8 +210,7 @@ mod tier1_wire_format_tests {
     #[test]
     fn set_video_source_timeline_is_noop_on_null_gpu_handle() {
         unsafe {
-            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE
-                .set_video_source_timeline_semaphore)(
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.set_video_source_timeline_semaphore)(
                 std::ptr::null(),
                 std::ptr::null(),
             );
@@ -232,8 +229,9 @@ mod tier1_wire_format_tests {
     #[test]
     fn clear_video_source_timeline_is_noop_on_null_gpu_handle() {
         unsafe {
-            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE
-                .clear_video_source_timeline_semaphore)(std::ptr::null());
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.clear_video_source_timeline_semaphore)(
+                std::ptr::null(),
+            );
         }
     }
 
@@ -251,8 +249,7 @@ mod tier1_wire_format_tests {
     #[test]
     fn host_video_source_timeline_arc_returns_null_on_null_gpu_handle() {
         let raw = unsafe {
-            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE
-                .host_video_source_timeline_arc)(std::ptr::null())
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.host_video_source_timeline_arc)(std::ptr::null())
         };
         assert!(raw.is_null(), "expected null on null gpu_handle");
     }

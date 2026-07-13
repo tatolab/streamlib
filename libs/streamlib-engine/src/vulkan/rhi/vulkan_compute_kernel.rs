@@ -28,10 +28,8 @@ use std::ffi::c_void;
 
 use streamlib_plugin_abi::GpuContextFullAccessVTable;
 
-use crate::core::rhi::{
-    ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, Texture,
-};
-use crate::core::{Result, Error};
+use crate::core::rhi::{ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, Texture};
+use crate::core::{Error, Result};
 
 /// Env var that overrides the default pipeline-cache directory. Used by tests
 /// and headless / CI scenarios that need a writable, isolated cache root.
@@ -192,18 +190,14 @@ impl VulkanComputeKernelInner {
 
         let shader_module = create_shader_module(device, &spirv, descriptor.label)?;
 
-        let descriptor_set_layout = match create_descriptor_set_layout(
-            device,
-            descriptor.bindings,
-            immutable_samplers,
-        )
-        {
-            Ok(layout) => layout,
-            Err(e) => {
-                unsafe { device.destroy_shader_module(shader_module, None) };
-                return Err(e);
-            }
-        };
+        let descriptor_set_layout =
+            match create_descriptor_set_layout(device, descriptor.bindings, immutable_samplers) {
+                Ok(layout) => layout,
+                Err(e) => {
+                    unsafe { device.destroy_shader_module(shader_module, None) };
+                    return Err(e);
+                }
+            };
 
         let pipeline_layout = match create_pipeline_layout(
             device,
@@ -251,23 +245,20 @@ impl VulkanComputeKernelInner {
             }
         };
 
-        let descriptor_set = match allocate_descriptor_set(
-            device,
-            descriptor_pool,
-            descriptor_set_layout,
-        ) {
-            Ok(s) => s,
-            Err(e) => {
-                unsafe {
-                    device.destroy_descriptor_pool(descriptor_pool, None);
-                    device.destroy_pipeline(pipeline, None);
-                    device.destroy_pipeline_layout(pipeline_layout, None);
-                    device.destroy_descriptor_set_layout(descriptor_set_layout, None);
-                    device.destroy_shader_module(shader_module, None);
+        let descriptor_set =
+            match allocate_descriptor_set(device, descriptor_pool, descriptor_set_layout) {
+                Ok(s) => s,
+                Err(e) => {
+                    unsafe {
+                        device.destroy_descriptor_pool(descriptor_pool, None);
+                        device.destroy_pipeline(pipeline, None);
+                        device.destroy_pipeline_layout(pipeline_layout, None);
+                        device.destroy_descriptor_set_layout(descriptor_set_layout, None);
+                        device.destroy_shader_module(shader_module, None);
+                    }
+                    return Err(e);
                 }
-                return Err(e);
-            }
-        };
+            };
 
         let command_pool = match create_command_pool(device, queue_family_index) {
             Ok(p) => p,
@@ -336,10 +327,7 @@ impl VulkanComputeKernelInner {
             command_buffer,
             fence,
             default_sampler: Mutex::new(None),
-            immutable_sampler_bindings: immutable_samplers
-                .iter()
-                .map(|(b, _)| *b)
-                .collect(),
+            immutable_sampler_bindings: immutable_samplers.iter().map(|(b, _)| *b).collect(),
             pending: Mutex::new(PendingState {
                 bindings: HashMap::new(),
                 push_constants: Vec::new(),
@@ -416,10 +404,10 @@ impl VulkanComputeKernelInner {
         }
         let view = vk_image_view_for(texture)?;
         let sampler = self.default_sampler()?;
-        self.pending.lock().bindings.insert(
-            binding,
-            BindingResource::SampledImage { view, sampler },
-        );
+        self.pending
+            .lock()
+            .bindings
+            .insert(binding, BindingResource::SampledImage { view, sampler });
         Ok(())
     }
 
@@ -445,11 +433,7 @@ impl VulkanComputeKernelInner {
     /// setters that take engine `Texture` handles. The view must be in
     /// `SHADER_READ_ONLY_OPTIMAL` at dispatch time; caller is responsible
     /// for the layout transition.
-    pub(crate) fn set_sampled_image_view(
-        &self,
-        binding: u32,
-        view: vk::ImageView,
-    ) -> Result<()> {
+    pub(crate) fn set_sampled_image_view(&self, binding: u32, view: vk::ImageView) -> Result<()> {
         self.expect_kind(binding, ComputeBindingKind::SampledImage)?;
         self.pending
             .lock()
@@ -497,11 +481,7 @@ impl VulkanComputeKernelInner {
     /// slot. Escape hatch for callers that build per-plane reinterpreted-
     /// format storage views by hand against a multi-planar image. The
     /// view must be in `GENERAL` layout at dispatch time.
-    pub(crate) fn set_storage_image_view(
-        &self,
-        binding: u32,
-        view: vk::ImageView,
-    ) -> Result<()> {
+    pub(crate) fn set_storage_image_view(&self, binding: u32, view: vk::ImageView) -> Result<()> {
         self.expect_kind(binding, ComputeBindingKind::StorageImage)?;
         self.pending
             .lock()
@@ -529,8 +509,7 @@ impl VulkanComputeKernelInner {
     /// bytes. The value's size in bytes must match `push_constant_size`.
     pub fn set_push_constants_value<T: Copy>(&self, value: &T) -> Result<()> {
         let size = std::mem::size_of::<T>();
-        let bytes =
-            unsafe { std::slice::from_raw_parts(value as *const T as *const u8, size) };
+        let bytes = unsafe { std::slice::from_raw_parts(value as *const T as *const u8, size) };
         self.set_push_constants(bytes)
     }
 
@@ -540,7 +519,12 @@ impl VulkanComputeKernelInner {
     /// Every binding declared at construction must have been set since the last
     /// dispatch (unset bindings are an error — Vulkan's behavior in that case
     /// is undefined, so we refuse to dispatch).
-    pub fn dispatch(&self, group_count_x: u32, group_count_y: u32, group_count_z: u32) -> Result<()> {
+    pub fn dispatch(
+        &self,
+        group_count_x: u32,
+        group_count_y: u32,
+        group_count_z: u32,
+    ) -> Result<()> {
         // Drain + validate up-front so concurrent set_* calls during the
         // dispatch don't leak into the next one.
         let pending = self.drain_and_validate_pending()?;
@@ -550,29 +534,21 @@ impl VulkanComputeKernelInner {
         unsafe {
             self.device
                 .wait_for_fences(&[self.fence], true, u64::MAX)
-                .map_err(|e| {
-                    Error::GpuError(format!("Failed to wait for compute fence: {e}"))
-                })?;
+                .map_err(|e| Error::GpuError(format!("Failed to wait for compute fence: {e}")))?;
             self.device
                 .reset_fences(&[self.fence])
-                .map_err(|e| {
-                    Error::GpuError(format!("Failed to reset compute fence: {e}"))
-                })?;
+                .map_err(|e| Error::GpuError(format!("Failed to reset compute fence: {e}")))?;
 
             self.device
                 .reset_command_buffer(self.command_buffer, vk::CommandBufferResetFlags::empty())
-                .map_err(|e| {
-                    Error::GpuError(format!("Failed to reset command buffer: {e}"))
-                })?;
+                .map_err(|e| Error::GpuError(format!("Failed to reset command buffer: {e}")))?;
 
             let begin_info = vk::CommandBufferBeginInfo::builder()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
                 .build();
             self.device
                 .begin_command_buffer(self.command_buffer, &begin_info)
-                .map_err(|e| {
-                    Error::GpuError(format!("Failed to begin command buffer: {e}"))
-                })?;
+                .map_err(|e| Error::GpuError(format!("Failed to begin command buffer: {e}")))?;
         }
 
         self.record_inner(
@@ -586,9 +562,7 @@ impl VulkanComputeKernelInner {
         unsafe {
             self.device
                 .end_command_buffer(self.command_buffer)
-                .map_err(|e| {
-                    Error::GpuError(format!("Failed to end command buffer: {e}"))
-                })?;
+                .map_err(|e| Error::GpuError(format!("Failed to end command buffer: {e}")))?;
 
             let cmd_info = vk::CommandBufferSubmitInfo::builder()
                 .command_buffer(self.command_buffer)
@@ -603,9 +577,7 @@ impl VulkanComputeKernelInner {
 
             self.device
                 .wait_for_fences(&[self.fence], true, u64::MAX)
-                .map_err(|e| {
-                    Error::GpuError(format!("Failed to wait for compute fence: {e}"))
-                })?;
+                .map_err(|e| Error::GpuError(format!("Failed to wait for compute fence: {e}")))?;
         }
 
         Ok(())
@@ -667,10 +639,7 @@ impl VulkanComputeKernelInner {
         image_view_handle: u64,
     ) -> Result<()> {
         use vulkanalia::vk::Handle;
-        self.set_combined_image_sampler_view(
-            binding,
-            vk::ImageView::from_raw(image_view_handle),
-        )
+        self.set_combined_image_sampler_view(binding, vk::ImageView::from_raw(image_view_handle))
     }
 
     pub(crate) fn set_storage_image_view_raw(
@@ -760,12 +729,8 @@ impl VulkanComputeKernelInner {
                 );
             }
 
-            self.device.cmd_dispatch(
-                command_buffer,
-                group_count_x,
-                group_count_y,
-                group_count_z,
-            );
+            self.device
+                .cmd_dispatch(command_buffer, group_count_x, group_count_y, group_count_z);
         }
 
         Ok(())
@@ -782,12 +747,16 @@ impl VulkanComputeKernelInner {
     }
 
     fn expect_kind(&self, binding: u32, expected: ComputeBindingKind) -> Result<()> {
-        let spec = self.bindings.iter().find(|b| b.binding == binding).ok_or_else(|| {
-            Error::GpuError(format!(
-                "Compute kernel '{}': binding {} not declared",
-                self.label, binding
-            ))
-        })?;
+        let spec = self
+            .bindings
+            .iter()
+            .find(|b| b.binding == binding)
+            .ok_or_else(|| {
+                Error::GpuError(format!(
+                    "Compute kernel '{}': binding {} not declared",
+                    self.label, binding
+                ))
+            })?;
         if spec.kind != expected {
             return Err(Error::GpuError(format!(
                 "Compute kernel '{}': binding {} declared as {:?}, but {:?} was set",
@@ -821,7 +790,8 @@ impl VulkanComputeKernelInner {
     }
 
     fn flush_descriptor_writes(&self, pending: &PendingState) -> Result<()> {
-        let mut buffer_infos: Vec<vk::DescriptorBufferInfo> = Vec::with_capacity(self.bindings.len());
+        let mut buffer_infos: Vec<vk::DescriptorBufferInfo> =
+            Vec::with_capacity(self.bindings.len());
         let mut image_infos: Vec<vk::DescriptorImageInfo> = Vec::with_capacity(self.bindings.len());
         let mut writes: Vec<vk::WriteDescriptorSet> = Vec::with_capacity(self.bindings.len());
 
@@ -889,10 +859,7 @@ impl VulkanComputeKernelInner {
                         image_idx: Some(idx),
                     });
                 }
-                (
-                    ComputeBindingKind::SampledImage,
-                    BindingResource::SampledImageOnly { view },
-                ) => {
+                (ComputeBindingKind::SampledImage, BindingResource::SampledImageOnly { view }) => {
                     let idx = image_infos.len();
                     image_infos.push(
                         vk::DescriptorImageInfo::builder()
@@ -1026,8 +993,7 @@ pub struct VulkanComputeKernel {
     /// Parent vtable for plugin ABI Clone/Drop dispatch (#918 Phase D).
     pub(crate) vtable: *const GpuContextFullAccessVTable,
     /// Per-type vtable for plugin ABI method dispatch (#907 Phase E).
-    pub(crate) methods_vtable:
-        *const streamlib_plugin_abi::VulkanComputeKernelMethodsVTable,
+    pub(crate) methods_vtable: *const streamlib_plugin_abi::VulkanComputeKernelMethodsVTable,
     /// Cached push-constant size in bytes. Set at construction; fixed
     /// for the kernel's lifetime.
     pub(crate) cached_push_constant_size: u32,
@@ -1069,8 +1035,7 @@ impl VulkanComputeKernel {
     pub(crate) fn from_arc_into_raw(arc: Arc<VulkanComputeKernelInner>) -> Self {
         let cached_push_constant_size = arc.push_constant_size();
         let handle = Arc::into_raw(arc) as *const c_void;
-        let vtable =
-            crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
+        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
         let methods_vtable =
             crate::core::plugin::host_services::host_vulkan_compute_kernel_methods_vtable();
         Self {
@@ -1175,11 +1140,7 @@ impl VulkanComputeKernel {
     /// the body is mode-routed through the v5 vtable slot so cdylib
     /// dispatch avoids the `host_inner()` panic guard. The Python /
     /// Deno consumer-rhi cdylibs don't link this code at all.
-    pub(crate) fn set_sampled_image_view(
-        &self,
-        binding: u32,
-        view: vk::ImageView,
-    ) -> Result<()> {
+    pub(crate) fn set_sampled_image_view(&self, binding: u32, view: vk::ImageView) -> Result<()> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
             return self.dispatch_set_sampled_image_view_via_vtable(binding, view);
         }
@@ -1198,9 +1159,7 @@ impl VulkanComputeKernel {
         view: vk::ImageView,
     ) -> Result<()> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_combined_image_sampler_view_via_vtable(
-                binding, view,
-            );
+            return self.dispatch_set_combined_image_sampler_view_via_vtable(binding, view);
         }
         self.host_inner()
             .set_combined_image_sampler_view(binding, view)
@@ -1211,11 +1170,7 @@ impl VulkanComputeKernel {
     ///
     /// See [`Self::set_sampled_image_view`] for the cdylib-routing
     /// rationale.
-    pub(crate) fn set_storage_image_view(
-        &self,
-        binding: u32,
-        view: vk::ImageView,
-    ) -> Result<()> {
+    pub(crate) fn set_storage_image_view(&self, binding: u32, view: vk::ImageView) -> Result<()> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
             return self.dispatch_set_storage_image_view_via_vtable(binding, view);
         }
@@ -1240,10 +1195,7 @@ impl VulkanComputeKernel {
             // SAFETY: T is Copy + Sized so its layout is stable; the
             // byte view is read-only and consumed inside the plugin ABI call.
             let bytes = unsafe {
-                std::slice::from_raw_parts(
-                    value as *const T as *const u8,
-                    std::mem::size_of::<T>(),
-                )
+                std::slice::from_raw_parts(value as *const T as *const u8, std::mem::size_of::<T>())
             };
             return self.dispatch_set_push_constants_via_vtable(bytes);
         }
@@ -1260,11 +1212,7 @@ impl VulkanComputeKernel {
         group_count_z: u32,
     ) -> Result<()> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_dispatch_via_vtable(
-                group_count_x,
-                group_count_y,
-                group_count_z,
-            );
+            return self.dispatch_dispatch_via_vtable(group_count_x, group_count_y, group_count_z);
         }
         self.host_inner()
             .dispatch(group_count_x, group_count_y, group_count_z)
@@ -1292,8 +1240,7 @@ impl VulkanComputeKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1326,8 +1273,7 @@ impl VulkanComputeKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1358,8 +1304,7 @@ impl VulkanComputeKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1390,8 +1335,7 @@ impl VulkanComputeKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1422,8 +1366,7 @@ impl VulkanComputeKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1454,18 +1397,13 @@ impl VulkanComputeKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
 
     #[cfg(target_os = "linux")]
-    fn dispatch_set_storage_image_via_vtable(
-        &self,
-        binding: u32,
-        texture: &Texture,
-    ) -> Result<()> {
+    fn dispatch_set_storage_image_via_vtable(&self, binding: u32, texture: &Texture) -> Result<()> {
         if self.methods_vtable.is_null() {
             return Err(Error::GpuError(
                 "set_storage_image: kernel methods vtable is null".into(),
@@ -1486,8 +1424,7 @@ impl VulkanComputeKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1528,8 +1465,7 @@ impl VulkanComputeKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1543,8 +1479,7 @@ impl VulkanComputeKernel {
         use vulkanalia::vk::Handle;
         if self.methods_vtable.is_null() {
             return Err(Error::GpuError(
-                "set_combined_image_sampler_view: kernel methods vtable is null"
-                    .into(),
+                "set_combined_image_sampler_view: kernel methods vtable is null".into(),
             ));
         }
         let mut err_buf = [0u8; 256];
@@ -1562,8 +1497,7 @@ impl VulkanComputeKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1595,8 +1529,7 @@ impl VulkanComputeKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1636,8 +1569,7 @@ impl VulkanComputeKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1657,11 +1589,10 @@ impl VulkanComputeKernel {
         group_z: u32,
     ) -> Result<()> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_record_via_vtable(
-                command_buffer, group_x, group_y, group_z,
-            );
+            return self.dispatch_record_via_vtable(command_buffer, group_x, group_y, group_z);
         }
-        self.host_inner().record(command_buffer, group_x, group_y, group_z)
+        self.host_inner()
+            .record(command_buffer, group_x, group_y, group_z)
     }
 
     /// Kernel's declared binding shape. Mode-routed: host-mode reads
@@ -1739,8 +1670,7 @@ impl VulkanComputeKernel {
             };
             if status2 != 0 {
                 let msg =
-                    String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                        .into_owned();
+                    String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
                 return Err(Error::GpuError(msg));
             }
             return heap
@@ -1750,8 +1680,7 @@ impl VulkanComputeKernel {
                 .collect();
         }
         if status != 0 {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             return Err(Error::GpuError(msg));
         }
         buf.iter()
@@ -1862,14 +1791,12 @@ fn validate_against_spirv(descriptor: &ComputeKernelDescriptor<'_>) -> Result<()
 
     // For each declared binding, the SPIR-V must agree on (a) presence and (b) descriptor type.
     for spec in descriptor.bindings {
-        let info = set0
-            .and_then(|m| m.get(&spec.binding))
-            .ok_or_else(|| {
-                Error::GpuError(format!(
-                    "Compute kernel '{}': binding {} declared but missing in SPIR-V",
-                    descriptor.label, spec.binding
-                ))
-            })?;
+        let info = set0.and_then(|m| m.get(&spec.binding)).ok_or_else(|| {
+            Error::GpuError(format!(
+                "Compute kernel '{}': binding {} declared but missing in SPIR-V",
+                descriptor.label, spec.binding
+            ))
+        })?;
         let expected = expected_spirv_type(spec.kind);
         if info.ty != expected {
             return Err(Error::GpuError(format!(
@@ -2002,11 +1929,13 @@ fn create_pipeline_layout(
 ) -> Result<vk::PipelineLayout> {
     let set_layouts = [set_layout];
     let push_constant_ranges: Vec<vk::PushConstantRange> = if push_constant_size > 0 {
-        vec![vk::PushConstantRange::builder()
-            .stage_flags(vk::ShaderStageFlags::COMPUTE)
-            .offset(0)
-            .size(push_constant_size)
-            .build()]
+        vec![
+            vk::PushConstantRange::builder()
+                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                .offset(0)
+                .size(push_constant_size)
+                .build(),
+        ]
     } else {
         Vec::new()
     };
@@ -2062,8 +1991,7 @@ fn create_compute_pipeline_with_cache(
         .layout(pipeline_layout)
         .build();
 
-    let pipelines_result =
-        unsafe { device.create_compute_pipelines(cache_handle, &[info], None) };
+    let pipelines_result = unsafe { device.create_compute_pipelines(cache_handle, &[info], None) };
 
     // Persist whatever the driver populated, even if one of the pipelines in
     // a hypothetical multi-pipeline batch failed (we only build one here).
@@ -2147,9 +2075,7 @@ fn create_pipeline_cache_handle(
             data.len()
         );
     } else {
-        tracing::debug!(
-            "Compute kernel '{label}': pipeline cache cold (no pInitialData)"
-        );
+        tracing::debug!("Compute kernel '{label}': pipeline cache cold (no pInitialData)");
     }
     let info = info.build();
     match unsafe { device.create_pipeline_cache(&info, None) } {
@@ -2172,9 +2098,7 @@ fn persist_pipeline_cache(
     let data = match unsafe { device.get_pipeline_cache_data(cache) } {
         Ok(data) => data,
         Err(e) => {
-            tracing::warn!(
-                "Compute kernel '{label}': vkGetPipelineCacheData failed: {e}"
-            );
+            tracing::warn!("Compute kernel '{label}': vkGetPipelineCacheData failed: {e}");
             return;
         }
     };
@@ -2213,9 +2137,7 @@ fn atomic_write_pipeline_cache(path: &Path, data: &[u8]) -> std::io::Result<()> 
             .unwrap_or(0)
     );
     let mut tmp = path.to_path_buf();
-    tmp.set_extension(format!(
-        "bin.{suffix}"
-    ));
+    tmp.set_extension(format!("bin.{suffix}"));
     std::fs::write(&tmp, data)?;
     std::fs::rename(&tmp, path)?;
     Ok(())
@@ -2311,10 +2233,7 @@ mod tests {
 
     /// Allocate a HOST_VISIBLE storage buffer of `element_count * 4` bytes
     /// usable as both an input and output of the test_blend kernel.
-    fn make_storage_buffer(
-        device: &Arc<HostVulkanDevice>,
-        element_count: u32,
-    ) -> PixelBuffer {
+    fn make_storage_buffer(device: &Arc<HostVulkanDevice>, element_count: u32) -> PixelBuffer {
         let vk_buf = HostVulkanBuffer::new(device, (element_count as u64) * 4)
             .expect("Failed to create storage buffer");
         PixelBuffer::from_host_vulkan_buffer(
@@ -2381,9 +2300,7 @@ mod tests {
         let inputs: Vec<PixelBuffer> = (0..input_count)
             .map(|i| {
                 let buf = make_storage_buffer(device, element_count);
-                let pattern: Vec<u32> = (0..element_count)
-                    .map(|j| (j + 1) * (i + 1))
-                    .collect();
+                let pattern: Vec<u32> = (0..element_count).map(|j| (j + 1) * (i + 1)).collect();
                 write_buffer_u32(&buf, &pattern);
                 buf
             })
@@ -2400,7 +2317,9 @@ mod tests {
             .expect("set_storage_buffer_pixel for output");
 
         let push: [u32; 1] = [element_count];
-        kernel.set_push_constants_value(&push).expect("push constants");
+        kernel
+            .set_push_constants_value(&push)
+            .expect("push constants");
 
         let group_count_x = element_count.div_ceil(64);
         kernel
@@ -2421,7 +2340,10 @@ mod tests {
     }
 
     fn assert_blend_for(input_count: u32) {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         let elem_count = 256u32;
         let (inputs, output) = run_blend_kernel_for(&device, input_count, elem_count);
         let actual = read_buffer_u32(&output, elem_count as usize);
@@ -2432,34 +2354,52 @@ mod tests {
         );
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn dispatch_matches_expected_blend_for_one_input() {
         assert_blend_for(1);
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn dispatch_matches_expected_blend_for_two_inputs() {
         assert_blend_for(2);
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn dispatch_matches_expected_blend_for_four_inputs() {
         assert_blend_for(4);
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn dispatch_matches_expected_blend_for_eight_inputs() {
         assert_blend_for(8);
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn kernel_bindings_reflect_descriptor() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         for &input_count in &[1u32, 2, 4, 8] {
             let bindings = blend_descriptor(input_count);
             let kernel = VulkanComputeKernel::new(
@@ -2484,10 +2424,16 @@ mod tests {
         }
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn rejects_descriptor_with_mismatched_binding_kind() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         // SPIR-V binding 0 is StorageBuffer — declaring it as UniformBuffer must fail.
         let bindings = vec![
             ComputeBindingSpec::uniform_buffer(0),
@@ -2510,10 +2456,16 @@ mod tests {
         );
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn rejects_descriptor_missing_a_binding_the_shader_declares() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         // 4-input shader declares bindings 0..3 + 8; omit binding 2.
         let bindings = vec![
             ComputeBindingSpec::storage_buffer(0),
@@ -2538,10 +2490,16 @@ mod tests {
         );
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn rejects_descriptor_with_extra_binding_not_in_shader() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         // 1-input shader declares only bindings 0 and 8 — extra binding 1 is invalid.
         let bindings = vec![
             ComputeBindingSpec::storage_buffer(0),
@@ -2565,10 +2523,16 @@ mod tests {
         );
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn rejects_push_constant_size_mismatch() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         let bindings = blend_descriptor(1);
         let result = VulkanComputeKernel::new(
             &device,
@@ -2587,10 +2551,16 @@ mod tests {
         );
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn dispatch_without_setting_bindings_fails_loud() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         let bindings = blend_descriptor(2);
         let kernel = VulkanComputeKernel::new(
             &device,
@@ -2602,8 +2572,13 @@ mod tests {
             },
         )
         .expect("kernel creation");
-        kernel.set_push_constants_value(&[1u32]).expect("push constants");
-        let err = kernel.dispatch(1, 1, 1).err().expect("expected dispatch failure");
+        kernel
+            .set_push_constants_value(&[1u32])
+            .expect("push constants");
+        let err = kernel
+            .dispatch(1, 1, 1)
+            .err()
+            .expect("expected dispatch failure");
         let msg = format!("{err}");
         assert!(
             msg.contains("not set before dispatch"),
@@ -2611,10 +2586,16 @@ mod tests {
         );
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn dispatch_completes_within_reasonable_budget() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         // Performance smoke: a small kernel build + first dispatch should
         // round-trip in well under a couple seconds on any reasonable GPU.
         // Catches catastrophic regressions like accidentally recreating
@@ -2737,11 +2718,17 @@ mod tests {
         let _ = dir; // keep the helper's tempdir name in scope
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     #[serial(streamlib_pipeline_cache_env)]
     fn cache_miss_writes_cache_file_after_kernel_construction() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         let dir = unique_cache_dir("miss-writes");
         with_pipeline_cache_dir(&dir, || {
             assert!(
@@ -2769,12 +2756,8 @@ mod tests {
             assert!(!written.is_empty(), "cache file must not be empty");
             // Header sanity: VkPipelineCacheHeaderVersionOne is 32 bytes,
             // first u32 is header_size = 32, second u32 is header_version = 1.
-            let len = u32::from_le_bytes([
-                written[0], written[1], written[2], written[3],
-            ]);
-            let ver = u32::from_le_bytes([
-                written[4], written[5], written[6], written[7],
-            ]);
+            let len = u32::from_le_bytes([written[0], written[1], written[2], written[3]]);
+            let ver = u32::from_le_bytes([written[4], written[5], written[6], written[7]]);
             assert!(
                 len >= 16 && ver == 1,
                 "expected pipeline cache header (len, ver=1), got len={len} ver={ver}"
@@ -2782,11 +2765,17 @@ mod tests {
         });
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     #[serial(streamlib_pipeline_cache_env)]
     fn cache_hit_does_not_panic_or_break_kernel_construction() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         let dir = unique_cache_dir("hit-reuses");
         with_pipeline_cache_dir(&dir, || {
             let bindings = blend_descriptor(1);
@@ -2805,7 +2794,10 @@ mod tests {
             );
             let cache_path = pipeline_cache_file_path(blend_spv(1)).expect("path");
             let warm_blob = std::fs::read(&cache_path).expect("warm read");
-            assert!(!warm_blob.is_empty(), "cache must be populated by first run");
+            assert!(
+                !warm_blob.is_empty(),
+                "cache must be populated by first run"
+            );
 
             // Second construction should hit the cache. We can't assert on
             // tracing output deterministically, but we can assert that the
@@ -2828,11 +2820,17 @@ mod tests {
         });
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     #[serial(streamlib_pipeline_cache_env)]
     fn corrupt_cache_blob_falls_back_to_recompile_and_overwrites() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         let dir = unique_cache_dir("corrupt-blob");
         with_pipeline_cache_dir(&dir, || {
             std::fs::create_dir_all(&dir).expect("mkdir");
@@ -2865,11 +2863,17 @@ mod tests {
         });
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     #[serial(streamlib_pipeline_cache_env)]
     fn read_only_cache_dir_does_not_break_kernel_construction() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         let dir = unique_cache_dir("readonly-dir");
         with_pipeline_cache_dir(&dir, || {
             std::fs::create_dir_all(&dir).expect("mkdir");
@@ -2914,10 +2918,16 @@ mod tests {
     const SAMPLED_IMAGE_SPV: &[u8] =
         include_bytes!(concat!(env!("OUT_DIR"), "/test_sampled_image.spv"));
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn sampled_image_binding_dispatches_with_raw_view() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
 
         let bindings = [
             ComputeBindingSpec::sampled_image(0),
@@ -2950,12 +2960,16 @@ mod tests {
         // RGBA8 STORAGE image (the output). Each gets its own VkImageView.
         let device_handle = device.device().clone();
         let allocator = device.allocator().clone();
-        let make_image = |usage: vk::ImageUsageFlags|
-            -> (vk::Image, vulkanalia_vma::Allocation, vk::ImageView) {
+        let make_image =
+            |usage: vk::ImageUsageFlags| -> (vk::Image, vulkanalia_vma::Allocation, vk::ImageView) {
                 let info = vk::ImageCreateInfo::builder()
                     .image_type(vk::ImageType::_2D)
                     .format(vk::Format::R8G8B8A8_UNORM)
-                    .extent(vk::Extent3D { width: 1, height: 1, depth: 1 })
+                    .extent(vk::Extent3D {
+                        width: 1,
+                        height: 1,
+                        depth: 1,
+                    })
                     .mip_levels(1)
                     .array_layers(1)
                     .samples(vk::SampleCountFlags::_1)
@@ -2969,10 +2983,8 @@ mod tests {
                     ..Default::default()
                 };
                 use vulkanalia_vma::Alloc;
-                let (image, alloc) = unsafe {
-                    allocator.create_image(info, &alloc_opts)
-                }
-                .expect("create_image");
+                let (image, alloc) =
+                    unsafe { allocator.create_image(info, &alloc_opts) }.expect("create_image");
                 let view_info = vk::ImageViewCreateInfo::builder()
                     .image(image)
                     .view_type(vk::ImageViewType::_2D)
@@ -2985,17 +2997,14 @@ mod tests {
                         layer_count: 1,
                     })
                     .build();
-                let view = unsafe {
-                    device_handle.create_image_view(&view_info, None)
-                }
-                .expect("create_image_view");
+                let view = unsafe { device_handle.create_image_view(&view_info, None) }
+                    .expect("create_image_view");
                 (image, alloc, view)
             };
 
         let (in_image, in_alloc, in_view) =
             make_image(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST);
-        let (out_image, out_alloc, out_view) =
-            make_image(vk::ImageUsageFlags::STORAGE);
+        let (out_image, out_alloc, out_view) = make_image(vk::ImageUsageFlags::STORAGE);
 
         // Transition both images out of UNDEFINED so the shader can sample
         // / write without producing undefined contents on debug drivers.
@@ -3018,8 +3027,7 @@ mod tests {
         let begin = vk::CommandBufferBeginInfo::builder()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
             .build();
-        unsafe { device_handle.begin_command_buffer(cb, &begin) }
-            .expect("begin_command_buffer");
+        unsafe { device_handle.begin_command_buffer(cb, &begin) }.expect("begin_command_buffer");
 
         let barriers = [
             vk::ImageMemoryBarrier2::builder()
@@ -3059,14 +3067,14 @@ mod tests {
                 })
                 .build(),
         ];
-        let dep = vk::DependencyInfo::builder().image_memory_barriers(&barriers).build();
+        let dep = vk::DependencyInfo::builder()
+            .image_memory_barriers(&barriers)
+            .build();
         unsafe { device_handle.cmd_pipeline_barrier2(cb, &dep) };
-        unsafe { device_handle.end_command_buffer(cb) }
-            .expect("end_command_buffer");
+        unsafe { device_handle.end_command_buffer(cb) }.expect("end_command_buffer");
 
         let fence_info = vk::FenceCreateInfo::builder().build();
-        let fence = unsafe { device_handle.create_fence(&fence_info, None) }
-            .expect("create_fence");
+        let fence = unsafe { device_handle.create_fence(&fence_info, None) }.expect("create_fence");
         let cb_submit = vk::CommandBufferSubmitInfo::builder()
             .command_buffer(cb)
             .build();
@@ -3108,6 +3116,4 @@ mod tests {
             allocator.destroy_image(out_image, out_alloc);
         }
     }
-
 }
-

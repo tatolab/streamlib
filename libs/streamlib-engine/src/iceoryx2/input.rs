@@ -39,7 +39,7 @@ use streamlib_plugin_abi::InputMailboxesVTable;
 
 use super::mailbox::PortMailbox;
 use super::read_mode::ReadMode;
-use super::{FrameHeader, FRAME_HEADER_SIZE};
+use super::{FRAME_HEADER_SIZE, FrameHeader};
 use crate::core::error::{Error, Result};
 
 /// Thread-local subscriber wrapper.
@@ -255,7 +255,10 @@ impl InputMailboxesInner {
     pub fn drain_listener(&self) {
         if let Some(listener) = self.listener.get() {
             if let Err(e) = listener.try_wait_all(|_event_id| {}) {
-                tracing::trace!("InputMailboxes: drain_listener try_wait_all failed: {:?}", e);
+                tracing::trace!(
+                    "InputMailboxes: drain_listener try_wait_all failed: {:?}",
+                    e
+                );
             }
         }
     }
@@ -499,9 +502,9 @@ impl InputMailboxes {
     ///
     /// Source-compatible with the pre-#894 `InputMailboxes::read`.
     pub fn read<T: DeserializeOwned>(&self, port: &str) -> Result<T> {
-        let raw = self.read_raw(port)?.ok_or_else(|| {
-            Error::Link(format!("No data available on port: {}", port))
-        })?;
+        let raw = self
+            .read_raw(port)?
+            .ok_or_else(|| Error::Link(format!("No data available on port: {}", port)))?;
         rmp_serde::from_slice(&raw.0)
             .map_err(|e| Error::Link(format!("Failed to deserialize frame: {}", e)))
     }
@@ -558,8 +561,7 @@ impl InputMailboxes {
             )
         };
         if rc != 0 {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             return Err(Error::Link(format!(
                 "InputMailboxes::read_raw(port='{}') failed: {}",
                 port, msg
@@ -711,13 +713,21 @@ mod tests {
         mailboxes.add_port("port_a", 64, ReadMode::ReadNextInOrder);
         mailboxes.add_port("port_b", 64, ReadMode::ReadNextInOrder);
 
-        assert!(!mailboxes.any_port_has_data(), "empty mailboxes report no data");
+        assert!(
+            !mailboxes.any_port_has_data(),
+            "empty mailboxes report no data"
+        );
 
         // Build a minimal valid frame for `port_a` and route it directly
         // — bypasses the iceoryx2 subscriber, exercising only the
         // mailbox-depth accounting.
         let schema_ident = streamlib_ipc_types::SchemaIdentWire::from_segments(
-            "tatolab", "test", "AnyPortHasData", 1, 0, 0,
+            "tatolab",
+            "test",
+            "AnyPortHasData",
+            1,
+            0,
+            0,
         )
         .expect("schema ident");
         let make_frame = |port: &str| -> Vec<u8> {
@@ -737,7 +747,10 @@ mod tests {
         }
 
         // All 5 are queued; any_port_has_data sees them.
-        assert!(mailboxes.any_port_has_data(), "five queued frames must report has_data");
+        assert!(
+            mailboxes.any_port_has_data(),
+            "five queued frames must report has_data"
+        );
 
         // Drain port_a entirely via read_raw (skips msgpack deserialization
         // of the synthetic payload).

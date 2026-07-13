@@ -10,11 +10,10 @@
 //! and the AV1 bitstream bit-writer for OBU headers.
 
 use crate::vulkan::video::vk_video_encoder::vk_encoder_dpb_av1::{
-    VkEncDpbAV1, Av1FrameType, REFS_PER_FRAME, NUM_REF_FRAMES,
+    Av1FrameType, NUM_REF_FRAMES, REFS_PER_FRAME, VkEncDpbAV1,
 };
 use crate::vulkan::video::vk_video_encoder::vk_video_encoder::{
-    VkVideoEncodeFrameInfo, VkVideoEncoder, CodecType,
-    mem_put_le32, mem_put_le16, make_fourcc,
+    CodecType, VkVideoEncodeFrameInfo, VkVideoEncoder, make_fourcc, mem_put_le16, mem_put_le32,
 };
 use std::collections::BTreeSet;
 
@@ -147,7 +146,10 @@ pub struct VkVideoEncodeFrameInfoAV1 {
 impl Default for VkVideoEncodeFrameInfoAV1 {
     fn default() -> Self {
         Self {
-            base: VkVideoEncodeFrameInfo { codec: CodecType::Av1, ..Default::default() },
+            base: VkVideoEncodeFrameInfo {
+                codec: CodecType::Av1,
+                ..Default::default()
+            },
             frame_type: Av1FrameType::Key,
             current_frame_id: 0,
             order_hint: 0,

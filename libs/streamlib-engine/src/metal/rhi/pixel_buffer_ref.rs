@@ -9,7 +9,7 @@ use crate::apple::corevideo_ffi::{
     CVPixelBufferGetHeight, CVPixelBufferGetPixelFormatType, CVPixelBufferGetWidth,
     CVPixelBufferRef, CVPixelBufferRelease, CVPixelBufferRetain,
 };
-use crate::core::rhi::{PixelFormat, PixelBufferRef};
+use crate::core::rhi::{PixelBufferRef, PixelFormat};
 
 impl PixelBufferRef {
     /// Create from a raw CVPixelBufferRef.
@@ -101,12 +101,12 @@ pub(crate) fn drop_impl(buffer_ref: &mut PixelBufferRef) {
 // ============================================================================
 
 use crate::apple::corevideo_ffi::{
-    mach_port_deallocate, mach_task_self, CVPixelBufferCreateWithIOSurface,
-    CVPixelBufferGetIOSurface, IOSurfaceCreateMachPort, IOSurfaceGetID, IOSurfaceLookup,
-    IOSurfaceLookupFromMachPort,
+    CVPixelBufferCreateWithIOSurface, CVPixelBufferGetIOSurface, IOSurfaceCreateMachPort,
+    IOSurfaceGetID, IOSurfaceLookup, IOSurfaceLookupFromMachPort, mach_port_deallocate,
+    mach_task_self,
 };
 use crate::core::rhi::{RhiExternalHandle, RhiPixelBufferExport, RhiPixelBufferImport};
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 
 impl RhiPixelBufferExport for PixelBufferRef {
     /// Export the CVPixelBuffer's IOSurface for cross-process sharing.
@@ -145,9 +145,7 @@ impl RhiPixelBufferExport for PixelBufferRef {
                 iosurface,
                 std::process::id()
             );
-            return Err(Error::Configuration(
-                "IOSurface has invalid ID 0".into(),
-            ));
+            return Err(Error::Configuration("IOSurface has invalid ID 0".into()));
         }
 
         tracing::trace!(

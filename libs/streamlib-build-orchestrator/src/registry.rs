@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::time::Duration;
 
-use streamlib_idents::{RegistryConfig, DEFAULT_REGISTRY_URL};
+use streamlib_idents::{DEFAULT_REGISTRY_URL, RegistryConfig};
 use thiserror::Error;
 
 /// The named cargo registry the streamlib SDK crate chain + vulkanalia fork
@@ -42,7 +42,9 @@ pub enum RegistryUseError {
     CargoSubtreeMissing { tree_root: PathBuf },
     /// A local-tree reshape was requested but the reshape script could not be
     /// located; the caller must supply the streamlib `scripts/registry/` dir.
-    #[error("cargo local-registry reshape script `{RESHAPE_SCRIPT_NAME}` not found (searched: {searched:?}); run from a streamlib checkout or pass a scripts dir")]
+    #[error(
+        "cargo local-registry reshape script `{RESHAPE_SCRIPT_NAME}` not found (searched: {searched:?}); run from a streamlib checkout or pass a scripts dir"
+    )]
     ReshapeScriptNotFound { searched: Vec<PathBuf> },
     /// The reshape script ran but exited non-zero.
     #[error("cargo local-registry reshape failed: {detail}")]
@@ -149,10 +151,11 @@ pub fn use_registry(
         if !tree_root.join("cargo").is_dir() {
             return Err(RegistryUseError::CargoSubtreeMissing { tree_root });
         }
-        let lr_dir = opts
-            .cargo_local_registry_dir
-            .clone()
-            .unwrap_or_else(|| consumer_root.join(".streamlib").join("cargo-local-registry"));
+        let lr_dir = opts.cargo_local_registry_dir.clone().unwrap_or_else(|| {
+            consumer_root
+                .join(".streamlib")
+                .join("cargo-local-registry")
+        });
         let scripts_dir = match &opts.reshape_scripts_dir {
             Some(dir) => dir.clone(),
             None => locate_reshape_scripts_dir()?,
@@ -160,9 +163,7 @@ pub fn use_registry(
         reshape_sparse_cargo_to_local_registry(&tree_root, &lr_dir, &scripts_dir)?;
         // The stanza records the absolute mirror dir so cargo resolves it from
         // any working directory under the consumer root.
-        let abs_lr = lr_dir
-            .canonicalize()
-            .unwrap_or(lr_dir);
+        let abs_lr = lr_dir.canonicalize().unwrap_or(lr_dir);
         CargoReplacementSource::LocalRegistry(abs_lr)
     } else {
         // Served `http(s)://` mount → point the replacement at its sparse index.
@@ -250,16 +251,16 @@ fn write_cargo_source_replacement(
             return Err(RegistryUseError::CargoConfigRead {
                 path: config_path,
                 detail: e.to_string(),
-            })
+            });
         }
     };
     let mut doc: toml_edit::DocumentMut =
-        existing
-            .parse()
-            .map_err(|e: toml_edit::TomlError| RegistryUseError::CargoConfigParse {
+        existing.parse().map_err(
+            |e: toml_edit::TomlError| RegistryUseError::CargoConfigParse {
                 path: config_path.clone(),
                 detail: e.to_string(),
-            })?;
+            },
+        )?;
 
     let canonical = format!("sparse+{DEFAULT_REGISTRY_URL}/cargo/");
 
@@ -323,7 +324,9 @@ fn ensure_table<'a>(
     }
     table[key]
         .as_table_mut()
-        .ok_or_else(|| RegistryUseError::CargoConfigMalformed { key: key.to_string() })
+        .ok_or_else(|| RegistryUseError::CargoConfigMalformed {
+            key: key.to_string(),
+        })
 }
 
 /// [`ensure_table`] plus mark the parent implicit so only the child header
@@ -458,7 +461,7 @@ pub fn serve_registry(
         Err(e) => {
             return Err(RegistryServeError::BindPort {
                 detail: format!("127.0.0.1:{port}: {e}"),
-            })
+            });
         }
     }
 
@@ -535,7 +538,7 @@ pub fn write_npmrc_scope(
             return Err(RegistryServeError::NpmrcWrite {
                 path: npmrc,
                 detail: e.to_string(),
-            })
+            });
         }
     };
     let prefix = format!("@{TATOLAB_REGISTRY_NAME}:registry=");
@@ -573,22 +576,32 @@ mod tests {
             stanza.contains("registry = \"sparse+https://registry.tatolab.com/cargo/\""),
             "{stanza}"
         );
-        assert!(stanza.contains("replace-with = \"tatolab-local-registry\""), "{stanza}");
-        assert!(stanza.contains("[source.tatolab-local-registry]"), "{stanza}");
-        assert!(stanza.contains("local-registry = \"/home/u/.streamlib/clr\""), "{stanza}");
+        assert!(
+            stanza.contains("replace-with = \"tatolab-local-registry\""),
+            "{stanza}"
+        );
+        assert!(
+            stanza.contains("[source.tatolab-local-registry]"),
+            "{stanza}"
+        );
+        assert!(
+            stanza.contains("local-registry = \"/home/u/.streamlib/clr\""),
+            "{stanza}"
+        );
         // Serverless mirror never emits a sparse+http replacement (the #1245 poison).
         assert!(!stanza.contains("sparse+http://"), "{stanza}");
     }
 
     #[test]
     fn stanza_sparse_mirror_points_replacement_at_served_index() {
-        let repl = CargoReplacementSource::SparseMirror(
-            "sparse+http://127.0.0.1:8799/cargo/".to_string(),
-        );
+        let repl =
+            CargoReplacementSource::SparseMirror("sparse+http://127.0.0.1:8799/cargo/".to_string());
         let stanza = emit_cargo_source_replacement_stanza(&repl);
         // Canonical id preserved on the replaced source, replacement is the mount.
         assert!(
-            stanza.contains("[source.tatolab]\nregistry = \"sparse+https://registry.tatolab.com/cargo/\""),
+            stanza.contains(
+                "[source.tatolab]\nregistry = \"sparse+https://registry.tatolab.com/cargo/\""
+            ),
             "{stanza}"
         );
         assert!(
@@ -609,7 +622,10 @@ mod tests {
         let body = std::fs::read_to_string(&path).unwrap();
         // Reverting the local-registry insert would drop this line.
         assert!(body.contains("local-registry = \"/mnt/mirror\""), "{body}");
-        assert!(body.contains("replace-with = \"tatolab-local-registry\""), "{body}");
+        assert!(
+            body.contains("replace-with = \"tatolab-local-registry\""),
+            "{body}"
+        );
 
         // Parses back as valid TOML with the expected structure.
         let doc: toml_edit::DocumentMut = body.parse().unwrap();
@@ -717,7 +733,10 @@ mod tests {
         // A `file://` and a plain dir path both resolve to a local tree.
         let remote = resolve_registry_ref("https://registry.tatolab.com").unwrap();
         assert!(remote.local_tree_root().is_none());
-        assert_eq!(remote.cargo_sparse_index_url(), "sparse+https://registry.tatolab.com/cargo/");
+        assert_eq!(
+            remote.cargo_sparse_index_url(),
+            "sparse+https://registry.tatolab.com/cargo/"
+        );
 
         let tree = tempfile::tempdir().unwrap();
         let local = resolve_registry_ref(tree.path().to_str().unwrap()).unwrap();
@@ -753,7 +772,10 @@ mod tests {
             empty_scripts.path(),
         )
         .expect_err("missing reshape script must be a typed error");
-        assert!(matches!(err, RegistryUseError::ReshapeScriptNotFound { .. }));
+        assert!(matches!(
+            err,
+            RegistryUseError::ReshapeScriptNotFound { .. }
+        ));
     }
 
     #[test]

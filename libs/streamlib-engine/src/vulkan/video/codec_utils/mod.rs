@@ -8,8 +8,8 @@
 pub mod helpers;
 pub mod vk_buffer_resource;
 pub mod vk_image_resource;
+pub mod vk_video_core_profile;
 pub mod vulkan_bitstream_buffer_impl;
 pub mod vulkan_command_buffer_pool;
-pub mod vulkan_video_image_pool;
 pub mod vulkan_video_capabilities;
-pub mod vk_video_core_profile;
+pub mod vulkan_video_image_pool;

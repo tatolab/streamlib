@@ -31,8 +31,8 @@
 mod common;
 
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use streamlib_adapter_abi::testing::{CrashTiming, SubprocessCrashHarness};
@@ -95,9 +95,7 @@ fn unrelated_subprocess_crash_does_not_perturb_host_adapter() {
     let fixture = match common::HostFixture::try_new() {
         Some(f) => f,
         None => {
-            println!(
-                "unrelated_subprocess_crash: skipping — no Vulkan device available"
-            );
+            println!("unrelated_subprocess_crash: skipping — no Vulkan device available");
             return;
         }
     };

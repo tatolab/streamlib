@@ -403,16 +403,12 @@ impl JpegBufferLayout {
                 cb.h_sampling, cb.v_sampling, cr.h_sampling, cr.v_sampling
             )));
         }
-        if cb.blocks_horizontal != cr.blocks_horizontal
-            || cb.blocks_vertical != cr.blocks_vertical
+        if cb.blocks_horizontal != cr.blocks_horizontal || cb.blocks_vertical != cr.blocks_vertical
         {
             return Err(Error::GpuError(format!(
                 "jpeg_decode kernel: Cb / Cr block grids must match; got Cb \
                  {}x{} vs Cr {}x{}",
-                cb.blocks_horizontal,
-                cb.blocks_vertical,
-                cr.blocks_horizontal,
-                cr.blocks_vertical
+                cb.blocks_horizontal, cb.blocks_vertical, cr.blocks_horizontal, cr.blocks_vertical
             )));
         }
         if cb.quant_table_id != cr.quant_table_id {
@@ -433,19 +429,13 @@ impl JpegBufferLayout {
             Error::GpuError("jpeg_decode kernel: Y blocks_vertical overflows u32".into())
         })?;
         let chroma_blocks_h: u32 = cb.blocks_horizontal.try_into().map_err(|_| {
-            Error::GpuError(
-                "jpeg_decode kernel: chroma blocks_horizontal overflows u32".into(),
-            )
+            Error::GpuError("jpeg_decode kernel: chroma blocks_horizontal overflows u32".into())
         })?;
         let chroma_blocks_v: u32 = cb.blocks_vertical.try_into().map_err(|_| {
-            Error::GpuError(
-                "jpeg_decode kernel: chroma blocks_vertical overflows u32".into(),
-            )
+            Error::GpuError("jpeg_decode kernel: chroma blocks_vertical overflows u32".into())
         })?;
         let cb_coef_offset: u32 = y_coefs.try_into().map_err(|_| {
-            Error::GpuError(
-                "jpeg_decode kernel: Y coefficient count overflows u32 offset".into(),
-            )
+            Error::GpuError("jpeg_decode kernel: Y coefficient count overflows u32 offset".into())
         })?;
         let cr_coef_offset: u32 = (y_coefs + cb_coefs).try_into().map_err(|_| {
             Error::GpuError(
@@ -454,9 +444,7 @@ impl JpegBufferLayout {
         })?;
         // Sanity: total coefficient count fits a u32 too.
         let _total: u32 = (y_coefs + cb_coefs + cr_coefs).try_into().map_err(|_| {
-            Error::GpuError(
-                "jpeg_decode kernel: total coefficient count overflows u32".into(),
-            )
+            Error::GpuError("jpeg_decode kernel: total coefficient count overflows u32".into())
         })?;
 
         Ok(Self {

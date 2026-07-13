@@ -68,8 +68,8 @@ mod tests {
     #[test]
     fn strategy_reads_priority_from_registered_descriptor() {
         let id = ident("Widgetron");
-        let descriptor = ProcessorDescriptor::new(id.clone(), "fixture")
-            .with_scheduling(ProcessorScheduling {
+        let descriptor =
+            ProcessorDescriptor::new(id.clone(), "fixture").with_scheduling(ProcessorScheduling {
                 priority: ThreadPriority::RealTime,
             });
         PROCESSOR_REGISTRY

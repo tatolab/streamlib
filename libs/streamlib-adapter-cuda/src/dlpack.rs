@@ -270,7 +270,11 @@ mod tests {
             let del = (*mt).deleter.expect("deleter must be Some");
             del(mt);
         }
-        assert_eq!(drops.load(Ordering::SeqCst), 1, "owner dropped exactly once");
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            1,
+            "owner dropped exactly once"
+        );
     }
 
     #[test]
@@ -294,12 +298,10 @@ mod tests {
             let t = &(*mt).dl_tensor;
             assert_eq!(t.ndim, 4);
             assert_eq!(t.dtype, DataType::F32);
-            let observed_shape =
-                std::slice::from_raw_parts(t.shape, t.ndim as usize).to_vec();
+            let observed_shape = std::slice::from_raw_parts(t.shape, t.ndim as usize).to_vec();
             assert_eq!(observed_shape, shape);
             assert!(!t.strides.is_null());
-            let observed_strides =
-                std::slice::from_raw_parts(t.strides, t.ndim as usize).to_vec();
+            let observed_strides = std::slice::from_raw_parts(t.strides, t.ndim as usize).to_vec();
             assert_eq!(observed_strides, strides_vec);
 
             let del = (*mt).deleter.expect("deleter must be Some");

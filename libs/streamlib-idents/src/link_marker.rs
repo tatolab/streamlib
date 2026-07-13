@@ -173,10 +173,16 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let marker = write_marker(tmp.path(), "{ not json at all");
         let err = load_link_manifest(&marker).unwrap_err();
-        assert!(matches!(err, LinkMarkerError::CorruptLinkState { .. }), "got {err:?}");
+        assert!(
+            matches!(err, LinkMarkerError::CorruptLinkState { .. }),
+            "got {err:?}"
+        );
         // And the find-and-load composite surfaces it too (no silent None).
         let err = find_and_load_active_link(tmp.path()).unwrap_err();
-        assert!(matches!(err, LinkMarkerError::CorruptLinkState { .. }), "got {err:?}");
+        assert!(
+            matches!(err, LinkMarkerError::CorruptLinkState { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]

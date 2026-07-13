@@ -18,10 +18,10 @@ use std::ffi::c_void;
 #[cfg(target_os = "linux")]
 use std::sync::Arc;
 
-use super::super::scope_token::with_full_scope_or_err;
-use super::super::shared::pixel_format_from_raw;
 use super::super::super::run_host_extern_c;
 use super::super::super::shared::wire::write_err;
+use super::super::scope_token::with_full_scope_or_err;
+use super::super::shared::pixel_format_from_raw;
 
 // ============================================================================
 // Phase D (#906) — privileged-only FullAccess host callbacks.
@@ -95,10 +95,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_ac
                 6 => streamlib_consumer_rhi::TextureFormat::Nv12,
                 _ => {
                     write_err(
-                        &format!(
-                            "acquire_output_texture: invalid format_raw {}",
-                            format_raw
-                        ),
+                        &format!("acquire_output_texture: invalid format_raw {}", format_raw),
                         err_buf,
                         err_buf_cap,
                         err_len,
@@ -133,10 +130,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_ac
                             id_bytes.len(),
                         );
                         std::ptr::write(out_id_len, id_bytes.len());
-                        std::ptr::write(
-                            out_texture as *mut crate::core::rhi::Texture,
-                            texture,
-                        );
+                        std::ptr::write(out_texture as *mut crate::core::rhi::Texture, texture);
                     }
                     0
                 }
@@ -175,15 +169,12 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_up
                 );
                 return 1;
             }
-            let id_slice =
-                unsafe { std::slice::from_raw_parts(surface_id_ptr, surface_id_len) };
+            let id_slice = unsafe { std::slice::from_raw_parts(surface_id_ptr, surface_id_len) };
             let surface_id = match std::str::from_utf8(id_slice) {
                 Ok(s) => s,
                 Err(e) => {
                     write_err(
-                        &format!(
-                            "upload_pixel_buffer_as_texture: surface_id not UTF-8: {e}"
-                        ),
+                        &format!("upload_pixel_buffer_as_texture: surface_id not UTF-8: {e}"),
                         err_buf,
                         err_buf_cap,
                         err_len,
@@ -262,10 +253,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_co
                 Some(f) => f,
                 None => {
                     write_err(
-                        &format!(
-                            "color_converter: invalid src_format_raw {}",
-                            src_format_raw
-                        ),
+                        &format!("color_converter: invalid src_format_raw {}", src_format_raw),
                         err_buf,
                         err_buf_cap,
                         err_len,
@@ -277,10 +265,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_co
                 Some(f) => f,
                 None => {
                     write_err(
-                        &format!(
-                            "color_converter: invalid dst_format_raw {}",
-                            dst_format_raw
-                        ),
+                        &format!("color_converter: invalid dst_format_raw {}", dst_format_raw),
                         err_buf,
                         err_buf_cap,
                         err_len,
@@ -357,8 +342,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cr
                 );
                 return 1;
             }
-            let label_slice =
-                unsafe { std::slice::from_raw_parts(label_ptr, label_len) };
+            let label_slice = unsafe { std::slice::from_raw_parts(label_ptr, label_len) };
             let label = match std::str::from_utf8(label_slice) {
                 Ok(s) => s,
                 Err(e) => {
@@ -462,8 +446,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_bu
                 );
                 return 1;
             }
-            let label_slice =
-                unsafe { std::slice::from_raw_parts(label_ptr, label_len) };
+            let label_slice = unsafe { std::slice::from_raw_parts(label_ptr, label_len) };
             let label = match std::str::from_utf8(label_slice) {
                 Ok(s) => s,
                 Err(e) => {
@@ -588,8 +571,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_bu
                 );
                 return 1;
             }
-            let label_slice =
-                unsafe { std::slice::from_raw_parts(label_ptr, label_len) };
+            let label_slice = unsafe { std::slice::from_raw_parts(label_ptr, label_len) };
             let label = match std::str::from_utf8(label_slice) {
                 Ok(s) => s,
                 Err(e) => {
@@ -602,9 +584,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_bu
                     return 1;
                 }
             };
-            let instances: &[crate::vulkan::rhi::TlasInstanceDesc] = if instances_len
-                == 0
-            {
+            let instances: &[crate::vulkan::rhi::TlasInstanceDesc] = if instances_len == 0 {
                 &[]
             } else {
                 // SAFETY: `instances_ptr` is `*const TlasInstanceDesc`
@@ -752,9 +732,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_gp
                     let mut repr = streamlib_plugin_abi::GpuCapabilitiesRepr {
                         device_name: [0u8; 256],
                         device_name_len: 0,
-                        supports_external_memory: u8::from(
-                            snapshot.supports_external_memory,
-                        ),
+                        supports_external_memory: u8::from(snapshot.supports_external_memory),
                         supports_cross_device_dma_buf_probe: u8::from(
                             snapshot.supports_cross_device_dma_buf_probe,
                         ),
@@ -895,10 +873,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_im
             match result {
                 Some(Ok(buf)) => {
                     unsafe {
-                        std::ptr::write(
-                            out_buffer as *mut crate::core::rhi::StorageBuffer,
-                            buf,
-                        );
+                        std::ptr::write(out_buffer as *mut crate::core::rhi::StorageBuffer, buf);
                     }
                     0
                 }
@@ -1014,8 +989,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_ho
             let token = scope_token as u64;
             crate::core::context::escalate_scope_registry::with_scope(token, |gpu| {
                 let device = gpu.device();
-                let host_device =
-                    crate::host_rhi::HostGpuDeviceExt::vulkan_device(device.as_ref());
+                let host_device = crate::host_rhi::HostGpuDeviceExt::vulkan_device(device.as_ref());
                 let arc = Arc::clone(host_device);
                 Arc::into_raw(arc) as *const c_void
             })
@@ -1058,10 +1032,8 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_ho
             // PluginAbiObject's `Drop` runs. We borrow without taking
             // ownership, clone the inner `Arc<HostVulkanTexture>`, and
             // return its raw pointer with the strong count bumped by 1.
-            let inner = unsafe {
-                &*(texture_handle
-                    as *const crate::core::rhi::texture::TextureInner)
-            };
+            let inner =
+                unsafe { &*(texture_handle as *const crate::core::rhi::texture::TextureInner) };
             let arc = Arc::clone(&inner.inner);
             Arc::into_raw(arc) as *const c_void
         },
@@ -1075,4 +1047,3 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_ho
 ) -> *const c_void {
     std::ptr::null()
 }
-

@@ -29,9 +29,7 @@ fn persistent_pool_count_stays_at_one_across_repeated_acquires() {
     let fixture = match HostFixture::try_new() {
         Some(f) => f,
         None => {
-            println!(
-                "persistent_command_pool: skipping — no Vulkan device available"
-            );
+            println!("persistent_command_pool: skipping — no Vulkan device available");
             return;
         }
     };

@@ -8,7 +8,7 @@ use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLCommandQueue, MTLCreateSystemDefaultDevice, MTLDevice};
 
 use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 
 use super::{MetalCommandQueue, MetalTexture};
 

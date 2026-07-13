@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::color::{
-    parse_app0, parse_app14_adobe, parse_app1_exif_color_space, parse_app2_icc_fragment,
-    IccAccumulator, JpegColorInfo,
+    IccAccumulator, JpegColorInfo, parse_app0, parse_app1_exif_color_space,
+    parse_app2_icc_fragment, parse_app14_adobe,
 };
 use crate::error::{JpegError, JpegResult};
 use crate::header::{

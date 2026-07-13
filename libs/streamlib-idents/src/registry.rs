@@ -411,7 +411,7 @@ impl<'a> RegistryClient<'a> {
                 return Err(ResolverError::RegistryFetchFailed {
                     name: pkg_ref.to_string(),
                     detail: format!("listing versions: {detail}"),
-                })
+                });
             }
         };
         Ok(parse_index_ndjson(&body, pkg_ref.name.as_str()))
@@ -627,7 +627,10 @@ mod tests {
             SemVer::new(2, 0, 0),
         ];
         let range = SemVerRange::from_str("^1.0.0").unwrap();
-        assert_eq!(select_version(&pr, &range, &avail).unwrap(), SemVer::new(1, 2, 0));
+        assert_eq!(
+            select_version(&pr, &range, &avail).unwrap(),
+            SemVer::new(1, 2, 0)
+        );
     }
 
     #[test]
@@ -640,7 +643,10 @@ mod tests {
             SemVer::new_prerelease(1, 2, 1, PrereleaseKind::Dev, 1),
         ];
         let range = SemVerRange::from_str("^1.2.0").unwrap();
-        assert_eq!(select_version(&pr, &range, &avail).unwrap(), SemVer::new(1, 2, 0));
+        assert_eq!(
+            select_version(&pr, &range, &avail).unwrap(),
+            SemVer::new(1, 2, 0)
+        );
     }
 
     #[test]
@@ -688,7 +694,9 @@ mod tests {
         let range = SemVerRange::from_str("^1.0.0").unwrap();
         let err = select_version(&pr, &range, &avail).unwrap_err();
         match err {
-            ResolverError::RegistryNoMatchingVersion { range, available, .. } => {
+            ResolverError::RegistryNoMatchingVersion {
+                range, available, ..
+            } => {
                 assert_eq!(range, "^1.0.0");
                 assert!(available.contains("2.0.0"));
                 assert!(available.contains("3.1.0"));
@@ -704,7 +712,10 @@ mod tests {
         let http = RegistryConfig {
             base_url: "https://registry.tatolab.com".into(),
         };
-        assert_eq!(http.pypi_simple_index_url(), "https://registry.tatolab.com/pypi/simple");
+        assert_eq!(
+            http.pypi_simple_index_url(),
+            "https://registry.tatolab.com/pypi/simple"
+        );
         assert_eq!(http.npm_registry_url(), "https://registry.tatolab.com/npm/");
         assert_eq!(
             http.cargo_sparse_index_url(),
@@ -778,8 +789,12 @@ mod tests {
         let client = RegistryClient::new(&cfg);
         let pr = pkg_ref("tatolab", "camera");
 
-        client.upload_slpkg(&pr, SemVer::new(0, 4, 32), b"a").unwrap();
-        client.upload_slpkg(&pr, SemVer::new(0, 4, 33), b"b").unwrap();
+        client
+            .upload_slpkg(&pr, SemVer::new(0, 4, 32), b"a")
+            .unwrap();
+        client
+            .upload_slpkg(&pr, SemVer::new(0, 4, 33), b"b")
+            .unwrap();
 
         // The on-disk index holds the union, canonicalized ascending.
         let index = tree.path().join("slpkg/camera/index.json");
@@ -800,7 +815,13 @@ mod tests {
                 let mut buf = [0u8; 2048];
                 let n = stream.read(&mut buf).unwrap();
                 let req = String::from_utf8_lossy(&buf[..n]);
-                let path = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("");
+                let path = req
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .split(' ')
+                    .nth(1)
+                    .unwrap_or("");
                 let rel = path.trim_start_matches('/');
                 let body = std::fs::read(root.join(rel)).unwrap_or_default();
                 let header = format!(
@@ -819,9 +840,14 @@ mod tests {
         let http_client = RegistryClient::new(&http_cfg);
         let versions = http_client.list_versions(&pr).unwrap();
         assert_eq!(versions, vec![SemVer::new(0, 4, 32), SemVer::new(0, 4, 33)]);
-        let (bytes, url) = http_client.download_slpkg(&pr, SemVer::new(0, 4, 33)).unwrap();
+        let (bytes, url) = http_client
+            .download_slpkg(&pr, SemVer::new(0, 4, 33))
+            .unwrap();
         assert_eq!(bytes, b"b");
-        assert!(url.ends_with("/slpkg/camera/0.4.33/camera.slpkg"), "url: {url}");
+        assert!(
+            url.ends_with("/slpkg/camera/0.4.33/camera.slpkg"),
+            "url: {url}"
+        );
         server.join().unwrap();
     }
 
@@ -847,7 +873,10 @@ mod tests {
         };
         let client = RegistryClient::new(&cfg);
         let versions = client.list_versions(&pkg_ref("tatolab", "nope")).unwrap();
-        assert!(versions.is_empty(), "404 index must list as empty, got {versions:?}");
+        assert!(
+            versions.is_empty(),
+            "404 index must list as empty, got {versions:?}"
+        );
         server.join().unwrap();
     }
 
@@ -900,7 +929,11 @@ mod tests {
         ]);
         assert_eq!(
             merged,
-            vec![SemVer::new(0, 9, 9), SemVer::new(1, 0, 0), SemVer::new(1, 2, 0)]
+            vec![
+                SemVer::new(0, 9, 9),
+                SemVer::new(1, 0, 0),
+                SemVer::new(1, 2, 0)
+            ]
         );
     }
 
@@ -918,7 +951,12 @@ mod tests {
         let client = RegistryClient::new(&cfg);
 
         // Missing manifest ⇒ None (the pre-atomic-release back-compat case).
-        assert!(client.fetch_release_manifest("tatolab", "0.5.1").unwrap().is_none());
+        assert!(
+            client
+                .fetch_release_manifest("tatolab", "0.5.1")
+                .unwrap()
+                .is_none()
+        );
 
         let mut manifest = ReleaseManifest::new(
             "0.5.1",
@@ -930,21 +968,28 @@ mod tests {
         manifest.python = Some("0.5.1".to_string());
         manifest.packages = vec![ReleaseManifestMember::new("@tatolab/jpeg", "1.0.7")];
 
-        let url = client.upload_release_manifest("tatolab", &manifest).unwrap();
+        let url = client
+            .upload_release_manifest("tatolab", &manifest)
+            .unwrap();
         assert!(
             url.ends_with("/slpkg/streamlib-release/0.5.1/manifest.json"),
             "url: {url}"
         );
         // The layout must be `<root>/slpkg/streamlib-release/<V>/manifest.json`.
-        assert!(tmp_guard
-            .path()
-            .join("slpkg")
-            .join("streamlib-release")
-            .join("0.5.1")
-            .join("manifest.json")
-            .is_file());
+        assert!(
+            tmp_guard
+                .path()
+                .join("slpkg")
+                .join("streamlib-release")
+                .join("0.5.1")
+                .join("manifest.json")
+                .is_file()
+        );
 
-        let back = client.fetch_release_manifest("tatolab", "0.5.1").unwrap().unwrap();
+        let back = client
+            .fetch_release_manifest("tatolab", "0.5.1")
+            .unwrap()
+            .unwrap();
         assert_eq!(back, manifest);
 
         // The release channel is listable — the consumer's range-aware

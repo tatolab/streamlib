@@ -88,11 +88,7 @@ processors:
     )
     .unwrap();
     // The processor entrypoint `pyproc:PyProc` → `pyproc.py` at the root.
-    std::fs::write(
-        pkg_dir.join("pyproc.py"),
-        "class PyProc:\n    pass\n",
-    )
-    .unwrap();
+    std::fs::write(pkg_dir.join("pyproc.py"), "class PyProc:\n    pass\n").unwrap();
     std::fs::write(
         pkg_dir.join("pyproject.toml"),
         format!(

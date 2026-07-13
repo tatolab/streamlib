@@ -14,8 +14,8 @@
 
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
-use vulkanalia::vk::KhrVideoQueueExtensionInstanceCommands;
 use vulkanalia::vk::KhrVideoEncodeQueueExtensionInstanceCommands;
+use vulkanalia::vk::KhrVideoQueueExtensionInstanceCommands;
 
 // ---------------------------------------------------------------------------
 // Codec-specific decode capability sType validation
@@ -24,9 +24,7 @@ use vulkanalia::vk::KhrVideoEncodeQueueExtensionInstanceCommands;
 /// Identifies the expected decode capability `sType` for a given codec.
 ///
 /// Returns `Some(expected_stype)` for supported decode codecs, `None` otherwise.
-fn decode_capability_stype(
-    codec: vk::VideoCodecOperationFlagsKHR,
-) -> Option<vk::StructureType> {
+fn decode_capability_stype(codec: vk::VideoCodecOperationFlagsKHR) -> Option<vk::StructureType> {
     if codec == vk::VideoCodecOperationFlagsKHR::DECODE_H264 {
         Some(vk::StructureType::VIDEO_DECODE_H264_CAPABILITIES_KHR)
     } else if codec == vk::VideoCodecOperationFlagsKHR::DECODE_H265 {
@@ -42,9 +40,7 @@ fn decode_capability_stype(
 /// Identifies the expected encode capability `sType` for a given codec.
 ///
 /// Returns `Some(expected_stype)` for supported encode codecs, `None` otherwise.
-fn encode_capability_stype(
-    codec: vk::VideoCodecOperationFlagsKHR,
-) -> Option<vk::StructureType> {
+fn encode_capability_stype(codec: vk::VideoCodecOperationFlagsKHR) -> Option<vk::StructureType> {
     if codec == vk::VideoCodecOperationFlagsKHR::ENCODE_H264 {
         Some(vk::StructureType::VIDEO_ENCODE_H264_CAPABILITIES_KHR)
     } else if codec == vk::VideoCodecOperationFlagsKHR::ENCODE_H265 {
@@ -86,59 +82,61 @@ pub unsafe fn get_video_decode_capabilities(
     video_queue_instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
     video_profile: &vk::VideoProfileInfoKHR,
-) -> Result<VideoDecodeCapabilitiesResult, vk::ErrorCode> { unsafe {
-    let video_codec = video_profile.video_codec_operation;
+) -> Result<VideoDecodeCapabilitiesResult, vk::ErrorCode> {
+    unsafe {
+        let video_codec = video_profile.video_codec_operation;
 
-    let mut h264_capabilities = vk::VideoDecodeH264CapabilitiesKHR::default();
-    let mut h265_capabilities = vk::VideoDecodeH265CapabilitiesKHR::default();
-    let mut av1_capabilities = vk::VideoDecodeAV1CapabilitiesKHR::default();
+        let mut h264_capabilities = vk::VideoDecodeH264CapabilitiesKHR::default();
+        let mut h265_capabilities = vk::VideoDecodeH265CapabilitiesKHR::default();
+        let mut av1_capabilities = vk::VideoDecodeAV1CapabilitiesKHR::default();
 
-    let mut video_decode_capabilities = vk::VideoDecodeCapabilitiesKHR::default();
+        let mut video_decode_capabilities = vk::VideoDecodeCapabilitiesKHR::default();
 
-    if video_codec == vk::VideoCodecOperationFlagsKHR::DECODE_H264 {
-        video_decode_capabilities.next =
-            &mut h264_capabilities as *mut _ as *mut core::ffi::c_void;
-    } else if video_codec == vk::VideoCodecOperationFlagsKHR::DECODE_H265 {
-        video_decode_capabilities.next =
-            &mut h265_capabilities as *mut _ as *mut core::ffi::c_void;
-    } else if video_codec == vk::VideoCodecOperationFlagsKHR::DECODE_AV1 {
-        video_decode_capabilities.next =
-            &mut av1_capabilities as *mut _ as *mut core::ffi::c_void;
-    } else {
-        tracing::error!("Unsupported decode codec: {:?}", video_codec);
-        return Err(vk::ErrorCode::VIDEO_PROFILE_CODEC_NOT_SUPPORTED_KHR);
+        if video_codec == vk::VideoCodecOperationFlagsKHR::DECODE_H264 {
+            video_decode_capabilities.next =
+                &mut h264_capabilities as *mut _ as *mut core::ffi::c_void;
+        } else if video_codec == vk::VideoCodecOperationFlagsKHR::DECODE_H265 {
+            video_decode_capabilities.next =
+                &mut h265_capabilities as *mut _ as *mut core::ffi::c_void;
+        } else if video_codec == vk::VideoCodecOperationFlagsKHR::DECODE_AV1 {
+            video_decode_capabilities.next =
+                &mut av1_capabilities as *mut _ as *mut core::ffi::c_void;
+        } else {
+            tracing::error!("Unsupported decode codec: {:?}", video_codec);
+            return Err(vk::ErrorCode::VIDEO_PROFILE_CODEC_NOT_SUPPORTED_KHR);
+        }
+
+        let mut video_capabilities = vk::VideoCapabilitiesKHR {
+            next: &mut video_decode_capabilities as *mut _ as *mut core::ffi::c_void,
+            ..Default::default()
+        };
+
+        video_queue_instance
+            .get_physical_device_video_capabilities_khr(
+                physical_device,
+                video_profile,
+                &mut video_capabilities,
+            )
+            .map_err(|e| {
+                tracing::error!("GetVideoDecodeCapabilities failed: {:?}", e);
+                e
+            })?;
+
+        let codec_capabilities = if video_codec == vk::VideoCodecOperationFlagsKHR::DECODE_H264 {
+            DecodeCodecCapabilities::H264(h264_capabilities)
+        } else if video_codec == vk::VideoCodecOperationFlagsKHR::DECODE_H265 {
+            DecodeCodecCapabilities::H265(h265_capabilities)
+        } else {
+            DecodeCodecCapabilities::Av1(av1_capabilities)
+        };
+
+        Ok(VideoDecodeCapabilitiesResult {
+            video_capabilities,
+            video_decode_capabilities,
+            codec_capabilities,
+        })
     }
-
-    let mut video_capabilities = vk::VideoCapabilitiesKHR {
-        next: &mut video_decode_capabilities as *mut _ as *mut core::ffi::c_void,
-        ..Default::default()
-    };
-
-    video_queue_instance
-        .get_physical_device_video_capabilities_khr(
-            physical_device,
-            video_profile,
-            &mut video_capabilities,
-        )
-        .map_err(|e| {
-            tracing::error!("GetVideoDecodeCapabilities failed: {:?}", e);
-            e
-        })?;
-
-    let codec_capabilities = if video_codec == vk::VideoCodecOperationFlagsKHR::DECODE_H264 {
-        DecodeCodecCapabilities::H264(h264_capabilities)
-    } else if video_codec == vk::VideoCodecOperationFlagsKHR::DECODE_H265 {
-        DecodeCodecCapabilities::H265(h265_capabilities)
-    } else {
-        DecodeCodecCapabilities::Av1(av1_capabilities)
-    };
-
-    Ok(VideoDecodeCapabilitiesResult {
-        video_capabilities,
-        video_decode_capabilities,
-        codec_capabilities,
-    })
-}}
+}
 
 // ---------------------------------------------------------------------------
 // GetVideoEncodeCapabilities
@@ -172,53 +170,55 @@ pub unsafe fn get_video_encode_capabilities(
     video_queue_instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
     video_profile: &vk::VideoProfileInfoKHR,
-) -> Result<VideoEncodeCapabilitiesResult, vk::ErrorCode> { unsafe {
-    let video_codec = video_profile.video_codec_operation;
+) -> Result<VideoEncodeCapabilitiesResult, vk::ErrorCode> {
+    unsafe {
+        let video_codec = video_profile.video_codec_operation;
 
-    let mut h264_capabilities = vk::VideoEncodeH264CapabilitiesKHR::default();
-    let mut h265_capabilities = vk::VideoEncodeH265CapabilitiesKHR::default();
+        let mut h264_capabilities = vk::VideoEncodeH264CapabilitiesKHR::default();
+        let mut h265_capabilities = vk::VideoEncodeH265CapabilitiesKHR::default();
 
-    let mut video_encode_capabilities = vk::VideoEncodeCapabilitiesKHR::default();
+        let mut video_encode_capabilities = vk::VideoEncodeCapabilitiesKHR::default();
 
-    if video_codec == vk::VideoCodecOperationFlagsKHR::ENCODE_H264 {
-        video_encode_capabilities.next =
-            &mut h264_capabilities as *mut _ as *mut core::ffi::c_void;
-    } else if video_codec == vk::VideoCodecOperationFlagsKHR::ENCODE_H265 {
-        video_encode_capabilities.next =
-            &mut h265_capabilities as *mut _ as *mut core::ffi::c_void;
-    } else {
-        tracing::error!("Unsupported encode codec: {:?}", video_codec);
-        return Err(vk::ErrorCode::VIDEO_PROFILE_CODEC_NOT_SUPPORTED_KHR);
+        if video_codec == vk::VideoCodecOperationFlagsKHR::ENCODE_H264 {
+            video_encode_capabilities.next =
+                &mut h264_capabilities as *mut _ as *mut core::ffi::c_void;
+        } else if video_codec == vk::VideoCodecOperationFlagsKHR::ENCODE_H265 {
+            video_encode_capabilities.next =
+                &mut h265_capabilities as *mut _ as *mut core::ffi::c_void;
+        } else {
+            tracing::error!("Unsupported encode codec: {:?}", video_codec);
+            return Err(vk::ErrorCode::VIDEO_PROFILE_CODEC_NOT_SUPPORTED_KHR);
+        }
+
+        let mut video_capabilities = vk::VideoCapabilitiesKHR {
+            next: &mut video_encode_capabilities as *mut _ as *mut core::ffi::c_void,
+            ..Default::default()
+        };
+
+        video_queue_instance
+            .get_physical_device_video_capabilities_khr(
+                physical_device,
+                video_profile,
+                &mut video_capabilities,
+            )
+            .map_err(|e| {
+                tracing::error!("GetVideoEncodeCapabilities failed: {:?}", e);
+                e
+            })?;
+
+        let codec_capabilities = if video_codec == vk::VideoCodecOperationFlagsKHR::ENCODE_H264 {
+            EncodeCodecCapabilities::H264(h264_capabilities)
+        } else {
+            EncodeCodecCapabilities::H265(h265_capabilities)
+        };
+
+        Ok(VideoEncodeCapabilitiesResult {
+            video_capabilities,
+            video_encode_capabilities,
+            codec_capabilities,
+        })
     }
-
-    let mut video_capabilities = vk::VideoCapabilitiesKHR {
-        next: &mut video_encode_capabilities as *mut _ as *mut core::ffi::c_void,
-        ..Default::default()
-    };
-
-    video_queue_instance
-        .get_physical_device_video_capabilities_khr(
-            physical_device,
-            video_profile,
-            &mut video_capabilities,
-        )
-        .map_err(|e| {
-            tracing::error!("GetVideoEncodeCapabilities failed: {:?}", e);
-            e
-        })?;
-
-    let codec_capabilities = if video_codec == vk::VideoCodecOperationFlagsKHR::ENCODE_H264 {
-        EncodeCodecCapabilities::H264(h264_capabilities)
-    } else {
-        EncodeCodecCapabilities::H265(h265_capabilities)
-    };
-
-    Ok(VideoEncodeCapabilitiesResult {
-        video_capabilities,
-        video_encode_capabilities,
-        codec_capabilities,
-    })
-}}
+}
 
 // ---------------------------------------------------------------------------
 // GetPhysicalDeviceVideoEncodeQualityLevelProperties
@@ -246,21 +246,22 @@ pub unsafe fn get_physical_device_video_encode_quality_level_properties(
     video_profile: &vk::VideoProfileInfoKHR,
     quality_level: u32,
     codec_quality_level_properties_ptr: *mut core::ffi::c_void,
-) -> Result<EncodeQualityLevelResult, vk::ErrorCode> { unsafe {
-    let quality_level_info = vk::PhysicalDeviceVideoEncodeQualityLevelInfoKHR {
-        s_type: vk::StructureType::PHYSICAL_DEVICE_VIDEO_ENCODE_QUALITY_LEVEL_INFO_KHR,
-        next: core::ptr::null(),
-        video_profile: video_profile as *const _,
-        quality_level,
-        ..Default::default()
-    };
+) -> Result<EncodeQualityLevelResult, vk::ErrorCode> {
+    unsafe {
+        let quality_level_info = vk::PhysicalDeviceVideoEncodeQualityLevelInfoKHR {
+            s_type: vk::StructureType::PHYSICAL_DEVICE_VIDEO_ENCODE_QUALITY_LEVEL_INFO_KHR,
+            next: core::ptr::null(),
+            video_profile: video_profile as *const _,
+            quality_level,
+            ..Default::default()
+        };
 
-    let mut quality_level_properties = vk::VideoEncodeQualityLevelPropertiesKHR {
-        next: codec_quality_level_properties_ptr,
-        ..Default::default()
-    };
+        let mut quality_level_properties = vk::VideoEncodeQualityLevelPropertiesKHR {
+            next: codec_quality_level_properties_ptr,
+            ..Default::default()
+        };
 
-    video_encode_queue_instance
+        video_encode_queue_instance
         .get_physical_device_video_encode_quality_level_properties_khr(
             physical_device,
             &quality_level_info,
@@ -275,10 +276,11 @@ pub unsafe fn get_physical_device_video_encode_quality_level_properties(
             e
         })?;
 
-    Ok(EncodeQualityLevelResult {
-        quality_level_properties,
-    })
-}}
+        Ok(EncodeQualityLevelResult {
+            quality_level_properties,
+        })
+    }
+}
 
 // ---------------------------------------------------------------------------
 // GetSupportedVideoFormats
@@ -303,72 +305,75 @@ pub unsafe fn get_supported_video_formats(
     physical_device: vk::PhysicalDevice,
     video_profile: &vk::VideoProfileInfoKHR,
     capability_flags: vk::VideoDecodeCapabilityFlagsKHR,
-) -> Result<SupportedVideoFormatsResult, vk::ErrorCode> { unsafe {
-    if capability_flags.contains(vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_COINCIDE) {
-        // NV, Intel: DPB and output share the same images.
-        let formats = get_video_formats(
-            video_queue_instance,
-            physical_device,
-            video_profile,
-            vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR | vk::ImageUsageFlags::VIDEO_DECODE_DPB_KHR,
-        )?;
+) -> Result<SupportedVideoFormatsResult, vk::ErrorCode> {
+    unsafe {
+        if capability_flags.contains(vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_COINCIDE) {
+            // NV, Intel: DPB and output share the same images.
+            let formats = get_video_formats(
+                video_queue_instance,
+                physical_device,
+                video_profile,
+                vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR
+                    | vk::ImageUsageFlags::VIDEO_DECODE_DPB_KHR,
+            )?;
 
-        if formats.is_empty() {
-            tracing::error!("No supported coincide DPB formats found");
-            return Err(vk::ErrorCode::VIDEO_PROFILE_FORMAT_NOT_SUPPORTED_KHR);
+            if formats.is_empty() {
+                tracing::error!("No supported coincide DPB formats found");
+                return Err(vk::ErrorCode::VIDEO_PROFILE_FORMAT_NOT_SUPPORTED_KHR);
+            }
+
+            let fmt = formats[0].format;
+            validate_formats(fmt, fmt);
+
+            Ok(SupportedVideoFormatsResult {
+                picture_format: fmt,
+                reference_pictures_format: fmt,
+            })
+        } else if capability_flags
+            .contains(vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_DISTINCT)
+        {
+            // AMD: DPB and output are separate images.
+            let dpb_formats = get_video_formats(
+                video_queue_instance,
+                physical_device,
+                video_profile,
+                vk::ImageUsageFlags::VIDEO_DECODE_DPB_KHR,
+            )?;
+
+            let out_formats = get_video_formats(
+                video_queue_instance,
+                physical_device,
+                video_profile,
+                vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR,
+            )?;
+
+            if dpb_formats.is_empty() || out_formats.is_empty() {
+                tracing::error!("No supported distinct DPB/output formats found");
+                return Err(vk::ErrorCode::VIDEO_PROFILE_FORMAT_NOT_SUPPORTED_KHR);
+            }
+
+            let reference_pictures_format = dpb_formats[0].format;
+            let picture_format = out_formats[0].format;
+
+            validate_formats(reference_pictures_format, picture_format);
+
+            Ok(SupportedVideoFormatsResult {
+                picture_format,
+                reference_pictures_format,
+            })
+        } else {
+            tracing::error!(
+                "Unsupported decode capability flags: {:?}",
+                capability_flags
+            );
+            Err(vk::ErrorCode::VIDEO_PROFILE_FORMAT_NOT_SUPPORTED_KHR)
         }
-
-        let fmt = formats[0].format;
-        validate_formats(fmt, fmt);
-
-        Ok(SupportedVideoFormatsResult {
-            picture_format: fmt,
-            reference_pictures_format: fmt,
-        })
-    } else if capability_flags.contains(vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_DISTINCT)
-    {
-        // AMD: DPB and output are separate images.
-        let dpb_formats = get_video_formats(
-            video_queue_instance,
-            physical_device,
-            video_profile,
-            vk::ImageUsageFlags::VIDEO_DECODE_DPB_KHR,
-        )?;
-
-        let out_formats = get_video_formats(
-            video_queue_instance,
-            physical_device,
-            video_profile,
-            vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR,
-        )?;
-
-        if dpb_formats.is_empty() || out_formats.is_empty() {
-            tracing::error!("No supported distinct DPB/output formats found");
-            return Err(vk::ErrorCode::VIDEO_PROFILE_FORMAT_NOT_SUPPORTED_KHR);
-        }
-
-        let reference_pictures_format = dpb_formats[0].format;
-        let picture_format = out_formats[0].format;
-
-        validate_formats(reference_pictures_format, picture_format);
-
-        Ok(SupportedVideoFormatsResult {
-            picture_format,
-            reference_pictures_format,
-        })
-    } else {
-        tracing::error!(
-            "Unsupported decode capability flags: {:?}",
-            capability_flags
-        );
-        Err(vk::ErrorCode::VIDEO_PROFILE_FORMAT_NOT_SUPPORTED_KHR)
     }
-}}
+}
 
 /// Log warnings when queried formats are undefined or mismatched.
 fn validate_formats(reference_pictures_format: vk::Format, picture_format: vk::Format) {
-    if reference_pictures_format == vk::Format::UNDEFINED
-        || picture_format == vk::Format::UNDEFINED
+    if reference_pictures_format == vk::Format::UNDEFINED || picture_format == vk::Format::UNDEFINED
     {
         tracing::error!(
             "Video format is undefined. reference_pictures_format: {:?}, picture_format: {:?}",
@@ -403,88 +408,84 @@ pub unsafe fn get_video_capabilities(
     video_profile: &vk::VideoProfileInfoKHR,
     video_capabilities: &mut vk::VideoCapabilitiesKHR,
     dump_data: bool,
-) -> vk::Result { unsafe {
-    assert_eq!(
-        video_capabilities.s_type,
-        vk::StructureType::VIDEO_CAPABILITIES_KHR
-    );
+) -> vk::Result {
+    unsafe {
+        assert_eq!(
+            video_capabilities.s_type,
+            vk::StructureType::VIDEO_CAPABILITIES_KHR
+        );
 
-    let codec = video_profile.video_codec_operation;
+        let codec = video_profile.video_codec_operation;
 
-    // Validate the pNext chain sType for the codec.
-    let next_ptr = video_capabilities.next;
-    if !next_ptr.is_null() {
-        let next_stype = (*(next_ptr as *const vk::BaseOutStructure)).s_type;
+        // Validate the pNext chain sType for the codec.
+        let next_ptr = video_capabilities.next;
+        if !next_ptr.is_null() {
+            let next_stype = (*(next_ptr as *const vk::BaseOutStructure)).s_type;
 
-        let is_decode = next_stype == vk::StructureType::VIDEO_DECODE_CAPABILITIES_KHR;
-        let is_encode = next_stype == vk::StructureType::VIDEO_ENCODE_CAPABILITIES_KHR;
+            let is_decode = next_stype == vk::StructureType::VIDEO_DECODE_CAPABILITIES_KHR;
+            let is_encode = next_stype == vk::StructureType::VIDEO_ENCODE_CAPABILITIES_KHR;
 
-        if !is_decode && !is_encode {
-            tracing::error!(
-                "Invalid pNext sType: {:?}, expected decode or encode capabilities",
-                next_stype
-            );
-            return vk::Result::ERROR_INITIALIZATION_FAILED;
-        }
+            if !is_decode && !is_encode {
+                tracing::error!(
+                    "Invalid pNext sType: {:?}, expected decode or encode capabilities",
+                    next_stype
+                );
+                return vk::Result::ERROR_INITIALIZATION_FAILED;
+            }
 
-        // Validate codec-specific capability structure further down the chain.
-        if is_decode {
-            let decode_caps = &*(next_ptr as *const vk::VideoDecodeCapabilitiesKHR);
-            if !decode_caps.next.is_null() {
-                let codec_stype =
-                    (*(decode_caps.next as *const vk::BaseOutStructure)).s_type;
-                if let Some(expected) = decode_capability_stype(codec) {
-                    if codec_stype != expected {
-                        tracing::error!(
-                            "Codec capability sType mismatch: got {:?}, expected {:?}",
-                            codec_stype,
-                            expected
-                        );
-                        return vk::Result::ERROR_INITIALIZATION_FAILED;
+            // Validate codec-specific capability structure further down the chain.
+            if is_decode {
+                let decode_caps = &*(next_ptr as *const vk::VideoDecodeCapabilitiesKHR);
+                if !decode_caps.next.is_null() {
+                    let codec_stype = (*(decode_caps.next as *const vk::BaseOutStructure)).s_type;
+                    if let Some(expected) = decode_capability_stype(codec) {
+                        if codec_stype != expected {
+                            tracing::error!(
+                                "Codec capability sType mismatch: got {:?}, expected {:?}",
+                                codec_stype,
+                                expected
+                            );
+                            return vk::Result::ERROR_INITIALIZATION_FAILED;
+                        }
+                    }
+                }
+            } else {
+                // encode
+                let encode_caps = &*(next_ptr as *const vk::VideoEncodeCapabilitiesKHR);
+                if !encode_caps.next.is_null() {
+                    let codec_stype = (*(encode_caps.next as *const vk::BaseOutStructure)).s_type;
+                    if let Some(expected) = encode_capability_stype(codec) {
+                        if codec_stype != expected {
+                            tracing::error!(
+                                "Codec capability sType mismatch: got {:?}, expected {:?}",
+                                codec_stype,
+                                expected
+                            );
+                            return vk::Result::ERROR_INITIALIZATION_FAILED;
+                        }
                     }
                 }
             }
-        } else {
-            // encode
-            let encode_caps = &*(next_ptr as *const vk::VideoEncodeCapabilitiesKHR);
-            if !encode_caps.next.is_null() {
-                let codec_stype =
-                    (*(encode_caps.next as *const vk::BaseOutStructure)).s_type;
-                if let Some(expected) = encode_capability_stype(codec) {
-                    if codec_stype != expected {
-                        tracing::error!(
-                            "Codec capability sType mismatch: got {:?}, expected {:?}",
-                            codec_stype,
-                            expected
-                        );
-                        return vk::Result::ERROR_INITIALIZATION_FAILED;
-                    }
-                }
-            }
         }
-    }
 
-    let vk_result = video_queue_instance
-        .get_physical_device_video_capabilities_khr(
+        let vk_result = video_queue_instance.get_physical_device_video_capabilities_khr(
             physical_device,
             video_profile,
             video_capabilities,
         );
 
-    if let Err(e) = vk_result {
-        tracing::error!(
-            "GetPhysicalDeviceVideoCapabilitiesKHR failed: {:?}",
-            e,
-        );
-        return vk::Result::from(e);
-    }
+        if let Err(e) = vk_result {
+            tracing::error!("GetPhysicalDeviceVideoCapabilitiesKHR failed: {:?}", e,);
+            return vk::Result::from(e);
+        }
 
-    if dump_data {
-        dump_video_capabilities(video_capabilities, codec);
-    }
+        if dump_data {
+            dump_video_capabilities(video_capabilities, codec);
+        }
 
-    vk::Result::SUCCESS
-}}
+        vk::Result::SUCCESS
+    }
+}
 
 /// Dump capability data via tracing.
 ///
@@ -562,38 +563,37 @@ pub unsafe fn get_video_formats(
     physical_device: vk::PhysicalDevice,
     video_profile: &vk::VideoProfileInfoKHR,
     image_usage: vk::ImageUsageFlags,
-) -> Result<Vec<vk::VideoFormatPropertiesKHR>, vk::ErrorCode> { unsafe {
-    let video_profiles = vk::VideoProfileListInfoKHR {
-        s_type: vk::StructureType::VIDEO_PROFILE_LIST_INFO_KHR,
-        next: core::ptr::null(),
-        profile_count: 1,
-        profiles: video_profile as *const _,
-        ..Default::default()
-    };
+) -> Result<Vec<vk::VideoFormatPropertiesKHR>, vk::ErrorCode> {
+    unsafe {
+        let video_profiles = vk::VideoProfileListInfoKHR {
+            s_type: vk::StructureType::VIDEO_PROFILE_LIST_INFO_KHR,
+            next: core::ptr::null(),
+            profile_count: 1,
+            profiles: video_profile as *const _,
+            ..Default::default()
+        };
 
-    let video_format_info = vk::PhysicalDeviceVideoFormatInfoKHR {
-        s_type: vk::StructureType::PHYSICAL_DEVICE_VIDEO_FORMAT_INFO_KHR,
-        next: &video_profiles as *const _ as *const core::ffi::c_void,
-        image_usage,
-        ..Default::default()
-    };
+        let video_format_info = vk::PhysicalDeviceVideoFormatInfoKHR {
+            s_type: vk::StructureType::PHYSICAL_DEVICE_VIDEO_FORMAT_INFO_KHR,
+            next: &video_profiles as *const _ as *const core::ffi::c_void,
+            image_usage,
+            ..Default::default()
+        };
 
-    // vulkanalia's wrapper handles the two-call count+fill pattern.
-    let supported_formats = video_queue_instance
-        .get_physical_device_video_format_properties_khr(
-            physical_device,
-            &video_format_info,
-        )?;
+        // vulkanalia's wrapper handles the two-call count+fill pattern.
+        let supported_formats = video_queue_instance
+            .get_physical_device_video_format_properties_khr(physical_device, &video_format_info)?;
 
-    if supported_formats.is_empty() {
-        tracing::warn!(
-            "No supported video formats found for usage {:?}",
-            image_usage
-        );
+        if supported_formats.is_empty() {
+            tracing::warn!(
+                "No supported video formats found for usage {:?}",
+                image_usage
+            );
+        }
+
+        Ok(supported_formats)
     }
-
-    Ok(supported_formats)
-}}
+}
 
 // ---------------------------------------------------------------------------
 // GetSupportedCodecs
@@ -634,29 +634,31 @@ pub unsafe fn get_supported_codecs(
     video_queue_family: Option<u32>,
     queue_flags_required: vk::QueueFlags,
     video_codec_operations: vk::VideoCodecOperationFlagsKHR,
-) -> (vk::VideoCodecOperationFlagsKHR, Option<u32>) { unsafe {
-    let (queues, video_queues, _query_result_status) =
-        get_queue_family_video_properties(instance, physical_device);
+) -> (vk::VideoCodecOperationFlagsKHR, Option<u32>) {
+    unsafe {
+        let (queues, video_queues, _query_result_status) =
+            get_queue_family_video_properties(instance, physical_device);
 
-    for (queue_index, (q, vq)) in queues.iter().zip(video_queues.iter()).enumerate() {
-        let queue_index = queue_index as u32;
+        for (queue_index, (q, vq)) in queues.iter().zip(video_queues.iter()).enumerate() {
+            let queue_index = queue_index as u32;
 
-        if let Some(required_family) = video_queue_family {
-            if required_family != queue_index {
-                continue;
+            if let Some(required_family) = video_queue_family {
+                if required_family != queue_index {
+                    continue;
+                }
+            }
+
+            let flags = q.queue_family_properties.queue_flags;
+            if flags.contains(queue_flags_required)
+                && vq.video_codec_operations.intersects(video_codec_operations)
+            {
+                return (vq.video_codec_operations, Some(queue_index));
             }
         }
 
-        let flags = q.queue_family_properties.queue_flags;
-        if flags.contains(queue_flags_required)
-            && vq.video_codec_operations.intersects(video_codec_operations)
-        {
-            return (vq.video_codec_operations, Some(queue_index));
-        }
+        (vk::VideoCodecOperationFlagsKHR::NONE, None)
     }
-
-    (vk::VideoCodecOperationFlagsKHR::NONE, None)
-}}
+}
 
 /// Convenience overload: check codecs supported on a known queue family.
 ///
@@ -669,16 +671,18 @@ pub unsafe fn get_supported_codecs_for_queue(
     instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
     video_queue_family: u32,
-) -> vk::VideoCodecOperationFlagsKHR { unsafe {
-    let (codecs, _) = get_supported_codecs(
-        instance,
-        physical_device,
-        Some(video_queue_family),
-        DEFAULT_VIDEO_QUEUE_FLAGS,
-        ALL_CODEC_OPERATIONS,
-    );
-    codecs
-}}
+) -> vk::VideoCodecOperationFlagsKHR {
+    unsafe {
+        let (codecs, _) = get_supported_codecs(
+            instance,
+            physical_device,
+            Some(video_queue_family),
+            DEFAULT_VIDEO_QUEUE_FLAGS,
+            ALL_CODEC_OPERATIONS,
+        );
+        codecs
+    }
+}
 
 /// Check whether a specific codec is supported on the given queue family.
 ///
@@ -692,10 +696,12 @@ pub unsafe fn is_codec_type_supported(
     physical_device: vk::PhysicalDevice,
     video_queue_family: u32,
     video_codec: vk::VideoCodecOperationFlagsKHR,
-) -> bool { unsafe {
-    let codecs = get_supported_codecs_for_queue(instance, physical_device, video_queue_family);
-    codecs.intersects(video_codec)
-}}
+) -> bool {
+    unsafe {
+        let codecs = get_supported_codecs_for_queue(instance, physical_device, video_queue_family);
+        codecs.intersects(video_codec)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // GetDecodeH264Capabilities / GetDecodeH265Capabilities / etc.
@@ -712,17 +718,19 @@ pub unsafe fn get_decode_capabilities_simple(
     video_queue_instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
     video_profile: &vk::VideoProfileInfoKHR,
-) -> Result<vk::VideoCapabilitiesKHR, vk::ErrorCode> { unsafe {
-    let mut video_capabilities = vk::VideoCapabilitiesKHR::default();
+) -> Result<vk::VideoCapabilitiesKHR, vk::ErrorCode> {
+    unsafe {
+        let mut video_capabilities = vk::VideoCapabilitiesKHR::default();
 
-    video_queue_instance.get_physical_device_video_capabilities_khr(
-        physical_device,
-        video_profile,
-        &mut video_capabilities,
-    )?;
+        video_queue_instance.get_physical_device_video_capabilities_khr(
+            physical_device,
+            video_profile,
+            &mut video_capabilities,
+        )?;
 
-    Ok(video_capabilities)
-}}
+        Ok(video_capabilities)
+    }
+}
 
 /// Query encode H.264 capabilities with codec-specific output.
 ///
@@ -735,27 +743,23 @@ pub unsafe fn get_encode_h264_capabilities(
     video_queue_instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
     video_profile: &vk::VideoProfileInfoKHR,
-) -> Result<
-    (
-        vk::VideoCapabilitiesKHR,
-        vk::VideoEncodeH264CapabilitiesKHR,
-    ),
-    vk::ErrorCode,
-> { unsafe {
-    let mut encode_264_capabilities = vk::VideoEncodeH264CapabilitiesKHR::default();
-    let mut video_capabilities = vk::VideoCapabilitiesKHR {
-        next: &mut encode_264_capabilities as *mut _ as *mut core::ffi::c_void,
-        ..Default::default()
-    };
+) -> Result<(vk::VideoCapabilitiesKHR, vk::VideoEncodeH264CapabilitiesKHR), vk::ErrorCode> {
+    unsafe {
+        let mut encode_264_capabilities = vk::VideoEncodeH264CapabilitiesKHR::default();
+        let mut video_capabilities = vk::VideoCapabilitiesKHR {
+            next: &mut encode_264_capabilities as *mut _ as *mut core::ffi::c_void,
+            ..Default::default()
+        };
 
-    video_queue_instance.get_physical_device_video_capabilities_khr(
-        physical_device,
-        video_profile,
-        &mut video_capabilities,
-    )?;
+        video_queue_instance.get_physical_device_video_capabilities_khr(
+            physical_device,
+            video_profile,
+            &mut video_capabilities,
+        )?;
 
-    Ok((video_capabilities, encode_264_capabilities))
-}}
+        Ok((video_capabilities, encode_264_capabilities))
+    }
+}
 
 // ---------------------------------------------------------------------------
 // GetVideoMaintenance1FeatureSupported
@@ -771,18 +775,20 @@ pub unsafe fn get_encode_h264_capabilities(
 pub unsafe fn get_video_maintenance1_feature_supported(
     instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
-) -> bool { unsafe {
-    let mut video_maintenance1_features =
-        vk::PhysicalDeviceVideoMaintenance1FeaturesKHR::default();
-    let mut device_features = vk::PhysicalDeviceFeatures2 {
-        next: &mut video_maintenance1_features as *mut _ as *mut core::ffi::c_void,
-        ..Default::default()
-    };
+) -> bool {
+    unsafe {
+        let mut video_maintenance1_features =
+            vk::PhysicalDeviceVideoMaintenance1FeaturesKHR::default();
+        let mut device_features = vk::PhysicalDeviceFeatures2 {
+            next: &mut video_maintenance1_features as *mut _ as *mut core::ffi::c_void,
+            ..Default::default()
+        };
 
-    instance.get_physical_device_features2(physical_device, &mut device_features);
+        instance.get_physical_device_features2(physical_device, &mut device_features);
 
-    video_maintenance1_features.video_maintenance1 == vk::TRUE
-}}
+        video_maintenance1_features.video_maintenance1 == vk::TRUE
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -802,37 +808,40 @@ unsafe fn get_queue_family_video_properties(
     Vec<vk::QueueFamilyProperties2>,
     Vec<vk::QueueFamilyVideoPropertiesKHR>,
     Vec<vk::QueueFamilyQueryResultStatusPropertiesKHR>,
-) { unsafe {
-    // Use raw function pointer because vulkanalia's wrapper doesn't support
-    // pNext chains on the output structures.
-    let get_props_fn = instance.commands().get_physical_device_queue_family_properties2;
+) {
+    unsafe {
+        // Use raw function pointer because vulkanalia's wrapper doesn't support
+        // pNext chains on the output structures.
+        let get_props_fn = instance
+            .commands()
+            .get_physical_device_queue_family_properties2;
 
-    // First call: get count.
-    let mut count: u32 = 0;
-    get_props_fn(physical_device, &mut count, core::ptr::null_mut());
+        // First call: get count.
+        let mut count: u32 = 0;
+        get_props_fn(physical_device, &mut count, core::ptr::null_mut());
 
-    let mut query_result_status: Vec<vk::QueueFamilyQueryResultStatusPropertiesKHR> =
-        vec![vk::QueueFamilyQueryResultStatusPropertiesKHR::default(); count as usize];
-    let mut video_queues: Vec<vk::QueueFamilyVideoPropertiesKHR> =
-        vec![vk::QueueFamilyVideoPropertiesKHR::default(); count as usize];
-    let mut queues: Vec<vk::QueueFamilyProperties2> =
-        vec![vk::QueueFamilyProperties2::default(); count as usize];
+        let mut query_result_status: Vec<vk::QueueFamilyQueryResultStatusPropertiesKHR> =
+            vec![vk::QueueFamilyQueryResultStatusPropertiesKHR::default(); count as usize];
+        let mut video_queues: Vec<vk::QueueFamilyVideoPropertiesKHR> =
+            vec![vk::QueueFamilyVideoPropertiesKHR::default(); count as usize];
+        let mut queues: Vec<vk::QueueFamilyProperties2> =
+            vec![vk::QueueFamilyProperties2::default(); count as usize];
 
-    // Wire up pNext chains: queue -> video_queue -> query_result_status
-    for i in 0..count as usize {
-        video_queues[i].next =
-            &mut query_result_status[i] as *mut _ as *mut core::ffi::c_void;
-        queues[i].next = &mut video_queues[i] as *mut _ as *mut core::ffi::c_void;
+        // Wire up pNext chains: queue -> video_queue -> query_result_status
+        for i in 0..count as usize {
+            video_queues[i].next = &mut query_result_status[i] as *mut _ as *mut core::ffi::c_void;
+            queues[i].next = &mut video_queues[i] as *mut _ as *mut core::ffi::c_void;
+        }
+
+        get_props_fn(physical_device, &mut count, queues.as_mut_ptr());
+
+        queues.truncate(count as usize);
+        video_queues.truncate(count as usize);
+        query_result_status.truncate(count as usize);
+
+        (queues, video_queues, query_result_status)
     }
-
-    get_props_fn(physical_device, &mut count, queues.as_mut_ptr());
-
-    queues.truncate(count as usize);
-    video_queues.truncate(count as usize);
-    query_result_status.truncate(count as usize);
-
-    (queues, video_queues, query_result_status)
-}}
+}
 
 // ---------------------------------------------------------------------------
 // Tests

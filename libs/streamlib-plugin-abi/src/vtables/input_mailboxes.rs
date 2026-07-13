@@ -105,11 +105,8 @@ pub struct InputMailboxesVTable {
     /// Check whether the named port has at least one queued frame
     /// after draining iceoryx2's per-publisher buffer into the
     /// per-port mailbox. Returns `false` for unknown ports.
-    pub has_data: unsafe extern "C" fn(
-        handle: *const c_void,
-        port_ptr: *const u8,
-        port_len: usize,
-    ) -> bool,
+    pub has_data:
+        unsafe extern "C" fn(handle: *const c_void, port_ptr: *const u8, port_len: usize) -> bool,
 
     /// Bump the host-side `Arc<InputMailboxesInner>` strong count.
     /// Returns the same opaque handle (the underlying inner is the
@@ -133,11 +130,8 @@ pub struct InputMailboxesVTable {
     /// unknown ports — caller must treat as a wiring error.
     ///
     /// v2 addition.
-    pub max_payload_for_port: unsafe extern "C" fn(
-        handle: *const c_void,
-        port_ptr: *const u8,
-        port_len: usize,
-    ) -> usize,
+    pub max_payload_for_port:
+        unsafe extern "C" fn(handle: *const c_void, port_ptr: *const u8, port_len: usize) -> usize,
 }
 
 // Safety: every field is a primitive or an `extern "C" fn` pointer.

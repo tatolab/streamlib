@@ -53,7 +53,12 @@ mod tests {
     #[test]
     fn serde_round_trip_preserves_structured_identity() {
         let spec = ProcessorSpec::new(
-            ident("tatolab", "streamlib", "CameraProcessor", SemVer::new(1, 0, 0)),
+            ident(
+                "tatolab",
+                "streamlib",
+                "CameraProcessor",
+                SemVer::new(1, 0, 0),
+            ),
             serde_json::json!({"width": 1920, "height": 1080}),
         );
         let json = serde_json::to_string(&spec).unwrap();
@@ -116,7 +121,12 @@ mod tests {
     #[test]
     fn msgpack_round_trip_preserves_full_value() {
         let spec = ProcessorSpec::new(
-            ident("tatolab", "streamlib", "CameraProcessor", SemVer::new(1, 2, 3)),
+            ident(
+                "tatolab",
+                "streamlib",
+                "CameraProcessor",
+                SemVer::new(1, 2, 3),
+            ),
             serde_json::json!({
                 "width": 1920,
                 "height": 1080,

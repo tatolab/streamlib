@@ -10,8 +10,8 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
-use streamlib::sdk::logging::{format_event_pretty, log_dir, LogLevel, RuntimeLogEvent, Source};
+use anyhow::{Context, Result, bail};
+use streamlib::sdk::logging::{LogLevel, RuntimeLogEvent, Source, format_event_pretty, log_dir};
 
 /// Arguments for the `logs` subcommand.
 pub struct LogsArgs<'a> {
@@ -124,7 +124,10 @@ fn parse_level(s: &str) -> Result<LogLevel> {
         "info" => Ok(LogLevel::Info),
         "warn" => Ok(LogLevel::Warn),
         "error" => Ok(LogLevel::Error),
-        other => bail!("invalid --level '{}': expected trace|debug|info|warn|error", other),
+        other => bail!(
+            "invalid --level '{}': expected trace|debug|info|warn|error",
+            other
+        ),
     }
 }
 
@@ -163,15 +166,15 @@ fn list_runtimes(log_dir: &Path, out: &mut dyn Write) -> Result<()> {
         return Ok(());
     }
 
-    writeln!(out, "{:<24}  {:<24}  {}", "RUNTIME_ID", "STARTED_AT", "SIZE")?;
+    writeln!(
+        out,
+        "{:<24}  {:<24}  {}",
+        "RUNTIME_ID", "STARTED_AT", "SIZE"
+    )?;
     for entry in entries {
         let started = format_millis(entry.started_at_millis);
         let size = format_size(entry.size_bytes);
-        writeln!(
-            out,
-            "{:<24}  {:<24}  {}",
-            entry.runtime_id, started, size
-        )?;
+        writeln!(out, "{:<24}  {:<24}  {}", entry.runtime_id, started, size)?;
     }
     Ok(())
 }
@@ -185,8 +188,8 @@ struct LogFileEntry {
 
 fn enumerate_jsonl(log_dir: &Path) -> Result<Vec<LogFileEntry>> {
     let mut out = Vec::new();
-    for entry in std::fs::read_dir(log_dir)
-        .with_context(|| format!("read log dir {}", log_dir.display()))?
+    for entry in
+        std::fs::read_dir(log_dir).with_context(|| format!("read log dir {}", log_dir.display()))?
     {
         let entry = entry?;
         let name = entry.file_name();
@@ -279,8 +282,8 @@ async fn stream_runtime(
         )?;
     }
 
-    let mut file = File::open(&current.path)
-        .with_context(|| format!("open {}", current.path.display()))?;
+    let mut file =
+        File::open(&current.path).with_context(|| format!("open {}", current.path.display()))?;
     let mut reader = BufReader::new(&mut file);
     let mut pos: u64 = 0;
     let mut line_buf = String::new();
@@ -304,8 +307,8 @@ async fn stream_runtime(
     // Tail loop: poll for appended bytes; switch to a newer file if the
     // runtime restarts (new `<runtime_id>-<higher-millis>.jsonl`).
     drop(reader);
-    let mut file = File::open(&current.path)
-        .with_context(|| format!("reopen {}", current.path.display()))?;
+    let mut file =
+        File::open(&current.path).with_context(|| format!("reopen {}", current.path.display()))?;
     file.seek(SeekFrom::Start(pos))?;
     let mut reader = BufReader::new(file);
 
@@ -444,7 +447,12 @@ mod tests {
         }
     }
 
-    fn write_jsonl(dir: &Path, runtime_id: &str, started: u128, events: &[RuntimeLogEvent]) -> PathBuf {
+    fn write_jsonl(
+        dir: &Path,
+        runtime_id: &str,
+        started: u128,
+        events: &[RuntimeLogEvent],
+    ) -> PathBuf {
         fs::create_dir_all(dir).unwrap();
         let path = dir.join(format!("{}-{}.jsonl", runtime_id, started));
         let mut f = fs::File::create(&path).unwrap();
@@ -469,8 +477,19 @@ mod tests {
     #[tokio::test]
     async fn reads_jsonl_and_pretty_prints() {
         let dir = tempfile::tempdir().unwrap();
-        let ev = make_event("Rabc", 1_700_000_000_000_000_000, LogLevel::Info, Source::Rust, "hello");
-        write_jsonl(dir.path(), "Rabc", 1_700_000_000_000, std::slice::from_ref(&ev));
+        let ev = make_event(
+            "Rabc",
+            1_700_000_000_000_000_000,
+            LogLevel::Info,
+            Source::Rust,
+            "hello",
+        );
+        write_jsonl(
+            dir.path(),
+            "Rabc",
+            1_700_000_000_000,
+            std::slice::from_ref(&ev),
+        );
 
         let mut args = empty_args();
         args.runtime_id = Some("Rabc");
@@ -479,7 +498,10 @@ mod tests {
 
         let mut expected = String::new();
         format_event_pretty(&ev, &mut expected);
-        assert_eq!(out, expected, "pretty output must match runtime stdout-mirror byte-for-byte");
+        assert_eq!(
+            out, expected,
+            "pretty output must match runtime stdout-mirror byte-for-byte"
+        );
     }
 
     #[tokio::test]
@@ -487,8 +509,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ev_a = make_event("Rabc", 1, LogLevel::Info, Source::Rust, "a");
         let ev_b = make_event("Rxyz", 2, LogLevel::Info, Source::Rust, "b");
-        write_jsonl(dir.path(), "Rabc", 1_700_000_000_000, std::slice::from_ref(&ev_a));
-        write_jsonl(dir.path(), "Rxyz", 1_700_000_001_000, std::slice::from_ref(&ev_b));
+        write_jsonl(
+            dir.path(),
+            "Rabc",
+            1_700_000_000_000,
+            std::slice::from_ref(&ev_a),
+        );
+        write_jsonl(
+            dir.path(),
+            "Rxyz",
+            1_700_000_001_000,
+            std::slice::from_ref(&ev_b),
+        );
 
         let mut args = empty_args();
         args.list = true;
@@ -497,8 +529,15 @@ mod tests {
 
         assert!(out.contains("Rabc"), "list output missing Rabc: {}", out);
         assert!(out.contains("Rxyz"), "list output missing Rxyz: {}", out);
-        assert!(out.contains("RUNTIME_ID"), "list output missing header: {}", out);
-        assert!(out.contains("STARTED_AT"), "list output missing STARTED_AT col");
+        assert!(
+            out.contains("RUNTIME_ID"),
+            "list output missing header: {}",
+            out
+        );
+        assert!(
+            out.contains("STARTED_AT"),
+            "list output missing STARTED_AT col"
+        );
         assert!(out.contains("SIZE"), "list output missing SIZE col");
     }
 
@@ -646,8 +685,7 @@ mod tests {
         let appender_path = path.clone();
         let appender = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(400)).await;
-            let appended =
-                make_event("Rabc", 200, LogLevel::Info, Source::Rust, "second");
+            let appended = make_event("Rabc", 200, LogLevel::Info, Source::Rust, "second");
             let mut f = fs::OpenOptions::new()
                 .append(true)
                 .open(&appender_path)
@@ -668,8 +706,16 @@ mod tests {
         appender.await.unwrap();
 
         let out = String::from_utf8(out).unwrap();
-        assert!(out.contains("first"), "follow output missing first record: {}", out);
-        assert!(out.contains("second"), "follow output missing tailed record: {}", out);
+        assert!(
+            out.contains("first"),
+            "follow output missing first record: {}",
+            out
+        );
+        assert!(
+            out.contains("second"),
+            "follow output missing tailed record: {}",
+            out
+        );
     }
 
     #[tokio::test]
@@ -683,7 +729,15 @@ mod tests {
         args.runtime_id = Some("Runknown");
         let (_out, _err, res) = run_capture(args, dir.path()).await;
         let err_msg = res.unwrap_err().to_string();
-        assert!(err_msg.contains("Runknown"), "error should mention the unknown id: {}", err_msg);
-        assert!(err_msg.contains("--list"), "error should suggest --list: {}", err_msg);
+        assert!(
+            err_msg.contains("Runknown"),
+            "error should mention the unknown id: {}",
+            err_msg
+        );
+        assert!(
+            err_msg.contains("--list"),
+            "error should suggest --list: {}",
+            err_msg
+        );
     }
 }

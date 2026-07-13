@@ -23,10 +23,10 @@ use streamlib_plugin_abi::{
 };
 
 #[cfg(target_os = "linux")]
-use super::super::scope_token::with_full_scope_or_err;
-#[cfg(target_os = "linux")]
 use super::super::super::run_host_extern_c;
 use super::super::super::shared::wire::write_err;
+#[cfg(target_os = "linux")]
+use super::super::scope_token::with_full_scope_or_err;
 
 // ---------------- Kernel construction (Linux-only) ----------------
 
@@ -250,8 +250,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cr
                     return 1;
                 }
             };
-            let usages =
-                streamlib_consumer_rhi::TextureUsages::from_bits_truncate(usage_bits);
+            let usages = streamlib_consumer_rhi::TextureUsages::from_bits_truncate(usage_bits);
             let result = with_full_scope_or_err(
                 scope_token,
                 "create_texture_ring",
@@ -353,4 +352,3 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cr
     );
     1
 }
-

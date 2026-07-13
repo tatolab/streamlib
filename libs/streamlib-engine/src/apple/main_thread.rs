@@ -22,9 +22,8 @@ where
         let _ = tx.send(result);
     });
 
-    rx.recv().map_err(|e| {
-        crate::core::Error::Runtime(format!("Main thread dispatch failed: {}", e))
-    })?
+    rx.recv()
+        .map_err(|e| crate::core::Error::Runtime(format!("Main thread dispatch failed: {}", e)))?
 }
 
 pub async fn execute_on_main_thread_async<F, T>(f: F) -> Result<T>

@@ -6,9 +6,9 @@ use std::sync::Arc;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::core::rhi::blitter::RhiBlitter;
 use crate::core::rhi::PixelBuffer;
-use crate::core::{Result, Error};
+use crate::core::rhi::blitter::RhiBlitter;
+use crate::core::{Error, Result};
 
 use super::HostVulkanDevice;
 
@@ -24,17 +24,19 @@ pub struct VulkanBlitter {
 
 impl VulkanBlitter {
     /// Create a new Vulkan blitter with a dedicated command pool.
-    pub fn new(vulkan_device: &Arc<HostVulkanDevice>, queue: vk::Queue, queue_family_index: u32) -> Result<Self> {
+    pub fn new(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        queue: vk::Queue,
+        queue_family_index: u32,
+    ) -> Result<Self> {
         let device = vulkan_device.device();
         let pool_info = vk::CommandPoolCreateInfo::builder()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
             .queue_family_index(queue_family_index)
             .build();
 
-        let command_pool =
-            unsafe { device.create_command_pool(&pool_info, None) }.map_err(|e| {
-                Error::GpuError(format!("Failed to create blitter command pool: {e}"))
-            })?;
+        let command_pool = unsafe { device.create_command_pool(&pool_info, None) }
+            .map_err(|e| Error::GpuError(format!("Failed to create blitter command pool: {e}")))?;
 
         Ok(Self {
             vulkan_device: Arc::clone(vulkan_device),
@@ -69,7 +71,8 @@ impl RhiBlitter for VulkanBlitter {
             .build();
 
         let command_buffer = unsafe { self.device.allocate_command_buffers(&alloc_info) }
-            .map_err(|e| Error::GpuError(format!("Failed to allocate blit command buffer: {e}")))?[0];
+            .map_err(|e| Error::GpuError(format!("Failed to allocate blit command buffer: {e}")))?
+            [0];
 
         let begin_info = vk::CommandBufferBeginInfo::builder()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
@@ -79,7 +82,9 @@ impl RhiBlitter for VulkanBlitter {
             self.device
                 .begin_command_buffer(command_buffer, &begin_info)
                 .map(|_| ())
-                .map_err(|e| Error::GpuError(format!("Failed to begin blit command buffer: {e}")))?;
+                .map_err(|e| {
+                    Error::GpuError(format!("Failed to begin blit command buffer: {e}"))
+                })?;
 
             let region = vk::BufferCopy2::builder()
                 .src_offset(0)
@@ -111,7 +116,9 @@ impl RhiBlitter for VulkanBlitter {
             let timeline_semaphore = self
                 .device
                 .create_semaphore(&timeline_semaphore_info, None)
-                .map_err(|e| Error::GpuError(format!("Failed to create blit timeline semaphore: {e}")))?;
+                .map_err(|e| {
+                    Error::GpuError(format!("Failed to create blit timeline semaphore: {e}"))
+                })?;
 
             let signal_semaphore = vk::SemaphoreSubmitInfo::builder()
                 .semaphore(timeline_semaphore)
@@ -186,15 +193,11 @@ unsafe impl Sync for VulkanBlitter {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::rhi::{PixelFormat, PixelBuffer, PixelBufferRef};
-    use crate::vulkan::rhi::{HostVulkanDevice, HostVulkanBuffer};
+    use crate::core::rhi::{PixelBuffer, PixelBufferRef, PixelFormat};
+    use crate::vulkan::rhi::{HostVulkanBuffer, HostVulkanDevice};
     use std::sync::Arc;
 
-    fn make_rhi_buffer(
-        device: &Arc<HostVulkanDevice>,
-        width: u32,
-        height: u32,
-    ) -> PixelBuffer {
+    fn make_rhi_buffer(device: &Arc<HostVulkanDevice>, width: u32, height: u32) -> PixelBuffer {
         let buf = HostVulkanBuffer::new(device, (width as u64) * (height as u64) * 4)
             .expect("pixel buffer allocation failed");
         PixelBuffer::from_host_vulkan_buffer(
@@ -206,7 +209,10 @@ mod tests {
         )
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_blit_copy_between_equal_size_buffers() {
         let device = match HostVulkanDevice::new() {
@@ -217,12 +223,8 @@ mod tests {
             }
         };
 
-        let blitter = VulkanBlitter::new(
-            &device,
-            device.queue(),
-            device.queue_family_index(),
-        )
-        .expect("blitter creation failed");
+        let blitter = VulkanBlitter::new(&device, device.queue(), device.queue_family_index())
+            .expect("blitter creation failed");
 
         let src = make_rhi_buffer(&device, 64, 64);
         let dst = make_rhi_buffer(&device, 64, 64);
@@ -245,7 +247,10 @@ mod tests {
         );
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_blit_copy_rejects_mismatched_buffer_sizes() {
         let device = match HostVulkanDevice::new() {
@@ -256,12 +261,8 @@ mod tests {
             }
         };
 
-        let blitter = VulkanBlitter::new(
-            &device,
-            device.queue(),
-            device.queue_family_index(),
-        )
-        .expect("blitter creation failed");
+        let blitter = VulkanBlitter::new(&device, device.queue(), device.queue_family_index())
+            .expect("blitter creation failed");
 
         let src = make_rhi_buffer(&device, 64, 64);
         let dst = make_rhi_buffer(&device, 128, 128); // different size

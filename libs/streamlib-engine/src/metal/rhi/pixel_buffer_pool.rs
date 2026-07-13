@@ -13,22 +13,22 @@ use core_foundation::dictionary::CFMutableDictionary;
 use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
 use objc2_core_video::{
-    kCVPixelBufferHeightKey, kCVPixelBufferIOSurfacePropertiesKey,
+    CVPixelBufferPool, kCVPixelBufferHeightKey, kCVPixelBufferIOSurfacePropertiesKey,
     kCVPixelBufferMetalCompatibilityKey, kCVPixelBufferOpenGLCompatibilityKey,
-    kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey, CVPixelBufferPool,
+    kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey,
 };
 use objc2_foundation::NSThread;
 use parking_lot::RwLock;
 
 use super::COREVIDEO_INIT_LOCK;
 use crate::apple::corevideo_ffi::{
-    kCVReturnSuccess, CVPixelBufferGetIOSurface, CVPixelBufferRef, IOSurfaceGetID,
+    CVPixelBufferGetIOSurface, CVPixelBufferRef, IOSurfaceGetID, kCVReturnSuccess,
 };
 use crate::core::rhi::{
-    PixelBufferDescriptor, PixelBufferPoolId, PixelFormat, PixelBuffer, RhiPixelBufferPool,
-    PixelBufferRef,
+    PixelBuffer, PixelBufferDescriptor, PixelBufferPoolId, PixelBufferRef, PixelFormat,
+    RhiPixelBufferPool,
 };
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 
 /// macOS pixel buffer pool wrapping CVPixelBufferPool.
 pub struct PixelBufferPoolMacOS {
@@ -235,7 +235,11 @@ fn create_pool_on_main_thread(
     // Log detailed format info for debugging
     tracing::info!(
         "CVPixelBufferPool: Creating pool on main thread: {}x{}, format={:?}, cv_format=0x{:08X} ('{}')",
-        width, height, format, pixel_format, format.fourcc_string()
+        width,
+        height,
+        format,
+        pixel_format,
+        format.fourcc_string()
     );
 
     // NOTE: kCVPixelFormatType_32RGBA ('RGBA') is defined but not well-supported.

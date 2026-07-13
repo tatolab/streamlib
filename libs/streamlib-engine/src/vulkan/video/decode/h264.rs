@@ -3,19 +3,18 @@
 
 //! H.264-specific NAL handling: SPS/PPS parsing, slice decode submission.
 
-use vulkanalia::vk;
 use tracing::{debug, warn};
+use vulkanalia::vk;
 
-use crate::vulkan::video::nv_video_parser::vulkan_h264_decoder::{
-    self as h264dec, BitstreamReader as H264BitstreamReader,
-    VulkanH264Decoder, MAX_DPB_SIZE as H264_MAX_DPB_SIZE, MAX_REFS as H264_MAX_REFS,
-    reference_picture_list_initialization_p_frame,
-};
 use crate::vulkan::video::nv_video_parser::vulkan_h26x_decoder::SliceType;
+use crate::vulkan::video::nv_video_parser::vulkan_h264_decoder::{
+    self as h264dec, BitstreamReader as H264BitstreamReader, MAX_DPB_SIZE as H264_MAX_DPB_SIZE,
+    MAX_REFS as H264_MAX_REFS, VulkanH264Decoder, reference_picture_list_initialization_p_frame,
+};
 use crate::vulkan::video::video_context::VideoError;
 
-use super::{SimpleDecoder, PendingFrame};
 use super::types::*;
+use super::{PendingFrame, SimpleDecoder};
 
 impl SimpleDecoder {
     // ------------------------------------------------------------------
@@ -33,9 +32,9 @@ impl SimpleDecoder {
         let mut reader = H264BitstreamReader::new(&rbsp);
 
         let parser = self.h264_parser.as_mut().unwrap();
-        let sps_id = parser.parse_sps(&mut reader).ok_or_else(|| {
-            VideoError::BitstreamError("Failed to parse H.264 SPS".into())
-        })?;
+        let sps_id = parser
+            .parse_sps(&mut reader)
+            .ok_or_else(|| VideoError::BitstreamError("Failed to parse H.264 SPS".into()))?;
 
         let sps = parser.spss[sps_id as usize].as_ref().ok_or_else(|| {
             VideoError::BitstreamError(format!("SPS {} not found after parse", sps_id))
@@ -117,7 +116,11 @@ impl SimpleDecoder {
                                 let delta = r.se();
                                 next_scale = (last_scale + delta + 256) % 256;
                             }
-                            last_scale = if next_scale == 0 { last_scale } else { next_scale };
+                            last_scale = if next_scale == 0 {
+                                last_scale
+                            } else {
+                                next_scale
+                            };
                         }
                     }
                 }
@@ -186,7 +189,10 @@ impl SimpleDecoder {
                 debug!("H.264 PPS parsed ({} bytes)", pps_nalu.len());
             }
         } else {
-            debug!("PPS cached ({} bytes), parser not yet initialized", pps_nalu.len());
+            debug!(
+                "PPS cached ({} bytes), parser not yet initialized",
+                pps_nalu.len()
+            );
         }
 
         // Auto-configure session now that both SPS and PPS are available
@@ -218,9 +224,10 @@ impl SimpleDecoder {
         // Drain previous pending frame (like H.265 path)
         let prev_frame = self.drain_pending_frame()?;
 
-        let parser = self.h264_parser.as_mut().ok_or_else(|| {
-            VideoError::BitstreamError("H.264 parser not initialized".into())
-        })?;
+        let parser = self
+            .h264_parser
+            .as_mut()
+            .ok_or_else(|| VideoError::BitstreamError("H.264 parser not initialized".into()))?;
 
         // Extract NAL header fields
         let nal_ref_idc = (nal[0] >> 5) & 0x3;
@@ -245,20 +252,25 @@ impl SimpleDecoder {
         let mut reader = H264BitstreamReader::new(&rbsp);
 
         // Parse slice header using the ported parser
-        let slh = parser.parse_slice_header(&mut reader, nal_ref_idc, nal_unit_type)
+        let slh = parser
+            .parse_slice_header(&mut reader, nal_ref_idc, nal_unit_type)
             .ok_or_else(|| {
                 VideoError::BitstreamError("Failed to parse H.264 slice header".into())
             })?;
 
         // Get SPS/PPS from the parser's arrays using the IDs from the slice header
         let pps_id = slh.pic_parameter_set_id as usize;
-        let pps = parser.ppss.get(pps_id).and_then(|p| p.clone()).ok_or_else(|| {
-            VideoError::BitstreamError(format!("H.264 PPS {} not found", pps_id))
-        })?;
+        let pps = parser
+            .ppss
+            .get(pps_id)
+            .and_then(|p| p.clone())
+            .ok_or_else(|| VideoError::BitstreamError(format!("H.264 PPS {} not found", pps_id)))?;
         let sps_id = pps.seq_parameter_set_id as usize;
-        let sps = parser.spss.get(sps_id).and_then(|s| s.clone()).ok_or_else(|| {
-            VideoError::BitstreamError(format!("H.264 SPS {} not found", sps_id))
-        })?;
+        let sps = parser
+            .spss
+            .get(sps_id)
+            .and_then(|s| s.clone())
+            .ok_or_else(|| VideoError::BitstreamError(format!("H.264 SPS {} not found", sps_id)))?;
         // Update active SPS/PPS for POC calculation
         parser.sps = Some(sps.clone());
         parser.pps = Some(pps.clone());
@@ -317,8 +329,11 @@ impl SimpleDecoder {
             }
             let phys_slot = self.h264_dpb_to_slot[dpb_idx];
             if phys_slot < 0 {
-                warn!(dpb_idx, frame = self.frame_counter,
-                      "H.264 ref list entry has no physical slot mapping");
+                warn!(
+                    dpb_idx,
+                    frame = self.frame_counter,
+                    "H.264 ref list entry has no physical slot mapping"
+                );
                 continue;
             }
             let ps = phys_slot as usize;
@@ -362,10 +377,12 @@ impl SimpleDecoder {
         let vk_dec = self.vk_decoder.as_ref().ok_or_else(|| {
             VideoError::BitstreamError("VkVideoDecoder not initialized for H.264".into())
         })?;
-        let setup_view = vk_dec.dpb_slot_image_view(setup_slot)
-            .ok_or_else(|| VideoError::BitstreamError(
-                format!("VkVideoDecoder DPB slot {} not available", setup_slot),
-            ))?;
+        let setup_view = vk_dec.dpb_slot_image_view(setup_slot).ok_or_else(|| {
+            VideoError::BitstreamError(format!(
+                "VkVideoDecoder DPB slot {} not available",
+                setup_slot
+            ))
+        })?;
         let setup_image = vk_dec.dpb_image();
         let session_params = vk_dec.session_parameters();
 
@@ -392,8 +409,15 @@ impl SimpleDecoder {
         }
 
         if self.frame_counter < 10 {
-            let ref_info_str: Vec<String> = ref_slots.iter().zip(ref_pic_infos.iter())
-                .map(|(s, r)| format!("slot{}(fn={},poc={})", s.slot_index, r.frame_num, r.pic_order_cnt[0]))
+            let ref_info_str: Vec<String> = ref_slots
+                .iter()
+                .zip(ref_pic_infos.iter())
+                .map(|(s, r)| {
+                    format!(
+                        "slot{}(fn={},poc={})",
+                        s.slot_index, r.frame_num, r.pic_order_cnt[0]
+                    )
+                })
                 .collect();
             debug!(
                 frame = self.frame_counter,
@@ -467,7 +491,9 @@ impl SimpleDecoder {
         let vk_dec = self.vk_decoder.as_mut().ok_or_else(|| {
             VideoError::BitstreamError("VkVideoDecoder not initialized for H.264".into())
         })?;
-        unsafe { vk_dec.decode_frame(&submit, &mut output)?; }
+        unsafe {
+            vk_dec.decode_frame(&submit, &mut output)?;
+        }
 
         // Apply decoded reference picture marking (MMCO / sliding window)
         let parser = self.h264_parser.as_mut().unwrap();

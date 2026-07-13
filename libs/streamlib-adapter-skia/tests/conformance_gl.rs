@@ -27,7 +27,7 @@ use streamlib_adapter_abi::{
     SurfaceTransportHandle, SurfaceUsage,
 };
 use streamlib_adapter_opengl::{
-    EglRuntime, HostSurfaceRegistration, OpenGlSurfaceAdapter, DRM_FORMAT_ARGB8888,
+    DRM_FORMAT_ARGB8888, EglRuntime, HostSurfaceRegistration, OpenGlSurfaceAdapter,
 };
 use streamlib_adapter_skia::SkiaGlSurfaceAdapter;
 
@@ -128,7 +128,9 @@ fn skia_gl_adapter_passes_run_conformance() {
     let skia_gl_adapter = match SkiaGlSurfaceAdapter::new(Arc::clone(&inner)) {
         Ok(a) => a,
         Err(e) => {
-            println!("skia-gl-adapter conformance: skipping — Skia DirectContext build failed: {e}");
+            println!(
+                "skia-gl-adapter conformance: skipping — Skia DirectContext build failed: {e}"
+            );
             return;
         }
     };

@@ -29,12 +29,10 @@ use std::sync::Arc;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
 use streamlib::sdk::context::GpuContext;
-use streamlib::sdk::rhi::{TextureFormat};
 use streamlib::sdk::engine::host_rhi::{
-    HostVulkanDevice,
-    HostVulkanBuffer,
-    HostVulkanTimelineSemaphore,
+    HostVulkanBuffer, HostVulkanDevice, HostVulkanTimelineSemaphore,
 };
+use streamlib::sdk::rhi::TextureFormat;
 use streamlib_adapter_abi::SurfaceId;
 use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
 
@@ -81,23 +79,17 @@ fn persistent_pool_count_stays_at_one_across_repeated_submits() {
             return;
         }
     };
-    let produce_done = match HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-    {
+    let produce_done = match HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0) {
         Ok(s) => Arc::new(s),
         Err(e) => {
-            println!(
-                "cuda persistent_pool: new_exportable produce_done failed: {e} — skipping"
-            );
+            println!("cuda persistent_pool: new_exportable produce_done failed: {e} — skipping");
             return;
         }
     };
-    let consume_done = match HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-    {
+    let consume_done = match HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0) {
         Ok(s) => Arc::new(s),
         Err(e) => {
-            println!(
-                "cuda persistent_pool: new_exportable consume_done failed: {e} — skipping"
-            );
+            println!("cuda persistent_pool: new_exportable consume_done failed: {e} — skipping");
             return;
         }
     };
@@ -105,16 +97,19 @@ fn persistent_pool_count_stays_at_one_across_repeated_submits() {
     // Source `VkImage` for the copy. The host pipeline producer path
     // takes any DMA-BUF render-target image; this is the same shape
     // the camera-to-cuda example registers.
-    let source_texture =
-        match gpu.acquire_render_target_dma_buf_image(W, H, TextureFormat::Bgra8Unorm) {
-            Ok(t) => t,
-            Err(e) => {
-                println!(
-                    "cuda persistent_pool: acquire_render_target_dma_buf_image failed: {e} — skipping"
-                );
-                return;
-            }
-        };
+    let source_texture = match gpu.acquire_render_target_dma_buf_image(
+        W,
+        H,
+        TextureFormat::Bgra8Unorm,
+    ) {
+        Ok(t) => t,
+        Err(e) => {
+            println!(
+                "cuda persistent_pool: acquire_render_target_dma_buf_image failed: {e} — skipping"
+            );
+            return;
+        }
+    };
     let texture_arc = Arc::clone(source_texture.vulkan_inner());
 
     let adapter = CudaSurfaceAdapter::new(Arc::clone(&host_device));

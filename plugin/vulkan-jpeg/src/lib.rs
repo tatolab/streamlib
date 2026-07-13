@@ -30,9 +30,7 @@ pub mod simple_decoder;
 #[cfg(target_os = "linux")]
 pub mod vulkan_compute_backend;
 
-pub use color::{
-    AdobeMetadata, AdobeTransform, ExifColorSpace, JfifMetadata, JpegColorInfo,
-};
+pub use color::{AdobeMetadata, AdobeTransform, ExifColorSpace, JfifMetadata, JpegColorInfo};
 #[cfg(target_os = "linux")]
 pub use color::{JpegColorSource, ResolvedJpegColor};
 pub use error::{JpegError, JpegResult};
@@ -46,9 +44,9 @@ pub use marker::ZIGZAG;
 #[cfg(target_os = "linux")]
 pub use backend::{JpegBackendKind, JpegDecodeBackend};
 #[cfg(target_os = "linux")]
-pub use kernel::{JpegDecodeKernel, JPEG_DECODE_WORKGROUP_SIZE};
+pub use kernel::{JPEG_DECODE_WORKGROUP_SIZE, JpegDecodeKernel};
 #[cfg(target_os = "linux")]
-pub use simple_decoder::{JpegDecodeOutput, SimpleJpegDecoder, MAX_FRAMES_IN_FLIGHT};
+pub use simple_decoder::{JpegDecodeOutput, MAX_FRAMES_IN_FLIGHT, SimpleJpegDecoder};
 #[cfg(target_os = "linux")]
 pub use vulkan_compute_backend::VulkanComputeBackend;
 
@@ -82,13 +80,7 @@ pub fn decode(bytes: &[u8]) -> JpegResult<DecodedJpeg> {
         }
     }
 
-    let components = scan::decode_entropy(
-        &frame,
-        &scan,
-        &huffman,
-        restart_interval,
-        entropy_data,
-    )?;
+    let components = scan::decode_entropy(&frame, &scan, &huffman, restart_interval, entropy_data)?;
 
     Ok(DecodedJpeg {
         frame,

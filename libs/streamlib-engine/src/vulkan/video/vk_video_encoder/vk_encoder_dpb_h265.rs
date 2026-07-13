@@ -21,9 +21,9 @@ pub const NO_REFERENCE_PICTURE_H265: u8 = 0xFF;
 
 // H.265 picture types matching StdVideoH265PictureType enum values.
 const PIC_TYPE_IDR: u32 = 0; // STD_VIDEO_H265_PICTURE_TYPE_IDR
-const PIC_TYPE_I: u32 = 1;   // STD_VIDEO_H265_PICTURE_TYPE_I
-const PIC_TYPE_P: u32 = 2;   // STD_VIDEO_H265_PICTURE_TYPE_P
-const PIC_TYPE_B: u32 = 3;   // STD_VIDEO_H265_PICTURE_TYPE_B
+const PIC_TYPE_I: u32 = 1; // STD_VIDEO_H265_PICTURE_TYPE_I
+const PIC_TYPE_P: u32 = 2; // STD_VIDEO_H265_PICTURE_TYPE_P
+const PIC_TYPE_B: u32 = 3; // STD_VIDEO_H265_PICTURE_TYPE_B
 
 // ---------------------------------------------------------------------------
 // DpbEntryH265
@@ -32,9 +32,9 @@ const PIC_TYPE_B: u32 = 3;   // STD_VIDEO_H265_PICTURE_TYPE_B
 /// A single entry in the H.265 encoder DPB.
 #[derive(Debug, Clone, Default)]
 pub struct DpbEntryH265 {
-    pub state: u32,    // 0: empty, 1: in use
-    pub marking: u32,  // 0: unused, 1: short-term, 2: long-term
-    pub output: bool,  // needed for output
+    pub state: u32,   // 0: empty, 1: in use
+    pub marking: u32, // 0: unused, 1: short-term, 2: long-term
+    pub output: bool, // needed for output
     pub corrupted: bool,
     pub pic_order_cnt_val: u32,
     pub ref_pic_order_cnt: [i32; MAX_DPB_SIZE_H265],
@@ -266,14 +266,16 @@ impl VkEncDpbH265 {
                 let mut min_poc_corrupted_val: u32 = u32::MAX;
 
                 for i in 0..self.dpb_size as usize {
-                    if self.dpb[i].state == 1 && self.dpb[i].marking == 1 && !self.dpb[i].corrupted {
+                    if self.dpb[i].state == 1 && self.dpb[i].marking == 1 && !self.dpb[i].corrupted
+                    {
                         num_short_term_ref_pics += 1;
                         if self.dpb[i].pic_order_cnt_val < min_poc_st_val {
                             min_poc_st_val = self.dpb[i].pic_order_cnt_val;
                             min_poc_st_idx = i as i32;
                         }
                     }
-                    if self.dpb[i].state == 1 && self.dpb[i].marking == 2 && !self.dpb[i].corrupted {
+                    if self.dpb[i].state == 1 && self.dpb[i].marking == 2 && !self.dpb[i].corrupted
+                    {
                         num_long_term_ref_pics += 1;
                         if self.dpb[i].pic_order_cnt_val < min_poc_lt_val {
                             min_poc_lt_val = self.dpb[i].pic_order_cnt_val;
@@ -554,8 +556,7 @@ impl VkEncDpbH265 {
             if pic_type == PIC_TYPE_B {
                 let max_st_ref_pics_curr =
                     cmp::max(MAX_ALLOWED_NUM_REF_FRAMES - num_poc_lt_curr, 2);
-                num_positive_ref_pics_used =
-                    cmp::max(max_st_ref_pics_curr - num_ref_l0 as i32, 1);
+                num_positive_ref_pics_used = cmp::max(max_st_ref_pics_curr - num_ref_l0 as i32, 1);
                 num_negative_ref_pics_used = max_st_ref_pics_curr - num_positive_ref_pics_used;
             } else {
                 let max_st_ref_pics_curr =
@@ -564,8 +565,7 @@ impl VkEncDpbH265 {
                 num_positive_ref_pics_used = 0;
             }
         } else {
-            let max_st_ref_pics_curr =
-                cmp::min(1, MAX_ALLOWED_NUM_REF_FRAMES - num_poc_lt_curr);
+            let max_st_ref_pics_curr = cmp::min(1, MAX_ALLOWED_NUM_REF_FRAMES - num_poc_lt_curr);
             num_negative_ref_pics_used = max_st_ref_pics_curr;
             num_positive_ref_pics_used = 0;
         }
@@ -607,8 +607,7 @@ impl VkEncDpbH265 {
                 // In C++: tmpSTRPS.delta_poc_s0_minus1[numStRefL0] = (uint8_t)(prevDelta - deltaPocS0[numStRefL0] - 1);
                 tmp_strps.delta_poc_s0_minus1[i] =
                     prev_delta.wrapping_sub(delta_poc_s0[i]).wrapping_sub(1) as u16;
-                tmp_strps.used_by_curr_pic_s0_flag |=
-                    ((used_by_curr_pic_s0[i] & 1) as u16) << i;
+                tmp_strps.used_by_curr_pic_s0_flag |= ((used_by_curr_pic_s0[i] & 1) as u16) << i;
                 prev_delta = delta_poc_s0[i];
             }
 
@@ -834,7 +833,11 @@ impl VkEncDpbH265 {
         let no_rasl_output_flag = is_idr;
 
         if is_irap && no_rasl_output_flag {
-            let no_output = if is_idr { false } else { no_output_of_prior_pics_flag };
+            let no_output = if is_idr {
+                false
+            } else {
+                no_output_of_prior_pics_flag
+            };
             if no_output {
                 for i in 0..self.dpb_size as usize {
                     self.dpb[i] = DpbEntryH265::default();
@@ -1049,7 +1052,8 @@ impl VkEncDpbH265 {
                         dpb_marking = self.dpb[j].marking,
                         dpb_poc = self.dpb[j].pic_order_cnt_val,
                         target_poc = poc_st_curr_before[i],
-                        matches = (self.dpb[j].marking == 1 && self.dpb[j].pic_order_cnt_val == poc_st_curr_before[i]),
+                        matches = (self.dpb[j].marking == 1
+                            && self.dpb[j].pic_order_cnt_val == poc_st_curr_before[i]),
                         "    DPB entry checked"
                     );
                 }
@@ -1201,16 +1205,21 @@ impl VkEncDpbH265 {
 
         let mut result = SetupRefListResult::default();
 
-        let num_poc_total_curr: u8 = (self.num_poc_st_curr_before
-            + self.num_poc_st_curr_after
-            + self.num_poc_lt_curr) as u8;
+        let num_poc_total_curr: u8 =
+            (self.num_poc_st_curr_before + self.num_poc_st_curr_after + self.num_poc_lt_curr) as u8;
 
         debug_assert!(num_poc_total_curr <= 8);
 
-        result.num_ref_idx_l0_active_minus1 =
-            if num_ref_l0 > 0 { (num_ref_l0 - 1) as u8 } else { 0 };
-        result.num_ref_idx_l1_active_minus1 =
-            if num_ref_l1 > 0 { (num_ref_l1 - 1) as u8 } else { 0 };
+        result.num_ref_idx_l0_active_minus1 = if num_ref_l0 > 0 {
+            (num_ref_l0 - 1) as u8
+        } else {
+            0
+        };
+        result.num_ref_idx_l1_active_minus1 = if num_ref_l1 > 0 {
+            (num_ref_l1 - 1) as u8
+        } else {
+            0
+        };
 
         self.long_term_flags = 0;
 
@@ -1235,10 +1244,8 @@ impl VkEncDpbH265 {
 
         // Build RefPicList0 for P and B frames
         if pic_type == PIC_TYPE_P || pic_type == PIC_TYPE_B {
-            let n_num_rps_curr_temp_list0 = cmp::max(
-                result.num_ref_idx_l0_active_minus1 + 1,
-                num_poc_total_curr,
-            );
+            let n_num_rps_curr_temp_list0 =
+                cmp::max(result.num_ref_idx_l0_active_minus1 + 1, num_poc_total_curr);
             debug_assert!(n_num_rps_curr_temp_list0 as usize <= MAX_NUM_LIST_REF_H265);
 
             let mut ref_pic_list_temp0 = [0i8; MAX_NUM_LIST_REF_H265];
@@ -1291,10 +1298,8 @@ impl VkEncDpbH265 {
             let num_poc_total_curr: u8 = (self.num_poc_st_curr_before
                 + self.num_poc_st_curr_after
                 + self.num_poc_lt_curr) as u8;
-            let n_num_rps_curr_temp_list1 = cmp::max(
-                result.num_ref_idx_l1_active_minus1 + 1,
-                num_poc_total_curr,
-            );
+            let n_num_rps_curr_temp_list1 =
+                cmp::max(result.num_ref_idx_l1_active_minus1 + 1, num_poc_total_curr);
             debug_assert!(n_num_rps_curr_temp_list1 as usize <= MAX_NUM_LIST_REF_H265);
 
             let mut ref_pic_list_temp1 = [0i8; MAX_NUM_LIST_REF_H265];
@@ -1336,8 +1341,7 @@ impl VkEncDpbH265 {
 
             for r_idx in 0..=result.num_ref_idx_l1_active_minus1 as usize {
                 result.ref_pic_list1[r_idx] = ref_pic_list_temp1[r_idx] as u8;
-                self.long_term_flags |=
-                    (is_long_term[16 + r_idx] as u32) << (16 + r_idx);
+                self.long_term_flags |= (is_long_term[16 + r_idx] as u32) << (16 + r_idx);
             }
         }
 
@@ -1354,7 +1358,9 @@ impl VkEncDpbH265 {
                 "  RefPicList0 entry"
             );
         }
-        if result.num_ref_idx_l0_active_minus1 == 0 && result.ref_pic_list0[0] == NO_REFERENCE_PICTURE_H265 {
+        if result.num_ref_idx_l0_active_minus1 == 0
+            && result.ref_pic_list0[0] == NO_REFERENCE_PICTURE_H265
+        {
             tracing::warn!("RefPicList0 is EMPTY for a P/B frame -- this will cause encode errors");
         }
         for i in 0..=result.num_ref_idx_l1_active_minus1 as usize {
@@ -1643,11 +1649,11 @@ mod tests {
         let result = dpb.initialize_rps(
             &[], // no SPS STRPS
             PIC_TYPE_P,
-            1,    // pic_order_cnt_val
-            0,    // temporal_id
+            1,     // pic_order_cnt_val
+            0,     // temporal_id
             false, // not IRAP
-            1,    // num_ref_l0
-            0,    // num_ref_l1
+            1,     // num_ref_l0
+            0,     // num_ref_l1
         );
 
         assert_eq!(result.short_term_ref_pic_set.num_negative_pics, 1);
@@ -1690,7 +1696,10 @@ mod tests {
         // With dpb_size=4 and 2 refs, both fit (2 <= 3), so num_negative_pics=2
         // but only the first is marked as used_by_curr_pic_s0
         assert!(result.short_term_ref_pic_set.num_negative_pics >= 1);
-        assert_eq!(result.short_term_ref_pic_set.used_by_curr_pic_s0_flag & 1, 1);
+        assert_eq!(
+            result.short_term_ref_pic_set.used_by_curr_pic_s0_flag & 1,
+            1
+        );
     }
 
     #[test]
@@ -1700,17 +1709,17 @@ mod tests {
 
         let empty_strps = ShortTermRefPicSet::default();
         let (slot, ref_pic_set) = dpb.dpb_picture_start_with_rps(
-            0,       // frame_id
-            0,       // pic_order_cnt_val
+            0, // frame_id
+            0, // pic_order_cnt_val
             PIC_TYPE_IDR,
-            true,    // is_irap
-            true,    // is_idr
-            true,    // pic_output_flag
-            0,       // temporal_id
-            false,   // no_output_of_prior_pics_flag
-            0,       // time_stamp
+            true,  // is_irap
+            true,  // is_idr
+            true,  // pic_output_flag
+            0,     // temporal_id
+            false, // no_output_of_prior_pics_flag
+            0,     // time_stamp
             &empty_strps,
-            256,     // max_pic_order_cnt_lsb
+            256, // max_pic_order_cnt_lsb
         );
 
         assert!(slot >= 0);
@@ -1728,27 +1737,41 @@ mod tests {
 
         // --- IDR frame (POC=0) ---
         dpb.reference_picture_marking(0, PIC_TYPE_IDR, false);
-        let _rps_result = dpb.initialize_rps(
-            &[], PIC_TYPE_IDR, 0, 0, true, 0, 0,
-        );
+        let _rps_result = dpb.initialize_rps(&[], PIC_TYPE_IDR, 0, 0, true, 0, 0);
         let empty_strps = ShortTermRefPicSet::default();
         let (slot0, _rps0) = dpb.dpb_picture_start_with_rps(
-            0, 0, PIC_TYPE_IDR, true, true, true, 0, false, 0,
-            &empty_strps, 256,
+            0,
+            0,
+            PIC_TYPE_IDR,
+            true,
+            true,
+            true,
+            0,
+            false,
+            0,
+            &empty_strps,
+            256,
         );
         assert!(slot0 >= 0);
         dpb.dpb_picture_end(1, true);
 
         // --- P frame (POC=1) ---
         dpb.reference_picture_marking(1, PIC_TYPE_P, false);
-        let rps_result1 = dpb.initialize_rps(
-            &[], PIC_TYPE_P, 1, 0, false, 1, 0,
-        );
+        let rps_result1 = dpb.initialize_rps(&[], PIC_TYPE_P, 1, 0, false, 1, 0);
         assert_eq!(rps_result1.short_term_ref_pic_set.num_negative_pics, 1);
 
         let (slot1, rps1) = dpb.dpb_picture_start_with_rps(
-            1, 1, PIC_TYPE_P, false, false, true, 0, false, 1,
-            &rps_result1.short_term_ref_pic_set, 256,
+            1,
+            1,
+            PIC_TYPE_P,
+            false,
+            false,
+            true,
+            0,
+            false,
+            1,
+            &rps_result1.short_term_ref_pic_set,
+            256,
         );
         assert!(slot1 >= 0);
 
@@ -1756,9 +1779,7 @@ mod tests {
         assert!(rps1.st_curr_before[0] >= 0);
         assert_eq!(rps1.st_curr_before[0], slot0);
 
-        let ref_lists = dpb.setup_reference_picture_list_lx(
-            PIC_TYPE_P, &rps1, 1, 0,
-        );
+        let ref_lists = dpb.setup_reference_picture_list_lx(PIC_TYPE_P, &rps1, 1, 0);
         assert_eq!(ref_lists.num_ref_idx_l0_active_minus1, 0);
         assert_eq!(ref_lists.ref_pic_list0[0], slot0 as u8);
 
@@ -1766,16 +1787,23 @@ mod tests {
 
         // --- P frame (POC=2) ---
         dpb.reference_picture_marking(2, PIC_TYPE_P, false);
-        let rps_result2 = dpb.initialize_rps(
-            &[], PIC_TYPE_P, 2, 0, false, 1, 0,
-        );
+        let rps_result2 = dpb.initialize_rps(&[], PIC_TYPE_P, 2, 0, false, 1, 0);
         // Both POC=0 and POC=1 are valid negative refs; with dpb_size=4,
         // both fit. Only 1 is used_by_curr_pic though.
         assert!(rps_result2.short_term_ref_pic_set.num_negative_pics >= 1);
 
         let (slot2, rps2) = dpb.dpb_picture_start_with_rps(
-            2, 2, PIC_TYPE_P, false, false, true, 0, false, 2,
-            &rps_result2.short_term_ref_pic_set, 256,
+            2,
+            2,
+            PIC_TYPE_P,
+            false,
+            false,
+            true,
+            0,
+            false,
+            2,
+            &rps_result2.short_term_ref_pic_set,
+            256,
         );
         assert!(slot2 >= 0);
 
@@ -1783,9 +1811,7 @@ mod tests {
         assert!(rps2.st_curr_before[0] >= 0);
         assert_eq!(rps2.st_curr_before[0], slot1);
 
-        let ref_lists2 = dpb.setup_reference_picture_list_lx(
-            PIC_TYPE_P, &rps2, 1, 0,
-        );
+        let ref_lists2 = dpb.setup_reference_picture_list_lx(PIC_TYPE_P, &rps2, 1, 0);
         assert_eq!(ref_lists2.ref_pic_list0[0], slot1 as u8);
 
         dpb.dpb_picture_end(1, true);
@@ -1804,8 +1830,17 @@ mod tests {
         dpb.reference_picture_marking(1, PIC_TYPE_P, false);
         let rps_result = dpb.initialize_rps(&[], PIC_TYPE_P, 1, 0, false, 1, 0);
         let (_, rps) = dpb.dpb_picture_start_with_rps(
-            1, 1, PIC_TYPE_P, false, false, true, 0, false, 1,
-            &rps_result.short_term_ref_pic_set, 256,
+            1,
+            1,
+            PIC_TYPE_P,
+            false,
+            false,
+            true,
+            0,
+            false,
+            1,
+            &rps_result.short_term_ref_pic_set,
+            256,
         );
         let ref_lists = dpb.setup_reference_picture_list_lx(PIC_TYPE_P, &rps, 1, 0);
 
@@ -1871,9 +1906,7 @@ mod tests {
             ..ShortTermRefPicSet::default()
         };
 
-        let ref_pic_set = dpb.apply_reference_picture_set(
-            2, PIC_TYPE_P, false, &strps, 256,
-        );
+        let ref_pic_set = dpb.apply_reference_picture_set(2, PIC_TYPE_P, false, &strps, 256);
 
         // POC=1 should be in stCurrBefore, POC=0 should be marked unused
         assert!(ref_pic_set.st_curr_before[0] >= 0);

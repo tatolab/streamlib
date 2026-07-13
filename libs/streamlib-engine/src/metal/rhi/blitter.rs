@@ -6,8 +6,8 @@
 use crate::apple::iosurface::create_metal_texture_from_iosurface;
 use crate::apple::texture_pool_macos::get_iosurface_id;
 use crate::core::rhi::blitter::RhiBlitter;
-use crate::core::rhi::{RhiCommandQueue, PixelBuffer};
-use crate::core::{Result, Error};
+use crate::core::rhi::{PixelBuffer, RhiCommandQueue};
+use crate::core::{Error, Result};
 use metal::foreign_types::ForeignTypeRef;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

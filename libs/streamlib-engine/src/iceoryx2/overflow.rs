@@ -72,7 +72,10 @@ mod tests {
             Overflow::from_manifest_str("drop_oldest").unwrap(),
             Overflow::DropOldest
         );
-        assert_eq!(Overflow::from_manifest_str("block").unwrap(), Overflow::Block);
+        assert_eq!(
+            Overflow::from_manifest_str("block").unwrap(),
+            Overflow::Block
+        );
     }
 
     #[test]

@@ -112,7 +112,6 @@ pub struct RuntimeOpsVTable {
     ),
 
     // v2 additions: owning-Arc handle lifetime management.
-
     /// Take a (borrowed) handle returned from
     /// [`crate::RuntimeContextVTable::runtime_ops_handle`] and return a new
     /// owned handle with an Arc refcount bump on the underlying

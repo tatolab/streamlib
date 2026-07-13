@@ -17,8 +17,8 @@
 use std::sync::Arc;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
-use streamlib::sdk::engine::host_rhi::HostVulkanTimelineSemaphore;
 use streamlib::sdk::context::GpuContext;
+use streamlib::sdk::engine::host_rhi::HostVulkanTimelineSemaphore;
 use streamlib::sdk::rhi::TextureFormat;
 use streamlib_adapter_abi::{
     StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState, SurfaceTransportHandle,
@@ -112,7 +112,9 @@ fn timeline_counter_advances_on_release_and_is_observable_by_next_acquire() {
     );
 
     {
-        let _r = ctx.acquire_read(&descriptor).expect("acquire_read after w1");
+        let _r = ctx
+            .acquire_read(&descriptor)
+            .expect("acquire_read after w1");
     }
     // Read drop signals consume_done with current_signal_value=2;
     // produce_done is untouched.

@@ -8,7 +8,6 @@
 //! reference frame group construction, stale reference invalidation,
 //! refresh_frame_flags derivation, and primary reference frame selection.
 
-
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -17,11 +16,11 @@ pub const BUFFER_POOL_MAX_SIZE: usize = 10;
 pub const INVALID_IDX: i32 = -1;
 pub const NUM_REF_FRAMES: usize = 8; // STD_VIDEO_AV1_NUM_REF_FRAMES
 pub const REFS_PER_FRAME: usize = 7; // STD_VIDEO_AV1_REFS_PER_FRAME
-pub const ORDER_HINT_BITS: u32 = 8;  // Default, may be configured
+pub const ORDER_HINT_BITS: u32 = 8; // Default, may be configured
 
 // Reference frame flags
 #[allow(dead_code)] // AV1 codec stub
-const REFRESH_LAST_FRAME_FLAG: u32 = 1 << 1;  // STD_VIDEO_AV1_REFERENCE_NAME_LAST_FRAME
+const REFRESH_LAST_FRAME_FLAG: u32 = 1 << 1; // STD_VIDEO_AV1_REFERENCE_NAME_LAST_FRAME
 const REFRESH_GOLDEN_FRAME_FLAG: u32 = 1 << 4;
 const REFRESH_BWD_FRAME_FLAG: u32 = 1 << 5;
 const REFRESH_ALT2_FRAME_FLAG: u32 = 1 << 6;
@@ -312,11 +311,19 @@ impl VkEncDpbAV1 {
 
     /// Get number of references in a group.
     pub fn get_num_refs_in_group(&self, group_id: i32) -> i32 {
-        if group_id == 0 { self.num_ref_frames_in_group1 } else { self.num_ref_frames_in_group2 }
+        if group_id == 0 {
+            self.num_ref_frames_in_group1
+        } else {
+            self.num_ref_frames_in_group2
+        }
     }
 
-    pub fn get_num_refs_l0(&self) -> i32 { self.num_ref_frames_l0 }
-    pub fn get_num_refs_l1(&self) -> i32 { self.num_ref_frames_l1 }
+    pub fn get_num_refs_l0(&self) -> i32 {
+        self.num_ref_frames_l0
+    }
+    pub fn get_num_refs_l1(&self) -> i32 {
+        self.num_ref_frames_l1
+    }
 
     /// Get frame type for a DPB index.
     pub fn get_frame_type(&self, dpb_idx: i32) -> Av1FrameType {
@@ -349,7 +356,12 @@ impl VkEncDpbAV1 {
     }
 
     /// Fill standard reference info for a DPB slot.
-    pub fn fill_std_reference_info(&self, dpb_idx: u8, frame_type: &mut Av1FrameType, order_hint: &mut u32) {
+    pub fn fill_std_reference_info(
+        &self,
+        dpb_idx: u8,
+        frame_type: &mut Av1FrameType,
+        order_hint: &mut u32,
+    ) {
         debug_assert!((dpb_idx as usize) < self.max_dpb_size as usize);
         let entry = &self.dpb[dpb_idx as usize];
         *frame_type = entry.frame_type;
@@ -357,7 +369,12 @@ impl VkEncDpbAV1 {
     }
 
     /// Configure reference buffer update flags.
-    pub fn configure_ref_buf_update(&mut self, shown_key_or_switch: bool, show_existing: bool, update_type: FrameUpdateType) {
+    pub fn configure_ref_buf_update(
+        &mut self,
+        shown_key_or_switch: bool,
+        show_existing: bool,
+        update_type: FrameUpdateType,
+    ) {
         if shown_key_or_switch {
             self.ref_buf_update_flag = 0xff;
             return;
@@ -369,7 +386,12 @@ impl VkEncDpbAV1 {
 
         let refresh_last = 1u32 << self.last_last_ref_name_in_use;
         self.ref_buf_update_flag = match update_type {
-            FrameUpdateType::KfUpdate => refresh_last | REFRESH_GOLDEN_FRAME_FLAG | REFRESH_ALT2_FRAME_FLAG | REFRESH_ALT_FRAME_FLAG,
+            FrameUpdateType::KfUpdate => {
+                refresh_last
+                    | REFRESH_GOLDEN_FRAME_FLAG
+                    | REFRESH_ALT2_FRAME_FLAG
+                    | REFRESH_ALT_FRAME_FLAG
+            }
             FrameUpdateType::LfUpdate => refresh_last,
             FrameUpdateType::GfUpdate => refresh_last | REFRESH_GOLDEN_FRAME_FLAG,
             FrameUpdateType::OverlayUpdate => refresh_last,

@@ -5,19 +5,19 @@
 //!
 //! Handles the main loop for processor threads based on their execution mode.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(unix)]
 use std::os::fd::OwnedFd;
 
 use parking_lot::Mutex;
 
+use crate::core::RuntimeContext;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::ProcessorUniqueId;
 use crate::core::processors::{ProcessorInstance, ProcessorState};
-use crate::core::RuntimeContext;
 /// Duration to sleep when paused (avoids busy-waiting).
 const PAUSE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
 
@@ -326,8 +326,7 @@ impl ReactiveLoopFdWaiter {
             };
             // SAFETY: epoll_ctl with EPOLL_CTL_ADD takes a pointer to a
             // valid epoll_event for the duration of the call.
-            let r =
-                unsafe { libc::epoll_ctl(epoll_fd, libc::EPOLL_CTL_ADD, fd, &mut event) };
+            let r = unsafe { libc::epoll_ctl(epoll_fd, libc::EPOLL_CTL_ADD, fd, &mut event) };
             if r < 0 {
                 Err(std::io::Error::last_os_error())
             } else {
@@ -512,7 +511,11 @@ mod tests {
         // SAFETY: eventfd returns -1 on failure; checked below. Initial
         // counter is 0; EFD_CLOEXEC matches production.
         let raw = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC) };
-        assert!(raw >= 0, "eventfd failed: {}", std::io::Error::last_os_error());
+        assert!(
+            raw >= 0,
+            "eventfd failed: {}",
+            std::io::Error::last_os_error()
+        );
         // SAFETY: raw is a fresh, owned fd from a successful eventfd() call.
         unsafe { OwnedFd::from_raw_fd(raw) }
     }
@@ -552,8 +555,8 @@ mod tests {
         // only while listener stays alive (listener outlives the waiter
         // thread because we join it before this function returns).
         let listener_fd = unsafe { listener.file_descriptor().native_handle() };
-        let waiter = ReactiveLoopFdWaiter::new(listener_fd, Some(make_eventfd()))
-            .expect("epoll setup");
+        let waiter =
+            ReactiveLoopFdWaiter::new(listener_fd, Some(make_eventfd())).expect("epoll setup");
 
         // Move the waiter to a worker thread, then fire notify() from this
         // thread. The worker reports the outcome and elapsed time back via
@@ -617,8 +620,8 @@ mod tests {
         let shutdown_eventfd = make_eventfd();
         let shutdown_raw = shutdown_eventfd.as_raw_fd();
 
-        let waiter = ReactiveLoopFdWaiter::new(listener_fd, Some(shutdown_eventfd))
-            .expect("epoll setup");
+        let waiter =
+            ReactiveLoopFdWaiter::new(listener_fd, Some(shutdown_eventfd)).expect("epoll setup");
 
         let (tx, rx) = std::sync::mpsc::channel();
         let worker = std::thread::spawn(move || {

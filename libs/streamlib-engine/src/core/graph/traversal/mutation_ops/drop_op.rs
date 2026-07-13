@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::{graph::ProcessorTraversalMut, LinkTraversalMut};
+use crate::core::{LinkTraversalMut, graph::ProcessorTraversalMut};
 
 impl<'a> ProcessorTraversalMut<'a> {
     pub fn drop(self) -> ProcessorTraversalMut<'a> {

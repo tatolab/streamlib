@@ -171,15 +171,14 @@ pub(crate) unsafe extern "C" fn host_output_writer_drop_arc(handle: *const c_voi
 
 /// Per-DSO host-side static OutputWriter dispatch table.
 pub(in crate::core::plugin::host_services) static HOST_OUTPUT_WRITER_VTABLE:
-    streamlib_plugin_abi::OutputWriterVTable =
-    streamlib_plugin_abi::OutputWriterVTable {
-        layout_version: streamlib_plugin_abi::OUTPUT_WRITER_VTABLE_LAYOUT_VERSION,
-        _reserved_padding: 0,
-        write_raw: host_output_writer_write_raw,
-        has_port: host_output_writer_has_port,
-        clone_arc: host_output_writer_clone_arc,
-        drop_arc: host_output_writer_drop_arc,
-    };
+    streamlib_plugin_abi::OutputWriterVTable = streamlib_plugin_abi::OutputWriterVTable {
+    layout_version: streamlib_plugin_abi::OUTPUT_WRITER_VTABLE_LAYOUT_VERSION,
+    _reserved_padding: 0,
+    write_raw: host_output_writer_write_raw,
+    has_port: host_output_writer_has_port,
+    clone_arc: host_output_writer_clone_arc,
+    drop_arc: host_output_writer_drop_arc,
+};
 
 /// Pointer to the [`streamlib_plugin_abi::OutputWriterVTable`] this DSO
 /// should dispatch through. Host mode resolves to the local static
@@ -234,8 +233,7 @@ mod output_writer_vtable_tier1_wire_format_tests {
     #[test]
     fn write_raw_returns_error_on_invalid_utf8_port() {
         let inner = std::sync::Arc::new(crate::iceoryx2::OutputWriterInner::new());
-        let handle =
-            std::sync::Arc::into_raw(inner) as *const std::ffi::c_void;
+        let handle = std::sync::Arc::into_raw(inner) as *const std::ffi::c_void;
         let mut err_buf = [0u8; 256];
         let mut err_len = 0usize;
         let bad_port = b"\xff\xfe"; // not utf-8
@@ -269,15 +267,15 @@ mod output_writer_vtable_tier1_wire_format_tests {
     #[test]
     fn has_port_returns_false_on_null_handle() {
         let port = b"any_port";
-        let result =
-            unsafe { (HOST_OUTPUT_WRITER_VTABLE.has_port)(std::ptr::null(), port.as_ptr(), port.len()) };
+        let result = unsafe {
+            (HOST_OUTPUT_WRITER_VTABLE.has_port)(std::ptr::null(), port.as_ptr(), port.len())
+        };
         assert!(!result);
     }
 
     #[test]
     fn clone_arc_returns_null_on_null_handle() {
-        let result =
-            unsafe { (HOST_OUTPUT_WRITER_VTABLE.clone_arc)(std::ptr::null()) };
+        let result = unsafe { (HOST_OUTPUT_WRITER_VTABLE.clone_arc)(std::ptr::null()) };
         assert!(result.is_null());
     }
 
@@ -298,8 +296,7 @@ mod output_writer_vtable_tier1_wire_format_tests {
         let inner = std::sync::Arc::new(crate::iceoryx2::OutputWriterInner::new());
         let inner_for_test = inner.clone();
         assert_eq!(std::sync::Arc::strong_count(&inner_for_test), 2);
-        let raw =
-            std::sync::Arc::into_raw(inner) as *const std::ffi::c_void;
+        let raw = std::sync::Arc::into_raw(inner) as *const std::ffi::c_void;
         // strong_count now 2 again (the into_raw handle counts).
         assert_eq!(std::sync::Arc::strong_count(&inner_for_test), 2);
 

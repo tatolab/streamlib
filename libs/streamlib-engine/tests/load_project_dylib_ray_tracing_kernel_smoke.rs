@@ -61,10 +61,10 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 use serial_test::serial;
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
-use streamlib::sdk::RunnerAutoBuild;
+use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
 use streamlib::sdk::schema_ident;
 use streamlib_engine::core::runtime::host_target_triple;
 
@@ -91,11 +91,7 @@ fn dlopen_processor_runs_ray_tracing_kernel_trace_rays_smoke() {
         .unwrap();
 
     let status = std::process::Command::new(env!("CARGO"))
-        .args([
-            "build",
-            "-p",
-            "streamlib-test-fixtures",
-        ])
+        .args(["build", "-p", "streamlib-test-fixtures"])
         .status()
         .expect("invoking cargo build");
     assert!(
@@ -111,7 +107,10 @@ fn dlopen_processor_runs_ray_tracing_kernel_trace_rays_smoke() {
         "so"
     };
     let dylib_name = format!("libstreamlib_test_fixtures.{}", dylib_ext);
-    let built_dylib = workspace_root.join("target").join("debug").join(&dylib_name);
+    let built_dylib = workspace_root
+        .join("target")
+        .join("debug")
+        .join(&dylib_name);
 
     let tmp = tempfile::tempdir().unwrap();
     let fixtures_src = workspace_root.join("packages/test-fixtures");
@@ -146,7 +145,10 @@ fn dlopen_processor_runs_ray_tracing_kernel_trace_rays_smoke() {
     runtime
         .add_module_with_blocking(
             module_ident_any_version!("tatolab", "test-fixtures"),
-            Strategy::Path { path: fixtures_dst.clone(), build: BuildPolicy::NeverBuild },
+            Strategy::Path {
+                path: fixtures_dst.clone(),
+                build: BuildPolicy::NeverBuild,
+            },
         )
         .expect("add_module_with must succeed against the test-fixtures cdylib");
 
@@ -164,9 +166,7 @@ fn dlopen_processor_runs_ray_tracing_kernel_trace_rays_smoke() {
                 "output_path": output_path_str,
             }),
         ))
-        .expect(
-            "add_processor must succeed for the dlopened RayTracingKernelSmokeTestProcessor",
-        );
+        .expect("add_processor must succeed for the dlopened RayTracingKernelSmokeTestProcessor");
 
     runtime
         .start()

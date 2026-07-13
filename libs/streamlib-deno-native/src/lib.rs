@@ -11,7 +11,7 @@
 //! going through Rust host pipes (zero-copy data plane).
 
 use std::collections::HashMap;
-use std::ffi::{c_char, CStr};
+use std::ffi::{CStr, c_char};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -21,7 +21,7 @@ use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
 use streamlib_ipc_types::{
-    FrameHeader, FRAME_HEADER_SIZE, MAX_FANIN_PER_DESTINATION, MAX_SUBSCRIBERS_PER_DESTINATION,
+    FRAME_HEADER_SIZE, FrameHeader, MAX_FANIN_PER_DESTINATION, MAX_SUBSCRIBERS_PER_DESTINATION,
 };
 
 // ============================================================================
@@ -132,7 +132,9 @@ pub unsafe extern "C" fn sldn_context_create(
     let id = if processor_id.is_null() {
         "unknown"
     } else {
-        unsafe { CStr::from_ptr(processor_id) }.to_str().unwrap_or("unknown")
+        unsafe { CStr::from_ptr(processor_id) }
+            .to_str()
+            .unwrap_or("unknown")
     };
 
     match DenoNativeContext::new(id) {
@@ -243,7 +245,10 @@ mod timerfd {
             return std::ptr::null_mut();
         }
 
-        let mut now = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        let mut now = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
         if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) } < 0 {
             unsafe { libc::close(timer_fd) };
             return std::ptr::null_mut();
@@ -258,11 +263,22 @@ mod timerfd {
         first_sec += interval_sec;
 
         let spec = libc::itimerspec {
-            it_interval: libc::timespec { tv_sec: interval_sec, tv_nsec: interval_nsec },
-            it_value: libc::timespec { tv_sec: first_sec, tv_nsec: first_nsec },
+            it_interval: libc::timespec {
+                tv_sec: interval_sec,
+                tv_nsec: interval_nsec,
+            },
+            it_value: libc::timespec {
+                tv_sec: first_sec,
+                tv_nsec: first_nsec,
+            },
         };
         let set_ret = unsafe {
-            libc::timerfd_settime(timer_fd, libc::TFD_TIMER_ABSTIME, &spec, std::ptr::null_mut())
+            libc::timerfd_settime(
+                timer_fd,
+                libc::TFD_TIMER_ABSTIME,
+                &spec,
+                std::ptr::null_mut(),
+            )
         };
         if set_ret < 0 {
             unsafe { libc::close(timer_fd) };
@@ -274,7 +290,10 @@ mod timerfd {
             unsafe { libc::close(timer_fd) };
             return std::ptr::null_mut();
         }
-        let mut event = libc::epoll_event { events: libc::EPOLLIN as u32, u64: 0 };
+        let mut event = libc::epoll_event {
+            events: libc::EPOLLIN as u32,
+            u64: 0,
+        };
         if unsafe { libc::epoll_ctl(epoll_fd, libc::EPOLL_CTL_ADD, timer_fd, &mut event) } < 0 {
             unsafe {
                 libc::close(epoll_fd);
@@ -360,7 +379,9 @@ pub unsafe extern "C" fn sldn_input_subscribe(
         Err(e) => {
             tracing::error!(
                 "[sldn:{}] Invalid service name '{}': {}",
-                ctx.processor_id, service_name, e
+                ctx.processor_id,
+                service_name,
+                e
             );
             return -1;
         }
@@ -379,7 +400,9 @@ pub unsafe extern "C" fn sldn_input_subscribe(
         Err(e) => {
             tracing::error!(
                 "[sldn:{}] Failed to open service '{}': {}",
-                ctx.processor_id, service_name, e
+                ctx.processor_id,
+                service_name,
+                e
             );
             return -1;
         }
@@ -394,7 +417,9 @@ pub unsafe extern "C" fn sldn_input_subscribe(
         Err(e) => {
             tracing::error!(
                 "[sldn:{}] Failed to create subscriber for '{}': {}",
-                ctx.processor_id, service_name, e
+                ctx.processor_id,
+                service_name,
+                e
             );
             return -1;
         }
@@ -473,7 +498,11 @@ pub unsafe extern "C" fn sldn_input_poll(ctx: *mut DenoNativeContext) -> i32 {
             let ts = header.timestamp_ns;
             let data_len = header.len as usize;
             if FRAME_HEADER_SIZE + data_len > buf.len() {
-                tracing::error!("frame data truncated: header.len={} buf.len()={}", data_len, buf.len());
+                tracing::error!(
+                    "frame data truncated: header.len={} buf.len()={}",
+                    data_len,
+                    buf.len()
+                );
                 continue;
             }
             let data = buf[FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + data_len].to_vec();
@@ -483,11 +512,7 @@ pub unsafe extern "C" fn sldn_input_poll(ctx: *mut DenoNativeContext) -> i32 {
         }
     }
 
-    if has_data {
-        1
-    } else {
-        0
-    }
+    if has_data { 1 } else { 0 }
 }
 
 /// Read data from a specific port.
@@ -633,7 +658,9 @@ pub unsafe extern "C" fn sldn_output_publish(
         Err(e) => {
             tracing::error!(
                 "[sldn:{}] Invalid schema ident segments for '{}': {}",
-                ctx.processor_id, service_name, e
+                ctx.processor_id,
+                service_name,
+                e
             );
             return -1;
         }
@@ -644,7 +671,9 @@ pub unsafe extern "C" fn sldn_output_publish(
         Err(e) => {
             tracing::error!(
                 "[sldn:{}] Invalid service name '{}': {}",
-                ctx.processor_id, service_name, e
+                ctx.processor_id,
+                service_name,
+                e
             );
             return -1;
         }
@@ -663,18 +692,26 @@ pub unsafe extern "C" fn sldn_output_publish(
         Err(e) => {
             tracing::error!(
                 "[sldn:{}] Failed to open service '{}': {}",
-                ctx.processor_id, service_name, e
+                ctx.processor_id,
+                service_name,
+                e
             );
             return -1;
         }
     };
 
-    let publisher = match service.publisher_builder().initial_max_slice_len(max_payload_bytes + FRAME_HEADER_SIZE).create() {
+    let publisher = match service
+        .publisher_builder()
+        .initial_max_slice_len(max_payload_bytes + FRAME_HEADER_SIZE)
+        .create()
+    {
         Ok(p) => p,
         Err(e) => {
             tracing::error!(
                 "[sldn:{}] Failed to create publisher for '{}': {}",
-                ctx.processor_id, service_name, e
+                ctx.processor_id,
+                service_name,
+                e
             );
             return -1;
         }
@@ -695,7 +732,9 @@ pub unsafe extern "C" fn sldn_output_publish(
                     Err(e) => {
                         tracing::warn!(
                             "[sldn:{}] Failed to create notifier for '{}': {:?}",
-                            ctx.processor_id, name, e
+                            ctx.processor_id,
+                            name,
+                            e
                         );
                         None
                     }
@@ -703,7 +742,9 @@ pub unsafe extern "C" fn sldn_output_publish(
                 Err(e) => {
                     tracing::warn!(
                         "[sldn:{}] Failed to open notify service '{}': {:?}",
-                        ctx.processor_id, name, e
+                        ctx.processor_id,
+                        name,
+                        e
                     );
                     None
                 }
@@ -711,7 +752,9 @@ pub unsafe extern "C" fn sldn_output_publish(
             Err(e) => {
                 tracing::warn!(
                     "[sldn:{}] Invalid notify service name '{}': {}",
-                    ctx.processor_id, name, e
+                    ctx.processor_id,
+                    name,
+                    e
                 );
                 None
             }
@@ -772,7 +815,8 @@ pub unsafe extern "C" fn sldn_output_write(
         None => {
             tracing::error!(
                 "[sldn:{}] No publisher for port '{}'",
-                ctx.processor_id, port_name
+                ctx.processor_id,
+                port_name
             );
             return -1;
         }
@@ -786,8 +830,13 @@ pub unsafe extern "C" fn sldn_output_write(
 
     let total_len = FRAME_HEADER_SIZE + data_slice.len();
     let mut frame = vec![0u8; total_len];
-    FrameHeader::new(&state.dest_port, state.schema_ident, timestamp_ns, data_slice.len() as u32)
-        .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
+    FrameHeader::new(
+        &state.dest_port,
+        state.schema_ident,
+        timestamp_ns,
+        data_slice.len() as u32,
+    )
+    .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
     frame[FRAME_HEADER_SIZE..].copy_from_slice(data_slice);
 
     let sample = match state.publisher.loan_slice_uninit(total_len) {
@@ -795,7 +844,9 @@ pub unsafe extern "C" fn sldn_output_write(
         Err(e) => {
             tracing::error!(
                 "[sldn:{}] Failed to loan slice for port '{}': {:?}",
-                ctx.processor_id, port_name, e
+                ctx.processor_id,
+                port_name,
+                e
             );
             return -1;
         }
@@ -804,7 +855,9 @@ pub unsafe extern "C" fn sldn_output_write(
     if let Err(e) = sample.send() {
         tracing::error!(
             "[sldn:{}] Failed to send sample for port '{}': {:?}",
-            ctx.processor_id, port_name, e
+            ctx.processor_id,
+            port_name,
+            e
         );
         return -1;
     }
@@ -814,7 +867,9 @@ pub unsafe extern "C" fn sldn_output_write(
     {
         tracing::trace!(
             "[sldn:{}] notify() failed for port '{}': {:?}",
-            ctx.processor_id, port_name, e
+            ctx.processor_id,
+            port_name,
+            e
         );
     }
 
@@ -855,7 +910,9 @@ pub unsafe extern "C" fn sldn_event_subscribe(
         Err(e) => {
             tracing::error!(
                 "[sldn:{}] Invalid notify service name '{}': {}",
-                ctx.processor_id, name, e
+                ctx.processor_id,
+                name,
+                e
             );
             return -1;
         }
@@ -872,7 +929,9 @@ pub unsafe extern "C" fn sldn_event_subscribe(
         Err(e) => {
             tracing::error!(
                 "[sldn:{}] Failed to open notify service '{}': {:?}",
-                ctx.processor_id, name, e
+                ctx.processor_id,
+                name,
+                e
             );
             return -1;
         }
@@ -882,7 +941,9 @@ pub unsafe extern "C" fn sldn_event_subscribe(
         Err(e) => {
             tracing::error!(
                 "[sldn:{}] Failed to create listener for '{}': {:?}",
-                ctx.processor_id, name, e
+                ctx.processor_id,
+                name,
+                e
             );
             return -1;
         }
@@ -904,10 +965,7 @@ pub unsafe extern "C" fn sldn_event_subscribe(
 /// be invoked through Deno's `nonblocking: true` FFI option so the JS event
 /// loop can stay responsive during the wait.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sldn_event_wait(
-    ctx: *mut DenoNativeContext,
-    timeout_ms: u32,
-) -> i32 {
+pub unsafe extern "C" fn sldn_event_wait(ctx: *mut DenoNativeContext, timeout_ms: u32) -> i32 {
     let ctx = match unsafe { ctx.as_ref() } {
         Some(c) => c,
         None => return -1,
@@ -926,17 +984,10 @@ pub unsafe extern "C" fn sldn_event_wait(
         },
         Duration::from_millis(timeout_ms as u64),
     ) {
-        tracing::trace!(
-            "[sldn:{}] timed_wait_all failed: {:?}",
-            ctx.processor_id, e
-        );
+        tracing::trace!("[sldn:{}] timed_wait_all failed: {:?}", ctx.processor_id, e);
         return -1;
     }
-    if woke {
-        1
-    } else {
-        0
-    }
+    if woke { 1 } else { 0 }
 }
 
 // ============================================================================
@@ -1072,7 +1123,8 @@ mod gpu_surface {
         if result != 0 {
             tracing::error!(
                 "IOSurface lock failed: surface={}, result={}",
-                handle.surface_id, result
+                handle.surface_id,
+                result
             );
             return -1;
         }
@@ -1102,11 +1154,7 @@ mod gpu_surface {
         handle.base_address = std::ptr::null_mut();
         handle.is_locked = false;
 
-        if result != 0 {
-            -1
-        } else {
-            0
-        }
+        if result != 0 { -1 } else { 0 }
     }
 
     #[unsafe(no_mangle)]
@@ -1194,7 +1242,9 @@ mod gpu_surface {
         if surface_ref.is_null() {
             tracing::error!(
                 "IOSurfaceCreate failed: {}x{} bpe={}",
-                width, height, bytes_per_element
+                width,
+                height,
+                bytes_per_element
             );
             return std::ptr::null_mut();
         }
@@ -1243,7 +1293,7 @@ mod gpu_surface {
     use std::os::unix::io::RawFd;
     use std::sync::Arc;
 
-    use streamlib_consumer_rhi::{ConsumerVulkanDevice, ConsumerVulkanBuffer, PixelFormat};
+    use streamlib_consumer_rhi::{ConsumerVulkanBuffer, ConsumerVulkanDevice, PixelFormat};
 
     /// Surface backend used for the currently-locked mapping. Reported via
     /// [`sldn_gpu_surface_backend`] so tests can assert the import took the
@@ -1447,7 +1497,9 @@ mod gpu_surface {
             Err(e) => {
                 tracing::error!(
                     "gpu_surface_lock: Vulkan DMA-BUF import failed for fd {} ({}B): {}",
-                    fd0, plane0_size, e
+                    fd0,
+                    plane0_size,
+                    e
                 );
                 unsafe { libc::close(dup_fd) };
                 return -1;
@@ -1502,7 +1554,10 @@ mod gpu_surface {
         if ptr == libc::MAP_FAILED {
             tracing::error!(
                 "sldn_gpu_surface_plane_mmap: mmap failed for plane {} (fd {}, size {}): {}",
-                idx, fd, size, std::io::Error::last_os_error()
+                idx,
+                fd,
+                size,
+                std::io::Error::last_os_error()
             );
             return -1;
         }
@@ -1570,9 +1625,7 @@ mod gpu_surface {
 
     /// Number of DMA-BUF planes on this surface (always >= 1).
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn sldn_gpu_surface_plane_count(
-        handle: *const SurfaceHandle,
-    ) -> u32 {
+    pub unsafe extern "C" fn sldn_gpu_surface_plane_count(handle: *const SurfaceHandle) -> u32 {
         unsafe { handle.as_ref() }
             .map(|h| h.fds.len() as u32)
             .unwrap_or(0)
@@ -1667,10 +1720,10 @@ mod gpu_surface {
     }
 
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn sldn_gpu_surface_bytes_per_row(
-        handle: *const SurfaceHandle,
-    ) -> u32 {
-        unsafe { handle.as_ref() }.map(|h| h.bytes_per_row).unwrap_or(0)
+    pub unsafe extern "C" fn sldn_gpu_surface_bytes_per_row(handle: *const SurfaceHandle) -> u32 {
+        unsafe { handle.as_ref() }
+            .map(|h| h.bytes_per_row)
+            .unwrap_or(0)
     }
 
     #[unsafe(no_mangle)]
@@ -1779,7 +1832,7 @@ mod gpu_surface {
 #[cfg(target_os = "macos")]
 mod surface_client {
     use std::collections::HashMap;
-    use std::ffi::{c_char, c_void, CStr, CString};
+    use std::ffi::{CStr, CString, c_char, c_void};
 
     use super::gpu_surface::SurfaceHandle;
 
@@ -2022,7 +2075,8 @@ mod surface_client {
             let error_msg = CStr::from_ptr(error_ptr).to_string_lossy();
             tracing::error!(
                 "surface_resolve_surface: handle error for '{}': {}",
-                pool_id_str, error_msg
+                pool_id_str,
+                error_msg
             );
             xpc_release(reply);
             return std::ptr::null_mut();
@@ -2236,9 +2290,7 @@ mod surface_client {
         }
         CStr::from_ptr(ptr).to_str().ok()
     }
-
 }
-
 
 #[cfg(target_os = "linux")]
 mod surface_client {
@@ -2249,14 +2301,14 @@ mod surface_client {
     //! safety posture — subprocess allocation goes through the host via #325
     //! escalate IPC.
     use std::collections::HashMap;
-    use std::ffi::{c_char, CStr};
+    use std::ffi::{CStr, c_char};
     use std::os::unix::io::RawFd;
     use std::os::unix::net::UnixStream;
     use std::sync::{Arc, Mutex};
 
     use streamlib_consumer_rhi::ConsumerVulkanDevice;
 
-    use super::gpu_surface::{SurfaceHandle, SURFACE_BACKEND_NONE};
+    use super::gpu_surface::{SURFACE_BACKEND_NONE, SurfaceHandle};
 
     const MAX_RESOLVE_CACHE: usize = 128;
 
@@ -2318,9 +2370,7 @@ mod surface_client {
     }
 
     impl SurfaceShareHandle {
-        fn lazy_connect(
-            &self,
-        ) -> std::io::Result<std::sync::MutexGuard<'_, Option<UnixStream>>> {
+        fn lazy_connect(&self) -> std::io::Result<std::sync::MutexGuard<'_, Option<UnixStream>>> {
             let mut guard = self.connection.lock().expect("poisoned");
             if guard.is_none() {
                 let stream = UnixStream::connect(&self.socket_path)?;
@@ -2391,7 +2441,9 @@ mod surface_client {
     }
 
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn sldn_surface_connect(socket_path: *const c_char) -> *mut SurfaceShareHandle {
+    pub unsafe extern "C" fn sldn_surface_connect(
+        socket_path: *const c_char,
+    ) -> *mut SurfaceShareHandle {
         let socket_path = match c_str_to_string(socket_path) {
             Some(s) if !s.is_empty() => s,
             _ => {
@@ -2404,7 +2456,8 @@ mod surface_client {
         tracing::error!(
             "surface_connect (linux): registered socket_path='{}' runtime_id='{}' \
              (lazy; will connect on first resolve_surface)",
-            socket_path, runtime_id
+            socket_path,
+            runtime_id
         );
 
         Box::into_raw(Box::new(SurfaceShareHandle {
@@ -2495,27 +2548,29 @@ mod surface_client {
                         None => Ok(None),
                     }
                 };
-                let cached_produce_dup = match dup_timeline(cached.produce_done_fd, "produce_done_fd") {
-                    Ok(o) => o,
-                    Err(_) => {
-                        for fd in &dup_fds {
-                            unsafe { libc::close(*fd) };
+                let cached_produce_dup =
+                    match dup_timeline(cached.produce_done_fd, "produce_done_fd") {
+                        Ok(o) => o,
+                        Err(_) => {
+                            for fd in &dup_fds {
+                                unsafe { libc::close(*fd) };
+                            }
+                            return std::ptr::null_mut();
                         }
-                        return std::ptr::null_mut();
-                    }
-                };
-                let cached_consume_dup = match dup_timeline(cached.consume_done_fd, "consume_done_fd") {
-                    Ok(o) => o,
-                    Err(_) => {
-                        for fd in &dup_fds {
-                            unsafe { libc::close(*fd) };
+                    };
+                let cached_consume_dup =
+                    match dup_timeline(cached.consume_done_fd, "consume_done_fd") {
+                        Ok(o) => o,
+                        Err(_) => {
+                            for fd in &dup_fds {
+                                unsafe { libc::close(*fd) };
+                            }
+                            if let Some(fd) = cached_produce_dup {
+                                unsafe { libc::close(fd) };
+                            }
+                            return std::ptr::null_mut();
                         }
-                        if let Some(fd) = cached_produce_dup {
-                            unsafe { libc::close(fd) };
-                        }
-                        return std::ptr::null_mut();
-                    }
-                };
+                    };
                 let n_planes = dup_fds.len();
                 return Box::into_raw(Box::new(SurfaceHandle {
                     fds: dup_fds,
@@ -2548,7 +2603,8 @@ mod surface_client {
                     "surface_resolve_surface: connect to '{}' failed: {}. \
                      The parent Runner owns this socket; check the runtime logs \
                      and confirm STREAMLIB_SURFACE_SOCKET points at a live runtime.",
-                    handle.socket_path, e
+                    handle.socket_path,
+                    e
                 );
                 return std::ptr::null_mut();
             }
@@ -2559,25 +2615,23 @@ mod surface_client {
             "op": "check_out",
             "surface_id": pool_id_str,
         });
-        let (response, received_fds) = match wire::send_request_with_fds(
-            stream,
-            &request,
-            &[],
-            wire::MAX_SCM_RIGHTS_FDS,
-        ) {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!(
-                    "surface_resolve_surface: check_out for '{}' failed: {}",
-                    pool_id_str, e
-                );
-                return std::ptr::null_mut();
-            }
-        };
+        let (response, received_fds) =
+            match wire::send_request_with_fds(stream, &request, &[], wire::MAX_SCM_RIGHTS_FDS) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!(
+                        "surface_resolve_surface: check_out for '{}' failed: {}",
+                        pool_id_str,
+                        e
+                    );
+                    return std::ptr::null_mut();
+                }
+            };
         if let Some(err) = response.get("error").and_then(|v| v.as_str()) {
             tracing::error!(
                 "surface_resolve_surface: handle error for '{}': {}",
-                pool_id_str, err
+                pool_id_str,
+                err
             );
             for fd in &received_fds {
                 unsafe { libc::close(*fd) };
@@ -2608,8 +2662,7 @@ mod surface_client {
             .get("has_consume_done_fd")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let trailing_count =
-            (has_produce_done_fd as usize) + (has_consume_done_fd as usize);
+        let trailing_count = (has_produce_done_fd as usize) + (has_consume_done_fd as usize);
         let (received_fds, produce_done_fd, consume_done_fd): (
             Vec<RawFd>,
             Option<RawFd>,
@@ -2619,8 +2672,16 @@ mod surface_client {
             let mut all = received_fds;
             let trailing: Vec<RawFd> = all.split_off(split_at);
             let mut iter = trailing.into_iter();
-            let produce_fd = if has_produce_done_fd { iter.next() } else { None };
-            let consume_fd = if has_consume_done_fd { iter.next() } else { None };
+            let produce_fd = if has_produce_done_fd {
+                iter.next()
+            } else {
+                None
+            };
+            let consume_fd = if has_consume_done_fd {
+                iter.next()
+            } else {
+                None
+            };
             (all, produce_fd, consume_fd)
         } else {
             (received_fds, None, None)
@@ -2867,9 +2928,7 @@ mod surface_client {
         let pool_id_str = match c_str_to_string(pool_id) {
             Some(s) if !s.is_empty() => s,
             _ => {
-                tracing::error!(
-                    "sldn_surface_update_image_layout: null or empty pool_id"
-                );
+                tracing::error!("sldn_surface_update_image_layout: null or empty pool_id");
                 return -1;
             }
         };
@@ -2878,7 +2937,8 @@ mod surface_client {
             Err(e) => {
                 tracing::error!(
                     "sldn_surface_update_image_layout: connect to '{}' failed: {}",
-                    handle.socket_path, e
+                    handle.socket_path,
+                    e
                 );
                 return -1;
             }
@@ -2889,24 +2949,25 @@ mod surface_client {
             "surface_id": pool_id_str,
             "current_image_layout": layout,
         });
-        let (response, response_fds) =
-            match wire::send_request_with_fds(stream, &request, &[], 0) {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::error!(
-                        "sldn_surface_update_image_layout: update_layout for '{}' failed: {}",
-                        pool_id_str, e
-                    );
-                    return -1;
-                }
-            };
+        let (response, response_fds) = match wire::send_request_with_fds(stream, &request, &[], 0) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!(
+                    "sldn_surface_update_image_layout: update_layout for '{}' failed: {}",
+                    pool_id_str,
+                    e
+                );
+                return -1;
+            }
+        };
         for fd in &response_fds {
             unsafe { libc::close(*fd) };
         }
         if let Some(err) = response.get("error").and_then(|v| v.as_str()) {
             tracing::error!(
                 "sldn_surface_update_image_layout: '{}': {}",
-                pool_id_str, err
+                pool_id_str,
+                err
             );
             return -1;
         }
@@ -2972,7 +3033,6 @@ mod surface_client {
     ) -> *mut c_void {
         std::ptr::null_mut()
     }
-
 }
 
 // ============================================================================
@@ -2993,8 +3053,8 @@ mod opengl {
         SurfaceTransportHandle, SurfaceUsage,
     };
     use streamlib_adapter_opengl::{
-        EglRuntime, HostSurfaceRegistration, OpenGlSurfaceAdapter,
-        OwnedMakeCurrentGuard, DRM_FORMAT_ABGR8888, DRM_FORMAT_ARGB8888,
+        DRM_FORMAT_ABGR8888, DRM_FORMAT_ARGB8888, EglRuntime, HostSurfaceRegistration,
+        OpenGlSurfaceAdapter, OwnedMakeCurrentGuard,
     };
 
     use super::gpu_surface::SurfaceHandle;
@@ -3022,10 +3082,7 @@ mod opengl {
         let egl = match EglRuntime::new() {
             Ok(r) => r,
             Err(e) => {
-                tracing::error!(
-                    "sldn_opengl_runtime_new: EglRuntime::new failed: {}",
-                    e
-                );
+                tracing::error!("sldn_opengl_runtime_new: EglRuntime::new failed: {}", e);
                 return std::ptr::null_mut();
             }
         };
@@ -3067,9 +3124,7 @@ mod opengl {
         let fd = match gpu.fds.first().copied() {
             Some(f) if f >= 0 => f,
             _ => {
-                tracing::error!(
-                    "sldn_opengl_register_surface: surface has no DMA-BUF fd"
-                );
+                tracing::error!("sldn_opengl_register_surface: surface has no DMA-BUF fd");
                 return -1;
             }
         };
@@ -3142,18 +3197,14 @@ mod opengl {
         let rt = match unsafe { rt.as_ref() } {
             Some(r) => r,
             None => {
-                tracing::error!(
-                    "sldn_opengl_register_external_oes_surface: null runtime"
-                );
+                tracing::error!("sldn_opengl_register_external_oes_surface: null runtime");
                 return -1;
             }
         };
         let gpu = match unsafe { gpu_handle.as_ref() } {
             Some(g) => g,
             None => {
-                tracing::error!(
-                    "sldn_opengl_register_external_oes_surface: null gpu_handle"
-                );
+                tracing::error!("sldn_opengl_register_external_oes_surface: null gpu_handle");
                 return -1;
             }
         };
@@ -3255,11 +3306,7 @@ mod opengl {
         release_inner(rt, surface_id, HeldKind::Read)
     }
 
-    fn acquire_inner(
-        rt: *mut OpenGlRuntimeHandle,
-        surface_id: u64,
-        kind: HeldKind,
-    ) -> u32 {
+    fn acquire_inner(rt: *mut OpenGlRuntimeHandle, surface_id: u64, kind: HeldKind) -> u32 {
         let rt = match unsafe { rt.as_ref() } {
             Some(r) => r,
             None => {
@@ -3270,10 +3317,7 @@ mod opengl {
         let make_current = match rt.egl.arc_lock_make_current() {
             Ok(g) => g,
             Err(e) => {
-                tracing::error!(
-                    "sldn_opengl_acquire_*: arc_lock_make_current: {}",
-                    e
-                );
+                tracing::error!("sldn_opengl_acquire_*: arc_lock_make_current: {}", e);
                 return 0;
             }
         };
@@ -3294,10 +3338,7 @@ mod opengl {
                     t
                 }
                 Err(e) => {
-                    tracing::error!(
-                        "sldn_opengl_acquire_write: adapter.acquire_write: {:?}",
-                        e
-                    );
+                    tracing::error!("sldn_opengl_acquire_write: adapter.acquire_write: {:?}", e);
                     return 0;
                 }
             },
@@ -3308,10 +3349,7 @@ mod opengl {
                     t
                 }
                 Err(e) => {
-                    tracing::error!(
-                        "sldn_opengl_acquire_read: adapter.acquire_read: {:?}",
-                        e
-                    );
+                    tracing::error!("sldn_opengl_acquire_read: adapter.acquire_read: {:?}", e);
                     return 0;
                 }
             },
@@ -3328,11 +3366,7 @@ mod opengl {
         texture_id
     }
 
-    fn release_inner(
-        rt: *mut OpenGlRuntimeHandle,
-        surface_id: u64,
-        expected: HeldKind,
-    ) -> i32 {
+    fn release_inner(rt: *mut OpenGlRuntimeHandle, surface_id: u64, expected: HeldKind) -> i32 {
         let rt = match unsafe { rt.as_ref() } {
             Some(r) => r,
             None => return -1,
@@ -3351,7 +3385,10 @@ mod opengl {
                 return -1;
             }
         };
-        if !matches!((&held.kind, &expected), (HeldKind::Read, HeldKind::Read) | (HeldKind::Write, HeldKind::Write)) {
+        if !matches!(
+            (&held.kind, &expected),
+            (HeldKind::Read, HeldKind::Read) | (HeldKind::Write, HeldKind::Write)
+        ) {
             tracing::error!(
                 "sldn_opengl_release_*: surface_id {} held in different mode than \
                  release call expected — releasing it anyway",
@@ -3425,34 +3462,22 @@ mod opengl {
     }
 
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn sldn_opengl_acquire_write(
-        _rt: *mut c_void,
-        _surface_id: u64,
-    ) -> u32 {
+    pub unsafe extern "C" fn sldn_opengl_acquire_write(_rt: *mut c_void, _surface_id: u64) -> u32 {
         0
     }
 
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn sldn_opengl_release_write(
-        _rt: *mut c_void,
-        _surface_id: u64,
-    ) -> i32 {
+    pub unsafe extern "C" fn sldn_opengl_release_write(_rt: *mut c_void, _surface_id: u64) -> i32 {
         -1
     }
 
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn sldn_opengl_acquire_read(
-        _rt: *mut c_void,
-        _surface_id: u64,
-    ) -> u32 {
+    pub unsafe extern "C" fn sldn_opengl_acquire_read(_rt: *mut c_void, _surface_id: u64) -> u32 {
         0
     }
 
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn sldn_opengl_release_read(
-        _rt: *mut c_void,
-        _surface_id: u64,
-    ) -> i32 {
+    pub unsafe extern "C" fn sldn_opengl_release_read(_rt: *mut c_void, _surface_id: u64) -> i32 {
         -1
     }
 }
@@ -3475,16 +3500,16 @@ mod vulkan {
     use std::os::unix::io::RawFd;
     use std::sync::{Arc, Mutex};
 
-    use streamlib_consumer_rhi::{
-        ConsumerMarker, ConsumerVulkanDevice, ConsumerVulkanTexture,
-        ConsumerVulkanTimelineSemaphore, TextureFormat,
-    };
     use streamlib_adapter_abi::{
         StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
         SurfaceTransportHandle, SurfaceUsage,
     };
     use streamlib_adapter_vulkan::{
-        raw_handles, HostSurfaceRegistration, VulkanLayout, VulkanSurfaceAdapter,
+        HostSurfaceRegistration, VulkanLayout, VulkanSurfaceAdapter, raw_handles,
+    };
+    use streamlib_consumer_rhi::{
+        ConsumerMarker, ConsumerVulkanDevice, ConsumerVulkanTexture,
+        ConsumerVulkanTimelineSemaphore, TextureFormat,
     };
 
     use super::gpu_surface::SurfaceHandle;
@@ -3575,9 +3600,7 @@ mod vulkan {
             }
         };
         if gpu.fds.is_empty() {
-            tracing::error!(
-                "sldn_vulkan_register_surface: surface has no DMA-BUF fds"
-            );
+            tracing::error!("sldn_vulkan_register_surface: surface has no DMA-BUF fds");
             return -1;
         }
         if gpu.drm_format_modifier == 0 {
@@ -3637,20 +3660,19 @@ mod vulkan {
                 return -1;
             }
         };
-        let produce_done = match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
-            &rt.device,
-            raw_sync_fd,
-        ) {
-            Ok(s) => Arc::new(s),
-            Err(e) => {
-                gpu.produce_done_fd = Some(raw_sync_fd);
-                tracing::error!(
-                    "sldn_vulkan_register_surface: produce_done from_imported_opaque_fd: {}",
-                    e
-                );
-                return -1;
-            }
-        };
+        let produce_done =
+            match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(&rt.device, raw_sync_fd)
+            {
+                Ok(s) => Arc::new(s),
+                Err(e) => {
+                    gpu.produce_done_fd = Some(raw_sync_fd);
+                    tracing::error!(
+                        "sldn_vulkan_register_surface: produce_done from_imported_opaque_fd: {}",
+                        e
+                    );
+                    return -1;
+                }
+            };
 
         // Import the host's `consume_done` timeline. We (the consumer)
         // signal this timeline from `end_read_access` so the producer
@@ -3702,10 +3724,7 @@ mod vulkan {
             initial_layout: VulkanLayout(gpu.current_image_layout),
         };
 
-        if let Err(e) = rt
-            .adapter
-            .register_host_surface(surface_id, registration)
-        {
+        if let Err(e) = rt.adapter.register_host_surface(surface_id, registration) {
             tracing::error!(
                 "sldn_vulkan_register_surface: register_host_surface failed: {:?}",
                 e
@@ -3833,10 +3852,7 @@ mod vulkan {
         {
             Ok(_) => 0,
             Err(e) => {
-                tracing::error!(
-                    "sldn_vulkan_release_to_foreign({}): {:?}",
-                    surface_id, e
-                );
+                tracing::error!("sldn_vulkan_release_to_foreign({}): {:?}", surface_id, e);
                 -1
             }
         }
@@ -3929,10 +3945,7 @@ mod vulkan {
                         0
                     }
                     Err(e) => {
-                        tracing::error!(
-                            "sldn_vulkan_acquire_read: adapter.acquire_read: {:?}",
-                            e
-                        );
+                        tracing::error!("sldn_vulkan_acquire_read: adapter.acquire_read: {:?}", e);
                         -1
                     }
                 }
@@ -3940,11 +3953,7 @@ mod vulkan {
         }
     }
 
-    fn release_inner(
-        rt: *mut VulkanRuntimeHandle,
-        surface_id: u64,
-        kind: AcquireKind,
-    ) -> i32 {
+    fn release_inner(rt: *mut VulkanRuntimeHandle, surface_id: u64, kind: AcquireKind) -> i32 {
         let rt = match unsafe { rt.as_ref() } {
             Some(r) => r,
             None => return -1,
@@ -3981,7 +3990,7 @@ mod cpu_readback {
         HostSurfaceRegistration, VulkanLayout,
     };
     use streamlib_consumer_rhi::{
-        ConsumerMarker, ConsumerVulkanDevice, ConsumerVulkanBuffer,
+        ConsumerMarker, ConsumerVulkanBuffer, ConsumerVulkanDevice,
         ConsumerVulkanTimelineSemaphore, PixelFormat,
     };
 
@@ -4018,11 +4027,8 @@ mod cpu_readback {
     /// See `SlpnCpuReadbackTriggerCallback` in
     /// `streamlib-python-native` for the contract — same shape, sldn_
     /// prefix.
-    pub type SldnCpuReadbackTriggerCallback = unsafe extern "C" fn(
-        user_data: *mut c_void,
-        surface_id: u64,
-        direction: u32,
-    ) -> u64;
+    pub type SldnCpuReadbackTriggerCallback =
+        unsafe extern "C" fn(user_data: *mut c_void, surface_id: u64, direction: u32) -> u64;
 
     pub struct EscalateCpuReadbackCopyTrigger {
         callback: Mutex<Option<RegisteredCallback>>,
@@ -4040,11 +4046,7 @@ mod cpu_readback {
             }
         }
 
-        pub fn install(
-            &self,
-            callback: SldnCpuReadbackTriggerCallback,
-            user_data: *mut c_void,
-        ) {
+        pub fn install(&self, callback: SldnCpuReadbackTriggerCallback, user_data: *mut c_void) {
             *self.callback.lock().expect("trigger callback poisoned") = Some(RegisteredCallback {
                 callback,
                 user_data: user_data as usize,
@@ -4053,19 +4055,15 @@ mod cpu_readback {
 
         fn dispatch(&self, surface_id: u64, direction: u32) -> Result<u64, AdapterError> {
             let registered = self.callback.lock().expect("trigger callback poisoned");
-            let entry = registered.as_ref().ok_or_else(|| AdapterError::IpcDisconnected {
-                reason:
-                    "cpu-readback trigger callback not installed; SDK must call \
+            let entry = registered
+                .as_ref()
+                .ok_or_else(|| AdapterError::IpcDisconnected {
+                    reason: "cpu-readback trigger callback not installed; SDK must call \
                      sldn_cpu_readback_set_trigger_callback before any acquire"
                         .into(),
-            })?;
-            let value = unsafe {
-                (entry.callback)(
-                    entry.user_data as *mut c_void,
-                    surface_id,
-                    direction,
-                )
-            };
+                })?;
+            let value =
+                unsafe { (entry.callback)(entry.user_data as *mut c_void, surface_id, direction) };
             if value == 0 {
                 return Err(AdapterError::IpcDisconnected {
                     reason: format!(
@@ -4222,8 +4220,7 @@ mod cpu_readback {
         let surface_width = gpu.width;
         let surface_height = gpu.height;
 
-        let mut staging_planes: Vec<Arc<ConsumerVulkanBuffer>> =
-            Vec::with_capacity(plane_count);
+        let mut staging_planes: Vec<Arc<ConsumerVulkanBuffer>> = Vec::with_capacity(plane_count);
         for plane_idx in 0..plane_count {
             let plane_idx_u32 = plane_idx as u32;
             let plane_width = format.plane_width(surface_width, plane_idx_u32);
@@ -4238,7 +4235,11 @@ mod cpu_readback {
                     (plane_width as u64) * (plane_height as u64) * (plane_bpp as u64)
                 });
             let pixel_format = pixel_format_for_plane(format, plane_idx_u32);
-            let pb = match ConsumerVulkanBuffer::from_dma_buf_fd(&rt.device, gpu.fds[plane_idx], plane_size) {
+            let pb = match ConsumerVulkanBuffer::from_dma_buf_fd(
+                &rt.device,
+                gpu.fds[plane_idx],
+                plane_size,
+            ) {
                 Ok(b) => Arc::new(b),
                 Err(e) => {
                     tracing::error!(
@@ -4470,11 +4471,7 @@ mod cpu_readback {
                 populate_view(rt, surface_id, out)
             }
             Err(e) => {
-                tracing::error!(
-                    "sldn_cpu_readback_acquire_read({}): {:?}",
-                    surface_id,
-                    e
-                );
+                tracing::error!("sldn_cpu_readback_acquire_read({}): {:?}", surface_id, e);
                 SLDN_CPU_READBACK_ERR
             }
         }
@@ -4501,11 +4498,7 @@ mod cpu_readback {
                 populate_view(rt, surface_id, out)
             }
             Err(e) => {
-                tracing::error!(
-                    "sldn_cpu_readback_acquire_write({}): {:?}",
-                    surface_id,
-                    e
-                );
+                tracing::error!("sldn_cpu_readback_acquire_write({}): {:?}", surface_id, e);
                 SLDN_CPU_READBACK_ERR
             }
         }
@@ -4627,11 +4620,8 @@ mod cpu_readback {
         pub planes: [SldnCpuReadbackPlane; SLDN_CPU_READBACK_MAX_PLANES],
     }
 
-    pub type SldnCpuReadbackTriggerCallback = unsafe extern "C" fn(
-        user_data: *mut c_void,
-        surface_id: u64,
-        direction: u32,
-    ) -> u64;
+    pub type SldnCpuReadbackTriggerCallback =
+        unsafe extern "C" fn(user_data: *mut c_void, surface_id: u64, direction: u32) -> u64;
 
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn sldn_cpu_readback_runtime_new() -> *mut c_void {
@@ -4875,8 +4865,8 @@ mod cuda {
             let mut props = MaybeUninit::<sys::cudaDeviceProp>::uninit();
             // SAFETY: `cudaGetDeviceProperties_v2` fully initializes the
             // out-pointer on success. On error we skip the ordinal.
-            let ok = unsafe { sys::cudaGetDeviceProperties_v2(props.as_mut_ptr(), ordinal) }
-                .result();
+            let ok =
+                unsafe { sys::cudaGetDeviceProperties_v2(props.as_mut_ptr(), ordinal) }.result();
             if ok.is_err() {
                 continue;
             }
@@ -5109,20 +5099,21 @@ mod cuda {
             unsafe { libc::close(vk_fd) };
             return SLDN_CUDA_ERR;
         }
-        let pixel_buffer = match ConsumerVulkanBuffer::from_opaque_fd(&rt.device, vk_fd, buffer_size) {
-            Ok(b) => Arc::new(b),
-            Err(e) => {
-                tracing::error!(
-                    "sldn_cuda_register_surface: from_opaque_fd failed: {} — \
+        let pixel_buffer =
+            match ConsumerVulkanBuffer::from_opaque_fd(&rt.device, vk_fd, buffer_size) {
+                Ok(b) => Arc::new(b),
+                Err(e) => {
+                    tracing::error!(
+                        "sldn_cuda_register_surface: from_opaque_fd failed: {} — \
                      verify the host registered this surface with handle_type=opaque_fd",
-                    e
-                );
-                // Vulkan import takes the fd ownership only on success;
-                // on error we still own the dup.
-                unsafe { libc::close(vk_fd) };
-                return SLDN_CUDA_ERR;
-            }
-        };
+                        e
+                    );
+                    // Vulkan import takes the fd ownership only on success;
+                    // on error we still own the dup.
+                    unsafe { libc::close(vk_fd) };
+                    return SLDN_CUDA_ERR;
+                }
+            };
 
         // ── Step 2: import the `produce_done` timeline into Vulkan ──────
         // Single-writer-per-edge
@@ -5152,8 +5143,7 @@ mod cuda {
             return SLDN_CUDA_ERR;
         }
         let timeline = match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
-            &rt.device,
-            vk_sync_fd,
+            &rt.device, vk_sync_fd,
         ) {
             Ok(s) => Arc::new(s),
             Err(e) => {
@@ -5335,9 +5325,8 @@ mod cuda {
             (&raw mut (*p).type_).write(
                 sys::cudaExternalSemaphoreHandleType::cudaExternalSemaphoreHandleTypeTimelineSemaphoreFd,
             );
-            (&raw mut (*p).handle).write(
-                sys::cudaExternalSemaphoreHandleDesc__bindgen_ty_1 { fd: cuda_sync_fd },
-            );
+            (&raw mut (*p).handle)
+                .write(sys::cudaExternalSemaphoreHandleDesc__bindgen_ty_1 { fd: cuda_sync_fd });
             (&raw mut (*p).flags).write(0);
             sem_desc.assume_init()
         };
@@ -5365,10 +5354,7 @@ mod cuda {
             match sys::cudaStreamCreate(stream.as_mut_ptr()).result() {
                 Ok(()) => stream.assume_init(),
                 Err(e) => {
-                    tracing::error!(
-                        "sldn_cuda_register_surface: cudaStreamCreate: {:?}",
-                        e
-                    );
+                    tracing::error!("sldn_cuda_register_surface: cudaStreamCreate: {:?}", e);
                     let _ = sys::cudaDestroyExternalSemaphore(ext_sem).result();
                     let _ = external_memory::destroy_external_memory(ext_mem);
                     gpu.produce_done_fd = Some(raw_sync_fd);
@@ -5517,13 +5503,8 @@ mod cuda {
         };
 
         let wait_result = unsafe {
-            sys::cudaWaitExternalSemaphoresAsync_v2(
-                &entry.ext_sem,
-                &wait_params,
-                1,
-                entry.stream,
-            )
-            .result()
+            sys::cudaWaitExternalSemaphoresAsync_v2(&entry.ext_sem, &wait_params, 1, entry.stream)
+                .result()
         };
         if let Err(e) = wait_result {
             return Err(format!("cudaWaitExternalSemaphoresAsync: {e:?}"));
@@ -5541,10 +5522,7 @@ mod cuda {
         Ok(())
     }
 
-    fn populate_view(
-        entry: &Arc<RegisteredCudaSurface>,
-        out: &mut SldnCudaView,
-    ) -> i32 {
+    fn populate_view(entry: &Arc<RegisteredCudaSurface>, out: &mut SldnCudaView) -> i32 {
         let capsule = build_capsule(entry);
         if capsule.is_null() {
             tracing::error!("sldn_cuda: build_capsule returned null");
@@ -5558,10 +5536,7 @@ mod cuda {
         SLDN_CUDA_OK
     }
 
-    fn lookup_entry(
-        rt: &CudaRuntimeHandle,
-        surface_id: u64,
-    ) -> Option<Arc<RegisteredCudaSurface>> {
+    fn lookup_entry(rt: &CudaRuntimeHandle, surface_id: u64) -> Option<Arc<RegisteredCudaSurface>> {
         rt.registered
             .lock()
             .expect("sldn_cuda registered: poisoned")
@@ -6125,8 +6100,7 @@ mod cuda {
             return SLDN_CUDA_ERR;
         }
         let timeline = match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
-            &rt.device,
-            vk_sync_fd,
+            &rt.device, vk_sync_fd,
         ) {
             Ok(s) => Arc::new(s),
             Err(e) => {
@@ -6276,9 +6250,8 @@ mod cuda {
             (&raw mut (*p).type_).write(
                 sys::cudaExternalSemaphoreHandleType::cudaExternalSemaphoreHandleTypeTimelineSemaphoreFd,
             );
-            (&raw mut (*p).handle).write(
-                sys::cudaExternalSemaphoreHandleDesc__bindgen_ty_1 { fd: cuda_sync_fd },
-            );
+            (&raw mut (*p).handle)
+                .write(sys::cudaExternalSemaphoreHandleDesc__bindgen_ty_1 { fd: cuda_sync_fd });
             (&raw mut (*p).flags).write(0);
             sem_desc.assume_init()
         };
@@ -6431,9 +6404,7 @@ mod cuda {
     /// `Rgba16Float` / `Rgba32Float` it returns the raw float value.
     fn default_texture_desc(format: TextureFormat) -> sys::cudaTextureDesc {
         let read_mode = match format {
-            TextureFormat::Rgba8Unorm => {
-                sys::cudaTextureReadMode::cudaReadModeNormalizedFloat
-            }
+            TextureFormat::Rgba8Unorm => sys::cudaTextureReadMode::cudaReadModeNormalizedFloat,
             TextureFormat::Rgba16Float | TextureFormat::Rgba32Float => {
                 sys::cudaTextureReadMode::cudaReadModeElementType
             }
@@ -6528,13 +6499,8 @@ mod cuda {
         };
 
         let wait_result = unsafe {
-            sys::cudaWaitExternalSemaphoresAsync_v2(
-                &entry.ext_sem,
-                &wait_params,
-                1,
-                entry.stream,
-            )
-            .result()
+            sys::cudaWaitExternalSemaphoresAsync_v2(&entry.ext_sem, &wait_params, 1, entry.stream)
+                .result()
         };
         if let Err(e) = wait_result {
             return Err(format!("cudaWaitExternalSemaphoresAsync: {e:?}"));
@@ -7016,7 +6982,10 @@ mod cuda {
             // channels MUST pair with `cudaReadModeNormalizedFloat`;
             // float channels accept `cudaReadModeElementType`.
             let d8 = default_texture_desc(TextureFormat::Rgba8Unorm);
-            assert_eq!(d8.filterMode, sys::cudaTextureFilterMode::cudaFilterModeLinear);
+            assert_eq!(
+                d8.filterMode,
+                sys::cudaTextureFilterMode::cudaFilterModeLinear
+            );
             assert_eq!(
                 d8.readMode,
                 sys::cudaTextureReadMode::cudaReadModeNormalizedFloat,
@@ -7024,7 +6993,10 @@ mod cuda {
             );
 
             let d16 = default_texture_desc(TextureFormat::Rgba16Float);
-            assert_eq!(d16.filterMode, sys::cudaTextureFilterMode::cudaFilterModeLinear);
+            assert_eq!(
+                d16.filterMode,
+                sys::cudaTextureFilterMode::cudaFilterModeLinear
+            );
             assert_eq!(
                 d16.readMode,
                 sys::cudaTextureReadMode::cudaReadModeElementType,
@@ -7032,7 +7004,10 @@ mod cuda {
             );
 
             let d32 = default_texture_desc(TextureFormat::Rgba32Float);
-            assert_eq!(d32.filterMode, sys::cudaTextureFilterMode::cudaFilterModeLinear);
+            assert_eq!(
+                d32.filterMode,
+                sys::cudaTextureFilterMode::cudaFilterModeLinear
+            );
             assert_eq!(
                 d32.readMode,
                 sys::cudaTextureReadMode::cudaReadModeElementType,
@@ -7174,18 +7149,12 @@ mod cuda {
     }
 
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn sldn_cuda_release_read(
-        _rt: *mut c_void,
-        _surface_id: u64,
-    ) -> i32 {
+    pub unsafe extern "C" fn sldn_cuda_release_read(_rt: *mut c_void, _surface_id: u64) -> i32 {
         SLDN_CUDA_ERR
     }
 
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn sldn_cuda_release_write(
-        _rt: *mut c_void,
-        _surface_id: u64,
-    ) -> i32 {
+    pub unsafe extern "C" fn sldn_cuda_release_write(_rt: *mut c_void, _surface_id: u64) -> i32 {
         SLDN_CUDA_ERR
     }
 
@@ -7261,8 +7230,6 @@ mod cuda {
     }
 }
 
-
-
 #[cfg(not(target_os = "linux"))]
 mod vulkan {
     use std::ffi::c_void;
@@ -7319,10 +7286,7 @@ mod vulkan {
     }
 
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn sldn_vulkan_release_write(
-        _rt: *mut c_void,
-        _surface_id: u64,
-    ) -> i32 {
+    pub unsafe extern "C" fn sldn_vulkan_release_write(_rt: *mut c_void, _surface_id: u64) -> i32 {
         -1
     }
 
@@ -7336,10 +7300,7 @@ mod vulkan {
     }
 
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn sldn_vulkan_release_read(
-        _rt: *mut c_void,
-        _surface_id: u64,
-    ) -> i32 {
+    pub unsafe extern "C" fn sldn_vulkan_release_read(_rt: *mut c_void, _surface_id: u64) -> i32 {
         -1
     }
 
@@ -7371,5 +7332,3 @@ unsafe fn c_str_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
     }
     unsafe { CStr::from_ptr(ptr) }.to_str().ok()
 }
-
-

@@ -95,9 +95,8 @@ fn run() -> ExitCode {
         total += n as usize;
     }
     let msg_len = u32::from_be_bytes(len_buf) as usize;
-    let (payload, fds) = match streamlib_surface_client::recv_message_with_fds(
-        &socket, msg_len, 1,
-    ) {
+    let (payload, fds) = match streamlib_surface_client::recv_message_with_fds(&socket, msg_len, 1)
+    {
         Ok(p) => p,
         Err(e) => return die(Some(&socket), format!("recv_message_with_fds: {e}")),
     };

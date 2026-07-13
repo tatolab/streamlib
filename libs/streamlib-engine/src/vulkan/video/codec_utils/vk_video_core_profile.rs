@@ -40,31 +40,18 @@ pub enum StdChromaFormatIdc {
 // Compile-time assertions matching the C++ static_asserts.
 const _: () = {
     use vulkanalia::vk::video::{
-        STD_VIDEO_H264_CHROMA_FORMAT_IDC_MONOCHROME,
-        STD_VIDEO_H264_CHROMA_FORMAT_IDC_420,
-        STD_VIDEO_H264_CHROMA_FORMAT_IDC_422,
-        STD_VIDEO_H264_CHROMA_FORMAT_IDC_444,
-        STD_VIDEO_H265_CHROMA_FORMAT_IDC_MONOCHROME,
-        STD_VIDEO_H265_CHROMA_FORMAT_IDC_420,
-        STD_VIDEO_H265_CHROMA_FORMAT_IDC_422,
-        STD_VIDEO_H265_CHROMA_FORMAT_IDC_444,
+        STD_VIDEO_H264_CHROMA_FORMAT_IDC_420, STD_VIDEO_H264_CHROMA_FORMAT_IDC_422,
+        STD_VIDEO_H264_CHROMA_FORMAT_IDC_444, STD_VIDEO_H264_CHROMA_FORMAT_IDC_MONOCHROME,
+        STD_VIDEO_H265_CHROMA_FORMAT_IDC_420, STD_VIDEO_H265_CHROMA_FORMAT_IDC_422,
+        STD_VIDEO_H265_CHROMA_FORMAT_IDC_444, STD_VIDEO_H265_CHROMA_FORMAT_IDC_MONOCHROME,
     };
     assert!(
         STD_VIDEO_H264_CHROMA_FORMAT_IDC_MONOCHROME.0
             == STD_VIDEO_H265_CHROMA_FORMAT_IDC_MONOCHROME.0
     );
-    assert!(
-        STD_VIDEO_H264_CHROMA_FORMAT_IDC_420.0
-            == STD_VIDEO_H265_CHROMA_FORMAT_IDC_420.0
-    );
-    assert!(
-        STD_VIDEO_H264_CHROMA_FORMAT_IDC_422.0
-            == STD_VIDEO_H265_CHROMA_FORMAT_IDC_422.0
-    );
-    assert!(
-        STD_VIDEO_H264_CHROMA_FORMAT_IDC_444.0
-            == STD_VIDEO_H265_CHROMA_FORMAT_IDC_444.0
-    );
+    assert!(STD_VIDEO_H264_CHROMA_FORMAT_IDC_420.0 == STD_VIDEO_H265_CHROMA_FORMAT_IDC_420.0);
+    assert!(STD_VIDEO_H264_CHROMA_FORMAT_IDC_422.0 == STD_VIDEO_H265_CHROMA_FORMAT_IDC_422.0);
+    assert!(STD_VIDEO_H264_CHROMA_FORMAT_IDC_444.0 == STD_VIDEO_H265_CHROMA_FORMAT_IDC_444.0);
 };
 
 // ---------------------------------------------------------------------------
@@ -312,11 +299,13 @@ impl VkVideoCoreProfile {
     /// # Safety
     /// `p_next` chain of `video_profile` must point to a valid codec-specific
     /// profile struct if non-null.
-    pub unsafe fn from_profile_info(video_profile: &vk::VideoProfileInfoKHR) -> Self { unsafe {
-        let mut this = Self::new_default();
-        this.init_from_profile(video_profile);
-        this
-    }}
+    pub unsafe fn from_profile_info(video_profile: &vk::VideoProfileInfoKHR) -> Self {
+        unsafe {
+            let mut this = Self::new_default();
+            this.init_from_profile(video_profile);
+            this
+        }
+    }
 
     // -- Static helpers -----------------------------------------------------
 
@@ -392,134 +381,136 @@ impl VkVideoCoreProfile {
     pub unsafe fn populate_profile_ext(
         &mut self,
         video_profile_ext: *const vk::BaseInStructure,
-    ) -> bool { unsafe {
-        let op = self.profile.video_codec_operation;
+    ) -> bool {
+        unsafe {
+            let op = self.profile.video_codec_operation;
 
-        let ext = if op == vk::VideoCodecOperationFlagsKHR::DECODE_H264 {
-            if !video_profile_ext.is_null() {
-                let p = &*(video_profile_ext as *const vk::VideoDecodeH264ProfileInfoKHR);
-                if p.s_type != vk::StructureType::VIDEO_DECODE_H264_PROFILE_INFO_KHR {
-                    self.profile.s_type = vk::StructureType::APPLICATION_INFO;
-                    return false;
-                }
-                CodecProfileExt::DecodeH264(std::ptr::read(p as *const _ as *const _))
-            } else {
-                CodecProfileExt::DecodeH264(vk::VideoDecodeH264ProfileInfoKHR {
-                    s_type: vk::StructureType::VIDEO_DECODE_H264_PROFILE_INFO_KHR,
-                    next: std::ptr::null(),
-                    std_profile_idc: vk::video::STD_VIDEO_H264_PROFILE_IDC_MAIN,
-                    picture_layout: vk::VideoDecodeH264PictureLayoutFlagsKHR::INTERLACED_INTERLEAVED_LINES,
-                    // _marker removed: vulkanalia structs don't have PhantomData
-                })
-            }
-        } else if op == vk::VideoCodecOperationFlagsKHR::DECODE_H265 {
-            if !video_profile_ext.is_null() {
-                let p = &*(video_profile_ext as *const vk::VideoDecodeH265ProfileInfoKHR);
-                if p.s_type != vk::StructureType::VIDEO_DECODE_H265_PROFILE_INFO_KHR {
-                    self.profile.s_type = vk::StructureType::APPLICATION_INFO;
-                    return false;
-                }
-                CodecProfileExt::DecodeH265(std::ptr::read(p as *const _ as *const _))
-            } else {
-                CodecProfileExt::DecodeH265(vk::VideoDecodeH265ProfileInfoKHR {
-                    s_type: vk::StructureType::VIDEO_DECODE_H265_PROFILE_INFO_KHR,
-                    next: std::ptr::null(),
-                    std_profile_idc: vk::video::STD_VIDEO_H265_PROFILE_IDC_MAIN,
-                    // _marker removed: vulkanalia structs don't have PhantomData
-                })
-            }
-        } else if op == vk::VideoCodecOperationFlagsKHR::DECODE_AV1 {
-            if !video_profile_ext.is_null() {
-                let p = &*(video_profile_ext as *const vk::VideoDecodeAV1ProfileInfoKHR);
-                if p.s_type != vk::StructureType::VIDEO_DECODE_AV1_PROFILE_INFO_KHR {
-                    self.profile.s_type = vk::StructureType::APPLICATION_INFO;
-                    return false;
-                }
-                CodecProfileExt::DecodeAv1(std::ptr::read(p as *const _ as *const _))
-            } else {
-                CodecProfileExt::DecodeAv1(vk::VideoDecodeAV1ProfileInfoKHR {
-                    s_type: vk::StructureType::VIDEO_DECODE_AV1_PROFILE_INFO_KHR,
-                    next: std::ptr::null(),
-                    std_profile: vk::video::STD_VIDEO_AV1_PROFILE_MAIN,
-                    film_grain_support: vk::FALSE,
-                    // _marker removed: vulkanalia structs don't have PhantomData
-                })
-            }
-        } else if op == CODEC_OP_DECODE_VP9 {
-            // VP9 decode not in ash 0.38 — stub handling.
-            CodecProfileExt::DecodeVp9 { std_profile: 0 }
-        } else if op == vk::VideoCodecOperationFlagsKHR::ENCODE_H264 {
-            if !video_profile_ext.is_null() {
-                let p = &*(video_profile_ext as *const vk::VideoEncodeH264ProfileInfoKHR);
-                if p.s_type != vk::StructureType::VIDEO_ENCODE_H264_PROFILE_INFO_KHR {
-                    self.profile.s_type = vk::StructureType::APPLICATION_INFO;
-                    return false;
-                }
-                // Copy encode usage info if chained.
-                if !p.next.is_null() {
-                    let usage = &*(p.next as *const vk::VideoEncodeUsageInfoKHR);
-                    if usage.s_type == vk::StructureType::VIDEO_ENCODE_USAGE_INFO_KHR {
-                        self.encode_usage_info = std::ptr::read(usage as *const _ as *const _);
+            let ext = if op == vk::VideoCodecOperationFlagsKHR::DECODE_H264 {
+                if !video_profile_ext.is_null() {
+                    let p = &*(video_profile_ext as *const vk::VideoDecodeH264ProfileInfoKHR);
+                    if p.s_type != vk::StructureType::VIDEO_DECODE_H264_PROFILE_INFO_KHR {
+                        self.profile.s_type = vk::StructureType::APPLICATION_INFO;
+                        return false;
                     }
+                    CodecProfileExt::DecodeH264(std::ptr::read(p as *const _ as *const _))
+                } else {
+                    CodecProfileExt::DecodeH264(vk::VideoDecodeH264ProfileInfoKHR {
+                        s_type: vk::StructureType::VIDEO_DECODE_H264_PROFILE_INFO_KHR,
+                        next: std::ptr::null(),
+                        std_profile_idc: vk::video::STD_VIDEO_H264_PROFILE_IDC_MAIN,
+                        picture_layout:
+                            vk::VideoDecodeH264PictureLayoutFlagsKHR::INTERLACED_INTERLEAVED_LINES,
+                        // _marker removed: vulkanalia structs don't have PhantomData
+                    })
                 }
-                CodecProfileExt::EncodeH264(std::ptr::read(p as *const _ as *const _))
-            } else {
-                CodecProfileExt::EncodeH264(vk::VideoEncodeH264ProfileInfoKHR {
-                    s_type: vk::StructureType::VIDEO_ENCODE_H264_PROFILE_INFO_KHR,
-                    next: std::ptr::null(),
-                    std_profile_idc: vk::video::STD_VIDEO_H264_PROFILE_IDC_MAIN,
-                    // _marker removed: vulkanalia structs don't have PhantomData
-                })
-            }
-        } else if op == vk::VideoCodecOperationFlagsKHR::ENCODE_H265 {
-            if !video_profile_ext.is_null() {
-                let p = &*(video_profile_ext as *const vk::VideoEncodeH265ProfileInfoKHR);
-                if p.s_type != vk::StructureType::VIDEO_ENCODE_H265_PROFILE_INFO_KHR {
-                    self.profile.s_type = vk::StructureType::APPLICATION_INFO;
-                    return false;
-                }
-                if !p.next.is_null() {
-                    let usage = &*(p.next as *const vk::VideoEncodeUsageInfoKHR);
-                    if usage.s_type == vk::StructureType::VIDEO_ENCODE_USAGE_INFO_KHR {
-                        self.encode_usage_info = std::ptr::read(usage as *const _ as *const _);
+            } else if op == vk::VideoCodecOperationFlagsKHR::DECODE_H265 {
+                if !video_profile_ext.is_null() {
+                    let p = &*(video_profile_ext as *const vk::VideoDecodeH265ProfileInfoKHR);
+                    if p.s_type != vk::StructureType::VIDEO_DECODE_H265_PROFILE_INFO_KHR {
+                        self.profile.s_type = vk::StructureType::APPLICATION_INFO;
+                        return false;
                     }
+                    CodecProfileExt::DecodeH265(std::ptr::read(p as *const _ as *const _))
+                } else {
+                    CodecProfileExt::DecodeH265(vk::VideoDecodeH265ProfileInfoKHR {
+                        s_type: vk::StructureType::VIDEO_DECODE_H265_PROFILE_INFO_KHR,
+                        next: std::ptr::null(),
+                        std_profile_idc: vk::video::STD_VIDEO_H265_PROFILE_IDC_MAIN,
+                        // _marker removed: vulkanalia structs don't have PhantomData
+                    })
                 }
-                CodecProfileExt::EncodeH265(std::ptr::read(p as *const _ as *const _))
+            } else if op == vk::VideoCodecOperationFlagsKHR::DECODE_AV1 {
+                if !video_profile_ext.is_null() {
+                    let p = &*(video_profile_ext as *const vk::VideoDecodeAV1ProfileInfoKHR);
+                    if p.s_type != vk::StructureType::VIDEO_DECODE_AV1_PROFILE_INFO_KHR {
+                        self.profile.s_type = vk::StructureType::APPLICATION_INFO;
+                        return false;
+                    }
+                    CodecProfileExt::DecodeAv1(std::ptr::read(p as *const _ as *const _))
+                } else {
+                    CodecProfileExt::DecodeAv1(vk::VideoDecodeAV1ProfileInfoKHR {
+                        s_type: vk::StructureType::VIDEO_DECODE_AV1_PROFILE_INFO_KHR,
+                        next: std::ptr::null(),
+                        std_profile: vk::video::STD_VIDEO_AV1_PROFILE_MAIN,
+                        film_grain_support: vk::FALSE,
+                        // _marker removed: vulkanalia structs don't have PhantomData
+                    })
+                }
+            } else if op == CODEC_OP_DECODE_VP9 {
+                // VP9 decode not in ash 0.38 — stub handling.
+                CodecProfileExt::DecodeVp9 { std_profile: 0 }
+            } else if op == vk::VideoCodecOperationFlagsKHR::ENCODE_H264 {
+                if !video_profile_ext.is_null() {
+                    let p = &*(video_profile_ext as *const vk::VideoEncodeH264ProfileInfoKHR);
+                    if p.s_type != vk::StructureType::VIDEO_ENCODE_H264_PROFILE_INFO_KHR {
+                        self.profile.s_type = vk::StructureType::APPLICATION_INFO;
+                        return false;
+                    }
+                    // Copy encode usage info if chained.
+                    if !p.next.is_null() {
+                        let usage = &*(p.next as *const vk::VideoEncodeUsageInfoKHR);
+                        if usage.s_type == vk::StructureType::VIDEO_ENCODE_USAGE_INFO_KHR {
+                            self.encode_usage_info = std::ptr::read(usage as *const _ as *const _);
+                        }
+                    }
+                    CodecProfileExt::EncodeH264(std::ptr::read(p as *const _ as *const _))
+                } else {
+                    CodecProfileExt::EncodeH264(vk::VideoEncodeH264ProfileInfoKHR {
+                        s_type: vk::StructureType::VIDEO_ENCODE_H264_PROFILE_INFO_KHR,
+                        next: std::ptr::null(),
+                        std_profile_idc: vk::video::STD_VIDEO_H264_PROFILE_IDC_MAIN,
+                        // _marker removed: vulkanalia structs don't have PhantomData
+                    })
+                }
+            } else if op == vk::VideoCodecOperationFlagsKHR::ENCODE_H265 {
+                if !video_profile_ext.is_null() {
+                    let p = &*(video_profile_ext as *const vk::VideoEncodeH265ProfileInfoKHR);
+                    if p.s_type != vk::StructureType::VIDEO_ENCODE_H265_PROFILE_INFO_KHR {
+                        self.profile.s_type = vk::StructureType::APPLICATION_INFO;
+                        return false;
+                    }
+                    if !p.next.is_null() {
+                        let usage = &*(p.next as *const vk::VideoEncodeUsageInfoKHR);
+                        if usage.s_type == vk::StructureType::VIDEO_ENCODE_USAGE_INFO_KHR {
+                            self.encode_usage_info = std::ptr::read(usage as *const _ as *const _);
+                        }
+                    }
+                    CodecProfileExt::EncodeH265(std::ptr::read(p as *const _ as *const _))
+                } else {
+                    CodecProfileExt::EncodeH265(vk::VideoEncodeH265ProfileInfoKHR {
+                        s_type: vk::StructureType::VIDEO_ENCODE_H265_PROFILE_INFO_KHR,
+                        next: std::ptr::null(),
+                        std_profile_idc: vk::video::STD_VIDEO_H265_PROFILE_IDC_MAIN,
+                        // _marker removed: vulkanalia structs don't have PhantomData
+                    })
+                }
+            } else if op == CODEC_OP_ENCODE_AV1 {
+                // AV1 encode not in vulkanalia 0.35 — stub handling.
+                CodecProfileExt::EncodeAv1 {
+                    std_profile: vk::video::STD_VIDEO_AV1_PROFILE_MAIN.0 as u32,
+                }
             } else {
-                CodecProfileExt::EncodeH265(vk::VideoEncodeH265ProfileInfoKHR {
-                    s_type: vk::StructureType::VIDEO_ENCODE_H265_PROFILE_INFO_KHR,
-                    next: std::ptr::null(),
-                    std_profile_idc: vk::video::STD_VIDEO_H265_PROFILE_IDC_MAIN,
-                    // _marker removed: vulkanalia structs don't have PhantomData
-                })
-            }
-        } else if op == CODEC_OP_ENCODE_AV1 {
-            // AV1 encode not in vulkanalia 0.35 — stub handling.
-            CodecProfileExt::EncodeAv1 {
-                std_profile: vk::video::STD_VIDEO_AV1_PROFILE_MAIN.0 as u32,
-            }
-        } else {
-            debug_assert!(false, "Unknown codec!");
-            return false;
-        };
+                debug_assert!(false, "Unknown codec!");
+                return false;
+            };
 
-        self.populate_profile_ext_inner(ext);
-        true
-    }}
+            self.populate_profile_ext_inner(ext);
+            true
+        }
+    }
 
     /// Mirrors C++ `InitFromProfile`.
     ///
     /// # Safety
     /// Same requirements as `populate_profile_ext`.
-    pub unsafe fn init_from_profile(
-        &mut self,
-        video_profile: &vk::VideoProfileInfoKHR,
-    ) -> bool { unsafe {
-        self.profile = std::ptr::read(video_profile as *const _ as *const _);
-        let next = video_profile.next;
-        self.profile.next = std::ptr::null();
-        self.populate_profile_ext(next as *const vk::BaseInStructure)
-    }}
+    pub unsafe fn init_from_profile(&mut self, video_profile: &vk::VideoProfileInfoKHR) -> bool {
+        unsafe {
+            self.profile = std::ptr::read(video_profile as *const _ as *const _);
+            let next = video_profile.next;
+            self.profile.next = std::ptr::null();
+            self.populate_profile_ext(next as *const vk::BaseInStructure)
+        }
+    }
 
     // -- Build a CodecProfileExt from constructor parameters -----------------
 
@@ -1110,9 +1101,7 @@ impl VkVideoCoreProfile {
     // -- YCbCr helpers (ported from ycbcr_utils.h) --------------------------
 
     /// Maps `video_full_range_flag` to `VkSamplerYcbcrRange`.
-    pub fn codec_full_range_to_ycbcr_range(
-        video_full_range_flag: bool,
-    ) -> vk::SamplerYcbcrRange {
+    pub fn codec_full_range_to_ycbcr_range(video_full_range_flag: bool) -> vk::SamplerYcbcrRange {
         if video_full_range_flag {
             vk::SamplerYcbcrRange::ITU_FULL
         } else {
@@ -1133,9 +1122,7 @@ impl VkVideoCoreProfile {
     }
 
     /// Maps ITU matrix_coefficients to `YcbcrPrimariesConstants`.
-    pub fn codec_get_matrix_coefficients(
-        matrix_coefficients: u32,
-    ) -> YcbcrPrimariesConstants {
+    pub fn codec_get_matrix_coefficients(matrix_coefficients: u32) -> YcbcrPrimariesConstants {
         match matrix_coefficients {
             1 => get_ycbcr_primaries_constants(YcbcrBtStandard::Bt709),
             5 | 6 => get_ycbcr_primaries_constants(YcbcrBtStandard::Bt601Ebu),
@@ -1484,7 +1471,10 @@ mod tests {
         // get_profile() returns Some because s_type is set, but the profile
         // has NONE codec operation and INVALID subsampling/bit-depth.
         let p = profile.get_profile().unwrap();
-        assert_eq!(p.video_codec_operation, vk::VideoCodecOperationFlagsKHR::NONE);
+        assert_eq!(
+            p.video_codec_operation,
+            vk::VideoCodecOperationFlagsKHR::NONE
+        );
     }
 
     #[test]

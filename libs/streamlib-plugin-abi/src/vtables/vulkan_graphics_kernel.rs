@@ -5,9 +5,7 @@
 
 use core::ffi::c_void;
 
-use crate::repr::{
-    DrawCallRepr, DrawIndexedCallRepr, GraphicsBindingSpecRepr, OffscreenDrawRepr,
-};
+use crate::repr::{DrawCallRepr, DrawIndexedCallRepr, GraphicsBindingSpecRepr, OffscreenDrawRepr};
 
 /// Layout version of [`crate::VulkanGraphicsKernelMethodsVTable`].
 ///
@@ -306,7 +304,10 @@ mod tests {
             8
         );
         assert_eq!(
-            offset_of!(VulkanGraphicsKernelMethodsVTable, set_storage_buffer_storage),
+            offset_of!(
+                VulkanGraphicsKernelMethodsVTable,
+                set_storage_buffer_storage
+            ),
             16
         );
         assert_eq!(
@@ -337,10 +338,7 @@ mod tests {
             offset_of!(VulkanGraphicsKernelMethodsVTable, offscreen_render),
             72
         );
-        assert_eq!(
-            offset_of!(VulkanGraphicsKernelMethodsVTable, bindings),
-            80
-        );
+        assert_eq!(offset_of!(VulkanGraphicsKernelMethodsVTable, bindings), 80);
         // v4 appended slots:
         //   cmd_bind_and_draw           @ 88
         //   cmd_bind_and_draw_indexed   @ 96

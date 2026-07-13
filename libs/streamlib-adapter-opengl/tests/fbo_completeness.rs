@@ -48,10 +48,7 @@ fn fbo_completeness_on_nvidia() {
         .acquire_write(&surface.descriptor)
         .expect("acquire_write");
 
-    let _current = fixture
-        .egl
-        .lock_make_current()
-        .expect("lock_make_current");
+    let _current = fixture.egl.lock_make_current().expect("lock_make_current");
 
     unsafe {
         // Drain any pre-existing error so this test fails on its
@@ -90,11 +87,6 @@ fn fbo_completeness_on_nvidia() {
              (see docs/learnings/nvidia-egl-dmabuf-render-target.md)",
             status
         );
-        assert_eq!(
-            err,
-            gl::NO_ERROR,
-            "FBO attach raised GL error 0x{:x}",
-            err
-        );
+        assert_eq!(err, gl::NO_ERROR, "FBO attach raised GL error 0x{:x}", err);
     }
 }

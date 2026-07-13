@@ -28,12 +28,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use streamlib_consumer_rhi::{
-    DevicePrivilege, VulkanRhiDevice, VulkanTextureLike, VulkanTimelineSemaphoreLike,
-};
 use streamlib_adapter_abi::{
     AdapterError, ReadGuard, Registry, StreamlibSurface, SurfaceAdapter, SurfaceId,
     SurfaceRegistration, VkImageInfo, WriteGuard,
+};
+use streamlib_consumer_rhi::{
+    DevicePrivilege, VulkanRhiDevice, VulkanTextureLike, VulkanTimelineSemaphoreLike,
 };
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
@@ -198,15 +198,16 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
         // submitting GPU work so `submit_to_queue` doesn't contend with
         // unrelated registry operations.
         let snapshot = self.surfaces.with(surface_id, |state| {
-            state.texture.image().map(|image| (image, state.current_layout))
+            state
+                .texture
+                .image()
+                .map(|image| (image, state.current_layout))
         });
         let (image, src_layout) = match snapshot {
             Some(Some(pair)) => pair,
             Some(None) => {
                 return Err(AdapterError::BackendRejected {
-                    reason: format!(
-                        "release_to_foreign: surface {surface_id:?} has no VkImage"
-                    ),
+                    reason: format!("release_to_foreign: surface {surface_id:?} has no VkImage"),
                 });
             }
             None => {
@@ -245,18 +246,12 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
     /// as a framework-native render target) call this once on
     /// registration to build their backend-context state, then read
     /// only the per-acquire `vk_image_layout` from the live view.
-    pub fn surface_image_info(
-        &self,
-        id: SurfaceId,
-    ) -> Option<VkImageInfo> {
+    pub fn surface_image_info(&self, id: SurfaceId) -> Option<VkImageInfo> {
         self.surfaces
             .with(id, |state| self.make_image_info(&state.texture))
     }
 
-    fn make_image_info(
-        &self,
-        texture: &<D::Privilege as DevicePrivilege>::Texture,
-    ) -> VkImageInfo {
+    fn make_image_info(&self, texture: &<D::Privilege as DevicePrivilege>::Texture) -> VkImageInfo {
         // Populated from VulkanTextureLike's create-time metadata.
         // `memory_handle` is opaque (raw VkDeviceMemory bits) for
         // frameworks like Skia that need to wrap the image as a
@@ -307,8 +302,7 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
             .submit_ctx
             .lock()
             .map_err(|_| AdapterError::BackendRejected {
-                reason: "transition_layout_sync: persistent submit context mutex poisoned"
-                    .into(),
+                reason: "transition_layout_sync: persistent submit context mutex poisoned".into(),
             })?;
         if guard.is_none() {
             *guard = Some(AdapterPersistentSubmitContext::new(device, qf)?);
@@ -332,9 +326,7 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
             .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
             .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
             .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-            .dst_access_mask(
-                vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
-            )
+            .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)
             .old_layout(from)
             .new_layout(to)
             .src_queue_family_index(qf)
@@ -357,10 +349,8 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
             .build();
         unsafe { device.cmd_pipeline_barrier2(cmd, &dep_info) };
 
-        unsafe { device.end_command_buffer(cmd) }.map_err(|e| {
-            AdapterError::BackendRejected {
-                reason: format!("end_command_buffer: {e}"),
-            }
+        unsafe { device.end_command_buffer(cmd) }.map_err(|e| AdapterError::BackendRejected {
+            reason: format!("end_command_buffer: {e}"),
         })?;
 
         let cmd_infos = [vk::CommandBufferSubmitInfo::builder()
@@ -370,11 +360,13 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
             .command_buffer_infos(&cmd_infos)
             .build();
 
-        unsafe { self.device.submit_to_queue(queue, &[submit], submit_ctx.fence) }.map_err(
-            |e| AdapterError::BackendRejected {
-                reason: format!("submit_to_queue: {e}"),
-            },
-        )?;
+        unsafe {
+            self.device
+                .submit_to_queue(queue, &[submit], submit_ctx.fence)
+        }
+        .map_err(|e| AdapterError::BackendRejected {
+            reason: format!("submit_to_queue: {e}"),
+        })?;
 
         // Block until the GPU has executed the barrier — the next
         // consumer's view assumes the new layout is visible. The wait
@@ -447,10 +439,7 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
         surface_id: SurfaceId,
         acquired: ReadAcquired<D::Privilege>,
     ) -> Result<vk::ImageLayout, AdapterError> {
-        let wait_value = acquired
-            .peer_timeline
-            .current_value()
-            .unwrap_or(0);
+        let wait_value = acquired.peer_timeline.current_value().unwrap_or(0);
         if acquired
             .peer_timeline
             .wait(wait_value, self.acquire_timeout.as_nanos() as u64)
@@ -482,10 +471,7 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
         surface_id: SurfaceId,
         acquired: WriteAcquired<D::Privilege>,
     ) -> Result<vk::ImageLayout, AdapterError> {
-        let wait_value = acquired
-            .peer_timeline
-            .current_value()
-            .unwrap_or(0);
+        let wait_value = acquired.peer_timeline.current_value().unwrap_or(0);
         if acquired
             .peer_timeline
             .wait(wait_value, self.acquire_timeout.as_nanos() as u64)
@@ -647,17 +633,21 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for VulkanSurfaceAdapter<D> {
         // can wait on it before re-writing. Inner Option: `None` means
         // "not the last reader, skip signal". Outer Option: `None`
         // means "surface raced an unregister".
-        let signal: Option<Option<(Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>, u64)>> =
-            self.surfaces.with_mut(surface_id, |state| {
-                debug_assert!(state.read_holders > 0, "read release without acquire");
-                state.dec_read_holders();
-                if state.read_holders > 0 {
-                    return None;
-                }
-                let next = state.next_signal_value();
-                state.current_signal_value = next;
-                Some((Arc::clone(&state.consume_done), next))
-            });
+        let signal: Option<
+            Option<(
+                Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>,
+                u64,
+            )>,
+        > = self.surfaces.with_mut(surface_id, |state| {
+            debug_assert!(state.read_holders > 0, "read release without acquire");
+            state.dec_read_holders();
+            if state.read_holders > 0 {
+                return None;
+            }
+            let next = state.next_signal_value();
+            state.current_signal_value = next;
+            Some((Arc::clone(&state.consume_done), next))
+        });
         let signal = match signal {
             Some(s) => s,
             None => {
@@ -678,14 +668,16 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for VulkanSurfaceAdapter<D> {
     fn end_write_access(&self, surface_id: SurfaceId) {
         // Producer-side release: signal `produce_done` so the consumer
         // can wait on it before reading.
-        let signal: Option<(Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>, u64)> =
-            self.surfaces.with_mut(surface_id, |state| {
-                debug_assert!(state.write_held, "write release without acquire");
-                state.set_write_held(false);
-                let next = state.next_signal_value();
-                state.current_signal_value = next;
-                (Arc::clone(&state.produce_done), next)
-            });
+        let signal: Option<(
+            Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>,
+            u64,
+        )> = self.surfaces.with_mut(surface_id, |state| {
+            debug_assert!(state.write_held, "write release without acquire");
+            state.set_write_held(false);
+            let next = state.next_signal_value();
+            state.current_signal_value = next;
+            (Arc::clone(&state.produce_done), next)
+        });
         let (produce_done, value) = match signal {
             Some(s) => s,
             None => {
@@ -730,12 +722,11 @@ impl AdapterPersistentSubmitContext {
             .queue_family_index(qf)
             .flags(vk::CommandPoolCreateFlags::TRANSIENT)
             .build();
-        let pool =
-            unsafe { device.create_command_pool(&pool_info, None) }.map_err(|e| {
-                AdapterError::BackendRejected {
-                    reason: format!("create_command_pool: {e}"),
-                }
-            })?;
+        let pool = unsafe { device.create_command_pool(&pool_info, None) }.map_err(|e| {
+            AdapterError::BackendRejected {
+                reason: format!("create_command_pool: {e}"),
+            }
+        })?;
 
         let alloc_info = vk::CommandBufferAllocateInfo::builder()
             .command_pool(pool)

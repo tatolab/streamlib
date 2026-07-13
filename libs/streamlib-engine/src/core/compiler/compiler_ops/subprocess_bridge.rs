@@ -37,9 +37,9 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::core::context::GpuContextLimitedAccess;
-use crate::core::error::{Result, Error};
+use crate::core::error::{Error, Result};
 
-use super::subprocess_escalate::{process_bridge_message, EscalateHandleRegistry};
+use super::subprocess_escalate::{EscalateHandleRegistry, process_bridge_message};
 
 /// Env var advertising the inherited child-end fd number of the escalate
 /// socketpair. The subprocess opens this fd as a duplex UNIX socket and
@@ -120,9 +120,8 @@ impl EscalateTransport {
     /// After `command.spawn()`, call [`Self::release_child_end`] so only
     /// the subprocess retains the child-side fd.
     pub(crate) fn attach(command: &mut Command) -> Result<Self> {
-        let (parent_end, child_end) = UnixStream::pair().map_err(|e| {
-            Error::Runtime(format!("failed to create escalate socketpair: {e}"))
-        })?;
+        let (parent_end, child_end) = UnixStream::pair()
+            .map_err(|e| Error::Runtime(format!("failed to create escalate socketpair: {e}")))?;
 
         let child_fd: RawFd = child_end.as_raw_fd();
 
@@ -333,9 +332,7 @@ fn reader_loop(
         // an escalate request" signal — that would silently re-route
         // every log message to the lifecycle queue and trip the
         // setup/teardown waiters.
-        let is_escalate_request = msg
-            .get("rpc")
-            .and_then(|v| v.as_str())
+        let is_escalate_request = msg.get("rpc").and_then(|v| v.as_str())
             == Some(super::subprocess_escalate::ESCALATE_REQUEST_RPC);
 
         if is_escalate_request {
@@ -407,12 +404,11 @@ where
     let proc_id = processor_id.to_string();
     let short = &proc_id[..8.min(proc_id.len())];
     let name = format!("{}-{}", thread_prefix, short);
-    let (source, target): (&'static str, &'static str) =
-        if thread_prefix.starts_with("py") {
-            ("python", "streamlib::polyglot::python")
-        } else {
-            ("deno", "streamlib::polyglot::deno")
-        };
+    let (source, target): (&'static str, &'static str) = if thread_prefix.starts_with("py") {
+        ("python", "streamlib::polyglot::python")
+    } else {
+        ("deno", "streamlib::polyglot::deno")
+    };
     let dispatch = tracing::dispatcher::get_default(|d| d.clone());
 
     thread::Builder::new()
@@ -424,9 +420,7 @@ where
                 for line in reader.lines() {
                     match line {
                         Ok(text) if !text.is_empty() => {
-                            emit_intercepted_line(
-                                target, channel, source, &proc_id, &text,
-                            );
+                            emit_intercepted_line(target, channel, source, &proc_id, &text);
                         }
                         Err(_) => break,
                         _ => {}
@@ -624,23 +618,27 @@ mod tests {
     #[test]
     fn subprocess_protocol_gate_accepts_supported_and_rejects_others() {
         // Current engine version is in range → accepted.
-        assert!(validate_subprocess_protocol(
-            Some(STREAMLIB_SUBPROCESS_PROTOCOL_VERSION),
-            "p",
-        )
-        .is_ok());
-        // The minimum supported version is in range → accepted.
         assert!(
-            validate_subprocess_protocol(Some(MIN_SUPPORTED_SUBPROCESS_PROTOCOL), "p").is_ok()
+            validate_subprocess_protocol(Some(STREAMLIB_SUBPROCESS_PROTOCOL_VERSION), "p",).is_ok()
         );
+        // The minimum supported version is in range → accepted.
+        assert!(validate_subprocess_protocol(Some(MIN_SUPPORTED_SUBPROCESS_PROTOCOL), "p").is_ok());
 
         // One past the engine's current version → refused (SDK too new).
         let too_new = validate_subprocess_protocol(
             Some(STREAMLIB_SUBPROCESS_PROTOCOL_VERSION + 1),
             "p-too-new",
         );
-        assert!(too_new.is_err(), "an SDK newer than the engine must be refused");
-        assert!(too_new.unwrap_err().to_string().contains("protocol mismatch"));
+        assert!(
+            too_new.is_err(),
+            "an SDK newer than the engine must be refused"
+        );
+        assert!(
+            too_new
+                .unwrap_err()
+                .to_string()
+                .contains("protocol mismatch")
+        );
 
         // Below the minimum supported version → refused (SDK too old).
         if MIN_SUPPORTED_SUBPROCESS_PROTOCOL > 0 {
@@ -656,10 +654,15 @@ mod tests {
 
         // No version reported at all (an SDK predating the handshake) → refused.
         let missing = validate_subprocess_protocol(None, "p-missing");
-        assert!(missing.is_err(), "a missing SDK protocol version must be refused");
-        assert!(missing
-            .unwrap_err()
-            .to_string()
-            .contains("did not report a protocol version"));
+        assert!(
+            missing.is_err(),
+            "a missing SDK protocol version must be refused"
+        );
+        assert!(
+            missing
+                .unwrap_err()
+                .to_string()
+                .contains("did not report a protocol version")
+        );
     }
 }

@@ -67,10 +67,8 @@ impl LockedResolution {
                     detail,
                 }
             })?;
-            let slot_dir = get_cached_package_dir_for_name_version(
-                pkg_ref.name.as_str(),
-                entry.version,
-            );
+            let slot_dir =
+                get_cached_package_dir_for_name_version(pkg_ref.name.as_str(), entry.version);
             pins.insert(
                 pkg_ref,
                 LockedPin {
@@ -135,7 +133,11 @@ impl LockedResolution {
         // version's pre-materialized slot. A missing slot means the pinned
         // set was never installed (or the cache was cleared) — fail loud
         // naming `streamlib install`, never fall through to a live fetch.
-        if !pin.slot_dir.join(streamlib_idents::Manifest::FILE_NAME).exists() {
+        if !pin
+            .slot_dir
+            .join(streamlib_idents::Manifest::FILE_NAME)
+            .exists()
+        {
             return Err(AddModuleError::LockedSlotMissing {
                 package: pkg_ref.clone(),
                 version: pin.version,
@@ -148,11 +150,13 @@ impl LockedResolution {
         // pin. Cheap — a handful of small YAML files per package, once per
         // package per load, not on any per-frame path. Catches a slot whose
         // content was tampered with or republished in place after install.
-        let actual = streamlib_idents::content_hash_for_package_dir(&pin.slot_dir)
-            .map_err(|e| AddModuleError::LockedSlotContentMismatch {
-                package: pkg_ref.clone(),
-                expected: pin.expected_content_hash.clone(),
-                actual: format!("<unhashable: {e}>"),
+        let actual =
+            streamlib_idents::content_hash_for_package_dir(&pin.slot_dir).map_err(|e| {
+                AddModuleError::LockedSlotContentMismatch {
+                    package: pkg_ref.clone(),
+                    expected: pin.expected_content_hash.clone(),
+                    actual: format!("<unhashable: {e}>"),
+                }
             })?;
         if actual != pin.expected_content_hash {
             return Err(AddModuleError::LockedSlotContentMismatch {
@@ -186,8 +190,8 @@ fn parse_lockfile_package_ref_key(key: &str) -> Result<PackageRef, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use streamlib_idents::{LockfileEntry, LockfileSource, Org, Package};
     use std::collections::BTreeMap;
+    use streamlib_idents::{LockfileEntry, LockfileSource, Org, Package};
 
     fn lockfile_with(entries: &[(&str, SemVer, &str)]) -> Lockfile {
         let mut packages = BTreeMap::new();
@@ -203,7 +207,10 @@ mod tests {
                 },
             );
         }
-        Lockfile { version: 1, packages }
+        Lockfile {
+            version: 1,
+            packages,
+        }
     }
 
     #[test]
@@ -234,10 +241,12 @@ mod tests {
     fn resolve_missing_package_is_lockfile_miss() {
         let lf = lockfile_with(&[("@tatolab/core", SemVer::new(1, 0, 0), "sha256:aa")]);
         let locked = LockedResolution::from_lockfile(&lf, Path::new("x.lock")).unwrap();
-        let absent =
-            PackageRef::new(Org::new("tatolab").unwrap(), Package::new("h264").unwrap());
+        let absent = PackageRef::new(Org::new("tatolab").unwrap(), Package::new("h264").unwrap());
         let err = locked.resolve(&absent, "top-level").unwrap_err();
-        assert!(matches!(err, AddModuleError::LockfileMiss { .. }), "got {err:?}");
+        assert!(
+            matches!(err, AddModuleError::LockfileMiss { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -255,7 +264,10 @@ mod tests {
             Package::new("never-installed-xyz").unwrap(),
         );
         let err = locked.resolve(&pkg, "top-level").unwrap_err();
-        assert!(matches!(err, AddModuleError::LockedSlotMissing { .. }), "got {err:?}");
+        assert!(
+            matches!(err, AddModuleError::LockedSlotMissing { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]

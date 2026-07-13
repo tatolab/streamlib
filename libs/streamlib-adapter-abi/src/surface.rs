@@ -449,10 +449,7 @@ mod tests {
         assert_eq!(offset_of!(SurfaceTransportHandle, dma_buf_fds), 4);
         assert_eq!(offset_of!(SurfaceTransportHandle, plane_offsets), 24);
         assert_eq!(offset_of!(SurfaceTransportHandle, plane_strides), 56);
-        assert_eq!(
-            offset_of!(SurfaceTransportHandle, drm_format_modifier),
-            88
-        );
+        assert_eq!(offset_of!(SurfaceTransportHandle, drm_format_modifier), 88);
         assert_eq!(size_of::<SurfaceTransportHandle>(), 96);
         assert_eq!(align_of::<SurfaceTransportHandle>(), 8);
     }

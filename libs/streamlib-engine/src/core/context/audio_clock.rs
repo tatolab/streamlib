@@ -241,10 +241,7 @@ impl AudioClock for SoftwareAudioClock {
                 tracing::info!("[SoftwareAudioClock] Stopped");
             })
             .map_err(|e| {
-                crate::core::Error::Runtime(format!(
-                    "Failed to spawn audio clock thread: {}",
-                    e
-                ))
+                crate::core::Error::Runtime(format!("Failed to spawn audio clock thread: {}", e))
             })?;
 
         *self.thread_handle.lock() = Some(handle);

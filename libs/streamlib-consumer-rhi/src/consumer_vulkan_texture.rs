@@ -17,8 +17,7 @@ use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
 use crate::{
-    ConsumerRhiError, ConsumerVulkanDevice, Result, TextureFormat, TextureUsages,
-    VulkanTextureLike,
+    ConsumerRhiError, ConsumerVulkanDevice, Result, TextureFormat, TextureUsages, VulkanTextureLike,
 };
 
 /// Convert RHI [`TextureFormat`] to the matching `vk::Format`.
@@ -161,7 +160,11 @@ impl ConsumerVulkanTexture {
         let image_info = vk::ImageCreateInfo::builder()
             .image_type(vk::ImageType::_2D)
             .format(vk_format)
-            .extent(vk::Extent3D { width, height, depth: 1 })
+            .extent(vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            })
             .mip_levels(1)
             .array_layers(1)
             .samples(vk::SampleCountFlags::_1)
@@ -271,9 +274,8 @@ impl ConsumerVulkanTexture {
     ) -> Result<Self> {
         // CUDA-mappable subset — mirrors the host-side constructor.
         match format {
-            TextureFormat::Rgba8Unorm
-            | TextureFormat::Rgba16Float
-            | TextureFormat::Rgba32Float => {}
+            TextureFormat::Rgba8Unorm | TextureFormat::Rgba16Float | TextureFormat::Rgba32Float => {
+            }
             other => {
                 return Err(ConsumerRhiError::Gpu(format!(
                     "ConsumerVulkanTexture::from_opaque_fd: format {other:?} is not \
@@ -302,7 +304,11 @@ impl ConsumerVulkanTexture {
         let image_info = vk::ImageCreateInfo::builder()
             .image_type(vk::ImageType::_2D)
             .format(vk_format)
-            .extent(vk::Extent3D { width, height, depth: 1 })
+            .extent(vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            })
             .mip_levels(1)
             .array_layers(1)
             .samples(vk::SampleCountFlags::_1)
@@ -379,7 +385,11 @@ impl ConsumerVulkanTexture {
         let image_info = vk::ImageCreateInfo::builder()
             .image_type(vk::ImageType::_2D)
             .format(vk_format)
-            .extent(vk::Extent3D { width, height, depth: 1 })
+            .extent(vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            })
             .mip_levels(1)
             .array_layers(1)
             .samples(vk::SampleCountFlags::_1)
@@ -481,8 +491,12 @@ impl ConsumerVulkanTexture {
                     .build(),
             )
             .build();
-        let view = unsafe { self.vulkan_device.device().create_image_view(&view_info, None) }
-            .map_err(|e| ConsumerRhiError::Gpu(format!("create_image_view failed: {e}")))?;
+        let view = unsafe {
+            self.vulkan_device
+                .device()
+                .create_image_view(&view_info, None)
+        }
+        .map_err(|e| ConsumerRhiError::Gpu(format!("create_image_view failed: {e}")))?;
         let _ = self.cached_image_view.set(view);
         Ok(*self.cached_image_view.get().unwrap())
     }
@@ -494,7 +508,8 @@ impl Drop for ConsumerVulkanTexture {
             unsafe { self.vulkan_device.device().destroy_image_view(view, None) };
         }
         unsafe { self.vulkan_device.device().destroy_image(self.image, None) };
-        self.vulkan_device.free_imported_memory(self.imported_memory);
+        self.vulkan_device
+            .free_imported_memory(self.imported_memory);
     }
 }
 

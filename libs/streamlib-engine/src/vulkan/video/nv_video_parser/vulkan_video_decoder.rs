@@ -21,8 +21,8 @@
 //!     wraps a `Vec<u8>` plus stream markers, since we do not share GPU bitstream buffers
 //!     in the parser layer itself. The client is responsible for GPU buffer management.
 
-use vulkanalia::vk;
 use std::sync::atomic::{AtomicI32, Ordering};
+use vulkanalia::vk;
 
 // ---------------------------------------------------------------------------
 // Constants (mirrors C++ enums on VulkanVideoDecoder)
@@ -76,10 +76,7 @@ pub fn pack_frame_rate(mut numerator: u32, mut denominator: u32) -> u32 {
         if numerator % 5 == 0 && denominator % 5 == 0 {
             numerator /= 5;
             denominator /= 5;
-        } else if (numerator | denominator) & 1 != 0
-            && numerator % 3 == 0
-            && denominator % 3 == 0
-        {
+        } else if (numerator | denominator) & 1 != 0 && numerator % 3 == 0 && denominator % 3 == 0 {
             numerator /= 3;
             denominator /= 3;
         } else {
@@ -389,7 +386,11 @@ pub trait VideoDecoderCodec {
     fn parse_nal_unit(&mut self, decoder: &mut VulkanVideoDecoder) -> NalUnitType;
 
     /// Fill in picture data.  Return `true` if picture should be sent to client.
-    fn begin_picture(&mut self, decoder: &VulkanVideoDecoder, picture_data: &mut PictureData) -> bool;
+    fn begin_picture(
+        &mut self,
+        decoder: &VulkanVideoDecoder,
+        picture_data: &mut PictureData,
+    ) -> bool;
 
     /// Called after a picture has been decoded.
     fn end_picture(&mut self) {}
@@ -727,8 +728,7 @@ impl VulkanVideoDecoder {
     /// Initialize the bit reader for the current NAL unit.
     /// Mirrors `VulkanVideoDecoder::init_dbits`.
     pub fn init_dbits(&mut self) {
-        self.nalu.get_offset =
-            self.nalu.start_offset + if self.no_start_codes { 0 } else { 3 };
+        self.nalu.get_offset = self.nalu.start_offset + if self.no_start_codes { 0 } else { 3 };
         self.nalu.get_zerocnt = 0;
         self.nalu.get_emulcnt = 0;
         self.nalu.get_bfr = 0;
@@ -755,8 +755,7 @@ impl VulkanVideoDecoder {
     /// Mirrors `VulkanVideoDecoder::consumed_bits`.
     #[inline]
     pub fn consumed_bits(&self) -> i32 {
-        let bytes =
-            self.nalu.get_offset - self.nalu.start_offset - self.nalu.get_emulcnt as i64;
+        let bytes = self.nalu.get_offset - self.nalu.start_offset - self.nalu.get_emulcnt as i64;
         (bytes as i32) * 8 - (32 - self.nalu.get_bfroffs as i32)
     }
 
@@ -864,7 +863,9 @@ impl VulkanVideoDecoder {
             b = self.u(1);
         }
         if leading_zero_bits < 32 {
-            (1u32 << leading_zero_bits).wrapping_sub(1).wrapping_add(self.u(leading_zero_bits as u32))
+            (1u32 << leading_zero_bits)
+                .wrapping_sub(1)
+                .wrapping_add(self.u(leading_zero_bits as u32))
         } else {
             0xFFFF_FFFFu32.wrapping_add(self.u(leading_zero_bits as u32))
         }
@@ -964,11 +965,7 @@ impl VulkanVideoDecoder {
     /// Swap the current bitstream buffer for a fresh one, optionally copying a
     /// region.  Returns the new buffer capacity.
     /// Mirrors `VulkanVideoDecoder::swapBitstreamBuffer`.
-    pub fn swap_bitstream_buffer(
-        &mut self,
-        copy_offset: usize,
-        copy_size: usize,
-    ) -> usize {
+    pub fn swap_bitstream_buffer(&mut self, copy_offset: usize, copy_size: usize) -> usize {
         self.bitstream_data.swap_buffer(copy_offset, copy_size);
         self.bitstream_data.len()
     }
@@ -1021,7 +1018,9 @@ impl VulkanVideoDecoder {
         client: &mut impl VideoDecodeClient,
     ) {
         if (self.nalu.end_offset - self.nalu.start_offset) > 3
-            && self.bitstream_data.has_slice_start_code_at_offset(self.nalu.start_offset)
+            && self
+                .bitstream_data
+                .has_slice_start_code_at_offset(self.nalu.start_offset)
         {
             self.init_dbits();
             let rbsp_size = self.available_bits() >> 3;
@@ -1031,13 +1030,11 @@ impl VulkanVideoDecoder {
 
                     let copy_offset = self.nalu.start_offset as usize;
                     let copy_size = (self.nalu.end_offset - self.nalu.start_offset) as usize;
-                    self.bitstream_data_len =
-                        self.swap_bitstream_buffer(copy_offset, copy_size);
+                    self.bitstream_data_len = self.swap_bitstream_buffer(copy_offset, copy_size);
                     self.nalu.end_offset -= self.nalu.start_offset;
                     self.nalu.start_offset = 0;
                     self.bitstream_data.reset_stream_markers();
-                    self.nalu_start_location =
-                        self.parsed_bytes - self.nalu.end_offset;
+                    self.nalu_start_location = self.parsed_bytes - self.nalu.end_offset;
                 }
             }
 
@@ -1084,9 +1081,7 @@ impl VulkanVideoDecoder {
         codec: &mut impl VideoDecoderCodec,
         client: &mut impl VideoDecodeClient,
     ) {
-        if self.nalu.end_offset <= 3
-            || self.bitstream_data.get_stream_markers_count() == 0
-        {
+        if self.nalu.end_offset <= 3 || self.bitstream_data.get_stream_markers_count() == 0 {
             return;
         }
 
@@ -1094,14 +1089,11 @@ impl VulkanVideoDecoder {
         self.picture_data = PictureData::default();
         self.picture_data.bitstream_data_offset = 0;
         self.picture_data.first_slice_index = 0;
-        self.picture_data.bitstream_data = self.bitstream_data.data_ptr()
-            [..self.nalu.start_offset as usize]
-            .to_vec();
+        self.picture_data.bitstream_data =
+            self.bitstream_data.data_ptr()[..self.nalu.start_offset as usize].to_vec();
         self.picture_data.bitstream_data_len = self.nalu.start_offset as usize;
-        self.picture_data.num_slices =
-            self.bitstream_data.get_stream_markers_count() as u32;
-        self.picture_data.slice_offsets =
-            self.bitstream_data.stream_markers().to_vec();
+        self.picture_data.num_slices = self.bitstream_data.get_stream_markers_count() as u32;
+        self.picture_data.slice_offsets = self.bitstream_data.stream_markers().to_vec();
 
         if codec.begin_picture(self, &mut self.picture_data.clone()) {
             // Re-read the picture_data that begin_picture filled
@@ -1118,8 +1110,7 @@ impl VulkanVideoDecoder {
                     }
                     if self.disp_info[i].pic_buf.is_none()
                         || (self.disp_info[disp].pic_buf.is_some()
-                            && self.disp_info[i].pts.wrapping_sub(self.disp_info[disp].pts)
-                                < 0)
+                            && self.disp_info[i].pts.wrapping_sub(self.disp_info[disp].pts) < 0)
                     {
                         disp = i;
                     }
@@ -1152,8 +1143,7 @@ impl VulkanVideoDecoder {
                         {
                             self.disp_info[disp].pts_valid = true;
                             self.disp_info[disp].pts = self.pts_queue[ndx].pts;
-                            self.disp_info[disp].discontinuity =
-                                self.pts_queue[ndx].discontinuity;
+                            self.disp_info[disp].discontinuity = self.pts_queue[ndx].discontinuity;
                             self.pts_queue[ndx].pts_valid = false;
                         }
                         ndx = (ndx + 1) % MAX_QUEUED_PTS;
@@ -1208,8 +1198,7 @@ impl VulkanVideoDecoder {
         let pts = if self.disp_info[disp].pts_valid {
             let mut pts = self.disp_info[disp].pts;
 
-            if self.filter_timestamps
-                || (self.check_pts > 0 && !self.disp_info[disp].discontinuity)
+            if self.filter_timestamps || (self.check_pts > 0 && !self.disp_info[disp].discontinuity)
             {
                 let mut earliest = disp;
                 for i in 0..MAX_DELAY {
@@ -1239,13 +1228,12 @@ impl VulkanVideoDecoder {
             if self.first_pts {
                 for i in 0..MAX_DELAY {
                     if self.disp_info[i].pic_buf.is_some() && self.disp_info[i].pts_valid {
-                        let mut poc_diff =
-                            self.disp_info[i].poc - self.disp_info[disp].poc;
+                        let mut poc_diff = self.disp_info[i].poc - self.disp_info[disp].poc;
                         if poc_diff < self.disp_info[disp].num_fields {
                             poc_diff = self.disp_info[disp].num_fields;
                         }
-                        pts = self.disp_info[i].pts
-                            - ((poc_diff as i64 * self.frame_duration) >> 1);
+                        pts =
+                            self.disp_info[i].pts - ((poc_diff as i64 * self.frame_duration) >> 1);
                         break;
                     }
                 }
@@ -1323,8 +1311,7 @@ impl VulkanVideoDecoder {
         if pck.discontinuity {
             if !self.no_start_codes {
                 if self.nalu.start_offset == 0 {
-                    self.nalu_start_location =
-                        self.parsed_bytes - self.nalu.end_offset;
+                    self.nalu_start_location = self.parsed_bytes - self.nalu.end_offset;
                 }
 
                 // Pad data after NAL unit with start_code_prefix
@@ -1386,10 +1373,8 @@ impl VulkanVideoDecoder {
                         self.end_of_picture(codec, client);
                         frames_in_pkt += 1;
                         let start_off = self.nalu.start_offset as usize;
-                        let size =
-                            (self.nalu.end_offset - self.nalu.start_offset) as usize;
-                        self.bitstream_data_len =
-                            self.swap_bitstream_buffer(start_off, size);
+                        let size = (self.nalu.end_offset - self.nalu.start_offset) as usize;
+                        self.bitstream_data_len = self.swap_bitstream_buffer(start_off, size);
                     }
                 }
             }
@@ -1418,8 +1403,7 @@ impl VulkanVideoDecoder {
                 buflen = buflen.min(remaining);
             }
 
-            let (start_offset, found_start_code) =
-                self.next_start_code(&curr_data[..buflen]);
+            let (start_offset, found_start_code) = self.next_start_code(&curr_data[..buflen]);
             let data_used = if found_start_code {
                 start_offset
             } else {
@@ -1431,8 +1415,7 @@ impl VulkanVideoDecoder {
                 if data_used > space {
                     self.resize_bitstream_buffer(data_used - space);
                 }
-                let bytes = data_used
-                    .min(self.bitstream_data_len - self.nalu.end_offset as usize);
+                let bytes = data_used.min(self.bitstream_data_len - self.nalu.end_offset as usize);
                 if bytes > 0 {
                     self.bitstream_data.copy_from_slice(
                         curr_data,
@@ -1447,8 +1430,7 @@ impl VulkanVideoDecoder {
                 // Check for picture boundaries early
                 if self.nalu.start_offset > 0
                     && self.nalu.end_offset
-                        == self.nalu.start_offset
-                            + self.min_bytes_for_boundary_detection as i64
+                        == self.nalu.start_offset + self.min_bytes_for_boundary_detection as i64
                 {
                     self.init_dbits();
                     let rbsp_size = self.available_bits() >> 3;
@@ -1458,15 +1440,12 @@ impl VulkanVideoDecoder {
                             frames_in_pkt += 1;
                         }
                         let copy_off = self.nalu.start_offset as usize;
-                        let copy_size =
-                            (self.nalu.end_offset - self.nalu.start_offset) as usize;
-                        self.bitstream_data_len =
-                            self.swap_bitstream_buffer(copy_off, copy_size);
+                        let copy_size = (self.nalu.end_offset - self.nalu.start_offset) as usize;
+                        self.bitstream_data_len = self.swap_bitstream_buffer(copy_off, copy_size);
                         self.nalu.end_offset -= self.nalu.start_offset;
                         self.nalu.start_offset = 0;
                         self.bitstream_data.reset_stream_markers();
-                        self.nalu_start_location =
-                            self.parsed_bytes - self.nalu.end_offset;
+                        self.nalu_start_location = self.parsed_bytes - self.nalu.end_offset;
                     }
                 }
             }
@@ -1474,8 +1453,7 @@ impl VulkanVideoDecoder {
             // Did we find a start code?
             if found_start_code {
                 if self.nalu.start_offset == 0 {
-                    self.nalu_start_location =
-                        self.parsed_bytes - self.nalu.end_offset;
+                    self.nalu_start_location = self.parsed_bytes - self.nalu.end_offset;
                 }
                 // Remove trailing 00.00.01
                 self.nalu.end_offset = if self.nalu.end_offset >= 3 {
@@ -1498,8 +1476,7 @@ impl VulkanVideoDecoder {
 
         if pck.eop || pck.eos {
             if self.nalu.start_offset == 0 {
-                self.nalu_start_location =
-                    self.parsed_bytes - self.nalu.end_offset;
+                self.nalu_start_location = self.parsed_bytes - self.nalu.end_offset;
             }
             // Remove trailing 00.00.01
             if self.bitstream_data.is_valid()

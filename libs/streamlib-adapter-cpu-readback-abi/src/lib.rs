@@ -387,7 +387,6 @@ pub struct CpuReadbackSurfaceAdapterVTable {
     // -----------------------------------------------------------------
     // Handle lifetime
     // -----------------------------------------------------------------
-
     /// Take a borrowed handle (typically minted by the host's
     /// runtime context when wiring the cdylib-side
     /// `CpuReadbackContext` PluginAbiObject) and return a new owned handle
@@ -408,7 +407,6 @@ pub struct CpuReadbackSurfaceAdapterVTable {
     // -----------------------------------------------------------------
     // Registry management (inherent on CpuReadbackSurfaceAdapter)
     // -----------------------------------------------------------------
-
     /// Register a surface with the adapter.
     ///
     /// `registration_ptr` is a `*const HostSurfaceRegistrationRepr`
@@ -434,11 +432,8 @@ pub struct CpuReadbackSurfaceAdapterVTable {
     /// Drop a registered surface from the adapter. Idempotent —
     /// missing entries return 0 via `*out_was_present = 0`. Calls
     /// against a null handle return 0 with `*out_was_present = 0`.
-    pub unregister_host_surface: unsafe extern "C" fn(
-        handle: *const c_void,
-        surface_id: u64,
-        out_was_present: *mut u32,
-    ),
+    pub unregister_host_surface:
+        unsafe extern "C" fn(handle: *const c_void, surface_id: u64, out_was_present: *mut u32),
 
     /// Snapshot the adapter's registry size (number of
     /// currently-registered surfaces). Returns 0 on null handle.
@@ -450,7 +445,6 @@ pub struct CpuReadbackSurfaceAdapterVTable {
     // -----------------------------------------------------------------
     // SurfaceAdapter trait methods
     // -----------------------------------------------------------------
-
     /// Blocking read acquire.
     ///
     /// `surface_ptr` is a `*const StreamlibSurface` borrowed from
@@ -523,7 +517,6 @@ pub struct CpuReadbackSurfaceAdapterVTable {
     // -----------------------------------------------------------------
     // Bridge entries — direct copy without registry-counter mutation
     // -----------------------------------------------------------------
-
     /// Bridge entry: run `vkCmdCopyImageToBuffer` for `surface_id`
     /// without going through the in-process registry's
     /// `try_begin_*` / `end_*_access` counters. Used today by the
@@ -611,11 +604,20 @@ mod tests {
         assert_eq!(offset_of!(HostSurfaceRegistrationRepr, width), 4);
         assert_eq!(offset_of!(HostSurfaceRegistrationRepr, height), 8);
         assert_eq!(offset_of!(HostSurfaceRegistrationRepr, plane_count), 12);
-        assert_eq!(offset_of!(HostSurfaceRegistrationRepr, initial_layout_raw), 16);
+        assert_eq!(
+            offset_of!(HostSurfaceRegistrationRepr, initial_layout_raw),
+            16
+        );
         assert_eq!(offset_of!(HostSurfaceRegistrationRepr, _padding), 20);
         assert_eq!(offset_of!(HostSurfaceRegistrationRepr, texture_handle), 24);
-        assert_eq!(offset_of!(HostSurfaceRegistrationRepr, produce_done_handle), 32);
-        assert_eq!(offset_of!(HostSurfaceRegistrationRepr, consume_done_handle), 40);
+        assert_eq!(
+            offset_of!(HostSurfaceRegistrationRepr, produce_done_handle),
+            32
+        );
+        assert_eq!(
+            offset_of!(HostSurfaceRegistrationRepr, consume_done_handle),
+            40
+        );
         assert_eq!(offset_of!(HostSurfaceRegistrationRepr, staging_handles), 48);
         assert_eq!(size_of::<HostSurfaceRegistrationRepr>(), 80);
         assert_eq!(align_of::<HostSurfaceRegistrationRepr>(), 8);
@@ -645,8 +647,14 @@ mod tests {
         assert_eq!(CPU_READBACK_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(size_of::<CpuReadbackSurfaceAdapterVTable>(), 112);
         assert_eq!(align_of::<CpuReadbackSurfaceAdapterVTable>(), 8);
-        assert_eq!(offset_of!(CpuReadbackSurfaceAdapterVTable, layout_version), 0);
-        assert_eq!(offset_of!(CpuReadbackSurfaceAdapterVTable, _reserved_padding), 4);
+        assert_eq!(
+            offset_of!(CpuReadbackSurfaceAdapterVTable, layout_version),
+            0
+        );
+        assert_eq!(
+            offset_of!(CpuReadbackSurfaceAdapterVTable, _reserved_padding),
+            4
+        );
         assert_eq!(offset_of!(CpuReadbackSurfaceAdapterVTable, clone_handle), 8);
         assert_eq!(offset_of!(CpuReadbackSurfaceAdapterVTable, drop_handle), 16);
         assert_eq!(
@@ -661,8 +669,14 @@ mod tests {
             offset_of!(CpuReadbackSurfaceAdapterVTable, registered_count),
             40
         );
-        assert_eq!(offset_of!(CpuReadbackSurfaceAdapterVTable, acquire_read), 48);
-        assert_eq!(offset_of!(CpuReadbackSurfaceAdapterVTable, acquire_write), 56);
+        assert_eq!(
+            offset_of!(CpuReadbackSurfaceAdapterVTable, acquire_read),
+            48
+        );
+        assert_eq!(
+            offset_of!(CpuReadbackSurfaceAdapterVTable, acquire_write),
+            56
+        );
         assert_eq!(
             offset_of!(CpuReadbackSurfaceAdapterVTable, try_acquire_read),
             64
@@ -680,11 +694,17 @@ mod tests {
             88
         );
         assert_eq!(
-            offset_of!(CpuReadbackSurfaceAdapterVTable, run_bridge_copy_image_to_buffer),
+            offset_of!(
+                CpuReadbackSurfaceAdapterVTable,
+                run_bridge_copy_image_to_buffer
+            ),
             96
         );
         assert_eq!(
-            offset_of!(CpuReadbackSurfaceAdapterVTable, run_bridge_copy_buffer_to_image),
+            offset_of!(
+                CpuReadbackSurfaceAdapterVTable,
+                run_bridge_copy_buffer_to_image
+            ),
             104
         );
     }

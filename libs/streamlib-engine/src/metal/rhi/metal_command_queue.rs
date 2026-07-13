@@ -7,7 +7,7 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLCommandQueue;
 
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 
 use super::MetalCommandBuffer;
 

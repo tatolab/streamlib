@@ -80,8 +80,7 @@ mod tamper {
     // `abi_layout_fingerprint` checks pass and the host reaches the
     // engine-transit check, which must reject the bit-flipped value.
     pub const ABI_VERSION: u32 = streamlib_plugin_abi::STREAMLIB_ABI_VERSION;
-    pub const ABI_LAYOUT_FINGERPRINT: u64 =
-        streamlib_plugin_abi::PLUGIN_ABI_LAYOUT_FINGERPRINT;
+    pub const ABI_LAYOUT_FINGERPRINT: u64 = streamlib_plugin_abi::PLUGIN_ABI_LAYOUT_FINGERPRINT;
     // Non-zero (so NOT the engine-free sentinel) and guaranteed not to
     // match any real host engine transit fingerprint.
     pub const ENGINE_TRANSIT_FINGERPRINT: u64 = 0xDEAD_BEEF_DEAD_BEEF;
@@ -92,9 +91,7 @@ mod tamper {
 /// `register`, so this body is unreachable in practice. We keep it valid
 /// (rather than `unreachable!()`) so a future change to the check order
 /// doesn't turn this stub into UB.
-unsafe extern "C" fn __streamlib_plugin_register_stub(
-    _host_services: *const ::core::ffi::c_void,
-) {
+unsafe extern "C" fn __streamlib_plugin_register_stub(_host_services: *const ::core::ffi::c_void) {
     // Intentionally empty — no host services touched, no processors
     // registered.
 }

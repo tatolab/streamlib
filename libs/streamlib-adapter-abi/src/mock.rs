@@ -4,8 +4,8 @@
 //! Reference [`SurfaceAdapter`] implementation used by the conformance
 //! suite and as a worked example for 3rd-party adapter authors.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::adapter::SurfaceAdapter;
 use crate::error::AdapterError;

@@ -16,8 +16,8 @@ use parking_lot::Mutex;
 
 use crate::core::color::{ResolvedColorInfo, TransferId};
 use crate::core::rhi::{
-    ColorConverterPushConstants, ComputeBindingSpec, ComputeKernelDescriptor, PixelFormat,
-    SourceLayoutInfo, Texture, COLOR_CONVERTER_PUSH_CONSTANT_SIZE,
+    COLOR_CONVERTER_PUSH_CONSTANT_SIZE, ColorConverterPushConstants, ComputeBindingSpec,
+    ComputeKernelDescriptor, PixelFormat, SourceLayoutInfo, Texture,
 };
 use crate::core::{Error, Result};
 
@@ -124,7 +124,8 @@ impl VulkanColorConverter {
         dst: &Texture,
         info: &ResolvedColorInfo,
     ) -> Result<()> {
-        let kernel = self.prepare_buffer_to_image_storage(src, src_layout, dst, info, TransferId::Srgb)?;
+        let kernel =
+            self.prepare_buffer_to_image_storage(src, src_layout, dst, info, TransferId::Srgb)?;
         Self::dispatch_buffer_to_image(&kernel, dst)
     }
 
@@ -137,7 +138,8 @@ impl VulkanColorConverter {
         dst: &Texture,
         info: &ResolvedColorInfo,
     ) -> Result<()> {
-        let kernel = self.prepare_buffer_to_image_pixel(src, src_layout, dst, info, TransferId::Srgb)?;
+        let kernel =
+            self.prepare_buffer_to_image_pixel(src, src_layout, dst, info, TransferId::Srgb)?;
         Self::dispatch_buffer_to_image(&kernel, dst)
     }
 
@@ -182,10 +184,16 @@ impl VulkanColorConverter {
     fn build_buffer_to_image_kernel(&self) -> Result<VulkanComputeKernel> {
         let spv: &[u8] = match self.src_format {
             PixelFormat::Nv12VideoRange | PixelFormat::Nv12FullRange => {
-                include_bytes!(concat!(env!("OUT_DIR"), "/color_convert_nv12_buffer_to_rgba.spv"))
+                include_bytes!(concat!(
+                    env!("OUT_DIR"),
+                    "/color_convert_nv12_buffer_to_rgba.spv"
+                ))
             }
             PixelFormat::Yuyv422 => {
-                include_bytes!(concat!(env!("OUT_DIR"), "/color_convert_yuyv_buffer_to_rgba.spv"))
+                include_bytes!(concat!(
+                    env!("OUT_DIR"),
+                    "/color_convert_yuyv_buffer_to_rgba.spv"
+                ))
             }
             other => {
                 return Err(Error::NotSupported(format!(
@@ -237,7 +245,7 @@ mod tests {
     use vulkanalia::prelude::v1_4::*;
     use vulkanalia::vk;
 
-    use crate::core::color::{from_linear, to_linear, MatrixId, PrimariesId, RangeId};
+    use crate::core::color::{MatrixId, PrimariesId, RangeId, from_linear, to_linear};
     use crate::core::rhi::{
         PixelBuffer, TextureDescriptor, TextureFormat, TextureReadbackDescriptor,
         TextureSourceLayout, TextureUsages,
@@ -272,9 +280,10 @@ mod tests {
     #[test]
     fn new_rejects_unsupported_dst_format() {
         let Some(device) = try_device() else { return };
-        let err = VulkanColorConverter::new(&device, PixelFormat::Nv12FullRange, PixelFormat::Bgra32)
-            .err()
-            .expect("must reject Bgra32 dest today");
+        let err =
+            VulkanColorConverter::new(&device, PixelFormat::Nv12FullRange, PixelFormat::Bgra32)
+                .err()
+                .expect("must reject Bgra32 dest today");
         assert!(matches!(err, Error::NotSupported(_)));
     }
 
@@ -347,11 +356,7 @@ mod tests {
 
     /// BT.601 (SMPTE 170M) full-range, the canonical webcam path.
     const BT601_FULL: CpuReferenceMatrix = CpuReferenceMatrix {
-        row_major: [
-            1.0, 0.0, 1.402,
-            1.0, -0.344136, -0.714136,
-            1.0, 1.772, 0.0,
-        ],
+        row_major: [1.0, 0.0, 1.402, 1.0, -0.344136, -0.714136, 1.0, 1.772, 0.0],
         offset: [0.0, 128.0, 128.0],
     };
 
@@ -359,9 +364,7 @@ mod tests {
     /// from `255/219 * Y` scale + chroma `255/224 * 1.5748` etc.
     const BT709_LIMITED: CpuReferenceMatrix = CpuReferenceMatrix {
         row_major: [
-            1.164384, 0.0, 1.792741,
-            1.164384, -0.213249, -0.532909,
-            1.164384, 2.112402, 0.0,
+            1.164384, 0.0, 1.792741, 1.164384, -0.213249, -0.532909, 1.164384, 2.112402, 0.0,
         ],
         offset: [16.0, 128.0, 128.0],
     };
@@ -435,9 +438,12 @@ mod tests {
                 let off = uv_base + (cy * width + cx * 2) as usize;
                 buf[off] =
                     (48u32 + (cx.wrapping_mul(13).wrapping_add(cy.wrapping_mul(11))) % 160) as u8;
-                buf[off + 1] =
-                    (48u32 + (cx.wrapping_mul(7).wrapping_add(cy.wrapping_mul(17)).wrapping_add(32)) % 160)
-                        as u8;
+                buf[off + 1] = (48u32
+                    + (cx
+                        .wrapping_mul(7)
+                        .wrapping_add(cy.wrapping_mul(17))
+                        .wrapping_add(32))
+                        % 160) as u8;
             }
         }
         buf
@@ -516,12 +522,18 @@ mod tests {
                 )
                 .build();
             let bs = [to_general];
-            let dep = vk::DependencyInfo::builder().image_memory_barriers(&bs).build();
+            let dep = vk::DependencyInfo::builder()
+                .image_memory_barriers(&bs)
+                .build();
             dev.cmd_pipeline_barrier2(cmd, &dep);
             dev.end_command_buffer(cmd).expect("end");
 
-            let cmd_infos = [vk::CommandBufferSubmitInfo::builder().command_buffer(cmd).build()];
-            let submits = [vk::SubmitInfo2::builder().command_buffer_infos(&cmd_infos).build()];
+            let cmd_infos = [vk::CommandBufferSubmitInfo::builder()
+                .command_buffer(cmd)
+                .build()];
+            let submits = [vk::SubmitInfo2::builder()
+                .command_buffer_infos(&cmd_infos)
+                .build()];
             device
                 .submit_to_queue(queue, &submits, vk::Fence::null())
                 .expect("submit transition");
@@ -542,8 +554,7 @@ mod tests {
         height: u32,
         pixel_format: PixelFormat,
     ) -> PixelBuffer {
-        let host_buf =
-            HostVulkanBuffer::new(device, nv12_bytes.len() as u64).expect("host buffer");
+        let host_buf = HostVulkanBuffer::new(device, nv12_bytes.len() as u64).expect("host buffer");
         unsafe {
             std::ptr::copy_nonoverlapping(
                 nv12_bytes.as_ptr(),
@@ -575,7 +586,8 @@ mod tests {
         label: &str,
     ) {
         let nv12_bytes = build_deterministic_nv12(width, height);
-        let pixel_buf = upload_nv12_pixel_buffer(device, &nv12_bytes, width, height, src_pixel_format);
+        let pixel_buf =
+            upload_nv12_pixel_buffer(device, &nv12_bytes, width, height, src_pixel_format);
         let output_texture = allocate_storage_target_in_general(device, width, height);
 
         let converter = VulkanColorConverter::new(device, src_pixel_format, PixelFormat::Rgba32)
@@ -583,11 +595,19 @@ mod tests {
 
         let src_layout = SourceLayoutInfo::nv12_tight(width, height);
         let kernel = converter
-            .prepare_buffer_to_image_pixel(&pixel_buf, src_layout, &output_texture, info, dst_transfer)
+            .prepare_buffer_to_image_pixel(
+                &pixel_buf,
+                src_layout,
+                &output_texture,
+                info,
+                dst_transfer,
+            )
             .expect("prepare");
         let dispatch_x = width.div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE);
         let dispatch_y = height.div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE);
-        kernel.dispatch(dispatch_x, dispatch_y, 1).expect("dispatch");
+        kernel
+            .dispatch(dispatch_x, dispatch_y, 1)
+            .expect("dispatch");
 
         let readback = VulkanTextureReadback::new(
             device,
@@ -602,7 +622,9 @@ mod tests {
         let ticket = readback
             .submit(&output_texture, TextureSourceLayout::General)
             .expect("readback submit");
-        let gpu = readback.wait_and_read(ticket, u64::MAX).expect("readback wait");
+        let gpu = readback
+            .wait_and_read(ticket, u64::MAX)
+            .expect("readback wait");
 
         let y_plane_size = (width * height) as usize;
         let mut mismatches = 0u32;
@@ -611,8 +633,7 @@ mod tests {
             for x in 0..width {
                 let y_byte = nv12_bytes[(y * width + x) as usize];
                 // Interleaved (U, V) at half spatial resolution, even-x.
-                let uv_offset =
-                    y_plane_size + ((y >> 1) * width + (x & !1)) as usize;
+                let uv_offset = y_plane_size + ((y >> 1) * width + (x & !1)) as usize;
                 let u_byte = nv12_bytes[uv_offset];
                 let v_byte = nv12_bytes[uv_offset + 1];
 
@@ -658,7 +679,10 @@ mod tests {
     ///   skips `pow()` per channel).
     /// - `SourceLayoutInfo::nv12_tight` strides flowing through push
     ///   constants and the shader's `read_byte` walk.
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn nv12_full_range_bt601_matches_cpu_reference() {
         let Some(device) = try_device() else { return };
@@ -696,7 +720,10 @@ mod tests {
     ///   is hardcoded, so a regression in the Rust matrix shifts only
     ///   the GPU side and the test catches it).
     /// - Transfer-bypass path (`Bt709` source = `Bt709` dest).
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn nv12_video_range_bt709_matches_cpu_reference() {
         let Some(device) = try_device() else { return };
@@ -734,7 +761,10 @@ mod tests {
     /// - Mid-stream transfer change costs only push constants — no
     ///   pipeline rebuild — which the test verifies by reusing the
     ///   same `(src, dst)` PixelFormat pair as the prior test.
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn nv12_bt709_to_srgb_transfer_path_matches_cpu_reference() {
         let Some(device) = try_device() else { return };

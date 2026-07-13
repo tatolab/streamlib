@@ -18,9 +18,9 @@ use super::host_callbacks;
 use super::run_host_extern_c;
 #[cfg(target_os = "linux")]
 use super::shared::borrow::{
-    make_acceleration_structure_borrow, make_compute_kernel_borrow,
-    make_index_buffer_borrow, make_pixel_buffer_borrow, make_storage_buffer_borrow,
-    make_texture_borrow, make_uniform_buffer_borrow, make_vertex_buffer_borrow,
+    make_acceleration_structure_borrow, make_compute_kernel_borrow, make_index_buffer_borrow,
+    make_pixel_buffer_borrow, make_storage_buffer_borrow, make_texture_borrow,
+    make_uniform_buffer_borrow, make_vertex_buffer_borrow,
 };
 use super::shared::wire::{slice_from_raw, write_err};
 
@@ -64,8 +64,7 @@ unsafe extern "C" fn host_compute_kernel_set_push_constants(
     run_host_extern_c(
         "host_compute_kernel_set_push_constants",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) }) else {
                 write_err(
                     "set_push_constants: null kernel handle",
                     err_buf,
@@ -91,7 +90,12 @@ unsafe extern "C" fn host_compute_kernel_set_push_constants(
             match kernel.set_push_constants(bytes) {
                 Ok(()) => 0,
                 Err(e) => {
-                    write_err(&format!("set_push_constants: {e}"), err_buf, err_buf_cap, err_len);
+                    write_err(
+                        &format!("set_push_constants: {e}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
                     1
                 }
             }
@@ -113,8 +117,7 @@ unsafe extern "C" fn host_compute_kernel_dispatch(
     run_host_extern_c(
         "host_compute_kernel_dispatch",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) }) else {
                 write_err(
                     "dispatch: null kernel handle",
                     err_buf,
@@ -179,8 +182,7 @@ unsafe extern "C" fn host_compute_kernel_set_storage_buffer_pixel(
     run_host_extern_c(
         "host_compute_kernel_set_storage_buffer_pixel",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) }) else {
                 write_err(
                     "set_storage_buffer_pixel: null kernel handle",
                     err_buf,
@@ -228,8 +230,7 @@ unsafe extern "C" fn host_compute_kernel_set_storage_buffer_storage(
     run_host_extern_c(
         "host_compute_kernel_set_storage_buffer_storage",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) }) else {
                 write_err(
                     "set_storage_buffer_storage: null kernel handle",
                     err_buf,
@@ -277,8 +278,7 @@ unsafe extern "C" fn host_compute_kernel_set_uniform_buffer(
     run_host_extern_c(
         "host_compute_kernel_set_uniform_buffer",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) }) else {
                 write_err(
                     "set_uniform_buffer: null kernel handle",
                     err_buf,
@@ -326,8 +326,7 @@ unsafe extern "C" fn host_compute_kernel_set_sampled_texture(
     run_host_extern_c(
         "host_compute_kernel_set_sampled_texture",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) }) else {
                 write_err(
                     "set_sampled_texture: null kernel handle",
                     err_buf,
@@ -375,8 +374,7 @@ unsafe extern "C" fn host_compute_kernel_set_storage_image(
     run_host_extern_c(
         "host_compute_kernel_set_storage_image",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) }) else {
                 write_err(
                     "set_storage_image: null kernel handle",
                     err_buf,
@@ -556,8 +554,7 @@ unsafe extern "C" fn host_compute_kernel_bindings(
     run_host_extern_c(
         "host_compute_kernel_bindings",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) }) else {
                 write_err(
                     "bindings: null kernel handle",
                     err_buf,
@@ -655,8 +652,7 @@ unsafe extern "C" fn host_compute_kernel_set_sampled_image_view(
     run_host_extern_c(
         "host_compute_kernel_set_sampled_image_view",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) }) else {
                 write_err(
                     "set_sampled_image_view: null kernel handle",
                     err_buf,
@@ -694,8 +690,7 @@ unsafe extern "C" fn host_compute_kernel_set_combined_image_sampler_view(
     run_host_extern_c(
         "host_compute_kernel_set_combined_image_sampler_view",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) }) else {
                 write_err(
                     "set_combined_image_sampler_view: null kernel handle",
                     err_buf,
@@ -704,9 +699,7 @@ unsafe extern "C" fn host_compute_kernel_set_combined_image_sampler_view(
                 );
                 return 1;
             };
-            match kernel
-                .set_combined_image_sampler_view_raw(binding, image_view_handle)
-            {
+            match kernel.set_combined_image_sampler_view_raw(binding, image_view_handle) {
                 Ok(()) => 0,
                 Err(e) => {
                     write_err(
@@ -735,8 +728,7 @@ unsafe extern "C" fn host_compute_kernel_set_storage_image_view(
     run_host_extern_c(
         "host_compute_kernel_set_storage_image_view",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) }) else {
                 write_err(
                     "set_storage_image_view: null kernel handle",
                     err_buf,
@@ -776,30 +768,14 @@ unsafe extern "C" fn host_compute_kernel_record(
     run_host_extern_c(
         "host_compute_kernel_record",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) })
-            else {
-                write_err(
-                    "record: null kernel handle",
-                    err_buf,
-                    err_buf_cap,
-                    err_len,
-                );
+            let Some(kernel) = (unsafe { handle_as_compute_kernel(kernel_handle) }) else {
+                write_err("record: null kernel handle", err_buf, err_buf_cap, err_len);
                 return 1;
             };
-            match kernel.record_raw(
-                command_buffer_handle,
-                group_x,
-                group_y,
-                group_z,
-            ) {
+            match kernel.record_raw(command_buffer_handle, group_x, group_y, group_z) {
                 Ok(()) => 0,
                 Err(e) => {
-                    write_err(
-                        &format!("record: {e}"),
-                        err_buf,
-                        err_buf_cap,
-                        err_len,
-                    );
+                    write_err(&format!("record: {e}"), err_buf, err_buf_cap, err_len);
                     1
                 }
             }
@@ -902,8 +878,7 @@ pub static HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE:
         set_storage_image: host_compute_kernel_set_storage_image,
         bindings: host_compute_kernel_bindings,
         set_sampled_image_view: host_compute_kernel_set_sampled_image_view,
-        set_combined_image_sampler_view:
-            host_compute_kernel_set_combined_image_sampler_view,
+        set_combined_image_sampler_view: host_compute_kernel_set_combined_image_sampler_view,
         set_storage_image_view: host_compute_kernel_set_storage_image_view,
         record: host_compute_kernel_record,
     };
@@ -911,8 +886,8 @@ pub static HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE:
 /// Accessor for the host's static `VulkanComputeKernelMethodsVTable`
 /// — used by `VulkanComputeKernel::from_arc_into_raw` to populate
 /// the PluginAbiObject's `methods_vtable` field.
-pub fn host_vulkan_compute_kernel_methods_vtable(
-) -> *const streamlib_plugin_abi::VulkanComputeKernelMethodsVTable {
+pub fn host_vulkan_compute_kernel_methods_vtable()
+-> *const streamlib_plugin_abi::VulkanComputeKernelMethodsVTable {
     // Same routing as `host_gpu_context_limited_access_vtable`:
     // cdylib PluginAbiObject constructors must store the host's vtable
     // pointer so dispatches actually cross to host code (whose
@@ -968,8 +943,7 @@ mod compute_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("set_storage_buffer_pixel: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("set_storage_buffer_pixel: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -990,8 +964,7 @@ mod compute_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("set_storage_buffer_storage: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("set_storage_buffer_storage: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -1012,8 +985,7 @@ mod compute_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("set_uniform_buffer: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("set_uniform_buffer: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -1034,8 +1006,7 @@ mod compute_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("set_sampled_texture: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("set_sampled_texture: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -1056,8 +1027,7 @@ mod compute_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("set_storage_image: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("set_storage_image: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -1087,8 +1057,7 @@ mod compute_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("set_sampled_image_view: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("set_sampled_image_view: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -1098,8 +1067,7 @@ mod compute_kernel_methods_vtable_null_tests {
     fn set_combined_image_sampler_view_rejects_null_kernel_handle() {
         let (mut buf, mut len) = make_err_buf();
         let rc = unsafe {
-            (HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE
-                .set_combined_image_sampler_view)(
+            (HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE.set_combined_image_sampler_view)(
                 std::ptr::null(),
                 0,
                 0,
@@ -1132,8 +1100,7 @@ mod compute_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("set_storage_image_view: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("set_storage_image_view: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -1146,7 +1113,9 @@ mod compute_kernel_methods_vtable_null_tests {
             (HOST_VULKAN_COMPUTE_KERNEL_METHODS_VTABLE.record)(
                 std::ptr::null(),
                 0,
-                1, 1, 1,
+                1,
+                1,
+                1,
                 buf.as_mut_ptr(),
                 buf.len(),
                 &mut len,
@@ -1154,8 +1123,7 @@ mod compute_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("record: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("record: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );

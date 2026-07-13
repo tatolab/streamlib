@@ -245,8 +245,14 @@ pub const PLUGIN_ABI_LAYOUT_FINGERPRINT: u64 = {
     h = fingerprint_fold_u64(h, SURFACE_STORE_VTABLE_LAYOUT_VERSION as u64);
     h = fingerprint_fold_u64(h, GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION as u64);
     h = fingerprint_fold_u64(h, TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION as u64);
-    h = fingerprint_fold_u64(h, VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION as u64);
-    h = fingerprint_fold_u64(h, VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION as u64);
+    h = fingerprint_fold_u64(
+        h,
+        VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION as u64,
+    );
+    h = fingerprint_fold_u64(
+        h,
+        VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION as u64,
+    );
     h = fingerprint_fold_u64(
         h,
         VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION as u64,
@@ -261,18 +267,34 @@ pub const PLUGIN_ABI_LAYOUT_FINGERPRINT: u64 = {
     h = fingerprint_fold_u64(h, INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION as u64);
 
     // Measured layout of the wire envelope + callback table.
-    h = fingerprint_fold_layout(h, size_of::<PluginDeclaration>(), align_of::<PluginDeclaration>());
+    h = fingerprint_fold_layout(
+        h,
+        size_of::<PluginDeclaration>(),
+        align_of::<PluginDeclaration>(),
+    );
     h = fingerprint_fold_layout(h, size_of::<HostServices>(), align_of::<HostServices>());
 
     // Measured layout of every vtable struct dereferenced field-by-field.
-    h = fingerprint_fold_layout(h, size_of::<ProcessorVTable>(), align_of::<ProcessorVTable>());
+    h = fingerprint_fold_layout(
+        h,
+        size_of::<ProcessorVTable>(),
+        align_of::<ProcessorVTable>(),
+    );
     h = fingerprint_fold_layout(
         h,
         size_of::<RuntimeContextVTable>(),
         align_of::<RuntimeContextVTable>(),
     );
-    h = fingerprint_fold_layout(h, size_of::<AudioClockVTable>(), align_of::<AudioClockVTable>());
-    h = fingerprint_fold_layout(h, size_of::<RuntimeOpsVTable>(), align_of::<RuntimeOpsVTable>());
+    h = fingerprint_fold_layout(
+        h,
+        size_of::<AudioClockVTable>(),
+        align_of::<AudioClockVTable>(),
+    );
+    h = fingerprint_fold_layout(
+        h,
+        size_of::<RuntimeOpsVTable>(),
+        align_of::<RuntimeOpsVTable>(),
+    );
     h = fingerprint_fold_layout(
         h,
         size_of::<GpuContextLimitedAccessVTable>(),
@@ -375,7 +397,6 @@ pub struct HostServices {
     // -------------------------------------------------------------------------
     // Tracing — forwarder Subscriber callbacks (tracing-ext-ffi-subscriber shape)
     // -------------------------------------------------------------------------
-
     /// Register a callsite with the host's tracing pipeline. The
     /// host's `EnvFilter` computes interest from `(target, level)`
     /// and returns it; the cdylib caches the result per-callsite
@@ -416,7 +437,6 @@ pub struct HostServices {
     // -------------------------------------------------------------------------
     // PUBSUB
     // -------------------------------------------------------------------------
-
     /// Publish a serialized `Event` to a topic. The event is encoded
     /// the same way `PubSub::publish` encodes today (msgpack-named
     /// via `rmp_serde::to_vec_named`), so host-side
@@ -438,7 +458,6 @@ pub struct HostServices {
     // -------------------------------------------------------------------------
     // Schema registry
     // -------------------------------------------------------------------------
-
     /// Register a schema's YAML body under its canonical id. Last
     /// write wins (matches `register_schema` semantics).
     pub schema_register: unsafe extern "C" fn(
@@ -459,18 +478,13 @@ pub struct HostServices {
         host: HostHandle,
         canonical_id_ptr: *const u8,
         canonical_id_len: usize,
-        result_callback: extern "C" fn(
-            userdata: *mut c_void,
-            yaml_ptr: *const u8,
-            yaml_len: usize,
-        ),
+        result_callback: extern "C" fn(userdata: *mut c_void, yaml_ptr: *const u8, yaml_len: usize),
         result_userdata: *mut c_void,
     ),
 
     // -------------------------------------------------------------------------
     // iceoryx2-log
     // -------------------------------------------------------------------------
-
     /// Emit an iceoryx2 log record. Used by the cdylib's
     /// `iceoryx2_log_types::Log` forwarder; the host bridges to its
     /// own tracing pipeline.
@@ -486,7 +500,6 @@ pub struct HostServices {
     // -------------------------------------------------------------------------
     // Processor registration (v2 — replaces the v1 typed pointer)
     // -------------------------------------------------------------------------
-
     /// Register a processor type with the host's registry. The
     /// `descriptor_msgpack` bytes encode a `ProcessorDescriptor`
     /// (using `streamlib-processor-schema`'s serde derives) — the
@@ -513,7 +526,6 @@ pub struct HostServices {
     // -------------------------------------------------------------------------
     // RuntimeContext vtable surface (v3 — eliminates the tokio shared crossing)
     // -------------------------------------------------------------------------
-
     /// Static dispatch table the cdylib's
     /// `RuntimeContext{Full,Limited}Access` shim uses to read host-
     /// owned context state. Set once at install time; never null
@@ -536,7 +548,6 @@ pub struct HostServices {
     // -------------------------------------------------------------------------
     // GpuContext vtable surface
     // -------------------------------------------------------------------------
-
     /// Static dispatch table for the host's `GpuContextLimitedAccess`.
     /// Paired with the per-instance handle returned by
     /// [`RuntimeContextVTable::gpu_limited_access`]. Set once at
@@ -547,7 +558,6 @@ pub struct HostServices {
     // -------------------------------------------------------------------------
     // SurfaceStore vtable surface
     // -------------------------------------------------------------------------
-
     /// Static dispatch table for the host's `SurfaceStore`. Paired
     /// with the per-`SurfaceStore` handle returned by
     /// [`GpuContextLimitedAccessVTable::surface_store`]. Set once at
@@ -558,7 +568,6 @@ pub struct HostServices {
     // -------------------------------------------------------------------------
     // GpuContextFullAccess vtable surface (v6 — Phase C2)
     // -------------------------------------------------------------------------
-
     /// Static dispatch table for the host's `GpuContextFullAccess`.
     /// Paired with the per-scope opaque handle the C3 `escalate_begin`
     /// callback returns. Set once at install time; non-null for hosts
@@ -572,7 +581,6 @@ pub struct HostServices {
     // -------------------------------------------------------------------------
     // TextureRingMethodsVTable surface (v7 — issue #907 Phase E PR 1/5)
     // -------------------------------------------------------------------------
-
     /// Static dispatch table for `TextureRing` PluginAbiObject method
     /// dispatch. Paired with the per-`TextureRing` handle the
     /// cdylib carries on its PluginAbiObject struct (`methods_vtable`
@@ -586,7 +594,6 @@ pub struct HostServices {
     // -------------------------------------------------------------------------
     // VulkanComputeKernelMethodsVTable surface (v8 — issue #907 Phase E PR 2/5)
     // -------------------------------------------------------------------------
-
     /// Static dispatch table for `VulkanComputeKernel` PluginAbiObject
     /// method dispatch. Paired with the per-`VulkanComputeKernel`
     /// handle the cdylib carries on its PluginAbiObject struct
@@ -600,7 +607,6 @@ pub struct HostServices {
     // -------------------------------------------------------------------------
     // VulkanGraphicsKernelMethodsVTable surface (v9 — issue #907 Phase E PR 3/5)
     // -------------------------------------------------------------------------
-
     /// Static dispatch table for `VulkanGraphicsKernel` PluginAbiObject
     /// method dispatch. Paired with the per-`VulkanGraphicsKernel`
     /// handle the cdylib carries on its PluginAbiObject struct
@@ -614,7 +620,6 @@ pub struct HostServices {
     // -------------------------------------------------------------------------
     // VulkanRayTracingKernelMethodsVTable surface (v10 — issue #907 Phase E PR 4/5)
     // -------------------------------------------------------------------------
-
     /// Static dispatch table for `VulkanRayTracingKernel` PluginAbiObject
     /// method dispatch. Paired with the per-`VulkanRayTracingKernel`
     /// handle the cdylib carries on its PluginAbiObject struct
@@ -623,13 +628,11 @@ pub struct HostServices {
     /// must check before dispatching). PR 4 of issue #907 lands the
     /// empty-shell vtable + pointer plumbing; follow-up PRs append
     /// the actual method slots.
-    pub vulkan_ray_tracing_kernel_methods_vtable:
-        *const VulkanRayTracingKernelMethodsVTable,
+    pub vulkan_ray_tracing_kernel_methods_vtable: *const VulkanRayTracingKernelMethodsVTable,
 
     // -------------------------------------------------------------------------
     // VulkanAccelerationStructureMethodsVTable surface (v11 — issue #907 Phase E PR 5/5)
     // -------------------------------------------------------------------------
-
     /// Static dispatch table for `VulkanAccelerationStructure`
     /// PluginAbiObject method dispatch. Set once at install time; non-null
     /// for hosts that ship a GpuContext, null otherwise. PR 5 of
@@ -641,7 +644,6 @@ pub struct HostServices {
     // -------------------------------------------------------------------------
     // RhiColorConverterMethodsVTable surface (v12 — Phase E sub-lift slice A)
     // -------------------------------------------------------------------------
-
     /// Static dispatch table for `RhiColorConverter` PluginAbiObject method
     /// dispatch. Paired with the per-`RhiColorConverter` handle the
     /// cdylib carries on its PluginAbiObject struct (`methods_vtable` field).
@@ -651,13 +653,11 @@ pub struct HostServices {
     /// `prepare_buffer_to_image_storage` slot so cdylib camera
     /// processors can prepare color-conversion kernels without
     /// tripping the PluginAbiObject's host-mode-only `host_inner()` panic.
-    pub rhi_color_converter_methods_vtable:
-        *const RhiColorConverterMethodsVTable,
+    pub rhi_color_converter_methods_vtable: *const RhiColorConverterMethodsVTable,
 
     // -------------------------------------------------------------------------
     // RhiCommandRecorderMethodsVTable surface (v13 — Phase E sub-lift slice B)
     // -------------------------------------------------------------------------
-
     /// Static dispatch table for `RhiCommandRecorder` PluginAbiObject
     /// method dispatch. Paired with the per-`RhiCommandRecorder`
     /// handle the cdylib carries on its PluginAbiObject struct
@@ -671,13 +671,11 @@ pub struct HostServices {
     /// can drive the host-owned recorder per frame without
     /// tripping the PluginAbiObject's host-mode-only `host_inner_mut()`
     /// panic.
-    pub rhi_command_recorder_methods_vtable:
-        *const RhiCommandRecorderMethodsVTable,
+    pub rhi_command_recorder_methods_vtable: *const RhiCommandRecorderMethodsVTable,
 
     // -------------------------------------------------------------------------
     // OutputWriterVTable + InputMailboxesVTable references (v14 — issue #894)
     // -------------------------------------------------------------------------
-
     /// Static dispatch table for the cdylib's `OutputWriter` PluginAbiObject
     /// method dispatch. Paired with the per-instance opaque handle
     /// the cdylib stores on its `outputs` field after the host
@@ -914,7 +912,10 @@ mod layout_tests {
         assert_eq!(offset_of!(PluginDeclaration, _reserved_padding), 4);
         assert_eq!(offset_of!(PluginDeclaration, register), 8);
         assert_eq!(offset_of!(PluginDeclaration, abi_layout_fingerprint), 16);
-        assert_eq!(offset_of!(PluginDeclaration, engine_transit_fingerprint), 24);
+        assert_eq!(
+            offset_of!(PluginDeclaration, engine_transit_fingerprint),
+            24
+        );
         assert_eq!(offset_of!(PluginDeclaration, build_identity_ptr), 32);
         assert_eq!(offset_of!(PluginDeclaration, build_identity_len), 40);
     }
@@ -961,7 +962,10 @@ mod layout_tests {
         assert_eq!(VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 5);
         assert_eq!(VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 4);
         assert_eq!(VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 3);
-        assert_eq!(VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION, 2);
+        assert_eq!(
+            VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION,
+            2
+        );
         assert_eq!(RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION, 2);
         // v2: appended PixelBuffer-flavored sibling slots
         // (`record_pixel_buffer_barrier`,
@@ -1035,10 +1039,7 @@ mod layout_tests {
             offset_of!(HostServices, gpu_context_full_access_vtable),
             120
         );
-        assert_eq!(
-            offset_of!(HostServices, texture_ring_methods_vtable),
-            128
-        );
+        assert_eq!(offset_of!(HostServices, texture_ring_methods_vtable), 128);
         assert_eq!(
             offset_of!(HostServices, vulkan_compute_kernel_methods_vtable),
             136
@@ -1052,10 +1053,7 @@ mod layout_tests {
             152
         );
         assert_eq!(
-            offset_of!(
-                HostServices,
-                vulkan_acceleration_structure_methods_vtable
-            ),
+            offset_of!(HostServices, vulkan_acceleration_structure_methods_vtable),
             160
         );
         assert_eq!(

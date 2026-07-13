@@ -26,7 +26,6 @@ use std::sync::{Arc, Mutex};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -411,7 +410,10 @@ impl PerFrameDecodeResources {
     /// Returns `true` when the resource is not in use (ref_count <= 0 and not
     /// in any queue).  Mirrors C++ `IsAvailable`.
     pub fn is_available(&self) -> bool {
-        self.ref_count <= 0 && !self.in_decode_queue && !self.in_display_queue && !self.owned_by_consumer
+        self.ref_count <= 0
+            && !self.in_decode_queue
+            && !self.in_display_queue
+            && !self.owned_by_consumer
     }
 
     /// Reset transient state.  Mirrors C++ `Reset`.
@@ -536,17 +538,16 @@ impl PerFrameDecodeResources {
     /// Initialise fences for this frame.
     /// Mirrors C++ `NvPerFrameDecodeResources::init`.
     pub fn init(&mut self, device: &vulkanalia::Device) -> Result<(), vk::Result> {
-        let fence_signaled_info = vk::FenceCreateInfo::builder()
-            .flags(vk::FenceCreateFlags::SIGNALED);
+        let fence_signaled_info =
+            vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
         let fence_info = vk::FenceCreateInfo::default();
 
         unsafe {
             self.frame_complete_fence = device
                 .create_fence(&fence_signaled_info, None)
                 .map_err(|e| e)?;
-            self.frame_consumer_done_fence = device
-                .create_fence(&fence_info, None)
-                .map_err(|e| e)?;
+            self.frame_consumer_done_fence =
+                device.create_fence(&fence_info, None).map_err(|e| e)?;
         }
 
         self.reset();
@@ -858,9 +859,7 @@ impl VkVideoFrameBuffer {
             let fence = self.image_set.per_frame[idx].frame_complete_fence;
             debug_assert!(fence != vk::Fence::null());
             unsafe {
-                let _ = self
-                    .device
-                    .wait_for_fences(&[fence], true, u64::MAX);
+                let _ = self.device.wait_for_fences(&[fence], true, u64::MAX);
                 let _ = self.device.reset_fences(&[fence]);
             }
         }
@@ -918,16 +917,12 @@ impl VkVideoFrameBuffer {
             if sync_info.has_frame_complete_signal_semaphore {
                 sync_info.frame_complete_semaphore = self.image_set.frame_complete_semaphore;
                 if sync_info.frame_complete_semaphore != vk::Semaphore::null() {
-                    sync_info.decode_complete_timeline_value = get_semaphore_value(
-                        SemSyncTypeIdx::Decode,
-                        res.decode_order,
-                    );
+                    sync_info.decode_complete_timeline_value =
+                        get_semaphore_value(SemSyncTypeIdx::Decode, res.decode_order);
 
                     if sync_info.has_filter_signal_semaphore {
-                        sync_info.filter_complete_timeline_value = get_semaphore_value(
-                            SemSyncTypeIdx::Filter,
-                            res.decode_order,
-                        );
+                        sync_info.filter_complete_timeline_value =
+                            get_semaphore_value(SemSyncTypeIdx::Filter, res.decode_order);
                         res.frame_complete_timeline_value =
                             sync_info.filter_complete_timeline_value;
                     } else {
@@ -941,8 +936,7 @@ impl VkVideoFrameBuffer {
 
             if res.use_consumer_signal_semaphore {
                 sync_info.has_frame_consumer_signal_semaphore = true;
-                sync_info.consumer_complete_semaphore =
-                    self.image_set.consumer_complete_semaphore;
+                sync_info.consumer_complete_semaphore = self.image_set.consumer_complete_semaphore;
                 sync_info.frame_consumer_done_timeline_value =
                     res.frame_consumer_done_timeline_value;
                 res.use_consumer_signal_semaphore = false;
@@ -965,9 +959,7 @@ impl VkVideoFrameBuffer {
 
         if let Some(front) = state.display_frames.pop_front() {
             picture_index = front as i32;
-            debug_assert!(
-                (picture_index as u32) < self.image_set.size()
-            );
+            debug_assert!((picture_index as u32) < self.image_set.size());
             debug_assert!(state.owned_by_display_mask & (1 << picture_index) == 0);
             state.owned_by_display_mask |= 1 << picture_index;
 
@@ -990,18 +982,14 @@ impl VkVideoFrameBuffer {
 
             // Frame-complete semaphore
             if res.has_frame_complete_signal_semaphore {
-                decoded_frame.frame_complete_semaphore =
-                    self.image_set.frame_complete_semaphore;
-                decoded_frame.frame_complete_done_sem_value =
-                    res.frame_complete_timeline_value;
+                decoded_frame.frame_complete_semaphore = self.image_set.frame_complete_semaphore;
+                decoded_frame.frame_complete_done_sem_value = res.frame_complete_timeline_value;
                 res.has_frame_complete_signal_semaphore = false;
 
                 decoded_frame.consumer_complete_semaphore =
                     self.image_set.consumer_complete_semaphore;
-                decoded_frame.frame_consumer_done_sem_value = get_semaphore_value(
-                    SemSyncTypeIdx::Display,
-                    res.display_order,
-                );
+                decoded_frame.frame_consumer_done_sem_value =
+                    get_semaphore_value(SemSyncTypeIdx::Display, res.display_order);
             } else {
                 decoded_frame.frame_complete_semaphore = vk::Semaphore::null();
             }
@@ -1041,10 +1029,7 @@ impl VkVideoFrameBuffer {
 
     /// Release displayed pictures back to the pool.
     /// Mirrors C++ `VkVideoFrameBuffer::ReleaseDisplayedPicture`.
-    pub fn release_displayed_picture(
-        &mut self,
-        releases: &[&DecodedFrameRelease],
-    ) -> i32 {
+    pub fn release_displayed_picture(&mut self, releases: &[&DecodedFrameRelease]) -> i32 {
         let mut state = self.display_queue_mutex.lock().unwrap();
         for release in releases {
             let pic_id = release.picture_index as usize;
@@ -1060,10 +1045,8 @@ impl VkVideoFrameBuffer {
             res.has_consumer_signal_fence = release.has_consumer_signal_fence;
             res.use_consumer_signal_semaphore = release.has_consumer_signal_semaphore;
             if release.has_consumer_signal_semaphore {
-                res.frame_consumer_done_timeline_value = get_semaphore_value(
-                    SemSyncTypeIdx::Display,
-                    release.display_order,
-                );
+                res.frame_consumer_done_timeline_value =
+                    get_semaphore_value(SemSyncTypeIdx::Display, release.display_order);
             }
         }
         0

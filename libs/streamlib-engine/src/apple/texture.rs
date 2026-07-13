@@ -5,7 +5,7 @@
 // Review if this texture creation utility is needed or can be removed
 #![allow(dead_code)]
 
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLTextureType;

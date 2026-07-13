@@ -26,7 +26,9 @@ use super::super::super::run_host_extern_c;
 // ---------------- Kernel Arc-handle lifecycle (Linux-only) ----------------
 
 #[cfg(target_os = "linux")]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_compute_kernel(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_compute_kernel(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_full_clone_compute_kernel",
         || {
@@ -45,7 +47,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cl
 }
 
 #[cfg(target_os = "linux")]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_compute_kernel(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_compute_kernel(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_full_drop_compute_kernel",
         || {
@@ -64,7 +68,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_dr
 }
 
 #[cfg(target_os = "linux")]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_graphics_kernel(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_graphics_kernel(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_full_clone_graphics_kernel",
         || {
@@ -82,7 +88,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cl
 }
 
 #[cfg(target_os = "linux")]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_graphics_kernel(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_graphics_kernel(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_full_drop_graphics_kernel",
         || {
@@ -100,7 +108,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_dr
 }
 
 #[cfg(target_os = "linux")]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_ray_tracing_kernel(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_ray_tracing_kernel(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_full_clone_ray_tracing_kernel",
         || {
@@ -118,7 +128,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cl
 }
 
 #[cfg(target_os = "linux")]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_ray_tracing_kernel(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_ray_tracing_kernel(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_full_drop_ray_tracing_kernel",
         || {
@@ -136,7 +148,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_dr
 }
 
 #[cfg(target_os = "linux")]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_texture_ring(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_texture_ring(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_full_clone_texture_ring",
         || {
@@ -154,7 +168,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cl
 }
 
 #[cfg(target_os = "linux")]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_texture_ring(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_texture_ring(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_full_drop_texture_ring",
         || {
@@ -178,7 +194,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_dr
 // code where the Inner layout is known statically.
 
 #[cfg(target_os = "linux")]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_color_converter(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_color_converter(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_full_clone_color_converter",
         || {
@@ -196,7 +214,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cl
 }
 
 #[cfg(target_os = "linux")]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_color_converter(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_color_converter(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_full_drop_color_converter",
         || {
@@ -214,7 +234,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_dr
 }
 
 #[cfg(target_os = "linux")]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_acceleration_structure(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_acceleration_structure(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_full_clone_acceleration_structure",
         || {
@@ -223,8 +245,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cl
             }
             unsafe {
                 Arc::increment_strong_count(
-                    handle
-                        as *const crate::vulkan::rhi::VulkanAccelerationStructureInner,
+                    handle as *const crate::vulkan::rhi::VulkanAccelerationStructureInner,
                 );
             }
         },
@@ -233,7 +254,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cl
 }
 
 #[cfg(target_os = "linux")]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_acceleration_structure(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_acceleration_structure(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_full_drop_acceleration_structure",
         || {
@@ -242,8 +265,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_dr
             }
             unsafe {
                 Arc::decrement_strong_count(
-                    handle
-                        as *const crate::vulkan::rhi::VulkanAccelerationStructureInner,
+                    handle as *const crate::vulkan::rhi::VulkanAccelerationStructureInner,
                 );
             }
         },
@@ -252,7 +274,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_dr
 }
 
 #[cfg(target_os = "linux")]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_command_recorder(_handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_command_recorder(
+    _handle: *const c_void,
+) {
     // RhiCommandRecorder is Box-shaped (single-owner) — deliberately
     // NOT Clone per CommandBuffer precedent. This slot is reserved
     // infrastructure; the type-level absence of `Clone` for
@@ -271,7 +295,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cl
 }
 
 #[cfg(target_os = "linux")]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_command_recorder(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_command_recorder(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_full_drop_command_recorder",
         || {
@@ -281,9 +307,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_dr
             // SAFETY: handle is `Box::into_raw(Box<RhiCommandRecorderInner>)`-shaped.
             // Reconstruct the Box and let Drop run.
             unsafe {
-                let _ = Box::from_raw(
-                    handle as *mut crate::vulkan::rhi::RhiCommandRecorderInner,
-                );
+                let _ = Box::from_raw(handle as *mut crate::vulkan::rhi::RhiCommandRecorderInner);
             }
         },
         (),
@@ -293,31 +317,72 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_dr
 // Non-Linux stubs (callbacks must exist for the static layout, but
 // the kernel types only ship on Linux).
 #[cfg(not(target_os = "linux"))]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_compute_kernel(_handle: *const c_void) {}
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_compute_kernel(
+    _handle: *const c_void,
+) {
+}
 #[cfg(not(target_os = "linux"))]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_compute_kernel(_handle: *const c_void) {}
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_compute_kernel(
+    _handle: *const c_void,
+) {
+}
 #[cfg(not(target_os = "linux"))]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_graphics_kernel(_handle: *const c_void) {}
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_graphics_kernel(
+    _handle: *const c_void,
+) {
+}
 #[cfg(not(target_os = "linux"))]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_graphics_kernel(_handle: *const c_void) {}
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_graphics_kernel(
+    _handle: *const c_void,
+) {
+}
 #[cfg(not(target_os = "linux"))]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_ray_tracing_kernel(_handle: *const c_void) {}
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_ray_tracing_kernel(
+    _handle: *const c_void,
+) {
+}
 #[cfg(not(target_os = "linux"))]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_ray_tracing_kernel(_handle: *const c_void) {}
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_ray_tracing_kernel(
+    _handle: *const c_void,
+) {
+}
 #[cfg(not(target_os = "linux"))]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_texture_ring(_handle: *const c_void) {}
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_texture_ring(
+    _handle: *const c_void,
+) {
+}
 #[cfg(not(target_os = "linux"))]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_texture_ring(_handle: *const c_void) {}
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_texture_ring(
+    _handle: *const c_void,
+) {
+}
 #[cfg(not(target_os = "linux"))]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_color_converter(_handle: *const c_void) {}
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_color_converter(
+    _handle: *const c_void,
+) {
+}
 #[cfg(not(target_os = "linux"))]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_color_converter(_handle: *const c_void) {}
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_color_converter(
+    _handle: *const c_void,
+) {
+}
 #[cfg(not(target_os = "linux"))]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_acceleration_structure(_handle: *const c_void) {}
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_acceleration_structure(
+    _handle: *const c_void,
+) {
+}
 #[cfg(not(target_os = "linux"))]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_acceleration_structure(_handle: *const c_void) {}
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_acceleration_structure(
+    _handle: *const c_void,
+) {
+}
 #[cfg(not(target_os = "linux"))]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_command_recorder(_handle: *const c_void) {}
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_clone_command_recorder(
+    _handle: *const c_void,
+) {
+}
 #[cfg(not(target_os = "linux"))]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_command_recorder(_handle: *const c_void) {}
-
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_command_recorder(
+    _handle: *const c_void,
+) {
+}

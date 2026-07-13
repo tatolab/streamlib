@@ -52,17 +52,17 @@
 use std::sync::Arc;
 
 pub use crate::vulkan::rhi::{
-    drm_modifier_probe, AccelerationStructureKind, HostMarker, HostVulkanDevice,
-    HostVulkanBuffer, HostVulkanTexture, HostVulkanTimelineSemaphore, ImageCopyRegion,
-    OffscreenColorTarget, OffscreenDraw, RayTracingPipelineProperties, RhiCommandRecorder,
-    ThirdPartyGpuCapabilities, TlasInstanceDesc, VulkanAccelerationStructure, VulkanAccess,
-    VulkanBufferLike, VulkanComputeKernel, VulkanGraphicsKernel, VulkanIndexBindable,
-    VulkanRayTracingKernel, VulkanStage, VulkanStorageBindable, VulkanTextureReadback,
-    VulkanUniformBindable, VulkanVertexBindable, IDENTITY_TRANSFORM,
+    AccelerationStructureKind, HostMarker, HostVulkanBuffer, HostVulkanDevice, HostVulkanTexture,
+    HostVulkanTimelineSemaphore, IDENTITY_TRANSFORM, ImageCopyRegion, OffscreenColorTarget,
+    OffscreenDraw, RayTracingPipelineProperties, RhiCommandRecorder, ThirdPartyGpuCapabilities,
+    TlasInstanceDesc, VulkanAccelerationStructure, VulkanAccess, VulkanBufferLike,
+    VulkanComputeKernel, VulkanGraphicsKernel, VulkanIndexBindable, VulkanRayTracingKernel,
+    VulkanStage, VulkanStorageBindable, VulkanTextureReadback, VulkanUniformBindable,
+    VulkanVertexBindable, drm_modifier_probe,
 };
 
 #[cfg(target_os = "linux")]
-pub use crate::vulkan::rhi::{PresentFrame, VulkanPresentTarget, MAX_FRAMES_IN_FLIGHT};
+pub use crate::vulkan::rhi::{MAX_FRAMES_IN_FLIGHT, PresentFrame, VulkanPresentTarget};
 
 pub use vulkanalia::vk::GeometryInstanceFlagsKHR;
 
@@ -135,8 +135,7 @@ impl HostTextureExt for Texture {
             return Ok(Arc::clone(self.vulkan_inner()));
         }
 
-        let vtable =
-            crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
+        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
         if vtable.is_null() {
             return Err(Error::GpuError(
                 "host_vulkan_texture_arc: GpuContextFullAccess vtable pointer is \
