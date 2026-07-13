@@ -129,6 +129,19 @@ enum Commands {
         action: PkgCommands,
     },
 
+    /// Point this consumer's toolchain at a single static registry location.
+    ///
+    /// `use <tree>` writes the cargo `[source]` replacement into
+    /// `.cargo/config.toml` (a serverless `local-registry` mirror for a local
+    /// folder, a sparse mirror for an HTTP mount) and derives the pypi / npm
+    /// channels — so a consumer resolves against a local tree with one command.
+    /// `serve <tree>` starts a localhost static mount for npm (the one ecosystem
+    /// with no `file://` registry story) and writes the `.npmrc` scope.
+    Registry {
+        #[command(subcommand)]
+        action: RegistryCommands,
+    },
+
     /// Point this consumer's entire streamlib surface at a local checkout.
     ///
     /// Run from a consumer root (app or package dir). Emits whole-tree
@@ -196,6 +209,27 @@ enum SchemasCommands {
     ValidateProcessor {
         /// Path to the processor YAML file
         path: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum RegistryCommands {
+    /// Configure this consumer's cargo/pypi/npm channels from one registry
+    /// location (a local folder, `file://`, or `http(s)://` mount).
+    Use {
+        /// Registry tree: a local folder path, a `file://` URL, or an
+        /// `http(s)://` static mount.
+        tree: String,
+    },
+    /// Serve a local registry tree over a localhost static mount for npm and
+    /// write the `.npmrc` scope. Blocks until Ctrl-C.
+    Serve {
+        /// Local registry tree directory to serve.
+        tree: PathBuf,
+
+        /// Localhost port to serve on (default: 8799).
+        #[arg(long)]
+        port: Option<u16>,
     },
 }
 
@@ -298,6 +332,10 @@ async fn async_main(cli: Cli) -> Result<()> {
             PkgCommands::Clean => commands::pkg::clean()?,
             PkgCommands::Inspect { path } => commands::pkg::inspect(&path)?,
             PkgCommands::List => commands::pkg::list()?,
+        },
+        Some(Commands::Registry { action }) => match action {
+            RegistryCommands::Use { tree } => commands::registry::use_registry(&tree)?,
+            RegistryCommands::Serve { tree, port } => commands::registry::serve(&tree, port)?,
         },
         Some(Commands::Link {
             checkout,

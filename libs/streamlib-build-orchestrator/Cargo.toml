@@ -13,9 +13,13 @@ repository.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 tracing = { workspace = true }
+thiserror = { workspace = true }
 serde_json = { workspace = true }
 toml_edit = { workspace = true }
 ureq = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
 streamlib-engine = { path = "../streamlib-engine", version = "0.6.0", registry = "tatolab" }
 streamlib-cargo-build = { path = "../streamlib-cargo-build", version = "0.6.0", registry = "tatolab" }
 streamlib-pack = { path = "../streamlib-pack", version = "0.6.0", registry = "tatolab" }

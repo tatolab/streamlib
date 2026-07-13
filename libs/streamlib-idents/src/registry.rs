@@ -82,6 +82,54 @@ impl RegistryConfig {
             .filter(|s| !s.is_empty())?;
         Some(Self { base_url })
     }
+
+    /// Build a config for a local on-disk registry tree rooted at `dir` — the
+    /// `file://<canonical-abs-dir>` form a `file://` consumer / publisher uses.
+    /// `dir` is canonicalized so the derived channel URLs are absolute and
+    /// relocation-stable; a non-existent path is a
+    /// [`ResolverError::RegistryFetchFailed`].
+    pub fn for_local_tree(dir: &Path) -> ResolverResult<Self> {
+        let canonical = dir
+            .canonicalize()
+            .map_err(|e| ResolverError::RegistryFetchFailed {
+                name: "<local tree>".to_string(),
+                detail: format!("canonicalize registry tree dir {} : {e}", dir.display()),
+            })?;
+        Ok(Self {
+            base_url: format!("file://{}", canonical.display()),
+        })
+    }
+
+    /// The on-disk tree root when [`base_url`](Self::base_url) is a `file://`
+    /// URL, else `None` (an `http(s)://` mount has no local root). Consumers
+    /// locate the per-ecosystem subtrees (`cargo/`, `npm/`, `pypi/`) under it.
+    pub fn local_tree_root(&self) -> Option<PathBuf> {
+        self.base_url.strip_prefix("file://").map(PathBuf::from)
+    }
+
+    /// The pypi PEP-503 `simple/` index URL derived from the single registry
+    /// location — the value `uv` reads as `UV_INDEX`. `file://` and `http(s)://`
+    /// both work: uv consumes a PEP-503 `simple/` tree over either transport.
+    pub fn pypi_simple_index_url(&self) -> String {
+        format!("{}/pypi/simple", self.base_url)
+    }
+
+    /// The npm registry URL derived from the single registry location — the
+    /// value an `.npmrc` `@tatolab:registry=` scope points at. npm/Deno have no
+    /// `file://` registry story, so a `file://` tree must first be served over a
+    /// static HTTP mount before this is reachable; the string is derived
+    /// uniformly here regardless.
+    pub fn npm_registry_url(&self) -> String {
+        format!("{}/npm/", self.base_url)
+    }
+
+    /// The cargo **sparse** index URL derived from the single registry location
+    /// (`sparse+<base>/cargo/`). Valid as a `[source]`-replacement target only
+    /// for an `http(s)://` mount — cargo's sparse protocol is HTTP-only, so a
+    /// `file://` tree is instead consumed via a `local-registry` reshape.
+    pub fn cargo_sparse_index_url(&self) -> String {
+        format!("sparse+{}/cargo/", self.base_url)
+    }
 }
 
 /// Client over a single [`RegistryConfig`].
@@ -647,6 +695,44 @@ mod tests {
             }
             other => panic!("expected RegistryNoMatchingVersion, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn ecosystem_urls_derive_from_the_single_base() {
+        // Every channel derives from the one base URL — the "single registry
+        // location, toolchain-derived" contract.
+        let http = RegistryConfig {
+            base_url: "https://registry.tatolab.com".into(),
+        };
+        assert_eq!(http.pypi_simple_index_url(), "https://registry.tatolab.com/pypi/simple");
+        assert_eq!(http.npm_registry_url(), "https://registry.tatolab.com/npm/");
+        assert_eq!(
+            http.cargo_sparse_index_url(),
+            "sparse+https://registry.tatolab.com/cargo/"
+        );
+        assert!(http.local_tree_root().is_none());
+
+        let file = RegistryConfig {
+            base_url: "file:///srv/tree".into(),
+        };
+        assert_eq!(file.pypi_simple_index_url(), "file:///srv/tree/pypi/simple");
+        assert_eq!(file.npm_registry_url(), "file:///srv/tree/npm/");
+        assert_eq!(file.local_tree_root(), Some(PathBuf::from("/srv/tree")));
+    }
+
+    #[test]
+    fn for_local_tree_canonicalizes_and_errors_on_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = RegistryConfig::for_local_tree(tmp.path()).unwrap();
+        assert!(cfg.base_url.starts_with("file://"));
+        // The canonical root round-trips back to the dir.
+        assert_eq!(
+            cfg.local_tree_root().unwrap().canonicalize().unwrap(),
+            tmp.path().canonicalize().unwrap()
+        );
+        // A non-existent path is a typed error, not a silent bad URL.
+        let missing = tmp.path().join("does-not-exist");
+        assert!(RegistryConfig::for_local_tree(&missing).is_err());
     }
 
     #[test]

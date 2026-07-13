@@ -291,16 +291,31 @@ fn find_first_wheel(wheels_dir: &Path, package_label: &str) -> Result<Option<Pat
 /// raw process output (caller inspects `status`); the `Err` arm covers only
 /// the failure to spawn `uv` at all.
 fn run_uv(args: &[&str], uv_cache_dir: &Path) -> Result<std::process::Output, String> {
-    Command::new("uv")
-        .args(args)
-        .env("UV_CACHE_DIR", uv_cache_dir.to_str().unwrap_or(""))
-        .output()
-        .map_err(|e| {
-            format!(
-                "failed to run uv (is uv installed?): {e}. Install with: \
-                 curl -LsSf https://astral.sh/uv/install.sh | sh"
-            )
-        })
+    let mut cmd = Command::new("uv");
+    cmd.args(args)
+        .env("UV_CACHE_DIR", uv_cache_dir.to_str().unwrap_or(""));
+    // Resolve `streamlib` (and any other registry deps) from the SAME single
+    // registry location cargo / `.slpkg` use, deriving `UV_INDEX` from it
+    // rather than depending on an ambiently-set one. A link-mode build resolves
+    // `streamlib` from its injected `[tool.uv.sources]` path override, which
+    // wins over the index regardless of what is set here.
+    if let Some(index) = derive_uv_index() {
+        cmd.env("UV_INDEX", index);
+    }
+    cmd.output().map_err(|e| {
+        format!(
+            "failed to run uv (is uv installed?): {e}. Install with: \
+             curl -LsSf https://astral.sh/uv/install.sh | sh"
+        )
+    })
+}
+
+/// The `UV_INDEX` pypi simple-index URL derived from the single configured
+/// registry location (`STREAMLIB_REGISTRY_URL`), or `None` when no registry is
+/// configured — a link-mode / path-only build resolves `streamlib` from a
+/// `[tool.uv.sources]` override instead of an index.
+fn derive_uv_index() -> Option<String> {
+    streamlib_idents::RegistryConfig::from_env().map(|c| c.pypi_simple_index_url())
 }
 
 fn path_to_str(path: &Path, package_label: &str) -> Result<String, BuildError> {
@@ -411,6 +426,49 @@ packages = ["python"]
             ),
         )
         .unwrap();
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn uv_index_derived_from_configured_registry_else_none() {
+        // The orchestrator derives `UV_INDEX` from the single configured
+        // registry location so the venv build no longer depends on an
+        // ambiently-set one. SAFETY: `#[serial]` — no other thread races these
+        // process-global env writes.
+        let prev = std::env::var("STREAMLIB_REGISTRY_URL").ok();
+
+        // A local `file://` tree derives its pypi simple-index sub-URL.
+        unsafe {
+            std::env::set_var("STREAMLIB_REGISTRY_URL", "file:///tmp/streamlib-tree");
+        }
+        assert_eq!(
+            derive_uv_index().as_deref(),
+            Some("file:///tmp/streamlib-tree/pypi/simple")
+        );
+
+        // An HTTP mount derives the same simple-index shape.
+        unsafe {
+            std::env::set_var("STREAMLIB_REGISTRY_URL", "http://127.0.0.1:8799");
+        }
+        assert_eq!(
+            derive_uv_index().as_deref(),
+            Some("http://127.0.0.1:8799/pypi/simple")
+        );
+
+        // Unset → no derived index (dev / link / path-only build). Mentally
+        // reverting the `from_env` gate to a hardcoded fallback would return
+        // Some here and reintroduce the ambient dependence this removes.
+        unsafe {
+            std::env::remove_var("STREAMLIB_REGISTRY_URL");
+        }
+        assert_eq!(derive_uv_index(), None);
+
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("STREAMLIB_REGISTRY_URL", v),
+                None => std::env::remove_var("STREAMLIB_REGISTRY_URL"),
+            }
+        }
     }
 
     #[test]

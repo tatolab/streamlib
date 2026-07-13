@@ -5047,6 +5047,7 @@ name = "streamlib-build-orchestrator"
 version = "0.6.0"
 dependencies = [
  "anyhow",
+ "libc",
  "serde_json",
  "serial_test",
  "streamlib-cargo-build",
@@ -5056,6 +5057,7 @@ dependencies = [
  "streamlib-pack",
  "streamlib-plugin-abi",
  "tempfile",
+ "thiserror 2.0.18",
  "toml_edit 0.22.27",
  "tracing",
  "ureq",

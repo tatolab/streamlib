@@ -39,6 +39,7 @@
 mod deno_codegen;
 mod native_host;
 mod python_venv;
+pub mod registry;
 mod release_check;
 
 #[cfg(test)]
