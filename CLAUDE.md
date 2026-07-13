@@ -396,12 +396,17 @@ the sanctioned loops instead:
   consumer bumps to. The monorepo still builds itself in-place (the dev
   `path` wins locally); publishing is a release step.
 
-**Install seam.** `streamlib install` resolves range→concrete, materializes,
-and writes `streamlib-app.lock`; a locked run (`add_modules_from_lockfile`)
-loads that pinned set offline (five network/build touchpoints unreachable),
-content-hash-verified. Range logic lives only at install, concrete
-enforcement only at run — the two resolvers stay separate; the lockfile is
-the handoff.
+**Install seam.** `streamlib install` (CLI) reproduces the app's
+`streamlib_modules/` folder from its committed `streamlib.lock`
+(`AppModulesDir::install_from_lockfile`) — hash-verified, offline, no
+resolution decisions: the container/CI preinstall path, the reproduce half of
+the `add`/`link` → `streamlib.lock` loop. The distinct **programmatic**
+`install()` seam (`sdk::runtime::install`, no longer a CLI verb) resolves a
+`streamlib.yaml` range→concrete, materializes, and writes `streamlib-app.lock`;
+a locked run (`add_modules_from_lockfile`) loads that pinned set offline (five
+network/build touchpoints unreachable), content-hash-verified. Range logic
+lives only at that install, concrete enforcement only at run — the two
+resolvers stay separate; the lockfile is the handoff.
 
 ### Vulkan RHI Boundary — ABSOLUTE RULE
 
