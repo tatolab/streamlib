@@ -226,12 +226,10 @@ enum StaticRegistryAction {
         #[arg(long, default_value = "http://127.0.0.1:8000")]
         base_url: String,
         /// Also package + emit the workspace release-closure crates into the
-        /// cargo tree (heavy — off by default; the fork is always emitted).
+        /// cargo tree (heavy — off by default). Includes the vendored
+        /// tatolab-vulkanalia* crates as ordinary closure members.
         #[arg(long)]
         cargo_closure: bool,
-        /// Skip the vulkanalia-fork cargo tree.
-        #[arg(long)]
-        no_cargo_fork: bool,
         /// Skip the pypi-simple tree.
         #[arg(long)]
         no_pypi: bool,
@@ -301,7 +299,6 @@ fn main() -> Result<()> {
             dev,
             base_url,
             cargo_closure,
-            no_cargo_fork,
             no_pypi,
             no_npm,
             no_slpkg,
@@ -315,7 +312,6 @@ fn main() -> Result<()> {
                 base_url,
                 dev,
                 ecosystems: EmitEcosystems {
-                    cargo_fork: !no_cargo_fork,
                     cargo_closure,
                     pypi: !no_pypi,
                     npm: !no_npm,

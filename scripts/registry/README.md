@@ -9,28 +9,28 @@ daemon. See
 
 ## Scripts
 
+(Rows for `emit-static-fork.sh` and `normalize_fork_crate.py` removed — the
+vulkanalia fork is vendored at `libs/tatolab-vulkanalia*` and resolves by path,
+so the fork-bootstrap emit/normalize machinery was deleted; see
+`docs/architecture/vendored-vulkanalia.md`.)
+
 | Script | What it does |
 |---|---|
-| `emit-static-fork.sh` | Package the `tatolab/vulkanalia` fork (`vulkanalia`, `-sys`, `-vma`) into a cargo sparse subtree, running `normalize_fork_crate.py` on each crate. The daemon-free bootstrap: the workspace declares `vulkanalia = { registry = "tatolab" }`, so cargo cannot resolve until the fork is fetchable. Emitted from a standalone clone (the fork depends only on crates.io + itself). |
-| `normalize_fork_crate.py` | Rewrite the ephemeral serving-port URL baked into a fork `.crate` (packaged `Cargo.toml` `registry-index` + bundled `Cargo.lock` `source`) to the canonical `[registries.tatolab]` index, strip `.cargo_vcs_info.json`, and re-gzip with a hand-framed deterministic header — so the tarball checksum is port-independent and reproduces the committed `Cargo.lock` on any emit host. |
-| `emit-cargo-local-registry.sh` | Reshape an emitted cargo **sparse** subtree into a cargo **local-registry** (`index/<shard>` + flat `.crate`s, no `config.json`) so cargo resolves the `tatolab` registry over a `file://` `[source]` replacement with **no HTTP server**. The serverless resolve CI uses (via the `cargo-fork-mirror` composite action) and the offline path an external consumer rides. |
+| `emit-cargo-local-registry.sh` | Reshape an emitted cargo **sparse** subtree into a cargo **local-registry** (`index/<shard>` + flat `.crate`s, no `config.json`) so cargo resolves the `tatolab` registry over a `file://` `[source]` replacement with **no HTTP server**. The serverless resolve CI uses (check-pack-load's out-of-tree build) and the offline path an external consumer rides. |
 | `render_cargo_index_line.py` | Render one cargo sparse-index NDJSON line from a `.crate`'s bundled manifest — the single source of truth for the index-line shape. |
-| `cargo-idx-path.sh` | Compute a crate's RFC 2141 sparse-index shard path (`serde → se/rd/serde`), sourced by `emit-static-fork.sh`. |
+| `cargo-idx-path.sh` | Compute a crate's RFC 2141 sparse-index shard path (`serde → se/rd/serde`); standalone helper, exercised against the Rust twin by `streamlib-pack`'s golden tests. |
 | `serve-static-registry.sh` | Serve an emitted tree with `python3 -m http.server` and print the consumer configuration (the manual configure-a-consumer path; a `streamlib registry use <dir>` verb is planned). |
 | `migrate-internal-deps.py` | Rewrite workspace cross-crate deps to the `{ path, version, registry = "tatolab" }` form. |
 
 ## Emitting a full tree
 
-The whole tree (fork + workspace closure + pypi + npm + `.slpkg` + catalog) is
-produced by the workspace tool, not these scripts:
+The whole tree (workspace closure — vendored `tatolab-vulkanalia*` included —
++ pypi + npm + `.slpkg` + catalog) is produced by the workspace tool, not
+these scripts:
 
 ```bash
 cargo xtask static-registry emit --out <dir> [--dev N] [--cargo-closure]
 ```
-
-`emit-static-fork.sh` is the one piece that must run standalone (building
-`xtask` itself needs the fork), so the emitter shells out to it for the fork
-subtree.
 
 ## Consuming a tree
 

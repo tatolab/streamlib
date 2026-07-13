@@ -217,7 +217,6 @@ fn emitted_tree_truncation_is_rejected_by_consumer_checks() {
         base_url: "http://127.0.0.1:9".into(), // unused by the slpkg ecosystem
         dev: None,
         ecosystems: EmitEcosystems {
-            cargo_fork: false,
             cargo_closure: false,
             pypi: false,
             npm: false,

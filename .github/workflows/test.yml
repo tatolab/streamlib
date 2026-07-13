@@ -54,14 +54,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-test-
 
-      # Serverless registry: the workspace declares `vulkanalia = { registry =
-      # "tatolab" }`, so `-p streamlib` (→ engine → vulkanalia on Linux) cannot
-      # build without the fork fetchable. Emit it + reshape into a cargo
-      # local-registry `[source]` replacement (no HTTP server) so the `--locked`
-      # build below resolves the fork offline.
-      - name: Mirror vulkanalia fork (serverless cargo [source] replacement)
-        uses: ./.github/actions/cargo-fork-mirror
-
       # The documented CI unit-test gate ("CI runs `cargo test --lib`").
       - name: Run unit tests
         run: cargo test --locked -p streamlib --lib

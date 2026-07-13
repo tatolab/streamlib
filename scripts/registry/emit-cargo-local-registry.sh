@@ -2,8 +2,8 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 #
-# Reshape a cargo SPARSE subtree (the one emit-static-fork.sh / the xtask
-# `static-registry emit` generator produce under <sparse>/cargo/) into a cargo
+# Reshape a cargo SPARSE subtree (the one the xtask `static-registry emit`
+# generator produces under <sparse>/cargo/) into a cargo
 # LOCAL-REGISTRY tree — the serverless, `file://`-resolvable source cargo can
 # use as a `[source]` replacement with NO running HTTP server.
 #

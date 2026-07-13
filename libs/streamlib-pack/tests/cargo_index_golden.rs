@@ -3,7 +3,7 @@
 
 //! Golden tests for the cargo sparse-index renderers — the Python index-line
 //! renderer (`scripts/registry/render_cargo_index_line.py`, the single source of
-//! truth the shell + xtask emit paths shell out to) and the index-path
+//! truth the xtask closure emit shells out to) and the index-path
 //! grammar's two implementations (Rust `cargo_index_path` + bash
 //! `cargo-idx-path.sh`).
 //!
@@ -145,7 +145,7 @@ fn python_renderer_matches_captured_golden_vulkanalia_vma() {
 
 /// The index-path grammar exists in TWO implementations — Rust
 /// `cargo_index_path` (xtask closure emit) and bash `cargo_idx_path`
-/// (`scripts/registry/cargo-idx-path.sh`, sourced by emit-static-fork.sh). Feed
+/// (`scripts/registry/cargo-idx-path.sh`, the standalone shell helper). Feed
 /// both the same names and require identical output, against the expected
 /// paths for every grammar arm (1/2/3-char + sharded 4+, lowercasing).
 #[test]
