@@ -158,24 +158,59 @@ enum Commands {
         action: RegistryCommands,
     },
 
-    /// Point this consumer's entire streamlib surface at a local checkout.
+    /// Link a local package checkout into this app's streamlib_modules/ — npm
+    /// link for streamlib packages.
     ///
-    /// Run from a consumer root (app or package dir). Emits whole-tree
-    /// language-native overrides (cargo `[patch]`, uv sources, Deno import map)
-    /// so an edit in the checkout is picked up by the next build with no
-    /// publish. Omit `<CHECKOUT>` to print the active link status.
+    /// `link <path>` is `add` with a symlink instead of a copy: it symlinks the
+    /// checkout into `streamlib_modules/@org/name` (identity read from the
+    /// checkout's own manifest), so edits in the checkout are live on the next
+    /// run with no re-add. `unlink <name>` reverts it.
+    ///
+    /// `--engine <checkout>` is the rare engine-developer verb: it points this
+    /// consumer's ENTIRE streamlib SDK surface at a local engine checkout via
+    /// whole-tree cargo `[patch]` / uv / Deno import-map overrides. Omit the
+    /// path with `--engine` to print engine-link status. App developers never
+    /// need `--engine`.
     Link {
-        /// Path to a local streamlib checkout. Omit to print status.
-        checkout: Option<PathBuf>,
+        /// Package checkout to symlink (default), or the engine checkout with
+        /// `--engine`. With `--engine`, omit to print engine-link status.
+        path: Option<PathBuf>,
 
-        /// Skip the post-link cargo resolution verification.
+        /// Engine-developer mode: whole-tree SDK override pointing at <path>.
+        #[arg(long)]
+        engine: bool,
+
+        /// (package link) App root to anchor streamlib_modules/ at
+        /// (default: current working directory, no walk-up).
+        #[arg(long)]
+        dir: Option<PathBuf>,
+
+        /// (engine link) Skip the post-link cargo resolution verification.
         #[arg(long)]
         skip_verify: bool,
     },
 
-    /// Remove the active streamlib link, restoring every manifest byte-identically.
+    /// Reverse a `streamlib link`.
+    ///
+    /// `unlink <name>` removes a package's `streamlib_modules/@org/name` symlink
+    /// and its `streamlib.lock` entry (the linked checkout is untouched).
+    /// `--engine` removes the whole-tree engine link, restoring every manifest
+    /// byte-identically.
     Unlink {
-        /// Discard files modified while the link was active instead of refusing.
+        /// Canonical `@org/name` package to unlink (omit with `--engine`).
+        name: Option<String>,
+
+        /// Engine-developer mode: remove the active whole-tree engine link.
+        #[arg(long)]
+        engine: bool,
+
+        /// (package unlink) App root to anchor streamlib_modules/ at
+        /// (default: current working directory, no walk-up).
+        #[arg(long)]
+        dir: Option<PathBuf>,
+
+        /// (engine unlink) Discard files modified while the link was active
+        /// instead of refusing.
         #[arg(long)]
         force: bool,
     },
@@ -359,18 +394,57 @@ async fn async_main(cli: Cli) -> Result<()> {
             RegistryCommands::Serve { tree, port } => commands::registry::serve(&tree, port)?,
         },
         Some(Commands::Link {
-            checkout,
+            path,
+            engine,
+            dir,
             skip_verify,
         }) => {
-            let consumer_root = std::env::current_dir()?;
-            match checkout {
-                Some(checkout) => commands::link::link(&consumer_root, &checkout, skip_verify)?,
-                None => commands::link::status(&consumer_root)?,
+            if engine {
+                if dir.is_some() {
+                    anyhow::bail!("--dir applies only to a package link, not `link --engine`");
+                }
+                let consumer_root = std::env::current_dir()?;
+                match path {
+                    Some(checkout) => commands::link::link(&consumer_root, &checkout, skip_verify)?,
+                    None => commands::link::status(&consumer_root)?,
+                }
+            } else {
+                if skip_verify {
+                    anyhow::bail!("--skip-verify applies only to `streamlib link --engine`");
+                }
+                let path = path.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "streamlib link needs a package checkout path (or `--engine <checkout>` \
+                         for the whole-tree engine link)"
+                    )
+                })?;
+                commands::add::link(&path, dir.as_deref())?;
             }
         }
-        Some(Commands::Unlink { force }) => {
-            let consumer_root = std::env::current_dir()?;
-            commands::link::unlink(&consumer_root, force)?;
+        Some(Commands::Unlink {
+            name,
+            engine,
+            dir,
+            force,
+        }) => {
+            if engine {
+                if dir.is_some() {
+                    anyhow::bail!("--dir applies only to a package unlink, not `unlink --engine`");
+                }
+                let consumer_root = std::env::current_dir()?;
+                commands::link::unlink(&consumer_root, force)?;
+            } else {
+                if force {
+                    anyhow::bail!("--force applies only to `streamlib unlink --engine`");
+                }
+                let name = name.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "streamlib unlink needs a package `@org/name` (or `--engine` for the \
+                         whole-tree engine link)"
+                    )
+                })?;
+                commands::add::unlink(&name, dir.as_deref())?;
+            }
         }
         Some(Commands::Generate {
             runtime,

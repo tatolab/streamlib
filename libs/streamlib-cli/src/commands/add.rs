@@ -17,7 +17,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use streamlib::sdk::runtime::{
-    AddPackageOptions, AddPackageReport, AddPackageSource, AppModulesDir,
+    AddPackageOptions, AddPackageReport, AddPackageSource, AppModulesDir, LinkPackageReport,
 };
 use streamlib_idents::PackageRef;
 
@@ -65,6 +65,38 @@ pub fn remove(name: &str, dir: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
+/// Symlink a local package checkout into the app's `streamlib_modules/` —
+/// `add`, but as a live symlink instead of a copy, so checkout edits are
+/// picked up on the next run. Identity comes from the checkout's manifest.
+pub fn link(path: &Path, dir: Option<&Path>) -> Result<()> {
+    let app = app_modules_dir(dir)?;
+    println!("Linking {}…", path.display());
+    let report = app
+        .link_package(path)
+        .map_err(|e| anyhow::anyhow!("link failed: {e}"))?;
+    print_link_report(&report);
+    Ok(())
+}
+
+/// Remove a package's `streamlib_modules/` symlink by its canonical
+/// `@org/name` ref, dropping its `streamlib.lock` entry. The linked checkout
+/// on disk is untouched.
+pub fn unlink(name: &str, dir: Option<&Path>) -> Result<()> {
+    let app = app_modules_dir(dir)?;
+    let pkg_ref = parse_canonical_package_ref(name)?;
+    let report = app
+        .unlink_package(&pkg_ref)
+        .map_err(|e| anyhow::anyhow!("unlink failed: {e}"))?;
+    println!("Unlinked {}", report.package);
+    if let Some(target) = &report.link_target {
+        println!("  Was linked to: {}", target.display());
+    }
+    if report.link_removed {
+        println!("  Removed link:  {}", report.package_dir.display());
+    }
+    Ok(())
+}
+
 /// The app-modules anchor: `--dir` when given, else the exact CWD.
 fn app_modules_dir(dir: Option<&Path>) -> Result<AppModulesDir> {
     match dir {
@@ -83,6 +115,22 @@ fn print_add_report(report: &AddPackageReport) {
     };
     println!("{verb} {} v{}", report.package, report.version);
     println!("  Folder: {}", report.package_dir.display());
+    println!("  Lock:   {}", report.lockfile_path.display());
+
+    print_processor_summary(&report.package_dir);
+}
+
+/// Pretty-print the link outcome plus a manifest-derived processor summary.
+fn print_link_report(report: &LinkPackageReport) {
+    println!();
+    let verb = if report.replaced_existing {
+        "Relinked"
+    } else {
+        "Linked"
+    };
+    println!("{verb} {} v{}", report.package, report.version);
+    println!("  Link:   {}", report.package_dir.display());
+    println!("  Target: {}", report.link_target.display());
     println!("  Lock:   {}", report.lockfile_path.display());
 
     print_processor_summary(&report.package_dir);
