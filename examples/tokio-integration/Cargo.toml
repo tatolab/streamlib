@@ -4,11 +4,16 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-# Standalone, registry-only example (headed to its own repo). The empty
-# `[workspace]` makes this its own workspace root so it builds off-tree, and
-# `streamlib` resolves from the static registry by version.
+# Standalone example (headed to its own repo). The empty `[workspace]` makes this
+# its own workspace root so it builds off-tree, and the `streamlib` SDK resolves
+# by version. This demo drives `Runner` directly and loads no processor
+# packages — so `./setup.sh` only links the SDK.
 [dependencies]
-streamlib = { version = "0.4.33-dev.2" }
+# The SDK is resolved by version. It is not published to crates.io yet, so for
+# local development `./setup.sh` runs `streamlib link --engine <checkout>` to
+# point this dep at the in-repo SDK. Once the SDK publishes, the bare version
+# resolves with no link step.
+streamlib = { version = "0.6" }
 tokio = { version = "1", features = ["full"] }
 
 [workspace]

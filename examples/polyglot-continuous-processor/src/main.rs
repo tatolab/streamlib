@@ -39,13 +39,12 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use streamlib::sdk::descriptors::SchemaIdent;
-use streamlib::sdk::error::Error;
-use streamlib::sdk::module_ident_any_version;
-use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::error::Result;
-use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
 use streamlib::sdk::RunnerAutoBuild;
+use streamlib::sdk::error::Error;
+use streamlib::sdk::error::Result;
+use streamlib::sdk::processor_type_ref;
+use streamlib::sdk::processors::{ProcessorSpec, ProcessorTypeReference};
+use streamlib::sdk::runtime::Runner;
 
 const RUN_DURATION: Duration = Duration::from_secs(2);
 /// Manifest-declared interval. Must match the YAML in
@@ -87,14 +86,14 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_ident(self) -> Result<SchemaIdent> {
+    fn processor_ref(self) -> ProcessorTypeReference {
         match self {
-            Self::Python => streamlib::sdk::schema_ident_any_version!(
+            Self::Python => processor_type_ref!(
                 "tatolab",
                 "polyglot-continuous-processor",
                 "PolyglotContinuousProcessor"
             ),
-            Self::Deno => streamlib::sdk::schema_ident_any_version!(
+            Self::Deno => processor_type_ref!(
                 "tatolab",
                 "polyglot-continuous-processor-deno",
                 "PolyglotContinuousProcessor"
@@ -166,25 +165,14 @@ fn run() -> Result<TickReport> {
     println!("Run length:        {:?}", RUN_DURATION);
 
     let runtime = Runner::with_auto_build()?;
-    // Load the polyglot processors via explicit add_module_with calls.
-    // The Python and Deno sub-packages are example-local (siblings of
-    // this example crate) and not workspace-staged, so each is
-    // resolved by its manifest directory. The recursive dep walker
-    // follows each sub-package's own dependencies. The runner picks
-    // which one to instantiate via `schema_ident_any_version!` based
-    // on `--runtime`.
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    runtime.add_module_with_blocking(
-        module_ident_any_version!("tatolab", "polyglot-continuous-processor"),
-        Strategy::Path { path: manifest_dir.join("python"), build: BuildPolicy::IfStale },
-    )?;
-    runtime.add_module_with_blocking(
-        module_ident_any_version!("tatolab", "polyglot-continuous-processor-deno"),
-        Strategy::Path { path: manifest_dir.join("deno"), build: BuildPolicy::IfStale },
-    )?;
+    // No module-loading call: this example's own `./python` and `./deno`
+    // polyglot packages live in this app's `streamlib_modules/` folder
+    // (populated by `./setup.sh`). The runtime lazily discovers + loads each on
+    // the first `processor_type_ref!` reference; the runner picks the Python or
+    // Deno provider by `--runtime`.
 
     let processor = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_ident()?,
+        runtime_kind.processor_ref(),
         serde_json::json!({
             "output_file": output_file.to_string_lossy(),
         }),

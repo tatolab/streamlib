@@ -1,16 +1,16 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-# Standalone, registry-only example (headed to its own repo). Every dependency
-# resolves from the static registry by version, and the empty `[workspace]` table
-# makes this its own workspace root so it builds off-tree. Loads
-# `@tatolab/camera` + `@tatolab/display` + `@tatolab/h264` + `@tatolab/h265`
-# at runtime via `Strategy::Registry`.
+# Standalone example (headed to its own repo). The `streamlib` SDK resolves by
+# version, and the empty `[workspace]` table makes this its own workspace root so
+# it builds off-tree. The processor packages it uses (`@tatolab/camera`,
+# `@tatolab/display`, `@tatolab/h264`, `@tatolab/h265`) are NOT Cargo deps — they
+# live in this app's `streamlib_modules/` folder (run `./setup.sh` once) and the
+# runtime lazily discovers + loads each cdylib at runtime. See README.md.
 #
-# Deliberately NOT taking streamlib-camera as a Rust dep. The camera is loaded
-# at runtime via `Runner::add_module(...)`; linking streamlib-camera as a Rust
-# dep would auto-register the `Camera` processor at link time, conflicting with
-# the cdylib's registration at load time.
+# Deliberately NOT taking streamlib-camera as a Rust dep: linking it would
+# auto-register the `Camera` processor at link time, conflicting with the
+# cdylib's registration when the runtime loads it from `streamlib_modules/`.
 [package]
 name = "vulkan-video-roundtrip-cdylib-camera"
 version = "0.1.0"
@@ -18,7 +18,11 @@ edition = "2024"
 publish = false
 
 [dependencies]
-streamlib = { version = "0.4.33-dev.5" }
+# The SDK is resolved by version. It is not published to crates.io yet, so for
+# local development `./setup.sh` runs `streamlib link --engine <checkout>` to
+# point this dep at the in-repo SDK. Once the SDK publishes, the bare version
+# resolves with no link step.
+streamlib = { version = "0.6" }
 serde_json = "1"
 
 [workspace]

@@ -16,48 +16,27 @@
 //! - DELETE /api/connections/:id - Remove a connection
 //! - WS /ws/events - WebSocket event stream
 //!
-//! Packages build automatically on `cargo run` via the build orchestrator,
-//! resolved from the static generic store by version.
-//!
-//! Loads `@tatolab/api-server` through the imperative
-//! [`Runner::add_module`] API. The fully spelled out
-//! [`streamlib::sdk::module_ident!`] call is one of four
-//! ergonomic shapes; the other three (split + any-version,
-//! joined + version, joined + any-version) are equally valid and
-//! resolve to the same `ModuleIdent::new(...)` expression at
-//! expansion time.
+//! There is no module-loading call: `@tatolab/api-server` lives in this
+//! app's `streamlib_modules/` folder (populated by `./setup.sh`) and the
+//! runtime lazily discovers + loads it on the first `processor_type_ref!`
+//! reference. The reference site carries no version — `processor_type_ref!`
+//! resolves to the installed provider.
 
 use streamlib::sdk::RunnerAutoBuild;
-use streamlib::sdk::module_ident;
+use streamlib::sdk::processor_type_ref;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::{BuildPolicy, Runner, SemVerRange, Strategy};
-use streamlib::sdk::schema_ident;
+use streamlib::sdk::runtime::Runner;
 
 #[tokio::main]
 async fn main() -> streamlib::sdk::error::Result<()> {
     let runtime = Runner::with_auto_build()?;
-
-    // Imperative module load — the runtime resolves the ident from the static registry
-    // generic registry by version (the orchestrator pulls each `.slpkg` and
-    // builds it from source on the host), verifies the semver range, then
-    // drives the internal module-loading machinery. Registry endpoint comes
-    // from `STREAMLIB_REGISTRY_URL`.
-    runtime
-        .add_module_with(
-            module_ident!("tatolab", "api-server", "^1.0.0"),
-            Strategy::Registry {
-                version_req: SemVerRange::Any,
-                build: BuildPolicy::IfStale,
-            },
-        )
-        .await?;
 
     let config = serde_json::json!({
         "host": "127.0.0.1",
         "port": 9000,
     });
     runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "api-server", "ApiServer", "1.0.0"),
+        processor_type_ref!("tatolab", "api-server", "ApiServer"),
         config,
     ))?;
     runtime.start()?;
@@ -69,44 +48,4 @@ async fn main() -> streamlib::sdk::error::Result<()> {
     runtime.wait_for_signal()?;
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    //! Compile-checks for the four `module_ident*!` macro shapes —
-    //! every shape must expand to a valid `ModuleIdent` against the
-    //! same `streamlib::sdk::descriptors::*` paths. The runtime
-    //! resolution of these idents is exercised in the engine's
-    //! `add_module_tests` module against fixture-staged packages.
-    use streamlib::sdk::descriptors::{ModuleIdent, SemVerRange};
-    use streamlib::sdk::{
-        module_ident, module_ident_any_version, module_ident_joined,
-        module_ident_joined_any_version,
-    };
-
-    #[test]
-    fn module_ident_split_with_version_round_trips() {
-        let id: ModuleIdent = module_ident!("tatolab", "api-server", "^1.0.0");
-        assert_eq!(id.to_string(), "@tatolab/api-server@^1.0.0");
-    }
-
-    #[test]
-    fn module_ident_split_any_version_emits_star_range() {
-        let id: ModuleIdent = module_ident_any_version!("tatolab", "api-server");
-        assert_eq!(id.to_string(), "@tatolab/api-server@*");
-        assert_eq!(id.version, SemVerRange::Any);
-    }
-
-    #[test]
-    fn module_ident_joined_with_version_round_trips() {
-        let id: ModuleIdent = module_ident_joined!("@tatolab/api-server", "~1.0.0");
-        assert_eq!(id.to_string(), "@tatolab/api-server@~1.0.0");
-    }
-
-    #[test]
-    fn module_ident_joined_any_version_emits_star_range() {
-        let id: ModuleIdent = module_ident_joined_any_version!("@tatolab/api-server");
-        assert_eq!(id.to_string(), "@tatolab/api-server@*");
-        assert_eq!(id.version, SemVerRange::Any);
-    }
 }

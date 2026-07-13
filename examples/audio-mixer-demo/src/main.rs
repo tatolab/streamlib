@@ -1,24 +1,21 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Audio Mixer Demo — canonical reference for the All-Dynamic Package
-//! Loading milestone.
+//! Audio Mixer Demo — a canonical no-load-call streamlib app.
 //!
-//! Demonstrates loading `@tatolab/audio` at runtime via
-//! `Runner::add_module` (no Cargo dep on `streamlib-audio`) and wiring
-//! its processors via structured `schema_ident!` + JSON config +
-//! string-named ports.
-//!
-//! Packages build automatically on `cargo run` via the build orchestrator.
-//! find the staged cdylib at `target/streamlib-plugins/tatolab__audio/`.
+//! Wires `@tatolab/audio`'s ChordGenerator → AudioOutput via
+//! `processor_type_ref!` + JSON config + string-named ports. There is no
+//! module-loading call: `@tatolab/audio` (and any package it depends on)
+//! lives in this app's `streamlib_modules/` folder (populated by
+//! `./setup.sh`), and the runtime lazily discovers + loads it on the first
+//! `processor_type_ref!` reference. The reference sites carry no version.
 
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::module_ident_any_version;
+use streamlib::sdk::processor_type_ref;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::RunnerAutoBuild;
-use streamlib::sdk::schema_ident;
 
 fn main() -> Result<()> {
     println!("\n🎵 Audio Mixer Demo - Mixing Multiple Tones\n");
@@ -26,16 +23,11 @@ fn main() -> Result<()> {
     println!("🎛️  Creating audio runtime...");
     let runtime = Runner::with_auto_build()?;
 
-    // 1) Load @tatolab/audio (and any deps it walks via patch:) from
-    //    the package source. `the build orchestrator`
-    //   .
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "audio"), streamlib::sdk::runtime::Strategy::Registry { version_req: streamlib::sdk::runtime::SemVerRange::Any, build: streamlib::sdk::runtime::BuildPolicy::IfStale })?;
-    println!("+ @tatolab/audio loaded from target/streamlib-plugins/\n");
-
-    // 2) Chord generator — addressed by structured schema_ident,
-    //    configured via JSON payload (matches chord_generator_config.yaml).
+    // Chord generator — addressed by a version-free processor_type_ref,
+    // configured via JSON payload (matches chord_generator_config.yaml). The
+    // first reference lazily loads `@tatolab/audio` from streamlib_modules/.
     println!("🎹 Adding chord generator (C major chord)...");
-    let chord_gen_ident = schema_ident!("tatolab", "audio", "ChordGenerator", "1.0.0");
+    let chord_gen_ident = processor_type_ref!("tatolab", "audio", "ChordGenerator");
     let chord_gen_config = serde_json::json!({
         // sample_rate / buffer_size are taken from the runtime AudioClock
         // at runtime; the values supplied here are placeholders the
@@ -50,7 +42,7 @@ fn main() -> Result<()> {
 
     // 3) Speaker output — default audio device.
     println!("🔊 Adding speaker output...");
-    let speaker_ident = schema_ident!("tatolab", "audio", "AudioOutput", "1.0.0");
+    let speaker_ident = processor_type_ref!("tatolab", "audio", "AudioOutput");
     let speaker_config = serde_json::json!({});
     let speaker = runtime.add_processor(ProcessorSpec::new(speaker_ident, speaker_config))?;
     println!("   Using default audio device\n");

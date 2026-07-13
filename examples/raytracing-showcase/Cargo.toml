@@ -1,11 +1,11 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-# Standalone, registry-only example (headed to its own repo). Every dependency
-# resolves from the static registry by version, and the empty `[workspace]` table
-# makes this its own workspace root so it builds off-tree. Renders ray-traced
-# frames directly through the SDK's `VulkanRayTracingKernel` RHI — loads no
-# runtime packages.
+# Standalone example (headed to its own repo). The `streamlib` SDK resolves by
+# version, and the empty `[workspace]` table makes this its own workspace root so
+# it builds off-tree. It renders ray-traced frames directly through the SDK's
+# `VulkanRayTracingKernel` RHI and loads no processor packages — so `./setup.sh`
+# only links the SDK.
 [package]
 name = "raytracing-showcase"
 version = "0.1.0"
@@ -13,7 +13,11 @@ edition = "2024"
 publish = false
 
 [dependencies]
-streamlib = { version = "0.4.33-dev.5" }
+# The SDK is resolved by version. It is not published to crates.io yet, so for
+# local development `./setup.sh` runs `streamlib link --engine <checkout>` to
+# point this dep at the in-repo SDK. Once the SDK publishes, the bare version
+# resolves with no link step.
+streamlib = { version = "0.6" }
 anyhow = "1.0.100"
 
 [workspace]

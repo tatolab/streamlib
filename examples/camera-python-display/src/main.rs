@@ -15,12 +15,13 @@
 //!   alpha-blends every layer into a render-target VkImage downstream
 //!   consumers resolve via Path 1
 //!
-//! The runner is pure glue — its dependencies, processors, and schemas
-//! are all contributed by packages it loads at runtime via
-//! `runtime.add_module` / `runtime.add_module_with`. The
-//! `CrtFilmGrain` + `BlendingCompositor` Rust-backed processors live in
-//! the sibling `effects/` package; the cyberpunk Python processors
-//! live in the sibling `python/` package.
+//! The runner is pure glue — it references each processor with
+//! `processor_type_ref!` and never loads a module. Its packages live in this
+//! app's `streamlib_modules/` folder (populated by `./setup.sh`) and the
+//! runtime lazily discovers + loads them: the `CrtFilmGrain` +
+//! `BlendingCompositor` Rust processors from the sibling `effects/` package,
+//! and the cyberpunk Python processors from the sibling `python/` package
+//! (`@tatolab/cyberpunk-processor`).
 //!
 //! macOS support was removed when the host pipeline standardised on
 //! tiled DMA-BUF VkImages — the pre-RHI CGL+IOSurface path could not
@@ -31,13 +32,12 @@
 //! ## Prerequisites
 //!
 //! - `uv` must be installed: <https://docs.astral.sh/uv/>
-//! - The sibling effects cdylib must have been built first:
-//!   `cargo build -p camera-python-display-effects`.
 //!
 //! ## Usage
 //!
 //! ```bash
-//! cargo run -p camera-python-display
+//! ./setup.sh    # link the SDK + effects/python/camera/display packages
+//! cargo run
 //! ```
 
 #[cfg(not(target_os = "linux"))]

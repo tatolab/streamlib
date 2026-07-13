@@ -3,10 +3,9 @@
 
 //! Vulkan Video Encode/Decode Roundtrip Pipeline — camera-as-cdylib variant.
 //!
-//! Sibling of `examples/vulkan-video-roundtrip` that loads every
-//! processor as a cdylib via `runtime.add_module_blocking(...)`.
-//! Exists to exercise the cdylib FFI surface (Phase E
-//! `RhiColorConverterMethodsVTable` + `RhiCommandRecorderMethodsVTable`)
+//! Sibling of `examples/vulkan-video-roundtrip`. Every processor is loaded as a
+//! cdylib — exercising the cdylib FFI surface
+//! (`RhiColorConverterMethodsVTable` + `RhiCommandRecorderMethodsVTable`)
 //! end-to-end through the encode → decode → display pipeline.
 //!
 //!   CameraProcessor (cdylib) → Encoder (cdylib) → Decoder (cdylib) → Display (cdylib)
@@ -15,17 +14,18 @@
 //!   cargo run -p vulkan-video-roundtrip-cdylib-camera -- h264 [device] [seconds]
 //!   cargo run -p vulkan-video-roundtrip-cdylib-camera -- h265 /dev/video0 10
 //!
-//! Packages build automatically on `cargo run` via the build orchestrator,
-//! resolved from the static generic store by version so the runtime can
-//! resolve each cdylib at load time.
+//! There is no module-loading call: every processor's package
+//! (`@tatolab/camera`, `@tatolab/display`, `@tatolab/h264`, `@tatolab/h265`)
+//! lives in this app's `streamlib_modules/` folder (populated by `./setup.sh`),
+//! and the runtime lazily discovers + loads each cdylib on the first
+//! `processor_type_ref!` reference. The reference sites carry no version.
 
 use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::module_ident_any_version;
+use streamlib::sdk::processor_type_ref;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::{BuildPolicy, Runner, SemVerRange, Strategy};
-use streamlib::sdk::schema_ident;
+use streamlib::sdk::runtime::Runner;
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -38,29 +38,13 @@ fn main() -> Result<()> {
         "=== Vulkan Video {} Roundtrip (all-cdylib) ===",
         codec.to_uppercase()
     );
-    println!("Camera:   {device} (loaded as cdylib via add_module)");
+    println!("Camera:   {device} (loaded as cdylib from streamlib_modules/)");
     println!("Duration: {duration_secs}s\n");
 
     let runtime = Runner::with_auto_build()?;
 
-    // Resolve every package from the static generic store by version — the
-    // cross-repo consumer path. The orchestrator pulls each `.slpkg` and builds
-    // it from source on the host. Registry endpoint comes from
-    // `STREAMLIB_REGISTRY_URL`.
-    let registry = || Strategy::Registry {
-        version_req: SemVerRange::Any,
-        build: BuildPolicy::IfStale,
-    };
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), registry())?;
-    runtime
-        .add_module_with_blocking(module_ident_any_version!("tatolab", "display"), registry())?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h264"), registry())?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h265"), registry())?;
-    println!("+ Camera / Display / H264 / H265 resolved from the static registry");
-    println!("+ Wire vocabulary registered (via @tatolab/core dep walk)\n");
-
     let camera = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "camera", "Camera", "1.0.0"),
+        processor_type_ref!("tatolab", "camera", "Camera"),
         serde_json::json!({
             "device_id": device,
             "max_width": std::env::var("STREAMLIB_CAMERA_MAX_WIDTH")
@@ -83,9 +67,9 @@ fn main() -> Result<()> {
         encoder_config.insert("effort_level".into(), serde_json::Value::from(e));
     }
     let encoder_ident = if is_h265 {
-        schema_ident!("tatolab", "h265", "H265Encoder", "1.0.0")
+        processor_type_ref!("tatolab", "h265", "H265Encoder")
     } else {
-        schema_ident!("tatolab", "h264", "H264Encoder", "1.0.0")
+        processor_type_ref!("tatolab", "h264", "H264Encoder")
     };
     let encoder = runtime.add_processor(ProcessorSpec::new(
         encoder_ident,
@@ -94,16 +78,16 @@ fn main() -> Result<()> {
     println!("+ {}Encoder: {encoder}", codec.to_uppercase());
 
     let decoder_ident = if is_h265 {
-        schema_ident!("tatolab", "h265", "H265Decoder", "1.0.0")
+        processor_type_ref!("tatolab", "h265", "H265Decoder")
     } else {
-        schema_ident!("tatolab", "h264", "H264Decoder", "1.0.0")
+        processor_type_ref!("tatolab", "h264", "H264Decoder")
     };
     let decoder =
         runtime.add_processor(ProcessorSpec::new(decoder_ident, serde_json::json!({})))?;
     println!("+ {}Decoder: {decoder}", codec.to_uppercase());
 
     let display = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "display", "Display", "1.0.0"),
+        processor_type_ref!("tatolab", "display", "Display"),
         serde_json::json!({
             "width": 1920,
             "height": 1080,

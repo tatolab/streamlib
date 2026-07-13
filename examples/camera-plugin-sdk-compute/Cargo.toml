@@ -1,21 +1,15 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-# Standalone, registry-only example (headed to its own repo). Every dependency
-# resolves from the static registry by version. This crate is its own workspace
+# Standalone example (headed to its own repo). This crate is its own workspace
 # root and includes the sibling `plugin/` cdylib (the engine-free grayscale
-# compute plugin) as a member so `cargo build -p grayscale-compute-plugin`
-# builds it for the example to stage. `@tatolab/camera` + `@tatolab/display`
-# load at runtime via `Strategy::Registry`; the example-local plugin loads via
-# `Strategy::Path`.
-#
-# The version pin below tracks the streamlib release that first shipped the
-# engine-free SDK surface-consumer API (resolve_texture_registration_by_surface_id
-# et al.). It is bumped to the published dev version during validation and to
-# the release version at publish.
+# compute plugin) as a member. The SDK resolves by version; the processor
+# packages (`@tatolab/camera`, `@tatolab/display`, and the example-local
+# `./plugin`) are linked into this app's `streamlib_modules/` by `./setup.sh`
+# and lazily discovered by the runtime. See README.md.
 [package]
 name = "camera-plugin-sdk-compute"
-version = "0.4.36-dev.1"
+version = "0.1.0"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 license = "BUSL-1.1"
@@ -29,22 +23,19 @@ serde_json = { workspace = true }
 members = ["plugin"]
 
 [workspace.package]
-version = "0.4.36-dev.1"
+version = "0.1.0"
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 license = "BUSL-1.1"
 
 [workspace.dependencies]
 # Engine facade — used ONLY by the runner (the host app), never the plugin.
-# Exact (`=`) pins so the dev prerelease is selected over the higher stable
-# `0.4.36` (which predates the engine-free surface-consumer API). At release
-# these bump to the published minor.
-streamlib = { version = "=0.4.36-dev.1" }
+streamlib = { version = "0.6" }
 # Engine-free authoring SDK chain — used by the plugin cdylib.
-streamlib-plugin-sdk = { version = "=0.4.36-dev.1" }
-streamlib-macros = { version = "=0.4.36-dev.1" }
-streamlib-plugin-abi = { version = "=0.4.36-dev.1" }
-streamlib-jtd-codegen = { version = "=0.4.36-dev.1" }
+streamlib-plugin-sdk = { version = "0.6" }
+streamlib-macros = { version = "0.6" }
+streamlib-plugin-abi = { version = "0.6" }
+streamlib-jtd-codegen = { version = "0.6" }
 tracing = { version = "0.1.41", features = ["release_max_level_debug"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }

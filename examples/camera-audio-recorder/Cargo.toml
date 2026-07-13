@@ -1,16 +1,17 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-# Standalone, registry-only example (headed to its own repo). The SDK resolves
-# from the static registry by version and the empty `[workspace]` table makes
-# this its own workspace root.
+# Standalone example (headed to its own repo). The `streamlib` SDK resolves by
+# version and the empty `[workspace]` table makes this its own workspace root so
+# it builds off-tree.
 #
 # DEFERRED, not in scope: this example is a no-op at HEAD. Its
 # `Camera + AudioCapture → Mp4Writer` recorder is macOS/iOS-only — the Linux
 # MP4 writer does not yet accept an audio input, so there is no Linux path —
 # and the pipeline still uses the deprecated compile-time typed-struct API.
 # The real pipeline lives in git history; see `src/main.rs` for the deferral
-# note and the path back.
+# note and the path back. It loads no processor packages today, so `./setup.sh`
+# only links the SDK.
 [package]
 name = "camera-audio-recorder"
 version = "0.1.0"
@@ -18,6 +19,10 @@ edition = "2024"
 publish = false
 
 [dependencies]
-streamlib = { version = "0.4.33-dev.5" }
+# The SDK is resolved by version. It is not published to crates.io yet, so for
+# local development `./setup.sh` runs `streamlib link --engine <checkout>` to
+# point this dep at the in-repo SDK. Once the SDK publishes, the bare version
+# resolves with no link step.
+streamlib = { version = "0.6" }
 
 [workspace]

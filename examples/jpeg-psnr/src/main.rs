@@ -11,17 +11,18 @@
 //! Usage:
 //!   jpeg-psnr <jpeg-path> <width> <height> <fps> <frame-count>
 //!
-//! Packages build automatically on `cargo run` via the build orchestrator,
-//! resolved from the static generic store by version so the runtime can
-//! resolve each cdylib at load time.
+//! There is no module-loading call: every processor's package
+//! (`@tatolab/debug-utilities`, `@tatolab/jpeg`, `@tatolab/display`) lives in
+//! this app's `streamlib_modules/` folder (populated by `./setup.sh`), and the
+//! runtime lazily discovers + loads each on the first `processor_type_ref!`
+//! reference. The reference sites carry no version.
 
 use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::module_ident_any_version;
+use streamlib::sdk::processor_type_ref;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::{BuildPolicy, Runner, SemVerRange, Strategy};
-use streamlib::sdk::schema_ident;
+use streamlib::sdk::runtime::Runner;
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -40,24 +41,8 @@ fn main() -> Result<()> {
 
     let runtime = Runner::with_auto_build()?;
 
-    // Resolve every package from the static generic store by version — the
-    // cross-repo consumer path. The orchestrator pulls each `.slpkg` and builds
-    // it from source on the host. Registry endpoint comes from
-    // `STREAMLIB_REGISTRY_URL`.
-    let registry = || Strategy::Registry {
-        version_req: SemVerRange::Any,
-        build: BuildPolicy::IfStale,
-    };
-    runtime.add_module_with_blocking(
-        module_ident_any_version!("tatolab", "debug-utilities"),
-        registry(),
-    )?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "jpeg"), registry())?;
-    runtime
-        .add_module_with_blocking(module_ident_any_version!("tatolab", "display"), registry())?;
-
     let source = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "debug-utilities", "JpegBytesSource", "1.0.0"),
+        processor_type_ref!("tatolab", "debug-utilities", "JpegBytesSource"),
         serde_json::json!({
             "file_path": jpeg_path,
             "fps": fps,
@@ -67,7 +52,7 @@ fn main() -> Result<()> {
     println!("+ JpegBytesSource: {source}");
 
     let decoder = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "jpeg", "JpegDecoder", "1.0.0"),
+        processor_type_ref!("tatolab", "jpeg", "JpegDecoder"),
         serde_json::json!({
             "max_width": width.max(1),
             "max_height": height.max(1),
@@ -76,7 +61,7 @@ fn main() -> Result<()> {
     println!("+ JpegDecoder: {decoder}");
 
     let display = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "display", "Display", "1.0.0"),
+        processor_type_ref!("tatolab", "display", "Display"),
         serde_json::json!({
             "width": width,
             "height": height,

@@ -18,17 +18,18 @@
 //! All MoQ config is automatic — Cloudflare draft-14 relay, auto-generated
 //! namespace.
 //!
-//! Packages build automatically on `cargo run` via the build orchestrator,
-//! resolved from the static generic store by version so the runtime can
-//! resolve each cdylib at load time.
+//! There is no module-loading call: every processor's package
+//! (`@tatolab/{audio,camera,display,h264,moq,opus}`) lives in this app's
+//! `streamlib_modules/` folder (populated by `./setup.sh`), and the runtime
+//! lazily discovers + loads each on the first `processor_type_ref!` reference.
+//! The reference sites carry no version.
 
 use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::module_ident_any_version;
+use streamlib::sdk::processor_type_ref;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::{BuildPolicy, Runner, SemVerRange, Strategy};
-use streamlib::sdk::schema_ident;
+use streamlib::sdk::runtime::Runner;
 
 fn main() -> Result<()> {
     rustls::crypto::ring::default_provider()
@@ -41,34 +42,18 @@ fn main() -> Result<()> {
 
     let runtime = Runner::with_auto_build()?;
 
-    // Resolve every package from the static generic store by version — the
-    // cross-repo consumer path. The orchestrator pulls each `.slpkg` and builds
-    // it from source on the host. Registry endpoint comes from
-    // `STREAMLIB_REGISTRY_URL`.
-    let registry = || Strategy::Registry {
-        version_req: SemVerRange::Any,
-        build: BuildPolicy::IfStale,
-    };
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "audio"), registry())?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "camera"), registry())?;
-    runtime
-        .add_module_with_blocking(module_ident_any_version!("tatolab", "display"), registry())?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "h264"), registry())?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "moq"), registry())?;
-    runtime.add_module_with_blocking(module_ident_any_version!("tatolab", "opus"), registry())?;
-
     // ---- PUBLISH SIDE ----
 
     let camera = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "camera", "Camera", "1.0.0"),
+        processor_type_ref!("tatolab", "camera", "Camera"),
         serde_json::json!({}),
     ))?;
     let h264_enc = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "h264", "H264Encoder", "1.0.0"),
+        processor_type_ref!("tatolab", "h264", "H264Encoder"),
         serde_json::json!({ "keyframe_interval_seconds": 2.0 }),
     ))?;
     let video_pub = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "moq", "MoqPublishTrack", "1.0.0"),
+        processor_type_ref!("tatolab", "moq", "MoqPublishTrack"),
         serde_json::json!({ "track_name": "video" }),
     ))?;
 
@@ -82,11 +67,11 @@ fn main() -> Result<()> {
     )?;
 
     let mic = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "audio", "AudioCapture", "1.0.0"),
+        processor_type_ref!("tatolab", "audio", "AudioCapture"),
         serde_json::json!({}),
     ))?;
     let resampler = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "audio", "AudioResampler", "1.0.0"),
+        processor_type_ref!("tatolab", "audio", "AudioResampler"),
         // `source_sample_rate` is required by the config schema but advisory —
         // the resampler derives the real source rate from each input frame.
         serde_json::json!({
@@ -96,15 +81,15 @@ fn main() -> Result<()> {
         }),
     ))?;
     let rechunker = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "audio", "BufferRechunker", "1.0.0"),
+        processor_type_ref!("tatolab", "audio", "BufferRechunker"),
         serde_json::json!({ "target_buffer_size": 960 }),
     ))?;
     let opus_enc = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "opus", "OpusEncoder", "1.0.0"),
+        processor_type_ref!("tatolab", "opus", "OpusEncoder"),
         serde_json::json!({}),
     ))?;
     let audio_pub = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "moq", "MoqPublishTrack", "1.0.0"),
+        processor_type_ref!("tatolab", "moq", "MoqPublishTrack"),
         serde_json::json!({ "track_name": "audio" }),
     ))?;
 
@@ -126,7 +111,7 @@ fn main() -> Result<()> {
     )?;
 
     let sensor = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "audio", "ChordGenerator", "1.0.0"),
+        processor_type_ref!("tatolab", "audio", "ChordGenerator"),
         serde_json::json!({
             "amplitude": 0.1,
             "buffer_size": 128,
@@ -134,7 +119,7 @@ fn main() -> Result<()> {
         }),
     ))?;
     let sensor_pub = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "moq", "MoqPublishTrack", "1.0.0"),
+        processor_type_ref!("tatolab", "moq", "MoqPublishTrack"),
         serde_json::json!({ "track_name": "sensor" }),
     ))?;
 
@@ -148,15 +133,15 @@ fn main() -> Result<()> {
     // ---- SUBSCRIBE SIDE ----
 
     let video_sub = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "moq", "MoqSubscribeTrack", "1.0.0"),
+        processor_type_ref!("tatolab", "moq", "MoqSubscribeTrack"),
         serde_json::json!({ "track_name": "video" }),
     ))?;
     let h264_dec = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "h264", "H264Decoder", "1.0.0"),
+        processor_type_ref!("tatolab", "h264", "H264Decoder"),
         serde_json::json!({}),
     ))?;
     let display = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "display", "Display", "1.0.0"),
+        processor_type_ref!("tatolab", "display", "Display"),
         serde_json::json!({
             "width": 1280,
             "height": 720,
@@ -174,15 +159,15 @@ fn main() -> Result<()> {
     )?;
 
     let audio_sub = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "moq", "MoqSubscribeTrack", "1.0.0"),
+        processor_type_ref!("tatolab", "moq", "MoqSubscribeTrack"),
         serde_json::json!({ "track_name": "audio" }),
     ))?;
     let opus_dec = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "opus", "OpusDecoder", "1.0.0"),
+        processor_type_ref!("tatolab", "opus", "OpusDecoder"),
         serde_json::json!({}),
     ))?;
     let sub_resampler = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "audio", "AudioResampler", "1.0.0"),
+        processor_type_ref!("tatolab", "audio", "AudioResampler"),
         serde_json::json!({
             "source_sample_rate": 48000,
             "target_sample_rate": 44100,
@@ -190,11 +175,11 @@ fn main() -> Result<()> {
         }),
     ))?;
     let sub_rechunker = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "audio", "BufferRechunker", "1.0.0"),
+        processor_type_ref!("tatolab", "audio", "BufferRechunker"),
         serde_json::json!({ "target_buffer_size": 512 }),
     ))?;
     let speaker = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "audio", "AudioOutput", "1.0.0"),
+        processor_type_ref!("tatolab", "audio", "AudioOutput"),
         serde_json::json!({}),
     ))?;
 
@@ -217,7 +202,7 @@ fn main() -> Result<()> {
 
     // Sensor subscriber — logs received frames, no downstream wiring.
     let _sensor_sub = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "moq", "MoqSubscribeTrack", "1.0.0"),
+        processor_type_ref!("tatolab", "moq", "MoqSubscribeTrack"),
         serde_json::json!({ "track_name": "sensor" }),
     ))?;
 

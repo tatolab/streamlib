@@ -12,9 +12,10 @@
 //!
 //! A Linux WHEP player is future work — it would wire
 //! `WebRtcWhepProcessor → @tatolab/h264 (Vulkan) H264Decoder → @tatolab/display`
-//! via runtime `add_module` / `ProcessorSpec` and load every package through
-//! `Strategy::Registry` like the other examples. Restore the pipeline shape
-//! from git history when building that.
+//! by referencing each processor with `processor_type_ref!` (no version, no
+//! load call); each provider's package resolves from this app's
+//! `streamlib_modules/` folder, populated by `./setup.sh`. Restore the pipeline
+//! shape from git history when building that.
 
 fn main() {
     eprintln!(
