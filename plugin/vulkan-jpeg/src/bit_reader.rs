@@ -61,9 +61,7 @@ impl<'a> BitReader<'a> {
     /// surfaced pending marker if present. Fill `0xFF` bytes are skipped.
     pub fn read_marker(&mut self) -> JpegResult<u8> {
         if let Some(marker_byte) = self.pending_marker {
-            let offset = self
-                .pending_marker_offset
-                .unwrap_or(self.cursor);
+            let offset = self.pending_marker_offset.unwrap_or(self.cursor);
             self.cursor = offset + 2;
             self.pending_marker = None;
             self.pending_marker_offset = None;
@@ -217,7 +215,10 @@ mod tests {
         assert_eq!(br.read_bits(8).unwrap(), 0xAB);
         // Next read must fail because the marker isn't data.
         let err = br.read_bits(8).unwrap_err();
-        assert!(matches!(err, JpegError::UnexpectedMarker { marker: 0xD0, .. }));
+        assert!(matches!(
+            err,
+            JpegError::UnexpectedMarker { marker: 0xD0, .. }
+        ));
         assert_eq!(br.pending_marker(), Some(0xD0));
     }
 

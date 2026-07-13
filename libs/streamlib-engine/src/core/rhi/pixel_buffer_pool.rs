@@ -3,7 +3,7 @@
 
 //! Pixel buffer pool for efficient buffer allocation.
 
-use super::{PixelFormat, PixelBuffer};
+use super::{PixelBuffer, PixelFormat};
 use crate::core::Result;
 
 /// Platform-agnostic identifier for a pooled pixel buffer.

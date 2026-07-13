@@ -50,10 +50,7 @@ pub enum Strategy {
 
     /// A directory containing `streamlib.yaml` plus per-language sources.
     /// `build` governs whether the orchestrator (re)builds before load.
-    Path {
-        path: PathBuf,
-        build: BuildPolicy,
-    },
+    Path { path: PathBuf, build: BuildPolicy },
 
     /// A `.slpkg` archive. Extracted to the cache, then loaded as-is —
     /// pre-built, never rebuilt.
@@ -162,10 +159,9 @@ impl ActiveLinkedCheckout {
     /// error, never a silent skip.
     #[tracing::instrument]
     pub(super) fn discover_from_cwd() -> std::result::Result<Option<Self>, AddModuleError> {
-        let cwd =
-            std::env::current_dir().map_err(|e| AddModuleError::LinkStateUnreadable {
-                detail: format!("resolving current working directory: {e}"),
-            })?;
+        let cwd = std::env::current_dir().map_err(|e| AddModuleError::LinkStateUnreadable {
+            detail: format!("resolving current working directory: {e}"),
+        })?;
         Self::discover_from(&cwd)
     }
 
@@ -313,8 +309,10 @@ pub(super) fn resolve_strategy_to_source(
     }
     match strategy {
         Strategy::InstalledCache => {
-            let (dir, _version) = lookup_installed_cache(pkg_ref)?
-                .ok_or_else(|| AddModuleError::ModuleNotFound { package: pkg_ref.clone() })?;
+            let (dir, _version) =
+                lookup_installed_cache(pkg_ref)?.ok_or_else(|| AddModuleError::ModuleNotFound {
+                    package: pkg_ref.clone(),
+                })?;
             // Same prefer-prebuilt-else-build-source decision as `.slpkg`:
             // a cached package may carry source needing a host build.
             Ok(source_for_resolved_dir(pkg_ref, dir))
@@ -341,7 +339,11 @@ pub(super) fn resolve_strategy_to_source(
             let checkout = fetch_git_checkout(pkg_ref, url, rev)?;
             Ok(source_for_dir(pkg_ref, checkout, *build))
         }
-        Strategy::Url { url, build, checksum } => {
+        Strategy::Url {
+            url,
+            build,
+            checksum,
+        } => {
             // Network-only fetch in the resolver (the same shape as
             // `fetch_git_checkout` for `Strategy::Git`): download the
             // `.slpkg` into the resolver cache, verify integrity, then
@@ -454,10 +456,7 @@ fn source_for_dir(
 /// instant); otherwise build the bundled Rust source on the host. This is
 /// the pip wheel-vs-sdist model for Rust: one artifact runs everywhere,
 /// and a toolchain is needed only when there's no matching prebuilt.
-fn source_for_resolved_dir(
-    pkg_ref: &streamlib_idents::PackageRef,
-    dir: PathBuf,
-) -> ResolvedSource {
+fn source_for_resolved_dir(pkg_ref: &streamlib_idents::PackageRef, dir: PathBuf) -> ResolvedSource {
     if needs_host_build(&dir) {
         ResolvedSource::NeedsBuild(BuildRequest {
             package: pkg_ref.clone(),
@@ -636,10 +635,15 @@ fn persist_registry_slpkg(
         package: pkg_ref.clone(),
         detail,
     };
-    std::fs::create_dir_all(&cache_dir)
-        .map_err(|e| persist_err(format!("creating resolver cache dir {}: {e}", cache_dir.display())))?;
+    std::fs::create_dir_all(&cache_dir).map_err(|e| {
+        persist_err(format!(
+            "creating resolver cache dir {}: {e}",
+            cache_dir.display()
+        ))
+    })?;
     let tmp = cache_dir.join(format!("{safe}.slpkg.partial"));
-    std::fs::write(&tmp, bytes).map_err(|e| persist_err(format!("writing fetched artifact: {e}")))?;
+    std::fs::write(&tmp, bytes)
+        .map_err(|e| persist_err(format!("writing fetched artifact: {e}")))?;
     std::fs::rename(&tmp, &target)
         .map_err(|e| persist_err(format!("publishing fetched artifact to cache: {e}")))?;
     Ok(target)
@@ -771,14 +775,12 @@ pub(super) fn read_version_from_manifest_dir(
         source_path: dir.to_path_buf(),
         detail: e.to_string(),
     })?;
-    manifest
-        .package
-        .as_ref()
-        .map(|p| p.version)
-        .ok_or_else(|| AddModuleError::StrategyManifestLoadFailed {
+    manifest.package.as_ref().map(|p| p.version).ok_or_else(|| {
+        AddModuleError::StrategyManifestLoadFailed {
             source_path: dir.to_path_buf(),
             detail: "manifest has no `package:` block".into(),
-        })
+        }
+    })
 }
 
 #[cfg(test)]
@@ -855,8 +857,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         manifest(dir.path(), RUST_YAML);
         std::fs::write(dir.path().join("Cargo.toml"), b"[package]\nname='rp'\n").unwrap();
-        let resolved =
-            source_for_fetched_slpkg(&pkg_ref(), dir.path().to_path_buf(), BuildPolicy::NeverBuild);
+        let resolved = source_for_fetched_slpkg(
+            &pkg_ref(),
+            dir.path().to_path_buf(),
+            BuildPolicy::NeverBuild,
+        );
         assert!(matches!(resolved, ResolvedSource::Ready(_)));
     }
 
@@ -967,8 +972,7 @@ mod tests {
         std::fs::write(&slpkg, b"slpkg-bytes").unwrap();
 
         let url = file_url(&slpkg);
-        let cached =
-            fetch_remote_slpkg(&pkg_ref(), &url, None).expect("first fetch must succeed");
+        let cached = fetch_remote_slpkg(&pkg_ref(), &url, None).expect("first fetch must succeed");
         assert_eq!(std::fs::read(&cached).unwrap(), b"slpkg-bytes");
 
         // Source gone — a cache hit must still resolve.
@@ -1211,7 +1215,10 @@ mod tests {
             Some(&link),
         )
         .expect("scan fallback must find the package by manifest identity");
-        assert_builds_from(resolved, &checkout.path().join("packages").join("weird-dir"));
+        assert_builds_from(
+            resolved,
+            &checkout.path().join("packages").join("weird-dir"),
+        );
     }
 
     /// A corrupt link marker is a loud typed error at discovery, never a silent
@@ -1236,8 +1243,8 @@ mod tests {
     #[test]
     fn no_marker_yields_no_active_link() {
         let empty = tempfile::tempdir().unwrap();
-        let link = ActiveLinkedCheckout::discover_from(empty.path())
-            .expect("no marker is not an error");
+        let link =
+            ActiveLinkedCheckout::discover_from(empty.path()).expect("no marker is not an error");
         assert!(link.is_none(), "no marker must yield no active link");
     }
 

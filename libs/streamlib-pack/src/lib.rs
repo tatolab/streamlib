@@ -147,8 +147,8 @@ pub fn compute_release_closure(workspace_root: &Path) -> Result<ReleaseClosure> 
             String::from_utf8_lossy(&output.stderr).trim(),
         );
     }
-    let md: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .context("parsing cargo metadata JSON")?;
+    let md: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("parsing cargo metadata JSON")?;
 
     let members: std::collections::HashSet<&str> = md
         .get("workspace_members")
@@ -157,7 +157,10 @@ pub fn compute_release_closure(workspace_root: &Path) -> Result<ReleaseClosure> 
         .unwrap_or_default();
 
     let empty = Vec::new();
-    let packages = md.get("packages").and_then(|p| p.as_array()).unwrap_or(&empty);
+    let packages = md
+        .get("packages")
+        .and_then(|p| p.as_array())
+        .unwrap_or(&empty);
     // id → package json, and id → name, for the members we care about.
     let mut pkg_by_id: std::collections::HashMap<&str, &serde_json::Value> =
         std::collections::HashMap::new();
@@ -182,7 +185,9 @@ pub fn compute_release_closure(workspace_root: &Path) -> Result<ReleaseClosure> 
         let Some(pkg) = pkg_by_id.get(id) else {
             return false;
         };
-        is_linkable_crate_name(name_of(id)) && json_has_library_target(pkg) && json_is_publishable(pkg)
+        is_linkable_crate_name(name_of(id))
+            && json_has_library_target(pkg)
+            && json_is_publishable(pkg)
     };
 
     // Resolved dependency graph: id → its normal/build dep ids.
@@ -190,7 +195,9 @@ pub fn compute_release_closure(workspace_root: &Path) -> Result<ReleaseClosure> 
         .get("resolve")
         .and_then(|r| r.get("nodes"))
         .and_then(|n| n.as_array())
-        .ok_or_else(|| anyhow::anyhow!("cargo metadata has no resolve graph (ran with --no-deps?)"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("cargo metadata has no resolve graph (ran with --no-deps?)")
+        })?;
     let mut deps_by_id: std::collections::HashMap<&str, Vec<&str>> =
         std::collections::HashMap::new();
     for node in resolve_nodes {
@@ -207,10 +214,7 @@ pub fn compute_release_closure(workspace_root: &Path) -> Result<ReleaseClosure> 
                     .and_then(|k| k.as_array())
                     .map(|kinds| {
                         kinds.iter().any(|k| {
-                            matches!(
-                                k.get("kind").and_then(|v| v.as_str()),
-                                None | Some("build")
-                            )
+                            matches!(k.get("kind").and_then(|v| v.as_str()), None | Some("build"))
                         })
                     })
                     .unwrap_or(true);
@@ -226,7 +230,11 @@ pub fn compute_release_closure(workspace_root: &Path) -> Result<ReleaseClosure> 
     let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut order: Vec<&str> = Vec::new();
     // Iterative DFS to avoid recursion-depth concerns on large graphs.
-    let mut roots: Vec<&str> = members.iter().copied().filter(|id| is_internal(id)).collect();
+    let mut roots: Vec<&str> = members
+        .iter()
+        .copied()
+        .filter(|id| is_internal(id))
+        .collect();
     roots.sort_by_key(|id| name_of(id).to_string());
     for root in roots {
         let mut stack: Vec<(&str, bool)> = vec![(root, false)];
@@ -591,9 +599,12 @@ pub fn assemble_artifact_with_cargo_config(
 
     // Emit.
     match target {
-        AssembleTarget::Slpkg(zip_path) => {
-            emit_slpkg(zip_path, &files, &manifest_bytes, stamped_cargo_toml.as_deref())?
-        }
+        AssembleTarget::Slpkg(zip_path) => emit_slpkg(
+            zip_path,
+            &files,
+            &manifest_bytes,
+            stamped_cargo_toml.as_deref(),
+        )?,
         AssembleTarget::StagedDir(dir) => {
             emit_staged_dir(dir, &files, &manifest_bytes, stamped_cargo_toml.as_deref())?
         }
@@ -753,10 +764,21 @@ fn cargo_path_dep_names(doc: &toml::Value) -> Vec<String> {
 pub fn is_non_source_artifact(name: &std::ffi::OsStr) -> bool {
     match name.to_str() {
         Some(
-            "target" | "lib" | ".git" | "node_modules" | "__pycache__"
-            | "_generated_" | ".streamlib-build.json" | ".venv" | "venv"
+            "target"
+            | "lib"
+            | ".git"
+            | "node_modules"
+            | "__pycache__"
+            | "_generated_"
+            | ".streamlib-build.json"
+            | ".venv"
+            | "venv"
             | "Cargo.lock"
-            | ".mypy_cache" | ".pytest_cache" | ".ruff_cache" | ".tox" | ".DS_Store",
+            | ".mypy_cache"
+            | ".pytest_cache"
+            | ".ruff_cache"
+            | ".tox"
+            | ".DS_Store",
         ) => true,
         Some(s) => s.ends_with(".slpkg") || s.ends_with(".egg-info") || s.ends_with(".pyc"),
         None => false,
@@ -935,7 +957,10 @@ fn collect_schema_files(pkg_dir: &Path) -> Result<Vec<PathBuf>> {
         .with_context(|| format!("read schemas dir: {}", schemas_dir.display()))?
     {
         let path = entry?.path();
-        if matches!(path.extension().and_then(|s| s.to_str()), Some("yaml" | "yml")) {
+        if matches!(
+            path.extension().and_then(|s| s.to_str()),
+            Some("yaml" | "yml")
+        ) {
             files.push(path.strip_prefix(pkg_dir).unwrap_or(&path).to_path_buf());
         }
     }
@@ -953,9 +978,7 @@ fn manifest_bytes_for(pkg_dir: &Path, policy: PathDepPolicy) -> Result<Vec<u8>> 
             std::fs::read(&manifest_path)
                 .with_context(|| format!("read {}", manifest_path.display()))
         }
-        PathDepPolicy::RewriteRelativeToAbsolute => {
-            rewrite_manifest_path_deps_absolute(pkg_dir)
-        }
+        PathDepPolicy::RewriteRelativeToAbsolute => rewrite_manifest_path_deps_absolute(pkg_dir),
     }
 }
 
@@ -1066,25 +1089,23 @@ pub fn strip_path_patches_in_dir(dir: &Path) -> Result<()> {
 /// rewritten to absolute, anchored at `pkg_dir`. Registry / git entries
 /// pass through unchanged.
 fn rewrite_manifest_path_deps_absolute(pkg_dir: &Path) -> Result<Vec<u8>> {
-    let yaml = std::fs::read_to_string(pkg_dir.join("streamlib.yaml"))
-        .context("read streamlib.yaml")?;
+    let yaml =
+        std::fs::read_to_string(pkg_dir.join("streamlib.yaml")).context("read streamlib.yaml")?;
     let mut manifest: streamlib_processor_schema::StreamlibYaml =
         serde_yaml::from_str(&yaml).context("parse streamlib.yaml")?;
 
     let abs_pkg = std::fs::canonicalize(pkg_dir).unwrap_or_else(|_| pkg_dir.to_path_buf());
-    let rewrite = |map: &mut std::collections::BTreeMap<
-        streamlib_idents::PackageRef,
-        DependencySpec,
-    >| {
-        for spec in map.values_mut() {
-            if let DependencySpec::Path(pd) = spec {
-                if pd.path.is_relative() {
-                    let joined = abs_pkg.join(&pd.path);
-                    pd.path = std::fs::canonicalize(&joined).unwrap_or(joined);
+    let rewrite =
+        |map: &mut std::collections::BTreeMap<streamlib_idents::PackageRef, DependencySpec>| {
+            for spec in map.values_mut() {
+                if let DependencySpec::Path(pd) = spec {
+                    if pd.path.is_relative() {
+                        let joined = abs_pkg.join(&pd.path);
+                        pd.path = std::fs::canonicalize(&joined).unwrap_or(joined);
+                    }
                 }
             }
-        }
-    };
+        };
     rewrite(&mut manifest.dependencies);
     rewrite(&mut manifest.patch);
 
@@ -1100,8 +1121,7 @@ fn rewrite_manifest_path_deps_absolute(pkg_dir: &Path) -> Result<Vec<u8>> {
 /// with the literal. Returns `Ok(None)` when there's no `[package]` table or
 /// no `version` key.
 pub fn rewrite_cargo_package_version(cargo_toml: &str, version: &str) -> Result<Option<String>> {
-    let mut doc: toml_edit::DocumentMut =
-        cargo_toml.parse().context("parse Cargo.toml")?;
+    let mut doc: toml_edit::DocumentMut = cargo_toml.parse().context("parse Cargo.toml")?;
     let Some(package) = doc.get_mut("package").and_then(|p| p.as_table_like_mut()) else {
         return Ok(None);
     };
@@ -1144,14 +1164,12 @@ fn emit_slpkg(
     manifest_bytes: &[u8],
     stamped_cargo_toml: Option<&[u8]>,
 ) -> Result<()> {
-    use zip::write::FileOptions;
     use zip::ZipWriter;
+    use zip::write::FileOptions;
 
-    let file = File::create(zip_path)
-        .with_context(|| format!("create {}", zip_path.display()))?;
+    let file = File::create(zip_path).with_context(|| format!("create {}", zip_path.display()))?;
     let mut zip = ZipWriter::new(file);
-    let options =
-        FileOptions::<()>::default().compression_method(zip::CompressionMethod::Deflated);
+    let options = FileOptions::<()>::default().compression_method(zip::CompressionMethod::Deflated);
 
     let mut seen = std::collections::HashSet::new();
     zip.start_file("streamlib.yaml", options)?;
@@ -1444,7 +1462,10 @@ mod tests {
         .unwrap_err();
         assert!(
             err.downcast_ref::<link_marker::LinkMarkerError>()
-                .is_some_and(|e| matches!(e, link_marker::LinkMarkerError::PackRefusedWhileLinked { .. })),
+                .is_some_and(|e| matches!(
+                    e,
+                    link_marker::LinkMarkerError::PackRefusedWhileLinked { .. }
+                )),
             "expected PackRefusedWhileLinked, got {err:?}"
         );
 
@@ -1485,14 +1506,24 @@ mod tests {
         std::fs::write(triple_dir.join(&dylib), b"prebuilt-should-be-ignored").unwrap();
 
         let out = dir.path().join("o.slpkg");
-        let outcome =
-            assemble_artifact(dir.path(), &AssembleTarget::Slpkg(out.clone()), &slpkg_opts(false), &())
-                .unwrap();
+        let outcome = assemble_artifact(
+            dir.path(),
+            &AssembleTarget::Slpkg(out.clone()),
+            &slpkg_opts(false),
+            &(),
+        )
+        .unwrap();
         assert!(!outcome.rebuilt, "source-only pack never compiles");
         let entries = zip_entries(&out);
         // Crate SOURCE ships so the consumer can build.
-        assert!(entries.contains(&"Cargo.toml".to_string()), "crate manifest must ship");
-        assert!(entries.contains(&"src/lib.rs".to_string()), "crate source must ship");
+        assert!(
+            entries.contains(&"Cargo.toml".to_string()),
+            "crate manifest must ship"
+        );
+        assert!(
+            entries.contains(&"src/lib.rs".to_string()),
+            "crate source must ship"
+        );
         // The prebuilt cdylib does NOT — source-only.
         assert!(
             !entries.iter().any(|e| e.starts_with("lib/")),
@@ -1573,16 +1604,32 @@ mod tests {
             "package:\n  org: tatolab\n  name: py\n  version: 0.1.0\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: python\n    execution: manual\n    entrypoint: \"p:P\"\n    inputs: []\n    outputs: []\n",
         )
         .unwrap();
-        std::fs::write(dir.path().join("pyproject.toml"), b"[project]\nname='py'\nversion='0.1.0'\n").unwrap();
+        std::fs::write(
+            dir.path().join("pyproject.toml"),
+            b"[project]\nname='py'\nversion='0.1.0'\n",
+        )
+        .unwrap();
         std::fs::write(dir.path().join("p.py"), b"# entrypoint").unwrap();
         std::fs::create_dir(dir.path().join("_generated_")).unwrap();
-        std::fs::write(dir.path().join("_generated_/tatolab__py.py"), b"# generated").unwrap();
+        std::fs::write(
+            dir.path().join("_generated_/tatolab__py.py"),
+            b"# generated",
+        )
+        .unwrap();
 
         let out = dir.path().join("o.slpkg");
-        assemble_artifact(dir.path(), &AssembleTarget::Slpkg(out.clone()), &slpkg_opts(false), &())
-            .unwrap();
+        assemble_artifact(
+            dir.path(),
+            &AssembleTarget::Slpkg(out.clone()),
+            &slpkg_opts(false),
+            &(),
+        )
+        .unwrap();
         let entries = zip_entries(&out);
-        assert!(entries.contains(&"p.py".to_string()), "entrypoint module must ship");
+        assert!(
+            entries.contains(&"p.py".to_string()),
+            "entrypoint module must ship"
+        );
         assert!(
             !entries.iter().any(|e| e.contains("_generated_")),
             "generated wire vocabulary must be stripped, got {entries:?}"
@@ -1603,8 +1650,11 @@ mod tests {
         );
 
         let dir = tempdir().unwrap();
-        std::fs::write(dir.path().join("Cargo.toml"), b"[package]\nname=\"p\"\nversion=\"0.1.0\"\n")
-            .unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            b"[package]\nname=\"p\"\nversion=\"0.1.0\"\n",
+        )
+        .unwrap();
         std::fs::create_dir(dir.path().join("src")).unwrap();
         std::fs::write(dir.path().join("src/lib.rs"), b"// src").unwrap();
         std::fs::write(dir.path().join("Cargo.lock"), b"# stale lock\n").unwrap();
@@ -1612,8 +1662,14 @@ mod tests {
         let mut files = Vec::new();
         collect_source_tree(dir.path(), &mut files).unwrap();
         let names: Vec<&str> = files.iter().map(|(rel, _)| rel.as_str()).collect();
-        assert!(names.contains(&"Cargo.toml"), "manifest must ship: {names:?}");
-        assert!(names.iter().any(|n| n.contains("lib.rs")), "src must ship: {names:?}");
+        assert!(
+            names.contains(&"Cargo.toml"),
+            "manifest must ship: {names:?}"
+        );
+        assert!(
+            names.iter().any(|n| n.contains("lib.rs")),
+            "src must ship: {names:?}"
+        );
         assert!(
             !names.iter().any(|n| n.contains("Cargo.lock")),
             "Cargo.lock must be stripped from shipped source: {names:?}"
@@ -1635,22 +1691,45 @@ mod tests {
             "package:\n  org: tatolab\n  name: py\n  version: 0.1.0\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: python\n    execution: manual\n    entrypoint: \"p:P\"\n    inputs: []\n    outputs: []\n",
         )
         .unwrap();
-        std::fs::write(dir.path().join("pyproject.toml"), b"[project]\nname='py'\nversion='0.1.0'\n").unwrap();
+        std::fs::write(
+            dir.path().join("pyproject.toml"),
+            b"[project]\nname='py'\nversion='0.1.0'\n",
+        )
+        .unwrap();
         std::fs::write(dir.path().join("p.py"), b"import helper").unwrap();
         std::fs::write(dir.path().join("helper.py"), b"# non-entrypoint module").unwrap();
         std::fs::create_dir(dir.path().join("models")).unwrap();
         std::fs::write(dir.path().join("models/weights.bin"), b"\x00\x01\x02").unwrap();
 
         let out = dir.path().join("o.slpkg");
-        let outcome =
-            assemble_artifact(dir.path(), &AssembleTarget::Slpkg(out.clone()), &slpkg_opts(false), &())
-                .unwrap();
-        assert!(!outcome.rebuilt, "no wheel/compile runs for a source-only Python package");
+        let outcome = assemble_artifact(
+            dir.path(),
+            &AssembleTarget::Slpkg(out.clone()),
+            &slpkg_opts(false),
+            &(),
+        )
+        .unwrap();
+        assert!(
+            !outcome.rebuilt,
+            "no wheel/compile runs for a source-only Python package"
+        );
         let entries = zip_entries(&out);
-        assert!(entries.contains(&"p.py".to_string()), "entrypoint module must ship");
-        assert!(entries.contains(&"helper.py".to_string()), "non-entrypoint module must ship");
-        assert!(entries.contains(&"models/weights.bin".to_string()), "data/assets must ship");
-        assert!(entries.contains(&"pyproject.toml".to_string()), "dep manifest must ship");
+        assert!(
+            entries.contains(&"p.py".to_string()),
+            "entrypoint module must ship"
+        );
+        assert!(
+            entries.contains(&"helper.py".to_string()),
+            "non-entrypoint module must ship"
+        );
+        assert!(
+            entries.contains(&"models/weights.bin".to_string()),
+            "data/assets must ship"
+        );
+        assert!(
+            entries.contains(&"pyproject.toml".to_string()),
+            "dep manifest must ship"
+        );
         // No wheel is built — the source IS the distribution.
         assert!(
             !entries.iter().any(|e| e.ends_with(".whl")),
@@ -1677,9 +1756,17 @@ mod tests {
             "package:\n  org: tatolab\n  name: py\n  version: 0.1.0\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: python\n    execution: manual\n    entrypoint: \"cuda_fisheye.processor:P\"\n    inputs: []\n    outputs: []\n",
         )
         .unwrap();
-        std::fs::write(dir.path().join("pyproject.toml"), b"[project]\nname='py'\nversion='0.1.0'\n").unwrap();
+        std::fs::write(
+            dir.path().join("pyproject.toml"),
+            b"[project]\nname='py'\nversion='0.1.0'\n",
+        )
+        .unwrap();
         std::fs::create_dir(dir.path().join("cuda_fisheye")).unwrap();
-        std::fs::write(dir.path().join("cuda_fisheye/processor.py"), b"class P:\n    pass\n").unwrap();
+        std::fs::write(
+            dir.path().join("cuda_fisheye/processor.py"),
+            b"class P:\n    pass\n",
+        )
+        .unwrap();
 
         let out = dir.path().join("o.slpkg");
         // Must NOT bail on the dotted/nested entrypoint.
@@ -1713,7 +1800,11 @@ mod tests {
             "package:\n  org: tatolab\n  name: py\n  version: 0.1.0\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: python\n    execution: manual\n    entrypoint: \"p:P\"\n    inputs: []\n    outputs: []\n",
         )
         .unwrap();
-        std::fs::write(dir.path().join("pyproject.toml"), b"[project]\nname='py'\nversion='0.1.0'\n").unwrap();
+        std::fs::write(
+            dir.path().join("pyproject.toml"),
+            b"[project]\nname='py'\nversion='0.1.0'\n",
+        )
+        .unwrap();
         std::fs::write(dir.path().join("p.py"), b"# real source").unwrap();
         // Dev venv with a regular file and a symlink (mirrors `lib64 -> lib`).
         let venv = dir.path().join(".venv");
@@ -1724,10 +1815,18 @@ mod tests {
         symlink("does-not-exist", dir.path().join("dangling-link")).unwrap();
 
         let out = dir.path().join("o.slpkg");
-        assemble_artifact(dir.path(), &AssembleTarget::Slpkg(out.clone()), &slpkg_opts(false), &())
-            .expect("assembly must tolerate .venv + dangling symlinks");
+        assemble_artifact(
+            dir.path(),
+            &AssembleTarget::Slpkg(out.clone()),
+            &slpkg_opts(false),
+            &(),
+        )
+        .expect("assembly must tolerate .venv + dangling symlinks");
         let entries = zip_entries(&out);
-        assert!(entries.contains(&"p.py".to_string()), "real source must ship");
+        assert!(
+            entries.contains(&"p.py".to_string()),
+            "real source must ship"
+        );
         assert!(
             !entries.iter().any(|e| e.starts_with(".venv/")),
             "dev .venv must not ship, got {entries:?}"
@@ -1755,9 +1854,13 @@ mod tests {
         std::fs::write(wheels.join("py-0.1.0-py3-none-any.whl"), b"PK\x03\x04").unwrap();
 
         let out = dir.path().join("o.slpkg");
-        let outcome =
-            assemble_artifact(dir.path(), &AssembleTarget::Slpkg(out.clone()), &slpkg_opts(false), &())
-                .unwrap();
+        let outcome = assemble_artifact(
+            dir.path(),
+            &AssembleTarget::Slpkg(out.clone()),
+            &slpkg_opts(false),
+            &(),
+        )
+        .unwrap();
         assert_eq!(outcome.python_wheels, 1);
         let entries = zip_entries(&out);
         assert!(entries.contains(&"python/wheels/py-0.1.0-py3-none-any.whl".to_string()));
@@ -1791,19 +1894,42 @@ mod tests {
         std::fs::write(dir.path().join("_generated_/stale.ts"), b"// stale").unwrap();
 
         let out = dir.path().join("o.slpkg");
-        assemble_artifact(dir.path(), &AssembleTarget::Slpkg(out.clone()), &slpkg_opts(false), &())
-            .unwrap();
+        assemble_artifact(
+            dir.path(),
+            &AssembleTarget::Slpkg(out.clone()),
+            &slpkg_opts(false),
+            &(),
+        )
+        .unwrap();
         let entries = zip_entries(&out);
         // Entrypoint at the authored path — NOT relocated under `deno/`.
-        assert!(entries.contains(&"t.ts".to_string()), "entrypoint must stage at root, got {entries:?}");
-        assert!(!entries.contains(&"deno/t.ts".to_string()), "must not relocate under deno/");
+        assert!(
+            entries.contains(&"t.ts".to_string()),
+            "entrypoint must stage at root, got {entries:?}"
+        );
+        assert!(
+            !entries.contains(&"deno/t.ts".to_string()),
+            "must not relocate under deno/"
+        );
         // The whole authored tree travels at its authored paths.
-        assert!(entries.contains(&"helper.ts".to_string()), "helper module must travel");
+        assert!(
+            entries.contains(&"helper.ts".to_string()),
+            "helper module must travel"
+        );
         assert!(entries.contains(&"deno.json".to_string()));
-        assert!(entries.contains(&".npmrc".to_string()), ".npmrc must travel so the package is self-contained");
-        assert!(entries.contains(&"assets/logo.bin".to_string()), "assets must travel at their authored path");
+        assert!(
+            entries.contains(&".npmrc".to_string()),
+            ".npmrc must travel so the package is self-contained"
+        );
+        assert!(
+            entries.contains(&"assets/logo.bin".to_string()),
+            "assets must travel at their authored path"
+        );
         // Codegen artifact excluded.
-        assert!(!entries.contains(&"_generated_/stale.ts".to_string()), "_generated_ must not ship as source");
+        assert!(
+            !entries.contains(&"_generated_/stale.ts".to_string()),
+            "_generated_ must not ship as source"
+        );
     }
 
     /// A staged Deno package keeps `streamlib.yaml` beside the entrypoint
@@ -1833,8 +1959,14 @@ mod tests {
         )
         .unwrap();
         // Decorator does `join(dirname(<t.ts>), "streamlib.yaml")` — both at root.
-        assert!(staged.path().join("t.ts").is_file(), "entrypoint at staged root");
-        assert!(staged.path().join("streamlib.yaml").is_file(), "manifest beside entrypoint");
+        assert!(
+            staged.path().join("t.ts").is_file(),
+            "entrypoint at staged root"
+        );
+        assert!(
+            staged.path().join("streamlib.yaml").is_file(),
+            "manifest beside entrypoint"
+        );
     }
 
     #[test]
@@ -1846,7 +1978,11 @@ mod tests {
         )
         .unwrap();
         std::fs::create_dir(dir.path().join("schemas")).unwrap();
-        std::fs::write(dir.path().join("schemas/t.yaml"), "metadata:\n  type: T\n  max_payload_bytes: 16\n").unwrap();
+        std::fs::write(
+            dir.path().join("schemas/t.yaml"),
+            "metadata:\n  type: T\n  max_payload_bytes: 16\n",
+        )
+        .unwrap();
         let err = assemble_artifact(
             dir.path(),
             &AssembleTarget::Slpkg(dir.path().join("o.slpkg")),
@@ -1935,7 +2071,11 @@ mod tests {
         )
         .unwrap();
         std::fs::create_dir(dir.path().join("schemas")).unwrap();
-        std::fs::write(dir.path().join("schemas/t.yaml"), "metadata:\n  type: T\n  max_payload_bytes: 16\n").unwrap();
+        std::fs::write(
+            dir.path().join("schemas/t.yaml"),
+            "metadata:\n  type: T\n  max_payload_bytes: 16\n",
+        )
+        .unwrap();
 
         let staged = tempdir().unwrap();
         assemble_artifact(
@@ -1970,7 +2110,11 @@ mod tests {
         )
         .unwrap();
         std::fs::create_dir(pkg.join("schemas")).unwrap();
-        std::fs::write(pkg.join("schemas/t.yaml"), "metadata:\n  type: T\n  max_payload_bytes: 16\n").unwrap();
+        std::fs::write(
+            pkg.join("schemas/t.yaml"),
+            "metadata:\n  type: T\n  max_payload_bytes: 16\n",
+        )
+        .unwrap();
 
         let staged = tempdir().unwrap();
         assemble_artifact(
@@ -2014,7 +2158,10 @@ mod tests {
             .expect("a literal [package].version must be stamped");
         let out = String::from_utf8(bytes).unwrap();
         assert!(out.contains("version = \"1.1.3-dev.4\""), "got: {out}");
-        assert!(!out.contains("0.4.30"), "stale literal must be gone, got: {out}");
+        assert!(
+            !out.contains("0.4.30"),
+            "stale literal must be gone, got: {out}"
+        );
         // Other fields + shape preserved.
         assert!(out.contains("name = \"rp\""));
         assert!(out.contains("edition = \"2024\""));
@@ -2037,7 +2184,10 @@ mod tests {
             .expect("a workspace-inherited version must be stamped to a literal");
         let out = String::from_utf8(bytes).unwrap();
         assert!(out.contains("version = \"1.0.0\""), "got: {out}");
-        assert!(!out.contains("workspace = true"), "inheritance must be gone, got: {out}");
+        assert!(
+            !out.contains("workspace = true"),
+            "inheritance must be gone, got: {out}"
+        );
     }
 
     #[test]
@@ -2049,10 +2199,15 @@ mod tests {
         )
         .unwrap();
         let out = String::from_utf8(
-            stamped_cargo_toml_bytes(dir.path(), "2.5.0").unwrap().unwrap(),
+            stamped_cargo_toml_bytes(dir.path(), "2.5.0")
+                .unwrap()
+                .unwrap(),
         )
         .unwrap();
-        assert!(out.contains("# top comment"), "comment preserved, got: {out}");
+        assert!(
+            out.contains("# top comment"),
+            "comment preserved, got: {out}"
+        );
         assert!(out.contains("[dependencies]") && out.contains("serde = \"1.0\""));
         assert!(out.contains("version = \"2.5.0\""), "got: {out}");
     }
@@ -2061,10 +2216,18 @@ mod tests {
     fn stamp_is_noop_without_cargo_toml_or_version() {
         // No Cargo.toml → nothing to stamp.
         let dir = tempdir().unwrap();
-        assert!(stamped_cargo_toml_bytes(dir.path(), "1.0.0").unwrap().is_none());
+        assert!(
+            stamped_cargo_toml_bytes(dir.path(), "1.0.0")
+                .unwrap()
+                .is_none()
+        );
         // A [package] with no version key → nothing to stamp (ship verbatim).
         std::fs::write(dir.path().join("Cargo.toml"), "[package]\nname = \"rp\"\n").unwrap();
-        assert!(stamped_cargo_toml_bytes(dir.path(), "1.0.0").unwrap().is_none());
+        assert!(
+            stamped_cargo_toml_bytes(dir.path(), "1.0.0")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -2088,18 +2251,29 @@ mod tests {
         std::fs::write(dir.path().join("src/lib.rs"), b"// crate source").unwrap();
 
         let out = dir.path().join("o.slpkg");
-        assemble_artifact(dir.path(), &AssembleTarget::Slpkg(out.clone()), &slpkg_opts(false), &())
-            .unwrap();
+        assemble_artifact(
+            dir.path(),
+            &AssembleTarget::Slpkg(out.clone()),
+            &slpkg_opts(false),
+            &(),
+        )
+        .unwrap();
         let entries = zip_entries(&out);
         // Exactly one Cargo.toml (the stamped one; verbatim copy deduped).
         assert_eq!(
-            entries.iter().filter(|e| e.as_str() == "Cargo.toml").count(),
+            entries
+                .iter()
+                .filter(|e| e.as_str() == "Cargo.toml")
+                .count(),
             1,
             "exactly one Cargo.toml must ship, got {entries:?}"
         );
         let cargo = zip_file_contents(&out, "Cargo.toml");
         assert!(cargo.contains("version = \"1.1.3-dev.4\""), "got: {cargo}");
-        assert!(!cargo.contains("0.4.30"), "stale version must not reach the artifact, got: {cargo}");
+        assert!(
+            !cargo.contains("0.4.30"),
+            "stale version must not reach the artifact, got: {cargo}"
+        );
     }
 
     #[test]
@@ -2143,7 +2317,10 @@ mod tests {
         .unwrap();
         let cargo = std::fs::read_to_string(staged.path().join("Cargo.toml")).unwrap();
         assert!(cargo.contains("version = \"1.1.3-dev.4\""), "got: {cargo}");
-        assert!(!cargo.contains("0.4.30"), "stale version must not reach the staged build, got: {cargo}");
+        assert!(
+            !cargo.contains("0.4.30"),
+            "stale version must not reach the staged build, got: {cargo}"
+        );
     }
 
     #[test]
@@ -2165,7 +2342,10 @@ mod tests {
         )
         .unwrap();
         assert!(out.contains("\"1.0.0\""), "got: {out}");
-        assert!(!out.contains("0.4.30"), "stale inline version must be gone, got: {out}");
+        assert!(
+            !out.contains("0.4.30"),
+            "stale inline version must be gone, got: {out}"
+        );
     }
 
     #[test]

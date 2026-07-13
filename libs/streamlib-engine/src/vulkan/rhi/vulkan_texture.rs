@@ -5,13 +5,13 @@
 
 use std::sync::{Arc, OnceLock};
 
+use vma::Alloc as _;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia_vma as vma;
-use vma::Alloc as _;
 
 use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 
 use super::HostVulkanDevice;
 
@@ -317,9 +317,8 @@ impl HostVulkanTexture {
                 let allocator = vulkan_device.allocator();
                 unsafe { allocator.create_image(image_info, &alloc_opts) }
             };
-            result.map_err(|e| {
-                Error::GpuError(format!("Failed to create exportable image: {e}"))
-            })?
+            result
+                .map_err(|e| Error::GpuError(format!("Failed to create exportable image: {e}")))?
         };
 
         Ok(Self {
@@ -384,10 +383,8 @@ impl HostVulkanTexture {
         };
 
         let allocator = vulkan_device.allocator();
-        let (image, allocation) =
-            unsafe { allocator.create_image(image_info, &alloc_opts) }.map_err(|e| {
-                Error::GpuError(format!("Failed to create device-local image: {e}"))
-            })?;
+        let (image, allocation) = unsafe { allocator.create_image(image_info, &alloc_opts) }
+            .map_err(|e| Error::GpuError(format!("Failed to create device-local image: {e}")))?;
 
         Ok(Self {
             vulkan_device: Some(Arc::clone(vulkan_device)),
@@ -489,9 +486,7 @@ impl HostVulkanTexture {
         // `VkDeviceMemory` block is pre-warmed at `HostVulkanDevice::new()`
         // (see `nvidia-dma-buf-after-swapchain.md`), so the post-swapchain
         // NVIDIA cap doesn't apply to the pooled path.
-        let (image, allocation) = if let Some(pool) =
-            vulkan_device.dma_buf_image_pool_tiled()
-        {
+        let (image, allocation) = if let Some(pool) = vulkan_device.dma_buf_image_pool_tiled() {
             unsafe { pool.create_image(image_info, &alloc_opts) }
         } else {
             let allocator = vulkan_device.allocator();
@@ -618,9 +613,8 @@ impl HostVulkanTexture {
         // construction so misuse fails fast rather than at
         // `cudaImportExternalMemory` time on the subprocess side.
         match desc.format {
-            TextureFormat::Rgba8Unorm
-            | TextureFormat::Rgba16Float
-            | TextureFormat::Rgba32Float => {}
+            TextureFormat::Rgba8Unorm | TextureFormat::Rgba16Float | TextureFormat::Rgba32Float => {
+            }
             other => {
                 return Err(Error::Configuration(format!(
                     "HostVulkanTexture::new_opaque_fd_export: format {other:?} is not \
@@ -681,8 +675,8 @@ impl HostVulkanTexture {
                     .into(),
             )
         })?;
-        let (image, allocation) = unsafe { pool.create_image(image_info, &alloc_opts) }
-            .map_err(|e| {
+        let (image, allocation) =
+            unsafe { pool.create_image(image_info, &alloc_opts) }.map_err(|e| {
                 Error::GpuError(format!(
                     "Failed to create OPAQUE_FD exportable image ({}x{} {:?}): {e}",
                     desc.width, desc.height, desc.format,
@@ -740,10 +734,7 @@ impl HostVulkanTexture {
             return Err(Error::Configuration(format!(
                 "HostVulkanTexture::new_video_dpb ({}): width, height, array_layers must be > 0; \
                  got {}x{}x{}",
-                descriptor.label,
-                descriptor.width,
-                descriptor.height,
-                descriptor.array_layers,
+                descriptor.label, descriptor.width, descriptor.height, descriptor.array_layers,
             )));
         }
 
@@ -843,9 +834,7 @@ impl HostVulkanTexture {
         format: TextureFormat,
     ) -> Result<Self> {
         if iosurface_ref.is_null() {
-            return Err(Error::TextureError(
-                "Cannot import null IOSurface".into(),
-            ));
+            return Err(Error::TextureError("Cannot import null IOSurface".into()));
         }
 
         let vk_format = texture_format_to_vk(format);
@@ -880,9 +869,7 @@ impl HostVulkanTexture {
 
         let image = unsafe { device.create_image(&image_info, None) }
             .map(|r| r)
-            .map_err(|e| {
-                Error::GpuError(format!("Failed to create image from IOSurface: {e}"))
-            })?;
+            .map_err(|e| Error::GpuError(format!("Failed to create image from IOSurface: {e}")))?;
 
         tracing::debug!(
             "Imported IOSurface as Vulkan image: {}x{} {:?}",
@@ -969,9 +956,9 @@ impl HostVulkanTexture {
         let vk_dev = self.vulkan_device.as_ref().ok_or_else(|| {
             Error::GpuError("Cannot create image view: no HostVulkanDevice stored".into())
         })?;
-        let image = self.image.ok_or_else(|| {
-            Error::GpuError("Cannot create image view: no image".into())
-        })?;
+        let image = self
+            .image
+            .ok_or_else(|| Error::GpuError("Cannot create image view: no image".into()))?;
 
         let vk_format = texture_format_to_vk(self.format);
         let view_info = vk::ImageViewCreateInfo::builder()
@@ -1016,8 +1003,9 @@ impl HostVulkanTexture {
             .queue_family_index(vulkan_device.queue_family_index())
             .flags(vk::CommandPoolCreateFlags::TRANSIENT)
             .build();
-        let pool = unsafe { device.create_command_pool(&pool_info, None) }
-            .map_err(|e| Error::GpuError(format!("transition_to_general: create_command_pool: {e}")))?;
+        let pool = unsafe { device.create_command_pool(&pool_info, None) }.map_err(|e| {
+            Error::GpuError(format!("transition_to_general: create_command_pool: {e}"))
+        })?;
         let cb_info = vk::CommandBufferAllocateInfo::builder()
             .command_pool(pool)
             .level(vk::CommandBufferLevel::PRIMARY)
@@ -1042,9 +1030,7 @@ impl HostVulkanTexture {
             .src_stage_mask(vk::PipelineStageFlags2::NONE)
             .src_access_mask(vk::AccessFlags2::empty())
             .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-            .dst_access_mask(
-                vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::SHADER_WRITE,
-            )
+            .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::SHADER_WRITE)
             .old_layout(vk::ImageLayout::UNDEFINED)
             .new_layout(vk::ImageLayout::GENERAL)
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -1075,17 +1061,11 @@ impl HostVulkanTexture {
             .command_buffer_infos(&cmd_infos)
             .build();
         let fence_info = vk::FenceCreateInfo::default();
-        let fence = unsafe { device.create_fence(&fence_info, None) }.map_err(|e| {
-            Error::GpuError(format!("transition_to_general: create_fence: {e}"))
-        })?;
+        let fence = unsafe { device.create_fence(&fence_info, None) }
+            .map_err(|e| Error::GpuError(format!("transition_to_general: create_fence: {e}")))?;
         let submits = [submit];
         let submit_result = unsafe {
-            HostVulkanDevice::submit_to_queue(
-                vulkan_device,
-                vulkan_device.queue(),
-                &submits,
-                fence,
-            )
+            HostVulkanDevice::submit_to_queue(vulkan_device, vulkan_device.queue(), &submits, fence)
         };
         if let Err(e) = submit_result {
             unsafe {
@@ -1096,11 +1076,7 @@ impl HostVulkanTexture {
         }
         let wait_result = unsafe { device.wait_for_fences(&[fence], true, u64::MAX) }
             .map(|_| ())
-            .map_err(|e| {
-                Error::GpuError(format!(
-                    "transition_to_general: wait_for_fences: {e}"
-                ))
-            });
+            .map_err(|e| Error::GpuError(format!("transition_to_general: wait_for_fences: {e}")));
         unsafe {
             device.destroy_fence(fence, None);
             device.destroy_command_pool(pool, None);
@@ -1134,12 +1110,13 @@ impl HostVulkanTexture {
     /// image or when the format's plane count isn't supported by this RHI
     /// build.
     pub fn dma_buf_plane_layout(&self) -> Result<Vec<(u64, u64)>> {
-        let vk_dev = self.vulkan_device.as_ref().ok_or_else(|| {
-            Error::GpuError("dma_buf_plane_layout: no HostVulkanDevice".into())
-        })?;
-        let image = self.image.ok_or_else(|| {
-            Error::GpuError("dma_buf_plane_layout: no image".into())
-        })?;
+        let vk_dev = self
+            .vulkan_device
+            .as_ref()
+            .ok_or_else(|| Error::GpuError("dma_buf_plane_layout: no HostVulkanDevice".into()))?;
+        let image = self
+            .image
+            .ok_or_else(|| Error::GpuError("dma_buf_plane_layout: no image".into()))?;
 
         // `vkGetImageSubresourceLayout` (the call below) requires LINEAR
         // or DRM_FORMAT_MODIFIER tiling per VUID-vkGetImageSubresourceLayout-image-07790.
@@ -1171,17 +1148,21 @@ impl HostVulkanTexture {
                     1 => vk::ImageAspectFlags::MEMORY_PLANE_1_EXT,
                     2 => vk::ImageAspectFlags::MEMORY_PLANE_2_EXT,
                     3 => vk::ImageAspectFlags::MEMORY_PLANE_3_EXT,
-                    _ => return Err(Error::GpuError(format!(
-                        "dma_buf_plane_layout: plane index {plane_idx} out of range"
-                    ))),
+                    _ => {
+                        return Err(Error::GpuError(format!(
+                            "dma_buf_plane_layout: plane index {plane_idx} out of range"
+                        )));
+                    }
                 }
             } else if matches!(self.format, TextureFormat::Nv12) {
                 match plane_idx {
                     0 => vk::ImageAspectFlags::PLANE_0,
                     1 => vk::ImageAspectFlags::PLANE_1,
-                    _ => return Err(Error::GpuError(format!(
-                        "dma_buf_plane_layout: NV12 plane {plane_idx} out of range"
-                    ))),
+                    _ => {
+                        return Err(Error::GpuError(format!(
+                            "dma_buf_plane_layout: NV12 plane {plane_idx} out of range"
+                        )));
+                    }
                 }
             } else {
                 vk::ImageAspectFlags::COLOR
@@ -1192,11 +1173,7 @@ impl HostVulkanTexture {
                 .mip_level(0)
                 .array_layer(0)
                 .build();
-            let layout = unsafe {
-                vk_dev
-                    .device()
-                    .get_image_subresource_layout(image, &subres)
-            };
+            let layout = unsafe { vk_dev.device().get_image_subresource_layout(image, &subres) };
             planes.push((layout.offset, layout.row_pitch));
         }
 
@@ -1223,10 +1200,7 @@ impl HostVulkanTexture {
         let Some(vk_dev) = self.vulkan_device.as_ref() else {
             return 0;
         };
-        vk_dev
-            .allocator()
-            .get_allocation_info(*allocation)
-            .size as vk::DeviceSize
+        vk_dev.allocator().get_allocation_info(*allocation).size as vk::DeviceSize
     }
 
     /// Export the texture's OPAQUE_FD memory as a file descriptor.
@@ -1392,10 +1366,9 @@ impl HostVulkanTexture {
             })
             .collect();
 
-        let mut explicit_modifier_info =
-            vk::ImageDrmFormatModifierExplicitCreateInfoEXT::builder()
-                .drm_format_modifier(drm_format_modifier)
-                .plane_layouts(&plane_layouts);
+        let mut explicit_modifier_info = vk::ImageDrmFormatModifierExplicitCreateInfoEXT::builder()
+            .drm_format_modifier(drm_format_modifier)
+            .plane_layouts(&plane_layouts);
 
         let mut external_image_info = vk::ExternalMemoryImageCreateInfo::builder()
             .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
@@ -1403,7 +1376,11 @@ impl HostVulkanTexture {
         let image_info = vk::ImageCreateInfo::builder()
             .image_type(vk::ImageType::_2D)
             .format(vk_format)
-            .extent(vk::Extent3D { width, height, depth: 1 })
+            .extent(vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            })
             .mip_levels(1)
             .array_layers(1)
             .samples(vk::SampleCountFlags::_1)
@@ -1441,14 +1418,13 @@ impl HostVulkanTexture {
                 e
             })?;
 
-        unsafe { device.bind_image_memory(image, memory, 0) }
-            .map_err(|e| {
-                vulkan_device.free_imported_memory(memory);
-                unsafe { device.destroy_image(image, None) };
-                Error::GpuError(format!(
-                    "import_render_target_dma_buf: bind_image_memory failed: {e}"
-                ))
-            })?;
+        unsafe { device.bind_image_memory(image, memory, 0) }.map_err(|e| {
+            vulkan_device.free_imported_memory(memory);
+            unsafe { device.destroy_image(image, None) };
+            Error::GpuError(format!(
+                "import_render_target_dma_buf: bind_image_memory failed: {e}"
+            ))
+        })?;
 
         Ok(Self {
             vulkan_device: Some(Arc::clone(vulkan_device)),
@@ -1644,9 +1620,7 @@ impl HostVulkanTexture {
     fn vk_memory_binding(&self) -> (vk::DeviceMemory, vk::DeviceSize, vk::DeviceSize) {
         // VMA path: query allocation_info on demand. The lookup is a
         // simple struct read from VMA's internal allocation handle.
-        if let (Some(vk_dev), Some(allocation)) =
-            (&self.vulkan_device, self.allocation.as_ref())
-        {
+        if let (Some(vk_dev), Some(allocation)) = (&self.vulkan_device, self.allocation.as_ref()) {
             let info = vk_dev.allocator().get_allocation_info(*allocation);
             return (info.deviceMemory, info.offset, info.size);
         }
@@ -1708,7 +1682,10 @@ mod tests {
     use super::*;
     use crate::vulkan::rhi::HostVulkanDevice;
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_pool_texture_creation_1920x1080_bgra8() {
         let device = match HostVulkanDevice::new() {
@@ -1735,7 +1712,10 @@ mod tests {
         );
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_texture_drop_frees_memory() {
         let device = match HostVulkanDevice::new() {
@@ -1753,7 +1733,10 @@ mod tests {
         println!("Texture drop completed without panic");
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_multiple_textures_coexist() {
         let device = match HostVulkanDevice::new() {
@@ -1786,7 +1769,10 @@ mod tests {
         println!("All dropped successfully");
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_dma_buf_export() {
         let device = match HostVulkanDevice::new() {
@@ -1832,7 +1818,10 @@ mod tests {
     /// buffers, textures for IPC) use raw vkAllocateMemory with VkExportMemoryAllocateInfo.
     /// Internal allocations (display camera textures) use raw vkAllocateMemory with
     /// dedicated allocation + multi-type fallback (no export flags).
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_camera_display_allocation_pattern() {
         let device = match HostVulkanDevice::new() {
@@ -1857,13 +1846,20 @@ mod tests {
             assert!(!buf.mapped_ptr().is_null());
             pixel_buffers.push(buf);
         }
-        println!("Step 1: {} pixel buffers created (raw exportable)", pixel_buffers.len());
+        println!(
+            "Step 1: {} pixel buffers created (raw exportable)",
+            pixel_buffers.len()
+        );
 
         // Step 2: Camera compute output image via VMA (no export, no dedicated)
         let compute_img_info = vk::ImageCreateInfo::builder()
             .image_type(vk::ImageType::_2D)
             .format(vk::Format::R8G8B8A8_UNORM)
-            .extent(vk::Extent3D { width, height, depth: 1 })
+            .extent(vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            })
             .mip_levels(1)
             .array_layers(1)
             .samples(vk::SampleCountFlags::_1)
@@ -1890,7 +1886,11 @@ mod tests {
             let img_info = vk::ImageCreateInfo::builder()
                 .image_type(vk::ImageType::_2D)
                 .format(vk::Format::B8G8R8A8_UNORM)
-                .extent(vk::Extent3D { width, height, depth: 1 })
+                .extent(vk::Extent3D {
+                    width,
+                    height,
+                    depth: 1,
+                })
                 .mip_levels(1)
                 .array_layers(1)
                 .samples(vk::SampleCountFlags::_1)
@@ -1953,7 +1953,10 @@ mod tests {
 
             camera_textures.push((image, memory, image_view));
         }
-        println!("Step 3: {} camera textures created (raw dedicated, no export)", camera_textures.len());
+        println!(
+            "Step 3: {} camera textures created (raw dedicated, no export)",
+            camera_textures.len()
+        );
 
         // Cleanup
         unsafe {
@@ -1968,7 +1971,10 @@ mod tests {
         println!("All resources cleaned up successfully");
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_various_formats() {
         let device = match HostVulkanDevice::new() {
@@ -1992,7 +1998,10 @@ mod tests {
         }
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_device_local_texture_creation() {
         let device = match HostVulkanDevice::new() {
@@ -2013,10 +2022,17 @@ mod tests {
         assert_eq!(texture.height(), 1080);
         assert_eq!(texture.format(), TextureFormat::Rgba8Unorm);
 
-        println!("Device-local texture created: {}x{}", texture.width(), texture.height());
+        println!(
+            "Device-local texture created: {}x{}",
+            texture.width(),
+            texture.height()
+        );
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_lazy_image_view() {
         let device = match HostVulkanDevice::new() {
@@ -2028,14 +2044,16 @@ mod tests {
         };
 
         let desc = TextureDescriptor::new(640, 480, TextureFormat::Rgba8Unorm);
-        let texture = HostVulkanTexture::new(&device, &desc)
-            .expect("texture creation failed");
+        let texture = HostVulkanTexture::new(&device, &desc).expect("texture creation failed");
 
         // First call creates the image view
         let view1 = texture.image_view().expect("image_view() failed");
         // Second call returns the cached view
         let view2 = texture.image_view().expect("cached image_view() failed");
-        assert_eq!(view1, view2, "image_view() should return the same cached view");
+        assert_eq!(
+            view1, view2,
+            "image_view() should return the same cached view"
+        );
 
         println!("Lazy image view: created and cached successfully");
     }
@@ -2049,7 +2067,10 @@ mod tests {
     /// 6. Assert plane[0].row_pitch >= 1920 * 4 (BGRA stride is at least
     ///    pixel-tight, possibly aligned up by tiling).
     #[cfg(target_os = "linux")]
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_render_target_dma_buf_round_trip() {
         use crate::vulkan::rhi::drm_modifier_probe::fourcc;
@@ -2119,7 +2140,10 @@ mod tests {
     /// loudly rather than silently fall back to LINEAR (which is sampler-
     /// only on NVIDIA — see docs/learnings/nvidia-egl-dmabuf-render-target.md).
     #[cfg(target_os = "linux")]
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_render_target_dma_buf_empty_modifiers_rejected() {
         let device = match HostVulkanDevice::new() {
@@ -2143,7 +2167,10 @@ mod tests {
         );
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_ring_texture_lifecycle() {
         let device = match HostVulkanDevice::new() {
@@ -2169,13 +2196,19 @@ mod tests {
         assert_ne!(v0, v1, "ring textures should have different image views");
 
         // Both should be DMA-BUF exportable (created via new(), not new_device_local())
-        let fd0 = t0.export_dma_buf_fd().expect("ring texture 0 DMA-BUF export failed");
-        let fd1 = t1.export_dma_buf_fd().expect("ring texture 1 DMA-BUF export failed");
+        let fd0 = t0
+            .export_dma_buf_fd()
+            .expect("ring texture 0 DMA-BUF export failed");
+        let fd1 = t1
+            .export_dma_buf_fd()
+            .expect("ring texture 1 DMA-BUF export failed");
         assert!(fd0 >= 0);
         assert!(fd1 >= 0);
         assert_ne!(fd0, fd1);
 
-        println!("Ring texture lifecycle: 2 textures created, image views cached, DMA-BUF exported");
+        println!(
+            "Ring texture lifecycle: 2 textures created, image views cached, DMA-BUF exported"
+        );
 
         drop(t0);
         drop(t1);
@@ -2189,7 +2222,10 @@ mod tests {
     /// `export_opaque_fd_memory` on a DMA-BUF-allocated texture
     /// produces an error).
     #[cfg(target_os = "linux")]
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn opaque_fd_image_export_round_trip_and_cross_flavor_rejection() {
         let device = match HostVulkanDevice::new() {
@@ -2242,9 +2278,7 @@ mod tests {
                     "error must call out the cross-flavor mismatch, got: {msg}"
                 );
             }
-            other => panic!(
-                "expected cross-flavor rejection on DMA-BUF texture, got {other:?}"
-            ),
+            other => panic!("expected cross-flavor rejection on DMA-BUF texture, got {other:?}"),
         }
     }
 
@@ -2255,7 +2289,10 @@ mod tests {
     /// the closed-list invariant from
     /// `cudaExternalMemoryGetMappedMipmappedArray`.
     #[cfg(target_os = "linux")]
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn opaque_fd_image_rejects_non_cuda_mappable_formats() {
         let device = match HostVulkanDevice::new() {
@@ -2292,9 +2329,7 @@ mod tests {
                     "format {bad_format:?} must be rejected with Configuration error; \
                      got {e}"
                 ),
-                Ok(_) => panic!(
-                    "format {bad_format:?} must be rejected for OPAQUE_FD; got Ok"
-                ),
+                Ok(_) => panic!("format {bad_format:?} must be rejected for OPAQUE_FD; got Ok"),
             }
         }
 
@@ -2305,8 +2340,8 @@ mod tests {
             TextureFormat::Rgba32Float,
         ] {
             let desc = TextureDescriptor::new(64, 64, good_format);
-            let texture = HostVulkanTexture::new_opaque_fd_export(&device, &desc)
-                .unwrap_or_else(|e| {
+            let texture =
+                HostVulkanTexture::new_opaque_fd_export(&device, &desc).unwrap_or_else(|e| {
                     panic!("CUDA-mappable format {good_format:?} must succeed, got: {e:?}")
                 });
             assert!(texture.is_opaque_fd_export());
@@ -2316,7 +2351,10 @@ mod tests {
     /// Zero width/height is rejected — these aren't CUDA-specific
     /// constraints but mirror the buffer-side input validation.
     #[cfg(target_os = "linux")]
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn opaque_fd_image_rejects_zero_dimensions() {
         let device = match HostVulkanDevice::new() {
@@ -2339,9 +2377,7 @@ mod tests {
                     "dimensions {w}x{h} must be rejected with Configuration error; \
                      got {e}"
                 ),
-                Ok(_) => panic!(
-                    "dimensions {w}x{h} must be rejected for OPAQUE_FD; got Ok"
-                ),
+                Ok(_) => panic!("dimensions {w}x{h} must be rejected for OPAQUE_FD; got Ok"),
             }
         }
     }
@@ -2359,7 +2395,10 @@ mod tests {
     /// observable upstream-cap bug we want surfaced as Configuration,
     /// not GpuError).
     #[cfg(target_os = "linux")]
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn new_video_dpb_rejects_zero_dimensions() {
         let device = match HostVulkanDevice::new() {
@@ -2393,12 +2432,10 @@ mod tests {
                         "rejection must carry the descriptor label, got: {msg}"
                     );
                 }
-                Err(e) => panic!(
-                    "{w}x{h}x{layers}: expected Configuration error, got {e}"
-                ),
-                Ok(_) => panic!(
-                    "{w}x{h}x{layers}: zero-component descriptor must be rejected, got Ok"
-                ),
+                Err(e) => panic!("{w}x{h}x{layers}: expected Configuration error, got {e}"),
+                Ok(_) => {
+                    panic!("{w}x{h}x{layers}: zero-component descriptor must be rejected, got Ok")
+                }
             }
         }
     }
@@ -2413,7 +2450,10 @@ mod tests {
     /// tolerates default profiles; full validation happens at
     /// `vkBindVideoSessionMemoryKHR`.
     #[cfg(target_os = "linux")]
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn new_video_dpb_succeeds_for_both_directions() {
         let device = match HostVulkanDevice::new() {

@@ -4,7 +4,7 @@
 use crate::core::graph::{
     LinkTraversal, LinkTraversalMut, ProcessorTraversal, ProcessorTraversalMut,
 };
-use petgraph::{visit::EdgeRef, Direction};
+use petgraph::{Direction, visit::EdgeRef};
 
 impl<'a> ProcessorTraversal<'a> {
     /// Get the first vertex in the current traversal.

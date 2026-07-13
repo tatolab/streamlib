@@ -206,13 +206,15 @@ impl Drop for NativeHandle {
 ///
 /// # Safety
 /// `fd` must be a valid open file descriptor that the caller owns.
-unsafe fn libc_close(fd: RawFd) { unsafe {
-    // `close` is provided by libc which is always linked on Unix targets.
-    unsafe extern "C" {
-        fn close(fd: std::os::raw::c_int) -> std::os::raw::c_int;
+unsafe fn libc_close(fd: RawFd) {
+    unsafe {
+        // `close` is provided by libc which is always linked on Unix targets.
+        unsafe extern "C" {
+            fn close(fd: std::os::raw::c_int) -> std::os::raw::c_int;
+        }
+        let _ = close(fd);
     }
-    let _ = close(fd);
-}}
+}
 
 // ---------------------------------------------------------------------------
 // pNext chain helper
@@ -228,19 +230,21 @@ unsafe fn libc_close(fd: RawFd) { unsafe {
 /// Both pointers must be valid and point to Vulkan structures whose first two
 /// fields are `s_type` and `next` (i.e. they extend `VkBaseInStructure`).
 /// `chained.next` must be null on entry.
-pub unsafe fn chain_next_vk_struct<N, C>(node: &mut N, chained: &mut C) { unsafe {
-    let node_base = node as *mut N as *mut vk::BaseOutStructure;
-    let chained_base = chained as *mut C as *mut vk::BaseOutStructure;
+pub unsafe fn chain_next_vk_struct<N, C>(node: &mut N, chained: &mut C) {
+    unsafe {
+        let node_base = node as *mut N as *mut vk::BaseOutStructure;
+        let chained_base = chained as *mut C as *mut vk::BaseOutStructure;
 
-    debug_assert!(
-        (*chained_base).next.is_null(),
-        "chained node must have null next on entry"
-    );
+        debug_assert!(
+            (*chained_base).next.is_null(),
+            "chained node must have null next on entry"
+        );
 
-    // Insert at the head: chained.next = node.next; node.next = chained
-    (*chained_base).next = (*node_base).next;
-    (*node_base).next = chained_base;
-}}
+        // Insert at the head: chained.next = node.next; node.next = chained
+        (*chained_base).next = (*node_base).next;
+        (*node_base).next = chained_base;
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Vulkan enumeration / query helpers
@@ -253,9 +257,7 @@ pub fn enumerate_instance_extension_properties(
     entry: &vulkanalia::Entry,
     layer: Option<&std::ffi::CStr>,
 ) -> Result<Vec<vk::ExtensionProperties>, vk::ErrorCode> {
-    unsafe {
-        entry.enumerate_instance_extension_properties(layer)
-    }
+    unsafe { entry.enumerate_instance_extension_properties(layer) }
 }
 
 /// Enumerate device extension properties.
@@ -265,9 +267,7 @@ pub fn enumerate_device_extension_properties(
     instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
 ) -> Result<Vec<vk::ExtensionProperties>, vk::ErrorCode> {
-    unsafe {
-        instance.enumerate_device_extension_properties(physical_device, None)
-    }
+    unsafe { instance.enumerate_device_extension_properties(physical_device, None) }
 }
 
 /// Enumerate physical devices.
@@ -302,45 +302,49 @@ pub struct QueueFamilyInfo {
 pub unsafe fn get_physical_device_queue_family_properties2(
     instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
-) -> Vec<QueueFamilyInfo> { unsafe {
-    // Use the raw function pointer because vulkanalia's high-level wrapper
-    // doesn't support pNext chains on the output structures.
-    let get_props_fn = instance.commands().get_physical_device_queue_family_properties2;
+) -> Vec<QueueFamilyInfo> {
+    unsafe {
+        // Use the raw function pointer because vulkanalia's high-level wrapper
+        // doesn't support pNext chains on the output structures.
+        let get_props_fn = instance
+            .commands()
+            .get_physical_device_queue_family_properties2;
 
-    // First call to get the count.
-    let mut count: u32 = 0;
-    get_props_fn(physical_device, &mut count, std::ptr::null_mut());
+        // First call to get the count.
+        let mut count: u32 = 0;
+        get_props_fn(physical_device, &mut count, std::ptr::null_mut());
 
-    // Allocate and chain structures.
-    let mut infos: Vec<QueueFamilyInfo> = (0..count)
-        .map(|_| QueueFamilyInfo {
-            properties: vk::QueueFamilyProperties2::default(),
-            video_properties: vk::QueueFamilyVideoPropertiesKHR::default(),
-            query_result_status: vk::QueueFamilyQueryResultStatusPropertiesKHR::default(),
-        })
-        .collect();
+        // Allocate and chain structures.
+        let mut infos: Vec<QueueFamilyInfo> = (0..count)
+            .map(|_| QueueFamilyInfo {
+                properties: vk::QueueFamilyProperties2::default(),
+                video_properties: vk::QueueFamilyVideoPropertiesKHR::default(),
+                query_result_status: vk::QueueFamilyQueryResultStatusPropertiesKHR::default(),
+            })
+            .collect();
 
-    // Build the mutable slice of QueueFamilyProperties2 with pNext chains.
-    let mut props: Vec<vk::QueueFamilyProperties2> = infos
-        .iter_mut()
-        .map(|info| {
-            info.video_properties.next =
-                &mut info.query_result_status as *mut _ as *mut std::ffi::c_void;
-            let mut p = vk::QueueFamilyProperties2::default();
-            p.next = &mut info.video_properties as *mut _ as *mut std::ffi::c_void;
-            p
-        })
-        .collect();
+        // Build the mutable slice of QueueFamilyProperties2 with pNext chains.
+        let mut props: Vec<vk::QueueFamilyProperties2> = infos
+            .iter_mut()
+            .map(|info| {
+                info.video_properties.next =
+                    &mut info.query_result_status as *mut _ as *mut std::ffi::c_void;
+                let mut p = vk::QueueFamilyProperties2::default();
+                p.next = &mut info.video_properties as *mut _ as *mut std::ffi::c_void;
+                p
+            })
+            .collect();
 
-    get_props_fn(physical_device, &mut count, props.as_mut_ptr());
+        get_props_fn(physical_device, &mut count, props.as_mut_ptr());
 
-    // Copy results back into infos.
-    for (info, prop) in infos.iter_mut().zip(props.iter()) {
-        info.properties.queue_family_properties = prop.queue_family_properties;
+        // Copy results back into infos.
+        for (info, prop) in infos.iter_mut().zip(props.iter()) {
+            info.properties.queue_family_properties = prop.queue_family_properties;
+        }
+
+        infos
     }
-
-    infos
-}}
+}
 
 /// Get surface formats.
 ///
@@ -349,9 +353,9 @@ pub unsafe fn get_physical_device_surface_formats(
     instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
     surface: vk::SurfaceKHR,
-) -> Result<Vec<vk::SurfaceFormatKHR>, vk::ErrorCode> { unsafe {
-    instance.get_physical_device_surface_formats_khr(physical_device, surface)
-}}
+) -> Result<Vec<vk::SurfaceFormatKHR>, vk::ErrorCode> {
+    unsafe { instance.get_physical_device_surface_formats_khr(physical_device, surface) }
+}
 
 /// Get present modes.
 ///
@@ -360,9 +364,9 @@ pub unsafe fn get_physical_device_surface_present_modes(
     instance: &vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
     surface: vk::SurfaceKHR,
-) -> Result<Vec<vk::PresentModeKHR>, vk::ErrorCode> { unsafe {
-    instance.get_physical_device_surface_present_modes_khr(physical_device, surface)
-}}
+) -> Result<Vec<vk::PresentModeKHR>, vk::ErrorCode> {
+    unsafe { instance.get_physical_device_surface_present_modes_khr(physical_device, surface) }
+}
 
 /// Get swapchain images.
 ///
@@ -370,9 +374,9 @@ pub unsafe fn get_physical_device_surface_present_modes(
 pub unsafe fn get_swapchain_images(
     device: &vulkanalia::Device,
     swapchain: vk::SwapchainKHR,
-) -> Result<Vec<vk::Image>, vk::ErrorCode> { unsafe {
-    device.get_swapchain_images_khr(swapchain)
-}}
+) -> Result<Vec<vk::Image>, vk::ErrorCode> {
+    unsafe { device.get_swapchain_images_khr(swapchain) }
+}
 
 // ---------------------------------------------------------------------------
 // Memory type mapping
@@ -387,21 +391,23 @@ pub unsafe fn map_memory_type_to_index(
     physical_device: vk::PhysicalDevice,
     type_bits: u32,
     requirements_mask: vk::MemoryPropertyFlags,
-) -> Result<u32, vk::ErrorCode> { unsafe {
-    let memory_properties = instance.get_physical_device_memory_properties(physical_device);
-    let mut bits = type_bits;
-    for i in 0..32u32 {
-        if (bits & 1) == 1
-            && memory_properties.memory_types[i as usize]
-                .property_flags
-                .contains(requirements_mask)
-        {
-            return Ok(i);
+) -> Result<u32, vk::ErrorCode> {
+    unsafe {
+        let memory_properties = instance.get_physical_device_memory_properties(physical_device);
+        let mut bits = type_bits;
+        for i in 0..32u32 {
+            if (bits & 1) == 1
+                && memory_properties.memory_types[i as usize]
+                    .property_flags
+                    .contains(requirements_mask)
+            {
+                return Ok(i);
+            }
+            bits >>= 1;
         }
-        bits >>= 1;
+        Err(vk::ErrorCode::VALIDATION_FAILED)
     }
-    Err(vk::ErrorCode::VALIDATION_FAILED)
-}}
+}
 
 // ---------------------------------------------------------------------------
 // Fence helpers
@@ -422,66 +428,71 @@ pub unsafe fn wait_and_reset_fence(
     fence_name: &str,
     fence_wait_timeout: u64,
     fence_total_wait_timeout: u64,
-) -> vk::Result { unsafe {
-    assert!(fence != vk::Fence::null());
+) -> vk::Result {
+    unsafe {
+        assert!(fence != vk::Fence::null());
 
-    let mut current_wait: u64 = 0;
-    let mut result = vk::Result::SUCCESS;
+        let mut current_wait: u64 = 0;
+        let mut result = vk::Result::SUCCESS;
 
-    while fence_total_wait_timeout >= current_wait {
-        current_wait += fence_wait_timeout;
+        while fence_total_wait_timeout >= current_wait {
+            current_wait += fence_wait_timeout;
 
-        match device.wait_for_fences(&[fence], true, fence_wait_timeout) {
-            Ok(vk::SuccessCode::SUCCESS) => {
-                result = vk::Result::SUCCESS;
-                break;
-            }
-            Ok(vk::SuccessCode::TIMEOUT) => {
-                tracing::warn!(
-                    "fence {}({:?}) is not done after {} ms",
-                    fence_name,
-                    fence,
-                    current_wait / (1_000 * 1_000),
-                );
-                result = vk::Result::TIMEOUT;
-            }
-            Ok(_) => {
-                result = vk::Result::SUCCESS;
-                break;
-            }
-            Err(e) => {
-                result = vk::Result::from(e);
-                break;
+            match device.wait_for_fences(&[fence], true, fence_wait_timeout) {
+                Ok(vk::SuccessCode::SUCCESS) => {
+                    result = vk::Result::SUCCESS;
+                    break;
+                }
+                Ok(vk::SuccessCode::TIMEOUT) => {
+                    tracing::warn!(
+                        "fence {}({:?}) is not done after {} ms",
+                        fence_name,
+                        fence,
+                        current_wait / (1_000 * 1_000),
+                    );
+                    result = vk::Result::TIMEOUT;
+                }
+                Ok(_) => {
+                    result = vk::Result::SUCCESS;
+                    break;
+                }
+                Err(e) => {
+                    result = vk::Result::from(e);
+                    break;
+                }
             }
         }
-    }
 
-    if result != vk::Result::SUCCESS {
-        let status = device.get_fence_status(fence);
-        tracing::error!(
-            "fence {}({:?}) is not done after {} ms — status: {:?}",
-            fence_name,
-            fence,
-            fence_total_wait_timeout / (1_000 * 1_000),
-            status,
-        );
-        panic!("Fence is not signaled yet after total wait timeout");
-    }
-
-    if reset_after_wait {
-        if let Err(e) = device.reset_fences(&[fence]) {
-            tracing::error!("ResetFences() result: {:?}", e);
-            panic!("ResetFences failed: {:?}", e);
+        if result != vk::Result::SUCCESS {
+            let status = device.get_fence_status(fence);
+            tracing::error!(
+                "fence {}({:?}) is not done after {} ms — status: {:?}",
+                fence_name,
+                fence,
+                fence_total_wait_timeout / (1_000 * 1_000),
+                status,
+            );
+            panic!("Fence is not signaled yet after total wait timeout");
         }
 
-        debug_assert!(
-            matches!(device.get_fence_status(fence), Ok(vk::SuccessCode::NOT_READY)),
-            "Fence should be NOT_READY after reset"
-        );
-    }
+        if reset_after_wait {
+            if let Err(e) = device.reset_fences(&[fence]) {
+                tracing::error!("ResetFences() result: {:?}", e);
+                panic!("ResetFences failed: {:?}", e);
+            }
 
-    result
-}}
+            debug_assert!(
+                matches!(
+                    device.get_fence_status(fence),
+                    Ok(vk::SuccessCode::NOT_READY)
+                ),
+                "Fence should be NOT_READY after reset"
+            );
+        }
+
+        result
+    }
+}
 
 /// Wait for `fence`, check the video decode query-pool status, and retry on
 /// timeout.
@@ -498,70 +509,70 @@ pub unsafe fn wait_and_get_status(
     fence_wait_timeout: u64,
     fence_total_wait_timeout: u64,
     mut retry_count: u32,
-) -> vk::Result { unsafe {
-    let mut result;
+) -> vk::Result {
+    unsafe {
+        let mut result;
 
-    loop {
-        result = wait_and_reset_fence(
-            device,
-            fence,
-            reset_after_wait,
-            fence_name,
-            fence_wait_timeout,
-            fence_total_wait_timeout,
-        );
-
-        if result != vk::Result::SUCCESS {
-            tracing::warn!(
-                "WaitForFences timeout {} result {:?} retry {}",
+        loop {
+            result = wait_and_reset_fence(
+                device,
+                fence,
+                reset_after_wait,
+                fence_name,
                 fence_wait_timeout,
-                result,
-                retry_count,
+                fence_total_wait_timeout,
             );
 
-            let mut decode_status_raw: i32 = vk::QueryResultStatusKHR::NOT_READY.as_raw();
-            let data_slice = std::slice::from_raw_parts_mut(
-                &mut decode_status_raw as *mut i32 as *mut u8,
-                std::mem::size_of::<i32>(),
-            );
-            let query_result = device.get_query_pool_results(
-                query_pool,
-                start_query_id as u32,
-                1, // query_count
-                data_slice,
-                std::mem::size_of::<i32>() as vk::DeviceSize,
-                vk::QueryResultFlags::WITH_STATUS_KHR,
-            );
-            let decode_status = vk::QueryResultStatusKHR::from_raw(decode_status_raw);
+            if result != vk::Result::SUCCESS {
+                tracing::warn!(
+                    "WaitForFences timeout {} result {:?} retry {}",
+                    fence_wait_timeout,
+                    result,
+                    retry_count,
+                );
 
-            tracing::error!("GetQueryPoolResults() result: {:?}", query_result);
-            tracing::error!(
-                "Decode status for CurrPicIdx {}: {:?}",
-                picture_index,
-                decode_status,
-            );
+                let mut decode_status_raw: i32 = vk::QueryResultStatusKHR::NOT_READY.as_raw();
+                let data_slice = std::slice::from_raw_parts_mut(
+                    &mut decode_status_raw as *mut i32 as *mut u8,
+                    std::mem::size_of::<i32>(),
+                );
+                let query_result = device.get_query_pool_results(
+                    query_pool,
+                    start_query_id as u32,
+                    1, // query_count
+                    data_slice,
+                    std::mem::size_of::<i32>() as vk::DeviceSize,
+                    vk::QueryResultFlags::WITH_STATUS_KHR,
+                );
+                let decode_status = vk::QueryResultStatusKHR::from_raw(decode_status_raw);
 
-            if let Err(vk::ErrorCode::DEVICE_LOST) = query_result {
-                tracing::error!("Dropping frame");
-                break;
+                tracing::error!("GetQueryPoolResults() result: {:?}", query_result);
+                tracing::error!(
+                    "Decode status for CurrPicIdx {}: {:?}",
+                    picture_index,
+                    decode_status,
+                );
+
+                if let Err(vk::ErrorCode::DEVICE_LOST) = query_result {
+                    tracing::error!("Dropping frame");
+                    break;
+                }
+
+                if query_result.is_ok() && decode_status == vk::QueryResultStatusKHR::ERROR {
+                    tracing::error!("Decoding of the frame failed.");
+                    break;
+                }
             }
 
-            if query_result.is_ok()
-                && decode_status == vk::QueryResultStatusKHR::ERROR
-            {
-                tracing::error!("Decoding of the frame failed.");
+            retry_count -= 1;
+            if result != vk::Result::TIMEOUT || retry_count == 0 {
                 break;
             }
         }
 
-        retry_count -= 1;
-        if result != vk::Result::TIMEOUT || retry_count == 0 {
-            break;
-        }
+        result
     }
-
-    result
-}}
+}
 
 // ---------------------------------------------------------------------------
 // DeviceUuidUtils

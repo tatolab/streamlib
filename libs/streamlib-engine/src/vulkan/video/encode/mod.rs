@@ -10,10 +10,10 @@
 
 pub mod color_vui;
 pub mod config;
-mod session;
-mod submit;
-mod staging;
 mod gop;
+mod session;
+mod staging;
+mod submit;
 mod vui_patch;
 
 #[cfg(test)]
@@ -22,17 +22,17 @@ mod tests;
 pub use color_vui::H273ColorVui;
 pub use config::*;
 
+use std::ptr;
+use std::sync::Arc;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia_vma as vma;
-use std::ptr;
-use std::sync::Arc;
 
 use crate::vulkan::video::video_context::{VideoContext, VideoError};
-use crate::vulkan::video::vk_video_encoder::vk_video_encoder_h264::VkVideoEncoderH264;
-use crate::vulkan::video::vk_video_encoder::vk_video_encoder_h265::VkVideoEncoderH265;
 use crate::vulkan::video::vk_video_encoder::vk_encoder_config_h264::EncoderConfigH264;
 use crate::vulkan::video::vk_video_encoder::vk_encoder_config_h265::EncoderConfigH265;
+use crate::vulkan::video::vk_video_encoder::vk_video_encoder_h264::VkVideoEncoderH264;
+use crate::vulkan::video::vk_video_encoder::vk_video_encoder_h265::VkVideoEncoderH265;
 use crate::vulkan::video::vk_video_encoder::vk_video_gop_structure::{
     GopState, VkVideoGopStructure,
 };
@@ -251,16 +251,18 @@ impl SimpleEncoder {
         let encode_queue = host_device.video_encode_queue().ok_or_else(|| {
             VideoError::BitstreamError(
                 "host device has no video encode queue family — \
-                 GPU does not support Vulkan Video encode".into(),
+                 GPU does not support Vulkan Video encode"
+                    .into(),
             )
         })?;
-        let encode_queue_family = host_device
-            .video_encode_queue_family_index()
-            .ok_or_else(|| {
-                VideoError::BitstreamError(
-                    "host device exposes encode queue but no queue family index".into(),
-                )
-            })?;
+        let encode_queue_family =
+            host_device
+                .video_encode_queue_family_index()
+                .ok_or_else(|| {
+                    VideoError::BitstreamError(
+                        "host device exposes encode queue but no queue family index".into(),
+                    )
+                })?;
         let compute_queue = host_device
             .compute_queue()
             .unwrap_or_else(|| host_device.queue());
@@ -457,8 +459,7 @@ impl Drop for SimpleEncoder {
 
             // Destroy source image view, then image + allocation
             if self.source_view != vk::ImageView::null() {
-                self.device
-                    .destroy_image_view(self.source_view, None);
+                self.device.destroy_image_view(self.source_view, None);
             }
             if self.source_image != vk::Image::null() {
                 allocator.destroy_image(self.source_image, self.source_allocation);

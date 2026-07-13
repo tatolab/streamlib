@@ -601,10 +601,7 @@ mod tests {
         );
         assert_eq!(offset_of!(ColorBlendAttachmentRepr, alpha_blend_op), 20);
         assert_eq!(offset_of!(ColorBlendAttachmentRepr, color_write_mask), 24);
-        assert_eq!(
-            offset_of!(ColorBlendAttachmentRepr, _reserved_padding),
-            28
-        );
+        assert_eq!(offset_of!(ColorBlendAttachmentRepr, _reserved_padding), 28);
     }
 
     #[test]
@@ -636,10 +633,7 @@ mod tests {
         assert_eq!(size_of::<GraphicsPipelineStateRepr>(), 160);
         assert_eq!(align_of::<GraphicsPipelineStateRepr>(), 8);
         assert_eq!(offset_of!(GraphicsPipelineStateRepr, topology), 0);
-        assert_eq!(
-            offset_of!(GraphicsPipelineStateRepr, _reserved_padding1),
-            4
-        );
+        assert_eq!(offset_of!(GraphicsPipelineStateRepr, _reserved_padding1), 4);
         assert_eq!(offset_of!(GraphicsPipelineStateRepr, vertex_input), 8);
         assert_eq!(offset_of!(GraphicsPipelineStateRepr, rasterization), 48);
         assert_eq!(offset_of!(GraphicsPipelineStateRepr, multisample), 64);
@@ -667,27 +661,12 @@ mod tests {
         assert_eq!(offset_of!(GraphicsKernelDescriptorRepr, label_len), 8);
         assert_eq!(offset_of!(GraphicsKernelDescriptorRepr, stages_ptr), 16);
         assert_eq!(offset_of!(GraphicsKernelDescriptorRepr, stages_len), 24);
+        assert_eq!(offset_of!(GraphicsKernelDescriptorRepr, bindings_ptr), 32);
+        assert_eq!(offset_of!(GraphicsKernelDescriptorRepr, bindings_len), 40);
+        assert_eq!(offset_of!(GraphicsKernelDescriptorRepr, push_constants), 48);
+        assert_eq!(offset_of!(GraphicsKernelDescriptorRepr, pipeline_state), 56);
         assert_eq!(
-            offset_of!(GraphicsKernelDescriptorRepr, bindings_ptr),
-            32
-        );
-        assert_eq!(
-            offset_of!(GraphicsKernelDescriptorRepr, bindings_len),
-            40
-        );
-        assert_eq!(
-            offset_of!(GraphicsKernelDescriptorRepr, push_constants),
-            48
-        );
-        assert_eq!(
-            offset_of!(GraphicsKernelDescriptorRepr, pipeline_state),
-            56
-        );
-        assert_eq!(
-            offset_of!(
-                GraphicsKernelDescriptorRepr,
-                descriptor_sets_in_flight
-            ),
+            offset_of!(GraphicsKernelDescriptorRepr, descriptor_sets_in_flight),
             216
         );
         assert_eq!(

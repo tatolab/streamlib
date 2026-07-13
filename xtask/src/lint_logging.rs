@@ -33,7 +33,14 @@ pub const TARGETS: &[LintTarget] = &[
         name: "python",
         root_relative: "libs/streamlib-python",
         extension: "py",
-        exclude_path_segments: &["tests", "_generated_", "__pycache__", ".venv", "build", "dist"],
+        exclude_path_segments: &[
+            "tests",
+            "_generated_",
+            "__pycache__",
+            ".venv",
+            "build",
+            "dist",
+        ],
         exclude_file_suffixes: &["_test.py"],
         comment_prefix: "#",
         banned_substrings: &["print(", "sys.stdout", "sys.stderr", "logging.basicConfig"],
@@ -111,7 +118,10 @@ pub fn scan_all(project_root: &Path) -> Result<LintReport> {
         scan_target(&root, target, &mut violations, &mut files_scanned)?;
     }
     scan_rust(project_root, &mut violations, &mut files_scanned)?;
-    Ok(LintReport { violations, files_scanned })
+    Ok(LintReport {
+        violations,
+        files_scanned,
+    })
 }
 
 fn scan_target(
@@ -177,8 +187,8 @@ fn scan_file(
     target: &'static LintTarget,
     violations: &mut Vec<Violation>,
 ) -> Result<()> {
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let content =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     if content.contains(ALLOW_FILE_PRAGMA) {
         return Ok(());
     }
@@ -403,8 +413,8 @@ fn discover_lint_opted_in_crates(project_root: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn scan_rust_file(path: &Path, violations: &mut Vec<Violation>) -> Result<()> {
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let content =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     if content.contains(ALLOW_FILE_PRAGMA) {
         return Ok(());
     }
@@ -591,9 +601,7 @@ fn eval_cfg(tokens: proc_macro2::TokenStream) -> CfgEval {
     eval_predicate(&mut iter)
 }
 
-fn eval_predicate(
-    iter: &mut std::iter::Peekable<proc_macro2::token_stream::IntoIter>,
-) -> CfgEval {
+fn eval_predicate(iter: &mut std::iter::Peekable<proc_macro2::token_stream::IntoIter>) -> CfgEval {
     let Some(tt) = iter.next() else {
         return CfgEval::Unknown;
     };
@@ -759,7 +767,12 @@ fn is_allow_disallowed_macros(attr: &syn::Attribute) -> bool {
     }
     let mut hit = false;
     let _ = attr.parse_nested_meta(|meta| {
-        let segs: Vec<_> = meta.path.segments.iter().map(|s| s.ident.to_string()).collect();
+        let segs: Vec<_> = meta
+            .path
+            .segments
+            .iter()
+            .map(|s| s.ident.to_string())
+            .collect();
         if segs == ["clippy", "disallowed_macros"] {
             hit = true;
         }
@@ -849,7 +862,11 @@ mod tests {
         path
     }
 
-    fn scan_fixture_tree(target: &'static LintTarget, content: &str, rel_path: &str) -> Vec<Violation> {
+    fn scan_fixture_tree(
+        target: &'static LintTarget,
+        content: &str,
+        rel_path: &str,
+    ) -> Vec<Violation> {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().to_path_buf();
         write_fixture(&root, rel_path, content);
@@ -955,7 +972,11 @@ mod tests {
             "// don't use console.log here\nstreamlib.log.info(\"ok\");\n",
             "src/app.ts",
         );
-        assert!(v.is_empty(), "commented-out console.log should not flag: {:?}", v);
+        assert!(
+            v.is_empty(),
+            "commented-out console.log should not flag: {:?}",
+            v
+        );
     }
 
     #[test]
@@ -967,7 +988,11 @@ mod tests {
         let mut violations = Vec::new();
         let mut files_scanned = 0usize;
         scan_target(&root, PYTHON_TARGET, &mut violations, &mut files_scanned).unwrap();
-        assert!(violations.is_empty(), "tests/ should be excluded: {:?}", violations);
+        assert!(
+            violations.is_empty(),
+            "tests/ should be excluded: {:?}",
+            violations
+        );
     }
 
     #[test]
@@ -977,7 +1002,11 @@ mod tests {
             "# streamlib:lint-logging:allow-file — this is the interceptor installer itself\nimport sys\nsys.stdout = MyInterceptor()\n",
             "src/_log_interceptors.py",
         );
-        assert!(v.is_empty(), "allow-file pragma should suppress entire file: {:?}", v);
+        assert!(
+            v.is_empty(),
+            "allow-file pragma should suppress entire file: {:?}",
+            v
+        );
     }
 
     #[test]
@@ -987,7 +1016,11 @@ mod tests {
             "// streamlib:lint-logging:allow-file — interceptor installer\nDeno.stdout.write(new Uint8Array());\n",
             "src/_log_interceptors.ts",
         );
-        assert!(v.is_empty(), "allow-file pragma should suppress entire file: {:?}", v);
+        assert!(
+            v.is_empty(),
+            "allow-file pragma should suppress entire file: {:?}",
+            v
+        );
     }
 
     #[test]
@@ -1009,8 +1042,18 @@ mod tests {
         write_fixture(&root, "src/app.ts", "streamlib.log.info(\"ok\");\n");
         let mut violations = Vec::new();
         let mut files_scanned = 0usize;
-        scan_target(&root, TYPESCRIPT_TARGET, &mut violations, &mut files_scanned).unwrap();
-        assert!(violations.is_empty(), "*_test.ts should be excluded: {:?}", violations);
+        scan_target(
+            &root,
+            TYPESCRIPT_TARGET,
+            &mut violations,
+            &mut files_scanned,
+        )
+        .unwrap();
+        assert!(
+            violations.is_empty(),
+            "*_test.ts should be excluded: {:?}",
+            violations
+        );
     }
 
     // ----- Rust target -------------------------------------------------------
@@ -1097,9 +1140,7 @@ mod tests {
 
     #[test]
     fn rust_cfg_test_skips_mod() {
-        let v = scan_rust_source(
-            "#[cfg(test)]\nmod tests {\n  fn t() { println!(\"x\"); }\n}\n",
-        );
+        let v = scan_rust_source("#[cfg(test)]\nmod tests {\n  fn t() { println!(\"x\"); }\n}\n");
         assert!(v.is_empty(), "#[cfg(test)] mod should be skipped: {:?}", v);
     }
 
@@ -1114,10 +1155,13 @@ mod tests {
 
     #[test]
     fn rust_cfg_macos_skips_item() {
-        let v = scan_rust_source(
-            "#[cfg(target_os = \"macos\")]\npub fn mac() { println!(\"x\"); }\n",
+        let v =
+            scan_rust_source("#[cfg(target_os = \"macos\")]\npub fn mac() { println!(\"x\"); }\n");
+        assert!(
+            v.is_empty(),
+            "target_os=macos should be skipped on linux: {:?}",
+            v
         );
-        assert!(v.is_empty(), "target_os=macos should be skipped on linux: {:?}", v);
     }
 
     #[test]
@@ -1152,7 +1196,12 @@ mod tests {
         let v = scan_rust_source(
             "#[cfg(feature = \"debug-overlay\")]\npub fn d() { println!(\"x\"); }\n",
         );
-        assert_eq!(v.len(), 1, "feature cfg should lint conservatively: {:?}", v);
+        assert_eq!(
+            v.len(),
+            1,
+            "feature cfg should lint conservatively: {:?}",
+            v
+        );
     }
 
     #[test]

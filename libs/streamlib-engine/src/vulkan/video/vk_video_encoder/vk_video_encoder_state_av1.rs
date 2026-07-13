@@ -147,7 +147,10 @@ mod tests {
 
     #[test]
     fn test_color_config() {
-        let config = Av1ColorConfig { mono_chrome: true, separate_uv_delta_q: false };
+        let config = Av1ColorConfig {
+            mono_chrome: true,
+            separate_uv_delta_q: false,
+        };
         assert!(config.mono_chrome);
     }
 }

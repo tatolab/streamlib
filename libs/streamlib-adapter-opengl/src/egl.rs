@@ -12,7 +12,7 @@
 //! the calling thread before issuing GL commands and clears it on the
 //! way out so a different thread can take over on the next call.
 
-use std::ffi::{c_void, CStr, CString};
+use std::ffi::{CStr, CString, c_void};
 use std::mem::ManuallyDrop;
 use std::os::raw::c_char;
 use std::sync::Arc;
@@ -65,8 +65,7 @@ pub enum EglRuntimeError {
 /// load-bearing call: per the NVIDIA EGL DMA-BUF render-target
 /// learning, the texture is render-target-capable iff the underlying
 /// modifier was reported `external_only=FALSE`.
-type PfnGlEGLImageTargetTexture2DOES =
-    unsafe extern "system" fn(target: u32, image: *mut c_void);
+type PfnGlEGLImageTargetTexture2DOES = unsafe extern "system" fn(target: u32, image: *mut c_void);
 
 // EGL DMA-BUF import attribute names that aren't in khronos-egl's
 // re-exports. Values are stable across vendors per
@@ -202,10 +201,8 @@ impl EglRuntime {
             return Err(EglRuntimeError::MissingGlExtension("GL_OES_EGL_image"));
         }
 
-        let image_target_texture_2d_oes = resolve_proc::<PfnGlEGLImageTargetTexture2DOES>(
-            &egl,
-            "glEGLImageTargetTexture2DOES",
-        )?;
+        let image_target_texture_2d_oes =
+            resolve_proc::<PfnGlEGLImageTargetTexture2DOES>(&egl, "glEGLImageTargetTexture2DOES")?;
 
         // Release current — every call site re-makes-current under
         // the lock so the runtime is thread-safe.
@@ -392,7 +389,10 @@ pub struct MakeCurrentGuard<'r> {
 impl Drop for MakeCurrentGuard<'_> {
     fn drop(&mut self) {
         if self._lock.is_some() {
-            let _ = self.runtime.egl.make_current(self.runtime.display, None, None, None);
+            let _ = self
+                .runtime
+                .egl
+                .make_current(self.runtime.display, None, None, None);
         }
     }
 }
@@ -413,17 +413,15 @@ pub struct OwnedMakeCurrentGuard {
 impl OwnedMakeCurrentGuard {
     fn new(runtime: Arc<EglRuntime>) -> Result<Self, EglRuntimeError> {
         if runtime.is_current_on_this_thread() {
-            return Ok(Self { runtime, lock: None });
+            return Ok(Self {
+                runtime,
+                lock: None,
+            });
         }
         let lock_borrowed = runtime.make_current_lock.lock();
         runtime
             .egl
-            .make_current(
-                runtime.display,
-                None,
-                None,
-                Some(runtime.context),
-            )
+            .make_current(runtime.display, None, None, Some(runtime.context))
             .map_err(|e| EglRuntimeError::MakeCurrent(format!("acquire: {e}")))?;
         // SAFETY: `lock_borrowed` borrows `runtime.make_current_lock`. We
         // anchor an `Arc<EglRuntime>` inside the same struct, so the

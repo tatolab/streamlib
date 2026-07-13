@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use schemars::JsonSchema;
 use schemars::r#gen::SchemaGenerator;
 use schemars::schema::{InstanceType, Schema, SchemaObject};
-use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Cow;
 use std::fmt;
@@ -184,10 +184,7 @@ impl<'de> Deserialize<'de> for PackageRef {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let raw = String::deserialize(d)?;
         let stripped = raw.strip_prefix('@').ok_or_else(|| {
-            serde::de::Error::custom(format!(
-                "PackageRef must start with '@', got '{}'",
-                raw
-            ))
+            serde::de::Error::custom(format!("PackageRef must start with '@', got '{}'", raw))
         })?;
         let (org_str, name_str) = stripped.split_once('/').ok_or_else(|| {
             serde::de::Error::custom(format!(
@@ -304,7 +301,9 @@ impl JsonSchema for TypeName {
 /// use streamlib_idents::SchemaIdent;
 /// let _: SchemaIdent = "@tatolab/core/VideoFrame@1.0.0".parse().unwrap();
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 #[schemars(
     description = "Structured schema identifier — the four-field map form of `@org/package/Type@version`."
 )]
@@ -455,10 +454,7 @@ impl JsonSchema for ModuleIdent {
 /// surface leaks into general use.
 pub(crate) fn parse_module_ident_wire(raw: &str) -> IdentResult<ModuleIdent> {
     let stripped = raw.strip_prefix('@').ok_or_else(|| {
-        IdentError::InvalidModuleIdent(
-            raw.to_string(),
-            "must start with '@'".into(),
-        )
+        IdentError::InvalidModuleIdent(raw.to_string(), "must start with '@'".into())
     })?;
     let (org_str, rest) = stripped.split_once('/').ok_or_else(|| {
         IdentError::InvalidModuleIdent(
@@ -664,7 +660,10 @@ version: 0.4.33-dev.2
     #[test]
     fn validators_reject_empty() {
         assert!(matches!(validate_org(""), Err(IdentError::EmptyOrg)));
-        assert!(matches!(validate_package(""), Err(IdentError::EmptyPackage)));
+        assert!(matches!(
+            validate_package(""),
+            Err(IdentError::EmptyPackage)
+        ));
         assert!(matches!(validate_type(""), Err(IdentError::EmptyType)));
     }
 

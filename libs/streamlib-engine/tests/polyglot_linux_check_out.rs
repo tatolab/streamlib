@@ -361,7 +361,10 @@ sys.stdout.flush()
     let output = Command::new("python3")
         .arg("-c")
         .arg(driver)
-        .env("STREAMLIB_SURFACE_SOCKET", "/nonexistent/surface-share.sock")
+        .env(
+            "STREAMLIB_SURFACE_SOCKET",
+            "/nonexistent/surface-share.sock",
+        )
         .env("TEST_NATIVE_LIB", &native_lib)
         .output()
         .expect("spawn python3");

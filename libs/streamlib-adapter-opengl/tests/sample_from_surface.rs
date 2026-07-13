@@ -20,7 +20,7 @@ mod common;
 
 use streamlib_adapter_abi::SurfaceAdapter;
 
-use common::{host_write_clear_color, HostFixture};
+use common::{HostFixture, host_write_clear_color};
 
 const VERTEX_SRC: &str = r#"#version 330 core
 out vec2 v_uv;
@@ -123,10 +123,7 @@ fn sample_from_surface() {
             .expect("acquire_read");
         let texture_id = guard.view().gl_texture_id();
 
-        let _current = fixture
-            .egl
-            .lock_make_current()
-            .expect("lock_make_current");
+        let _current = fixture.egl.lock_make_current().expect("lock_make_current");
         unsafe {
             // Build a probe RGBA8 texture + FBO of width×height.
             let mut probe_tex: u32 = 0;
@@ -143,16 +140,8 @@ fn sample_from_surface() {
                 gl::UNSIGNED_BYTE,
                 std::ptr::null(),
             );
-            gl::TexParameteri(
-                gl::TEXTURE_2D,
-                gl::TEXTURE_MIN_FILTER,
-                gl::NEAREST as i32,
-            );
-            gl::TexParameteri(
-                gl::TEXTURE_2D,
-                gl::TEXTURE_MAG_FILTER,
-                gl::NEAREST as i32,
-            );
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
 
             let mut probe_fbo: u32 = 0;
             gl::GenFramebuffers(1, &mut probe_fbo);
@@ -172,8 +161,7 @@ fn sample_from_surface() {
 
             let prog = compile_program().expect("compile shaders");
             gl::UseProgram(prog);
-            let loc =
-                gl::GetUniformLocation(prog, b"u_tex\0".as_ptr() as *const _);
+            let loc = gl::GetUniformLocation(prog, b"u_tex\0".as_ptr() as *const _);
             gl::Uniform1i(loc, 0);
             gl::ActiveTexture(gl::TEXTURE0);
             gl::BindTexture(gl::TEXTURE_2D, texture_id);

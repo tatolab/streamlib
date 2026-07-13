@@ -61,9 +61,7 @@ fn subprocess_crash_mid_skia_write_observed_by_harness() {
     let gpu = match try_init_gpu() {
         Some(g) => g,
         None => {
-            println!(
-                "subprocess_crash_mid_skia_write: skipping — no Vulkan / no GPU"
-            );
+            println!("subprocess_crash_mid_skia_write: skipping — no Vulkan / no GPU");
             return;
         }
     };

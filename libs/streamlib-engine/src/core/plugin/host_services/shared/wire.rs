@@ -20,7 +20,10 @@
 /// the dispatch. The returned slice's `'static` lifetime is a
 /// stand-in for "tied to the caller's `(ptr, len)` argument" — the
 /// callback body must not store the slice past return.
-pub(in crate::core::plugin::host_services) unsafe fn slice_from_raw(ptr: *const u8, len: usize) -> &'static [u8] {
+pub(in crate::core::plugin::host_services) unsafe fn slice_from_raw(
+    ptr: *const u8,
+    len: usize,
+) -> &'static [u8] {
     if ptr.is_null() || len == 0 {
         return &[];
     }
@@ -178,11 +181,7 @@ mod run_host_extern_c_panic_safety_net_tests {
         // flow" invariant. Mental-revert: making `run_host_extern_c`
         // always return `default_on_panic` (no Ok branch) would
         // fail this test.
-        let rc = run_host_extern_c::<_, i32>(
-            "test_ok_path",
-            || 99i32,
-            -1i32,
-        );
+        let rc = run_host_extern_c::<_, i32>("test_ok_path", || 99i32, -1i32);
         assert_eq!(rc, 99);
     }
 

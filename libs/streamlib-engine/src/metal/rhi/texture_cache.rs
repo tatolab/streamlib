@@ -19,12 +19,12 @@ use super::COREVIDEO_INIT_LOCK;
 #[allow(dead_code)]
 const AUTO_FLUSH_INTERVAL: u64 = 60;
 use crate::apple::corevideo_ffi::{
-    kCVReturnSuccess, CFRelease, CVMetalTextureCacheCreate,
-    CVMetalTextureCacheCreateTextureFromImage, CVMetalTextureCacheFlush, CVMetalTextureCacheRef,
-    CVMetalTextureGetTexture, CVMetalTextureRef,
+    CFRelease, CVMetalTextureCacheCreate, CVMetalTextureCacheCreateTextureFromImage,
+    CVMetalTextureCacheFlush, CVMetalTextureCacheRef, CVMetalTextureGetTexture, CVMetalTextureRef,
+    kCVReturnSuccess,
 };
 use crate::core::rhi::{PixelBuffer, RhiTextureCache, RhiTextureView};
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 
 /// macOS texture cache wrapping CVMetalTextureCache.
 ///

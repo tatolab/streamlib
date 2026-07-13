@@ -79,7 +79,6 @@ pub struct ProcessorVTable {
     // -------------------------------------------------------------------------
     // Constructor + lifetime
     // -------------------------------------------------------------------------
-
     /// Build a processor instance from msgpack-encoded `Config`
     /// bytes. Returns a thin opaque pointer the cdylib's wrappers
     /// cast back to `*mut P::Processor`. Null = failure (message in
@@ -100,7 +99,6 @@ pub struct ProcessorVTable {
     // -------------------------------------------------------------------------
     // Async lifecycle (block_on'd inside cdylib using host's tokio handle)
     // -------------------------------------------------------------------------
-
     pub setup: unsafe extern "C" fn(
         instance: *mut c_void,
         ctx_full: *const c_void,
@@ -136,7 +134,6 @@ pub struct ProcessorVTable {
     // -------------------------------------------------------------------------
     // Sync lifecycle
     // -------------------------------------------------------------------------
-
     pub process: unsafe extern "C" fn(
         instance: *mut c_void,
         ctx_limited: *const c_void,
@@ -168,7 +165,6 @@ pub struct ProcessorVTable {
     // -------------------------------------------------------------------------
     // Static info
     // -------------------------------------------------------------------------
-
     /// Serialize the processor's [`ExecutionConfig`] to msgpack bytes.
     /// Return value follows the byte-count convention documented on
     /// the struct.
@@ -190,7 +186,6 @@ pub struct ProcessorVTable {
     // dispatch through the new
     // [`crate::OutputWriterVTable`] / [`crate::InputMailboxesVTable`] slots.
     // -------------------------------------------------------------------------
-
     pub has_iceoryx2_outputs: unsafe extern "C" fn(instance: *const c_void) -> bool,
     pub has_iceoryx2_inputs: unsafe extern "C" fn(instance: *const c_void) -> bool,
 
@@ -239,7 +234,6 @@ pub struct ProcessorVTable {
     // -------------------------------------------------------------------------
     // Config / state IO (msgpack bytes on the wire)
     // -------------------------------------------------------------------------
-
     /// Apply a runtime-reconfigure update. The bytes are
     /// msgpack-encoded `P::Config` (matches `construct`'s payload
     /// shape).

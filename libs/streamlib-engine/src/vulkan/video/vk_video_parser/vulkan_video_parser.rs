@@ -168,7 +168,8 @@ impl DpbSlots {
         let old_dpb_max_size = if reconfigure { self.dpb_max_size } else { 0 };
         self.dpb_max_size = new_dpb_max_size;
 
-        self.dpb.resize_with(self.dpb_max_size as usize, DpbSlot::default);
+        self.dpb
+            .resize_with(self.dpb_max_size as usize, DpbSlot::default);
 
         for ndx in old_dpb_max_size..self.dpb_max_size {
             self.dpb[ndx as usize].invalidate();
@@ -535,10 +536,9 @@ impl VulkanVideoParser {
             dpb_slot = self.dpb.allocate_slot();
             debug_assert!(dpb_slot >= 0);
             self.set_pic_dpb_slot(curr_pic_idx, dpb_slot);
-            self.dpb.get_mut(dpb_slot as u32).set_picture_resource(
-                pic_buf_idx,
-                self.current_picture_id,
-            );
+            self.dpb
+                .get_mut(dpb_slot as u32)
+                .set_picture_resource(pic_buf_idx, self.current_picture_id);
         }
         debug_assert!(dpb_slot >= 0);
         dpb_slot
@@ -562,10 +562,9 @@ impl VulkanVideoParser {
                 dpb_slot = self.dpb.allocate_slot();
                 debug_assert!(dpb_slot >= 0);
                 self.set_pic_dpb_slot(curr_pic_idx, dpb_slot);
-                self.dpb.get_mut(dpb_slot as u32).set_picture_resource(
-                    pic_buf_idx,
-                    self.current_picture_id,
-                );
+                self.dpb
+                    .get_mut(dpb_slot as u32)
+                    .set_picture_resource(pic_buf_idx, self.current_picture_id);
             }
             debug_assert!(dpb_slot >= 0);
         }
@@ -590,10 +589,9 @@ impl VulkanVideoParser {
                 dpb_slot = self.dpb.allocate_slot();
                 debug_assert!(dpb_slot >= 0);
                 self.set_pic_dpb_slot(curr_pic_idx, dpb_slot);
-                self.dpb.get_mut(dpb_slot as u32).set_picture_resource(
-                    pic_buf_idx,
-                    self.current_picture_id,
-                );
+                self.dpb
+                    .get_mut(dpb_slot as u32)
+                    .set_picture_resource(pic_buf_idx, self.current_picture_id);
             }
             debug_assert!(dpb_slot >= 0);
         }
@@ -633,12 +631,11 @@ impl VulkanVideoParser {
     ) -> i32 {
         let sequence_update = stored_max_width != 0 && stored_max_height != 0;
 
-        let mut max_dpb_slots =
-            if codec == vk::VideoCodecOperationFlagsKHR::DECODE_H264 {
-                MAX_DPB_REF_AND_SETUP_SLOTS
-            } else {
-                MAX_DPB_REF_SLOTS
-            };
+        let mut max_dpb_slots = if codec == vk::VideoCodecOperationFlagsKHR::DECODE_H264 {
+            MAX_DPB_REF_AND_SETUP_SLOTS
+        } else {
+            MAX_DPB_REF_SLOTS
+        };
 
         if codec == vk::VideoCodecOperationFlagsKHR::DECODE_AV1 {
             max_dpb_slots = 9;
@@ -854,7 +851,15 @@ mod tests {
         let mut entry = DpbH264Entry::default();
         let foc = [10i16, 20i16];
         entry.set_reference_and_top_bottom_field(
-            true, false, false, true, true, false, 5, &foc, Some(3),
+            true,
+            false,
+            false,
+            true,
+            true,
+            false,
+            5,
+            &foc,
+            Some(3),
         );
         assert!(entry.is_ref());
         assert!(entry.is_field_ref);
@@ -870,12 +875,8 @@ mod tests {
 
     #[test]
     fn test_parser_new_default_state() {
-        let parser = VulkanVideoParser::new(
-            vk::VideoCodecOperationFlagsKHR::DECODE_H264,
-            16,
-            17,
-            90000,
-        );
+        let parser =
+            VulkanVideoParser::new(vk::VideoCodecOperationFlagsKHR::DECODE_H264, 16, 17, 90000);
         assert_eq!(parser.current_picture_id, 0);
         assert_eq!(parser.dpb_slots_mask, 0);
         assert_eq!(parser.field_pic_flag_mask, 0);
@@ -887,12 +888,8 @@ mod tests {
 
     #[test]
     fn test_parser_pic_idx() {
-        let parser = VulkanVideoParser::new(
-            vk::VideoCodecOperationFlagsKHR::DECODE_H264,
-            16,
-            17,
-            90000,
-        );
+        let parser =
+            VulkanVideoParser::new(vk::VideoCodecOperationFlagsKHR::DECODE_H264, 16, 17, 90000);
         assert_eq!(parser.get_pic_idx(Some(0)), 0);
         assert_eq!(parser.get_pic_idx(Some(15)), 15);
         assert_eq!(parser.get_pic_idx(Some(16)), -1); // out of range
@@ -902,12 +899,8 @@ mod tests {
 
     #[test]
     fn test_parser_set_pic_dpb_slot() {
-        let mut parser = VulkanVideoParser::new(
-            vk::VideoCodecOperationFlagsKHR::DECODE_H264,
-            16,
-            17,
-            90000,
-        );
+        let mut parser =
+            VulkanVideoParser::new(vk::VideoCodecOperationFlagsKHR::DECODE_H264, 16, 17, 90000);
         // Initially no slot.
         assert_eq!(parser.get_pic_dpb_slot(0), -1);
 
@@ -927,12 +920,8 @@ mod tests {
 
     #[test]
     fn test_parser_field_pic_flag() {
-        let mut parser = VulkanVideoParser::new(
-            vk::VideoCodecOperationFlagsKHR::DECODE_H264,
-            16,
-            17,
-            90000,
-        );
+        let mut parser =
+            VulkanVideoParser::new(vk::VideoCodecOperationFlagsKHR::DECODE_H264, 16, 17, 90000);
         assert!(!parser.get_field_pic_flag(0));
         let old = parser.set_field_pic_flag(0, true);
         assert!(!old);
@@ -944,12 +933,8 @@ mod tests {
 
     #[test]
     fn test_parser_reset_pic_dpb_slots() {
-        let mut parser = VulkanVideoParser::new(
-            vk::VideoCodecOperationFlagsKHR::DECODE_H265,
-            16,
-            16,
-            90000,
-        );
+        let mut parser =
+            VulkanVideoParser::new(vk::VideoCodecOperationFlagsKHR::DECODE_H265, 16, 16, 90000);
         // Grow DPB to 16 slots.
         parser.dpb.init(16, false);
 
@@ -969,12 +954,8 @@ mod tests {
 
     #[test]
     fn test_parser_allocate_dpb_slot_h264() {
-        let mut parser = VulkanVideoParser::new(
-            vk::VideoCodecOperationFlagsKHR::DECODE_H264,
-            16,
-            17,
-            90000,
-        );
+        let mut parser =
+            VulkanVideoParser::new(vk::VideoCodecOperationFlagsKHR::DECODE_H264, 16, 17, 90000);
         parser.dpb.init(17, false);
 
         let slot = parser.allocate_dpb_slot_for_current_h264(Some(0), false, -1);
@@ -988,12 +969,8 @@ mod tests {
 
     #[test]
     fn test_parser_allocate_dpb_slot_h265() {
-        let mut parser = VulkanVideoParser::new(
-            vk::VideoCodecOperationFlagsKHR::DECODE_H265,
-            16,
-            16,
-            90000,
-        );
+        let mut parser =
+            VulkanVideoParser::new(vk::VideoCodecOperationFlagsKHR::DECODE_H265, 16, 16, 90000);
         parser.dpb.init(16, false);
 
         let slot = parser.allocate_dpb_slot_for_current_h265(Some(5), true, -1);
@@ -1003,12 +980,8 @@ mod tests {
 
     #[test]
     fn test_parser_allocate_dpb_slot_av1() {
-        let mut parser = VulkanVideoParser::new(
-            vk::VideoCodecOperationFlagsKHR::DECODE_AV1,
-            16,
-            9,
-            90000,
-        );
+        let mut parser =
+            VulkanVideoParser::new(vk::VideoCodecOperationFlagsKHR::DECODE_AV1, 16, 9, 90000);
         parser.dpb.init(9, false);
 
         let slot = parser.allocate_dpb_slot_for_current_av1(Some(2), true, -1);
@@ -1018,17 +991,20 @@ mod tests {
 
     #[test]
     fn test_parser_begin_sequence_h264() {
-        let mut parser = VulkanVideoParser::new(
-            vk::VideoCodecOperationFlagsKHR::DECODE_H264,
-            16,
-            17,
-            90000,
-        );
+        let mut parser =
+            VulkanVideoParser::new(vk::VideoCodecOperationFlagsKHR::DECODE_H264, 16, 17, 90000);
         let result = parser.begin_sequence(
             vk::VideoCodecOperationFlagsKHR::DECODE_H264,
-            1920, 1080, 1920, 1080,
-            16, 0,
-            0, 0, 0, 0,
+            1920,
+            1080,
+            1920,
+            1080,
+            16,
+            0,
+            0,
+            0,
+            0,
+            0,
         );
         assert!(result > 0);
         assert_eq!(parser.max_num_dpb_slots, MAX_DPB_REF_AND_SETUP_SLOTS);
@@ -1036,17 +1012,20 @@ mod tests {
 
     #[test]
     fn test_parser_begin_sequence_av1() {
-        let mut parser = VulkanVideoParser::new(
-            vk::VideoCodecOperationFlagsKHR::DECODE_AV1,
-            16,
-            9,
-            90000,
-        );
+        let mut parser =
+            VulkanVideoParser::new(vk::VideoCodecOperationFlagsKHR::DECODE_AV1, 16, 9, 90000);
         let result = parser.begin_sequence(
             vk::VideoCodecOperationFlagsKHR::DECODE_AV1,
-            1920, 1080, 1920, 1080,
-            16, 0,
-            0, 0, 0, 0,
+            1920,
+            1080,
+            1920,
+            1080,
+            16,
+            0,
+            0,
+            0,
+            0,
+            0,
         );
         assert!(result > 0);
         assert_eq!(parser.max_num_dpb_slots, 9);
@@ -1054,10 +1033,8 @@ mod tests {
 
     #[test]
     fn test_parser_advance_picture_id() {
-        let mut parser = VulkanVideoParser::new(
-            vk::VideoCodecOperationFlagsKHR::DECODE_H264,
-            16, 17, 90000,
-        );
+        let mut parser =
+            VulkanVideoParser::new(vk::VideoCodecOperationFlagsKHR::DECODE_H264, 16, 17, 90000);
         assert_eq!(parser.current_picture_id, 0);
         parser.advance_picture_id();
         assert_eq!(parser.current_picture_id, 1);
@@ -1065,10 +1042,8 @@ mod tests {
 
     #[test]
     fn test_create_vulkan_video_parser_factory() {
-        let result = create_vulkan_video_parser(
-            vk::VideoCodecOperationFlagsKHR::DECODE_H264,
-            16, 17, 90000,
-        );
+        let result =
+            create_vulkan_video_parser(vk::VideoCodecOperationFlagsKHR::DECODE_H264, 16, 17, 90000);
         assert!(result.is_ok());
     }
 

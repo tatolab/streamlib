@@ -21,9 +21,7 @@
 
 mod common;
 
-use common::{
-    run_single_schema_codegen, skip_unless_jtd_codegen_available, workspace_root,
-};
+use common::{run_single_schema_codegen, skip_unless_jtd_codegen_available, workspace_root};
 use streamlib_jtd_codegen::RuntimeTarget;
 use tempfile::TempDir;
 
@@ -31,14 +29,7 @@ const REPRESENTATIVE_SCHEMA_REL: &str =
     "libs/streamlib-jtd-codegen/tests/fixtures/jtd_codegen_test_fixture.yaml";
 
 const EXPECTED_FIELDS: &[&str] = &[
-    "alpha",
-    "beta",
-    "delta",
-    "epsilon",
-    "gamma",
-    "mu",
-    "nu",
-    "zeta",
+    "alpha", "beta", "delta", "epsilon", "gamma", "mu", "nu", "zeta",
 ];
 
 #[test]
@@ -63,18 +54,12 @@ fn field_order_consistent_across_runtimes_for_jtd_codegen_test_fixture() {
     run_single_schema_codegen(RuntimeTarget::Python, &schema_path, py_dir.path());
     run_single_schema_codegen(RuntimeTarget::Typescript, &schema_path, ts_dir.path());
 
-    let rust_code = std::fs::read_to_string(
-        rust_dir.path().join("jtd_codegen_test_fixture.rs"),
-    )
-    .expect("read generated Rust");
-    let py_code = std::fs::read_to_string(
-        py_dir.path().join("jtd_codegen_test_fixture.py"),
-    )
-    .expect("read generated Python");
-    let ts_code = std::fs::read_to_string(
-        ts_dir.path().join("jtd_codegen_test_fixture.ts"),
-    )
-    .expect("read generated TypeScript");
+    let rust_code = std::fs::read_to_string(rust_dir.path().join("jtd_codegen_test_fixture.rs"))
+        .expect("read generated Rust");
+    let py_code = std::fs::read_to_string(py_dir.path().join("jtd_codegen_test_fixture.py"))
+        .expect("read generated Python");
+    let ts_code = std::fs::read_to_string(ts_dir.path().join("jtd_codegen_test_fixture.ts"))
+        .expect("read generated TypeScript");
 
     let rust_fields = extract_rust_struct_fields(&rust_code);
     let py_fields = extract_python_dataclass_fields(&py_code);

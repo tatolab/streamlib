@@ -231,28 +231,36 @@ fn test_simple_decoder_config_defaults() {
 
 #[test]
 fn test_aligned_extent_math_1080p() {
-    use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{align_size, H264_MB_SIZE_ALIGNMENT};
+    use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{
+        H264_MB_SIZE_ALIGNMENT, align_size,
+    };
     assert_eq!(align_size(1920u32, H264_MB_SIZE_ALIGNMENT), 1920);
     assert_eq!(align_size(1080u32, H264_MB_SIZE_ALIGNMENT), 1088);
 }
 
 #[test]
 fn test_aligned_extent_math_720p() {
-    use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{align_size, H264_MB_SIZE_ALIGNMENT};
+    use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{
+        H264_MB_SIZE_ALIGNMENT, align_size,
+    };
     assert_eq!(align_size(1280u32, H264_MB_SIZE_ALIGNMENT), 1280);
     assert_eq!(align_size(720u32, H264_MB_SIZE_ALIGNMENT), 720);
 }
 
 #[test]
 fn test_aligned_extent_math_4k() {
-    use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{align_size, H264_MB_SIZE_ALIGNMENT};
+    use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{
+        H264_MB_SIZE_ALIGNMENT, align_size,
+    };
     assert_eq!(align_size(3840u32, H264_MB_SIZE_ALIGNMENT), 3840);
     assert_eq!(align_size(2160u32, H264_MB_SIZE_ALIGNMENT), 2160);
 }
 
 #[test]
 fn test_aligned_extent_math_odd_extent() {
-    use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{align_size, H264_MB_SIZE_ALIGNMENT};
+    use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{
+        H264_MB_SIZE_ALIGNMENT, align_size,
+    };
     // Arbitrary non-aligned dims must round up to a multiple of 16.
     assert_eq!(align_size(641u32, H264_MB_SIZE_ALIGNMENT), 656);
     assert_eq!(align_size(481u32, H264_MB_SIZE_ALIGNMENT), 496);
@@ -290,17 +298,17 @@ fn test_split_nal_units_multiple() {
     // SPS + PPS + IDR
     let mut data = Vec::new();
     data.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // SC
-    data.extend_from_slice(&[0x67, 0x42, 0x00, 0x1E]);  // SPS
+    data.extend_from_slice(&[0x67, 0x42, 0x00, 0x1E]); // SPS
     data.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // SC
-    data.extend_from_slice(&[0x68, 0xCE, 0x38, 0x80]);  // PPS
-    data.extend_from_slice(&[0x00, 0x00, 0x01]);         // 3-byte SC
-    data.extend_from_slice(&[0x65, 0x88, 0x84]);          // IDR
+    data.extend_from_slice(&[0x68, 0xCE, 0x38, 0x80]); // PPS
+    data.extend_from_slice(&[0x00, 0x00, 0x01]); // 3-byte SC
+    data.extend_from_slice(&[0x65, 0x88, 0x84]); // IDR
 
     let nals = SimpleDecoder::split_nal_units_owned(&data);
     assert_eq!(nals.len(), 3);
-    assert_eq!(nals[0][0] & 0x1F, 7);  // SPS
-    assert_eq!(nals[1][0] & 0x1F, 8);  // PPS
-    assert_eq!(nals[2][0] & 0x1F, 5);  // IDR
+    assert_eq!(nals[0][0] & 0x1F, 7); // SPS
+    assert_eq!(nals[1][0] & 0x1F, 8); // PPS
+    assert_eq!(nals[2][0] & 0x1F, 5); // IDR
 }
 
 #[test]
@@ -349,12 +357,17 @@ fn test_parse_h265_sps_dimensions_640x480() {
     bits.push(0); // general_tier_flag
     bits.extend_from_slice(&[0, 0, 0, 0, 1]); // general_profile_idc = 1 (Main)
     // general_profile_compatibility_flag[32]:
-    bits.push(0); bits.push(1);
-    for _ in 0..30 { bits.push(0); }
+    bits.push(0);
+    bits.push(1);
+    for _ in 0..30 {
+        bits.push(0);
+    }
     // progressive, interlaced, non_packed, frame_only
     bits.extend_from_slice(&[1, 0, 1, 0]);
     // 44 reserved zero bits
-    for _ in 0..44 { bits.push(0); }
+    for _ in 0..44 {
+        bits.push(0);
+    }
     // general_level_idc: 8 bits = 93 (0x5D)
     bits.extend_from_slice(&[0, 1, 0, 1, 1, 1, 0, 1]);
 
@@ -364,12 +377,16 @@ fn test_parse_h265_sps_dimensions_640x480() {
     bits.extend_from_slice(&[0, 1, 0]);
 
     // pic_width_in_luma_samples: ue(640)
-    for _ in 0..9 { bits.push(0); }
+    for _ in 0..9 {
+        bits.push(0);
+    }
     bits.push(1);
     bits.extend_from_slice(&[0, 1, 0, 0, 0, 0, 0, 0, 1]); // 129
 
     // pic_height_in_luma_samples: ue(480)
-    for _ in 0..8 { bits.push(0); }
+    for _ in 0..8 {
+        bits.push(0);
+    }
     bits.push(1);
     bits.extend_from_slice(&[1, 1, 1, 0, 0, 0, 0, 1]); // 225
 

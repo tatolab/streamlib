@@ -70,11 +70,7 @@ pub fn provision_python_venv(
     let prebuilt_wheel = find_first_wheel(&temp_dir.join("python").join("wheels"), package_label)?;
     let pyproject_path = {
         let p = temp_dir.join("pyproject.toml");
-        if p.exists() {
-            Some(p)
-        } else {
-            None
-        }
+        if p.exists() { Some(p) } else { None }
     };
 
     // ---- link-mode override ----
@@ -121,7 +117,14 @@ pub fn provision_python_venv(
         let _ = pyproject; // presence-gated; install targets the project dir
         let project_str = path_to_str(temp_dir, package_label)?;
         let output = run_uv(
-            &["pip", "install", "-e", &project_str, "--python", &venv_python_str],
+            &[
+                "pip",
+                "install",
+                "-e",
+                &project_str,
+                "--python",
+                &venv_python_str,
+            ],
             &uv_cache_dir,
         )
         .map_err(|detail| build_failed(package_label, detail))?;
@@ -273,11 +276,12 @@ fn find_first_wheel(wheels_dir: &Path, package_label: &str) -> Result<Option<Pat
         return Ok(None);
     }
     let mut wheels: Vec<PathBuf> = std::fs::read_dir(wheels_dir)
-        .map_err(|e| {
-            BuildError::Other {
-                package: package_label.to_string(),
-                detail: format!("failed to read wheels directory {}: {e}", wheels_dir.display()),
-            }
+        .map_err(|e| BuildError::Other {
+            package: package_label.to_string(),
+            detail: format!(
+                "failed to read wheels directory {}: {e}",
+                wheels_dir.display()
+            ),
         })?
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
@@ -350,9 +354,8 @@ fn apply_link_override(
         "streamlib link active — pointing staged pyproject's streamlib dep at the linked checkout"
     );
 
-    let body = std::fs::read_to_string(pyproject).map_err(|e| {
-        build_failed(package_label, format!("read staged pyproject.toml: {e}"))
-    })?;
+    let body = std::fs::read_to_string(pyproject)
+        .map_err(|e| build_failed(package_label, format!("read staged pyproject.toml: {e}")))?;
     let mut doc: toml_edit::DocumentMut = body.parse().map_err(|e: toml_edit::TomlError| {
         build_failed(package_label, format!("parse staged pyproject.toml: {e}"))
     })?;
@@ -372,9 +375,8 @@ fn apply_link_override(
         toml_edit::Item::Value(toml_edit::Value::InlineTable(source)),
     );
 
-    std::fs::write(pyproject, doc.to_string()).map_err(|e| {
-        build_failed(package_label, format!("write staged pyproject.toml: {e}"))
-    })
+    std::fs::write(pyproject, doc.to_string())
+        .map_err(|e| build_failed(package_label, format!("write staged pyproject.toml: {e}")))
 }
 
 /// Get-or-create `key` as a table, with a typed error when an existing
@@ -518,8 +520,7 @@ packages = ["python"]
         // schemas-only or Rust-only package.
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join("streamlib.yaml"), "package:\n  name: x\n").unwrap();
-        provision_python_venv(temp.path(), None, "tatolab/x")
-            .expect("no-python must be a no-op");
+        provision_python_venv(temp.path(), None, "tatolab/x").expect("no-python must be a no-op");
         assert!(
             !temp.path().join(".venv").exists(),
             "no venv must be created for a non-Python staged package"
@@ -572,7 +573,10 @@ packages = ["python"]
 
         // compileall: at least one .pyc somewhere under the venv.
         let has_pyc = find_any_pyc(&temp.path().join(".venv"));
-        assert!(has_pyc, "compileall must have produced at least one .pyc in the venv");
+        assert!(
+            has_pyc,
+            "compileall must have produced at least one .pyc in the venv"
+        );
     }
 
     #[test]
@@ -594,12 +598,18 @@ packages = ["python"]
         apply_link_override(&pyproject, sdk, "tatolab/p").unwrap();
 
         let body = std::fs::read_to_string(&pyproject).unwrap();
-        assert!(body.contains("[tool.uv.sources]"), "sources table missing:\n{body}");
+        assert!(
+            body.contains("[tool.uv.sources]"),
+            "sources table missing:\n{body}"
+        );
         assert!(
             body.contains("/opt/streamlib-checkout/libs/streamlib-python"),
             "override path missing:\n{body}"
         );
-        assert!(body.contains("editable = true"), "editable flag missing:\n{body}");
+        assert!(
+            body.contains("editable = true"),
+            "editable flag missing:\n{body}"
+        );
     }
 
     #[test]
@@ -655,10 +665,23 @@ packages = ["python"]
 
         // The staged pyproject got the override injected…
         let body = std::fs::read_to_string(staged.path().join("pyproject.toml")).unwrap();
-        assert!(body.contains("[tool.uv.sources]"), "override missing:\n{body}");
-        assert!(body.contains(&sdk.display().to_string()), "sdk path missing:\n{body}");
+        assert!(
+            body.contains("[tool.uv.sources]"),
+            "override missing:\n{body}"
+        );
+        assert!(
+            body.contains(&sdk.display().to_string()),
+            "sdk path missing:\n{body}"
+        );
         // …and the venv exists (streamlib resolved from the linked SDK).
-        assert!(staged.path().join(".venv").join("bin").join("python").exists());
+        assert!(
+            staged
+                .path()
+                .join(".venv")
+                .join("bin")
+                .join("python")
+                .exists()
+        );
     }
 
     fn find_any_pyc(dir: &Path) -> bool {

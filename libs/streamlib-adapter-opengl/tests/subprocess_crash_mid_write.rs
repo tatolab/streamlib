@@ -134,9 +134,7 @@ fn subprocess_crash_mid_write_observed_by_harness() {
             // kernel reaps the subprocess, our copy of the write
             // end is the only remaining ref, so read() returns 0.
             let mut buf = [0u8; 1];
-            let n = unsafe {
-                libc::read(read_fd, buf.as_mut_ptr() as *mut _, 1)
-            };
+            let n = unsafe { libc::read(read_fd, buf.as_mut_ptr() as *mut _, 1) };
             // n == 0 means EOF (cleanup observed); n < 0 with EAGAIN
             // means "still alive, try again"; n > 0 means data
             // (shouldn't happen — helper doesn't write).
@@ -166,4 +164,3 @@ fn subprocess_crash_mid_write_observed_by_harness() {
         "subprocess SIGKILL'd by harness must NOT report success: {exit_status:?}"
     );
 }
-

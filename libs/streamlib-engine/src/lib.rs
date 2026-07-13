@@ -57,21 +57,16 @@ pub mod schemas {
 // - #[streamlib::processor("Camera")] - Processor definition by name lookup in streamlib.yaml
 // - #[derive(ConfigDescriptor)] - Config field metadata derive macro
 pub use streamlib_macros::{
-    module_ident, module_ident_any_version, module_ident_joined, module_ident_joined_any_version,
-    processor, schema_ident, schema_ident_any_version, ConfigDescriptor,
+    ConfigDescriptor, module_ident, module_ident_any_version, module_ident_joined,
+    module_ident_joined_any_version, processor, schema_ident, schema_ident_any_version,
 };
 
 pub use core::{
-    are_synchronized,
-    gl_constants,
-    // Port marker traits and helpers for compile-time safe connections
-    input,
-    media_clock::MediaClock,
-    output,
-    timestamp_delta_ms,
     ConnectionDefinition,
     // Processor traits (mode-specific)
     ContinuousProcessor,
+    DEFAULT_SYNC_TOLERANCE_MS,
+    Error,
     GlContext,
     GlTextureBinding,
     GpuContext,
@@ -80,6 +75,7 @@ pub use core::{
     ManualProcessor,
     NativeTextureHandle,
     OutputPortMarker,
+    PROCESSOR_REGISTRY,
     PooledTextureHandle,
     ProcessorDefinition,
     ProcessorSpec,
@@ -88,7 +84,6 @@ pub use core::{
     RuntimeContext,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    Error,
     Texture,
     TextureDescriptor,
     TextureFormat,
@@ -96,8 +91,13 @@ pub use core::{
     TexturePoolDescriptor,
     TextureUsages,
     TimeContext,
-    DEFAULT_SYNC_TOLERANCE_MS,
-    PROCESSOR_REGISTRY,
+    are_synchronized,
+    gl_constants,
+    // Port marker traits and helpers for compile-time safe connections
+    input,
+    media_clock::MediaClock,
+    output,
+    timestamp_delta_ms,
 };
 
 // GPU Backends - Metal and Vulkan
@@ -248,26 +248,23 @@ pub mod sdk {
 
         // Port markers + input/output helpers — semantically processor-
         // related; live in `core::graph::edges::link_port_markers`.
-        pub use crate::core::graph::{
-            input, output, InputPortMarker, OutputPortMarker,
-        };
+        pub use crate::core::graph::{InputPortMarker, OutputPortMarker, input, output};
 
         // Port schema spec — semantically processor-related; lives in
         // `core::descriptors`.
         pub use crate::core::descriptors::PortSchemaSpec;
-
     }
 
-    pub use crate::iceoryx2;
-    pub use crate::logging;
-    pub use crate::inventory;
-    pub use crate::serde_json;
     pub use crate::crossbeam_channel;
+    pub use crate::iceoryx2;
+    pub use crate::inventory;
+    pub use crate::logging;
+    pub use crate::serde_json;
 
     pub use streamlib_macros::{
-    module_ident, module_ident_any_version, module_ident_joined, module_ident_joined_any_version,
-    processor, schema_ident, schema_ident_any_version, ConfigDescriptor,
-};
+        ConfigDescriptor, module_ident, module_ident_any_version, module_ident_joined,
+        module_ident_joined_any_version, processor, schema_ident, schema_ident_any_version,
+    };
 
     pub mod permissions {
         pub use crate::{
@@ -284,11 +281,11 @@ pub mod sdk {
         all(target_os = "linux", not(feature = "backend-metal"))
     ))]
     pub mod engine {
-        pub use crate::host_rhi;
-        pub use crate::{HostGpuDeviceExt, HostPixelBufferRefExt, HostTextureExt};
         #[cfg(target_os = "linux")]
         pub use crate::HostSurfaceStoreExt;
+        pub use crate::host_rhi;
         #[cfg(target_os = "linux")]
         pub use crate::linux_surface_share;
+        pub use crate::{HostGpuDeviceExt, HostPixelBufferRefExt, HostTextureExt};
     }
 }

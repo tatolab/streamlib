@@ -20,9 +20,9 @@ use std::path::{Path, PathBuf};
 use crate::error::{ResolverError, ResolverResult};
 use crate::git::fetch_git;
 use crate::ident::{PackageRef, TypeName};
-use crate::lockfile::{compute_content_hash, Lockfile, LockfileEntry, LockfileSource};
+use crate::lockfile::{Lockfile, LockfileEntry, LockfileSource, compute_content_hash};
 use crate::manifest::{DependencySpec, Manifest, RegistryDependency, SchemaEntry};
-use crate::registry::{cache_slpkg_bytes, select_version, RegistryClient, RegistryConfig};
+use crate::registry::{RegistryClient, RegistryConfig, cache_slpkg_bytes, select_version};
 
 /// Outcome of resolving a `streamlib.yaml` graph: the root project + every
 /// transitive package, keyed by canonical `"@org/name"` lockfile key.
@@ -178,11 +178,7 @@ pub fn resolve_with(
     // fails loud with `RegistryNotConfigured`.
     let registry = options.registry.as_ref();
 
-    let root = build_resolved_package(
-        root_manifest,
-        root_dir.to_path_buf(),
-        ResolvedSource::Root,
-    )?;
+    let root = build_resolved_package(root_manifest, root_dir.to_path_buf(), ResolvedSource::Root)?;
 
     // The dep map is now typed end-to-end: `BTreeMap<PackageRef, _>`. The
     // canonical-string lookup-key invariants the resolver previously
@@ -380,11 +376,7 @@ fn resolve_path_dependency(
     if abs.extension().and_then(|s| s.to_str()) == Some("slpkg") {
         let extracted = extract_slpkg(&abs, cache_dir)?;
         let manifest = Manifest::load(&extracted)?;
-        return build_resolved_package(
-            manifest,
-            extracted,
-            ResolvedSource::Slpkg { archive: abs },
-        );
+        return build_resolved_package(manifest, extracted, ResolvedSource::Slpkg { archive: abs });
     }
     if !abs.is_dir() {
         return Err(ResolverError::PathDependencyNotDirectory {
@@ -549,15 +541,15 @@ fn resolve_bare_schema_name_internal<'a>(
         .unwrap_or_else(|| "<root>".into());
     chain.push(pkg_id.clone());
 
-    let declared = root
-        .manifest
-        .schemas
-        .as_ref()
-        .ok_or_else(|| ResolverError::BareSchemaNameUnresolved {
-            name: name.as_str().to_string(),
-            package: pkg_id.clone(),
-            chain: chain.clone(),
-        })?;
+    let declared =
+        root.manifest
+            .schemas
+            .as_ref()
+            .ok_or_else(|| ResolverError::BareSchemaNameUnresolved {
+                name: name.as_str().to_string(),
+                package: pkg_id.clone(),
+                chain: chain.clone(),
+            })?;
     let entry = declared
         .get(name)
         .ok_or_else(|| ResolverError::BareSchemaNameUnresolved {
@@ -712,10 +704,12 @@ fn extract_slpkg(archive: &Path, cache_dir: &Path) -> ResolverResult<PathBuf> {
     })?;
 
     for i in 0..zip.len() {
-        let mut entry = zip.by_index(i).map_err(|e| ResolverError::SlpkgExtractFailed {
-            path: archive.to_path_buf(),
-            message: format!("entry {i} read failed: {e}"),
-        })?;
+        let mut entry = zip
+            .by_index(i)
+            .map_err(|e| ResolverError::SlpkgExtractFailed {
+                path: archive.to_path_buf(),
+                message: format!("entry {i} read failed: {e}"),
+            })?;
         let entry_name = entry.name().to_string();
         // Reject path traversal.
         if entry_name.contains("..") || entry_name.starts_with('/') {
@@ -781,7 +775,10 @@ mod tests {
         );
         let res = resolve(&root).unwrap();
         assert!(res.packages.is_empty());
-        assert_eq!(res.root.manifest.package_id().as_deref(), Some("@tatolab/core"));
+        assert_eq!(
+            res.root.manifest.package_id().as_deref(),
+            Some("@tatolab/core")
+        );
         assert!(res.root.content_hash.starts_with("sha256:"));
         assert!(matches!(res.root.source, ResolvedSource::Root));
     }
@@ -1035,7 +1032,8 @@ dependencies:
                 .as_bytes(),
             )
             .unwrap();
-            zip.start_file("schemas/EscalateRequest.yaml", opts).unwrap();
+            zip.start_file("schemas/EscalateRequest.yaml", opts)
+                .unwrap();
             zip.write_all(b"metadata:\n  name: EscalateRequest\nproperties: {}\n")
                 .unwrap();
             zip.finish().unwrap();
@@ -1065,7 +1063,13 @@ dependencies:
         assert!(matches!(escalate.source, ResolvedSource::Registry { .. }));
         // Highest-in-range selected.
         assert_eq!(
-            escalate.manifest.package.as_ref().unwrap().version.to_string(),
+            escalate
+                .manifest
+                .package
+                .as_ref()
+                .unwrap()
+                .version
+                .to_string(),
             "1.2.0"
         );
         assert_eq!(escalate.schema_files.len(), 1);
@@ -1094,7 +1098,8 @@ dependencies:
             .as_bytes(),
         )
         .unwrap();
-        zip.start_file("schemas/EscalateRequest.yaml", opts).unwrap();
+        zip.start_file("schemas/EscalateRequest.yaml", opts)
+            .unwrap();
         zip.write_all(b"metadata:\n  name: EscalateRequest\nproperties: {}\n")
             .unwrap();
         zip.finish().unwrap();
@@ -1138,7 +1143,13 @@ patch:
         // Resolved from the registry (patch path was absent), highest-in-range.
         assert!(matches!(escalate.source, ResolvedSource::Registry { .. }));
         assert_eq!(
-            escalate.manifest.package.as_ref().unwrap().version.to_string(),
+            escalate
+                .manifest
+                .package
+                .as_ref()
+                .unwrap()
+                .version
+                .to_string(),
             "1.2.0"
         );
     }
@@ -1184,7 +1195,13 @@ patch:
         // Local path patch won; the registry's 1.2.0 was NOT consulted.
         assert!(matches!(escalate.source, ResolvedSource::Path { .. }));
         assert_eq!(
-            escalate.manifest.package.as_ref().unwrap().version.to_string(),
+            escalate
+                .manifest
+                .package
+                .as_ref()
+                .unwrap()
+                .version
+                .to_string(),
             "1.5.0"
         );
     }
@@ -1301,8 +1318,16 @@ dependencies:
         );
         let schemas = root.join("schemas");
         std::fs::create_dir_all(&schemas).unwrap();
-        write_yaml(&schemas, "VideoFrame.yaml", "metadata:\n  name: VideoFrame\n");
-        write_yaml(&schemas, "AudioFrame.yaml", "metadata:\n  name: AudioFrame\n");
+        write_yaml(
+            &schemas,
+            "VideoFrame.yaml",
+            "metadata:\n  name: VideoFrame\n",
+        );
+        write_yaml(
+            &schemas,
+            "AudioFrame.yaml",
+            "metadata:\n  name: AudioFrame\n",
+        );
         // Non-yaml files must not be picked up.
         write_yaml(&schemas, "README.md", "readme\n");
 
@@ -1397,7 +1422,10 @@ schemas:
         // Bare-name resolution walks the External edge to core.
         let name = TypeName::new("VideoFrame").unwrap();
         let (owner, file) = resolve_bare_schema_name(&res, &res.root, &name).unwrap();
-        assert_eq!(owner.manifest.package_id().as_deref(), Some("@tatolab/core"));
+        assert_eq!(
+            owner.manifest.package_id().as_deref(),
+            Some("@tatolab/core")
+        );
         assert!(file.ends_with("VideoFrame.yaml"));
     }
 

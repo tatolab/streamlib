@@ -5,7 +5,7 @@
 // Review if these are needed for future texture format support or can be removed
 #![allow(dead_code)]
 
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -68,7 +68,7 @@ pub fn create_iosurface(
     pixel_format: PixelFormat,
 ) -> Result<Retained<IOSurface>> {
     use objc2::runtime::AnyObject;
-    use objc2_foundation::{ns_string, NSNumber, NSString};
+    use objc2_foundation::{NSNumber, NSString, ns_string};
 
     let ios_format = pixel_format_to_iosurface(pixel_format)?;
 
@@ -103,8 +103,8 @@ pub fn create_iosurface(
 
     let properties = NSDictionary::from_slices(&keys, &values);
 
-    use objc2::runtime::AnyClass;
     use objc2::ClassType;
+    use objc2::runtime::AnyClass;
 
     let cls: &AnyClass = IOSurface::class();
     let allocated_ptr: *mut IOSurface = unsafe { msg_send![cls, alloc] };

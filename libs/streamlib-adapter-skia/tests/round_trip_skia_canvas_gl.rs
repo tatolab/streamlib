@@ -19,14 +19,14 @@ use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
 use skia_safe::{Color, Color4f, Paint, Point};
 use streamlib::sdk::context::GpuContext;
-use streamlib::sdk::rhi::TextureFormat;
 use streamlib::sdk::engine::host_rhi::HostVulkanDevice;
+use streamlib::sdk::rhi::TextureFormat;
 use streamlib_adapter_abi::{
     StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
     SurfaceUsage,
 };
 use streamlib_adapter_opengl::{
-    EglRuntime, HostSurfaceRegistration, OpenGlSurfaceAdapter, DRM_FORMAT_ARGB8888,
+    DRM_FORMAT_ARGB8888, EglRuntime, HostSurfaceRegistration, OpenGlSurfaceAdapter,
 };
 use streamlib_adapter_skia::SkiaGlSurfaceAdapter;
 use vulkanalia::prelude::v1_4::*;
@@ -129,7 +129,12 @@ fn round_trip_skia_canvas_gl() {
     } // guard drops → flush_and_submit_surface → glFinish.
 
     // === Host readback ==================================================
-    let pixels = host_readback_bgra(&host_device, stream_tex.vulkan_inner().image().expect("image"), W, H);
+    let pixels = host_readback_bgra(
+        &host_device,
+        stream_tex.vulkan_inner().image().expect("image"),
+        W,
+        H,
+    );
 
     // === Pixel-content assertions =======================================
     // Asymmetric tolerances: the corner is far from any geometry and
@@ -264,7 +269,11 @@ fn host_readback_bgra(
                 .build(),
         )
         .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
-        .image_extent(vk::Extent3D { width, height, depth: 1 })
+        .image_extent(vk::Extent3D {
+            width,
+            height,
+            depth: 1,
+        })
         .build();
     let regions = [region];
     unsafe {

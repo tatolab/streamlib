@@ -97,7 +97,9 @@ pub struct ComputeKernelDescriptor<'a> {
 // Plugin-ABI repr conversions
 // =============================================================================
 
-use streamlib_plugin_abi::{ComputeBindingKindRepr, ComputeBindingSpecRepr, ComputeKernelDescriptorRepr};
+use streamlib_plugin_abi::{
+    ComputeBindingKindRepr, ComputeBindingSpecRepr, ComputeKernelDescriptorRepr,
+};
 
 impl From<ComputeBindingKind> for ComputeBindingKindRepr {
     fn from(value: ComputeBindingKind) -> Self {
@@ -130,8 +132,11 @@ impl From<&ComputeBindingSpec> for ComputeBindingSpecRepr {
 pub(crate) fn stage_compute_kernel_descriptor(
     desc: &ComputeKernelDescriptor<'_>,
 ) -> (ComputeKernelDescriptorRepr, Vec<ComputeBindingSpecRepr>) {
-    let bindings_buf: Vec<ComputeBindingSpecRepr> =
-        desc.bindings.iter().map(ComputeBindingSpecRepr::from).collect();
+    let bindings_buf: Vec<ComputeBindingSpecRepr> = desc
+        .bindings
+        .iter()
+        .map(ComputeBindingSpecRepr::from)
+        .collect();
     let repr = ComputeKernelDescriptorRepr {
         label_ptr: desc.label.as_ptr(),
         label_len: desc.label.len(),

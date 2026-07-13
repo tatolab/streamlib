@@ -9,7 +9,7 @@ use crate::core::graph::{
     GraphNodeWithComponents, ProcessorNode, ProcessorTraversalMut, StateComponent,
     TraversalSourceMut,
 };
-use crate::core::processors::{ProcessorSpec, ProcessorState, PROCESSOR_REGISTRY};
+use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec, ProcessorState};
 
 impl<'a> TraversalSourceMut<'a> {
     /// Add a new processor node to the graph.

@@ -12,12 +12,8 @@
 //!   SIGKILLs the subprocess at a configurable point so adapters can
 //!   verify host-side cleanup against the surface-share watchdog.
 
-pub use crate::conformance::{
-    empty_surface, run_conformance, ConformanceSurfaceFactory,
-};
+pub use crate::conformance::{ConformanceSurfaceFactory, empty_surface, run_conformance};
 pub use crate::mock::{AdapterCountersSnapshot, MockAdapter, MockView};
 
 #[cfg(target_os = "linux")]
-pub use crate::subprocess_crash::{
-    CrashTiming, SubprocessCrashHarness, SubprocessCrashOutcome,
-};
+pub use crate::subprocess_crash::{CrashTiming, SubprocessCrashHarness, SubprocessCrashOutcome};

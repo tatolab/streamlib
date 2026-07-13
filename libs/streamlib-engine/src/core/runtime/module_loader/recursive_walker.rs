@@ -13,8 +13,8 @@ use super::locked::LockedResolution;
 use super::processor_registration::register_manifest_processors;
 use super::schema_registration::register_package_schemas;
 use super::source::{
-    read_version_from_manifest_dir, resolve_strategy_to_source, ActiveLinkedCheckout,
-    ResolvedSource, Strategy,
+    ActiveLinkedCheckout, ResolvedSource, Strategy, read_version_from_manifest_dir,
+    resolve_strategy_to_source,
 };
 use crate::core::{Error, Result};
 use crate::iceoryx2::Iceoryx2Node;
@@ -357,10 +357,7 @@ struct InFlightPlaceholderGuard<'memo> {
 }
 
 impl<'memo> InFlightPlaceholderGuard<'memo> {
-    fn arm(
-        resolution_memo: &'memo ResolutionMemo,
-        package: streamlib_idents::PackageRef,
-    ) -> Self {
+    fn arm(resolution_memo: &'memo ResolutionMemo, package: streamlib_idents::PackageRef) -> Self {
         Self {
             resolution_memo,
             package: Some(package),
@@ -387,7 +384,10 @@ impl Drop for InFlightPlaceholderGuard<'_> {
 fn describe_requirer(requirer: &RequirerRecord) -> String {
     match &requirer.requirer {
         Some(pkg) => format!("{pkg} (declared `{}`)", requirer.declared_range),
-        None => format!("top-level add_module (declared `{}`)", requirer.declared_range),
+        None => format!(
+            "top-level add_module (declared `{}`)",
+            requirer.declared_range
+        ),
     }
 }
 
@@ -508,7 +508,7 @@ fn add_module_recursive_body(
                 return Err(AddModuleError::BuildRequiredButNoOrchestrator {
                     package: pkg_ref.clone(),
                     policy: request.policy,
-                })
+                });
             }
         },
     };
@@ -517,13 +517,12 @@ fn add_module_recursive_body(
 
     // Read the manifest; authoritative source of identity for the
     // package at the resolved location.
-    let config = ProjectConfig::load(&manifest_dir).map_err(|e| {
-        AddModuleError::ManifestLoadFailed {
+    let config =
+        ProjectConfig::load(&manifest_dir).map_err(|e| AddModuleError::ManifestLoadFailed {
             module: module.clone(),
             source_path: manifest_dir.clone(),
             detail: e.to_string(),
-        }
-    })?;
+        })?;
 
     config
         .check_streamlib_version_compatibility()
@@ -686,7 +685,10 @@ fn derive_dep_strategy_and_ident(
     consumer_dir: &std::path::Path,
     dep_ref: &streamlib_idents::PackageRef,
     spec: &streamlib_idents::DependencySpec,
-    patch: &std::collections::BTreeMap<streamlib_idents::PackageRef, streamlib_idents::DependencySpec>,
+    patch: &std::collections::BTreeMap<
+        streamlib_idents::PackageRef,
+        streamlib_idents::DependencySpec,
+    >,
 ) -> Result<(streamlib_idents::ModuleIdent, Strategy)> {
     use streamlib_idents::{DependencySpec, ModuleIdent, SemVerRange};
 

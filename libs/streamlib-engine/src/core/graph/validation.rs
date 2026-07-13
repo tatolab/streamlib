@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::error::{Result, Error};
+use crate::core::error::{Error, Result};
 use crate::core::graph::{Link, ProcessorNode};
 use petgraph::algo::is_cyclic_directed;
 use petgraph::graph::DiGraph;

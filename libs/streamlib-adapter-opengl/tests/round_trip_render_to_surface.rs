@@ -17,7 +17,7 @@ mod common;
 
 use streamlib_adapter_abi::SurfaceAdapter;
 
-use common::{host_readback, HostFixture};
+use common::{HostFixture, host_readback};
 
 #[test]
 fn round_trip_render_to_surface() {
@@ -41,10 +41,7 @@ fn round_trip_render_to_surface() {
             .expect("acquire_write");
         let texture_id = guard.view().gl_texture_id();
 
-        let _current = fixture
-            .egl
-            .lock_make_current()
-            .expect("lock_make_current");
+        let _current = fixture.egl.lock_make_current().expect("lock_make_current");
         unsafe {
             let mut fbo: u32 = 0;
             gl::GenFramebuffers(1, &mut fbo);

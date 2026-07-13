@@ -63,13 +63,10 @@ use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use streamlib_adapter_abi::{
-    AdapterError, StreamlibSurface, SurfaceAdapter,
-};
+use streamlib_adapter_abi::{AdapterError, StreamlibSurface, SurfaceAdapter};
 use streamlib_adapter_skia_abi::{
+    SKIA_GL_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION, SKIA_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION,
     SkiaGlSurfaceAdapterVTable, SkiaSurfaceAdapterVTable, SkiaViewRepr,
-    SKIA_GL_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION,
-    SKIA_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION,
 };
 use streamlib_consumer_rhi::VulkanRhiDevice;
 
@@ -86,8 +83,8 @@ use crate::gl_adapter::SkiaGlSurfaceAdapter;
 /// The vtable is `const`-initialized per `D` monomorphization;
 /// every call for the same `D` returns the same pointer. Multiple
 /// `D`s coexist in the same host process with their own vtables.
-pub fn host_skia_surface_adapter_vtable<D: VulkanRhiDevice + 'static>(
-) -> *const SkiaSurfaceAdapterVTable {
+pub fn host_skia_surface_adapter_vtable<D: VulkanRhiDevice + 'static>()
+-> *const SkiaSurfaceAdapterVTable {
     &VkMonoVTable::<D>::VTABLE
 }
 
@@ -310,10 +307,7 @@ unsafe fn run_vk_acquire<D, F>(
 ) -> i32
 where
     D: VulkanRhiDevice + 'static,
-    F: FnOnce(
-        &SkiaSurfaceAdapter<D>,
-        &StreamlibSurface,
-    ) -> Result<Option<SkiaViewRepr>, String>,
+    F: FnOnce(&SkiaSurfaceAdapter<D>, &StreamlibSurface) -> Result<Option<SkiaViewRepr>, String>,
 {
     run_host_extern_c(
         callback_name,
@@ -350,8 +344,7 @@ where
             }
             // SAFETY: caller asserts the pointer is a borrowed
             // StreamlibSurface valid for the call duration.
-            let surface: &StreamlibSurface =
-                unsafe { &*(surface_ptr as *const StreamlibSurface) };
+            let surface: &StreamlibSurface = unsafe { &*(surface_ptr as *const StreamlibSurface) };
             match body(adapter, surface) {
                 Ok(Some(view)) => {
                     if !out_view.is_null() {
@@ -659,10 +652,7 @@ unsafe fn run_gl_acquire<F>(
     body: F,
 ) -> i32
 where
-    F: FnOnce(
-        &SkiaGlSurfaceAdapter,
-        &StreamlibSurface,
-    ) -> Result<Option<SkiaViewRepr>, String>,
+    F: FnOnce(&SkiaGlSurfaceAdapter, &StreamlibSurface) -> Result<Option<SkiaViewRepr>, String>,
 {
     run_host_extern_c(
         callback_name,
@@ -697,8 +687,7 @@ where
                 }
                 return 1;
             }
-            let surface: &StreamlibSurface =
-                unsafe { &*(surface_ptr as *const StreamlibSurface) };
+            let surface: &StreamlibSurface = unsafe { &*(surface_ptr as *const StreamlibSurface) };
             match body(adapter, surface) {
                 Ok(Some(view)) => {
                     if !out_view.is_null() {

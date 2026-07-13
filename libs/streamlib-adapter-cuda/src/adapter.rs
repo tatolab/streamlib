@@ -329,11 +329,13 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
     where
         T: VulkanTextureLike + ?Sized,
     {
-        let image = texture.image().ok_or_else(|| AdapterError::BackendRejected {
-            reason:
-                "submit_host_copy_image_to_buffer: source texture has no VkImage (placeholder?)"
-                    .into(),
-        })?;
+        let image = texture
+            .image()
+            .ok_or_else(|| AdapterError::BackendRejected {
+                reason:
+                    "submit_host_copy_image_to_buffer: source texture has no VkImage (placeholder?)"
+                        .into(),
+            })?;
         let image_extent = vk::Extent3D {
             width: texture.width(),
             height: texture.height(),
@@ -375,10 +377,7 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
                             "submit_host_copy_image_to_buffer: source texture is \
                              {}x{}x4 = {} bytes; destination cuda buffer size is \
                              {} bytes (texture would overrun)",
-                            image_extent.width,
-                            image_extent.height,
-                            required_bytes,
-                            buffer_size,
+                            image_extent.width, image_extent.height, required_bytes, buffer_size,
                         ),
                     });
                 }
@@ -450,22 +449,23 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
         surface: &StreamlibSurface,
     ) -> Result<Option<ReadAcquired<D::Privilege>>, AdapterError> {
         let id = surface.id;
-        self.surfaces.try_begin_read(id, |state| match &state.resource {
-            // Consumer-side acquire waits on `produce_done` — the
-            // peer-timeline's `current_value()` snapshot is taken inside
-            // `finalize_read` (outside the registry lock).
-            SurfaceResource::Buffer { pixel_buffer } => Ok(ReadAcquired {
-                peer_timeline: Arc::clone(&state.produce_done),
-                buffer: pixel_buffer.buffer(),
-                size: pixel_buffer.size(),
-            }),
-            SurfaceResource::Image { .. } => Err(AdapterError::BackendRejected {
-                reason: format!(
-                    "acquire_read: surface_id={id} was registered as an image-flavored \
+        self.surfaces
+            .try_begin_read(id, |state| match &state.resource {
+                // Consumer-side acquire waits on `produce_done` — the
+                // peer-timeline's `current_value()` snapshot is taken inside
+                // `finalize_read` (outside the registry lock).
+                SurfaceResource::Buffer { pixel_buffer } => Ok(ReadAcquired {
+                    peer_timeline: Arc::clone(&state.produce_done),
+                    buffer: pixel_buffer.buffer(),
+                    size: pixel_buffer.size(),
+                }),
+                SurfaceResource::Image { .. } => Err(AdapterError::BackendRejected {
+                    reason: format!(
+                        "acquire_read: surface_id={id} was registered as an image-flavored \
                      surface; use acquire_texture (for cudaTextureObject_t) instead"
-                ),
-            }),
-        })
+                    ),
+                }),
+            })
     }
 
     fn try_begin_write(
@@ -473,21 +473,22 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
         surface: &StreamlibSurface,
     ) -> Result<Option<WriteAcquired<D::Privilege>>, AdapterError> {
         let id = surface.id;
-        self.surfaces.try_begin_write(id, |state| match &state.resource {
-            // Producer-side acquire waits on `consume_done` — confirms
-            // the consumer has drained prior content before re-write.
-            SurfaceResource::Buffer { pixel_buffer } => Ok(WriteAcquired {
-                peer_timeline: Arc::clone(&state.consume_done),
-                buffer: pixel_buffer.buffer(),
-                size: pixel_buffer.size(),
-            }),
-            SurfaceResource::Image { .. } => Err(AdapterError::BackendRejected {
-                reason: format!(
-                    "acquire_write: surface_id={id} was registered as an image-flavored \
+        self.surfaces
+            .try_begin_write(id, |state| match &state.resource {
+                // Producer-side acquire waits on `consume_done` — confirms
+                // the consumer has drained prior content before re-write.
+                SurfaceResource::Buffer { pixel_buffer } => Ok(WriteAcquired {
+                    peer_timeline: Arc::clone(&state.consume_done),
+                    buffer: pixel_buffer.buffer(),
+                    size: pixel_buffer.size(),
+                }),
+                SurfaceResource::Image { .. } => Err(AdapterError::BackendRejected {
+                    reason: format!(
+                        "acquire_write: surface_id={id} was registered as an image-flavored \
                      surface; use acquire_surface (for cudaSurfaceObject_t) instead"
-                ),
-            }),
-        })
+                    ),
+                }),
+            })
     }
 
     fn try_begin_image_read(
@@ -495,28 +496,29 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
         surface: &StreamlibSurface,
     ) -> Result<Option<ImageReadAcquired<D::Privilege>>, AdapterError> {
         let id = surface.id;
-        self.surfaces.try_begin_read(id, |state| match &state.resource {
-            SurfaceResource::Image { texture } => {
-                let image = texture.image().ok_or_else(|| AdapterError::BackendRejected {
+        self.surfaces
+            .try_begin_read(id, |state| match &state.resource {
+                SurfaceResource::Image { texture } => {
+                    let image = texture.image().ok_or_else(|| AdapterError::BackendRejected {
                     reason: format!(
                         "acquire_texture: surface_id={id} texture has no VkImage (placeholder?)"
                     ),
                 })?;
-                Ok(ImageReadAcquired {
-                    peer_timeline: Arc::clone(&state.produce_done),
-                    image,
-                    width: texture.width(),
-                    height: texture.height(),
-                    format: texture.format(),
-                })
-            }
-            SurfaceResource::Buffer { .. } => Err(AdapterError::BackendRejected {
-                reason: format!(
-                    "acquire_texture: surface_id={id} was registered as a buffer-flavored \
+                    Ok(ImageReadAcquired {
+                        peer_timeline: Arc::clone(&state.produce_done),
+                        image,
+                        width: texture.width(),
+                        height: texture.height(),
+                        format: texture.format(),
+                    })
+                }
+                SurfaceResource::Buffer { .. } => Err(AdapterError::BackendRejected {
+                    reason: format!(
+                        "acquire_texture: surface_id={id} was registered as a buffer-flavored \
                      surface; use acquire_read (for DLPack capsules) instead"
-                ),
-            }),
-        })
+                    ),
+                }),
+            })
     }
 
     fn try_begin_image_write(
@@ -524,28 +526,29 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
         surface: &StreamlibSurface,
     ) -> Result<Option<ImageWriteAcquired<D::Privilege>>, AdapterError> {
         let id = surface.id;
-        self.surfaces.try_begin_write(id, |state| match &state.resource {
-            SurfaceResource::Image { texture } => {
-                let image = texture.image().ok_or_else(|| AdapterError::BackendRejected {
+        self.surfaces
+            .try_begin_write(id, |state| match &state.resource {
+                SurfaceResource::Image { texture } => {
+                    let image = texture.image().ok_or_else(|| AdapterError::BackendRejected {
                     reason: format!(
                         "acquire_surface: surface_id={id} texture has no VkImage (placeholder?)"
                     ),
                 })?;
-                Ok(ImageWriteAcquired {
-                    peer_timeline: Arc::clone(&state.consume_done),
-                    image,
-                    width: texture.width(),
-                    height: texture.height(),
-                    format: texture.format(),
-                })
-            }
-            SurfaceResource::Buffer { .. } => Err(AdapterError::BackendRejected {
-                reason: format!(
-                    "acquire_surface: surface_id={id} was registered as a buffer-flavored \
+                    Ok(ImageWriteAcquired {
+                        peer_timeline: Arc::clone(&state.consume_done),
+                        image,
+                        width: texture.width(),
+                        height: texture.height(),
+                        format: texture.format(),
+                    })
+                }
+                SurfaceResource::Buffer { .. } => Err(AdapterError::BackendRejected {
+                    reason: format!(
+                        "acquire_surface: surface_id={id} was registered as a buffer-flavored \
                      surface; use acquire_write (for DLPack capsules) instead"
-                ),
-            }),
-        })
+                    ),
+                }),
+            })
     }
 
     fn finalize_image_read(
@@ -558,10 +561,7 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
         // source of truth — no cross-process value publishing IPC
         // needed for v1 (see
         // `docs/architecture/adapter-timeline-single-writer.md`).
-        let wait_value = acquired
-            .peer_timeline
-            .current_value()
-            .unwrap_or(0);
+        let wait_value = acquired.peer_timeline.current_value().unwrap_or(0);
         if acquired
             .peer_timeline
             .wait(wait_value, self.acquire_timeout.as_nanos() as u64)
@@ -588,10 +588,7 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
     ) -> Result<CudaSurfaceView<'_>, AdapterError> {
         // Producer-side wait on `consume_done`'s current value — see
         // `finalize_image_read` for the kernel-counter rationale.
-        let wait_value = acquired
-            .peer_timeline
-            .current_value()
-            .unwrap_or(0);
+        let wait_value = acquired.peer_timeline.current_value().unwrap_or(0);
         if acquired
             .peer_timeline
             .wait(wait_value, self.acquire_timeout.as_nanos() as u64)
@@ -701,10 +698,7 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
         surface_id: SurfaceId,
         acquired: ReadAcquired<D::Privilege>,
     ) -> Result<(vk::Buffer, vk::DeviceSize), AdapterError> {
-        let wait_value = acquired
-            .peer_timeline
-            .current_value()
-            .unwrap_or(0);
+        let wait_value = acquired.peer_timeline.current_value().unwrap_or(0);
         if acquired
             .peer_timeline
             .wait(wait_value, self.acquire_timeout.as_nanos() as u64)
@@ -723,10 +717,7 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
         surface_id: SurfaceId,
         acquired: WriteAcquired<D::Privilege>,
     ) -> Result<(vk::Buffer, vk::DeviceSize), AdapterError> {
-        let wait_value = acquired
-            .peer_timeline
-            .current_value()
-            .unwrap_or(0);
+        let wait_value = acquired.peer_timeline.current_value().unwrap_or(0);
         if acquired
             .peer_timeline
             .wait(wait_value, self.acquire_timeout.as_nanos() as u64)
@@ -831,13 +822,7 @@ where
             .image_extent(image_extent)
             .build();
         unsafe {
-            vk_device.cmd_copy_image_to_buffer(
-                cmd,
-                image,
-                transfer_layout,
-                buffer,
-                &[copy_region],
-            );
+            vk_device.cmd_copy_image_to_buffer(cmd, image, transfer_layout, buffer, &[copy_region]);
         }
 
         let post_barrier = build_color_image_barrier(image, qf, transfer_layout, image_layout);
@@ -866,11 +851,13 @@ where
             .signal_semaphore_infos(&signal_infos)
             .build();
 
-        unsafe { self.device.submit_to_queue(queue, &[submit], submit_ctx.fence) }.map_err(
-            |e| AdapterError::BackendRejected {
-                reason: format!("submit_to_queue: {e}"),
-            },
-        )?;
+        unsafe {
+            self.device
+                .submit_to_queue(queue, &[submit], submit_ctx.fence)
+        }
+        .map_err(|e| AdapterError::BackendRejected {
+            reason: format!("submit_to_queue: {e}"),
+        })?;
 
         Ok(())
     }
@@ -906,12 +893,11 @@ impl AdapterPersistentSubmitContext {
             .queue_family_index(qf)
             .flags(vk::CommandPoolCreateFlags::TRANSIENT)
             .build();
-        let pool =
-            unsafe { device.create_command_pool(&pool_info, None) }.map_err(|e| {
-                AdapterError::BackendRejected {
-                    reason: format!("create_command_pool: {e}"),
-                }
-            })?;
+        let pool = unsafe { device.create_command_pool(&pool_info, None) }.map_err(|e| {
+            AdapterError::BackendRejected {
+                reason: format!("create_command_pool: {e}"),
+            }
+        })?;
 
         let alloc_info = vk::CommandBufferAllocateInfo::builder()
             .command_pool(pool)
@@ -1173,17 +1159,21 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CudaSurfaceAdapter<D> {
         // can wait on it before re-writing. Inner Option: `None` means
         // "not the last reader, skip signal". Outer Option: `None`
         // means "surface raced an unregister".
-        let signal: Option<Option<(Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>, u64)>> =
-            self.surfaces.with_mut(surface_id, |state| {
-                debug_assert!(state.read_holders > 0, "read release without acquire");
-                state.dec_read_holders();
-                if state.read_holders > 0 {
-                    return None;
-                }
-                let next = state.next_signal_value();
-                state.current_signal_value = next;
-                Some((Arc::clone(&state.consume_done), next))
-            });
+        let signal: Option<
+            Option<(
+                Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>,
+                u64,
+            )>,
+        > = self.surfaces.with_mut(surface_id, |state| {
+            debug_assert!(state.read_holders > 0, "read release without acquire");
+            state.dec_read_holders();
+            if state.read_holders > 0 {
+                return None;
+            }
+            let next = state.next_signal_value();
+            state.current_signal_value = next;
+            Some((Arc::clone(&state.consume_done), next))
+        });
         let signal = match signal {
             Some(s) => s,
             None => {
@@ -1204,14 +1194,16 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CudaSurfaceAdapter<D> {
     fn end_write_access(&self, surface_id: SurfaceId) {
         // Producer-side release: signal `produce_done` so the consumer
         // can wait on it before reading.
-        let signal: Option<(Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>, u64)> =
-            self.surfaces.with_mut(surface_id, |state| {
-                debug_assert!(state.write_held, "write release without acquire");
-                state.set_write_held(false);
-                let next = state.next_signal_value();
-                state.current_signal_value = next;
-                (Arc::clone(&state.produce_done), next)
-            });
+        let signal: Option<(
+            Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>,
+            u64,
+        )> = self.surfaces.with_mut(surface_id, |state| {
+            debug_assert!(state.write_held, "write release without acquire");
+            state.set_write_held(false);
+            let next = state.next_signal_value();
+            state.current_signal_value = next;
+            (Arc::clone(&state.produce_done), next)
+        });
         let (produce_done, value) = match signal {
             Some(s) => s,
             None => {

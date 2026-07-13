@@ -712,7 +712,10 @@ pub struct BitstreamReader<'a> {
 
 impl<'a> BitstreamReader<'a> {
     pub fn new(data: &'a [u8]) -> Self {
-        Self { data, bit_offset: 0 }
+        Self {
+            data,
+            bit_offset: 0,
+        }
     }
 
     /// Read `n` bits as an unsigned value (MSB-first). Corresponds to `u(n)`.
@@ -869,7 +872,8 @@ fn read_tile_group_size(src: &[u8], size: usize) -> Option<u64> {
 }
 
 /// Segmentation feature data: whether each level is signed.
-const SEG_FEATURE_DATA_SIGNED: [bool; SEG_LVL_MAX] = [true, true, true, true, true, false, false, false];
+const SEG_FEATURE_DATA_SIGNED: [bool; SEG_LVL_MAX] =
+    [true, true, true, true, true, false, false, false];
 /// Segmentation feature data: bit width per level.
 const SEG_FEATURE_BITS: [u32; SEG_LVL_MAX] = [8, 6, 6, 6, 6, 3, 0, 0];
 /// Segmentation feature data: max absolute value per level.
@@ -1238,7 +1242,12 @@ impl VulkanAv1Decoder {
         }
     }
 
-    fn read_primitive_refsubexpfin(bs: &mut BitstreamReader, n: u16, k: u16, reference: u16) -> u16 {
+    fn read_primitive_refsubexpfin(
+        bs: &mut BitstreamReader,
+        n: u16,
+        k: u16,
+        reference: u16,
+    ) -> u16 {
         inv_recenter_finite_nonneg(n, reference, Self::read_primitive_subexpfin(bs, n, k))
     }
 
@@ -1574,8 +1583,11 @@ impl VulkanAv1Decoder {
             return false;
         }
 
-        sps.color_config.mono_chrome =
-            if sps.seq_profile != Av1Profile::High as u32 { bs.u(1) != 0 } else { false };
+        sps.color_config.mono_chrome = if sps.seq_profile != Av1Profile::High as u32 {
+            bs.u(1) != 0
+        } else {
+            false
+        };
         sps.color_config.color_description_present_flag = bs.u(1) != 0;
 
         if sps.color_config.color_description_present_flag {
@@ -1765,7 +1777,8 @@ impl VulkanAv1Decoder {
         let min_log2_tile_cols = tile_log2(max_tile_width_sb, sb_cols);
         let max_log2_tile_cols = tile_log2(1, sb_cols.min(MAX_TILE_COLS as u32));
         let max_log2_tile_rows = tile_log2(1, sb_rows.min(MAX_TILE_ROWS as u32));
-        let min_log2_tiles = min_log2_tile_cols.max(tile_log2(max_tile_area_sb_init, sb_rows * sb_cols));
+        let min_log2_tiles =
+            min_log2_tile_cols.max(tile_log2(max_tile_area_sb_init, sb_rows * sb_cols));
 
         self.pic_data.tile_info.uniform_tile_spacing_flag = bs.u(1) != 0;
         self.pic_data.mi_col_starts = [0; MAX_TILE_COLS + 1];
@@ -1843,8 +1856,11 @@ impl VulkanAv1Decoder {
             while start_sb < sb_cols && i < MAX_TILE_COLS {
                 self.pic_data.mi_col_starts[i] = start_sb;
                 let max_width = (sb_cols - start_sb).min(max_tile_width_sb);
-                self.pic_data.width_in_sbs_minus_1[i] =
-                    if max_width > 1 { Self::sw_get_uniform(bs, max_width) } else { 0 };
+                self.pic_data.width_in_sbs_minus_1[i] = if max_width > 1 {
+                    Self::sw_get_uniform(bs, max_width)
+                } else {
+                    0
+                };
                 let size_sb = self.pic_data.width_in_sbs_minus_1[i] + 1;
                 widest_tile_sb = widest_tile_sb.max(size_sb);
                 start_sb += size_sb;
@@ -1865,8 +1881,11 @@ impl VulkanAv1Decoder {
             while start_sb < sb_rows && i < MAX_TILE_ROWS {
                 self.pic_data.mi_row_starts[i] = start_sb;
                 let max_height = (sb_rows - start_sb).min(max_tile_height_sb);
-                self.pic_data.height_in_sbs_minus_1[i] =
-                    if max_height > 1 { Self::sw_get_uniform(bs, max_height) } else { 0 };
+                self.pic_data.height_in_sbs_minus_1[i] = if max_height > 1 {
+                    Self::sw_get_uniform(bs, max_height)
+                } else {
+                    0
+                };
                 let size_sb = self.pic_data.height_in_sbs_minus_1[i] + 1;
                 start_sb += size_sb;
                 i += 1;
@@ -1901,7 +1920,11 @@ impl VulkanAv1Decoder {
         self.pic_data.quantization.delta_q_y_dc = Self::read_delta_q(bs, 6);
 
         if !mono_chrome {
-            let diff_uv_delta = if separate_uv_delta_q { bs.u(1) != 0 } else { false };
+            let diff_uv_delta = if separate_uv_delta_q {
+                bs.u(1) != 0
+            } else {
+                false
+            };
             self.pic_data.quantization.delta_q_u_dc = Self::read_delta_q(bs, 6);
             self.pic_data.quantization.delta_q_u_ac = Self::read_delta_q(bs, 6);
             if diff_uv_delta {
@@ -2174,9 +2197,11 @@ impl VulkanAv1Decoder {
         let subsampling_y = sps.color_config.subsampling_y;
 
         if film_grain_params_present && (self.pic_data.show_frame || self.showable_frame) {
-            #[allow(clippy::self_assignment)] // intentional: documents preservation across this path
+            #[allow(clippy::self_assignment)]
+            // intentional: documents preservation across this path
             {
-                self.pic_data.std_info.flags.delta_q_present = self.pic_data.std_info.flags.delta_q_present;
+                self.pic_data.std_info.flags.delta_q_present =
+                    self.pic_data.std_info.flags.delta_q_present;
             }
             self.pic_data.film_grain.apply_grain = bs.u(1) != 0;
 
@@ -2187,8 +2212,11 @@ impl VulkanAv1Decoder {
 
             self.pic_data.film_grain.grain_seed = bs.u(16) as u16;
             let frame_type = self.pic_data.std_info.frame_type;
-            self.pic_data.film_grain.update_grain =
-                if frame_type == Av1FrameType::Inter { bs.u(1) != 0 } else { true };
+            self.pic_data.film_grain.update_grain = if frame_type == Av1FrameType::Inter {
+                bs.u(1) != 0
+            } else {
+                true
+            };
 
             if !self.pic_data.film_grain.update_grain {
                 let buf_idx = bs.u(3) as u8;
@@ -2238,9 +2266,9 @@ impl VulkanAv1Decoder {
             self.pic_data.film_grain.grain_scaling_minus_8 = bs.u(2) as u8;
             self.pic_data.film_grain.ar_coeff_lag = bs.u(2) as u8;
 
-            let num_pos_luma =
-                2 * self.pic_data.film_grain.ar_coeff_lag as usize
-                    * (self.pic_data.film_grain.ar_coeff_lag as usize + 1);
+            let num_pos_luma = 2
+                * self.pic_data.film_grain.ar_coeff_lag as usize
+                * (self.pic_data.film_grain.ar_coeff_lag as usize + 1);
             let mut num_pos_chroma = num_pos_luma;
             if self.pic_data.film_grain.num_y_points > 0 {
                 num_pos_chroma += 1;
@@ -2316,7 +2344,8 @@ impl VulkanAv1Decoder {
         #[allow(clippy::eq_op)] // documents LAST_FRAME's relative slot in the reference frame table
         let last_frame_slot = REFERENCE_NAME_LAST_FRAME - REFERENCE_NAME_LAST_FRAME;
         self.ref_frame_idx[last_frame_slot] = last_frame_idx;
-        self.ref_frame_idx[REFERENCE_NAME_GOLDEN_FRAME - REFERENCE_NAME_LAST_FRAME] = gold_frame_idx;
+        self.ref_frame_idx[REFERENCE_NAME_GOLDEN_FRAME - REFERENCE_NAME_LAST_FRAME] =
+            gold_frame_idx;
         if last_frame_idx >= 0 {
             used_frame[last_frame_idx as usize] = true;
         }
@@ -2346,7 +2375,8 @@ impl VulkanAv1Decoder {
                 }
             }
             if ref_idx >= 0 {
-                self.ref_frame_idx[REFERENCE_NAME_ALTREF_FRAME - REFERENCE_NAME_LAST_FRAME] = ref_idx;
+                self.ref_frame_idx[REFERENCE_NAME_ALTREF_FRAME - REFERENCE_NAME_LAST_FRAME] =
+                    ref_idx;
                 used_frame[ref_idx as usize] = true;
             }
         }
@@ -2366,7 +2396,8 @@ impl VulkanAv1Decoder {
                 }
             }
             if ref_idx >= 0 {
-                self.ref_frame_idx[REFERENCE_NAME_BWDREF_FRAME - REFERENCE_NAME_LAST_FRAME] = ref_idx;
+                self.ref_frame_idx[REFERENCE_NAME_BWDREF_FRAME - REFERENCE_NAME_LAST_FRAME] =
+                    ref_idx;
                 used_frame[ref_idx as usize] = true;
             }
         }
@@ -2386,7 +2417,8 @@ impl VulkanAv1Decoder {
                 }
             }
             if ref_idx >= 0 {
-                self.ref_frame_idx[REFERENCE_NAME_ALTREF2_FRAME - REFERENCE_NAME_LAST_FRAME] = ref_idx;
+                self.ref_frame_idx[REFERENCE_NAME_ALTREF2_FRAME - REFERENCE_NAME_LAST_FRAME] =
+                    ref_idx;
                 used_frame[ref_idx as usize] = true;
             }
         }
@@ -2450,7 +2482,10 @@ impl VulkanAv1Decoder {
             None => return false,
         };
 
-        if !sps.enable_order_hint || self.is_frame_intra() || !self.pic_data.std_info.flags.reference_select {
+        if !sps.enable_order_hint
+            || self.is_frame_intra()
+            || !self.pic_data.std_info.flags.reference_select
+        {
             return false;
         }
 
@@ -2531,7 +2566,10 @@ impl VulkanAv1Decoder {
             None => return None,
         };
 
-        if !sps.enable_order_hint || self.is_frame_intra() || !self.pic_data.std_info.flags.reference_select {
+        if !sps.enable_order_hint
+            || self.is_frame_intra()
+            || !self.pic_data.std_info.flags.reference_select
+        {
             return None;
         }
 
@@ -2633,14 +2671,16 @@ impl VulkanAv1Decoder {
                     self.showable_frame = self.buffers[frame_to_show_map_idx].showable_frame;
 
                     if sps.film_grain_params_present {
-                        self.pic_data.film_grain =
-                            self.buffers[frame_to_show_map_idx].film_grain_params.clone();
+                        self.pic_data.film_grain = self.buffers[frame_to_show_map_idx]
+                            .film_grain_params
+                            .clone();
                     }
 
                     if reset_decoder_state {
                         self.showable_frame = false;
                         self.pic_data.std_info.frame_type = Av1FrameType::Key;
-                        self.pic_data.std_info.refresh_frame_flags = ((1u16 << NUM_REF_FRAMES) - 1) as u8;
+                        self.pic_data.std_info.refresh_frame_flags =
+                            ((1u16 << NUM_REF_FRAMES) - 1) as u8;
 
                         self.pic_data.loop_filter.loop_filter_ref_deltas =
                             self.buffers[frame_to_show_map_idx].lf_ref_delta;
@@ -2683,15 +2723,15 @@ impl VulkanAv1Decoder {
                 self.showable_frame = bs.u(1) != 0;
             }
 
-            self.pic_data.std_info.flags.error_resilient_mode =
-                if self.pic_data.std_info.frame_type == Av1FrameType::Switch
-                    || (self.pic_data.std_info.frame_type == Av1FrameType::Key
-                        && self.pic_data.show_frame)
-                {
-                    true
-                } else {
-                    bs.u(1) != 0
-                };
+            self.pic_data.std_info.flags.error_resilient_mode = if self.pic_data.std_info.frame_type
+                == Av1FrameType::Switch
+                || (self.pic_data.std_info.frame_type == Av1FrameType::Key
+                    && self.pic_data.show_frame)
+            {
+                true
+            } else {
+                bs.u(1) != 0
+            };
         }
 
         if self.pic_data.std_info.frame_type == Av1FrameType::Key && self.pic_data.show_frame {
@@ -2765,8 +2805,16 @@ impl VulkanAv1Decoder {
         }
 
         if sps.decoder_model_info_present {
-            self.pic_data.std_info.flags.buffer_removal_time_present_flag = bs.u(1) != 0;
-            if self.pic_data.std_info.flags.buffer_removal_time_present_flag {
+            self.pic_data
+                .std_info
+                .flags
+                .buffer_removal_time_present_flag = bs.u(1) != 0;
+            if self
+                .pic_data
+                .std_info
+                .flags
+                .buffer_removal_time_present_flag
+            {
                 for op_num in 0..=(sps.operating_points_cnt_minus_1 as usize) {
                     if self.op_params[op_num].decoder_model_param_present {
                         let op_pt_idc = sps.operating_point_idc[op_num];
@@ -2862,7 +2910,8 @@ impl VulkanAv1Decoder {
                 self.pic_data.std_info.interpolation_filter = Av1InterpolationFilter::Switchable;
             } else {
                 self.pic_data.std_info.interpolation_filter =
-                    Av1InterpolationFilter::from_u32(bs.u(2)).unwrap_or(Av1InterpolationFilter::EightTap);
+                    Av1InterpolationFilter::from_u32(bs.u(2))
+                        .unwrap_or(Av1InterpolationFilter::EightTap);
             }
 
             self.pic_data.std_info.flags.is_motion_mode_switchable = bs.u(1) != 0;
@@ -2912,8 +2961,12 @@ impl VulkanAv1Decoder {
         self.pic_data.std_info.delta_lf_res = 0;
         self.pic_data.std_info.flags.delta_lf_present = false;
         self.pic_data.std_info.flags.delta_lf_multi = false;
-        self.pic_data.std_info.flags.delta_q_present =
-            if self.pic_data.quantization.base_q_idx > 0 { bs.u(1) != 0 } else { false };
+        self.pic_data.std_info.flags.delta_q_present = if self.pic_data.quantization.base_q_idx > 0
+        {
+            bs.u(1) != 0
+        } else {
+            false
+        };
 
         if self.pic_data.std_info.flags.delta_q_present {
             self.pic_data.std_info.delta_q_res = bs.u(2) as u8;
@@ -2963,10 +3016,7 @@ impl VulkanAv1Decoder {
 
         self.decode_loop_filter_data(bs);
 
-        if !self.coded_lossless
-            && sps.enable_cdef
-            && !self.pic_data.std_info.flags.allow_intrabc
-        {
+        if !self.coded_lossless && sps.enable_cdef && !self.pic_data.std_info.flags.allow_intrabc {
             self.decode_cdef_data(bs);
         }
         if !self.all_lossless
@@ -3072,8 +3122,7 @@ impl VulkanAv1Decoder {
                         self.pic_data.segmentation.feature_enabled;
                     self.buffers[idx].seg_feature_data = self.pic_data.segmentation.feature_data;
 
-                    self.buffers[idx].primary_ref_frame =
-                        self.pic_data.std_info.primary_ref_frame;
+                    self.buffers[idx].primary_ref_frame = self.pic_data.std_info.primary_ref_frame;
                     self.buffers[idx].base_q_index = self.pic_data.quantization.base_q_idx;
                     self.buffers[idx].disable_frame_end_update_cdf =
                         self.pic_data.std_info.flags.disable_frame_end_update_cdf;
@@ -3137,10 +3186,7 @@ impl VulkanAv1Decoder {
                 && obu_type != Av1ObuType::SequenceHeader
                 && obu_type != Av1ObuType::Padding
             {
-                if !Self::is_obu_in_current_operating_point(
-                    self.operating_point_idc_active,
-                    &hdr,
-                ) {
+                if !Self::is_obu_in_current_operating_point(self.operating_point_idc_active, &hdr) {
                     offset += total_obu_size;
                     continue;
                 }
@@ -3409,7 +3455,12 @@ mod tests {
         );
         // All slots should be filled (>= 0)
         for i in 0..REFS_PER_FRAME {
-            assert!(decoder.ref_frame_idx[i] >= 0, "ref_frame_idx[{}] = {}", i, decoder.ref_frame_idx[i]);
+            assert!(
+                decoder.ref_frame_idx[i] >= 0,
+                "ref_frame_idx[{}] = {}",
+                i,
+                decoder.ref_frame_idx[i]
+            );
         }
     }
 
@@ -3536,7 +3587,10 @@ mod tests {
         let decoder = VulkanAv1Decoder::new(false);
         assert!(!decoder.obu_annex_b);
         assert!(!decoder.sps_received);
-        assert_eq!(decoder.pic_data.std_info.primary_ref_frame, PRIMARY_REF_NONE);
+        assert_eq!(
+            decoder.pic_data.std_info.primary_ref_frame,
+            PRIMARY_REF_NONE
+        );
         assert_eq!(decoder.pic_data.std_info.refresh_frame_flags, 0xFF);
         assert_eq!(decoder.ref_frame_id, [-1; NUM_REF_FRAMES]);
         assert_eq!(decoder.tile_size_bytes_minus_1, 3);
@@ -3590,10 +3644,7 @@ mod tests {
     fn test_read_tile_group_size() {
         assert_eq!(read_tile_group_size(&[42], 1), Some(42));
         assert_eq!(read_tile_group_size(&[0x01, 0x02], 2), Some(0x0201));
-        assert_eq!(
-            read_tile_group_size(&[0x01, 0x02, 0x03], 3),
-            Some(0x030201)
-        );
+        assert_eq!(read_tile_group_size(&[0x01, 0x02, 0x03], 3), Some(0x030201));
         assert_eq!(
             read_tile_group_size(&[0x01, 0x02, 0x03, 0x04], 4),
             Some(0x04030201)

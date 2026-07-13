@@ -257,9 +257,7 @@ fn import_single_plane_with_handle_type(
         .build();
 
     let buffer = unsafe { device.create_buffer(&buffer_info, None) }.map_err(|e| {
-        ConsumerRhiError::Gpu(format!(
-            "ConsumerVulkanBuffer: create_buffer failed: {e}"
-        ))
+        ConsumerRhiError::Gpu(format!("ConsumerVulkanBuffer: create_buffer failed: {e}"))
     })?;
 
     let mem_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
@@ -317,10 +315,14 @@ fn teardown_plane(vulkan_device: &Arc<ConsumerVulkanDevice>, plane: ConsumerImpo
 impl Drop for ConsumerVulkanBuffer {
     fn drop(&mut self) {
         unsafe {
-            self.vulkan_device.device().destroy_buffer(self.buffer, None);
+            self.vulkan_device
+                .device()
+                .destroy_buffer(self.buffer, None);
         }
-        self.vulkan_device.unmap_imported_memory(self.imported_memory);
-        self.vulkan_device.free_imported_memory(self.imported_memory);
+        self.vulkan_device
+            .unmap_imported_memory(self.imported_memory);
+        self.vulkan_device
+            .free_imported_memory(self.imported_memory);
         for plane in self.extra_imported_planes.drain(..) {
             teardown_plane(&self.vulkan_device, plane);
         }

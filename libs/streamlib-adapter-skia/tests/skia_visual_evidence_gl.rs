@@ -24,18 +24,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
-use skia_safe::{
-    gradient_shader, Color, Color4f, Paint, PaintStyle, Path, Point, Rect, TileMode,
-};
+use skia_safe::{Color, Color4f, Paint, PaintStyle, Path, Point, Rect, TileMode, gradient_shader};
 use streamlib::sdk::context::GpuContext;
-use streamlib::sdk::rhi::TextureFormat;
 use streamlib::sdk::engine::host_rhi::HostVulkanDevice;
+use streamlib::sdk::rhi::TextureFormat;
 use streamlib_adapter_abi::{
-    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState,
-    SurfaceTransportHandle, SurfaceUsage,
+    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
+    SurfaceUsage,
 };
 use streamlib_adapter_opengl::{
-    EglRuntime, HostSurfaceRegistration, OpenGlSurfaceAdapter, DRM_FORMAT_ARGB8888,
+    DRM_FORMAT_ARGB8888, EglRuntime, HostSurfaceRegistration, OpenGlSurfaceAdapter,
 };
 use streamlib_adapter_skia::SkiaGlSurfaceAdapter;
 use vulkanalia::prelude::v1_4::*;
@@ -208,10 +206,7 @@ fn skia_visual_evidence_gl() {
             let mut tile = Paint::default();
             tile.set_color(*color);
             let x0 = 16.0 + i as f32 * 22.0;
-            canvas.draw_rect(
-                Rect::new(x0, strip_y, x0 + 18.0, strip_y + strip_h),
-                &tile,
-            );
+            canvas.draw_rect(Rect::new(x0, strip_y, x0 + 18.0, strip_y + strip_h), &tile);
         }
 
         for &(cx, cy) in &[
@@ -234,10 +229,7 @@ fn skia_visual_evidence_gl() {
         H,
     );
     write_bgra_as_png(&pixels, W, H, &png_path);
-    println!(
-        "[skia_visual_evidence_gl] wrote {}",
-        png_path.display()
-    );
+    println!("[skia_visual_evidence_gl] wrote {}", png_path.display());
 }
 
 fn host_readback_bgra(
@@ -321,7 +313,11 @@ fn host_readback_bgra(
                 .build(),
         )
         .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
-        .image_extent(vk::Extent3D { width, height, depth: 1 })
+        .image_extent(vk::Extent3D {
+            width,
+            height,
+            depth: 1,
+        })
         .build();
     let regions = [region];
     unsafe {
@@ -368,8 +364,7 @@ fn write_bgra_as_png(bgra: &[u8], width: u32, height: u32, path: &std::path::Pat
     for px in rgba.chunks_exact_mut(4) {
         px.swap(0, 2);
     }
-    let file = File::create(path)
-        .unwrap_or_else(|e| panic!("create {}: {e}", path.display()));
+    let file = File::create(path).unwrap_or_else(|e| panic!("create {}: {e}", path.display()));
     let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);

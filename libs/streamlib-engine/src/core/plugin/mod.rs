@@ -27,8 +27,8 @@ pub(crate) mod processor_vtable;
 #[cfg(test)]
 mod twin_drift_guard;
 
-pub use host_services::{install_host_services, RegisterHelper};
-pub use streamlib_plugin_abi::{HostServices, HOST_SERVICES_LAYOUT_VERSION};
+pub use host_services::{RegisterHelper, install_host_services};
+pub use streamlib_plugin_abi::{HOST_SERVICES_LAYOUT_VERSION, HostServices};
 
 // Build-fingerprint handshake surface. The facade `streamlib` SDK's
 // `sdk::plugin` re-exports `core::plugin`, so the `#[processor]` macro

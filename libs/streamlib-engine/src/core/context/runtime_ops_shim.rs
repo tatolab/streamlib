@@ -126,9 +126,8 @@ impl RuntimeOpsShim {
             .await
             .map_err(|_| Error::Runtime("runtime-ops completion dropped".into()))?;
         if status == 0 {
-            rmp_serde::from_slice(&payload).map_err(|e| {
-                Error::Runtime(format!("runtime-ops response decode failed: {e}"))
-            })
+            rmp_serde::from_slice(&payload)
+                .map_err(|e| Error::Runtime(format!("runtime-ops response decode failed: {e}")))
         } else {
             let msg = String::from_utf8_lossy(&payload).into_owned();
             Err(Error::Runtime(msg))
@@ -193,10 +192,7 @@ unsafe extern "C" fn runtime_ops_completion_trampoline(
 }
 
 impl RuntimeOperations for RuntimeOpsShim {
-    fn add_processor_async(
-        &self,
-        spec: ProcessorSpec,
-    ) -> BoxFuture<'_, Result<ProcessorUniqueId>> {
+    fn add_processor_async(&self, spec: ProcessorSpec) -> BoxFuture<'_, Result<ProcessorUniqueId>> {
         let bytes = match rmp_serde::to_vec_named(&spec) {
             Ok(b) => b,
             Err(e) => {
@@ -206,22 +202,27 @@ impl RuntimeOperations for RuntimeOpsShim {
                 return Box::pin(async move { err });
             }
         };
-        Box::pin(self.submit(move |handle, vtable, completion, user_data| unsafe {
-            ((*vtable).add_processor)(handle, bytes.as_ptr(), bytes.len(), completion, user_data);
-            // Hold bytes alive until the host has consumed them. The
-            // vtable contract is "valid for the duration of the call"
-            // — the spawned host task copies the bytes synchronously
-            // before its first await, so it's safe to drop bytes when
-            // this closure returns. `bytes` is moved into the closure,
-            // so it's dropped at end-of-call here.
-            drop(bytes);
-        }))
+        Box::pin(
+            self.submit(move |handle, vtable, completion, user_data| unsafe {
+                ((*vtable).add_processor)(
+                    handle,
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    completion,
+                    user_data,
+                );
+                // Hold bytes alive until the host has consumed them. The
+                // vtable contract is "valid for the duration of the call"
+                // — the spawned host task copies the bytes synchronously
+                // before its first await, so it's safe to drop bytes when
+                // this closure returns. `bytes` is moved into the closure,
+                // so it's dropped at end-of-call here.
+                drop(bytes);
+            }),
+        )
     }
 
-    fn remove_processor_async(
-        &self,
-        processor_id: ProcessorUniqueId,
-    ) -> BoxFuture<'_, Result<()>> {
+    fn remove_processor_async(&self, processor_id: ProcessorUniqueId) -> BoxFuture<'_, Result<()>> {
         let bytes = match rmp_serde::to_vec_named(&processor_id) {
             Ok(b) => b,
             Err(e) => {
@@ -231,16 +232,18 @@ impl RuntimeOperations for RuntimeOpsShim {
                 return Box::pin(async move { err });
             }
         };
-        Box::pin(self.submit_unit(move |handle, vtable, completion, user_data| unsafe {
-            ((*vtable).remove_processor)(
-                handle,
-                bytes.as_ptr(),
-                bytes.len(),
-                completion,
-                user_data,
-            );
-            drop(bytes);
-        }))
+        Box::pin(
+            self.submit_unit(move |handle, vtable, completion, user_data| unsafe {
+                ((*vtable).remove_processor)(
+                    handle,
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    completion,
+                    user_data,
+                );
+                drop(bytes);
+            }),
+        )
     }
 
     fn connect_async(
@@ -266,19 +269,21 @@ impl RuntimeOperations for RuntimeOpsShim {
                 return Box::pin(async move { err });
             }
         };
-        Box::pin(self.submit(move |handle, vtable, completion, user_data| unsafe {
-            ((*vtable).connect)(
-                handle,
-                from_bytes.as_ptr(),
-                from_bytes.len(),
-                to_bytes.as_ptr(),
-                to_bytes.len(),
-                completion,
-                user_data,
-            );
-            drop(from_bytes);
-            drop(to_bytes);
-        }))
+        Box::pin(
+            self.submit(move |handle, vtable, completion, user_data| unsafe {
+                ((*vtable).connect)(
+                    handle,
+                    from_bytes.as_ptr(),
+                    from_bytes.len(),
+                    to_bytes.as_ptr(),
+                    to_bytes.len(),
+                    completion,
+                    user_data,
+                );
+                drop(from_bytes);
+                drop(to_bytes);
+            }),
+        )
     }
 
     fn disconnect_async(&self, link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
@@ -291,16 +296,12 @@ impl RuntimeOperations for RuntimeOpsShim {
                 return Box::pin(async move { err });
             }
         };
-        Box::pin(self.submit_unit(move |handle, vtable, completion, user_data| unsafe {
-            ((*vtable).disconnect)(
-                handle,
-                bytes.as_ptr(),
-                bytes.len(),
-                completion,
-                user_data,
-            );
-            drop(bytes);
-        }))
+        Box::pin(
+            self.submit_unit(move |handle, vtable, completion, user_data| unsafe {
+                ((*vtable).disconnect)(handle, bytes.as_ptr(), bytes.len(), completion, user_data);
+                drop(bytes);
+            }),
+        )
     }
 
     fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {

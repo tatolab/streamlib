@@ -48,22 +48,16 @@ impl IndexBuffer {
         byte_size: u64,
     ) -> crate::core::Result<Self> {
         let inner =
-            crate::vulkan::rhi::HostVulkanBuffer::new_index_buffer_host_visible(
-                device, byte_size,
-            )?;
+            crate::vulkan::rhi::HostVulkanBuffer::new_index_buffer_host_visible(device, byte_size)?;
         Ok(Self::from_arc_into_raw(Arc::new(inner)))
     }
 
     /// Wrap a pre-allocated buffer that already has `INDEX_BUFFER` usage.
-    pub fn from_host_vulkan_buffer(
-        inner: Arc<crate::vulkan::rhi::HostVulkanBuffer>,
-    ) -> Self {
+    pub fn from_host_vulkan_buffer(inner: Arc<crate::vulkan::rhi::HostVulkanBuffer>) -> Self {
         Self::from_arc_into_raw(inner)
     }
 
-    pub(crate) fn from_arc_into_raw(
-        inner: Arc<crate::vulkan::rhi::HostVulkanBuffer>,
-    ) -> Self {
+    pub(crate) fn from_arc_into_raw(inner: Arc<crate::vulkan::rhi::HostVulkanBuffer>) -> Self {
         let byte_size = inner.size() as u64;
         let mapped_ptr = inner.mapped_ptr();
         let handle = Arc::into_raw(inner) as *const c_void;

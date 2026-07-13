@@ -42,9 +42,7 @@ fn two_subprocesses_concurrently_read_same_surface() {
     let host = match common::HostFixture::try_new() {
         Some(h) => h,
         None => {
-            tracing::info!(
-                "concurrent_reads_two_subprocesses: skipping — no Vulkan"
-            );
+            tracing::info!("concurrent_reads_two_subprocesses: skipping — no Vulkan");
             return;
         }
     };
@@ -83,14 +81,8 @@ fn two_subprocesses_concurrently_read_same_surface() {
             .export_opaque_fd()
             .expect("export consume_done_fd");
         let req = common::helper_descriptor("wait-only", &surface, 1, None);
-        common::send_helper_request(
-            sock,
-            &req,
-            &[dma_buf_fd],
-            produce_done_fd,
-            consume_done_fd,
-        )
-        .expect("send helper request");
+        common::send_helper_request(sock, &req, &[dma_buf_fd], produce_done_fd, consume_done_fd)
+            .expect("send helper request");
     }
 
     let resp_a = common::recv_helper_response(&sock_a);

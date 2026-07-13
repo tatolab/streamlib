@@ -31,20 +31,18 @@
 //!   - "OK\nregister_texture_with_layout=ok\nsurface_store_register_texture=ok\nresolve_texture_registration=ok\nsurface_store_lookup_texture=ok"
 //!   - "ERR:<msg>" on any step failure.
 
-use streamlib::sdk::context::{
-    RuntimeContextFullAccess, RuntimeContextLimitedAccess,
-};
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
 
 #[cfg(target_os = "linux")]
-use streamlib::sdk::engine::host_rhi::HostVulkanTimelineSemaphore;
+use streamlib::engine_internal::sdk::rhi::VulkanLayout;
 #[cfg(target_os = "linux")]
 use streamlib::sdk::engine::HostSurfaceStoreExt;
 #[cfg(target_os = "linux")]
-use streamlib::sdk::rhi::TextureFormat;
+use streamlib::sdk::engine::host_rhi::HostVulkanTimelineSemaphore;
 #[cfg(target_os = "linux")]
-use streamlib::engine_internal::sdk::rhi::VulkanLayout;
+use streamlib::sdk::rhi::TextureFormat;
 
 #[streamlib::sdk::processor("SurfaceShareEscalateConsistencyTestProcessor")]
 pub struct SurfaceShareEscalateConsistencyTest {}
@@ -130,29 +128,20 @@ fn run_smoke(
     // `produce_done` + `consume_done` per
     // `docs/architecture/adapter-timeline-single-writer.md`.
     let host_device = full.host_vulkan_device_arc()?;
-    let texture = full.acquire_render_target_dma_buf_image(
-        width,
-        height,
-        TextureFormat::Bgra8Unorm,
-    )?;
-    let produce_done = HostVulkanTimelineSemaphore::new_exportable(
-        host_device.device(),
-        0,
-    )
-    .map_err(|e| {
-        Error::GpuError(format!(
-            "HostVulkanTimelineSemaphore::new_exportable (produce_done): {e}"
-        ))
-    })?;
-    let consume_done = HostVulkanTimelineSemaphore::new_exportable(
-        host_device.device(),
-        0,
-    )
-    .map_err(|e| {
-        Error::GpuError(format!(
-            "HostVulkanTimelineSemaphore::new_exportable (consume_done): {e}"
-        ))
-    })?;
+    let texture =
+        full.acquire_render_target_dma_buf_image(width, height, TextureFormat::Bgra8Unorm)?;
+    let produce_done = HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+        .map_err(|e| {
+            Error::GpuError(format!(
+                "HostVulkanTimelineSemaphore::new_exportable (produce_done): {e}"
+            ))
+        })?;
+    let consume_done = HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+        .map_err(|e| {
+            Error::GpuError(format!(
+                "HostVulkanTimelineSemaphore::new_exportable (consume_done): {e}"
+            ))
+        })?;
 
     // Step 2: register via the cross-process (surface-share daemon)
     // channel.
@@ -167,11 +156,7 @@ fn run_smoke(
             Some(&consume_done),
             VulkanLayout::UNDEFINED,
         )
-        .map_err(|e| {
-            Error::GpuError(format!(
-                "surface_store.register_texture: {e}"
-            ))
-        })?;
+        .map_err(|e| Error::GpuError(format!("surface_store.register_texture: {e}")))?;
 
     // Step 3: dual-register via the in-process texture_cache
     // channel so the Path-1 resolve below hits the fast path.
@@ -190,34 +175,20 @@ fn run_smoke(
     // tells the resolver to read the producer's published layout
     // from the registration rather than override per-frame.
     let _registration = full
-        .resolve_texture_registration_by_surface_id(
-            surface_id,
-            None,
-            width,
-            height,
-        )
-        .map_err(|e| {
-            Error::GpuError(format!(
-                "resolve_texture_registration_by_surface_id: {e}"
-            ))
-        })?;
+        .resolve_texture_registration_by_surface_id(surface_id, None, width, height)
+        .map_err(|e| Error::GpuError(format!("resolve_texture_registration_by_surface_id: {e}")))?;
 
     // Step 5: look up via the cross-process (surface-share daemon)
     // path. Returns a fresh Texture PluginAbiObject over the same imported
     // VkImage. Both texture handles release on scope exit; the
     // host-side Arcs drop in inverse-construction order.
-    let (looked_up_texture, looked_up_layout) =
-        store.lookup_texture(surface_id).map_err(|e| {
-            Error::GpuError(format!(
-                "surface_store.lookup_texture: {e}"
-            ))
-        })?;
+    let (looked_up_texture, looked_up_layout) = store
+        .lookup_texture(surface_id)
+        .map_err(|e| Error::GpuError(format!("surface_store.lookup_texture: {e}")))?;
     // Sanity: the looked-up texture's dimensions must agree with
     // the original — locks the dimensions half of the round-trip
     // wire format.
-    if looked_up_texture.width() != width
-        || looked_up_texture.height() != height
-    {
+    if looked_up_texture.width() != width || looked_up_texture.height() != height {
         return Err(Error::GpuError(format!(
             "lookup_texture returned mismatched dimensions: \
              expected {width}x{height}, got {}x{}",

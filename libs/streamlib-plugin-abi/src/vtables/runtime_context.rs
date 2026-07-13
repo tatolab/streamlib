@@ -44,7 +44,6 @@ pub struct RuntimeContextVTable {
     // -------------------------------------------------------------------------
     // Identifier accessors (owned-return; cdylib does not retain a borrow)
     // -------------------------------------------------------------------------
-
     /// Copy the runtime id as UTF-8 bytes into `out_buf`. Returns the
     /// required length; `*out_len` receives the actually-written
     /// count (`min(required, out_buf_cap)`). Truncation is benign;
@@ -70,14 +69,12 @@ pub struct RuntimeContextVTable {
     // -------------------------------------------------------------------------
     // Lifecycle flags
     // -------------------------------------------------------------------------
-
     pub is_paused: unsafe extern "C" fn(ctx: *const c_void) -> bool,
     pub should_process: unsafe extern "C" fn(ctx: *const c_void) -> bool,
 
     // -------------------------------------------------------------------------
     // GPU context handles
     // -------------------------------------------------------------------------
-
     /// Returns an opaque handle to the privileged [`GpuContextFullAccess`].
     /// Pointer is valid for the lifetime of the surrounding
     /// `RuntimeContextFullAccess` shim. Paired with the methods
@@ -94,7 +91,6 @@ pub struct RuntimeContextVTable {
     // -------------------------------------------------------------------------
     // Host-owned services (handles; static vtables live on HostServices)
     // -------------------------------------------------------------------------
-
     /// Opaque handle to the runtime's audio clock. Pair with
     /// [`crate::HostServices::audio_clock_vtable`] to call methods on it.
     /// The handle remains valid for the lifetime of the runtime.

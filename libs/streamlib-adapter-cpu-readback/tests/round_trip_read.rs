@@ -71,9 +71,7 @@ fn round_trip_read_per_row_pattern_lands_unscrambled() {
     let fixture = match HostFixture::try_new() {
         Some(f) => f,
         None => {
-            println!(
-                "round_trip_read_per_row_pattern: skipping — no Vulkan device available"
-            );
+            println!("round_trip_read_per_row_pattern: skipping — no Vulkan device available");
             return;
         }
     };

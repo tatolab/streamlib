@@ -75,11 +75,8 @@ pub struct OutputWriterVTable {
     /// Check whether a port has been configured. Returns `true` if
     /// the host's `OutputWriterInner` has at least one
     /// `add_connection` entry for the named port.
-    pub has_port: unsafe extern "C" fn(
-        handle: *const c_void,
-        port_ptr: *const u8,
-        port_len: usize,
-    ) -> bool,
+    pub has_port:
+        unsafe extern "C" fn(handle: *const c_void, port_ptr: *const u8, port_len: usize) -> bool,
 
     /// Bump the host-side `Arc<OutputWriterInner>` strong count.
     /// Returns the same opaque handle (the cdylib uses the same

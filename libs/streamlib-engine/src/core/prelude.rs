@@ -5,7 +5,7 @@
 
 pub use crate::core::{
     // Errors
-    error::{Result, Error},
+    error::{Error, Result},
 
     // Graph
     graph::{LinkUniqueId, ProcessorUniqueId},
@@ -16,4 +16,3 @@ pub use crate::core::{
     // Runtime
     runtime::Runner,
 };
-

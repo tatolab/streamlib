@@ -27,9 +27,7 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use streamlib::sdk::context::{
-    RuntimeContextFullAccess, RuntimeContextLimitedAccess,
-};
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ContinuousProcessor;
 

@@ -12,8 +12,8 @@
 
 use std::path::Path;
 
-use streamlib_pack::static_registry::{emit_static_registry, EmitEcosystems, EmitOptions};
 use streamlib_idents::{CatalogClient, Org, Package, PackageRef, SemVer};
+use streamlib_pack::static_registry::{EmitEcosystems, EmitOptions, emit_static_registry};
 
 fn write(dir: &Path, rel: &str, body: &str) {
     let path = dir.join(rel);
@@ -122,10 +122,19 @@ fn real_emit_writes_catalog_inside_the_flipped_tree() {
     // store, the release manifest (completion marker), the per-package
     // catalogs, the owned JTD, and the aggregate — all present together.
     assert!(out.join("slpkg/fixcam/2.1.0/fixcam.slpkg").is_file());
-    assert!(out.join("slpkg/streamlib-release/0.9.9/manifest.json").is_file());
+    assert!(
+        out.join("slpkg/streamlib-release/0.9.9/manifest.json")
+            .is_file()
+    );
     assert!(out.join("slpkg/fixcam/2.1.0/fixcam.catalog.json").is_file());
-    assert!(out.join("slpkg/fixcore/1.4.0/fixcore.catalog.json").is_file());
-    assert!(out.join("slpkg/fixcore/1.4.0/schemas/FixFrame.jtd.json").is_file());
+    assert!(
+        out.join("slpkg/fixcore/1.4.0/fixcore.catalog.json")
+            .is_file()
+    );
+    assert!(
+        out.join("slpkg/fixcore/1.4.0/schemas/FixFrame.jtd.json")
+            .is_file()
+    );
     assert!(out.join("catalog/index.ndjson").is_file());
     // No staging remnant beside the served tree.
     let remnants: Vec<_> = std::fs::read_dir(tmp.path())
@@ -133,7 +142,10 @@ fn real_emit_writes_catalog_inside_the_flipped_tree() {
         .filter_map(|e| e.ok())
         .filter(|e| e.file_name().to_string_lossy().contains(".staging."))
         .collect();
-    assert!(remnants.is_empty(), "staging remnant left behind: {remnants:?}");
+    assert!(
+        remnants.is_empty(),
+        "staging remnant left behind: {remnants:?}"
+    );
 
     // The catalog surface is queryable off the served tree.
     let client = CatalogClient::new(format!("file://{}", out.display()), None);
@@ -142,11 +154,19 @@ fn real_emit_writes_catalog_inside_the_flipped_tree() {
     assert_eq!(index[0].processor.name, "FixSource");
     let out_schema = index[0].processor.outputs[0].schema.schema().unwrap();
     assert_eq!(out_schema.to_string(), "@tatolab/fixcore/FixFrame@1.4.0");
-    let jtd = client.fetch_schema_type_definition(out_schema).unwrap().unwrap();
-    assert_eq!(jtd["metadata"]["type"], "FixFrame");
-    let cam_ref = PackageRef::new(Org::new("tatolab").unwrap(), Package::new("fixcam").unwrap());
-    assert!(client
-        .fetch_package_catalog(&cam_ref, &SemVer::new(2, 1, 0))
+    let jtd = client
+        .fetch_schema_type_definition(out_schema)
         .unwrap()
-        .is_some());
+        .unwrap();
+    assert_eq!(jtd["metadata"]["type"], "FixFrame");
+    let cam_ref = PackageRef::new(
+        Org::new("tatolab").unwrap(),
+        Package::new("fixcam").unwrap(),
+    );
+    assert!(
+        client
+            .fetch_package_catalog(&cam_ref, &SemVer::new(2, 1, 0))
+            .unwrap()
+            .is_some()
+    );
 }

@@ -36,8 +36,8 @@ pub fn vulkan_adapter_subprocess_helper_path() -> PathBuf {
     helper
 }
 
-use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
 use streamlib::sdk::context::GpuContext;
+use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
 use streamlib::sdk::rhi::{Texture, TextureFormat};
 use streamlib_adapter_abi::{
     StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState, SurfaceTransportHandle,
@@ -201,12 +201,16 @@ pub fn recv_helper_response(parent: &UnixStream) -> serde_json::Value {
                 4 - total,
             )
         };
-        assert!(n > 0, "read response length: {}", std::io::Error::last_os_error());
+        assert!(
+            n > 0,
+            "read response length: {}",
+            std::io::Error::last_os_error()
+        );
         total += n as usize;
     }
     let msg_len = u32::from_be_bytes(len_buf) as usize;
-    let (payload, fds) = streamlib_surface_client::recv_message_with_fds(parent, msg_len, 1)
-        .expect("recv response");
+    let (payload, fds) =
+        streamlib_surface_client::recv_message_with_fds(parent, msg_len, 1).expect("recv response");
     for fd in fds {
         unsafe { libc::close(fd) };
     }

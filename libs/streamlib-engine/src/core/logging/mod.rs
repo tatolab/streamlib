@@ -8,13 +8,13 @@
 //! interface contract) and `CLAUDE.md` for the engine-model framing.
 
 pub use config::{LoggingTunables, StreamlibLoggingConfig};
-pub use event::{LogLevel, RuntimeLogEvent, Source, SCHEMA_VERSION};
-pub use init::{init, init_for_tests, StreamlibLoggingGuard};
+pub use event::{LogLevel, RuntimeLogEvent, SCHEMA_VERSION, Source};
+pub use init::{StreamlibLoggingGuard, init, init_for_tests};
 pub use paths::{log_dir, runtime_log_path};
 pub(crate) use polyglot_sink::push_polyglot_record;
 pub(crate) use record::LogRecord;
-pub(crate) use worker::now_ns;
 pub use worker::format_event_pretty;
+pub(crate) use worker::now_ns;
 
 mod config;
 mod event;

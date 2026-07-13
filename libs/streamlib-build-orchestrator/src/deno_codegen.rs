@@ -41,7 +41,7 @@ pub fn provision_deno_typescript(temp_dir: &Path, package_label: &str) -> Result
             return Err(build_failed(
                 package_label,
                 format!("reading streamlib.yaml for Deno codegen: {e}"),
-            ))
+            ));
         }
     };
     if !build::has_typescript_runtime_processors(&config) {
@@ -190,7 +190,10 @@ mod tests {
                 break;
             }
         }
-        assert!(found_ts, "codegen must emit a .ts wire type under _generated_");
+        assert!(
+            found_ts,
+            "codegen must emit a .ts wire type under _generated_"
+        );
     }
 
     fn walkdir(root: &Path) -> Vec<std::path::PathBuf> {

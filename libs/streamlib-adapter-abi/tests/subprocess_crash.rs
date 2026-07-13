@@ -17,8 +17,8 @@
 use std::io::Read;
 use std::os::unix::io::FromRawFd;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use streamlib_adapter_abi::testing::{CrashTiming, SubprocessCrashHarness};

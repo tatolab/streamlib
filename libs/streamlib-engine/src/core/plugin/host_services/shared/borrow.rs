@@ -26,8 +26,8 @@ use std::ffi::c_void;
 
 use super::super::{
     host_gpu_context_full_access_vtable, host_gpu_context_limited_access_vtable,
-    host_vulkan_acceleration_structure_methods_vtable,
-    host_vulkan_compute_kernel_methods_vtable, host_vulkan_graphics_kernel_methods_vtable,
+    host_vulkan_acceleration_structure_methods_vtable, host_vulkan_compute_kernel_methods_vtable,
+    host_vulkan_graphics_kernel_methods_vtable,
 };
 
 pub(in crate::core::plugin::host_services) fn make_pixel_buffer_borrow(
@@ -177,24 +177,22 @@ pub(in crate::core::plugin::host_services) fn make_acceleration_structure_borrow
     // ray-tracing kernel's `set_acceleration_structure` check reads
     // `tlas.kind()` and would see BottomLevel for every borrow if the
     // cached field stayed 0.
-    let (cached_kind, cached_device_address, cached_storage_size) =
-        if handle.is_null() {
-            (0u32, 0u64, 0u64)
-        } else {
-            // SAFETY: caller hands us a `handle` minted by
-            // `Arc::into_raw(Arc<VulkanAccelerationStructureInner>)`,
-            // so dereferencing through the host-internal Inner is
-            // sound on the host side (this helper is host-only;
-            // cdylib borrows would never reach this code path).
-            let as_inner = unsafe {
-                &*(handle as *const crate::vulkan::rhi::VulkanAccelerationStructureInner)
-            };
-            let kind = match as_inner.kind() {
-                crate::vulkan::rhi::AccelerationStructureKind::BottomLevel => 0u32,
-                crate::vulkan::rhi::AccelerationStructureKind::TopLevel => 1u32,
-            };
-            (kind, as_inner.device_address(), as_inner.storage_size())
+    let (cached_kind, cached_device_address, cached_storage_size) = if handle.is_null() {
+        (0u32, 0u64, 0u64)
+    } else {
+        // SAFETY: caller hands us a `handle` minted by
+        // `Arc::into_raw(Arc<VulkanAccelerationStructureInner>)`,
+        // so dereferencing through the host-internal Inner is
+        // sound on the host side (this helper is host-only;
+        // cdylib borrows would never reach this code path).
+        let as_inner =
+            unsafe { &*(handle as *const crate::vulkan::rhi::VulkanAccelerationStructureInner) };
+        let kind = match as_inner.kind() {
+            crate::vulkan::rhi::AccelerationStructureKind::BottomLevel => 0u32,
+            crate::vulkan::rhi::AccelerationStructureKind::TopLevel => 1u32,
         };
+        (kind, as_inner.device_address(), as_inner.storage_size())
+    };
     std::mem::ManuallyDrop::new(crate::vulkan::rhi::VulkanAccelerationStructure {
         handle,
         vtable: host_gpu_context_full_access_vtable(),
@@ -242,15 +240,13 @@ pub(in crate::core::plugin::host_services) fn make_compute_kernel_borrow(
 pub(in crate::core::plugin::host_services) fn make_graphics_kernel_borrow(
     handle: *const c_void,
 ) -> std::mem::ManuallyDrop<crate::vulkan::rhi::VulkanGraphicsKernel> {
-    let k_for_inner = std::mem::ManuallyDrop::new(
-        crate::vulkan::rhi::VulkanGraphicsKernel {
-            handle,
-            vtable: host_gpu_context_full_access_vtable(),
-            methods_vtable: host_vulkan_graphics_kernel_methods_vtable(),
-            cached_push_constant_size: 0,
-            cached_descriptor_sets_in_flight: 0,
-        },
-    );
+    let k_for_inner = std::mem::ManuallyDrop::new(crate::vulkan::rhi::VulkanGraphicsKernel {
+        handle,
+        vtable: host_gpu_context_full_access_vtable(),
+        methods_vtable: host_vulkan_graphics_kernel_methods_vtable(),
+        cached_push_constant_size: 0,
+        cached_descriptor_sets_in_flight: 0,
+    });
     let inner = k_for_inner.host_inner();
     std::mem::ManuallyDrop::new(crate::vulkan::rhi::VulkanGraphicsKernel {
         handle,
@@ -287,8 +283,8 @@ mod make_borrow_cached_field_regression_tests {
             480,
             crate::core::rhi::TextureFormat::Rgba8Unorm,
         );
-        let host_texture = crate::vulkan::rhi::HostVulkanTexture::new(&device, &desc)
-            .expect("texture allocate");
+        let host_texture =
+            crate::vulkan::rhi::HostVulkanTexture::new(&device, &desc).expect("texture allocate");
         use crate::host_rhi::HostTextureExt;
         let texture = crate::core::rhi::Texture::from_vulkan(host_texture);
         let borrow = make_texture_borrow(texture.handle);
@@ -306,13 +302,15 @@ mod make_borrow_cached_field_regression_tests {
             return;
         };
         let host_buffer =
-            crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible(
-                &device, 16_384,
-            )
-            .expect("storage buffer allocate");
+            crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible(&device, 16_384)
+                .expect("storage buffer allocate");
         let buffer = crate::core::rhi::StorageBuffer::from_arc_into_raw(Arc::new(host_buffer));
         let borrow = make_storage_buffer_borrow(buffer.handle);
-        assert_eq!(borrow.byte_size(), 16_384, "byte_size_cached must mirror the inner");
+        assert_eq!(
+            borrow.byte_size(),
+            16_384,
+            "byte_size_cached must mirror the inner"
+        );
         assert!(
             !borrow.mapped_ptr().is_null(),
             "mapped_ptr_cached must mirror the inner HOST_VISIBLE pointer"
@@ -325,11 +323,11 @@ mod make_borrow_cached_field_regression_tests {
             return;
         };
         // Bgra8 = 4 bytes/pixel, 320x240 = 307_200 bytes
-        let host_buffer =
-            crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible(
-                &device, 320 * 240 * 4,
-            )
-            .expect("backing buffer allocate");
+        let host_buffer = crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible(
+            &device,
+            320 * 240 * 4,
+        )
+        .expect("backing buffer allocate");
         let pb = crate::core::rhi::PixelBuffer::from_host_vulkan_buffer(
             Arc::new(host_buffer),
             320,
@@ -354,7 +352,11 @@ mod make_borrow_cached_field_regression_tests {
         let buffer = crate::core::rhi::UniformBuffer::new_host_visible(&device, 4_096)
             .expect("uniform buffer allocate");
         let borrow = make_uniform_buffer_borrow(buffer.handle);
-        assert_eq!(borrow.byte_size(), 4_096, "byte_size_cached must mirror the inner");
+        assert_eq!(
+            borrow.byte_size(),
+            4_096,
+            "byte_size_cached must mirror the inner"
+        );
         assert!(
             !borrow.mapped_ptr().is_null(),
             "mapped_ptr_cached must mirror the inner HOST_VISIBLE pointer"
@@ -369,7 +371,11 @@ mod make_borrow_cached_field_regression_tests {
         let buffer = crate::core::rhi::VertexBuffer::new_host_visible(&device, 8_192)
             .expect("vertex buffer allocate");
         let borrow = make_vertex_buffer_borrow(buffer.handle);
-        assert_eq!(borrow.byte_size(), 8_192, "byte_size_cached must mirror the inner");
+        assert_eq!(
+            borrow.byte_size(),
+            8_192,
+            "byte_size_cached must mirror the inner"
+        );
         assert!(
             !borrow.mapped_ptr().is_null(),
             "mapped_ptr_cached must mirror the inner HOST_VISIBLE pointer"
@@ -384,7 +390,11 @@ mod make_borrow_cached_field_regression_tests {
         let buffer = crate::core::rhi::IndexBuffer::new_host_visible(&device, 2_048)
             .expect("index buffer allocate");
         let borrow = make_index_buffer_borrow(buffer.handle);
-        assert_eq!(borrow.byte_size(), 2_048, "byte_size_cached must mirror the inner");
+        assert_eq!(
+            borrow.byte_size(),
+            2_048,
+            "byte_size_cached must mirror the inner"
+        );
         assert!(
             !borrow.mapped_ptr().is_null(),
             "mapped_ptr_cached must mirror the inner HOST_VISIBLE pointer"
@@ -411,9 +421,8 @@ mod make_borrow_cached_field_regression_tests {
             ],
             push_constant_size: 4,
         };
-        let kernel =
-            crate::vulkan::rhi::VulkanComputeKernel::new(&device, &descriptor)
-                .expect("compute kernel construct");
+        let kernel = crate::vulkan::rhi::VulkanComputeKernel::new(&device, &descriptor)
+            .expect("compute kernel construct");
         let borrow = make_compute_kernel_borrow(kernel.handle);
         assert_eq!(
             borrow.push_constant_size(),
@@ -432,9 +441,7 @@ mod make_borrow_cached_field_regression_tests {
         }
         // Single triangle BLAS, smallest payload that exercises the
         // build path. Mirrors the rt-smoke fixture's vertex layout.
-        let vertices: Vec<f32> = vec![
-            0.0, -0.5, 0.0, -0.5, 0.5, 0.0, 0.5, 0.5, 0.0,
-        ];
+        let vertices: Vec<f32> = vec![0.0, -0.5, 0.0, -0.5, 0.5, 0.0, 0.5, 0.5, 0.0];
         let indices: Vec<u32> = vec![0, 1, 2];
         let blas = crate::vulkan::rhi::VulkanAccelerationStructure::build_triangles_blas(
             &device,

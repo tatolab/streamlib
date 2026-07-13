@@ -53,9 +53,7 @@ pub fn yuv_to_rgb_matrix(matrix: MatrixId, range: RangeId) -> YuvToRgbDecomposit
 
     YuvToRgbDecomposition {
         matrix_row_major: [
-            y_scale, 0.0, m_r_cr,
-            y_scale, m_g_cb, m_g_cr,
-            y_scale, m_b_cb, 0.0,
+            y_scale, 0.0, m_r_cr, y_scale, m_g_cb, m_g_cr, y_scale, m_b_cb, 0.0,
         ],
         offset: [y_offset, 128.0, 128.0],
     }
@@ -108,11 +106,7 @@ mod tests {
     fn bt601_full_range_matches_canonical_coefficients() {
         let d = yuv_to_rgb_matrix(MatrixId::Smpte170m, RangeId::Full);
         // Y_scale=1, c_scale=1, y_offset=0, BT.601 coefficients
-        let expected = [
-            1.0, 0.0, 1.402,
-            1.0, -0.344136, -0.714136,
-            1.0, 1.772, 0.0,
-        ];
+        let expected = [1.0, 0.0, 1.402, 1.0, -0.344136, -0.714136, 1.0, 1.772, 0.0];
         assert_matrix(&d.matrix_row_major, &expected, 1e-4);
         assert_eq!(d.offset, [0.0, 128.0, 128.0]);
     }
@@ -126,11 +120,7 @@ mod tests {
         // R = 1.164 Y' + 1.596 Cr'
         // G = 1.164 Y' - 0.392 Cb' - 0.813 Cr'
         // B = 1.164 Y' + 2.017 Cb'
-        let expected = [
-            1.164, 0.0, 1.596,
-            1.164, -0.392, -0.813,
-            1.164, 2.017, 0.0,
-        ];
+        let expected = [1.164, 0.0, 1.596, 1.164, -0.392, -0.813, 1.164, 2.017, 0.0];
         assert_matrix(&d.matrix_row_major, &expected, 5e-3);
         assert_eq!(d.offset, [16.0, 128.0, 128.0]);
     }
@@ -139,11 +129,7 @@ mod tests {
     #[test]
     fn bt709_full_range_matches_canonical_coefficients() {
         let d = yuv_to_rgb_matrix(MatrixId::Bt709, RangeId::Full);
-        let expected = [
-            1.0, 0.0, 1.5748,
-            1.0, -0.1873, -0.4681,
-            1.0, 1.8556, 0.0,
-        ];
+        let expected = [1.0, 0.0, 1.5748, 1.0, -0.1873, -0.4681, 1.0, 1.8556, 0.0];
         assert_matrix(&d.matrix_row_major, &expected, 5e-4);
         assert_eq!(d.offset, [0.0, 128.0, 128.0]);
     }
@@ -153,11 +139,7 @@ mod tests {
     fn bt709_limited_range_matches_canonical_coefficients() {
         let d = yuv_to_rgb_matrix(MatrixId::Bt709, RangeId::Limited);
         // 1.164 = 255/219; 1.793 = 1.5748 * 255/224; etc.
-        let expected = [
-            1.164, 0.0, 1.793,
-            1.164, -0.213, -0.533,
-            1.164, 2.112, 0.0,
-        ];
+        let expected = [1.164, 0.0, 1.793, 1.164, -0.213, -0.533, 1.164, 2.112, 0.0];
         assert_matrix(&d.matrix_row_major, &expected, 5e-3);
         assert_eq!(d.offset, [16.0, 128.0, 128.0]);
     }
@@ -171,11 +153,7 @@ mod tests {
         // G: 1.164, -(2*0.9407*0.0593/0.678)*255/224 ≈ -0.187,
         //          -(2*0.7373*0.2627/0.678)*255/224 ≈ -0.650
         // B: 1.164, (2*0.9407)*255/224 ≈ 2.142, 0
-        let expected = [
-            1.164, 0.0, 1.679,
-            1.164, -0.187, -0.650,
-            1.164, 2.142, 0.0,
-        ];
+        let expected = [1.164, 0.0, 1.679, 1.164, -0.187, -0.650, 1.164, 2.142, 0.0];
         assert_matrix(&d.matrix_row_major, &expected, 5e-3);
         assert_eq!(d.offset, [16.0, 128.0, 128.0]);
     }
@@ -185,11 +163,7 @@ mod tests {
     #[test]
     fn identity_returns_identity_matrix() {
         let d = yuv_to_rgb_matrix(MatrixId::Identity, RangeId::Full);
-        let expected = [
-            1.0, 0.0, 0.0,
-            0.0, 1.0, 0.0,
-            0.0, 0.0, 1.0,
-        ];
+        let expected = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
         assert_matrix(&d.matrix_row_major, &expected, 0.0);
         assert_eq!(d.offset, [0.0, 0.0, 0.0]);
     }

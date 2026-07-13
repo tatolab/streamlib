@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::{Mutex, OnceLock};
 
-use streamlib_plugin_abi::{ProcessorVTable, PROCESSOR_VTABLE_LAYOUT_VERSION};
+use streamlib_plugin_abi::{PROCESSOR_VTABLE_LAYOUT_VERSION, ProcessorVTable};
 
 use streamlib_adapter_abi::ffi::run_host_extern_c;
 
@@ -97,8 +97,7 @@ where
         run_host_extern_c(
             "ProcessorWrappers::construct",
             || {
-                let config: P::Config = if config_msgpack_len == 0 || config_msgpack_ptr.is_null()
-                {
+                let config: P::Config = if config_msgpack_len == 0 || config_msgpack_ptr.is_null() {
                     P::Config::default()
                 } else {
                     let bytes = unsafe {

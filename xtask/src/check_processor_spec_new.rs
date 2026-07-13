@@ -57,12 +57,7 @@ pub fn run(workspace_root: &Path) -> Result<()> {
         violations.len()
     );
     for v in &violations {
-        eprintln!(
-            "  {}:{}: {}",
-            v.file.display(),
-            v.line,
-            v.snippet.trim()
-        );
+        eprintln!("  {}:{}: {}", v.file.display(), v.line, v.snippet.trim());
     }
     eprintln!(
         "\nFix:\n  - Bare-string `ProcessorSpec::new(\"Foo\", ...)`: pass a structured `SchemaIdent`.\n  - Hand-rolled `SchemaIdent::new(Org::new(\"...\"), ...)` in examples/*/src/: replace with `streamlib::sdk::schema_ident_any_version!(\"org\", \"package\", \"Type\")?` (the common case — registry resolves the version at runtime), or with `streamlib::sdk::schema_ident!(\"org\", \"package\", \"Type\", \"1.0.0\")` when strict version pinning is required.\n\nSee docs/architecture/schema-identity-and-packaging.md and the #707 / #719 issue bodies."
@@ -131,8 +126,8 @@ fn is_rust_source(path: &Path) -> bool {
 }
 
 fn scan_file(path: &Path, violations: &mut Vec<LintViolation>) -> Result<()> {
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let content =
+        fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let lines: Vec<&str> = content.lines().collect();
     let example_src = is_example_src_file(path);
     for (idx, line) in lines.iter().enumerate() {
@@ -367,7 +362,9 @@ mod tests {
             "/abs/libs/streamlib-macros/src/codegen.rs"
         )));
         // build.rs / shaders / fixtures sit beside src/, not under it:
-        assert!(!is_example_src_file(Path::new("/abs/examples/foo/build.rs")));
+        assert!(!is_example_src_file(Path::new(
+            "/abs/examples/foo/build.rs"
+        )));
     }
 
     #[test]

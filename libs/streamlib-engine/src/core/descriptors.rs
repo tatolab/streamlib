@@ -11,8 +11,8 @@
 //! resolves unchanged.
 
 pub use streamlib_processor_schema::descriptors::{
-    port_schema_spec_wire, CodeExamples, ConfigDescriptor, ConfigField, PortDescriptor,
-    ProcessorDescriptor, ProcessorRuntime,
+    CodeExamples, ConfigDescriptor, ConfigField, PortDescriptor, ProcessorDescriptor,
+    ProcessorRuntime, port_schema_spec_wire,
 };
 pub use streamlib_processor_schema::{
     ModuleIdent, Org, Package, PortSchemaSpec, ProcessorScheduling, SchemaIdent, SemVer,

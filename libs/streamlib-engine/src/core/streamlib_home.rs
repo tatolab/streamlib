@@ -108,7 +108,9 @@ pub fn get_uv_cache_dir() -> PathBuf {
 
 /// Get the path to a cached extracted package directory.
 pub fn get_cached_package_dir(cache_key: &str) -> PathBuf {
-    get_streamlib_data_dir().join("cache/packages").join(cache_key)
+    get_streamlib_data_dir()
+        .join("cache/packages")
+        .join(cache_key)
 }
 
 /// The installed-cache slot for a package name + version — the single

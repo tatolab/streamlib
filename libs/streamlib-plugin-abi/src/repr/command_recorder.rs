@@ -86,7 +86,6 @@ pub struct SemaphoreSubmitInfoRepr {
     pub _reserved_padding: u32,
 }
 
-
 /// `#[repr(C)]` mirror of `streamlib::core::color::ResolvedColorInfo`.
 ///
 /// Each field is the matching engine-side `#[repr(u32)]` enum's
@@ -170,9 +169,6 @@ mod tests {
         assert_eq!(offset_of!(SemaphoreSubmitInfoRepr, value), 8);
         assert_eq!(offset_of!(SemaphoreSubmitInfoRepr, stage_mask), 16);
         assert_eq!(offset_of!(SemaphoreSubmitInfoRepr, device_index), 24);
-        assert_eq!(
-            offset_of!(SemaphoreSubmitInfoRepr, _reserved_padding),
-            28
-        );
+        assert_eq!(offset_of!(SemaphoreSubmitInfoRepr, _reserved_padding), 28);
     }
 }

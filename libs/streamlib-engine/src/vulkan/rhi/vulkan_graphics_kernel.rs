@@ -51,10 +51,10 @@ use crate::core::rhi::{
     DepthStencilState, DrawCall, DrawIndexedCall, FrontFace, GraphicsBindingKind,
     GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor, GraphicsPipelineState,
     GraphicsShaderStage, GraphicsShaderStageFlags, GraphicsStage, IndexType, PolygonMode,
-    PrimitiveTopology, ScissorRect, Texture, TextureFormat,
-    VertexAttributeFormat, VertexInputRate, VertexInputState, Viewport,
+    PrimitiveTopology, ScissorRect, Texture, TextureFormat, VertexAttributeFormat, VertexInputRate,
+    VertexInputState, Viewport,
 };
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 
 use super::HostVulkanDevice;
 
@@ -226,10 +226,8 @@ impl VulkanGraphicsKernelInner {
         // never leak partial state.
         let shader_modules = create_shader_modules(device, descriptor)?;
 
-        let descriptor_set_layout = match create_descriptor_set_layout(
-            device,
-            descriptor.bindings,
-        ) {
+        let descriptor_set_layout = match create_descriptor_set_layout(device, descriptor.bindings)
+        {
             Ok(l) => l,
             Err(e) => {
                 destroy_shader_modules(device, &shader_modules);
@@ -360,10 +358,8 @@ impl VulkanGraphicsKernelInner {
         let view = texture.vulkan_inner().image_view()?;
         let sampler = self.default_sampler()?;
         self.with_slot(frame_index, |slot| {
-            slot.bindings.insert(
-                binding,
-                BindingResource::SampledImage { view, sampler },
-            );
+            slot.bindings
+                .insert(binding, BindingResource::SampledImage { view, sampler });
             Ok(())
         })
     }
@@ -384,7 +380,10 @@ impl VulkanGraphicsKernelInner {
         self.with_slot(frame_index, |slot| {
             slot.bindings.insert(
                 binding,
-                BindingResource::Buffer { buffer: vk_buf, size },
+                BindingResource::Buffer {
+                    buffer: vk_buf,
+                    size,
+                },
             );
             Ok(())
         })
@@ -406,7 +405,10 @@ impl VulkanGraphicsKernelInner {
         self.with_slot(frame_index, |slot| {
             slot.bindings.insert(
                 binding,
-                BindingResource::Buffer { buffer: vk_buf, size },
+                BindingResource::Buffer {
+                    buffer: vk_buf,
+                    size,
+                },
             );
             Ok(())
         })
@@ -449,11 +451,7 @@ impl VulkanGraphicsKernelInner {
     /// Convenience: stage a `Copy` value as push constants by reinterpreting
     /// its bytes. The value's size in bytes must match the declared push
     /// constant size.
-    pub fn set_push_constants_value<T: Copy>(
-        &self,
-        frame_index: u32,
-        value: &T,
-    ) -> Result<()> {
+    pub fn set_push_constants_value<T: Copy>(&self, frame_index: u32, value: &T) -> Result<()> {
         let size = std::mem::size_of::<T>();
         let bytes = unsafe { std::slice::from_raw_parts(value as *const T as *const u8, size) };
         self.set_push_constants(frame_index, bytes)
@@ -589,11 +587,7 @@ impl VulkanGraphicsKernelInner {
         frame_index: u32,
         draw: &DrawIndexedCall,
     ) -> Result<()> {
-        self.cmd_bind_and_draw_inner(
-            command_buffer,
-            frame_index,
-            DrawKind::DrawIndexed(*draw),
-        )
+        self.cmd_bind_and_draw_inner(command_buffer, frame_index, DrawKind::DrawIndexed(*draw))
     }
 
     /// Render into one or more offscreen color attachments using slot 0 of
@@ -614,10 +608,7 @@ impl VulkanGraphicsKernelInner {
             )));
         }
         let scaffold_handles = self.offscreen_scaffold()?;
-        let (command_buffer, fence) = (
-            scaffold_handles.command_buffer,
-            scaffold_handles.fence,
-        );
+        let (command_buffer, fence) = (scaffold_handles.command_buffer, scaffold_handles.fence);
 
         let (width, height) = extent;
         let viewport = Viewport::full(width, height);
@@ -664,7 +655,8 @@ impl VulkanGraphicsKernelInner {
             // Caller-supplied targets are expected to be freshly-acquired or
             // post-presented; UNDEFINED with CLEAR/LOAD load_op is the
             // tolerant pattern.
-            let mut barriers: Vec<vk::ImageMemoryBarrier2> = Vec::with_capacity(color_targets.len());
+            let mut barriers: Vec<vk::ImageMemoryBarrier2> =
+                Vec::with_capacity(color_targets.len());
             use crate::host_rhi::HostTextureExt;
             for target in color_targets {
                 let image = target.texture.vulkan_inner().image().ok_or_else(|| {
@@ -705,17 +697,21 @@ impl VulkanGraphicsKernelInner {
             let color_attachments: Vec<vk::RenderingAttachmentInfo> = color_targets
                 .iter()
                 .map(|t| {
-                    let view = t.texture.vulkan_inner().image_view().unwrap_or(vk::ImageView::null());
+                    let view = t
+                        .texture
+                        .vulkan_inner()
+                        .image_view()
+                        .unwrap_or(vk::ImageView::null());
                     let mut attachment = vk::RenderingAttachmentInfo::builder()
                         .image_view(view)
                         .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                         .store_op(vk::AttachmentStoreOp::STORE);
                     attachment = if let Some(c) = t.clear_color {
-                        attachment
-                            .load_op(vk::AttachmentLoadOp::CLEAR)
-                            .clear_value(vk::ClearValue {
+                        attachment.load_op(vk::AttachmentLoadOp::CLEAR).clear_value(
+                            vk::ClearValue {
                                 color: vk::ClearColorValue { float32: c },
-                            })
+                            },
+                        )
                     } else {
                         attachment.load_op(vk::AttachmentLoadOp::LOAD)
                     };
@@ -730,7 +726,8 @@ impl VulkanGraphicsKernelInner {
                 .layer_count(1)
                 .color_attachments(&color_attachments)
                 .build();
-            self.device.cmd_begin_rendering(command_buffer, &rendering_info);
+            self.device
+                .cmd_begin_rendering(command_buffer, &rendering_info);
 
             // Drop the immutable borrow on `draw` here so we can build a
             // DrawCall/DrawIndexedCall with the offscreen viewport/scissor
@@ -917,9 +914,7 @@ impl VulkanGraphicsKernelInner {
             }
 
             // Vertex buffers — bind in declared order.
-            if let VertexInputState::Buffers { bindings, .. } =
-                &self.pipeline_state.vertex_input
-            {
+            if let VertexInputState::Buffers { bindings, .. } = &self.pipeline_state.vertex_input {
                 let mut sorted: Vec<u32> = bindings.iter().map(|b| b.binding).collect();
                 sorted.sort_unstable();
                 if let (Some(&first), Some(&last)) = (sorted.first(), sorted.last()) {
@@ -959,8 +954,12 @@ impl VulkanGraphicsKernelInner {
             // Index buffer — only bound when an indexed draw is recorded.
             if let DrawKind::DrawIndexed(_) = &draw {
                 let ib = pending.index_buffer.expect("checked above");
-                self.device
-                    .cmd_bind_index_buffer(command_buffer, ib.buffer, ib.offset, ib.index_type);
+                self.device.cmd_bind_index_buffer(
+                    command_buffer,
+                    ib.buffer,
+                    ib.offset,
+                    ib.index_type,
+                );
             }
 
             match draw {
@@ -1085,11 +1084,7 @@ impl VulkanGraphicsKernelInner {
         })
     }
 
-    fn flush_descriptor_writes(
-        &self,
-        frame_index: u32,
-        pending: &PendingState,
-    ) -> Result<()> {
+    fn flush_descriptor_writes(&self, frame_index: u32, pending: &PendingState) -> Result<()> {
         let descriptor_set = self.descriptor_sets[frame_index as usize];
 
         let mut buffer_infos: Vec<vk::DescriptorBufferInfo> =
@@ -1225,7 +1220,8 @@ impl Drop for VulkanGraphicsKernelInner {
             let _ = self.vulkan_device.wait_idle();
             if let Some(scaffold) = self.offscreen.lock().take() {
                 self.device.destroy_fence(scaffold.fence, None);
-                self.device.destroy_command_pool(scaffold.command_pool, None);
+                self.device
+                    .destroy_command_pool(scaffold.command_pool, None);
             }
             if let Some(sampler) = self.default_sampler.lock().take() {
                 self.device.destroy_sampler(sampler, None);
@@ -1280,8 +1276,7 @@ pub struct VulkanGraphicsKernel {
     /// Parent vtable for plugin ABI Clone/Drop dispatch (#918 Phase D).
     pub(crate) vtable: *const GpuContextFullAccessVTable,
     /// Per-type vtable for plugin ABI method dispatch (#907 Phase E).
-    pub(crate) methods_vtable:
-        *const streamlib_plugin_abi::VulkanGraphicsKernelMethodsVTable,
+    pub(crate) methods_vtable: *const streamlib_plugin_abi::VulkanGraphicsKernelMethodsVTable,
     /// Cached push-constant size in bytes. Set at construction.
     pub(crate) cached_push_constant_size: u32,
     /// Cached descriptor-set ring depth. Set at construction.
@@ -1304,8 +1299,7 @@ impl VulkanGraphicsKernel {
         let cached_push_constant_size = arc.push_constant_size();
         let cached_descriptor_sets_in_flight = arc.descriptor_sets_in_flight();
         let handle = Arc::into_raw(arc) as *const c_void;
-        let vtable =
-            crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
+        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
         let methods_vtable =
             crate::core::plugin::host_services::host_vulkan_graphics_kernel_methods_vtable();
         Self {
@@ -1397,8 +1391,7 @@ impl VulkanGraphicsKernel {
             };
             if status2 != 0 {
                 let msg =
-                    String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                        .into_owned();
+                    String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
                 return Err(Error::GpuError(msg));
             }
             return heap
@@ -1408,8 +1401,7 @@ impl VulkanGraphicsKernel {
                 .collect();
         }
         if status != 0 {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             return Err(Error::GpuError(msg));
         }
         buf.iter()
@@ -1435,13 +1427,10 @@ impl VulkanGraphicsKernel {
         texture: &Texture,
     ) -> Result<()> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_sampled_texture_via_vtable(
-                frame_index,
-                binding,
-                texture,
-            );
+            return self.dispatch_set_sampled_texture_via_vtable(frame_index, binding, texture);
         }
-        self.host_inner().set_sampled_texture(frame_index, binding, texture)
+        self.host_inner()
+            .set_sampled_texture(frame_index, binding, texture)
     }
 
     /// Bind a [`crate::core::rhi::PixelBuffer`]-shaped storage
@@ -1457,13 +1446,10 @@ impl VulkanGraphicsKernel {
         buffer: &crate::core::rhi::PixelBuffer,
     ) -> Result<()> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_storage_buffer_pixel_via_vtable(
-                frame_index,
-                binding,
-                buffer,
-            );
+            return self.dispatch_set_storage_buffer_pixel_via_vtable(frame_index, binding, buffer);
         }
-        self.host_inner().set_storage_buffer(frame_index, binding, buffer)
+        self.host_inner()
+            .set_storage_buffer(frame_index, binding, buffer)
     }
 
     /// Bind a raw-bytes [`crate::core::rhi::StorageBuffer`] at
@@ -1482,7 +1468,8 @@ impl VulkanGraphicsKernel {
                 buffer,
             );
         }
-        self.host_inner().set_storage_buffer(frame_index, binding, buffer)
+        self.host_inner()
+            .set_storage_buffer(frame_index, binding, buffer)
     }
 
     /// Bind a [`crate::core::rhi::UniformBuffer`] (UBO) at
@@ -1495,13 +1482,10 @@ impl VulkanGraphicsKernel {
         buffer: &crate::core::rhi::UniformBuffer,
     ) -> Result<()> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_uniform_buffer_via_vtable(
-                frame_index,
-                binding,
-                buffer,
-            );
+            return self.dispatch_set_uniform_buffer_via_vtable(frame_index, binding, buffer);
         }
-        self.host_inner().set_uniform_buffer(frame_index, binding, buffer)
+        self.host_inner()
+            .set_uniform_buffer(frame_index, binding, buffer)
     }
 
     pub fn set_storage_image(
@@ -1511,13 +1495,10 @@ impl VulkanGraphicsKernel {
         texture: &Texture,
     ) -> Result<()> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_storage_image_via_vtable(
-                frame_index,
-                binding,
-                texture,
-            );
+            return self.dispatch_set_storage_image_via_vtable(frame_index, binding, texture);
         }
-        self.host_inner().set_storage_image(frame_index, binding, texture)
+        self.host_inner()
+            .set_storage_image(frame_index, binding, texture)
     }
 
     pub fn set_push_constants(&self, frame_index: u32, bytes: &[u8]) -> Result<()> {
@@ -1527,11 +1508,7 @@ impl VulkanGraphicsKernel {
         self.host_inner().set_push_constants(frame_index, bytes)
     }
 
-    pub fn set_push_constants_value<T: Copy>(
-        &self,
-        frame_index: u32,
-        value: &T,
-    ) -> Result<()> {
+    pub fn set_push_constants_value<T: Copy>(&self, frame_index: u32, value: &T) -> Result<()> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
             // SAFETY: T is Copy + Sized — the byte view is read-only
             // and consumed inside the plugin ABI call. Caller is responsible
@@ -1540,14 +1517,12 @@ impl VulkanGraphicsKernel {
             // push-constant slot the bytes land in is read verbatim
             // by the GPU shader.
             let bytes = unsafe {
-                std::slice::from_raw_parts(
-                    value as *const T as *const u8,
-                    std::mem::size_of::<T>(),
-                )
+                std::slice::from_raw_parts(value as *const T as *const u8, std::mem::size_of::<T>())
             };
             return self.dispatch_set_push_constants_via_vtable(frame_index, bytes);
         }
-        self.host_inner().set_push_constants_value(frame_index, value)
+        self.host_inner()
+            .set_push_constants_value(frame_index, value)
     }
 
     /// Bind a [`crate::core::rhi::VertexBuffer`] at
@@ -1629,13 +1604,10 @@ impl VulkanGraphicsKernel {
         draw: &DrawIndexedCall,
     ) -> Result<()> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_cmd_bind_and_draw_indexed_via_vtable(
-                cmd,
-                frame_index,
-                draw,
-            );
+            return self.dispatch_cmd_bind_and_draw_indexed_via_vtable(cmd, frame_index, draw);
         }
-        self.host_inner().cmd_bind_and_draw_indexed(cmd, frame_index, draw)
+        self.host_inner()
+            .cmd_bind_and_draw_indexed(cmd, frame_index, draw)
     }
 
     /// Offscreen render. See [`VulkanGraphicsKernelInner::offscreen_render`].
@@ -1659,11 +1631,7 @@ impl VulkanGraphicsKernel {
     }
 
     #[cfg(target_os = "linux")]
-    fn dispatch_set_push_constants_via_vtable(
-        &self,
-        frame_index: u32,
-        bytes: &[u8],
-    ) -> Result<()> {
+    fn dispatch_set_push_constants_via_vtable(&self, frame_index: u32, bytes: &[u8]) -> Result<()> {
         if self.methods_vtable.is_null() {
             return Err(Error::GpuError(
                 "set_push_constants: graphics kernel methods vtable is null".into(),
@@ -1685,8 +1653,7 @@ impl VulkanGraphicsKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1719,8 +1686,7 @@ impl VulkanGraphicsKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1753,8 +1719,7 @@ impl VulkanGraphicsKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1787,8 +1752,7 @@ impl VulkanGraphicsKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1821,8 +1785,7 @@ impl VulkanGraphicsKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1855,8 +1818,7 @@ impl VulkanGraphicsKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1891,8 +1853,7 @@ impl VulkanGraphicsKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1931,8 +1892,7 @@ impl VulkanGraphicsKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -2001,8 +1961,7 @@ impl VulkanGraphicsKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -2044,8 +2003,7 @@ impl VulkanGraphicsKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -2064,8 +2022,7 @@ impl VulkanGraphicsKernel {
         use vulkanalia::vk::Handle;
         if self.methods_vtable.is_null() {
             return Err(Error::GpuError(
-                "cmd_bind_and_draw_indexed: graphics kernel methods vtable is null"
-                    .into(),
+                "cmd_bind_and_draw_indexed: graphics kernel methods vtable is null".into(),
             ));
         }
         let draw_repr = draw_indexed_call_to_repr(draw);
@@ -2086,8 +2043,7 @@ impl VulkanGraphicsKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -2156,9 +2112,7 @@ fn draw_call_to_repr(d: &DrawCall) -> streamlib_plugin_abi::DrawCallRepr {
 }
 
 #[cfg(target_os = "linux")]
-fn draw_indexed_call_to_repr(
-    d: &DrawIndexedCall,
-) -> streamlib_plugin_abi::DrawIndexedCallRepr {
+fn draw_indexed_call_to_repr(d: &DrawIndexedCall) -> streamlib_plugin_abi::DrawIndexedCallRepr {
     let (viewport_present, viewport) = match d.viewport {
         Some(v) => (1u32, viewport_to_repr(v)),
         None => (
@@ -2426,7 +2380,10 @@ fn validate_against_spirv(descriptor: &GraphicsKernelDescriptor<'_>) -> Result<(
         if !descriptor.bindings.iter().any(|s| s.binding == binding) {
             return Err(Error::GpuError(format!(
                 "Graphics kernel '{}': SPIR-V declares binding {} ({:?}, stages {:#b}) but it is missing from the descriptor",
-                descriptor.label, binding, ty, stages.bits()
+                descriptor.label,
+                binding,
+                ty,
+                stages.bits()
             )));
         }
     }
@@ -2441,7 +2398,8 @@ fn validate_against_spirv(descriptor: &GraphicsKernelDescriptor<'_>) -> Result<(
             descriptor.push_constants.size
         )));
     }
-    if spirv_push_size > 0 && (spirv_push_stages.bits() & !descriptor.push_constants.stages.bits()) != 0
+    if spirv_push_size > 0
+        && (spirv_push_stages.bits() & !descriptor.push_constants.stages.bits()) != 0
     {
         return Err(Error::GpuError(format!(
             "Graphics kernel '{}': push-constant stage visibility mismatch — declared {:#b}, SPIR-V uses {:#b}",
@@ -2712,11 +2670,13 @@ fn create_pipeline_layout(
 ) -> Result<vk::PipelineLayout> {
     let set_layouts = [set_layout];
     let push_ranges: Vec<vk::PushConstantRange> = if push.size > 0 {
-        vec![vk::PushConstantRange::builder()
-            .stage_flags(shader_stage_flags_to_vk(push.stages))
-            .offset(0)
-            .size(push.size)
-            .build()]
+        vec![
+            vk::PushConstantRange::builder()
+                .stage_flags(shader_stage_flags_to_vk(push.stages))
+                .offset(0)
+                .size(push.size)
+                .build(),
+        ]
     } else {
         Vec::new()
     };
@@ -2919,10 +2879,8 @@ fn create_graphics_pipeline_with_cache(
 
     let depth_stencil_info = build_depth_stencil_info(&state.depth_stencil);
 
-    let color_blend_attachments = build_color_blend_attachments(
-        &state.color_blend,
-        state.attachment_formats.color.len(),
-    );
+    let color_blend_attachments =
+        build_color_blend_attachments(&state.color_blend, state.attachment_formats.color.len());
     let color_blend_state = vk::PipelineColorBlendStateCreateInfo::builder()
         .logic_op_enable(false)
         .logic_op(vk::LogicOp::COPY)
@@ -2950,7 +2908,8 @@ fn create_graphics_pipeline_with_cache(
     let mut rendering_info_builder = vk::PipelineRenderingCreateInfo::builder()
         .color_attachment_formats(&color_attachment_formats);
     if let Some(df) = state.attachment_formats.depth {
-        rendering_info_builder = rendering_info_builder.depth_attachment_format(depth_format_to_vk(df));
+        rendering_info_builder =
+            rendering_info_builder.depth_attachment_format(depth_format_to_vk(df));
     }
     let mut pipeline_rendering_info = rendering_info_builder.build();
 
@@ -2988,9 +2947,7 @@ fn create_graphics_pipeline_with_cache(
     Ok(pipelines.0[0])
 }
 
-fn build_depth_stencil_info(
-    state: &DepthStencilState,
-) -> vk::PipelineDepthStencilStateCreateInfo {
+fn build_depth_stencil_info(state: &DepthStencilState) -> vk::PipelineDepthStencilStateCreateInfo {
     match state {
         DepthStencilState::Disabled => vk::PipelineDepthStencilStateCreateInfo::builder()
             .depth_test_enable(false)
@@ -3131,9 +3088,7 @@ fn persist_pipeline_cache(
     let data = match unsafe { device.get_pipeline_cache_data(cache) } {
         Ok(d) => d,
         Err(e) => {
-            tracing::warn!(
-                "Graphics kernel '{label}': vkGetPipelineCacheData failed: {e}"
-            );
+            tracing::warn!("Graphics kernel '{label}': vkGetPipelineCacheData failed: {e}");
             return;
         }
     };
@@ -3178,11 +3133,11 @@ mod tests {
     use super::*;
     use crate::core::rhi::{
         AttachmentFormats, ColorBlendState, ColorWriteMask, DepthCompareOp, DepthStencilState,
-        GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor,
-        GraphicsPipelineState, GraphicsPushConstants, GraphicsShaderStageFlags, GraphicsStage,
-        MultisampleState, PrimitiveTopology, RasterizationState, TextureFormat,
-        VertexAttributeFormat, VertexInputAttribute, VertexInputBinding, VertexInputRate,
-        VertexInputState, derive_bindings_from_spirv_multistage,
+        GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor, GraphicsPipelineState,
+        GraphicsPushConstants, GraphicsShaderStageFlags, GraphicsStage, MultisampleState,
+        PrimitiveTopology, RasterizationState, TextureFormat, VertexAttributeFormat,
+        VertexInputAttribute, VertexInputBinding, VertexInputRate, VertexInputState,
+        derive_bindings_from_spirv_multistage,
     };
     use crate::host_rhi::HostTextureExt;
 
@@ -3244,16 +3199,25 @@ mod tests {
             GraphicsStage::vertex(vert_spv()),
             GraphicsStage::fragment(frag_spv()),
         ];
-        let (bindings, push) = derive_bindings_from_spirv_multistage(&stages)
-            .expect("derive bindings");
-        assert_eq!(bindings.len(), 1, "display_blit declares one fragment binding");
+        let (bindings, push) =
+            derive_bindings_from_spirv_multistage(&stages).expect("derive bindings");
+        assert_eq!(
+            bindings.len(),
+            1,
+            "display_blit declares one fragment binding"
+        );
         assert_eq!(bindings[0].binding, 0);
         assert_eq!(bindings[0].kind, GraphicsBindingKind::SampledTexture);
         assert!(
-            bindings[0].stages.contains(GraphicsShaderStageFlags::FRAGMENT),
+            bindings[0]
+                .stages
+                .contains(GraphicsShaderStageFlags::FRAGMENT),
             "binding 0 is consumed by fragment stage"
         );
-        assert_eq!(push.size, 16, "push constants are scale (vec2) + offset (vec2)");
+        assert_eq!(
+            push.size, 16,
+            "push constants are scale (vec2) + offset (vec2)"
+        );
         assert!(push.stages.contains(GraphicsShaderStageFlags::FRAGMENT));
     }
 
@@ -3277,7 +3241,8 @@ mod tests {
             .expect("expected validation failure");
         let msg = format!("{err}");
         assert!(
-            msg.contains("binding 0") && (msg.contains("StorageBuffer") || msg.contains("STORAGE_BUFFER")),
+            msg.contains("binding 0")
+                && (msg.contains("StorageBuffer") || msg.contains("STORAGE_BUFFER")),
             "expected mismatch error mentioning binding 0 and StorageBuffer, got: {msg}"
         );
     }
@@ -3374,11 +3339,17 @@ mod tests {
         );
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn new_rejects_zero_descriptor_sets_in_flight() {
         // descriptor_sets_in_flight = 0 must fail before any Vulkan call.
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         let bindings = [GraphicsBindingSpec::sampled_texture(
             0,
             GraphicsShaderStageFlags::FRAGMENT,
@@ -3400,10 +3371,16 @@ mod tests {
         );
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn new_rejects_descriptor_without_vertex_stage() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         let bindings = [GraphicsBindingSpec::sampled_texture(
             0,
             GraphicsShaderStageFlags::FRAGMENT,
@@ -3421,10 +3398,16 @@ mod tests {
         );
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn new_rejects_descriptor_without_fragment_stage() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         let bindings: [GraphicsBindingSpec; 0] = [];
         let stages = [GraphicsStage::vertex(vert_spv())]; // no fragment
         let pipeline_state = default_pipeline_state();
@@ -3442,10 +3425,16 @@ mod tests {
 
     // ---- Pipeline construction (GPU device required) ----------------------
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn constructs_display_blit_kernel() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         let bindings = [GraphicsBindingSpec::sampled_texture(
             0,
             GraphicsShaderStageFlags::FRAGMENT,
@@ -3456,14 +3445,17 @@ mod tests {
         ];
         let pipeline_state = default_pipeline_state();
         let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
-        let kernel = VulkanGraphicsKernel::new(&device, &descriptor)
-            .expect("kernel must construct");
+        let kernel =
+            VulkanGraphicsKernel::new(&device, &descriptor).expect("kernel must construct");
         assert_eq!(kernel.bindings().len(), 1);
         assert_eq!(kernel.push_constant_size(), 16);
         assert_eq!(kernel.descriptor_sets_in_flight(), 2);
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn constructs_kernel_with_depth_stencil_enabled() {
         // Smoke test: pipeline creation succeeds when both
@@ -3481,7 +3473,10 @@ mod tests {
         // Validation layers (`VK_LOADER_LAYERS_ENABLE=*validation*`)
         // exercise the spec-VUID side of pipeline creation and cover
         // the "did we forget to plumb depth state" failure mode.
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         let bindings = [GraphicsBindingSpec::sampled_texture(
             0,
             GraphicsShaderStageFlags::FRAGMENT,
@@ -3505,10 +3500,16 @@ mod tests {
         assert_eq!(kernel.bindings().len(), 1);
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn constructs_kernel_with_alpha_blending() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         let bindings = [GraphicsBindingSpec::sampled_texture(
             0,
             GraphicsShaderStageFlags::FRAGMENT,
@@ -3525,10 +3526,16 @@ mod tests {
             .expect("alpha-blending kernel must construct");
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn constructs_kernel_with_vertex_input_buffers() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         // A pipeline that *declares* vertex input buffers — the display_blit
         // shader doesn't read them, but Vulkan permits unused vertex input
         // declarations. We're locking the pipeline-creation path here, not
@@ -3568,10 +3575,16 @@ mod tests {
             .expect("vertex-input kernel must construct");
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn frame_index_out_of_range_fails_loud() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         let bindings = [GraphicsBindingSpec::sampled_texture(
             0,
             GraphicsShaderStageFlags::FRAGMENT,
@@ -3582,23 +3595,17 @@ mod tests {
         ];
         let pipeline_state = default_pipeline_state();
         let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
-        let kernel = VulkanGraphicsKernel::new(&device, &descriptor)
-            .expect("kernel construction");
+        let kernel = VulkanGraphicsKernel::new(&device, &descriptor).expect("kernel construction");
 
         // Allocate a dummy texture for the call. Doesn't matter what it is —
         // the frame_index check happens before the texture is dereferenced.
-        let dummy_desc = crate::core::rhi::TextureDescriptor::new(
-            16,
-            16,
-            TextureFormat::Bgra8Unorm,
-        )
-        .with_usage(
-            crate::core::rhi::TextureUsages::TEXTURE_BINDING
-                | crate::core::rhi::TextureUsages::COPY_DST,
-        );
-        let texture =
-            crate::vulkan::rhi::HostVulkanTexture::new_device_local(&device, &dummy_desc)
-                .expect("test texture allocation");
+        let dummy_desc =
+            crate::core::rhi::TextureDescriptor::new(16, 16, TextureFormat::Bgra8Unorm).with_usage(
+                crate::core::rhi::TextureUsages::TEXTURE_BINDING
+                    | crate::core::rhi::TextureUsages::COPY_DST,
+            );
+        let texture = crate::vulkan::rhi::HostVulkanTexture::new_device_local(&device, &dummy_desc)
+            .expect("test texture allocation");
         let stream_texture = crate::core::rhi::Texture::from_vulkan(texture);
 
         // Ring depth is 2; index 2 must fail.
@@ -3613,10 +3620,16 @@ mod tests {
         );
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn dispatch_without_setting_bindings_fails_loud() {
-        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
         let bindings = [GraphicsBindingSpec::sampled_texture(
             0,
             GraphicsShaderStageFlags::FRAGMENT,
@@ -3627,8 +3640,7 @@ mod tests {
         ];
         let pipeline_state = default_pipeline_state();
         let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
-        let kernel = VulkanGraphicsKernel::new(&device, &descriptor)
-            .expect("kernel construction");
+        let kernel = VulkanGraphicsKernel::new(&device, &descriptor).expect("kernel construction");
         // Don't bind anything before drawing — must fail with a clear error,
         // not corrupt GPU state.
         let draw = crate::core::rhi::DrawCall {

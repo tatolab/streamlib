@@ -94,10 +94,7 @@ fn validate_processor_schema(schema: &ProcessorSchema) -> SchemaResult<()> {
         if input.buffer_size == Some(0) {
             return Err(SchemaError::InvalidName {
                 name: schema.name.clone(),
-                reason: format!(
-                    "input '{}' buffer_size cannot be 0",
-                    input.name
-                ),
+                reason: format!("input '{}' buffer_size cannot be 0", input.name),
             });
         }
     }
@@ -446,11 +443,11 @@ scheduling:
   priority: NotAValidVariant
 "#;
         let result = parse_processor_yaml(yaml);
-        let err = result.expect_err("invalid priority variant must error").to_string();
+        let err = result
+            .expect_err("invalid priority variant must error")
+            .to_string();
         assert!(
-            err.contains("priority")
-                || err.contains("realtime")
-                || err.contains("variant"),
+            err.contains("priority") || err.contains("realtime") || err.contains("variant"),
             "expected diagnostic to mention `priority`, `realtime`, or `variant`; got: {err}"
         );
     }

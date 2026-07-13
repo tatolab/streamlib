@@ -217,7 +217,6 @@ pub struct SkiaSurfaceAdapterVTable {
     // -----------------------------------------------------------------
     // Handle lifetime
     // -----------------------------------------------------------------
-
     /// Take a borrowed handle and return a new owned handle with an
     /// Arc refcount bump on the underlying
     /// `Arc<SkiaSurfaceAdapter<D>>`. The owned handle remains valid
@@ -234,7 +233,6 @@ pub struct SkiaSurfaceAdapterVTable {
     // -----------------------------------------------------------------
     // Informational projection
     // -----------------------------------------------------------------
-
     /// Snapshot the inner Vulkan adapter's registry size (number of
     /// currently-registered surfaces). Returns 0 on null handle.
     /// The Skia adapter has no registry of its own — this projects
@@ -244,7 +242,6 @@ pub struct SkiaSurfaceAdapterVTable {
     // -----------------------------------------------------------------
     // SurfaceAdapter trait methods
     // -----------------------------------------------------------------
-
     /// Blocking read acquire.
     ///
     /// `surface_ptr` is a `*const StreamlibSurface` borrowed from
@@ -492,7 +489,10 @@ mod tests {
         assert_eq!(offset_of!(SkiaGlSurfaceAdapterVTable, acquire_read), 32);
         assert_eq!(offset_of!(SkiaGlSurfaceAdapterVTable, acquire_write), 40);
         assert_eq!(offset_of!(SkiaGlSurfaceAdapterVTable, try_acquire_read), 48);
-        assert_eq!(offset_of!(SkiaGlSurfaceAdapterVTable, try_acquire_write), 56);
+        assert_eq!(
+            offset_of!(SkiaGlSurfaceAdapterVTable, try_acquire_write),
+            56
+        );
         assert_eq!(offset_of!(SkiaGlSurfaceAdapterVTable, end_read_access), 64);
         assert_eq!(offset_of!(SkiaGlSurfaceAdapterVTable, end_write_access), 72);
     }

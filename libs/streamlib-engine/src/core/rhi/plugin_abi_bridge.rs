@@ -22,18 +22,17 @@
 
 use streamlib_plugin_abi::{
     AttachmentFormatsRepr, BlendFactorRepr, BlendOpRepr, ColorBlendAttachmentRepr,
-    ColorBlendStateKindRepr, ColorBlendStateRepr, ComputeBindingKindRepr,
-    ComputeBindingSpecRepr, ComputeKernelDescriptorRepr, CullModeRepr, DepthCompareOpRepr,
-    DepthFormatRepr, DepthStencilStateKindRepr, DepthStencilStateRepr, FrontFaceRepr,
-    GraphicsBindingKindRepr, GraphicsBindingSpecRepr, GraphicsDynamicStateRepr,
-    GraphicsKernelDescriptorRepr, GraphicsPipelineStateRepr, GraphicsPushConstantsRepr,
-    GraphicsShaderStageRepr, GraphicsStageRepr, MultisampleStateRepr, PolygonModeRepr,
-    PrimitiveTopologyRepr, RasterizationStateRepr, RayTracingBindingKindRepr,
+    ColorBlendStateKindRepr, ColorBlendStateRepr, ComputeBindingKindRepr, ComputeBindingSpecRepr,
+    ComputeKernelDescriptorRepr, CullModeRepr, DepthCompareOpRepr, DepthFormatRepr,
+    DepthStencilStateKindRepr, DepthStencilStateRepr, FrontFaceRepr, GraphicsBindingKindRepr,
+    GraphicsBindingSpecRepr, GraphicsDynamicStateRepr, GraphicsKernelDescriptorRepr,
+    GraphicsPipelineStateRepr, GraphicsPushConstantsRepr, GraphicsShaderStageRepr,
+    GraphicsStageRepr, MultisampleStateRepr, PolygonModeRepr, PrimitiveTopologyRepr,
+    RAY_TRACING_SHADER_UNUSED, RasterizationStateRepr, RayTracingBindingKindRepr,
     RayTracingBindingSpecRepr, RayTracingKernelDescriptorRepr, RayTracingPushConstantsRepr,
     RayTracingShaderGroupKindRepr, RayTracingShaderGroupRepr, RayTracingShaderStageRepr,
     RayTracingStageRepr, VertexAttributeFormatRepr, VertexInputAttributeRepr,
-    VertexInputBindingRepr, VertexInputRateRepr, VertexInputStateKindRepr,
-    VertexInputStateRepr, RAY_TRACING_SHADER_UNUSED,
+    VertexInputBindingRepr, VertexInputRateRepr, VertexInputStateKindRepr, VertexInputStateRepr,
 };
 
 use crate::core::rhi::{
@@ -88,7 +87,9 @@ impl From<&ComputeBindingSpec> for ComputeBindingSpecRepr {
     }
 }
 
-pub(crate) fn compute_binding_spec_from_repr(repr: &ComputeBindingSpecRepr) -> Result<ComputeBindingSpec> {
+pub(crate) fn compute_binding_spec_from_repr(
+    repr: &ComputeBindingSpecRepr,
+) -> Result<ComputeBindingSpec> {
     Ok(ComputeBindingSpec {
         binding: repr.binding,
         kind: compute_binding_kind_from_repr(repr.kind)?,
@@ -129,8 +130,11 @@ pub fn compute_kernel_descriptor_to_repr_with_bindings<'a>(
 pub fn stage_compute_kernel_descriptor(
     desc: &ComputeKernelDescriptor<'_>,
 ) -> (ComputeKernelDescriptorRepr, Vec<ComputeBindingSpecRepr>) {
-    let bindings_buf: Vec<ComputeBindingSpecRepr> =
-        desc.bindings.iter().map(ComputeBindingSpecRepr::from).collect();
+    let bindings_buf: Vec<ComputeBindingSpecRepr> = desc
+        .bindings
+        .iter()
+        .map(ComputeBindingSpecRepr::from)
+        .collect();
     // SAFETY: `bindings_buf` is a freshly-allocated Vec; we capture
     // its current data pointer, but the Vec lives as long as the
     // tuple returned by this function (and the caller is responsible
@@ -593,7 +597,9 @@ impl From<&GraphicsBindingSpec> for GraphicsBindingSpecRepr {
     }
 }
 
-pub(crate) fn graphics_binding_spec_from_repr(repr: &GraphicsBindingSpecRepr) -> Result<GraphicsBindingSpec> {
+pub(crate) fn graphics_binding_spec_from_repr(
+    repr: &GraphicsBindingSpecRepr,
+) -> Result<GraphicsBindingSpec> {
     Ok(GraphicsBindingSpec {
         binding: repr.binding,
         kind: graphics_binding_kind_from_repr(repr.kind)?,
@@ -624,9 +630,7 @@ impl From<GraphicsPushConstants> for GraphicsPushConstantsRepr {
     }
 }
 
-fn graphics_push_constants_from_repr(
-    repr: &GraphicsPushConstantsRepr,
-) -> GraphicsPushConstants {
+fn graphics_push_constants_from_repr(repr: &GraphicsPushConstantsRepr) -> GraphicsPushConstants {
     GraphicsPushConstants {
         size: repr.size,
         stages: graphics_shader_stage_flags_from_bits(repr.stages),
@@ -1017,15 +1021,10 @@ unsafe fn slice_from_ptr_len<'a, T>(ptr: *const T, len: usize) -> &'a [T] {
 ///
 /// If `len > 0` the pointer must be valid for reads of `len` bytes.
 /// Returned `&str` borrows from caller-managed memory.
-unsafe fn str_from_ptr_len<'a>(
-    ptr: *const u8,
-    len: usize,
-    field_name: &str,
-) -> Result<&'a str> {
+unsafe fn str_from_ptr_len<'a>(ptr: *const u8, len: usize, field_name: &str) -> Result<&'a str> {
     let bytes = unsafe { slice_from_ptr_len::<u8>(ptr, len) };
-    std::str::from_utf8(bytes).map_err(|e| {
-        Error::GpuError(format!("{field_name}: invalid UTF-8: {e}"))
-    })
+    std::str::from_utf8(bytes)
+        .map_err(|e| Error::GpuError(format!("{field_name}: invalid UTF-8: {e}")))
 }
 
 // =============================================================================
@@ -1050,7 +1049,10 @@ pub struct GraphicsKernelDescriptorReprStage {
 #[allow(dead_code)]
 pub fn stage_graphics_kernel_descriptor(
     desc: &GraphicsKernelDescriptor<'_>,
-) -> (GraphicsKernelDescriptorRepr, GraphicsKernelDescriptorReprStage) {
+) -> (
+    GraphicsKernelDescriptorRepr,
+    GraphicsKernelDescriptorReprStage,
+) {
     let stages_buf: Vec<GraphicsStageRepr> = desc
         .stages
         .iter()
@@ -1063,44 +1065,47 @@ pub fn stage_graphics_kernel_descriptor(
             entry_point_len: s.entry_point.len(),
         })
         .collect();
-    let bindings_buf: Vec<GraphicsBindingSpecRepr> =
-        desc.bindings.iter().map(GraphicsBindingSpecRepr::from).collect();
+    let bindings_buf: Vec<GraphicsBindingSpecRepr> = desc
+        .bindings
+        .iter()
+        .map(GraphicsBindingSpecRepr::from)
+        .collect();
 
-    let (vertex_input_repr, vertex_bindings_buf, vertex_attrs_buf) = match &desc
-        .pipeline_state
-        .vertex_input
-    {
-        VertexInputState::None => (
-            VertexInputStateRepr {
-                kind: VertexInputStateKindRepr::None as u32,
-                _reserved_padding: 0,
-                bindings_ptr: std::ptr::null(),
-                bindings_len: 0,
-                attributes_ptr: std::ptr::null(),
-                attributes_len: 0,
-            },
-            Vec::new(),
-            Vec::new(),
-        ),
-        VertexInputState::Buffers {
-            bindings,
-            attributes,
-        } => {
-            let b: Vec<VertexInputBindingRepr> =
-                bindings.iter().map(VertexInputBindingRepr::from).collect();
-            let a: Vec<VertexInputAttributeRepr> =
-                attributes.iter().map(VertexInputAttributeRepr::from).collect();
-            let repr = VertexInputStateRepr {
-                kind: VertexInputStateKindRepr::Buffers as u32,
-                _reserved_padding: 0,
-                bindings_ptr: b.as_ptr(),
-                bindings_len: b.len(),
-                attributes_ptr: a.as_ptr(),
-                attributes_len: a.len(),
-            };
-            (repr, b, a)
-        }
-    };
+    let (vertex_input_repr, vertex_bindings_buf, vertex_attrs_buf) =
+        match &desc.pipeline_state.vertex_input {
+            VertexInputState::None => (
+                VertexInputStateRepr {
+                    kind: VertexInputStateKindRepr::None as u32,
+                    _reserved_padding: 0,
+                    bindings_ptr: std::ptr::null(),
+                    bindings_len: 0,
+                    attributes_ptr: std::ptr::null(),
+                    attributes_len: 0,
+                },
+                Vec::new(),
+                Vec::new(),
+            ),
+            VertexInputState::Buffers {
+                bindings,
+                attributes,
+            } => {
+                let b: Vec<VertexInputBindingRepr> =
+                    bindings.iter().map(VertexInputBindingRepr::from).collect();
+                let a: Vec<VertexInputAttributeRepr> = attributes
+                    .iter()
+                    .map(VertexInputAttributeRepr::from)
+                    .collect();
+                let repr = VertexInputStateRepr {
+                    kind: VertexInputStateKindRepr::Buffers as u32,
+                    _reserved_padding: 0,
+                    bindings_ptr: b.as_ptr(),
+                    bindings_len: b.len(),
+                    attributes_ptr: a.as_ptr(),
+                    attributes_len: a.len(),
+                };
+                (repr, b, a)
+            }
+        };
 
     let color_formats_buf: Vec<u32> = desc
         .pipeline_state
@@ -1216,9 +1221,8 @@ where
             let attrs_len = repr.pipeline_state.vertex_input.attributes_len;
             let b_repr =
                 unsafe { slice_from_ptr_len::<VertexInputBindingRepr>(bindings_ptr, bindings_len) };
-            let a_repr = unsafe {
-                slice_from_ptr_len::<VertexInputAttributeRepr>(attrs_ptr, attrs_len)
-            };
+            let a_repr =
+                unsafe { slice_from_ptr_len::<VertexInputAttributeRepr>(attrs_ptr, attrs_len) };
             let b: Vec<VertexInputBinding> = b_repr
                 .iter()
                 .map(vertex_input_binding_from_repr)
@@ -1311,8 +1315,12 @@ pub fn stage_ray_tracing_kernel_descriptor(
             entry_point_len: s.entry_point.len(),
         })
         .collect();
-    let groups_buf: Vec<RayTracingShaderGroupRepr> =
-        desc.groups.iter().copied().map(RayTracingShaderGroupRepr::from).collect();
+    let groups_buf: Vec<RayTracingShaderGroupRepr> = desc
+        .groups
+        .iter()
+        .copied()
+        .map(RayTracingShaderGroupRepr::from)
+        .collect();
     let bindings_buf: Vec<RayTracingBindingSpecRepr> = desc
         .bindings
         .iter()
@@ -1359,9 +1367,8 @@ where
     F: FnOnce(&RayTracingKernelDescriptor<'_>) -> Result<R>,
 {
     let label = unsafe { str_from_ptr_len(repr.label_ptr, repr.label_len, "label")? };
-    let stages_repr = unsafe {
-        slice_from_ptr_len::<RayTracingStageRepr>(repr.stages_ptr, repr.stages_len)
-    };
+    let stages_repr =
+        unsafe { slice_from_ptr_len::<RayTracingStageRepr>(repr.stages_ptr, repr.stages_len) };
     let stages: Vec<RayTracingStage<'_>> = stages_repr
         .iter()
         .map(|s| {
@@ -1431,22 +1438,10 @@ mod tests {
                 assert_eq!(decoded.label, "test_compute");
                 assert_eq!(decoded.spv, spv);
                 assert_eq!(decoded.bindings.len(), 4);
-                assert_eq!(
-                    decoded.bindings[0].kind,
-                    ComputeBindingKind::StorageBuffer
-                );
-                assert_eq!(
-                    decoded.bindings[1].kind,
-                    ComputeBindingKind::UniformBuffer
-                );
-                assert_eq!(
-                    decoded.bindings[2].kind,
-                    ComputeBindingKind::SampledTexture
-                );
-                assert_eq!(
-                    decoded.bindings[3].kind,
-                    ComputeBindingKind::StorageImage
-                );
+                assert_eq!(decoded.bindings[0].kind, ComputeBindingKind::StorageBuffer);
+                assert_eq!(decoded.bindings[1].kind, ComputeBindingKind::UniformBuffer);
+                assert_eq!(decoded.bindings[2].kind, ComputeBindingKind::SampledTexture);
+                assert_eq!(decoded.bindings[3].kind, ComputeBindingKind::StorageImage);
                 assert_eq!(decoded.push_constant_size, 16);
                 Ok(())
             })
@@ -1473,10 +1468,7 @@ mod tests {
             _reserved_padding: 0,
         };
         let err = unsafe {
-            with_decoded_compute_kernel_descriptor(&repr, |_| {
-                Ok::<_, Error>(())
-            })
-            .unwrap_err()
+            with_decoded_compute_kernel_descriptor(&repr, |_| Ok::<_, Error>(())).unwrap_err()
         };
         assert!(format!("{err}").contains("invalid discriminant 99"));
     }
@@ -1485,7 +1477,10 @@ mod tests {
     fn graphics_descriptor_roundtrip_minimal() {
         let vs_spv: &[u8] = &[0xDE, 0xAD];
         let fs_spv: &[u8] = &[0xBE, 0xEF];
-        let stages = [GraphicsStage::vertex(vs_spv), GraphicsStage::fragment(fs_spv)];
+        let stages = [
+            GraphicsStage::vertex(vs_spv),
+            GraphicsStage::fragment(fs_spv),
+        ];
         let bindings = [
             GraphicsBindingSpec::sampled_texture(0, GraphicsShaderStageFlags::FRAGMENT),
             GraphicsBindingSpec::uniform_buffer(1, GraphicsShaderStageFlags::VERTEX_FRAGMENT),
@@ -1542,7 +1537,10 @@ mod tests {
     fn graphics_descriptor_roundtrip_with_vertex_input_buffers() {
         let vs_spv: &[u8] = &[0; 4];
         let fs_spv: &[u8] = &[0; 4];
-        let stages = [GraphicsStage::vertex(vs_spv), GraphicsStage::fragment(fs_spv)];
+        let stages = [
+            GraphicsStage::vertex(vs_spv),
+            GraphicsStage::fragment(fs_spv),
+        ];
         let vertex_bindings = vec![VertexInputBinding {
             binding: 0,
             stride: 32,
@@ -1600,10 +1598,7 @@ mod tests {
                         assert_eq!(bindings[0].stride, 32);
                         assert_eq!(attributes.len(), 2);
                         assert_eq!(attributes[1].offset, 12);
-                        assert_eq!(
-                            attributes[1].format,
-                            VertexAttributeFormat::Rgba32Float
-                        );
+                        assert_eq!(attributes[1].format, VertexAttributeFormat::Rgba32Float);
                     }
                     _ => panic!("expected Buffers"),
                 }
@@ -1697,7 +1692,10 @@ mod tests {
             any_hit: None,
         };
         let repr = RayTracingShaderGroupRepr::from(group);
-        assert_eq!(repr.kind, RayTracingShaderGroupKindRepr::TrianglesHit as u32);
+        assert_eq!(
+            repr.kind,
+            RayTracingShaderGroupKindRepr::TrianglesHit as u32
+        );
         assert_eq!(repr.closest_hit, RAY_TRACING_SHADER_UNUSED);
         assert_eq!(repr.any_hit, RAY_TRACING_SHADER_UNUSED);
         // Round-trip back to None.

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 #[cfg(all(unix, not(target_os = "macos")))]
-use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
+use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static SIGNAL_HANDLER_INSTALLED: AtomicBool = AtomicBool::new(false);
@@ -91,21 +91,23 @@ fn install_macos_signal_handlers() -> std::io::Result<()> {
 fn install_sigterm_handler_macos() -> std::io::Result<()> {
     use signal_hook::consts::signal::SIGTERM;
     use signal_hook::flag;
-    use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
 
     // Use flag approach for SIGTERM - simpler than pipe
     let term_flag = Arc::new(AtomicBool::new(false));
     flag::register(SIGTERM, Arc::clone(&term_flag))?;
 
     // Monitor the flag in a background thread
-    std::thread::spawn(move || loop {
-        if term_flag.load(Ordering::Relaxed) {
-            tracing::info!("SIGTERM received, triggering graceful shutdown");
-            trigger_macos_termination();
-            break;
+    std::thread::spawn(move || {
+        loop {
+            if term_flag.load(Ordering::Relaxed) {
+                tracing::info!("SIGTERM received, triggering graceful shutdown");
+                trigger_macos_termination();
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
     });
 
     Ok(())

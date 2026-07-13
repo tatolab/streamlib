@@ -444,4 +444,3 @@ impl From<RemoveModuleError> for Error {
         Error::Configuration(err.to_string())
     }
 }
-

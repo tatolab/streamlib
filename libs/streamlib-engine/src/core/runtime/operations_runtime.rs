@@ -3,17 +3,17 @@
 
 use std::sync::Arc;
 
+use super::Runner;
 use super::operations::{BoxFuture, RuntimeOperations};
 use super::runtime::TokioRuntimeVariant;
-use super::Runner;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{
     GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, PendingDeletionComponent,
     ProcessorUniqueId, StateComponent,
 };
 use crate::core::processors::{ProcessorSpec, ProcessorState};
-use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
-use crate::core::{InputLinkPortRef, OutputLinkPortRef, PortDirection, Result, Error};
+use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
+use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, PortDirection, Result};
 
 // =============================================================================
 // Core Implementation Functions ('static async fns for spawn compatibility)
@@ -158,9 +158,11 @@ async fn connect_impl(
         // pre-validation is what gets the typed error to the caller.
         // Validate source processor + output port.
         {
-            let from_node = graph.traversal().v(&from.processor_id).first().ok_or_else(
-                || Error::ProcessorNotFound(from.processor_id.to_string()),
-            )?;
+            let from_node = graph
+                .traversal()
+                .v(&from.processor_id)
+                .first()
+                .ok_or_else(|| Error::ProcessorNotFound(from.processor_id.to_string()))?;
             if !from_node.has_output(&from.port_name) {
                 return Err(Error::ProcessorPortNotFound {
                     processor_id: from.processor_id.to_string(),
@@ -171,9 +173,11 @@ async fn connect_impl(
         }
         // Validate target processor + input port.
         {
-            let to_node = graph.traversal().v(&to.processor_id).first().ok_or_else(
-                || Error::ProcessorNotFound(to.processor_id.to_string()),
-            )?;
+            let to_node = graph
+                .traversal()
+                .v(&to.processor_id)
+                .first()
+                .ok_or_else(|| Error::ProcessorNotFound(to.processor_id.to_string()))?;
             if !to_node.has_input(&to.port_name) {
                 return Err(Error::ProcessorPortNotFound {
                     processor_id: to.processor_id.to_string(),

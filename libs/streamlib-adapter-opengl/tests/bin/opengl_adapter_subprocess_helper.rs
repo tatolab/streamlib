@@ -19,9 +19,7 @@ use std::os::unix::net::UnixStream;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use streamlib_adapter_opengl::{
-    EglRuntime, HostSurfaceRegistration, OpenGlSurfaceAdapter,
-};
+use streamlib_adapter_opengl::{EglRuntime, HostSurfaceRegistration, OpenGlSurfaceAdapter};
 
 #[derive(Debug, serde::Deserialize)]
 struct HelperRequest {
@@ -82,9 +80,8 @@ fn run() -> ExitCode {
         total += n as usize;
     }
     let msg_len = u32::from_be_bytes(len_buf) as usize;
-    let (payload, fds) = match streamlib_surface_client::recv_message_with_fds(
-        &socket, msg_len, 1,
-    ) {
+    let (payload, fds) = match streamlib_surface_client::recv_message_with_fds(&socket, msg_len, 1)
+    {
         Ok(p) => p,
         Err(e) => return die(Some(&socket), format!("recv_message_with_fds: {e}")),
     };

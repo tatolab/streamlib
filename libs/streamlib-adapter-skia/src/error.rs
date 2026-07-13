@@ -35,6 +35,8 @@ pub enum SkiaAdapterError {
     /// `VulkanImageInfoExt::vk_image_info()` reported
     /// `VK_FORMAT_UNDEFINED`. Skia rejects this — the upstream
     /// `VulkanTextureLike` impl is missing format metadata.
-    #[error("vk_image_info reported VK_FORMAT_UNDEFINED — upstream VulkanTextureLike impl is missing format metadata")]
+    #[error(
+        "vk_image_info reported VK_FORMAT_UNDEFINED — upstream VulkanTextureLike impl is missing format metadata"
+    )]
     UndefinedFormat,
 }

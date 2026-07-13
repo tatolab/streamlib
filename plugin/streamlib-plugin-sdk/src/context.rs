@@ -87,10 +87,7 @@ impl GpuContextLimitedAccess {
     /// Acquire a HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
     /// Dispatches through the plugin ABI vtable's `acquire_storage_buffer`
     /// callback.
-    pub fn acquire_storage_buffer(
-        &self,
-        byte_size: u64,
-    ) -> Result<crate::rhi::StorageBuffer> {
+    pub fn acquire_storage_buffer(&self, byte_size: u64) -> Result<crate::rhi::StorageBuffer> {
         if self.handle.is_null() || self.vtable.is_null() {
             return Err(Error::GpuError(
                 "acquire_storage_buffer: GpuContextLimitedAccess has null handle/vtable".into(),
@@ -214,7 +211,8 @@ impl GpuContextLimitedAccess {
     ) -> Result<crate::rhi::Texture> {
         if self.handle.is_null() || self.vtable.is_null() {
             return Err(Error::GpuError(
-                "resolve_texture_by_surface_id: GpuContextLimitedAccess has null handle/vtable".into(),
+                "resolve_texture_by_surface_id: GpuContextLimitedAccess has null handle/vtable"
+                    .into(),
             ));
         }
         let mut out_texture: std::mem::MaybeUninit<crate::rhi::Texture> =
@@ -633,10 +631,7 @@ impl GpuContextFullAccess {
     /// LimitedAccess mirror — cdylib dispatch inherits the
     /// `acquire_storage_buffer` slot via
     /// [`Self::inherited_limited_unchecked`].
-    pub fn acquire_storage_buffer(
-        &self,
-        byte_size: u64,
-    ) -> Result<crate::rhi::StorageBuffer> {
+    pub fn acquire_storage_buffer(&self, byte_size: u64) -> Result<crate::rhi::StorageBuffer> {
         self.inherited_limited_unchecked()
             .acquire_storage_buffer(byte_size)
     }
@@ -1044,10 +1039,7 @@ impl GpuContextFullAccess {
     /// Build an engine-owned multi-step command-buffer recorder.
     /// Dispatches through the [`GpuContextFullAccessVTable`]'s
     /// `create_command_recorder` slot.
-    pub fn create_command_recorder(
-        &self,
-        label: &str,
-    ) -> Result<crate::rhi::RhiCommandRecorder> {
+    pub fn create_command_recorder(&self, label: &str) -> Result<crate::rhi::RhiCommandRecorder> {
         if self.vtable.is_null() {
             return Err(Error::GpuError(
                 "create_command_recorder: GpuContextFullAccess has null vtable".into(),
@@ -1198,7 +1190,10 @@ mod layout_tests {
         assert_eq!(offset_of!(RuntimeContextFullAccess<'static>, handle), 0);
         assert_eq!(offset_of!(RuntimeContextFullAccess<'static>, vtable), 8);
         assert_eq!(offset_of!(RuntimeContextFullAccess<'static>, gpu_full), 16);
-        assert_eq!(offset_of!(RuntimeContextFullAccess<'static>, gpu_limited), 56);
+        assert_eq!(
+            offset_of!(RuntimeContextFullAccess<'static>, gpu_limited),
+            56
+        );
     }
 
     #[test]
@@ -1207,6 +1202,9 @@ mod layout_tests {
         assert_eq!(align_of::<RuntimeContextLimitedAccess<'static>>(), 8);
         assert_eq!(offset_of!(RuntimeContextLimitedAccess<'static>, handle), 0);
         assert_eq!(offset_of!(RuntimeContextLimitedAccess<'static>, vtable), 8);
-        assert_eq!(offset_of!(RuntimeContextLimitedAccess<'static>, gpu_limited), 16);
+        assert_eq!(
+            offset_of!(RuntimeContextLimitedAccess<'static>, gpu_limited),
+            16
+        );
     }
 }

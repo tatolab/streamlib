@@ -216,31 +216,25 @@ impl VideoContext {
 
         unsafe {
             // Get the raw function pointer from vulkanalia's command table.
-            let fp = InstanceV1_0::commands(&self.instance)
-                .get_physical_device_queue_family_properties2;
+            let fp =
+                InstanceV1_0::commands(&self.instance).get_physical_device_queue_family_properties2;
 
             // First call: get queue family count.
             let mut count: u32 = 0;
             fp(self.physical_device, &mut count, std::ptr::null_mut());
 
             let n = count as usize;
-            let mut video_props =
-                vec![vk::QueueFamilyVideoPropertiesKHR::default(); n];
+            let mut video_props = vec![vk::QueueFamilyVideoPropertiesKHR::default(); n];
             let mut props2: Vec<vk::QueueFamilyProperties2> = (0..n)
                 .map(|i| {
                     let mut p = vk::QueueFamilyProperties2::default();
-                    p.next =
-                        &mut video_props[i] as *mut _ as *mut std::ffi::c_void;
+                    p.next = &mut video_props[i] as *mut _ as *mut std::ffi::c_void;
                     p
                 })
                 .collect();
 
             // Second call: fill results with pNext chains.
-            fp(
-                self.physical_device,
-                &mut count,
-                props2.as_mut_ptr(),
-            );
+            fp(self.physical_device, &mut count, props2.as_mut_ptr());
 
             for i in 0..count as usize {
                 let flags = props2[i].queue_family_properties.queue_flags;
@@ -253,7 +247,6 @@ impl VideoContext {
         }
         Err(VideoError::NoVideoQueueFamily)
     }
-
 }
 
 impl Drop for VideoContext {
@@ -277,5 +270,4 @@ mod tests {
         let e = VideoError::NoVideoQueueFamily;
         assert!(format!("{}", e).contains("queue family"));
     }
-
 }

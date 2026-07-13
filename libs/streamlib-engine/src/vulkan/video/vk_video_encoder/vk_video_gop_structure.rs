@@ -267,8 +267,7 @@ impl VkVideoGopStructure {
 
         // IDR frame detection
         if first_frame
-            || (self.idr_period > 0
-                && (gop_state.position_in_input_order % self.idr_period) == 0)
+            || (self.idr_period > 0 && (gop_state.position_in_input_order % self.idr_period) == 0)
         {
             gop_pos.picture_type = FrameType::Idr;
             gop_pos.input_order = 0;
@@ -289,21 +288,18 @@ impl VkVideoGopStructure {
         if gop_pos.in_gop == 0 {
             // Start of a new (open or closed) GOP
             gop_pos.picture_type = FrameType::I;
-            consecutive_b_frame_count = (gop_state.position_in_input_order
-                - gop_state.last_ref_in_input_order
-                - 1) as u8;
+            consecutive_b_frame_count =
+                (gop_state.position_in_input_order - gop_state.last_ref_in_input_order - 1) as u8;
             gop_state.intra_refresh_counter = 0;
         } else if (gop_pos.in_gop % self.gop_frame_cycle as u32) == 0 {
             // Start of min/sub-GOP
             gop_pos.picture_type = FrameType::P;
-            consecutive_b_frame_count = (gop_state.position_in_input_order
-                - gop_state.last_ref_in_input_order
-                - 1) as u8;
+            consecutive_b_frame_count =
+                (gop_state.position_in_input_order - gop_state.last_ref_in_input_order - 1) as u8;
         } else if consecutive_b_frame_count > 0 {
             // B-frame promotion checks
             if (frames_left == 1)
-                || (self.idr_period > 0
-                    && gop_state.position_in_input_order == self.idr_period - 1)
+                || (self.idr_period > 0 && gop_state.position_in_input_order == self.idr_period - 1)
                 || (self.closed_gop && gop_pos.in_gop == self.gop_frame_count - 1)
             {
                 gop_pos.picture_type = self.pre_closed_gop_anchor_frame_type;
@@ -320,8 +316,8 @@ impl VkVideoGopStructure {
 
                 let mut next_ref_delta = frames_left - 1;
                 if self.idr_period > 0 {
-                    next_ref_delta = next_ref_delta
-                        .min(self.get_period_delta(gop_state, self.idr_period) - 1);
+                    next_ref_delta =
+                        next_ref_delta.min(self.get_period_delta(gop_state, self.idr_period) - 1);
                 }
                 next_ref_delta = next_ref_delta.min(
                     self.get_period_delta(gop_state, self.gop_frame_count)
@@ -332,8 +328,7 @@ impl VkVideoGopStructure {
                         - gop_pos.input_order,
                 );
 
-                consecutive_b_frame_count =
-                    (gop_pos.b_frame_pos as u32 + next_ref_delta) as u8;
+                consecutive_b_frame_count = (gop_pos.b_frame_pos as u32 + next_ref_delta) as u8;
                 gop_pos.num_b_frames = consecutive_b_frame_count as i8;
             }
         }
@@ -428,12 +423,7 @@ impl VkVideoGopStructure {
         let mut gop_pos = GopPosition::new(gop_state.position_in_input_order);
         for frame_num in 0..num_frames - 1 {
             let frames_left = (num_frames - frame_num) as u32;
-            self.get_position_in_gop(
-                &mut gop_state,
-                &mut gop_pos,
-                frame_num == 0,
-                frames_left,
-            );
+            self.get_position_in_gop(&mut gop_state, &mut gop_pos, frame_num == 0, frames_left);
             print!("{:>4}", gop_pos.picture_type.name());
         }
         self.get_position_in_gop(&mut gop_state, &mut gop_pos, false, 1);
@@ -444,12 +434,7 @@ impl VkVideoGopStructure {
         gop_state = GopState::default();
         for frame_num in 0..num_frames - 1 {
             let frames_left = (num_frames - frame_num) as u32;
-            self.get_position_in_gop(
-                &mut gop_state,
-                &mut gop_pos,
-                frame_num == 0,
-                frames_left,
-            );
+            self.get_position_in_gop(&mut gop_state, &mut gop_pos, frame_num == 0, frames_left);
             print!("{:3} ", gop_pos.input_order);
         }
         self.get_position_in_gop(&mut gop_state, &mut gop_pos, false, 1);
@@ -460,12 +445,7 @@ impl VkVideoGopStructure {
         gop_state = GopState::default();
         for frame_num in 0..num_frames - 1 {
             let frames_left = (num_frames - frame_num) as u32;
-            self.get_position_in_gop(
-                &mut gop_state,
-                &mut gop_pos,
-                frame_num == 0,
-                frames_left,
-            );
+            self.get_position_in_gop(&mut gop_state, &mut gop_pos, frame_num == 0, frames_left);
             print!("{:3} ", gop_pos.encode_order);
         }
         self.get_position_in_gop(&mut gop_state, &mut gop_pos, false, 1);
@@ -476,12 +456,7 @@ impl VkVideoGopStructure {
         gop_state = GopState::default();
         for frame_num in 0..num_frames - 1 {
             let frames_left = (num_frames - frame_num) as u32;
-            self.get_position_in_gop(
-                &mut gop_state,
-                &mut gop_pos,
-                frame_num == 0,
-                frames_left,
-            );
+            self.get_position_in_gop(&mut gop_state, &mut gop_pos, frame_num == 0, frames_left);
             print!("{:3} ", gop_pos.in_gop);
         }
         self.get_position_in_gop(&mut gop_state, &mut gop_pos, false, 1);
@@ -516,11 +491,7 @@ impl VkVideoGopStructure {
     ///
     /// Equivalent to the C++ `DumpFramesGopStructure` method.
     #[allow(clippy::disallowed_macros)] // diagnostic dumper invoked from test bins; stdout is the output channel
-    pub fn dump_frames_gop_structure(
-        &self,
-        first_frame_num_in_input_order: u64,
-        num_frames: u64,
-    ) {
+    pub fn dump_frames_gop_structure(&self, first_frame_num_in_input_order: u64, num_frames: u64) {
         println!("Input Encode Position  Frame ");
         println!("order order   in GOP   type  ");
         let last = first_frame_num_in_input_order + num_frames - 1;

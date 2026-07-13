@@ -3,19 +3,22 @@
 
 //! Video session configuration and session parameter creation for decode.
 
-use vulkanalia::prelude::v1_4::*;
-use vulkanalia::vk;
 use std::ptr;
 use tracing::{debug, info};
+use vulkanalia::prelude::v1_4::*;
+use vulkanalia::vk;
 
 use crate::vulkan::video::nv_video_parser::vulkan_h264_decoder::{
-    SeqParameterSet as H264Sps, PicParameterSet as H264Pps,
-    H264PocType, H264LevelIdc,
+    H264LevelIdc, H264PocType, PicParameterSet as H264Pps, SeqParameterSet as H264Sps,
 };
 use crate::vulkan::video::nv_video_parser::vulkan_h265_decoder as h265dec;
 use crate::vulkan::video::video_context::VideoError;
-use crate::vulkan::video::vk_video_decoder::vk_video_decoder::{VkVideoDecoder, VkParserDetectedVideoFormat};
-use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{align_size, H264_MB_SIZE_ALIGNMENT};
+use crate::vulkan::video::vk_video_decoder::vk_video_decoder::{
+    VkParserDetectedVideoFormat, VkVideoDecoder,
+};
+use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{
+    H264_MB_SIZE_ALIGNMENT, align_size,
+};
 
 use super::SimpleDecoder;
 
@@ -270,158 +273,176 @@ impl SimpleDecoder {
     /// Build StdVideoH264SequenceParameterSet from the ported parser's SPS.
     unsafe fn build_std_sps_from_parsed(
         sps: &H264Sps,
-    ) -> vk::video::StdVideoH264SequenceParameterSet { unsafe {
-        let mut flags: vk::video::StdVideoH264SpsFlags = std::mem::zeroed();
-        flags.set_direct_8x8_inference_flag(sps.flags.direct_8x8_inference_flag as u32);
-        flags.set_frame_mbs_only_flag(sps.flags.frame_mbs_only_flag as u32);
-        flags.set_frame_cropping_flag(sps.flags.frame_cropping_flag as u32);
-        flags.set_mb_adaptive_frame_field_flag(sps.flags.mb_adaptive_frame_field_flag as u32);
-        flags.set_vui_parameters_present_flag(sps.flags.vui_parameters_present_flag as u32);
-        flags.set_delta_pic_order_always_zero_flag(sps.flags.delta_pic_order_always_zero_flag as u32);
-        flags.set_separate_colour_plane_flag(sps.flags.separate_colour_plane_flag as u32);
-        flags.set_qpprime_y_zero_transform_bypass_flag(sps.flags.qpprime_y_zero_transform_bypass_flag as u32);
-        flags.set_gaps_in_frame_num_value_allowed_flag(sps.flags.gaps_in_frame_num_value_allowed_flag as u32);
-        flags.set_seq_scaling_matrix_present_flag(sps.flags.seq_scaling_matrix_present_flag as u32);
+    ) -> vk::video::StdVideoH264SequenceParameterSet {
+        unsafe {
+            let mut flags: vk::video::StdVideoH264SpsFlags = std::mem::zeroed();
+            flags.set_direct_8x8_inference_flag(sps.flags.direct_8x8_inference_flag as u32);
+            flags.set_frame_mbs_only_flag(sps.flags.frame_mbs_only_flag as u32);
+            flags.set_frame_cropping_flag(sps.flags.frame_cropping_flag as u32);
+            flags.set_mb_adaptive_frame_field_flag(sps.flags.mb_adaptive_frame_field_flag as u32);
+            flags.set_vui_parameters_present_flag(sps.flags.vui_parameters_present_flag as u32);
+            flags.set_delta_pic_order_always_zero_flag(
+                sps.flags.delta_pic_order_always_zero_flag as u32,
+            );
+            flags.set_separate_colour_plane_flag(sps.flags.separate_colour_plane_flag as u32);
+            flags.set_qpprime_y_zero_transform_bypass_flag(
+                sps.flags.qpprime_y_zero_transform_bypass_flag as u32,
+            );
+            flags.set_gaps_in_frame_num_value_allowed_flag(
+                sps.flags.gaps_in_frame_num_value_allowed_flag as u32,
+            );
+            flags.set_seq_scaling_matrix_present_flag(
+                sps.flags.seq_scaling_matrix_present_flag as u32,
+            );
 
-        let profile_idc = match sps.profile_idc {
-            66 => vk::video::STD_VIDEO_H264_PROFILE_IDC_BASELINE,
-            77 => vk::video::STD_VIDEO_H264_PROFILE_IDC_MAIN,
-            88 => vk::video::STD_VIDEO_H264_PROFILE_IDC_MAIN, // Extended → Main
-            100 => vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH,
-            110 => vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH,
-            122 => vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH,
-            244 => vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH_444_PREDICTIVE,
-            _ => vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH,
-        };
+            let profile_idc = match sps.profile_idc {
+                66 => vk::video::STD_VIDEO_H264_PROFILE_IDC_BASELINE,
+                77 => vk::video::STD_VIDEO_H264_PROFILE_IDC_MAIN,
+                88 => vk::video::STD_VIDEO_H264_PROFILE_IDC_MAIN, // Extended → Main
+                100 => vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH,
+                110 => vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH,
+                122 => vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH,
+                244 => vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH_444_PREDICTIVE,
+                _ => vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH,
+            };
 
-        let level_idc = match sps.level_idc {
-            H264LevelIdc::Level1_0 => vk::video::STD_VIDEO_H264_LEVEL_IDC_1_0,
-            H264LevelIdc::Level1_1 => vk::video::STD_VIDEO_H264_LEVEL_IDC_1_1,
-            H264LevelIdc::Level1_2 => vk::video::STD_VIDEO_H264_LEVEL_IDC_1_2,
-            H264LevelIdc::Level1_3 => vk::video::STD_VIDEO_H264_LEVEL_IDC_1_3,
-            H264LevelIdc::Level2_0 => vk::video::STD_VIDEO_H264_LEVEL_IDC_2_0,
-            H264LevelIdc::Level2_1 => vk::video::STD_VIDEO_H264_LEVEL_IDC_2_1,
-            H264LevelIdc::Level2_2 => vk::video::STD_VIDEO_H264_LEVEL_IDC_2_2,
-            H264LevelIdc::Level3_0 => vk::video::STD_VIDEO_H264_LEVEL_IDC_3_0,
-            H264LevelIdc::Level3_1 => vk::video::STD_VIDEO_H264_LEVEL_IDC_3_1,
-            H264LevelIdc::Level3_2 => vk::video::STD_VIDEO_H264_LEVEL_IDC_3_2,
-            H264LevelIdc::Level4_0 => vk::video::STD_VIDEO_H264_LEVEL_IDC_4_0,
-            H264LevelIdc::Level4_1 => vk::video::STD_VIDEO_H264_LEVEL_IDC_4_1,
-            H264LevelIdc::Level4_2 => vk::video::STD_VIDEO_H264_LEVEL_IDC_4_2,
-            H264LevelIdc::Level5_0 => vk::video::STD_VIDEO_H264_LEVEL_IDC_5_0,
-            H264LevelIdc::Level5_1 => vk::video::STD_VIDEO_H264_LEVEL_IDC_5_1,
-            H264LevelIdc::Level5_2 => vk::video::STD_VIDEO_H264_LEVEL_IDC_5_2,
-            H264LevelIdc::Level6_0 => vk::video::STD_VIDEO_H264_LEVEL_IDC_6_0,
-            H264LevelIdc::Level6_1 => vk::video::STD_VIDEO_H264_LEVEL_IDC_6_1,
-            H264LevelIdc::Level6_2 => vk::video::STD_VIDEO_H264_LEVEL_IDC_6_2,
-            _ => vk::video::STD_VIDEO_H264_LEVEL_IDC_4_1,
-        };
+            let level_idc = match sps.level_idc {
+                H264LevelIdc::Level1_0 => vk::video::STD_VIDEO_H264_LEVEL_IDC_1_0,
+                H264LevelIdc::Level1_1 => vk::video::STD_VIDEO_H264_LEVEL_IDC_1_1,
+                H264LevelIdc::Level1_2 => vk::video::STD_VIDEO_H264_LEVEL_IDC_1_2,
+                H264LevelIdc::Level1_3 => vk::video::STD_VIDEO_H264_LEVEL_IDC_1_3,
+                H264LevelIdc::Level2_0 => vk::video::STD_VIDEO_H264_LEVEL_IDC_2_0,
+                H264LevelIdc::Level2_1 => vk::video::STD_VIDEO_H264_LEVEL_IDC_2_1,
+                H264LevelIdc::Level2_2 => vk::video::STD_VIDEO_H264_LEVEL_IDC_2_2,
+                H264LevelIdc::Level3_0 => vk::video::STD_VIDEO_H264_LEVEL_IDC_3_0,
+                H264LevelIdc::Level3_1 => vk::video::STD_VIDEO_H264_LEVEL_IDC_3_1,
+                H264LevelIdc::Level3_2 => vk::video::STD_VIDEO_H264_LEVEL_IDC_3_2,
+                H264LevelIdc::Level4_0 => vk::video::STD_VIDEO_H264_LEVEL_IDC_4_0,
+                H264LevelIdc::Level4_1 => vk::video::STD_VIDEO_H264_LEVEL_IDC_4_1,
+                H264LevelIdc::Level4_2 => vk::video::STD_VIDEO_H264_LEVEL_IDC_4_2,
+                H264LevelIdc::Level5_0 => vk::video::STD_VIDEO_H264_LEVEL_IDC_5_0,
+                H264LevelIdc::Level5_1 => vk::video::STD_VIDEO_H264_LEVEL_IDC_5_1,
+                H264LevelIdc::Level5_2 => vk::video::STD_VIDEO_H264_LEVEL_IDC_5_2,
+                H264LevelIdc::Level6_0 => vk::video::STD_VIDEO_H264_LEVEL_IDC_6_0,
+                H264LevelIdc::Level6_1 => vk::video::STD_VIDEO_H264_LEVEL_IDC_6_1,
+                H264LevelIdc::Level6_2 => vk::video::STD_VIDEO_H264_LEVEL_IDC_6_2,
+                _ => vk::video::STD_VIDEO_H264_LEVEL_IDC_4_1,
+            };
 
-        let chroma_format_idc = match sps.chroma_format_idc {
-            0 => vk::video::STD_VIDEO_H264_CHROMA_FORMAT_IDC_MONOCHROME,
-            1 => vk::video::STD_VIDEO_H264_CHROMA_FORMAT_IDC_420,
-            2 => vk::video::STD_VIDEO_H264_CHROMA_FORMAT_IDC_422,
-            3 => vk::video::STD_VIDEO_H264_CHROMA_FORMAT_IDC_444,
-            _ => vk::video::STD_VIDEO_H264_CHROMA_FORMAT_IDC_420,
-        };
+            let chroma_format_idc = match sps.chroma_format_idc {
+                0 => vk::video::STD_VIDEO_H264_CHROMA_FORMAT_IDC_MONOCHROME,
+                1 => vk::video::STD_VIDEO_H264_CHROMA_FORMAT_IDC_420,
+                2 => vk::video::STD_VIDEO_H264_CHROMA_FORMAT_IDC_422,
+                3 => vk::video::STD_VIDEO_H264_CHROMA_FORMAT_IDC_444,
+                _ => vk::video::STD_VIDEO_H264_CHROMA_FORMAT_IDC_420,
+            };
 
-        let poc_type = match sps.pic_order_cnt_type {
-            H264PocType::Type0 => vk::video::STD_VIDEO_H264_POC_TYPE_0,
-            H264PocType::Type1 => vk::video::STD_VIDEO_H264_POC_TYPE_1,
-            H264PocType::Type2 => vk::video::STD_VIDEO_H264_POC_TYPE_2,
-        };
+            let poc_type = match sps.pic_order_cnt_type {
+                H264PocType::Type0 => vk::video::STD_VIDEO_H264_POC_TYPE_0,
+                H264PocType::Type1 => vk::video::STD_VIDEO_H264_POC_TYPE_1,
+                H264PocType::Type2 => vk::video::STD_VIDEO_H264_POC_TYPE_2,
+            };
 
-        vk::video::StdVideoH264SequenceParameterSet {
-            flags,
-            profile_idc,
-            level_idc,
-            chroma_format_idc,
-            seq_parameter_set_id: sps.seq_parameter_set_id as u8,
-            bit_depth_luma_minus8: sps.bit_depth_luma_minus8 as u8,
-            bit_depth_chroma_minus8: sps.bit_depth_chroma_minus8 as u8,
-            log2_max_frame_num_minus4: sps.log2_max_frame_num_minus4 as u8,
-            pic_order_cnt_type: poc_type,
-            offset_for_non_ref_pic: sps.offset_for_non_ref_pic,
-            offset_for_top_to_bottom_field: sps.offset_for_top_to_bottom_field,
-            log2_max_pic_order_cnt_lsb_minus4: sps.log2_max_pic_order_cnt_lsb_minus4 as u8,
-            num_ref_frames_in_pic_order_cnt_cycle: sps.num_ref_frames_in_pic_order_cnt_cycle,
-            max_num_ref_frames: sps.max_num_ref_frames as u8,
-            reserved1: 0,
-            pic_width_in_mbs_minus1: sps.pic_width_in_mbs_minus1 as u32,
-            pic_height_in_map_units_minus1: sps.pic_height_in_map_units_minus1 as u32,
-            frame_crop_left_offset: sps.frame_crop_left_offset as u32,
-            frame_crop_right_offset: sps.frame_crop_right_offset as u32,
-            frame_crop_top_offset: sps.frame_crop_top_offset as u32,
-            frame_crop_bottom_offset: sps.frame_crop_bottom_offset as u32,
-            reserved2: 0,
-            pOffsetForRefFrame: if sps.num_ref_frames_in_pic_order_cnt_cycle > 0 {
-                sps.offset_for_ref_frame.as_ptr()
-            } else {
-                ptr::null()
-            },
-            pScalingLists: ptr::null(),
-            pSequenceParameterSetVui: ptr::null(),
+            vk::video::StdVideoH264SequenceParameterSet {
+                flags,
+                profile_idc,
+                level_idc,
+                chroma_format_idc,
+                seq_parameter_set_id: sps.seq_parameter_set_id as u8,
+                bit_depth_luma_minus8: sps.bit_depth_luma_minus8 as u8,
+                bit_depth_chroma_minus8: sps.bit_depth_chroma_minus8 as u8,
+                log2_max_frame_num_minus4: sps.log2_max_frame_num_minus4 as u8,
+                pic_order_cnt_type: poc_type,
+                offset_for_non_ref_pic: sps.offset_for_non_ref_pic,
+                offset_for_top_to_bottom_field: sps.offset_for_top_to_bottom_field,
+                log2_max_pic_order_cnt_lsb_minus4: sps.log2_max_pic_order_cnt_lsb_minus4 as u8,
+                num_ref_frames_in_pic_order_cnt_cycle: sps.num_ref_frames_in_pic_order_cnt_cycle,
+                max_num_ref_frames: sps.max_num_ref_frames as u8,
+                reserved1: 0,
+                pic_width_in_mbs_minus1: sps.pic_width_in_mbs_minus1 as u32,
+                pic_height_in_map_units_minus1: sps.pic_height_in_map_units_minus1 as u32,
+                frame_crop_left_offset: sps.frame_crop_left_offset as u32,
+                frame_crop_right_offset: sps.frame_crop_right_offset as u32,
+                frame_crop_top_offset: sps.frame_crop_top_offset as u32,
+                frame_crop_bottom_offset: sps.frame_crop_bottom_offset as u32,
+                reserved2: 0,
+                pOffsetForRefFrame: if sps.num_ref_frames_in_pic_order_cnt_cycle > 0 {
+                    sps.offset_for_ref_frame.as_ptr()
+                } else {
+                    ptr::null()
+                },
+                pScalingLists: ptr::null(),
+                pSequenceParameterSetVui: ptr::null(),
+            }
         }
-    }}
+    }
 
     /// Build StdVideoH264PictureParameterSet from the ported parser's PPS.
     unsafe fn build_std_pps_from_parsed(
         pps: &H264Pps,
-    ) -> vk::video::StdVideoH264PictureParameterSet { unsafe {
-        let mut flags: vk::video::StdVideoH264PpsFlags = std::mem::zeroed();
-        flags.set_entropy_coding_mode_flag(pps.flags.entropy_coding_mode_flag as u32);
-        flags.set_deblocking_filter_control_present_flag(pps.flags.deblocking_filter_control_present_flag as u32);
-        flags.set_weighted_pred_flag(pps.flags.weighted_pred_flag as u32);
-        flags.set_constrained_intra_pred_flag(pps.flags.constrained_intra_pred_flag as u32);
-        flags.set_redundant_pic_cnt_present_flag(pps.flags.redundant_pic_cnt_present_flag as u32);
-        flags.set_transform_8x8_mode_flag(pps.flags.transform_8x8_mode_flag as u32);
-        flags.set_pic_scaling_matrix_present_flag(pps.flags.pic_scaling_matrix_present_flag as u32);
-        flags.set_bottom_field_pic_order_in_frame_present_flag(
-            pps.flags.bottom_field_pic_order_in_frame_present_flag as u32,
-        );
+    ) -> vk::video::StdVideoH264PictureParameterSet {
+        unsafe {
+            let mut flags: vk::video::StdVideoH264PpsFlags = std::mem::zeroed();
+            flags.set_entropy_coding_mode_flag(pps.flags.entropy_coding_mode_flag as u32);
+            flags.set_deblocking_filter_control_present_flag(
+                pps.flags.deblocking_filter_control_present_flag as u32,
+            );
+            flags.set_weighted_pred_flag(pps.flags.weighted_pred_flag as u32);
+            flags.set_constrained_intra_pred_flag(pps.flags.constrained_intra_pred_flag as u32);
+            flags.set_redundant_pic_cnt_present_flag(
+                pps.flags.redundant_pic_cnt_present_flag as u32,
+            );
+            flags.set_transform_8x8_mode_flag(pps.flags.transform_8x8_mode_flag as u32);
+            flags.set_pic_scaling_matrix_present_flag(
+                pps.flags.pic_scaling_matrix_present_flag as u32,
+            );
+            flags.set_bottom_field_pic_order_in_frame_present_flag(
+                pps.flags.bottom_field_pic_order_in_frame_present_flag as u32,
+            );
 
-        vk::video::StdVideoH264PictureParameterSet {
-            flags,
-            seq_parameter_set_id: pps.seq_parameter_set_id,
-            pic_parameter_set_id: pps.pic_parameter_set_id,
-            num_ref_idx_l0_default_active_minus1: pps.num_ref_idx_l0_default_active_minus1,
-            num_ref_idx_l1_default_active_minus1: pps.num_ref_idx_l1_default_active_minus1,
-            weighted_bipred_idc: match pps.weighted_bipred_idc {
-                0 => vk::video::STD_VIDEO_H264_WEIGHTED_BIPRED_IDC_DEFAULT,
-                1 => vk::video::STD_VIDEO_H264_WEIGHTED_BIPRED_IDC_EXPLICIT,
-                2 => vk::video::STD_VIDEO_H264_WEIGHTED_BIPRED_IDC_IMPLICIT,
-                _ => vk::video::STD_VIDEO_H264_WEIGHTED_BIPRED_IDC_DEFAULT,
-            },
-            pic_init_qp_minus26: pps.pic_init_qp_minus26,
-            pic_init_qs_minus26: pps.pic_init_qs_minus26,
-            chroma_qp_index_offset: pps.chroma_qp_index_offset,
-            second_chroma_qp_index_offset: pps.second_chroma_qp_index_offset,
-            pScalingLists: ptr::null(),
+            vk::video::StdVideoH264PictureParameterSet {
+                flags,
+                seq_parameter_set_id: pps.seq_parameter_set_id,
+                pic_parameter_set_id: pps.pic_parameter_set_id,
+                num_ref_idx_l0_default_active_minus1: pps.num_ref_idx_l0_default_active_minus1,
+                num_ref_idx_l1_default_active_minus1: pps.num_ref_idx_l1_default_active_minus1,
+                weighted_bipred_idc: match pps.weighted_bipred_idc {
+                    0 => vk::video::STD_VIDEO_H264_WEIGHTED_BIPRED_IDC_DEFAULT,
+                    1 => vk::video::STD_VIDEO_H264_WEIGHTED_BIPRED_IDC_EXPLICIT,
+                    2 => vk::video::STD_VIDEO_H264_WEIGHTED_BIPRED_IDC_IMPLICIT,
+                    _ => vk::video::STD_VIDEO_H264_WEIGHTED_BIPRED_IDC_DEFAULT,
+                },
+                pic_init_qp_minus26: pps.pic_init_qp_minus26,
+                pic_init_qs_minus26: pps.pic_init_qs_minus26,
+                chroma_qp_index_offset: pps.chroma_qp_index_offset,
+                second_chroma_qp_index_offset: pps.second_chroma_qp_index_offset,
+                pScalingLists: ptr::null(),
+            }
         }
-    }}
+    }
 
     /// Build a default PPS when no PPS NAL has been received yet.
-    unsafe fn build_std_pps_default(
-        sps_id: u8,
-    ) -> vk::video::StdVideoH264PictureParameterSet { unsafe {
-        let mut flags: vk::video::StdVideoH264PpsFlags = std::mem::zeroed();
-        flags.set_deblocking_filter_control_present_flag(1);
-        flags.set_entropy_coding_mode_flag(1);
+    unsafe fn build_std_pps_default(sps_id: u8) -> vk::video::StdVideoH264PictureParameterSet {
+        unsafe {
+            let mut flags: vk::video::StdVideoH264PpsFlags = std::mem::zeroed();
+            flags.set_deblocking_filter_control_present_flag(1);
+            flags.set_entropy_coding_mode_flag(1);
 
-        vk::video::StdVideoH264PictureParameterSet {
-            flags,
-            seq_parameter_set_id: sps_id,
-            pic_parameter_set_id: 0,
-            num_ref_idx_l0_default_active_minus1: 0,
-            num_ref_idx_l1_default_active_minus1: 0,
-            weighted_bipred_idc: vk::video::STD_VIDEO_H264_WEIGHTED_BIPRED_IDC_DEFAULT,
-            pic_init_qp_minus26: 0,
-            pic_init_qs_minus26: 0,
-            chroma_qp_index_offset: 0,
-            second_chroma_qp_index_offset: 0,
-            pScalingLists: ptr::null(),
+            vk::video::StdVideoH264PictureParameterSet {
+                flags,
+                seq_parameter_set_id: sps_id,
+                pic_parameter_set_id: 0,
+                num_ref_idx_l0_default_active_minus1: 0,
+                num_ref_idx_l1_default_active_minus1: 0,
+                weighted_bipred_idc: vk::video::STD_VIDEO_H264_WEIGHTED_BIPRED_IDC_DEFAULT,
+                pic_init_qp_minus26: 0,
+                pic_init_qs_minus26: 0,
+                chroma_qp_index_offset: 0,
+                second_chroma_qp_index_offset: 0,
+                pScalingLists: ptr::null(),
+            }
         }
-    }}
+    }
 
     /// Create H.264 session parameters on VkVideoDecoder's video session.
     pub(crate) fn create_session_params_h264_vk(&mut self) -> Result<(), VideoError> {
@@ -435,15 +456,18 @@ impl SimpleDecoder {
             })?
             .clone();
 
-        let parser = self.h264_parser.as_ref().ok_or_else(|| {
-            VideoError::BitstreamError("H.264 parser not initialized".into())
-        })?;
-        let sps = parser.sps.as_ref().ok_or_else(|| {
-            VideoError::BitstreamError("No active H.264 SPS".into())
-        })?;
-        let pps = parser.pps.as_ref().or_else(|| {
-            parser.ppss.iter().flatten().next()
-        });
+        let parser = self
+            .h264_parser
+            .as_ref()
+            .ok_or_else(|| VideoError::BitstreamError("H.264 parser not initialized".into()))?;
+        let sps = parser
+            .sps
+            .as_ref()
+            .ok_or_else(|| VideoError::BitstreamError("No active H.264 SPS".into()))?;
+        let pps = parser
+            .pps
+            .as_ref()
+            .or_else(|| parser.ppss.iter().flatten().next());
 
         let h264_sps = unsafe { Self::build_std_sps_from_parsed(sps) };
         let h264_pps = if let Some(pps) = pps {
@@ -460,7 +484,10 @@ impl SimpleDecoder {
         // Set-on-decoder happens after the new one is built so the swap is
         // atomic from the caller's perspective.
         if vk_dec.session_parameters() != vk::VideoSessionParametersKHR::null() {
-            self.ctx.host_device().wait_idle().map_err(VideoError::from)?;
+            self.ctx
+                .host_device()
+                .wait_idle()
+                .map_err(VideoError::from)?;
         }
 
         let descriptor = crate::vulkan::rhi::VideoSessionParametersDescriptor {
@@ -474,11 +501,9 @@ impl SimpleDecoder {
             quality_level: None,
             template: None,
         };
-        let new_params = crate::vulkan::rhi::HostVulkanVideoSessionParameters::new(
-            &session_arc,
-            &descriptor,
-        )
-        .map_err(|e| VideoError::BitstreamError(format!("H.264 session params: {e}")))?;
+        let new_params =
+            crate::vulkan::rhi::HostVulkanVideoSessionParameters::new(&session_arc, &descriptor)
+                .map_err(|e| VideoError::BitstreamError(format!("H.264 session params: {e}")))?;
         vk_dec.set_session_parameters_arc(new_params);
 
         debug!("H.264 session parameters created on VkVideoDecoder");
@@ -524,15 +549,19 @@ impl SimpleDecoder {
             }
         }
         // VPS DecPicBufMgr (from parsed VPS, falls back to SPS values)
-        let max_dpb_minus1 = parsed_sps.map_or(3u8, |s| {
-            s.max_dec_pic_buffering.saturating_sub(1).max(1)
-        });
+        let max_dpb_minus1 =
+            parsed_sps.map_or(3u8, |s| s.max_dec_pic_buffering.saturating_sub(1).max(1));
         let max_reorder = parsed_sps.map_or(0u8, |s| s.max_num_reorder_pics);
         let vps_dec_pic_buf_mgr = if let Some(v) = parsed_vps {
             vk::video::StdVideoH265DecPicBufMgr {
                 max_latency_increase_plus1: {
                     let mut arr = [0u32; 7];
-                    for (i, val) in v.dec_pic_buf_mgr.max_latency_increase_plus1.iter().enumerate() {
+                    for (i, val) in v
+                        .dec_pic_buf_mgr
+                        .max_latency_increase_plus1
+                        .iter()
+                        .enumerate()
+                    {
                         arr[i] = *val as u32;
                     }
                     arr
@@ -550,7 +579,12 @@ impl SimpleDecoder {
         let dec_pic_buf_mgr = vk::video::StdVideoH265DecPicBufMgr {
             max_latency_increase_plus1: parsed_sps.map_or([0u32; 7], |s| {
                 let mut arr = [0u32; 7];
-                for (i, v) in s.dec_pic_buf_mgr.max_latency_increase_plus1.iter().enumerate() {
+                for (i, v) in s
+                    .dec_pic_buf_mgr
+                    .max_latency_increase_plus1
+                    .iter()
+                    .enumerate()
+                {
                     arr[i] = *v as u32;
                 }
                 arr
@@ -558,21 +592,19 @@ impl SimpleDecoder {
             max_dec_pic_buffering_minus1: parsed_sps.map_or([max_dpb_minus1; 7], |s| {
                 s.dec_pic_buf_mgr.max_dec_pic_buffering_minus1
             }),
-            max_num_reorder_pics: parsed_sps.map_or([max_reorder; 7], |s| {
-                s.dec_pic_buf_mgr.max_num_reorder_pics
-            }),
+            max_num_reorder_pics: parsed_sps
+                .map_or([max_reorder; 7], |s| s.dec_pic_buf_mgr.max_num_reorder_pics),
         };
 
-        let general_profile_idc = parsed_sps.map_or(
-            vk::video::STD_VIDEO_H265_PROFILE_IDC_MAIN,
-            |s| match s.profile_tier_level.general_profile_idc {
-                2 => vk::video::STD_VIDEO_H265_PROFILE_IDC_MAIN_10,
-                _ => vk::video::STD_VIDEO_H265_PROFILE_IDC_MAIN,
-            },
-        );
-        let general_level_idc = parsed_sps.map_or(
-            vk::video::STD_VIDEO_H265_LEVEL_IDC_4_1,
-            |s| match s.profile_tier_level.general_level_idc {
+        let general_profile_idc =
+            parsed_sps.map_or(vk::video::STD_VIDEO_H265_PROFILE_IDC_MAIN, |s| {
+                match s.profile_tier_level.general_profile_idc {
+                    2 => vk::video::STD_VIDEO_H265_PROFILE_IDC_MAIN_10,
+                    _ => vk::video::STD_VIDEO_H265_PROFILE_IDC_MAIN,
+                }
+            });
+        let general_level_idc = parsed_sps.map_or(vk::video::STD_VIDEO_H265_LEVEL_IDC_4_1, |s| {
+            match s.profile_tier_level.general_level_idc {
                 h265dec::H265LevelIdc::Level1_0 => vk::video::STD_VIDEO_H265_LEVEL_IDC_1_0,
                 h265dec::H265LevelIdc::Level2_0 => vk::video::STD_VIDEO_H265_LEVEL_IDC_2_0,
                 h265dec::H265LevelIdc::Level2_1 => vk::video::STD_VIDEO_H265_LEVEL_IDC_2_1,
@@ -587,8 +619,8 @@ impl SimpleDecoder {
                 h265dec::H265LevelIdc::Level6_1 => vk::video::STD_VIDEO_H265_LEVEL_IDC_6_1,
                 h265dec::H265LevelIdc::Level6_2 => vk::video::STD_VIDEO_H265_LEVEL_IDC_6_2,
                 _ => vk::video::STD_VIDEO_H265_LEVEL_IDC_4_1,
-            },
-        );
+            }
+        });
         let profile_tier_level = vk::video::StdVideoH265ProfileTierLevel {
             flags: unsafe { std::mem::zeroed() },
             general_profile_idc,
@@ -598,14 +630,11 @@ impl SimpleDecoder {
             flags: vps_flags,
             vps_video_parameter_set_id: parsed_vps
                 .map_or(0, |v| v.vps_video_parameter_set_id as u8),
-            vps_max_sub_layers_minus1: parsed_vps
-                .map_or(0, |v| v.vps_max_sub_layers_minus1 as u8),
+            vps_max_sub_layers_minus1: parsed_vps.map_or(0, |v| v.vps_max_sub_layers_minus1 as u8),
             reserved1: 0,
             reserved2: 0,
-            vps_num_units_in_tick: parsed_vps
-                .map_or(1, |v| v.vps_num_units_in_tick),
-            vps_time_scale: parsed_vps
-                .map_or(30, |v| v.vps_time_scale),
+            vps_num_units_in_tick: parsed_vps.map_or(1, |v| v.vps_num_units_in_tick),
+            vps_time_scale: parsed_vps.map_or(30, |v| v.vps_time_scale),
             vps_num_ticks_poc_diff_one_minus1: parsed_vps
                 .map_or(0, |v| v.vps_num_ticks_poc_diff_one_minus1),
             reserved3: 0,
@@ -616,8 +645,7 @@ impl SimpleDecoder {
 
         // Build SPS from parsed data
         let log2_min_cb = parsed_sps.map_or(0u8, |s| s.log2_min_luma_coding_block_size_minus3);
-        let log2_diff_cb =
-            parsed_sps.map_or(2u8, |s| s.log2_diff_max_min_luma_coding_block_size);
+        let log2_diff_cb = parsed_sps.map_or(2u8, |s| s.log2_diff_max_min_luma_coding_block_size);
         let log2_ctb = log2_min_cb as u32 + 3 + log2_diff_cb as u32;
         let ctb_size = 1u32 << log2_ctb;
         let aligned_w = (width + ctb_size - 1) & !(ctb_size - 1);
@@ -660,8 +688,8 @@ impl SimpleDecoder {
         }
 
         // Build StdVideoH265ShortTermRefPicSet array from parsed SPS
-        let std_strps_vec: Vec<vk::video::StdVideoH265ShortTermRefPicSet> = parsed_sps
-            .map_or_else(Vec::new, |s| {
+        let std_strps_vec: Vec<vk::video::StdVideoH265ShortTermRefPicSet> =
+            parsed_sps.map_or_else(Vec::new, |s| {
                 s.std_short_term_ref_pic_sets
                     .iter()
                     .map(|st| {
@@ -757,8 +785,9 @@ impl SimpleDecoder {
             conf_win_right_offset: parsed_sps
                 .map_or((aligned_w - width) / 2, |s| s.conf_win_right_offset as u32),
             conf_win_top_offset: parsed_sps.map_or(0, |s| s.conf_win_top_offset as u32),
-            conf_win_bottom_offset: parsed_sps
-                .map_or((aligned_h - height) / 2, |s| s.conf_win_bottom_offset as u32),
+            conf_win_bottom_offset: parsed_sps.map_or((aligned_h - height) / 2, |s| {
+                s.conf_win_bottom_offset as u32
+            }),
             pProfileTierLevel: &profile_tier_level,
             pDecPicBufMgr: &dec_pic_buf_mgr,
             pScalingLists: ptr::null(),
@@ -841,8 +870,7 @@ impl SimpleDecoder {
             log2_max_transform_skip_block_size_minus2: parsed_pps
                 .map_or(0, |p| p.log2_max_transform_skip_block_size_minus2),
             log2_sao_offset_scale_luma: parsed_pps.map_or(0, |p| p.log2_sao_offset_scale_luma),
-            log2_sao_offset_scale_chroma: parsed_pps
-                .map_or(0, |p| p.log2_sao_offset_scale_chroma),
+            log2_sao_offset_scale_chroma: parsed_pps.map_or(0, |p| p.log2_sao_offset_scale_chroma),
             pps_act_y_qp_offset_plus5: 0,
             pps_act_cb_qp_offset_plus5: 0,
             pps_act_cr_qp_offset_plus3: 0,
@@ -885,7 +913,10 @@ impl SimpleDecoder {
 
         // VUID-vkDestroyVideoSessionParametersKHR-videoSessionParameters-07212.
         if vk_dec.session_parameters() != vk::VideoSessionParametersKHR::null() {
-            self.ctx.host_device().wait_idle().map_err(VideoError::from)?;
+            self.ctx
+                .host_device()
+                .wait_idle()
+                .map_err(VideoError::from)?;
         }
 
         let vps_array = [h265_vps];
@@ -904,11 +935,9 @@ impl SimpleDecoder {
             quality_level: None,
             template: None,
         };
-        let new_params = crate::vulkan::rhi::HostVulkanVideoSessionParameters::new(
-            &session_arc,
-            &descriptor,
-        )
-        .map_err(|e| VideoError::BitstreamError(format!("H.265 session params: {e}")))?;
+        let new_params =
+            crate::vulkan::rhi::HostVulkanVideoSessionParameters::new(&session_arc, &descriptor)
+                .map_err(|e| VideoError::BitstreamError(format!("H.265 session params: {e}")))?;
         vk_dec.set_session_parameters_arc(new_params);
         debug!("H265 session parameters created on VkVideoDecoder (from parsed SPS/PPS)");
 

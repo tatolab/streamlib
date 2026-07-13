@@ -10,7 +10,7 @@
 
 use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 
 /// Kind of resource bound at a particular slot in a compute kernel's
 /// descriptor set.
@@ -105,12 +105,9 @@ pub struct ComputeKernelDescriptor<'a> {
 ///
 /// Rejects multi-set kernels — only descriptor set 0 is supported, matching
 /// `VulkanComputeKernel`'s contract.
-pub fn derive_bindings_from_spirv(
-    spv: &[u8],
-) -> Result<(Vec<ComputeBindingSpec>, u32)> {
-    let reflection = Reflection::new_from_spirv(spv).map_err(|e| {
-        Error::GpuError(format!("Failed to reflect SPIR-V: {e:?}"))
-    })?;
+pub fn derive_bindings_from_spirv(spv: &[u8]) -> Result<(Vec<ComputeBindingSpec>, u32)> {
+    let reflection = Reflection::new_from_spirv(spv)
+        .map_err(|e| Error::GpuError(format!("Failed to reflect SPIR-V: {e:?}")))?;
 
     let sets = reflection.get_descriptor_sets().map_err(|e| {
         Error::GpuError(format!(
@@ -127,10 +124,8 @@ pub fn derive_bindings_from_spirv(
 
     let mut bindings: Vec<ComputeBindingSpec> = Vec::new();
     if let Some(set0) = sets.get(&0) {
-        let mut entries: Vec<(u32, RDescriptorType)> = set0
-            .iter()
-            .map(|(b, info)| (*b, info.ty))
-            .collect();
+        let mut entries: Vec<(u32, RDescriptorType)> =
+            set0.iter().map(|(b, info)| (*b, info.ty)).collect();
         // Stable order — declaration-order convenience for callers.
         entries.sort_by_key(|(b, _)| *b);
         for (binding, ty) in entries {
@@ -160,9 +155,7 @@ fn spirv_type_to_kind(ty: RDescriptorType) -> Option<ComputeBindingKind> {
     match ty {
         RDescriptorType::STORAGE_BUFFER => Some(ComputeBindingKind::StorageBuffer),
         RDescriptorType::UNIFORM_BUFFER => Some(ComputeBindingKind::UniformBuffer),
-        RDescriptorType::COMBINED_IMAGE_SAMPLER => {
-            Some(ComputeBindingKind::SampledTexture)
-        }
+        RDescriptorType::COMBINED_IMAGE_SAMPLER => Some(ComputeBindingKind::SampledTexture),
         RDescriptorType::SAMPLED_IMAGE => Some(ComputeBindingKind::SampledImage),
         RDescriptorType::STORAGE_IMAGE => Some(ComputeBindingKind::StorageImage),
         _ => None,
@@ -190,8 +183,8 @@ mod tests {
     #[test]
     fn derives_storage_buffers_for_blend_shader() {
         for &n in &[1u32, 2, 4, 8] {
-            let (bindings, push_size) = derive_bindings_from_spirv(blend_spv(n))
-                .expect("derive bindings");
+            let (bindings, push_size) =
+                derive_bindings_from_spirv(blend_spv(n)).expect("derive bindings");
             assert_eq!(bindings.len(), n as usize + 1);
             for spec in &bindings {
                 assert_eq!(spec.kind, ComputeBindingKind::StorageBuffer);

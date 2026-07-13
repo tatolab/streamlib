@@ -7,8 +7,8 @@
 //! buffered records and `fdatasync`s the JSONL file.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -23,7 +23,9 @@ use crate::core::logging::paths::runtime_log_path;
 use crate::core::logging::polyglot_sink::{self, PolyglotLogSink};
 #[cfg(unix)]
 use crate::core::logging::stdio_interceptor::{self, StdioInterceptor};
-use crate::core::logging::worker::{spawn as spawn_worker, WorkerConfig, WorkerHandle, WorkerSignal};
+use crate::core::logging::worker::{
+    WorkerConfig, WorkerHandle, WorkerSignal, spawn as spawn_worker,
+};
 use crate::core::logging::writer::JsonlBatchedWriter;
 
 /// Drops a little later than most — on `Drop`, flushes and `fdatasync`s
@@ -175,9 +177,7 @@ pub fn init_for_tests(config: StreamlibLoggingConfig) -> Result<StreamlibLogging
     Ok(guard)
 }
 
-fn build_components(
-    config: StreamlibLoggingConfig,
-) -> Result<(Dispatch, StreamlibLoggingGuard)> {
+fn build_components(config: StreamlibLoggingConfig) -> Result<(Dispatch, StreamlibLoggingGuard)> {
     let tunables = ResolvedTunables::from_config(&config.tunables);
 
     let (writer, jsonl_path) = match (&config.runtime_id, config.jsonl) {
@@ -267,8 +267,7 @@ fn build_components(
     // bypasses `tracing::*!()` rather than routing through it.
     polyglot_sink::install(Arc::new(PolyglotLogSink::from_worker(&worker)));
 
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let layer = JsonlSinkLayer::new(
         Arc::clone(&worker.queue),
         worker.doorbell.clone(),
@@ -303,4 +302,3 @@ fn install_panic_hook(worker: &WorkerHandle) {
         previous(info);
     }));
 }
-

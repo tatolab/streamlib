@@ -5,7 +5,9 @@
 
 use core::ffi::c_void;
 
-use crate::repr::{DrawCallRepr, DrawIndexedCallRepr, ImageCopyRegionRepr, SemaphoreSubmitInfoRepr};
+use crate::repr::{
+    DrawCallRepr, DrawIndexedCallRepr, ImageCopyRegionRepr, SemaphoreSubmitInfoRepr,
+};
 
 /// Layout version of [`crate::RhiCommandRecorderMethodsVTable`].
 ///
@@ -275,7 +277,6 @@ pub struct RhiCommandRecorderMethodsVTable {
     // -------------------------------------------------------------------------
     // v3 entries (#1066) — swapchain render-path slots.
     // -------------------------------------------------------------------------
-
     /// Record a layout transition on a raw `VkImage` handle —
     /// distinct from v1 [`Self::record_image_barrier`] which takes
     /// a `Texture` PluginAbiObject. Used by `VulkanPresentTarget` to
@@ -455,10 +456,7 @@ mod tests {
             offset_of!(RhiCommandRecorderMethodsVTable, _reserved_padding),
             4
         );
-        assert_eq!(
-            offset_of!(RhiCommandRecorderMethodsVTable, begin),
-            8
-        );
+        assert_eq!(offset_of!(RhiCommandRecorderMethodsVTable, begin), 8);
         assert_eq!(
             offset_of!(RhiCommandRecorderMethodsVTable, record_image_barrier),
             16
@@ -472,24 +470,15 @@ mod tests {
             32
         );
         assert_eq!(
-            offset_of!(
-                RhiCommandRecorderMethodsVTable,
-                record_copy_image_to_buffer
-            ),
+            offset_of!(RhiCommandRecorderMethodsVTable, record_copy_image_to_buffer),
             40
         );
         assert_eq!(
-            offset_of!(
-                RhiCommandRecorderMethodsVTable,
-                submit_signaling_timeline
-            ),
+            offset_of!(RhiCommandRecorderMethodsVTable, submit_signaling_timeline),
             48
         );
         assert_eq!(
-            offset_of!(
-                RhiCommandRecorderMethodsVTable,
-                record_pixel_buffer_barrier
-            ),
+            offset_of!(RhiCommandRecorderMethodsVTable, record_pixel_buffer_barrier),
             56
         );
         assert_eq!(
@@ -508,17 +497,11 @@ mod tests {
             72
         );
         assert_eq!(
-            offset_of!(
-                RhiCommandRecorderMethodsVTable,
-                cmd_begin_dynamic_rendering
-            ),
+            offset_of!(RhiCommandRecorderMethodsVTable, cmd_begin_dynamic_rendering),
             80
         );
         assert_eq!(
-            offset_of!(
-                RhiCommandRecorderMethodsVTable,
-                cmd_end_dynamic_rendering
-            ),
+            offset_of!(RhiCommandRecorderMethodsVTable, cmd_end_dynamic_rendering),
             88
         );
         assert_eq!(
@@ -535,10 +518,7 @@ mod tests {
             112
         );
         // v5 entries.
-        assert_eq!(
-            offset_of!(RhiCommandRecorderMethodsVTable, submit),
-            120
-        );
+        assert_eq!(offset_of!(RhiCommandRecorderMethodsVTable, submit), 120);
         assert_eq!(
             offset_of!(RhiCommandRecorderMethodsVTable, submit_and_wait),
             128

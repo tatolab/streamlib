@@ -17,8 +17,8 @@
 use std::sync::Arc;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
-use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
 use streamlib::sdk::context::GpuContext;
+use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
 use streamlib::sdk::rhi::TextureFormat;
 use streamlib_adapter_abi::{
     StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
@@ -69,12 +69,10 @@ fn skia_read_and_vulkan_read_share_surface() {
     // Single-writer-per-edge per
     // `docs/architecture/adapter-timeline-single-writer.md`.
     let produce_done = Arc::new(
-        HostVulkanTimelineSemaphore::new(host_device.device(), 0)
-            .expect("produce_done timeline"),
+        HostVulkanTimelineSemaphore::new(host_device.device(), 0).expect("produce_done timeline"),
     );
     let consume_done = Arc::new(
-        HostVulkanTimelineSemaphore::new(host_device.device(), 0)
-            .expect("consume_done timeline"),
+        HostVulkanTimelineSemaphore::new(host_device.device(), 0).expect("consume_done timeline"),
     );
     let surface_id = 0xdada_dada;
     inner

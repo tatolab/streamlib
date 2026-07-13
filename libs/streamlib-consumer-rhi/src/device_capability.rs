@@ -351,11 +351,7 @@ pub trait VulkanRhiDevice: Send + Sync {
     /// One-shot synchronous submit; the fence wait is the simple
     /// correct shape because the next consumer GPU work assumes the
     /// new layout is visible.
-    fn acquire_from_foreign(
-        &self,
-        image: vk::Image,
-        target: vk::ImageLayout,
-    ) -> Result<()>;
+    fn acquire_from_foreign(&self, image: vk::Image, target: vk::ImageLayout) -> Result<()>;
 }
 
 #[cfg(test)]

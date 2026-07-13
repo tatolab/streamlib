@@ -21,9 +21,9 @@ use std::sync::Arc;
 
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
-use vulkanalia_vma::{self as vma, Alloc};
 #[cfg(unix)]
 use vulkanalia::vk::KhrExternalMemoryFdExtensionDeviceCommands;
+use vulkanalia_vma::{self as vma, Alloc};
 
 // ---------------------------------------------------------------------------
 // YCbCr format helpers (subset of nvidia_utils/vulkan/ycbcrvkinfo.h)
@@ -358,7 +358,10 @@ impl VkImageResource {
 
     /// Get plane layout using MEMORY_PLANE aspect bits (for DRM format modifier images).
     pub fn get_memory_plane_layout(&self, plane_index: u32) -> Option<vk::SubresourceLayout> {
-        if !self.uses_drm_format_modifier || plane_index >= self.memory_plane_count || plane_index >= 4 {
+        if !self.uses_drm_format_modifier
+            || plane_index >= self.memory_plane_count
+            || plane_index >= 4
+        {
             return None;
         }
         Some(self.memory_plane_layouts[plane_index as usize])
@@ -412,7 +415,9 @@ impl VkImageResource {
 
         // Safety: the caller guarantees the device and memory are valid.
         let fd = unsafe {
-            self.device.get_memory_fd_khr(&get_fd_info).map_err(vk::Result::from)?
+            self.device
+                .get_memory_fd_khr(&get_fd_info)
+                .map_err(vk::Result::from)?
         };
         Ok(fd)
     }
@@ -436,8 +441,7 @@ impl VkImageResource {
                 ..Default::default()
             };
 
-            let (image, allocation) = allocator
-                .create_image(*image_create_info, &alloc_options)?;
+            let (image, allocation) = allocator.create_image(*image_create_info, &alloc_options)?;
 
             let alloc_info = allocator.get_allocation_info(allocation);
             let image_offset = alloc_info.offset;
@@ -446,8 +450,7 @@ impl VkImageResource {
             // Retrieve actual memory property flags from the chosen memory type.
             let mem_props = allocator.get_memory_properties();
             let memory_type_index = alloc_info.memoryType as u32;
-            let actual_flags =
-                mem_props.memory_types[memory_type_index as usize].property_flags;
+            let actual_flags = mem_props.memory_types[memory_type_index as usize].property_flags;
 
             let device_memory_info = DeviceMemoryInfo {
                 memory: alloc_info.deviceMemory,
@@ -626,9 +629,9 @@ impl VkImageResource {
                     array_layer: 0,
                 };
                 unsafe {
-                    self.memory_plane_layouts[p] =
-                        self.device
-                            .get_image_subresource_layout(self.image, &sub_res);
+                    self.memory_plane_layouts[p] = self
+                        .device
+                        .get_image_subresource_layout(self.image, &sub_res);
                 }
             }
 
@@ -640,13 +643,15 @@ impl VkImageResource {
                 {
                     let width = self.image_create_info.extent.width;
                     let height = self.image_create_info.extent.height;
-                    let bytes_per_pixel: u64 =
-                        if mp_info.planes_layout.bpp == YcbcrBpp::Bpp8 { 1 } else { 2 };
+                    let bytes_per_pixel: u64 = if mp_info.planes_layout.bpp == YcbcrBpp::Bpp8 {
+                        1
+                    } else {
+                        2
+                    };
 
                     // Plane 0 (Y): Full resolution
                     if self.memory_plane_layouts[0].row_pitch == 0 {
-                        self.memory_plane_layouts[0].row_pitch =
-                            width as u64 * bytes_per_pixel;
+                        self.memory_plane_layouts[0].row_pitch = width as u64 * bytes_per_pixel;
                     }
                     if self.memory_plane_layouts[0].size == 0 {
                         self.memory_plane_layouts[0].size =
@@ -705,8 +710,7 @@ impl VkImageResource {
 
         if mp_info.is_none() {
             // Not a multi-planar format
-            self.is_linear_image =
-                self.image_create_info.tiling == vk::ImageTiling::LINEAR;
+            self.is_linear_image = self.image_create_info.tiling == vk::ImageTiling::LINEAR;
             if self.is_linear_image {
                 let sub_resource = vk::ImageSubresource {
                     aspect_mask: vk::ImageAspectFlags::COLOR,
@@ -714,9 +718,9 @@ impl VkImageResource {
                     array_layer: 0,
                 };
                 unsafe {
-                    self.layouts[0] =
-                        self.device
-                            .get_image_subresource_layout(self.image, &sub_resource);
+                    self.layouts[0] = self
+                        .device
+                        .get_image_subresource_layout(self.image, &sub_resource);
                 }
             }
             return;
@@ -726,13 +730,10 @@ impl VkImageResource {
         self.query_format_flags_from_mp_info(&mp_info);
 
         // External/non-owning wrapper has no device memory — skip host-visible queries
-        let is_host_visible = self
-            .device_memory
-            .as_ref()
-            .map_or(false, |m| {
-                m.memory_property_flags
-                    .contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
-            });
+        let is_host_visible = self.device_memory.as_ref().map_or(false, |m| {
+            m.memory_property_flags
+                .contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
+        });
 
         if !is_host_visible {
             return;
@@ -804,8 +805,7 @@ impl VkImageResource {
                 array_layer: 0,
             };
             unsafe {
-                self.layouts[0] =
-                    self.device.get_image_subresource_layout(self.image, &sub);
+                self.layouts[0] = self.device.get_image_subresource_layout(self.image, &sub);
             }
         }
     }
@@ -1021,11 +1021,10 @@ impl VkImageResourceView {
             .subresource_range(image_subresource_range);
 
         // Determine whether to skip the combined view
-        let mut skip_combined_view =
-            mp_info.is_some() && !plane_usage_override.is_empty();
+        let mut skip_combined_view = mp_info.is_some() && !plane_usage_override.is_empty();
 
-        let mut usage_create_info = vk::ImageViewUsageCreateInfo::builder()
-            .usage(plane_usage_override);
+        let mut usage_create_info =
+            vk::ImageViewUsageCreateInfo::builder().usage(plane_usage_override);
 
         if !skip_combined_view {
             if mp_info.is_some() {
@@ -1042,8 +1041,7 @@ impl VkImageResourceView {
 
         if !skip_combined_view {
             unsafe {
-                image_views[num_views as usize] =
-                    device.create_image_view(&view_info, None)?;
+                image_views[num_views as usize] = device.create_image_view(&view_info, None)?;
             }
             num_views += 1;
             // Reset pNext
@@ -1071,8 +1069,7 @@ impl VkImageResourceView {
                     | vk::ImageUsageFlags::VIDEO_ENCODE_SRC_KHR);
                 pu
             };
-            let mut plane_usage_info = vk::ImageViewUsageCreateInfo::builder()
-                .usage(plane_usage);
+            let mut plane_usage_info = vk::ImageViewUsageCreateInfo::builder().usage(plane_usage);
 
             // Skip per-plane views when usage is zero (video-only images like DPB)
             if !plane_usage_info.usage.is_empty() {
@@ -1080,13 +1077,11 @@ impl VkImageResourceView {
 
                 // Create Y plane view
                 view_info.format = mp.vk_plane_format[num_planes as usize];
-                view_info.subresource_range.aspect_mask =
-                    vk::ImageAspectFlags::from_bits_truncate(
-                        vk::ImageAspectFlags::PLANE_0.bits() << num_planes,
-                    );
+                view_info.subresource_range.aspect_mask = vk::ImageAspectFlags::from_bits_truncate(
+                    vk::ImageAspectFlags::PLANE_0.bits() << num_planes,
+                );
                 unsafe {
-                    image_views[num_views as usize] =
-                        device.create_image_view(&view_info, None)?;
+                    image_views[num_views as usize] = device.create_image_view(&view_info, None)?;
                 }
                 num_views += 1;
                 num_planes += 1;
@@ -1214,8 +1209,8 @@ impl VkImageResourceView {
         // Build pNext chain for combined view.
         // Chain order (when both present): viewInfo -> ycbcrConversionInfo -> usageCreateInfo
         // SamplerYcbcrConversionInfo doesn't have push_next in ash, so we chain manually.
-        let mut ycbcr_conversion_info = vk::SamplerYcbcrConversionInfo::builder()
-            .conversion(ycbcr_conversion);
+        let mut ycbcr_conversion_info =
+            vk::SamplerYcbcrConversionInfo::builder().conversion(ycbcr_conversion);
         let mut combined_usage_info =
             vk::ImageViewUsageCreateInfo::builder().usage(combined_view_usage);
 
@@ -1224,10 +1219,9 @@ impl VkImageResourceView {
                 // SamplerYcbcrConversionInfoBuilder doesn't support push_next
                 // for ImageViewUsageCreateInfo, so chain via raw pointer.
                 unsafe {
-                    let ycbcr_ptr = &mut ycbcr_conversion_info
-                        as *mut _ as *mut vk::SamplerYcbcrConversionInfo;
-                    (*ycbcr_ptr).next =
-                        &mut combined_usage_info as *mut _ as *const _;
+                    let ycbcr_ptr =
+                        &mut ycbcr_conversion_info as *mut _ as *mut vk::SamplerYcbcrConversionInfo;
+                    (*ycbcr_ptr).next = &mut combined_usage_info as *mut _ as *const _;
                 }
             }
             view_info = view_info.push_next(&mut ycbcr_conversion_info);
@@ -1237,8 +1231,7 @@ impl VkImageResourceView {
 
         // Create combined view (index 0)
         unsafe {
-            image_views[num_views as usize] =
-                device.create_image_view(&view_info, None)?;
+            image_views[num_views as usize] = device.create_image_view(&view_info, None)?;
         }
         num_views += 1;
 
@@ -1265,8 +1258,7 @@ impl VkImageResourceView {
                     | vk::ImageUsageFlags::VIDEO_ENCODE_SRC_KHR);
                 pu
             };
-            let mut plane_usage_info = vk::ImageViewUsageCreateInfo::builder()
-                .usage(plane_usage);
+            let mut plane_usage_info = vk::ImageViewUsageCreateInfo::builder().usage(plane_usage);
             view_info = view_info.push_next(&mut plane_usage_info);
 
             // Create Y plane view
@@ -1288,10 +1280,9 @@ impl VkImageResourceView {
 
             if mp.planes_layout.number_of_extra_planes > 0 {
                 view_info.format = mp.vk_plane_format[num_planes as usize];
-                view_info.subresource_range.aspect_mask =
-                    vk::ImageAspectFlags::from_bits_truncate(
-                        vk::ImageAspectFlags::PLANE_0.bits() << num_planes,
-                    );
+                view_info.subresource_range.aspect_mask = vk::ImageAspectFlags::from_bits_truncate(
+                    vk::ImageAspectFlags::PLANE_0.bits() << num_planes,
+                );
                 unsafe {
                     match device.create_image_view(&view_info, None) {
                         Ok(v) => image_views[num_views as usize] = v,
@@ -1341,8 +1332,7 @@ impl Drop for VkImageResourceView {
         for i in 0..self.num_views as usize {
             if self.image_views[i] != vk::ImageView::null() {
                 unsafe {
-                    self.device
-                        .destroy_image_view(self.image_views[i], None);
+                    self.device.destroy_image_view(self.image_views[i], None);
                 }
                 self.image_views[i] = vk::ImageView::null();
             }
@@ -1378,16 +1368,19 @@ mod tests {
     /// panic on function pointers.
     ///
     /// SAFETY: Caller must never call Vulkan methods on the returned device.
-    unsafe fn dummy_device() -> vulkanalia::Device { unsafe {
-        std::mem::MaybeUninit::uninit().assume_init()
-    }}
+    unsafe fn dummy_device() -> vulkanalia::Device {
+        unsafe { std::mem::MaybeUninit::uninit().assume_init() }
+    }
 
     #[test]
     fn test_ycbcr_vk_format_info_nv12() {
         let info = ycbcr_vk_format_info(vk::Format::G8_B8R8_2PLANE_420_UNORM);
         assert!(info.is_some());
         let info = info.unwrap();
-        assert_eq!(info.planes_layout.layout, YcbcrPlanesLayout::SemiPlanarCbCrInterleaved);
+        assert_eq!(
+            info.planes_layout.layout,
+            YcbcrPlanesLayout::SemiPlanarCbCrInterleaved
+        );
         assert_eq!(info.planes_layout.bpp, YcbcrBpp::Bpp8);
         assert!(info.planes_layout.secondary_plane_subsampled_x);
         assert!(info.planes_layout.secondary_plane_subsampled_y);
@@ -1411,7 +1404,10 @@ mod tests {
         assert!(info.is_some());
         let info = info.unwrap();
         assert_eq!(info.planes_layout.number_of_extra_planes, 2);
-        assert_eq!(info.planes_layout.layout, YcbcrPlanesLayout::PlanarCbCrBlockJoined);
+        assert_eq!(
+            info.planes_layout.layout,
+            YcbcrPlanesLayout::PlanarCbCrBlockJoined
+        );
     }
 
     #[test]
@@ -1428,7 +1424,8 @@ mod tests {
         assert_eq!(nv12.planes_layout.bpp, YcbcrBpp::Bpp8);
 
         // 10-bit format should report as 16-bit (non-8bpp treated as 16bpp)
-        let p010 = ycbcr_vk_format_info(vk::Format::G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16).unwrap();
+        let p010 =
+            ycbcr_vk_format_info(vk::Format::G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16).unwrap();
         assert_ne!(p010.planes_layout.bpp, YcbcrBpp::Bpp8);
     }
 
@@ -1455,7 +1452,6 @@ mod tests {
             queue_family_index_count: 0,
             queue_family_indices: std::ptr::null(),
             initial_layout: vk::ImageLayout::UNDEFINED,
-
         };
 
         // Same or smaller should be compatible
@@ -1516,7 +1512,11 @@ mod tests {
             flags: vk::ImageCreateFlags::empty(),
             image_type: vk::ImageType::_2D,
             format: vk::Format::G8_B8R8_2PLANE_420_UNORM,
-            extent: vk::Extent3D { width: 1920, height: 1080, depth: 1 },
+            extent: vk::Extent3D {
+                width: 1920,
+                height: 1080,
+                depth: 1,
+            },
             mip_levels: 1,
             array_layers: 1,
             samples: vk::SampleCountFlags::_1,
@@ -1533,7 +1533,13 @@ mod tests {
             unsafe { dummy_device() },
             &base_info,
             vk::Image::null(),
-            0, 0, None, None, None, 0, 0,
+            0,
+            0,
+            None,
+            None,
+            None,
+            0,
+            0,
         ));
         assert!(!r1.uses_drm_format_modifier);
 
@@ -1542,7 +1548,13 @@ mod tests {
             unsafe { dummy_device() },
             &base_info,
             vk::Image::null(),
-            0, 0, None, None, None, 1, 2,
+            0,
+            0,
+            None,
+            None,
+            None,
+            1,
+            2,
         ));
         assert!(r2.uses_drm_format_modifier);
         assert_eq!(r2.drm_format_modifier, 1);
@@ -1557,7 +1569,13 @@ mod tests {
             unsafe { dummy_device() },
             &drm_info,
             vk::Image::null(),
-            0, 0, None, None, None, 0, 0,
+            0,
+            0,
+            None,
+            None,
+            None,
+            0,
+            0,
         ));
         assert!(r3.uses_drm_format_modifier);
     }
@@ -1570,7 +1588,11 @@ mod tests {
             flags: vk::ImageCreateFlags::empty(),
             image_type: vk::ImageType::_2D,
             format: vk::Format::R8G8B8A8_UNORM,
-            extent: vk::Extent3D { width: 64, height: 64, depth: 1 },
+            extent: vk::Extent3D {
+                width: 64,
+                height: 64,
+                depth: 1,
+            },
             mip_levels: 1,
             array_layers: 1,
             samples: vk::SampleCountFlags::_1,
@@ -1605,7 +1627,11 @@ mod tests {
                 flags: vk::ImageCreateFlags::empty(),
                 image_type: vk::ImageType::_2D,
                 format: vk::Format::G8_B8R8_2PLANE_420_UNORM,
-                extent: vk::Extent3D { width: 1920, height: 1080, depth: 1 },
+                extent: vk::Extent3D {
+                    width: 1920,
+                    height: 1080,
+                    depth: 1,
+                },
                 mip_levels: 1,
                 array_layers: 1,
                 samples: vk::SampleCountFlags::_1,
@@ -1622,19 +1648,24 @@ mod tests {
             allocator: None,
             allocation: None,
             layouts: [vk::SubresourceLayout::default(); 3],
-            memory_plane_layouts: [vk::SubresourceLayout {
-                offset: 0,
-                size: 1920 * 1080,
-                row_pitch: 1920,
-                array_pitch: 0,
-                depth_pitch: 0,
-            }, vk::SubresourceLayout {
-                offset: 1920 * 1080,
-                size: 1920 * 540,
-                row_pitch: 1920,
-                array_pitch: 0,
-                depth_pitch: 0,
-            }, vk::SubresourceLayout::default(), vk::SubresourceLayout::default()],
+            memory_plane_layouts: [
+                vk::SubresourceLayout {
+                    offset: 0,
+                    size: 1920 * 1080,
+                    row_pitch: 1920,
+                    array_pitch: 0,
+                    depth_pitch: 0,
+                },
+                vk::SubresourceLayout {
+                    offset: 1920 * 1080,
+                    size: 1920 * 540,
+                    row_pitch: 1920,
+                    array_pitch: 0,
+                    depth_pitch: 0,
+                },
+                vk::SubresourceLayout::default(),
+                vk::SubresourceLayout::default(),
+            ],
             drm_format_modifier: 1,
             memory_plane_count: 2,
             is_linear_image: false,

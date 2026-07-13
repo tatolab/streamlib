@@ -93,9 +93,9 @@ pub fn substitute(schema_value: &mut Value, table: &mut SentinelTable) -> anyhow
         None => return Ok(()),
     };
 
-    let imports_obj = imports.as_object().ok_or_else(|| {
-        anyhow::anyhow!("`imports` must be a map of alias → SchemaIdent record")
-    })?;
+    let imports_obj = imports
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("`imports` must be a map of alias → SchemaIdent record"))?;
 
     let mut alias_to_sentinel: BTreeMap<String, String> = BTreeMap::new();
     for (alias, ident_value) in imports_obj {
@@ -118,10 +118,7 @@ pub fn substitute(schema_value: &mut Value, table: &mut SentinelTable) -> anyhow
             anyhow::anyhow!("`definitions` must be a map (schema-level invariant)")
         })?;
         for sentinel in alias_to_sentinel.values() {
-            defs_obj.insert(
-                sentinel.clone(),
-                serde_json::json!({ "properties": {} }),
-            );
+            defs_obj.insert(sentinel.clone(), serde_json::json!({ "properties": {} }));
         }
     }
 
@@ -137,9 +134,7 @@ fn parse_schema_ident_from_value(value: &Value, alias: &str) -> anyhow::Result<S
         version: String,
     }
     let raw: Raw = serde_json::from_value(value.clone()).map_err(|e| {
-        anyhow::anyhow!(
-            "imports[{alias}] must be a {{org, package, type, version}} record: {e}"
-        )
+        anyhow::anyhow!("imports[{alias}] must be a {{org, package, type, version}} record: {e}")
     })?;
 
     let version = SemVer::deserialize_from_str(&raw.version)?;
@@ -355,7 +350,11 @@ pub fn restore_python(code: &str, table: &SentinelTable) -> String {
     let mut import_block = String::new();
     for (module_path, types) in &imports_by_module {
         let imports: Vec<&str> = types.iter().map(|s| s.as_str()).collect();
-        import_block.push_str(&format!("from {} import {}\n", module_path, imports.join(", ")));
+        import_block.push_str(&format!(
+            "from {} import {}\n",
+            module_path,
+            imports.join(", ")
+        ));
     }
     if !import_block.is_empty() {
         import_block.push('\n');
@@ -659,7 +658,8 @@ mod private_semver {
     impl DeserializeFromStr for SemVer {
         fn deserialize_from_str(s: &str) -> anyhow::Result<Self> {
             let yaml = format!("\"{}\"", s);
-            serde_yaml::from_str::<SemVer>(&yaml).map_err(|e| anyhow::anyhow!("invalid semver `{s}`: {e}"))
+            serde_yaml::from_str::<SemVer>(&yaml)
+                .map_err(|e| anyhow::anyhow!("invalid semver `{s}`: {e}"))
         }
     }
 }

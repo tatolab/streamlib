@@ -5,11 +5,11 @@
 
 use crate::vulkan::video::video_context::VideoError;
 use crate::vulkan::video::vk_video_encoder::vk_video_gop_structure::{
-    GopPosition, FrameType as GopFrameType,
+    FrameType as GopFrameType, GopPosition,
 };
 
-use super::config::{EncodePacket, FrameType};
 use super::SimpleEncoder;
+use super::config::{EncodePacket, FrameType};
 
 /// Entry in the B-frame reorder buffer.
 pub(crate) struct ReorderEntry {
@@ -32,45 +32,47 @@ impl SimpleEncoder {
         &mut self,
         nv12_data: &[u8],
         timestamp_ns: Option<i64>,
-    ) -> Result<Vec<EncodePacket>, VideoError> { unsafe {
-        let display_pts = self.frame_counter;
-        let frame_type = self.decide_frame_type();
+    ) -> Result<Vec<EncodePacket>, VideoError> {
+        unsafe {
+            let display_pts = self.frame_counter;
+            let frame_type = self.decide_frame_type();
 
-        if frame_type == FrameType::B {
-            // Buffer the B-frame — it needs a future reference that hasn't
-            // been encoded yet.
-            self.reorder_buffer.push(ReorderEntry {
-                nv12_data: nv12_data.to_vec(),
-                display_pts,
-                timestamp_ns,
-            });
+            if frame_type == FrameType::B {
+                // Buffer the B-frame — it needs a future reference that hasn't
+                // been encoded yet.
+                self.reorder_buffer.push(ReorderEntry {
+                    nv12_data: nv12_data.to_vec(),
+                    display_pts,
+                    timestamp_ns,
+                });
+                self.frame_counter += 1;
+                return Ok(Vec::new());
+            }
+
+            // Non-B frame (IDR/I/P): encode it first (it's the future reference
+            // for any buffered B-frames), then encode the buffered B-frames.
+            let mut packets = Vec::new();
+
+            // Encode the reference frame
+            let pkt = self.upload_and_encode(nv12_data, frame_type, display_pts, timestamp_ns)?;
+            packets.push(pkt);
             self.frame_counter += 1;
-            return Ok(Vec::new());
+
+            // Now encode buffered B-frames in display order
+            let buffered: Vec<ReorderEntry> = self.reorder_buffer.drain(..).collect();
+            for entry in buffered {
+                let b_pkt = self.upload_and_encode(
+                    &entry.nv12_data,
+                    FrameType::B,
+                    entry.display_pts,
+                    entry.timestamp_ns,
+                )?;
+                packets.push(b_pkt);
+            }
+
+            Ok(packets)
         }
-
-        // Non-B frame (IDR/I/P): encode it first (it's the future reference
-        // for any buffered B-frames), then encode the buffered B-frames.
-        let mut packets = Vec::new();
-
-        // Encode the reference frame
-        let pkt = self.upload_and_encode(nv12_data, frame_type, display_pts, timestamp_ns)?;
-        packets.push(pkt);
-        self.frame_counter += 1;
-
-        // Now encode buffered B-frames in display order
-        let buffered: Vec<ReorderEntry> = self.reorder_buffer.drain(..).collect();
-        for entry in buffered {
-            let b_pkt = self.upload_and_encode(
-                &entry.nv12_data,
-                FrameType::B,
-                entry.display_pts,
-                entry.timestamp_ns,
-            )?;
-            packets.push(b_pkt);
-        }
-
-        Ok(packets)
-    }}
+    }
 
     /// Flush any remaining frames.
     ///
@@ -85,7 +87,12 @@ impl SimpleEncoder {
         let buffered: Vec<ReorderEntry> = self.reorder_buffer.drain(..).collect();
         for entry in buffered {
             let pkt = unsafe {
-                self.upload_and_encode(&entry.nv12_data, FrameType::P, entry.display_pts, entry.timestamp_ns)?
+                self.upload_and_encode(
+                    &entry.nv12_data,
+                    FrameType::P,
+                    entry.display_pts,
+                    entry.timestamp_ns,
+                )?
             };
             packets.push(pkt);
         }
@@ -101,24 +108,16 @@ impl SimpleEncoder {
             self.gop_state = Default::default();
             // Advance past the IDR position so next call continues from 1
             let mut pos = GopPosition::new(0);
-            self.gop.get_position_in_gop(
-                &mut self.gop_state,
-                &mut pos,
-                true,
-                u32::MAX,
-            );
+            self.gop
+                .get_position_in_gop(&mut self.gop_state, &mut pos, true, u32::MAX);
             return FrameType::Idr;
         }
 
         let first_frame = self.frame_counter == 0;
         let mut pos = GopPosition::new(self.gop_state.position_in_input_order);
 
-        self.gop.get_position_in_gop(
-            &mut self.gop_state,
-            &mut pos,
-            first_frame,
-            u32::MAX,
-        );
+        self.gop
+            .get_position_in_gop(&mut self.gop_state, &mut pos, first_frame, u32::MAX);
 
         match pos.picture_type {
             GopFrameType::Idr => FrameType::Idr,

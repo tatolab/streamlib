@@ -52,7 +52,6 @@ pub struct SurfaceStoreVTable {
     // -------------------------------------------------------------------------
     // Handle lifetime
     // -------------------------------------------------------------------------
-
     /// Bump the refcount on a `SurfaceStore` handle.
     /// `Arc::increment_strong_count(handle as *const SurfaceStoreInner)`.
     pub clone_handle: unsafe extern "C" fn(handle: *const c_void),
@@ -65,7 +64,6 @@ pub struct SurfaceStoreVTable {
     // -------------------------------------------------------------------------
     // Cross-platform method dispatch
     // -------------------------------------------------------------------------
-
     /// Connect to the surface-share service (XPC on macOS, Unix
     /// socket on Linux). On success returns 0; on failure writes a
     /// UTF-8 error into `err_buf` and returns non-zero.
@@ -153,7 +151,6 @@ pub struct SurfaceStoreVTable {
     // host side (they wrap DMA-BUF / OPAQUE_FD surface-share IPC).
     // Non-Linux hosts ship stubs that return non-zero with a clean
     // error message.
-
     /// Register a texture for cross-process sharing. `texture` is a
     /// `*const Texture` PluginAbiObject pointer; `produce_done_handle` and
     /// `consume_done_handle` are opaque `Arc<HostVulkanTimelineSemaphore>`

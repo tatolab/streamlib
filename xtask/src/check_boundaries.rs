@@ -84,7 +84,10 @@ pub fn scan_all(project_root: &Path) -> Result<CheckReport> {
     check_vulkanalia_uses_workspace_fork(project_root, &mut violations, &mut files_scanned)?;
     check_streamlib_engine_confined(project_root, &mut violations, &mut files_scanned)?;
     check_streamlib_top_level_shortcut(project_root, &mut violations, &mut files_scanned)?;
-    Ok(CheckReport { violations, files_scanned })
+    Ok(CheckReport {
+        violations,
+        files_scanned,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -157,9 +160,7 @@ fn walk_rs(project_root: &Path) -> impl Iterator<Item = PathBuf> + '_ {
                 .into_iter()
                 .filter_map(|e| e.ok())
                 .filter(|e| e.file_type().is_file())
-                .filter(|e| {
-                    e.path().extension().and_then(|x| x.to_str()) == Some("rs")
-                })
+                .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("rs"))
                 .map(|e| e.into_path())
                 .collect::<Vec<_>>()
         })
@@ -175,9 +176,7 @@ fn walk_cargo_toml(project_root: &Path) -> impl Iterator<Item = PathBuf> + '_ {
                 .into_iter()
                 .filter_map(|e| e.ok())
                 .filter(|e| e.file_type().is_file())
-                .filter(|e| {
-                    e.path().file_name().and_then(|x| x.to_str()) == Some("Cargo.toml")
-                })
+                .filter(|e| e.path().file_name().and_then(|x| x.to_str()) == Some("Cargo.toml"))
                 .map(|e| e.into_path())
                 .collect::<Vec<_>>()
         })
@@ -194,8 +193,7 @@ fn rel_to_root<'a>(path: &'a Path, project_root: &Path) -> &'a Path {
 
 const CHECK_NO_ASH: &str = "no-ash";
 
-const ASH_RATIONALE: &str =
-    "ash is fully replaced by vulkanalia (#252); reintroducing it splits the workspace's GPU API surface";
+const ASH_RATIONALE: &str = "ash is fully replaced by vulkanalia (#252); reintroducing it splits the workspace's GPU API surface";
 
 fn check_no_ash(
     project_root: &Path,
@@ -204,8 +202,8 @@ fn check_no_ash(
 ) -> Result<()> {
     for path in walk_rs(project_root) {
         *files_scanned += 1;
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("read {}", path.display()))?;
+        let content =
+            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         for (idx, line) in content.lines().enumerate() {
             let trimmed = line.trim_start();
             if trimmed.starts_with("use ash::") || trimmed.starts_with("extern crate ash;") {
@@ -213,7 +211,11 @@ fn check_no_ash(
                     path: rel_to_root(&path, project_root).to_path_buf(),
                     line_no: idx + 1,
                     line_text: line.to_string(),
-                    matched_pattern: trimmed.split_whitespace().take(2).collect::<Vec<_>>().join(" "),
+                    matched_pattern: trimmed
+                        .split_whitespace()
+                        .take(2)
+                        .collect::<Vec<_>>()
+                        .join(" "),
                     check: CHECK_NO_ASH,
                     rationale: ASH_RATIONALE,
                 });
@@ -222,8 +224,8 @@ fn check_no_ash(
     }
     for path in walk_cargo_toml(project_root) {
         *files_scanned += 1;
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("read {}", path.display()))?;
+        let content =
+            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         let parsed: toml::Value = match toml::from_str(&content) {
             Ok(v) => v,
             Err(_) => continue,
@@ -250,8 +252,7 @@ fn check_no_ash(
 
 const CHECK_VULKANALIA: &str = "vulkanalia-only-in-rhi";
 
-const VULKANALIA_RATIONALE: &str =
-    "raw vulkanalia must stay inside the RHI / consumer-rhi / adapter crates and a small set of documented-exception files";
+const VULKANALIA_RATIONALE: &str = "raw vulkanalia must stay inside the RHI / consumer-rhi / adapter crates and a small set of documented-exception files";
 
 const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
     // Core RHI host side — owns every privileged Vulkan primitive.
@@ -323,8 +324,8 @@ fn check_vulkanalia_confined(
         if matches_allow(rel, VULKANALIA_ALLOWLIST) {
             continue;
         }
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("read {}", path.display()))?;
+        let content =
+            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         for (idx, line) in content.lines().enumerate() {
             let trimmed = line.trim_start();
             // Only flag actual `use vulkanalia` import statements; not
@@ -359,8 +360,8 @@ fn check_vulkanalia_confined(
         if matches_allow(rel, VULKANALIA_CARGO_DEP_ALLOWLIST) {
             continue;
         }
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("read {}", path.display()))?;
+        let content =
+            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         let parsed: toml::Value = match toml::from_str(&content) {
             Ok(v) => v,
             Err(_) => continue,
@@ -447,10 +448,10 @@ fn check_cdylib_and_adapter_runtime_deps(
             continue;
         }
         *files_scanned += 1;
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("read {}", path.display()))?;
-        let parsed: toml::Value = toml::from_str(&content)
-            .with_context(|| format!("parse {}", path.display()))?;
+        let content =
+            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        let parsed: toml::Value =
+            toml::from_str(&content).with_context(|| format!("parse {}", path.display()))?;
         for (section, dep_name, line_no) in iter_dep_entries(&parsed, &content) {
             if dep_name == "streamlib" && !section_is_dev_only(&section) {
                 violations.push(Violation {
@@ -478,8 +479,7 @@ fn section_is_dev_only(section: &str) -> bool {
 
 const CHECK_PRIVILEGED_VK: &str = "no-privileged-vk-outside-rhi";
 
-const PRIVILEGED_VK_RATIONALE: &str =
-    "vkAllocateMemory / vkGetMemoryFdKHR / vkCreateComputePipelines are privileged primitives owned by the host RHI";
+const PRIVILEGED_VK_RATIONALE: &str = "vkAllocateMemory / vkGetMemoryFdKHR / vkCreateComputePipelines are privileged primitives owned by the host RHI";
 
 /// Privileged vulkanalia method names (snake_case form). A bare `\.<name>\(`
 /// match is enough — these are unambiguous when called on a Device handle.
@@ -548,8 +548,8 @@ fn check_privileged_vk_calls(
         if matches_allow(rel, PRIVILEGED_VK_ALLOWLIST) {
             continue;
         }
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("read {}", path.display()))?;
+        let content =
+            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         for (idx, line) in content.lines().enumerate() {
             let trimmed = line.trim_start();
             if trimmed.starts_with("//") {
@@ -590,13 +590,15 @@ fn check_vulkanalia_uses_workspace_fork(
     for path in walk_cargo_toml(project_root) {
         *files_scanned += 1;
         let rel = rel_to_root(&path, project_root);
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("read {}", path.display()))?;
+        let content =
+            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         let parsed: toml::Value = match toml::from_str(&content) {
             Ok(v) => v,
             Err(_) => continue,
         };
-        for (section, dep_name, dep_value, line_no) in iter_dep_entries_with_values(&parsed, &content) {
+        for (section, dep_name, dep_value, line_no) in
+            iter_dep_entries_with_values(&parsed, &content)
+        {
             if !is_vulkanalia_dep(&dep_name) {
                 continue;
             }
@@ -643,8 +645,7 @@ fn is_vulkanalia_dep(name: &str) -> bool {
 
 const CHECK_STREAMLIB_ENGINE: &str = "streamlib-engine-only-in-sdk-or-engine";
 
-const STREAMLIB_ENGINE_RATIONALE: &str =
-    "direct streamlib_engine::* imports must stay in the engine itself or in libs/streamlib-sdk/src/lib.rs (the SDK facade); consumer code routes through streamlib::* (with engine extensions via streamlib::sdk::engine::*)";
+const STREAMLIB_ENGINE_RATIONALE: &str = "direct streamlib_engine::* imports must stay in the engine itself or in libs/streamlib-sdk/src/lib.rs (the SDK facade); consumer code routes through streamlib::* (with engine extensions via streamlib::sdk::engine::*)";
 
 const STREAMLIB_ENGINE_ALLOWLIST: &[AllowEntry] = &[
     AllowEntry {
@@ -687,8 +688,7 @@ const STREAMLIB_ENGINE_ALLOWLIST: &[AllowEntry] = &[
 
 const CHECK_TOP_LEVEL_SHORTCUT: &str = "streamlib-top-level-shortcut-forbidden";
 
-const TOP_LEVEL_SHORTCUT_RATIONALE: &str =
-    "use streamlib::sdk::* (or sdk::engine::* / engine_internal::* for engine-side access); top-level streamlib::Foo shortcuts hide the boundary tier";
+const TOP_LEVEL_SHORTCUT_RATIONALE: &str = "use streamlib::sdk::* (or sdk::engine::* / engine_internal::* for engine-side access); top-level streamlib::Foo shortcuts hide the boundary tier";
 
 const TOP_LEVEL_SHORTCUT_ALLOWLIST: &[AllowEntry] = &[
     AllowEntry {
@@ -725,8 +725,8 @@ fn check_streamlib_top_level_shortcut(
         if matches_allow(rel, TOP_LEVEL_SHORTCUT_ALLOWLIST) {
             continue;
         }
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("read {}", path.display()))?;
+        let content =
+            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         for (line_no, line) in content.lines().enumerate() {
             let trimmed = line.trim_start();
             if trimmed.starts_with("//") {
@@ -789,8 +789,8 @@ fn check_streamlib_engine_confined(
         if matches_allow(rel, STREAMLIB_ENGINE_ALLOWLIST) {
             continue;
         }
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("read {}", path.display()))?;
+        let content =
+            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         for (line_no, line) in content.lines().enumerate() {
             // Skip comment-only lines (doc-comment intra-doc links are not
             // type-checked but still encourage future authors to reach for
@@ -839,10 +839,7 @@ fn dep_is_workspace_inherited(value: &toml::Value) -> bool {
 /// - `[target.<cfg>.dependencies]`
 /// - `[target.<cfg>.dev-dependencies]`
 /// - `[target.<cfg>.build-dependencies]`
-fn iter_dep_entries(
-    toml_value: &toml::Value,
-    raw_text: &str,
-) -> Vec<(String, String, usize)> {
+fn iter_dep_entries(toml_value: &toml::Value, raw_text: &str) -> Vec<(String, String, usize)> {
     iter_dep_entries_with_values(toml_value, raw_text)
         .into_iter()
         .map(|(section, name, _value, line)| (section, name, line))
@@ -864,7 +861,12 @@ fn iter_dep_entries_with_values(
         if let Some(deps) = table.get(section_name).and_then(|v| v.as_table()) {
             for (dep_name, value) in deps {
                 let line = find_dep_line(raw_text, section_name, dep_name);
-                out.push((section_name.to_string(), dep_name.clone(), value.clone(), line));
+                out.push((
+                    section_name.to_string(),
+                    dep_name.clone(),
+                    value.clone(),
+                    line,
+                ));
             }
         }
     }
@@ -936,11 +938,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         // Top-level Cargo.toml so walk_cargo_toml has something to find at
         // root if we choose to add deps there.
-        write_fixture(
-            dir.path(),
-            "Cargo.toml",
-            "[workspace]\nmembers = []\n",
-        );
+        write_fixture(dir.path(), "Cargo.toml", "[workspace]\nmembers = []\n");
         dir
     }
 
@@ -1006,8 +1004,16 @@ mod tests {
             "[package]\nname = \"streamlib\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nahash = \"0.8\"\n",
         );
         let report = scan_all(dir.path()).unwrap();
-        let no_ash: Vec<_> = report.violations.iter().filter(|v| v.check == CHECK_NO_ASH).collect();
-        assert!(no_ash.is_empty(), "ahash should not match ash: {:?}", no_ash);
+        let no_ash: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_NO_ASH)
+            .collect();
+        assert!(
+            no_ash.is_empty(),
+            "ahash should not match ash: {:?}",
+            no_ash
+        );
     }
 
     // ----- Check 2: vulkanalia confined -----
@@ -1022,7 +1028,10 @@ mod tests {
         );
         let report = scan_all(dir.path()).unwrap();
         assert!(
-            report.violations.iter().any(|v| v.check == CHECK_VULKANALIA),
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_VULKANALIA),
             "expected vulkanalia confinement violation, got {:?}",
             report.violations,
         );
@@ -1037,7 +1046,11 @@ mod tests {
             "use vulkanalia::vk;\n",
         );
         let report = scan_all(dir.path()).unwrap();
-        let vk: Vec<_> = report.violations.iter().filter(|v| v.check == CHECK_VULKANALIA).collect();
+        let vk: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_VULKANALIA)
+            .collect();
         assert!(vk.is_empty(), "vulkanalia in RHI should pass: {:?}", vk);
     }
 
@@ -1050,8 +1063,16 @@ mod tests {
             "use vulkanalia::vk;\n",
         );
         let report = scan_all(dir.path()).unwrap();
-        let vk: Vec<_> = report.violations.iter().filter(|v| v.check == CHECK_VULKANALIA).collect();
-        assert!(vk.is_empty(), "vulkanalia in consumer-rhi should pass: {:?}", vk);
+        let vk: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_VULKANALIA)
+            .collect();
+        assert!(
+            vk.is_empty(),
+            "vulkanalia in consumer-rhi should pass: {:?}",
+            vk
+        );
     }
 
     #[test]
@@ -1063,8 +1084,16 @@ mod tests {
             "use vulkanalia::vk;\n",
         );
         let report = scan_all(dir.path()).unwrap();
-        let vk: Vec<_> = report.violations.iter().filter(|v| v.check == CHECK_VULKANALIA).collect();
-        assert!(vk.is_empty(), "vulkanalia in adapter crate should pass: {:?}", vk);
+        let vk: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_VULKANALIA)
+            .collect();
+        assert!(
+            vk.is_empty(),
+            "vulkanalia in adapter crate should pass: {:?}",
+            vk
+        );
     }
 
     #[test]
@@ -1084,7 +1113,10 @@ vulkanalia = "0.20"
         );
         let report = scan_all(dir.path()).unwrap();
         assert!(
-            report.violations.iter().any(|v| v.check == CHECK_VULKANALIA),
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_VULKANALIA),
             "expected vulkanalia Cargo dep violation, got {:?}",
             report.violations,
         );
@@ -1106,8 +1138,16 @@ vulkanalia = "0.20"
 "#,
         );
         let report = scan_all(dir.path()).unwrap();
-        let vk: Vec<_> = report.violations.iter().filter(|v| v.check == CHECK_VULKANALIA).collect();
-        assert!(vk.is_empty(), "vulkanalia dep in adapter crate should pass: {:?}", vk);
+        let vk: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_VULKANALIA)
+            .collect();
+        assert!(
+            vk.is_empty(),
+            "vulkanalia dep in adapter crate should pass: {:?}",
+            vk
+        );
     }
 
     // ----- Check 5: vulkanalia uses workspace fork -----
@@ -1129,7 +1169,10 @@ vulkanalia = "0.35"
         );
         let report = scan_all(dir.path()).unwrap();
         assert!(
-            report.violations.iter().any(|v| v.check == CHECK_VULKANALIA_FORK),
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_VULKANALIA_FORK),
             "expected workspace-fork violation, got {:?}",
             report.violations,
         );
@@ -1152,7 +1195,10 @@ vulkanalia-vma = "0.4"
         );
         let report = scan_all(dir.path()).unwrap();
         assert!(
-            report.violations.iter().any(|v| v.check == CHECK_VULKANALIA_FORK),
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_VULKANALIA_FORK),
             "expected workspace-fork violation for vulkanalia-vma, got {:?}",
             report.violations,
         );
@@ -1177,7 +1223,10 @@ vulkanalia = { git = "https://github.com/KhronosGroup/Vulkan-Headers" }
         );
         let report = scan_all(dir.path()).unwrap();
         assert!(
-            report.violations.iter().any(|v| v.check == CHECK_VULKANALIA_FORK),
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_VULKANALIA_FORK),
             "expected workspace-fork violation for git dep, got {:?}",
             report.violations,
         );
@@ -1199,8 +1248,16 @@ vulkanalia = { workspace = true }
 "#,
         );
         let report = scan_all(dir.path()).unwrap();
-        let fork: Vec<_> = report.violations.iter().filter(|v| v.check == CHECK_VULKANALIA_FORK).collect();
-        assert!(fork.is_empty(), "{{ workspace = true }} should pass: {:?}", fork);
+        let fork: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_VULKANALIA_FORK)
+            .collect();
+        assert!(
+            fork.is_empty(),
+            "{{ workspace = true }} should pass: {:?}",
+            fork
+        );
     }
 
     #[test]
@@ -1219,7 +1276,11 @@ vulkanalia.workspace = true
 "#,
         );
         let report = scan_all(dir.path()).unwrap();
-        let fork: Vec<_> = report.violations.iter().filter(|v| v.check == CHECK_VULKANALIA_FORK).collect();
+        let fork: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_VULKANALIA_FORK)
+            .collect();
         assert!(fork.is_empty(), "dotted-key form should pass: {:?}", fork);
     }
 
@@ -1238,7 +1299,11 @@ vulkanalia.workspace = true
             "use vulkanalia::vk;\n",
         );
         let report = scan_all(dir.path()).unwrap();
-        let vk: Vec<_> = report.violations.iter().filter(|v| v.check == CHECK_VULKANALIA).collect();
+        let vk: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_VULKANALIA)
+            .collect();
         assert!(vk.is_empty(), "vulkanalia in tests/ should pass: {:?}", vk);
     }
 
@@ -1261,7 +1326,10 @@ streamlib = { path = "../streamlib" }
         );
         let report = scan_all(dir.path()).unwrap();
         assert!(
-            report.violations.iter().any(|v| v.check == CHECK_CDYLIB_DEPS),
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_CDYLIB_DEPS),
             "expected cdylib runtime-dep violation, got {:?}",
             report.violations,
         );
@@ -1284,7 +1352,10 @@ streamlib = { path = "../streamlib" }
         );
         let report = scan_all(dir.path()).unwrap();
         assert!(
-            report.violations.iter().any(|v| v.check == CHECK_CDYLIB_DEPS),
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_CDYLIB_DEPS),
             "expected adapter target runtime-dep violation, got {:?}",
             report.violations,
         );
@@ -1306,8 +1377,16 @@ streamlib = { path = "../streamlib" }
 "#,
         );
         let report = scan_all(dir.path()).unwrap();
-        let cdy: Vec<_> = report.violations.iter().filter(|v| v.check == CHECK_CDYLIB_DEPS).collect();
-        assert!(cdy.is_empty(), "streamlib in dev-deps should pass: {:?}", cdy);
+        let cdy: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_CDYLIB_DEPS)
+            .collect();
+        assert!(
+            cdy.is_empty(),
+            "streamlib in dev-deps should pass: {:?}",
+            cdy
+        );
     }
 
     // ----- Check 4: privileged vk calls -----
@@ -1322,7 +1401,10 @@ streamlib = { path = "../streamlib" }
         );
         let report = scan_all(dir.path()).unwrap();
         assert!(
-            report.violations.iter().any(|v| v.check == CHECK_PRIVILEGED_VK),
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_PRIVILEGED_VK),
             "expected privileged-vk violation, got {:?}",
             report.violations,
         );
@@ -1338,7 +1420,10 @@ streamlib = { path = "../streamlib" }
         );
         let report = scan_all(dir.path()).unwrap();
         assert!(
-            report.violations.iter().any(|v| v.check == CHECK_PRIVILEGED_VK),
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_PRIVILEGED_VK),
             "expected privileged-vk violation in adapter crate, got {:?}",
             report.violations,
         );
@@ -1353,8 +1438,16 @@ streamlib = { path = "../streamlib" }
             "fn f() { unsafe { self.device.allocate_memory(&info, None).unwrap(); } }\n",
         );
         let report = scan_all(dir.path()).unwrap();
-        let pv: Vec<_> = report.violations.iter().filter(|v| v.check == CHECK_PRIVILEGED_VK).collect();
-        assert!(pv.is_empty(), "privileged call in RHI should pass: {:?}", pv);
+        let pv: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_PRIVILEGED_VK)
+            .collect();
+        assert!(
+            pv.is_empty(),
+            "privileged call in RHI should pass: {:?}",
+            pv
+        );
     }
 
     #[test]
@@ -1366,8 +1459,16 @@ streamlib = { path = "../streamlib" }
             "fn f() { unsafe { self.device.allocate_memory(&alloc_info, None).unwrap(); } }\n",
         );
         let report = scan_all(dir.path()).unwrap();
-        let pv: Vec<_> = report.violations.iter().filter(|v| v.check == CHECK_PRIVILEGED_VK).collect();
-        assert!(pv.is_empty(), "consumer-rhi import-side carve-out should pass: {:?}", pv);
+        let pv: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_PRIVILEGED_VK)
+            .collect();
+        assert!(
+            pv.is_empty(),
+            "consumer-rhi import-side carve-out should pass: {:?}",
+            pv
+        );
     }
 
     // ----- Cdylib tightening (#572) -----
@@ -1388,7 +1489,10 @@ streamlib = { path = "../streamlib" }
         );
         let report = scan_all(dir.path()).unwrap();
         assert!(
-            report.violations.iter().any(|v| v.check == CHECK_VULKANALIA),
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_VULKANALIA),
             "expected vulkanalia confinement violation in python-native cdylib, got {:?}",
             report.violations,
         );
@@ -1404,7 +1508,10 @@ streamlib = { path = "../streamlib" }
         );
         let report = scan_all(dir.path()).unwrap();
         assert!(
-            report.violations.iter().any(|v| v.check == CHECK_VULKANALIA),
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_VULKANALIA),
             "expected vulkanalia confinement violation in deno-native cdylib, got {:?}",
             report.violations,
         );
@@ -1427,7 +1534,10 @@ vulkanalia = { workspace = true }
         );
         let report = scan_all(dir.path()).unwrap();
         assert!(
-            report.violations.iter().any(|v| v.check == CHECK_VULKANALIA),
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_VULKANALIA),
             "expected vulkanalia Cargo-dep violation in python-native cdylib, got {:?}",
             report.violations,
         );
@@ -1450,7 +1560,10 @@ vulkanalia = { workspace = true }
         );
         let report = scan_all(dir.path()).unwrap();
         assert!(
-            report.violations.iter().any(|v| v.check == CHECK_VULKANALIA),
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_VULKANALIA),
             "expected vulkanalia Cargo-dep violation in deno-native cdylib, got {:?}",
             report.violations,
         );
@@ -1466,7 +1579,10 @@ vulkanalia = { workspace = true }
         );
         let report = scan_all(dir.path()).unwrap();
         assert!(
-            report.violations.iter().any(|v| v.check == CHECK_PRIVILEGED_VK),
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_PRIVILEGED_VK),
             "expected privileged-vk violation in python-native cdylib, got {:?}",
             report.violations,
         );
@@ -1482,7 +1598,10 @@ vulkanalia = { workspace = true }
         );
         let report = scan_all(dir.path()).unwrap();
         assert!(
-            report.violations.iter().any(|v| v.check == CHECK_PRIVILEGED_VK),
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_PRIVILEGED_VK),
             "expected privileged-vk violation in deno-native cdylib, got {:?}",
             report.violations,
         );
@@ -1503,7 +1622,15 @@ vulkanalia = { workspace = true }
             "// use ash::vk; — kept for historical reference only\n",
         );
         let report = scan_all(dir.path()).unwrap();
-        let no_ash: Vec<_> = report.violations.iter().filter(|v| v.check == CHECK_NO_ASH).collect();
-        assert!(no_ash.is_empty(), "commented import should not match: {:?}", no_ash);
+        let no_ash: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_NO_ASH)
+            .collect();
+        assert!(
+            no_ash.is_empty(),
+            "commented import should not match: {:?}",
+            no_ash
+        );
     }
 }

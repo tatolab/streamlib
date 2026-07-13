@@ -19,15 +19,17 @@ use std::ffi::c_void;
 #[cfg(target_os = "linux")]
 use std::sync::Arc;
 
-use super::super::shared::handle_as_gpu_context;
 use super::super::super::run_host_extern_c;
 use super::super::super::shared::wire::{slice_from_raw, write_err};
+use super::super::shared::handle_as_gpu_context;
 
 // -------------------------------------------------------------------------
 // RhiCommandQueue Arc-handle lifecycle + create_command_buffer
 // -------------------------------------------------------------------------
 
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clone_rhi_command_queue(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clone_rhi_command_queue(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_lim_clone_rhi_command_queue",
         || {
@@ -45,7 +47,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clo
     )
 }
 
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_rhi_command_queue(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_rhi_command_queue(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_lim_drop_rhi_command_queue",
         || {
@@ -96,24 +100,18 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_cre
             // `Arc::into_raw(Arc<RhiCommandQueueInner>)`-shaped; the
             // Arc's strong count keeps the inner alive for the duration.
             let inner = unsafe {
-                &*(queue_handle
-                    as *const crate::core::rhi::command_queue::RhiCommandQueueInner)
+                &*(queue_handle as *const crate::core::rhi::command_queue::RhiCommandQueueInner)
             };
             let result = inner.inner.create_command_buffer();
             match result {
                 Ok(platform_cb) => {
                     let cb_inner =
-                        crate::core::rhi::command_buffer::CommandBufferInner {
-                            inner: platform_cb,
-                        };
+                        crate::core::rhi::command_buffer::CommandBufferInner { inner: platform_cb };
                     let cb = crate::core::rhi::CommandBuffer::from_inner(cb_inner);
                     // SAFETY: out_cb points at caller-allocated stack
                     // storage for a CommandBuffer value.
                     unsafe {
-                        std::ptr::write(
-                            out_cb as *mut crate::core::rhi::CommandBuffer,
-                            cb,
-                        );
+                        std::ptr::write(out_cb as *mut crate::core::rhi::CommandBuffer, cb);
                     }
                     0
                 }
@@ -131,7 +129,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_cre
 // CommandBuffer lifecycle: drop + consume-semantics commits (v7)
 // -------------------------------------------------------------------------
 
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_command_buffer(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_command_buffer(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_lim_drop_command_buffer",
         || {
@@ -150,7 +150,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_dro
     )
 }
 
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_commit_command_buffer(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_commit_command_buffer(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_lim_commit_command_buffer",
         || {
@@ -163,9 +165,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_com
             // double-free. We move-out of the Box so the platform
             // commit can take ownership of the inner by-value.
             let cb_box = unsafe {
-                Box::from_raw(
-                    handle as *mut crate::core::rhi::command_buffer::CommandBufferInner,
-                )
+                Box::from_raw(handle as *mut crate::core::rhi::command_buffer::CommandBufferInner)
             };
             let cb_inner = *cb_box;
             cb_inner.inner.commit();
@@ -174,7 +174,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_com
     )
 }
 
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_commit_and_wait_command_buffer(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_commit_and_wait_command_buffer(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_lim_commit_and_wait_command_buffer",
         || {
@@ -183,9 +185,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_com
             }
             // SAFETY: see `host_gpu_lim_commit_command_buffer`.
             let cb_box = unsafe {
-                Box::from_raw(
-                    handle as *mut crate::core::rhi::command_buffer::CommandBufferInner,
-                )
+                Box::from_raw(handle as *mut crate::core::rhi::command_buffer::CommandBufferInner)
             };
             let cb_inner = *cb_box;
             cb_inner.inner.commit_and_wait();
@@ -210,8 +210,8 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_cop
             // concurrent reference. src/dst are
             // `*const Texture` (layout locked by `texture_layout` test).
             unsafe {
-                let cb_inner = &mut *(handle
-                    as *mut crate::core::rhi::command_buffer::CommandBufferInner);
+                let cb_inner =
+                    &mut *(handle as *mut crate::core::rhi::command_buffer::CommandBufferInner);
                 let src_tex = &*(src as *const crate::core::rhi::Texture);
                 let dst_tex = &*(dst as *const crate::core::rhi::Texture);
                 // Re-use the existing platform-specific copy_texture
@@ -221,10 +221,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_cop
                     any(feature = "backend-metal", any(target_os = "macos", target_os = "ios"))
                 ))]
                 {
-                    cb_inner.inner.copy_texture(
-                        &src_tex.host_inner().inner,
-                        &dst_tex.host_inner().inner,
-                    );
+                    cb_inner
+                        .inner
+                        .copy_texture(&src_tex.host_inner().inner, &dst_tex.host_inner().inner);
                 }
                 #[cfg(any(
                     feature = "backend-vulkan",
@@ -238,10 +237,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_cop
                 }
                 #[cfg(target_os = "windows")]
                 {
-                    cb_inner.inner.copy_texture(
-                        &src_tex.host_inner().inner,
-                        &dst_tex.host_inner().inner,
-                    );
+                    cb_inner
+                        .inner
+                        .copy_texture(&src_tex.host_inner().inner, &dst_tex.host_inner().inner);
                 }
             }
         },
@@ -264,11 +262,21 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_com
         "host_gpu_lim_command_queue",
         || -> i32 {
             let Some(gpu) = (unsafe { handle_as_gpu_context(gpu_handle) }) else {
-                write_err("command_queue: null gpu handle", err_buf, err_buf_cap, err_len);
+                write_err(
+                    "command_queue: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
                 return 1;
             };
             if out_queue.is_null() {
-                write_err("command_queue: null out_queue", err_buf, err_buf_cap, err_len);
+                write_err(
+                    "command_queue: null out_queue",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
                 return 1;
             }
             // `gpu.command_queue()` returns `&RhiCommandQueue` (a borrow
@@ -278,10 +286,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_com
             let owned = gpu.command_queue().clone();
             // SAFETY: out_queue points at caller-allocated stack storage.
             unsafe {
-                std::ptr::write(
-                    out_queue as *mut crate::core::rhi::RhiCommandQueue,
-                    owned,
-                );
+                std::ptr::write(out_queue as *mut crate::core::rhi::RhiCommandQueue, owned);
             }
             0
         },
@@ -321,10 +326,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_cre
                 Ok(cb) => {
                     // SAFETY: out_cb points at caller-allocated storage.
                     unsafe {
-                        std::ptr::write(
-                            out_cb as *mut crate::core::rhi::CommandBuffer,
-                            cb,
-                        );
+                        std::ptr::write(out_cb as *mut crate::core::rhi::CommandBuffer, cb);
                     }
                     0
                 }
@@ -489,9 +491,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_bli
                 );
                 return 1;
             }
-            let dst_pb = unsafe {
-                &*(dst_pixel_buffer as *const crate::core::rhi::PixelBuffer)
-            };
+            let dst_pb = unsafe { &*(dst_pixel_buffer as *const crate::core::rhi::PixelBuffer) };
             let src_io = src_iosurface_ref as crate::apple::corevideo_ffi::IOSurfaceRef;
             match unsafe { gpu.blit_copy_iosurface(src_io, dst_pb, width, height) } {
                 Ok(()) => 0,

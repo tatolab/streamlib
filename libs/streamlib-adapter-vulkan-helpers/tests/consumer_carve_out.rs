@@ -167,8 +167,7 @@ fn consumer_device_concurrent_submit_serializes_real_work() {
                 .map_err(|e| format!("allocate_command_buffers: {e}"))?[0];
             let begin = vk::CommandBufferBeginInfo::builder()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-            unsafe { dev.begin_command_buffer(cmd, &begin) }
-                .map_err(|e| format!("begin: {e}"))?;
+            unsafe { dev.begin_command_buffer(cmd, &begin) }.map_err(|e| format!("begin: {e}"))?;
             let pattern: u32 = 0xCAFE_0000 | tid;
             unsafe {
                 dev.cmd_fill_buffer(
@@ -180,15 +179,15 @@ fn consumer_device_concurrent_submit_serializes_real_work() {
                 );
             }
             unsafe { dev.end_command_buffer(cmd) }.map_err(|e| format!("end: {e}"))?;
-            let fence = unsafe {
-                dev.create_fence(&vk::FenceCreateInfo::builder(), None)
-            }
-            .map_err(|e| format!("create_fence: {e}"))?;
+            let fence = unsafe { dev.create_fence(&vk::FenceCreateInfo::builder(), None) }
+                .map_err(|e| format!("create_fence: {e}"))?;
             let cmd_info = vk::CommandBufferSubmitInfo::builder()
                 .command_buffer(cmd)
                 .build();
             let cmd_infos = [cmd_info];
-            let submit = vk::SubmitInfo2::builder().command_buffer_infos(&cmd_infos).build();
+            let submit = vk::SubmitInfo2::builder()
+                .command_buffer_infos(&cmd_infos)
+                .build();
             let submits = [submit];
             unsafe {
                 <ConsumerVulkanDevice as VulkanRhiDevice>::submit_to_queue(
@@ -353,9 +352,8 @@ fn consumer_device_drop_with_live_imports_emits_leak_warning() {
     // subscriber is set as the *thread* default so other concurrent
     // tests don't compete for the global default.
     let captured = Arc::new(warn_capture::CapturedWarns(Mutex::new(Vec::new())));
-    let subscriber = tracing_subscriber::registry().with(warn_capture::WarnCaptureLayer::new(
-        Arc::clone(&captured),
-    ));
+    let subscriber = tracing_subscriber::registry()
+        .with(warn_capture::WarnCaptureLayer::new(Arc::clone(&captured)));
     let _guard = tracing::subscriber::set_default(subscriber);
 
     // Allocate an exportable HOST_VISIBLE staging buffer on the host
@@ -378,8 +376,8 @@ fn consumer_device_drop_with_live_imports_emits_leak_warning() {
         .size(64 * 64 * 4)
         .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST)
         .sharing_mode(vk::SharingMode::EXCLUSIVE);
-    let probe = unsafe { consumer.device().create_buffer(&probe_info, None) }
-        .expect("probe buffer");
+    let probe =
+        unsafe { consumer.device().create_buffer(&probe_info, None) }.expect("probe buffer");
     let mem_req = unsafe { consumer.device().get_buffer_memory_requirements(probe) };
     unsafe { consumer.device().destroy_buffer(probe, None) };
 

@@ -19,8 +19,8 @@ use std::sync::Arc;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
 use skia_safe::{Color, Color4f, Paint, Point};
-use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
 use streamlib::sdk::context::GpuContext;
+use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
 use streamlib::sdk::rhi::TextureFormat;
 use streamlib_adapter_abi::{
     StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
@@ -70,12 +70,10 @@ fn round_trip_skia_canvas() {
     // `acquire_write` is exercised below, so `produce_done` tracks
     // the assertion.
     let produce_done = Arc::new(
-        HostVulkanTimelineSemaphore::new(host_device.device(), 0)
-            .expect("produce_done timeline"),
+        HostVulkanTimelineSemaphore::new(host_device.device(), 0).expect("produce_done timeline"),
     );
     let consume_done = Arc::new(
-        HostVulkanTimelineSemaphore::new(host_device.device(), 0)
-            .expect("consume_done timeline"),
+        HostVulkanTimelineSemaphore::new(host_device.device(), 0).expect("consume_done timeline"),
     );
     let timeline = Arc::clone(&produce_done);
     let surface_id = 0x5e1a_5e1a;
@@ -252,7 +250,11 @@ fn host_readback_bgra(
                 .build(),
         )
         .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
-        .image_extent(vk::Extent3D { width, height, depth: 1 })
+        .image_extent(vk::Extent3D {
+            width,
+            height,
+            depth: 1,
+        })
         .build();
     let regions = [region];
     unsafe {

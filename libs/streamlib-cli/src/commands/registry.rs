@@ -26,7 +26,10 @@ pub fn use_registry(tree_ref: &str) -> Result<()> {
     let consumer_root = std::env::current_dir().context("resolve current working directory")?;
     let report = registry::use_registry(&consumer_root, tree_ref, &UseRegistryOptions::default())?;
 
-    println!("Configured consumer against registry: {}", report.registry.base_url);
+    println!(
+        "Configured consumer against registry: {}",
+        report.registry.base_url
+    );
     println!();
     println!("cargo — wrote {}", report.cargo_config_path.display());
     match &report.cargo_replacement {
@@ -41,7 +44,10 @@ pub fn use_registry(tree_ref: &str) -> Result<()> {
     println!();
     println!("registry seed — export so `.slpkg` resolution + the build orchestrator's");
     println!("UV_INDEX derivation + in-process schema codegen all key on this one tree:");
-    println!("  export STREAMLIB_REGISTRY_URL=\"{}\"", report.registry.base_url);
+    println!(
+        "  export STREAMLIB_REGISTRY_URL=\"{}\"",
+        report.registry.base_url
+    );
     println!();
     println!("pypi (uv) — the orchestrator derives this from the seed above; for a direct");
     println!("`uv` invocation set it explicitly:");
@@ -49,7 +55,9 @@ pub fn use_registry(tree_ref: &str) -> Result<()> {
     println!();
     if report.npm_needs_serve {
         println!("npm — a local `file://` tree has no npm registry story; serve it:");
-        println!("  streamlib registry serve {tree_ref}   # serves npm on localhost + writes .npmrc");
+        println!(
+            "  streamlib registry serve {tree_ref}   # serves npm on localhost + writes .npmrc"
+        );
     } else {
         println!("npm — add to .npmrc:");
         println!("  @tatolab:registry={}", report.npm_registry_url);

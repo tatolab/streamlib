@@ -29,8 +29,8 @@ mod vulkan_compute_kernel;
 mod vulkan_graphics_kernel;
 
 pub use color_converter::{
-    pixel_format_color_kind, ColorConverterPushConstants, RhiColorConverter, SourceLayoutInfo,
-    COLOR_CONVERTER_PUSH_CONSTANT_SIZE,
+    COLOR_CONVERTER_PUSH_CONSTANT_SIZE, ColorConverterPushConstants, RhiColorConverter,
+    SourceLayoutInfo, pixel_format_color_kind,
 };
 pub use command_recorder::{ImageCopyRegion, RhiCommandRecorder};
 pub use compute_kernel_descriptor::{
@@ -42,8 +42,8 @@ pub use graphics_kernel_descriptor::{
     GraphicsBindingKind, GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor,
     GraphicsPipelineState, GraphicsPushConstants, GraphicsShaderStage, GraphicsShaderStageFlags,
     GraphicsStage, IndexType, MultisampleState, OffscreenColorTarget, OffscreenDraw, PolygonMode,
-    PrimitiveTopology, RasterizationState, ScissorRect, VertexAttributeFormat, VertexInputAttribute,
-    VertexInputBinding, VertexInputRate, VertexInputState, Viewport,
+    PrimitiveTopology, RasterizationState, ScissorRect, VertexAttributeFormat,
+    VertexInputAttribute, VertexInputBinding, VertexInputRate, VertexInputState, Viewport,
 };
 pub use pipeline_flags::{VulkanAccess, VulkanStage};
 pub use pixel_buffer::{PixelBuffer, PixelBufferPoolId};
@@ -51,9 +51,7 @@ pub use pooled_texture_handle::{PooledTextureHandle, TexturePoolDescriptor};
 pub use storage_buffer::StorageBuffer;
 pub use texture::{NativeTextureHandle, Texture, TextureDescriptor};
 pub use texture_registration::TextureRegistration;
-pub use texture_ring::{
-    TextureRing, TextureRingSlot, TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES,
-};
+pub use texture_ring::{TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES, TextureRing, TextureRingSlot};
 pub use vulkan_compute_kernel::VulkanComputeKernel;
 pub use vulkan_graphics_kernel::VulkanGraphicsKernel;
 
@@ -79,8 +77,8 @@ pub(crate) use graphics_kernel_descriptor::stage_graphics_kernel_descriptor;
 /// texture handle with the same limited-access vtable the host's
 /// `clone_texture` slot was minted against, so `Texture::Drop` reaches
 /// the matching `drop_texture`.
-pub(crate) fn host_gpu_context_limited_access_vtable(
-) -> *const streamlib_plugin_abi::GpuContextLimitedAccessVTable {
+pub(crate) fn host_gpu_context_limited_access_vtable()
+-> *const streamlib_plugin_abi::GpuContextLimitedAccessVTable {
     crate::plugin::host_callbacks()
         .map(|c| c.gpu_context_limited_access_vtable)
         .filter(|p| !p.is_null())

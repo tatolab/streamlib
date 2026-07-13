@@ -27,11 +27,13 @@ pub use audio_clock::{
     SoftwareAudioClock,
 };
 pub use audio_clock_shim::AudioClockShim;
-pub use runtime_ops_shim::RuntimeOpsShim;
 #[cfg(target_os = "linux")]
 pub use compute_kernel_bridge::ComputeKernelBridge;
 #[cfg(target_os = "linux")]
 pub use cpu_readback_bridge::{CpuReadbackBridge, CpuReadbackCopyDirection};
+#[cfg(target_os = "linux")]
+pub use gpu_context::GpuCapabilitiesSnapshot;
+pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};
 #[cfg(target_os = "linux")]
 pub use graphics_kernel_bridge::{
     BlendFactorWire, BlendOpWire, CullModeWire, DepthCompareOpWire, DepthFormatWire,
@@ -39,27 +41,22 @@ pub use graphics_kernel_bridge::{
     GraphicsBindingValue, GraphicsDrawSpec, GraphicsIndexBufferBinding, GraphicsKernelBridge,
     GraphicsKernelRegisterDecl, GraphicsKernelRunDraw, GraphicsPipelineStateWire,
     GraphicsVertexBufferBinding, IndexTypeWire, PolygonModeWire, PrimitiveTopologyWire,
-    ScissorRectWire, VertexAttributeFormatWire, VertexInputAttributeDecl,
-    VertexInputBindingDecl, VertexInputRateWire, ViewportWire,
+    ScissorRectWire, VertexAttributeFormatWire, VertexInputAttributeDecl, VertexInputBindingDecl,
+    VertexInputRateWire, ViewportWire,
 };
 #[cfg(target_os = "linux")]
 pub use ray_tracing_kernel_bridge::{
-    BlasRegisterDecl, RayTracingBindingDecl, RayTracingBindingKindWire,
-    RayTracingBindingValue, RayTracingKernelBridge, RayTracingKernelRegisterDecl,
-    RayTracingKernelRunDispatch, RayTracingShaderGroupWire, RayTracingShaderStageWire,
-    RayTracingStageDecl, TlasInstanceDeclWire, TlasRegisterDecl,
-    RAY_TRACING_STAGE_INDEX_NONE,
+    BlasRegisterDecl, RAY_TRACING_STAGE_INDEX_NONE, RayTracingBindingDecl,
+    RayTracingBindingKindWire, RayTracingBindingValue, RayTracingKernelBridge,
+    RayTracingKernelRegisterDecl, RayTracingKernelRunDispatch, RayTracingShaderGroupWire,
+    RayTracingShaderStageWire, RayTracingStageDecl, TlasInstanceDeclWire, TlasRegisterDecl,
 };
-pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};
-#[cfg(target_os = "linux")]
-pub use gpu_context::GpuCapabilitiesSnapshot;
-pub use runtime_context::{
-    RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
-};
+pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+pub use runtime_ops_shim::RuntimeOpsShim;
 pub use surface_store::SurfaceStore;
 pub use texture_pool::*;
 pub use texture_registration::TextureRegistration;
 pub use texture_ring::{
-    TextureRing, TextureRingInner, TextureRingSlot, TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES,
+    TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES, TextureRing, TextureRingInner, TextureRingSlot,
 };
 pub use time_context::TimeContext;

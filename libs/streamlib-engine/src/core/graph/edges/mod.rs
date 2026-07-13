@@ -14,7 +14,7 @@ pub use input_link_port_ref::InputLinkPortRef;
 pub use link::Link;
 pub use link_capacity::LinkCapacity;
 pub use link_direction::LinkDirection;
-pub use link_port_markers::{input, output, InputPortMarker, OutputPortMarker, PortMarker};
+pub use link_port_markers::{InputPortMarker, OutputPortMarker, PortMarker, input, output};
 pub use link_state::LinkState;
 pub use link_unique_id::LinkUniqueId;
 pub use output_link_port_ref::OutputLinkPortRef;

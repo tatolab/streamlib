@@ -373,9 +373,7 @@ impl IccAccumulator {
         }
         let slot = &mut self.fragments[fragment.seq as usize - 1];
         if slot.is_some() {
-            return Err(JpegError::Unsupported(
-                "APP2 ICC: duplicate fragment seq",
-            ));
+            return Err(JpegError::Unsupported("APP2 ICC: duplicate fragment seq"));
         }
         *slot = Some(fragment.data.to_vec());
         Ok(())
@@ -463,7 +461,9 @@ impl JpegColorInfo {
     /// rejected with a typed error (the 4-component decode path
     /// doesn't exist today).
     pub fn resolve(&self) -> JpegResult<ResolvedJpegColor> {
-        use streamlib_plugin_sdk::sdk::color::{MatrixId, PrimariesId, RangeId, ResolvedColorInfo, TransferId};
+        use streamlib_plugin_sdk::sdk::color::{
+            MatrixId, PrimariesId, RangeId, ResolvedColorInfo, TransferId,
+        };
 
         let jfif_default = ResolvedColorInfo {
             primaries: PrimariesId::Bt709,
@@ -885,4 +885,3 @@ mod tests {
         payload
     }
 }
-

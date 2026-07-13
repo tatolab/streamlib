@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use streamlib_idents::{PackageRef, SemVer};
 
 use crate::core::streamlib_home::get_streamlib_data_dir;
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 
 /// Format-version of the on-disk installed-package manifest. Bumped when the
 /// shape changes; mismatched files are reset on load with a warning. Pre-#717

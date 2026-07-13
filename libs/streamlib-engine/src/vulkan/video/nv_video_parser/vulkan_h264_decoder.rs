@@ -218,7 +218,10 @@ impl<'a> BitstreamReader<'a> {
 
     /// Number of bits remaining.
     pub fn available_bits(&self) -> usize {
-        self.data.len().saturating_mul(8).saturating_sub(self.bit_offset)
+        self.data
+            .len()
+            .saturating_mul(8)
+            .saturating_sub(self.bit_offset)
     }
 
     /// Read `n` bits as a u32 (max 32).
@@ -274,11 +277,7 @@ impl<'a> BitstreamReader<'a> {
         let k = code_num as u32;
         // Mapping: code_num -> (-1)^(code_num+1) * Ceil(code_num/2)
         let val = ((k + 1) / 2) as i32;
-        if k % 2 == 0 {
-            -val
-        } else {
-            val
-        }
+        if k % 2 == 0 { -val } else { val }
     }
 
     /// Peek at next n bits without consuming them.
@@ -870,25 +869,82 @@ struct MaxDpbMbsLimit {
 }
 
 const MBS_LEVEL_LIMITS: &[MaxDpbMbsLimit] = &[
-    MaxDpbMbsLimit { level: H264LevelIdc::Level1_0, max_dpb_mbs: 396 },
-    MaxDpbMbsLimit { level: H264LevelIdc::Level1_1, max_dpb_mbs: 900 },
-    MaxDpbMbsLimit { level: H264LevelIdc::Level1_2, max_dpb_mbs: 2376 },
-    MaxDpbMbsLimit { level: H264LevelIdc::Level1_3, max_dpb_mbs: 2376 },
-    MaxDpbMbsLimit { level: H264LevelIdc::Level2_0, max_dpb_mbs: 2376 },
-    MaxDpbMbsLimit { level: H264LevelIdc::Level2_1, max_dpb_mbs: 4752 },
-    MaxDpbMbsLimit { level: H264LevelIdc::Level2_2, max_dpb_mbs: 8100 },
-    MaxDpbMbsLimit { level: H264LevelIdc::Level3_0, max_dpb_mbs: 8100 },
-    MaxDpbMbsLimit { level: H264LevelIdc::Level3_1, max_dpb_mbs: 18000 },
-    MaxDpbMbsLimit { level: H264LevelIdc::Level3_2, max_dpb_mbs: 20480 },
-    MaxDpbMbsLimit { level: H264LevelIdc::Level4_0, max_dpb_mbs: 32768 },
-    MaxDpbMbsLimit { level: H264LevelIdc::Level4_1, max_dpb_mbs: 32768 },
-    MaxDpbMbsLimit { level: H264LevelIdc::Level4_2, max_dpb_mbs: 34816 },
-    MaxDpbMbsLimit { level: H264LevelIdc::Level5_0, max_dpb_mbs: 110400 },
-    MaxDpbMbsLimit { level: H264LevelIdc::Level5_1, max_dpb_mbs: 184320 },
-    MaxDpbMbsLimit { level: H264LevelIdc::Level5_2, max_dpb_mbs: 184320 },
-    MaxDpbMbsLimit { level: H264LevelIdc::Level6_0, max_dpb_mbs: 696320 },
-    MaxDpbMbsLimit { level: H264LevelIdc::Level6_1, max_dpb_mbs: 696320 },
-    MaxDpbMbsLimit { level: H264LevelIdc::Level6_2, max_dpb_mbs: 696320 },
+    MaxDpbMbsLimit {
+        level: H264LevelIdc::Level1_0,
+        max_dpb_mbs: 396,
+    },
+    MaxDpbMbsLimit {
+        level: H264LevelIdc::Level1_1,
+        max_dpb_mbs: 900,
+    },
+    MaxDpbMbsLimit {
+        level: H264LevelIdc::Level1_2,
+        max_dpb_mbs: 2376,
+    },
+    MaxDpbMbsLimit {
+        level: H264LevelIdc::Level1_3,
+        max_dpb_mbs: 2376,
+    },
+    MaxDpbMbsLimit {
+        level: H264LevelIdc::Level2_0,
+        max_dpb_mbs: 2376,
+    },
+    MaxDpbMbsLimit {
+        level: H264LevelIdc::Level2_1,
+        max_dpb_mbs: 4752,
+    },
+    MaxDpbMbsLimit {
+        level: H264LevelIdc::Level2_2,
+        max_dpb_mbs: 8100,
+    },
+    MaxDpbMbsLimit {
+        level: H264LevelIdc::Level3_0,
+        max_dpb_mbs: 8100,
+    },
+    MaxDpbMbsLimit {
+        level: H264LevelIdc::Level3_1,
+        max_dpb_mbs: 18000,
+    },
+    MaxDpbMbsLimit {
+        level: H264LevelIdc::Level3_2,
+        max_dpb_mbs: 20480,
+    },
+    MaxDpbMbsLimit {
+        level: H264LevelIdc::Level4_0,
+        max_dpb_mbs: 32768,
+    },
+    MaxDpbMbsLimit {
+        level: H264LevelIdc::Level4_1,
+        max_dpb_mbs: 32768,
+    },
+    MaxDpbMbsLimit {
+        level: H264LevelIdc::Level4_2,
+        max_dpb_mbs: 34816,
+    },
+    MaxDpbMbsLimit {
+        level: H264LevelIdc::Level5_0,
+        max_dpb_mbs: 110400,
+    },
+    MaxDpbMbsLimit {
+        level: H264LevelIdc::Level5_1,
+        max_dpb_mbs: 184320,
+    },
+    MaxDpbMbsLimit {
+        level: H264LevelIdc::Level5_2,
+        max_dpb_mbs: 184320,
+    },
+    MaxDpbMbsLimit {
+        level: H264LevelIdc::Level6_0,
+        max_dpb_mbs: 696320,
+    },
+    MaxDpbMbsLimit {
+        level: H264LevelIdc::Level6_1,
+        max_dpb_mbs: 696320,
+    },
+    MaxDpbMbsLimit {
+        level: H264LevelIdc::Level6_2,
+        max_dpb_mbs: 696320,
+    },
 ];
 
 /// Derive MaxDpbFrames from SPS level and picture dimensions.
@@ -915,8 +971,7 @@ pub fn derive_max_dpb_frames(sps: &SeqParameterSet) -> u8 {
         if level == limit.level {
             let pic_size = pic_width_in_mbs * frame_height_in_mbs;
             if pic_size > 0 {
-                max_dpb_frames =
-                    (limit.max_dpb_mbs / pic_size).min(16) as u8;
+                max_dpb_frames = (limit.max_dpb_mbs / pic_size).min(16) as u8;
             }
             break;
         }
@@ -1075,7 +1130,10 @@ impl VulkanH264Decoder {
         ) {
             sps.chroma_format_idc = reader.ue();
             if sps.chroma_format_idc < 0 || sps.chroma_format_idc > 3 {
-                tracing::warn!("Invalid chroma_format_idc in SPS ({})", sps.chroma_format_idc);
+                tracing::warn!(
+                    "Invalid chroma_format_idc in SPS ({})",
+                    sps.chroma_format_idc
+                );
                 return None;
             }
             if sps.chroma_format_idc == 3 {
@@ -1088,7 +1146,11 @@ impl VulkanH264Decoder {
             if sps.seq_scaling_list.scaling_matrix_present_flag {
                 for i in 0..8 {
                     let scaling_list_type = if i < 6 {
-                        Self::parse_scaling_list(reader, &mut sps.seq_scaling_list.scaling_list_4x4[i], 16)
+                        Self::parse_scaling_list(
+                            reader,
+                            &mut sps.seq_scaling_list.scaling_list_4x4[i],
+                            16,
+                        )
                     } else {
                         Self::parse_scaling_list(
                             reader,
@@ -1142,10 +1204,7 @@ impl VulkanH264Decoder {
 
         sps.max_num_ref_frames = reader.ue() as u32;
         if sps.max_num_ref_frames > 16 {
-            tracing::warn!(
-                "SPS: Invalid num_ref_frames ({})",
-                sps.max_num_ref_frames
-            );
+            tracing::warn!("SPS: Invalid num_ref_frames ({})", sps.max_num_ref_frames);
             return None;
         }
         sps.flags.gaps_in_frame_num_value_allowed_flag = reader.flag();
@@ -1211,27 +1270,78 @@ impl VulkanH264Decoder {
         }
         // Table E-1 SAR mapping
         match vui.aspect_ratio_idc {
-            1 => { vui.sar_width = 1; vui.sar_height = 1; }
-            2 => { vui.sar_width = 12; vui.sar_height = 11; }
-            3 => { vui.sar_width = 10; vui.sar_height = 11; }
-            4 => { vui.sar_width = 16; vui.sar_height = 11; }
-            5 => { vui.sar_width = 40; vui.sar_height = 33; }
-            6 => { vui.sar_width = 24; vui.sar_height = 11; }
-            7 => { vui.sar_width = 20; vui.sar_height = 11; }
-            8 => { vui.sar_width = 32; vui.sar_height = 11; }
-            9 => { vui.sar_width = 80; vui.sar_height = 33; }
-            10 => { vui.sar_width = 18; vui.sar_height = 11; }
-            11 => { vui.sar_width = 15; vui.sar_height = 11; }
-            12 => { vui.sar_width = 64; vui.sar_height = 33; }
-            13 => { vui.sar_width = 160; vui.sar_height = 99; }
-            14 => { vui.sar_width = 4; vui.sar_height = 3; }
-            15 => { vui.sar_width = 3; vui.sar_height = 2; }
-            16 => { vui.sar_width = 2; vui.sar_height = 1; }
+            1 => {
+                vui.sar_width = 1;
+                vui.sar_height = 1;
+            }
+            2 => {
+                vui.sar_width = 12;
+                vui.sar_height = 11;
+            }
+            3 => {
+                vui.sar_width = 10;
+                vui.sar_height = 11;
+            }
+            4 => {
+                vui.sar_width = 16;
+                vui.sar_height = 11;
+            }
+            5 => {
+                vui.sar_width = 40;
+                vui.sar_height = 33;
+            }
+            6 => {
+                vui.sar_width = 24;
+                vui.sar_height = 11;
+            }
+            7 => {
+                vui.sar_width = 20;
+                vui.sar_height = 11;
+            }
+            8 => {
+                vui.sar_width = 32;
+                vui.sar_height = 11;
+            }
+            9 => {
+                vui.sar_width = 80;
+                vui.sar_height = 33;
+            }
+            10 => {
+                vui.sar_width = 18;
+                vui.sar_height = 11;
+            }
+            11 => {
+                vui.sar_width = 15;
+                vui.sar_height = 11;
+            }
+            12 => {
+                vui.sar_width = 64;
+                vui.sar_height = 33;
+            }
+            13 => {
+                vui.sar_width = 160;
+                vui.sar_height = 99;
+            }
+            14 => {
+                vui.sar_width = 4;
+                vui.sar_height = 3;
+            }
+            15 => {
+                vui.sar_width = 3;
+                vui.sar_height = 2;
+            }
+            16 => {
+                vui.sar_width = 2;
+                vui.sar_height = 1;
+            }
             255 => {
                 vui.sar_width = reader.u(16) as i32;
                 vui.sar_height = reader.u(16) as i32;
             }
-            _ => { vui.sar_width = 1; vui.sar_height = 1; }
+            _ => {
+                vui.sar_width = 1;
+                vui.sar_height = 1;
+            }
         }
         vui.overscan_info_present_flag = reader.flag();
         if vui.overscan_info_present_flag {
@@ -1633,10 +1743,7 @@ impl VulkanH264Decoder {
     // ref_pic_list_reordering (7.4.3.1)
     // -----------------------------------------------------------------------
 
-    fn parse_ref_pic_list_reordering(
-        reader: &mut BitstreamReader,
-        slh: &mut SliceHeader,
-    ) -> bool {
+    fn parse_ref_pic_list_reordering(reader: &mut BitstreamReader, slh: &mut SliceHeader) -> bool {
         if slh.slice_type != SliceType::I && slh.slice_type != SliceType::Si {
             slh.ref_pic_list_reordering_flag_l0 = reader.flag();
             if slh.ref_pic_list_reordering_flag_l0 {
@@ -1698,7 +1805,8 @@ impl VulkanH264Decoder {
             if reader.flag() {
                 let weight = reader.se();
                 let offset = reader.se();
-                slh.weights_out_of_range += (weight < -128 || weight > 127 || offset < -128 || offset > 127) as i32;
+                slh.weights_out_of_range +=
+                    (weight < -128 || weight > 127 || offset < -128 || offset > 127) as i32;
                 slh.luma_weight[0][i] = weight as i16;
                 slh.luma_offset[0][i] = offset as i16;
             } else {
@@ -1710,7 +1818,8 @@ impl VulkanH264Decoder {
                     for j in 0..2 {
                         let weight = reader.se();
                         let offset = reader.se();
-                        slh.weights_out_of_range += (weight < -128 || weight > 127 || offset < -128 || offset > 127) as i32;
+                        slh.weights_out_of_range +=
+                            (weight < -128 || weight > 127 || offset < -128 || offset > 127) as i32;
                         slh.chroma_weight[0][i][j] = weight as i16;
                         slh.chroma_offset[0][i][j] = offset as i16;
                     }
@@ -1727,7 +1836,8 @@ impl VulkanH264Decoder {
                 if reader.flag() {
                     let weight = reader.se();
                     let offset = reader.se();
-                    slh.weights_out_of_range += (weight < -128 || weight > 127 || offset < -128 || offset > 127) as i32;
+                    slh.weights_out_of_range +=
+                        (weight < -128 || weight > 127 || offset < -128 || offset > 127) as i32;
                     slh.luma_weight[1][i] = weight as i16;
                     slh.luma_offset[1][i] = offset as i16;
                 } else {
@@ -1739,7 +1849,9 @@ impl VulkanH264Decoder {
                         for j in 0..2 {
                             let weight = reader.se();
                             let offset = reader.se();
-                            slh.weights_out_of_range += (weight < -128 || weight > 127 || offset < -128 || offset > 127) as i32;
+                            slh.weights_out_of_range +=
+                                (weight < -128 || weight > 127 || offset < -128 || offset > 127)
+                                    as i32;
                             slh.chroma_weight[1][i][j] = weight as i16;
                             slh.chroma_offset[1][i][j] = offset as i16;
                         }
@@ -1830,8 +1942,7 @@ impl VulkanH264Decoder {
         {
             self.prev_pic_order_cnt_msb + max_pic_order_cnt_lsb
         } else if (slh.pic_order_cnt_lsb > self.prev_pic_order_cnt_lsb)
-            && ((slh.pic_order_cnt_lsb - self.prev_pic_order_cnt_lsb)
-                > (max_pic_order_cnt_lsb / 2))
+            && ((slh.pic_order_cnt_lsb - self.prev_pic_order_cnt_lsb) > (max_pic_order_cnt_lsb / 2))
         {
             self.prev_pic_order_cnt_msb - max_pic_order_cnt_lsb
         } else {
@@ -1880,12 +1991,11 @@ impl VulkanH264Decoder {
         };
 
         // absFrameNum (8-7)
-        let mut abs_frame_num =
-            if sps.num_ref_frames_in_pic_order_cnt_cycle > 0 {
-                frame_num_offset + slh.frame_num
-            } else {
-                0
-            };
+        let mut abs_frame_num = if sps.num_ref_frames_in_pic_order_cnt_cycle > 0 {
+            frame_num_offset + slh.frame_num
+        } else {
+            0
+        };
         if slh.nal_ref_idc == 0 && abs_frame_num > 0 {
             abs_frame_num -= 1;
         }
@@ -1998,14 +2108,14 @@ impl VulkanH264Decoder {
                 self.dpb[i].bottom_long_term_pic_num = self.dpb[i].long_term_frame_idx;
             } else if !slh.bottom_field_flag {
                 // top field
-                self.dpb[i].top_pic_num = 2 * self.dpb[i].frame_num_wrap + 1;     // same parity (8-31)
-                self.dpb[i].bottom_pic_num = 2 * self.dpb[i].frame_num_wrap;       // opposite (8-32)
+                self.dpb[i].top_pic_num = 2 * self.dpb[i].frame_num_wrap + 1; // same parity (8-31)
+                self.dpb[i].bottom_pic_num = 2 * self.dpb[i].frame_num_wrap; // opposite (8-32)
                 self.dpb[i].top_long_term_pic_num = 2 * self.dpb[i].long_term_frame_idx + 1; // (8-33)
                 self.dpb[i].bottom_long_term_pic_num = 2 * self.dpb[i].long_term_frame_idx; // (8-34)
             } else {
                 // bottom field
-                self.dpb[i].top_pic_num = 2 * self.dpb[i].frame_num_wrap;          // opposite (8-32)
-                self.dpb[i].bottom_pic_num = 2 * self.dpb[i].frame_num_wrap + 1;   // same parity (8-31)
+                self.dpb[i].top_pic_num = 2 * self.dpb[i].frame_num_wrap; // opposite (8-32)
+                self.dpb[i].bottom_pic_num = 2 * self.dpb[i].frame_num_wrap + 1; // same parity (8-31)
                 self.dpb[i].top_long_term_pic_num = 2 * self.dpb[i].long_term_frame_idx; // (8-34)
                 self.dpb[i].bottom_long_term_pic_num = 2 * self.dpb[i].long_term_frame_idx + 1; // (8-33)
             }
@@ -2017,11 +2127,7 @@ impl VulkanH264Decoder {
     // -----------------------------------------------------------------------
 
     /// Apply decoded reference picture marking.
-    pub fn decoded_reference_picture_marking(
-        &mut self,
-        slh: &SliceHeader,
-        num_ref_frames: u32,
-    ) {
+    pub fn decoded_reference_picture_marking(&mut self, slh: &SliceHeader, num_ref_frames: u32) {
         if slh.idr_pic_flag {
             // All reference pictures unused
             for i in 0..MAX_DPB_SIZE {
@@ -2052,7 +2158,10 @@ impl VulkanH264Decoder {
             if !slh.adaptive_ref_pic_marking_mode_flag {
                 self.sliding_window_decoded_reference_picture_marking(num_ref_frames);
             } else {
-                self.adaptive_memory_control_decoded_reference_picture_marking(slh, num_ref_frames as i32);
+                self.adaptive_memory_control_decoded_reference_picture_marking(
+                    slh,
+                    num_ref_frames as i32,
+                );
             }
             // Mark current as short-term if not already long-term (8.2.5.1)
             if (!slh.field_pic_flag || !slh.bottom_field_flag)
@@ -2159,8 +2268,7 @@ impl VulkanH264Decoder {
             match slh.mmco[k].memory_management_control_operation {
                 1 => {
                     // Mark short-term as unused (8.2.5.4.1)
-                    let pic_num_x =
-                        curr_pic_num - (slh.mmco[k].difference_of_pic_nums_minus1 + 1);
+                    let pic_num_x = curr_pic_num - (slh.mmco[k].difference_of_pic_nums_minus1 + 1);
                     for i in 0..MAX_DPB_SIZE {
                         if self.dpb[i].view_id == slh.view_id {
                             if self.dpb[i].top_field_marking == MARKING_SHORT
@@ -2197,8 +2305,7 @@ impl VulkanH264Decoder {
                 }
                 3 => {
                     // Assign LongTermFrameIdx to short-term (8.2.5.4.3)
-                    let pic_num_x =
-                        curr_pic_num - (slh.mmco[k].difference_of_pic_nums_minus1 + 1);
+                    let pic_num_x = curr_pic_num - (slh.mmco[k].difference_of_pic_nums_minus1 + 1);
                     for i in 0..MAX_DPB_SIZE {
                         if self.dpb[i].view_id != slh.view_id {
                             continue;
@@ -2387,7 +2494,10 @@ impl VulkanH264Decoder {
                     poc_min2 = self.dpb[i].bottom_field_order_cnt;
                     i_min2 = Some(i);
                 }
-                if self.dpb[i].state != 0 && self.dpb[i].not_existing && self.dpb[i].frame_num <= fn_min {
+                if self.dpb[i].state != 0
+                    && self.dpb[i].not_existing
+                    && self.dpb[i].frame_num <= fn_min
+                {
                     fn_min = self.dpb[i].frame_num;
                     j_min = Some(i);
                 }
@@ -2577,25 +2687,43 @@ pub fn reference_picture_list_initialization_b_frame(
     // List 0
     let mut idx0 = 0usize;
     for &(_, dpb_idx) in &short_before {
-        if idx0 < MAX_REFS { ref_pic_list0[idx0] = dpb_idx as i8; idx0 += 1; }
+        if idx0 < MAX_REFS {
+            ref_pic_list0[idx0] = dpb_idx as i8;
+            idx0 += 1;
+        }
     }
     for &(_, dpb_idx) in &short_after {
-        if idx0 < MAX_REFS { ref_pic_list0[idx0] = dpb_idx as i8; idx0 += 1; }
+        if idx0 < MAX_REFS {
+            ref_pic_list0[idx0] = dpb_idx as i8;
+            idx0 += 1;
+        }
     }
     for &(_, dpb_idx) in &long_term_entries {
-        if idx0 < MAX_REFS { ref_pic_list0[idx0] = dpb_idx as i8; idx0 += 1; }
+        if idx0 < MAX_REFS {
+            ref_pic_list0[idx0] = dpb_idx as i8;
+            idx0 += 1;
+        }
     }
 
     // List 1
     let mut idx1 = 0usize;
     for &(_, dpb_idx) in &short_after {
-        if idx1 < MAX_REFS { ref_pic_list1[idx1] = dpb_idx as i8; idx1 += 1; }
+        if idx1 < MAX_REFS {
+            ref_pic_list1[idx1] = dpb_idx as i8;
+            idx1 += 1;
+        }
     }
     for &(_, dpb_idx) in &short_before {
-        if idx1 < MAX_REFS { ref_pic_list1[idx1] = dpb_idx as i8; idx1 += 1; }
+        if idx1 < MAX_REFS {
+            ref_pic_list1[idx1] = dpb_idx as i8;
+            idx1 += 1;
+        }
     }
     for &(_, dpb_idx) in &long_term_entries {
-        if idx1 < MAX_REFS { ref_pic_list1[idx1] = dpb_idx as i8; idx1 += 1; }
+        if idx1 < MAX_REFS {
+            ref_pic_list1[idx1] = dpb_idx as i8;
+            idx1 += 1;
+        }
     }
 
     // If list 1 == list 0 and has more than one entry, swap first two of list 1
@@ -3082,9 +3210,8 @@ mod tests {
         let cur_poc = 4;
         let mut list0 = [-1i8; MAX_REFS];
         let mut list1 = [-1i8; MAX_REFS];
-        let (cnt0, cnt1) = reference_picture_list_initialization_b_frame(
-            &dpb, cur_poc, &mut list0, &mut list1,
-        );
+        let (cnt0, cnt1) =
+            reference_picture_list_initialization_b_frame(&dpb, cur_poc, &mut list0, &mut list1);
         assert_eq!(cnt0, 3);
         assert_eq!(cnt1, 3);
         // List 0: POC<=4 descending (4, 2), then POC>4 ascending (6)
@@ -3151,7 +3278,7 @@ mod tests {
     fn derive_max_dpb_frames_level_3_1() {
         let sps = SeqParameterSet {
             level_idc: H264LevelIdc::Level3_1,
-            pic_width_in_mbs_minus1: 119, // 1920/16 - 1
+            pic_width_in_mbs_minus1: 119,       // 1920/16 - 1
             pic_height_in_map_units_minus1: 67, // 1088/16 - 1
             flags: SpsFlags {
                 frame_mbs_only_flag: true,
@@ -3168,7 +3295,7 @@ mod tests {
     fn derive_max_dpb_frames_small_picture() {
         let sps = SeqParameterSet {
             level_idc: H264LevelIdc::Level3_0,
-            pic_width_in_mbs_minus1: 10, // 176/16 - 1
+            pic_width_in_mbs_minus1: 10,       // 176/16 - 1
             pic_height_in_map_units_minus1: 8, // 144/16 - 1
             flags: SpsFlags {
                 frame_mbs_only_flag: true,
@@ -3210,9 +3337,9 @@ mod tests {
 
         // For simplicity, just verify the SPS id and profile parsing:
         let data = [
-            66u8, // profile_idc
-            0x40, // constraint_set_flags (constraint_set1_flag set)
-            30,   // level_idc
+            66u8,       // profile_idc
+            0x40,       // constraint_set_flags (constraint_set1_flag set)
+            30,         // level_idc
             0b11111010, // sps_id=ue(0)="1", log2_max_frame_num_minus4=ue(0)="1",
             // poc_type=ue(0)="1", log2_max_pic_order_cnt_lsb_minus4=ue(0)="1",
             // max_num_ref_frames=ue(1)="010"

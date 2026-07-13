@@ -14,7 +14,7 @@
 use std::ffi::c_void;
 use std::sync::{Arc, OnceLock};
 
-use streamlib_plugin_abi::{RuntimeOpsVTable, RUNTIME_OPS_VTABLE_LAYOUT_VERSION};
+use streamlib_plugin_abi::{RUNTIME_OPS_VTABLE_LAYOUT_VERSION, RuntimeOpsVTable};
 
 use crate::core::runtime::RuntimeOperations;
 
@@ -210,14 +210,14 @@ unsafe extern "C" fn host_rov_remove_processor(
                 .to_vec()
             };
             rt.spawn(async move {
-                let result = match rmp_serde::from_slice::<crate::core::graph::ProcessorUniqueId>(
-                    &id_bytes,
-                ) {
-                    Ok(pid) => ops.remove_processor_async(pid).await,
-                    Err(e) => Err(crate::core::Error::Config(format!(
-                        "remove_processor: processor_id msgpack decode failed: {e}"
-                    ))),
-                };
+                let result =
+                    match rmp_serde::from_slice::<crate::core::graph::ProcessorUniqueId>(&id_bytes)
+                    {
+                        Ok(pid) => ops.remove_processor_async(pid).await,
+                        Err(e) => Err(crate::core::Error::Config(format!(
+                            "remove_processor: processor_id msgpack decode failed: {e}"
+                        ))),
+                    };
                 guard.fire_with_result(result);
             });
         },
@@ -238,8 +238,7 @@ unsafe extern "C" fn host_rov_connect(
         "host_rov_connect",
         || {
             if handle.is_null() {
-                CompletionGuard::new(completion, user_data)
-                    .fire_err_msg(b"connect: null handle");
+                CompletionGuard::new(completion, user_data).fire_err_msg(b"connect: null handle");
                 return;
             }
             let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
@@ -259,18 +258,18 @@ unsafe extern "C" fn host_rov_connect(
                 unsafe { std::slice::from_raw_parts(to_msgpack_ptr, to_msgpack_len) }.to_vec()
             };
             rt.spawn(async move {
-                let from: crate::core::OutputLinkPortRef =
-                    match rmp_serde::from_slice(&from_bytes) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            let result: crate::core::Result<crate::core::graph::LinkUniqueId> =
-                                Err(crate::core::Error::Config(format!(
-                                    "connect: from-port msgpack decode failed: {e}"
-                                )));
-                            guard.fire_with_result(result);
-                            return;
-                        }
-                    };
+                let from: crate::core::OutputLinkPortRef = match rmp_serde::from_slice(&from_bytes)
+                {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let result: crate::core::Result<crate::core::graph::LinkUniqueId> =
+                            Err(crate::core::Error::Config(format!(
+                                "connect: from-port msgpack decode failed: {e}"
+                            )));
+                        guard.fire_with_result(result);
+                        return;
+                    }
+                };
                 let to: crate::core::InputLinkPortRef = match rmp_serde::from_slice(&to_bytes) {
                     Ok(v) => v,
                     Err(e) => {
@@ -318,13 +317,13 @@ unsafe extern "C" fn host_rov_disconnect(
                     .to_vec()
             };
             rt.spawn(async move {
-                let result =
-                    match rmp_serde::from_slice::<crate::core::graph::LinkUniqueId>(&bytes) {
-                        Ok(link_id) => ops.disconnect_async(link_id).await,
-                        Err(e) => Err(crate::core::Error::Config(format!(
-                            "disconnect: link_id msgpack decode failed: {e}"
-                        ))),
-                    };
+                let result = match rmp_serde::from_slice::<crate::core::graph::LinkUniqueId>(&bytes)
+                {
+                    Ok(link_id) => ops.disconnect_async(link_id).await,
+                    Err(e) => Err(crate::core::Error::Config(format!(
+                        "disconnect: link_id msgpack decode failed: {e}"
+                    ))),
+                };
                 guard.fire_with_result(result);
             });
         },
@@ -341,8 +340,7 @@ unsafe extern "C" fn host_rov_to_json(
         "host_rov_to_json",
         || {
             if handle.is_null() {
-                CompletionGuard::new(completion, user_data)
-                    .fire_err_msg(b"to_json: null handle");
+                CompletionGuard::new(completion, user_data).fire_err_msg(b"to_json: null handle");
                 return;
             }
             let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
@@ -451,7 +449,9 @@ mod runtime_ops_vtable_null_handle_guards {
 
     impl CompletionSink {
         fn new() -> StdArc<Self> {
-            StdArc::new(Self { events: Mutex::new(Vec::new()) })
+            StdArc::new(Self {
+                events: Mutex::new(Vec::new()),
+            })
         }
     }
 
@@ -467,7 +467,11 @@ mod runtime_ops_vtable_null_handle_guards {
         } else {
             unsafe { std::slice::from_raw_parts(result_ptr, result_len) }.to_vec()
         };
-        sink_arc.events.lock().expect("poisoned").push((status, payload));
+        sink_arc
+            .events
+            .lock()
+            .expect("poisoned")
+            .push((status, payload));
         // Re-leak so the host's CompletionGuard's Drop (if it fires
         // again — it shouldn't, but defensive) can still find it.
         // In practice the guard's `fire_err_msg` consumes via `mut`,
@@ -572,11 +576,7 @@ mod runtime_ops_vtable_null_handle_guards {
     fn to_json_fires_error_completion_on_null_handle() {
         let (user_data, sink) = install_sink_user_data();
         unsafe {
-            (HOST_RUNTIME_OPS_VTABLE.to_json)(
-                std::ptr::null(),
-                record_completion,
-                user_data,
-            );
+            (HOST_RUNTIME_OPS_VTABLE.to_json)(std::ptr::null(), record_completion, user_data);
         }
         assert_single_err_completion(&sink, "to_json: null handle");
         unsafe { reclaim_sink(user_data) };
@@ -620,9 +620,7 @@ mod runtime_ops_vtable_tier1_wire_format_tests {
 
     #[test]
     fn clone_handle_returns_null_on_null_borrowed() {
-        let out = unsafe {
-            (HOST_RUNTIME_OPS_VTABLE.clone_handle)(std::ptr::null())
-        };
+        let out = unsafe { (HOST_RUNTIME_OPS_VTABLE.clone_handle)(std::ptr::null()) };
         assert!(out.is_null());
     }
 
@@ -643,7 +641,9 @@ mod runtime_ops_vtable_tier1_wire_format_tests {
 
     impl CompletionSink {
         fn new() -> StdArc<Self> {
-            StdArc::new(Self { events: Mutex::new(Vec::new()) })
+            StdArc::new(Self {
+                events: Mutex::new(Vec::new()),
+            })
         }
     }
 
@@ -659,7 +659,11 @@ mod runtime_ops_vtable_tier1_wire_format_tests {
         } else {
             unsafe { std::slice::from_raw_parts(result_ptr, result_len) }.to_vec()
         };
-        sink_arc.events.lock().expect("poisoned").push((status, payload));
+        sink_arc
+            .events
+            .lock()
+            .expect("poisoned")
+            .push((status, payload));
         let _ = StdArc::into_raw(sink_arc);
     }
 

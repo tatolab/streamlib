@@ -322,12 +322,7 @@ pub struct FramePayload {
 
 impl FramePayload {
     /// Create a new payload with the given port, structured schema ident, and data.
-    pub fn new(
-        port: &str,
-        schema_ident: SchemaIdentWire,
-        timestamp_ns: i64,
-        data: &[u8],
-    ) -> Self {
+    pub fn new(port: &str, schema_ident: SchemaIdentWire, timestamp_ns: i64, data: &[u8]) -> Self {
         let len = data.len().min(MAX_PAYLOAD_SIZE) as u32;
         let mut payload = Self {
             port_key: PortKey::new(port),
@@ -659,9 +654,8 @@ mod tests {
 
     #[test]
     fn frame_header_round_trip_via_slice() {
-        let ident =
-            SchemaIdentWire::from_segments("tatolab", "core", "EncodedVideoFrame", 1, 2, 3)
-                .unwrap();
+        let ident = SchemaIdentWire::from_segments("tatolab", "core", "EncodedVideoFrame", 1, 2, 3)
+            .unwrap();
         let header = FrameHeader::new("dest_port", ident, 42, 1024);
         let mut buf = [0u8; FRAME_HEADER_SIZE];
         header.write_to_slice(&mut buf);

@@ -36,10 +36,8 @@ impl VulkanLayout {
         Self(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL.as_raw());
     pub const SHADER_READ_ONLY_OPTIMAL: Self =
         Self(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL.as_raw());
-    pub const TRANSFER_SRC_OPTIMAL: Self =
-        Self(vk::ImageLayout::TRANSFER_SRC_OPTIMAL.as_raw());
-    pub const TRANSFER_DST_OPTIMAL: Self =
-        Self(vk::ImageLayout::TRANSFER_DST_OPTIMAL.as_raw());
+    pub const TRANSFER_SRC_OPTIMAL: Self = Self(vk::ImageLayout::TRANSFER_SRC_OPTIMAL.as_raw());
+    pub const TRANSFER_DST_OPTIMAL: Self = Self(vk::ImageLayout::TRANSFER_DST_OPTIMAL.as_raw());
 
     /// Convert to the underlying `vk::ImageLayout`. Adapter crates use
     /// this when issuing layout transitions; cdylibs never call it

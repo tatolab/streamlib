@@ -154,7 +154,12 @@ mod tests {
     /// Empty-id and unicode-id both survive the wire.
     #[test]
     fn msgpack_round_trip_edge_cases() {
-        for s in ["", "P", "P-very-long-id-that-overflows-fixstr-limit-and-needs-str8", "P🎥-emoji"] {
+        for s in [
+            "",
+            "P",
+            "P-very-long-id-that-overflows-fixstr-limit-and-needs-str8",
+            "P🎥-emoji",
+        ] {
             let id = ProcessorUniqueId::from(s);
             let bytes = rmp_serde::to_vec_named(&id).expect("encode");
             let back: ProcessorUniqueId = rmp_serde::from_slice(&bytes).expect("decode");

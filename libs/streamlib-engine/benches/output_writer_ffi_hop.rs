@@ -39,7 +39,7 @@
 
 use std::sync::Arc;
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use iceoryx2::prelude::*;
 
 use streamlib_engine::iceoryx2::{OutputWriter, OutputWriterInner, SchemaIdentWire};
@@ -64,8 +64,7 @@ fn unique_suffix(tag: &str) -> String {
 /// hence no background-drainer thread).
 struct BenchFixture {
     inner: Arc<OutputWriterInner>,
-    subscriber:
-        iceoryx2::port::subscriber::Subscriber<iceoryx2::service::ipc::Service, [u8], ()>,
+    subscriber: iceoryx2::port::subscriber::Subscriber<iceoryx2::service::ipc::Service, [u8], ()>,
     listener: iceoryx2::port::listener::Listener<iceoryx2::service::ipc::Service>,
     // Keep the node + service handles alive for the bench's
     // lifetime so the publisher inside the inner doesn't observe

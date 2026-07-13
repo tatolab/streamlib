@@ -42,9 +42,8 @@ use std::sync::Arc;
 
 use streamlib_adapter_abi::{StreamlibSurface, SurfaceAdapter, VkImageInfo};
 use streamlib_adapter_vulkan_abi::{
-    RawVulkanHandlesRepr, VkImageInfoRepr, VkImageLayoutValueRepr,
-    VulkanSurfaceAdapterVTable, VulkanViewRepr,
-    VULKAN_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION,
+    RawVulkanHandlesRepr, VULKAN_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION, VkImageInfoRepr,
+    VkImageLayoutValueRepr, VulkanSurfaceAdapterVTable, VulkanViewRepr,
 };
 use streamlib_consumer_rhi::{DevicePrivilege, VulkanLayout, VulkanRhiDevice};
 
@@ -58,8 +57,8 @@ use crate::raw_handles::raw_handles;
 /// The vtable is `const`-initialized per `D` monomorphization;
 /// every call for the same `D` returns the same pointer. Multiple
 /// `D`s coexist in the same host process with their own vtables.
-pub fn host_vulkan_surface_adapter_vtable<D: VulkanRhiDevice + 'static>(
-) -> *const VulkanSurfaceAdapterVTable {
+pub fn host_vulkan_surface_adapter_vtable<D: VulkanRhiDevice + 'static>()
+-> *const VulkanSurfaceAdapterVTable {
     &MonoVTable::<D>::VTABLE
 }
 
@@ -406,8 +405,7 @@ where
             // SAFETY: caller asserts the pointer is a borrowed
             // StreamlibSurface from its own stack/heap, valid for
             // the duration of the call.
-            let surface: &StreamlibSurface =
-                unsafe { &*(surface_ptr as *const StreamlibSurface) };
+            let surface: &StreamlibSurface = unsafe { &*(surface_ptr as *const StreamlibSurface) };
             match body(adapter, surface) {
                 Ok(Some(view)) => {
                     if !out_view.is_null() {
@@ -866,7 +864,10 @@ mod tier1_null_handle_tests {
 
     #[test]
     fn layout_version_matches_constant() {
-        assert_eq!(vtable().layout_version, VULKAN_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION);
+        assert_eq!(
+            vtable().layout_version,
+            VULKAN_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION
+        );
         assert_eq!(vtable()._reserved_padding, 0);
     }
 
@@ -941,7 +942,10 @@ mod tier1_null_handle_tests {
         };
         assert_eq!(rc, 1);
         let msg = err_msg(&buf, len);
-        assert!(msg.contains("acquire_read: null adapter handle"), "got: {msg}");
+        assert!(
+            msg.contains("acquire_read: null adapter handle"),
+            "got: {msg}"
+        );
     }
 
     #[test]

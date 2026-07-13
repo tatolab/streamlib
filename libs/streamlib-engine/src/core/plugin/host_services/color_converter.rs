@@ -24,7 +24,6 @@ use super::shared::borrow::{
 };
 use super::shared::wire::write_err;
 
-
 // =============================================================================
 // RhiColorConverterMethodsVTable wrappers (Phase E sub-lift slice A).
 // Each wrapper reconstructs the converter borrow from the raw
@@ -49,18 +48,14 @@ unsafe fn handle_as_color_converter(
     if handle.is_null() {
         return None;
     }
-    Some(unsafe {
-        &*(handle as *const crate::core::rhi::RhiColorConverterInner)
-    })
+    Some(unsafe { &*(handle as *const crate::core::rhi::RhiColorConverterInner) })
 }
 
 /// Convert a `#[repr(u32)]` `PrimariesId` discriminant to the typed
 /// enum. Returns `None` for out-of-range values so the wrapper can
 /// report a clean error rather than transmuting a garbage tag.
 #[cfg(target_os = "linux")]
-fn primaries_from_raw(
-    raw: u32,
-) -> Option<crate::core::color::PrimariesId> {
+fn primaries_from_raw(raw: u32) -> Option<crate::core::color::PrimariesId> {
     use crate::core::color::PrimariesId;
     match raw {
         0 => Some(PrimariesId::Bt709),
@@ -143,9 +138,7 @@ unsafe extern "C" fn host_color_converter_prepare_buffer_to_image_storage(
     run_host_extern_c(
         "host_color_converter_prepare_buffer_to_image_storage",
         || -> i32 {
-            let Some(converter) =
-                (unsafe { handle_as_color_converter(converter_handle) })
-            else {
+            let Some(converter) = (unsafe { handle_as_color_converter(converter_handle) }) else {
                 write_err(
                     "prepare_buffer_to_image_storage: null converter handle",
                     err_buf,
@@ -305,17 +298,13 @@ unsafe extern "C" fn host_color_converter_prepare_buffer_to_image_storage(
                     let raw_inner = arc_kernel.handle;
                     unsafe {
                         std::sync::Arc::increment_strong_count(
-                            raw_inner
-                                as *const crate::vulkan::rhi::VulkanComputeKernelInner,
+                            raw_inner as *const crate::vulkan::rhi::VulkanComputeKernelInner,
                         );
                     }
                     let push_constant_size = arc_kernel.cached_push_constant_size;
                     unsafe {
                         std::ptr::write(out_kernel, raw_inner);
-                        std::ptr::write(
-                            out_cached_push_constant_size,
-                            push_constant_size,
-                        );
+                        std::ptr::write(out_cached_push_constant_size, push_constant_size);
                     }
                     0
                 }
@@ -383,9 +372,7 @@ unsafe extern "C" fn host_color_converter_prepare_buffer_to_image_pixel(
     run_host_extern_c(
         "host_color_converter_prepare_buffer_to_image_pixel",
         || -> i32 {
-            let Some(converter) =
-                (unsafe { handle_as_color_converter(converter_handle) })
-            else {
+            let Some(converter) = (unsafe { handle_as_color_converter(converter_handle) }) else {
                 write_err(
                     "prepare_buffer_to_image_pixel: null converter handle",
                     err_buf,
@@ -531,17 +518,13 @@ unsafe extern "C" fn host_color_converter_prepare_buffer_to_image_pixel(
                     let raw_inner = arc_kernel.handle;
                     unsafe {
                         std::sync::Arc::increment_strong_count(
-                            raw_inner
-                                as *const crate::vulkan::rhi::VulkanComputeKernelInner,
+                            raw_inner as *const crate::vulkan::rhi::VulkanComputeKernelInner,
                         );
                     }
                     let push_constant_size = arc_kernel.cached_push_constant_size;
                     unsafe {
                         std::ptr::write(out_kernel, raw_inner);
-                        std::ptr::write(
-                            out_cached_push_constant_size,
-                            push_constant_size,
-                        );
+                        std::ptr::write(out_cached_push_constant_size, push_constant_size);
                     }
                     0
                 }
@@ -604,9 +587,7 @@ unsafe extern "C" fn host_color_converter_convert_buffer_to_image_storage(
     run_host_extern_c(
         "host_color_converter_convert_buffer_to_image_storage",
         || -> i32 {
-            let Some(converter) =
-                (unsafe { handle_as_color_converter(converter_handle) })
-            else {
+            let Some(converter) = (unsafe { handle_as_color_converter(converter_handle) }) else {
                 write_err(
                     "convert_buffer_to_image_storage: null converter handle",
                     err_buf,
@@ -780,9 +761,7 @@ unsafe extern "C" fn host_color_converter_convert_buffer_to_image_pixel(
     run_host_extern_c(
         "host_color_converter_convert_buffer_to_image_pixel",
         || -> i32 {
-            let Some(converter) =
-                (unsafe { handle_as_color_converter(converter_handle) })
-            else {
+            let Some(converter) = (unsafe { handle_as_color_converter(converter_handle) }) else {
                 write_err(
                     "convert_buffer_to_image_pixel: null converter handle",
                     err_buf,
@@ -945,24 +924,19 @@ unsafe extern "C" fn host_color_converter_convert_buffer_to_image_pixel(
 pub static HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE:
     streamlib_plugin_abi::RhiColorConverterMethodsVTable =
     streamlib_plugin_abi::RhiColorConverterMethodsVTable {
-        layout_version:
-            streamlib_plugin_abi::RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION,
+        layout_version: streamlib_plugin_abi::RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION,
         _reserved_padding: 0,
-        prepare_buffer_to_image_storage:
-            host_color_converter_prepare_buffer_to_image_storage,
-        prepare_buffer_to_image_pixel:
-            host_color_converter_prepare_buffer_to_image_pixel,
-        convert_buffer_to_image_storage:
-            host_color_converter_convert_buffer_to_image_storage,
-        convert_buffer_to_image_pixel:
-            host_color_converter_convert_buffer_to_image_pixel,
+        prepare_buffer_to_image_storage: host_color_converter_prepare_buffer_to_image_storage,
+        prepare_buffer_to_image_pixel: host_color_converter_prepare_buffer_to_image_pixel,
+        convert_buffer_to_image_storage: host_color_converter_convert_buffer_to_image_storage,
+        convert_buffer_to_image_pixel: host_color_converter_convert_buffer_to_image_pixel,
     };
 
 /// Accessor for the host's static `RhiColorConverterMethodsVTable` —
 /// used by `RhiColorConverter::from_arc_into_raw` to populate the
 /// PluginAbiObject's `methods_vtable` field.
-pub fn host_rhi_color_converter_methods_vtable(
-) -> *const streamlib_plugin_abi::RhiColorConverterMethodsVTable {
+pub fn host_rhi_color_converter_methods_vtable()
+-> *const streamlib_plugin_abi::RhiColorConverterMethodsVTable {
     &HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE
 }
 
@@ -1132,8 +1106,7 @@ mod rhi_color_converter_methods_vtable_tier1_wire_format_tests {
         let layout = dummy_layout();
         let info = dummy_info();
         let rc = unsafe {
-            (HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE
-                .convert_buffer_to_image_storage)(
+            (HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE.convert_buffer_to_image_storage)(
                 std::ptr::null(),
                 std::ptr::null(),
                 &layout,
@@ -1158,8 +1131,7 @@ mod rhi_color_converter_methods_vtable_tier1_wire_format_tests {
         let layout = dummy_layout();
         let info = dummy_info();
         let rc = unsafe {
-            (HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE
-                .convert_buffer_to_image_pixel)(
+            (HOST_RHI_COLOR_CONVERTER_METHODS_VTABLE.convert_buffer_to_image_pixel)(
                 std::ptr::null(),
                 std::ptr::null(),
                 &layout,
@@ -1213,9 +1185,6 @@ mod rhi_color_converter_methods_vtable_tier1_wire_format_tests {
         // The null-check ordering surfaces src_buffer first (it's a
         // simpler check than out_kernel). Either error is acceptable —
         // verify we got *an* error tagged with the slot name.
-        assert!(
-            msg.contains("prepare_buffer_to_image_pixel:"),
-            "got: {msg}"
-        );
+        assert!(msg.contains("prepare_buffer_to_image_pixel:"), "got: {msg}");
     }
 }

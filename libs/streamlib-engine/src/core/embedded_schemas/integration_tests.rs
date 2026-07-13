@@ -19,7 +19,7 @@
 use std::time::{Duration, Instant};
 
 use super::{max_payload_bytes_for_port_spec, test_support};
-use crate::iceoryx2::{FrameHeader, Iceoryx2Node, SchemaIdentWire, FRAME_HEADER_SIZE};
+use crate::iceoryx2::{FRAME_HEADER_SIZE, FrameHeader, Iceoryx2Node, SchemaIdentWire};
 use iceoryx2::prelude::*;
 use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib_processor_schema::PortSchemaSpec;
@@ -354,9 +354,9 @@ fn test_large_frame_schema_publisher_subscriber_roundtrip_256kb() {
     }
 
     // Loan and send.
-    let sample = publisher.loan_slice_uninit(payload_size).expect(
-        "loan_slice_uninit should succeed — encodedvideoframe schema declares 4 MB",
-    );
+    let sample = publisher
+        .loan_slice_uninit(payload_size)
+        .expect("loan_slice_uninit should succeed — encodedvideoframe schema declares 4 MB");
     let sample = sample.write_from_slice(&payload);
     sample.send().expect("send should succeed");
 

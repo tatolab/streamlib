@@ -562,8 +562,8 @@ use streamlib_plugin_abi::{
     GraphicsKernelDescriptorRepr, GraphicsPipelineStateRepr, GraphicsPushConstantsRepr,
     GraphicsShaderStageRepr, GraphicsStageRepr, MultisampleStateRepr, PolygonModeRepr,
     PrimitiveTopologyRepr, RasterizationStateRepr, VertexAttributeFormatRepr,
-    VertexInputAttributeRepr, VertexInputBindingRepr, VertexInputRateRepr, VertexInputStateKindRepr,
-    VertexInputStateRepr,
+    VertexInputAttributeRepr, VertexInputBindingRepr, VertexInputRateRepr,
+    VertexInputStateKindRepr, VertexInputStateRepr,
 };
 
 impl From<GraphicsShaderStage> for GraphicsShaderStageRepr {
@@ -882,7 +882,10 @@ pub(crate) struct GraphicsKernelDescriptorReprStage {
 /// `attachment_formats.color_ptr` all point into `stage`'s Vecs).
 pub(crate) fn stage_graphics_kernel_descriptor(
     desc: &GraphicsKernelDescriptor<'_>,
-) -> (GraphicsKernelDescriptorRepr, GraphicsKernelDescriptorReprStage) {
+) -> (
+    GraphicsKernelDescriptorRepr,
+    GraphicsKernelDescriptorReprStage,
+) {
     let stages_buf: Vec<GraphicsStageRepr> = desc
         .stages
         .iter()
@@ -895,8 +898,11 @@ pub(crate) fn stage_graphics_kernel_descriptor(
             entry_point_len: s.entry_point.len(),
         })
         .collect();
-    let bindings_buf: Vec<GraphicsBindingSpecRepr> =
-        desc.bindings.iter().map(GraphicsBindingSpecRepr::from).collect();
+    let bindings_buf: Vec<GraphicsBindingSpecRepr> = desc
+        .bindings
+        .iter()
+        .map(GraphicsBindingSpecRepr::from)
+        .collect();
 
     let (vertex_input_repr, vertex_bindings_buf, vertex_attrs_buf) =
         match &desc.pipeline_state.vertex_input {
@@ -918,8 +924,10 @@ pub(crate) fn stage_graphics_kernel_descriptor(
             } => {
                 let b: Vec<VertexInputBindingRepr> =
                     bindings.iter().map(VertexInputBindingRepr::from).collect();
-                let a: Vec<VertexInputAttributeRepr> =
-                    attributes.iter().map(VertexInputAttributeRepr::from).collect();
+                let a: Vec<VertexInputAttributeRepr> = attributes
+                    .iter()
+                    .map(VertexInputAttributeRepr::from)
+                    .collect();
                 let repr = VertexInputStateRepr {
                     kind: VertexInputStateKindRepr::Buffers as u32,
                     _reserved_padding: 0,
@@ -1007,9 +1015,14 @@ mod staging_tests {
 
     #[test]
     fn fullscreen_effect_descriptor_stages_to_expected_repr() {
-        let stages = [GraphicsStage::vertex(VERT_SPV), GraphicsStage::fragment(FRAG_SPV)];
-        let bindings =
-            [GraphicsBindingSpec::sampled_texture(0, GraphicsShaderStageFlags::FRAGMENT)];
+        let stages = [
+            GraphicsStage::vertex(VERT_SPV),
+            GraphicsStage::fragment(FRAG_SPV),
+        ];
+        let bindings = [GraphicsBindingSpec::sampled_texture(
+            0,
+            GraphicsShaderStageFlags::FRAGMENT,
+        )];
         let pipeline_state = GraphicsPipelineState {
             topology: PrimitiveTopology::TriangleList,
             vertex_input: VertexInputState::None,
@@ -1050,11 +1063,17 @@ mod staging_tests {
         assert_eq!(repr.bindings_ptr, stage.bindings_buf.as_ptr());
 
         // Stage discriminants + SPIR-V slice plumbing.
-        assert_eq!(stage.stages_buf[0].stage, GraphicsShaderStageRepr::Vertex as u32);
+        assert_eq!(
+            stage.stages_buf[0].stage,
+            GraphicsShaderStageRepr::Vertex as u32
+        );
         assert_eq!(stage.stages_buf[0].spv_len, VERT_SPV.len());
         assert_eq!(stage.stages_buf[0].spv_ptr, VERT_SPV.as_ptr());
         assert_eq!(stage.stages_buf[0].entry_point_len, "main".len());
-        assert_eq!(stage.stages_buf[1].stage, GraphicsShaderStageRepr::Fragment as u32);
+        assert_eq!(
+            stage.stages_buf[1].stage,
+            GraphicsShaderStageRepr::Fragment as u32
+        );
         assert_eq!(stage.stages_buf[1].spv_len, FRAG_SPV.len());
 
         // Binding mapping: sampled-texture kind + fragment stage mask.
@@ -1069,7 +1088,10 @@ mod staging_tests {
         );
 
         // Pipeline-state scalars.
-        assert_eq!(repr.pipeline_state.topology, PrimitiveTopologyRepr::TriangleList as u32);
+        assert_eq!(
+            repr.pipeline_state.topology,
+            PrimitiveTopologyRepr::TriangleList as u32
+        );
         assert_eq!(
             repr.pipeline_state.dynamic_state,
             GraphicsDynamicStateRepr::ViewportScissor as u32
@@ -1108,10 +1130,7 @@ mod staging_tests {
             repr.pipeline_state.attachment_formats.color_ptr,
             stage.color_formats_buf.as_ptr()
         );
-        assert_eq!(
-            stage.color_formats_buf[0],
-            TextureFormat::Rgba8Unorm as u32
-        );
+        assert_eq!(stage.color_formats_buf[0], TextureFormat::Rgba8Unorm as u32);
     }
 
     #[test]
@@ -1119,7 +1138,10 @@ mod staging_tests {
         // Exercises the VertexInputState::Buffers + depth + enabled-blend
         // arms so the keepalive Vecs for vertex bindings/attributes carry
         // real data and the tagged-union discriminants map correctly.
-        let stages = [GraphicsStage::vertex(VERT_SPV), GraphicsStage::fragment(FRAG_SPV)];
+        let stages = [
+            GraphicsStage::vertex(VERT_SPV),
+            GraphicsStage::fragment(FRAG_SPV),
+        ];
         let bindings: [GraphicsBindingSpec; 0] = [];
         let vertex_input = VertexInputState::Buffers {
             bindings: vec![VertexInputBinding {
@@ -1201,7 +1223,10 @@ mod staging_tests {
         assert_eq!(stage.vertex_attrs_buf[1].offset, 12);
 
         // Rasterization scalars round-trip.
-        assert_eq!(repr.pipeline_state.rasterization.cull_mode, CullModeRepr::Back as u32);
+        assert_eq!(
+            repr.pipeline_state.rasterization.cull_mode,
+            CullModeRepr::Back as u32
+        );
         assert_eq!(
             repr.pipeline_state.rasterization.front_face,
             FrontFaceRepr::Clockwise as u32
@@ -1225,11 +1250,17 @@ mod staging_tests {
             ColorBlendStateKindRepr::Enabled as u32
         );
         assert_eq!(
-            repr.pipeline_state.color_blend.attachment.src_color_blend_factor,
+            repr.pipeline_state
+                .color_blend
+                .attachment
+                .src_color_blend_factor,
             BlendFactorRepr::SrcAlpha as u32
         );
         assert_eq!(
-            repr.pipeline_state.color_blend.attachment.dst_color_blend_factor,
+            repr.pipeline_state
+                .color_blend
+                .attachment
+                .dst_color_blend_factor,
             BlendFactorRepr::OneMinusSrcAlpha as u32
         );
 

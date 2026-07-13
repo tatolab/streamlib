@@ -6,7 +6,6 @@
 mod backend;
 pub mod blitter;
 mod color_converter;
-mod tone_mapper;
 pub(crate) mod command_buffer;
 pub(crate) mod command_queue;
 mod compute_kernel;
@@ -22,54 +21,53 @@ pub(crate) mod plugin_abi_bridge;
 mod ray_tracing_kernel;
 mod storage_buffer;
 pub(crate) mod texture;
-mod uniform_buffer;
-mod vertex_buffer;
 mod texture_cache;
 mod texture_readback;
+mod tone_mapper;
+mod uniform_buffer;
+mod vertex_buffer;
 
 pub use backend::RhiBackend;
 pub use blitter::RhiBlitter;
+pub use color_converter::{
+    COLOR_CONVERTER_PUSH_CONSTANT_SIZE, ColorConverterPushConstants, RhiColorConverter,
+    RhiColorConverterInner, SourceLayoutInfo, pixel_format_color_kind,
+};
 pub use command_buffer::CommandBuffer;
 pub use command_queue::RhiCommandQueue;
-pub use color_converter::{
-    pixel_format_color_kind, ColorConverterPushConstants, RhiColorConverter,
-    RhiColorConverterInner, SourceLayoutInfo, COLOR_CONVERTER_PUSH_CONSTANT_SIZE,
-};
-pub use tone_mapper::{
-    RhiToneMapper, ToneCurveId, ToneMapperPushConstants, TONE_MAPPER_PUSH_CONSTANT_SIZE,
-};
 pub use compute_kernel::{
-    derive_bindings_from_spirv, ComputeBindingKind, ComputeBindingSpec,
-    ComputeKernelDescriptor,
+    ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, derive_bindings_from_spirv,
 };
 pub use device::GpuDevice;
-pub use graphics_kernel::{
-    derive_bindings_from_spirv_multistage, AttachmentFormats, BlendFactor, BlendOp,
-    ColorBlendAttachment, ColorBlendState, ColorWriteMask, CullMode, DepthCompareOp, DepthFormat,
-    DepthStencilState, DrawCall, DrawIndexedCall, FrontFace, GraphicsBindingKind,
-    GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor, GraphicsPipelineState,
-    GraphicsPushConstants, GraphicsShaderStage, GraphicsShaderStageFlags, GraphicsStage,
-    IndexType, MultisampleState, PolygonMode, PrimitiveTopology, RasterizationState, ScissorRect,
-    VertexAttributeFormat, VertexInputAttribute, VertexInputBinding, VertexInputRate,
-    VertexInputState, Viewport,
-};
 pub use external_handle::{RhiExternalHandle, RhiPixelBufferExport, RhiPixelBufferImport};
-pub use ray_tracing_kernel::{
-    validate_shader_groups, RayTracingBindingKind, RayTracingBindingSpec,
-    RayTracingKernelDescriptor, RayTracingPushConstants, RayTracingShaderGroup,
-    RayTracingShaderStage, RayTracingShaderStageFlags, RayTracingStage,
+pub use gl_interop::{GlContext, GlTextureBinding, gl_constants};
+pub use graphics_kernel::{
+    AttachmentFormats, BlendFactor, BlendOp, ColorBlendAttachment, ColorBlendState, ColorWriteMask,
+    CullMode, DepthCompareOp, DepthFormat, DepthStencilState, DrawCall, DrawIndexedCall, FrontFace,
+    GraphicsBindingKind, GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor,
+    GraphicsPipelineState, GraphicsPushConstants, GraphicsShaderStage, GraphicsShaderStageFlags,
+    GraphicsStage, IndexType, MultisampleState, PolygonMode, PrimitiveTopology, RasterizationState,
+    ScissorRect, VertexAttributeFormat, VertexInputAttribute, VertexInputBinding, VertexInputRate,
+    VertexInputState, Viewport, derive_bindings_from_spirv_multistage,
 };
-pub use gl_interop::{gl_constants, GlContext, GlTextureBinding};
+#[cfg(target_os = "linux")]
+pub use index_buffer::IndexBuffer;
 pub use pixel_buffer::PixelBuffer;
 pub use pixel_buffer_pool::{PixelBufferDescriptor, PixelBufferPoolId};
+pub use ray_tracing_kernel::{
+    RayTracingBindingKind, RayTracingBindingSpec, RayTracingKernelDescriptor,
+    RayTracingPushConstants, RayTracingShaderGroup, RayTracingShaderStage,
+    RayTracingShaderStageFlags, RayTracingStage, validate_shader_groups,
+};
 #[cfg(target_os = "linux")]
 pub use storage_buffer::StorageBuffer;
+pub use tone_mapper::{
+    RhiToneMapper, TONE_MAPPER_PUSH_CONSTANT_SIZE, ToneCurveId, ToneMapperPushConstants,
+};
 #[cfg(target_os = "linux")]
 pub use uniform_buffer::UniformBuffer;
 #[cfg(target_os = "linux")]
 pub use vertex_buffer::VertexBuffer;
-#[cfg(target_os = "linux")]
-pub use index_buffer::IndexBuffer;
 // Note: RhiPixelBufferPool is intentionally not exported - use GpuContext::acquire_pixel_buffer()
 pub(crate) use pixel_buffer_pool::RhiPixelBufferPool;
 pub use pixel_buffer_ref::PixelBufferRef;

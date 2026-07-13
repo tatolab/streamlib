@@ -57,9 +57,8 @@ impl ManualProcessor for TcpBindTest::Processor {
             Ok(port) => port.to_string(),
             Err(e) => format!("ERR:{e}"),
         };
-        std::fs::write(&output_path, &line).map_err(|e| {
-            Error::Runtime(format!("TcpBindTest: write {output_path}: {e}"))
-        })?;
+        std::fs::write(&output_path, &line)
+            .map_err(|e| Error::Runtime(format!("TcpBindTest: write {output_path}: {e}")))?;
         Ok(())
     }
 

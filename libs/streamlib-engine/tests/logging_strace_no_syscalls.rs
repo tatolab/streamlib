@@ -144,9 +144,8 @@ mod linux {
             )
         });
 
-        let writes = count_writes_in_burst(&trace).unwrap_or_else(|e| {
-            panic!("burst window parse failed: {e}\nemitter trace:\n{trace}")
-        });
+        let writes = count_writes_in_burst(&trace)
+            .unwrap_or_else(|e| panic!("burst window parse failed: {e}\nemitter trace:\n{trace}"));
 
         assert_eq!(
             writes, 0,

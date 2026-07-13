@@ -56,8 +56,8 @@ use streamlib_adapter_abi::{
     ReadGuard, StreamlibSurface, SurfaceAdapter, SurfaceFormat, WriteGuard,
 };
 use streamlib_adapter_cpu_readback_abi::{
-    CpuReadbackPlaneRepr, CpuReadbackSurfaceAdapterVTable, CpuReadbackViewRepr,
-    HostSurfaceRegistrationRepr, CPU_READBACK_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION, MAX_PLANES,
+    CPU_READBACK_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION, CpuReadbackPlaneRepr,
+    CpuReadbackSurfaceAdapterVTable, CpuReadbackViewRepr, HostSurfaceRegistrationRepr, MAX_PLANES,
 };
 use streamlib_consumer_rhi::{DevicePrivilege, VulkanLayout, VulkanRhiDevice};
 
@@ -72,8 +72,8 @@ use crate::view::{CpuReadbackReadView, CpuReadbackWriteView};
 /// The vtable is `const`-initialized per `D` monomorphization;
 /// every call for the same `D` returns the same pointer. Multiple
 /// `D`s coexist in the same host process with their own vtables.
-pub fn host_cpu_readback_surface_adapter_vtable<D: VulkanRhiDevice + 'static>(
-) -> *const CpuReadbackSurfaceAdapterVTable {
+pub fn host_cpu_readback_surface_adapter_vtable<D: VulkanRhiDevice + 'static>()
+-> *const CpuReadbackSurfaceAdapterVTable {
     &MonoVTable::<D>::VTABLE
 }
 
@@ -257,9 +257,7 @@ unsafe extern "C" fn host_clone_handle<D: VulkanRhiDevice + 'static>(
             // SAFETY: handle is
             // Arc::into_raw(Arc<CpuReadbackSurfaceAdapter<D>>)-shaped.
             unsafe {
-                Arc::increment_strong_count(
-                    borrowed_handle as *const CpuReadbackSurfaceAdapter<D>,
-                );
+                Arc::increment_strong_count(borrowed_handle as *const CpuReadbackSurfaceAdapter<D>);
             }
             borrowed_handle
         },
@@ -278,9 +276,7 @@ unsafe extern "C" fn host_drop_handle<D: VulkanRhiDevice + 'static>(owned_handle
             // Arc::into_raw(Arc<CpuReadbackSurfaceAdapter<D>>)-shaped
             // with at least one host-side refcount remaining.
             unsafe {
-                Arc::decrement_strong_count(
-                    owned_handle as *const CpuReadbackSurfaceAdapter<D>,
-                );
+                Arc::decrement_strong_count(owned_handle as *const CpuReadbackSurfaceAdapter<D>);
             }
         },
         (),
@@ -369,8 +365,7 @@ unsafe extern "C" fn host_register_host_surface<D: VulkanRhiDevice + 'static>(
                 if r.texture_handle == 0 {
                     None
                 } else {
-                    let ptr = r.texture_handle
-                        as *const <D::Privilege as DevicePrivilege>::Texture;
+                    let ptr = r.texture_handle as *const <D::Privilege as DevicePrivilege>::Texture;
                     unsafe {
                         Arc::increment_strong_count(ptr);
                         Some(Arc::from_raw(ptr))
@@ -393,9 +388,7 @@ unsafe extern "C" fn host_register_host_surface<D: VulkanRhiDevice + 'static>(
             for i in 0..plane_count {
                 let raw = r.staging_handles[i];
                 if raw == 0 {
-                    let msg = format!(
-                        "register_host_surface: null staging handle at plane {i}"
-                    );
+                    let msg = format!("register_host_surface: null staging handle at plane {i}");
                     unsafe { write_err(&msg, err_buf, err_buf_cap, err_len) };
                     return 1;
                 }
@@ -531,8 +524,7 @@ where
             // SAFETY: caller asserts the pointer is a borrowed
             // StreamlibSurface from its own stack/heap, valid for
             // the duration of the call.
-            let surface: &StreamlibSurface =
-                unsafe { &*(surface_ptr as *const StreamlibSurface) };
+            let surface: &StreamlibSurface = unsafe { &*(surface_ptr as *const StreamlibSurface) };
             match body(adapter, surface) {
                 Ok(Some(view)) => {
                     if !out_view.is_null() {
@@ -974,7 +966,10 @@ mod tier1_null_handle_tests {
         };
         assert_eq!(rc, 1);
         let msg = err_msg(&buf, len);
-        assert!(msg.contains("acquire_read: null adapter handle"), "got: {msg}");
+        assert!(
+            msg.contains("acquire_read: null adapter handle"),
+            "got: {msg}"
+        );
     }
 
     #[test]

@@ -11,9 +11,7 @@ use streamlib_plugin_abi::GpuContextFullAccessVTable;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::core::rhi::{
-    DrawCall, DrawIndexedCall, ScissorRect, Texture, Viewport, VulkanLayout,
-};
+use crate::core::rhi::{DrawCall, DrawIndexedCall, ScissorRect, Texture, Viewport, VulkanLayout};
 use crate::core::{Error, Result};
 
 use super::{
@@ -149,8 +147,8 @@ impl RhiCommandRecorderInner {
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
             .queue_family_index(queue_family_index)
             .build();
-        let command_pool = unsafe { device.create_command_pool(&pool_info, None) }
-            .map_err(|e| {
+        let command_pool =
+            unsafe { device.create_command_pool(&pool_info, None) }.map_err(|e| {
                 Error::GpuError(format!(
                     "RhiCommandRecorder '{label}': vkCreateCommandPool failed: {e}"
                 ))
@@ -779,17 +777,12 @@ impl RhiCommandRecorderInner {
         let image = vk::Image::from_raw(image_raw);
         let old_layout = vk::ImageLayout::from_raw(from_layout_raw);
         let new_layout = vk::ImageLayout::from_raw(to_layout_raw);
-        let src_stage =
-            vk::PipelineStageFlags2::from_bits_truncate(from_stage_raw as u64);
-        let src_access =
-            vk::AccessFlags2::from_bits_truncate(from_access_raw as u64);
-        let dst_stage =
-            vk::PipelineStageFlags2::from_bits_truncate(to_stage_raw as u64);
-        let dst_access =
-            vk::AccessFlags2::from_bits_truncate(to_access_raw as u64);
+        let src_stage = vk::PipelineStageFlags2::from_bits_truncate(from_stage_raw as u64);
+        let src_access = vk::AccessFlags2::from_bits_truncate(from_access_raw as u64);
+        let dst_stage = vk::PipelineStageFlags2::from_bits_truncate(to_stage_raw as u64);
+        let dst_access = vk::AccessFlags2::from_bits_truncate(to_access_raw as u64);
         self.record_swapchain_image_barrier(
-            image, old_layout, new_layout, src_stage, src_access, dst_stage,
-            dst_access,
+            image, old_layout, new_layout, src_stage, src_access, dst_stage, dst_access,
         )
     }
 
@@ -817,9 +810,7 @@ impl RhiCommandRecorderInner {
                 vk::SemaphoreSubmitInfo::builder()
                     .semaphore(vk::Semaphore::from_raw(r.semaphore))
                     .value(r.value)
-                    .stage_mask(vk::PipelineStageFlags2::from_bits_truncate(
-                        r.stage_mask,
-                    ))
+                    .stage_mask(vk::PipelineStageFlags2::from_bits_truncate(r.stage_mask))
                     .device_index(r.device_index)
                     .build()
             })
@@ -830,9 +821,7 @@ impl RhiCommandRecorderInner {
                 vk::SemaphoreSubmitInfo::builder()
                     .semaphore(vk::Semaphore::from_raw(r.semaphore))
                     .value(r.value)
-                    .stage_mask(vk::PipelineStageFlags2::from_bits_truncate(
-                        r.stage_mask,
-                    ))
+                    .stage_mask(vk::PipelineStageFlags2::from_bits_truncate(r.stage_mask))
                     .device_index(r.device_index)
                     .build()
             })
@@ -943,8 +932,7 @@ pub struct RhiCommandRecorder {
     /// sub-lift slice B — #984). Null in host mode; populated by
     /// [`Self::from_inner`] via
     /// [`crate::core::plugin::host_services::host_rhi_command_recorder_methods_vtable`].
-    pub(crate) methods_vtable:
-        *const streamlib_plugin_abi::RhiCommandRecorderMethodsVTable,
+    pub(crate) methods_vtable: *const streamlib_plugin_abi::RhiCommandRecorderMethodsVTable,
 }
 
 // SAFETY: handle points at a `Box<RhiCommandRecorderInner>`; Inner
@@ -965,8 +953,7 @@ impl RhiCommandRecorder {
     /// methods vtables.
     pub(crate) fn from_inner(inner: RhiCommandRecorderInner) -> Self {
         let handle = Box::into_raw(Box::new(inner)) as *const c_void;
-        let vtable =
-            crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
+        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
         let methods_vtable =
             crate::core::plugin::host_services::host_rhi_command_recorder_methods_vtable();
         Self {
@@ -1039,7 +1026,13 @@ impl RhiCommandRecorder {
             );
         }
         self.host_inner_mut().record_image_barrier(
-            texture, from_layout, to_layout, from_stage, to_stage, from_access, to_access,
+            texture,
+            from_layout,
+            to_layout,
+            from_stage,
+            to_stage,
+            from_access,
+            to_access,
         )
     }
 
@@ -1072,7 +1065,11 @@ impl RhiCommandRecorder {
             );
         }
         self.host_inner_mut().record_buffer_barrier(
-            buffer, from_stage, to_stage, from_access, to_access,
+            buffer,
+            from_stage,
+            to_stage,
+            from_access,
+            to_access,
         )
     }
 
@@ -1092,9 +1089,8 @@ impl RhiCommandRecorder {
         region: ImageCopyRegion,
     ) -> Result<()> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_record_copy_image_to_buffer_via_vtable(
-                src, src_layout, dst, region,
-            );
+            return self
+                .dispatch_record_copy_image_to_buffer_via_vtable(src, src_layout, dst, region);
         }
         self.host_inner_mut()
             .record_copy_image_to_buffer(src, src_layout, dst, region)
@@ -1124,9 +1120,7 @@ impl RhiCommandRecorder {
         group_z: u32,
     ) -> Result<()> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_record_dispatch_via_vtable(
-                kernel, group_x, group_y, group_z,
-            );
+            return self.dispatch_record_dispatch_via_vtable(kernel, group_x, group_y, group_z);
         }
         self.host_inner_mut()
             .record_dispatch(kernel, group_x, group_y, group_z)
@@ -1162,11 +1156,7 @@ impl RhiCommandRecorder {
         draw: &DrawIndexedCall,
     ) -> Result<()> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_record_draw_indexed_via_vtable(
-                kernel,
-                frame_index,
-                draw,
-            );
+            return self.dispatch_record_draw_indexed_via_vtable(kernel, frame_index, draw);
         }
         self.host_inner_mut()
             .record_draw_indexed(kernel, frame_index, draw)
@@ -1181,10 +1171,7 @@ impl RhiCommandRecorder {
         signal_value: u64,
     ) -> Result<()> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_submit_signaling_timeline_via_vtable(
-                timeline,
-                signal_value,
-            );
+            return self.dispatch_submit_signaling_timeline_via_vtable(timeline, signal_value);
         }
         self.host_inner_mut()
             .submit_signaling_timeline(timeline, signal_value)
@@ -1217,8 +1204,7 @@ impl RhiCommandRecorder {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1236,8 +1222,7 @@ impl RhiCommandRecorder {
     ) -> Result<()> {
         if self.methods_vtable.is_null() {
             return Err(Error::GpuError(
-                "record_image_barrier: command recorder methods vtable is null"
-                    .into(),
+                "record_image_barrier: command recorder methods vtable is null".into(),
             ));
         }
         let mut err_buf = [0u8; 256];
@@ -1260,8 +1245,7 @@ impl RhiCommandRecorder {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1276,15 +1260,12 @@ impl RhiCommandRecorder {
     ) -> Result<()> {
         if self.methods_vtable.is_null() {
             return Err(Error::GpuError(
-                "record_buffer_barrier: command recorder methods vtable is null"
-                    .into(),
+                "record_buffer_barrier: command recorder methods vtable is null".into(),
             ));
         }
         let mut err_buf = [0u8; 256];
         let mut err_len: usize = 0;
-        let status = if let Some(storage_handle) =
-            buffer.cdylib_storage_buffer_handle()
-        {
+        let status = if let Some(storage_handle) = buffer.cdylib_storage_buffer_handle() {
             unsafe {
                 ((*self.methods_vtable).record_buffer_barrier)(
                     self.handle,
@@ -1298,9 +1279,7 @@ impl RhiCommandRecorder {
                     &mut err_len as *mut usize,
                 )
             }
-        } else if let Some(pixel_handle) =
-            buffer.cdylib_pixel_buffer_handle()
-        {
+        } else if let Some(pixel_handle) = buffer.cdylib_pixel_buffer_handle() {
             unsafe {
                 ((*self.methods_vtable).record_pixel_buffer_barrier)(
                     self.handle,
@@ -1326,8 +1305,7 @@ impl RhiCommandRecorder {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1361,8 +1339,7 @@ impl RhiCommandRecorder {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1376,8 +1353,7 @@ impl RhiCommandRecorder {
     ) -> Result<()> {
         if self.methods_vtable.is_null() {
             return Err(Error::GpuError(
-                "record_copy_image_to_buffer: command recorder methods vtable is null"
-                    .into(),
+                "record_copy_image_to_buffer: command recorder methods vtable is null".into(),
             ));
         }
         let region_repr = streamlib_plugin_abi::ImageCopyRegionRepr {
@@ -1392,9 +1368,7 @@ impl RhiCommandRecorder {
         };
         let mut err_buf = [0u8; 256];
         let mut err_len: usize = 0;
-        let status = if let Some(dst_storage_handle) =
-            dst.cdylib_storage_buffer_handle()
-        {
+        let status = if let Some(dst_storage_handle) = dst.cdylib_storage_buffer_handle() {
             unsafe {
                 ((*self.methods_vtable).record_copy_image_to_buffer)(
                     self.handle,
@@ -1407,9 +1381,7 @@ impl RhiCommandRecorder {
                     &mut err_len as *mut usize,
                 )
             }
-        } else if let Some(dst_pixel_handle) =
-            dst.cdylib_pixel_buffer_handle()
-        {
+        } else if let Some(dst_pixel_handle) = dst.cdylib_pixel_buffer_handle() {
             unsafe {
                 ((*self.methods_vtable).record_copy_image_to_pixel_buffer)(
                     self.handle,
@@ -1434,8 +1406,7 @@ impl RhiCommandRecorder {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1447,12 +1418,10 @@ impl RhiCommandRecorder {
     ) -> Result<()> {
         if self.methods_vtable.is_null() {
             return Err(Error::GpuError(
-                "submit_signaling_timeline: command recorder methods vtable is null"
-                    .into(),
+                "submit_signaling_timeline: command recorder methods vtable is null".into(),
             ));
         }
-        let timeline_handle = timeline as *const HostVulkanTimelineSemaphore
-            as *const c_void;
+        let timeline_handle = timeline as *const HostVulkanTimelineSemaphore as *const c_void;
         let mut err_buf = [0u8; 256];
         let mut err_len: usize = 0;
         let status = unsafe {
@@ -1468,8 +1437,7 @@ impl RhiCommandRecorder {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1494,8 +1462,7 @@ impl RhiCommandRecorder {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1520,8 +1487,7 @@ impl RhiCommandRecorder {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1587,23 +1553,11 @@ impl RhiCommandRecorder {
     ) -> Result<()> {
         if crate::core::plugin::host_services::host_callbacks().is_some() {
             return self.dispatch_record_swapchain_image_barrier_via_vtable(
-                image,
-                old_layout,
-                new_layout,
-                src_stage,
-                src_access,
-                dst_stage,
-                dst_access,
+                image, old_layout, new_layout, src_stage, src_access, dst_stage, dst_access,
             );
         }
         self.host_inner_mut().record_swapchain_image_barrier(
-            image,
-            old_layout,
-            new_layout,
-            src_stage,
-            src_access,
-            dst_stage,
-            dst_access,
+            image, old_layout, new_layout, src_stage, src_access, dst_stage, dst_access,
         )
     }
 
@@ -1704,8 +1658,7 @@ impl RhiCommandRecorder {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1718,8 +1671,7 @@ impl RhiCommandRecorder {
     ) -> Result<()> {
         if self.methods_vtable.is_null() {
             return Err(Error::GpuError(
-                "record_draw_indexed: command recorder methods vtable is null"
-                    .into(),
+                "record_draw_indexed: command recorder methods vtable is null".into(),
             ));
         }
         let (viewport_present, vp) = match draw.viewport {
@@ -1770,8 +1722,7 @@ impl RhiCommandRecorder {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1789,8 +1740,7 @@ impl RhiCommandRecorder {
     ) -> Result<()> {
         if self.methods_vtable.is_null() {
             return Err(Error::GpuError(
-                "record_swapchain_image_barrier: command recorder methods vtable is null"
-                    .into(),
+                "record_swapchain_image_barrier: command recorder methods vtable is null".into(),
             ));
         }
         let mut err_buf = [0u8; 256];
@@ -1813,8 +1763,7 @@ impl RhiCommandRecorder {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1827,8 +1776,7 @@ impl RhiCommandRecorder {
     ) -> Result<()> {
         if self.methods_vtable.is_null() {
             return Err(Error::GpuError(
-                "cmd_begin_dynamic_rendering: command recorder methods vtable is null"
-                    .into(),
+                "cmd_begin_dynamic_rendering: command recorder methods vtable is null".into(),
             ));
         }
         let has_clear = if clear_color.is_some() { 1u32 } else { 0u32 };
@@ -1854,8 +1802,7 @@ impl RhiCommandRecorder {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1863,8 +1810,7 @@ impl RhiCommandRecorder {
     fn dispatch_cmd_end_dynamic_rendering_via_vtable(&self) -> Result<()> {
         if self.methods_vtable.is_null() {
             return Err(Error::GpuError(
-                "cmd_end_dynamic_rendering: command recorder methods vtable is null"
-                    .into(),
+                "cmd_end_dynamic_rendering: command recorder methods vtable is null".into(),
             ));
         }
         let mut err_buf = [0u8; 256];
@@ -1880,8 +1826,7 @@ impl RhiCommandRecorder {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1893,8 +1838,7 @@ impl RhiCommandRecorder {
     ) -> Result<()> {
         if self.methods_vtable.is_null() {
             return Err(Error::GpuError(
-                "submit_with_semaphores: command recorder methods vtable is null"
-                    .into(),
+                "submit_with_semaphores: command recorder methods vtable is null".into(),
             ));
         }
         // Project the vk::SemaphoreSubmitInfo arrays into POD reprs.
@@ -1943,12 +1887,10 @@ impl RhiCommandRecorder {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
-
 }
 
 impl Drop for RhiCommandRecorder {
@@ -2004,9 +1946,7 @@ mod layout_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::rhi::{
-        ComputeBindingSpec, ComputeKernelDescriptor, PixelBuffer, PixelFormat,
-    };
+    use crate::core::rhi::{ComputeBindingSpec, ComputeKernelDescriptor, PixelBuffer, PixelFormat};
     use crate::vulkan::rhi::HostVulkanBuffer;
 
     fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {
@@ -2020,8 +1960,8 @@ mod tests {
     }
 
     fn make_storage_buffer(device: &Arc<HostVulkanDevice>, element_count: u32) -> PixelBuffer {
-        let vk_buf = HostVulkanBuffer::new(device, (element_count as u64) * 4)
-            .expect("storage buffer");
+        let vk_buf =
+            HostVulkanBuffer::new(device, (element_count as u64) * 4).expect("storage buffer");
         PixelBuffer::from_host_vulkan_buffer(
             Arc::new(vk_buf),
             element_count,
@@ -2072,10 +2012,7 @@ mod tests {
             .err()
             .expect("expected typed error");
         let msg = format!("{err}");
-        assert!(
-            msg.contains("outside an active recording"),
-            "got: {msg}"
-        );
+        assert!(msg.contains("outside an active recording"), "got: {msg}");
     }
 
     #[cfg_attr(
@@ -2110,10 +2047,7 @@ mod tests {
         let mut rec = RhiCommandRecorder::new(&device, "no-begin-submit").expect("create");
         let err = rec.submit().err().expect("expected typed error");
         let msg = format!("{err}");
-        assert!(
-            msg.contains("without an active recording"),
-            "got: {msg}"
-        );
+        assert!(msg.contains("without an active recording"), "got: {msg}");
     }
 
     #[cfg_attr(
@@ -2133,7 +2067,8 @@ mod tests {
             None => return,
         };
         let mut rec = RhiCommandRecorder::new(&device, "first-begin-no-block").expect("create");
-        rec.begin().expect("first begin must not block on unsignaled fence");
+        rec.begin()
+            .expect("first begin must not block on unsignaled fence");
         rec.submit_and_wait().expect("submit_and_wait");
     }
 
@@ -2326,19 +2261,23 @@ mod tests {
         // makes this assertion fail with src_access in the to_stage
         // slot (#1089's exact failure mode).
         assert_eq!(
-            captured[0], src_stage.bits() as i64,
+            captured[0],
+            src_stage.bits() as i64,
             "from_stage_raw must receive caller's src_stage"
         );
         assert_eq!(
-            captured[1], dst_stage.bits() as i64,
+            captured[1],
+            dst_stage.bits() as i64,
             "to_stage_raw must receive caller's dst_stage (#1089: was src_access)"
         );
         assert_eq!(
-            captured[2], src_access.bits() as i64,
+            captured[2],
+            src_access.bits() as i64,
             "from_access_raw must receive caller's src_access (#1089: was dst_stage)"
         );
         assert_eq!(
-            captured[3], dst_access.bits() as i64,
+            captured[3],
+            dst_access.bits() as i64,
             "to_access_raw must receive caller's dst_access"
         );
     }
@@ -2406,8 +2345,7 @@ mod tests {
             .set_push_constants_value(&push)
             .expect("push constants");
 
-        let timeline =
-            HostVulkanTimelineSemaphore::new(device.device(), 0).expect("timeline");
+        let timeline = HostVulkanTimelineSemaphore::new(device.device(), 0).expect("timeline");
 
         let mut rec = RhiCommandRecorder::new(&device, "recorder-test").expect("recorder");
         rec.begin().expect("begin");
@@ -2461,10 +2399,8 @@ mod tests {
         let pattern: Vec<u32> = (0..element_count).map(|i| i + 1).collect();
         write_buffer_u32(&input, &pattern);
 
-        let timeline =
-            HostVulkanTimelineSemaphore::new(device.device(), 0).expect("timeline");
-        let mut rec =
-            RhiCommandRecorder::new(&device, "recorder-back-to-back").expect("recorder");
+        let timeline = HostVulkanTimelineSemaphore::new(device.device(), 0).expect("timeline");
+        let mut rec = RhiCommandRecorder::new(&device, "recorder-back-to-back").expect("recorder");
 
         for frame in 1..=3u64 {
             kernel.set_storage_buffer_pixel(0, &input).expect("set 0");
@@ -2484,7 +2420,8 @@ mod tests {
                 VulkanAccess::HOST_READ,
             )
             .expect("barrier");
-            rec.submit_signaling_timeline(&timeline, frame).expect("submit");
+            rec.submit_signaling_timeline(&timeline, frame)
+                .expect("submit");
 
             timeline.wait(frame, u64::MAX).expect("wait");
             assert_eq!(

@@ -72,7 +72,6 @@ impl<'a> BitReader<'a> {
         let suffix = self.u(lz);
         (1u32 << lz) - 1 + suffix
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -159,11 +158,7 @@ fn remove_epb(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len());
     let mut i = 0;
     while i < data.len() {
-        if i + 2 < data.len()
-            && data[i] == 0
-            && data[i + 1] == 0
-            && data[i + 2] == 3
-        {
+        if i + 2 < data.len() && data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 3 {
             // Check if this is a valid EPB (next byte must be 00, 01, 02, or 03)
             if i + 3 < data.len() && data[i + 3] <= 3 {
                 out.push(0);
@@ -230,8 +225,7 @@ fn split_nals(data: &[u8]) -> Vec<(usize, Vec<u8>)> {
         let mut nal_end = data.len();
         while i + 2 < data.len() {
             if data[i] == 0 && data[i + 1] == 0 {
-                if (i + 3 < data.len() && data[i + 2] == 0 && data[i + 3] == 1)
-                    || data[i + 2] == 1
+                if (i + 3 < data.len() && data[i + 2] == 0 && data[i + 3] == 1) || data[i + 2] == 1
                 {
                     nal_end = i;
                     break;
@@ -602,12 +596,8 @@ mod tests {
             0, 0, 0, 1, 0x67, 0x42, 0x00, 0x1E, // SPS NAL (Baseline)
             0, 0, 0, 1, 0x68, 0xCE, 0x38, 0x80, // PPS NAL
         ];
-        let patched = patch_header_timing(
-            &header,
-            vk::VideoCodecOperationFlagsKHR::ENCODE_H264,
-            30,
-            1,
-        );
+        let patched =
+            patch_header_timing(&header, vk::VideoCodecOperationFlagsKHR::ENCODE_H264, 30, 1);
         assert_eq!(patched, header);
     }
 }

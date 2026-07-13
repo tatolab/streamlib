@@ -284,9 +284,7 @@ impl From<&crate::core::SchemaIdent> for SchemaIdentOutput {
 impl SchemaIdentOutput {
     /// Resolve a structured port schema spec into the JSON-wire output
     /// shape. `Any` ports yield `None` (the field is omitted on the wire).
-    pub fn from_port_spec(
-        spec: &crate::core::PortSchemaSpec,
-    ) -> Option<Self> {
+    pub fn from_port_spec(spec: &crate::core::PortSchemaSpec) -> Option<Self> {
         match spec {
             crate::core::PortSchemaSpec::Any => None,
             crate::core::PortSchemaSpec::Specific(ident) => Some(Self::from(ident)),
@@ -502,12 +500,8 @@ mod schema_ident_output_tests {
 
     #[test]
     fn from_port_spec_resolves_specific_to_structured() {
-        let spec = PortSchemaSpec::Specific(ident(
-            "tatolab",
-            "core",
-            "VideoFrame",
-            SemVer::new(1, 0, 0),
-        ));
+        let spec =
+            PortSchemaSpec::Specific(ident("tatolab", "core", "VideoFrame", SemVer::new(1, 0, 0)));
         let s = SchemaIdentOutput::from_port_spec(&spec)
             .expect("Specific must yield a structured output");
         assert_eq!(s.org, "tatolab");
@@ -563,10 +557,7 @@ mod schema_ident_output_tests {
             overflow: None,
         };
         let out = PortInfoOutput::from(&port);
-        let s = out
-            .data_type
-            .as_ref()
-            .expect("Specific must resolve");
+        let s = out.data_type.as_ref().expect("Specific must resolve");
         assert_eq!(s.org, "tatolab");
         assert_eq!(s.package, "core");
         assert_eq!(s.type_name, "VideoFrame");
@@ -615,10 +606,7 @@ mod schema_ident_output_tests {
             true,
         );
         let out = PortDescriptorOutput::from(&pd);
-        let s = out
-            .schema
-            .as_ref()
-            .expect("Specific must resolve");
+        let s = out.schema.as_ref().expect("Specific must resolve");
         assert_eq!(s.org, "tatolab");
         assert_eq!(s.package, "core");
         assert_eq!(s.type_name, "EncodedVideoFrame");

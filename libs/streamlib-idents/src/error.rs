@@ -17,13 +17,19 @@ pub enum IdentError {
     #[error("type segment is empty")]
     EmptyType,
 
-    #[error("org `{0}` contains invalid character `{1}` (allowed: a-z, 0-9, hyphen, must start with a-z)")]
+    #[error(
+        "org `{0}` contains invalid character `{1}` (allowed: a-z, 0-9, hyphen, must start with a-z)"
+    )]
     InvalidOrgCharacter(String, char),
 
-    #[error("package `{0}` contains invalid character `{1}` (allowed: a-z, 0-9, hyphen, must start with a-z)")]
+    #[error(
+        "package `{0}` contains invalid character `{1}` (allowed: a-z, 0-9, hyphen, must start with a-z)"
+    )]
     InvalidPackageCharacter(String, char),
 
-    #[error("type `{0}` contains invalid character `{1}` (allowed: a-z, A-Z, 0-9, must start with A-Z)")]
+    #[error(
+        "type `{0}` contains invalid character `{1}` (allowed: a-z, A-Z, 0-9, must start with A-Z)"
+    )]
     InvalidTypeCharacter(String, char),
 
     #[error("org `{0}` must start with a-z")]
@@ -64,21 +70,27 @@ pub enum ResolverError {
         source: serde_yaml::Error,
     },
 
-    #[error("manifest `{path}` declares dependency `{dep_key}` but it must match the form `@org/name` (was `{actual}`)")]
+    #[error(
+        "manifest `{path}` declares dependency `{dep_key}` but it must match the form `@org/name` (was `{actual}`)"
+    )]
     InvalidDependencyKey {
         path: PathBuf,
         dep_key: String,
         actual: String,
     },
 
-    #[error("manifest `{path}` declares package id `{declared}` which doesn't match the dependency edge `{requested}`")]
+    #[error(
+        "manifest `{path}` declares package id `{declared}` which doesn't match the dependency edge `{requested}`"
+    )]
     PackageIdMismatch {
         path: PathBuf,
         declared: String,
         requested: String,
     },
 
-    #[error("dependency `{name}` declared at `{from}` resolves to version `{found}` which doesn't satisfy range `{range}`")]
+    #[error(
+        "dependency `{name}` declared at `{from}` resolves to version `{found}` which doesn't satisfy range `{range}`"
+    )]
     VersionRangeUnsatisfied {
         name: String,
         from: PathBuf,
@@ -86,7 +98,9 @@ pub enum ResolverError {
         range: String,
     },
 
-    #[error("dependency `{name}` resolution conflict: range `{range_a}` (from `{from_a}`) and `{range_b}` (from `{from_b}`) have no overlap")]
+    #[error(
+        "dependency `{name}` resolution conflict: range `{range_a}` (from `{from_a}`) and `{range_b}` (from `{from_b}`) have no overlap"
+    )]
     VersionRangeConflict {
         name: String,
         range_a: String,

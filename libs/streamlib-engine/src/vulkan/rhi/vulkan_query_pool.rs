@@ -62,8 +62,7 @@ impl EncodeFeedbackLayout {
                 .contains(vk::VideoEncodeFeedbackFlagsKHR::BITSTREAM_BUFFER_OFFSET),
             has_bytes_written: flags
                 .contains(vk::VideoEncodeFeedbackFlagsKHR::BITSTREAM_BYTES_WRITTEN),
-            has_overrides: flags
-                .contains(vk::VideoEncodeFeedbackFlagsKHR::BITSTREAM_HAS_OVERRIDES),
+            has_overrides: flags.contains(vk::VideoEncodeFeedbackFlagsKHR::BITSTREAM_HAS_OVERRIDES),
         }
     }
 
@@ -449,7 +448,10 @@ mod tests {
     /// error before reaching `vkCreateQueryPool`. Hardware-gated because
     /// constructing the descriptor requires a `HostVulkanDevice`.
     #[cfg(target_os = "linux")]
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn new_rejects_zero_query_count() {
         let device = match HostVulkanDevice::new() {
@@ -482,7 +484,10 @@ mod tests {
     /// and an empty mask produces a pool whose results are
     /// silently empty.
     #[cfg(target_os = "linux")]
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn new_rejects_pipeline_stats_empty_flags() {
         let device = match HostVulkanDevice::new() {
@@ -513,7 +518,10 @@ mod tests {
     /// `VIDEO_ENCODE_FEEDBACK_KHR` rejects an empty feedback-flag
     /// mask AND missing video profile.
     #[cfg(target_os = "linux")]
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn new_rejects_encode_feedback_missing_fields() {
         let device = match HostVulkanDevice::new() {
@@ -562,7 +570,10 @@ mod tests {
     /// cleanly against a real device. Locks the "non-video query types
     /// don't need the video-specific pNext" path.
     #[cfg(target_os = "linux")]
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn new_timestamp_query_pool_succeeds() {
         let device = match HostVulkanDevice::new() {

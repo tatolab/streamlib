@@ -105,10 +105,7 @@ impl<'h> SubprocessCrashHarness<'h> {
     /// `observe_cleanup` is called repeatedly each poll — return
     /// `Ok(())` to mark cleanup complete, `Err(...)` to keep waiting.
     #[tracing::instrument(level = "debug", skip(self, observe_cleanup), fields(timing = ?self.timing))]
-    pub fn run<F>(
-        mut self,
-        mut observe_cleanup: F,
-    ) -> io::Result<SubprocessCrashOutcome>
+    pub fn run<F>(mut self, mut observe_cleanup: F) -> io::Result<SubprocessCrashOutcome>
     where
         F: FnMut() -> Result<(), &'static str>,
     {
@@ -147,5 +144,4 @@ impl<'h> SubprocessCrashHarness<'h> {
             std::thread::sleep(self.cleanup_poll_interval);
         }
     }
-
 }

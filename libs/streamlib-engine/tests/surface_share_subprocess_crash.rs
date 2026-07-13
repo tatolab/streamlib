@@ -18,8 +18,8 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use streamlib_engine::linux_surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 use streamlib_adapter_abi::testing::{CrashTiming, SubprocessCrashHarness};
+use streamlib_engine::linux_surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 use streamlib_surface_client::{connect_to_surface_share_socket, send_request_with_fds};
 
 /// Locate the test helper binary built by `cargo test` under `target/<profile>/`.
@@ -129,7 +129,9 @@ fn watchdog_cleans_up_surface_after_subprocess_sigkill() {
             // with nothing to clean up.
             let deadline = Instant::now() + Duration::from_secs(5);
             loop {
-                let n = state_for_post.surface_ids_by_runtime(&runtime_id_for_post).len();
+                let n = state_for_post
+                    .surface_ids_by_runtime(&runtime_id_for_post)
+                    .len();
                 if n >= 1 {
                     return Ok(());
                 }

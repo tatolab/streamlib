@@ -65,8 +65,7 @@ mod gpu_full_access_vtable_tests {
 
     use super::super::HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE;
     use streamlib_plugin_abi::{
-        ComputeKernelDescriptorRepr, GraphicsKernelDescriptorRepr,
-        RayTracingKernelDescriptorRepr,
+        ComputeKernelDescriptorRepr, GraphicsKernelDescriptorRepr, RayTracingKernelDescriptorRepr,
     };
 
     fn make_err_buf() -> ([u8; 256], usize) {
@@ -202,11 +201,9 @@ mod gpu_full_access_vtable_tests {
     #[test]
     fn acquire_render_target_dma_buf_image_returns_error_on_null_scope_token() {
         let (mut buf, mut len) = make_err_buf();
-        let mut out: crate::core::rhi::texture::Texture =
-            unsafe { std::mem::zeroed() };
+        let mut out: crate::core::rhi::texture::Texture = unsafe { std::mem::zeroed() };
         let rc = unsafe {
-            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE
-                .acquire_render_target_dma_buf_image)(
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.acquire_render_target_dma_buf_image)(
                 std::ptr::null(),
                 64,
                 64,
@@ -220,9 +217,7 @@ mod gpu_full_access_vtable_tests {
         assert_eq!(rc, 1);
         let msg = err_buf_as_str(&buf, len);
         assert!(
-            msg.contains(
-                "acquire_render_target_dma_buf_image: invalid escalate scope"
-            ),
+            msg.contains("acquire_render_target_dma_buf_image: invalid escalate scope"),
             "got: {msg}"
         );
     }
@@ -234,11 +229,9 @@ mod gpu_full_access_vtable_tests {
         // would later fail scope lookup) but an invalid format ensures
         // the format-validation path fires.
         let (mut buf, mut len) = make_err_buf();
-        let mut out: crate::core::rhi::texture::Texture =
-            unsafe { std::mem::zeroed() };
+        let mut out: crate::core::rhi::texture::Texture = unsafe { std::mem::zeroed() };
         let rc = unsafe {
-            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE
-                .acquire_render_target_dma_buf_image)(
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.acquire_render_target_dma_buf_image)(
                 std::ptr::null(),
                 64,
                 64,
@@ -252,9 +245,7 @@ mod gpu_full_access_vtable_tests {
         assert_eq!(rc, 1);
         let msg = err_buf_as_str(&buf, len);
         assert!(
-            msg.contains(
-                "acquire_render_target_dma_buf_image: invalid format_raw"
-            ),
+            msg.contains("acquire_render_target_dma_buf_image: invalid format_raw"),
             "got: {msg}"
         );
     }
@@ -287,8 +278,7 @@ mod gpu_full_access_vtable_tests {
         let (mut buf, mut len) = make_err_buf();
         let mut id_buf = [0u8; 256];
         let mut id_len: usize = 0;
-        let mut out: crate::core::rhi::texture::Texture =
-            unsafe { std::mem::zeroed() };
+        let mut out: crate::core::rhi::texture::Texture = unsafe { std::mem::zeroed() };
         let rc = unsafe {
             (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.acquire_output_texture)(
                 std::ptr::null(),
@@ -317,8 +307,7 @@ mod gpu_full_access_vtable_tests {
         let (mut buf, mut len) = make_err_buf();
         let mut id_buf = [0u8; 256];
         let mut id_len: usize = 0;
-        let mut out: crate::core::rhi::texture::Texture =
-            unsafe { std::mem::zeroed() };
+        let mut out: crate::core::rhi::texture::Texture = unsafe { std::mem::zeroed() };
         let rc = unsafe {
             (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.acquire_output_texture)(
                 std::ptr::null(),
@@ -571,9 +560,7 @@ mod gpu_full_access_vtable_tests {
     #[test]
     fn host_vulkan_device_arc_returns_null_on_null_token() {
         let raw = unsafe {
-            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.host_vulkan_device_arc)(
-                std::ptr::null(),
-            )
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.host_vulkan_device_arc)(std::ptr::null())
         };
         assert!(raw.is_null(), "null scope token must yield null pointer");
     }
@@ -588,9 +575,7 @@ mod gpu_full_access_vtable_tests {
     #[test]
     fn host_vulkan_texture_arc_returns_null_on_null_handle() {
         let raw = unsafe {
-            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.host_vulkan_texture_arc)(
-                std::ptr::null(),
-            )
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.host_vulkan_texture_arc)(std::ptr::null())
         };
         assert!(raw.is_null(), "null texture handle must yield null pointer");
     }
@@ -621,4 +606,3 @@ mod gpu_full_access_vtable_tests {
         );
     }
 }
-

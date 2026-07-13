@@ -31,17 +31,17 @@
 //! the dep graph alone.
 
 use std::marker::PhantomData;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use streamlib_consumer_rhi::{
-    DevicePrivilege, VulkanRhiBuffer, VulkanRhiDevice, VulkanTextureLike,
-    VulkanTimelineSemaphoreLike,
-};
 use streamlib_adapter_abi::{
     AdapterError, ReadGuard, Registry, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId,
     SurfaceRegistration, WriteGuard,
+};
+use streamlib_consumer_rhi::{
+    DevicePrivilege, VulkanRhiBuffer, VulkanRhiDevice, VulkanTextureLike,
+    VulkanTimelineSemaphoreLike,
 };
 use tracing::instrument;
 use vulkanalia::prelude::v1_4::*;
@@ -545,7 +545,11 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CpuReadbackSurfaceAdapter<
         let outcome = self
             .acquire_inner(surface.id, false, true)?
             .expect("blocking acquire returned None");
-        Ok(ReadGuard::new(self, surface.id, build_read_view(&outcome.snap)))
+        Ok(ReadGuard::new(
+            self,
+            surface.id,
+            build_read_view(&outcome.snap),
+        ))
     }
 
     fn acquire_write<'g>(
@@ -567,7 +571,11 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CpuReadbackSurfaceAdapter<
         surface: &StreamlibSurface,
     ) -> Result<Option<ReadGuard<'g, Self>>, AdapterError> {
         match self.acquire_inner(surface.id, false, false)? {
-            Some(o) => Ok(Some(ReadGuard::new(self, surface.id, build_read_view(&o.snap)))),
+            Some(o) => Ok(Some(ReadGuard::new(
+                self,
+                surface.id,
+                build_read_view(&o.snap),
+            ))),
             None => Ok(None),
         }
     }
@@ -599,17 +607,21 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CpuReadbackSurfaceAdapter<
         //
         // Inner Option: `None` means "not the last reader, skip signal".
         // Outer Option: `None` means "surface raced an unregister".
-        let signal: Option<Option<(Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>, u64)>> =
-            self.surfaces.with_mut(surface_id, |state| {
-                debug_assert!(state.read_holders > 0, "read release without acquire");
-                state.dec_read_holders();
-                if state.read_holders > 0 {
-                    return None;
-                }
-                let next = state.current_signal_value + 1;
-                state.current_signal_value = next;
-                Some((Arc::clone(&state.consume_done), next))
-            });
+        let signal: Option<
+            Option<(
+                Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>,
+                u64,
+            )>,
+        > = self.surfaces.with_mut(surface_id, |state| {
+            debug_assert!(state.read_holders > 0, "read release without acquire");
+            state.dec_read_holders();
+            if state.read_holders > 0 {
+                return None;
+            }
+            let next = state.current_signal_value + 1;
+            state.current_signal_value = next;
+            Some((Arc::clone(&state.consume_done), next))
+        });
         let signal = match signal {
             Some(s) => s,
             None => {
@@ -853,8 +865,7 @@ impl<D: VulkanRhiDevice + 'static> InProcessCpuReadbackCopyTrigger<D> {
             .submit_ctx
             .lock()
             .map_err(|_| AdapterError::BackendRejected {
-                reason: "submit_image_buffer_copy: persistent submit context mutex poisoned"
-                    .into(),
+                reason: "submit_image_buffer_copy: persistent submit context mutex poisoned".into(),
             })?;
         if guard.is_none() {
             *guard = Some(AdapterPersistentSubmitContext::new(vk_device, qf)?);
@@ -868,10 +879,11 @@ impl<D: VulkanRhiDevice + 'static> InProcessCpuReadbackCopyTrigger<D> {
         let begin_info = vk::CommandBufferBeginInfo::builder()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
             .build();
-        unsafe { vk_device.begin_command_buffer(cmd, &begin_info) }
-            .map_err(|e| AdapterError::BackendRejected {
+        unsafe { vk_device.begin_command_buffer(cmd, &begin_info) }.map_err(|e| {
+            AdapterError::BackendRejected {
                 reason: format!("begin_command_buffer: {e}"),
-            })?;
+            }
+        })?;
 
         let pre_barrier =
             build_image_barrier(image, qf, from_layout, transfer_layout, combined_aspect);
@@ -975,11 +987,13 @@ impl<D: VulkanRhiDevice + 'static> InProcessCpuReadbackCopyTrigger<D> {
             .signal_semaphore_infos(&signal_infos)
             .build();
 
-        unsafe { self.device.submit_to_queue(queue, &[submit], submit_ctx.fence) }.map_err(
-            |e| AdapterError::BackendRejected {
-                reason: format!("submit_to_queue: {e}"),
-            },
-        )?;
+        unsafe {
+            self.device
+                .submit_to_queue(queue, &[submit], submit_ctx.fence)
+        }
+        .map_err(|e| AdapterError::BackendRejected {
+            reason: format!("submit_to_queue: {e}"),
+        })?;
 
         Ok(ctx.suggested_signal_value)
     }
@@ -1016,12 +1030,11 @@ impl AdapterPersistentSubmitContext {
             .queue_family_index(qf)
             .flags(vk::CommandPoolCreateFlags::TRANSIENT)
             .build();
-        let pool =
-            unsafe { device.create_command_pool(&pool_info, None) }.map_err(|e| {
-                AdapterError::BackendRejected {
-                    reason: format!("create_command_pool: {e}"),
-                }
-            })?;
+        let pool = unsafe { device.create_command_pool(&pool_info, None) }.map_err(|e| {
+            AdapterError::BackendRejected {
+                reason: format!("create_command_pool: {e}"),
+            }
+        })?;
 
         let alloc_info = vk::CommandBufferAllocateInfo::builder()
             .command_pool(pool)
@@ -1069,12 +1082,10 @@ impl AdapterPersistentSubmitContext {
                 reason: format!("reset_fences (persistent submit fence): {e}"),
             }
         })?;
-        unsafe {
-            device.reset_command_pool(self.pool, vk::CommandPoolResetFlags::empty())
-        }
-        .map_err(|e| AdapterError::BackendRejected {
-            reason: format!("reset_command_pool (persistent submit pool): {e}"),
-        })?;
+        unsafe { device.reset_command_pool(self.pool, vk::CommandPoolResetFlags::empty()) }
+            .map_err(|e| AdapterError::BackendRejected {
+                reason: format!("reset_command_pool (persistent submit pool): {e}"),
+            })?;
         Ok(())
     }
 
@@ -1084,8 +1095,7 @@ impl AdapterPersistentSubmitContext {
     /// known-completed submit.
     fn destroy(self, device: &vulkanalia::Device) {
         // Wait for any pending submit to drain so destruction is safe.
-        let _ =
-            unsafe { device.wait_for_fences(&[self.fence], true, u64::MAX) };
+        let _ = unsafe { device.wait_for_fences(&[self.fence], true, u64::MAX) };
         unsafe {
             device.destroy_fence(self.fence, None);
             device.destroy_command_pool(self.pool, None);

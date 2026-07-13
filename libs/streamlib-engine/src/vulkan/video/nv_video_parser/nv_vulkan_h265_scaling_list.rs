@@ -11,16 +11,14 @@
 /// Index 0: intra, Index 1: inter.
 pub const DEFAULT_SCALING_LIST_8X8: [[u8; 64]; 2] = [
     [
-        16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 17, 16, 17, 16, 17, 18,
-        17, 18, 18, 17, 18, 21, 19, 20, 21, 20, 19, 21, 24, 22, 22, 24,
-        24, 22, 22, 24, 25, 25, 27, 30, 27, 25, 25, 29, 31, 35, 35, 31,
-        29, 36, 41, 44, 41, 36, 47, 54, 54, 47, 65, 70, 65, 88, 88, 115,
+        16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 17, 16, 17, 16, 17, 18, 17, 18, 18, 17, 18, 21, 19,
+        20, 21, 20, 19, 21, 24, 22, 22, 24, 24, 22, 22, 24, 25, 25, 27, 30, 27, 25, 25, 29, 31, 35,
+        35, 31, 29, 36, 41, 44, 41, 36, 47, 54, 54, 47, 65, 70, 65, 88, 88, 115,
     ],
     [
-        16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 17, 17, 17, 17, 17, 18,
-        18, 18, 18, 18, 18, 20, 20, 20, 20, 20, 20, 20, 24, 24, 24, 24,
-        24, 24, 24, 24, 25, 25, 25, 25, 25, 25, 25, 28, 28, 28, 28, 28,
-        28, 33, 33, 33, 33, 33, 41, 41, 41, 41, 54, 54, 54, 71, 71, 91,
+        16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 17, 17, 17, 17, 17, 18, 18, 18, 18, 18, 18, 20, 20,
+        20, 20, 20, 20, 20, 24, 24, 24, 24, 24, 24, 24, 24, 25, 25, 25, 25, 25, 25, 25, 28, 28, 28,
+        28, 28, 28, 33, 33, 33, 33, 33, 41, 41, 41, 41, 54, 54, 54, 71, 71, 91,
     ],
 ];
 
@@ -61,24 +59,36 @@ impl Default for ScalingList {
         Self {
             entry: [
                 [
-                    ScalingListEntry::default(), ScalingListEntry::default(),
-                    ScalingListEntry::default(), ScalingListEntry::default(),
-                    ScalingListEntry::default(), ScalingListEntry::default(),
+                    ScalingListEntry::default(),
+                    ScalingListEntry::default(),
+                    ScalingListEntry::default(),
+                    ScalingListEntry::default(),
+                    ScalingListEntry::default(),
+                    ScalingListEntry::default(),
                 ],
                 [
-                    ScalingListEntry::default(), ScalingListEntry::default(),
-                    ScalingListEntry::default(), ScalingListEntry::default(),
-                    ScalingListEntry::default(), ScalingListEntry::default(),
+                    ScalingListEntry::default(),
+                    ScalingListEntry::default(),
+                    ScalingListEntry::default(),
+                    ScalingListEntry::default(),
+                    ScalingListEntry::default(),
+                    ScalingListEntry::default(),
                 ],
                 [
-                    ScalingListEntry::default(), ScalingListEntry::default(),
-                    ScalingListEntry::default(), ScalingListEntry::default(),
-                    ScalingListEntry::default(), ScalingListEntry::default(),
+                    ScalingListEntry::default(),
+                    ScalingListEntry::default(),
+                    ScalingListEntry::default(),
+                    ScalingListEntry::default(),
+                    ScalingListEntry::default(),
+                    ScalingListEntry::default(),
                 ],
                 [
-                    ScalingListEntry::default(), ScalingListEntry::default(),
-                    ScalingListEntry::default(), ScalingListEntry::default(),
-                    ScalingListEntry::default(), ScalingListEntry::default(),
+                    ScalingListEntry::default(),
+                    ScalingListEntry::default(),
+                    ScalingListEntry::default(),
+                    ScalingListEntry::default(),
+                    ScalingListEntry::default(),
+                    ScalingListEntry::default(),
                 ],
             ],
         }
@@ -98,8 +108,7 @@ pub fn init_4x4_scaling_lists_h265(scaling_factors: &mut [u8], scl: &ScalingList
         if scle.scaling_list_pred_mode_flag == 0 {
             if scle.scaling_list_pred_matrix_id_delta != 0 {
                 // Duplicate from a reference matrix.
-                let ref_matrix_id =
-                    matrix_id as i32 - scle.scaling_list_pred_matrix_id_delta;
+                let ref_matrix_id = matrix_id as i32 - scle.scaling_list_pred_matrix_id_delta;
                 debug_assert!(ref_matrix_id >= 0);
                 let ref_offset = 4 * 4 * ref_matrix_id as usize;
                 // Copy within the same slice — use split or temporary copy.
@@ -146,16 +155,14 @@ pub fn init_8x8_scaling_lists_h265(
         if scle.scaling_list_pred_mode_flag == 0 {
             if scle.scaling_list_pred_matrix_id_delta != 0 {
                 // Duplicate from a reference matrix.
-                let ref_matrix_id =
-                    matrix_id as i32 - scle.scaling_list_pred_matrix_id_delta;
+                let ref_matrix_id = matrix_id as i32 - scle.scaling_list_pred_matrix_id_delta;
                 debug_assert!(ref_matrix_id >= 0);
                 let ref_offset = 8 * 8 * ref_matrix_id as usize;
                 let mut tmp = [0u8; 64];
                 tmp.copy_from_slice(&scaling_factors[ref_offset..ref_offset + 64]);
                 scaling_factors[offset..offset + 64].copy_from_slice(&tmp);
                 if size_id >= 2 {
-                    scaling_factors_dc[matrix_id] =
-                        scaling_factors_dc[ref_matrix_id as usize];
+                    scaling_factors_dc[matrix_id] = scaling_factors_dc[ref_matrix_id as usize];
                 }
             } else {
                 // Default values (>= 8x8).
@@ -183,8 +190,7 @@ pub fn init_8x8_scaling_lists_h265(
                 scaling_factors[offset + k] = next_coef as u8;
             }
             if size_id >= 2 {
-                scaling_factors_dc[matrix_id] =
-                    (scle.scaling_list_dc_coef_minus8 + 8) as u8;
+                scaling_factors_dc[matrix_id] = (scle.scaling_list_dc_coef_minus8 + 8) as u8;
             }
         }
     }

@@ -14,7 +14,7 @@ use parking_lot::Mutex;
 use super::{
     EventPayload, FRAME_HEADER_SIZE, MAX_FANIN_PER_DESTINATION, MAX_SUBSCRIBERS_PER_DESTINATION,
 };
-use crate::core::error::{Result, Error};
+use crate::core::error::{Error, Result};
 
 /// Thread-safe wrapper for iceoryx2 Node.
 ///
@@ -28,9 +28,9 @@ pub struct Iceoryx2Node {
 impl Iceoryx2Node {
     /// Create a new iceoryx2 Node.
     pub fn new() -> Result<Self> {
-        let node = NodeBuilder::new().create::<ipc::Service>().map_err(|e| {
-            Error::Runtime(format!("Failed to create iceoryx2 node: {:?}", e))
-        })?;
+        let node = NodeBuilder::new()
+            .create::<ipc::Service>()
+            .map_err(|e| Error::Runtime(format!("Failed to create iceoryx2 node: {:?}", e)))?;
 
         Ok(Self {
             inner: Arc::new(Mutex::new(node)),
@@ -52,9 +52,7 @@ impl Iceoryx2Node {
             .max_publishers(16)
             .subscriber_max_buffer_size(64)
             .open_or_create()
-            .map_err(|e| {
-                Error::Runtime(format!("Failed to open/create event service: {:?}", e))
-            })?;
+            .map_err(|e| Error::Runtime(format!("Failed to open/create event service: {:?}", e)))?;
 
         Ok(Iceoryx2EventService { inner: service })
     }
@@ -134,11 +132,7 @@ impl Iceoryx2Node {
 
 /// Handle to an iceoryx2 publish-subscribe service for `[u8]` slices.
 pub struct Iceoryx2Service {
-    inner: iceoryx2::service::port_factory::publish_subscribe::PortFactory<
-        ipc::Service,
-        [u8],
-        (),
-    >,
+    inner: iceoryx2::service::port_factory::publish_subscribe::PortFactory<ipc::Service, [u8], ()>,
     max_queued_messages: usize,
 }
 
@@ -232,9 +226,7 @@ impl Iceoryx2EventService {
             .subscriber_builder()
             .buffer_size(64)
             .create()
-            .map_err(|e| {
-                Error::Runtime(format!("Failed to create event subscriber: {:?}", e))
-            })
+            .map_err(|e| Error::Runtime(format!("Failed to create event subscriber: {:?}", e)))
     }
 }
 
@@ -430,15 +422,11 @@ mod tests {
 
         // Open with overflow disabled — back-pressure on.
         let service_for_main = node
-            .open_or_create_service(
-                &service_name,
-                depth,
-                /* enable_safe_overflow */ false,
-            )
+            .open_or_create_service(&service_name, depth, /* enable_safe_overflow */ false)
             .expect("open service");
         drop(service_for_main); // keep the service alive only via the
-                                // worker-side reopen; iceoryx2 services
-                                // are reference-counted.
+        // worker-side reopen; iceoryx2 services
+        // are reference-counted.
 
         // iceoryx2 Publishers hold `Rc<>` internally and aren't `Send`,
         // so the publisher must be created on the worker thread. Pre-
@@ -486,16 +474,13 @@ mod tests {
                         Ok(sample) => {
                             let sample = sample.write_from_slice(&[0u8; 8]);
                             if let Err(e) = sample.send() {
-                                let _ = result_tx.send(Err(format!(
-                                    "pre-fill send {i} failed: {e:?}"
-                                )));
+                                let _ =
+                                    result_tx.send(Err(format!("pre-fill send {i} failed: {e:?}")));
                                 return;
                             }
                         }
                         Err(e) => {
-                            let _ = result_tx.send(Err(format!(
-                                "pre-fill loan {i} failed: {e:?}"
-                            )));
+                            let _ = result_tx.send(Err(format!("pre-fill loan {i} failed: {e:?}")));
                             return;
                         }
                     }
@@ -593,8 +578,8 @@ mod tests {
     /// Runtime ~1.5 s. Two thread pools per run.
     #[test]
     fn sustained_200hz_two_stage_relay_preserves_messages_only_with_deep_rings() {
-        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
         use std::time::{Duration, Instant};
 
         fn run_relay(
@@ -640,11 +625,8 @@ mod tests {
                 let start = Instant::now();
                 for i in 0..total {
                     let mut payload = vec![0u8; FRAME_HEADER_SIZE + 4];
-                    payload[FRAME_HEADER_SIZE..]
-                        .copy_from_slice(&i.to_le_bytes());
-                    let sample = publisher
-                        .loan_slice_uninit(payload.len())
-                        .expect("loan");
+                    payload[FRAME_HEADER_SIZE..].copy_from_slice(&i.to_le_bytes());
+                    let sample = publisher.loan_slice_uninit(payload.len()).expect("loan");
                     let sample = sample.write_from_slice(&payload);
                     sample.send().expect("send");
                     sent_clone.fetch_add(1, Ordering::Relaxed);
@@ -679,11 +661,7 @@ mod tests {
                         [u8],
                         (),
                     >,
-                     publisher: &iceoryx2::port::publisher::Publisher<
-                        ipc::Service,
-                        [u8],
-                        (),
-                    >|
+                     publisher: &iceoryx2::port::publisher::Publisher<ipc::Service, [u8], ()>|
                      -> bool {
                         match subscriber.receive() {
                             Ok(Some(sample)) => {
@@ -707,12 +685,8 @@ mod tests {
                     }
                     if relay_one(&subscriber, &publisher) {
                         count += 1;
-                        if relay_pause_every > 0
-                            && count % relay_pause_every == 0
-                        {
-                            std::thread::sleep(Duration::from_millis(
-                                relay_pause_ms,
-                            ));
+                        if relay_pause_every > 0 && count % relay_pause_every == 0 {
+                            std::thread::sleep(Duration::from_millis(relay_pause_ms));
                         }
                     } else {
                         std::thread::sleep(Duration::from_micros(200));
@@ -766,10 +740,8 @@ mod tests {
         let pause_every: u32 = 25;
         let pause_ms: u64 = 50;
 
-        let (sent_shallow, recv_shallow) =
-            run_relay(4, 4, total, hz, pause_every, pause_ms);
-        let (sent_deep, recv_deep) =
-            run_relay(64, 64, total, hz, pause_every, pause_ms);
+        let (sent_shallow, recv_shallow) = run_relay(4, 4, total, hz, pause_every, pause_ms);
+        let (sent_deep, recv_deep) = run_relay(64, 64, total, hz, pause_every, pause_ms);
 
         assert_eq!(sent_shallow, total, "producer should send every message");
         assert_eq!(sent_deep, total, "producer should send every message");

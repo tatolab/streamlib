@@ -65,7 +65,10 @@ fn pkg_publish_writes_fetchable_catalog_and_owned_jtd() {
 
     // The `.slpkg` and the per-package catalog both land in the version dir.
     let ver_dir = tree.path().join("slpkg/foo/1.1.0");
-    assert!(ver_dir.join("foo.slpkg").is_file(), "the .slpkg was published");
+    assert!(
+        ver_dir.join("foo.slpkg").is_file(),
+        "the .slpkg was published"
+    );
     assert!(
         ver_dir.join("foo.catalog.json").is_file(),
         "pkg publish must write the per-package catalog"
@@ -90,7 +93,10 @@ fn pkg_publish_writes_fetchable_catalog_and_owned_jtd() {
         .unwrap()
         .expect("catalog fetchable from a pkg-publish-only tree");
     assert_eq!(catalog.package.to_string(), "@tatolab/foo");
-    assert!(catalog.processors.is_empty(), "schema-only package has no processors");
+    assert!(
+        catalog.processors.is_empty(),
+        "schema-only package has no processors"
+    );
 
     // The owned JTD resolves by its release-core ident.
     let jtd = client

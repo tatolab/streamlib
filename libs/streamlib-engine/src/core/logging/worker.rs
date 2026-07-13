@@ -7,16 +7,16 @@
 //! optional batched JSONL writer.
 
 use std::io::Write;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crossbeam_channel::{bounded, RecvTimeoutError, Sender};
+use crossbeam_channel::{RecvTimeoutError, Sender, bounded};
 use crossbeam_queue::ArrayQueue;
 
 use crate::core::logging::config::ResolvedTunables;
-use crate::core::logging::event::{LogLevel, RuntimeLogEvent, Source, SCHEMA_VERSION};
+use crate::core::logging::event::{LogLevel, RuntimeLogEvent, SCHEMA_VERSION, Source};
 use crate::core::logging::record::LogRecord;
 use crate::core::logging::writer::JsonlBatchedWriter;
 use crate::core::runtime::RuntimeUniqueId;

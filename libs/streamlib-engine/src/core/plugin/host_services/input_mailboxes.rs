@@ -16,7 +16,6 @@ use super::host_callbacks;
 use super::run_host_extern_c;
 use super::shared::wire::write_extern_err;
 
-
 // =============================================================================
 // InputMailboxesVTable wrappers (issue #894)
 // =============================================================================
@@ -70,12 +69,7 @@ unsafe extern "C" fn host_input_mailboxes_read_raw(
                 return 1;
             };
             if port_ptr.is_null() {
-                write_extern_err(
-                    "read_raw: null port_ptr",
-                    err_buf,
-                    err_buf_cap,
-                    err_len,
-                );
+                write_extern_err("read_raw: null port_ptr", err_buf, err_buf_cap, err_len);
                 return 1;
             }
             let port_bytes = unsafe { std::slice::from_raw_parts(port_ptr, port_len) };
@@ -249,16 +243,15 @@ unsafe extern "C" fn host_input_mailboxes_max_payload_for_port(
 
 /// Per-DSO host-side static InputMailboxes dispatch table.
 pub(in crate::core::plugin::host_services) static HOST_INPUT_MAILBOXES_VTABLE:
-    streamlib_plugin_abi::InputMailboxesVTable =
-    streamlib_plugin_abi::InputMailboxesVTable {
-        layout_version: streamlib_plugin_abi::INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION,
-        _reserved_padding: 0,
-        read_raw: host_input_mailboxes_read_raw,
-        has_data: host_input_mailboxes_has_data,
-        clone_arc: host_input_mailboxes_clone_arc,
-        drop_arc: host_input_mailboxes_drop_arc,
-        max_payload_for_port: host_input_mailboxes_max_payload_for_port,
-    };
+    streamlib_plugin_abi::InputMailboxesVTable = streamlib_plugin_abi::InputMailboxesVTable {
+    layout_version: streamlib_plugin_abi::INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION,
+    _reserved_padding: 0,
+    read_raw: host_input_mailboxes_read_raw,
+    has_data: host_input_mailboxes_has_data,
+    clone_arc: host_input_mailboxes_clone_arc,
+    drop_arc: host_input_mailboxes_drop_arc,
+    max_payload_for_port: host_input_mailboxes_max_payload_for_port,
+};
 
 /// Pointer to the [`streamlib_plugin_abi::InputMailboxesVTable`] this
 /// DSO should dispatch through.
@@ -318,8 +311,7 @@ mod input_mailboxes_vtable_tier1_wire_format_tests {
     #[test]
     fn read_raw_returns_error_on_invalid_utf8_port() {
         let inner = std::sync::Arc::new(crate::iceoryx2::InputMailboxesInner::new());
-        let handle =
-            std::sync::Arc::into_raw(inner) as *const std::ffi::c_void;
+        let handle = std::sync::Arc::into_raw(inner) as *const std::ffi::c_void;
         let mut buf = [0u8; 64];
         let mut out_len = 0usize;
         let mut out_ts = 0i64;
@@ -358,13 +350,8 @@ mod input_mailboxes_vtable_tier1_wire_format_tests {
     #[test]
     fn read_raw_returns_no_data_on_empty_mailbox() {
         let inner = std::sync::Arc::new(crate::iceoryx2::InputMailboxesInner::new());
-        inner.add_port(
-            "p",
-            8,
-            crate::iceoryx2::ReadMode::ReadNextInOrder,
-        );
-        let handle =
-            std::sync::Arc::into_raw(inner) as *const std::ffi::c_void;
+        inner.add_port("p", 8, crate::iceoryx2::ReadMode::ReadNextInOrder);
+        let handle = std::sync::Arc::into_raw(inner) as *const std::ffi::c_void;
         let mut buf = [0u8; 64];
         let mut out_len = 0usize;
         let mut out_ts = 0i64;
@@ -401,11 +388,7 @@ mod input_mailboxes_vtable_tier1_wire_format_tests {
     fn has_data_returns_false_on_null_handle() {
         let port = b"any";
         let result = unsafe {
-            (HOST_INPUT_MAILBOXES_VTABLE.has_data)(
-                std::ptr::null(),
-                port.as_ptr(),
-                port.len(),
-            )
+            (HOST_INPUT_MAILBOXES_VTABLE.has_data)(std::ptr::null(), port.as_ptr(), port.len())
         };
         assert!(!result);
     }
@@ -428,8 +411,7 @@ mod input_mailboxes_vtable_tier1_wire_format_tests {
     fn clone_drop_arc_balance_strong_count() {
         let inner = std::sync::Arc::new(crate::iceoryx2::InputMailboxesInner::new());
         let inner_for_test = inner.clone();
-        let raw =
-            std::sync::Arc::into_raw(inner) as *const std::ffi::c_void;
+        let raw = std::sync::Arc::into_raw(inner) as *const std::ffi::c_void;
         assert_eq!(std::sync::Arc::strong_count(&inner_for_test), 2);
         let cloned = unsafe { (HOST_INPUT_MAILBOXES_VTABLE.clone_arc)(raw) };
         assert_eq!(cloned, raw);

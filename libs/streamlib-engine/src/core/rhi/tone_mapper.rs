@@ -23,9 +23,9 @@
 use crate::core::color::TransferId;
 
 #[cfg(target_os = "linux")]
-use crate::core::rhi::Texture;
-#[cfg(target_os = "linux")]
 use crate::core::Result;
+#[cfg(target_os = "linux")]
+use crate::core::rhi::Texture;
 
 /// Tone-curve selector for [`ToneMapperPushConstants::tonemap_curve`].
 /// Numeric values must match the `TONE_CURVE_*` constants in
@@ -146,9 +146,7 @@ impl RhiToneMapper {
     /// Build a tone-mapper bound to `device`. The internal compute
     /// kernel is allocated lazily on first dispatch.
     #[cfg(target_os = "linux")]
-    pub fn new(
-        device: &std::sync::Arc<crate::vulkan::rhi::HostVulkanDevice>,
-    ) -> Self {
+    pub fn new(device: &std::sync::Arc<crate::vulkan::rhi::HostVulkanDevice>) -> Self {
         Self {
             inner: crate::vulkan::rhi::VulkanToneMapper::new(device),
         }

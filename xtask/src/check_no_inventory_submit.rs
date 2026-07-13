@@ -39,12 +39,7 @@ use walkdir::WalkDir;
 
 const SCAN_PARENTS: &[&str] = &["libs", "packages", "examples"];
 
-const SKIP_PATH_FRAGMENTS: &[&str] = &[
-    "/target/",
-    "/_generated_/",
-    "/node_modules/",
-    "/.git/",
-];
+const SKIP_PATH_FRAGMENTS: &[&str] = &["/target/", "/_generated_/", "/node_modules/", "/.git/"];
 
 /// Marker comment that exempts an entire file from this gate. Reserved
 /// for the gate's own definition (which must contain the banned token
@@ -73,7 +68,11 @@ pub fn run(workspace_root: &Path) -> Result<()> {
         violations.len()
     );
     for v in &violations {
-        eprintln!("  {}:{}: inventory::submit!(FactoryRegistration ...)", v.file.display(), v.line);
+        eprintln!(
+            "  {}:{}: inventory::submit!(FactoryRegistration ...)",
+            v.file.display(),
+            v.line
+        );
     }
     eprintln!(
         "\nFix:\n  \
@@ -124,8 +123,8 @@ fn scan_dir(dir: &Path, violations: &mut Vec<Violation>) -> Result<()> {
 }
 
 fn scan_file(path: &Path, violations: &mut Vec<Violation>) -> Result<()> {
-    let body = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read {}", path.display()))?;
+    let body =
+        fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
     if body.contains(ALLOW_FILE_PRAGMA) {
         return Ok(());
     }

@@ -35,9 +35,7 @@ pub use gpu_acquire_test_processor::GpuAcquireTest;
 pub use graphics_kernel_smoke_test_processor::GraphicsKernelSmokeTest;
 pub use lifecycle_probe_processor::LifecycleProbe;
 pub use opengl_smoke_test_processor::OpenGlSmokeTest;
-pub use panicking_lifecycle_processor::{
-    PanickingContinuousLifecycle, PanickingManualLifecycle,
-};
+pub use panicking_lifecycle_processor::{PanickingContinuousLifecycle, PanickingManualLifecycle};
 pub use ray_tracing_kernel_smoke_test_processor::RayTracingKernelSmokeTest;
 pub use surface_share_escalate_consistency_test_processor::SurfaceShareEscalateConsistencyTest;
 pub use tcp_bind_test_processor::TcpBindTest;

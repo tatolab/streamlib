@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 
 use streamlib_idents::{ResolvedPackages, ResolverOptions};
 
-use crate::{generate_from_resolved, RuntimeTarget};
+use crate::{RuntimeTarget, generate_from_resolved};
 
 /// Run codegen for the calling Rust crate.
 ///
@@ -43,16 +43,19 @@ use crate::{generate_from_resolved, RuntimeTarget};
 /// `[build-dependencies]` entry purely for the error type.
 pub fn run_for_rust_crate() {
     if let Err(err) = run_for_rust_crate_inner() {
-        eprintln!("error: streamlib_jtd_codegen build.rs helper failed: {:?}", err);
+        eprintln!(
+            "error: streamlib_jtd_codegen build.rs helper failed: {:?}",
+            err
+        );
         std::process::exit(1);
     }
 }
 
 fn run_for_rust_crate_inner() -> Result<()> {
-    let crate_dir = PathBuf::from(
-        std::env::var_os("CARGO_MANIFEST_DIR")
-            .context("CARGO_MANIFEST_DIR not set — run_for_rust_crate must be called from build.rs")?,
-    );
+    let crate_dir =
+        PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").context(
+            "CARGO_MANIFEST_DIR not set — run_for_rust_crate must be called from build.rs",
+        )?);
     let out_dir = PathBuf::from(
         std::env::var_os("OUT_DIR")
             .context("OUT_DIR not set — run_for_rust_crate must be called from build.rs")?,
@@ -86,11 +89,9 @@ fn run_for_rust_crate_inner() -> Result<()> {
     fs::create_dir_all(&gen_dir)
         .with_context(|| format!("Failed to create {}", gen_dir.display()))?;
 
-    generate_from_resolved(&resolved, RuntimeTarget::Rust, &gen_dir)
-        .context("Codegen failed")?;
+    generate_from_resolved(&resolved, RuntimeTarget::Rust, &gen_dir).context("Codegen failed")?;
 
-    write_rust_shim(&gen_dir, &shim_path)
-        .context("Failed to write _generated_shim.rs")?;
+    write_rust_shim(&gen_dir, &shim_path).context("Failed to write _generated_shim.rs")?;
 
     Ok(())
 }
@@ -98,7 +99,10 @@ fn run_for_rust_crate_inner() -> Result<()> {
 /// Emit `cargo:rerun-if-changed=` for every schema YAML and every manifest
 /// reachable through the resolved dependency set.
 fn emit_rerun_directives(crate_dir: &Path, resolved: &ResolvedPackages) {
-    println!("cargo:rerun-if-changed={}", crate_dir.join("streamlib.yaml").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        crate_dir.join("streamlib.yaml").display()
+    );
 
     let lock = crate_dir.join("streamlib.lock");
     if lock.exists() {

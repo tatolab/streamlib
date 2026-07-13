@@ -120,7 +120,6 @@ pub struct GpuContextLimitedAccessVTable {
     // -------------------------------------------------------------------------
     // Handle lifetime (mirrors RuntimeOpsVTable v2)
     // -------------------------------------------------------------------------
-
     /// Take a borrowed handle returned from
     /// [`crate::RuntimeContextVTable::gpu_limited_access`] and return a new
     /// owned handle with an Arc refcount bump on the underlying
@@ -145,7 +144,6 @@ pub struct GpuContextLimitedAccessVTable {
     // refcount bumps (Clone) and decrements (Drop) dispatch through
     // these host-resident callbacks so the Arc accounting is done by
     // host-compiled code under any rustc-minor / dep-graph drift.
-
     /// Bump the refcount on a `PixelBuffer` handle. Called by the
     /// cdylib's `Clone for PixelBuffer`. The handle pointer is
     /// `Arc::into_raw(Arc<PixelBufferRef>)`-shaped; host
@@ -171,7 +169,6 @@ pub struct GpuContextLimitedAccessVTable {
     // cdylib-side would require both sides to agree on
     // `PixelBufferRef`'s in-memory layout — which the cdylib has no
     // way to guarantee under rustc-minor / dep-graph drift.
-
     /// Number of `PixelBuffer` references to the same underlying
     /// `PixelBufferRef`. Engine-internal probe used by the host's
     /// pool manager to detect "buffer no longer in use" without
@@ -204,7 +201,6 @@ pub struct GpuContextLimitedAccessVTable {
     // host. Identical Arc-lifetime contract as `PixelBuffer` —
     // refcount accounting runs in host-compiled code so the cdylib
     // never has to know `TextureInner`'s layout.
-
     /// Bump the refcount on a `Texture` handle. Called by the
     /// cdylib's `Clone for Texture`. The handle pointer is
     /// `Arc::into_raw(Arc<TextureInner>)`-shaped; host implementation
@@ -230,7 +226,6 @@ pub struct GpuContextLimitedAccessVTable {
     // handle and fires `drop_pooled_texture_handle` from its `Drop`
     // impl. There is no `clone_pooled_texture_handle` — cloning would
     // duplicate the raw pointer and double-release the slot.
-
     /// Release the host-side `PooledTextureHandleInner` backing a
     /// `PooledTextureHandle`. The host runs `Box::from_raw + drop`,
     /// which fires the inner's `Drop` impl and releases the pool
@@ -250,7 +245,6 @@ pub struct GpuContextLimitedAccessVTable {
     // argument is the `*const Arc<GpuContext>`-shaped handle from
     // `RuntimeContextVTable::gpu_limited_access` (or a clone via
     // `Self::clone_handle`).
-
     /// Register a texture in the host's same-process texture cache.
     /// `texture_handle` is the `*const Arc<TextureInner>` from a
     /// cdylib-side `Texture`'s `handle` field; the host bumps the Arc
@@ -326,11 +320,8 @@ pub struct GpuContextLimitedAccessVTable {
 
     /// Remove an id from the host's same-process texture cache.
     /// Idempotent — missing entries are a no-op.
-    pub unregister_texture: unsafe extern "C" fn(
-        handle: *const c_void,
-        id_ptr: *const u8,
-        id_len: usize,
-    ),
+    pub unregister_texture:
+        unsafe extern "C" fn(handle: *const c_void, id_ptr: *const u8, id_len: usize),
 
     // -------------------------------------------------------------------------
     // Linux-only buffer Arc-handle lifecycle
@@ -346,7 +337,6 @@ pub struct GpuContextLimitedAccessVTable {
     // buffer growing extra state) without re-versioning a shared
     // callback. Stub on non-Linux hosts; callable only from cdylib
     // code that links the Linux-only buffer types.
-
     /// Bump the refcount on a `StorageBuffer` handle.
     /// `Arc::increment_strong_count(handle as *const HostVulkanBuffer)`.
     pub clone_storage_buffer: unsafe extern "C" fn(handle: *const c_void),
@@ -381,7 +371,6 @@ pub struct GpuContextLimitedAccessVTable {
     // failure writes a UTF-8 message into `err_buf` and returns
     // non-zero. Non-Linux stubs return non-zero with a
     // "buffer-type-not-available-on-this-platform" message.
-
     /// Acquire a `StorageBuffer` of the given byte size.
     pub acquire_storage_buffer: unsafe extern "C" fn(
         handle: *const c_void,
@@ -431,7 +420,6 @@ pub struct GpuContextLimitedAccessVTable {
     // shape as `PixelBuffer` / `Texture`'s Arc-handle pattern. Cdylibs
     // get Arc semantics (cheap Clone via refcount bump) without ever
     // touching the host's `Arc<T>` implementation.
-
     /// Bump the refcount on a `TextureRegistration` handle. Host
     /// implementation runs
     /// `Arc::increment_strong_count(handle as *const TextureRegistrationInner)`.
@@ -446,7 +434,6 @@ pub struct GpuContextLimitedAccessVTable {
     // -------------------------------------------------------------------------
     // TextureRegistration method dispatch
     // -------------------------------------------------------------------------
-
     /// Borrow the registration's underlying `Texture`. Returns a
     /// pointer into the host's heap allocation that is alive for as
     /// long as the caller holds the originating
@@ -454,14 +441,12 @@ pub struct GpuContextLimitedAccessVTable {
     /// inner alive). The returned `Texture` is itself a layout-stable
     /// `#[repr(C)]` value (see `core/rhi/texture.rs::Texture::tests::texture_layout`),
     /// so the cdylib can deref the pointer directly.
-    pub texture_registration_texture:
-        unsafe extern "C" fn(handle: *const c_void) -> *const c_void,
+    pub texture_registration_texture: unsafe extern "C" fn(handle: *const c_void) -> *const c_void,
 
     /// Last-known `VkImageLayout` (raw `i32` enumerant). Atomic
     /// `Acquire` load on the host side. Linux-only behaviour; non-
     /// Linux hosts return `0` (VK_IMAGE_LAYOUT_UNDEFINED).
-    pub texture_registration_current_layout:
-        unsafe extern "C" fn(handle: *const c_void) -> i32,
+    pub texture_registration_current_layout: unsafe extern "C" fn(handle: *const c_void) -> i32,
 
     /// Record a new last-known layout. Atomic `Release` store on the
     /// host side. Linux-only behaviour; non-Linux hosts treat this
@@ -499,7 +484,6 @@ pub struct GpuContextLimitedAccessVTable {
     // The cdylib's `RhiCommandQueue` is `(handle, vtable)` where
     // `handle` is `Arc::into_raw(Arc<RhiCommandQueueInner>)`. Same
     // shape as every other Arc-handle β-reshape on this vtable.
-
     /// Bump the refcount on an `RhiCommandQueue` handle.
     pub clone_rhi_command_queue: unsafe extern "C" fn(handle: *const c_void),
 
@@ -526,7 +510,6 @@ pub struct GpuContextLimitedAccessVTable {
     // `commit` and `commit_and_wait` are consume-semantics: the host
     // runs `Box::from_raw + commit + drop` and the cdylib nulls its
     // local handle/vtable fields so Drop becomes a no-op afterward.
-
     /// Release the host-side `Box<CommandBufferInner>` backing a
     /// `CommandBuffer`. Calling on a null pointer is a no-op.
     /// Calling twice on the same handle is undefined behaviour
@@ -547,16 +530,12 @@ pub struct GpuContextLimitedAccessVTable {
     /// `*const Texture` pointers — the layout is locked by the
     /// per-type `texture_layout` regression test so the host's read
     /// agrees with the cdylib's write.
-    pub copy_texture_command_buffer: unsafe extern "C" fn(
-        handle: *const c_void,
-        src: *const c_void,
-        dst: *const c_void,
-    ),
+    pub copy_texture_command_buffer:
+        unsafe extern "C" fn(handle: *const c_void, src: *const c_void, dst: *const c_void),
 
     // -------------------------------------------------------------------------
     // GpuContextLimitedAccess command-queue / command-buffer / blit methods
     // -------------------------------------------------------------------------
-
     /// Return an owned `RhiCommandQueue` view of the host's shared
     /// command queue (refcount bumped on the underlying
     /// `Arc<RhiCommandQueueInner>`). Cdylib's caller releases via
@@ -634,16 +613,12 @@ pub struct GpuContextLimitedAccessVTable {
     // The bulk of the SurfaceStore ABI lives on its own
     // SurfaceStoreVTable; these two callbacks bridge from
     // GpuContextLimitedAccess to that subsystem.
-
     /// Return an owned [`SurfaceStore`] PluginAbiObject if the host has one,
     /// or a null-handle PluginAbiObject ("None") otherwise. Always returns 0;
     /// callers branch on whether the written `SurfaceStore`'s handle
     /// is null. Writes a fresh PluginAbiObject (Arc refcount bumped) into
     /// `*out_store`.
-    pub surface_store: unsafe extern "C" fn(
-        gpu_handle: *const c_void,
-        out_store: *mut c_void,
-    ),
+    pub surface_store: unsafe extern "C" fn(gpu_handle: *const c_void, out_store: *mut c_void),
 
     /// Convenience method: check out a surface from the engine's
     /// `SurfaceStore` by `surface_id` (assumes the store exists).
@@ -662,7 +637,6 @@ pub struct GpuContextLimitedAccessVTable {
     // -------------------------------------------------------------------------
     // PixelBuffer acquire / get / resolve method-dispatch
     // -------------------------------------------------------------------------
-
     /// Acquire a pixel buffer from a pre-reserved pool. The tuple
     /// return `(PixelBufferPoolId, PixelBuffer)` is encoded via
     /// paired out-params: `out_pool_id_buf` receives the
@@ -714,7 +688,6 @@ pub struct GpuContextLimitedAccessVTable {
     // -------------------------------------------------------------------------
     // Escalate scope transition (Phase C3)
     // -------------------------------------------------------------------------
-
     /// Begin an escalate scope. Acquires the host's escalate gate on
     /// the supplied `gpu_handle`, mints an opaque scope token, and
     /// writes it into `*out_scope_token` on success. Returns 0 on
@@ -768,7 +741,6 @@ pub struct GpuContextLimitedAccessVTable {
     // -------------------------------------------------------------------------
     // Texture method dispatch — DMA-BUF FD export (Phase F)
     // -------------------------------------------------------------------------
-
     /// Export the texture's GPU memory as a Linux DMA-BUF file
     /// descriptor for cross-framework / cross-process sharing.
     ///
@@ -805,13 +777,11 @@ pub struct GpuContextLimitedAccessVTable {
     /// adapter work resumes (see #908's deferred macOS list).
     ///
     /// Calling with a null `texture_handle` returns `-1` (no panic).
-    pub texture_native_dma_buf_fd:
-        unsafe extern "C" fn(texture_handle: *const c_void) -> i64,
+    pub texture_native_dma_buf_fd: unsafe extern "C" fn(texture_handle: *const c_void) -> i64,
 
     // -------------------------------------------------------------------------
     // Video-source timeline semaphore publish/clear (v12 — #958)
     // -------------------------------------------------------------------------
-
     /// Publish a producer's `Arc<HostVulkanTimelineSemaphore>` for
     /// in-process GPU-GPU sync (the in-tree consumer is
     /// `LinuxDisplayProcessor::render_frame`, which waits on the
@@ -841,10 +811,8 @@ pub struct GpuContextLimitedAccessVTable {
     /// Linux-only on the host side; non-Linux stubs are no-ops.
     /// Calling with a null `gpu_handle` or null `timeline_handle` is
     /// a no-op.
-    pub set_video_source_timeline_semaphore: unsafe extern "C" fn(
-        gpu_handle: *const c_void,
-        timeline_handle: *const c_void,
-    ),
+    pub set_video_source_timeline_semaphore:
+        unsafe extern "C" fn(gpu_handle: *const c_void, timeline_handle: *const c_void),
 
     /// Drop the published producer timeline so consumers observe the
     /// absence and skip the wait. Idempotent against a never-set or
@@ -853,14 +821,11 @@ pub struct GpuContextLimitedAccessVTable {
     ///
     /// Linux-only on the host side; non-Linux stubs are no-ops.
     /// Calling with a null `gpu_handle` is a no-op.
-    pub clear_video_source_timeline_semaphore: unsafe extern "C" fn(
-        gpu_handle: *const c_void,
-    ),
+    pub clear_video_source_timeline_semaphore: unsafe extern "C" fn(gpu_handle: *const c_void),
 
     // -------------------------------------------------------------------------
     // HostVulkanTimelineSemaphore::wait (v13 — #958 Phase E sub)
     // -------------------------------------------------------------------------
-
     /// Block until the host's `HostVulkanTimelineSemaphore` counter
     /// has reached or surpassed `value`. Called per-frame from
     /// `HostVulkanTimelineSemaphore::wait` on the cdylib side; the
@@ -896,7 +861,6 @@ pub struct GpuContextLimitedAccessVTable {
     // -------------------------------------------------------------------------
     // host_video_source_timeline_arc (v14 — #1066)
     // -------------------------------------------------------------------------
-
     /// Clone the host's `Arc<HostVulkanTimelineSemaphore>` that was
     /// most recently published via
     /// [`Self::set_video_source_timeline_semaphore`], so a cdylib
@@ -928,9 +892,8 @@ pub struct GpuContextLimitedAccessVTable {
     /// dormant work the v12 set/clear pair flagged).
     ///
     /// Linux-only on the host side; non-Linux stubs return null.
-    pub host_video_source_timeline_arc: unsafe extern "C" fn(
-        gpu_handle: *const c_void,
-    ) -> *const c_void,
+    pub host_video_source_timeline_arc:
+        unsafe extern "C" fn(gpu_handle: *const c_void) -> *const c_void,
 }
 
 unsafe impl Send for GpuContextLimitedAccessVTable {}
@@ -967,7 +930,10 @@ mod tests {
             40
         );
         assert_eq!(
-            offset_of!(GpuContextLimitedAccessVTable, plane_base_address_pixel_buffer),
+            offset_of!(
+                GpuContextLimitedAccessVTable,
+                plane_base_address_pixel_buffer
+            ),
             48
         );
         assert_eq!(
@@ -1108,7 +1074,10 @@ mod tests {
             304
         );
         assert_eq!(
-            offset_of!(GpuContextLimitedAccessVTable, commit_and_wait_command_buffer),
+            offset_of!(
+                GpuContextLimitedAccessVTable,
+                commit_and_wait_command_buffer
+            ),
             312
         );
         assert_eq!(
@@ -1149,7 +1118,10 @@ mod tests {
             392
         );
         assert_eq!(
-            offset_of!(GpuContextLimitedAccessVTable, resolve_pixel_buffer_by_surface_id),
+            offset_of!(
+                GpuContextLimitedAccessVTable,
+                resolve_pixel_buffer_by_surface_id
+            ),
             400
         );
         // C3-added entries (Phase C3, #903).
@@ -1157,10 +1129,7 @@ mod tests {
             offset_of!(GpuContextLimitedAccessVTable, escalate_begin),
             408
         );
-        assert_eq!(
-            offset_of!(GpuContextLimitedAccessVTable, escalate_end),
-            416
-        );
+        assert_eq!(offset_of!(GpuContextLimitedAccessVTable, escalate_end), 416);
         // Phase F entry (#908 / #957).
         assert_eq!(
             offset_of!(GpuContextLimitedAccessVTable, texture_native_dma_buf_fd),

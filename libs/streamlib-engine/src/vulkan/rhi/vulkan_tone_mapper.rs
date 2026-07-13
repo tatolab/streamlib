@@ -16,15 +16,13 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::core::rhi::{
-    ComputeBindingSpec, ComputeKernelDescriptor, Texture, ToneMapperPushConstants, VulkanLayout,
-    TONE_MAPPER_PUSH_CONSTANT_SIZE,
+    ComputeBindingSpec, ComputeKernelDescriptor, TONE_MAPPER_PUSH_CONSTANT_SIZE, Texture,
+    ToneMapperPushConstants, VulkanLayout,
 };
 use crate::core::{Error, Result};
 use crate::host_rhi::HostTextureExt;
 
-use super::{
-    HostVulkanDevice, RhiCommandRecorder, VulkanAccess, VulkanComputeKernel, VulkanStage,
-};
+use super::{HostVulkanDevice, RhiCommandRecorder, VulkanAccess, VulkanComputeKernel, VulkanStage};
 
 /// Workgroup tile size. Matches the converter shader so consumers
 /// computing dispatch dims (`⌈(width, height) / 16⌉`) can use a single
@@ -230,8 +228,8 @@ impl VulkanToneMapper {
 mod tests {
     use super::*;
     use crate::core::color::{
-        bt2390_eetf_per_channel, linear_to_pq, linear_to_srgb, pq_to_linear, srgb_to_linear,
-        TransferId,
+        TransferId, bt2390_eetf_per_channel, linear_to_pq, linear_to_srgb, pq_to_linear,
+        srgb_to_linear,
     };
     use crate::core::rhi::{
         TextureDescriptor, TextureFormat, TextureReadbackDescriptor, TextureSourceLayout,
@@ -251,7 +249,9 @@ mod tests {
     /// elsewhere in `vulkan/rhi/`.
     #[test]
     fn new_is_cheap_and_lazy() {
-        let Some(device) = try_vulkan_device() else { return };
+        let Some(device) = try_vulkan_device() else {
+            return;
+        };
         let mapper = VulkanToneMapper::new(&device);
         // Kernel must be unbuilt at this point.
         assert!(mapper.kernel.lock().is_none());
@@ -272,11 +272,9 @@ mod tests {
         pattern_bgra: impl Fn(u32, u32) -> [u8; 4],
     ) -> Texture {
         let bpp: u32 = 4;
-        let staging = HostVulkanBuffer::new(
-            device,
-            (width as u64) * (height as u64) * (bpp as u64),
-        )
-        .expect("staging");
+        let staging =
+            HostVulkanBuffer::new(device, (width as u64) * (height as u64) * (bpp as u64))
+                .expect("staging");
         unsafe {
             let mut p = staging.mapped_ptr();
             for y in 0..height {
@@ -352,7 +350,9 @@ mod tests {
                 )
                 .build();
             let bs = [to_dst];
-            let dep = vk::DependencyInfo::builder().image_memory_barriers(&bs).build();
+            let dep = vk::DependencyInfo::builder()
+                .image_memory_barriers(&bs)
+                .build();
             dev.cmd_pipeline_barrier2(cmd, &dep);
 
             let copy = vk::BufferImageCopy::builder()
@@ -366,7 +366,11 @@ mod tests {
                         .build(),
                 )
                 .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
-                .image_extent(vk::Extent3D { width, height, depth: 1 })
+                .image_extent(vk::Extent3D {
+                    width,
+                    height,
+                    depth: 1,
+                })
                 .build();
             let regions = [copy];
             dev.cmd_copy_buffer_to_image(
@@ -401,13 +405,17 @@ mod tests {
                 )
                 .build();
             let bs2 = [to_general];
-            let dep2 = vk::DependencyInfo::builder().image_memory_barriers(&bs2).build();
+            let dep2 = vk::DependencyInfo::builder()
+                .image_memory_barriers(&bs2)
+                .build();
             dev.cmd_pipeline_barrier2(cmd, &dep2);
             dev.end_command_buffer(cmd).expect("end");
-            let cmd_infos =
-                [vk::CommandBufferSubmitInfo::builder().command_buffer(cmd).build()];
-            let submits =
-                [vk::SubmitInfo2::builder().command_buffer_infos(&cmd_infos).build()];
+            let cmd_infos = [vk::CommandBufferSubmitInfo::builder()
+                .command_buffer(cmd)
+                .build()];
+            let submits = [vk::SubmitInfo2::builder()
+                .command_buffer_infos(&cmd_infos)
+                .build()];
             device
                 .submit_to_queue(queue, &submits, vk::Fence::null())
                 .expect("submit fill");
@@ -420,11 +428,7 @@ mod tests {
     /// Allocate an empty `STORAGE_BINDING | COPY_SRC | COPY_DST` BGRA8
     /// texture for the tone mapper's dispatch destination. Layout is
     /// `UNDEFINED` on return — `apply_with_layouts` transitions it.
-    fn make_dst_texture(
-        device: &Arc<HostVulkanDevice>,
-        width: u32,
-        height: u32,
-    ) -> Texture {
+    fn make_dst_texture(device: &Arc<HostVulkanDevice>, width: u32, height: u32) -> Texture {
         let desc = TextureDescriptor {
             width,
             height,
@@ -474,7 +478,9 @@ mod tests {
     #[test]
     #[ignore = "hardware integration — requires a working Vulkan device + queue"]
     fn bt2390_pq_to_srgb_matches_cpu_reference() {
-        let Some(device) = try_vulkan_device() else { return };
+        let Some(device) = try_vulkan_device() else {
+            return;
+        };
         let width = 16u32;
         let height = 16u32;
         let pin_nits = 1000.0_f32;
@@ -554,7 +560,11 @@ mod tests {
                     );
                 }
                 // Alpha should pass through as 0xFF.
-                assert_eq!(bytes[off + 3], 0xFF, "alpha pass-through broken at ({x},{y})");
+                assert_eq!(
+                    bytes[off + 3],
+                    0xFF,
+                    "alpha pass-through broken at ({x},{y})"
+                );
             }
         }
     }
@@ -595,7 +605,9 @@ mod tests {
     #[test]
     #[ignore = "hardware integration — requires a working Vulkan device + queue"]
     fn apply_with_layouts_rejects_same_image_for_src_and_dst() {
-        let Some(device) = try_vulkan_device() else { return };
+        let Some(device) = try_vulkan_device() else {
+            return;
+        };
         let texture = make_general_texture(&device, 8, 8, |_, _| [0; 4]);
         let push = ToneMapperPushConstants::new(
             8,

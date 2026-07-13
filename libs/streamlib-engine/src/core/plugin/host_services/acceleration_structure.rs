@@ -14,8 +14,6 @@ use std::ffi::c_void;
 use super::run_host_extern_c;
 use super::shared::wire::{slice_from_raw, write_err};
 
-
-
 // ---------------------------------------------------------------------------
 // VulkanAccelerationStructureMethodsVTable wrappers (issue #955)
 //
@@ -46,9 +44,7 @@ unsafe fn handle_as_acceleration_structure(
     if handle.is_null() {
         return None;
     }
-    Some(unsafe {
-        &*(handle as *const crate::vulkan::rhi::VulkanAccelerationStructureInner)
-    })
+    Some(unsafe { &*(handle as *const crate::vulkan::rhi::VulkanAccelerationStructureInner) })
 }
 
 #[cfg(target_os = "linux")]
@@ -64,9 +60,7 @@ unsafe extern "C" fn host_vulkan_acceleration_structure_label(
     run_host_extern_c(
         "host_vulkan_acceleration_structure_label",
         || -> i32 {
-            let Some(as_inner) =
-                (unsafe { handle_as_acceleration_structure(as_handle) })
-            else {
+            let Some(as_inner) = (unsafe { handle_as_acceleration_structure(as_handle) }) else {
                 write_err(
                     "label: null acceleration_structure handle",
                     err_buf,
@@ -90,11 +84,7 @@ unsafe extern "C" fn host_vulkan_acceleration_structure_label(
             // just shows the prefix in logs.
             let copy_len = label_bytes.len().min(out_buf_cap);
             unsafe {
-                std::ptr::copy_nonoverlapping(
-                    label_bytes.as_ptr(),
-                    out_buf,
-                    copy_len,
-                );
+                std::ptr::copy_nonoverlapping(label_bytes.as_ptr(), out_buf, copy_len);
                 std::ptr::write(out_len, copy_len);
             }
             0
@@ -138,8 +128,8 @@ pub static HOST_VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE:
 /// `VulkanAccelerationStructureMethodsVTable` — used by
 /// `VulkanAccelerationStructure::from_arc_into_raw` to populate the
 /// PluginAbiObject's `methods_vtable` field.
-pub fn host_vulkan_acceleration_structure_methods_vtable(
-) -> *const streamlib_plugin_abi::VulkanAccelerationStructureMethodsVTable {
+pub fn host_vulkan_acceleration_structure_methods_vtable()
+-> *const streamlib_plugin_abi::VulkanAccelerationStructureMethodsVTable {
     &HOST_VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE
 }
 #[cfg(all(test, target_os = "linux"))]
@@ -183,8 +173,7 @@ mod acceleration_structure_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("label: null acceleration_structure handle"),
+            err_buf_as_str(&buf, len).contains("label: null acceleration_structure handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );

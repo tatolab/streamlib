@@ -46,7 +46,11 @@ pub enum JpegError {
     InvalidScan(&'static str),
 
     #[error("expected restart marker RST{expected} at byte {offset}, got {marker:#04x}")]
-    UnexpectedRestartMarker { expected: u8, marker: u8, offset: usize },
+    UnexpectedRestartMarker {
+        expected: u8,
+        marker: u8,
+        offset: usize,
+    },
 
     #[error("unsupported feature: {0}")]
     Unsupported(&'static str),

@@ -3,17 +3,17 @@
 
 //! macOS-specific texture pool implementation using IOSurface.
 
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use objc2_io_surface::IOSurface;
 
-use super::iosurface::{create_iosurface, create_metal_texture_from_iosurface, PixelFormat};
+use super::iosurface::{PixelFormat, create_iosurface, create_metal_texture_from_iosurface};
 use crate::core::context::texture_pool::{
     PoolSlot, TexturePoolDescriptor, TexturePoolInner, TexturePoolKey,
 };
 use crate::core::rhi::{Texture, TextureFormat};
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 use crate::metal::rhi::MetalTexture;
 
 // FFI binding to get IOSurface ID for cross-process sharing

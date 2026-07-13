@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::super::components::{
-    default_component_serializers, default_components, ComponentMap, ComponentSerializer,
+    ComponentMap, ComponentSerializer, default_component_serializers, default_components,
 };
 use super::super::{GraphNodeWithComponents, GraphWeight, InputLinkPortRef, OutputLinkPortRef};
 use super::{PortInfo, ProcessorNodePorts, ProcessorUniqueId};

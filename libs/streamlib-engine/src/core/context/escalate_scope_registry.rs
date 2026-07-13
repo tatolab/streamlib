@@ -70,10 +70,7 @@ fn registry() -> &'static EscalateScopeRegistry {
 pub(crate) fn begin_escalate_scope(arc_ctx: Arc<GpuContext>) -> ScopeToken {
     arc_ctx.escalate_gate().enter();
     let token = registry().next_serial.fetch_add(1, Ordering::Relaxed);
-    let mut scopes = registry()
-        .scopes
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let mut scopes = registry().scopes.lock().unwrap_or_else(|e| e.into_inner());
     scopes.insert(token, arc_ctx);
     token
 }
@@ -118,10 +115,7 @@ where
     F: FnOnce(&Arc<GpuContext>) -> R,
 {
     let removed = {
-        let mut scopes = registry()
-            .scopes
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut scopes = registry().scopes.lock().unwrap_or_else(|e| e.into_inner());
         scopes.remove(&token)
     };
     let arc_ctx = removed?;
@@ -191,10 +185,7 @@ where
     F: FnOnce(&Arc<GpuContext>) -> R,
 {
     let arc_clone = {
-        let scopes = registry()
-            .scopes
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let scopes = registry().scopes.lock().unwrap_or_else(|e| e.into_inner());
         scopes.get(&token).cloned()
     };
     arc_clone.as_ref().map(f)
@@ -310,8 +301,7 @@ mod tests {
         // fix, the gate is still in-scope while the drain runs and is
         // released only after. Mentally revert the registry to exit
         // before draining and this observes `false` → the assert fails.
-        let observed =
-            end_escalate_scope_with(token, |arc_ctx| arc_ctx.escalate_gate().in_scope());
+        let observed = end_escalate_scope_with(token, |arc_ctx| arc_ctx.escalate_gate().in_scope());
         assert_eq!(
             observed,
             Some(true),

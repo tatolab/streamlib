@@ -39,8 +39,9 @@ use streamlib_processor_schema::{
 // it at expansion time so invalid ranges surface as compile errors.
 use streamlib_idents::SemVerRange;
 use syn::{
+    DeriveInput, ItemStruct, LitStr, Token,
     parse::{Parse, ParseStream},
-    parse_macro_input, DeriveInput, ItemStruct, LitStr, Token,
+    parse_macro_input,
 };
 
 /// Main processor attribute macro.
@@ -103,7 +104,7 @@ pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// aliasing. Falls back to `::streamlib::sdk` for in-engine macro use, which
 /// resolves via the engine's `extern crate self as streamlib`.
 fn sdk_root() -> proc_macro2::TokenStream {
-    use proc_macro_crate::{crate_name, FoundCrate};
+    use proc_macro_crate::{FoundCrate, crate_name};
     fn as_sdk_path(found: FoundCrate) -> proc_macro2::TokenStream {
         match found {
             FoundCrate::Itself => quote! { crate::sdk },
@@ -240,12 +241,7 @@ fn load_processor_schema(
 
     // `SchemaIdent::new` projects a prerelease package version onto its
     // release core — schema idents are release-only by constructor invariant.
-    let ident = SchemaIdent::new(
-        pkg.org.clone(),
-        pkg.name.clone(),
-        type_name,
-        pkg.version,
-    );
+    let ident = SchemaIdent::new(pkg.org.clone(), pkg.name.clone(), type_name, pkg.version);
 
     // Resolve bare-name port + config schema references against the
     // enclosing manifest's `schemas:` map (#767). After this pass, every
@@ -529,10 +525,7 @@ fn expand_schema_ident_any_version(
     let type_str = args.type_name.value();
 
     Org::new(&org_str).map_err(|e| {
-        syn::Error::new(
-            args.org.span(),
-            format!("invalid org `{}`: {}", org_str, e),
-        )
+        syn::Error::new(args.org.span(), format!("invalid org `{}`: {}", org_str, e))
     })?;
     Package::new(&package_str).map_err(|e| {
         syn::Error::new(
@@ -590,10 +583,7 @@ fn expand_schema_ident(args: &SchemaIdentArgs) -> syn::Result<proc_macro2::Token
     let version_str = args.version.value();
 
     Org::new(&org_str).map_err(|e| {
-        syn::Error::new(
-            args.org.span(),
-            format!("invalid org `{}`: {}", org_str, e),
-        )
+        syn::Error::new(args.org.span(), format!("invalid org `{}`: {}", org_str, e))
     })?;
     Package::new(&package_str).map_err(|e| {
         syn::Error::new(
@@ -769,12 +759,8 @@ fn expand_module_ident_split(
     let org_str = org.value();
     let name_str = name.value();
 
-    Org::new(&org_str).map_err(|e| {
-        syn::Error::new(
-            org.span(),
-            format!("invalid org `{}`: {}", org_str, e),
-        )
-    })?;
+    Org::new(&org_str)
+        .map_err(|e| syn::Error::new(org.span(), format!("invalid org `{}`: {}", org_str, e)))?;
     Package::new(&name_str).map_err(|e| {
         syn::Error::new(
             name.span(),

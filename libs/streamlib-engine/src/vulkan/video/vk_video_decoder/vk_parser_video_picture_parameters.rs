@@ -6,11 +6,11 @@
 //! Manages VkVideoSessionParametersKHR for SPS/PPS parameter sets.
 //! Handles add/update of H.264, H.265, and AV1 parameter sets.
 
+use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, Ordering};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::Arc;
 
 // Placeholder import — will be used when codec_utils types are fully integrated.
 #[allow(unused_imports)]
@@ -65,12 +65,24 @@ pub trait StdVideoPictureParametersSetIf: Send + Sync {
     fn get_client_object(&self) -> Option<Arc<dyn std::any::Any + Send + Sync>>;
 
     // Codec-specific raw pointers (opaque to this module).
-    fn get_std_h264_sps(&self) -> *const std::ffi::c_void { std::ptr::null() }
-    fn get_std_h264_pps(&self) -> *const std::ffi::c_void { std::ptr::null() }
-    fn get_std_h265_vps(&self) -> *const std::ffi::c_void { std::ptr::null() }
-    fn get_std_h265_sps(&self) -> *const std::ffi::c_void { std::ptr::null() }
-    fn get_std_h265_pps(&self) -> *const std::ffi::c_void { std::ptr::null() }
-    fn get_std_av1_sps(&self) -> *const std::ffi::c_void { std::ptr::null() }
+    fn get_std_h264_sps(&self) -> *const std::ffi::c_void {
+        std::ptr::null()
+    }
+    fn get_std_h264_pps(&self) -> *const std::ffi::c_void {
+        std::ptr::null()
+    }
+    fn get_std_h265_vps(&self) -> *const std::ffi::c_void {
+        std::ptr::null()
+    }
+    fn get_std_h265_sps(&self) -> *const std::ffi::c_void {
+        std::ptr::null()
+    }
+    fn get_std_h265_pps(&self) -> *const std::ffi::c_void {
+        std::ptr::null()
+    }
+    fn get_std_av1_sps(&self) -> *const std::ffi::c_void {
+        std::ptr::null()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -178,10 +190,7 @@ impl VkParserVideoPictureParameters {
     // Construction
     // ------------------------------------------------------------------
 
-    fn new(
-        vk_dev_ctx: *const (),
-        template: Option<Arc<VkParserVideoPictureParameters>>,
-    ) -> Self {
+    fn new(vk_dev_ctx: *const (), template: Option<Arc<VkParserVideoPictureParameters>>) -> Self {
         Self {
             class_id: REF_CLASS_ID,
             id: -1,
@@ -209,7 +218,9 @@ impl VkParserVideoPictureParameters {
     }
 
     /// Cast from an opaque base reference. Mirrors `VideoPictureParametersFromBase`.
-    pub fn from_base(base: &VkParserVideoPictureParameters) -> Option<&VkParserVideoPictureParameters> {
+    pub fn from_base(
+        base: &VkParserVideoPictureParameters,
+    ) -> Option<&VkParserVideoPictureParameters> {
         if base.class_id == REF_CLASS_ID {
             Some(base)
         } else {
@@ -258,9 +269,7 @@ impl VkParserVideoPictureParameters {
     /// Returns the SPS or PPS id, or -1 on failure.
     ///
     /// Mirrors `PopulateH264UpdateFields`.
-    pub fn populate_h264_update_fields(
-        pps_set: &dyn StdVideoPictureParametersSetIf,
-    ) -> i32 {
+    pub fn populate_h264_update_fields(pps_set: &dyn StdVideoPictureParametersSetIf) -> i32 {
         let std_type = pps_set.get_std_type();
         debug_assert!(
             std_type == StdType::H264Sps || std_type == StdType::H264Pps,
@@ -292,9 +301,7 @@ impl VkParserVideoPictureParameters {
     /// Returns the VPS, SPS, or PPS id, or -1 on failure.
     ///
     /// Mirrors `PopulateH265UpdateFields`.
-    pub fn populate_h265_update_fields(
-        pps_set: &dyn StdVideoPictureParametersSetIf,
-    ) -> i32 {
+    pub fn populate_h265_update_fields(pps_set: &dyn StdVideoPictureParametersSetIf) -> i32 {
         let std_type = pps_set.get_std_type();
         debug_assert!(
             std_type == StdType::H265Vps
@@ -506,10 +513,7 @@ impl VkParserVideoPictureParameters {
     /// parameters object for each.
     ///
     /// Mirrors `FlushPictureParametersQueue`.
-    pub fn flush_picture_parameters_queue(
-        &mut self,
-        video_session: vk::VideoSessionKHR,
-    ) -> i32 {
+    pub fn flush_picture_parameters_queue(&mut self, video_session: vk::VideoSessionKHR) -> i32 {
         if video_session == vk::VideoSessionKHR::null() {
             return -1;
         }
@@ -631,10 +635,7 @@ impl VkParserVideoPictureParameters {
             let _ = video_session; // would call cur.flush_picture_parameters_queue(video_session)
         }
 
-        let need_new = Self::check_std_object_before_update(
-            std_pps.as_ref(),
-            current.as_deref(),
-        );
+        let need_new = Self::check_std_object_before_update(std_pps.as_ref(), current.as_deref());
 
         if need_new {
             let new_obj = Self::create(vk_dev_ctx, current.clone());
@@ -896,19 +897,16 @@ mod tests {
     #[test]
     fn test_check_std_object_before_update_no_current() {
         let sps = MockPps::h264_sps(0);
-        assert!(VkParserVideoPictureParameters::check_std_object_before_update(
-            &sps, None
-        ));
+        assert!(VkParserVideoPictureParameters::check_std_object_before_update(&sps, None));
     }
 
     #[test]
     fn test_check_std_object_before_update_with_current_no_update() {
         let sps = MockPps::h264_sps(0);
         let params = VkParserVideoPictureParameters::new(std::ptr::null(), None);
-        assert!(!VkParserVideoPictureParameters::check_std_object_before_update(
-            &sps,
-            Some(&params),
-        ));
+        assert!(
+            !VkParserVideoPictureParameters::check_std_object_before_update(&sps, Some(&params),)
+        );
     }
 
     #[test]
@@ -918,10 +916,9 @@ mod tests {
             ..MockPps::h264_sps(0)
         };
         let params = VkParserVideoPictureParameters::new(std::ptr::null(), None);
-        assert!(VkParserVideoPictureParameters::check_std_object_before_update(
-            &sps,
-            Some(&params),
-        ));
+        assert!(
+            VkParserVideoPictureParameters::check_std_object_before_update(&sps, Some(&params),)
+        );
     }
 
     #[test]

@@ -12,8 +12,8 @@
 
 use std::collections::HashMap;
 use std::os::unix::io::RawFd;
-use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 
 use parking_lot::RwLock;
 
@@ -150,9 +150,7 @@ impl Clone for SurfaceMetadata {
             produce_done_fd: self.produce_done_fd,
             consume_done_fd: self.consume_done_fd,
             checkout_count: self.checkout_count,
-            current_image_layout: AtomicI32::new(
-                self.current_image_layout.load(Ordering::Acquire),
-            ),
+            current_image_layout: AtomicI32::new(self.current_image_layout.load(Ordering::Acquire)),
             vk_image_type: self.vk_image_type,
             vk_image_mip_levels: self.vk_image_mip_levels,
             vk_image_array_layers: self.vk_image_array_layers,
@@ -388,10 +386,7 @@ impl SurfaceShareState {
     /// timeline-semaphore OPAQUE_FD. The returned fds are the table's
     /// own — callers that hand them out via SCM_RIGHTS must `dup` each
     /// fd first.
-    pub fn get_surface_planes(
-        &self,
-        surface_id: &str,
-    ) -> Option<SurfacePlaneCheckout> {
+    pub fn get_surface_planes(&self, surface_id: &str) -> Option<SurfacePlaneCheckout> {
         let mut surfaces = self.inner.surfaces.write();
         surfaces.get_mut(surface_id).map(|metadata| {
             metadata.checkout_count += 1;
@@ -404,9 +399,7 @@ impl SurfaceShareState {
                 handle_type: metadata.handle_type.clone(),
                 produce_done_fd: metadata.produce_done_fd,
                 consume_done_fd: metadata.consume_done_fd,
-                current_image_layout: metadata
-                    .current_image_layout
-                    .load(Ordering::Acquire),
+                current_image_layout: metadata.current_image_layout.load(Ordering::Acquire),
                 vk_image_type: metadata.vk_image_type,
                 vk_image_mip_levels: metadata.vk_image_mip_levels,
                 vk_image_array_layers: metadata.vk_image_array_layers,
@@ -459,7 +452,11 @@ impl SurfaceShareState {
 mod tests {
     use super::*;
 
-    fn reg<'a>(surface_id: &'a str, runtime_id: &'a str, resource_type: &'a str) -> SurfaceRegistration<'a> {
+    fn reg<'a>(
+        surface_id: &'a str,
+        runtime_id: &'a str,
+        resource_type: &'a str,
+    ) -> SurfaceRegistration<'a> {
         SurfaceRegistration {
             surface_id,
             runtime_id,
@@ -489,12 +486,16 @@ mod tests {
     #[test]
     fn register_surface_with_resource_type() {
         let state = SurfaceShareState::new();
-        assert!(state
-            .register_surface(reg("buf-001", "runtime-1", "pixel_buffer"))
-            .is_ok());
-        assert!(state
-            .register_surface(reg("tex-001", "runtime-1", "texture"))
-            .is_ok());
+        assert!(
+            state
+                .register_surface(reg("buf-001", "runtime-1", "pixel_buffer"))
+                .is_ok()
+        );
+        assert!(
+            state
+                .register_surface(reg("tex-001", "runtime-1", "texture"))
+                .is_ok()
+        );
 
         let surfaces = state.get_surfaces();
         assert_eq!(surfaces.len(), 2);
@@ -511,9 +512,19 @@ mod tests {
         let (rejected_planes, rejected_produce, rejected_consume) = state
             .register_surface(reg("dup", "rt", "texture"))
             .expect_err("duplicate must be rejected");
-        assert_eq!(rejected_planes, vec![-1], "rejected plane fds returned to caller");
-        assert_eq!(rejected_produce, None, "no produce_done fd was registered, none returned");
-        assert_eq!(rejected_consume, None, "no consume_done fd was registered, none returned");
+        assert_eq!(
+            rejected_planes,
+            vec![-1],
+            "rejected plane fds returned to caller"
+        );
+        assert_eq!(
+            rejected_produce, None,
+            "no produce_done fd was registered, none returned"
+        );
+        assert_eq!(
+            rejected_consume, None,
+            "no consume_done fd was registered, none returned"
+        );
     }
 
     /// The watchdog uses `surface_ids_by_runtime` to discover what to
@@ -625,14 +636,14 @@ mod tests {
                 handle_type: "opaque_fd",
                 drm_format_modifier: 0,
                 produce_done_fd: None,
-            consume_done_fd: None,
+                consume_done_fd: None,
                 current_image_layout: 0,
-                vk_image_type: 2,        // VK_IMAGE_TYPE_3D
-                vk_image_mip_levels: 9,  // 256 = 2^8, plus base = 9 levels
+                vk_image_type: 2,       // VK_IMAGE_TYPE_3D
+                vk_image_mip_levels: 9, // 256 = 2^8, plus base = 9 levels
                 vk_image_array_layers: 6,
-                vk_image_samples: 4,                // _4
-                vk_image_tiling: 1000158000,        // DRM_FORMAT_MODIFIER_EXT
-                vk_image_usage: 0x4F,               // 0x0F | COLOR_ATTACHMENT (0x40)
+                vk_image_samples: 4,         // _4
+                vk_image_tiling: 1000158000, // DRM_FORMAT_MODIFIER_EXT
+                vk_image_usage: 0x4F,        // 0x0F | COLOR_ATTACHMENT (0x40)
                 vk_image_allocation_size: 16_777_216,
             })
             .expect("register vk-image-rt");
@@ -688,7 +699,7 @@ mod tests {
                 handle_type: "dma_buf",
                 drm_format_modifier: 0,
                 produce_done_fd: None,
-            consume_done_fd: None,
+                consume_done_fd: None,
                 current_image_layout: 0,
                 vk_image_type: VK_IMAGE_TYPE_DEFAULT,
                 vk_image_mip_levels: VK_IMAGE_MIP_LEVELS_DEFAULT,
@@ -707,9 +718,7 @@ mod tests {
         // is coming and the pipe will never refill.
         for fd in &read_fds {
             let mut buf = [0u8; 1];
-            let n = unsafe {
-                libc::read(*fd, buf.as_mut_ptr() as *mut libc::c_void, 1)
-            };
+            let n = unsafe { libc::read(*fd, buf.as_mut_ptr() as *mut libc::c_void, 1) };
             assert_eq!(
                 n, 0,
                 "pipe read end {} should yield EOF after write end was closed by release_surface",

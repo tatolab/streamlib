@@ -77,8 +77,7 @@ unsafe extern "C" fn host_graphics_kernel_set_storage_buffer_pixel(
     run_host_extern_c(
         "host_graphics_kernel_set_storage_buffer_pixel",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) }) else {
                 write_err(
                     "set_storage_buffer_pixel: null kernel handle",
                     err_buf,
@@ -127,8 +126,7 @@ unsafe extern "C" fn host_graphics_kernel_set_storage_buffer_storage(
     run_host_extern_c(
         "host_graphics_kernel_set_storage_buffer_storage",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) }) else {
                 write_err(
                     "set_storage_buffer_storage: null kernel handle",
                     err_buf,
@@ -177,8 +175,7 @@ unsafe extern "C" fn host_graphics_kernel_set_uniform_buffer(
     run_host_extern_c(
         "host_graphics_kernel_set_uniform_buffer",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) }) else {
                 write_err(
                     "set_uniform_buffer: null kernel handle",
                     err_buf,
@@ -227,8 +224,7 @@ unsafe extern "C" fn host_graphics_kernel_set_sampled_texture(
     run_host_extern_c(
         "host_graphics_kernel_set_sampled_texture",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) }) else {
                 write_err(
                     "set_sampled_texture: null kernel handle",
                     err_buf,
@@ -277,8 +273,7 @@ unsafe extern "C" fn host_graphics_kernel_set_storage_image(
     run_host_extern_c(
         "host_graphics_kernel_set_storage_image",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) }) else {
                 write_err(
                     "set_storage_image: null kernel handle",
                     err_buf,
@@ -328,8 +323,7 @@ unsafe extern "C" fn host_graphics_kernel_set_vertex_buffer(
     run_host_extern_c(
         "host_graphics_kernel_set_vertex_buffer",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) }) else {
                 write_err(
                     "set_vertex_buffer: null kernel handle",
                     err_buf,
@@ -379,8 +373,7 @@ unsafe extern "C" fn host_graphics_kernel_set_index_buffer(
     run_host_extern_c(
         "host_graphics_kernel_set_index_buffer",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) }) else {
                 write_err(
                     "set_index_buffer: null kernel handle",
                     err_buf,
@@ -438,8 +431,7 @@ unsafe extern "C" fn host_graphics_kernel_set_push_constants(
     run_host_extern_c(
         "host_graphics_kernel_set_push_constants",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) }) else {
                 write_err(
                     "set_push_constants: null kernel handle",
                     err_buf,
@@ -564,8 +556,7 @@ unsafe extern "C" fn host_graphics_kernel_offscreen_render(
     run_host_extern_c(
         "host_graphics_kernel_offscreen_render",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) }) else {
                 write_err(
                     "offscreen_render: null kernel handle",
                     err_buf,
@@ -741,8 +732,7 @@ unsafe extern "C" fn host_ray_tracing_kernel_set_acceleration_structure(
     run_host_extern_c(
         "host_ray_tracing_kernel_set_acceleration_structure",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) }) else {
                 write_err(
                     "set_acceleration_structure: null kernel handle",
                     err_buf,
@@ -790,8 +780,7 @@ unsafe extern "C" fn host_ray_tracing_kernel_set_storage_buffer_pixel(
     run_host_extern_c(
         "host_ray_tracing_kernel_set_storage_buffer_pixel",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) }) else {
                 write_err(
                     "set_storage_buffer_pixel: null kernel handle",
                     err_buf,
@@ -839,8 +828,7 @@ unsafe extern "C" fn host_ray_tracing_kernel_set_storage_buffer_storage(
     run_host_extern_c(
         "host_ray_tracing_kernel_set_storage_buffer_storage",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) }) else {
                 write_err(
                     "set_storage_buffer_storage: null kernel handle",
                     err_buf,
@@ -888,8 +876,7 @@ unsafe extern "C" fn host_ray_tracing_kernel_set_uniform_buffer(
     run_host_extern_c(
         "host_ray_tracing_kernel_set_uniform_buffer",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) }) else {
                 write_err(
                     "set_uniform_buffer: null kernel handle",
                     err_buf,
@@ -937,8 +924,7 @@ unsafe extern "C" fn host_ray_tracing_kernel_set_sampled_texture(
     run_host_extern_c(
         "host_ray_tracing_kernel_set_sampled_texture",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) }) else {
                 write_err(
                     "set_sampled_texture: null kernel handle",
                     err_buf,
@@ -986,8 +972,7 @@ unsafe extern "C" fn host_ray_tracing_kernel_set_storage_image(
     run_host_extern_c(
         "host_ray_tracing_kernel_set_storage_image",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) }) else {
                 write_err(
                     "set_storage_image: null kernel handle",
                     err_buf,
@@ -1035,8 +1020,7 @@ unsafe extern "C" fn host_ray_tracing_kernel_set_push_constants(
     run_host_extern_c(
         "host_ray_tracing_kernel_set_push_constants",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) }) else {
                 write_err(
                     "set_push_constants: null kernel handle",
                     err_buf,
@@ -1089,8 +1073,7 @@ unsafe extern "C" fn host_ray_tracing_kernel_trace_rays(
     run_host_extern_c(
         "host_ray_tracing_kernel_trace_rays",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) }) else {
                 write_err(
                     "trace_rays: null kernel handle",
                     err_buf,
@@ -1306,8 +1289,7 @@ unsafe extern "C" fn host_graphics_kernel_bindings(
     run_host_extern_c(
         "host_graphics_kernel_bindings",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) }) else {
                 write_err(
                     "bindings: null kernel handle",
                     err_buf,
@@ -1333,8 +1315,7 @@ unsafe extern "C" fn host_graphics_kernel_bindings(
             }
             if !out_specs_buf.is_null() {
                 for (i, spec) in bindings.iter().enumerate() {
-                    let repr =
-                        streamlib_plugin_abi::GraphicsBindingSpecRepr::from(spec);
+                    let repr = streamlib_plugin_abi::GraphicsBindingSpecRepr::from(spec);
                     unsafe { std::ptr::write(out_specs_buf.add(i), repr) };
                 }
             } else if actual > 0 {
@@ -1390,8 +1371,7 @@ unsafe extern "C" fn host_graphics_kernel_cmd_bind_and_draw(
     run_host_extern_c(
         "host_graphics_kernel_cmd_bind_and_draw",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) }) else {
                 write_err(
                     "cmd_bind_and_draw: null kernel handle",
                     err_buf,
@@ -1411,11 +1391,7 @@ unsafe extern "C" fn host_graphics_kernel_cmd_bind_and_draw(
             }
             let draw_repr = unsafe { &*draw };
             let inner_draw = draw_call_from_repr(draw_repr);
-            match kernel.cmd_bind_and_draw_raw(
-                command_buffer_handle,
-                frame_index,
-                &inner_draw,
-            ) {
+            match kernel.cmd_bind_and_draw_raw(command_buffer_handle, frame_index, &inner_draw) {
                 Ok(()) => 0,
                 Err(e) => {
                     write_err(
@@ -1465,8 +1441,7 @@ unsafe extern "C" fn host_graphics_kernel_cmd_bind_and_draw_indexed(
     run_host_extern_c(
         "host_graphics_kernel_cmd_bind_and_draw_indexed",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_graphics_kernel(kernel_handle) }) else {
                 write_err(
                     "cmd_bind_and_draw_indexed: null kernel handle",
                     err_buf,
@@ -1529,8 +1504,7 @@ unsafe extern "C" fn host_graphics_kernel_cmd_bind_and_draw_indexed(
 pub static HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE:
     streamlib_plugin_abi::VulkanGraphicsKernelMethodsVTable =
     streamlib_plugin_abi::VulkanGraphicsKernelMethodsVTable {
-        layout_version:
-            streamlib_plugin_abi::VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION,
+        layout_version: streamlib_plugin_abi::VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION,
         _reserved_padding: 0,
         set_storage_buffer_pixel: host_graphics_kernel_set_storage_buffer_pixel,
         set_storage_buffer_storage: host_graphics_kernel_set_storage_buffer_storage,
@@ -1549,8 +1523,8 @@ pub static HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE:
 /// Accessor for the host's static `VulkanGraphicsKernelMethodsVTable`
 /// — used by `VulkanGraphicsKernel::from_arc_into_raw` to populate
 /// the PluginAbiObject's `methods_vtable` field.
-pub fn host_vulkan_graphics_kernel_methods_vtable(
-) -> *const streamlib_plugin_abi::VulkanGraphicsKernelMethodsVTable {
+pub fn host_vulkan_graphics_kernel_methods_vtable()
+-> *const streamlib_plugin_abi::VulkanGraphicsKernelMethodsVTable {
     // See [`host_vulkan_compute_kernel_methods_vtable`] for the routing
     // rationale — cdylib PluginAbiObject constructors must store the host's
     // vtable pointer so dispatches actually cross the plugin ABI.
@@ -1733,8 +1707,7 @@ unsafe extern "C" fn host_ray_tracing_kernel_bindings(
     run_host_extern_c(
         "host_ray_tracing_kernel_bindings",
         || -> i32 {
-            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) })
-            else {
+            let Some(kernel) = (unsafe { handle_as_ray_tracing_kernel(kernel_handle) }) else {
                 write_err(
                     "bindings: null kernel handle",
                     err_buf,
@@ -1760,8 +1733,7 @@ unsafe extern "C" fn host_ray_tracing_kernel_bindings(
             }
             if !out_specs_buf.is_null() {
                 for (i, spec) in bindings.iter().enumerate() {
-                    let repr =
-                        streamlib_plugin_abi::RayTracingBindingSpecRepr::from(spec);
+                    let repr = streamlib_plugin_abi::RayTracingBindingSpecRepr::from(spec);
                     unsafe { std::ptr::write(out_specs_buf.add(i), repr) };
                 }
             } else if actual > 0 {
@@ -1819,8 +1791,8 @@ pub static HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE:
 /// `VulkanRayTracingKernelMethodsVTable` — used by
 /// `VulkanRayTracingKernel::from_arc_into_raw` to populate the
 /// PluginAbiObject's `methods_vtable` field.
-pub fn host_vulkan_ray_tracing_kernel_methods_vtable(
-) -> *const streamlib_plugin_abi::VulkanRayTracingKernelMethodsVTable {
+pub fn host_vulkan_ray_tracing_kernel_methods_vtable()
+-> *const streamlib_plugin_abi::VulkanRayTracingKernelMethodsVTable {
     &HOST_VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE
 }
 
@@ -1863,8 +1835,7 @@ mod graphics_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("set_storage_buffer_pixel: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("set_storage_buffer_pixel: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -1886,8 +1857,7 @@ mod graphics_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("set_storage_buffer_storage: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("set_storage_buffer_storage: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -1909,8 +1879,7 @@ mod graphics_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("set_uniform_buffer: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("set_uniform_buffer: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -1932,8 +1901,7 @@ mod graphics_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("set_sampled_texture: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("set_sampled_texture: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -1955,8 +1923,7 @@ mod graphics_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("set_storage_image: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("set_storage_image: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -1979,8 +1946,7 @@ mod graphics_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("set_vertex_buffer: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("set_vertex_buffer: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -2003,8 +1969,7 @@ mod graphics_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("set_index_buffer: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("set_index_buffer: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -2026,8 +1991,7 @@ mod graphics_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("set_push_constants: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("set_push_constants: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -2055,8 +2019,7 @@ mod graphics_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("offscreen_render: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("offscreen_render: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -2081,8 +2044,7 @@ mod graphics_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("cmd_bind_and_draw: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("cmd_bind_and_draw: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -2091,8 +2053,7 @@ mod graphics_kernel_methods_vtable_null_tests {
     #[test]
     fn cmd_bind_and_draw_indexed_rejects_null_kernel_handle() {
         let (mut buf, mut len) = make_err_buf();
-        let draw: streamlib_plugin_abi::DrawIndexedCallRepr =
-            unsafe { std::mem::zeroed() };
+        let draw: streamlib_plugin_abi::DrawIndexedCallRepr = unsafe { std::mem::zeroed() };
         let rc = unsafe {
             (HOST_VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE.cmd_bind_and_draw_indexed)(
                 std::ptr::null(),
@@ -2106,13 +2067,11 @@ mod graphics_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("cmd_bind_and_draw_indexed: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("cmd_bind_and_draw_indexed: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
     }
-
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -2154,8 +2113,7 @@ mod ray_tracing_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("set_acceleration_structure: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("set_acceleration_structure: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -2176,8 +2134,7 @@ mod ray_tracing_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("set_storage_buffer_pixel: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("set_storage_buffer_pixel: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -2198,8 +2155,7 @@ mod ray_tracing_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("set_storage_buffer_storage: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("set_storage_buffer_storage: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -2220,8 +2176,7 @@ mod ray_tracing_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("set_uniform_buffer: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("set_uniform_buffer: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -2242,8 +2197,7 @@ mod ray_tracing_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("set_sampled_texture: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("set_sampled_texture: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -2264,8 +2218,7 @@ mod ray_tracing_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("set_storage_image: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("set_storage_image: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -2286,8 +2239,7 @@ mod ray_tracing_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("set_push_constants: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("set_push_constants: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -2309,8 +2261,7 @@ mod ray_tracing_kernel_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("trace_rays: null kernel handle"),
+            err_buf_as_str(&buf, len).contains("trace_rays: null kernel handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );

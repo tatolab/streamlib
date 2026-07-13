@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::core::execution::ThreadPriority;
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 
 /// Apply thread priority to the current thread based on the specified priority level.
 ///
@@ -22,7 +22,7 @@ pub fn apply_thread_priority(priority: ThreadPriority) -> Result<()> {
 fn set_realtime_priority() -> Result<()> {
     use mach2::kern_return::KERN_SUCCESS;
     use mach2::thread_policy::{
-        thread_time_constraint_policy_data_t, THREAD_TIME_CONSTRAINT_POLICY,
+        THREAD_TIME_CONSTRAINT_POLICY, thread_time_constraint_policy_data_t,
     };
 
     extern "C" {
@@ -86,7 +86,7 @@ fn set_realtime_priority() -> Result<()> {
     // iOS uses same Mach APIs as macOS
     use mach2::kern_return::KERN_SUCCESS;
     use mach2::thread_policy::{
-        thread_time_constraint_policy_data_t, THREAD_TIME_CONSTRAINT_POLICY,
+        THREAD_TIME_CONSTRAINT_POLICY, thread_time_constraint_policy_data_t,
     };
 
     extern "C" {
@@ -142,7 +142,7 @@ fn set_realtime_priority() -> Result<()> {
 fn set_high_priority() -> Result<()> {
     // Use POSIX thread priority for High priority (not real-time)
     // This gives elevated priority without real-time constraints
-    use libc::{pthread_self, pthread_setschedparam, sched_param, SCHED_RR};
+    use libc::{SCHED_RR, pthread_self, pthread_setschedparam, sched_param};
 
     unsafe {
         let thread = pthread_self();
@@ -157,7 +157,10 @@ fn set_high_priority() -> Result<()> {
         if result != 0 {
             // Note: This may fail if not running with appropriate privileges
             // We log a warning but don't fail the processor startup
-            tracing::warn!("Failed to set high thread priority: errno {}. This may require elevated privileges.", result);
+            tracing::warn!(
+                "Failed to set high thread priority: errno {}. This may require elevated privileges.",
+                result
+            );
             return Ok(()); // Don't fail - just run with normal priority
         }
     }

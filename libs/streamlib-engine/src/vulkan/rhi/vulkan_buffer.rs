@@ -3,12 +3,12 @@
 
 use std::sync::Arc;
 
+use vma::Alloc as _;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia_vma as vma;
-use vma::Alloc as _;
 
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 
 use super::HostVulkanDevice;
 
@@ -145,10 +145,7 @@ impl HostVulkanBuffer {
     /// avoiding NVIDIA driver failures where global export configuration causes
     /// OOM after swapchain creation.
     #[tracing::instrument(level = "trace", skip(vulkan_device), fields(size))]
-    pub fn new(
-        vulkan_device: &Arc<HostVulkanDevice>,
-        size: u64,
-    ) -> Result<Self> {
+    pub fn new(vulkan_device: &Arc<HostVulkanDevice>, size: u64) -> Result<Self> {
         Self::new_host_visible_with_usage(
             vulkan_device,
             size,
@@ -424,10 +421,7 @@ impl HostVulkanBuffer {
     /// unusable for CUDA / OpenCL interop and the failure would
     /// surface only at `vkGetMemoryFdKHR` time.
     #[tracing::instrument(level = "trace", skip(vulkan_device), fields(size))]
-    pub fn new_opaque_fd_export(
-        vulkan_device: &Arc<HostVulkanDevice>,
-        size: u64,
-    ) -> Result<Self> {
+    pub fn new_opaque_fd_export(vulkan_device: &Arc<HostVulkanDevice>, size: u64) -> Result<Self> {
         if size == 0 {
             return Err(Error::Configuration(
                 "HostVulkanBuffer::new_opaque_fd_export: size must be > 0".into(),
@@ -467,9 +461,7 @@ impl HostVulkanBuffer {
         })?;
         let (buffer, allocation) = unsafe { pool.create_buffer(buffer_info, &alloc_opts) }
             .map_err(|e| {
-                Error::GpuError(format!(
-                    "Failed to create OPAQUE_FD exportable buffer: {e}"
-                ))
+                Error::GpuError(format!("Failed to create OPAQUE_FD exportable buffer: {e}"))
             })?;
 
         let allocator = vulkan_device.allocator();
@@ -478,7 +470,8 @@ impl HostVulkanBuffer {
         if mapped_ptr.is_null() {
             unsafe { allocator.destroy_buffer(buffer, allocation) };
             return Err(Error::GpuError(
-                "VMA OPAQUE_FD staging buffer mapped pointer is null — expected persistent mapping".into(),
+                "VMA OPAQUE_FD staging buffer mapped pointer is null — expected persistent mapping"
+                    .into(),
             ));
         }
 
@@ -689,11 +682,13 @@ impl HostVulkanBuffer {
         }
         let allocation = self.allocation.as_ref().ok_or_else(|| {
             Error::GpuError(
-                "HostVulkanBuffer::export_opaque_fd_memory: buffer has no VMA allocation"
-                    .into(),
+                "HostVulkanBuffer::export_opaque_fd_memory: buffer has no VMA allocation".into(),
             )
         })?;
-        let alloc_info = self.vulkan_device.allocator().get_allocation_info(*allocation);
+        let alloc_info = self
+            .vulkan_device
+            .allocator()
+            .get_allocation_info(*allocation);
         let memory = alloc_info.deviceMemory;
 
         let get_fd_info = vk::MemoryGetFdInfoKHR::builder()
@@ -703,9 +698,7 @@ impl HostVulkanBuffer {
 
         use vulkanalia::vk::KhrExternalMemoryFdExtensionDeviceCommands;
         let fd = unsafe { self.vulkan_device.device().get_memory_fd_khr(&get_fd_info) }
-            .map_err(|e| {
-                Error::GpuError(format!("Failed to export OPAQUE_FD memory fd: {e}"))
-            })?;
+            .map_err(|e| Error::GpuError(format!("Failed to export OPAQUE_FD memory fd: {e}")))?;
         Ok(fd)
     }
 
@@ -713,7 +706,10 @@ impl HostVulkanBuffer {
     pub fn export_dma_buf_fd(&self) -> Result<std::os::unix::io::RawFd> {
         // Determine which DeviceMemory to export from
         let device_memory = if let Some(allocation) = &self.allocation {
-            let alloc_info = self.vulkan_device.allocator().get_allocation_info(*allocation);
+            let alloc_info = self
+                .vulkan_device
+                .allocator()
+                .get_allocation_info(*allocation);
             alloc_info.deviceMemory
         } else if let Some(memory) = self.imported_memory {
             memory
@@ -901,7 +897,6 @@ impl HostVulkanBuffer {
             size: plane.size,
         })
     }
-
 }
 
 /// Create one `VkBuffer` + bind one imported `VkDeviceMemory` + map it.
@@ -929,9 +924,8 @@ fn import_single_plane(
         .push_next(&mut external_buffer_info)
         .build();
 
-    let buffer = unsafe { device.create_buffer(&buffer_info, None) }.map_err(|e| {
-        Error::GpuError(format!("Failed to create buffer for DMA-BUF import: {e}"))
-    })?;
+    let buffer = unsafe { device.create_buffer(&buffer_info, None) }
+        .map_err(|e| Error::GpuError(format!("Failed to create buffer for DMA-BUF import: {e}")))?;
 
     let mem_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
     let alloc_size = effective_size.max(mem_requirements.size);
@@ -986,7 +980,11 @@ impl Drop for HostVulkanBuffer {
         #[cfg(target_os = "linux")]
         if self.imported_from_dma_buf {
             // DMA-BUF import path: raw DeviceMemory, not VMA.
-            unsafe { self.vulkan_device.device().destroy_buffer(self.buffer, None) };
+            unsafe {
+                self.vulkan_device
+                    .device()
+                    .destroy_buffer(self.buffer, None)
+            };
             if let Some(memory) = self.imported_memory.take() {
                 self.vulkan_device.unmap_imported_memory(memory);
                 self.vulkan_device.free_imported_memory(memory);
@@ -1001,7 +999,11 @@ impl Drop for HostVulkanBuffer {
 
         // VMA path: destroy_buffer frees both the buffer and the allocation
         if let Some(allocation) = self.allocation.take() {
-            unsafe { self.vulkan_device.allocator().destroy_buffer(self.buffer, allocation) };
+            unsafe {
+                self.vulkan_device
+                    .allocator()
+                    .destroy_buffer(self.buffer, allocation)
+            };
         }
     }
 }
@@ -1014,7 +1016,10 @@ unsafe impl Sync for HostVulkanBuffer {}
 mod tests {
     use super::*;
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_pool_buffer_creation_1920x1080_bgra32() {
         let device = match HostVulkanDevice::new() {
@@ -1038,7 +1043,10 @@ mod tests {
         println!("Pool buffer created: {} bytes ({W}x{H}x{BPP})", buf.size());
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_buffer_write_and_readback() {
         let device = match HostVulkanDevice::new() {
@@ -1076,7 +1084,10 @@ mod tests {
         println!("Write/readback verified for {} bytes", size);
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_dma_buf_export() {
         let device = match HostVulkanDevice::new() {
@@ -1103,7 +1114,10 @@ mod tests {
     /// export is rejected (calling `export_opaque_fd_memory` on a DMA-BUF
     /// buffer produces an error).
     #[cfg(target_os = "linux")]
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn opaque_fd_export_round_trip_and_cross_flavor_rejection() {
         let device = match HostVulkanDevice::new() {
@@ -1119,9 +1133,15 @@ mod tests {
         }
 
         // Positive: OPAQUE_FD-allocated buffer exports an OPAQUE_FD fd.
-        let buf = HostVulkanBuffer::new_opaque_fd_export(&device, (128 as u64) * (128 as u64) * (4 as u64))
+        let buf = HostVulkanBuffer::new_opaque_fd_export(
+            &device,
+            (128 as u64) * (128 as u64) * (4 as u64),
+        )
         .expect("new_opaque_fd_export failed");
-        assert!(!buf.mapped_ptr().is_null(), "mapped pointer should be non-null");
+        assert!(
+            !buf.mapped_ptr().is_null(),
+            "mapped pointer should be non-null"
+        );
         assert_eq!(buf.size(), (128 * 128 * 4) as vk::DeviceSize);
         let fd = buf
             .export_opaque_fd_memory()
@@ -1139,9 +1159,7 @@ mod tests {
                     "error must call out the cross-flavor mismatch, got: {msg}"
                 );
             }
-            other => panic!(
-                "expected cross-flavor rejection on DMA-BUF buffer, got {other:?}"
-            ),
+            other => panic!("expected cross-flavor rejection on DMA-BUF buffer, got {other:?}"),
         }
     }
 
@@ -1151,7 +1169,10 @@ mod tests {
     /// `opaque_fd_export_round_trip_and_cross_flavor_rejection` covering
     /// the GPU-resident path.
     #[cfg(target_os = "linux")]
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn opaque_fd_device_local_export_round_trip() {
         let device = match HostVulkanDevice::new() {
@@ -1162,13 +1183,14 @@ mod tests {
             }
         };
         if device.opaque_fd_buffer_pool_device_local().is_none() {
-            println!(
-                "Skipping - DEVICE_LOCAL OPAQUE_FD buffer pool unavailable on this driver"
-            );
+            println!("Skipping - DEVICE_LOCAL OPAQUE_FD buffer pool unavailable on this driver");
             return;
         }
 
-        let buf = HostVulkanBuffer::new_opaque_fd_export_device_local(&device, (128 as u64) * (128 as u64) * (4 as u64))
+        let buf = HostVulkanBuffer::new_opaque_fd_export_device_local(
+            &device,
+            (128 as u64) * (128 as u64) * (4 as u64),
+        )
         .expect("new_opaque_fd_export_device_local failed");
         // DEVICE_LOCAL allocations are not host-mapped.
         assert!(
@@ -1187,7 +1209,10 @@ mod tests {
     /// `export_external_handle` dispatches to the correct
     /// `RhiExternalHandle` variant for each allocation flavor.
     #[cfg(target_os = "linux")]
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn export_external_handle_dispatches_on_allocation_flavor() {
         use crate::core::rhi::RhiExternalHandle;
@@ -1201,9 +1226,8 @@ mod tests {
         };
 
         // DMA-BUF flavor → DmaBuf variant.
-        let dma_buf =
-            HostVulkanBuffer::new(&device, (64 as u64) * (64 as u64) * (4 as u64))
-                .expect("dma-buf buffer failed");
+        let dma_buf = HostVulkanBuffer::new(&device, (64 as u64) * (64 as u64) * (4 as u64))
+            .expect("dma-buf buffer failed");
         match dma_buf.export_external_handle() {
             Ok(RhiExternalHandle::DmaBuf { fd, size }) => {
                 assert!(fd >= 0, "DMA-BUF fd must be non-negative, got {fd}");
@@ -1216,7 +1240,10 @@ mod tests {
         // OPAQUE_FD flavor → OpaqueFd variant. Skip if the pool isn't
         // available on this driver (already tested separately above).
         if device.opaque_fd_buffer_pool().is_some() {
-            let opaque_buf = HostVulkanBuffer::new_opaque_fd_export(&device, (64 as u64) * (64 as u64) * (4 as u64))
+            let opaque_buf = HostVulkanBuffer::new_opaque_fd_export(
+                &device,
+                (64 as u64) * (64 as u64) * (4 as u64),
+            )
             .expect("new_opaque_fd_export failed");
             match opaque_buf.export_external_handle() {
                 Ok(RhiExternalHandle::OpaqueFd { fd, size }) => {
@@ -1237,7 +1264,10 @@ mod tests {
     /// is comfortably below every observed real-device UUID and well
     /// above any plausible constant-write bug.
     #[cfg(target_os = "linux")]
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn physical_device_uuid_is_populated() {
         let device = match HostVulkanDevice::new() {
@@ -1272,7 +1302,10 @@ mod tests {
         println!("physical_device_uuid: {uuid:02x?}");
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_multiple_buffers_coexist() {
         let device = match HostVulkanDevice::new() {
@@ -1307,7 +1340,10 @@ mod tests {
         println!("All dropped successfully");
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_drop_frees_without_panic() {
         let device = match HostVulkanDevice::new() {
@@ -1325,7 +1361,10 @@ mod tests {
         println!("Buffer drop completed without panic");
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_dma_buf_import_round_trip() {
         let device = match HostVulkanDevice::new() {
@@ -1357,7 +1396,7 @@ mod tests {
 
         // Import into a new buffer from the DMA-BUF fd
         let imported = HostVulkanBuffer::from_dma_buf_fd(&device, fd, src.size())
-        .expect("DMA-BUF import failed");
+            .expect("DMA-BUF import failed");
 
         // Verify imported buffer has the same data
         unsafe {
@@ -1382,7 +1421,10 @@ mod tests {
     /// `HostVulkanBuffer`, confirm `plane_count()` reports 2, and each
     /// plane's bytes survive intact. Mirrors the symmetry the polyglot
     /// Python and Deno shims provide via `*_gpu_surface_plane_{count,size,mmap,base_address}`.
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_dma_buf_import_multi_plane_round_trip() {
         let device = match HostVulkanDevice::new() {
@@ -1418,13 +1460,18 @@ mod tests {
         let fd1 = src1.export_dma_buf_fd().expect("plane 1 export failed");
 
         // Import both as planes of a single pixel buffer.
-        let imported = HostVulkanBuffer::from_dma_buf_fds(&device, &[fd0, fd1], &[plane_size, plane_size])
-        .expect("multi-plane DMA-BUF import failed");
+        let imported =
+            HostVulkanBuffer::from_dma_buf_fds(&device, &[fd0, fd1], &[plane_size, plane_size])
+                .expect("multi-plane DMA-BUF import failed");
 
         assert_eq!(imported.plane_count(), 2, "plane_count must report 2");
         assert_eq!(imported.plane_size(0), plane_size);
         assert_eq!(imported.plane_size(1), plane_size);
-        assert_eq!(imported.plane_size(2), 0, "out-of-range plane size must be 0");
+        assert_eq!(
+            imported.plane_size(2),
+            0,
+            "out-of-range plane size must be 0"
+        );
 
         let p0 = imported.plane_mapped_ptr(0);
         let p1 = imported.plane_mapped_ptr(1);
@@ -1439,18 +1486,8 @@ mod tests {
         // pattern1. Byte-exact, no cross-contamination.
         unsafe {
             for i in (0..plane_size as usize).step_by(4) {
-                let b0 = [
-                    *p0.add(i),
-                    *p0.add(i + 1),
-                    *p0.add(i + 2),
-                    *p0.add(i + 3),
-                ];
-                let b1 = [
-                    *p1.add(i),
-                    *p1.add(i + 1),
-                    *p1.add(i + 2),
-                    *p1.add(i + 3),
-                ];
+                let b0 = [*p0.add(i), *p0.add(i + 1), *p0.add(i + 2), *p0.add(i + 3)];
+                let b1 = [*p1.add(i), *p1.add(i + 1), *p1.add(i + 2), *p1.add(i + 3)];
                 assert_eq!(b0, pattern0, "plane 0 mismatch at offset {i}");
                 assert_eq!(b1, pattern1, "plane 1 mismatch at offset {i}");
             }
@@ -1466,7 +1503,10 @@ mod tests {
     /// more planes than the surface-share `MAX_DMA_BUF_PLANES` cap (4 today).
     /// Covers the Rust half of the consistency the wire helpers already
     /// enforce on sends/receives.
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_dma_buf_import_rejects_oversize_plane_vec() {
         let device = match HostVulkanDevice::new() {
@@ -1480,10 +1520,10 @@ mod tests {
         // fds/sizes vecs with one more entry than the cap. Negative fds
         // are fine — we expect the length check to fire before any
         // syscall touches them.
-        let fds: Vec<std::os::unix::io::RawFd> =
-            (0..=streamlib_surface_client::MAX_DMA_BUF_PLANES as i32)
-                .map(|_| -1i32)
-                .collect();
+        let fds: Vec<std::os::unix::io::RawFd> = (0..=streamlib_surface_client::MAX_DMA_BUF_PLANES
+            as i32)
+            .map(|_| -1i32)
+            .collect();
         let sizes: Vec<vk::DeviceSize> = vec![1024; fds.len()];
 
         let result = HostVulkanBuffer::from_dma_buf_fds(&device, &fds, &sizes);
@@ -1500,7 +1540,10 @@ mod tests {
     /// STORAGE_BUFFER-usage VkBuffer: mapped pointer is non-null, size
     /// matches the requested byte count, write→readback round-trips
     /// through the persistent mapping.
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn storage_buffer_host_visible_write_readback() {
         let device = match HostVulkanDevice::new() {
@@ -1516,7 +1559,10 @@ mod tests {
             .expect("storage buffer allocation failed");
 
         assert_eq!(buf.size(), byte_size as vk::DeviceSize);
-        assert!(!buf.mapped_ptr().is_null(), "mapped pointer must be non-null");
+        assert!(
+            !buf.mapped_ptr().is_null(),
+            "mapped pointer must be non-null"
+        );
         assert_ne!(buf.buffer(), vk::Buffer::null());
 
         // Write a counter pattern through the mapped pointer and read it back.
@@ -1531,10 +1577,7 @@ mod tests {
             }
         }
 
-        println!(
-            "storage buffer round-trip verified: {} bytes",
-            byte_size
-        );
+        println!("storage buffer round-trip verified: {} bytes", byte_size);
     }
 
     /// `new_storage_buffer_host_visible` rejects byte_size = 0 and
@@ -1581,7 +1624,10 @@ mod tests {
     /// import via `from_dma_buf_fd_as_storage_buffer`, verify the
     /// imported mapping carries the same bytes the source wrote.
     #[cfg(target_os = "linux")]
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn storage_buffer_from_dma_buf_fd_round_trip() {
         let device = match HostVulkanDevice::new() {
@@ -1607,9 +1653,8 @@ mod tests {
         let fd = src.export_dma_buf_fd().expect("DMA-BUF export failed");
         assert!(fd >= 0);
 
-        let imported =
-            HostVulkanBuffer::from_dma_buf_fd_as_storage_buffer(&device, fd, byte_size)
-                .expect("DMA-BUF SSBO import failed");
+        let imported = HostVulkanBuffer::from_dma_buf_fd_as_storage_buffer(&device, fd, byte_size)
+            .expect("DMA-BUF SSBO import failed");
 
         assert_eq!(imported.size(), byte_size as vk::DeviceSize);
         assert!(!imported.mapped_ptr().is_null());
@@ -1684,7 +1729,10 @@ mod tests {
     /// to stay flat across the failed call (allocator + cleanup paths
     /// must be balanced).
     #[cfg(target_os = "linux")]
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn storage_buffer_from_dma_buf_fd_drops_on_failure() {
         let device = match HostVulkanDevice::new() {
@@ -1700,20 +1748,13 @@ mod tests {
         // be rejected per spec (the dma_buf cannot back the
         // requested size).
         let source_size: u64 = 4096;
-        let source = HostVulkanBuffer::new_storage_buffer_host_visible(
-            &device,
-            source_size,
-        )
-        .expect("source SSBO allocation failed");
+        let source = HostVulkanBuffer::new_storage_buffer_host_visible(&device, source_size)
+            .expect("source SSBO allocation failed");
         let fd = source.export_dma_buf_fd().expect("DMA-BUF export failed");
 
         let oversized: u64 = 16 * 1024 * 1024;
         let before = device.live_import_allocation_count();
-        let result = HostVulkanBuffer::from_dma_buf_fd_as_storage_buffer(
-            &device,
-            fd,
-            oversized,
-        );
+        let result = HostVulkanBuffer::from_dma_buf_fd_as_storage_buffer(&device, fd, oversized);
         let after = device.live_import_allocation_count();
 
         // Strict: the driver MUST reject. If it accepts, either the
@@ -1751,7 +1792,10 @@ mod tests {
     /// (the codec's resize loop catches `size == 0` via this early
     /// path).
     #[cfg(target_os = "linux")]
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn new_video_bitstream_rejects_zero_size() {
         let device = match HostVulkanDevice::new() {
@@ -1762,7 +1806,10 @@ mod tests {
             }
         };
         let profile = vk::VideoProfileInfoKHR::default();
-        for direction in [VideoBitstreamDirection::Encode, VideoBitstreamDirection::Decode] {
+        for direction in [
+            VideoBitstreamDirection::Encode,
+            VideoBitstreamDirection::Decode,
+        ] {
             let descriptor = VideoBitstreamBufferDescriptor {
                 label: "test/zero-size",
                 size: 0,
@@ -1780,7 +1827,9 @@ mod tests {
                         "zero-size error must carry the label, got: {msg}"
                     );
                 }
-                Err(e) => panic!("zero size ({direction:?}): expected Configuration error, got {e}"),
+                Err(e) => {
+                    panic!("zero size ({direction:?}): expected Configuration error, got {e}")
+                }
                 Ok(_) => panic!("zero size ({direction:?}): expected rejection, got Ok"),
             }
         }
@@ -1794,7 +1843,10 @@ mod tests {
     /// profiles for the buffer-creation path (the chain is validated
     /// at codec-session bind time, not at buffer creation).
     #[cfg(target_os = "linux")]
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn new_video_bitstream_succeeds_for_both_directions() {
         let device = match HostVulkanDevice::new() {
@@ -1806,7 +1858,10 @@ mod tests {
         };
         let profile = vk::VideoProfileInfoKHR::default();
         const SIZE: u64 = 1 << 20; // 1 MiB
-        for direction in [VideoBitstreamDirection::Encode, VideoBitstreamDirection::Decode] {
+        for direction in [
+            VideoBitstreamDirection::Encode,
+            VideoBitstreamDirection::Decode,
+        ] {
             let descriptor = VideoBitstreamBufferDescriptor {
                 label: "test/bitstream-positive",
                 size: SIZE,
@@ -1825,7 +1880,11 @@ mod tests {
                 !buf.mapped_ptr().is_null(),
                 "{direction:?} bitstream buffer must be persistently mapped"
             );
-            assert_ne!(buf.buffer(), vk::Buffer::null(), "VkBuffer handle must be non-null");
+            assert_ne!(
+                buf.buffer(),
+                vk::Buffer::null(),
+                "VkBuffer handle must be non-null"
+            );
         }
     }
 }

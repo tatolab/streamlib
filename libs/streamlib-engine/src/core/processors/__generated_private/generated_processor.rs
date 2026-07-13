@@ -5,11 +5,11 @@
 
 use serde_json::Value as JsonValue;
 
+use crate::core::ProcessorDescriptor;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::error::Result;
 use crate::core::execution::ExecutionConfig;
 use crate::core::processors::Config;
-use crate::core::ProcessorDescriptor;
 
 /// Internal trait implemented by the processor macro.
 ///

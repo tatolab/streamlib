@@ -18,10 +18,10 @@
 //!   using idiomatic Rust vectors.
 //! - `VulkanDeviceContext` is replaced by `vulkanalia::Device` plus the raw `vk::Device` handle.
 
-use vulkanalia::prelude::v1_4::*;
-use vulkanalia::vk;
 use std::cell::UnsafeCell;
 use std::sync::{Arc, Mutex};
+use vulkanalia::prelude::v1_4::*;
+use vulkanalia::vk;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -144,19 +144,21 @@ impl PoolNode {
         &mut self,
         cmd_buf: vk::CommandBuffer,
         begin_info: &vk::CommandBufferBeginInfo,
-    ) -> Result<vk::CommandBuffer, vk::Result> { unsafe {
-        if !self.is_valid() {
-            return Err(vk::Result::ERROR_INITIALIZATION_FAILED);
-        }
-        if self.cmd_buf_state != CmdBufState::Reset {
-            return Err(vk::Result::ERROR_INITIALIZATION_FAILED);
-        }
+    ) -> Result<vk::CommandBuffer, vk::Result> {
+        unsafe {
+            if !self.is_valid() {
+                return Err(vk::Result::ERROR_INITIALIZATION_FAILED);
+            }
+            if self.cmd_buf_state != CmdBufState::Reset {
+                return Err(vk::Result::ERROR_INITIALIZATION_FAILED);
+            }
 
-        let device = self.device.as_ref().unwrap();
-        device.begin_command_buffer(cmd_buf, begin_info)?;
-        self.cmd_buf_state = CmdBufState::Recording;
-        Ok(cmd_buf)
-    }}
+            let device = self.device.as_ref().unwrap();
+            device.begin_command_buffer(cmd_buf, begin_info)?;
+            self.cmd_buf_state = CmdBufState::Recording;
+            Ok(cmd_buf)
+        }
+    }
 
     /// End command buffer recording.
     /// Mirrors C++ `PoolNode::EndCommandBufferRecording`.
@@ -166,23 +168,25 @@ impl PoolNode {
     pub unsafe fn end_command_buffer_recording(
         &mut self,
         cmd_buf: vk::CommandBuffer,
-    ) -> vk::Result { unsafe {
-        if !self.is_valid() {
-            return vk::Result::ERROR_INITIALIZATION_FAILED;
-        }
-        if self.cmd_buf_state != CmdBufState::Recording {
-            return vk::Result::ERROR_INITIALIZATION_FAILED;
-        }
-
-        let device = self.device.as_ref().unwrap();
-        match device.end_command_buffer(cmd_buf) {
-            Ok(()) => {
-                self.cmd_buf_state = CmdBufState::Recorded;
-                vk::Result::SUCCESS
+    ) -> vk::Result {
+        unsafe {
+            if !self.is_valid() {
+                return vk::Result::ERROR_INITIALIZATION_FAILED;
             }
-            Err(e) => vk::Result::from(e),
+            if self.cmd_buf_state != CmdBufState::Recording {
+                return vk::Result::ERROR_INITIALIZATION_FAILED;
+            }
+
+            let device = self.device.as_ref().unwrap();
+            match device.end_command_buffer(cmd_buf) {
+                Ok(()) => {
+                    self.cmd_buf_state = CmdBufState::Recorded;
+                    vk::Result::SUCCESS
+                }
+                Err(e) => vk::Result::from(e),
+            }
         }
-    }}
+    }
 
     /// Mark the command buffer as submitted.
     /// Mirrors C++ `PoolNode::SetCommandBufferSubmitted`.
@@ -210,38 +214,36 @@ impl PoolNode {
         fence_name: &str,
         fence_wait_timeout_nsec: u64,
         fence_total_wait_timeout_nsec: u64,
-    ) -> vk::Result { unsafe {
-        if self.cmd_buf_state != CmdBufState::Submitted {
-            return vk::Result::ERROR_INITIALIZATION_FAILED;
-        }
+    ) -> vk::Result {
+        unsafe {
+            if self.cmd_buf_state != CmdBufState::Submitted {
+                return vk::Result::ERROR_INITIALIZATION_FAILED;
+            }
 
-        let device = match &self.device {
-            Some(d) => d,
-            None => return vk::Result::ERROR_INITIALIZATION_FAILED,
-        };
-        if fence == vk::Fence::null() {
-            return vk::Result::ERROR_INITIALIZATION_FAILED;
-        }
+            let device = match &self.device {
+                Some(d) => d,
+                None => return vk::Result::ERROR_INITIALIZATION_FAILED,
+            };
+            if fence == vk::Fence::null() {
+                return vk::Result::ERROR_INITIALIZATION_FAILED;
+            }
 
-        let result = wait_and_reset_fence(
-            device,
-            fence,
-            reset_after_wait,
-            fence_name,
-            fence_wait_timeout_nsec,
-            fence_total_wait_timeout_nsec,
-        );
-
-        if result != vk::Result::SUCCESS {
-            tracing::error!(
-                fence = fence_name,
-                ?result,
-                "wait_and_reset_fence() failed",
+            let result = wait_and_reset_fence(
+                device,
+                fence,
+                reset_after_wait,
+                fence_name,
+                fence_wait_timeout_nsec,
+                fence_total_wait_timeout_nsec,
             );
-        }
 
-        result
-    }}
+            if result != vk::Result::SUCCESS {
+                tracing::error!(fence = fence_name, ?result, "wait_and_reset_fence() failed",);
+            }
+
+            result
+        }
+    }
 
     /// Reset the command buffer state, optionally waiting for GPU completion.
     /// Mirrors C++ `PoolNode::ResetCommandBuffer`.
@@ -253,24 +255,26 @@ impl PoolNode {
         fence: vk::Fence,
         sync_with_host: bool,
         fence_name: &str,
-    ) -> bool { unsafe {
-        if self.cmd_buf_state == CmdBufState::Reset {
-            return false;
-        }
+    ) -> bool {
+        unsafe {
+            if self.cmd_buf_state == CmdBufState::Reset {
+                return false;
+            }
 
-        if sync_with_host {
-            self.sync_host_on_cmd_buff_complete(
-                fence,
-                true,
-                fence_name,
-                DEFAULT_FENCE_WAIT_TIMEOUT_NSEC,
-                DEFAULT_FENCE_TOTAL_WAIT_TIMEOUT_NSEC,
-            );
-        }
+            if sync_with_host {
+                self.sync_host_on_cmd_buff_complete(
+                    fence,
+                    true,
+                    fence_name,
+                    DEFAULT_FENCE_WAIT_TIMEOUT_NSEC,
+                    DEFAULT_FENCE_TOTAL_WAIT_TIMEOUT_NSEC,
+                );
+            }
 
-        self.cmd_buf_state = CmdBufState::Reset;
-        true
-    }}
+            self.cmd_buf_state = CmdBufState::Reset;
+            true
+        }
+    }
 }
 
 impl Default for PoolNode {
@@ -309,33 +313,35 @@ impl VulkanCommandBuffersSet {
         device: &vulkanalia::Device,
         queue_family_index: u32,
         count: u32,
-    ) -> vk::Result { unsafe {
-        let pool_info = vk::CommandPoolCreateInfo::builder()
-            .queue_family_index(queue_family_index)
-            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
+    ) -> vk::Result {
+        unsafe {
+            let pool_info = vk::CommandPoolCreateInfo::builder()
+                .queue_family_index(queue_family_index)
+                .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
 
-        self.cmd_pool = match device.create_command_pool(&pool_info, None) {
-            Ok(pool) => pool,
-            Err(e) => return e.into(),
-        };
+            self.cmd_pool = match device.create_command_pool(&pool_info, None) {
+                Ok(pool) => pool,
+                Err(e) => return e.into(),
+            };
 
-        let alloc_info = vk::CommandBufferAllocateInfo::builder()
-            .command_pool(self.cmd_pool)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(count);
+            let alloc_info = vk::CommandBufferAllocateInfo::builder()
+                .command_pool(self.cmd_pool)
+                .level(vk::CommandBufferLevel::PRIMARY)
+                .command_buffer_count(count);
 
-        self.cmd_buffers = match device.allocate_command_buffers(&alloc_info) {
-            Ok(bufs) => bufs,
-            Err(e) => {
-                device.destroy_command_pool(self.cmd_pool, None);
-                self.cmd_pool = vk::CommandPool::null();
-                return e.into();
-            }
-        };
+            self.cmd_buffers = match device.allocate_command_buffers(&alloc_info) {
+                Ok(bufs) => bufs,
+                Err(e) => {
+                    device.destroy_command_pool(self.cmd_pool, None);
+                    self.cmd_pool = vk::CommandPool::null();
+                    return e.into();
+                }
+            };
 
-        self.device = Some(device.clone());
-        vk::Result::SUCCESS
-    }}
+            self.device = Some(device.clone());
+            vk::Result::SUCCESS
+        }
+    }
 
     fn get_command_buffer(&self, index: u32) -> Option<vk::CommandBuffer> {
         self.cmd_buffers.get(index as usize).copied()
@@ -343,19 +349,21 @@ impl VulkanCommandBuffersSet {
 
     /// # Safety
     /// Must only be called when no command buffers are in use.
-    unsafe fn destroy(&mut self) { unsafe {
-        if let Some(ref device) = self.device {
-            if !self.cmd_buffers.is_empty() {
-                device.free_command_buffers(self.cmd_pool, &self.cmd_buffers);
-                self.cmd_buffers.clear();
+    unsafe fn destroy(&mut self) {
+        unsafe {
+            if let Some(ref device) = self.device {
+                if !self.cmd_buffers.is_empty() {
+                    device.free_command_buffers(self.cmd_pool, &self.cmd_buffers);
+                    self.cmd_buffers.clear();
+                }
+                if self.cmd_pool != vk::CommandPool::null() {
+                    device.destroy_command_pool(self.cmd_pool, None);
+                    self.cmd_pool = vk::CommandPool::null();
+                }
             }
-            if self.cmd_pool != vk::CommandPool::null() {
-                device.destroy_command_pool(self.cmd_pool, None);
-                self.cmd_pool = vk::CommandPool::null();
-            }
+            self.device = None;
         }
-        self.device = None;
-    }}
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -379,27 +387,29 @@ impl VulkanFenceSet {
 
     /// # Safety
     /// `device` must be valid and not destroyed for the lifetime of this set.
-    unsafe fn create_set(&mut self, device: &vulkanalia::Device, count: u32) -> vk::Result { unsafe {
-        self.destroy();
+    unsafe fn create_set(&mut self, device: &vulkanalia::Device, count: u32) -> vk::Result {
+        unsafe {
+            self.destroy();
 
-        let fence_info = vk::FenceCreateInfo::default();
-        let mut fences = Vec::with_capacity(count as usize);
-        for _ in 0..count {
-            match device.create_fence(&fence_info, None) {
-                Ok(f) => fences.push(f),
-                Err(e) => {
-                    // Clean up already-created fences.
-                    for f in &fences {
-                        device.destroy_fence(*f, None);
+            let fence_info = vk::FenceCreateInfo::default();
+            let mut fences = Vec::with_capacity(count as usize);
+            for _ in 0..count {
+                match device.create_fence(&fence_info, None) {
+                    Ok(f) => fences.push(f),
+                    Err(e) => {
+                        // Clean up already-created fences.
+                        for f in &fences {
+                            device.destroy_fence(*f, None);
+                        }
+                        return e.into();
                     }
-                    return e.into();
                 }
             }
+            self.fences = fences;
+            self.device = Some(device.clone());
+            vk::Result::SUCCESS
         }
-        self.fences = fences;
-        self.device = Some(device.clone());
-        vk::Result::SUCCESS
-    }}
+    }
 
     fn get_fence(&self, index: u32) -> vk::Fence {
         self.fences
@@ -410,17 +420,19 @@ impl VulkanFenceSet {
 
     /// # Safety
     /// No fences may be in use on the GPU.
-    unsafe fn destroy(&mut self) { unsafe {
-        if let Some(ref device) = self.device {
-            for f in &self.fences {
-                if *f != vk::Fence::null() {
-                    device.destroy_fence(*f, None);
+    unsafe fn destroy(&mut self) {
+        unsafe {
+            if let Some(ref device) = self.device {
+                for f in &self.fences {
+                    if *f != vk::Fence::null() {
+                        device.destroy_fence(*f, None);
+                    }
                 }
             }
+            self.fences.clear();
+            self.device = None;
         }
-        self.fences.clear();
-        self.device = None;
-    }}
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -444,26 +456,28 @@ impl VulkanSemaphoreSet {
 
     /// # Safety
     /// `device` must be valid and not destroyed for the lifetime of this set.
-    unsafe fn create_set(&mut self, device: &vulkanalia::Device, count: u32) -> vk::Result { unsafe {
-        self.destroy();
+    unsafe fn create_set(&mut self, device: &vulkanalia::Device, count: u32) -> vk::Result {
+        unsafe {
+            self.destroy();
 
-        let sem_info = vk::SemaphoreCreateInfo::default();
-        let mut sems = Vec::with_capacity(count as usize);
-        for _ in 0..count {
-            match device.create_semaphore(&sem_info, None) {
-                Ok(s) => sems.push(s),
-                Err(e) => {
-                    for s in &sems {
-                        device.destroy_semaphore(*s, None);
+            let sem_info = vk::SemaphoreCreateInfo::default();
+            let mut sems = Vec::with_capacity(count as usize);
+            for _ in 0..count {
+                match device.create_semaphore(&sem_info, None) {
+                    Ok(s) => sems.push(s),
+                    Err(e) => {
+                        for s in &sems {
+                            device.destroy_semaphore(*s, None);
+                        }
+                        return e.into();
                     }
-                    return e.into();
                 }
             }
+            self.semaphores = sems;
+            self.device = Some(device.clone());
+            vk::Result::SUCCESS
         }
-        self.semaphores = sems;
-        self.device = Some(device.clone());
-        vk::Result::SUCCESS
-    }}
+    }
 
     fn get_semaphore(&self, index: u32) -> vk::Semaphore {
         self.semaphores
@@ -474,17 +488,19 @@ impl VulkanSemaphoreSet {
 
     /// # Safety
     /// No semaphores may be in use on the GPU.
-    unsafe fn destroy(&mut self) { unsafe {
-        if let Some(ref device) = self.device {
-            for s in &self.semaphores {
-                if *s != vk::Semaphore::null() {
-                    device.destroy_semaphore(*s, None);
+    unsafe fn destroy(&mut self) {
+        unsafe {
+            if let Some(ref device) = self.device {
+                for s in &self.semaphores {
+                    if *s != vk::Semaphore::null() {
+                        device.destroy_semaphore(*s, None);
+                    }
                 }
             }
+            self.semaphores.clear();
+            self.device = None;
         }
-        self.semaphores.clear();
-        self.device = None;
-    }}
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -576,59 +592,61 @@ pub unsafe fn wait_and_reset_fence(
     fence_name: &str,
     fence_wait_timeout: u64,
     fence_total_wait_timeout: u64,
-) -> vk::Result { unsafe {
-    debug_assert!(fence != vk::Fence::null());
+) -> vk::Result {
+    unsafe {
+        debug_assert!(fence != vk::Fence::null());
 
-    let mut current_wait: u64 = 0;
-    let mut result = vk::Result::SUCCESS;
+        let mut current_wait: u64 = 0;
+        let mut result = vk::Result::SUCCESS;
 
-    while fence_total_wait_timeout >= current_wait {
-        current_wait += fence_wait_timeout;
+        while fence_total_wait_timeout >= current_wait {
+            current_wait += fence_wait_timeout;
 
-        match device.wait_for_fences(&[fence], true, fence_wait_timeout) {
-            Ok(vk::SuccessCode::SUCCESS) => {
-                result = vk::Result::SUCCESS;
-                break;
-            }
-            Ok(vk::SuccessCode::TIMEOUT) => {
-                tracing::warn!(
-                    fence = fence_name,
-                    fence_handle = ?fence,
-                    elapsed_ms = current_wait / (1000 * 1000),
-                    "fence not signaled",
-                );
-                result = vk::Result::TIMEOUT;
-            }
-            Ok(_) => {
-                result = vk::Result::SUCCESS;
-                break;
-            }
-            Err(e) => {
-                result = e.into();
-                break;
+            match device.wait_for_fences(&[fence], true, fence_wait_timeout) {
+                Ok(vk::SuccessCode::SUCCESS) => {
+                    result = vk::Result::SUCCESS;
+                    break;
+                }
+                Ok(vk::SuccessCode::TIMEOUT) => {
+                    tracing::warn!(
+                        fence = fence_name,
+                        fence_handle = ?fence,
+                        elapsed_ms = current_wait / (1000 * 1000),
+                        "fence not signaled",
+                    );
+                    result = vk::Result::TIMEOUT;
+                }
+                Ok(_) => {
+                    result = vk::Result::SUCCESS;
+                    break;
+                }
+                Err(e) => {
+                    result = e.into();
+                    break;
+                }
             }
         }
-    }
 
-    if result != vk::Result::SUCCESS {
-        tracing::error!(
-            fence = fence_name,
-            fence_handle = ?fence,
-            total_wait_ms = fence_total_wait_timeout / (1000 * 1000),
-            status = ?device.get_fence_status(fence),
-            "fence wait exhausted without signal",
-        );
-        return result;
-    }
-
-    if reset_after_wait {
-        if let Err(e) = device.reset_fences(&[fence]) {
-            return e.into();
+        if result != vk::Result::SUCCESS {
+            tracing::error!(
+                fence = fence_name,
+                fence_handle = ?fence,
+                total_wait_ms = fence_total_wait_timeout / (1000 * 1000),
+                status = ?device.get_fence_status(fence),
+                "fence wait exhausted without signal",
+            );
+            return result;
         }
-    }
 
-    vk::Result::SUCCESS
-}}
+        if reset_after_wait {
+            if let Err(e) = device.reset_fences(&[fence]) {
+                return e.into();
+            }
+        }
+
+        vk::Result::SUCCESS
+    }
+}
 
 // ---------------------------------------------------------------------------
 // VulkanCommandBufferPool
@@ -713,67 +731,69 @@ impl VulkanCommandBufferPool {
         video_profile: Option<&vk::VideoProfileInfoKHR>,
         create_semaphores: bool,
         create_fences: bool,
-    ) -> vk::Result { unsafe {
-        let pool = Arc::get_mut(self)
-            .expect("Cannot configure pool while other references exist");
+    ) -> vk::Result {
+        unsafe {
+            let pool =
+                Arc::get_mut(self).expect("Cannot configure pool while other references exist");
 
-        let mut inner = pool.mutex.lock().unwrap();
+            let mut inner = pool.mutex.lock().unwrap();
 
-        let nodes = pool.pool_nodes.get_mut();
-        if num_pool_nodes as usize > nodes.len() {
-            return vk::Result::ERROR_TOO_MANY_OBJECTS;
-        }
+            let nodes = pool.pool_nodes.get_mut();
+            if num_pool_nodes as usize > nodes.len() {
+                return vk::Result::ERROR_TOO_MANY_OBJECTS;
+            }
 
-        let result = pool.command_buffers_set.create_command_buffer_pool(
-            device,
-            queue_family_index,
-            num_pool_nodes,
-        );
-        if result != vk::Result::SUCCESS {
-            return result;
-        }
-
-        if create_semaphores {
-            let result = pool.semaphore_set.create_set(device, num_pool_nodes);
+            let result = pool.command_buffers_set.create_command_buffer_pool(
+                device,
+                queue_family_index,
+                num_pool_nodes,
+            );
             if result != vk::Result::SUCCESS {
                 return result;
             }
-        }
 
-        if create_fences {
-            let result = pool.fence_set.create_set(device, num_pool_nodes);
-            if result != vk::Result::SUCCESS {
-                return result;
+            if create_semaphores {
+                let result = pool.semaphore_set.create_set(device, num_pool_nodes);
+                if result != vk::Result::SUCCESS {
+                    return result;
+                }
             }
-        }
 
-        if create_query_pool {
-            if pool
-                .query_pool_set
-                .create_set(
-                    vulkan_device,
-                    num_pool_nodes,
-                    vk::QueryType::VIDEO_ENCODE_FEEDBACK_KHR,
-                    vk::VideoEncodeFeedbackFlagsKHR::BITSTREAM_BUFFER_OFFSET
-                        | vk::VideoEncodeFeedbackFlagsKHR::BITSTREAM_BYTES_WRITTEN,
-                    video_profile,
-                )
-                .is_err()
-            {
-                return vk::Result::ERROR_INITIALIZATION_FAILED;
+            if create_fences {
+                let result = pool.fence_set.create_set(device, num_pool_nodes);
+                if result != vk::Result::SUCCESS {
+                    return result;
+                }
             }
-        }
 
-        for i in 0..num_pool_nodes {
-            let _ = nodes[i as usize].init(device.clone());
-            inner.available_pool_nodes |= 1u64 << i;
-        }
+            if create_query_pool {
+                if pool
+                    .query_pool_set
+                    .create_set(
+                        vulkan_device,
+                        num_pool_nodes,
+                        vk::QueryType::VIDEO_ENCODE_FEEDBACK_KHR,
+                        vk::VideoEncodeFeedbackFlagsKHR::BITSTREAM_BUFFER_OFFSET
+                            | vk::VideoEncodeFeedbackFlagsKHR::BITSTREAM_BYTES_WRITTEN,
+                        video_profile,
+                    )
+                    .is_err()
+                {
+                    return vk::Result::ERROR_INITIALIZATION_FAILED;
+                }
+            }
 
-        pool.device = Some(device.clone());
-        inner.pool_size = num_pool_nodes;
-        inner.queue_family_index = queue_family_index;
-        vk::Result::SUCCESS
-    }}
+            for i in 0..num_pool_nodes {
+                let _ = nodes[i as usize].init(device.clone());
+                inner.available_pool_nodes |= 1u64 << i;
+            }
+
+            pool.device = Some(device.clone());
+            inner.pool_size = num_pool_nodes;
+            inner.queue_family_index = queue_family_index;
+            vk::Result::SUCCESS
+        }
+    }
 
     /// Acquire an available pool node.
     /// Mirrors C++ `VulkanCommandBufferPool::GetAvailablePoolNode`.
@@ -885,23 +905,24 @@ impl VulkanCommandBufferPool {
     ///
     /// # Safety
     /// All GPU work using pool resources must be complete.
-    pub unsafe fn deinit(self: &mut Arc<Self>) { unsafe {
-        let pool = Arc::get_mut(self)
-            .expect("Cannot deinit pool while other references exist");
-        let inner = pool.mutex.lock().unwrap();
-        let pool_size = inner.pool_size as usize;
-        drop(inner);
+    pub unsafe fn deinit(self: &mut Arc<Self>) {
+        unsafe {
+            let pool = Arc::get_mut(self).expect("Cannot deinit pool while other references exist");
+            let inner = pool.mutex.lock().unwrap();
+            let pool_size = inner.pool_size as usize;
+            drop(inner);
 
-        let nodes = pool.pool_nodes.get_mut();
-        for i in 0..pool_size {
-            nodes[i].deinit();
+            let nodes = pool.pool_nodes.get_mut();
+            for i in 0..pool_size {
+                nodes[i].deinit();
+            }
+
+            pool.command_buffers_set.destroy();
+            pool.semaphore_set.destroy();
+            pool.fence_set.destroy();
+            pool.query_pool_set.destroy();
         }
-
-        pool.command_buffers_set.destroy();
-        pool.semaphore_set.destroy();
-        pool.fence_set.destroy();
-        pool.query_pool_set.destroy();
-    }}
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -949,10 +970,12 @@ impl PoolNodeHandle {
     /// This is safe in practice because `PoolNodeHandle` has exclusive ownership
     /// of the node index (guaranteed by the bitmask).
     #[allow(clippy::mut_from_ref)] // interior mutability via UnsafeCell; caller-guaranteed exclusivity
-    pub unsafe fn node_mut(&self) -> &mut PoolNode { unsafe {
-        let nodes = &mut *self.pool.pool_nodes.get();
-        &mut nodes[self.index as usize]
-    }}
+    pub unsafe fn node_mut(&self) -> &mut PoolNode {
+        unsafe {
+            let nodes = &mut *self.pool.pool_nodes.get();
+            &mut nodes[self.index as usize]
+        }
+    }
 
     /// Begin command buffer recording.
     ///
@@ -961,21 +984,23 @@ impl PoolNodeHandle {
     pub unsafe fn begin_command_buffer_recording(
         &self,
         begin_info: &vk::CommandBufferBeginInfo,
-    ) -> Result<vk::CommandBuffer, vk::Result> { unsafe {
-        let cmd_buf = self
-            .get_command_buffer()
-            .ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
-        self.node_mut()
-            .begin_command_buffer_recording(cmd_buf, begin_info)
-    }}
+    ) -> Result<vk::CommandBuffer, vk::Result> {
+        unsafe {
+            let cmd_buf = self
+                .get_command_buffer()
+                .ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
+            self.node_mut()
+                .begin_command_buffer_recording(cmd_buf, begin_info)
+        }
+    }
 
     /// End command buffer recording.
     ///
     /// # Safety
     /// The command buffer must be in recording state.
-    pub unsafe fn end_command_buffer_recording(&self, cmd_buf: vk::CommandBuffer) -> vk::Result { unsafe {
-        self.node_mut().end_command_buffer_recording(cmd_buf)
-    }}
+    pub unsafe fn end_command_buffer_recording(&self, cmd_buf: vk::CommandBuffer) -> vk::Result {
+        unsafe { self.node_mut().end_command_buffer_recording(cmd_buf) }
+    }
 
     /// Mark the command buffer as submitted.
     pub fn set_command_buffer_submitted(&self) -> bool {
@@ -991,26 +1016,30 @@ impl PoolNodeHandle {
         &self,
         reset_after_wait: bool,
         fence_name: &str,
-    ) -> vk::Result { unsafe {
-        let fence = self.get_fence();
-        self.node_mut().sync_host_on_cmd_buff_complete(
-            fence,
-            reset_after_wait,
-            fence_name,
-            DEFAULT_FENCE_WAIT_TIMEOUT_NSEC,
-            DEFAULT_FENCE_TOTAL_WAIT_TIMEOUT_NSEC,
-        )
-    }}
+    ) -> vk::Result {
+        unsafe {
+            let fence = self.get_fence();
+            self.node_mut().sync_host_on_cmd_buff_complete(
+                fence,
+                reset_after_wait,
+                fence_name,
+                DEFAULT_FENCE_WAIT_TIMEOUT_NSEC,
+                DEFAULT_FENCE_TOTAL_WAIT_TIMEOUT_NSEC,
+            )
+        }
+    }
 
     /// Reset the command buffer, optionally waiting for GPU completion first.
     ///
     /// # Safety
     /// If `sync_with_host` is true, the command buffer must have been submitted.
-    pub unsafe fn reset_command_buffer(&self, sync_with_host: bool, fence_name: &str) -> bool { unsafe {
-        let fence = self.get_fence();
-        self.node_mut()
-            .reset_command_buffer(fence, sync_with_host, fence_name)
-    }}
+    pub unsafe fn reset_command_buffer(&self, sync_with_host: bool, fence_name: &str) -> bool {
+        unsafe {
+            let fence = self.get_fence();
+            self.node_mut()
+                .reset_command_buffer(fence, sync_with_host, fence_name)
+        }
+    }
 
     /// Get the command buffer state.
     pub fn cmd_buf_state(&self) -> CmdBufState {
@@ -1064,30 +1093,32 @@ impl PoolNodeHandler {
         pool: &Arc<VulkanCommandBufferPool>,
         operation_name: &str,
         wait_on_cpu_after_submit: bool,
-    ) -> Self { unsafe {
-        let node_handle = pool.get_available_pool_node();
-        let mut cmd_buf = vk::CommandBuffer::null();
+    ) -> Self {
+        unsafe {
+            let node_handle = pool.get_available_pool_node();
+            let mut cmd_buf = vk::CommandBuffer::null();
 
-        if let Some(ref handle) = node_handle {
-            handle.reset_command_buffer(true, operation_name);
+            if let Some(ref handle) = node_handle {
+                handle.reset_command_buffer(true, operation_name);
 
-            let begin_info = vk::CommandBufferBeginInfo::builder()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+                let begin_info = vk::CommandBufferBeginInfo::builder()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
-            match handle.begin_command_buffer_recording(&begin_info) {
-                Ok(buf) => cmd_buf = buf,
-                Err(_) => {}
+                match handle.begin_command_buffer_recording(&begin_info) {
+                    Ok(buf) => cmd_buf = buf,
+                    Err(_) => {}
+                }
+            }
+
+            Self {
+                node_handle,
+                cmd_buf,
+                operation_name: operation_name.to_string(),
+                wait_on_cpu_after_submit,
+                command_ended: false,
             }
         }
-
-        Self {
-            node_handle,
-            cmd_buf,
-            operation_name: operation_name.to_string(),
-            wait_on_cpu_after_submit,
-            command_ended: false,
-        }
-    }}
+    }
 
     /// Create a handler with an existing pool node handle.
     ///
@@ -1098,50 +1129,54 @@ impl PoolNodeHandler {
         existing_node: Option<PoolNodeHandle>,
         operation_name: &str,
         wait_on_cpu_after_submit: bool,
-    ) -> Self { unsafe {
-        let node_handle = existing_node.or_else(|| pool.get_available_pool_node());
-        let mut cmd_buf = vk::CommandBuffer::null();
+    ) -> Self {
+        unsafe {
+            let node_handle = existing_node.or_else(|| pool.get_available_pool_node());
+            let mut cmd_buf = vk::CommandBuffer::null();
 
-        if let Some(ref handle) = node_handle {
-            handle.reset_command_buffer(true, operation_name);
+            if let Some(ref handle) = node_handle {
+                handle.reset_command_buffer(true, operation_name);
 
-            let begin_info = vk::CommandBufferBeginInfo::builder()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+                let begin_info = vk::CommandBufferBeginInfo::builder()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
-            match handle.begin_command_buffer_recording(&begin_info) {
-                Ok(buf) => cmd_buf = buf,
-                Err(_) => {}
+                match handle.begin_command_buffer_recording(&begin_info) {
+                    Ok(buf) => cmd_buf = buf,
+                    Err(_) => {}
+                }
+            }
+
+            Self {
+                node_handle,
+                cmd_buf,
+                operation_name: operation_name.to_string(),
+                wait_on_cpu_after_submit,
+                command_ended: false,
             }
         }
-
-        Self {
-            node_handle,
-            cmd_buf,
-            operation_name: operation_name.to_string(),
-            wait_on_cpu_after_submit,
-            command_ended: false,
-        }
-    }}
+    }
 
     /// End command buffer recording.
     /// Mirrors C++ `PoolNodeHandler::EndCmdBufferRecording`.
     ///
     /// # Safety
     /// The command buffer must be in recording state.
-    pub unsafe fn end_cmd_buffer_recording(&mut self) -> vk::Result { unsafe {
-        if let Some(ref handle) = self.node_handle {
-            if self.cmd_buf == vk::CommandBuffer::null() {
-                return vk::Result::ERROR_INITIALIZATION_FAILED;
+    pub unsafe fn end_cmd_buffer_recording(&mut self) -> vk::Result {
+        unsafe {
+            if let Some(ref handle) = self.node_handle {
+                if self.cmd_buf == vk::CommandBuffer::null() {
+                    return vk::Result::ERROR_INITIALIZATION_FAILED;
+                }
+                let result = handle.end_command_buffer_recording(self.cmd_buf);
+                if result == vk::Result::SUCCESS {
+                    self.command_ended = true;
+                }
+                result
+            } else {
+                vk::Result::ERROR_INITIALIZATION_FAILED
             }
-            let result = handle.end_command_buffer_recording(self.cmd_buf);
-            if result == vk::Result::SUCCESS {
-                self.command_ended = true;
-            }
-            result
-        } else {
-            vk::Result::ERROR_INITIALIZATION_FAILED
         }
-    }}
+    }
 
     /// Check if the handler is valid and has a command buffer ready for recording.
     pub fn is_valid(&self) -> bool {

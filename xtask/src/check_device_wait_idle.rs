@@ -155,11 +155,7 @@ fn scan_file(path: &Path, violations: &mut Vec<Violation>) -> Result<()> {
         let in_test = depth > 0;
         let trimmed = line.trim_start();
         let is_comment = trimmed.starts_with("//");
-        if !in_test
-            && !is_comment
-            && !line.contains(ALLOW_LINE_PRAGMA)
-            && line.contains(BANNED)
-        {
+        if !in_test && !is_comment && !line.contains(ALLOW_LINE_PRAGMA) && line.contains(BANNED) {
             violations.push(Violation {
                 path: path.to_path_buf(),
                 line_no: idx + 1,

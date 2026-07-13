@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::error::{Result, Error};
+use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphNodeWithComponents, ProcessorPauseGateComponent, ProcessorReadyBarrierComponent,
     ProcessorReadyBarrierHandle, ProcessorUniqueId, ShutdownChannelComponent, StateComponent,
@@ -17,9 +17,7 @@ pub(crate) fn prepare_processor(
         .traversal_mut()
         .v(proc_id)
         .first_mut()
-        .ok_or_else(|| {
-            Error::ProcessorNotFound(format!("Processor '{}' not found", proc_id))
-        })?;
+        .ok_or_else(|| Error::ProcessorNotFound(format!("Processor '{}' not found", proc_id)))?;
 
     // Create barrier for synchronization with processor thread
     let (barrier_component, barrier_handle) = ProcessorReadyBarrierComponent::new();

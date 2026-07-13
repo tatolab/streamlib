@@ -16,9 +16,9 @@ use std::ffi::c_void;
 use std::sync::Arc;
 
 use streamlib_plugin_abi::{
-    GpuContextFullAccessVTable, GpuContextLimitedAccessVTable,
     GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION,
-    GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION,
+    GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, GpuContextFullAccessVTable,
+    GpuContextLimitedAccessVTable,
 };
 
 use super::host_callbacks;
@@ -29,6 +29,27 @@ mod limited;
 mod scope_token;
 mod shared;
 
+use full::{
+    host_gpu_full_acquire_output_texture, host_gpu_full_acquire_render_target_dma_buf_image,
+    host_gpu_full_build_tlas, host_gpu_full_build_triangles_blas, host_gpu_full_check_in_surface,
+    host_gpu_full_color_converter, host_gpu_full_create_command_recorder,
+    host_gpu_full_create_timeline_semaphore, host_gpu_full_drop_handle,
+    host_gpu_full_gpu_capabilities, host_gpu_full_host_vulkan_device_arc,
+    host_gpu_full_host_vulkan_texture_arc, host_gpu_full_import_dma_buf_storage_buffer,
+    host_gpu_full_supports_ray_tracing_pipeline, host_gpu_full_upload_pixel_buffer_as_texture,
+    host_gpu_full_wait_device_idle,
+};
+use full::{
+    host_gpu_full_clone_acceleration_structure, host_gpu_full_clone_color_converter,
+    host_gpu_full_clone_command_recorder, host_gpu_full_clone_compute_kernel,
+    host_gpu_full_clone_graphics_kernel, host_gpu_full_clone_ray_tracing_kernel,
+    host_gpu_full_clone_texture_ring, host_gpu_full_create_compute_kernel,
+    host_gpu_full_create_graphics_kernel, host_gpu_full_create_ray_tracing_kernel,
+    host_gpu_full_create_texture_ring, host_gpu_full_drop_acceleration_structure,
+    host_gpu_full_drop_color_converter, host_gpu_full_drop_command_recorder,
+    host_gpu_full_drop_compute_kernel, host_gpu_full_drop_graphics_kernel,
+    host_gpu_full_drop_ray_tracing_kernel, host_gpu_full_drop_texture_ring,
+};
 use limited::{
     host_gpu_lim_acquire_index_buffer, host_gpu_lim_acquire_pixel_buffer,
     host_gpu_lim_acquire_storage_buffer, host_gpu_lim_acquire_texture,
@@ -44,40 +65,19 @@ use limited::{
     host_gpu_lim_create_command_buffer, host_gpu_lim_create_command_buffer_from_queue,
     host_gpu_lim_drop_command_buffer, host_gpu_lim_drop_index_buffer,
     host_gpu_lim_drop_pixel_buffer, host_gpu_lim_drop_pooled_texture_handle,
-    host_gpu_lim_drop_rhi_command_queue, host_gpu_lim_drop_storage_buffer, host_gpu_lim_drop_texture,
-    host_gpu_lim_drop_texture_registration, host_gpu_lim_drop_uniform_buffer,
-    host_gpu_lim_drop_vertex_buffer, host_gpu_lim_escalate_begin, host_gpu_lim_escalate_end,
-    host_gpu_lim_get_pixel_buffer, host_gpu_lim_host_video_source_timeline_arc,
-    host_gpu_lim_plane_base_address_pixel_buffer, host_gpu_lim_plane_size_pixel_buffer,
-    host_gpu_lim_register_texture, host_gpu_lim_resolve_pixel_buffer_by_surface_id,
-    host_gpu_lim_resolve_texture_by_surface_id,
+    host_gpu_lim_drop_rhi_command_queue, host_gpu_lim_drop_storage_buffer,
+    host_gpu_lim_drop_texture, host_gpu_lim_drop_texture_registration,
+    host_gpu_lim_drop_uniform_buffer, host_gpu_lim_drop_vertex_buffer, host_gpu_lim_escalate_begin,
+    host_gpu_lim_escalate_end, host_gpu_lim_get_pixel_buffer,
+    host_gpu_lim_host_video_source_timeline_arc, host_gpu_lim_plane_base_address_pixel_buffer,
+    host_gpu_lim_plane_size_pixel_buffer, host_gpu_lim_register_texture,
+    host_gpu_lim_resolve_pixel_buffer_by_surface_id, host_gpu_lim_resolve_texture_by_surface_id,
     host_gpu_lim_resolve_texture_registration_by_surface_id,
     host_gpu_lim_set_video_source_timeline_semaphore, host_gpu_lim_strong_count_pixel_buffer,
     host_gpu_lim_surface_store, host_gpu_lim_texture_native_dma_buf_fd,
     host_gpu_lim_texture_registration_current_layout, host_gpu_lim_texture_registration_texture,
     host_gpu_lim_texture_registration_update_layout, host_gpu_lim_unregister_texture,
     host_gpu_lim_update_texture_registration_layout, host_gpu_lim_wait_timeline_semaphore,
-};
-use full::{
-    host_gpu_full_clone_acceleration_structure, host_gpu_full_clone_color_converter,
-    host_gpu_full_clone_command_recorder, host_gpu_full_clone_compute_kernel,
-    host_gpu_full_clone_graphics_kernel, host_gpu_full_clone_ray_tracing_kernel,
-    host_gpu_full_clone_texture_ring, host_gpu_full_create_compute_kernel,
-    host_gpu_full_create_graphics_kernel, host_gpu_full_create_ray_tracing_kernel,
-    host_gpu_full_create_texture_ring, host_gpu_full_drop_acceleration_structure,
-    host_gpu_full_drop_color_converter, host_gpu_full_drop_command_recorder,
-    host_gpu_full_drop_compute_kernel, host_gpu_full_drop_graphics_kernel,
-    host_gpu_full_drop_ray_tracing_kernel, host_gpu_full_drop_texture_ring,
-};
-use full::{
-    host_gpu_full_acquire_output_texture, host_gpu_full_acquire_render_target_dma_buf_image,
-    host_gpu_full_build_tlas, host_gpu_full_build_triangles_blas, host_gpu_full_check_in_surface,
-    host_gpu_full_color_converter, host_gpu_full_create_command_recorder,
-    host_gpu_full_create_timeline_semaphore, host_gpu_full_drop_handle,
-    host_gpu_full_gpu_capabilities, host_gpu_full_host_vulkan_device_arc,
-    host_gpu_full_host_vulkan_texture_arc, host_gpu_full_import_dma_buf_storage_buffer,
-    host_gpu_full_supports_ray_tracing_pipeline, host_gpu_full_upload_pixel_buffer_as_texture,
-    host_gpu_full_wait_device_idle,
 };
 
 // pointers and reading nothing about layout.
@@ -107,8 +107,9 @@ unsafe extern "C" fn host_gpu_lim_clone_handle(borrowed_handle: *const c_void) -
             // `Box::into_raw(Box::new(...))` so the caller gets a
             // fresh owned handle that matches `drop_handle`'s
             // expected shape.
-            let original =
-                unsafe { &*(borrowed_handle as *const std::sync::Arc<crate::core::context::GpuContext>) };
+            let original = unsafe {
+                &*(borrowed_handle as *const std::sync::Arc<crate::core::context::GpuContext>)
+            };
             Box::into_raw(Box::new(original.clone())) as *const c_void
         },
         std::ptr::null(),
@@ -185,8 +186,7 @@ pub static HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE: GpuContextFullAccessVTable =
         create_graphics_kernel: host_gpu_full_create_graphics_kernel,
         create_ray_tracing_kernel: host_gpu_full_create_ray_tracing_kernel,
         create_texture_ring: host_gpu_full_create_texture_ring,
-        acquire_render_target_dma_buf_image:
-            host_gpu_full_acquire_render_target_dma_buf_image,
+        acquire_render_target_dma_buf_image: host_gpu_full_acquire_render_target_dma_buf_image,
         // Phase D (#906) entries.
         wait_device_idle: host_gpu_full_wait_device_idle,
         acquire_output_texture: host_gpu_full_acquire_output_texture,
@@ -212,9 +212,7 @@ pub static HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE: GpuContextFullAccessVTable =
 /// [`HostServices::gpu_context_full_access_vtable`].
 pub fn host_gpu_context_full_access_vtable() -> *const GpuContextFullAccessVTable {
     match host_callbacks() {
-        Some(c) if !c.gpu_context_full_access_vtable.is_null() => {
-            c.gpu_context_full_access_vtable
-        }
+        Some(c) if !c.gpu_context_full_access_vtable.is_null() => c.gpu_context_full_access_vtable,
         _ => &HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE,
     }
 }
@@ -277,13 +275,10 @@ pub static HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE: GpuContextLimitedAccessVTable
         escalate_begin: host_gpu_lim_escalate_begin,
         escalate_end: host_gpu_lim_escalate_end,
         texture_native_dma_buf_fd: host_gpu_lim_texture_native_dma_buf_fd,
-        set_video_source_timeline_semaphore:
-            host_gpu_lim_set_video_source_timeline_semaphore,
-        clear_video_source_timeline_semaphore:
-            host_gpu_lim_clear_video_source_timeline_semaphore,
+        set_video_source_timeline_semaphore: host_gpu_lim_set_video_source_timeline_semaphore,
+        clear_video_source_timeline_semaphore: host_gpu_lim_clear_video_source_timeline_semaphore,
         wait_timeline_semaphore: host_gpu_lim_wait_timeline_semaphore,
-        host_video_source_timeline_arc:
-            host_gpu_lim_host_video_source_timeline_arc,
+        host_video_source_timeline_arc: host_gpu_lim_host_video_source_timeline_arc,
     };
 
 /// Pointer to the [`GpuContextLimitedAccessVTable`] this plugin should
@@ -396,7 +391,10 @@ mod gpu_lim_tier1_wire_format_tests {
         drop_texture_registration_handles_null,
         drop_texture_registration
     );
-    null_handle_no_crash_test!(clone_rhi_command_queue_handles_null, clone_rhi_command_queue);
+    null_handle_no_crash_test!(
+        clone_rhi_command_queue_handles_null,
+        clone_rhi_command_queue
+    );
     null_handle_no_crash_test!(drop_rhi_command_queue_handles_null, drop_rhi_command_queue);
     null_handle_no_crash_test!(drop_command_buffer_handles_null, drop_command_buffer);
     null_handle_no_crash_test!(commit_command_buffer_handles_null, commit_command_buffer);
@@ -411,18 +409,15 @@ mod gpu_lim_tier1_wire_format_tests {
 
     #[test]
     fn clone_handle_returns_null_on_null_input() {
-        let out = unsafe {
-            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.clone_handle)(std::ptr::null())
-        };
+        let out =
+            unsafe { (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.clone_handle)(std::ptr::null()) };
         assert!(out.is_null());
     }
 
     #[test]
     fn strong_count_pixel_buffer_returns_zero_on_null() {
         let n = unsafe {
-            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.strong_count_pixel_buffer)(
-                std::ptr::null(),
-            )
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.strong_count_pixel_buffer)(std::ptr::null())
         };
         assert_eq!(n, 0);
     }
@@ -441,10 +436,7 @@ mod gpu_lim_tier1_wire_format_tests {
     #[test]
     fn plane_size_pixel_buffer_returns_zero_on_null_handle() {
         let n = unsafe {
-            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.plane_size_pixel_buffer)(
-                std::ptr::null(),
-                0,
-            )
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.plane_size_pixel_buffer)(std::ptr::null(), 0)
         };
         assert_eq!(n, 0);
     }
@@ -452,9 +444,7 @@ mod gpu_lim_tier1_wire_format_tests {
     #[test]
     fn texture_registration_texture_returns_null_on_null_handle() {
         let p = unsafe {
-            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.texture_registration_texture)(
-                std::ptr::null(),
-            )
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.texture_registration_texture)(std::ptr::null())
         };
         assert!(p.is_null());
     }
@@ -554,7 +544,10 @@ mod gpu_lim_tier1_wire_format_tests {
                 &mut out as *mut _ as *mut c_void,
             );
         }
-        assert!(out.is_none(), "null gpu_handle must produce a None PluginAbiObject");
+        assert!(
+            out.is_none(),
+            "null gpu_handle must produce a None PluginAbiObject"
+        );
     }
 
     #[test]
@@ -654,7 +647,10 @@ mod gpu_lim_tier1_wire_format_tests {
         };
         assert_eq!(rc, 1);
         let msg = err_buf_as_str(&buf, len);
-        assert!(msg.contains("create_command_buffer: null out_cb"), "got: {msg}");
+        assert!(
+            msg.contains("create_command_buffer: null out_cb"),
+            "got: {msg}"
+        );
         unsafe { free_host_handle(handle) };
     }
 
@@ -679,7 +675,10 @@ mod gpu_lim_tier1_wire_format_tests {
         };
         assert_eq!(rc, 1);
         let msg = err_buf_as_str(&buf, len);
-        assert!(msg.contains("acquire_texture: null gpu handle"), "got: {msg}");
+        assert!(
+            msg.contains("acquire_texture: null gpu handle"),
+            "got: {msg}"
+        );
     }
 
     #[test]
@@ -845,8 +844,7 @@ mod gpu_lim_tier1_wire_format_tests {
         let id = b"abc";
         let mut out_storage = [0u8; 256];
         let rc = unsafe {
-            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE
-                .resolve_texture_registration_by_surface_id)(
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.resolve_texture_registration_by_surface_id)(
                 std::ptr::null(),
                 id.as_ptr(),
                 id.len(),
@@ -863,9 +861,7 @@ mod gpu_lim_tier1_wire_format_tests {
         assert_eq!(rc, 1);
         let msg = err_buf_as_str(&buf, len);
         assert!(
-            msg.contains(
-                "resolve_texture_registration_by_surface_id: null gpu handle"
-            ),
+            msg.contains("resolve_texture_registration_by_surface_id: null gpu handle"),
             "got: {msg}"
         );
     }
@@ -879,8 +875,7 @@ mod gpu_lim_tier1_wire_format_tests {
         let (mut buf, mut len) = make_err_buf();
         let id = b"abc";
         let rc = unsafe {
-            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE
-                .resolve_texture_registration_by_surface_id)(
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.resolve_texture_registration_by_surface_id)(
                 handle,
                 id.as_ptr(),
                 id.len(),
@@ -897,9 +892,7 @@ mod gpu_lim_tier1_wire_format_tests {
         assert_eq!(rc, 1);
         let msg = err_buf_as_str(&buf, len);
         assert!(
-            msg.contains(
-                "resolve_texture_registration_by_surface_id: null out_registration"
-            ),
+            msg.contains("resolve_texture_registration_by_surface_id: null out_registration"),
             "got: {msg}"
         );
         unsafe { free_host_handle(handle) };
@@ -915,8 +908,7 @@ mod gpu_lim_tier1_wire_format_tests {
         let id: [u8; 3] = [0xFF, 0xFF, 0xFF];
         let mut out_storage = [0u8; 256];
         let rc = unsafe {
-            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE
-                .resolve_texture_registration_by_surface_id)(
+            (HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE.resolve_texture_registration_by_surface_id)(
                 handle,
                 id.as_ptr(),
                 id.len(),
@@ -933,9 +925,7 @@ mod gpu_lim_tier1_wire_format_tests {
         assert_eq!(rc, 1);
         let msg = err_buf_as_str(&buf, len);
         assert!(
-            msg.contains(
-                "resolve_texture_registration_by_surface_id: surface_id not valid UTF-8"
-            ),
+            msg.contains("resolve_texture_registration_by_surface_id: surface_id not valid UTF-8"),
             "got: {msg}"
         );
         unsafe { free_host_handle(handle) };
@@ -1170,9 +1160,7 @@ mod gpu_lim_tier1_wire_format_tests {
         assert_eq!(rc, 1);
         let msg = err_buf_as_str(&buf, len);
         assert!(
-            msg.contains(
-                "copy_pixel_buffer_to_texture: null pixel_buffer or texture"
-            ),
+            msg.contains("copy_pixel_buffer_to_texture: null pixel_buffer or texture"),
             "got: {msg}"
         );
         unsafe { free_host_handle(handle) };
@@ -1501,7 +1489,10 @@ mod gpu_lim_tier1_wire_format_tests {
         };
         assert_eq!(rc, 1);
         let msg = err_buf_as_str(&buf, len);
-        assert!(msg.contains("get_pixel_buffer: null gpu handle"), "got: {msg}");
+        assert!(
+            msg.contains("get_pixel_buffer: null gpu handle"),
+            "got: {msg}"
+        );
     }
 
     #[test]
@@ -1638,9 +1629,7 @@ mod gpu_lim_tier1_wire_format_tests {
         assert_eq!(rc, 1);
         let msg = err_buf_as_str(&buf, len);
         assert!(
-            msg.contains(
-                "resolve_pixel_buffer_by_surface_id: surface_id not valid UTF-8"
-            ),
+            msg.contains("resolve_pixel_buffer_by_surface_id: surface_id not valid UTF-8"),
             "got: {msg}"
         );
         unsafe { free_host_handle(handle) };
@@ -1674,8 +1663,6 @@ mod gpu_lim_tier1_wire_format_tests {
     }
 
     unsafe fn free_host_handle(handle: *const c_void) {
-        let _ = unsafe {
-            Box::from_raw(handle as *mut Arc<crate::core::context::GpuContext>)
-        };
+        let _ = unsafe { Box::from_raw(handle as *mut Arc<crate::core::context::GpuContext>) };
     }
 }

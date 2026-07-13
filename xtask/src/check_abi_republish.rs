@@ -147,7 +147,9 @@ pub fn run(project_root: &Path) -> Result<()> {
 /// Prefers `origin/$GITHUB_BASE_REF` (the PR target on GitHub Actions), then a
 /// bare `$GITHUB_BASE_REF`, then `origin/main` / `main`.
 fn resolve_merge_base(project_root: &Path) -> Option<String> {
-    let base_ref = std::env::var("GITHUB_BASE_REF").ok().filter(|s| !s.is_empty());
+    let base_ref = std::env::var("GITHUB_BASE_REF")
+        .ok()
+        .filter(|s| !s.is_empty());
     let candidates: Vec<String> = match base_ref {
         Some(branch) => vec![format!("origin/{branch}"), branch],
         None => vec!["origin/main".to_string(), "main".to_string()],
@@ -167,11 +169,7 @@ fn merge_base(project_root: &Path, base: &str) -> Option<String> {
         return None;
     }
     let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if sha.is_empty() {
-        None
-    } else {
-        Some(sha)
-    }
+    if sha.is_empty() { None } else { Some(sha) }
 }
 
 /// `git show <rev>:<path>` — the file's contents at `rev`, or `None` if absent.

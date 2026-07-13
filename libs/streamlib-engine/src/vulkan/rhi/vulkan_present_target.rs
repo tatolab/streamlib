@@ -16,11 +16,13 @@ use crate::core::color::{ColorTraits, HdrStaticMetadata};
 use crate::core::rhi::TextureFormat;
 use crate::core::{Error, Result};
 
+use super::HostVulkanDevice;
 use super::vulkan_command_recorder::RhiCommandRecorder;
 use super::vulkan_pipeline_flags::VulkanStage;
-use super::vulkan_swapchain_colorspace::{build_hdr_metadata, pick_swapchain_format, SwapchainColorPick};
+use super::vulkan_swapchain_colorspace::{
+    SwapchainColorPick, build_hdr_metadata, pick_swapchain_format,
+};
 use super::vulkan_sync::HostVulkanTimelineSemaphore;
-use super::HostVulkanDevice;
 
 /// Maximum CPU/GPU frames in flight at once.
 ///
@@ -120,7 +122,11 @@ impl VulkanPresentTarget {
     /// site. The window handle must outlive the present target;
     /// dropping the target destroys the surface + swapchain +
     /// per-frame resources.
-    #[tracing::instrument(level = "trace", skip(device, window, color_traits), fields(width, height, vsync))]
+    #[tracing::instrument(
+        level = "trace",
+        skip(device, window, color_traits),
+        fields(width, height, vsync)
+    )]
     pub fn new(
         device: &Arc<HostVulkanDevice>,
         window: &(impl HasWindowHandle + HasDisplayHandle),
@@ -186,8 +192,8 @@ impl VulkanPresentTarget {
 
         let mut render_finished_semaphores = Vec::with_capacity(swapchain_images.len());
         for _ in 0..swapchain_images.len() {
-            let sem = unsafe { raw_device.create_semaphore(&semaphore_info, None) }
-                .map_err(|e| {
+            let sem =
+                unsafe { raw_device.create_semaphore(&semaphore_info, None) }.map_err(|e| {
                     Error::GpuError(format!(
                         "VulkanPresentTarget: render-finished semaphore: {e}"
                     ))
@@ -197,8 +203,8 @@ impl VulkanPresentTarget {
 
         let mut image_available_semaphores = Vec::with_capacity(MAX_FRAMES_IN_FLIGHT);
         for _ in 0..MAX_FRAMES_IN_FLIGHT {
-            let sem = unsafe { raw_device.create_semaphore(&semaphore_info, None) }
-                .map_err(|e| {
+            let sem =
+                unsafe { raw_device.create_semaphore(&semaphore_info, None) }.map_err(|e| {
                     Error::GpuError(format!(
                         "VulkanPresentTarget: image-available semaphore: {e}"
                     ))
@@ -256,9 +262,7 @@ impl VulkanPresentTarget {
         // `wait_idle()` takes the queue mutexes so it doesn't race with
         // an active submit on another thread.
         self.device.wait_idle().map_err(|e| {
-            Error::GpuError(format!(
-                "VulkanPresentTarget::recreate: wait_idle: {e}"
-            ))
+            Error::GpuError(format!("VulkanPresentTarget::recreate: wait_idle: {e}"))
         })?;
 
         let raw_device = self.device.device();
@@ -291,8 +295,8 @@ impl VulkanPresentTarget {
             self.render_finished_semaphores.clear();
             let semaphore_info = vk::SemaphoreCreateInfo::builder().build();
             for _ in 0..new_images.len() {
-                let sem = unsafe { raw_device.create_semaphore(&semaphore_info, None) }
-                    .map_err(|e| {
+                let sem =
+                    unsafe { raw_device.create_semaphore(&semaphore_info, None) }.map_err(|e| {
                         Error::GpuError(format!(
                             "VulkanPresentTarget::recreate: render-finished semaphore: {e}"
                         ))
@@ -379,7 +383,11 @@ impl VulkanPresentTarget {
         // currently-owned handle; metadata array is stack-allocated
         // and lives across the call. The driver is required to read
         // through the pointers before returning per spec.
-        unsafe { self.device.device().set_hdr_metadata_ext(&swapchains, &metadatas) };
+        unsafe {
+            self.device
+                .device()
+                .set_hdr_metadata_ext(&swapchains, &metadatas)
+        };
         self.last_hdr_metadata = Some(metadata);
         Ok(())
     }
@@ -434,15 +442,11 @@ impl VulkanPresentTarget {
             Err(vk::ErrorCode::OUT_OF_DATE_KHR) => {
                 // Caller will drive recreate(). Roll back the timeline
                 // bump so the next attempt's wait math stays consistent.
-                self.frame_timeline_value = self
-                    .frame_timeline_value
-                    .saturating_sub(1);
+                self.frame_timeline_value = self.frame_timeline_value.saturating_sub(1);
                 return Ok(false);
             }
             Err(e) => {
-                self.frame_timeline_value = self
-                    .frame_timeline_value
-                    .saturating_sub(1);
+                self.frame_timeline_value = self.frame_timeline_value.saturating_sub(1);
                 return Err(Error::GpuError(format!(
                     "VulkanPresentTarget::render_frame: acquire_next_image_khr: {e}"
                 )));
@@ -451,8 +455,7 @@ impl VulkanPresentTarget {
 
         let swapchain_image = self.swapchain_images[image_index as usize];
         let image_view = self.swapchain_image_views[image_index as usize];
-        let render_finished_semaphore =
-            self.render_finished_semaphores[image_index as usize];
+        let render_finished_semaphore = self.render_finished_semaphores[image_index as usize];
 
         // Capture handles needed for end-of-frame work BEFORE borrowing
         // self.recorders[frame_index] mutably.
@@ -532,7 +535,8 @@ impl VulkanPresentTarget {
         // Submit: wait on image_available (binary, COLOR_ATTACHMENT_OUTPUT)
         // + any caller-added timeline waits; signal render_finished (binary,
         // ALL_COMMANDS) + frame timeline.
-        let mut wait_infos: Vec<vk::SemaphoreSubmitInfo> = Vec::with_capacity(1 + extra_waits.len());
+        let mut wait_infos: Vec<vk::SemaphoreSubmitInfo> =
+            Vec::with_capacity(1 + extra_waits.len());
         wait_infos.push(
             vk::SemaphoreSubmitInfo::builder()
                 .semaphore(image_available_semaphore)
@@ -693,32 +697,29 @@ fn create_swapchain(
     let physical_device = device.physical_device();
     let raw_device = device.device();
 
-    let capabilities = unsafe {
-        instance.get_physical_device_surface_capabilities_khr(physical_device, surface)
-    }
-    .map_err(|e| {
-        Error::GpuError(format!(
-            "VulkanPresentTarget: get_physical_device_surface_capabilities_khr: {e}"
-        ))
-    })?;
+    let capabilities =
+        unsafe { instance.get_physical_device_surface_capabilities_khr(physical_device, surface) }
+            .map_err(|e| {
+                Error::GpuError(format!(
+                    "VulkanPresentTarget: get_physical_device_surface_capabilities_khr: {e}"
+                ))
+            })?;
 
-    let surface_formats = unsafe {
-        instance.get_physical_device_surface_formats_khr(physical_device, surface)
-    }
-    .map_err(|e| {
-        Error::GpuError(format!(
-            "VulkanPresentTarget: get_physical_device_surface_formats_khr: {e}"
-        ))
-    })?;
+    let surface_formats =
+        unsafe { instance.get_physical_device_surface_formats_khr(physical_device, surface) }
+            .map_err(|e| {
+                Error::GpuError(format!(
+                    "VulkanPresentTarget: get_physical_device_surface_formats_khr: {e}"
+                ))
+            })?;
 
-    let present_modes = unsafe {
-        instance.get_physical_device_surface_present_modes_khr(physical_device, surface)
-    }
-    .map_err(|e| {
-        Error::GpuError(format!(
-            "VulkanPresentTarget: get_physical_device_surface_present_modes_khr: {e}"
-        ))
-    })?;
+    let present_modes =
+        unsafe { instance.get_physical_device_surface_present_modes_khr(physical_device, surface) }
+            .map_err(|e| {
+                Error::GpuError(format!(
+                    "VulkanPresentTarget: get_physical_device_surface_present_modes_khr: {e}"
+                ))
+            })?;
 
     if surface_formats.is_empty() {
         return Err(Error::GpuError(
@@ -796,18 +797,13 @@ fn create_swapchain(
         .build();
 
     let swapchain = unsafe { raw_device.create_swapchain_khr(&swapchain_info, None) }
-        .map_err(|e| {
-            Error::GpuError(format!(
-                "VulkanPresentTarget: create_swapchain_khr: {e}"
-            ))
-        })?;
+        .map_err(|e| Error::GpuError(format!("VulkanPresentTarget: create_swapchain_khr: {e}")))?;
 
-    let images = unsafe { raw_device.get_swapchain_images_khr(swapchain) }
-        .map_err(|e| {
-            Error::GpuError(format!(
-                "VulkanPresentTarget: get_swapchain_images_khr: {e}"
-            ))
-        })?;
+    let images = unsafe { raw_device.get_swapchain_images_khr(swapchain) }.map_err(|e| {
+        Error::GpuError(format!(
+            "VulkanPresentTarget: get_swapchain_images_khr: {e}"
+        ))
+    })?;
 
     let mut image_views = Vec::with_capacity(images.len());
     for &image in &images {
@@ -832,11 +828,7 @@ fn create_swapchain(
             )
             .build();
         let view = unsafe { raw_device.create_image_view(&view_info, None) }
-            .map_err(|e| {
-                Error::GpuError(format!(
-                    "VulkanPresentTarget: create_image_view: {e}"
-                ))
-            })?;
+            .map_err(|e| Error::GpuError(format!("VulkanPresentTarget: create_image_view: {e}")))?;
         image_views.push(view);
     }
 
@@ -849,7 +841,6 @@ fn create_swapchain(
         color_pick,
     ))
 }
-
 
 /// Strip surface formats the engine's [`vk_format_to_texture_format`]
 /// table can't project to [`TextureFormat`]. Called by
@@ -1069,8 +1060,8 @@ mod tests {
         };
         let timeline_a = HostVulkanTimelineSemaphore::new(device.device(), 0).expect("timeline a");
         let timeline_b = HostVulkanTimelineSemaphore::new(device.device(), 0).expect("timeline b");
-        let mut recorder = RhiCommandRecorder::new(&device, "test-present-frame-waits")
-            .expect("recorder");
+        let mut recorder =
+            RhiCommandRecorder::new(&device, "test-present-frame-waits").expect("recorder");
 
         {
             let mut frame = synthetic_present_frame(
@@ -1108,17 +1099,12 @@ mod tests {
                 return;
             }
         };
-        let mut recorder = RhiCommandRecorder::new(&device, "test-present-frame-double-begin")
-            .expect("recorder");
+        let mut recorder =
+            RhiCommandRecorder::new(&device, "test-present-frame-double-begin").expect("recorder");
         recorder.begin().expect("begin recording");
 
-        let mut frame = synthetic_present_frame(
-            &mut recorder,
-            0,
-            0,
-            (1920, 1080),
-            TextureFormat::Bgra8Unorm,
-        );
+        let mut frame =
+            synthetic_present_frame(&mut recorder, 0, 0, (1920, 1080), TextureFormat::Bgra8Unorm);
         // First begin_rendering would normally succeed and issue a
         // real `cmd_begin_rendering` — but `image_view` is null in this
         // synthetic frame, so the underlying Vulkan call records a
@@ -1136,10 +1122,7 @@ mod tests {
             .err()
             .expect("expected typed error");
         let msg = format!("{err}");
-        assert!(
-            msg.contains("render pass already active"),
-            "got: {msg}"
-        );
+        assert!(msg.contains("render pass already active"), "got: {msg}");
 
         // Drain the recorder so Drop is clean.
         frame.inner.in_render_pass = false;
@@ -1166,24 +1149,16 @@ mod tests {
                 return;
             }
         };
-        let mut recorder = RhiCommandRecorder::new(&device, "test-present-frame-stray-end")
-            .expect("recorder");
+        let mut recorder =
+            RhiCommandRecorder::new(&device, "test-present-frame-stray-end").expect("recorder");
         recorder.begin().expect("begin recording");
 
-        let mut frame = synthetic_present_frame(
-            &mut recorder,
-            0,
-            0,
-            (1920, 1080),
-            TextureFormat::Bgra8Unorm,
-        );
+        let mut frame =
+            synthetic_present_frame(&mut recorder, 0, 0, (1920, 1080), TextureFormat::Bgra8Unorm);
 
         let err = frame.end_rendering().err().expect("expected typed error");
         let msg = format!("{err}");
-        assert!(
-            msg.contains("no active render pass"),
-            "got: {msg}"
-        );
+        assert!(msg.contains("no active render pass"), "got: {msg}");
 
         drop(frame);
         let _ = recorder.submit_and_wait();

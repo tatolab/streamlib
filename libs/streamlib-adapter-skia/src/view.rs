@@ -26,8 +26,8 @@ use streamlib_consumer_rhi::VulkanRhiDevice;
 use vulkanalia::vk;
 
 use crate::skia_internal::{
-    assert_skia_views_not_cpu_readable, drop_skia_image_under_lock,
-    flush_and_drop_skia_surface, SyncDirectContext,
+    SyncDirectContext, assert_skia_views_not_cpu_readable, drop_skia_image_under_lock,
+    flush_and_drop_skia_surface,
 };
 
 /// Write view of an acquired Skia surface — exposes the

@@ -5,19 +5,19 @@ use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
 
+use crate::core::compiler::PendingOperation;
 use crate::core::compiler::compilation_plan::CompilationPlan;
 use crate::core::compiler::compile_phase::CompilePhase;
 use crate::core::compiler::compile_result::CompileResult;
 use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
-use crate::core::compiler::PendingOperation;
 use crate::core::context::RuntimeContext;
-use crate::core::error::{Result, Error};
+use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkStateComponent,
     ProcessorReadyBarrierHandle, ProcessorUniqueId,
 };
 use crate::core::processors::PROCESSOR_REGISTRY;
-use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
+use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
 
 /// Compiles graph changes into running processor state.
 pub struct Compiler {

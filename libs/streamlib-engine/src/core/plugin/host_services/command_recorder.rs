@@ -26,7 +26,6 @@ use super::shared::borrow::{
 };
 use super::shared::wire::write_err;
 
-
 // =============================================================================
 // RhiCommandRecorderMethodsVTable wrappers (Phase E sub-lift slice B — #984).
 // Each wrapper reconstructs the recorder borrow from the raw
@@ -53,9 +52,7 @@ unsafe fn handle_as_command_recorder_mut(
     if handle.is_null() {
         return None;
     }
-    Some(unsafe {
-        &mut *(handle as *mut crate::vulkan::rhi::RhiCommandRecorderInner)
-    })
+    Some(unsafe { &mut *(handle as *mut crate::vulkan::rhi::RhiCommandRecorderInner) })
 }
 
 /// Reconstruct a stack-allocated `VulkanComputeKernel` PluginAbiObject
@@ -82,15 +79,9 @@ unsafe extern "C" fn host_command_recorder_begin(
     run_host_extern_c(
         "host_command_recorder_begin",
         || -> i32 {
-            let Some(recorder) =
-                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            let Some(recorder) = (unsafe { handle_as_command_recorder_mut(recorder_handle) })
             else {
-                write_err(
-                    "begin: null recorder handle",
-                    err_buf,
-                    err_buf_cap,
-                    err_len,
-                );
+                write_err("begin: null recorder handle", err_buf, err_buf_cap, err_len);
                 return 1;
             };
             match recorder.begin() {
@@ -135,8 +126,7 @@ unsafe extern "C" fn host_command_recorder_record_image_barrier(
     run_host_extern_c(
         "host_command_recorder_record_image_barrier",
         || -> i32 {
-            let Some(recorder) =
-                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            let Some(recorder) = (unsafe { handle_as_command_recorder_mut(recorder_handle) })
             else {
                 write_err(
                     "record_image_barrier: null recorder handle",
@@ -156,16 +146,12 @@ unsafe extern "C" fn host_command_recorder_record_image_barrier(
                 return 1;
             }
             let texture_borrow = make_texture_borrow(texture_handle);
-            let from_layout =
-                streamlib_consumer_rhi::VulkanLayout(from_layout_raw);
+            let from_layout = streamlib_consumer_rhi::VulkanLayout(from_layout_raw);
             let to_layout = streamlib_consumer_rhi::VulkanLayout(to_layout_raw);
-            let from_stage =
-                crate::vulkan::rhi::VulkanStage(from_stage_raw as u64);
+            let from_stage = crate::vulkan::rhi::VulkanStage(from_stage_raw as u64);
             let to_stage = crate::vulkan::rhi::VulkanStage(to_stage_raw as u64);
-            let from_access =
-                crate::vulkan::rhi::VulkanAccess(from_access_raw as u64);
-            let to_access =
-                crate::vulkan::rhi::VulkanAccess(to_access_raw as u64);
+            let from_access = crate::vulkan::rhi::VulkanAccess(from_access_raw as u64);
+            let to_access = crate::vulkan::rhi::VulkanAccess(to_access_raw as u64);
             match recorder.record_image_barrier(
                 &*texture_borrow,
                 from_layout,
@@ -231,8 +217,7 @@ unsafe extern "C" fn host_command_recorder_record_buffer_barrier(
     run_host_extern_c(
         "host_command_recorder_record_buffer_barrier",
         || -> i32 {
-            let Some(recorder) =
-                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            let Some(recorder) = (unsafe { handle_as_command_recorder_mut(recorder_handle) })
             else {
                 write_err(
                     "record_buffer_barrier: null recorder handle",
@@ -251,15 +236,11 @@ unsafe extern "C" fn host_command_recorder_record_buffer_barrier(
                 );
                 return 1;
             }
-            let buffer_borrow =
-                make_storage_buffer_borrow(storage_buffer_handle);
-            let from_stage =
-                crate::vulkan::rhi::VulkanStage(from_stage_raw as u64);
+            let buffer_borrow = make_storage_buffer_borrow(storage_buffer_handle);
+            let from_stage = crate::vulkan::rhi::VulkanStage(from_stage_raw as u64);
             let to_stage = crate::vulkan::rhi::VulkanStage(to_stage_raw as u64);
-            let from_access =
-                crate::vulkan::rhi::VulkanAccess(from_access_raw as u64);
-            let to_access =
-                crate::vulkan::rhi::VulkanAccess(to_access_raw as u64);
+            let from_access = crate::vulkan::rhi::VulkanAccess(from_access_raw as u64);
+            let to_access = crate::vulkan::rhi::VulkanAccess(to_access_raw as u64);
             match recorder.record_buffer_barrier(
                 &*buffer_borrow,
                 from_stage,
@@ -320,8 +301,7 @@ unsafe extern "C" fn host_command_recorder_record_dispatch(
     run_host_extern_c(
         "host_command_recorder_record_dispatch",
         || -> i32 {
-            let Some(recorder) =
-                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            let Some(recorder) = (unsafe { handle_as_command_recorder_mut(recorder_handle) })
             else {
                 write_err(
                     "record_dispatch: null recorder handle",
@@ -341,12 +321,7 @@ unsafe extern "C" fn host_command_recorder_record_dispatch(
                 return 1;
             }
             let kernel_borrow = make_compute_kernel_borrow(kernel_handle);
-            match recorder.record_dispatch(
-                &*kernel_borrow,
-                group_x,
-                group_y,
-                group_z,
-            ) {
+            match recorder.record_dispatch(&*kernel_borrow, group_x, group_y, group_z) {
                 Ok(()) => 0,
                 Err(e) => {
                     write_err(
@@ -394,8 +369,7 @@ unsafe extern "C" fn host_command_recorder_record_copy_image_to_buffer(
     run_host_extern_c(
         "host_command_recorder_record_copy_image_to_buffer",
         || -> i32 {
-            let Some(recorder) =
-                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            let Some(recorder) = (unsafe { handle_as_command_recorder_mut(recorder_handle) })
             else {
                 write_err(
                     "record_copy_image_to_buffer: null recorder handle",
@@ -434,10 +408,8 @@ unsafe extern "C" fn host_command_recorder_record_copy_image_to_buffer(
             }
             let region_ref = unsafe { &*region };
             let src_borrow = make_texture_borrow(src_texture_handle);
-            let dst_borrow =
-                make_storage_buffer_borrow(dst_storage_buffer_handle);
-            let src_layout =
-                streamlib_consumer_rhi::VulkanLayout(src_layout_raw);
+            let dst_borrow = make_storage_buffer_borrow(dst_storage_buffer_handle);
+            let src_layout = streamlib_consumer_rhi::VulkanLayout(src_layout_raw);
             let region_rust = crate::vulkan::rhi::ImageCopyRegion {
                 width: region_ref.width,
                 height: region_ref.height,
@@ -506,8 +478,7 @@ unsafe extern "C" fn host_command_recorder_record_pixel_buffer_barrier(
     run_host_extern_c(
         "host_command_recorder_record_pixel_buffer_barrier",
         || -> i32 {
-            let Some(recorder) =
-                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            let Some(recorder) = (unsafe { handle_as_command_recorder_mut(recorder_handle) })
             else {
                 write_err(
                     "record_pixel_buffer_barrier: null recorder handle",
@@ -526,15 +497,11 @@ unsafe extern "C" fn host_command_recorder_record_pixel_buffer_barrier(
                 );
                 return 1;
             }
-            let buffer_borrow =
-                make_pixel_buffer_borrow(pixel_buffer_handle);
-            let from_stage =
-                crate::vulkan::rhi::VulkanStage(from_stage_raw as u64);
+            let buffer_borrow = make_pixel_buffer_borrow(pixel_buffer_handle);
+            let from_stage = crate::vulkan::rhi::VulkanStage(from_stage_raw as u64);
             let to_stage = crate::vulkan::rhi::VulkanStage(to_stage_raw as u64);
-            let from_access =
-                crate::vulkan::rhi::VulkanAccess(from_access_raw as u64);
-            let to_access =
-                crate::vulkan::rhi::VulkanAccess(to_access_raw as u64);
+            let from_access = crate::vulkan::rhi::VulkanAccess(from_access_raw as u64);
+            let to_access = crate::vulkan::rhi::VulkanAccess(to_access_raw as u64);
             match recorder.record_buffer_barrier(
                 &*buffer_borrow,
                 from_stage,
@@ -595,8 +562,7 @@ unsafe extern "C" fn host_command_recorder_record_copy_image_to_pixel_buffer(
     run_host_extern_c(
         "host_command_recorder_record_copy_image_to_pixel_buffer",
         || -> i32 {
-            let Some(recorder) =
-                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            let Some(recorder) = (unsafe { handle_as_command_recorder_mut(recorder_handle) })
             else {
                 write_err(
                     "record_copy_image_to_pixel_buffer: null recorder handle",
@@ -635,10 +601,8 @@ unsafe extern "C" fn host_command_recorder_record_copy_image_to_pixel_buffer(
             }
             let region_ref = unsafe { &*region };
             let src_borrow = make_texture_borrow(src_texture_handle);
-            let dst_borrow =
-                make_pixel_buffer_borrow(dst_pixel_buffer_handle);
-            let src_layout =
-                streamlib_consumer_rhi::VulkanLayout(src_layout_raw);
+            let dst_borrow = make_pixel_buffer_borrow(dst_pixel_buffer_handle);
+            let src_layout = streamlib_consumer_rhi::VulkanLayout(src_layout_raw);
             let region_rust = crate::vulkan::rhi::ImageCopyRegion {
                 width: region_ref.width,
                 height: region_ref.height,
@@ -704,8 +668,7 @@ unsafe extern "C" fn host_command_recorder_submit_signaling_timeline(
     run_host_extern_c(
         "host_command_recorder_submit_signaling_timeline",
         || -> i32 {
-            let Some(recorder) =
-                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            let Some(recorder) = (unsafe { handle_as_command_recorder_mut(recorder_handle) })
             else {
                 write_err(
                     "submit_signaling_timeline: null recorder handle",
@@ -733,8 +696,7 @@ unsafe extern "C" fn host_command_recorder_submit_signaling_timeline(
             // `wait_timeline_semaphore` slot). The borrow lasts
             // only for the duration of this call.
             let timeline = unsafe {
-                &*(timeline_handle
-                    as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore)
+                &*(timeline_handle as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore)
             };
             match recorder.submit_signaling_timeline(timeline, signal_value) {
                 Ok(()) => 0,
@@ -794,8 +756,7 @@ unsafe extern "C" fn host_command_recorder_record_swapchain_image_barrier(
     run_host_extern_c(
         "host_command_recorder_record_swapchain_image_barrier",
         || -> i32 {
-            let Some(recorder) =
-                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            let Some(recorder) = (unsafe { handle_as_command_recorder_mut(recorder_handle) })
             else {
                 write_err(
                     "record_swapchain_image_barrier: null recorder handle",
@@ -877,8 +838,7 @@ unsafe extern "C" fn host_command_recorder_cmd_begin_dynamic_rendering(
     run_host_extern_c(
         "host_command_recorder_cmd_begin_dynamic_rendering",
         || -> i32 {
-            let Some(recorder) =
-                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            let Some(recorder) = (unsafe { handle_as_command_recorder_mut(recorder_handle) })
             else {
                 write_err(
                     "cmd_begin_dynamic_rendering: null recorder handle",
@@ -953,8 +913,7 @@ unsafe extern "C" fn host_command_recorder_cmd_end_dynamic_rendering(
     run_host_extern_c(
         "host_command_recorder_cmd_end_dynamic_rendering",
         || -> i32 {
-            let Some(recorder) =
-                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            let Some(recorder) = (unsafe { handle_as_command_recorder_mut(recorder_handle) })
             else {
                 write_err(
                     "cmd_end_dynamic_rendering: null recorder handle",
@@ -1012,8 +971,7 @@ unsafe extern "C" fn host_command_recorder_submit_with_semaphores(
     run_host_extern_c(
         "host_command_recorder_submit_with_semaphores",
         || -> i32 {
-            let Some(recorder) =
-                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            let Some(recorder) = (unsafe { handle_as_command_recorder_mut(recorder_handle) })
             else {
                 write_err(
                     "submit_with_semaphores: null recorder handle",
@@ -1025,12 +983,11 @@ unsafe extern "C" fn host_command_recorder_submit_with_semaphores(
             };
             // SAFETY: caller-owned arrays. We only read; the buffers
             // outlive the call by the cdylib-side `Vec` they came from.
-            let waits_repr: &[streamlib_plugin_abi::SemaphoreSubmitInfoRepr] =
-                if waits_count == 0 {
-                    &[]
-                } else {
-                    unsafe { std::slice::from_raw_parts(waits_ptr, waits_count) }
-                };
+            let waits_repr: &[streamlib_plugin_abi::SemaphoreSubmitInfoRepr] = if waits_count == 0 {
+                &[]
+            } else {
+                unsafe { std::slice::from_raw_parts(waits_ptr, waits_count) }
+            };
             let signals_repr: &[streamlib_plugin_abi::SemaphoreSubmitInfoRepr] =
                 if signals_count == 0 {
                     &[]
@@ -1040,8 +997,7 @@ unsafe extern "C" fn host_command_recorder_submit_with_semaphores(
             // Dispatch into the RHI-side `from_wire` shim — see the
             // `record_swapchain_image_barrier` wrapper above for the
             // check-boundaries rationale.
-            match recorder.submit_with_semaphores_from_wire(waits_repr, signals_repr)
-            {
+            match recorder.submit_with_semaphores_from_wire(waits_repr, signals_repr) {
                 Ok(()) => 0,
                 Err(e) => {
                     write_err(
@@ -1093,8 +1049,7 @@ unsafe extern "C" fn host_command_recorder_record_draw(
     run_host_extern_c(
         "host_command_recorder_record_draw",
         || -> i32 {
-            let Some(recorder) =
-                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            let Some(recorder) = (unsafe { handle_as_command_recorder_mut(recorder_handle) })
             else {
                 write_err(
                     "record_draw: null recorder handle",
@@ -1157,12 +1112,7 @@ unsafe extern "C" fn host_command_recorder_record_draw(
             match recorder.record_draw(&*kernel_borrow, frame_index, &draw_call) {
                 Ok(()) => 0,
                 Err(e) => {
-                    write_err(
-                        &format!("record_draw: {e}"),
-                        err_buf,
-                        err_buf_cap,
-                        err_len,
-                    );
+                    write_err(&format!("record_draw: {e}"), err_buf, err_buf_cap, err_len);
                     1
                 }
             }
@@ -1200,8 +1150,7 @@ unsafe extern "C" fn host_command_recorder_record_draw_indexed(
     run_host_extern_c(
         "host_command_recorder_record_draw_indexed",
         || -> i32 {
-            let Some(recorder) =
-                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            let Some(recorder) = (unsafe { handle_as_command_recorder_mut(recorder_handle) })
             else {
                 write_err(
                     "record_draw_indexed: null recorder handle",
@@ -1262,11 +1211,7 @@ unsafe extern "C" fn host_command_recorder_record_draw_indexed(
                 scissor,
             };
             let kernel_borrow = make_graphics_kernel_borrow(kernel_handle);
-            match recorder.record_draw_indexed(
-                &*kernel_borrow,
-                frame_index,
-                &draw_call,
-            ) {
+            match recorder.record_draw_indexed(&*kernel_borrow, frame_index, &draw_call) {
                 Ok(()) => 0,
                 Err(e) => {
                     write_err(
@@ -1319,8 +1264,7 @@ unsafe extern "C" fn host_command_recorder_submit(
     run_host_extern_c(
         "host_command_recorder_submit",
         || -> i32 {
-            let Some(recorder) =
-                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            let Some(recorder) = (unsafe { handle_as_command_recorder_mut(recorder_handle) })
             else {
                 write_err(
                     "submit: null recorder handle",
@@ -1365,8 +1309,7 @@ unsafe extern "C" fn host_command_recorder_submit_and_wait(
     run_host_extern_c(
         "host_command_recorder_submit_and_wait",
         || -> i32 {
-            let Some(recorder) =
-                (unsafe { handle_as_command_recorder_mut(recorder_handle) })
+            let Some(recorder) = (unsafe { handle_as_command_recorder_mut(recorder_handle) })
             else {
                 write_err(
                     "submit_and_wait: null recorder handle",
@@ -1400,12 +1343,7 @@ unsafe extern "C" fn host_command_recorder_submit_and_wait(
     err_buf_cap: usize,
     err_len: *mut usize,
 ) -> i32 {
-    write_err(
-        "submit_and_wait: Linux-only",
-        err_buf,
-        err_buf_cap,
-        err_len,
-    );
+    write_err("submit_and_wait: Linux-only", err_buf, err_buf_cap, err_len);
     1
 }
 
@@ -1417,27 +1355,19 @@ unsafe extern "C" fn host_command_recorder_submit_and_wait(
 pub static HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE:
     streamlib_plugin_abi::RhiCommandRecorderMethodsVTable =
     streamlib_plugin_abi::RhiCommandRecorderMethodsVTable {
-        layout_version:
-            streamlib_plugin_abi::RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION,
+        layout_version: streamlib_plugin_abi::RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION,
         _reserved_padding: 0,
         begin: host_command_recorder_begin,
         record_image_barrier: host_command_recorder_record_image_barrier,
         record_buffer_barrier: host_command_recorder_record_buffer_barrier,
         record_dispatch: host_command_recorder_record_dispatch,
-        record_copy_image_to_buffer:
-            host_command_recorder_record_copy_image_to_buffer,
-        submit_signaling_timeline:
-            host_command_recorder_submit_signaling_timeline,
-        record_pixel_buffer_barrier:
-            host_command_recorder_record_pixel_buffer_barrier,
-        record_copy_image_to_pixel_buffer:
-            host_command_recorder_record_copy_image_to_pixel_buffer,
-        record_swapchain_image_barrier:
-            host_command_recorder_record_swapchain_image_barrier,
-        cmd_begin_dynamic_rendering:
-            host_command_recorder_cmd_begin_dynamic_rendering,
-        cmd_end_dynamic_rendering:
-            host_command_recorder_cmd_end_dynamic_rendering,
+        record_copy_image_to_buffer: host_command_recorder_record_copy_image_to_buffer,
+        submit_signaling_timeline: host_command_recorder_submit_signaling_timeline,
+        record_pixel_buffer_barrier: host_command_recorder_record_pixel_buffer_barrier,
+        record_copy_image_to_pixel_buffer: host_command_recorder_record_copy_image_to_pixel_buffer,
+        record_swapchain_image_barrier: host_command_recorder_record_swapchain_image_barrier,
+        cmd_begin_dynamic_rendering: host_command_recorder_cmd_begin_dynamic_rendering,
+        cmd_end_dynamic_rendering: host_command_recorder_cmd_end_dynamic_rendering,
         submit_with_semaphores: host_command_recorder_submit_with_semaphores,
         record_draw: host_command_recorder_record_draw,
         record_draw_indexed: host_command_recorder_record_draw_indexed,
@@ -1452,8 +1382,8 @@ pub static HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE:
 /// See [`host_vulkan_compute_kernel_methods_vtable`] for the routing
 /// rationale — cdylib PluginAbiObject constructors must store the host's
 /// vtable pointer so dispatches actually cross the plugin ABI.
-pub fn host_rhi_command_recorder_methods_vtable(
-) -> *const streamlib_plugin_abi::RhiCommandRecorderMethodsVTable {
+pub fn host_rhi_command_recorder_methods_vtable()
+-> *const streamlib_plugin_abi::RhiCommandRecorderMethodsVTable {
     match host_callbacks() {
         Some(c) if !c.rhi_command_recorder_methods_vtable.is_null() => {
             c.rhi_command_recorder_methods_vtable
@@ -1537,8 +1467,7 @@ mod gpu_rhi_command_recorder_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("record_image_barrier: null recorder handle"),
+            err_buf_as_str(&buf, len).contains("record_image_barrier: null recorder handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -1562,8 +1491,7 @@ mod gpu_rhi_command_recorder_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("record_buffer_barrier: null recorder handle"),
+            err_buf_as_str(&buf, len).contains("record_buffer_barrier: null recorder handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -1586,8 +1514,7 @@ mod gpu_rhi_command_recorder_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("record_dispatch: null recorder handle"),
+            err_buf_as_str(&buf, len).contains("record_dispatch: null recorder handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -1611,8 +1538,7 @@ mod gpu_rhi_command_recorder_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("record_copy_image_to_buffer: null recorder handle"),
+            err_buf_as_str(&buf, len).contains("record_copy_image_to_buffer: null recorder handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -1633,8 +1559,7 @@ mod gpu_rhi_command_recorder_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("submit_signaling_timeline: null recorder handle"),
+            err_buf_as_str(&buf, len).contains("submit_signaling_timeline: null recorder handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -1674,8 +1599,7 @@ mod gpu_rhi_command_recorder_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("submit_and_wait: null recorder handle"),
+            err_buf_as_str(&buf, len).contains("submit_and_wait: null recorder handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -1699,8 +1623,7 @@ mod gpu_rhi_command_recorder_methods_vtable_null_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("record_pixel_buffer_barrier: null recorder handle"),
+            err_buf_as_str(&buf, len).contains("record_pixel_buffer_barrier: null recorder handle"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
@@ -1711,8 +1634,7 @@ mod gpu_rhi_command_recorder_methods_vtable_null_tests {
         let (mut buf, mut len) = make_err_buf();
         let region = dummy_region();
         let rc = unsafe {
-            (HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE
-                .record_copy_image_to_pixel_buffer)(
+            (HOST_RHI_COMMAND_RECORDER_METHODS_VTABLE.record_copy_image_to_pixel_buffer)(
                 std::ptr::null(),
                 std::ptr::null(),
                 0,

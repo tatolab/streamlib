@@ -15,8 +15,8 @@
 
 use std::sync::Arc;
 
-use streamlib_consumer_rhi::{DevicePrivilege, VulkanLayout};
 use streamlib_adapter_abi::{SurfaceFormat, SurfaceId, SurfaceRegistration};
+use streamlib_consumer_rhi::{DevicePrivilege, VulkanLayout};
 
 /// Inputs the registration site hands to
 /// [`crate::CpuReadbackSurfaceAdapter::register_host_surface`].

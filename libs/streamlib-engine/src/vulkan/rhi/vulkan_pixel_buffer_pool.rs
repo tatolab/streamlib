@@ -5,10 +5,10 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::core::rhi::{PixelBufferPoolId, PixelFormat, PixelBuffer, PixelBufferRef};
-use crate::core::{Result, Error};
+use crate::core::rhi::{PixelBuffer, PixelBufferPoolId, PixelBufferRef, PixelFormat};
+use crate::core::{Error, Result};
 
-use super::{HostVulkanDevice, HostVulkanBuffer};
+use super::{HostVulkanBuffer, HostVulkanDevice};
 
 /// Reusable pool of [`HostVulkanBuffer`]s for efficient buffer recycling.
 pub struct VulkanPixelBufferPool {
@@ -42,7 +42,10 @@ impl VulkanPixelBufferPool {
         let mut last_err: Option<Error> = None;
 
         for i in 0..pre_allocate {
-            match HostVulkanBuffer::new(&device, (width as u64) * (height as u64) * (bytes_per_pixel as u64)) {
+            match HostVulkanBuffer::new(
+                &device,
+                (width as u64) * (height as u64) * (bytes_per_pixel as u64),
+            ) {
                 Ok(buffer) => {
                     buffers.push(Arc::new(buffer));
                     buffer_to_pool_id.insert(i, PixelBufferPoolId::new());
@@ -51,7 +54,9 @@ impl VulkanPixelBufferPool {
                     tracing::warn!(
                         "VulkanPixelBufferPool: allocation {}/{} failed: {} \
                          (likely NVIDIA DMA-BUF limit after swapchain creation)",
-                        i + 1, pre_allocate, e
+                        i + 1,
+                        pre_allocate,
+                        e
                     );
                     last_err = Some(e);
                     break;
@@ -61,9 +66,7 @@ impl VulkanPixelBufferPool {
 
         if buffers.is_empty() {
             return Err(last_err.unwrap_or_else(|| {
-                Error::BufferError(
-                    "VulkanPixelBufferPool: failed to allocate any buffers".into(),
-                )
+                Error::BufferError("VulkanPixelBufferPool: failed to allocate any buffers".into())
             }));
         }
 
@@ -152,7 +155,10 @@ mod tests {
     use super::*;
     use crate::vulkan::rhi::HostVulkanDevice;
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_pool_acquire_returns_buffer() {
         let device = match HostVulkanDevice::new() {
@@ -163,11 +169,9 @@ mod tests {
             }
         };
 
-        let pool = VulkanPixelBufferPool::new(
-            Arc::clone(&device),
-            64, 64, 4, PixelFormat::Bgra32, 3,
-        )
-        .expect("pool creation failed");
+        let pool =
+            VulkanPixelBufferPool::new(Arc::clone(&device), 64, 64, 4, PixelFormat::Bgra32, 3)
+                .expect("pool creation failed");
 
         let result = pool.acquire();
         assert!(result.is_ok(), "acquire must succeed on a fresh pool");
@@ -175,10 +179,17 @@ mod tests {
         let (pool_id, buf) = result.unwrap();
         assert_eq!(buf.width, 64);
         assert_eq!(buf.height, 64);
-        assert_ne!(pool_id, PixelBufferPoolId::new(), "pool id must be stable, not a fresh zero-id");
+        assert_ne!(
+            pool_id,
+            PixelBufferPoolId::new(),
+            "pool id must be stable, not a fresh zero-id"
+        );
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_pool_exhaustion_returns_error() {
         let device = match HostVulkanDevice::new() {
@@ -189,11 +200,9 @@ mod tests {
             }
         };
 
-        let pool = VulkanPixelBufferPool::new(
-            Arc::clone(&device),
-            64, 64, 4, PixelFormat::Bgra32, 1,
-        )
-        .expect("pool creation failed");
+        let pool =
+            VulkanPixelBufferPool::new(Arc::clone(&device), 64, 64, 4, PixelFormat::Bgra32, 1)
+                .expect("pool creation failed");
 
         // Hold the only buffer so all buffers are externally referenced
         let (_id, _held) = pool.acquire().expect("first acquire must succeed");
@@ -205,7 +214,10 @@ mod tests {
         );
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_pool_reuses_buffer_after_release() {
         let device = match HostVulkanDevice::new() {
@@ -216,11 +228,9 @@ mod tests {
             }
         };
 
-        let pool = VulkanPixelBufferPool::new(
-            Arc::clone(&device),
-            64, 64, 4, PixelFormat::Bgra32, 1,
-        )
-        .expect("pool creation failed");
+        let pool =
+            VulkanPixelBufferPool::new(Arc::clone(&device), 64, 64, 4, PixelFormat::Bgra32, 1)
+                .expect("pool creation failed");
 
         let (_id, buf) = pool.acquire().expect("first acquire must succeed");
         drop(buf); // release back to pool (Arc strong_count returns to 1)

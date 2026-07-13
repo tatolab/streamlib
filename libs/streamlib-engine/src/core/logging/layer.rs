@@ -10,20 +10,20 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crossbeam_channel::Sender;
 use crossbeam_queue::ArrayQueue;
 use tracing::field::{Field, Visit};
 use tracing::{Event, Subscriber};
+use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::Layer;
 
 use crate::core::logging::event::{LogLevel, Source};
 use crate::core::logging::record::LogRecord;
-use crate::core::logging::worker::{now_ns, WorkerSignal};
+use crate::core::logging::worker::{WorkerSignal, now_ns};
 
 pub(crate) struct JsonlSinkLayer {
     queue: Arc<ArrayQueue<LogRecord>>,
@@ -145,29 +145,39 @@ impl Visit for Capture {
     fn record_str(&mut self, field: &Field, value: &str) {
         let name = field.name();
         if !self.set_well_known(name, value.to_string()) {
-            self.attrs
-                .insert(name.to_string(), serde_json::Value::String(value.to_string()));
+            self.attrs.insert(
+                name.to_string(),
+                serde_json::Value::String(value.to_string()),
+            );
         }
     }
 
     fn record_i64(&mut self, field: &Field, value: i64) {
-        self.attrs
-            .insert(field.name().to_string(), serde_json::Value::Number(value.into()));
+        self.attrs.insert(
+            field.name().to_string(),
+            serde_json::Value::Number(value.into()),
+        );
     }
 
     fn record_u64(&mut self, field: &Field, value: u64) {
-        self.attrs
-            .insert(field.name().to_string(), serde_json::Value::Number(value.into()));
+        self.attrs.insert(
+            field.name().to_string(),
+            serde_json::Value::Number(value.into()),
+        );
     }
 
     fn record_i128(&mut self, field: &Field, value: i128) {
-        self.attrs
-            .insert(field.name().to_string(), serde_json::Value::String(value.to_string()));
+        self.attrs.insert(
+            field.name().to_string(),
+            serde_json::Value::String(value.to_string()),
+        );
     }
 
     fn record_u128(&mut self, field: &Field, value: u128) {
-        self.attrs
-            .insert(field.name().to_string(), serde_json::Value::String(value.to_string()));
+        self.attrs.insert(
+            field.name().to_string(),
+            serde_json::Value::String(value.to_string()),
+        );
     }
 
     fn record_bool(&mut self, field: &Field, value: bool) {

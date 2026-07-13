@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::{Mutex, OnceLock};
 
-use streamlib_plugin_abi::{ProcessorVTable, PROCESSOR_VTABLE_LAYOUT_VERSION};
+use streamlib_plugin_abi::{PROCESSOR_VTABLE_LAYOUT_VERSION, ProcessorVTable};
 
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::plugin::host_services::run_host_extern_c;
@@ -109,26 +109,20 @@ where
         run_host_extern_c(
             "ProcessorWrappers::construct",
             || {
-                let config: P::Config =
-                    if config_msgpack_len == 0 || config_msgpack_ptr.is_null() {
-                        P::Config::default()
-                    } else {
-                        let bytes = unsafe {
-                            std::slice::from_raw_parts(config_msgpack_ptr, config_msgpack_len)
-                        };
-                        match rmp_serde::from_slice(bytes) {
-                            Ok(c) => c,
-                            Err(e) => {
-                                write_err(
-                                    err_buf,
-                                    err_buf_cap,
-                                    err_len,
-                                    &format!("config deser: {e}"),
-                                );
-                                return std::ptr::null_mut();
-                            }
-                        }
+                let config: P::Config = if config_msgpack_len == 0 || config_msgpack_ptr.is_null() {
+                    P::Config::default()
+                } else {
+                    let bytes = unsafe {
+                        std::slice::from_raw_parts(config_msgpack_ptr, config_msgpack_len)
                     };
+                    match rmp_serde::from_slice(bytes) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            write_err(err_buf, err_buf_cap, err_len, &format!("config deser: {e}"));
+                            return std::ptr::null_mut();
+                        }
+                    }
+                };
 
                 match P::from_config(config) {
                     Ok(processor) => Box::into_raw(Box::new(processor)) as *mut c_void,
@@ -387,26 +381,24 @@ where
                 // pairs the host hands us. Null handle/vtable =
                 // "this processor has no outputs/inputs" — pass
                 // None to the trait method.
-                let output_writer = if output_writer_handle.is_null()
-                    || output_writer_vtable.is_null()
-                {
-                    None
-                } else {
-                    Some(crate::iceoryx2::OutputWriter::from_raw_parts(
-                        output_writer_handle,
-                        output_writer_vtable,
-                    ))
-                };
-                let input_mailboxes = if input_mailboxes_handle.is_null()
-                    || input_mailboxes_vtable.is_null()
-                {
-                    None
-                } else {
-                    Some(crate::iceoryx2::InputMailboxes::from_raw_parts(
-                        input_mailboxes_handle,
-                        input_mailboxes_vtable,
-                    ))
-                };
+                let output_writer =
+                    if output_writer_handle.is_null() || output_writer_vtable.is_null() {
+                        None
+                    } else {
+                        Some(crate::iceoryx2::OutputWriter::from_raw_parts(
+                            output_writer_handle,
+                            output_writer_vtable,
+                        ))
+                    };
+                let input_mailboxes =
+                    if input_mailboxes_handle.is_null() || input_mailboxes_vtable.is_null() {
+                        None
+                    } else {
+                        Some(crate::iceoryx2::InputMailboxes::from_raw_parts(
+                            input_mailboxes_handle,
+                            input_mailboxes_vtable,
+                        ))
+                    };
                 match <P as GeneratedProcessor>::set_iceoryx2_resources(
                     processor,
                     output_writer,
@@ -438,9 +430,7 @@ where
                 let bytes = if config_msgpack_len == 0 || config_msgpack_ptr.is_null() {
                     &[][..]
                 } else {
-                    unsafe {
-                        std::slice::from_raw_parts(config_msgpack_ptr, config_msgpack_len)
-                    }
+                    unsafe { std::slice::from_raw_parts(config_msgpack_ptr, config_msgpack_len) }
                 };
                 let config: P::Config = match rmp_serde::from_slice(bytes) {
                     Ok(c) => c,
@@ -528,12 +518,7 @@ fn write_err(buf: *mut u8, cap: usize, out_len: *mut usize, msg: &str) {
 /// Writes `bytes` to `out_buf` when it fits within `out_cap`. Always
 /// returns the **required** buffer size (`bytes.len()`); the caller
 /// inspects that value vs. `out_cap` to detect truncation.
-fn write_out_bytes(
-    bytes: &[u8],
-    out_buf: *mut u8,
-    out_cap: usize,
-    out_len: *mut usize,
-) -> usize {
+fn write_out_bytes(bytes: &[u8], out_buf: *mut u8, out_cap: usize, out_len: *mut usize) -> usize {
     if bytes.len() <= out_cap && !out_buf.is_null() && !out_len.is_null() {
         unsafe {
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_buf, bytes.len());

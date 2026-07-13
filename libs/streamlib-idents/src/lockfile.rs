@@ -131,11 +131,10 @@ fn write_lockfile_with_header(
     lockfile: &Lockfile,
     header: &str,
 ) -> ResolverResult<()> {
-    let body =
-        serde_yaml::to_string(lockfile).map_err(|e| ResolverError::ManifestParse {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
+    let body = serde_yaml::to_string(lockfile).map_err(|e| ResolverError::ManifestParse {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
     let mut out = String::with_capacity(header.len() + body.len());
     out.push_str(header);
     out.push_str(&body);
@@ -335,7 +334,9 @@ packages:
             "@tatolab/core".into(),
             LockfileEntry {
                 version: SemVer::new(1, 0, 0),
-                source: LockfileSource::Path { path: "../core".into() },
+                source: LockfileSource::Path {
+                    path: "../core".into(),
+                },
                 content_hash: "sha256:abc".into(),
             },
         );
@@ -378,7 +379,10 @@ packages:
 
         let app_body = std::fs::read_to_string(&app).unwrap();
         let codegen_body = std::fs::read_to_string(&codegen).unwrap();
-        assert!(app_body.contains("streamlib install"), "app header: {app_body}");
+        assert!(
+            app_body.contains("streamlib install"),
+            "app header: {app_body}"
+        );
         assert!(
             codegen_body.contains("streamlib generate"),
             "codegen header: {codegen_body}"
@@ -388,7 +392,10 @@ packages:
         // The wire payload (below the header) round-trips identically.
         let back = read_lockfile(&app).unwrap();
         assert_eq!(back.packages.len(), 1);
-        assert_eq!(back.packages.get("@tatolab/core").unwrap().version, SemVer::new(1, 0, 0));
+        assert_eq!(
+            back.packages.get("@tatolab/core").unwrap().version,
+            SemVer::new(1, 0, 0)
+        );
 
         // Byte-determinism: a second write of the same lockfile is identical.
         let app2 = tmp.path().join("streamlib-app-2.lock");

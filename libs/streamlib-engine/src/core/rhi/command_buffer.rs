@@ -178,9 +178,7 @@ impl CommandBuffer {
     pub fn as_metal_command_buffer(&self) -> &crate::metal::rhi::MetalCommandBuffer {
         // SAFETY: see `host_inner_mut` — same shape, immutable borrow.
         if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "CommandBuffer::as_metal_command_buffer() reached from cdylib code"
-            );
+            panic!("CommandBuffer::as_metal_command_buffer() reached from cdylib code");
         }
         unsafe { &(*(self.handle as *const CommandBufferInner)).inner }
     }

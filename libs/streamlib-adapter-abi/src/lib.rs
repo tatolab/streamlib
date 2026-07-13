@@ -22,13 +22,13 @@ mod subprocess_crash;
 pub mod testing;
 
 pub use adapter::{
-    CpuReadable, CpuWritable, GlWritable, SurfaceAdapter, VkImageHandle, VkImageInfo,
-    VkImageLayoutValue, VulkanImageInfoExt, VulkanWritable, STREAMLIB_ADAPTER_ABI_VERSION,
+    CpuReadable, CpuWritable, GlWritable, STREAMLIB_ADAPTER_ABI_VERSION, SurfaceAdapter,
+    VkImageHandle, VkImageInfo, VkImageLayoutValue, VulkanImageInfoExt, VulkanWritable,
 };
 pub use error::AdapterError;
 pub use guard::{ReadGuard, WriteGuard};
 pub use registry::{Registry, SurfaceRegistration};
 pub use surface::{
-    AccessMode, SurfaceFormat, SurfaceId, SurfaceSyncState, SurfaceTransportHandle,
-    SurfaceUsage, StreamlibSurface,
+    AccessMode, StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState,
+    SurfaceTransportHandle, SurfaceUsage,
 };

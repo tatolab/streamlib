@@ -38,9 +38,8 @@ impl BuildOrchestrator for LoadAsIsOrchestrator {
 /// [`LoadAsIsOrchestrator`] plus a per-directory materialize-call counter,
 /// letting tests assert a skipped package's subtree was not re-walked.
 struct MaterializeCountingOrchestrator {
-    counts: std::sync::Arc<
-        parking_lot::Mutex<std::collections::HashMap<std::path::PathBuf, usize>>,
-    >,
+    counts:
+        std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<std::path::PathBuf, usize>>>,
 }
 impl BuildOrchestrator for MaterializeCountingOrchestrator {
     fn materialize(
@@ -85,9 +84,8 @@ fn count_materializations_for_dir_named(
 struct RendezvousLoadAsIsOrchestrator {
     rendezvous_dir_names: Vec<String>,
     rendezvous: std::sync::Barrier,
-    counts: std::sync::Arc<
-        parking_lot::Mutex<std::collections::HashMap<std::path::PathBuf, usize>>,
-    >,
+    counts:
+        std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<std::path::PathBuf, usize>>>,
 }
 impl BuildOrchestrator for RendezvousLoadAsIsOrchestrator {
     fn materialize(
@@ -101,9 +99,7 @@ impl BuildOrchestrator for RendezvousLoadAsIsOrchestrator {
                 let matches = dir
                     .file_name()
                     .and_then(|name| name.to_str())
-                    .is_some_and(|name| {
-                        self.rendezvous_dir_names.iter().any(|r| r == name)
-                    });
+                    .is_some_and(|name| self.rendezvous_dir_names.iter().any(|r| r == name));
                 if matches {
                     self.rendezvous.wait();
                 }
@@ -306,14 +302,13 @@ schemas:
     let body = crate::core::embedded_schemas::get_embedded_schema_definition(canonical)
         .expect("registered schema must be discoverable post-load");
     assert!(body.contains("MyTestConfig"));
-    let port_spec = streamlib_processor_schema::PortSchemaSpec::Specific(
-        streamlib_idents::SchemaIdent::new(
+    let port_spec =
+        streamlib_processor_schema::PortSchemaSpec::Specific(streamlib_idents::SchemaIdent::new(
             streamlib_idents::Org::new("tatolab").unwrap(),
             streamlib_idents::Package::new("test-load-project-registers-schemas").unwrap(),
             streamlib_idents::TypeName::new("MyTestConfig").unwrap(),
             streamlib_idents::SemVer::new(1, 0, 0),
-        ),
-    );
+        ));
     assert_eq!(
         crate::core::embedded_schemas::max_payload_bytes_for_port_spec(&port_spec).unwrap(),
         8192,
@@ -437,7 +432,10 @@ fn path_strategy_resolves_git_patch_via_shared_helper() {
         .current_dir(&repo)
         .output()
         .expect("git rev-parse");
-    let rev = String::from_utf8(rev_output.stdout).unwrap().trim().to_string();
+    let rev = String::from_utf8(rev_output.stdout)
+        .unwrap()
+        .trim()
+        .to_string();
 
     let sandbox = tempfile::tempdir().unwrap();
     let prev_home = std::env::var_os("STREAMLIB_HOME");
@@ -719,10 +717,7 @@ fn path_package_registry_dep_routes_to_registry_not_installed_cache() {
     let _restore = StreamlibHomeRestore(prev_home);
     // No ambient registry config, so the routing is observable regardless of
     // the developer / CI shell.
-    let _no_registry = EnvVarsCleared::new(&[
-        "STREAMLIB_REGISTRY_URL",
-        "STREAMLIB_REGISTRY_TOKEN",
-    ]);
+    let _no_registry = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "STREAMLIB_REGISTRY_TOKEN"]);
 
     // An installed-cache entry for @tatolab/b that WOULD satisfy `^0.1.0` —
     // resolved through the production accessor so it lands at the real layout.
@@ -1220,11 +1215,16 @@ mod add_module_tests {
         let canonical = format!("@tatolab/ic-only/{TYPE_NAME}");
         runtime
             .add_module_with_blocking(
-                ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new("ic-only").unwrap()),
+                ModuleIdent::any(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("ic-only").unwrap(),
+                ),
                 Strategy::InstalledCache,
             )
             .expect("InstalledCache strategy must hit the cache");
-        assert!(crate::core::embedded_schemas::get_embedded_schema_definition(&canonical).is_some());
+        assert!(
+            crate::core::embedded_schemas::get_embedded_schema_definition(&canonical).is_some()
+        );
     }
 
     #[test]
@@ -1233,20 +1233,31 @@ mod add_module_tests {
         const TYPE_NAME: &str = "PathStrategySchema";
         let home = tempfile::tempdir().unwrap();
         let arbitrary = tempfile::tempdir().unwrap();
-        write_schemas_only_manifest(arbitrary.path(), "tatolab", "md-arbitrary", "0.7.2", Some(TYPE_NAME));
+        write_schemas_only_manifest(
+            arbitrary.path(),
+            "tatolab",
+            "md-arbitrary",
+            "0.7.2",
+            Some(TYPE_NAME),
+        );
         let _guard = HomeGuard::install(home.path());
         let runtime = Runner::new().expect("Runner::new");
         let canonical = format!("@tatolab/md-arbitrary/{TYPE_NAME}");
         runtime
             .add_module_with_blocking(
-                ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new("md-arbitrary").unwrap()),
+                ModuleIdent::any(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("md-arbitrary").unwrap(),
+                ),
                 Strategy::Path {
                     path: arbitrary.path().to_path_buf(),
                     build: BuildPolicy::NeverBuild,
                 },
             )
             .expect("Path strategy must load the arbitrary dir");
-        assert!(crate::core::embedded_schemas::get_embedded_schema_definition(&canonical).is_some());
+        assert!(
+            crate::core::embedded_schemas::get_embedded_schema_definition(&canonical).is_some()
+        );
     }
 
     #[test]
@@ -1257,7 +1268,10 @@ mod add_module_tests {
         let runtime = Runner::new().expect("Runner::new");
         let err = runtime
             .add_module_with_blocking(
-                ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new("md-missing").unwrap()),
+                ModuleIdent::any(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("md-missing").unwrap(),
+                ),
                 Strategy::Path {
                     path: std::path::PathBuf::from("/nonexistent/does-not-exist"),
                     build: BuildPolicy::NeverBuild,
@@ -1283,7 +1297,10 @@ mod add_module_tests {
         let runtime = Runner::new().expect("Runner::new");
         let err = runtime
             .add_module_with_blocking(
-                ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new("ab-no-orch").unwrap()),
+                ModuleIdent::any(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("ab-no-orch").unwrap(),
+                ),
                 Strategy::Path {
                     path: arbitrary.path().to_path_buf(),
                     build: BuildPolicy::AlwaysBuild,
@@ -1305,12 +1322,21 @@ mod add_module_tests {
     fn if_stale_without_orchestrator_fails_loud() {
         let home = tempfile::tempdir().unwrap();
         let arbitrary = tempfile::tempdir().unwrap();
-        write_schemas_only_manifest(arbitrary.path(), "tatolab", "ifstale-no-orch", "0.1.0", None);
+        write_schemas_only_manifest(
+            arbitrary.path(),
+            "tatolab",
+            "ifstale-no-orch",
+            "0.1.0",
+            None,
+        );
         let _guard = HomeGuard::install(home.path());
         let runtime = Runner::new().expect("Runner::new");
         let err = runtime
             .add_module_with_blocking(
-                ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new("ifstale-no-orch").unwrap()),
+                ModuleIdent::any(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("ifstale-no-orch").unwrap(),
+                ),
                 Strategy::Path {
                     path: arbitrary.path().to_path_buf(),
                     build: BuildPolicy::IfStale,
@@ -1370,13 +1396,18 @@ processors:
         // a build for a runtime-bearing package.
         let err = runtime
             .add_module_with_blocking(
-                ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new("py-no-orch").unwrap()),
+                ModuleIdent::any(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("py-no-orch").unwrap(),
+                ),
                 Strategy::Path {
                     path: pkg.path().to_path_buf(),
                     build: BuildPolicy::IfStale,
                 },
             )
-            .expect_err("a build-requiring python source package with no orchestrator must fail loud");
+            .expect_err(
+                "a build-requiring python source package with no orchestrator must fail loud",
+            );
         assert!(
             matches!(err, AddModuleError::BuildRequiredButNoOrchestrator { ref package, .. }
                 if package.name.as_str() == "py-no-orch"),
@@ -1484,7 +1515,10 @@ processors:
         let runtime = Runner::new().expect("Runner::new");
         let err = runtime
             .add_module_with_blocking(
-                ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new("cycle-self").unwrap()),
+                ModuleIdent::any(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("cycle-self").unwrap(),
+                ),
                 Strategy::Path {
                     path: pkg.path().to_path_buf(),
                     build: BuildPolicy::NeverBuild,
@@ -1505,10 +1539,12 @@ processors:
         // Placeholder drop-guard witness: the dep-recursion failure exit
         // must clear the armed placeholder — the memo never wedges.
         assert!(
-            !runtime.resolution_memo.contains_package(&streamlib_idents::PackageRef::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("cycle-self").unwrap(),
-            )),
+            !runtime
+                .resolution_memo
+                .contains_package(&streamlib_idents::PackageRef::new(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("cycle-self").unwrap(),
+                )),
             "cycle failure must clear the in-flight placeholder",
         );
     }
@@ -1539,7 +1575,10 @@ processors:
         runtime.set_build_orchestrator(LoadAsIsOrchestrator);
         let err = runtime
             .add_module_with_blocking(
-                ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new("cycle-a").unwrap()),
+                ModuleIdent::any(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("cycle-a").unwrap(),
+                ),
                 Strategy::Path {
                     path: a.clone(),
                     build: BuildPolicy::NeverBuild,
@@ -1562,10 +1601,12 @@ processors:
         // b) must be cleared as the failure unwinds through them.
         for name in ["cycle-a", "cycle-b"] {
             assert!(
-                !runtime.resolution_memo.contains_package(&streamlib_idents::PackageRef::new(
-                    Org::new("tatolab").unwrap(),
-                    Package::new(name).unwrap(),
-                )),
+                !runtime
+                    .resolution_memo
+                    .contains_package(&streamlib_idents::PackageRef::new(
+                        Org::new("tatolab").unwrap(),
+                        Package::new(name).unwrap(),
+                    )),
                 "cycle failure must clear the in-flight placeholder for {name}",
             );
         }
@@ -1774,9 +1815,10 @@ processors:
 
         let _guard = HomeGuard::install(home.path());
         let runtime = Runner::new().expect("Runner::new");
-        let materialize_counts = Arc::new(parking_lot::Mutex::new(
-            std::collections::HashMap::<std::path::PathBuf, usize>::new(),
-        ));
+        let materialize_counts = Arc::new(parking_lot::Mutex::new(std::collections::HashMap::<
+            std::path::PathBuf,
+            usize,
+        >::new()));
         runtime.set_build_orchestrator(MaterializeCountingOrchestrator {
             counts: Arc::clone(&materialize_counts),
         });
@@ -2099,9 +2141,10 @@ processors:
 
         let _guard = HomeGuard::install(home.path());
         let runtime = Runner::new().expect("Runner::new");
-        let materialize_counts = Arc::new(parking_lot::Mutex::new(
-            std::collections::HashMap::<std::path::PathBuf, usize>::new(),
-        ));
+        let materialize_counts = Arc::new(parking_lot::Mutex::new(std::collections::HashMap::<
+            std::path::PathBuf,
+            usize,
+        >::new()));
         runtime.set_build_orchestrator(RendezvousLoadAsIsOrchestrator {
             rendezvous_dir_names: vec!["d".to_string()],
             rendezvous: std::sync::Barrier::new(2),
@@ -2127,8 +2170,7 @@ processors:
             strategy(&tb),
         );
         let handle = runtime.tokio_runtime_variant.handle();
-        let (result_ta, result_tb) =
-            handle.block_on(async { tokio::join!(added_ta, added_tb) });
+        let (result_ta, result_tb) = handle.block_on(async { tokio::join!(added_ta, added_tb) });
         result_ta.expect("TA load must succeed");
         result_tb.expect("TB load must succeed");
 
@@ -2201,9 +2243,10 @@ processors:
 
         let _guard = HomeGuard::install(home.path());
         let runtime = Runner::new().expect("Runner::new");
-        let materialize_counts = Arc::new(parking_lot::Mutex::new(
-            std::collections::HashMap::<std::path::PathBuf, usize>::new(),
-        ));
+        let materialize_counts = Arc::new(parking_lot::Mutex::new(std::collections::HashMap::<
+            std::path::PathBuf,
+            usize,
+        >::new()));
         runtime.set_build_orchestrator(RendezvousLoadAsIsOrchestrator {
             rendezvous_dir_names: vec!["d1".to_string(), "d2".to_string()],
             rendezvous: std::sync::Barrier::new(2),
@@ -2231,8 +2274,7 @@ processors:
             },
         );
         let handle = runtime.tokio_runtime_variant.handle();
-        let (result_ta, result_tb) =
-            handle.block_on(async { tokio::join!(added_ta, added_tb) });
+        let (result_ta, result_tb) = handle.block_on(async { tokio::join!(added_ta, added_tb) });
 
         let results = [result_ta.map(|_| ()), result_tb.map(|_| ())];
         let conflict_count = results
@@ -2357,8 +2399,7 @@ processors:
         release_tx.send(()).unwrap();
 
         let handle = runtime.tokio_runtime_variant.handle();
-        let (result_ta, result_tb) =
-            handle.block_on(async { tokio::join!(added_ta, added_tb) });
+        let (result_ta, result_tb) = handle.block_on(async { tokio::join!(added_ta, added_tb) });
         result_ta.expect("owner load must succeed");
         result_tb.expect("waiter load must succeed after the owner commits");
 
@@ -2458,15 +2499,13 @@ processors:
         release_tx.send(()).unwrap();
 
         let handle = runtime.tokio_runtime_variant.handle();
-        let (result_ta, result_tb) =
-            handle.block_on(async { tokio::join!(added_ta, added_tb) });
+        let (result_ta, result_tb) = handle.block_on(async { tokio::join!(added_ta, added_tb) });
         let owner_err = result_ta.expect_err("owner load must fail (injected E failure)");
         assert!(
             matches!(owner_err, AddModuleError::MaterializeFailed { .. }),
             "owner must surface the injected materialize failure, got: {owner_err:?}",
         );
-        let waiter_err =
-            result_tb.expect_err("waiter must fail loudly when the owner fails");
+        let waiter_err = result_tb.expect_err("waiter must fail loudly when the owner fails");
         assert!(
             matches!(
                 waiter_err,
@@ -2496,8 +2535,10 @@ processors:
             Org::new("tatolab").unwrap(),
             Package::new("guard-pkg").unwrap(),
         );
-        let ident =
-            ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new("guard-pkg").unwrap());
+        let ident = ModuleIdent::any(
+            Org::new("tatolab").unwrap(),
+            Package::new("guard-pkg").unwrap(),
+        );
         runtime.loading_modules.lock().insert(pkg, (0, ident));
 
         let err = runtime
@@ -2583,12 +2624,11 @@ processors:
                 BuildSource::PackageDir(d) => d.clone(),
                 other => return Err(BuildError::UnsupportedSource(format!("{other:?}"))),
             };
-            let cfg = crate::core::config::ProjectConfig::load(&src).map_err(|e| {
-                BuildError::Other {
+            let cfg =
+                crate::core::config::ProjectConfig::load(&src).map_err(|e| BuildError::Other {
                     package: request.package.to_string(),
                     detail: e.to_string(),
-                }
-            })?;
+                })?;
             let pkg = cfg.package.as_ref().ok_or_else(|| BuildError::Other {
                 package: request.package.to_string(),
                 detail: "no [package] block".into(),
@@ -2688,7 +2728,13 @@ processors:
 
         // Two-level registry tree: lockrun-lib depends on lockrun-core.
         let mirror = tempfile::tempdir().unwrap();
-        write_mirror_slpkg(mirror.path(), "lockrun-core", "0.1.0", "LockrunCoreSchema", None);
+        write_mirror_slpkg(
+            mirror.path(),
+            "lockrun-core",
+            "0.1.0",
+            "LockrunCoreSchema",
+            None,
+        );
         write_mirror_slpkg(
             mirror.path(),
             "lockrun-lib",
@@ -2723,8 +2769,14 @@ processors:
         // Lockfile pins the full transitive set (lib + its transitive core).
         assert_eq!(report.packages.len(), 2, "pins: {:?}", report.packages);
         let names: Vec<String> = report.packages.iter().map(|(p, _)| p.to_string()).collect();
-        assert!(names.contains(&"@tatolab/lockrun-lib".to_string()), "{names:?}");
-        assert!(names.contains(&"@tatolab/lockrun-core".to_string()), "{names:?}");
+        assert!(
+            names.contains(&"@tatolab/lockrun-lib".to_string()),
+            "{names:?}"
+        );
+        assert!(
+            names.contains(&"@tatolab/lockrun-core".to_string()),
+            "{names:?}"
+        );
         assert!(report.lockfile_path.ends_with("streamlib-app.lock"));
 
         // ---- poison the registry ----
@@ -2822,12 +2874,18 @@ processors:
         install_to(lock_b.clone());
         let a = std::fs::read(&lock_a).unwrap();
         let b = std::fs::read(&lock_b).unwrap();
-        assert_eq!(a, b, "two installs of identical inputs must produce identical lockfile bytes");
+        assert_eq!(
+            a, b,
+            "two installs of identical inputs must produce identical lockfile bytes"
+        );
 
         // Path deps are recorded as `path:` sources (the link-bridge shape:
         // a linked/local tree records Path entries).
         let text = String::from_utf8(a).unwrap();
-        assert!(text.contains("kind: path"), "path dep must record a path source:\n{text}");
+        assert!(
+            text.contains("kind: path"),
+            "path dep must record a path source:\n{text}"
+        );
     }
 
     /// A locked run whose manifest declares a dep the lockfile does NOT pin
@@ -3122,7 +3180,13 @@ packages:
         let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL"]);
 
         let mirror = tempfile::tempdir().unwrap();
-        write_mirror_slpkg(mirror.path(), "mutate-pkg", "0.1.0", "MutatePkgSchema", None);
+        write_mirror_slpkg(
+            mirror.path(),
+            "mutate-pkg",
+            "0.1.0",
+            "MutatePkgSchema",
+            None,
+        );
 
         let project = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -3148,7 +3212,13 @@ packages:
 
         // Mutate the registry AFTER install: publish a newer in-range
         // version. The registry stays reachable for the run.
-        write_mirror_slpkg(mirror.path(), "mutate-pkg", "0.2.0", "MutatePkgSchema", None);
+        write_mirror_slpkg(
+            mirror.path(),
+            "mutate-pkg",
+            "0.2.0",
+            "MutatePkgSchema",
+            None,
+        );
 
         let runtime = Runner::new().unwrap();
         runtime

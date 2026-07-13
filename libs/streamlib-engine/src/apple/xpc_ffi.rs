@@ -189,7 +189,7 @@ extern "C" {
     ///
     /// Returns null if the key doesn't exist or isn't a string.
     pub fn xpc_dictionary_get_string(dictionary: xpc_object_t, key: *const c_char)
-        -> *const c_char;
+    -> *const c_char;
 
     /// Get an int64 value from a dictionary.
     ///

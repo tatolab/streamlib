@@ -93,7 +93,8 @@ mod tests {
 
     #[test]
     fn test_sync_statistics() {
-        let (drift_ms, is_synced) = sync_statistics(1_020_000_000, 1_000_000_000, DEFAULT_SYNC_TOLERANCE_MS);
+        let (drift_ms, is_synced) =
+            sync_statistics(1_020_000_000, 1_000_000_000, DEFAULT_SYNC_TOLERANCE_MS);
         assert!((drift_ms - 20.0).abs() < 0.1);
         assert!(!is_synced);
 

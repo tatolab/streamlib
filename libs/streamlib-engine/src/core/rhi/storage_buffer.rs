@@ -66,18 +66,14 @@ impl StorageBuffer {
     /// ([`crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible`]
     /// or
     /// [`crate::vulkan::rhi::HostVulkanBuffer::from_dma_buf_fd_as_storage_buffer`]).
-    pub fn from_host_vulkan_buffer(
-        inner: Arc<crate::vulkan::rhi::HostVulkanBuffer>,
-    ) -> Self {
+    pub fn from_host_vulkan_buffer(inner: Arc<crate::vulkan::rhi::HostVulkanBuffer>) -> Self {
         Self::from_arc_into_raw(inner)
     }
 
     /// Internal helper: leak an initial Arc strong count via
     /// `Arc::into_raw`, capture POD fields, resolve the host-mode
     /// vtable.
-    pub(crate) fn from_arc_into_raw(
-        inner: Arc<crate::vulkan::rhi::HostVulkanBuffer>,
-    ) -> Self {
+    pub(crate) fn from_arc_into_raw(inner: Arc<crate::vulkan::rhi::HostVulkanBuffer>) -> Self {
         let byte_size = inner.size() as u64;
         let mapped_ptr = inner.mapped_ptr();
         let handle = Arc::into_raw(inner) as *const c_void;

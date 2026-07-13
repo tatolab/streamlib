@@ -189,10 +189,7 @@ pub fn run(workspace_root: &Path) -> Result<()> {
 pub fn scan_workspace(workspace_root: &Path) -> Result<Vec<Violation>> {
     let mut all = Vec::new();
     let target_dir = workspace_root.join(TARGET_DIR);
-    for entry in WalkDir::new(&target_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
+    for entry in WalkDir::new(&target_dir).into_iter().filter_map(|e| e.ok()) {
         let abs = entry.path();
         if !entry.file_type().is_file() {
             continue;
@@ -204,10 +201,8 @@ pub fn scan_workspace(workspace_root: &Path) -> Result<Vec<Violation>> {
             .strip_prefix(workspace_root)
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|_| abs.to_path_buf());
-        let src = fs::read_to_string(abs)
-            .with_context(|| format!("reading {}", abs.display()))?;
-        let file = syn::parse_file(&src)
-            .with_context(|| format!("parsing {}", abs.display()))?;
+        let src = fs::read_to_string(abs).with_context(|| format!("reading {}", abs.display()))?;
+        let file = syn::parse_file(&src).with_context(|| format!("parsing {}", abs.display()))?;
         let mut visitor = FileVisitor {
             file_path: relpath,
             current_impl_type: None,
@@ -244,8 +239,8 @@ pub fn scan_cdylib_dispatch_paths(workspace_root: &Path) -> Result<Vec<DispatchV
                 .strip_prefix(workspace_root)
                 .map(|p| p.to_path_buf())
                 .unwrap_or_else(|_| abs.to_path_buf());
-            let src = fs::read_to_string(abs)
-                .with_context(|| format!("reading {}", abs.display()))?;
+            let src =
+                fs::read_to_string(abs).with_context(|| format!("reading {}", abs.display()))?;
             // Files that fail to parse (proc-macro-heavy generated
             // code, partial includes) are skipped — the lint can't
             // reason about them and false-negatives there are
@@ -291,9 +286,7 @@ fn has_cfg_test(attrs: &[syn::Attribute]) -> bool {
 fn token_stream_contains_test_ident(tokens: proc_macro2::TokenStream) -> bool {
     tokens.into_iter().any(|tt| match tt {
         proc_macro2::TokenTree::Ident(i) => i == "test",
-        proc_macro2::TokenTree::Group(g) => {
-            token_stream_contains_test_ident(g.stream())
-        }
+        proc_macro2::TokenTree::Group(g) => token_stream_contains_test_ident(g.stream()),
         _ => false,
     })
 }
@@ -312,7 +305,10 @@ fn cargo_toml_has_cdylib(toml_str: &str) -> bool {
     let Ok(v) = toml::from_str::<toml::Value>(toml_str) else {
         return false;
     };
-    let Some(arr) = v.get("lib").and_then(|l| l.get("crate-type")).and_then(|c| c.as_array())
+    let Some(arr) = v
+        .get("lib")
+        .and_then(|l| l.get("crate-type"))
+        .and_then(|c| c.as_array())
     else {
         return false;
     };
@@ -325,19 +321,17 @@ fn cargo_toml_has_cdylib(toml_str: &str) -> bool {
 /// workspace-root Cargo.toml itself.
 fn discover_cdylib_crates(workspace_root: &Path) -> Result<Vec<(PathBuf, String)>> {
     let mut out = Vec::new();
-    let walker = WalkDir::new(workspace_root)
-        .into_iter()
-        .filter_entry(|e| {
-            // Prune target/, hidden dirs (`.git`, `.claude`), and
-            // anything not a directory at this level — `.rs` files
-            // and Cargo.toml files are kept.
-            let name = e.file_name().to_string_lossy();
-            if e.file_type().is_dir() {
-                name != "target" && !name.starts_with('.')
-            } else {
-                true
-            }
-        });
+    let walker = WalkDir::new(workspace_root).into_iter().filter_entry(|e| {
+        // Prune target/, hidden dirs (`.git`, `.claude`), and
+        // anything not a directory at this level — `.rs` files
+        // and Cargo.toml files are kept.
+        let name = e.file_name().to_string_lossy();
+        if e.file_type().is_dir() {
+            name != "target" && !name.starts_with('.')
+        } else {
+            true
+        }
+    });
     for entry in walker.filter_map(|e| e.ok()) {
         if entry.file_name() != "Cargo.toml" {
             continue;
@@ -947,37 +941,27 @@ mod tests {
 
     #[test]
     fn has_cfg_test_detects_bare_form() {
-        let attrs: syn::ItemFn = syn::parse_str(
-            "#[cfg(test)] fn x() {}",
-        )
-        .expect("parse");
+        let attrs: syn::ItemFn = syn::parse_str("#[cfg(test)] fn x() {}").expect("parse");
         assert!(has_cfg_test(&attrs.attrs));
     }
 
     #[test]
     fn has_cfg_test_detects_all_combinator() {
-        let attrs: syn::ItemFn = syn::parse_str(
-            "#[cfg(all(test, target_os = \"linux\"))] fn x() {}",
-        )
-        .expect("parse");
+        let attrs: syn::ItemFn =
+            syn::parse_str("#[cfg(all(test, target_os = \"linux\"))] fn x() {}").expect("parse");
         assert!(has_cfg_test(&attrs.attrs));
     }
 
     #[test]
     fn has_cfg_test_ignores_non_test_cfg() {
-        let attrs: syn::ItemFn = syn::parse_str(
-            "#[cfg(target_os = \"linux\")] fn x() {}",
-        )
-        .expect("parse");
+        let attrs: syn::ItemFn =
+            syn::parse_str("#[cfg(target_os = \"linux\")] fn x() {}").expect("parse");
         assert!(!has_cfg_test(&attrs.attrs));
     }
 
     #[test]
     fn has_cfg_test_ignores_non_cfg_attrs() {
-        let attrs: syn::ItemFn = syn::parse_str(
-            "#[allow(dead_code)] fn x() {}",
-        )
-        .expect("parse");
+        let attrs: syn::ItemFn = syn::parse_str("#[allow(dead_code)] fn x() {}").expect("parse");
         assert!(!has_cfg_test(&attrs.attrs));
     }
 }

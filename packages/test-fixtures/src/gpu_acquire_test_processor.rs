@@ -54,9 +54,10 @@ impl ManualProcessor for GpuAcquireTest::Processor {
         let height = self.config.height;
 
         let result: Result<(u32, u32, *mut u8)> = (|| {
-            let gpu = self.gpu.as_ref().ok_or_else(|| {
-                Error::Runtime("GpuAcquireTest: setup() didn't stash gpu".into())
-            })?;
+            let gpu = self
+                .gpu
+                .as_ref()
+                .ok_or_else(|| Error::Runtime("GpuAcquireTest: setup() didn't stash gpu".into()))?;
 
             // Exercise `acquire_pixel_buffer` — paired out-param
             // tuple return.
@@ -98,9 +99,8 @@ impl ManualProcessor for GpuAcquireTest::Processor {
             Ok((w, h, ptr)) => format!("OK\n{w}x{h}\nsentinel_addr=0x{:x}", ptr as usize),
             Err(e) => format!("ERR:{e}"),
         };
-        std::fs::write(&output_path, &line).map_err(|e| {
-            Error::Runtime(format!("GpuAcquireTest: write {output_path}: {e}"))
-        })?;
+        std::fs::write(&output_path, &line)
+            .map_err(|e| Error::Runtime(format!("GpuAcquireTest: write {output_path}: {e}")))?;
         Ok(())
     }
 

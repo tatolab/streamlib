@@ -5,14 +5,14 @@
 
 use crate::apple::corevideo_ffi::kCVReturnSuccess;
 use crate::apple::vimage_ffi::{
-    kCVPixelBufferLock_ReadOnly, kvImageNoError, kvImageNoFlags, vImageCVImageFormat_Create,
-    vImageCVImageFormat_Release, vImageConvert_AnyToAny, vImageConverterRef,
-    vImageConverter_CreateForCVToCVImageFormat, vImageConverter_Release, vImage_Buffer,
-    vimage_error_description, CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow,
-    CVPixelBufferLockBaseAddress, CVPixelBufferUnlockBaseAddress,
+    CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow, CVPixelBufferLockBaseAddress,
+    CVPixelBufferUnlockBaseAddress, kCVPixelBufferLock_ReadOnly, kvImageNoError, kvImageNoFlags,
+    vImage_Buffer, vImageCVImageFormat_Create, vImageCVImageFormat_Release, vImageConvert_AnyToAny,
+    vImageConverter_CreateForCVToCVImageFormat, vImageConverter_Release, vImageConverterRef,
+    vimage_error_description,
 };
-use crate::core::rhi::{PixelFormat, PixelBuffer};
-use crate::core::{Result, Error};
+use crate::core::rhi::{PixelBuffer, PixelFormat};
+use crate::core::{Error, Result};
 use std::ptr;
 
 /// macOS format converter wrapping vImageConverter.

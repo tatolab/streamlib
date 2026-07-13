@@ -55,10 +55,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serial_test::serial;
+use streamlib::sdk::RunnerAutoBuild as _;
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
-use streamlib::sdk::runtime::{Strategy, Runner};
-use streamlib::sdk::RunnerAutoBuild as _;
+use streamlib::sdk::runtime::{Runner, Strategy};
 use streamlib_engine::core::runtime::host_target_triple;
 use streamlib_engine::schemas::current_schema_definition;
 
@@ -111,7 +111,11 @@ fn pkg_build_slpkg(cli: &Path, pkg_dir: &Path, slpkg: &Path) {
         "`streamlib pkg build` in {} must succeed",
         pkg_dir.display()
     );
-    assert!(slpkg.exists(), "pkg build must have written {}", slpkg.display());
+    assert!(
+        slpkg.exists(),
+        "pkg build must have written {}",
+        slpkg.display()
+    );
 }
 
 #[test]
@@ -141,7 +145,9 @@ fn pack_then_load_rust_package_registers_processors() {
     runtime
         .add_module_with_blocking(
             module_ident_any_version!("tatolab", "network"),
-            Strategy::Slpkg { path: slpkg.clone() },
+            Strategy::Slpkg {
+                path: slpkg.clone(),
+            },
         )
         .expect("add_module_with SlpkgArchive against a freshly-packed Rust slpkg must succeed");
 
@@ -182,7 +188,9 @@ fn pack_then_load_schemas_only_package_registers_schemas() {
     runtime
         .add_module_with_blocking(
             module_ident_any_version!("tatolab", "core"),
-            Strategy::Slpkg { path: slpkg.clone() },
+            Strategy::Slpkg {
+                path: slpkg.clone(),
+            },
         )
         .expect("add_module_with SlpkgArchive against a schemas-only slpkg must succeed");
 
@@ -280,7 +288,9 @@ processors:
     let err = runtime
         .add_module_with_blocking(
             module_ident_any_version!("tatolab", "foreign-triple-fixture"),
-            Strategy::Slpkg { path: slpkg.clone() },
+            Strategy::Slpkg {
+                path: slpkg.clone(),
+            },
         )
         .expect_err("add_module_with SlpkgArchive against a foreign-triple-only slpkg must error");
     let msg = format!("{err}");

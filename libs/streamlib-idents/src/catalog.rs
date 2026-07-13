@@ -298,10 +298,11 @@ impl CatalogClient {
         let Some(body) = self.fetch_relative(&rel)? else {
             return Ok(None);
         };
-        let catalog = serde_json::from_slice(&body).map_err(|e| ResolverError::RegistryFetchFailed {
-            name: rel,
-            detail: format!("parsing package catalog JSON: {e}"),
-        })?;
+        let catalog =
+            serde_json::from_slice(&body).map_err(|e| ResolverError::RegistryFetchFailed {
+                name: rel,
+                detail: format!("parsing package catalog JSON: {e}"),
+            })?;
         Ok(Some(catalog))
     }
 
@@ -322,10 +323,11 @@ impl CatalogClient {
         let Some(body) = self.fetch_relative(&rel)? else {
             return Ok(None);
         };
-        let value = serde_json::from_slice(&body).map_err(|e| ResolverError::RegistryFetchFailed {
-            name: rel,
-            detail: format!("parsing schema JTD JSON: {e}"),
-        })?;
+        let value =
+            serde_json::from_slice(&body).map_err(|e| ResolverError::RegistryFetchFailed {
+                name: rel,
+                detail: format!("parsing schema JTD JSON: {e}"),
+            })?;
         Ok(Some(value))
     }
 }
@@ -501,7 +503,9 @@ mod tests {
         let client = CatalogClient::new(format!("file://{}", base.display()), None);
         assert_eq!(client.fetch_processor_index().unwrap(), vec![line]);
         assert_eq!(
-            client.fetch_package_catalog(&pkg_ref("camera"), &SemVer::new(1, 0, 0)).unwrap(),
+            client
+                .fetch_package_catalog(&pkg_ref("camera"), &SemVer::new(1, 0, 0))
+                .unwrap(),
             Some(catalog)
         );
         let fetched_jtd = client
@@ -516,13 +520,17 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let client = CatalogClient::new(format!("file://{}", root.path().display()), None);
         assert!(client.fetch_processor_index().unwrap().is_empty());
-        assert!(client
-            .fetch_package_catalog(&pkg_ref("nope"), &SemVer::new(9, 9, 9))
-            .unwrap()
-            .is_none());
-        assert!(client
-            .fetch_schema_type_definition(&ident("nope", "Nope", SemVer::new(9, 9, 9)))
-            .unwrap()
-            .is_none());
+        assert!(
+            client
+                .fetch_package_catalog(&pkg_ref("nope"), &SemVer::new(9, 9, 9))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            client
+                .fetch_schema_type_definition(&ident("nope", "Nope", SemVer::new(9, 9, 9)))
+                .unwrap()
+                .is_none()
+        );
     }
 }

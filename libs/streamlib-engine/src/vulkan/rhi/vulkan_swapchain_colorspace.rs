@@ -135,9 +135,15 @@ fn pick_srgb_fallback(surface_formats: &[vk::SurfaceFormatKHR]) -> SwapchainColo
     // (some compositors only offer the sRGB-encoded variant). Last
     // resort: surface_formats[0], whatever it is.
     const SRGB_PRIORITIES: &[(vk::Format, vk::ColorSpaceKHR)] = &[
-        (vk::Format::B8G8R8A8_UNORM, vk::ColorSpaceKHR::SRGB_NONLINEAR),
+        (
+            vk::Format::B8G8R8A8_UNORM,
+            vk::ColorSpaceKHR::SRGB_NONLINEAR,
+        ),
         (vk::Format::B8G8R8A8_SRGB, vk::ColorSpaceKHR::SRGB_NONLINEAR),
-        (vk::Format::R8G8B8A8_UNORM, vk::ColorSpaceKHR::SRGB_NONLINEAR),
+        (
+            vk::Format::R8G8B8A8_UNORM,
+            vk::ColorSpaceKHR::SRGB_NONLINEAR,
+        ),
         (vk::Format::R8G8B8A8_SRGB, vk::ColorSpaceKHR::SRGB_NONLINEAR),
     ];
     for &(want_format, want_color_space) in SRGB_PRIORITIES {
@@ -193,7 +199,10 @@ mod tests {
     use super::*;
 
     fn fmt(format: vk::Format, color_space: vk::ColorSpaceKHR) -> vk::SurfaceFormatKHR {
-        vk::SurfaceFormatKHR { format, color_space }
+        vk::SurfaceFormatKHR {
+            format,
+            color_space,
+        }
     }
 
     fn pq_bt2020() -> ColorTraits {
@@ -212,14 +221,20 @@ mod tests {
 
     fn srgb_only() -> Vec<vk::SurfaceFormatKHR> {
         vec![
-            fmt(vk::Format::B8G8R8A8_UNORM, vk::ColorSpaceKHR::SRGB_NONLINEAR),
+            fmt(
+                vk::Format::B8G8R8A8_UNORM,
+                vk::ColorSpaceKHR::SRGB_NONLINEAR,
+            ),
             fmt(vk::Format::B8G8R8A8_SRGB, vk::ColorSpaceKHR::SRGB_NONLINEAR),
         ]
     }
 
     fn nvidia_hdr10() -> Vec<vk::SurfaceFormatKHR> {
         vec![
-            fmt(vk::Format::B8G8R8A8_UNORM, vk::ColorSpaceKHR::SRGB_NONLINEAR),
+            fmt(
+                vk::Format::B8G8R8A8_UNORM,
+                vk::ColorSpaceKHR::SRGB_NONLINEAR,
+            ),
             fmt(vk::Format::B8G8R8A8_SRGB, vk::ColorSpaceKHR::SRGB_NONLINEAR),
             fmt(
                 vk::Format::A2B10G10R10_UNORM_PACK32,
@@ -230,7 +245,10 @@ mod tests {
 
     fn mesa_full_set() -> Vec<vk::SurfaceFormatKHR> {
         vec![
-            fmt(vk::Format::B8G8R8A8_UNORM, vk::ColorSpaceKHR::SRGB_NONLINEAR),
+            fmt(
+                vk::Format::B8G8R8A8_UNORM,
+                vk::ColorSpaceKHR::SRGB_NONLINEAR,
+            ),
             fmt(vk::Format::B8G8R8A8_SRGB, vk::ColorSpaceKHR::SRGB_NONLINEAR),
             fmt(
                 vk::Format::A2B10G10R10_UNORM_PACK32,
@@ -296,7 +314,10 @@ mod tests {
     #[test]
     fn hdr_signal_falls_through_to_extended_srgb_linear_when_no_hdr10() {
         let formats = vec![
-            fmt(vk::Format::B8G8R8A8_UNORM, vk::ColorSpaceKHR::SRGB_NONLINEAR),
+            fmt(
+                vk::Format::B8G8R8A8_UNORM,
+                vk::ColorSpaceKHR::SRGB_NONLINEAR,
+            ),
             fmt(
                 vk::Format::R16G16B16A16_SFLOAT,
                 vk::ColorSpaceKHR::EXTENDED_SRGB_LINEAR_EXT,
@@ -321,7 +342,10 @@ mod tests {
     #[test]
     fn hdr10_picks_fp16_when_packed_10_bit_unavailable() {
         let formats = vec![
-            fmt(vk::Format::B8G8R8A8_UNORM, vk::ColorSpaceKHR::SRGB_NONLINEAR),
+            fmt(
+                vk::Format::B8G8R8A8_UNORM,
+                vk::ColorSpaceKHR::SRGB_NONLINEAR,
+            ),
             fmt(
                 vk::Format::R16G16B16A16_SFLOAT,
                 vk::ColorSpaceKHR::HDR10_ST2084_EXT,

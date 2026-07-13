@@ -31,11 +31,7 @@ pub(super) fn list_available_triples(lib_dir: &std::path::Path) -> Result<Vec<St
         return Ok(Vec::new());
     }
     let entries = std::fs::read_dir(lib_dir).map_err(|e| {
-        Error::Configuration(format!(
-            "Failed to enumerate {}: {}",
-            lib_dir.display(),
-            e
-        ))
+        Error::Configuration(format!("Failed to enumerate {}: {}", lib_dir.display(), e))
     })?;
     let mut triples: Vec<String> = entries
         .filter_map(|entry| entry.ok())
@@ -89,8 +85,7 @@ pub(crate) unsafe fn validate_plugin_declaration(
     // read soundly here.
     // SAFETY: `abi_version` is `u32` at offset 0; the static is at least
     // that large for any plugin that exports the symbol.
-    let plugin_abi_version =
-        unsafe { std::ptr::addr_of!((*decl_ptr).abi_version).read() };
+    let plugin_abi_version = unsafe { std::ptr::addr_of!((*decl_ptr).abi_version).read() };
     if plugin_abi_version != host_abi_version {
         // Do NOT form `&*decl_ptr` or read the appended v5 fields — a
         // non-v5 declaration has a smaller byte shape and those fields
@@ -169,13 +164,13 @@ pub(super) fn register_manifest_processors(
     config: &crate::core::config::ProjectConfig,
 ) -> Result<()> {
     use super::schema_registration::resolve_config_schema_canonical_id;
+    use crate::core::ProcessorDescriptor;
     use crate::core::compiler::compiler_ops::create_deno_subprocess_host_constructor;
     use crate::core::compiler::compiler_ops::create_python_native_subprocess_host_constructor;
     use crate::core::compiler::compiler_ops::resolve_python_native_lib_path;
     use crate::core::config::ProjectConfig;
     use crate::core::descriptors::{PortDescriptor, ProcessorRuntime};
     use crate::core::execution::{ExecutionConfig, ProcessExecution};
-    use crate::core::ProcessorDescriptor;
 
     if config.processors.is_empty() {
         tracing::debug!(
@@ -235,8 +230,8 @@ pub(super) fn register_manifest_processors(
     for proc_schema in &config.processors {
         // Compose the structured processor ident from the manifest's
         // package metadata + the processor's PascalCase short name.
-        let proc_schema_ident =
-            compose_processor_schema_ident(package_metadata, &proc_schema.name).map_err(|e| {
+        let proc_schema_ident = compose_processor_schema_ident(package_metadata, &proc_schema.name)
+            .map_err(|e| {
                 Error::Configuration(format!(
                     "processor short name `{}` in {} is not valid PascalCase: {}",
                     proc_schema.name,
@@ -274,8 +269,7 @@ pub(super) fn register_manifest_processors(
                             // subdir is absent, surface the available
                             // triples so the user sees exactly which
                             // platforms this slpkg was packed for.
-                            let available =
-                                list_available_triples(&lib_dir).unwrap_or_default();
+                            let available = list_available_triples(&lib_dir).unwrap_or_default();
                             let detail = if available.is_empty() {
                                 format!(
                                     "Failed to read {}: {}. \
@@ -358,8 +352,7 @@ pub(super) fn register_manifest_processors(
                     // Validated as a v5 declaration ⇒ the full struct is
                     // present; borrowing to invoke `register` is now sound.
                     // SAFETY: version-confirmed v5 layout; `lib` outlives use.
-                    let decl: &streamlib_plugin_abi::PluginDeclaration =
-                        unsafe { &*decl_ptr };
+                    let decl: &streamlib_plugin_abi::PluginDeclaration = unsafe { &*decl_ptr };
 
                     // Build the HostServices payload from the host's
                     // process-wide statics + this runtime's iceoryx2
@@ -377,9 +370,7 @@ pub(super) fn register_manifest_processors(
                     // the cdylib's callback returns before this
                     // function frame is dropped.
                     unsafe {
-                        (decl.register)(
-                            &host_services as *const _ as *const ::std::ffi::c_void,
-                        );
+                        (decl.register)(&host_services as *const _ as *const ::std::ffi::c_void);
                     }
 
                     // Keep the library alive for the process lifetime
@@ -509,8 +500,7 @@ pub(super) fn register_manifest_processors(
                 // `materialize`. `project_path` is that staged dir, so the
                 // interpreter is a pure path join — no venv creation here.
                 #[cfg(unix)]
-                let python_executable =
-                    project_path.join(".venv").join("bin").join("python");
+                let python_executable = project_path.join(".venv").join("bin").join("python");
                 #[cfg(windows)]
                 let python_executable = project_path
                     .join(".venv")
@@ -532,8 +522,7 @@ pub(super) fn register_manifest_processors(
             _ => unreachable!(),
         };
 
-        crate::core::processors::PROCESSOR_REGISTRY
-            .register_dynamic(descriptor, constructor)?;
+        crate::core::processors::PROCESSOR_REGISTRY.register_dynamic(descriptor, constructor)?;
 
         tracing::info!(
             "Registered processor '{}' ({:?})",
@@ -581,10 +570,8 @@ mod tests {
         // the Python / Deno decorators mint — a dev-versioned package's
         // processor idents carry the release core, or full-ident comparisons
         // and registry map keys split across the host/subprocess boundary.
-        let meta: crate::core::config::PackageMetadata = serde_yaml::from_str(
-            "org: tatolab\nname: camera\nversion: 0.4.33-dev.2\n",
-        )
-        .unwrap();
+        let meta: crate::core::config::PackageMetadata =
+            serde_yaml::from_str("org: tatolab\nname: camera\nversion: 0.4.33-dev.2\n").unwrap();
         let ident = compose_processor_schema_ident(&meta, "Camera").unwrap();
         assert_eq!(
             ident.version,
@@ -657,8 +644,14 @@ mod tests {
                 host_abi_version,
                 ..
             } => {
-                assert_eq!(*plugin_abi_version, streamlib_plugin_abi::STREAMLIB_ABI_VERSION + 1);
-                assert_eq!(*host_abi_version, streamlib_plugin_abi::STREAMLIB_ABI_VERSION);
+                assert_eq!(
+                    *plugin_abi_version,
+                    streamlib_plugin_abi::STREAMLIB_ABI_VERSION + 1
+                );
+                assert_eq!(
+                    *host_abi_version,
+                    streamlib_plugin_abi::STREAMLIB_ABI_VERSION
+                );
             }
             other => panic!("expected PluginAbiVersionMismatch, got {other:?}"),
         }
@@ -678,7 +671,10 @@ mod tests {
         );
         let msg = err.to_string();
         // Both identities + the remedy appear in the operator-facing message.
-        assert!(msg.contains(PLUGIN_TEST_IDENTITY), "plugin identity missing: {msg}");
+        assert!(
+            msg.contains(PLUGIN_TEST_IDENTITY),
+            "plugin identity missing: {msg}"
+        );
         assert!(
             msg.contains(crate::core::plugin::build_fingerprint::BUILD_IDENTITY),
             "host identity missing: {msg}"
@@ -705,7 +701,10 @@ mod tests {
             other => panic!("expected PluginBuildMismatch, got {other:?}"),
         }
         let msg = err.to_string();
-        assert!(msg.contains(PLUGIN_TEST_IDENTITY), "plugin identity missing: {msg}");
+        assert!(
+            msg.contains(PLUGIN_TEST_IDENTITY),
+            "plugin identity missing: {msg}"
+        );
         assert!(
             msg.contains(crate::core::plugin::build_fingerprint::BUILD_IDENTITY),
             "host identity missing: {msg}"
@@ -724,7 +723,9 @@ mod tests {
         let err = unsafe { validate_plugin_declaration(&decl, probe_path()) }
             .expect_err("mismatch must be refused even with a null identity");
         match &err {
-            Error::PluginBuildMismatch { plugin_identity, .. } => {
+            Error::PluginBuildMismatch {
+                plugin_identity, ..
+            } => {
                 assert_eq!(plugin_identity, "unknown");
             }
             other => panic!("expected PluginBuildMismatch, got {other:?}"),

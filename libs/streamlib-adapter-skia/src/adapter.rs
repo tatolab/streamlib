@@ -24,8 +24,8 @@ use skia_safe::gpu::vk::{
     Alloc, AllocFlag, BackendContext, GetProcOf, ImageInfo as SkiaVkImageInfo,
 };
 use skia_safe::gpu::{
-    backend_render_targets, backend_textures, direct_contexts, images as skia_images, surfaces,
-    BackendTexture, DirectContext, Protected, SurfaceOrigin,
+    BackendTexture, DirectContext, Protected, SurfaceOrigin, backend_render_targets,
+    backend_textures, direct_contexts, images as skia_images, surfaces,
 };
 use skia_safe::{AlphaType, ColorSpace, ColorType};
 use streamlib_adapter_abi::{
@@ -68,9 +68,7 @@ impl<D: VulkanRhiDevice + 'static> SkiaSurfaceAdapter<D> {
     /// [`SkiaAdapterError::DirectContextBuildFailed`] when Skia
     /// rejects the backend context (rare — typically caused by a
     /// missing extension).
-    pub fn new(
-        inner: Arc<VulkanSurfaceAdapter<D>>,
-    ) -> Result<Self, SkiaAdapterError> {
+    pub fn new(inner: Arc<VulkanSurfaceAdapter<D>>) -> Result<Self, SkiaAdapterError> {
         let direct_context = build_direct_context(inner.device())?;
         Ok(Self {
             inner,
@@ -111,14 +109,13 @@ fn build_direct_context<D: VulkanRhiDevice>(
             reason: format!("dlopen {LIBRARY}: {e}"),
         }
     })?;
-    let get_instance_proc_addr_sym: libloading::Symbol<vk::PFN_vkGetInstanceProcAddr> =
-        unsafe { library.get(b"vkGetInstanceProcAddr\0") }.map_err(|e| {
-            SkiaAdapterError::DirectContextBuildFailed {
-                reason: format!("dlsym vkGetInstanceProcAddr: {e}"),
-            }
-        })?;
-    let entry_get_instance_proc_addr: vk::PFN_vkGetInstanceProcAddr =
-        *get_instance_proc_addr_sym;
+    let get_instance_proc_addr_sym: libloading::Symbol<vk::PFN_vkGetInstanceProcAddr> = unsafe {
+        library.get(b"vkGetInstanceProcAddr\0")
+    }
+    .map_err(|e| SkiaAdapterError::DirectContextBuildFailed {
+        reason: format!("dlsym vkGetInstanceProcAddr: {e}"),
+    })?;
+    let entry_get_instance_proc_addr: vk::PFN_vkGetInstanceProcAddr = *get_instance_proc_addr_sym;
     let device_get_device_proc_addr = instance.commands().get_device_proc_addr;
 
     // Skia hands us its own typed handles inside GetProcOf and we use
@@ -131,11 +128,10 @@ fn build_direct_context<D: VulkanRhiDevice>(
     let get_proc = move |of: GetProcOf| -> *const c_void {
         match of {
             GetProcOf::Instance(skia_instance, name) => unsafe {
-                let raw: Option<unsafe extern "system" fn()> =
-                    entry_get_instance_proc_addr(
-                        vk::Instance::from_raw(skia_instance as usize),
-                        name,
-                    );
+                let raw: Option<unsafe extern "system" fn()> = entry_get_instance_proc_addr(
+                    vk::Instance::from_raw(skia_instance as usize),
+                    name,
+                );
                 match raw {
                     Some(f) => f as *const c_void,
                     None => std::ptr::null(),
@@ -143,10 +139,7 @@ fn build_direct_context<D: VulkanRhiDevice>(
             },
             GetProcOf::Device(skia_device, name) => unsafe {
                 let raw: Option<unsafe extern "system" fn()> =
-                    device_get_device_proc_addr(
-                        vk::Device::from_raw(skia_device as usize),
-                        name,
-                    );
+                    device_get_device_proc_addr(vk::Device::from_raw(skia_device as usize), name);
                 match raw {
                     Some(f) => f as *const c_void,
                     None => std::ptr::null(),
@@ -167,8 +160,7 @@ fn build_direct_context<D: VulkanRhiDevice>(
 
     direct_contexts::make_vulkan(&backend_context, None).ok_or_else(|| {
         SkiaAdapterError::DirectContextBuildFailed {
-            reason: "skia_safe::gpu::direct_contexts::make_vulkan returned None"
-                .into(),
+            reason: "skia_safe::gpu::direct_contexts::make_vulkan returned None".into(),
         }
     })
 }
@@ -176,12 +168,8 @@ fn build_direct_context<D: VulkanRhiDevice>(
 /// Map a Vulkan `vk::Format` to a Skia `ColorType`.
 fn vk_format_to_skia_color_type(format: vk::Format) -> Option<ColorType> {
     match format {
-        vk::Format::B8G8R8A8_UNORM | vk::Format::B8G8R8A8_SRGB => {
-            Some(ColorType::BGRA8888)
-        }
-        vk::Format::R8G8B8A8_UNORM | vk::Format::R8G8B8A8_SRGB => {
-            Some(ColorType::RGBA8888)
-        }
+        vk::Format::B8G8R8A8_UNORM | vk::Format::B8G8R8A8_SRGB => Some(ColorType::BGRA8888),
+        vk::Format::R8G8B8A8_UNORM | vk::Format::R8G8B8A8_SRGB => Some(ColorType::RGBA8888),
         vk::Format::R16G16B16A16_SFLOAT => Some(ColorType::RGBAF16),
         vk::Format::R32G32B32A32_SFLOAT => Some(ColorType::RGBAF32),
         _ => None,
@@ -261,9 +249,7 @@ fn build_skia_image_info<V: VulkanImageInfoExt>(
             view.vk_image().0 as _,
             alloc,
             std::mem::transmute::<i32, skia_safe::gpu::vk::ImageTiling>(normalized_tiling),
-            std::mem::transmute::<i32, skia_safe::gpu::vk::ImageLayout>(
-                view.vk_image_layout().0,
-            ),
+            std::mem::transmute::<i32, skia_safe::gpu::vk::ImageLayout>(view.vk_image_layout().0),
             std::mem::transmute::<i32, skia_safe::gpu::vk::Format>(info.format),
             info.level_count,
             Some(info.queue_family),
@@ -298,20 +284,17 @@ impl<D: VulkanRhiDevice + 'static> SkiaSurfaceAdapter<D> {
         let color_type = vk_format_to_skia_color_type(vk::Format::from_raw(info.format))
             .ok_or_else(|| AdapterError::UnsupportedFormat {
                 surface_id,
-                reason: format!(
-                    "vk::Format {} not in Skia BGRA/RGBA mapping",
-                    info.format
-                ),
+                reason: format!("vk::Format {} not in Skia BGRA/RGBA mapping", info.format),
             })?;
 
         let backend_render_target = backend_render_targets::make_vk((width, height), &skia_info);
 
-        let mut ctx_guard = self
-            .direct_context
-            .lock()
-            .map_err(|_| AdapterError::BackendRejected {
-                reason: "Skia DirectContext mutex poisoned".into(),
-            })?;
+        let mut ctx_guard =
+            self.direct_context
+                .lock()
+                .map_err(|_| AdapterError::BackendRejected {
+                    reason: "Skia DirectContext mutex poisoned".into(),
+                })?;
         let surface = surfaces::wrap_backend_render_target(
             &mut ctx_guard.0,
             &backend_render_target,
@@ -321,8 +304,7 @@ impl<D: VulkanRhiDevice + 'static> SkiaSurfaceAdapter<D> {
             None,
         )
         .ok_or_else(|| AdapterError::BackendRejected {
-            reason: "skia_safe::gpu::surfaces::wrap_backend_render_target returned None"
-                .into(),
+            reason: "skia_safe::gpu::surfaces::wrap_backend_render_target returned None".into(),
         })?;
         drop(ctx_guard);
 
@@ -350,22 +332,19 @@ impl<D: VulkanRhiDevice + 'static> SkiaSurfaceAdapter<D> {
         let color_type = vk_format_to_skia_color_type(vk::Format::from_raw(info.format))
             .ok_or_else(|| AdapterError::UnsupportedFormat {
                 surface_id,
-                reason: format!(
-                    "vk::Format {} not in Skia BGRA/RGBA mapping",
-                    info.format
-                ),
+                reason: format!("vk::Format {} not in Skia BGRA/RGBA mapping", info.format),
             })?;
 
         let backend_texture: BackendTexture = unsafe {
             backend_textures::make_vk((width, height), &skia_info, "streamlib-skia-read")
         };
 
-        let mut ctx_guard = self
-            .direct_context
-            .lock()
-            .map_err(|_| AdapterError::BackendRejected {
-                reason: "Skia DirectContext mutex poisoned".into(),
-            })?;
+        let mut ctx_guard =
+            self.direct_context
+                .lock()
+                .map_err(|_| AdapterError::BackendRejected {
+                    reason: "Skia DirectContext mutex poisoned".into(),
+                })?;
         let image = skia_images::borrow_texture_from(
             &mut ctx_guard.0,
             &backend_texture,
@@ -447,4 +426,3 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for SkiaSurfaceAdapter<D> {
         // is the one place we flush Skia + signal the timeline.
     }
 }
-

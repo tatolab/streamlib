@@ -28,9 +28,7 @@ use tracing::field::{Field, Visit};
 use tracing::span;
 use tracing::{Event, Metadata, Subscriber};
 
-use super::host_services::{
-    host_callbacks, host_interest_to_tracing, tracing_level_to_host,
-};
+use super::host_services::{host_callbacks, host_interest_to_tracing, tracing_level_to_host};
 
 /// Forwarding subscriber installed in cdylib-linked plugins at
 /// `install_host_services` time.
@@ -49,7 +47,10 @@ impl ForwardingSubscriber {
 }
 
 impl Subscriber for ForwardingSubscriber {
-    fn register_callsite(&self, metadata: &'static Metadata<'static>) -> tracing::subscriber::Interest {
+    fn register_callsite(
+        &self,
+        metadata: &'static Metadata<'static>,
+    ) -> tracing::subscriber::Interest {
         let Some(cbs) = host_callbacks() else {
             return tracing::subscriber::Interest::never();
         };
@@ -128,19 +129,25 @@ impl Visit for ForwardingVisitor {
         if name == "message" {
             self.message = Some(value.to_string());
         } else {
-            self.fields
-                .insert(name.to_string(), serde_json::Value::String(value.to_string()));
+            self.fields.insert(
+                name.to_string(),
+                serde_json::Value::String(value.to_string()),
+            );
         }
     }
 
     fn record_i64(&mut self, field: &Field, value: i64) {
-        self.fields
-            .insert(field.name().to_string(), serde_json::Value::Number(value.into()));
+        self.fields.insert(
+            field.name().to_string(),
+            serde_json::Value::Number(value.into()),
+        );
     }
 
     fn record_u64(&mut self, field: &Field, value: u64) {
-        self.fields
-            .insert(field.name().to_string(), serde_json::Value::Number(value.into()));
+        self.fields.insert(
+            field.name().to_string(),
+            serde_json::Value::Number(value.into()),
+        );
     }
 
     fn record_bool(&mut self, field: &Field, value: bool) {

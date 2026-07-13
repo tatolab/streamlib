@@ -259,8 +259,7 @@ impl Texture {
         height: u32,
         format_raw: u32,
     ) -> Self {
-        let vtable =
-            crate::core::plugin::host_services::host_gpu_context_limited_access_vtable();
+        let vtable = crate::core::plugin::host_services::host_gpu_context_limited_access_vtable();
         Self {
             handle,
             vtable,
@@ -401,9 +400,7 @@ impl Texture {
             // the `texture_native_dma_buf_fd` slot accepts the texture
             // handle directly and returns `-1` (no FD) or a non-
             // negative `RawFd` widened to `i64`.
-            let fd_i64 = unsafe {
-                ((*self.vtable).texture_native_dma_buf_fd)(self.handle)
-            };
+            let fd_i64 = unsafe { ((*self.vtable).texture_native_dma_buf_fd)(self.handle) };
             if fd_i64 < 0 {
                 None
             } else {

@@ -17,13 +17,13 @@ use std::mem;
 use std::sync::Arc;
 
 use streamlib_plugin_abi::GpuContextFullAccessVTable;
+use vma::Alloc as _;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia::vk::KhrAccelerationStructureExtensionDeviceCommands as _;
 use vulkanalia_vma as vma;
-use vma::Alloc as _;
 
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 
 use super::HostVulkanDevice;
 
@@ -238,20 +238,19 @@ impl VulkanAccelerationStructureInner {
         }
 
         // Geometry descriptor.
-        let mut triangles_data =
-            vk::AccelerationStructureGeometryTrianglesDataKHR::builder()
-                .vertex_format(vk::Format::R32G32B32_SFLOAT)
-                .vertex_data(vk::DeviceOrHostAddressConstKHR {
-                    device_address: vertex_buffer.device_address,
-                })
-                .vertex_stride(12)
-                .max_vertex(vertex_count.saturating_sub(1))
-                .index_type(vk::IndexType::UINT32)
-                .index_data(vk::DeviceOrHostAddressConstKHR {
-                    device_address: index_buffer.device_address,
-                })
-                .transform_data(vk::DeviceOrHostAddressConstKHR { device_address: 0 })
-                .build();
+        let mut triangles_data = vk::AccelerationStructureGeometryTrianglesDataKHR::builder()
+            .vertex_format(vk::Format::R32G32B32_SFLOAT)
+            .vertex_data(vk::DeviceOrHostAddressConstKHR {
+                device_address: vertex_buffer.device_address,
+            })
+            .vertex_stride(12)
+            .max_vertex(vertex_count.saturating_sub(1))
+            .index_type(vk::IndexType::UINT32)
+            .index_data(vk::DeviceOrHostAddressConstKHR {
+                device_address: index_buffer.device_address,
+            })
+            .transform_data(vk::DeviceOrHostAddressConstKHR { device_address: 0 })
+            .build();
 
         let geometry = vk::AccelerationStructureGeometryKHR::builder()
             .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
@@ -265,17 +264,15 @@ impl VulkanAccelerationStructureInner {
         let _ = &mut triangles_data;
 
         let geometries = [geometry];
-        let build_geometry_info =
-            vk::AccelerationStructureBuildGeometryInfoKHR::builder()
-                .type_(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
-                .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
-                .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-                .geometries(&geometries)
-                .build();
+        let build_geometry_info = vk::AccelerationStructureBuildGeometryInfoKHR::builder()
+            .type_(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
+            .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
+            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
+            .geometries(&geometries)
+            .build();
 
         let max_primitive_counts = [triangle_count];
-        let mut size_info =
-            vk::AccelerationStructureBuildSizesInfoKHR::builder().build();
+        let mut size_info = vk::AccelerationStructureBuildSizesInfoKHR::builder().build();
         unsafe {
             device.get_acceleration_structure_build_sizes_khr(
                 vk::AccelerationStructureBuildTypeKHR::DEVICE,
@@ -358,11 +355,7 @@ impl VulkanAccelerationStructureInner {
             )));
         }
         unsafe {
-            std::ptr::copy_nonoverlapping(
-                instance_blob.as_ptr(),
-                inst_ptr,
-                instance_blob.len(),
-            );
+            std::ptr::copy_nonoverlapping(instance_blob.as_ptr(), inst_ptr, instance_blob.len());
         }
 
         let instances_data = vk::AccelerationStructureGeometryInstancesDataKHR::builder()
@@ -381,17 +374,15 @@ impl VulkanAccelerationStructureInner {
             .build();
 
         let geometries = [geometry];
-        let build_geometry_info =
-            vk::AccelerationStructureBuildGeometryInfoKHR::builder()
-                .type_(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
-                .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
-                .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-                .geometries(&geometries)
-                .build();
+        let build_geometry_info = vk::AccelerationStructureBuildGeometryInfoKHR::builder()
+            .type_(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
+            .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
+            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
+            .geometries(&geometries)
+            .build();
 
         let max_primitive_counts = [instances.len() as u32];
-        let mut size_info =
-            vk::AccelerationStructureBuildSizesInfoKHR::builder().build();
+        let mut size_info = vk::AccelerationStructureBuildSizesInfoKHR::builder().build();
         unsafe {
             device.get_acceleration_structure_build_sizes_khr(
                 vk::AccelerationStructureBuildTypeKHR::DEVICE,
@@ -447,9 +438,7 @@ impl VulkanAccelerationStructureInner {
             AccelerationStructureKind::BottomLevel => {
                 vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL
             }
-            AccelerationStructureKind::TopLevel => {
-                vk::AccelerationStructureTypeKHR::TOP_LEVEL
-            }
+            AccelerationStructureKind::TopLevel => vk::AccelerationStructureTypeKHR::TOP_LEVEL,
         };
         let as_create_info = vk::AccelerationStructureCreateInfoKHR::builder()
             .buffer(storage.buffer)
@@ -457,14 +446,12 @@ impl VulkanAccelerationStructureInner {
             .size(storage_size)
             .type_(as_type)
             .build();
-        let handle = unsafe {
-            device.create_acceleration_structure_khr(&as_create_info, None)
-        }
-        .map_err(|e| {
-            Error::GpuError(format!(
-                "Acceleration structure '{label}': vkCreateAccelerationStructureKHR failed: {e}"
-            ))
-        })?;
+        let handle = unsafe { device.create_acceleration_structure_khr(&as_create_info, None) }
+            .map_err(|e| {
+                Error::GpuError(format!(
+                    "Acceleration structure '{label}': vkCreateAccelerationStructureKHR failed: {e}"
+                ))
+            })?;
 
         // Plug the AS handle into the build info.
         build_geometry_info.dst_acceleration_structure = handle;
@@ -595,9 +582,8 @@ impl VulkanAccelerationStructureInner {
         let address_info = vk::AccelerationStructureDeviceAddressInfoKHR::builder()
             .acceleration_structure(handle)
             .build();
-        let device_address = unsafe {
-            device.get_acceleration_structure_device_address_khr(&address_info)
-        };
+        let device_address =
+            unsafe { device.get_acceleration_structure_device_address_khr(&address_info) };
 
         // Drop transient inputs now — the AS is built; scratch was freed
         // inside the build closure above.
@@ -671,7 +657,10 @@ impl std::fmt::Debug for VulkanAccelerationStructureInner {
         f.debug_struct("VulkanAccelerationStructureInner")
             .field("label", &self.label)
             .field("kind", &self.kind)
-            .field("device_address", &format_args!("{:#x}", self.device_address))
+            .field(
+                "device_address",
+                &format_args!("{:#x}", self.device_address),
+            )
             .field("storage_size", &self.storage_size)
             .field("instances", &self.referenced_blases.len())
             .finish()
@@ -694,8 +683,7 @@ impl VulkanAccelerationStructure {
         let cached_device_address = arc.device_address();
         let cached_storage_size = arc.storage_size();
         let handle = Arc::into_raw(arc) as *const c_void;
-        let vtable =
-            crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
+        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
         let methods_vtable =
             crate::core::plugin::host_services::host_vulkan_acceleration_structure_methods_vtable();
         Self {
@@ -819,10 +807,8 @@ impl VulkanAccelerationStructure {
                 // Best-effort: surface the error string as the
                 // label so log lines reading `.label()` still make
                 // sense, rather than panic. Labels are diagnostic.
-                let msg = String::from_utf8_lossy(
-                    &err_buf[..err_len.min(err_buf.len())],
-                )
-                .into_owned();
+                let msg =
+                    String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
                 format!("<label dispatch failed: {msg}>")
             }
         } else {
@@ -898,10 +884,7 @@ mod layout_tests {
         assert_eq!(align_of::<VulkanAccelerationStructure>(), 8);
         assert_eq!(offset_of!(VulkanAccelerationStructure, handle), 0);
         assert_eq!(offset_of!(VulkanAccelerationStructure, vtable), 8);
-        assert_eq!(
-            offset_of!(VulkanAccelerationStructure, methods_vtable),
-            16
-        );
+        assert_eq!(offset_of!(VulkanAccelerationStructure, methods_vtable), 16);
         assert_eq!(offset_of!(VulkanAccelerationStructure, cached_kind), 24);
         assert_eq!(
             offset_of!(VulkanAccelerationStructure, _reserved_padding),
@@ -944,7 +927,10 @@ impl AsBuffer {
         usage: vk::BufferUsageFlags,
         label: &str,
     ) -> Result<Self> {
-        debug_assert!(size > 0, "AsBuffer::new called with zero size for '{label}'");
+        debug_assert!(
+            size > 0,
+            "AsBuffer::new called with zero size for '{label}'"
+        );
         let allocator = vulkan_device.allocator();
         let buffer_info = vk::BufferCreateInfo::builder()
             .size(size)
@@ -956,15 +942,17 @@ impl AsBuffer {
             required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
             ..Default::default()
         };
-        let (buffer, allocation) =
-            unsafe { allocator.create_buffer(buffer_info, &alloc_opts) }.map_err(|e| {
+        let (buffer, allocation) = unsafe { allocator.create_buffer(buffer_info, &alloc_opts) }
+            .map_err(|e| {
                 Error::GpuError(format!(
                     "AS buffer '{label}': vmaCreateBuffer (size={size}) failed: {e}"
                 ))
             })?;
 
         let device_address = if usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS) {
-            let info = vk::BufferDeviceAddressInfo::builder().buffer(buffer).build();
+            let info = vk::BufferDeviceAddressInfo::builder()
+                .buffer(buffer)
+                .build();
             unsafe { vulkan_device.device().get_buffer_device_address(&info) }
         } else {
             0
@@ -1009,15 +997,17 @@ impl AsBuffer {
                 | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
             ..Default::default()
         };
-        let (buffer, allocation) =
-            unsafe { allocator.create_buffer(buffer_info, &alloc_opts) }.map_err(|e| {
+        let (buffer, allocation) = unsafe { allocator.create_buffer(buffer_info, &alloc_opts) }
+            .map_err(|e| {
                 Error::GpuError(format!(
                     "AS buffer (host-visible) '{label}': vmaCreateBuffer (size={size}) failed: {e}"
                 ))
             })?;
 
         let device_address = if usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS) {
-            let info = vk::BufferDeviceAddressInfo::builder().buffer(buffer).build();
+            let info = vk::BufferDeviceAddressInfo::builder()
+                .buffer(buffer)
+                .build();
             unsafe { vulkan_device.device().get_buffer_device_address(&info) }
         } else {
             0
@@ -1035,7 +1025,10 @@ impl AsBuffer {
     /// or null if the allocation isn't host-mapped.
     fn mapped_ptr(&self) -> *mut u8 {
         if let Some(allocation) = self.allocation {
-            let info = self.vulkan_device.allocator().get_allocation_info(allocation);
+            let info = self
+                .vulkan_device
+                .allocator()
+                .get_allocation_info(allocation);
             info.pMappedData as *mut u8
         } else {
             std::ptr::null_mut()
@@ -1149,4 +1142,3 @@ fn instance_bytes(desc: &TlasInstanceDesc) -> [u8; INSTANCE_BYTES] {
 
     out
 }
-

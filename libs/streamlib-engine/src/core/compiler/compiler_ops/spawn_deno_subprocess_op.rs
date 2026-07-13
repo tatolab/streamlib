@@ -6,17 +6,15 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::core::error::{Result, Error};
+use crate::core::error::{Error, Result};
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::ProcessorNode;
 use crate::core::processors::DynamicProcessorConstructorFn;
-use crate::core::{
-    ProcessorDescriptor, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
-};
+use crate::core::{ProcessorDescriptor, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
 use super::subprocess_bridge::{
-    spawn_fd_line_reader, validate_subprocess_protocol, EscalateTransport, SubprocessBridge,
-    PROTOCOL_VERSION_ENV, STREAMLIB_SUBPROCESS_PROTOCOL_VERSION,
+    EscalateTransport, PROTOCOL_VERSION_ENV, STREAMLIB_SUBPROCESS_PROTOCOL_VERSION,
+    SubprocessBridge, spawn_fd_line_reader, validate_subprocess_protocol,
 };
 
 // ============================================================================
@@ -66,10 +64,7 @@ pub(crate) struct DenoSubprocessHostProcessor {
 // ============================================================================
 
 impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProcessor {
-    fn __generated_setup(
-        &mut self,
-        ctx: &RuntimeContextFullAccess<'_>,
-    ) -> Result<()> {
+    fn __generated_setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         (|| -> Result<()> {
             let project_path = PathBuf::from(&self.project_path);
 
@@ -178,7 +173,10 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
                 );
 
             #[cfg(target_os = "linux")]
-            command.env("STREAMLIB_SURFACE_SOCKET", ctx.host_base().surface_socket_path());
+            command.env(
+                "STREAMLIB_SURFACE_SOCKET",
+                ctx.host_base().surface_socket_path(),
+            );
 
             // Escalate IPC rides a dedicated `AF_UNIX` socketpair, not
             // fd1/fd2, so the subprocess's stdout/stderr can be captured
@@ -186,13 +184,12 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
             // JSON protocol. See #451.
             let mut escalate_transport = EscalateTransport::attach(&mut command)?;
 
-            let mut child = command.spawn()
-                .map_err(|e| {
-                    Error::Runtime(format!(
-                        "Failed to spawn Deno subprocess for '{}': {}. Deno: '{}'",
-                        self.processor_id, e, deno_binary
-                    ))
-                })?;
+            let mut child = command.spawn().map_err(|e| {
+                Error::Runtime(format!(
+                    "Failed to spawn Deno subprocess for '{}': {}. Deno: '{}'",
+                    self.processor_id, e, deno_binary
+                ))
+            })?;
 
             escalate_transport.release_child_end();
 
@@ -210,31 +207,18 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
             // reserved for framed IPC; #451 moved IPC to a socketpair
             // so fd1 is now free to capture raw writes.
             if let Some(stdout) = child.stdout.take() {
-                spawn_fd_line_reader(
-                    stdout,
-                    "dn-stdout",
-                    "fd1",
-                    &self.processor_id,
-                );
+                spawn_fd_line_reader(stdout, "dn-stdout", "fd1", &self.processor_id);
             }
             if let Some(stderr) = child.stderr.take() {
-                spawn_fd_line_reader(
-                    stderr,
-                    "dn-stderr",
-                    "fd2",
-                    &self.processor_id,
-                );
+                spawn_fd_line_reader(stderr, "dn-stderr", "fd2", &self.processor_id);
             }
 
             // Clone the sandbox so the bridge reader thread can dispatch
             // escalate requests on behalf of the subprocess.
             let sandbox = ctx.gpu_limited_access().clone();
             let escalate_stream = escalate_transport.into_parent_stream();
-            let bridge = SubprocessBridge::new(
-                escalate_stream,
-                sandbox,
-                self.processor_id.clone(),
-            )?;
+            let bridge =
+                SubprocessBridge::new(escalate_stream, sandbox, self.processor_id.clone())?;
 
             self.child = Some(child);
             self.bridge = Some(bridge);
@@ -292,18 +276,15 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
         })()
     }
 
-    fn __generated_teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> Result<()> {
+    fn __generated_teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         (|| -> Result<()> {
             tracing::info!("[{}] Tearing down Deno subprocess", self.processor_id);
 
             // Send teardown command (best-effort)
             if self.bridge.is_some() {
-                if let Err(e) = self.bridge_send(
-                    &serde_json::json!({"cmd": "teardown", "capability": "full"}),
-                ) {
+                if let Err(e) =
+                    self.bridge_send(&serde_json::json!({"cmd": "teardown", "capability": "full"}))
+                {
                     tracing::warn!(
                         "[{}] Failed to send teardown command: {}",
                         self.processor_id,
@@ -361,17 +342,14 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
         })()
     }
 
-    fn __generated_on_pause(
-        &mut self,
-        _ctx: &RuntimeContextLimitedAccess<'_>,
-    ) -> Result<()> {
+    fn __generated_on_pause(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         (|| -> Result<()> {
             if self.subprocess_dead {
                 return Ok(());
             }
-            if let Err(e) = self.bridge_send(
-                &serde_json::json!({"cmd": "on_pause", "capability": "limited"}),
-            ) {
+            if let Err(e) =
+                self.bridge_send(&serde_json::json!({"cmd": "on_pause", "capability": "limited"}))
+            {
                 tracing::warn!("[{}] Failed to send on_pause: {}", self.processor_id, e);
                 self.subprocess_dead = true;
                 return Ok(());
@@ -391,17 +369,14 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
         })()
     }
 
-    fn __generated_on_resume(
-        &mut self,
-        _ctx: &RuntimeContextLimitedAccess<'_>,
-    ) -> Result<()> {
+    fn __generated_on_resume(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         (|| -> Result<()> {
             if self.subprocess_dead {
                 return Ok(());
             }
-            if let Err(e) = self.bridge_send(
-                &serde_json::json!({"cmd": "on_resume", "capability": "limited"}),
-            ) {
+            if let Err(e) =
+                self.bridge_send(&serde_json::json!({"cmd": "on_resume", "capability": "limited"}))
+            {
                 tracing::warn!("[{}] Failed to send on_resume: {}", self.processor_id, e);
                 self.subprocess_dead = true;
                 return Ok(());
@@ -461,9 +436,8 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
         if self.subprocess_dead {
             return Ok(());
         }
-        if let Err(e) = self.bridge_send(
-            &serde_json::json!({"cmd": "stop", "capability": "full"}),
-        ) {
+        if let Err(e) = self.bridge_send(&serde_json::json!({"cmd": "stop", "capability": "full"}))
+        {
             tracing::warn!(
                 "[{}] Subprocess pipe broken on stop: {}",
                 self.processor_id,
@@ -527,15 +501,11 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
         Ok(())
     }
 
-    fn iceoryx2_output_writer_inner(
-        &self,
-    ) -> Option<Arc<crate::iceoryx2::OutputWriterInner>> {
+    fn iceoryx2_output_writer_inner(&self) -> Option<Arc<crate::iceoryx2::OutputWriterInner>> {
         None
     }
 
-    fn iceoryx2_input_mailboxes_inner(
-        &self,
-    ) -> Option<Arc<crate::iceoryx2::InputMailboxesInner>> {
+    fn iceoryx2_input_mailboxes_inner(&self) -> Option<Arc<crate::iceoryx2::InputMailboxesInner>> {
         None
     }
 
@@ -570,24 +540,27 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
 impl DenoSubprocessHostProcessor {
     /// Send a length-prefixed JSON message to the subprocess stdin.
     fn bridge_send(&mut self, msg: &serde_json::Value) -> Result<()> {
-        let bridge = self.bridge.as_ref().ok_or_else(|| {
-            Error::Runtime("Subprocess bridge not initialized".to_string())
-        })?;
+        let bridge = self
+            .bridge
+            .as_ref()
+            .ok_or_else(|| Error::Runtime("Subprocess bridge not initialized".to_string()))?;
         bridge.send(msg)
     }
 
     /// Read a length-prefixed JSON message from the subprocess stdout.
     fn bridge_recv(&mut self) -> Result<serde_json::Value> {
-        let bridge = self.bridge.as_ref().ok_or_else(|| {
-            Error::Runtime("Subprocess bridge not initialized".to_string())
-        })?;
+        let bridge = self
+            .bridge
+            .as_ref()
+            .ok_or_else(|| Error::Runtime("Subprocess bridge not initialized".to_string()))?;
         bridge.recv_lifecycle()
     }
 
     fn bridge_recv_timeout(&mut self, timeout: Duration) -> Result<serde_json::Value> {
-        let bridge = self.bridge.as_ref().ok_or_else(|| {
-            Error::Runtime("Subprocess bridge not initialized".to_string())
-        })?;
+        let bridge = self
+            .bridge
+            .as_ref()
+            .ok_or_else(|| Error::Runtime("Subprocess bridge not initialized".to_string()))?;
         bridge
             .recv_lifecycle_timeout(timeout)
             .map_err(|e| Error::Runtime(format!("bridge recv timed out: {e}")))
@@ -626,7 +599,10 @@ pub(crate) fn create_deno_subprocess_host_constructor(
             native_lib_path: String::new(),
             input_port_wiring: Vec::new(),
             output_port_wiring: Vec::new(),
-        }) as Box<dyn crate::core::processors::DynGeneratedProcessor + Send>)
+        })
+            as Box<
+                dyn crate::core::processors::DynGeneratedProcessor + Send,
+            >)
     })
 }
 

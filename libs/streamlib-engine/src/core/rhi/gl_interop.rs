@@ -12,7 +12,7 @@
 //! - Windows: DXGI → GL texture via `WGL_NV_DX_interop` (future)
 
 use crate::core::rhi::PixelBuffer;
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 use std::ffi::c_void;
 
 /// OpenGL texture target constants.

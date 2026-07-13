@@ -69,10 +69,7 @@ fn locate_native_lib(file_name: &str) -> Option<PathBuf> {
 /// caller pre-built the example.
 fn locate_or_build_example(bin_name: &str, package: &str) -> Option<PathBuf> {
     for profile in &["debug", "release"] {
-        let candidate = workspace_root()
-            .join("target")
-            .join(profile)
-            .join(bin_name);
+        let candidate = workspace_root().join("target").join(profile).join(bin_name);
         if candidate.exists() {
             return Some(candidate);
         }
@@ -88,10 +85,7 @@ fn locate_or_build_example(bin_name: &str, package: &str) -> Option<PathBuf> {
     if !status.success() {
         return None;
     }
-    let candidate = workspace_root()
-        .join("target")
-        .join("debug")
-        .join(bin_name);
+    let candidate = workspace_root().join("target").join("debug").join(bin_name);
     candidate.exists().then_some(candidate)
 }
 
@@ -244,4 +238,3 @@ fn polyglot_continuous_processor_deno() {
         "continuous processor deno scenario failed",
     );
 }
-

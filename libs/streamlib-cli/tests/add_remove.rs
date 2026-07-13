@@ -19,7 +19,9 @@
 use std::path::Path;
 use std::process::Command;
 
-use streamlib_pack::{assemble_artifact, AssembleOptions, AssembleTarget, CargoProfile, PathDepPolicy};
+use streamlib_pack::{
+    AssembleOptions, AssembleTarget, CargoProfile, PathDepPolicy, assemble_artifact,
+};
 
 const BIN: &str = env!("CARGO_BIN_EXE_streamlib");
 
@@ -112,7 +114,10 @@ fn add_records_prints_catalog_then_remove_evicts() {
         String::from_utf8_lossy(&out.stderr)
     );
     // Catalog-backed discovery summary printed.
-    assert!(stdout.contains("Added @tatolab/foo v1.1.0"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("Added @tatolab/foo v1.1.0"),
+        "stdout: {stdout}"
+    );
     assert!(stdout.contains("Processors (1):"), "stdout: {stdout}");
     assert!(stdout.contains("Foo — does foo"), "stdout: {stdout}");
     assert!(stdout.contains("video_in (any)"), "stdout: {stdout}");
@@ -124,9 +129,15 @@ fn add_records_prints_catalog_then_remove_evicts() {
     // Recorded in packages.yaml + materialized cache slot present.
     let packages_yaml =
         std::fs::read_to_string(home.path().join(".streamlib/packages.yaml")).unwrap();
-    assert!(packages_yaml.contains("@tatolab/foo"), "packages.yaml: {packages_yaml}");
+    assert!(
+        packages_yaml.contains("@tatolab/foo"),
+        "packages.yaml: {packages_yaml}"
+    );
     let slot = home.path().join(".streamlib/cache/packages/foo-1.1.0");
-    assert!(slot.join("streamlib.yaml").is_file(), "cache slot missing manifest");
+    assert!(
+        slot.join("streamlib.yaml").is_file(),
+        "cache slot missing manifest"
+    );
 
     // `pkg list` reads packages.yaml offline (no registry) — proves the record
     // is what a later offline consumer resolves against.
@@ -139,11 +150,17 @@ fn add_records_prints_catalog_then_remove_evicts() {
     let out = run(&["remove", "@tatolab/foo"], &registry, home.path());
     let rstdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "remove failed: {rstdout}");
-    assert!(rstdout.contains("Removed @tatolab/foo v1.1.0"), "stdout: {rstdout}");
+    assert!(
+        rstdout.contains("Removed @tatolab/foo v1.1.0"),
+        "stdout: {rstdout}"
+    );
     assert!(!slot.exists(), "cache slot must be evicted");
     let packages_yaml =
         std::fs::read_to_string(home.path().join(".streamlib/packages.yaml")).unwrap();
-    assert!(!packages_yaml.contains("@tatolab/foo"), "still recorded: {packages_yaml}");
+    assert!(
+        !packages_yaml.contains("@tatolab/foo"),
+        "still recorded: {packages_yaml}"
+    );
 
     // Removing an absent package fails loud.
     let out = run(&["remove", "@tatolab/foo"], &registry, home.path());
@@ -163,5 +180,8 @@ fn add_unsatisfiable_range_names_available_versions() {
     assert!(!out.status.success(), "^2 must not resolve");
     let stderr = String::from_utf8_lossy(&out.stderr);
     // The typed RegistryNoMatchingVersion names the available version.
-    assert!(stderr.contains("1.1.0"), "stderr should name available versions: {stderr}");
+    assert!(
+        stderr.contains("1.1.0"),
+        "stderr should name available versions: {stderr}"
+    );
 }

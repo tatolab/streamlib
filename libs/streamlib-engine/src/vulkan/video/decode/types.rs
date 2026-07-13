@@ -69,7 +69,10 @@ impl Default for DecodedFrame {
             image: vk::Image::null(),
             image_view: vk::ImageView::null(),
             format: vk::Format::UNDEFINED,
-            extent: vk::Extent2D { width: 0, height: 0 },
+            extent: vk::Extent2D {
+                width: 0,
+                height: 0,
+            },
             picture_order_count: 0,
             decode_order: 0,
             dpb_slot: -1,

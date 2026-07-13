@@ -73,9 +73,7 @@ fn try_acquire_returns_none_when_write_held() {
 #[test]
 fn try_acquire_read_not_contended_by_concurrent_readers() {
     let Some(fixture) = HostFixture::try_new() else {
-        println!(
-            "try_acquire_read_not_contended_by_concurrent_readers: no GPU — skipping"
-        );
+        println!("try_acquire_read_not_contended_by_concurrent_readers: no GPU — skipping");
         return;
     };
     let surface = fixture.register_surface(SURFACE_ID_B, 16, 16);

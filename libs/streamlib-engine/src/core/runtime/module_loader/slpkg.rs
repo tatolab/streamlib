@@ -55,7 +55,10 @@ pub fn extract_slpkg_to_cache(slpkg_path: &std::path::Path) -> Result<std::path:
 /// caller promotes into the cache only after an identity check passes), so the
 /// archive's own `package:` identity does not decide where the bytes land.
 /// Rejects path-traversal entries.
-pub fn extract_slpkg_to_dir(slpkg_path: &std::path::Path, dest_dir: &std::path::Path) -> Result<()> {
+pub fn extract_slpkg_to_dir(
+    slpkg_path: &std::path::Path,
+    dest_dir: &std::path::Path,
+) -> Result<()> {
     let slpkg_bytes = std::fs::read(slpkg_path).map_err(|e| {
         Error::Configuration(format!("Failed to read {}: {}", slpkg_path.display(), e))
     })?;
@@ -76,7 +79,11 @@ fn extract_zip_bytes_to_dir(
             .map_err(|e| Error::Configuration(format!("Failed to clear cache dir: {}", e)))?;
     }
 
-    tracing::info!("Extracting {} to {}", source_label.display(), dest_dir.display());
+    tracing::info!(
+        "Extracting {} to {}",
+        source_label.display(),
+        dest_dir.display()
+    );
     std::fs::create_dir_all(dest_dir)
         .map_err(|e| Error::Configuration(format!("Failed to create cache dir: {}", e)))?;
 
@@ -85,9 +92,9 @@ fn extract_zip_bytes_to_dir(
         .map_err(|e| Error::Configuration(format!("Failed to open .slpkg archive: {}", e)))?;
 
     for i in 0..archive.len() {
-        let mut file = archive.by_index(i).map_err(|e| {
-            Error::Configuration(format!("Failed to read archive entry: {}", e))
-        })?;
+        let mut file = archive
+            .by_index(i)
+            .map_err(|e| Error::Configuration(format!("Failed to read archive entry: {}", e)))?;
 
         let file_name = file.name().to_string();
 
@@ -102,18 +109,16 @@ fn extract_zip_bytes_to_dir(
         let output_path = dest_dir.join(&file_name);
 
         if let Some(parent) = output_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                Error::Configuration(format!("Failed to create directory: {}", e))
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| Error::Configuration(format!("Failed to create directory: {}", e)))?;
         }
 
         let mut output_file = std::fs::File::create(&output_path).map_err(|e| {
             Error::Configuration(format!("Failed to create {}: {}", output_path.display(), e))
         })?;
 
-        std::io::copy(&mut file, &mut output_file).map_err(|e| {
-            Error::Configuration(format!("Failed to extract {}: {}", file_name, e))
-        })?;
+        std::io::copy(&mut file, &mut output_file)
+            .map_err(|e| Error::Configuration(format!("Failed to extract {}: {}", file_name, e)))?;
     }
 
     Ok(())

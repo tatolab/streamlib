@@ -12,10 +12,10 @@
 //! wins when multiple are registered, and `Error::UnknownProcessorType`
 //! surfaces cleanly when nothing matches.
 
+use streamlib_engine::core::ProcessorDescriptor;
 use streamlib_engine::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib_engine::core::error::Error;
 use streamlib_engine::core::processors::PROCESSOR_REGISTRY;
-use streamlib_engine::core::ProcessorDescriptor;
 
 fn ident(org: &str, pkg: &str, ty: &str, v: SemVer) -> SchemaIdent {
     SchemaIdent::new(
@@ -58,12 +58,12 @@ fn macro_resolves_to_highest_registered_version() {
     // succeed when this test runs after a sibling has already inserted
     // the same entries. Either direction is fine — what matters is that
     // by the time the macro fires, all three versions are present.
-    let _ = PROCESSOR_REGISTRY
-        .register_descriptor_only(ProcessorDescriptor::new(v1.clone(), "test"));
-    let _ = PROCESSOR_REGISTRY
-        .register_descriptor_only(ProcessorDescriptor::new(v3.clone(), "test"));
-    let _ = PROCESSOR_REGISTRY
-        .register_descriptor_only(ProcessorDescriptor::new(v2.clone(), "test"));
+    let _ =
+        PROCESSOR_REGISTRY.register_descriptor_only(ProcessorDescriptor::new(v1.clone(), "test"));
+    let _ =
+        PROCESSOR_REGISTRY.register_descriptor_only(ProcessorDescriptor::new(v3.clone(), "test"));
+    let _ =
+        PROCESSOR_REGISTRY.register_descriptor_only(ProcessorDescriptor::new(v2.clone(), "test"));
 
     let resolved: SchemaIdent = streamlib::sdk::schema_ident_any_version!(
         "schema-ident-any-version-test",

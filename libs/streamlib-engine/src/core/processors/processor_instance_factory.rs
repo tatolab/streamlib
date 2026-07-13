@@ -7,14 +7,14 @@ use std::sync::{Arc, LazyLock};
 
 use parking_lot::RwLock;
 
+use crate::core::ProcessorDescriptor;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::descriptors::SchemaIdent;
 use crate::core::error::{Error, Result};
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::{PortInfo, ProcessorNode};
 use crate::core::processors::{Config, DynGeneratedProcessor, GeneratedProcessor};
-use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
-use crate::core::ProcessorDescriptor;
+use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
 use streamlib_plugin_abi::ProcessorVTable;
 use streamlib_processor_schema::PortSchemaSpec;
 
@@ -64,10 +64,8 @@ pub enum ProcessorInstance {
         instance_ptr: *mut c_void,
         vtable: &'static ProcessorVTable,
         any_placeholder: (),
-        iceoryx2_output_writer_inner:
-            Option<Arc<crate::iceoryx2::OutputWriterInner>>,
-        iceoryx2_input_mailboxes_inner:
-            Option<Arc<crate::iceoryx2::InputMailboxesInner>>,
+        iceoryx2_output_writer_inner: Option<Arc<crate::iceoryx2::OutputWriterInner>>,
+        iceoryx2_input_mailboxes_inner: Option<Arc<crate::iceoryx2::InputMailboxesInner>>,
         /// `true` when the vtable's function pointers target a
         /// cdylib's address space (loaded via `STREAMLIB_PLUGIN`);
         /// `false` when they target the host's address space
@@ -118,13 +116,7 @@ impl ProcessorInstance {
     /// code + scratch buffer.
     fn vtable_call_full(
         instance_ptr: *mut c_void,
-        method: unsafe extern "C" fn(
-            *mut c_void,
-            *const c_void,
-            *mut u8,
-            usize,
-            *mut usize,
-        ) -> i32,
+        method: unsafe extern "C" fn(*mut c_void, *const c_void, *mut u8, usize, *mut usize) -> i32,
         ctx: &RuntimeContextFullAccess<'_>,
         method_name: &str,
     ) -> Result<()> {
@@ -151,13 +143,7 @@ impl ProcessorInstance {
 
     fn vtable_call_limited(
         instance_ptr: *mut c_void,
-        method: unsafe extern "C" fn(
-            *mut c_void,
-            *const c_void,
-            *mut u8,
-            usize,
-            *mut usize,
-        ) -> i32,
+        method: unsafe extern "C" fn(*mut c_void, *const c_void, *mut u8, usize, *mut usize) -> i32,
         ctx: &RuntimeContextLimitedAccess<'_>,
         method_name: &str,
     ) -> Result<()> {
@@ -248,9 +234,8 @@ impl ProcessorInstance {
                 let instance_ptr = *instance_ptr;
                 let setup_fn = vtable.setup;
                 let sandbox = ctx.gpu_limited_access().clone();
-                sandbox.escalate(|_full| {
-                    Self::vtable_call_full(instance_ptr, setup_fn, ctx, "setup")
-                })
+                sandbox
+                    .escalate(|_full| Self::vtable_call_full(instance_ptr, setup_fn, ctx, "setup"))
             }
             Self::LegacyDyn(inner) => inner.__generated_setup(ctx),
         }
@@ -295,9 +280,11 @@ impl ProcessorInstance {
     /// Run the processor's `on_pause` hook.
     pub fn on_pause(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         match self {
-            Self::VTable { instance_ptr, vtable, .. } => {
-                Self::vtable_call_limited(*instance_ptr, vtable.on_pause, ctx, "on_pause")
-            }
+            Self::VTable {
+                instance_ptr,
+                vtable,
+                ..
+            } => Self::vtable_call_limited(*instance_ptr, vtable.on_pause, ctx, "on_pause"),
             Self::LegacyDyn(inner) => inner.__generated_on_pause(ctx),
         }
     }
@@ -305,9 +292,11 @@ impl ProcessorInstance {
     /// Run the processor's `on_resume` hook.
     pub fn on_resume(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         match self {
-            Self::VTable { instance_ptr, vtable, .. } => {
-                Self::vtable_call_limited(*instance_ptr, vtable.on_resume, ctx, "on_resume")
-            }
+            Self::VTable {
+                instance_ptr,
+                vtable,
+                ..
+            } => Self::vtable_call_limited(*instance_ptr, vtable.on_resume, ctx, "on_resume"),
             Self::LegacyDyn(inner) => inner.__generated_on_resume(ctx),
         }
     }
@@ -315,9 +304,11 @@ impl ProcessorInstance {
     /// Run one tick of the processor's `process` body.
     pub fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         match self {
-            Self::VTable { instance_ptr, vtable, .. } => {
-                Self::vtable_call_limited(*instance_ptr, vtable.process, ctx, "process")
-            }
+            Self::VTable {
+                instance_ptr,
+                vtable,
+                ..
+            } => Self::vtable_call_limited(*instance_ptr, vtable.process, ctx, "process"),
             Self::LegacyDyn(inner) => inner.process(ctx),
         }
     }
@@ -464,9 +455,7 @@ impl ProcessorInstance {
     /// mutate the inner directly via
     /// [`crate::iceoryx2::OutputWriterInner::add_connection`] —
     /// no plugin ABI hop to the cdylib.
-    pub fn iceoryx2_output_writer_inner(
-        &self,
-    ) -> Option<Arc<crate::iceoryx2::OutputWriterInner>> {
+    pub fn iceoryx2_output_writer_inner(&self) -> Option<Arc<crate::iceoryx2::OutputWriterInner>> {
         match self {
             Self::VTable {
                 iceoryx2_output_writer_inner,
@@ -509,10 +498,10 @@ impl ProcessorInstance {
     pub fn install_iceoryx2_resources(&mut self) -> Result<()> {
         let needs_outputs = self.has_iceoryx2_outputs();
         let needs_inputs = self.has_iceoryx2_inputs();
-        let output_inner = needs_outputs
-            .then(|| Arc::new(crate::iceoryx2::OutputWriterInner::new()));
-        let input_inner = needs_inputs
-            .then(|| Arc::new(crate::iceoryx2::InputMailboxesInner::new()));
+        let output_inner =
+            needs_outputs.then(|| Arc::new(crate::iceoryx2::OutputWriterInner::new()));
+        let input_inner =
+            needs_inputs.then(|| Arc::new(crate::iceoryx2::InputMailboxesInner::new()));
 
         match self {
             Self::VTable {
@@ -584,9 +573,7 @@ impl ProcessorInstance {
                     let msg = std::str::from_utf8(&err_buf[..err_len])
                         .unwrap_or("<non-utf8 error>")
                         .to_string();
-                    Err(Error::Runtime(format!(
-                        "set_iceoryx2_resources: {msg}"
-                    )))
+                    Err(Error::Runtime(format!("set_iceoryx2_resources: {msg}")))
                 }
             }
             Self::LegacyDyn(inner) => {
@@ -740,7 +727,9 @@ impl ProcessorInstance {
     pub fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         match self {
             Self::LegacyDyn(inner) => inner.as_any_mut(),
-            Self::VTable { any_placeholder, .. } => any_placeholder,
+            Self::VTable {
+                any_placeholder, ..
+            } => any_placeholder,
         }
     }
 }
@@ -749,9 +738,8 @@ impl ProcessorInstance {
 /// [`ProcessorInstanceFactory::register_dynamic`] for subprocess
 /// host wrappers (Python / Deno) that don't fit the generic vtable
 /// monomorphization shape.
-pub type DynamicProcessorConstructorFn = Box<
-    dyn Fn(&ProcessorNode) -> Result<Box<dyn DynGeneratedProcessor + Send>> + Send + Sync,
->;
+pub type DynamicProcessorConstructorFn =
+    Box<dyn Fn(&ProcessorNode) -> Result<Box<dyn DynGeneratedProcessor + Send>> + Send + Sync>;
 
 /// Per-type registration entry the factory stores.
 enum RegistrationKind {
@@ -852,7 +840,9 @@ impl ProcessorInstanceFactory {
         // In-process registration — vtable's function pointers
         // target the host's address space; lifecycle dispatch uses
         // the Boxed FullAccess directly (no plugin ABI hop).
-        if let Err(e) = self.register_via_vtable(descriptor, vtable, /* cdylib_resident */ false) {
+        if let Err(e) =
+            self.register_via_vtable(descriptor, vtable, /* cdylib_resident */ false)
+        {
             tracing::warn!(
                 "Processor registration for {} failed: {}",
                 std::any::type_name::<P>(),
@@ -935,7 +925,10 @@ impl ProcessorInstanceFactory {
             }
             registrations.insert(
                 type_name.clone(),
-                RegistrationKind::VTable { vtable, cdylib_resident },
+                RegistrationKind::VTable {
+                    vtable,
+                    cdylib_resident,
+                },
             );
         }
 
@@ -1015,9 +1008,10 @@ impl ProcessorInstanceFactory {
             .write()
             .insert(type_name.clone(), descriptor);
 
-        self.registrations
-            .write()
-            .insert(type_name.clone(), RegistrationKind::LegacyDyn { constructor });
+        self.registrations.write().insert(
+            type_name.clone(),
+            RegistrationKind::LegacyDyn { constructor },
+        );
 
         tracing::info!(
             "[register_dynamic] new processor type registered '{}'",
@@ -1118,7 +1112,10 @@ impl ProcessorInstanceFactory {
         })?;
 
         match registration {
-            RegistrationKind::VTable { vtable, cdylib_resident } => {
+            RegistrationKind::VTable {
+                vtable,
+                cdylib_resident,
+            } => {
                 // Serialize node.config (serde_json::Value) to msgpack
                 // for the cdylib's construct fn to deserialize into
                 // P::Config.
@@ -1331,8 +1328,12 @@ mod tests {
         let v1 = ident("acme", "core", "Camera", SemVer::new(1, 0, 0));
         let v2 = ident("acme", "core", "Camera", SemVer::new(2, 0, 0));
 
-        factory.register_descriptor_only(unit_descriptor(v1.clone())).unwrap();
-        factory.register_descriptor_only(unit_descriptor(v2.clone())).unwrap();
+        factory
+            .register_descriptor_only(unit_descriptor(v1.clone()))
+            .unwrap();
+        factory
+            .register_descriptor_only(unit_descriptor(v2.clone()))
+            .unwrap();
 
         assert!(factory.descriptor(&v1).is_some());
         assert!(factory.descriptor(&v2).is_some());
@@ -1350,9 +1351,15 @@ mod tests {
         let v3 = SchemaIdent::new(org.clone(), pkg.clone(), ty.clone(), SemVer::new(2, 0, 0));
 
         // Insert out of order to prove the resolver picks max, not last-inserted.
-        factory.register_descriptor_only(unit_descriptor(v2.clone())).unwrap();
-        factory.register_descriptor_only(unit_descriptor(v3.clone())).unwrap();
-        factory.register_descriptor_only(unit_descriptor(v1.clone())).unwrap();
+        factory
+            .register_descriptor_only(unit_descriptor(v2.clone()))
+            .unwrap();
+        factory
+            .register_descriptor_only(unit_descriptor(v3.clone()))
+            .unwrap();
+        factory
+            .register_descriptor_only(unit_descriptor(v1.clone()))
+            .unwrap();
 
         let resolved = factory.resolve_any_version(&org, &pkg, &ty).unwrap();
         assert_eq!(

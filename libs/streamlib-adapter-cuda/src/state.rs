@@ -109,12 +109,8 @@ pub struct HostImageSurfaceRegistration<P: DevicePrivilege> {
 /// usage-correction hint, the same shape the OpenGL adapter uses for
 /// its EXTERNAL_OES read-only restriction.
 pub(crate) enum SurfaceResource<P: DevicePrivilege> {
-    Buffer {
-        pixel_buffer: Arc<P::Buffer>,
-    },
-    Image {
-        texture: Arc<P::Texture>,
-    },
+    Buffer { pixel_buffer: Arc<P::Buffer> },
+    Image { texture: Arc<P::Texture> },
 }
 
 /// Per-surface state held inside the adapter's `Registry<...>`.
@@ -136,7 +132,8 @@ pub(crate) struct SurfaceState<P: DevicePrivilege> {
     /// surfaces (consumed by the cross-process release shim that
     /// composes `VulkanSurfaceAdapter::release_to_foreign`); ignored on
     /// the buffer path.
-    #[allow(dead_code)] // consumed by the cross-process release shim (see HostImageSurfaceRegistration::initial_layout)
+    #[allow(dead_code)]
+    // consumed by the cross-process release shim (see HostImageSurfaceRegistration::initial_layout)
     pub(crate) current_layout: VulkanLayout,
     pub(crate) read_holders: u64,
     pub(crate) write_held: bool,

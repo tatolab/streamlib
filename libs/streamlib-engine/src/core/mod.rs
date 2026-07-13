@@ -50,15 +50,15 @@ pub mod utils;
 pub use context::*;
 pub use descriptors::*;
 pub use error::*;
-pub use rhi::{gl_constants, GlContext, GlTextureBinding, NativeTextureHandle, RhiBackend};
+pub use execution::*;
 pub use graph::*;
 pub use graph_snapshot::*;
 pub use processors::*;
-pub use utils::*;
-pub use execution::*;
+pub use rhi::{GlContext, GlTextureBinding, NativeTextureHandle, RhiBackend, gl_constants};
 pub use runtime::*;
 pub use sync::*;
 pub use texture::*;
+pub use utils::*;
 
 // Narrow re-exports of engine-internal items that have sanctioned
 // external consumers. Each line below is a deliberate boundary

@@ -18,11 +18,8 @@ fn compile_shaders() {
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
-    let shaders: &[(&str, &str, &str)] = &[(
-        "src/shaders/jpeg_decode.comp",
-        "jpeg_decode.spv",
-        "compute",
-    )];
+    let shaders: &[(&str, &str, &str)] =
+        &[("src/shaders/jpeg_decode.comp", "jpeg_decode.spv", "compute")];
 
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
 

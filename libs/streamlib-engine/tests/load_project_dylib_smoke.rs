@@ -13,10 +13,10 @@
 use std::path::Path;
 
 use serial_test::serial;
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
-use streamlib::sdk::runtime::{BuildPolicy, Strategy, Runner};
-use streamlib::sdk::RunnerAutoBuild;
+use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
 use streamlib_engine::core::runtime::host_target_triple;
 
 fn copy_dir_contents(src: &Path, dst: &Path) {
@@ -46,11 +46,7 @@ fn load_project_real_dylib_registers_processor_via_export_plugin() {
     // in `packages/test-fixtures/Cargo.toml`. Idempotent: cargo's
     // incremental machinery skips the rebuild on a warm tree.
     let status = std::process::Command::new(env!("CARGO"))
-        .args([
-            "build",
-            "-p",
-            "streamlib-test-fixtures",
-        ])
+        .args(["build", "-p", "streamlib-test-fixtures"])
         .status()
         .expect("invoking cargo build");
     assert!(
@@ -66,7 +62,10 @@ fn load_project_real_dylib_registers_processor_via_export_plugin() {
         "so"
     };
     let dylib_name = format!("libstreamlib_test_fixtures.{}", dylib_ext);
-    let built_dylib = workspace_root.join("target").join("debug").join(&dylib_name);
+    let built_dylib = workspace_root
+        .join("target")
+        .join("debug")
+        .join(&dylib_name);
     assert!(
         built_dylib.exists(),
         "cdylib expected at {} after cargo build",
@@ -108,9 +107,14 @@ fn load_project_real_dylib_registers_processor_via_export_plugin() {
     runtime
         .add_module_with_blocking(
             module_ident_any_version!("tatolab", "test-fixtures"),
-            Strategy::Path { path: fixtures_dst.clone(), build: BuildPolicy::NeverBuild },
+            Strategy::Path {
+                path: fixtures_dst.clone(),
+                build: BuildPolicy::NeverBuild,
+            },
         )
-        .expect("add_module_with ManifestDirectory must succeed against a real test-fixtures cdylib");
+        .expect(
+            "add_module_with ManifestDirectory must succeed against a real test-fixtures cdylib",
+        );
 
     let registered = PROCESSOR_REGISTRY
         .list_registered()

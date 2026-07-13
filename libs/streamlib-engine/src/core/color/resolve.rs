@@ -135,13 +135,8 @@ mod tests {
     /// Partial info: only matrix specified. Other axes pull defaults.
     #[test]
     fn partial_info_fills_only_missing_axes() {
-        let r = resolve_color_defaults(
-            None,
-            None,
-            Some(MatrixId::Bt709),
-            None,
-            ColorSpaceKind::Yuv,
-        );
+        let r =
+            resolve_color_defaults(None, None, Some(MatrixId::Bt709), None, ColorSpaceKind::Yuv);
         assert_eq!(r.matrix, MatrixId::Bt709); // explicit
         assert_eq!(r.primaries, PrimariesId::Bt709); // default
         assert_eq!(r.transfer, TransferId::Bt709); // YUV default

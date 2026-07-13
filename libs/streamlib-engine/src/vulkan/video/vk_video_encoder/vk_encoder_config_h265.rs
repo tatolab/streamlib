@@ -76,20 +76,202 @@ pub struct LevelLimits {
 
 /// H.265 level limits table (Table A-1).
 pub static LEVEL_LIMITS_H265: &[LevelLimits] = &[
-    LevelLimits { level_idc: 30, max_luma_ps: 36864, max_cpb_size_main_tier: 350, max_cpb_size_high_tier: -1, max_slice_segment_per_picture: 16, max_tile_rows: 1, max_tile_cols: 1, max_luma_sr: 552960, max_bit_rate_main_tier: 128, max_bit_rate_high_tier: -1, min_cr: 2, std_level: 0 },
-    LevelLimits { level_idc: 60, max_luma_ps: 122880, max_cpb_size_main_tier: 1500, max_cpb_size_high_tier: -1, max_slice_segment_per_picture: 16, max_tile_rows: 1, max_tile_cols: 1, max_luma_sr: 3686400, max_bit_rate_main_tier: 1500, max_bit_rate_high_tier: -1, min_cr: 2, std_level: 1 },
-    LevelLimits { level_idc: 63, max_luma_ps: 245760, max_cpb_size_main_tier: 3000, max_cpb_size_high_tier: -1, max_slice_segment_per_picture: 20, max_tile_rows: 1, max_tile_cols: 1, max_luma_sr: 7372800, max_bit_rate_main_tier: 3000, max_bit_rate_high_tier: -1, min_cr: 2, std_level: 2 },
-    LevelLimits { level_idc: 90, max_luma_ps: 552960, max_cpb_size_main_tier: 6000, max_cpb_size_high_tier: -1, max_slice_segment_per_picture: 30, max_tile_rows: 2, max_tile_cols: 2, max_luma_sr: 16588800, max_bit_rate_main_tier: 6000, max_bit_rate_high_tier: -1, min_cr: 2, std_level: 3 },
-    LevelLimits { level_idc: 93, max_luma_ps: 983040, max_cpb_size_main_tier: 10000, max_cpb_size_high_tier: -1, max_slice_segment_per_picture: 40, max_tile_rows: 3, max_tile_cols: 3, max_luma_sr: 33177600, max_bit_rate_main_tier: 10000, max_bit_rate_high_tier: -1, min_cr: 2, std_level: 4 },
-    LevelLimits { level_idc: 120, max_luma_ps: 2228224, max_cpb_size_main_tier: 12000, max_cpb_size_high_tier: 30000, max_slice_segment_per_picture: 75, max_tile_rows: 5, max_tile_cols: 5, max_luma_sr: 66846720, max_bit_rate_main_tier: 12000, max_bit_rate_high_tier: 30000, min_cr: 4, std_level: 5 },
-    LevelLimits { level_idc: 123, max_luma_ps: 2228224, max_cpb_size_main_tier: 20000, max_cpb_size_high_tier: 50000, max_slice_segment_per_picture: 75, max_tile_rows: 5, max_tile_cols: 5, max_luma_sr: 133693440, max_bit_rate_main_tier: 20000, max_bit_rate_high_tier: 50000, min_cr: 4, std_level: 6 },
-    LevelLimits { level_idc: 150, max_luma_ps: 8912896, max_cpb_size_main_tier: 25000, max_cpb_size_high_tier: 100000, max_slice_segment_per_picture: 200, max_tile_rows: 11, max_tile_cols: 10, max_luma_sr: 267386880, max_bit_rate_main_tier: 25000, max_bit_rate_high_tier: 100000, min_cr: 6, std_level: 7 },
-    LevelLimits { level_idc: 153, max_luma_ps: 8912896, max_cpb_size_main_tier: 40000, max_cpb_size_high_tier: 160000, max_slice_segment_per_picture: 200, max_tile_rows: 11, max_tile_cols: 10, max_luma_sr: 534773760, max_bit_rate_main_tier: 40000, max_bit_rate_high_tier: 160000, min_cr: 8, std_level: 8 },
-    LevelLimits { level_idc: 156, max_luma_ps: 8912896, max_cpb_size_main_tier: 60000, max_cpb_size_high_tier: 240000, max_slice_segment_per_picture: 200, max_tile_rows: 11, max_tile_cols: 10, max_luma_sr: 1069547520, max_bit_rate_main_tier: 60000, max_bit_rate_high_tier: 240000, min_cr: 8, std_level: 9 },
-    LevelLimits { level_idc: 180, max_luma_ps: 35651584, max_cpb_size_main_tier: 60000, max_cpb_size_high_tier: 240000, max_slice_segment_per_picture: 600, max_tile_rows: 22, max_tile_cols: 20, max_luma_sr: 1069547520, max_bit_rate_main_tier: 60000, max_bit_rate_high_tier: 240000, min_cr: 8, std_level: 10 },
-    LevelLimits { level_idc: 183, max_luma_ps: 35651584, max_cpb_size_main_tier: 120000, max_cpb_size_high_tier: 480000, max_slice_segment_per_picture: 600, max_tile_rows: 22, max_tile_cols: 20, max_luma_sr: 2139095040, max_bit_rate_main_tier: 120000, max_bit_rate_high_tier: 480000, min_cr: 8, std_level: 11 },
-    LevelLimits { level_idc: 186, max_luma_ps: 35651584, max_cpb_size_main_tier: 240000, max_cpb_size_high_tier: 800000, max_slice_segment_per_picture: 600, max_tile_rows: 22, max_tile_cols: 20, max_luma_sr: 4278190080, max_bit_rate_main_tier: 240000, max_bit_rate_high_tier: 800000, min_cr: 6, std_level: 12 },
-    LevelLimits { level_idc: 187, max_luma_ps: 67108864, max_cpb_size_main_tier: 240000, max_cpb_size_high_tier: 800000, max_slice_segment_per_picture: 600, max_tile_rows: 22, max_tile_cols: 20, max_luma_sr: 4278190080, max_bit_rate_main_tier: 240000, max_bit_rate_high_tier: 800000, min_cr: 6, std_level: 12 },
+    LevelLimits {
+        level_idc: 30,
+        max_luma_ps: 36864,
+        max_cpb_size_main_tier: 350,
+        max_cpb_size_high_tier: -1,
+        max_slice_segment_per_picture: 16,
+        max_tile_rows: 1,
+        max_tile_cols: 1,
+        max_luma_sr: 552960,
+        max_bit_rate_main_tier: 128,
+        max_bit_rate_high_tier: -1,
+        min_cr: 2,
+        std_level: 0,
+    },
+    LevelLimits {
+        level_idc: 60,
+        max_luma_ps: 122880,
+        max_cpb_size_main_tier: 1500,
+        max_cpb_size_high_tier: -1,
+        max_slice_segment_per_picture: 16,
+        max_tile_rows: 1,
+        max_tile_cols: 1,
+        max_luma_sr: 3686400,
+        max_bit_rate_main_tier: 1500,
+        max_bit_rate_high_tier: -1,
+        min_cr: 2,
+        std_level: 1,
+    },
+    LevelLimits {
+        level_idc: 63,
+        max_luma_ps: 245760,
+        max_cpb_size_main_tier: 3000,
+        max_cpb_size_high_tier: -1,
+        max_slice_segment_per_picture: 20,
+        max_tile_rows: 1,
+        max_tile_cols: 1,
+        max_luma_sr: 7372800,
+        max_bit_rate_main_tier: 3000,
+        max_bit_rate_high_tier: -1,
+        min_cr: 2,
+        std_level: 2,
+    },
+    LevelLimits {
+        level_idc: 90,
+        max_luma_ps: 552960,
+        max_cpb_size_main_tier: 6000,
+        max_cpb_size_high_tier: -1,
+        max_slice_segment_per_picture: 30,
+        max_tile_rows: 2,
+        max_tile_cols: 2,
+        max_luma_sr: 16588800,
+        max_bit_rate_main_tier: 6000,
+        max_bit_rate_high_tier: -1,
+        min_cr: 2,
+        std_level: 3,
+    },
+    LevelLimits {
+        level_idc: 93,
+        max_luma_ps: 983040,
+        max_cpb_size_main_tier: 10000,
+        max_cpb_size_high_tier: -1,
+        max_slice_segment_per_picture: 40,
+        max_tile_rows: 3,
+        max_tile_cols: 3,
+        max_luma_sr: 33177600,
+        max_bit_rate_main_tier: 10000,
+        max_bit_rate_high_tier: -1,
+        min_cr: 2,
+        std_level: 4,
+    },
+    LevelLimits {
+        level_idc: 120,
+        max_luma_ps: 2228224,
+        max_cpb_size_main_tier: 12000,
+        max_cpb_size_high_tier: 30000,
+        max_slice_segment_per_picture: 75,
+        max_tile_rows: 5,
+        max_tile_cols: 5,
+        max_luma_sr: 66846720,
+        max_bit_rate_main_tier: 12000,
+        max_bit_rate_high_tier: 30000,
+        min_cr: 4,
+        std_level: 5,
+    },
+    LevelLimits {
+        level_idc: 123,
+        max_luma_ps: 2228224,
+        max_cpb_size_main_tier: 20000,
+        max_cpb_size_high_tier: 50000,
+        max_slice_segment_per_picture: 75,
+        max_tile_rows: 5,
+        max_tile_cols: 5,
+        max_luma_sr: 133693440,
+        max_bit_rate_main_tier: 20000,
+        max_bit_rate_high_tier: 50000,
+        min_cr: 4,
+        std_level: 6,
+    },
+    LevelLimits {
+        level_idc: 150,
+        max_luma_ps: 8912896,
+        max_cpb_size_main_tier: 25000,
+        max_cpb_size_high_tier: 100000,
+        max_slice_segment_per_picture: 200,
+        max_tile_rows: 11,
+        max_tile_cols: 10,
+        max_luma_sr: 267386880,
+        max_bit_rate_main_tier: 25000,
+        max_bit_rate_high_tier: 100000,
+        min_cr: 6,
+        std_level: 7,
+    },
+    LevelLimits {
+        level_idc: 153,
+        max_luma_ps: 8912896,
+        max_cpb_size_main_tier: 40000,
+        max_cpb_size_high_tier: 160000,
+        max_slice_segment_per_picture: 200,
+        max_tile_rows: 11,
+        max_tile_cols: 10,
+        max_luma_sr: 534773760,
+        max_bit_rate_main_tier: 40000,
+        max_bit_rate_high_tier: 160000,
+        min_cr: 8,
+        std_level: 8,
+    },
+    LevelLimits {
+        level_idc: 156,
+        max_luma_ps: 8912896,
+        max_cpb_size_main_tier: 60000,
+        max_cpb_size_high_tier: 240000,
+        max_slice_segment_per_picture: 200,
+        max_tile_rows: 11,
+        max_tile_cols: 10,
+        max_luma_sr: 1069547520,
+        max_bit_rate_main_tier: 60000,
+        max_bit_rate_high_tier: 240000,
+        min_cr: 8,
+        std_level: 9,
+    },
+    LevelLimits {
+        level_idc: 180,
+        max_luma_ps: 35651584,
+        max_cpb_size_main_tier: 60000,
+        max_cpb_size_high_tier: 240000,
+        max_slice_segment_per_picture: 600,
+        max_tile_rows: 22,
+        max_tile_cols: 20,
+        max_luma_sr: 1069547520,
+        max_bit_rate_main_tier: 60000,
+        max_bit_rate_high_tier: 240000,
+        min_cr: 8,
+        std_level: 10,
+    },
+    LevelLimits {
+        level_idc: 183,
+        max_luma_ps: 35651584,
+        max_cpb_size_main_tier: 120000,
+        max_cpb_size_high_tier: 480000,
+        max_slice_segment_per_picture: 600,
+        max_tile_rows: 22,
+        max_tile_cols: 20,
+        max_luma_sr: 2139095040,
+        max_bit_rate_main_tier: 120000,
+        max_bit_rate_high_tier: 480000,
+        min_cr: 8,
+        std_level: 11,
+    },
+    LevelLimits {
+        level_idc: 186,
+        max_luma_ps: 35651584,
+        max_cpb_size_main_tier: 240000,
+        max_cpb_size_high_tier: 800000,
+        max_slice_segment_per_picture: 600,
+        max_tile_rows: 22,
+        max_tile_cols: 20,
+        max_luma_sr: 4278190080,
+        max_bit_rate_main_tier: 240000,
+        max_bit_rate_high_tier: 800000,
+        min_cr: 6,
+        std_level: 12,
+    },
+    LevelLimits {
+        level_idc: 187,
+        max_luma_ps: 67108864,
+        max_cpb_size_main_tier: 240000,
+        max_cpb_size_high_tier: 800000,
+        max_slice_segment_per_picture: 600,
+        max_tile_rows: 22,
+        max_tile_cols: 20,
+        max_luma_sr: 4278190080,
+        max_bit_rate_main_tier: 240000,
+        max_bit_rate_high_tier: 800000,
+        min_cr: 6,
+        std_level: 12,
+    },
 ];
 
 /// H.265 profile IDC constants.
@@ -195,10 +377,7 @@ impl EncoderConfigH265 {
     /// Returns `(pic_width_aligned, pic_height_aligned, total_size_in_samples)`.
     ///
     /// Equivalent to the C++ `GetCtbAlignedPicSizeInSamples`.
-    pub fn get_ctb_aligned_pic_size_in_samples(
-        &self,
-        min_ctbs_y: bool,
-    ) -> (u32, u32, u32) {
+    pub fn get_ctb_aligned_pic_size_in_samples(&self, min_ctbs_y: bool) -> (u32, u32, u32) {
         let (width, height) = if min_ctbs_y {
             let min_cb_log2_size_y = self.cu_min_size as u32 + 3;
             let min_cb_size_y = 1u32 << min_cb_log2_size_y;
@@ -324,9 +503,7 @@ impl EncoderConfigH265 {
     /// Equivalent to the C++ `EncoderConfigH265::InitProfileLevel`.
     pub fn init_profile_level(&mut self) {
         if self.profile == h265_profile::INVALID {
-            if self.base.encode_chroma_subsampling
-                == vk::VideoChromaSubsamplingFlagsKHR::_420
-            {
+            if self.base.encode_chroma_subsampling == vk::VideoChromaSubsamplingFlagsKHR::_420 {
                 if self.base.input.bpp == 8 {
                     self.profile = h265_profile::MAIN;
                 } else if self.base.input.bpp <= 10 {
@@ -385,8 +562,7 @@ impl EncoderConfigH265 {
         let cpb_vcl_factor = self.get_cpb_vcl_factor();
         let level_idx = self.level_idc as usize;
 
-        let mut level_bit_rate =
-            self.base.average_bitrate.max(self.hrd_bitrate);
+        let mut level_bit_rate = self.base.average_bitrate.max(self.hrd_bitrate);
         level_bit_rate = level_bit_rate.max(
             (LEVEL_LIMITS_H265[level_idx].max_bit_rate_main_tier as u32 * 800).min(120_000_000),
         );
@@ -405,9 +581,9 @@ impl EncoderConfigH265 {
             {
                 self.hrd_bitrate = (self.base.average_bitrate * 3).min(level_bit_rate);
                 if self.base.vbv_buffer_size != 0 {
-                    self.hrd_bitrate = self.hrd_bitrate.min(
-                        (self.base.vbv_buffer_size * 2).max(self.base.average_bitrate),
-                    );
+                    self.hrd_bitrate = self
+                        .hrd_bitrate
+                        .min((self.base.vbv_buffer_size * 2).max(self.base.average_bitrate));
                 }
             } else {
                 self.hrd_bitrate = self.base.average_bitrate;
@@ -426,9 +602,7 @@ impl EncoderConfigH265 {
             self.base.vbv_buffer_size =
                 (LEVEL_LIMITS_H265[level_idx].max_cpb_size_main_tier as u32 * cpb_vcl_factor)
                     .min(100_000_000);
-            if self.base.rate_control_mode
-                != vk::VideoEncodeRateControlModeFlagsKHR::DISABLED
-            {
+            if self.base.rate_control_mode != vk::VideoEncodeRateControlModeFlagsKHR::DISABLED {
                 if (self.base.vbv_buffer_size >> 3) > self.hrd_bitrate {
                     self.base.vbv_buffer_size = self.hrd_bitrate << 3;
                 }

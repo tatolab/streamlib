@@ -16,11 +16,13 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use super::super::shared::{handle_as_gpu_context, pixel_format_from_raw};
 use super::super::super::run_host_extern_c;
 use super::super::super::shared::wire::{slice_from_raw, write_err, write_id_bytes};
+use super::super::shared::{handle_as_gpu_context, pixel_format_from_raw};
 
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clone_pixel_buffer(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clone_pixel_buffer(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_lim_clone_pixel_buffer",
         || {
@@ -40,7 +42,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clo
     )
 }
 
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_pixel_buffer(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_pixel_buffer(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_lim_drop_pixel_buffer",
         || {
@@ -60,7 +64,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_dro
     )
 }
 
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_strong_count_pixel_buffer(handle: *const c_void) -> usize {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_strong_count_pixel_buffer(
+    handle: *const c_void,
+) -> usize {
     run_host_extern_c(
         "host_gpu_lim_strong_count_pixel_buffer",
         || {
@@ -76,8 +82,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_str
             // in HOST-COMPILED code regardless of caller DSO, so the cdylib
             // never has to know `PixelBufferRef`'s in-memory layout.
             unsafe {
-                let arc =
-                    Arc::from_raw(handle as *const crate::core::rhi::PixelBufferRef);
+                let arc = Arc::from_raw(handle as *const crate::core::rhi::PixelBufferRef);
                 let count = Arc::strong_count(&arc);
                 let _ = Arc::into_raw(arc);
                 count
@@ -187,10 +192,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_acq
                         out_pool_id_len,
                     );
                     unsafe {
-                        std::ptr::write(
-                            out_pixel_buffer as *mut crate::core::rhi::PixelBuffer,
-                            pb,
-                        );
+                        std::ptr::write(out_pixel_buffer as *mut crate::core::rhi::PixelBuffer, pb);
                     }
                     0
                 }
@@ -251,10 +253,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_get
             match gpu.get_pixel_buffer(&pool_id) {
                 Ok(pb) => {
                     unsafe {
-                        std::ptr::write(
-                            out_pixel_buffer as *mut crate::core::rhi::PixelBuffer,
-                            pb,
-                        );
+                        std::ptr::write(out_pixel_buffer as *mut crate::core::rhi::PixelBuffer, pb);
                     }
                     0
                 }
@@ -314,10 +313,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_res
             match gpu.resolve_pixel_buffer_by_surface_id(id_str) {
                 Ok(pb) => {
                     unsafe {
-                        std::ptr::write(
-                            out_pixel_buffer as *mut crate::core::rhi::PixelBuffer,
-                            pb,
-                        );
+                        std::ptr::write(out_pixel_buffer as *mut crate::core::rhi::PixelBuffer, pb);
                     }
                     0
                 }

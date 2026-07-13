@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, OnceLock, Weak};
 
-use super::events::{topics, Event, EventListener};
+use super::events::{Event, EventListener, topics};
 use crate::iceoryx2::{EventPayload, Iceoryx2EventService, Iceoryx2Node, MAX_EVENT_PAYLOAD_SIZE};
 
 type EventPublisher =

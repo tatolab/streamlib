@@ -56,10 +56,7 @@ fn connect_to_orphan_unknown_processor_returns_port_not_found_with_input_directi
     // Add an unknown processor — fails with typed error but leaves the
     // failed node in the graph with empty ports vec.
     let _ = runtime
-        .add_processor(ProcessorSpec::new(
-            unknown_ident(),
-            serde_json::json!({}),
-        ))
+        .add_processor(ProcessorSpec::new(unknown_ident(), serde_json::json!({})))
         .err()
         .expect("registry miss should error");
 
@@ -68,11 +65,8 @@ fn connect_to_orphan_unknown_processor_returns_port_not_found_with_input_directi
     let nodes = graph_json["nodes"].as_array().unwrap();
     let failed_id = nodes
         .iter()
-        .find(|n| {
-            n["type"]["type"].as_str() == Some("DefinitelyNotARegisteredProcessor")
-        })
-        .expect("failed node should be in graph")
-        ["id"]
+        .find(|n| n["type"]["type"].as_str() == Some("DefinitelyNotARegisteredProcessor"))
+        .expect("failed node should be in graph")["id"]
         .as_str()
         .unwrap()
         .to_string();
@@ -110,19 +104,14 @@ fn connect_with_unknown_target_processor_id_returns_processor_not_found() {
     // node exists with empty ports — but we'll skip past the port check
     // by trying a target that doesn't exist at all).
     let _ = runtime
-        .add_processor(ProcessorSpec::new(
-            unknown_ident(),
-            serde_json::json!({}),
-        ))
+        .add_processor(ProcessorSpec::new(unknown_ident(), serde_json::json!({})))
         .err()
         .unwrap();
     let graph_json = runtime.to_json().unwrap();
     let nodes = graph_json["nodes"].as_array().unwrap();
     let failed_id = nodes
         .iter()
-        .find(|n| {
-            n["type"]["type"].as_str() == Some("DefinitelyNotARegisteredProcessor")
-        })
+        .find(|n| n["type"]["type"].as_str() == Some("DefinitelyNotARegisteredProcessor"))
         .unwrap()["id"]
         .as_str()
         .unwrap()

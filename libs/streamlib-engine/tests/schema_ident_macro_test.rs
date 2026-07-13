@@ -11,8 +11,7 @@ use streamlib_engine::core::descriptors::{Org, Package, SchemaIdent, SemVer, Typ
 
 #[test]
 fn macro_matches_long_form() {
-    let short =
-        streamlib::sdk::schema_ident!("tatolab", "polyglot-foo", "PolyglotFoo", "1.2.3");
+    let short = streamlib::sdk::schema_ident!("tatolab", "polyglot-foo", "PolyglotFoo", "1.2.3");
 
     let long = SchemaIdent::new(
         Org::new("tatolab").unwrap(),
@@ -32,7 +31,6 @@ fn macro_accepts_zero_version() {
 
 #[test]
 fn macro_accepts_trailing_comma() {
-    let id =
-        streamlib::sdk::schema_ident!("tatolab", "core", "VideoFrame", "1.0.0",);
+    let id = streamlib::sdk::schema_ident!("tatolab", "core", "VideoFrame", "1.0.0",);
     assert_eq!(id.version, SemVer::new(1, 0, 0));
 }

@@ -17,7 +17,7 @@ use std::ffi::c_void;
 use parking_lot::Mutex;
 
 use crate::core::rhi::PixelBuffer;
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 #[cfg(target_os = "linux")]
 use crate::host_rhi::HostTextureExt;
 
@@ -26,13 +26,13 @@ const MAX_SURFACE_CACHE_SIZE: usize = 512;
 
 #[cfg(target_os = "macos")]
 use crate::apple::xpc_ffi::{
-    _NSConcreteMallocBlock, xpc_connection_cancel, xpc_connection_create_mach_service,
-    xpc_connection_resume, xpc_connection_send_message,
+    _NSConcreteMallocBlock, BLOCK_FLAGS_NEEDS_FREE, Block, BlockDescriptor, xpc_connection_cancel,
+    xpc_connection_create_mach_service, xpc_connection_resume, xpc_connection_send_message,
     xpc_connection_send_message_with_reply_sync, xpc_connection_set_event_handler,
     xpc_connection_t, xpc_dictionary_copy_mach_send, xpc_dictionary_create,
     xpc_dictionary_get_string, xpc_dictionary_set_mach_send, xpc_dictionary_set_string,
     xpc_error_connection_interrupted, xpc_error_connection_invalid, xpc_is_error, xpc_object_t,
-    xpc_release, Block, BlockDescriptor, BLOCK_FLAGS_NEEDS_FREE,
+    xpc_release,
 };
 
 /// Surface metadata stored alongside the cached pixel buffer.
@@ -240,7 +240,7 @@ impl SurfaceStoreInner {
     /// Otherwise, sends the mach port to the surface-share service and receives a new ID.
     #[cfg(target_os = "macos")]
     pub fn check_in(&self, pixel_buffer: &PixelBuffer) -> Result<String> {
-        use crate::apple::corevideo_ffi::{mach_port_deallocate, mach_task_self, IOSurfaceGetID};
+        use crate::apple::corevideo_ffi::{IOSurfaceGetID, mach_port_deallocate, mach_task_self};
 
         // Get the IOSurface ID for deduplication
         let pixel_buffer_ref = pixel_buffer.buffer_ref();
@@ -331,7 +331,7 @@ impl SurfaceStoreInner {
 
         // Import the pixel buffer from mach port
         use crate::core::rhi::{
-            PixelFormat, RhiExternalHandle, RhiPixelBufferImport, PixelBufferRef,
+            PixelBufferRef, PixelFormat, RhiExternalHandle, RhiPixelBufferImport,
         };
 
         let handle = RhiExternalHandle::IOSurfaceMachPort { port: mach_port };
@@ -612,10 +612,7 @@ impl SurfaceStoreInner {
             unsafe {
                 xpc_release(reply);
             }
-            return Err(Error::Configuration(format!(
-                "XPC register: {}",
-                error_msg
-            )));
+            return Err(Error::Configuration(format!("XPC register: {}", error_msg)));
         }
 
         unsafe {
@@ -635,7 +632,7 @@ impl SurfaceStoreInner {
 
         // Import the pixel buffer from mach port
         use crate::core::rhi::{
-            PixelFormat, RhiExternalHandle, RhiPixelBufferImport, PixelBufferRef,
+            PixelBufferRef, PixelFormat, RhiExternalHandle, RhiPixelBufferImport,
         };
 
         let handle = RhiExternalHandle::IOSurfaceMachPort { port: mach_port };
@@ -709,10 +706,7 @@ impl SurfaceStoreInner {
             unsafe {
                 xpc_release(reply);
             }
-            return Err(Error::Configuration(format!(
-                "XPC lookup: {}",
-                error_msg
-            )));
+            return Err(Error::Configuration(format!("XPC lookup: {}", error_msg)));
         }
 
         // Extract mach_port from reply
@@ -810,13 +804,12 @@ impl SurfaceStoreInner {
     /// Connect to the surface-share Unix socket.
     #[cfg(target_os = "linux")]
     pub fn connect(&self) -> Result<()> {
-        let stream = std::os::unix::net::UnixStream::connect(&self.service_name)
-            .map_err(|e| {
-                Error::Configuration(format!(
-                    "Failed to connect to surface-share socket '{}': {}",
-                    self.service_name, e
-                ))
-            })?;
+        let stream = std::os::unix::net::UnixStream::connect(&self.service_name).map_err(|e| {
+            Error::Configuration(format!(
+                "Failed to connect to surface-share socket '{}': {}",
+                self.service_name, e
+            ))
+        })?;
 
         *self.connection.lock() = Some(stream);
 
@@ -908,9 +901,8 @@ impl SurfaceStoreInner {
             unsafe { libc::close(*fd) };
         }
 
-        let (response, response_fds) = send_result.map_err(|e| {
-            Error::Configuration(format!("Unix socket check_in failed: {}", e))
-        })?;
+        let (response, response_fds) = send_result
+            .map_err(|e| Error::Configuration(format!("Unix socket check_in failed: {}", e)))?;
         // check_in never returns fds; close any the surface-share service may have attached
         // defensively so a future protocol drift doesn't leak them.
         for fd in &response_fds {
@@ -920,9 +912,7 @@ impl SurfaceStoreInner {
         let surface_id = response
             .get("surface_id")
             .and_then(|v: &serde_json::Value| v.as_str())
-            .ok_or_else(|| {
-                Error::Configuration("check_in: missing surface_id in response".into())
-            })?
+            .ok_or_else(|| Error::Configuration("check_in: missing surface_id in response".into()))?
             .to_string();
 
         self.cache
@@ -973,18 +963,16 @@ impl SurfaceStoreInner {
             &[],
             streamlib_surface_client::MAX_DMA_BUF_PLANES,
         )
-        .map_err(|e| {
-            Error::Configuration(format!("Unix socket check_out failed: {}", e))
-        })?;
+        .map_err(|e| Error::Configuration(format!("Unix socket check_out failed: {}", e)))?;
 
-        if let Some(error) = response.get("error").and_then(|v: &serde_json::Value| v.as_str()) {
+        if let Some(error) = response
+            .get("error")
+            .and_then(|v: &serde_json::Value| v.as_str())
+        {
             for fd in &received_fds {
                 unsafe { libc::close(*fd) };
             }
-            return Err(Error::Configuration(format!(
-                "check_out: {}",
-                error
-            )));
+            return Err(Error::Configuration(format!("check_out: {}", error)));
         }
 
         if received_fds.is_empty() {
@@ -1057,18 +1045,17 @@ impl SurfaceStoreInner {
         let send_result =
             streamlib_surface_client::send_request_with_fds(stream, &request, &[fd], 0);
         unsafe { libc::close(fd) };
-        let (response, response_fds) = send_result.map_err(|e| {
-            Error::Configuration(format!("Unix socket register failed: {}", e))
-        })?;
+        let (response, response_fds) = send_result
+            .map_err(|e| Error::Configuration(format!("Unix socket register failed: {}", e)))?;
         for f in &response_fds {
             unsafe { libc::close(*f) };
         }
 
-        if let Some(error) = response.get("error").and_then(|v: &serde_json::Value| v.as_str()) {
-            return Err(Error::Configuration(format!(
-                "register: {}",
-                error
-            )));
+        if let Some(error) = response
+            .get("error")
+            .and_then(|v: &serde_json::Value| v.as_str())
+        {
+            return Err(Error::Configuration(format!("register: {}", error)));
         }
 
         tracing::debug!("SurfaceStore: Registered buffer '{}'", pool_id);
@@ -1267,11 +1254,11 @@ impl SurfaceStoreInner {
             unsafe { libc::close(*f) };
         }
 
-        if let Some(error) = response.get("error").and_then(|v: &serde_json::Value| v.as_str()) {
-            return Err(Error::Configuration(format!(
-                "register_texture: {}",
-                error
-            )));
+        if let Some(error) = response
+            .get("error")
+            .and_then(|v: &serde_json::Value| v.as_str())
+        {
+            return Err(Error::Configuration(format!("register_texture: {}", error)));
         }
 
         tracing::debug!(
@@ -1414,7 +1401,10 @@ impl SurfaceStoreInner {
             unsafe { libc::close(*f) };
         }
 
-        if let Some(error) = response.get("error").and_then(|v: &serde_json::Value| v.as_str()) {
+        if let Some(error) = response
+            .get("error")
+            .and_then(|v: &serde_json::Value| v.as_str())
+        {
             return Err(Error::Configuration(format!(
                 "register_pixel_buffer_with_timeline: {}",
                 error
@@ -1461,18 +1451,16 @@ impl SurfaceStoreInner {
             &[],
             streamlib_surface_client::MAX_DMA_BUF_PLANES,
         )
-        .map_err(|e| {
-            Error::Configuration(format!("Unix socket lookup failed: {}", e))
-        })?;
+        .map_err(|e| Error::Configuration(format!("Unix socket lookup failed: {}", e)))?;
 
-        if let Some(error) = response.get("error").and_then(|v: &serde_json::Value| v.as_str()) {
+        if let Some(error) = response
+            .get("error")
+            .and_then(|v: &serde_json::Value| v.as_str())
+        {
             for fd in &received_fds {
                 unsafe { libc::close(*fd) };
             }
-            return Err(Error::Configuration(format!(
-                "lookup: {}",
-                error
-            )));
+            return Err(Error::Configuration(format!("lookup: {}", error)));
         }
 
         if received_fds.is_empty() {
@@ -1546,28 +1534,19 @@ impl SurfaceStoreInner {
 
         let connection = self.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
-            Error::Configuration(
-                "SurfaceStore not connected to surface-share service".into(),
-            )
+            Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
         let (response, response_fds) =
-            streamlib_surface_client::send_request_with_fds(stream, &request, &[], 0)
-                .map_err(|e| {
-                    Error::Configuration(format!(
-                        "Unix socket update_layout failed: {}",
-                        e
-                    ))
-                })?;
+            streamlib_surface_client::send_request_with_fds(stream, &request, &[], 0).map_err(
+                |e| Error::Configuration(format!("Unix socket update_layout failed: {}", e)),
+            )?;
         for f in &response_fds {
             unsafe { libc::close(*f) };
         }
 
         if let Some(error) = response.get("error").and_then(|v| v.as_str()) {
-            return Err(Error::Configuration(format!(
-                "update_layout: {}",
-                error
-            )));
+            return Err(Error::Configuration(format!("update_layout: {}", error)));
         }
 
         match response.get("success").and_then(|v| v.as_bool()) {
@@ -1591,7 +1570,10 @@ impl SurfaceStoreInner {
     pub fn lookup_texture(
         &self,
         surface_id: &str,
-    ) -> Result<(crate::core::rhi::Texture, streamlib_consumer_rhi::VulkanLayout)> {
+    ) -> Result<(
+        crate::core::rhi::Texture,
+        streamlib_consumer_rhi::VulkanLayout,
+    )> {
         let request = serde_json::json!({
             "op": "lookup",
             "surface_id": surface_id,
@@ -1608,18 +1590,16 @@ impl SurfaceStoreInner {
             &[],
             streamlib_surface_client::MAX_DMA_BUF_PLANES,
         )
-        .map_err(|e| {
-            Error::Configuration(format!("Unix socket lookup_texture failed: {}", e))
-        })?;
+        .map_err(|e| Error::Configuration(format!("Unix socket lookup_texture failed: {}", e)))?;
 
-        if let Some(error) = response.get("error").and_then(|v: &serde_json::Value| v.as_str()) {
+        if let Some(error) = response
+            .get("error")
+            .and_then(|v: &serde_json::Value| v.as_str())
+        {
             for fd in &received_fds {
                 unsafe { libc::close(*fd) };
             }
-            return Err(Error::Configuration(format!(
-                "lookup_texture: {}",
-                error
-            )));
+            return Err(Error::Configuration(format!("lookup_texture: {}", error)));
         }
 
         if received_fds.is_empty() {
@@ -1674,14 +1654,13 @@ impl SurfaceStoreInner {
 
         let allocation_size = (width as u64) * (height as u64) * (format.bytes_per_pixel() as u64);
 
-        let vulkan_device =
-            crate::vulkan::rhi::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
-                .get()
-                .ok_or_else(|| {
-                    Error::NotSupported(
-                        "lookup_texture: HostVulkanDevice not initialized for import".into(),
-                    )
-                })?;
+        let vulkan_device = crate::vulkan::rhi::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
+            .get()
+            .ok_or_else(|| {
+                Error::NotSupported(
+                    "lookup_texture: HostVulkanDevice not initialized for import".into(),
+                )
+            })?;
 
         let vulkan_texture = crate::vulkan::rhi::HostVulkanTexture::from_dma_buf_fd(
             vulkan_device,
@@ -1791,21 +1770,14 @@ impl SurfaceStoreInner {
     }
 
     #[cfg(not(target_os = "linux"))]
-    pub fn lookup_texture(
-        &self,
-        _surface_id: &str,
-    ) -> Result<(crate::core::rhi::Texture, i32)> {
+    pub fn lookup_texture(&self, _surface_id: &str) -> Result<(crate::core::rhi::Texture, i32)> {
         Err(Error::NotSupported(
             "Texture lookup not supported on this platform".into(),
         ))
     }
 
     #[cfg(not(target_os = "linux"))]
-    pub fn update_image_layout(
-        &self,
-        _surface_id: &str,
-        _layout: i32,
-    ) -> Result<()> {
+    pub fn update_image_layout(&self, _surface_id: &str, _layout: i32) -> Result<()> {
         Err(Error::NotSupported(
             "update_image_layout not supported on this platform".into(),
         ))
@@ -2262,7 +2234,10 @@ impl SurfaceStore {
     pub fn lookup_texture(
         &self,
         surface_id: &str,
-    ) -> Result<(crate::core::rhi::Texture, streamlib_consumer_rhi::VulkanLayout)> {
+    ) -> Result<(
+        crate::core::rhi::Texture,
+        streamlib_consumer_rhi::VulkanLayout,
+    )> {
         if self.is_none() {
             return Err(Error::Configuration(
                 "SurfaceStore::lookup_texture: null handle".into(),

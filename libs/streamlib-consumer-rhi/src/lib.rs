@@ -49,9 +49,9 @@ mod formats;
 mod pixel_format;
 
 #[cfg(target_os = "linux")]
-mod consumer_vulkan_device;
-#[cfg(target_os = "linux")]
 mod consumer_vulkan_buffer;
+#[cfg(target_os = "linux")]
+mod consumer_vulkan_device;
 #[cfg(target_os = "linux")]
 mod consumer_vulkan_sync;
 #[cfg(target_os = "linux")]
@@ -73,9 +73,9 @@ pub use pixel_format::PixelFormat;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(target_os = "linux")]
-pub use consumer_vulkan_device::ConsumerVulkanDevice;
-#[cfg(target_os = "linux")]
 pub use consumer_vulkan_buffer::ConsumerVulkanBuffer;
+#[cfg(target_os = "linux")]
+pub use consumer_vulkan_device::ConsumerVulkanDevice;
 #[cfg(target_os = "linux")]
 pub use consumer_vulkan_sync::ConsumerVulkanTimelineSemaphore;
 #[cfg(target_os = "linux")]

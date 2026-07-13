@@ -15,16 +15,17 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use super::super::shared::handle_as_gpu_context;
 use super::super::super::run_host_extern_c;
 use super::super::super::shared::wire::{slice_from_raw, write_err};
-
+use super::super::shared::handle_as_gpu_context;
 
 // -------------------------------------------------------------------------
 // TextureRegistration Arc-handle lifecycle
 // -------------------------------------------------------------------------
 
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clone_texture_registration(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clone_texture_registration(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_lim_clone_texture_registration",
         || {
@@ -42,7 +43,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clo
     )
 }
 
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_texture_registration(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_texture_registration(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_lim_drop_texture_registration",
         || {
@@ -202,14 +205,18 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_res
             } else {
                 None
             };
-            match gpu.resolve_texture_registration_by_surface_id(id_str, texture_layout, width, height) {
+            match gpu.resolve_texture_registration_by_surface_id(
+                id_str,
+                texture_layout,
+                width,
+                height,
+            ) {
                 Ok(reg) => {
                     // SAFETY: out_registration points at caller-allocated
                     // stack storage for a `TextureRegistration` value.
                     unsafe {
                         std::ptr::write(
-                            out_registration
-                                as *mut crate::core::context::TextureRegistration,
+                            out_registration as *mut crate::core::context::TextureRegistration,
                             reg,
                         );
                     }

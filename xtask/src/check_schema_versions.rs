@@ -90,8 +90,8 @@ fn is_schema_yaml(path: &Path) -> bool {
 }
 
 fn has_top_level_version(path: &Path) -> Result<bool> {
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let content =
+        fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
 
     // Empty file is fine.
     if content.trim().is_empty() {

@@ -412,7 +412,10 @@ mod tests {
         let names = list_embedded_schema_names();
         let mut sorted = names.clone();
         sorted.sort();
-        assert_eq!(names, sorted, "list_embedded_schema_names must return sorted output");
+        assert_eq!(
+            names, sorted,
+            "list_embedded_schema_names must return sorted output"
+        );
     }
 
     #[test]
@@ -439,8 +442,8 @@ mod tests {
             TypeName::new("Nothing").unwrap(),
             SemVer::new(1, 0, 0),
         ));
-        let err = max_payload_bytes_for_port_spec(&spec)
-            .expect_err("registry miss must surface as Err");
+        let err =
+            max_payload_bytes_for_port_spec(&spec).expect_err("registry miss must surface as Err");
         let msg = err.to_string();
         assert!(
             msg.contains("@tatolab/does-not-exist-payload/Nothing"),
@@ -613,8 +616,7 @@ mod tests {
         ));
         let mut desc = ProcessorDescriptor::new(processor_type.clone(), "block-sink");
         desc.inputs.push(
-            PortDescriptor::iceoryx2("video_in", "input", video_schema)
-                .with_overflow("block"),
+            PortDescriptor::iceoryx2("video_in", "input", video_schema).with_overflow("block"),
         );
         PROCESSOR_REGISTRY
             .register_descriptor_only(desc)
@@ -648,8 +650,7 @@ mod tests {
             TypeName::new("VideoFrame").unwrap(),
             SemVer::new(1, 0, 0),
         ));
-        let mut desc =
-            ProcessorDescriptor::new(processor_type.clone(), "default-sink");
+        let mut desc = ProcessorDescriptor::new(processor_type.clone(), "default-sink");
         desc.inputs
             .push(PortDescriptor::iceoryx2("video_in", "input", video_schema));
         PROCESSOR_REGISTRY
@@ -694,7 +695,10 @@ mod tests {
         let err = overflow_for_input_port(&processor_type, "video_in")
             .expect_err("unknown overflow string must error");
         let msg = err.to_string();
-        assert!(msg.contains("drop_oldest"), "error must list valid values: {msg}");
+        assert!(
+            msg.contains("drop_oldest"),
+            "error must list valid values: {msg}"
+        );
         assert!(msg.contains("block"), "error must list valid values: {msg}");
         assert!(
             matches!(err, crate::core::error::Error::Configuration(_)),
@@ -741,8 +745,8 @@ mod tests {
 
         register_schema(canonical, body);
 
-        let got = get_embedded_schema_definition(canonical)
-            .expect("registered schema must resolve");
+        let got =
+            get_embedded_schema_definition(canonical).expect("registered schema must resolve");
         assert!(got.contains("RuntimeOnlyType"));
 
         let spec = PortSchemaSpec::Specific(SchemaIdent::new(

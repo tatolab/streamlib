@@ -13,9 +13,9 @@
 
 use std::ffi::c_void;
 
-use super::super::scope_token::with_full_scope_or_err;
 use super::super::super::run_host_extern_c;
 use super::super::super::shared::wire::write_err;
+use super::super::scope_token::with_full_scope_or_err;
 
 // ---------------- Render-target allocation (Phase C3, Linux-only) ---------
 
@@ -81,10 +81,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_ac
             match result {
                 Some(Ok(texture)) => {
                     unsafe {
-                        std::ptr::write(
-                            out_texture as *mut crate::core::rhi::Texture,
-                            texture,
-                        );
+                        std::ptr::write(out_texture as *mut crate::core::rhi::Texture, texture);
                     }
                     0
                 }
@@ -118,4 +115,3 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_ac
     );
     1
 }
-

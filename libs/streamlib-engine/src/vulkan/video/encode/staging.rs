@@ -4,16 +4,16 @@
 //! NV12 staging upload, image layout transitions, and GPU-resident RGBA
 //! encode path (RGB→NV12 compute shader).
 
+use std::ptr;
+use std::sync::Arc;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia_vma::{self as vma, Alloc};
-use std::ptr;
-use std::sync::Arc;
 
 use crate::vulkan::video::video_context::{VideoContext, VideoError};
 
-use super::config::{Codec, EncodePacket, FrameType, SimpleEncoderConfig};
 use super::SimpleEncoder;
+use super::config::{Codec, EncodePacket, FrameType, SimpleEncoderConfig};
 
 impl SimpleEncoder {
     /// Create the encoder from an externally-owned Vulkan device (skips device creation).
@@ -30,235 +30,247 @@ impl SimpleEncoder {
         transfer_queue_family: u32,
         compute_queue: vk::Queue,
         compute_queue_family: u32,
-    ) -> Result<SimpleEncoder, VideoError> { unsafe {
-        let codec_flag = match config.codec {
-            Codec::H264 => vk::VideoCodecOperationFlagsKHR::ENCODE_H264,
-            Codec::H265 => vk::VideoCodecOperationFlagsKHR::ENCODE_H265,
-        };
+    ) -> Result<SimpleEncoder, VideoError> {
+        unsafe {
+            let codec_flag = match config.codec {
+                Codec::H264 => vk::VideoCodecOperationFlagsKHR::ENCODE_H264,
+                Codec::H265 => vk::VideoCodecOperationFlagsKHR::ENCODE_H265,
+            };
 
-        // Use the external device's allocator — no new VMA allocator created.
-        let ctx = Arc::new(VideoContext::from_external(
-            instance.clone(),
-            device.clone(),
-            physical_device,
-            allocator,
-            host_device.clone(),
-        )?);
+            // Use the external device's allocator — no new VMA allocator created.
+            let ctx = Arc::new(VideoContext::from_external(
+                instance.clone(),
+                device.clone(),
+                physical_device,
+                allocator,
+                host_device.clone(),
+            )?);
 
-        let enc_config = config.to_encode_config();
-        let gop = config.to_gop_structure();
-        let prepend_header = config.effective_prepend_header();
+            let enc_config = config.to_encode_config();
+            let gop = config.to_gop_structure();
+            let prepend_header = config.effective_prepend_header();
 
-        // Create a dummy Entry — not used for anything when device is external,
-        // but the struct requires it. Load the Vulkan library to satisfy the field.
-        let entry = vulkanalia::Entry::new(
-            vulkanalia::loader::LibloadingLoader::new(vulkanalia::loader::LIBRARY)
-                .map_err(|e| VideoError::BitstreamError(format!("Failed to load Vulkan loader: {}", e)))?,
-        ).map_err(|e| VideoError::BitstreamError(format!("Failed to load Vulkan: {}", e)))?;
+            // Create a dummy Entry — not used for anything when device is external,
+            // but the struct requires it. Load the Vulkan library to satisfy the field.
+            let entry = vulkanalia::Entry::new(
+                vulkanalia::loader::LibloadingLoader::new(vulkanalia::loader::LIBRARY).map_err(
+                    |e| VideoError::BitstreamError(format!("Failed to load Vulkan loader: {}", e)),
+                )?,
+            )
+            .map_err(|e| VideoError::BitstreamError(format!("Failed to load Vulkan: {}", e)))?;
 
-        let mut this = SimpleEncoder {
-            _entry: entry,
-            _instance: instance.clone(),
-            device: device.clone(),
-            ctx: ctx.clone(),
-            codec_flag,
-            encode_config: None,
-            video_session: vk::VideoSessionKHR::null(),
-            video_session_arc: None,
-            session_params: vk::VideoSessionParametersKHR::null(),
-            session_params_arc: None,
-            dpb_texture: None,
-            dpb_separate_textures: Vec::new(),
-            dpb_slots: Vec::new(),
-            bitstream_buffer_owner: None,
-            bitstream_buffer_size: 0,
-            command_pool: vk::CommandPool::null(),
-            command_buffer: vk::CommandBuffer::null(),
-            query_pool: None,
-            fence: vk::Fence::null(),
-            frame_count: 0,
-            encode_order_count: 0,
-            poc_counter: 0,
-            rate_control_sent: false,
-            aligned_width: 0,
-            aligned_height: 0,
-            configured: false,
-            effective_quality_level: 0,
-            h265_encoder: None,
-            h265_config: None,
-            h264_encoder: None,
-            h264_config: None,
-            source_image: vk::Image::null(),
-            source_view: vk::ImageView::null(),
-            source_allocation: std::mem::zeroed(),
-            staging_buffer: vk::Buffer::null(),
-            staging_allocation: std::mem::zeroed(),
-            staging_mapped_ptr: ptr::null_mut(),
-            staging_size: 0,
-            transfer_pool: vk::CommandPool::null(),
-            transfer_cb: vk::CommandBuffer::null(),
-            transfer_fence: vk::Fence::null(),
-            transfer_queue,
-            transfer_queue_family,
-            encode_queue,
-            encode_queue_family,
-            compute_queue,
-            compute_queue_family,
-            rgb_to_nv12: None,
-            gop,
-            gop_state: Default::default(),
-            frame_counter: 0,
-            force_idr_flag: false,
-            reorder_buffer: Vec::new(),
-            cached_header: Vec::new(),
-            config,
-            prepend_header,
-            host_device: host_device.clone(),
-        };
+            let mut this = SimpleEncoder {
+                _entry: entry,
+                _instance: instance.clone(),
+                device: device.clone(),
+                ctx: ctx.clone(),
+                codec_flag,
+                encode_config: None,
+                video_session: vk::VideoSessionKHR::null(),
+                video_session_arc: None,
+                session_params: vk::VideoSessionParametersKHR::null(),
+                session_params_arc: None,
+                dpb_texture: None,
+                dpb_separate_textures: Vec::new(),
+                dpb_slots: Vec::new(),
+                bitstream_buffer_owner: None,
+                bitstream_buffer_size: 0,
+                command_pool: vk::CommandPool::null(),
+                command_buffer: vk::CommandBuffer::null(),
+                query_pool: None,
+                fence: vk::Fence::null(),
+                frame_count: 0,
+                encode_order_count: 0,
+                poc_counter: 0,
+                rate_control_sent: false,
+                aligned_width: 0,
+                aligned_height: 0,
+                configured: false,
+                effective_quality_level: 0,
+                h265_encoder: None,
+                h265_config: None,
+                h264_encoder: None,
+                h264_config: None,
+                source_image: vk::Image::null(),
+                source_view: vk::ImageView::null(),
+                source_allocation: std::mem::zeroed(),
+                staging_buffer: vk::Buffer::null(),
+                staging_allocation: std::mem::zeroed(),
+                staging_mapped_ptr: ptr::null_mut(),
+                staging_size: 0,
+                transfer_pool: vk::CommandPool::null(),
+                transfer_cb: vk::CommandBuffer::null(),
+                transfer_fence: vk::Fence::null(),
+                transfer_queue,
+                transfer_queue_family,
+                encode_queue,
+                encode_queue_family,
+                compute_queue,
+                compute_queue_family,
+                rgb_to_nv12: None,
+                gop,
+                gop_state: Default::default(),
+                frame_counter: 0,
+                force_idr_flag: false,
+                reorder_buffer: Vec::new(),
+                cached_header: Vec::new(),
+                config,
+                prepend_header,
+                host_device: host_device.clone(),
+            };
 
-        // Configure encoder (creates video session, DPB, etc.).
-        this.configure(&enc_config)?;
+            // Configure encoder (creates video session, DPB, etc.).
+            this.configure(&enc_config)?;
 
-        let raw_header = this.extract_header().unwrap_or_default();
-        this.cached_header = super::vui_patch::patch_header_timing(
-            &raw_header,
-            this.codec_flag,
-            this.config.fps,
-            1,
-        );
-        let (aligned_w, aligned_h) = this.aligned_extent();
+            let raw_header = this.extract_header().unwrap_or_default();
+            this.cached_header = super::vui_patch::patch_header_timing(
+                &raw_header,
+                this.codec_flag,
+                this.config.fps,
+                1,
+            );
+            let (aligned_w, aligned_h) = this.aligned_extent();
 
-        // Source NV12 image.
-        let mut h264_profile = vk::VideoEncodeH264ProfileInfoKHR::builder().std_profile_idc(
-            this.h264_profile_idc(),
-        );
-        let mut h265_profile = vk::VideoEncodeH265ProfileInfoKHR::builder().std_profile_idc(
-            vk::video::STD_VIDEO_H265_PROFILE_IDC_MAIN,
-        );
-        let mut src_encode_usage = vk::VideoEncodeUsageInfoKHR::builder()
-            .tuning_mode(vk::VideoEncodeTuningModeKHR::LOW_LATENCY);
+            // Source NV12 image.
+            let mut h264_profile = vk::VideoEncodeH264ProfileInfoKHR::builder()
+                .std_profile_idc(this.h264_profile_idc());
+            let mut h265_profile = vk::VideoEncodeH265ProfileInfoKHR::builder()
+                .std_profile_idc(vk::video::STD_VIDEO_H265_PROFILE_IDC_MAIN);
+            let mut src_encode_usage = vk::VideoEncodeUsageInfoKHR::builder()
+                .tuning_mode(vk::VideoEncodeTuningModeKHR::LOW_LATENCY);
 
-        let mut profile_info = vk::VideoProfileInfoKHR::builder()
-            .video_codec_operation(codec_flag)
-            .chroma_subsampling(vk::VideoChromaSubsamplingFlagsKHR::_420)
-            .luma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::_8)
-            .chroma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::_8)
-            .push_next(&mut src_encode_usage);
+            let mut profile_info = vk::VideoProfileInfoKHR::builder()
+                .video_codec_operation(codec_flag)
+                .chroma_subsampling(vk::VideoChromaSubsamplingFlagsKHR::_420)
+                .luma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::_8)
+                .chroma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::_8)
+                .push_next(&mut src_encode_usage);
 
-        if codec_flag == vk::VideoCodecOperationFlagsKHR::ENCODE_H264 {
-            profile_info = profile_info.push_next(&mut h264_profile);
-        } else {
-            profile_info = profile_info.push_next(&mut h265_profile);
-        }
+            if codec_flag == vk::VideoCodecOperationFlagsKHR::ENCODE_H264 {
+                profile_info = profile_info.push_next(&mut h264_profile);
+            } else {
+                profile_info = profile_info.push_next(&mut h265_profile);
+            }
 
-        let profile_list =
-            vk::VideoProfileListInfoKHR::builder().profiles(std::slice::from_ref(&profile_info));
+            let profile_list = vk::VideoProfileListInfoKHR::builder()
+                .profiles(std::slice::from_ref(&profile_info));
 
-        let src_queue_families = [transfer_queue_family, encode_queue_family];
-        let mut src_image_info = vk::ImageCreateInfo::builder()
-            .image_type(vk::ImageType::_2D)
-            .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
-            .extent(vk::Extent3D { width: aligned_w, height: aligned_h, depth: 1 })
-            .mip_levels(1)
-            .array_layers(1)
-            .samples(vk::SampleCountFlags::_1)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(vk::ImageUsageFlags::VIDEO_ENCODE_SRC_KHR | vk::ImageUsageFlags::TRANSFER_DST)
-            .initial_layout(vk::ImageLayout::UNDEFINED);
-
-        if transfer_queue_family != encode_queue_family {
-            src_image_info = src_image_info
-                .sharing_mode(vk::SharingMode::CONCURRENT)
-                .queue_family_indices(&src_queue_families);
-        } else {
-            src_image_info = src_image_info.sharing_mode(vk::SharingMode::EXCLUSIVE);
-        }
-
-        src_image_info.next =
-            &*profile_list as *const vk::VideoProfileListInfoKHR as *const std::ffi::c_void;
-
-        let allocator = ctx.allocator();
-        let src_alloc_options = vma::AllocationOptions {
-            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            ..Default::default()
-        };
-        // Staging source image allocation runs under the host's device-level
-        // resource lock so concurrent processor submissions cannot race the
-        // create + bind on NVIDIA Linux.
-        let (source_image, source_allocation) = {
-            let _device_lock = host_device.lock_device();
-            allocator.create_image(src_image_info, &src_alloc_options)
-        }.map_err(VideoError::from)?;
-
-        let mut source_ycbcr_info = vk::SamplerYcbcrConversionInfo::builder()
-            .conversion(ctx.nv12_ycbcr_conversion());
-        let source_view = device.create_image_view(
-            &vk::ImageViewCreateInfo::builder()
-                .image(source_image)
-                .view_type(vk::ImageViewType::_2D)
+            let src_queue_families = [transfer_queue_family, encode_queue_family];
+            let mut src_image_info = vk::ImageCreateInfo::builder()
+                .image_type(vk::ImageType::_2D)
                 .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
-                .subresource_range(vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: 0, level_count: 1,
-                    base_array_layer: 0, layer_count: 1,
+                .extent(vk::Extent3D {
+                    width: aligned_w,
+                    height: aligned_h,
+                    depth: 1,
                 })
-                .push_next(&mut source_ycbcr_info),
-            None,
-        )?;
+                .mip_levels(1)
+                .array_layers(1)
+                .samples(vk::SampleCountFlags::_1)
+                .tiling(vk::ImageTiling::OPTIMAL)
+                .usage(
+                    vk::ImageUsageFlags::VIDEO_ENCODE_SRC_KHR | vk::ImageUsageFlags::TRANSFER_DST,
+                )
+                .initial_layout(vk::ImageLayout::UNDEFINED);
 
-        let staging_size = (aligned_w * aligned_h * 3 / 2) as usize;
-        let stg_create_info = vk::BufferCreateInfo::builder()
-            .size(staging_size as u64)
-            .usage(vk::BufferUsageFlags::TRANSFER_SRC)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-        let stg_alloc_options = vma::AllocationOptions {
-            flags: vma::AllocationCreateFlags::MAPPED
-                | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
-            required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
-                | vk::MemoryPropertyFlags::HOST_COHERENT,
-            ..Default::default()
-        };
-        // Staging buffer allocation runs under the host's device-level
-        // resource lock so concurrent processor submissions cannot race the
-        // create + bind on NVIDIA Linux.
-        let (staging_buffer, staging_allocation) = {
-            let _device_lock = host_device.lock_device();
-            allocator.create_buffer(stg_create_info, &stg_alloc_options)
-        }.map_err(VideoError::from)?;
-        let stg_info = allocator.get_allocation_info(staging_allocation);
-        let staging_mapped_ptr = stg_info.pMappedData as *mut u8;
-        if staging_mapped_ptr.is_null() {
-            allocator.destroy_buffer(staging_buffer, staging_allocation);
-            return Err(VideoError::Vulkan(vk::Result::ERROR_MEMORY_MAP_FAILED));
+            if transfer_queue_family != encode_queue_family {
+                src_image_info = src_image_info
+                    .sharing_mode(vk::SharingMode::CONCURRENT)
+                    .queue_family_indices(&src_queue_families);
+            } else {
+                src_image_info = src_image_info.sharing_mode(vk::SharingMode::EXCLUSIVE);
+            }
+
+            src_image_info.next =
+                &*profile_list as *const vk::VideoProfileListInfoKHR as *const std::ffi::c_void;
+
+            let allocator = ctx.allocator();
+            let src_alloc_options = vma::AllocationOptions {
+                required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                ..Default::default()
+            };
+            // Staging source image allocation runs under the host's device-level
+            // resource lock so concurrent processor submissions cannot race the
+            // create + bind on NVIDIA Linux.
+            let (source_image, source_allocation) = {
+                let _device_lock = host_device.lock_device();
+                allocator.create_image(src_image_info, &src_alloc_options)
+            }
+            .map_err(VideoError::from)?;
+
+            let mut source_ycbcr_info =
+                vk::SamplerYcbcrConversionInfo::builder().conversion(ctx.nv12_ycbcr_conversion());
+            let source_view = device.create_image_view(
+                &vk::ImageViewCreateInfo::builder()
+                    .image(source_image)
+                    .view_type(vk::ImageViewType::_2D)
+                    .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
+                    .subresource_range(vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    })
+                    .push_next(&mut source_ycbcr_info),
+                None,
+            )?;
+
+            let staging_size = (aligned_w * aligned_h * 3 / 2) as usize;
+            let stg_create_info = vk::BufferCreateInfo::builder()
+                .size(staging_size as u64)
+                .usage(vk::BufferUsageFlags::TRANSFER_SRC)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            let stg_alloc_options = vma::AllocationOptions {
+                flags: vma::AllocationCreateFlags::MAPPED
+                    | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
+                    | vk::MemoryPropertyFlags::HOST_COHERENT,
+                ..Default::default()
+            };
+            // Staging buffer allocation runs under the host's device-level
+            // resource lock so concurrent processor submissions cannot race the
+            // create + bind on NVIDIA Linux.
+            let (staging_buffer, staging_allocation) = {
+                let _device_lock = host_device.lock_device();
+                allocator.create_buffer(stg_create_info, &stg_alloc_options)
+            }
+            .map_err(VideoError::from)?;
+            let stg_info = allocator.get_allocation_info(staging_allocation);
+            let staging_mapped_ptr = stg_info.pMappedData as *mut u8;
+            if staging_mapped_ptr.is_null() {
+                allocator.destroy_buffer(staging_buffer, staging_allocation);
+                return Err(VideoError::Vulkan(vk::Result::ERROR_MEMORY_MAP_FAILED));
+            }
+
+            let transfer_pool = device.create_command_pool(
+                &vk::CommandPoolCreateInfo::builder()
+                    .queue_family_index(transfer_queue_family)
+                    .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
+                None,
+            )?;
+            let transfer_cb = device.allocate_command_buffers(
+                &vk::CommandBufferAllocateInfo::builder()
+                    .command_pool(transfer_pool)
+                    .level(vk::CommandBufferLevel::PRIMARY)
+                    .command_buffer_count(1),
+            )?[0];
+            let transfer_fence = device.create_fence(&vk::FenceCreateInfo::default(), None)?;
+
+            this.source_image = source_image;
+            this.source_view = source_view;
+            this.source_allocation = source_allocation;
+            this.staging_buffer = staging_buffer;
+            this.staging_allocation = staging_allocation;
+            this.staging_mapped_ptr = staging_mapped_ptr;
+            this.staging_size = staging_size;
+            this.transfer_pool = transfer_pool;
+            this.transfer_cb = transfer_cb;
+            this.transfer_fence = transfer_fence;
+
+            Ok(this)
         }
-
-        let transfer_pool = device.create_command_pool(
-            &vk::CommandPoolCreateInfo::builder()
-                .queue_family_index(transfer_queue_family)
-                .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
-            None,
-        )?;
-        let transfer_cb = device.allocate_command_buffers(
-            &vk::CommandBufferAllocateInfo::builder()
-                .command_pool(transfer_pool)
-                .level(vk::CommandBufferLevel::PRIMARY)
-                .command_buffer_count(1),
-        )?[0];
-        let transfer_fence = device.create_fence(&vk::FenceCreateInfo::default(), None)?;
-
-        this.source_image = source_image;
-        this.source_view = source_view;
-        this.source_allocation = source_allocation;
-        this.staging_buffer = staging_buffer;
-        this.staging_allocation = staging_allocation;
-        this.staging_mapped_ptr = staging_mapped_ptr;
-        this.staging_size = staging_size;
-        this.transfer_pool = transfer_pool;
-        this.transfer_cb = transfer_cb;
-        this.transfer_fence = transfer_fence;
-
-        Ok(this)
-    }}
+    }
 
     /// Upload NV12 data, encode one frame, return the packet.
     pub(crate) unsafe fn upload_and_encode(
@@ -267,211 +279,209 @@ impl SimpleEncoder {
         frame_type: FrameType,
         display_pts: u64,
         timestamp_ns: Option<i64>,
-    ) -> Result<EncodePacket, VideoError> { unsafe {
-        let width = self.config.width;
-        let height = self.config.height;
-        let enc_cfg = self.encode_config().unwrap();
-        let aligned_w = enc_cfg.aligned_width();
-        let aligned_h = enc_cfg.aligned_height();
+    ) -> Result<EncodePacket, VideoError> {
+        unsafe {
+            let width = self.config.width;
+            let height = self.config.height;
+            let enc_cfg = self.encode_config().unwrap();
+            let aligned_w = enc_cfg.aligned_width();
+            let aligned_h = enc_cfg.aligned_height();
 
-        // Upload NV12 data to staging buffer
-        let y_size = (width * height) as usize;
-        let uv_size = (width * height / 2) as usize;
-        let copy_size = y_size + uv_size;
-        ptr::copy_nonoverlapping(
-            nv12_data.as_ptr(),
-            self.staging_mapped_ptr,
-            copy_size.min(self.staging_size),
-        );
+            // Upload NV12 data to staging buffer
+            let y_size = (width * height) as usize;
+            let uv_size = (width * height / 2) as usize;
+            let copy_size = y_size + uv_size;
+            ptr::copy_nonoverlapping(
+                nv12_data.as_ptr(),
+                self.staging_mapped_ptr,
+                copy_size.min(self.staging_size),
+            );
 
-        // Record transfer commands: barrier -> copy -> barrier
-        self.device.reset_command_buffer(
-            self.transfer_cb,
-            vk::CommandBufferResetFlags::empty(),
-        )?;
+            // Record transfer commands: barrier -> copy -> barrier
+            self.device
+                .reset_command_buffer(self.transfer_cb, vk::CommandBufferResetFlags::empty())?;
 
-        self.device.begin_command_buffer(
-            self.transfer_cb,
-            &vk::CommandBufferBeginInfo::builder()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-        )?;
+            self.device.begin_command_buffer(
+                self.transfer_cb,
+                &vk::CommandBufferBeginInfo::builder()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+            )?;
 
-        // Barrier: UNDEFINED -> TRANSFER_DST
-        let barrier_to_transfer = vk::ImageMemoryBarrier2::builder()
-            .src_stage_mask(vk::PipelineStageFlags2::NONE)
-            .src_access_mask(vk::AccessFlags2::empty())
-            .dst_stage_mask(vk::PipelineStageFlags2::COPY)
-            .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-            .old_layout(vk::ImageLayout::UNDEFINED)
-            .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(self.source_image)
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: 0,
-                layer_count: 1,
-            });
+            // Barrier: UNDEFINED -> TRANSFER_DST
+            let barrier_to_transfer = vk::ImageMemoryBarrier2::builder()
+                .src_stage_mask(vk::PipelineStageFlags2::NONE)
+                .src_access_mask(vk::AccessFlags2::empty())
+                .dst_stage_mask(vk::PipelineStageFlags2::COPY)
+                .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(self.source_image)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                });
 
-        let image_barriers_to_transfer = [barrier_to_transfer];
-        let dep_to_transfer = vk::DependencyInfo::builder()
-            .image_memory_barriers(&image_barriers_to_transfer);
-        self.device
-            .cmd_pipeline_barrier2(self.transfer_cb, &dep_to_transfer);
+            let image_barriers_to_transfer = [barrier_to_transfer];
+            let dep_to_transfer =
+                vk::DependencyInfo::builder().image_memory_barriers(&image_barriers_to_transfer);
+            self.device
+                .cmd_pipeline_barrier2(self.transfer_cb, &dep_to_transfer);
 
-        // Copy Y plane
-        let y_region = vk::BufferImageCopy::builder()
-            .image_subresource(vk::ImageSubresourceLayers {
-                aspect_mask: vk::ImageAspectFlags::PLANE_0,
-                mip_level: 0,
-                base_array_layer: 0,
-                layer_count: 1,
+            // Copy Y plane
+            let y_region = vk::BufferImageCopy::builder()
+                .image_subresource(vk::ImageSubresourceLayers {
+                    aspect_mask: vk::ImageAspectFlags::PLANE_0,
+                    mip_level: 0,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })
+                .image_extent(vk::Extent3D {
+                    width: aligned_w,
+                    height: aligned_h,
+                    depth: 1,
+                });
+
+            // Copy UV plane
+            let uv_region = vk::BufferImageCopy::builder()
+                .buffer_offset(y_size as u64)
+                .image_subresource(vk::ImageSubresourceLayers {
+                    aspect_mask: vk::ImageAspectFlags::PLANE_1,
+                    mip_level: 0,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })
+                .image_extent(vk::Extent3D {
+                    width: aligned_w / 2,
+                    height: aligned_h / 2,
+                    depth: 1,
+                });
+
+            self.device.cmd_copy_buffer_to_image(
+                self.transfer_cb,
+                self.staging_buffer,
+                self.source_image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[y_region, uv_region],
+            );
+
+            // Barrier: TRANSFER_DST -> VIDEO_ENCODE_SRC
+            let barrier_to_encode = vk::ImageMemoryBarrier2::builder()
+                .src_stage_mask(vk::PipelineStageFlags2::COPY)
+                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                .dst_stage_mask(vk::PipelineStageFlags2::NONE)
+                .dst_access_mask(vk::AccessFlags2::empty())
+                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .new_layout(vk::ImageLayout::VIDEO_ENCODE_SRC_KHR)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(self.source_image)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                });
+
+            let image_barriers_to_encode = [barrier_to_encode];
+            let dep_to_encode =
+                vk::DependencyInfo::builder().image_memory_barriers(&image_barriers_to_encode);
+            self.device
+                .cmd_pipeline_barrier2(self.transfer_cb, &dep_to_encode);
+
+            self.device.end_command_buffer(self.transfer_cb)?;
+
+            // Submit transfer
+            let cb_submit = vk::CommandBufferSubmitInfo::builder()
+                .command_buffer(self.transfer_cb)
+                .build();
+            let cb_submits = [cb_submit];
+            let submit = vk::SubmitInfo2::builder()
+                .command_buffer_infos(&cb_submits)
+                .build();
+
+            self.device.reset_fences(&[self.transfer_fence])?;
+            self.host_device
+                .submit_to_queue(self.transfer_queue, &[submit], self.transfer_fence)
+                .map_err(VideoError::from)?;
+            self.device
+                .wait_for_fences(&[self.transfer_fence], true, u64::MAX)?;
+
+            // Encode
+            let output = self.encode_frame(self.source_image, self.source_view, frame_type)?;
+
+            // Build packet
+            let is_keyframe = frame_type == FrameType::Idr;
+            let mut data = Vec::new();
+
+            // Prepend header on first frame or on every IDR if configured
+            if is_keyframe && (display_pts == 0 || self.prepend_header) {
+                data.extend_from_slice(&self.cached_header);
+            }
+
+            data.extend_from_slice(&output.data);
+
+            Ok(EncodePacket {
+                data,
+                frame_type,
+                pts: display_pts,
+                is_keyframe,
+                timestamp_ns,
             })
-            .image_extent(vk::Extent3D {
-                width: aligned_w,
-                height: aligned_h,
-                depth: 1,
-            });
-
-        // Copy UV plane
-        let uv_region = vk::BufferImageCopy::builder()
-            .buffer_offset(y_size as u64)
-            .image_subresource(vk::ImageSubresourceLayers {
-                aspect_mask: vk::ImageAspectFlags::PLANE_1,
-                mip_level: 0,
-                base_array_layer: 0,
-                layer_count: 1,
-            })
-            .image_extent(vk::Extent3D {
-                width: aligned_w / 2,
-                height: aligned_h / 2,
-                depth: 1,
-            });
-
-        self.device.cmd_copy_buffer_to_image(
-            self.transfer_cb,
-            self.staging_buffer,
-            self.source_image,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            &[y_region, uv_region],
-        );
-
-        // Barrier: TRANSFER_DST -> VIDEO_ENCODE_SRC
-        let barrier_to_encode = vk::ImageMemoryBarrier2::builder()
-            .src_stage_mask(vk::PipelineStageFlags2::COPY)
-            .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-            .dst_stage_mask(vk::PipelineStageFlags2::NONE)
-            .dst_access_mask(vk::AccessFlags2::empty())
-            .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-            .new_layout(vk::ImageLayout::VIDEO_ENCODE_SRC_KHR)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(self.source_image)
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: 0,
-                layer_count: 1,
-            });
-
-        let image_barriers_to_encode = [barrier_to_encode];
-        let dep_to_encode = vk::DependencyInfo::builder()
-            .image_memory_barriers(&image_barriers_to_encode);
-        self.device
-            .cmd_pipeline_barrier2(self.transfer_cb, &dep_to_encode);
-
-        self.device.end_command_buffer(self.transfer_cb)?;
-
-        // Submit transfer
-        let cb_submit = vk::CommandBufferSubmitInfo::builder()
-            .command_buffer(self.transfer_cb)
-            .build();
-        let cb_submits = [cb_submit];
-        let submit = vk::SubmitInfo2::builder()
-            .command_buffer_infos(&cb_submits)
-            .build();
-
-        self.device.reset_fences(&[self.transfer_fence])?;
-        self.host_device
-            .submit_to_queue(self.transfer_queue, &[submit], self.transfer_fence)
-            .map_err(VideoError::from)?;
-        self.device
-            .wait_for_fences(&[self.transfer_fence], true, u64::MAX)?;
-
-        // Encode
-        let output = self.encode_frame(
-            self.source_image,
-            self.source_view,
-            frame_type,
-        )?;
-
-        // Build packet
-        let is_keyframe = frame_type == FrameType::Idr;
-        let mut data = Vec::new();
-
-        // Prepend header on first frame or on every IDR if configured
-        if is_keyframe && (display_pts == 0 || self.prepend_header) {
-            data.extend_from_slice(&self.cached_header);
         }
-
-        data.extend_from_slice(&output.data);
-
-        Ok(EncodePacket {
-            data,
-            frame_type,
-            pts: display_pts,
-            is_keyframe,
-            timestamp_ns,
-        })
-    }}
+    }
 
     /// Internal implementation of encode_image (GPU-resident RGBA path).
     pub(crate) unsafe fn encode_image_internal(
         &mut self,
         rgba_image_view: vk::ImageView,
         timestamp_ns: Option<i64>,
-    ) -> Result<Vec<EncodePacket>, VideoError> { unsafe {
-        // Lazily create the RGB→NV12 converter on first call, unless the caller
-        // pre-allocated it via `prepare_gpu_encode_resources()`.
-        if self.rgb_to_nv12.is_none() {
-            self.prepare_gpu_encode_resources_impl()?;
+    ) -> Result<Vec<EncodePacket>, VideoError> {
+        unsafe {
+            // Lazily create the RGB→NV12 converter on first call, unless the caller
+            // pre-allocated it via `prepare_gpu_encode_resources()`.
+            if self.rgb_to_nv12.is_none() {
+                self.prepare_gpu_encode_resources_impl()?;
+            }
+
+            // Run RGB→NV12 conversion on the GPU.
+            let converter = self.rgb_to_nv12.as_mut().unwrap();
+            let (nv12_image, nv12_view) = converter.convert(rgba_image_view)?;
+
+            // Determine frame type via GOP (B-frames not supported for GPU
+            // image path since we can't buffer GPU images; promote to P).
+            let mut frame_type = self.decide_frame_type();
+            if frame_type == FrameType::B {
+                frame_type = FrameType::P;
+            }
+
+            let display_pts = self.frame_counter;
+            self.frame_counter += 1;
+
+            // Encode from the NV12 image (already in VIDEO_ENCODE_SRC layout).
+            let output = self.encode_frame(nv12_image, nv12_view, frame_type)?;
+
+            let is_keyframe = frame_type == FrameType::Idr;
+            let mut data = Vec::new();
+
+            if is_keyframe && (display_pts == 0 || self.prepend_header) {
+                data.extend_from_slice(&self.cached_header);
+            }
+
+            data.extend_from_slice(&output.data);
+
+            Ok(vec![EncodePacket {
+                data,
+                frame_type,
+                pts: display_pts,
+                is_keyframe,
+                timestamp_ns,
+            }])
         }
-
-        // Run RGB→NV12 conversion on the GPU.
-        let converter = self.rgb_to_nv12.as_mut().unwrap();
-        let (nv12_image, nv12_view) = converter.convert(rgba_image_view)?;
-
-        // Determine frame type via GOP (B-frames not supported for GPU
-        // image path since we can't buffer GPU images; promote to P).
-        let mut frame_type = self.decide_frame_type();
-        if frame_type == FrameType::B {
-            frame_type = FrameType::P;
-        }
-
-        let display_pts = self.frame_counter;
-        self.frame_counter += 1;
-
-        // Encode from the NV12 image (already in VIDEO_ENCODE_SRC layout).
-        let output = self.encode_frame(nv12_image, nv12_view, frame_type)?;
-
-        let is_keyframe = frame_type == FrameType::Idr;
-        let mut data = Vec::new();
-
-        if is_keyframe && (display_pts == 0 || self.prepend_header) {
-            data.extend_from_slice(&self.cached_header);
-        }
-
-        data.extend_from_slice(&output.data);
-
-        Ok(vec![EncodePacket {
-            data,
-            frame_type,
-            pts: display_pts,
-            is_keyframe,
-            timestamp_ns,
-        }])
-    }}
+    }
 }

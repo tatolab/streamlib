@@ -70,7 +70,10 @@ fn round_trip_write_persists_modifications() {
     // READ round: confirm pattern_b made it.
     let guard = fixture.ctx.acquire_read(&descriptor).expect("acquire_read");
     for chunk in guard.view().plane(0).bytes().chunks_exact(4) {
-        assert_eq!(chunk, &pattern_b, "post-write read should observe pattern_b");
+        assert_eq!(
+            chunk, &pattern_b,
+            "post-write read should observe pattern_b"
+        );
     }
 }
 

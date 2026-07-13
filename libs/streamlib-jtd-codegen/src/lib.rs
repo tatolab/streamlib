@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use streamlib_idents::{
-    resolve_bare_schema_name, ResolvedPackage, ResolvedPackages, ResolverOptions, SemVer,
+    ResolvedPackage, ResolvedPackages, ResolverOptions, SemVer, resolve_bare_schema_name,
 };
 
 pub mod build_rs;
@@ -121,7 +121,11 @@ pub fn generate(opts: GenerateOptions) -> Result<()> {
             let lock_path = project_dir.join(streamlib_idents::LOCKFILE_NAME);
             streamlib_idents::write_lockfile(&lock_path, &lockfile)
                 .context("Failed to write streamlib.lock")?;
-            tracing::info!("Wrote {} ({} packages)", lock_path.display(), resolved.packages.len());
+            tracing::info!(
+                "Wrote {} ({} packages)",
+                lock_path.display(),
+                resolved.packages.len()
+            );
         }
 
         return generate_from_resolved(&resolved, runtime, &output);
@@ -350,8 +354,8 @@ impl SchemaIdentity {
 }
 
 fn classify_schema(yaml_content: &str, package: Option<&PackageContext>) -> Result<SchemaIdentity> {
-    let schema: JtdSchema = serde_yaml::from_str(yaml_content)
-        .context("Failed to parse YAML metadata")?;
+    let schema: JtdSchema =
+        serde_yaml::from_str(yaml_content).context("Failed to parse YAML metadata")?;
 
     if let Some(type_name) = &schema.metadata.type_name {
         let pkg = package.with_context(|| {
@@ -435,7 +439,10 @@ fn prepare_schema(
     // identifier is reconstructed at codegen-emit time from the package
     // context.
     if identity.package_subdir.is_some() {
-        if let Some(metadata) = json_value.get_mut("metadata").and_then(|v| v.as_object_mut()) {
+        if let Some(metadata) = json_value
+            .get_mut("metadata")
+            .and_then(|v| v.as_object_mut())
+        {
             metadata.remove("type");
             metadata.insert(
                 "name".to_string(),
@@ -509,7 +516,9 @@ fn run_jtd_codegen_rust(tasks: &[SchemaTask], output_dir: &Path) -> Result<()> {
         let (identity, json_path, sentinel_table, binary_fields) =
             prepare_schema(task, temp_dir.path())?;
 
-        let temp_rust_out = temp_dir.path().join(format!("rust_{}", identity.temp_dir_key()));
+        let temp_rust_out = temp_dir
+            .path()
+            .join(format!("rust_{}", identity.temp_dir_key()));
         fs::create_dir_all(&temp_rust_out)?;
 
         let output = Command::new("jtd-codegen")
@@ -524,12 +533,19 @@ fn run_jtd_codegen_rust(tasks: &[SchemaTask], output_dir: &Path) -> Result<()> {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("jtd-codegen failed for {}: {}", task.schema_path.display(), stderr);
+            anyhow::bail!(
+                "jtd-codegen failed for {}: {}",
+                task.schema_path.display(),
+                stderr
+            );
         }
 
         let generated_mod = temp_rust_out.join("mod.rs");
         let generated_code = fs::read_to_string(&generated_mod).with_context(|| {
-            format!("Failed to read generated code for {}", task.schema_path.display())
+            format!(
+                "Failed to read generated code for {}",
+                task.schema_path.display()
+            )
         })?;
 
         let processed_code =
@@ -538,9 +554,8 @@ fn run_jtd_codegen_rust(tasks: &[SchemaTask], output_dir: &Path) -> Result<()> {
 
         let output_path = identity.output_path(output_dir, "rs");
         if let Some(parent) = output_path.parent() {
-            fs::create_dir_all(parent).with_context(|| {
-                format!("Failed to create directory {}", parent.display())
-            })?;
+            fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create directory {}", parent.display()))?;
         }
         fs::write(&output_path, restored_code)
             .with_context(|| format!("Failed to write {}", output_path.display()))?;
@@ -580,7 +595,9 @@ fn run_jtd_codegen_python(tasks: &[SchemaTask], output_dir: &Path) -> Result<()>
         let (identity, json_path, sentinel_table, _binary_fields) =
             prepare_schema(task, temp_dir.path())?;
 
-        let temp_python_out = temp_dir.path().join(format!("python_{}", identity.temp_dir_key()));
+        let temp_python_out = temp_dir
+            .path()
+            .join(format!("python_{}", identity.temp_dir_key()));
         fs::create_dir_all(&temp_python_out)?;
 
         let output = Command::new("jtd-codegen")
@@ -595,7 +612,11 @@ fn run_jtd_codegen_python(tasks: &[SchemaTask], output_dir: &Path) -> Result<()>
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("jtd-codegen failed for {}: {}", task.schema_path.display(), stderr);
+            anyhow::bail!(
+                "jtd-codegen failed for {}: {}",
+                task.schema_path.display(),
+                stderr
+            );
         }
 
         let generated_init = temp_python_out.join("__init__.py");
@@ -628,14 +649,17 @@ fn run_jtd_codegen_python(tasks: &[SchemaTask], output_dir: &Path) -> Result<()>
 
         let output_path = identity.output_path(output_dir, "py");
         if let Some(parent) = output_path.parent() {
-            fs::create_dir_all(parent).with_context(|| {
-                format!("Failed to create directory {}", parent.display())
-            })?;
+            fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create directory {}", parent.display()))?;
         }
         fs::write(&output_path, &restored_code)
             .with_context(|| format!("Failed to write {}", output_path.display()))?;
 
-        tracing::info!("    -> {} (class {})", output_path.display(), identity.struct_name);
+        tracing::info!(
+            "    -> {} (class {})",
+            output_path.display(),
+            identity.struct_name
+        );
         entries.push(identity);
     }
 
@@ -671,7 +695,9 @@ fn run_jtd_codegen_typescript(tasks: &[SchemaTask], output_dir: &Path) -> Result
         let (identity, json_path, sentinel_table, _binary_fields) =
             prepare_schema(task, temp_dir.path())?;
 
-        let temp_ts_out = temp_dir.path().join(format!("ts_{}", identity.temp_dir_key()));
+        let temp_ts_out = temp_dir
+            .path()
+            .join(format!("ts_{}", identity.temp_dir_key()));
         fs::create_dir_all(&temp_ts_out)?;
 
         let output = Command::new("jtd-codegen")
@@ -686,7 +712,11 @@ fn run_jtd_codegen_typescript(tasks: &[SchemaTask], output_dir: &Path) -> Result
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("jtd-codegen failed for {}: {}", task.schema_path.display(), stderr);
+            anyhow::bail!(
+                "jtd-codegen failed for {}: {}",
+                task.schema_path.display(),
+                stderr
+            );
         }
 
         let generated_index = temp_ts_out.join("index.ts");
@@ -702,14 +732,17 @@ fn run_jtd_codegen_typescript(tasks: &[SchemaTask], output_dir: &Path) -> Result
 
         let output_path = identity.output_path(output_dir, "ts");
         if let Some(parent) = output_path.parent() {
-            fs::create_dir_all(parent).with_context(|| {
-                format!("Failed to create directory {}", parent.display())
-            })?;
+            fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create directory {}", parent.display()))?;
         }
         fs::write(&output_path, &restored_code)
             .with_context(|| format!("Failed to write {}", output_path.display()))?;
 
-        tracing::info!("    -> {} (interface {})", output_path.display(), identity.struct_name);
+        tracing::info!(
+            "    -> {} (interface {})",
+            output_path.display(),
+            identity.struct_name
+        );
         entries.push(identity);
     }
 
@@ -817,8 +850,7 @@ fn post_process_rust(
         if line.contains("#[derive(Serialize, Deserialize)]")
             || line.contains("#[derive(Debug, Serialize, Deserialize)]")
         {
-            pending_decl_kind =
-                Some(peek_decl_kind(&post_lines, idx, discriminator_enum_ref));
+            pending_decl_kind = Some(peek_decl_kind(&post_lines, idx, discriminator_enum_ref));
             pending_attr_lines.clear();
             continue;
         }
@@ -842,9 +874,8 @@ fn post_process_rust(
             // `}` doesn't get dropped.
             let is_empty_inline = line.trim_end().ends_with("{}");
 
-            result.push_str(
-                "#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]\n",
-            );
+            result
+                .push_str("#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]\n");
             for attr in pending_attr_lines.drain(..) {
                 result.push_str(&attr);
                 result.push('\n');
@@ -875,9 +906,7 @@ fn post_process_rust(
             let is_disc_variant = pending_decl_kind == Some(DeclKind::DiscriminatorEnum);
 
             if is_disc_variant {
-                result.push_str(
-                    "#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]\n",
-                );
+                result.push_str("#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]\n");
             } else {
                 result.push_str(
                     "#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]\n",
@@ -1005,10 +1034,7 @@ enum DeclKind {
     DiscriminatorEnum,
 }
 
-fn rename_lookup<'a>(
-    renames: &'a [(String, String)],
-    full_name: &str,
-) -> Option<&'a String> {
+fn rename_lookup<'a>(renames: &'a [(String, String)], full_name: &str) -> Option<&'a String> {
     renames
         .iter()
         .find(|(full, _)| full == full_name)
@@ -1255,11 +1281,7 @@ fn inject_typing_imports(code: &str) -> String {
 ///    attribute is the first non-docstring statement in the class body.
 ///    `ClassVar[SchemaIdent]` opts the attribute out of dataclass field
 ///    treatment.
-fn inject_schema_ident_python(
-    code: &str,
-    class_name: &str,
-    ident: &SchemaIdentEmit,
-) -> String {
+fn inject_schema_ident_python(code: &str, class_name: &str, ident: &SchemaIdentEmit) -> String {
     // 1. Extend the existing `from typing import …` line to include `ClassVar`
     //    and inject `from streamlib.schema_ident import SchemaIdent` right
     //    after it. The exact set of imports varies per schema (some include
@@ -1292,7 +1314,11 @@ fn inject_schema_ident_python(
             .unwrap_or(bytes.len());
         let line = &with_imports[cursor..line_end];
         if line.trim().is_empty() {
-            cursor = if line_end < bytes.len() { line_end + 1 } else { line_end };
+            cursor = if line_end < bytes.len() {
+                line_end + 1
+            } else {
+                line_end
+            };
         } else {
             break;
         }
@@ -1376,7 +1402,10 @@ fn post_process_typescript(code: &str, expected_class_name: &str) -> String {
 /// (subdir-sorted, entries within each subdir-sorted).
 fn group_entries(
     entries: &[SchemaIdentity],
-) -> (Vec<SchemaIdentity>, std::collections::BTreeMap<String, Vec<SchemaIdentity>>) {
+) -> (
+    Vec<SchemaIdentity>,
+    std::collections::BTreeMap<String, Vec<SchemaIdentity>>,
+) {
     let mut flat: Vec<SchemaIdentity> = Vec::new();
     let mut groups: std::collections::BTreeMap<String, Vec<SchemaIdentity>> =
         std::collections::BTreeMap::new();
@@ -1410,8 +1439,7 @@ fn write_rust_barrels(output_dir: &Path, entries: &[SchemaIdentity]) -> Result<(
             content.push_str(&format!("pub use {}::{};\n", e.module_name, e.struct_name));
         }
         let path = output_dir.join(subdir).join("mod.rs");
-        fs::write(&path, content)
-            .with_context(|| format!("Failed to write {}", path.display()))?;
+        fs::write(&path, content).with_context(|| format!("Failed to write {}", path.display()))?;
     }
 
     let mut top = String::from(
@@ -1454,7 +1482,10 @@ fn write_python_barrels(output_dir: &Path, entries: &[SchemaIdentity]) -> Result
              # Generated by jtd-codegen. DO NOT EDIT.\n\n",
         );
         for e in group {
-            init_py.push_str(&format!("from .{} import {}\n", e.module_name, e.struct_name));
+            init_py.push_str(&format!(
+                "from .{} import {}\n",
+                e.module_name, e.struct_name
+            ));
         }
         init_py.push_str("\n__all__ = [\n");
         for e in group {
@@ -1462,8 +1493,7 @@ fn write_python_barrels(output_dir: &Path, entries: &[SchemaIdentity]) -> Result
         }
         init_py.push_str("]\n");
         let path = output_dir.join(subdir).join("__init__.py");
-        fs::write(&path, init_py)
-            .with_context(|| format!("Failed to write {}", path.display()))?;
+        fs::write(&path, init_py).with_context(|| format!("Failed to write {}", path.display()))?;
     }
 
     let mut top = String::from(
@@ -1473,7 +1503,10 @@ fn write_python_barrels(output_dir: &Path, entries: &[SchemaIdentity]) -> Result
          # Generated by jtd-codegen. DO NOT EDIT.\n\n",
     );
     for e in &flat {
-        top.push_str(&format!("from .{} import {}\n", e.module_name, e.struct_name));
+        top.push_str(&format!(
+            "from .{} import {}\n",
+            e.module_name, e.struct_name
+        ));
     }
     for (subdir, group) in &groups {
         for e in group {
@@ -1509,8 +1542,7 @@ fn write_typescript_barrels(output_dir: &Path, entries: &[SchemaIdentity]) -> Re
             idx.push_str(&format!("export * from \"./{}.ts\";\n", e.module_name));
         }
         let path = output_dir.join(subdir).join("index.ts");
-        fs::write(&path, idx)
-            .with_context(|| format!("Failed to write {}", path.display()))?;
+        fs::write(&path, idx).with_context(|| format!("Failed to write {}", path.display()))?;
     }
 
     let mut top = String::from(
@@ -1691,7 +1723,9 @@ mod tests {
             version: "1.0.0".to_string(),
         };
         let out = post_process_python(code, "VideoFrame", Some(&ident));
-        assert!(out.contains("from typing import Any, ClassVar, Dict, Optional, Union, get_args, get_origin"));
+        assert!(out.contains(
+            "from typing import Any, ClassVar, Dict, Optional, Union, get_args, get_origin"
+        ));
         assert!(out.contains("from streamlib.schema_ident import SchemaIdent"));
         assert!(out.contains("__streamlib_schema_ident__: ClassVar[SchemaIdent] = SchemaIdent("));
         assert!(out.contains("org=\"tatolab\""));
@@ -1744,7 +1778,9 @@ mod tests {
     fn post_process_typescript_substitutes_discriminator_union() {
         let code = "export type StreamlibCanonRoot = StreamlibCanonRootBar | StreamlibCanonRootFoo;\nexport interface StreamlibCanonRootBar { op: \"bar\"; }\n";
         let out = post_process_typescript(code, "EscalateRequest");
-        assert!(out.contains("export type EscalateRequest = EscalateRequestBar | EscalateRequestFoo;"));
+        assert!(
+            out.contains("export type EscalateRequest = EscalateRequestBar | EscalateRequestFoo;")
+        );
         assert!(out.contains("export interface EscalateRequestBar"));
         assert!(!out.contains("StreamlibCanonRoot"));
     }
@@ -1857,12 +1893,17 @@ mod tests {
         )
         .unwrap();
         let names = collect_binary_field_names(&json);
-        assert!(names.is_empty(), "expected no binary fields, got {:?}", names);
+        assert!(
+            names.is_empty(),
+            "expected no binary fields, got {:?}",
+            names
+        );
     }
 
     #[test]
     fn collect_binary_field_names_handles_schemas_with_no_properties() {
-        let json: serde_json::Value = serde_json::from_str(r#"{"metadata": {"name": "Empty"}}"#).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(r#"{"metadata": {"name": "Empty"}}"#).unwrap();
         let names = collect_binary_field_names(&json);
         assert!(names.is_empty());
     }
@@ -1959,7 +2000,10 @@ mod tests {
             version: SemVer::new(1, 0, 0),
         };
         let id = classify_schema(yaml, Some(&pkg)).unwrap();
-        assert_eq!(id.package_subdir.as_deref(), Some("tatolab__screen_capture"));
+        assert_eq!(
+            id.package_subdir.as_deref(),
+            Some("tatolab__screen_capture")
+        );
     }
 
     #[test]
@@ -2005,7 +2049,10 @@ mod tests {
             package_subdir: None,
         };
         let p = id.output_path(Path::new("/out"), "rs");
-        assert_eq!(p, PathBuf::from("/out/com_tatolab_jtd_codegen_fixture_a_config.rs"));
+        assert_eq!(
+            p,
+            PathBuf::from("/out/com_tatolab_jtd_codegen_fixture_a_config.rs")
+        );
     }
 
     #[test]
@@ -2049,10 +2096,7 @@ mod tests {
 
     #[test]
     fn extract_tag_attr_finds_serde_tag() {
-        assert_eq!(
-            extract_tag_attr("#[serde(tag = \"op\")]"),
-            Some("op")
-        );
+        assert_eq!(extract_tag_attr("#[serde(tag = \"op\")]"), Some("op"));
         assert_eq!(extract_tag_attr("#[derive(Debug)]"), None);
     }
 
@@ -2108,7 +2152,9 @@ mod tests {
         let top = std::fs::read_to_string(tmp.path().join("mod.rs")).unwrap();
         assert!(top.contains("pub mod com_tatolab_jtd_codegen_fixture_a_config;"));
         assert!(top.contains("pub mod tatolab__core;"));
-        assert!(top.contains("pub use com_tatolab_jtd_codegen_fixture_a_config::JtdCodegenFixtureAConfig;"));
+        assert!(top.contains(
+            "pub use com_tatolab_jtd_codegen_fixture_a_config::JtdCodegenFixtureAConfig;"
+        ));
         assert!(top.contains("pub use tatolab__core::VideoFrame;"));
 
         let sub = std::fs::read_to_string(tmp.path().join("tatolab__core/mod.rs")).unwrap();
@@ -2136,7 +2182,9 @@ mod tests {
         write_python_barrels(tmp.path(), &entries).unwrap();
 
         let top = std::fs::read_to_string(tmp.path().join("__init__.py")).unwrap();
-        assert!(top.contains("from .com_tatolab_jtd_codegen_fixture_a_config import JtdCodegenFixtureAConfig"));
+        assert!(top.contains(
+            "from .com_tatolab_jtd_codegen_fixture_a_config import JtdCodegenFixtureAConfig"
+        ));
         assert!(top.contains("from .tatolab__core import VideoFrame"));
 
         let sub = std::fs::read_to_string(tmp.path().join("tatolab__core/__init__.py")).unwrap();

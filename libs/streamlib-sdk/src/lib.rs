@@ -125,14 +125,14 @@ pub mod sdk {
         /// A `Runner` with the default polyglot build orchestrator wired,
         /// so build-requiring module loads (`Strategy::Path`/`Git` +
         /// `IfStale`/`AlwaysBuild`) materialize from source on demand.
-        fn with_auto_build(
-        ) -> streamlib_engine::core::error::Result<std::sync::Arc<runtime::Runner>>;
+        fn with_auto_build()
+        -> streamlib_engine::core::error::Result<std::sync::Arc<runtime::Runner>>;
     }
 
     #[cfg(feature = "auto-build")]
     impl RunnerAutoBuild for runtime::Runner {
-        fn with_auto_build(
-        ) -> streamlib_engine::core::error::Result<std::sync::Arc<runtime::Runner>> {
+        fn with_auto_build()
+        -> streamlib_engine::core::error::Result<std::sync::Arc<runtime::Runner>> {
             runtime::Runner::new_with_orchestrator(PolyglotBuildOrchestrator::default())
         }
     }
@@ -152,9 +152,7 @@ pub mod sdk {
         // Port markers + input/output helpers — semantically processor-
         // related; physically live in `core::graph::edges::link_port_markers`
         // in engine source.
-        pub use streamlib_engine::core::graph::{
-            input, output, InputPortMarker, OutputPortMarker,
-        };
+        pub use streamlib_engine::core::graph::{InputPortMarker, OutputPortMarker, input, output};
 
         // Port schema spec — semantically processor-related; lives in
         // `core::descriptors` in engine source (re-exported from
@@ -272,9 +270,7 @@ pub mod sdk {
         /// engine-only timeline-semaphore registration paths on
         /// `SurfaceStore` (`register_texture` /
         /// `register_pixel_buffer_with_timeline`).
-        pub use streamlib_engine::{
-            HostGpuDeviceExt, HostPixelBufferRefExt, HostTextureExt,
-        };
+        pub use streamlib_engine::{HostGpuDeviceExt, HostPixelBufferRefExt, HostTextureExt};
 
         #[cfg(target_os = "linux")]
         pub use streamlib_engine::HostSurfaceStoreExt;

@@ -20,8 +20,10 @@
 /// Engine-side twin directory, relative to this crate's manifest.
 const ENGINE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/core/plugin/");
 /// SDK-side twin directory (`plugin/streamlib-plugin-sdk` is two levels up).
-const SDK_DIR: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../plugin/streamlib-plugin-sdk/src/plugin/");
+const SDK_DIR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../plugin/streamlib-plugin-sdk/src/plugin/"
+);
 
 /// Strip full-line comments + blank lines, apply the one known import-path shim
 /// (`super::host_services::` → `super::`), then drop all remaining whitespace.
@@ -43,7 +45,8 @@ fn normalize(src: &str) -> String {
     // Trailing commas before a close-delimiter are line-wrap artifacts (rustfmt
     // adds one when it breaks an arg/field list across lines); strip them so a
     // pure wrap-formatting difference doesn't read as logic drift.
-    no_ws.replace(",)", ")")
+    no_ws
+        .replace(",)", ")")
         .replace(",]", "]")
         .replace(",}", "}")
         .replace(",>", ">")
@@ -52,7 +55,9 @@ fn normalize(src: &str) -> String {
 fn read(dir: &str, name: &str) -> String {
     let path = format!("{dir}{name}");
     std::fs::read_to_string(&path).unwrap_or_else(|e| {
-        panic!("twin-drift guard: cannot read `{path}`: {e} — did a twin file move? update this guard.")
+        panic!(
+            "twin-drift guard: cannot read `{path}`: {e} — did a twin file move? update this guard."
+        )
     })
 }
 

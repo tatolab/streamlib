@@ -180,10 +180,14 @@ mod tests {
         // accidental flatten via custom Serialize would trip this test.
         let mut catalog = MoqBroadcastCatalog::new();
         let schema = ident("tatolab", "core", "VideoFrame", SemVer::new(1, 0, 0));
-        let proc_type = ident("tatolab", "streamlib", "CameraProcessor", SemVer::new(1, 0, 0));
+        let proc_type = ident(
+            "tatolab",
+            "streamlib",
+            "CameraProcessor",
+            SemVer::new(1, 0, 0),
+        );
         catalog.add_track("track", Some(&schema), Some(&proc_type), "video");
-        let json: serde_json::Value =
-            serde_json::from_slice(&catalog.to_json_bytes()).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&catalog.to_json_bytes()).unwrap();
         let schema_json = &json["tracks"][0]["schema"];
         assert!(
             schema_json.is_object(),
@@ -210,12 +214,8 @@ mod tests {
             "AudioCaptureProcessor",
             SemVer::new(1, 0, 0),
         );
-        let entry = catalog_entry_for_output_port(
-            "encoder",
-            Some(&schema),
-            &proc_type,
-            "audio_out",
-        );
+        let entry =
+            catalog_entry_for_output_port("encoder", Some(&schema), &proc_type, "audio_out");
         assert_eq!(entry.track_name, "encoder/audio_out");
         let s = entry.schema.as_ref().unwrap();
         assert_eq!(s.type_name, "AudioFrame");

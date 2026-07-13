@@ -21,13 +21,13 @@
 
 use std::sync::Arc;
 
-use streamlib_consumer_rhi::VulkanRhiDevice;
 use streamlib_adapter_abi::{
     AdapterError, ReadGuard, StreamlibSurface, SurfaceAdapter, WriteGuard,
 };
+use streamlib_consumer_rhi::VulkanRhiDevice;
 
 use crate::adapter::VulkanSurfaceAdapter;
-use crate::raw_handles::{raw_handles, RawVulkanHandles};
+use crate::raw_handles::{RawVulkanHandles, raw_handles};
 
 // Power-user `raw_handles()` is generic over `VulkanRhiDevice` —
 // works against either host- or consumer-flavored devices. The

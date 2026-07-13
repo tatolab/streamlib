@@ -25,7 +25,9 @@ mod vulkan_upload_resources;
 pub use host_marker::HostMarker;
 pub use vulkan_command_buffer::VulkanCommandBuffer;
 pub use vulkan_command_queue::VulkanCommandQueue;
-pub use vulkan_device::{HostVulkanDevice, RayTracingPipelineProperties, ThirdPartyGpuCapabilities};
+pub use vulkan_device::{
+    HostVulkanDevice, RayTracingPipelineProperties, ThirdPartyGpuCapabilities,
+};
 
 // Plugin-ABI transit-layout probes for the three non-`#[repr(C)]`
 // engine types that cross by raw `Arc` pointer. Folded into the
@@ -33,15 +35,15 @@ pub use vulkan_device::{HostVulkanDevice, RayTracingPipelineProperties, ThirdPar
 #[cfg(target_os = "linux")]
 pub(crate) use vulkan_device::host_vulkan_device_layout_probe;
 #[cfg(target_os = "linux")]
-pub(crate) use vulkan_sync::host_vulkan_timeline_semaphore_layout_probe;
-#[cfg(target_os = "linux")]
-pub(crate) use vulkan_texture::host_vulkan_texture_layout_probe;
-#[allow(unused_imports)]
-pub use vulkan_sync::{VulkanFence, VulkanSemaphore};
-#[cfg(target_os = "linux")]
 #[allow(unused_imports)]
 pub use vulkan_sync::HostVulkanTimelineSemaphore;
+#[cfg(target_os = "linux")]
+pub(crate) use vulkan_sync::host_vulkan_timeline_semaphore_layout_probe;
+#[allow(unused_imports)]
+pub use vulkan_sync::{VulkanFence, VulkanSemaphore};
 pub use vulkan_texture::HostVulkanTexture;
+#[cfg(target_os = "linux")]
+pub(crate) use vulkan_texture::host_vulkan_texture_layout_probe;
 #[cfg(target_os = "linux")]
 pub use vulkan_texture::{VideoDpbDirection, VideoDpbTextureDescriptor};
 #[cfg(target_os = "linux")]
@@ -67,7 +69,7 @@ pub use vulkan_blitter::VulkanBlitter;
 #[cfg(target_os = "linux")]
 mod vulkan_tone_mapper;
 #[cfg(target_os = "linux")]
-pub use vulkan_tone_mapper::{VulkanToneMapper, TONE_MAPPER_WORKGROUP_SIZE};
+pub use vulkan_tone_mapper::{TONE_MAPPER_WORKGROUP_SIZE, VulkanToneMapper};
 
 pub(crate) mod vulkan_buffer;
 pub use vulkan_buffer::HostVulkanBuffer;
@@ -99,15 +101,13 @@ pub(crate) use vulkan_command_recorder::RhiCommandRecorderInner;
 #[cfg(target_os = "linux")]
 mod vulkan_present_target;
 #[cfg(target_os = "linux")]
-pub use vulkan_present_target::{
-    PresentFrame, VulkanPresentTarget, MAX_FRAMES_IN_FLIGHT,
-};
+pub use vulkan_present_target::{MAX_FRAMES_IN_FLIGHT, PresentFrame, VulkanPresentTarget};
 
 #[cfg(target_os = "linux")]
 mod vulkan_swapchain_colorspace;
 #[cfg(target_os = "linux")]
 pub use vulkan_swapchain_colorspace::{
-    build_hdr_metadata, pick_swapchain_format, SwapchainColorPick,
+    SwapchainColorPick, build_hdr_metadata, pick_swapchain_format,
 };
 
 mod vulkan_texture_cache;
@@ -120,15 +120,13 @@ mod vulkan_compute_kernel;
 pub use vulkan_compute_kernel::VulkanComputeKernel;
 
 mod vulkan_graphics_kernel;
-pub use vulkan_graphics_kernel::{
-    OffscreenColorTarget, OffscreenDraw, VulkanGraphicsKernel,
-};
+pub use vulkan_graphics_kernel::{OffscreenColorTarget, OffscreenDraw, VulkanGraphicsKernel};
 
 #[cfg(target_os = "linux")]
 mod vulkan_acceleration_structure;
 #[cfg(target_os = "linux")]
 pub use vulkan_acceleration_structure::{
-    AccelerationStructureKind, TlasInstanceDesc, VulkanAccelerationStructure, IDENTITY_TRANSFORM,
+    AccelerationStructureKind, IDENTITY_TRANSFORM, TlasInstanceDesc, VulkanAccelerationStructure,
 };
 // `VulkanAccelerationStructureInner` is `pub(crate)`-shaped — only
 // the host's clone/drop callbacks in `core::plugin::host_services`
@@ -159,9 +157,7 @@ pub use vulkan_video_session::{
 #[cfg(target_os = "linux")]
 mod vulkan_query_pool;
 #[cfg(target_os = "linux")]
-pub use vulkan_query_pool::{
-    HostVulkanQueryPool, QueryPoolDescriptor, VideoEncodeFeedbackResult,
-};
+pub use vulkan_query_pool::{HostVulkanQueryPool, QueryPoolDescriptor, VideoEncodeFeedbackResult};
 
 #[cfg(target_os = "linux")]
 pub mod drm_modifier_probe;

@@ -22,8 +22,8 @@ mod common;
 use std::os::fd::IntoRawFd;
 use std::os::unix::io::AsRawFd;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use streamlib::sdk::engine::HostTextureExt;
 
@@ -48,8 +48,7 @@ fn subprocess_crash_mid_write_does_not_break_host_adapter() {
     }
 
     // Build the helper Command + a socketpair-style fd handoff.
-    let (parent_sock, child_sock) =
-        std::os::unix::net::UnixStream::pair().expect("socketpair");
+    let (parent_sock, child_sock) = std::os::unix::net::UnixStream::pair().expect("socketpair");
     let child_fd = child_sock.into_raw_fd();
     unsafe {
         let flags = libc::fcntl(child_fd, libc::F_GETFD);

@@ -14,12 +14,12 @@
 
 use std::path::{Path, PathBuf};
 
-use streamlib_idents::{
-    parse_catalog_index_ndjson, CatalogRuntime, CatalogSchemaRef, Org, Package, PackageRef,
-    RegistryClient, RegistryConfig, SchemaIdent, SemVer, TypeName, CATALOG_INDEX_PATH,
-};
 use streamlib_idents::CatalogClient;
-use streamlib_pack::catalog::{build_package_catalog, build_sibling_versions, SiblingVersions};
+use streamlib_idents::{
+    CATALOG_INDEX_PATH, CatalogRuntime, CatalogSchemaRef, Org, Package, PackageRef, RegistryClient,
+    RegistryConfig, SchemaIdent, SemVer, TypeName, parse_catalog_index_ndjson,
+};
+use streamlib_pack::catalog::{SiblingVersions, build_package_catalog, build_sibling_versions};
 use streamlib_pack::static_registry::{merge_catalog_index_lines, write_package_catalog};
 
 fn write(dir: &Path, rel: &str, body: &str) {
@@ -259,7 +259,11 @@ fn pkg_publish_emits_fetchable_catalog_and_republish_does_not_duplicate() {
     //    `merge_catalog_index_lines` and this jumps from 2 to 4.)
     publish_package(&tree, &camera, &siblings);
     let after = client.fetch_processor_index().unwrap();
-    assert_eq!(after.len(), 2, "republish must not duplicate aggregate lines");
+    assert_eq!(
+        after.len(),
+        2,
+        "republish must not duplicate aggregate lines"
+    );
     // The on-disk aggregate itself has no dupes (not just the parsed view).
     let raw = std::fs::read(tree.join(CATALOG_INDEX_PATH)).unwrap();
     assert_eq!(parse_catalog_index_ndjson(&raw).len(), 2);
@@ -337,18 +341,29 @@ processors:
     let client = CatalogClient::new(format!("file://{}", tree.display()), None);
 
     // Per-package catalog under the FULL prerelease version dir.
-    assert!(tree.join("slpkg/widget/2.1.0-dev.3/widget.catalog.json").is_file());
+    assert!(
+        tree.join("slpkg/widget/2.1.0-dev.3/widget.catalog.json")
+            .is_file()
+    );
     let full_ver: SemVer = "2.1.0-dev.3".parse().unwrap();
     let catalog = client
         .fetch_package_catalog(&pkg_ref("widget"), &full_ver)
         .unwrap()
         .expect("catalog fetchable by the FULL prerelease version");
-    let cfg_ident = catalog.processors[0].config.as_ref().unwrap().schema.clone();
+    let cfg_ident = catalog.processors[0]
+        .config
+        .as_ref()
+        .unwrap()
+        .schema
+        .clone();
     // The config schema ident is release-core (prerelease stripped).
     assert_eq!(cfg_ident.to_string(), "@tatolab/widget/WidgetConfig@2.1.0");
 
     // JTD under the RELEASE-CORE dir, fetchable by the release-core ident.
-    assert!(tree.join("slpkg/widget/2.1.0/schemas/WidgetConfig.jtd.json").is_file());
+    assert!(
+        tree.join("slpkg/widget/2.1.0/schemas/WidgetConfig.jtd.json")
+            .is_file()
+    );
     let jtd = client
         .fetch_schema_type_definition(&cfg_ident)
         .unwrap()

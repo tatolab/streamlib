@@ -28,10 +28,10 @@
 use std::sync::Arc;
 
 use streamlib::sdk::context::GpuContext;
+use streamlib::sdk::engine::HostGpuDeviceExt;
 use streamlib::sdk::engine::host_rhi::{
     HostVulkanBuffer, HostVulkanDevice, HostVulkanTexture, HostVulkanTimelineSemaphore,
 };
-use streamlib::sdk::engine::HostGpuDeviceExt;
 use streamlib::sdk::rhi::{TextureDescriptor, TextureFormat as RhiTextureFormat};
 use streamlib_adapter_abi::{
     AdapterError, StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState,
@@ -59,9 +59,7 @@ fn host_device_or_skip(test_name: &str) -> Option<Arc<HostVulkanDevice>> {
     let gpu = try_init_gpu()?;
     let host_device = Arc::clone(gpu.device().vulkan_device());
     if host_device.opaque_fd_image_pool().is_none() {
-        println!(
-            "{test_name}: skipping — OPAQUE_FD image pool unavailable on this driver"
-        );
+        println!("{test_name}: skipping — OPAQUE_FD image pool unavailable on this driver");
         return None;
     }
     Some(host_device)
@@ -109,15 +107,14 @@ fn make_surface(id: SurfaceId) -> StreamlibSurface {
 /// lookup fails (returns `None`).
 #[test]
 fn image_registration_round_trips_through_surface_texture_accessor() {
-    let Some(host_device) = host_device_or_skip(
-        "image_registration_round_trips_through_surface_texture_accessor",
-    ) else {
+    let Some(host_device) =
+        host_device_or_skip("image_registration_round_trips_through_surface_texture_accessor")
+    else {
         return;
     };
     let adapter = CudaSurfaceAdapter::new(Arc::clone(&host_device));
     let id: SurfaceId = 0x4001;
-    let texture = make_image(&host_device, RhiTextureFormat::Rgba8Unorm)
-        .expect("texture");
+    let texture = make_image(&host_device, RhiTextureFormat::Rgba8Unorm).expect("texture");
     let produce_done = make_timeline(&host_device).expect("produce_done");
     let consume_done = make_timeline(&host_device).expect("consume_done");
     adapter
@@ -162,9 +159,9 @@ fn image_registration_round_trips_through_surface_texture_accessor() {
 /// adapter accepts every variant the host can build.
 #[test]
 fn image_registration_accepts_each_cuda_mappable_format() {
-    let Some(host_device) = host_device_or_skip(
-        "image_registration_accepts_each_cuda_mappable_format",
-    ) else {
+    let Some(host_device) =
+        host_device_or_skip("image_registration_accepts_each_cuda_mappable_format")
+    else {
         return;
     };
     let adapter = CudaSurfaceAdapter::new(Arc::clone(&host_device));
@@ -206,9 +203,9 @@ fn image_registration_accepts_each_cuda_mappable_format() {
 /// the registry is one keyspace regardless of flavor.
 #[test]
 fn buffer_then_image_registration_returns_surface_already_registered() {
-    let Some(host_device) = host_device_or_skip(
-        "buffer_then_image_registration_returns_surface_already_registered",
-    ) else {
+    let Some(host_device) =
+        host_device_or_skip("buffer_then_image_registration_returns_surface_already_registered")
+    else {
         return;
     };
     let adapter = CudaSurfaceAdapter::new(Arc::clone(&host_device));
@@ -290,7 +287,9 @@ fn acquire_texture_returns_view_with_correct_handles_and_releases_on_drop() {
     }
     // Guard dropped — the next acquire must succeed because the read
     // holder was released by Drop.
-    let _again = adapter.acquire_texture(&surface).expect("re-acquire_texture");
+    let _again = adapter
+        .acquire_texture(&surface)
+        .expect("re-acquire_texture");
 }
 
 /// `acquire_surface` mirrors `acquire_texture` on the writeable side.
@@ -329,7 +328,9 @@ fn acquire_surface_returns_view_with_correct_handles_and_releases_on_drop() {
         assert_eq!(view.format(), ConsumerTextureFormat::Rgba32Float);
         assert_eq!(guard.surface_id(), id);
     }
-    let _again = adapter.acquire_surface(&surface).expect("re-acquire_surface");
+    let _again = adapter
+        .acquire_surface(&surface)
+        .expect("re-acquire_surface");
 }
 
 /// Path-restriction: an image-flavored surface rejects `acquire_read`
@@ -338,9 +339,9 @@ fn acquire_surface_returns_view_with_correct_handles_and_releases_on_drop() {
 /// the OpenGL adapter's EXTERNAL_OES-rejects-write hint.
 #[test]
 fn buffer_path_rejects_image_surface_with_usage_correction_hint() {
-    let Some(host_device) = host_device_or_skip(
-        "buffer_path_rejects_image_surface_with_usage_correction_hint",
-    ) else {
+    let Some(host_device) =
+        host_device_or_skip("buffer_path_rejects_image_surface_with_usage_correction_hint")
+    else {
         return;
     };
     let adapter = CudaSurfaceAdapter::new(Arc::clone(&host_device));
@@ -390,9 +391,9 @@ fn buffer_path_rejects_image_surface_with_usage_correction_hint() {
 /// with a typed `BackendRejected` carrying the inverse usage hint.
 #[test]
 fn image_path_rejects_buffer_surface_with_usage_correction_hint() {
-    let Some(host_device) = host_device_or_skip(
-        "image_path_rejects_buffer_surface_with_usage_correction_hint",
-    ) else {
+    let Some(host_device) =
+        host_device_or_skip("image_path_rejects_buffer_surface_with_usage_correction_hint")
+    else {
         return;
     };
     let adapter = CudaSurfaceAdapter::new(Arc::clone(&host_device));
@@ -437,9 +438,9 @@ fn image_path_rejects_buffer_surface_with_usage_correction_hint() {
 /// `try_acquire_write` contention behavior.
 #[test]
 fn try_acquire_surface_returns_none_on_reader_contention() {
-    let Some(host_device) = host_device_or_skip(
-        "try_acquire_surface_returns_none_on_reader_contention",
-    ) else {
+    let Some(host_device) =
+        host_device_or_skip("try_acquire_surface_returns_none_on_reader_contention")
+    else {
         return;
     };
     let adapter = CudaSurfaceAdapter::new(Arc::clone(&host_device));
@@ -472,9 +473,9 @@ fn try_acquire_surface_returns_none_on_reader_contention() {
 /// for write.
 #[test]
 fn try_acquire_texture_returns_none_on_writer_contention() {
-    let Some(host_device) = host_device_or_skip(
-        "try_acquire_texture_returns_none_on_writer_contention",
-    ) else {
+    let Some(host_device) =
+        host_device_or_skip("try_acquire_texture_returns_none_on_writer_contention")
+    else {
         return;
     };
     let adapter = CudaSurfaceAdapter::new(Arc::clone(&host_device));
@@ -508,9 +509,9 @@ fn try_acquire_texture_returns_none_on_writer_contention() {
 /// rejection.
 #[test]
 fn image_acquire_on_unregistered_surface_returns_surface_not_found() {
-    let Some(_host_device) = host_device_or_skip(
-        "image_acquire_on_unregistered_surface_returns_surface_not_found",
-    ) else {
+    let Some(_host_device) =
+        host_device_or_skip("image_acquire_on_unregistered_surface_returns_surface_not_found")
+    else {
         return;
     };
     let adapter = CudaSurfaceAdapter::<HostVulkanDevice>::new(_host_device);

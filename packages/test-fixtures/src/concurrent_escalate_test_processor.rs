@@ -23,13 +23,11 @@
 //! drives the cdylib path through `escalate_via_vtable` — the
 //! plugin ABI contract the audit flagged as previously uncovered.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use streamlib::sdk::context::{
-    RuntimeContextFullAccess, RuntimeContextLimitedAccess,
-};
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
 
@@ -118,18 +116,14 @@ impl ManualProcessor for ConcurrentEscalateTest::Processor {
                 let completed = completed_count.load(Ordering::SeqCst);
                 let overlaps = overlap_count.load(Ordering::SeqCst);
                 if completed != thread_count {
-                    format!(
-                        "ERR:completed {completed}/{thread_count} threads",
-                    )
+                    format!("ERR:completed {completed}/{thread_count} threads",)
                 } else {
                     format!("OK\n{thread_count}\noverlaps={overlaps}")
                 }
             }
         };
         std::fs::write(&output_path, &line).map_err(|e| {
-            Error::Runtime(format!(
-                "ConcurrentEscalateTest: write {output_path}: {e}"
-            ))
+            Error::Runtime(format!("ConcurrentEscalateTest: write {output_path}: {e}"))
         })?;
         Ok(())
     }

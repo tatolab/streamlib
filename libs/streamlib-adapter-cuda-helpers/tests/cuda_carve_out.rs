@@ -49,9 +49,7 @@ use streamlib::sdk::engine::HostGpuDeviceExt;
 use serial_test::serial;
 use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::engine::host_rhi::{
-    HostVulkanDevice,
-    HostVulkanBuffer,
-    HostVulkanTimelineSemaphore,
+    HostVulkanBuffer, HostVulkanDevice, HostVulkanTimelineSemaphore,
 };
 use streamlib_adapter_abi::{
     StreamlibSurface, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle, SurfaceUsage,
@@ -104,23 +102,24 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
     }
 
     // ── Phase 1: host allocates OPAQUE_FD-exportable pixel buffer ──
-    let pixel_buffer = match HostVulkanBuffer::new_opaque_fd_export(&host_device, (W as u64) * (H as u64) * (BPP as u64)) {
+    let pixel_buffer = match HostVulkanBuffer::new_opaque_fd_export(
+        &host_device,
+        (W as u64) * (H as u64) * (BPP as u64),
+    ) {
         Ok(b) => Arc::new(b),
         Err(e) => {
             println!("cuda carve-out: new_opaque_fd_export failed: {e} — skipping");
             return;
         }
     };
-    let produce_done = match HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-    {
+    let produce_done = match HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0) {
         Ok(s) => Arc::new(s),
         Err(e) => {
             println!("cuda carve-out: produce_done new_exportable failed: {e} — skipping");
             return;
         }
     };
-    let consume_done = match HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-    {
+    let consume_done = match HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0) {
         Ok(s) => Arc::new(s),
         Err(e) => {
             println!("cuda carve-out: consume_done new_exportable failed: {e} — skipping");
@@ -159,18 +158,14 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
         SurfaceSyncState::default(),
     );
 
-    let pattern: Vec<u8> = (0..buffer_size)
-        .map(|i| ((i * 31) & 0xFF) as u8)
-        .collect();
+    let pattern: Vec<u8> = (0..buffer_size).map(|i| ((i * 31) & 0xFF) as u8).collect();
 
     // Take the write acquire to exercise the trait, then write through
     // the underlying mapped pointer (the view doesn't expose mapped
     // bytes yet — that's the cuda-typed view work in #589/#590).
     {
         use streamlib_adapter_abi::SurfaceAdapter as _;
-        let _wguard = adapter
-            .acquire_write(&surface)
-            .expect("host acquire_write");
+        let _wguard = adapter.acquire_write(&surface).expect("host acquire_write");
         // SAFETY: `pixel_buffer` is HOST_VISIBLE | HOST_COHERENT and the
         // mapped pointer stays valid for the buffer's lifetime; we hold
         // an Arc through the entire test. Single-writer discipline is
@@ -191,9 +186,8 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
         let _rguard = adapter
             .acquire_read(&surface)
             .expect("host acquire_read sanity");
-        let host_view = unsafe {
-            std::slice::from_raw_parts(pixel_buffer.mapped_ptr(), buffer_size)
-        };
+        let host_view =
+            unsafe { std::slice::from_raw_parts(pixel_buffer.mapped_ptr(), buffer_size) };
         assert_eq!(
             host_view, pattern,
             "host adapter's mapped pointer must observe the pattern post-acquire-write"
@@ -292,9 +286,8 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
     //    inference performance is preserved. The flip is recorded in
     //    `context.md` under "Open empirical question (Stage 8)".
     let mut ptr_attrs = MaybeUninit::<sys::cudaPointerAttributes>::uninit();
-    let ptr_attrs_call = unsafe {
-        sys::cudaPointerGetAttributes(ptr_attrs.as_mut_ptr(), dev_ptr).result()
-    };
+    let ptr_attrs_call =
+        unsafe { sys::cudaPointerGetAttributes(ptr_attrs.as_mut_ptr(), dev_ptr).result() };
     if let Err(e) = ptr_attrs_call {
         let _ = unsafe { external_memory::destroy_external_memory(ext_mem) };
         unsafe { libc::close(timeline_fd) };
@@ -368,23 +361,20 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
     // the construction self-documenting. `reserved` (cuda-13xxx only)
     // is `[c_uint; 16]` and stays at the all-zero pre-fill, matching
     // the CUDA spec's "reserved must be zero" contract. (#595)
-    let mut sem_desc =
-        std::mem::MaybeUninit::<sys::cudaExternalSemaphoreHandleDesc>::zeroed();
+    let mut sem_desc = std::mem::MaybeUninit::<sys::cudaExternalSemaphoreHandleDesc>::zeroed();
     let sem_desc = unsafe {
         let p = sem_desc.as_mut_ptr();
         (&raw mut (*p).type_).write(
             sys::cudaExternalSemaphoreHandleType::cudaExternalSemaphoreHandleTypeTimelineSemaphoreFd,
         );
-        (&raw mut (*p).handle).write(
-            sys::cudaExternalSemaphoreHandleDesc__bindgen_ty_1 { fd: timeline_fd },
-        );
+        (&raw mut (*p).handle)
+            .write(sys::cudaExternalSemaphoreHandleDesc__bindgen_ty_1 { fd: timeline_fd });
         (&raw mut (*p).flags).write(0);
         sem_desc.assume_init()
     };
     let mut ext_sem = MaybeUninit::<sys::cudaExternalSemaphore_t>::uninit();
-    let import_sem_result = unsafe {
-        sys::cudaImportExternalSemaphore(ext_sem.as_mut_ptr(), &sem_desc).result()
-    };
+    let import_sem_result =
+        unsafe { sys::cudaImportExternalSemaphore(ext_sem.as_mut_ptr(), &sem_desc).result() };
     if let Err(e) = import_sem_result {
         let _ = unsafe { external_memory::destroy_external_memory(ext_mem) };
         unsafe { libc::close(timeline_fd) };
@@ -406,8 +396,7 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
     // (cuda-13xxx adds a top-level `reserved: [c_uint; 16]`). All field
     // writes go through raw pointers so we never form a `&mut` to an
     // intermediate not-yet-fully-initialised value. (#595)
-    let mut wait_params =
-        std::mem::MaybeUninit::<sys::cudaExternalSemaphoreWaitParams>::zeroed();
+    let mut wait_params = std::mem::MaybeUninit::<sys::cudaExternalSemaphoreWaitParams>::zeroed();
     let wait_params = unsafe {
         let p = wait_params.as_mut_ptr();
         (&raw mut (*p).params.fence.value).write(1);

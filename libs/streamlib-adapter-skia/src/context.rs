@@ -54,9 +54,7 @@ impl<D: VulkanRhiDevice + 'static> SkiaContext<D> {
     /// Constructs a single Skia `DirectContext` shared by all
     /// `acquire_*` calls. The customer never sees `GrVkBackendContext` —
     /// it's owned internally by the adapter.
-    pub fn new(
-        vulkan_ctx: &VulkanContext<D>,
-    ) -> Result<Self, SkiaAdapterError> {
+    pub fn new(vulkan_ctx: &VulkanContext<D>) -> Result<Self, SkiaAdapterError> {
         let adapter = SkiaSurfaceAdapter::new(Arc::clone(vulkan_ctx.adapter()))?;
         Ok(Self {
             adapter: Arc::new(adapter),

@@ -21,9 +21,9 @@ pub use thread_priority::ThreadPriority;
 // Processor schema re-exports
 pub use error::{SchemaError, SchemaResult};
 pub use processor_schema::{
-    compute_schema_id, to_pascal_case, to_snake_case, PortSchemaSpec, ProcessorConfigSchema,
-    ProcessorLanguage, ProcessorPortSchema, ProcessorScheduling, ProcessorSchema,
-    ProcessorSchemaExecution, ProcessorStateField, RuntimeConfig, RuntimeOptions,
+    PortSchemaSpec, ProcessorConfigSchema, ProcessorLanguage, ProcessorPortSchema,
+    ProcessorScheduling, ProcessorSchema, ProcessorSchemaExecution, ProcessorStateField,
+    RuntimeConfig, RuntimeOptions, compute_schema_id, to_pascal_case, to_snake_case,
 };
 pub use processor_schema_parser::{parse_processor_yaml, parse_processor_yaml_file};
 

@@ -43,7 +43,9 @@ use std::os::unix::net::UnixStream;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanTexture, HostVulkanTimelineSemaphore};
+use streamlib::sdk::engine::host_rhi::{
+    HostVulkanDevice, HostVulkanTexture, HostVulkanTimelineSemaphore,
+};
 use streamlib::sdk::rhi::TextureFormat;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
@@ -93,7 +95,9 @@ fn die(socket: Option<&UnixStream>, msg: String) -> ExitCode {
 }
 
 fn run() -> ExitCode {
-    let role = std::env::args().nth(1).unwrap_or_else(|| "wait-only".to_string());
+    let role = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "wait-only".to_string());
 
     let sock_fd_str = match std::env::var("STREAMLIB_HELPER_SOCKET_FD") {
         Ok(v) => v,
@@ -252,11 +256,9 @@ fn run() -> ExitCode {
                 );
             }
             let color = req.clear_color.unwrap_or([1.0, 0.5, 0.25, 1.0]);
-            if let Err(e) = subprocess_clear_image(
-                &device,
-                texture.image().expect("imported image"),
-                color,
-            ) {
+            if let Err(e) =
+                subprocess_clear_image(&device, texture.image().expect("imported image"), color)
+            {
                 return die(Some(&socket), format!("subprocess_clear_image: {e}"));
             }
             let signal_value = match produce_done.current_value() {
@@ -264,10 +266,7 @@ fn run() -> ExitCode {
                 Err(e) => return die(Some(&socket), format!("produce_done.current_value: {e}")),
             };
             if let Err(e) = produce_done.signal_host(signal_value) {
-                return die(
-                    Some(&socket),
-                    format!("produce_done.signal_host: {e}"),
-                );
+                return die(Some(&socket), format!("produce_done.signal_host: {e}"));
             }
             HelperResponse {
                 ok: true,
@@ -302,10 +301,7 @@ fn run() -> ExitCode {
                 Err(e) => return die(Some(&socket), format!("consume_done.current_value: {e}")),
             };
             if let Err(e) = consume_done.signal_host(signal_value) {
-                return die(
-                    Some(&socket),
-                    format!("consume_done.signal_host: {e}"),
-                );
+                return die(Some(&socket), format!("consume_done.signal_host: {e}"));
             }
             HelperResponse {
                 ok: true,
@@ -403,9 +399,7 @@ fn subprocess_clear_image(
         .build();
     unsafe { dev.cmd_pipeline_barrier2(cmd, &dep) };
 
-    let clear_value = vk::ClearColorValue {
-        float32: color,
-    };
+    let clear_value = vk::ClearColorValue { float32: color };
     let range = vk::ImageSubresourceRange::builder()
         .aspect_mask(vk::ImageAspectFlags::COLOR)
         .level_count(1)
@@ -473,7 +467,9 @@ fn subprocess_readback_image(
         .find(|i| {
             let bit = 1u32 << i;
             (mem_req.memory_type_bits & bit) != 0
-                && mem_props.memory_types[*i as usize].property_flags.contains(needed)
+                && mem_props.memory_types[*i as usize]
+                    .property_flags
+                    .contains(needed)
         })
         .ok_or_else(|| Error::GpuError("no host-visible memory type".into()))?;
 
@@ -481,17 +477,15 @@ fn subprocess_readback_image(
         .allocation_size(mem_req.size)
         .memory_type_index(mem_type_idx)
         .build();
-    let mem = unsafe { dev.allocate_memory(&alloc_info, None) }
-        .map_err(|e| {
-            unsafe { dev.destroy_buffer(buffer, None) };
-            Error::GpuError(format!("allocate_memory: {e}"))
-        })?;
-    unsafe { dev.bind_buffer_memory(buffer, mem, 0) }
-        .map_err(|e| {
-            unsafe { dev.free_memory(mem, None) };
-            unsafe { dev.destroy_buffer(buffer, None) };
-            Error::GpuError(format!("bind_buffer_memory: {e}"))
-        })?;
+    let mem = unsafe { dev.allocate_memory(&alloc_info, None) }.map_err(|e| {
+        unsafe { dev.destroy_buffer(buffer, None) };
+        Error::GpuError(format!("allocate_memory: {e}"))
+    })?;
+    unsafe { dev.bind_buffer_memory(buffer, mem, 0) }.map_err(|e| {
+        unsafe { dev.free_memory(mem, None) };
+        unsafe { dev.destroy_buffer(buffer, None) };
+        Error::GpuError(format!("bind_buffer_memory: {e}"))
+    })?;
 
     // Command buffer: transition image to TRANSFER_SRC, copy to buffer.
     let pool = unsafe {
@@ -562,7 +556,11 @@ fn subprocess_readback_image(
                 .build(),
         )
         .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
-        .image_extent(vk::Extent3D { width, height, depth: 1 })
+        .image_extent(vk::Extent3D {
+            width,
+            height,
+            depth: 1,
+        })
         .build();
     let regions = [copy];
     unsafe {

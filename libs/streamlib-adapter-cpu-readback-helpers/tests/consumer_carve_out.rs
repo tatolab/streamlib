@@ -26,22 +26,18 @@ use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
 use serial_test::serial;
 use streamlib::sdk::context::GpuContext;
+use streamlib::sdk::engine::host_rhi::{HostMarker, HostVulkanBuffer, HostVulkanTimelineSemaphore};
 use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
-use streamlib::sdk::engine::host_rhi::{
-    HostMarker,
-    HostVulkanBuffer,
-    HostVulkanTimelineSemaphore,
-};
 use streamlib_adapter_abi::{
-    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState,
-    SurfaceTransportHandle, SurfaceUsage,
+    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
+    SurfaceUsage,
 };
 use streamlib_adapter_cpu_readback::{
     CpuReadbackCopyTrigger, CpuReadbackSurfaceAdapter, HostSurfaceRegistration,
     InProcessCpuReadbackCopyTrigger, VulkanLayout,
 };
 use streamlib_consumer_rhi::{
-    ConsumerVulkanDevice, ConsumerVulkanBuffer, ConsumerVulkanTimelineSemaphore,
+    ConsumerVulkanBuffer, ConsumerVulkanDevice, ConsumerVulkanTimelineSemaphore,
     PixelFormat as ConsumerPixelFormat,
 };
 
@@ -67,16 +63,19 @@ fn host_image_to_consumer_staging_byte_equal_round_trip() {
     let host_device = Arc::clone(gpu.device().vulkan_device());
 
     // Allocate the host source render-target VkImage.
-    let stream_texture =
-        match gpu.acquire_render_target_dma_buf_image(W, H, TextureFormat::Bgra8Unorm) {
-            Ok(t) => t,
-            Err(e) => {
-                println!(
-                    "carve-out round-trip: acquire_render_target_dma_buf_image failed: {e} — skipping"
-                );
-                return;
-            }
-        };
+    let stream_texture = match gpu.acquire_render_target_dma_buf_image(
+        W,
+        H,
+        TextureFormat::Bgra8Unorm,
+    ) {
+        Ok(t) => t,
+        Err(e) => {
+            println!(
+                "carve-out round-trip: acquire_render_target_dma_buf_image failed: {e} — skipping"
+            );
+            return;
+        }
+    };
     let texture_arc = Arc::clone(stream_texture.vulkan_inner());
 
     // Allocate the host-side HOST_VISIBLE staging buffer. We keep an
@@ -203,8 +202,9 @@ fn host_image_to_consumer_staging_byte_equal_round_trip() {
             return;
         }
     };
-    let consumer_staging = ConsumerVulkanBuffer::from_dma_buf_fd(&consumer, dma_buf_fd, (W as u64) * (H as u64) * 4)
-    .expect("ConsumerVulkanBuffer::from_dma_buf_fd");
+    let consumer_staging =
+        ConsumerVulkanBuffer::from_dma_buf_fd(&consumer, dma_buf_fd, (W as u64) * (H as u64) * 4)
+            .expect("ConsumerVulkanBuffer::from_dma_buf_fd");
     let consumer_timeline =
         ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(&consumer, sync_fd)
             .expect("ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd");

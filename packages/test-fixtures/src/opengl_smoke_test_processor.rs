@@ -27,9 +27,7 @@
 //!     the integration test treats this as a clean pass.
 //!   - "ERR:<msg>" on any other step failure.
 
-use streamlib::sdk::context::{
-    RuntimeContextFullAccess, RuntimeContextLimitedAccess,
-};
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
 
@@ -41,12 +39,12 @@ use streamlib::sdk::engine::HostTextureExt;
 use streamlib::sdk::rhi::TextureFormat;
 #[cfg(target_os = "linux")]
 use streamlib_adapter_abi::{
-    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState,
-    SurfaceTransportHandle, SurfaceUsage,
+    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
+    SurfaceUsage,
 };
 #[cfg(target_os = "linux")]
 use streamlib_adapter_opengl::{
-    EglRuntime, HostSurfaceRegistration, OpenGlSurfaceAdapter, DRM_FORMAT_ARGB8888,
+    DRM_FORMAT_ARGB8888, EglRuntime, HostSurfaceRegistration, OpenGlSurfaceAdapter,
 };
 
 #[streamlib::sdk::processor("OpenGlSmokeTestProcessor")]
@@ -71,11 +69,8 @@ impl ManualProcessor for OpenGlSmokeTest::Processor {
             Ok(SmokeOutcome::SkipEgl(reason)) => format!("SKIP:{reason}"),
             Err(e) => format!("ERR:{e}"),
         };
-        std::fs::write(&output_path, &line).map_err(|e| {
-            Error::Runtime(format!(
-                "OpenGlSmokeTest: write {output_path}: {e}"
-            ))
-        })?;
+        std::fs::write(&output_path, &line)
+            .map_err(|e| Error::Runtime(format!("OpenGlSmokeTest: write {output_path}: {e}")))?;
         Ok(())
     }
 
@@ -83,11 +78,7 @@ impl ManualProcessor for OpenGlSmokeTest::Processor {
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let output_path = self.config.output_path.clone();
         std::fs::write(&output_path, "SKIP:opengl smoke is linux-only")
-            .map_err(|e| {
-                Error::Runtime(format!(
-                    "OpenGlSmokeTest: write {output_path}: {e}"
-                ))
-            })?;
+            .map_err(|e| Error::Runtime(format!("OpenGlSmokeTest: write {output_path}: {e}")))?;
         Ok(())
     }
 
@@ -129,21 +120,16 @@ fn run_smoke(
     // engine-side replacement for the explicit `.escalate(|full|...)`.
     let full = ctx.gpu_full_access();
     let _host_device = full.host_vulkan_device_arc()?;
-    let stream_texture = full.acquire_render_target_dma_buf_image(
-        width,
-        height,
-        TextureFormat::Bgra8Unorm,
-    )?;
+    let stream_texture =
+        full.acquire_render_target_dma_buf_image(width, height, TextureFormat::Bgra8Unorm)?;
     let texture_arc = stream_texture.host_vulkan_texture_arc()?;
 
-    let dma_buf_fd = texture_arc.export_dma_buf_fd().map_err(|e| {
-        Error::GpuError(format!("HostVulkanTexture::export_dma_buf_fd: {e}"))
-    })?;
-    let plane_layout = texture_arc.dma_buf_plane_layout().map_err(|e| {
-        Error::GpuError(format!(
-            "HostVulkanTexture::dma_buf_plane_layout: {e}"
-        ))
-    })?;
+    let dma_buf_fd = texture_arc
+        .export_dma_buf_fd()
+        .map_err(|e| Error::GpuError(format!("HostVulkanTexture::export_dma_buf_fd: {e}")))?;
+    let plane_layout = texture_arc
+        .dma_buf_plane_layout()
+        .map_err(|e| Error::GpuError(format!("HostVulkanTexture::dma_buf_plane_layout: {e}")))?;
     let modifier = texture_arc.chosen_drm_format_modifier();
 
     // EGL init may fail when the test host lacks a display, lacks
@@ -186,17 +172,13 @@ fn run_smoke(
         SurfaceTransportHandle::empty(),
         SurfaceSyncState::default(),
     );
-    let guard = adapter.acquire_write(&surface).map_err(|e| {
-        Error::GpuError(format!(
-            "OpenGlSurfaceAdapter::acquire_write: {e:?}"
-        ))
-    })?;
+    let guard = adapter
+        .acquire_write(&surface)
+        .map_err(|e| Error::GpuError(format!("OpenGlSurfaceAdapter::acquire_write: {e:?}")))?;
     let view = guard.view();
     let gl_texture = view.gl_texture_id();
     if gl_texture == 0 {
-        return Err(Error::GpuError(
-            "gl_texture_id() returned zero".into(),
-        ));
+        return Err(Error::GpuError("gl_texture_id() returned zero".into()));
     }
     drop(guard);
     drop(adapter);

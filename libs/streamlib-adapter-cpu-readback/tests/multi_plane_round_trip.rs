@@ -70,7 +70,9 @@ fn nv12_multi_plane_write_round_trips_to_read() {
     let fixture = match HostFixture::try_new() {
         Some(f) => f,
         None => {
-            println!("nv12_multi_plane_write_round_trips_to_read: skipping — no Vulkan device available");
+            println!(
+                "nv12_multi_plane_write_round_trips_to_read: skipping — no Vulkan device available"
+            );
             return;
         }
     };
@@ -158,10 +160,7 @@ fn nv12_multi_plane_write_round_trips_to_read() {
     let uv_bytes = uv.bytes();
     assert_eq!(uv_bytes.len() as u32, (width / 2) * (height / 2) * 2);
     for (i, chunk) in uv_bytes.chunks_exact(2).enumerate() {
-        assert_eq!(
-            chunk, &UV_BYTES,
-            "UV pair {i} mismatch: {chunk:02x?}"
-        );
+        assert_eq!(chunk, &UV_BYTES, "UV pair {i} mismatch: {chunk:02x?}");
     }
 }
 
@@ -267,7 +266,8 @@ fn nv12_per_plane_distinct_patterns_lands_unscrambled() {
                 "UV plane row {row} col {col} U mismatch"
             );
             assert_eq!(
-                uv_bytes[off + 1], expected_v,
+                uv_bytes[off + 1],
+                expected_v,
                 "UV plane row {row} col {col} V mismatch"
             );
         }

@@ -296,10 +296,7 @@ mod tests {
             offset_of!(VulkanComputeKernelMethodsVTable, set_push_constants),
             8
         );
-        assert_eq!(
-            offset_of!(VulkanComputeKernelMethodsVTable, dispatch),
-            16
-        );
+        assert_eq!(offset_of!(VulkanComputeKernelMethodsVTable, dispatch), 16);
         assert_eq!(
             offset_of!(VulkanComputeKernelMethodsVTable, set_storage_buffer_pixel),
             24
@@ -320,25 +317,22 @@ mod tests {
             offset_of!(VulkanComputeKernelMethodsVTable, set_storage_image),
             56
         );
-        assert_eq!(
-            offset_of!(VulkanComputeKernelMethodsVTable, bindings),
-            64
-        );
+        assert_eq!(offset_of!(VulkanComputeKernelMethodsVTable, bindings), 64);
         assert_eq!(
             offset_of!(VulkanComputeKernelMethodsVTable, set_sampled_image_view),
             72
         );
         assert_eq!(
-            offset_of!(VulkanComputeKernelMethodsVTable, set_combined_image_sampler_view),
+            offset_of!(
+                VulkanComputeKernelMethodsVTable,
+                set_combined_image_sampler_view
+            ),
             80
         );
         assert_eq!(
             offset_of!(VulkanComputeKernelMethodsVTable, set_storage_image_view),
             88
         );
-        assert_eq!(
-            offset_of!(VulkanComputeKernelMethodsVTable, record),
-            96
-        );
+        assert_eq!(offset_of!(VulkanComputeKernelMethodsVTable, record), 96);
     }
 }

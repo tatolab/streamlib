@@ -12,9 +12,9 @@
 
 use std::ffi::c_void;
 
-use super::super::shared::handle_as_gpu_context;
 use super::super::super::run_host_extern_c;
 use super::super::super::shared::wire::{slice_from_raw, write_err};
+use super::super::shared::handle_as_gpu_context;
 
 // -------------------------------------------------------------------------
 // GpuContextLimitedAccessVTable — surface_store accessors
@@ -49,10 +49,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_sur
             // or host) takes ownership.
             if let Some(store) = gpu.surface_store() {
                 unsafe {
-                    std::ptr::write(
-                        out_store as *mut crate::core::context::SurfaceStore,
-                        store,
-                    );
+                    std::ptr::write(out_store as *mut crate::core::context::SurfaceStore, store);
                 }
             }
             // else: out_store already holds the null-handle PluginAbiObject.
@@ -107,10 +104,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_che
             match gpu.check_out_surface(id_str) {
                 Ok(pb) => {
                     unsafe {
-                        std::ptr::write(
-                            out_pixel_buffer as *mut crate::core::rhi::PixelBuffer,
-                            pb,
-                        );
+                        std::ptr::write(out_pixel_buffer as *mut crate::core::rhi::PixelBuffer, pb);
                     }
                     0
                 }
@@ -123,5 +117,3 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_che
         1,
     )
 }
-
-

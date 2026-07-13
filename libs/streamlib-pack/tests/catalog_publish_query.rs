@@ -10,8 +10,8 @@
 use std::path::{Path, PathBuf};
 
 use streamlib_idents::{
-    render_catalog_index_ndjson, CatalogClient, CatalogRuntime, CatalogSchemaRef, Org, Package,
-    PackageRef, RegistryClient, RegistryConfig, SemVer, CATALOG_INDEX_PATH,
+    CATALOG_INDEX_PATH, CatalogClient, CatalogRuntime, CatalogSchemaRef, Org, Package, PackageRef,
+    RegistryClient, RegistryConfig, SemVer, render_catalog_index_ndjson,
 };
 use streamlib_pack::catalog::{build_package_catalog, build_sibling_versions};
 use streamlib_pack::static_registry::{build_and_flip, write_package_catalog};
@@ -125,7 +125,11 @@ fn emit_catalog_tree(root: &Path, pkg_dirs: &[PathBuf]) {
         write_package_catalog(&slpkg, &arts).unwrap();
         index.extend(arts.index_lines);
     }
-    write(root, CATALOG_INDEX_PATH, &render_catalog_index_ndjson(&index));
+    write(
+        root,
+        CATALOG_INDEX_PATH,
+        &render_catalog_index_ndjson(&index),
+    );
 }
 
 #[test]
@@ -156,12 +160,21 @@ fn reconstruct_wiring_graph_from_catalog_without_touching_slpkg() {
     let sink_line = index.iter().find(|l| l.processor.name == "Sink").unwrap();
     let out_schema = camera_line.processor.outputs[0].schema.schema().unwrap();
     let in_schema = sink_line.processor.inputs[0].schema.schema().unwrap();
-    assert_eq!(out_schema, in_schema, "the wiring edge shares a schema identity");
+    assert_eq!(
+        out_schema, in_schema,
+        "the wiring edge shares a schema identity"
+    );
     assert_eq!(out_schema.to_string(), "@tatolab/core/VideoFrame@1.4.0");
-    assert_eq!(sink_line.processor.inputs[0].read_mode.as_deref(), Some("skip_to_latest"));
+    assert_eq!(
+        sink_line.processor.inputs[0].read_mode.as_deref(),
+        Some("skip_to_latest")
+    );
     assert_eq!(camera_line.processor.runtime, CatalogRuntime::Rust);
     assert_eq!(sink_line.processor.runtime, CatalogRuntime::Python);
-    assert_eq!(sink_line.processor.entrypoint.as_deref(), Some("src.sink:Sink"));
+    assert_eq!(
+        sink_line.processor.entrypoint.as_deref(),
+        Some("src.sink:Sink")
+    );
 
     // 3. Per-package catalog fetch (browse-UI path) agrees with the aggregate.
     let cam_catalog = client
@@ -169,27 +182,40 @@ fn reconstruct_wiring_graph_from_catalog_without_touching_slpkg() {
         .unwrap()
         .unwrap();
     assert_eq!(cam_catalog.processors.len(), 2);
-    let cfg_ident = cam_catalog.processors[0].config.as_ref().unwrap().schema.clone();
+    let cfg_ident = cam_catalog.processors[0]
+        .config
+        .as_ref()
+        .unwrap()
+        .schema
+        .clone();
     assert_eq!(cfg_ident.to_string(), "@tatolab/camera/CameraConfig@2.1.0");
 
     // 4. Fetch the field-level schema shape via JTD, resolved from the OWNING
     //    package's version dir — core owns VideoFrame, camera owns CameraConfig.
-    let vf_jtd = client.fetch_schema_type_definition(out_schema).unwrap().unwrap();
+    let vf_jtd = client
+        .fetch_schema_type_definition(out_schema)
+        .unwrap()
+        .unwrap();
     assert_eq!(vf_jtd["metadata"]["type"], "VideoFrame");
     assert!(vf_jtd["properties"].get("width").is_some());
-    let cfg_jtd = client.fetch_schema_type_definition(&cfg_ident).unwrap().unwrap();
+    let cfg_jtd = client
+        .fetch_schema_type_definition(&cfg_ident)
+        .unwrap()
+        .unwrap();
     assert_eq!(cfg_jtd["metadata"]["type"], "CameraConfig");
 
     // 5. Prove we reconstructed everything WITHOUT reading any `.slpkg`: the
     //    only bytes in a `.slpkg` are the opaque sentinel, and nothing above
     //    parsed them. Assert directly that the tarball is the opaque sentinel
     //    (i.e. the graph did not come from it).
-    let slpkg_bytes =
-        std::fs::read(tree.join("slpkg/camera/2.1.0/camera.slpkg")).unwrap();
+    let slpkg_bytes = std::fs::read(tree.join("slpkg/camera/2.1.0/camera.slpkg")).unwrap();
     assert_eq!(slpkg_bytes, b"OPAQUE-SLPKG-TARBALL-BYTES-DO-NOT-READ");
 
     // A concrete port never collapses to the `any` wildcard.
-    assert_ne!(camera_line.processor.outputs[0].schema, CatalogSchemaRef::Any);
+    assert_ne!(
+        camera_line.processor.outputs[0].schema,
+        CatalogSchemaRef::Any
+    );
 }
 
 /// GATING regression: a `-dev.N` publisher's JTDs must be fetchable by the
@@ -246,7 +272,12 @@ processors:
         .expect("per-package catalog under the full prerelease version dir");
 
     // …while the JTD is fetched by the release-core ident and MUST resolve.
-    let cfg_ident = catalog.processors[0].config.as_ref().unwrap().schema.clone();
+    let cfg_ident = catalog.processors[0]
+        .config
+        .as_ref()
+        .unwrap()
+        .schema
+        .clone();
     assert_eq!(cfg_ident.to_string(), "@tatolab/widget/WidgetConfig@2.1.0");
     let jtd = client
         .fetch_schema_type_definition(&cfg_ident)
@@ -275,7 +306,10 @@ fn catalog_aggregate_written_into_staging_rides_the_atomic_flip() {
         // Mirror the emit ordering: release marker first, aggregate last.
         let rel = staging.join("slpkg/streamlib-release/0.5.1");
         std::fs::create_dir_all(&rel)?;
-        std::fs::write(rel.join("manifest.json"), b"{\"release_version\":\"0.5.1\"}")?;
+        std::fs::write(
+            rel.join("manifest.json"),
+            b"{\"release_version\":\"0.5.1\"}",
+        )?;
         let idx = staging.join(CATALOG_INDEX_PATH);
         std::fs::create_dir_all(idx.parent().unwrap())?;
         std::fs::write(&idx, "{\"package\":\"@tatolab/x\"}\n")?;
@@ -285,5 +319,8 @@ fn catalog_aggregate_written_into_staging_rides_the_atomic_flip() {
 
     // After the flip both are present together.
     assert!(out.join(CATALOG_INDEX_PATH).is_file());
-    assert!(out.join("slpkg/streamlib-release/0.5.1/manifest.json").is_file());
+    assert!(
+        out.join("slpkg/streamlib-release/0.5.1/manifest.json")
+            .is_file()
+    );
 }

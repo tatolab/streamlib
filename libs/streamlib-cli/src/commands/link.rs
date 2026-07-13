@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 use streamlib_idents::link_marker::{
-    LinkManifest, LinkMarkerError, LinkTransactionState, LinkedManifestFile, LINK_BACKUP_DIR,
-    LINK_MANIFEST_FILE, LINK_STATE_DIR,
+    LINK_BACKUP_DIR, LINK_MANIFEST_FILE, LINK_STATE_DIR, LinkManifest, LinkMarkerError,
+    LinkTransactionState, LinkedManifestFile,
 };
 
 /// Human-facing greppability marker on the emitted cargo `[patch]` block.
@@ -323,8 +323,7 @@ pub fn unlink(consumer_root: &Path, force: bool) -> Result<(), LinkError> {
                 // Already the original (e.g. crash before this edit applied).
                 RestoreAction::Skip
             } else {
-                let is_linked_content =
-                    live_hash.as_deref() == Some(tf.post_edit_sha256.as_str());
+                let is_linked_content = live_hash.as_deref() == Some(tf.post_edit_sha256.as_str());
                 if !(live.is_none() || is_linked_content || force) {
                     return Err(LinkError::UnlinkRefusedModifiedFile { path: abs.clone() });
                 }
@@ -424,9 +423,7 @@ fn canonicalize_checkout(checkout: &Path) -> Result<PathBuf, LinkError> {
 
 /// Load the link manifest from `consumer_root/.streamlib/link.json` (any state).
 fn load_active_manifest(consumer_root: &Path) -> Result<Option<LinkManifest>, LinkError> {
-    let path = consumer_root
-        .join(LINK_STATE_DIR)
-        .join(LINK_MANIFEST_FILE);
+    let path = consumer_root.join(LINK_STATE_DIR).join(LINK_MANIFEST_FILE);
     if !path.is_file() {
         return Ok(None);
     }
@@ -467,9 +464,7 @@ fn write_manifest_excl(consumer_root: &Path, manifest: &LinkManifest) -> Result<
 
 /// Overwrite `link.json` in place (used for the `applying → active` flip).
 fn overwrite_manifest(consumer_root: &Path, manifest: &LinkManifest) -> Result<(), LinkError> {
-    let path = consumer_root
-        .join(LINK_STATE_DIR)
-        .join(LINK_MANIFEST_FILE);
+    let path = consumer_root.join(LINK_STATE_DIR).join(LINK_MANIFEST_FILE);
     let body = manifest_json(manifest, &path)?;
     std::fs::write(&path, body).map_err(|e| LinkError::io(&path, e))
 }
@@ -526,10 +521,7 @@ fn read_tatolab_index(path: &Path) -> Result<Option<String>, LinkError> {
 }
 
 /// Run `cargo metadata` and parse its JSON output.
-fn run_cargo_metadata(
-    args: &[&str],
-    cwd: Option<&Path>,
-) -> Result<serde_json::Value, String> {
+fn run_cargo_metadata(args: &[&str], cwd: Option<&Path>) -> Result<serde_json::Value, String> {
     let mut cmd = std::process::Command::new("cargo");
     cmd.args(args);
     if let Some(cwd) = cwd {
@@ -618,16 +610,15 @@ fn verify_cargo_patch_resolution(
         Some(consumer_root),
     ) {
         Ok(md) => md,
-        Err(offline_err) => run_cargo_metadata(
-            &["metadata", "--format-version", "1"],
-            Some(consumer_root),
-        )
-        .map_err(|online_err| {
-            format!(
-                "cargo could not resolve the consumer's dependency graph — offline: \
+        Err(offline_err) => {
+            run_cargo_metadata(&["metadata", "--format-version", "1"], Some(consumer_root))
+                .map_err(|online_err| {
+                    format!(
+                        "cargo could not resolve the consumer's dependency graph — offline: \
                  {offline_err}; online: {online_err}"
-            )
-        })?,
+                    )
+                })?
+        }
     };
 
     let empty = Vec::new();
@@ -658,7 +649,11 @@ fn verify_cargo_patch_resolution(
         }
     }
 
-    tracing::info!(verified, unpatched = not_patched.len(), "post-link cargo resolution checked");
+    tracing::info!(
+        verified,
+        unpatched = not_patched.len(),
+        "post-link cargo resolution checked"
+    );
     Ok(not_patched)
 }
 
@@ -789,9 +784,8 @@ fn relock_streamlib_crates(consumer_root: &Path, targets: &[&str]) -> Result<(),
     offline.push("--offline");
     match run_cargo_status(&offline, Some(consumer_root)) {
         Ok(()) => Ok(()),
-        Err(offline_err) => run_cargo_status(&base, Some(consumer_root)).map_err(|online_err| {
-            format!("offline: {offline_err}; online: {online_err}")
-        }),
+        Err(offline_err) => run_cargo_status(&base, Some(consumer_root))
+            .map_err(|online_err| format!("offline: {offline_err}; online: {online_err}")),
     }
 }
 
@@ -813,12 +807,11 @@ fn record_relocked_lockfile(
         std::fs::write(&backup, orig).map_err(|e| LinkError::io(&backup, e))?;
     }
 
-    let mut manifest = load_active_manifest(consumer_root)?.ok_or_else(|| {
-        LinkError::CorruptLinkState {
+    let mut manifest =
+        load_active_manifest(consumer_root)?.ok_or_else(|| LinkError::CorruptLinkState {
             path: consumer_root.join(LINK_STATE_DIR).join(LINK_MANIFEST_FILE),
             detail: "link manifest missing while recording the re-locked Cargo.lock".to_string(),
-        }
-    })?;
+        })?;
     manifest.files.push(LinkedManifestFile {
         path: PathBuf::from("Cargo.lock"),
         existed_before: original.is_some(),
@@ -869,11 +862,7 @@ fn build_link_manifest(
         .map(|edit| LinkedManifestFile {
             path: edit.rel_path.clone(),
             existed_before: edit.original.is_some(),
-            pre_edit_sha256: edit
-                .original
-                .as_deref()
-                .map(hex_sha256)
-                .unwrap_or_default(),
+            pre_edit_sha256: edit.original.as_deref().map(hex_sha256).unwrap_or_default(),
             post_edit_sha256: hex_sha256(edit.new_content.as_bytes()),
         })
         .collect();
@@ -954,18 +943,26 @@ fn plan_cargo_config_edit(
         None => String::new(),
     };
     let mut doc: toml_edit::DocumentMut =
-        existing.parse().map_err(|e: toml_edit::TomlError| LinkError::ManifestParse {
-            path: abs_path.clone(),
-            detail: e.to_string(),
-        })?;
+        existing
+            .parse()
+            .map_err(|e: toml_edit::TomlError| LinkError::ManifestParse {
+                path: abs_path.clone(),
+                detail: e.to_string(),
+            })?;
 
     // Build `[patch."<index>"]` with one path entry per crate. `patch` is an
     // implicit parent table so only the `[patch."url"]` header is emitted.
     let mut patch_target = toml_edit::Table::new();
     for (name, dir) in crates {
         let mut entry = toml_edit::InlineTable::new();
-        entry.insert("path", toml_edit::Value::from(dir.to_string_lossy().into_owned()));
-        patch_target.insert(name, toml_edit::Item::Value(toml_edit::Value::InlineTable(entry)));
+        entry.insert(
+            "path",
+            toml_edit::Value::from(dir.to_string_lossy().into_owned()),
+        );
+        patch_target.insert(
+            name,
+            toml_edit::Item::Value(toml_edit::Value::InlineTable(entry)),
+        );
     }
     patch_target
         .decor_mut()
@@ -1021,10 +1018,12 @@ fn plan_pyproject_edit(
         None => String::new(),
     };
     let mut doc: toml_edit::DocumentMut =
-        existing.parse().map_err(|e: toml_edit::TomlError| LinkError::ManifestParse {
-            path: pyproject.to_path_buf(),
-            detail: e.to_string(),
-        })?;
+        existing
+            .parse()
+            .map_err(|e: toml_edit::TomlError| LinkError::ManifestParse {
+                path: pyproject.to_path_buf(),
+                detail: e.to_string(),
+            })?;
 
     // [tool.uv.sources] streamlib = { path = "<checkout>/libs/streamlib-python", editable = true }
     let sdk_path = checkout.join(PYTHON_SDK_REL);
@@ -1084,12 +1083,11 @@ fn plan_deno_edit(
         serde_json::Value::String(entry.to_string_lossy().into_owned()),
     );
 
-    let mut new_content = serde_json::to_string_pretty(&value).map_err(|e| {
-        LinkError::ManifestParse {
+    let mut new_content =
+        serde_json::to_string_pretty(&value).map_err(|e| LinkError::ManifestParse {
             path: deno.to_path_buf(),
             detail: e.to_string(),
-        }
-    })?;
+        })?;
     new_content.push('\n');
 
     Ok(PlannedEdit {

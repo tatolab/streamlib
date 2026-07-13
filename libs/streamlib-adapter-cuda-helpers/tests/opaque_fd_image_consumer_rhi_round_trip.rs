@@ -57,9 +57,7 @@
 use std::sync::Arc;
 
 use serial_test::serial;
-use streamlib::sdk::engine::host_rhi::{
-    HostVulkanBuffer, HostVulkanDevice, HostVulkanTexture,
-};
+use streamlib::sdk::engine::host_rhi::{HostVulkanBuffer, HostVulkanDevice, HostVulkanTexture};
 use streamlib::sdk::rhi::TextureDescriptor;
 use streamlib_consumer_rhi::{
     ConsumerVulkanBuffer, ConsumerVulkanDevice, TextureFormat as ConsumerTextureFormat,
@@ -87,14 +85,15 @@ unsafe fn submit_one_shot<F: FnOnce(vk::CommandBuffer)>(
         .queue_family_index(queue_family_index)
         .flags(vk::CommandPoolCreateFlags::TRANSIENT)
         .build();
-    let pool = unsafe { device.create_command_pool(&pool_info, None) }
-        .expect("create_command_pool");
+    let pool =
+        unsafe { device.create_command_pool(&pool_info, None) }.expect("create_command_pool");
     let alloc_info = vk::CommandBufferAllocateInfo::builder()
         .command_pool(pool)
         .level(vk::CommandBufferLevel::PRIMARY)
         .command_buffer_count(1)
         .build();
-    let cmd = unsafe { device.allocate_command_buffers(&alloc_info) }.expect("allocate_command_buffers")[0];
+    let cmd = unsafe { device.allocate_command_buffers(&alloc_info) }
+        .expect("allocate_command_buffers")[0];
 
     let begin = vk::CommandBufferBeginInfo::builder()
         .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
@@ -234,7 +233,11 @@ fn opaque_fd_image_carve_out_round_trip() {
                     layer_count: 1,
                 })
                 .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
-                .image_extent(vk::Extent3D { width: W, height: H, depth: 1 })
+                .image_extent(vk::Extent3D {
+                    width: W,
+                    height: H,
+                    depth: 1,
+                })
                 .build();
             let regions = [region];
             let copy_info = vk::CopyBufferToImageInfo2::builder()
@@ -400,7 +403,11 @@ fn opaque_fd_image_carve_out_round_trip() {
                     layer_count: 1,
                 })
                 .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
-                .image_extent(vk::Extent3D { width: W, height: H, depth: 1 })
+                .image_extent(vk::Extent3D {
+                    width: W,
+                    height: H,
+                    depth: 1,
+                })
                 .build();
             let regions = [region];
             let copy_info = vk::CopyImageToBufferInfo2::builder()
@@ -416,12 +423,8 @@ fn opaque_fd_image_carve_out_round_trip() {
     // Phase 7: byte-equal vs the pattern the host originally wrote.
     // SAFETY: HOST_VISIBLE | HOST_COHERENT — the consumer's mapped
     // pointer is valid for the buffer's lifetime; we hold the Arc.
-    let consumer_view = unsafe {
-        std::slice::from_raw_parts(
-            consumer_dest_buf.mapped_ptr(),
-            IMAGE_BYTES as usize,
-        )
-    };
+    let consumer_view =
+        unsafe { std::slice::from_raw_parts(consumer_dest_buf.mapped_ptr(), IMAGE_BYTES as usize) };
     assert_eq!(
         consumer_view,
         &pattern[..],

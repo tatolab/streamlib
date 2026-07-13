@@ -83,10 +83,7 @@ impl EscalateGate {
     /// Panics if the gate is already held by the current thread —
     /// see the type-level doc for the rationale.
     pub(crate) fn enter(&self) {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let current = std::thread::current().id();
         while state.in_scope {
             if state.holder == Some(current) {
@@ -99,10 +96,7 @@ impl EscalateGate {
                      instead of ctx.gpu_limited_access().escalate(|full| ...)."
                 );
             }
-            state = self
-                .cv
-                .wait(state)
-                .unwrap_or_else(|e| e.into_inner());
+            state = self.cv.wait(state).unwrap_or_else(|e| e.into_inner());
         }
         state.in_scope = true;
         state.holder = Some(current);
@@ -135,10 +129,7 @@ impl EscalateGate {
     /// was already false — harmless but indicates a bug at the call
     /// site.
     pub(crate) fn exit(&self) {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.in_scope = false;
         state.holder = None;
         self.cv.notify_one();

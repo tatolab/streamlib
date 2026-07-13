@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 
 /// Vulkan texture cache — creates and caches VkImageView from VkImage.
 ///
@@ -103,7 +103,10 @@ mod tests {
     use crate::vulkan::rhi::{HostVulkanDevice, HostVulkanTexture};
     use std::sync::Arc;
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_creates_image_view_for_valid_image() {
         let device = match HostVulkanDevice::new() {
@@ -129,10 +132,17 @@ mod tests {
             .create_view_from_image(image, vk::Format::B8G8R8A8_UNORM, 64, 64)
             .expect("image view creation failed");
 
-        assert_ne!(view, vk::ImageView::null(), "image view handle must be non-null");
+        assert_ne!(
+            view,
+            vk::ImageView::null(),
+            "image view handle must be non-null"
+        );
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_returns_cached_view_for_same_image() {
         let device = match HostVulkanDevice::new() {
@@ -162,10 +172,16 @@ mod tests {
             .create_view_from_image(image, vk::Format::B8G8R8A8_UNORM, 64, 64)
             .expect("second call failed");
 
-        assert_eq!(view_a, view_b, "same image must return the same cached VkImageView");
+        assert_eq!(
+            view_a, view_b,
+            "same image must return the same cached VkImageView"
+        );
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn test_flush_destroys_all_cached_views() {
         let device = match HostVulkanDevice::new() {

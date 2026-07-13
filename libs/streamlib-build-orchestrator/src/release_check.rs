@@ -37,7 +37,7 @@ use std::collections::BTreeMap;
 use streamlib_cargo_build::TatolabRegistryPin;
 use streamlib_engine::core::runtime::BuildError;
 use streamlib_idents::{
-    crates_missing_from_release, RegistryClient, RegistryConfig, SemVer, SemVerRange,
+    RegistryClient, RegistryConfig, SemVer, SemVerRange, crates_missing_from_release,
 };
 
 /// Registry org the release manifest lives under. Matches the publish
@@ -120,7 +120,10 @@ pub(crate) fn assert_release_complete(
             .max()
             .map(|v| v.to_string())
             .unwrap_or_else(|| pin.version.clone());
-        by_release.entry(target).or_default().push((pin.name.clone(), range));
+        by_release
+            .entry(target)
+            .or_default()
+            .push((pin.name.clone(), range));
     }
 
     let mut missing_all: Vec<String> = Vec::new();
@@ -183,7 +186,10 @@ mod tests {
         TatolabRegistryPin {
             name: name.to_string(),
             req: req.to_string(),
-            version: req.trim_start_matches(['=', '^', '~', '>', '<']).trim().to_string(),
+            version: req
+                .trim_start_matches(['=', '^', '~', '>', '<'])
+                .trim()
+                .to_string(),
         }
     }
 
@@ -193,7 +199,10 @@ mod tests {
     fn with_file_registry<T>(dir: &std::path::Path, f: impl FnOnce() -> T) -> T {
         let prev_url = std::env::var("STREAMLIB_REGISTRY_URL").ok();
         unsafe {
-            std::env::set_var("STREAMLIB_REGISTRY_URL", format!("file://{}", dir.display()));
+            std::env::set_var(
+                "STREAMLIB_REGISTRY_URL",
+                format!("file://{}", dir.display()),
+            );
         }
         let out = f();
         unsafe {
@@ -216,10 +225,22 @@ mod tests {
 
     #[test]
     fn cargo_req_mapping_bare_is_caret_and_operators_pass_through() {
-        assert_eq!(cargo_req_to_range("0.5.0"), SemVerRange::from_str("^0.5.0").ok());
-        assert_eq!(cargo_req_to_range("=0.4.36"), SemVerRange::from_str("=0.4.36").ok());
-        assert_eq!(cargo_req_to_range("^0.5.1"), SemVerRange::from_str("^0.5.1").ok());
-        assert_eq!(cargo_req_to_range(">=0.5.0"), SemVerRange::from_str(">=0.5.0").ok());
+        assert_eq!(
+            cargo_req_to_range("0.5.0"),
+            SemVerRange::from_str("^0.5.0").ok()
+        );
+        assert_eq!(
+            cargo_req_to_range("=0.4.36"),
+            SemVerRange::from_str("=0.4.36").ok()
+        );
+        assert_eq!(
+            cargo_req_to_range("^0.5.1"),
+            SemVerRange::from_str("^0.5.1").ok()
+        );
+        assert_eq!(
+            cargo_req_to_range(">=0.5.0"),
+            SemVerRange::from_str(">=0.5.0").ok()
+        );
     }
 
     #[test]
@@ -263,10 +284,20 @@ mod tests {
             assert_release_complete("pkg", &pins).unwrap_err()
         });
         match err {
-            BuildError::IncompleteRelease { release_version, missing, .. } => {
+            BuildError::IncompleteRelease {
+                release_version,
+                missing,
+                ..
+            } => {
                 assert_eq!(release_version, "0.5.1");
-                assert!(missing.contains("streamlib-plugin-sdk@^0.5.0"), "missing: {missing}");
-                assert!(!missing.contains("streamlib-macros"), "macros satisfied: {missing}");
+                assert!(
+                    missing.contains("streamlib-plugin-sdk@^0.5.0"),
+                    "missing: {missing}"
+                );
+                assert!(
+                    !missing.contains("streamlib-macros"),
+                    "macros satisfied: {missing}"
+                );
             }
             other => panic!("expected IncompleteRelease, got {other:?}"),
         }
@@ -310,9 +341,16 @@ mod tests {
             assert_release_complete("streamlib-jpeg", &pins).unwrap_err()
         });
         match err {
-            BuildError::IncompleteRelease { release_version, missing, .. } => {
+            BuildError::IncompleteRelease {
+                release_version,
+                missing,
+                ..
+            } => {
                 assert_eq!(release_version, "0.4.36");
-                assert!(missing.contains("streamlib-plugin-sdk@=0.4.36"), "missing: {missing}");
+                assert!(
+                    missing.contains("streamlib-plugin-sdk@=0.4.36"),
+                    "missing: {missing}"
+                );
             }
             other => panic!("expected IncompleteRelease, got {other:?}"),
         }
@@ -388,7 +426,10 @@ mod tests {
         let out = with_file_registry(tmp.path(), || {
             assert_release_complete("@tatolab/mavlink", &pins)
         });
-        assert!(out.is_ok(), "a complete release must resolve clean: {out:?}");
+        assert!(
+            out.is_ok(),
+            "a complete release must resolve clean: {out:?}"
+        );
     }
 
     #[test]
@@ -412,7 +453,10 @@ mod tests {
                 None => std::env::remove_var("STREAMLIB_REGISTRY_URL"),
             }
         }
-        assert!(out.is_ok(), "transport errors must degrade to proceed: {out:?}");
+        assert!(
+            out.is_ok(),
+            "transport errors must degrade to proceed: {out:?}"
+        );
     }
 
     #[test]
@@ -426,11 +470,20 @@ mod tests {
             hint: "re-run the release publish (cargo xtask static-registry emit)".to_string(),
         };
         let rendered = err.to_string();
-        assert!(rendered.contains("incomplete release of 0.5.1"), "{rendered}");
-        assert!(rendered.contains("streamlib-plugin-sdk@^0.5.0"), "{rendered}");
+        assert!(
+            rendered.contains("incomplete release of 0.5.1"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("streamlib-plugin-sdk@^0.5.0"),
+            "{rendered}"
+        );
         assert!(rendered.contains("vulkan-jpeg@^0.5.0"), "{rendered}");
         assert!(rendered.contains("@tatolab/mavlink"), "{rendered}");
-        assert!(rendered.contains("cargo xtask static-registry emit"), "{rendered}");
+        assert!(
+            rendered.contains("cargo xtask static-registry emit"),
+            "{rendered}"
+        );
     }
 
     #[test]
@@ -444,7 +497,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let partial = ReleaseManifest::new(
             "0.5.1-dev.5",
-            vec![ReleaseManifestMember::new("streamlib-macros", "0.5.1-dev.5")],
+            vec![ReleaseManifestMember::new(
+                "streamlib-macros",
+                "0.5.1-dev.5",
+            )],
         );
         publish_manifest(tmp.path(), &partial);
         let pins = vec![
@@ -455,7 +511,11 @@ mod tests {
             assert_release_complete("pkg", &pins).unwrap_err()
         });
         match err {
-            BuildError::IncompleteRelease { release_version, missing, .. } => {
+            BuildError::IncompleteRelease {
+                release_version,
+                missing,
+                ..
+            } => {
                 assert_eq!(release_version, "0.5.1-dev.5");
                 assert!(
                     missing.contains("streamlib-plugin-sdk@^0.5.1-dev.3"),
@@ -486,6 +546,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let pins = vec![pin("streamlib-plugin-sdk", "0.5.1")];
         let out = with_file_registry(tmp.path(), || assert_release_complete("pkg", &pins));
-        assert!(out.is_ok(), "absent manifest must proceed (back-compat): {out:?}");
+        assert!(
+            out.is_ok(),
+            "absent manifest must proceed (back-compat): {out:?}"
+        );
     }
 }

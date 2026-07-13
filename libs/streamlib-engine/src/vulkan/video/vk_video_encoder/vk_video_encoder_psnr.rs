@@ -75,7 +75,10 @@ impl VkVideoEncoderPsnr {
             psnr_recon_u: Vec::new(),
             psnr_recon_v: Vec::new(),
             image_dpb_format: vk::Format::UNDEFINED,
-            image_extent: vk::Extent2D { width: 0, height: 0 },
+            image_extent: vk::Extent2D {
+                width: 0,
+                height: 0,
+            },
             num_planes: 3,
             encode_width: 0,
             encode_height: 0,

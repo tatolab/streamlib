@@ -206,11 +206,7 @@ fn log2_u31(n: u32) -> u32 {
 /// `CeilLog2(n) = (n > 0) ? Log2U31(n-1) : 0`
 /// Returns 0 for n <= 0.
 pub fn ceil_log2(n: i32) -> u32 {
-    if n > 0 {
-        log2_u31((n - 1) as u32)
-    } else {
-        0
-    }
+    if n > 0 { log2_u31((n - 1) as u32) } else { 0 }
 }
 
 // ---------------------------------------------------------------------------
@@ -1330,9 +1326,7 @@ impl VulkanH265Decoder {
         self.dpb
             .iter()
             .filter(|e| {
-                e.layer_id == self.nuh_layer_id
-                    && e.state == DPB_STATE_IN_USE
-                    && e.output != 0
+                e.layer_id == self.nuh_layer_id && e.state == DPB_STATE_IN_USE && e.output != 0
             })
             .count() as i32
     }
@@ -1362,8 +1356,7 @@ impl VulkanH265Decoder {
                     poc_min = self.dpb[i].pic_order_cnt_val;
                     i_min = i as i32;
                 } else if i_min2 < 0
-                    || self.dpb[i].pic_order_cnt_val
-                        < self.dpb[i_min2 as usize].pic_order_cnt_val
+                    || self.dpb[i].pic_order_cnt_val < self.dpb[i_min2 as usize].pic_order_cnt_val
                 {
                     i_min2 = i as i32;
                 }
@@ -1431,8 +1424,7 @@ impl VulkanH265Decoder {
             }
         }
 
-        let is_irap_pic =
-            slh.nal_unit_type >= NalUnitType::BlaWLp as u8 && slh.nal_unit_type <= 23;
+        let is_irap_pic = slh.nal_unit_type >= NalUnitType::BlaWLp as u8 && slh.nal_unit_type <= 23;
 
         let pic_order_cnt_val = self.picture_order_count(slh);
         self.reference_picture_set(slh, pic_order_cnt_val);
@@ -1472,8 +1464,7 @@ impl VulkanH265Decoder {
         }
 
         // Make room in DPB
-        let mut dpb_size =
-            self.max_dec_pic_buffering.min(self.max_dpb_size);
+        let mut dpb_size = self.max_dec_pic_buffering.min(self.max_dpb_size);
         if dpb_size <= 0 {
             dpb_size = 1;
         }
@@ -1572,15 +1563,13 @@ impl VulkanH265Decoder {
             None => return 0,
         };
 
-        let is_irap_pic =
-            slh.nal_unit_type >= NalUnitType::BlaWLp as u8 && slh.nal_unit_type <= 23;
+        let is_irap_pic = slh.nal_unit_type >= NalUnitType::BlaWLp as u8 && slh.nal_unit_type <= 23;
 
         let pic_order_cnt_msb;
         if is_irap_pic && self.no_rasl_output_flag {
             pic_order_cnt_msb = 0;
         } else {
-            let max_pic_order_cnt_lsb =
-                1i32 << (sps.log2_max_pic_order_cnt_lsb_minus4 + 4);
+            let max_pic_order_cnt_lsb = 1i32 << (sps.log2_max_pic_order_cnt_lsb_minus4 + 4);
 
             if (slh.pic_order_cnt_lsb as i32) < self.prev_pic_order_cnt_lsb
                 && (self.prev_pic_order_cnt_lsb - slh.pic_order_cnt_lsb as i32)
@@ -1639,8 +1628,7 @@ impl VulkanH265Decoder {
         };
 
         let max_pic_order_cnt_lsb = 1i32 << (sps.log2_max_pic_order_cnt_lsb_minus4 + 4);
-        let is_irap_pic =
-            slh.nal_unit_type >= NalUnitType::BlaWLp as u8 && slh.nal_unit_type <= 23;
+        let is_irap_pic = slh.nal_unit_type >= NalUnitType::BlaWLp as u8 && slh.nal_unit_type <= 23;
 
         if is_irap_pic && self.no_rasl_output_flag {
             for i in 0..HEVC_DPB_SIZE {
@@ -1681,8 +1669,7 @@ impl VulkanH265Decoder {
             let mut k = 0i32;
             for i in 0..strps.num_negative_pics as usize {
                 if strps.used_by_curr_pic_s0[i] != 0 {
-                    poc_st_curr_before[j as usize] =
-                        pic_order_cnt_val + strps.delta_poc_s0[i];
+                    poc_st_curr_before[j as usize] = pic_order_cnt_val + strps.delta_poc_s0[i];
                     j += 1;
                 } else {
                     poc_st_foll[k as usize] = pic_order_cnt_val + strps.delta_poc_s0[i];
@@ -1694,8 +1681,7 @@ impl VulkanH265Decoder {
             j = 0;
             for i in 0..strps.num_positive_pics as usize {
                 if strps.used_by_curr_pic_s1[i] != 0 {
-                    poc_st_curr_after[j as usize] =
-                        pic_order_cnt_val + strps.delta_poc_s1[i];
+                    poc_st_curr_after[j as usize] = pic_order_cnt_val + strps.delta_poc_s1[i];
                     j += 1;
                 } else {
                     poc_st_foll[k as usize] = pic_order_cnt_val + strps.delta_poc_s1[i];
@@ -1713,15 +1699,13 @@ impl VulkanH265Decoder {
             let lt_count = slh.num_long_term_sps as usize + slh.num_long_term_pics as usize;
             for i in 0..lt_count {
                 if i < slh.num_long_term_sps as usize {
-                    poc_lsb_lt[i] =
-                        sps.long_term_ref_pics_sps.lt_ref_pic_poc_lsb_sps
-                            [slh.lt_idx_sps[i] as usize] as i32;
-                    used_by_curr_pic_lt[i] = (sps
-                        .long_term_ref_pics_sps
-                        .used_by_curr_pic_lt_sps_flag
-                        >> slh.lt_idx_sps[i])
-                        & 1
-                        != 0;
+                    poc_lsb_lt[i] = sps.long_term_ref_pics_sps.lt_ref_pic_poc_lsb_sps
+                        [slh.lt_idx_sps[i] as usize] as i32;
+                    used_by_curr_pic_lt[i] =
+                        (sps.long_term_ref_pics_sps.used_by_curr_pic_lt_sps_flag
+                            >> slh.lt_idx_sps[i])
+                            & 1
+                            != 0;
                 } else {
                     poc_lsb_lt[i] = slh.poc_lsb_lt[i] as i32;
                     used_by_curr_pic_lt[i] = (slh.used_by_curr_pic_lt_flags >> i) & 1 != 0;
@@ -1919,12 +1903,12 @@ impl VulkanH265Decoder {
                         if (view_id_cur <= view_id_zero && view_id_cur <= view_id_ref)
                             || (view_id_cur >= view_id_zero && view_id_cur >= view_id_ref)
                         {
-                            self.ref_pic_set_inter_layer_0
-                                [num_active_ref_layer_pics_0 as usize] = j as i8;
+                            self.ref_pic_set_inter_layer_0[num_active_ref_layer_pics_0 as usize] =
+                                j as i8;
                             num_active_ref_layer_pics_0 += 1;
                         } else {
-                            self.ref_pic_set_inter_layer_1
-                                [num_active_ref_layer_pics_1 as usize] = j as i8;
+                            self.ref_pic_set_inter_layer_1[num_active_ref_layer_pics_1 as usize] =
+                                j as i8;
                             num_active_ref_layer_pics_1 += 1;
                         }
                     } else {
@@ -2079,11 +2063,8 @@ impl VulkanH265Decoder {
             {
                 let mut i = 0usize;
                 for j in (0..rstrps.num_positive_pics as usize).rev() {
-                    let d_poc =
-                        rstrps.delta_poc_s1[j] + delta_rps;
-                    if d_poc < 0
-                        && use_delta_flag[rstrps.num_negative_pics as usize + j] != 0
-                    {
+                    let d_poc = rstrps.delta_poc_s1[j] + delta_rps;
+                    if d_poc < 0 && use_delta_flag[rstrps.num_negative_pics as usize + j] != 0 {
                         if i >= MAX_NUM_STRPS_ENTRIES {
                             break;
                         }
@@ -2106,8 +2087,7 @@ impl VulkanH265Decoder {
                         strps.delta_poc_s0[i] = delta_rps;
                         std_strps.delta_poc_s0_minus1[i] = delta_rps as u16;
                         strps.used_by_curr_pic_s0[i] = used_by_curr_pic_flag
-                            [rstrps.num_negative_pics as usize
-                                + rstrps.num_positive_pics as usize];
+                            [rstrps.num_negative_pics as usize + rstrps.num_positive_pics as usize];
                         if strps.used_by_curr_pic_s0[i] != 0 {
                             std_strps.used_by_curr_pic_s0_flag |= 1 << i;
                         }
@@ -2160,8 +2140,7 @@ impl VulkanH265Decoder {
                         strps.delta_poc_s1[i] = delta_rps;
                         std_strps.delta_poc_s1_minus1[i] = delta_rps;
                         strps.used_by_curr_pic_s1[i] = used_by_curr_pic_flag
-                            [rstrps.num_negative_pics as usize
-                                + rstrps.num_positive_pics as usize];
+                            [rstrps.num_negative_pics as usize + rstrps.num_positive_pics as usize];
                         if strps.used_by_curr_pic_s1[i] != 0 {
                             std_strps.used_by_curr_pic_s1_flag |= 1 << i;
                         }
@@ -2170,9 +2149,7 @@ impl VulkanH265Decoder {
                 }
                 for j in 0..rstrps.num_positive_pics as usize {
                     let d_poc = rstrps.delta_poc_s1[j] + delta_rps;
-                    if d_poc > 0
-                        && use_delta_flag[rstrps.num_negative_pics as usize + j] != 0
-                    {
+                    if d_poc > 0 && use_delta_flag[rstrps.num_negative_pics as usize + j] != 0 {
                         if i >= MAX_NUM_STRPS_ENTRIES {
                             break;
                         }
@@ -2236,11 +2213,8 @@ impl VulkanH265Decoder {
             std_strps.num_positive_pics = num_positive_pics;
 
             for i in 0..num_negative_pics as usize {
-                strps.delta_poc_s0[i] = (if i == 0 {
-                    0
-                } else {
-                    strps.delta_poc_s0[i - 1]
-                }) - (delta_poc_s0_minus1[i] as i32 + 1);
+                strps.delta_poc_s0[i] = (if i == 0 { 0 } else { strps.delta_poc_s0[i - 1] })
+                    - (delta_poc_s0_minus1[i] as i32 + 1);
                 std_strps.delta_poc_s0_minus1[i] = strps.delta_poc_s0[i] as u16;
                 strps.used_by_curr_pic_s0[i] = used_by_curr_pic_s0_flag[i];
                 if strps.used_by_curr_pic_s0[i] != 0 {
@@ -2248,11 +2222,8 @@ impl VulkanH265Decoder {
                 }
             }
             for i in 0..num_positive_pics as usize {
-                strps.delta_poc_s1[i] = (if i == 0 {
-                    0
-                } else {
-                    strps.delta_poc_s1[i - 1]
-                }) + (delta_poc_s1_minus1[i] as i32 + 1);
+                strps.delta_poc_s1[i] = (if i == 0 { 0 } else { strps.delta_poc_s1[i - 1] })
+                    + (delta_poc_s1_minus1[i] as i32 + 1);
                 std_strps.delta_poc_s1_minus1[i] = strps.delta_poc_s1[i];
                 strps.used_by_curr_pic_s1[i] = used_by_curr_pic_s1_flag[i];
                 if strps.used_by_curr_pic_s1[i] != 0 {
@@ -2296,10 +2267,7 @@ impl VulkanH265Decoder {
                         let dc_coef = reader.se()?;
                         scle.scaling_list_dc_coef_minus8 = dc_coef;
                         if dc_coef < -7 || dc_coef > 247 {
-                            tracing::warn!(
-                                "Invalid scaling_list_dc_coef_minus8 ({})",
-                                dc_coef
-                            );
+                            tracing::warn!("Invalid scaling_list_dc_coef_minus8 ({})", dc_coef);
                             return None;
                         }
                         next_coef = scle.scaling_list_dc_coef_minus8 + 8;
@@ -2308,10 +2276,7 @@ impl VulkanH265Decoder {
                         let delta_coef = reader.se()?;
                         scle.scaling_list_delta_coef[i] = delta_coef as i8;
                         if delta_coef < -128 || delta_coef > 127 {
-                            tracing::warn!(
-                                "Invalid scaling_list_delta_coef ({})",
-                                delta_coef
-                            );
+                            tracing::warn!("Invalid scaling_list_delta_coef ({})", delta_coef);
                             return None;
                         }
                         next_coef = (next_coef + delta_coef) & 0xff;
@@ -2345,14 +2310,11 @@ impl VulkanH265Decoder {
         if vps.vps_max_sub_layers_minus1 as usize >= MAX_NUM_SUB_LAYERS {
             return None;
         }
-        vps.base_flags.vps_temporal_id_nesting_flag =
-            reader.u(1)? != 0;
+        vps.base_flags.vps_temporal_id_nesting_flag = reader.u(1)? != 0;
         let _reserved = reader.u(16)?; // reserved_0xffff_16bits
 
-        vps.profile_tier_level = Self::parse_profile_tier_level(
-            reader,
-            vps.vps_max_sub_layers_minus1 as u8,
-        )?;
+        vps.profile_tier_level =
+            Self::parse_profile_tier_level(reader, vps.vps_max_sub_layers_minus1 as u8)?;
 
         let sub_layer_ordering_present = reader.u(1)? != 0;
         vps.base_flags.vps_sub_layer_ordering_info_present_flag = sub_layer_ordering_present;
@@ -2474,10 +2436,8 @@ impl VulkanH265Decoder {
             sps.dec_pic_buf_mgr.max_dec_pic_buffering_minus1[i] = reader.ue()? as u8;
             sps.dec_pic_buf_mgr.max_num_reorder_pics[i] = reader.ue()? as u8;
             sps.dec_pic_buf_mgr.max_latency_increase_plus1[i] = reader.ue()? as u8;
-            if sps.dec_pic_buf_mgr.max_dec_pic_buffering_minus1[i] + 1 > sps.max_dec_pic_buffering
-            {
-                sps.max_dec_pic_buffering =
-                    sps.dec_pic_buf_mgr.max_dec_pic_buffering_minus1[i] + 1;
+            if sps.dec_pic_buf_mgr.max_dec_pic_buffering_minus1[i] + 1 > sps.max_dec_pic_buffering {
+                sps.max_dec_pic_buffering = sps.dec_pic_buf_mgr.max_dec_pic_buffering_minus1[i] + 1;
             }
             if sps.dec_pic_buf_mgr.max_num_reorder_pics[i] > sps.max_num_reorder_pics {
                 sps.max_num_reorder_pics = sps.dec_pic_buf_mgr.max_num_reorder_pics[i];
@@ -2703,8 +2663,7 @@ impl VulkanH265Decoder {
 
         pps.init_qp_minus26 = reader.se()? as i8;
         let qp_bd_offset_y = sps.map_or(0i32, |s| 6 * s.bit_depth_luma_minus8 as i32);
-        if (pps.init_qp_minus26 as i32) < -(26 + qp_bd_offset_y)
-            || pps.init_qp_minus26 as i32 > 25
+        if (pps.init_qp_minus26 as i32) < -(26 + qp_bd_offset_y) || pps.init_qp_minus26 as i32 > 25
         {
             tracing::warn!("Invalid init_qp_minus26: {}", pps.init_qp_minus26);
             return None;
@@ -2815,9 +2774,8 @@ impl VulkanH265Decoder {
         pps: &HevcPicParam,
     ) -> Option<HevcSliceHeader> {
         let rap_pic_flag = nal_unit_type >= NalUnitType::BlaWLp as u8 && nal_unit_type <= 23;
-        let idr_pic_flag =
-            nal_unit_type == NalUnitType::IdrWRadl as u8
-                || nal_unit_type == NalUnitType::IdrNLp as u8;
+        let idr_pic_flag = nal_unit_type == NalUnitType::IdrWRadl as u8
+            || nal_unit_type == NalUnitType::IdrNLp as u8;
 
         let mut slh = HevcSliceHeader::default();
         slh.nal_unit_type = nal_unit_type;
@@ -2911,22 +2869,19 @@ impl VulkanH265Decoder {
                         slh.num_long_term_sps = reader.ue()? as u8;
                     }
                     slh.num_long_term_pics = reader.ue()? as u8;
-                    let lt_count =
-                        slh.num_long_term_sps as usize + slh.num_long_term_pics as usize;
+                    let lt_count = slh.num_long_term_sps as usize + slh.num_long_term_pics as usize;
                     if lt_count > MAX_NUM_REF_PICS {
                         return None;
                     }
                     for i in 0..lt_count {
                         if i < slh.num_long_term_sps as usize {
                             if sps.num_long_term_ref_pics_sps > 1 {
-                                let bits =
-                                    ceil_log2(sps.num_long_term_ref_pics_sps as i32);
+                                let bits = ceil_log2(sps.num_long_term_ref_pics_sps as i32);
                                 slh.lt_idx_sps[i] = reader.u(bits)? as u8;
                             }
                         } else {
-                            slh.poc_lsb_lt[i] = reader
-                                .u(sps.log2_max_pic_order_cnt_lsb_minus4 as u32 + 4)?
-                                as u16;
+                            slh.poc_lsb_lt[i] =
+                                reader.u(sps.log2_max_pic_order_cnt_lsb_minus4 as u32 + 4)? as u16;
                             if reader.u(1)? != 0 {
                                 // used_by_curr_pic_lt_flag
                                 slh.used_by_curr_pic_lt_flags |= 1 << i;
@@ -3121,13 +3076,13 @@ mod tests {
         // This matches ceil(log2(n)) for n >= 1.
         assert_eq!(ceil_log2(0), 0);
         assert_eq!(ceil_log2(-1), 0);
-        assert_eq!(ceil_log2(1), 0);  // ceil(log2(1)) = 0
-        assert_eq!(ceil_log2(2), 1);  // ceil(log2(2)) = 1
-        assert_eq!(ceil_log2(3), 2);  // ceil(log2(3)) = 2
-        assert_eq!(ceil_log2(4), 2);  // ceil(log2(4)) = 2
-        assert_eq!(ceil_log2(5), 3);  // ceil(log2(5)) = 3
-        assert_eq!(ceil_log2(8), 3);  // ceil(log2(8)) = 3
-        assert_eq!(ceil_log2(9), 4);  // ceil(log2(9)) = 4
+        assert_eq!(ceil_log2(1), 0); // ceil(log2(1)) = 0
+        assert_eq!(ceil_log2(2), 1); // ceil(log2(2)) = 1
+        assert_eq!(ceil_log2(3), 2); // ceil(log2(3)) = 2
+        assert_eq!(ceil_log2(4), 2); // ceil(log2(4)) = 2
+        assert_eq!(ceil_log2(5), 3); // ceil(log2(5)) = 3
+        assert_eq!(ceil_log2(8), 3); // ceil(log2(8)) = 3
+        assert_eq!(ceil_log2(9), 4); // ceil(log2(9)) = 4
         assert_eq!(ceil_log2(16), 4); // ceil(log2(16)) = 4
         assert_eq!(ceil_log2(17), 5); // ceil(log2(17)) = 5
     }

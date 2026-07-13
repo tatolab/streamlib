@@ -27,14 +27,14 @@
 
 use super::bus::PubSub;
 use super::events::{
-    topics, Event, EventListener, KeyCode, KeyState, Modifiers, MouseButton, MouseState,
-    ProcessorEvent, RuntimeEvent,
+    Event, EventListener, KeyCode, KeyState, Modifiers, MouseButton, MouseState, ProcessorEvent,
+    RuntimeEvent, topics,
 };
 use crate::iceoryx2::{Iceoryx2Node, MAX_EVENT_PAYLOAD_SIZE};
 use parking_lot::Mutex;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------

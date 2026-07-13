@@ -50,8 +50,8 @@ pub(crate) struct StdioInterceptorFiles {
 /// write ends onto fds 1/2. Reader threads are NOT spawned yet —
 /// call [`StdioInterceptorPending::start_readers`] once a
 /// `tracing::Dispatch` is available.
-pub(crate) fn install_redirects(
-) -> std::io::Result<(StdioInterceptorPending, StdioInterceptorFiles)> {
+pub(crate) fn install_redirects()
+-> std::io::Result<(StdioInterceptorPending, StdioInterceptorFiles)> {
     // Dup fd 1 twice: one copy becomes the pretty-mirror sink, one is
     // stashed for restoration in Drop. Same for fd 2. MUST happen
     // BEFORE the dup2 redirects below — otherwise the "real" handles
@@ -184,10 +184,9 @@ fn make_pipe() -> std::io::Result<(OwnedFd, OwnedFd)> {
     if rc < 0 {
         return Err(std::io::Error::last_os_error());
     }
-    Ok((
-        unsafe { OwnedFd::from_raw_fd(fds[0]) },
-        unsafe { OwnedFd::from_raw_fd(fds[1]) },
-    ))
+    Ok((unsafe { OwnedFd::from_raw_fd(fds[0]) }, unsafe {
+        OwnedFd::from_raw_fd(fds[1])
+    }))
 }
 
 fn owned_fd_to_file(fd: OwnedFd) -> File {

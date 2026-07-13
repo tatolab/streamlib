@@ -25,8 +25,7 @@ pub use traits::{ContinuousProcessor, ManualProcessor, ReactiveProcessor};
 pub use __generated_private::{DynGeneratedProcessor, GeneratedProcessor};
 
 pub use processor_instance_factory::{
-    DynamicProcessorConstructorFn, ProcessorInstance, ProcessorInstanceFactory,
-    PROCESSOR_REGISTRY,
+    DynamicProcessorConstructorFn, PROCESSOR_REGISTRY, ProcessorInstance, ProcessorInstanceFactory,
 };
 pub use processor_spec::ProcessorSpec;
 

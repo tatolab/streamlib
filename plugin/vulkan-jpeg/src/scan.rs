@@ -27,21 +27,19 @@ pub(crate) fn decode_entropy(
             .components
             .iter()
             .find(|c| c.id == scan_comp.component_id)
-            .ok_or(JpegError::InvalidScan(
-                "SOS component id missing from SOF",
-            ))?;
-        let dc_table = huffman.dc[scan_comp.dc_table_id as usize]
-            .as_ref()
-            .ok_or(JpegError::MissingHuffmanTable {
+            .ok_or(JpegError::InvalidScan("SOS component id missing from SOF"))?;
+        let dc_table = huffman.dc[scan_comp.dc_table_id as usize].as_ref().ok_or(
+            JpegError::MissingHuffmanTable {
                 class: 0,
                 id: scan_comp.dc_table_id,
-            })?;
-        let ac_table = huffman.ac[scan_comp.ac_table_id as usize]
-            .as_ref()
-            .ok_or(JpegError::MissingHuffmanTable {
+            },
+        )?;
+        let ac_table = huffman.ac[scan_comp.ac_table_id as usize].as_ref().ok_or(
+            JpegError::MissingHuffmanTable {
                 class: 1,
                 id: scan_comp.ac_table_id,
-            })?;
+            },
+        )?;
         let blocks_h = mcus_h * frame_comp.h_sampling as usize;
         let blocks_v = mcus_v * frame_comp.v_sampling as usize;
         planes.push(ComponentPlane {
@@ -147,9 +145,7 @@ fn decode_block(
                 // ZRL: 16 zeros, no value.
                 k += 16;
                 if k > 64 {
-                    return Err(JpegError::InvalidScan(
-                        "ZRL would overrun 8x8 block",
-                    ));
+                    return Err(JpegError::InvalidScan("ZRL would overrun 8x8 block"));
                 }
                 continue;
             }
@@ -163,9 +159,7 @@ fn decode_block(
         }
         k += run;
         if k >= 64 {
-            return Err(JpegError::InvalidScan(
-                "AC run+category overruns 8x8 block",
-            ));
+            return Err(JpegError::InvalidScan("AC run+category overruns 8x8 block"));
         }
         let raw = reader.read_bits(category)?;
         let value = BitReader::extend(raw, category);

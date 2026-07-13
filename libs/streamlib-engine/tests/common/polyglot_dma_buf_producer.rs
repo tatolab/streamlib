@@ -23,10 +23,10 @@
 #![cfg(target_os = "linux")]
 #![allow(dead_code)] // Each test binary uses only a subset of the helper.
 
-use std::ffi::{c_char, CStr};
+use std::ffi::{CStr, c_char};
 use std::os::unix::io::RawFd;
 
-use vulkanalia::loader::{LibloadingLoader, LIBRARY};
+use vulkanalia::loader::{LIBRARY, LibloadingLoader};
 use vulkanalia::prelude::v1_1::*;
 use vulkanalia::vk::{self, KhrExternalMemoryFdExtensionDeviceCommands as _};
 
@@ -41,8 +41,8 @@ impl TestDmaBufProducer {
     pub fn try_new() -> Result<Self, String> {
         let loader = unsafe { LibloadingLoader::new(LIBRARY) }
             .map_err(|e| format!("load libvulkan: {e}"))?;
-        let entry = unsafe { vulkanalia::Entry::new(loader) }
-            .map_err(|e| format!("vulkan entry: {e}"))?;
+        let entry =
+            unsafe { vulkanalia::Entry::new(loader) }.map_err(|e| format!("vulkan entry: {e}"))?;
 
         let app_info = vk::ApplicationInfo::builder()
             .application_name(b"streamlib-polyglot-integration-test\0")

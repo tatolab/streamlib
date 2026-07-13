@@ -669,11 +669,7 @@ mod tests {
             Event::processor("test-proc", ProcessorEvent::Started),
             Event::custom("my-topic", serde_json::json!({"key": "value"})),
             Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed),
-            Event::mouse(
-                MouseButton::Left,
-                (100.5, 200.25),
-                MouseState::Pressed,
-            ),
+            Event::mouse(MouseButton::Left, (100.5, 200.25), MouseState::Pressed),
             Event::window(WindowEventType::Resized {
                 width: 1920,
                 height: 1080,

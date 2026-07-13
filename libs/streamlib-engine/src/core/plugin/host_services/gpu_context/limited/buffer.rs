@@ -17,10 +17,10 @@ use std::ffi::c_void;
 #[cfg(target_os = "linux")]
 use std::sync::Arc;
 
-#[cfg(target_os = "linux")]
-use super::super::shared::handle_as_gpu_context;
 use super::super::super::run_host_extern_c;
 use super::super::super::shared::wire::write_err;
+#[cfg(target_os = "linux")]
+use super::super::shared::handle_as_gpu_context;
 
 // -------------------------------------------------------------------------
 // Linux-only buffer Arc-handle lifecycle
@@ -35,7 +35,9 @@ use super::super::super::shared::wire::write_err;
 // the vtable slot is unconditional for ABI stability.
 
 #[cfg(target_os = "linux")]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clone_host_vulkan_buffer_arc(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clone_host_vulkan_buffer_arc(
+    handle: *const c_void,
+) {
     if handle.is_null() {
         return;
     }
@@ -47,7 +49,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clo
 }
 
 #[cfg(target_os = "linux")]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_host_vulkan_buffer_arc(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_host_vulkan_buffer_arc(
+    handle: *const c_void,
+) {
     if handle.is_null() {
         return;
     }
@@ -59,13 +63,17 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_dro
 }
 
 #[cfg(not(target_os = "linux"))]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clone_host_vulkan_buffer_arc(_handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clone_host_vulkan_buffer_arc(
+    _handle: *const c_void,
+) {
     // Buffer types only exist on Linux; this callback is unreachable
     // on other platforms. Defensive no-op.
 }
 
 #[cfg(not(target_os = "linux"))]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_host_vulkan_buffer_arc(_handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_host_vulkan_buffer_arc(
+    _handle: *const c_void,
+) {
     // Buffer types only exist on Linux; defensive no-op.
 }
 
@@ -75,7 +83,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_dro
 // growing a per-type cached field that needs its own clone semantics)
 // only edits the wrapper without touching the vtable surface.
 
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clone_storage_buffer(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clone_storage_buffer(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_lim_clone_storage_buffer",
         || unsafe { host_gpu_lim_clone_host_vulkan_buffer_arc(handle) },
@@ -83,7 +93,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clo
     )
 }
 
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_storage_buffer(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_storage_buffer(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_lim_drop_storage_buffer",
         || unsafe { host_gpu_lim_drop_host_vulkan_buffer_arc(handle) },
@@ -91,7 +103,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_dro
     )
 }
 
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clone_uniform_buffer(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clone_uniform_buffer(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_lim_clone_uniform_buffer",
         || unsafe { host_gpu_lim_clone_host_vulkan_buffer_arc(handle) },
@@ -99,7 +113,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clo
     )
 }
 
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_uniform_buffer(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_uniform_buffer(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_lim_drop_uniform_buffer",
         || unsafe { host_gpu_lim_drop_host_vulkan_buffer_arc(handle) },
@@ -107,7 +123,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_dro
     )
 }
 
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clone_vertex_buffer(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clone_vertex_buffer(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_lim_clone_vertex_buffer",
         || unsafe { host_gpu_lim_clone_host_vulkan_buffer_arc(handle) },
@@ -115,7 +133,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clo
     )
 }
 
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_vertex_buffer(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_vertex_buffer(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_lim_drop_vertex_buffer",
         || unsafe { host_gpu_lim_drop_host_vulkan_buffer_arc(handle) },
@@ -123,7 +143,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_dro
     )
 }
 
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clone_index_buffer(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clone_index_buffer(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_lim_clone_index_buffer",
         || unsafe { host_gpu_lim_clone_host_vulkan_buffer_arc(handle) },
@@ -131,7 +153,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_clo
     )
 }
 
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_index_buffer(handle: *const c_void) {
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_drop_index_buffer(
+    handle: *const c_void,
+) {
     run_host_extern_c(
         "host_gpu_lim_drop_index_buffer",
         || unsafe { host_gpu_lim_drop_host_vulkan_buffer_arc(handle) },
@@ -176,10 +200,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_acq
             match gpu.acquire_storage_buffer(byte_size) {
                 Ok(buf) => {
                     unsafe {
-                        std::ptr::write(
-                            out_buffer as *mut crate::core::rhi::StorageBuffer,
-                            buf,
-                        );
+                        std::ptr::write(out_buffer as *mut crate::core::rhi::StorageBuffer, buf);
                     }
                     0
                 }
@@ -226,10 +247,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_acq
             match gpu.acquire_uniform_buffer(byte_size) {
                 Ok(buf) => {
                     unsafe {
-                        std::ptr::write(
-                            out_buffer as *mut crate::core::rhi::UniformBuffer,
-                            buf,
-                        );
+                        std::ptr::write(out_buffer as *mut crate::core::rhi::UniformBuffer, buf);
                     }
                     0
                 }
@@ -276,10 +294,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_acq
             match gpu.acquire_vertex_buffer(byte_size) {
                 Ok(buf) => {
                     unsafe {
-                        std::ptr::write(
-                            out_buffer as *mut crate::core::rhi::VertexBuffer,
-                            buf,
-                        );
+                        std::ptr::write(out_buffer as *mut crate::core::rhi::VertexBuffer, buf);
                     }
                     0
                 }
@@ -326,10 +341,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_acq
             match gpu.acquire_index_buffer(byte_size) {
                 Ok(buf) => {
                     unsafe {
-                        std::ptr::write(
-                            out_buffer as *mut crate::core::rhi::IndexBuffer,
-                            buf,
-                        );
+                        std::ptr::write(out_buffer as *mut crate::core::rhi::IndexBuffer, buf);
                     }
                     0
                 }
@@ -414,4 +426,3 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_lim_acq
     );
     1
 }
-

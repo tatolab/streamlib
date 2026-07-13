@@ -23,22 +23,22 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
+use vma::Alloc as _;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia::vk::KhrRayTracingPipelineExtensionDeviceCommands as _;
 use vulkanalia_vma as vma;
-use vma::Alloc as _;
 
 use std::ffi::c_void;
 
 use streamlib_plugin_abi::GpuContextFullAccessVTable;
 
 use crate::core::rhi::{
-    validate_shader_groups, RayTracingBindingKind, RayTracingBindingSpec,
-    RayTracingKernelDescriptor, RayTracingShaderGroup, RayTracingShaderStage,
-    RayTracingShaderStageFlags, RayTracingStage, Texture,
+    RayTracingBindingKind, RayTracingBindingSpec, RayTracingKernelDescriptor,
+    RayTracingShaderGroup, RayTracingShaderStage, RayTracingShaderStageFlags, RayTracingStage,
+    Texture, validate_shader_groups,
 };
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 
 use super::{HostVulkanDevice, VulkanAccelerationStructure};
 
@@ -128,9 +128,7 @@ impl VulkanRayTracingKernelInner {
         if descriptor.max_recursion_depth > rt_props.max_ray_recursion_depth {
             return Err(Error::GpuError(format!(
                 "Ray-tracing kernel '{}': declared max_recursion_depth={} exceeds device max ({})",
-                descriptor.label,
-                descriptor.max_recursion_depth,
-                rt_props.max_ray_recursion_depth
+                descriptor.label, descriptor.max_recursion_depth, rt_props.max_ray_recursion_depth
             )));
         }
 
@@ -186,23 +184,20 @@ impl VulkanRayTracingKernelInner {
             .collect();
 
         // Group create infos (one per declared group).
-        let group_infos: Vec<vk::RayTracingShaderGroupCreateInfoKHR> = descriptor
-            .groups
-            .iter()
-            .map(|g| group_to_vk(g))
-            .collect();
+        let group_infos: Vec<vk::RayTracingShaderGroupCreateInfoKHR> =
+            descriptor.groups.iter().map(|g| group_to_vk(g)).collect();
 
         // Descriptor-set layout + pool + set (one set, mirrors compute kernel's shape).
-        let descriptor_set_layout =
-            match create_descriptor_set_layout(device, descriptor.bindings) {
-                Ok(l) => l,
-                Err(e) => {
-                    for m in shader_modules.drain(..) {
-                        unsafe { device.destroy_shader_module(m, None) };
-                    }
-                    return Err(e);
+        let descriptor_set_layout = match create_descriptor_set_layout(device, descriptor.bindings)
+        {
+            Ok(l) => l,
+            Err(e) => {
+                for m in shader_modules.drain(..) {
+                    unsafe { device.destroy_shader_module(m, None) };
                 }
-            };
+                return Err(e);
+            }
+        };
 
         let pipeline_layout = match create_pipeline_layout(
             device,
@@ -255,12 +250,7 @@ impl VulkanRayTracingKernelInner {
         };
 
         // Fetch shader-group handles + build SBT.
-        let sbt = match build_sbt(
-            vulkan_device,
-            descriptor,
-            pipeline,
-            &rt_props,
-        ) {
+        let sbt = match build_sbt(vulkan_device, descriptor, pipeline, &rt_props) {
             Ok(s) => s,
             Err(e) => {
                 unsafe {
@@ -291,26 +281,23 @@ impl VulkanRayTracingKernelInner {
                 return Err(e);
             }
         };
-        let descriptor_set = match allocate_descriptor_set(
-            device,
-            descriptor_pool,
-            descriptor_set_layout,
-        ) {
-            Ok(s) => s,
-            Err(e) => {
-                drop_sbt(&sbt, vulkan_device);
-                unsafe {
-                    device.destroy_descriptor_pool(descriptor_pool, None);
-                    device.destroy_pipeline(pipeline, None);
-                    device.destroy_pipeline_layout(pipeline_layout, None);
-                    device.destroy_descriptor_set_layout(descriptor_set_layout, None);
+        let descriptor_set =
+            match allocate_descriptor_set(device, descriptor_pool, descriptor_set_layout) {
+                Ok(s) => s,
+                Err(e) => {
+                    drop_sbt(&sbt, vulkan_device);
+                    unsafe {
+                        device.destroy_descriptor_pool(descriptor_pool, None);
+                        device.destroy_pipeline(pipeline, None);
+                        device.destroy_pipeline_layout(pipeline_layout, None);
+                        device.destroy_descriptor_set_layout(descriptor_set_layout, None);
+                    }
+                    for m in shader_modules.drain(..) {
+                        unsafe { device.destroy_shader_module(m, None) };
+                    }
+                    return Err(e);
                 }
-                for m in shader_modules.drain(..) {
-                    unsafe { device.destroy_shader_module(m, None) };
-                }
-                return Err(e);
-            }
-        };
+            };
 
         // Command pool + buffer + fence.
         let command_pool = match create_command_pool(device, queue_family_index) {
@@ -409,7 +396,9 @@ impl VulkanRayTracingKernelInner {
         if tlas.kind() != super::AccelerationStructureKind::TopLevel {
             return Err(Error::GpuError(format!(
                 "Ray-tracing kernel '{}': binding {} expects a top-level AS, got {:?}",
-                self.label, binding, tlas.kind()
+                self.label,
+                binding,
+                tlas.kind()
             )));
         }
         self.pending.lock().bindings.insert(
@@ -468,10 +457,10 @@ impl VulkanRayTracingKernelInner {
             texture.vulkan_inner().image_view()?
         };
         let sampler = self.default_sampler()?;
-        self.pending.lock().bindings.insert(
-            binding,
-            BindingResource::SampledImage { view, sampler },
-        );
+        self.pending
+            .lock()
+            .bindings
+            .insert(binding, BindingResource::SampledImage { view, sampler });
         Ok(())
     }
 
@@ -702,9 +691,11 @@ impl VulkanRayTracingKernelInner {
     }
 
     fn flush_descriptor_writes(&self, pending: &PendingState) -> Result<()> {
-        let mut buffer_infos: Vec<vk::DescriptorBufferInfo> = Vec::with_capacity(self.bindings.len());
+        let mut buffer_infos: Vec<vk::DescriptorBufferInfo> =
+            Vec::with_capacity(self.bindings.len());
         let mut image_infos: Vec<vk::DescriptorImageInfo> = Vec::with_capacity(self.bindings.len());
-        let mut as_handles: Vec<vk::AccelerationStructureKHR> = Vec::with_capacity(self.bindings.len());
+        let mut as_handles: Vec<vk::AccelerationStructureKHR> =
+            Vec::with_capacity(self.bindings.len());
         let mut as_writes: Vec<vk::WriteDescriptorSetAccelerationStructureKHR> =
             Vec::with_capacity(self.bindings.len());
 
@@ -720,7 +711,10 @@ impl VulkanRayTracingKernelInner {
         for spec in &self.bindings {
             let res = pending.bindings.get(&spec.binding).expect("checked above");
             match (spec.kind, res) {
-                (RayTracingBindingKind::StorageBuffer, BindingResource::Buffer { buffer, size }) => {
+                (
+                    RayTracingBindingKind::StorageBuffer,
+                    BindingResource::Buffer { buffer, size },
+                ) => {
                     let idx = buffer_infos.len();
                     buffer_infos.push(
                         vk::DescriptorBufferInfo::builder()
@@ -737,7 +731,10 @@ impl VulkanRayTracingKernelInner {
                         as_idx: None,
                     });
                 }
-                (RayTracingBindingKind::UniformBuffer, BindingResource::Buffer { buffer, size }) => {
+                (
+                    RayTracingBindingKind::UniformBuffer,
+                    BindingResource::Buffer { buffer, size },
+                ) => {
                     let idx = buffer_infos.len();
                     buffer_infos.push(
                         vk::DescriptorBufferInfo::builder()
@@ -880,9 +877,11 @@ impl Drop for VulkanRayTracingKernelInner {
             }
             self.device.destroy_fence(self.fence, None);
             self.device.destroy_command_pool(self.command_pool, None);
-            self.device.destroy_descriptor_pool(self.descriptor_pool, None);
+            self.device
+                .destroy_descriptor_pool(self.descriptor_pool, None);
             self.device.destroy_pipeline(self.pipeline, None);
-            self.device.destroy_pipeline_layout(self.pipeline_layout, None);
+            self.device
+                .destroy_pipeline_layout(self.pipeline_layout, None);
             self.device
                 .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
             for module in self.shader_modules.drain(..) {
@@ -923,8 +922,7 @@ pub struct VulkanRayTracingKernel {
     /// Parent vtable for plugin ABI Clone/Drop dispatch (#918 Phase D).
     pub(crate) vtable: *const GpuContextFullAccessVTable,
     /// Per-type vtable for plugin ABI method dispatch (#907 Phase E).
-    pub(crate) methods_vtable:
-        *const streamlib_plugin_abi::VulkanRayTracingKernelMethodsVTable,
+    pub(crate) methods_vtable: *const streamlib_plugin_abi::VulkanRayTracingKernelMethodsVTable,
     /// Cached push-constant size in bytes. Set at construction.
     pub(crate) cached_push_constant_size: u32,
     /// Reserved padding so the struct stays 8-byte aligned and the
@@ -947,8 +945,7 @@ impl VulkanRayTracingKernel {
     pub(crate) fn from_arc_into_raw(arc: Arc<VulkanRayTracingKernelInner>) -> Self {
         let cached_push_constant_size = arc.push_constant_size();
         let handle = Arc::into_raw(arc) as *const c_void;
-        let vtable =
-            crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
+        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
         let methods_vtable =
             crate::core::plugin::host_services::host_vulkan_ray_tracing_kernel_methods_vtable();
         Self {
@@ -1052,10 +1049,7 @@ impl VulkanRayTracingKernel {
             // SAFETY: T is Copy + Sized so its layout is stable; the
             // byte view is read-only and consumed inside the plugin ABI call.
             let bytes = unsafe {
-                std::slice::from_raw_parts(
-                    value as *const T as *const u8,
-                    std::mem::size_of::<T>(),
-                )
+                std::slice::from_raw_parts(value as *const T as *const u8, std::mem::size_of::<T>())
             };
             return self.dispatch_set_push_constants_via_vtable(bytes);
         }
@@ -1137,8 +1131,8 @@ impl VulkanRayTracingKernel {
                 )
             };
             if status2 != 0 {
-                let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                    .into_owned();
+                let msg =
+                    String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
                 return Err(Error::GpuError(msg));
             }
             return heap
@@ -1148,9 +1142,7 @@ impl VulkanRayTracingKernel {
                 .collect();
         }
         if status != 0 {
-            let msg =
-                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                    .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             return Err(Error::GpuError(msg));
         }
         buf.iter()
@@ -1190,8 +1182,7 @@ impl VulkanRayTracingKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1222,8 +1213,7 @@ impl VulkanRayTracingKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1254,8 +1244,7 @@ impl VulkanRayTracingKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1286,8 +1275,7 @@ impl VulkanRayTracingKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1318,18 +1306,13 @@ impl VulkanRayTracingKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
 
     #[cfg(target_os = "linux")]
-    fn dispatch_set_storage_image_via_vtable(
-        &self,
-        binding: u32,
-        texture: &Texture,
-    ) -> Result<()> {
+    fn dispatch_set_storage_image_via_vtable(&self, binding: u32, texture: &Texture) -> Result<()> {
         if self.methods_vtable.is_null() {
             return Err(Error::GpuError(
                 "set_storage_image: ray-tracing kernel methods vtable is null".into(),
@@ -1350,8 +1333,7 @@ impl VulkanRayTracingKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1378,19 +1360,13 @@ impl VulkanRayTracingKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
 
     #[cfg(target_os = "linux")]
-    fn dispatch_trace_rays_via_vtable(
-        &self,
-        width: u32,
-        height: u32,
-        depth: u32,
-    ) -> Result<()> {
+    fn dispatch_trace_rays_via_vtable(&self, width: u32, height: u32, depth: u32) -> Result<()> {
         if self.methods_vtable.is_null() {
             return Err(Error::GpuError(
                 "trace_rays: ray-tracing kernel methods vtable is null".into(),
@@ -1412,8 +1388,7 @@ impl VulkanRayTracingKernel {
         if status == 0 {
             Ok(())
         } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                .into_owned();
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
         }
     }
@@ -1606,9 +1581,7 @@ fn spirv_type_to_kind(ty: RDescriptorType) -> Option<RayTracingBindingKind> {
     match ty {
         RDescriptorType::STORAGE_BUFFER => Some(RayTracingBindingKind::StorageBuffer),
         RDescriptorType::UNIFORM_BUFFER => Some(RayTracingBindingKind::UniformBuffer),
-        RDescriptorType::COMBINED_IMAGE_SAMPLER => {
-            Some(RayTracingBindingKind::SampledTexture)
-        }
+        RDescriptorType::COMBINED_IMAGE_SAMPLER => Some(RayTracingBindingKind::SampledTexture),
         RDescriptorType::STORAGE_IMAGE => Some(RayTracingBindingKind::StorageImage),
         RDescriptorType::ACCELERATION_STRUCTURE_KHR => {
             Some(RayTracingBindingKind::AccelerationStructure)
@@ -1647,11 +1620,13 @@ fn create_pipeline_layout(
 ) -> Result<vk::PipelineLayout> {
     let set_layouts = [set_layout];
     let push_constant_ranges: Vec<vk::PushConstantRange> = if push_constant_size > 0 {
-        vec![vk::PushConstantRange::builder()
-            .stage_flags(stage_flags_to_vk(push_stages))
-            .offset(0)
-            .size(push_constant_size)
-            .build()]
+        vec![
+            vk::PushConstantRange::builder()
+                .stage_flags(stage_flags_to_vk(push_stages))
+                .offset(0)
+                .size(push_constant_size)
+                .build(),
+        ]
     } else {
         Vec::new()
     };
@@ -1831,10 +1806,7 @@ enum SbtRegion {
     Callable,
 }
 
-fn group_region(
-    stages: &[RayTracingStage<'_>],
-    group: &RayTracingShaderGroup,
-) -> SbtRegion {
+fn group_region(stages: &[RayTracingStage<'_>], group: &RayTracingShaderGroup) -> SbtRegion {
     match *group {
         RayTracingShaderGroup::General { general } => match stages[general as usize].stage {
             RayTracingShaderStage::RayGen => SbtRegion::RayGen,
@@ -1867,8 +1839,10 @@ fn build_sbt(
     let device = vulkan_device.device();
 
     let handle_size = rt_props.shader_group_handle_size as vk::DeviceSize;
-    let handle_stride =
-        align_up(handle_size, rt_props.shader_group_handle_alignment as vk::DeviceSize);
+    let handle_stride = align_up(
+        handle_size,
+        rt_props.shader_group_handle_alignment as vk::DeviceSize,
+    );
     let base_alignment = rt_props.shader_group_base_alignment as vk::DeviceSize;
 
     // Categorize each group. The vkGetRayTracingShaderGroupHandlesKHR call
@@ -1895,16 +1869,22 @@ fn build_sbt(
 
     // Region offsets (within the SBT buffer) are aligned to base_alignment.
     let raygen_offset: vk::DeviceSize = 0;
-    let raygen_size =
-        align_up(handle_stride * raygen_indices.len() as vk::DeviceSize, base_alignment);
+    let raygen_size = align_up(
+        handle_stride * raygen_indices.len() as vk::DeviceSize,
+        base_alignment,
+    );
 
     let miss_offset = raygen_offset + raygen_size;
-    let miss_size =
-        align_up(handle_stride * miss_indices.len() as vk::DeviceSize, base_alignment);
+    let miss_size = align_up(
+        handle_stride * miss_indices.len() as vk::DeviceSize,
+        base_alignment,
+    );
 
     let hit_offset = miss_offset + miss_size;
-    let hit_size =
-        align_up(handle_stride * hit_indices.len() as vk::DeviceSize, base_alignment);
+    let hit_size = align_up(
+        handle_stride * hit_indices.len() as vk::DeviceSize,
+        base_alignment,
+    );
 
     let callable_offset = hit_offset + hit_size;
     let callable_size = align_up(
@@ -1919,12 +1899,7 @@ fn build_sbt(
     let handle_data_size = (handle_size * group_count as vk::DeviceSize) as usize;
     let mut handle_blob = vec![0u8; handle_data_size];
     unsafe {
-        device.get_ray_tracing_shader_group_handles_khr(
-            pipeline,
-            0,
-            group_count,
-            &mut handle_blob,
-        )
+        device.get_ray_tracing_shader_group_handles_khr(pipeline, 0, group_count, &mut handle_blob)
     }
     .map_err(|e| {
         Error::GpuError(format!(
@@ -1987,23 +1962,22 @@ fn build_sbt(
         required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
         ..Default::default()
     };
-    let (sbt_buffer, sbt_allocation) =
-        unsafe { allocator.create_buffer(buffer_info, &alloc_opts) }.map_err(|e| {
+    let (sbt_buffer, sbt_allocation) = unsafe { allocator.create_buffer(buffer_info, &alloc_opts) }
+        .map_err(|e| {
             Error::GpuError(format!(
                 "Ray-tracing kernel '{}': SBT vmaCreateBuffer (size={total_size}) failed: {e}",
                 descriptor.label
             ))
         })?;
-    let address_info = vk::BufferDeviceAddressInfo::builder().buffer(sbt_buffer).build();
+    let address_info = vk::BufferDeviceAddressInfo::builder()
+        .buffer(sbt_buffer)
+        .build();
     let sbt_address = unsafe { device.get_buffer_device_address(&address_info) };
 
     // Stage + upload.
-    if let Err(e) = upload_bytes_to_buffer(
-        vulkan_device,
-        sbt_buffer,
-        &staging_data,
-        descriptor.label,
-    ) {
+    if let Err(e) =
+        upload_bytes_to_buffer(vulkan_device, sbt_buffer, &staging_data, descriptor.label)
+    {
         unsafe { allocator.destroy_buffer(sbt_buffer, sbt_allocation) };
         return Err(e);
     }
@@ -2022,7 +1996,11 @@ fn build_sbt(
             } else {
                 sbt_address + miss_offset
             },
-            stride: if miss_indices.is_empty() { 0 } else { handle_stride },
+            stride: if miss_indices.is_empty() {
+                0
+            } else {
+                handle_stride
+            },
             size: handle_stride * miss_indices.len() as vk::DeviceSize,
         },
         hit_region: vk::StridedDeviceAddressRegionKHR {
@@ -2031,7 +2009,11 @@ fn build_sbt(
             } else {
                 sbt_address + hit_offset
             },
-            stride: if hit_indices.is_empty() { 0 } else { handle_stride },
+            stride: if hit_indices.is_empty() {
+                0
+            } else {
+                handle_stride
+            },
             size: handle_stride * hit_indices.len() as vk::DeviceSize,
         },
         callable_region: vk::StridedDeviceAddressRegionKHR {
@@ -2040,7 +2022,11 @@ fn build_sbt(
             } else {
                 sbt_address + callable_offset
             },
-            stride: if callable_indices.is_empty() { 0 } else { handle_stride },
+            stride: if callable_indices.is_empty() {
+                0
+            } else {
+                handle_stride
+            },
             size: handle_stride * callable_indices.len() as vk::DeviceSize,
         },
     })
@@ -2058,8 +2044,7 @@ fn write_region(
         let dst_off = (region_offset + stride * i as vk::DeviceSize) as usize;
         let src_off = group_idx * handle_size as usize;
         let len = handle_size as usize;
-        out[dst_off..dst_off + len]
-            .copy_from_slice(&handle_blob[src_off..src_off + len]);
+        out[dst_off..dst_off + len].copy_from_slice(&handle_blob[src_off..src_off + len]);
     }
 }
 
@@ -2168,9 +2153,8 @@ fn upload_bytes_to_buffer(
         .command_buffer_infos(&cmd_infos)
         .build();
 
-    let submit_result = unsafe {
-        HostVulkanDevice::submit_to_queue(vulkan_device, queue, &[submit], fence)
-    };
+    let submit_result =
+        unsafe { HostVulkanDevice::submit_to_queue(vulkan_device, queue, &[submit], fence) };
     let wait_result: Result<()> = if submit_result.is_ok() {
         unsafe { device.wait_for_fences(&[fence], true, u64::MAX) }
             .map(|_| ())
@@ -2194,7 +2178,11 @@ fn upload_bytes_to_buffer(
 
 fn drop_sbt(sbt: &Sbt, vulkan_device: &Arc<HostVulkanDevice>) {
     if let Some(allocation) = sbt.allocation.as_ref().copied() {
-        unsafe { vulkan_device.allocator().destroy_buffer(sbt.buffer, allocation) };
+        unsafe {
+            vulkan_device
+                .allocator()
+                .destroy_buffer(sbt.buffer, allocation)
+        };
     }
 }
 
@@ -2276,17 +2264,27 @@ mod tests {
         )
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn kernel_constructs_against_real_device() {
-        let Some(device) = try_ray_tracing_device() else { return };
+        let Some(device) = try_ray_tracing_device() else {
+            return;
+        };
         let _kernel = make_test_kernel(&device, "rt-construct").expect("kernel creation");
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn kernel_rejects_missing_binding_in_descriptor() {
-        let Some(device) = try_ray_tracing_device() else { return };
+        let Some(device) = try_ray_tracing_device() else {
+            return;
+        };
         // Shader binds 0=AS + 1=storage image; omit binding 1.
         let stages = [
             RayTracingStage::ray_gen(rt_test_rgen_spv()),
@@ -2323,10 +2321,15 @@ mod tests {
         );
     }
 
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn kernel_rejects_kind_mismatch() {
-        let Some(device) = try_ray_tracing_device() else { return };
+        let Some(device) = try_ray_tracing_device() else {
+            return;
+        };
         let stages = [
             RayTracingStage::ray_gen(rt_test_rgen_spv()),
             RayTracingStage::miss(rt_test_rmiss_spv()),
@@ -2368,17 +2371,22 @@ mod tests {
     /// against a 64×64 storage image. Reads the result back and checks
     /// that the centre pixel is hit (barycentric color, mostly red) and
     /// the corner pixels are miss (dark blue from rmiss).
-    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn trace_rays_produces_hit_and_miss_pixels() {
-        let Some(device) = try_ray_tracing_device() else { return };
+        let Some(device) = try_ray_tracing_device() else {
+            return;
+        };
 
         // Triangle in clip-space-ish coords: covers the centre of the
         // [-1,1]² launch window, leaves the corners uncovered.
         let vertices: [f32; 9] = [
             -0.6, -0.6, 0.5, //
-             0.6, -0.6, 0.5, //
-             0.0,  0.6, 0.5, //
+            0.6, -0.6, 0.5, //
+            0.0, 0.6, 0.5, //
         ];
         let indices: [u32; 3] = [0, 1, 2];
         let blas = VulkanAccelerationStructure::build_triangles_blas(
@@ -2425,10 +2433,7 @@ mod tests {
         )
         .expect("texture creation");
         let stream_texture = Texture::from_vulkan(texture);
-        let image = stream_texture
-            .vulkan_inner()
-            .image()
-            .expect("image handle");
+        let image = stream_texture.vulkan_inner().image().expect("image handle");
         HostVulkanTexture::transition_to_general(&device, image)
             .expect("transition output to GENERAL");
 
@@ -2439,9 +2444,7 @@ mod tests {
         kernel
             .set_storage_image(1, &stream_texture)
             .expect("set storage image");
-        kernel
-            .trace_rays(W, H, 1)
-            .expect("trace_rays");
+        kernel.trace_rays(W, H, 1).expect("trace_rays");
 
         let readback = VulkanTextureReadback::new_into_stream_error(
             &device,
@@ -2489,5 +2492,4 @@ mod tests {
             corner.2
         );
     }
-
 }

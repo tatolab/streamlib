@@ -86,7 +86,11 @@ fn link_then_unlink_is_byte_clean_and_idempotent_across_cycles() {
 
         // During link: overrides present, marker present + flipped to active.
         let manifest = load_active_manifest(&consumer).unwrap().unwrap();
-        assert_eq!(manifest.state, LinkTransactionState::Active, "cycle {cycle}");
+        assert_eq!(
+            manifest.state,
+            LinkTransactionState::Active,
+            "cycle {cycle}"
+        );
         assert_eq!(
             manifest.python_sdk_path,
             PathBuf::from("/some/checkout/libs/streamlib-python"),
@@ -100,19 +104,35 @@ fn link_then_unlink_is_byte_clean_and_idempotent_across_cycles() {
         assert!(linked_cargo.contains("streamlib-idents"));
         assert!(linked_cargo.contains(CARGO_PATCH_MARKER));
         assert!(linked_cargo.contains("[registries.tatolab]"));
-        assert!(std::fs::read_to_string(&pyproject)
-            .unwrap()
-            .contains("[tool.uv.sources]"));
-        assert!(std::fs::read_to_string(&deno)
-            .unwrap()
-            .contains("libs/streamlib-deno/mod.ts"));
+        assert!(
+            std::fs::read_to_string(&pyproject)
+                .unwrap()
+                .contains("[tool.uv.sources]")
+        );
+        assert!(
+            std::fs::read_to_string(&deno)
+                .unwrap()
+                .contains("libs/streamlib-deno/mod.ts")
+        );
 
         unlink(&consumer, false).unwrap();
 
         // After unlink: byte-identical + zero residue.
-        assert_eq!(std::fs::read(&cargo).unwrap(), orig_cargo, "cycle {cycle}: cargo");
-        assert_eq!(std::fs::read(&pyproject).unwrap(), orig_py, "cycle {cycle}: pyproject");
-        assert_eq!(std::fs::read(&deno).unwrap(), orig_deno, "cycle {cycle}: deno");
+        assert_eq!(
+            std::fs::read(&cargo).unwrap(),
+            orig_cargo,
+            "cycle {cycle}: cargo"
+        );
+        assert_eq!(
+            std::fs::read(&pyproject).unwrap(),
+            orig_py,
+            "cycle {cycle}: pyproject"
+        );
+        assert_eq!(
+            std::fs::read(&deno).unwrap(),
+            orig_deno,
+            "cycle {cycle}: deno"
+        );
         assert!(
             !consumer.join(LINK_STATE_DIR).exists(),
             "cycle {cycle}: .streamlib state must be gone"
@@ -148,7 +168,10 @@ fn unlink_deletes_a_cargo_config_it_created_and_prunes_the_dir() {
     assert!(consumer.join(".cargo").join("config.toml").is_file());
 
     unlink(&consumer, false).unwrap();
-    assert!(!consumer.join(".cargo").exists(), ".cargo we created must be pruned");
+    assert!(
+        !consumer.join(".cargo").exists(),
+        ".cargo we created must be pruned"
+    );
     assert!(!consumer.join(LINK_STATE_DIR).exists());
     // Parent config untouched.
     assert!(outer_cargo.join("config.toml").is_file());
@@ -169,7 +192,10 @@ fn link_to_a_nonexistent_checkout_modifies_nothing() {
     let before = std::fs::read(consumer.join(".cargo").join("config.toml")).unwrap();
 
     let err = link(&consumer, &consumer.join("does-not-exist"), true).unwrap_err();
-    assert!(matches!(err, LinkError::NotAStreamlibCheckout(_)), "got {err:?}");
+    assert!(
+        matches!(err, LinkError::NotAStreamlibCheckout(_)),
+        "got {err:?}"
+    );
     assert!(!consumer.join(LINK_STATE_DIR).exists());
     assert_eq!(
         std::fs::read(consumer.join(".cargo").join("config.toml")).unwrap(),
@@ -184,7 +210,10 @@ fn link_to_a_dir_without_cargo_toml_is_rejected() {
     write_full_consumer(&consumer);
     let bogus = tempfile::tempdir().unwrap();
     let err = link(&consumer, bogus.path(), true).unwrap_err();
-    assert!(matches!(err, LinkError::NotAStreamlibCheckout(_)), "got {err:?}");
+    assert!(
+        matches!(err, LinkError::NotAStreamlibCheckout(_)),
+        "got {err:?}"
+    );
 }
 
 #[test]
@@ -216,9 +245,18 @@ fn pyproject_and_deno_overrides_are_presence_gated() {
     )
     .unwrap();
 
-    let edits = plan_edits(&consumer, &PathBuf::from("/checkout"), INDEX_URL, &fake_crate_set()).unwrap();
+    let edits = plan_edits(
+        &consumer,
+        &PathBuf::from("/checkout"),
+        INDEX_URL,
+        &fake_crate_set(),
+    )
+    .unwrap();
     assert_eq!(edits.len(), 1, "only the cargo config should be planned");
-    assert_eq!(edits[0].rel_path, PathBuf::from(".cargo").join("config.toml"));
+    assert_eq!(
+        edits[0].rel_path,
+        PathBuf::from(".cargo").join("config.toml")
+    );
 }
 
 #[test]
@@ -229,7 +267,10 @@ fn linking_a_different_checkout_over_an_active_link_is_refused() {
     link_with_fixed_crates(&consumer, &PathBuf::from("/checkout-A"));
 
     let err = link(&consumer, &workspace_checkout(), true).unwrap_err();
-    assert!(matches!(err, LinkError::AlreadyLinkedElsewhere { .. }), "got {err:?}");
+    assert!(
+        matches!(err, LinkError::AlreadyLinkedElsewhere { .. }),
+        "got {err:?}"
+    );
 }
 
 #[test]
@@ -248,9 +289,17 @@ fn deno_jsonc_with_comments_is_rejected_cleanly() {
         "{\n  // a comment breaks strict JSON\n  \"imports\": {}\n}\n",
     )
     .unwrap();
-    let err = plan_edits(&consumer, &PathBuf::from("/checkout"), INDEX_URL, &fake_crate_set())
-        .unwrap_err();
-    assert!(matches!(err, LinkError::ManifestParse { .. }), "got {err:?}");
+    let err = plan_edits(
+        &consumer,
+        &PathBuf::from("/checkout"),
+        INDEX_URL,
+        &fake_crate_set(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, LinkError::ManifestParse { .. }),
+        "got {err:?}"
+    );
 }
 
 #[test]
@@ -262,7 +311,10 @@ fn non_table_pyproject_tool_key_is_a_typed_error_not_a_panic() {
     let pyproject = consumer.join("pyproject.toml");
     std::fs::write(&pyproject, "tool = 3\n").unwrap();
     let err = plan_pyproject_edit(&pyproject, &consumer, &PathBuf::from("/checkout")).unwrap_err();
-    assert!(matches!(err, LinkError::ManifestParse { .. }), "got {err:?}");
+    assert!(
+        matches!(err, LinkError::ManifestParse { .. }),
+        "got {err:?}"
+    );
 }
 
 #[test]
@@ -276,9 +328,17 @@ fn concurrent_second_link_is_refused_by_exclusive_marker_create() {
     std::fs::create_dir_all(&state_dir).unwrap();
     std::fs::write(state_dir.join(LINK_MANIFEST_FILE), "{}").unwrap();
 
-    let err = establish_link(&consumer, &PathBuf::from("/checkout"), INDEX_URL, &fake_crate_set())
-        .unwrap_err();
-    assert!(matches!(err, LinkError::LinkMarkerAlreadyExists { .. }), "got {err:?}");
+    let err = establish_link(
+        &consumer,
+        &PathBuf::from("/checkout"),
+        INDEX_URL,
+        &fake_crate_set(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, LinkError::LinkMarkerAlreadyExists { .. }),
+        "got {err:?}"
+    );
 }
 
 #[test]
@@ -299,7 +359,10 @@ fn torn_applying_state_refuses_relink_and_plain_unlink_recovers() {
     // (crash here — no edits, no backups)
 
     let err = link(&consumer, &real_checkout, true).unwrap_err();
-    assert!(matches!(err, LinkError::TornLinkState { .. }), "got {err:?}");
+    assert!(
+        matches!(err, LinkError::TornLinkState { .. }),
+        "got {err:?}"
+    );
 
     // Plain unlink recovers: all files still pre-edit → skipped; state gone.
     unlink(&consumer, false).unwrap();
@@ -360,8 +423,13 @@ fn apply_failure_on_the_last_edit_rolls_back_earlier_edits_byte_identically() {
         return;
     }
 
-    let err = establish_link(&consumer, &PathBuf::from("/checkout"), INDEX_URL, &fake_crate_set())
-        .unwrap_err();
+    let err = establish_link(
+        &consumer,
+        &PathBuf::from("/checkout"),
+        INDEX_URL,
+        &fake_crate_set(),
+    )
+    .unwrap_err();
     assert!(matches!(err, LinkError::Io { .. }), "got {err:?}");
 
     // Earlier edits rolled back byte-identically; failing target unmodified;
@@ -402,11 +470,17 @@ fn incomplete_rollback_preserves_backups_and_link_state() {
 
     let apply_err = apply_transaction(&consumer, &edits).unwrap_err();
     let err = unwind_failed_transaction(&consumer, &edits, apply_err);
-    assert!(matches!(err, LinkError::RollbackIncomplete { .. }), "got {err:?}");
+    assert!(
+        matches!(err, LinkError::RollbackIncomplete { .. }),
+        "got {err:?}"
+    );
 
     // Earlier edits still restored; backups + manifest preserved.
     assert_eq!(std::fs::read(&cargo).unwrap(), orig_cargo);
-    assert!(marker_path(&consumer).is_file(), "link state must be preserved");
+    assert!(
+        marker_path(&consumer).is_file(),
+        "link state must be preserved"
+    );
     assert!(
         consumer
             .join(LINK_STATE_DIR)
@@ -434,9 +508,19 @@ fn unlink_tristate_refuses_user_edits_without_force_and_restores_with_it() {
 
     // Without --force: refuse, tree untouched.
     let err = unlink(&consumer, false).unwrap_err();
-    assert!(matches!(err, LinkError::UnlinkRefusedModifiedFile { .. }), "got {err:?}");
-    assert_eq!(std::fs::read(&cargo).unwrap(), edited, "refusal must not mutate");
-    assert!(marker_path(&consumer).is_file(), "link state preserved on refusal");
+    assert!(
+        matches!(err, LinkError::UnlinkRefusedModifiedFile { .. }),
+        "got {err:?}"
+    );
+    assert_eq!(
+        std::fs::read(&cargo).unwrap(),
+        edited,
+        "refusal must not mutate"
+    );
+    assert!(
+        marker_path(&consumer).is_file(),
+        "link state preserved on refusal"
+    );
 
     // With --force: discard the user edit, restore the pre-link original.
     unlink(&consumer, true).unwrap();
@@ -479,10 +563,16 @@ fn unlink_refuses_to_restore_a_corrupted_backup() {
     std::fs::write(&backup, b"tampered content").unwrap();
 
     let err = unlink(&consumer, false).unwrap_err();
-    assert!(matches!(err, LinkError::CorruptLinkState { .. }), "got {err:?}");
+    assert!(
+        matches!(err, LinkError::CorruptLinkState { .. }),
+        "got {err:?}"
+    );
     // Refused restore ⇒ the live (linked) config was NOT clobbered.
     let live = std::fs::read_to_string(consumer.join(".cargo").join("config.toml")).unwrap();
-    assert!(live.contains("[patch."), "live config must be untouched by the refused restore");
+    assert!(
+        live.contains("[patch."),
+        "live config must be untouched by the refused restore"
+    );
 }
 
 #[test]
@@ -504,7 +594,10 @@ fn failed_refresh_derivation_preserves_the_active_link() {
     let linked_cargo = std::fs::read(consumer.join(".cargo").join("config.toml")).unwrap();
 
     let err = link(&consumer, &broken_checkout, true).unwrap_err();
-    assert!(matches!(err, LinkError::CrateSetDerivation { .. }), "got {err:?}");
+    assert!(
+        matches!(err, LinkError::CrateSetDerivation { .. }),
+        "got {err:?}"
+    );
 
     // The active link survived the failed refresh.
     assert!(marker_path(&consumer).is_file(), "link state must survive");
@@ -526,14 +619,18 @@ fn derive_linkable_crates_selects_the_streamlib_sdk_closure() {
     let checkout = workspace_checkout();
     let crates = match derive_linkable_crates(&checkout) {
         Ok(c) => c,
-        Err(LinkError::CrateSetDerivation { detail, .. }) if detail.contains("failed to run cargo") => {
+        Err(LinkError::CrateSetDerivation { detail, .. })
+            if detail.contains("failed to run cargo") =>
+        {
             eprintln!("skipping: cargo not available to run metadata");
             return;
         }
         Err(e) => panic!("cargo metadata failed: {e}"),
     };
 
-    let sdk = crates.get("streamlib").expect("the `streamlib` SDK crate must be linkable");
+    let sdk = crates
+        .get("streamlib")
+        .expect("the `streamlib` SDK crate must be linkable");
     assert!(
         sdk.ends_with("libs/streamlib-sdk"),
         "streamlib SDK member dir should be libs/streamlib-sdk, got {}",
@@ -593,8 +690,14 @@ fn real_link_offline_e2e_link_refresh_unlink_roundtrip() {
     }
 
     let linked = std::fs::read_to_string(cargo_dir.join("config.toml")).unwrap();
-    assert!(linked.contains("[patch."), "patch section must be emitted:\n{linked}");
-    assert!(linked.contains("libs/streamlib-sdk"), "sdk path must appear");
+    assert!(
+        linked.contains("[patch."),
+        "patch section must be emitted:\n{linked}"
+    );
+    assert!(
+        linked.contains("libs/streamlib-sdk"),
+        "sdk path must appear"
+    );
 
     // Same-checkout re-link = refresh (exercises derive-before-unlink + the
     // full re-emission).
@@ -639,18 +742,28 @@ fn relocked_cargo_lock_is_recorded_and_restored_byte_clean_across_cycles() {
     for cycle in 0..2 {
         // Pre-link snapshot (what unlink must restore the lock to).
         let snapshot = std::fs::read(&lockfile).unwrap();
-        assert_eq!(snapshot, original_lock, "cycle {cycle}: lock must be original pre-link");
+        assert_eq!(
+            snapshot, original_lock,
+            "cycle {cycle}: lock must be original pre-link"
+        );
 
         link_with_fixed_crates(&consumer, &PathBuf::from("/checkout"));
 
         // A real `cargo update -p …` would rewrite the lock; simulate that.
-        std::fs::write(&lockfile, format!("# re-locked cycle {cycle}\nversion = 4\n")).unwrap();
+        std::fs::write(
+            &lockfile,
+            format!("# re-locked cycle {cycle}\nversion = 4\n"),
+        )
+        .unwrap();
         record_relocked_lockfile(&consumer, &lockfile, Some(snapshot)).unwrap();
 
         // The manifest now carries a Cargo.lock entry alongside the 3 configs.
         let manifest = load_active_manifest(&consumer).unwrap().unwrap();
         assert!(
-            manifest.files.iter().any(|f| f.path == PathBuf::from("Cargo.lock")),
+            manifest
+                .files
+                .iter()
+                .any(|f| f.path == PathBuf::from("Cargo.lock")),
             "cycle {cycle}: manifest must record the re-locked Cargo.lock"
         );
 
@@ -662,8 +775,15 @@ fn relocked_cargo_lock_is_recorded_and_restored_byte_clean_across_cycles() {
             original_lock,
             "cycle {cycle}: Cargo.lock must be restored byte-identically"
         );
-        assert_eq!(std::fs::read(&cargo).unwrap(), orig_cargo, "cycle {cycle}: cargo config");
-        assert!(!consumer.join(LINK_STATE_DIR).exists(), "cycle {cycle}: state gone");
+        assert_eq!(
+            std::fs::read(&cargo).unwrap(),
+            orig_cargo,
+            "cycle {cycle}: cargo config"
+        );
+        assert!(
+            !consumer.join(LINK_STATE_DIR).exists(),
+            "cycle {cycle}: state gone"
+        );
     }
 }
 
@@ -692,7 +812,10 @@ fn relocked_cargo_lock_created_by_link_is_removed_on_unlink() {
     record_relocked_lockfile(&consumer, &lockfile, None).unwrap();
 
     unlink(&consumer, false).unwrap();
-    assert!(!lockfile.exists(), "a Cargo.lock the link created must be removed on unlink");
+    assert!(
+        !lockfile.exists(),
+        "a Cargo.lock the link created must be removed on unlink"
+    );
     assert!(!consumer.join(LINK_STATE_DIR).exists());
 }
 
@@ -716,11 +839,21 @@ fn unlink_refuses_a_user_modified_relocked_lock_without_force() {
     std::fs::write(&lockfile, "# user edit\nversion = 4\n").unwrap();
 
     let err = unlink(&consumer, false).unwrap_err();
-    assert!(matches!(err, LinkError::UnlinkRefusedModifiedFile { .. }), "got {err:?}");
-    assert!(marker_path(&consumer).is_file(), "refusal must preserve link state");
+    assert!(
+        matches!(err, LinkError::UnlinkRefusedModifiedFile { .. }),
+        "got {err:?}"
+    );
+    assert!(
+        marker_path(&consumer).is_file(),
+        "refusal must preserve link state"
+    );
 
     unlink(&consumer, true).unwrap();
-    assert_eq!(std::fs::read(&lockfile).unwrap(), original_lock, "force restores pre-link lock");
+    assert_eq!(
+        std::fs::read(&lockfile).unwrap(),
+        original_lock,
+        "force restores pre-link lock"
+    );
     assert!(!consumer.join(LINK_STATE_DIR).exists());
 }
 
@@ -749,12 +882,17 @@ fn stale_lock_relock_failed_error_names_lockfile_and_command() {
     let msg = err.to_string();
     assert!(msg.contains("/app/Cargo.lock"), "names the lockfile: {msg}");
     assert!(
-        msg.contains("cargo update --manifest-path /app/Cargo.toml -p streamlib -p streamlib-idents"),
+        msg.contains(
+            "cargo update --manifest-path /app/Cargo.toml -p streamlib -p streamlib-idents"
+        ),
         "names the exact command: {msg}"
     );
     assert!(msg.contains("streamlib unlink"), "offers the escape: {msg}");
     // The whole point: the cause is the lock, not the version requirements.
-    assert!(!msg.contains("version requirement"), "must not misdiagnose: {msg}");
+    assert!(
+        !msg.contains("version requirement"),
+        "must not misdiagnose: {msg}"
+    );
 }
 
 /// The rolled-back verification error carries the accurate cause and the
@@ -769,7 +907,10 @@ fn link_verification_failed_message_is_actionable_and_not_the_old_misdiagnosis()
     };
     let msg = err.to_string();
     assert!(msg.contains("--skip-verify"), "offers the escape: {msg}");
-    assert!(msg.contains("streamlib@0.6.0"), "names the offending crate: {msg}");
+    assert!(
+        msg.contains("streamlib@0.6.0"),
+        "names the offending crate: {msg}"
+    );
     assert!(
         !msg.contains("Fix the consumer's version requirements so the checkout's crate versions"),
         "must drop the old misdiagnosing phrasing: {msg}"
