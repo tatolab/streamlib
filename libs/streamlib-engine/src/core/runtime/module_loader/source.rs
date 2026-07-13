@@ -140,13 +140,177 @@ pub(super) enum ResolvedSource {
     NeedsBuild(BuildRequest),
 }
 
+/// An active `streamlib link` discovered for the current run, carrying the
+/// linked checkout so the resolver can redirect module resolution to the
+/// checkout's `packages/` tree.
+///
+/// npm-link semantics: a package present in the checkout takes precedence over
+/// whatever [`Strategy`] the caller declared (registry / path / url / …), so
+/// editing a linked package and re-running picks up the edit even for the
+/// dominant `add_module(ident, registry())` app shape. A package NOT in the
+/// checkout is unaffected and resolves from its declared strategy.
+#[derive(Debug, Clone)]
+pub(super) struct ActiveLinkedCheckout {
+    /// Canonicalized path of the linked streamlib checkout.
+    checkout: PathBuf,
+}
+
+impl ActiveLinkedCheckout {
+    /// Discover an active link from the process working directory — the
+    /// consumer's run dir, where `streamlib link` wrote `.streamlib/link.json`.
+    /// `Ok(None)` when no link is active; a corrupt marker is a loud typed
+    /// error, never a silent skip.
+    #[tracing::instrument]
+    pub(super) fn discover_from_cwd() -> std::result::Result<Option<Self>, AddModuleError> {
+        let cwd =
+            std::env::current_dir().map_err(|e| AddModuleError::LinkStateUnreadable {
+                detail: format!("resolving current working directory: {e}"),
+            })?;
+        Self::discover_from(&cwd)
+    }
+
+    /// [`Self::discover_from_cwd`] anchored at an explicit start dir (test seam).
+    pub(super) fn discover_from(
+        start: &std::path::Path,
+    ) -> std::result::Result<Option<Self>, AddModuleError> {
+        match streamlib_idents::link_marker::find_and_load_active_link(start) {
+            Ok(Some((_marker, manifest))) => Ok(Some(Self {
+                checkout: manifest.checkout,
+            })),
+            Ok(None) => Ok(None),
+            Err(e) => Err(AddModuleError::LinkStateCorrupt {
+                detail: e.to_string(),
+            }),
+        }
+    }
+
+    /// The linked checkout path.
+    pub(super) fn checkout(&self) -> &std::path::Path {
+        &self.checkout
+    }
+
+    /// If `pkg_ref` (`@org/name`) is present in the checkout's `packages/`
+    /// tree, return its source dir. The match is by the manifest's declared
+    /// `package.org` + `package.name` (not the directory name), so a package
+    /// whose directory differs from its name still resolves. `Ok(None)` when
+    /// the package is absent — the caller then resolves it from its declared
+    /// strategy, unchanged.
+    pub(super) fn checkout_package_dir(
+        &self,
+        pkg_ref: &streamlib_idents::PackageRef,
+    ) -> std::result::Result<Option<PathBuf>, AddModuleError> {
+        let packages_root = self.checkout.join("packages");
+        if !packages_root.is_dir() {
+            return Ok(None);
+        }
+        // Fast path: the standard monorepo layout is `packages/<name>`.
+        let by_name = packages_root.join(pkg_ref.name.as_str());
+        if manifest_declares_package(&by_name, pkg_ref) {
+            return Ok(Some(by_name));
+        }
+        // Fallback: scan for a package dir whose manifest declares this ident
+        // (covers a package whose directory name differs from its package name).
+        let entries =
+            std::fs::read_dir(&packages_root).map_err(|e| AddModuleError::LinkStateUnreadable {
+                detail: format!(
+                    "reading linked checkout packages dir {}: {e}",
+                    packages_root.display()
+                ),
+            })?;
+        for entry in entries.flatten() {
+            let dir = entry.path();
+            if dir == by_name || !dir.is_dir() {
+                continue;
+            }
+            if manifest_declares_package(&dir, pkg_ref) {
+                return Ok(Some(dir));
+            }
+        }
+        Ok(None)
+    }
+}
+
+/// Resolve the active link to thread into a top-level module load, honoring
+/// the locked-run contract: a **locked** run (`add_modules_from_lockfile`)
+/// IGNORES links — it must be reproducible / offline — so it always resolves
+/// to `None`. A live run discovers the link from the process working directory.
+/// This is the single gate that keeps locked runs link-free.
+pub(super) fn discover_active_link_for_load(
+    is_locked: bool,
+) -> std::result::Result<Option<ActiveLinkedCheckout>, AddModuleError> {
+    if is_locked {
+        Ok(None)
+    } else {
+        ActiveLinkedCheckout::discover_from_cwd()
+    }
+}
+
+/// [`discover_active_link_for_load`] with the discovery anchored at an explicit
+/// start dir (test seam) so the locked gate can be locked without touching the
+/// process working directory.
+#[cfg(test)]
+pub(super) fn discover_active_link_for_load_from(
+    is_locked: bool,
+    start: &std::path::Path,
+) -> std::result::Result<Option<ActiveLinkedCheckout>, AddModuleError> {
+    if is_locked {
+        Ok(None)
+    } else {
+        ActiveLinkedCheckout::discover_from(start)
+    }
+}
+
+/// Whether the `streamlib.yaml` at `dir` declares a package whose org + name
+/// equal `pkg_ref`. A missing / unreadable / malformed manifest is treated as
+/// "no match" — this dir just isn't the package we're looking for; a genuine
+/// manifest error surfaces on the real load path with a precise message.
+fn manifest_declares_package(
+    dir: &std::path::Path,
+    pkg_ref: &streamlib_idents::PackageRef,
+) -> bool {
+    use streamlib_idents::Manifest;
+    if !dir.join(Manifest::FILE_NAME).exists() {
+        return false;
+    }
+    match Manifest::load(dir) {
+        Ok(m) => m
+            .package
+            .as_ref()
+            .is_some_and(|p| p.org == pkg_ref.org && p.name == pkg_ref.name),
+        Err(_) => false,
+    }
+}
+
 /// Resolve a [`Strategy`] to a [`ResolvedSource`]. Pure source-location
 /// logic (cache lookup, `.slpkg` extract, git checkout); never invokes a
 /// build tool.
+///
+/// When `link` is `Some` (a non-locked run with an active `streamlib link`), a
+/// package present in the linked checkout's `packages/` tree is resolved from
+/// there regardless of `strategy` — see [`ActiveLinkedCheckout`]. Locked runs
+/// pass `None` (reproducible / offline by contract), and a package absent from
+/// the checkout falls through to `strategy` unchanged.
 pub(super) fn resolve_strategy_to_source(
     strategy: &Strategy,
     pkg_ref: &streamlib_idents::PackageRef,
+    link: Option<&ActiveLinkedCheckout>,
 ) -> std::result::Result<ResolvedSource, AddModuleError> {
+    // Link-aware short-circuit (npm-link semantics): an active link redirects
+    // resolution of ANY package present in the linked checkout, overriding the
+    // caller's strategy. This is what makes `streamlib link` → edit → re-run
+    // reflect a checkout edit for the dominant `add_module(ident, registry())`
+    // app shape. IfStale rebuilds on edit via the build tool's own fingerprint.
+    if let Some(link) = link {
+        if let Some(pkg_dir) = link.checkout_package_dir(pkg_ref)? {
+            tracing::info!(
+                package = %pkg_ref,
+                checkout = %link.checkout().display(),
+                source = %pkg_dir.display(),
+                "streamlib link active — resolving module from linked checkout (overriding strategy)"
+            );
+            return Ok(source_for_dir(pkg_ref, pkg_dir, BuildPolicy::IfStale));
+        }
+    }
     match strategy {
         Strategy::InstalledCache => {
             let (dir, _version) = lookup_installed_cache(pkg_ref)?
@@ -886,5 +1050,218 @@ mod tests {
         let cached = fetch_remote_slpkg(&pkg_ref(), &url, None).expect("http fetch must succeed");
         assert_eq!(std::fs::read(&cached).unwrap(), body);
         server.join().unwrap();
+    }
+
+    // =====================================================================
+    // ActiveLinkedCheckout — link-aware resolution (npm-link semantics)
+    // =====================================================================
+
+    fn pkg_ref_named(name: &str) -> streamlib_idents::PackageRef {
+        streamlib_idents::PackageRef::new(
+            streamlib_idents::Org::new("tatolab").unwrap(),
+            streamlib_idents::Package::new(name).unwrap(),
+        )
+    }
+
+    /// Build a fake linked checkout containing `packages/<dir_name>/streamlib.yaml`
+    /// declaring `@tatolab/<pkg_name>`. `dir_name` and `pkg_name` differ only in
+    /// the scan-fallback test.
+    fn fake_checkout_with_package(dir_name: &str, pkg_name: &str) -> tempfile::TempDir {
+        let checkout = tempfile::tempdir().unwrap();
+        let pkg = checkout.path().join("packages").join(dir_name);
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(
+            pkg.join("streamlib.yaml"),
+            format!(
+                "package:\n  org: tatolab\n  name: {pkg_name}\n  version: 0.1.0\nprocessors:\n  \
+                 - name: P\n    version: 1.0.0\n    description: d\n    runtime: python\n    \
+                 execution: manual\n    entrypoint: \"p:P\"\n    inputs: []\n    outputs: []\n"
+            ),
+        )
+        .unwrap();
+        checkout
+    }
+
+    /// Write a link marker under `consumer_root/.streamlib/link.json` pointing at
+    /// `checkout`, then discover it. The discovery walks up from `consumer_root`
+    /// (no CWD dependency — hermetic).
+    fn active_link_for(
+        consumer_root: &std::path::Path,
+        checkout: &std::path::Path,
+    ) -> ActiveLinkedCheckout {
+        let marker_dir = consumer_root.join(".streamlib");
+        std::fs::create_dir_all(&marker_dir).unwrap();
+        std::fs::write(
+            marker_dir.join("link.json"),
+            format!(
+                r#"{{"checkout":"{c}","python_sdk_path":"{c}/libs/streamlib-python","deno_sdk_entrypoint_path":"{c}/libs/streamlib-deno/mod.ts","linked_at":"t","linked_crate_count":1,"state":"active","files":[]}}"#,
+                c = checkout.display()
+            ),
+        )
+        .unwrap();
+        ActiveLinkedCheckout::discover_from(consumer_root)
+            .expect("discovery must not error")
+            .expect("an active link must be found")
+    }
+
+    fn assert_builds_from(resolved: ResolvedSource, expected_dir: &std::path::Path) {
+        match resolved {
+            ResolvedSource::NeedsBuild(req) => match req.source {
+                BuildSource::PackageDir(dir) => assert_eq!(
+                    dir, expected_dir,
+                    "must build from the checkout package dir"
+                ),
+                other => panic!("expected PackageDir source, got {other:?}"),
+            },
+            other => panic!("expected NeedsBuild(checkout), got {other:?}"),
+        }
+    }
+
+    /// CRUX (issue #1246): an active link redirects a `Strategy::Registry` load
+    /// of a checkout-present package to the checkout, OVERRIDING the explicit
+    /// registry strategy (npm-link semantics — a linked name takes precedence).
+    /// Mentally revert the link short-circuit at the top of
+    /// `resolve_strategy_to_source` and this resolves from the registry instead
+    /// (RegistryNotConfigured), failing the assertion.
+    #[test]
+    fn active_link_overrides_registry_strategy_for_checkout_present_package() {
+        let checkout = fake_checkout_with_package("foo", "foo");
+        let consumer = tempfile::tempdir().unwrap();
+        let link = active_link_for(consumer.path(), checkout.path());
+
+        let resolved = resolve_strategy_to_source(
+            &Strategy::Registry {
+                version_req: SemVerRange::Any,
+                build: BuildPolicy::IfStale,
+            },
+            &pkg_ref_named("foo"),
+            Some(&link),
+        )
+        .expect("linked checkout-present package must resolve from the checkout, not error");
+        assert_builds_from(resolved, &checkout.path().join("packages").join("foo"));
+    }
+
+    /// A package ABSENT from the checkout falls through to its declared strategy
+    /// even under an active link — registry strategies stay available. Using
+    /// `Strategy::Path` to a nonexistent dir gives an env-independent signal
+    /// that the strategy dispatch (not the link branch) ran.
+    #[test]
+    fn active_link_leaves_absent_package_on_its_declared_strategy() {
+        let checkout = fake_checkout_with_package("foo", "foo");
+        let consumer = tempfile::tempdir().unwrap();
+        let link = active_link_for(consumer.path(), checkout.path());
+
+        let missing = consumer.path().join("nope");
+        let err = resolve_strategy_to_source(
+            &Strategy::Path {
+                path: missing.clone(),
+                build: BuildPolicy::IfStale,
+            },
+            &pkg_ref_named("bar"), // NOT in the checkout
+            Some(&link),
+        )
+        .expect_err("absent-from-checkout package must use its declared strategy");
+        assert!(
+            matches!(err, AddModuleError::ManifestDirectoryMissing { .. }),
+            "expected the Path strategy to run unchanged, got {err:?}"
+        );
+    }
+
+    /// UNLINKED regression: with `link = None`, resolution is byte-for-byte the
+    /// pre-change behavior — a checkout-present package name resolves from its
+    /// declared strategy, NOT any checkout. Mentally revert nothing; this must
+    /// pass on both the pre- and post-change code (the `None` path is untouched).
+    #[test]
+    fn no_link_resolution_is_unchanged() {
+        // Same package name ("foo") that the linked test redirects — but with no
+        // link, the strategy is authoritative. A nonexistent Path errors exactly
+        // as before.
+        let consumer = tempfile::tempdir().unwrap();
+        let missing = consumer.path().join("nope");
+        let err = resolve_strategy_to_source(
+            &Strategy::Path {
+                path: missing,
+                build: BuildPolicy::IfStale,
+            },
+            &pkg_ref_named("foo"),
+            None,
+        )
+        .expect_err("without a link the declared strategy is authoritative");
+        assert!(
+            matches!(err, AddModuleError::ManifestDirectoryMissing { .. }),
+            "unlinked resolution must be unchanged, got {err:?}"
+        );
+    }
+
+    /// The scan fallback matches a package whose directory name differs from its
+    /// declared package name (match is by manifest org+name, not dir name).
+    #[test]
+    fn active_link_scan_fallback_matches_by_manifest_not_dir_name() {
+        // dir = "weird-dir", but the manifest declares @tatolab/camera.
+        let checkout = fake_checkout_with_package("weird-dir", "camera");
+        let consumer = tempfile::tempdir().unwrap();
+        let link = active_link_for(consumer.path(), checkout.path());
+
+        let resolved = resolve_strategy_to_source(
+            &Strategy::Registry {
+                version_req: SemVerRange::Any,
+                build: BuildPolicy::IfStale,
+            },
+            &pkg_ref_named("camera"),
+            Some(&link),
+        )
+        .expect("scan fallback must find the package by manifest identity");
+        assert_builds_from(resolved, &checkout.path().join("packages").join("weird-dir"));
+    }
+
+    /// A corrupt link marker is a loud typed error at discovery, never a silent
+    /// skip that would leave resolution in a mixed checkout/registry state.
+    #[test]
+    fn corrupt_link_marker_is_a_loud_error() {
+        let consumer = tempfile::tempdir().unwrap();
+        let marker_dir = consumer.path().join(".streamlib");
+        std::fs::create_dir_all(&marker_dir).unwrap();
+        std::fs::write(marker_dir.join("link.json"), "{ not json at all").unwrap();
+
+        let err = ActiveLinkedCheckout::discover_from(consumer.path())
+            .expect_err("a corrupt marker must fail loudly");
+        assert!(
+            matches!(err, AddModuleError::LinkStateCorrupt { .. }),
+            "expected LinkStateCorrupt, got {err:?}"
+        );
+    }
+
+    /// No marker anywhere above the start dir ⇒ no active link ⇒ resolution is
+    /// unaffected.
+    #[test]
+    fn no_marker_yields_no_active_link() {
+        let empty = tempfile::tempdir().unwrap();
+        let link = ActiveLinkedCheckout::discover_from(empty.path())
+            .expect("no marker is not an error");
+        assert!(link.is_none(), "no marker must yield no active link");
+    }
+
+    /// A LOCKED run ignores an active link (reproducible / offline by
+    /// contract), while an unlocked run over the SAME marker discovers it.
+    /// Mentally revert the `is_locked` gate in `discover_active_link_for_load`
+    /// (always discover) and the locked case would return `Some`, failing the
+    /// `is_none` assertion.
+    #[test]
+    fn locked_run_ignores_active_link() {
+        let checkout = fake_checkout_with_package("foo", "foo");
+        let consumer = tempfile::tempdir().unwrap();
+        // Writes an active marker under `consumer`.
+        active_link_for(consumer.path(), checkout.path());
+
+        let locked = discover_active_link_for_load_from(true, consumer.path())
+            .expect("locked discovery must not error");
+        assert!(locked.is_none(), "a locked run must ignore the active link");
+
+        let unlocked = discover_active_link_for_load_from(false, consumer.path())
+            .expect("unlocked discovery must not error");
+        assert!(
+            unlocked.is_some(),
+            "an unlocked run over the same marker must discover the link"
+        );
     }
 }

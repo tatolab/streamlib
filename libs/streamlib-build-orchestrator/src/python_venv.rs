@@ -33,16 +33,17 @@ use streamlib_engine::core::runtime::BuildError;
 /// (Windows) — so that after the orchestrator's atomic rename it lands at
 /// `{staged_package_dir}/.venv/bin/python`.
 ///
-/// `source_pkg_dir` is the on-disk package source the artifact was assembled
-/// from; it is walked upward for an active `streamlib link` marker so the venv
-/// can build against a linked checkout's Python SDK. Pass the staged dir when
-/// there is no distinct source tree.
+/// `link_python_sdk`, when `Some`, is the linked checkout's Python SDK path
+/// (resolved once by the orchestrator from the active `streamlib link`); the
+/// staged pyproject's `streamlib` dependency is redirected at it so the venv
+/// resolves the SDK from the checkout instead of the registry — the cargo
+/// `[patch]` mirror on the Python side. `None` ⇒ registry resolution.
 ///
 /// No-op (returns `Ok(())`) when the staged package has no Python runtime.
-#[tracing::instrument(skip(temp_dir, source_pkg_dir), fields(temp_dir = %temp_dir.display(), package = %package_label))]
+#[tracing::instrument(skip(temp_dir, link_python_sdk), fields(temp_dir = %temp_dir.display(), package = %package_label))]
 pub fn provision_python_venv(
     temp_dir: &Path,
-    source_pkg_dir: &Path,
+    link_python_sdk: Option<&Path>,
     package_label: &str,
 ) -> Result<(), BuildError> {
     if !staged_package_has_python(temp_dir) {
@@ -77,12 +78,12 @@ pub fn provision_python_venv(
     };
 
     // ---- link-mode override ----
-    // When a `streamlib link` is active for the source tree this package was
-    // built from, redirect the staged pyproject's `streamlib` dependency at the
-    // linked checkout's Python SDK before installing, so the venv resolves the
-    // SDK from local source (mirrors the cargo `[patch]` the CLI emits).
-    if let Some(pyproject) = &pyproject_path {
-        apply_link_override_if_active(pyproject, source_pkg_dir, package_label)?;
+    // When a `streamlib link` is active (the orchestrator resolved the
+    // checkout's Python SDK), redirect the staged pyproject's `streamlib`
+    // dependency at it before installing, so the venv resolves the SDK from the
+    // checkout (mirrors the cargo `[patch]` injected into the cdylib build).
+    if let (Some(pyproject), Some(sdk_path)) = (&pyproject_path, link_python_sdk) {
+        apply_link_override(pyproject, sdk_path, package_label)?;
     }
 
     // ---- uv venv ----
@@ -319,28 +320,17 @@ fn build_failed(package: &str, detail: String) -> BuildError {
     }
 }
 
-/// If a `streamlib link` is active for `source_pkg_dir` (discovered via the
-/// shared marker primitive in `streamlib_pack::link_marker`), rewrite the
-/// staged `pyproject`'s `streamlib` dependency to resolve from the linked
-/// checkout's Python SDK via `[tool.uv.sources]`. A corrupt marker is a loud
-/// error — silently ignoring it would produce a mixed state (cargo patched,
-/// venv from registry).
-fn apply_link_override_if_active(
+/// Rewrite the staged `pyproject`'s `streamlib` dependency to resolve from the
+/// linked checkout's Python SDK at `sdk_path` via `[tool.uv.sources]`. Called
+/// only when the orchestrator resolved an active `streamlib link` — the
+/// discovery + corrupt-marker handling live there, so this is a pure
+/// manifest rewrite.
+fn apply_link_override(
     pyproject: &Path,
-    source_pkg_dir: &Path,
+    sdk_path: &Path,
     package_label: &str,
 ) -> Result<(), BuildError> {
-    let link = streamlib_pack::link_marker::find_and_load_active_link(source_pkg_dir)
-        .map_err(|e| build_failed(package_label, e.to_string()))?;
-    let Some((marker, manifest)) = link else {
-        return Ok(());
-    };
-    // The marker carries the resolved absolute SDK path — read data, don't
-    // re-derive a checkout-relative convention.
-    let sdk_path = manifest.python_sdk_path;
     tracing::info!(
-        marker = %marker.display(),
-        checkout = %manifest.checkout.display(),
         sdk = %sdk_path.display(),
         "streamlib link active — pointing staged pyproject's streamlib dep at the linked checkout"
     );
@@ -470,7 +460,7 @@ packages = ["python"]
         // schemas-only or Rust-only package.
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join("streamlib.yaml"), "package:\n  name: x\n").unwrap();
-        provision_python_venv(temp.path(), temp.path(), "tatolab/x")
+        provision_python_venv(temp.path(), None, "tatolab/x")
             .expect("no-python must be a no-op");
         assert!(
             !temp.path().join(".venv").exists(),
@@ -497,7 +487,7 @@ packages = ["python"]
         let temp = tempfile::tempdir().unwrap();
         write_staged_python_package(temp.path(), &sdk);
 
-        provision_python_venv(temp.path(), temp.path(), "tatolab/mypkg")
+        provision_python_venv(temp.path(), None, "tatolab/mypkg")
             .expect("provision must succeed offline against the fixture SDK");
 
         // Contract: interpreter at exactly {temp_dir}/.venv/bin/python.
@@ -527,35 +517,13 @@ packages = ["python"]
         assert!(has_pyc, "compileall must have produced at least one .pyc in the venv");
     }
 
-    /// Write a full-schema link marker whose `python_sdk_path` points at `sdk`.
-    fn write_link_marker(source_root: &Path, sdk: &Path) {
-        let marker_dir = source_root.join(".streamlib");
-        std::fs::create_dir_all(&marker_dir).unwrap();
-        std::fs::write(
-            marker_dir.join("link.json"),
-            format!(
-                r#"{{
-  "checkout": "/opt/streamlib-checkout",
-  "python_sdk_path": "{sdk}",
-  "deno_sdk_entrypoint_path": "/opt/streamlib-checkout/libs/streamlib-deno/mod.ts",
-  "linked_at": "2026-01-01T00:00:00Z",
-  "linked_crate_count": 1,
-  "state": "active",
-  "files": []
-}}"#,
-                sdk = sdk.display()
-            ),
-        )
-        .unwrap();
-    }
-
     #[test]
-    fn link_override_redirects_staged_pyproject_at_the_marker_python_sdk_path() {
-        // A source tree carrying an active `streamlib link` marker; the staged
-        // pyproject's streamlib dep must be redirected at the marker's
-        // recorded absolute python_sdk_path (data, not re-derived).
-        let src = tempfile::tempdir().unwrap();
-        write_link_marker(src.path(), Path::new("/opt/streamlib-checkout/libs/streamlib-python"));
+    fn link_override_redirects_staged_pyproject_at_the_sdk_path() {
+        // Given the linked checkout's Python SDK path (resolved by the
+        // orchestrator), the staged pyproject's streamlib dep is redirected at
+        // it via `[tool.uv.sources]`. Reverting the rewrite would leave the dep
+        // resolving from the registry.
+        let sdk = Path::new("/opt/streamlib-checkout/libs/streamlib-python");
 
         let staged = tempfile::tempdir().unwrap();
         let pyproject = staged.path().join("pyproject.toml");
@@ -565,7 +533,7 @@ packages = ["python"]
         )
         .unwrap();
 
-        apply_link_override_if_active(&pyproject, src.path(), "tatolab/p").unwrap();
+        apply_link_override(&pyproject, sdk, "tatolab/p").unwrap();
 
         let body = std::fs::read_to_string(&pyproject).unwrap();
         assert!(body.contains("[tool.uv.sources]"), "sources table missing:\n{body}");
@@ -577,53 +545,12 @@ packages = ["python"]
     }
 
     #[test]
-    fn link_override_is_a_noop_without_an_active_marker() {
-        let src = tempfile::tempdir().unwrap();
-        let staged = tempfile::tempdir().unwrap();
-        let pyproject = staged.path().join("pyproject.toml");
-        let original = "[project]\nname = \"p\"\nversion = \"0.1.0\"\ndependencies = [\"streamlib\"]\n";
-        std::fs::write(&pyproject, original).unwrap();
-
-        apply_link_override_if_active(&pyproject, src.path(), "tatolab/p").unwrap();
-
-        // No marker ⇒ pyproject untouched.
-        assert_eq!(std::fs::read_to_string(&pyproject).unwrap(), original);
-    }
-
-    #[test]
-    fn corrupt_link_marker_is_a_loud_error_not_a_silent_skip() {
-        // A corrupt link.json must fail the provision — silently ignoring it
-        // produces a mixed state (cargo patched to the checkout, venv built
-        // from the registry).
-        let src = tempfile::tempdir().unwrap();
-        let marker_dir = src.path().join(".streamlib");
-        std::fs::create_dir_all(&marker_dir).unwrap();
-        std::fs::write(marker_dir.join("link.json"), "{ definitely not json").unwrap();
-
-        let staged = tempfile::tempdir().unwrap();
-        let pyproject = staged.path().join("pyproject.toml");
-        let original = "[project]\nname = \"p\"\nversion = \"0.1.0\"\ndependencies = [\"streamlib\"]\n";
-        std::fs::write(&pyproject, original).unwrap();
-
-        let err = apply_link_override_if_active(&pyproject, src.path(), "tatolab/p")
-            .expect_err("corrupt marker must be a loud error");
-        assert!(
-            format!("{err}").contains("corrupt"),
-            "error must name the corruption, got: {err}"
-        );
-        // And the staged pyproject was not half-mutated.
-        assert_eq!(std::fs::read_to_string(&pyproject).unwrap(), original);
-    }
-
-    #[test]
     fn non_table_tool_key_in_staged_pyproject_is_a_typed_error_not_a_panic() {
-        let src = tempfile::tempdir().unwrap();
-        write_link_marker(src.path(), Path::new("/opt/sdk"));
         let staged = tempfile::tempdir().unwrap();
         let pyproject = staged.path().join("pyproject.toml");
         std::fs::write(&pyproject, "tool = 3\n").unwrap();
 
-        let err = apply_link_override_if_active(&pyproject, src.path(), "tatolab/p")
+        let err = apply_link_override(&pyproject, Path::new("/opt/sdk"), "tatolab/p")
             .expect_err("non-table `tool` must be a typed error");
         assert!(
             format!("{err}").contains("not a table"),
@@ -632,11 +559,11 @@ packages = ["python"]
     }
 
     #[test]
-    fn provision_applies_link_override_end_to_end_against_marked_source_tree() {
-        // T4: drive the override through `provision_python_venv` itself — a
-        // marked SOURCE tree whose python_sdk_path points at the offline
-        // fixture SDK; the STAGED pyproject (no uv source of its own) must be
-        // rewritten and the venv must install the linked SDK. Requires `uv`.
+    fn provision_applies_link_override_end_to_end_against_linked_sdk() {
+        // Drive the override through `provision_python_venv` itself: passing the
+        // offline fixture SDK as the link SDK path, the STAGED pyproject (no uv
+        // source of its own) must be rewritten and the venv must install the
+        // linked SDK. Requires `uv`.
         if which_uv().is_none() {
             eprintln!("skipping: `uv` not on PATH");
             return;
@@ -644,10 +571,6 @@ packages = ["python"]
 
         let root = tempfile::tempdir().unwrap();
         let sdk = write_fixture_streamlib_sdk(root.path());
-
-        // Source tree with an active link marker pointing at the fixture SDK.
-        let src = tempfile::tempdir().unwrap();
-        write_link_marker(src.path(), &sdk);
 
         // Staged package WITHOUT any uv source — resolution must come from
         // the injected link override.
@@ -669,7 +592,7 @@ packages = ["python"]
         )
         .unwrap();
 
-        provision_python_venv(staged.path(), src.path(), "tatolab/mypkg")
+        provision_python_venv(staged.path(), Some(&sdk), "tatolab/mypkg")
             .expect("provision must succeed against the linked fixture SDK");
 
         // The staged pyproject got the override injected…

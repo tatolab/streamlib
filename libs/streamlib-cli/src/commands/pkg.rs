@@ -26,7 +26,7 @@ pub fn build(output: Option<&Path>) -> Result<()> {
     let package_dir = std::env::current_dir().context("resolve current working directory")?;
     // Early friendly check; the load-bearing guard runs again inside
     // `assemble_artifact`'s Slpkg branch (streamlib-pack owns the seam).
-    streamlib_pack::link_marker::ensure_no_active_link_for_pack(&package_dir)?;
+    streamlib_idents::link_marker::ensure_no_active_link_for_pack(&package_dir)?;
     let output_path = resolve_slpkg_output(&package_dir, output)?;
     let outcome = assemble_source_slpkg(&package_dir, &output_path)?;
     println!("Built source-only package: {}", output_path.display());
@@ -54,7 +54,7 @@ pub fn publish() -> Result<()> {
     let package_dir = std::env::current_dir().context("resolve current working directory")?;
     // Early friendly check; the load-bearing guard runs again inside
     // `assemble_artifact`'s Slpkg branch (streamlib-pack owns the seam).
-    streamlib_pack::link_marker::ensure_no_active_link_for_pack(&package_dir)?;
+    streamlib_idents::link_marker::ensure_no_active_link_for_pack(&package_dir)?;
     // Lightweight manifest read — package metadata only, NO dependency
     // resolution (which would require the registry just to read name/version).
     let config = streamlib_cargo_build::read_minimal_project_config(&package_dir)

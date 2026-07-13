@@ -137,6 +137,24 @@ fn run_module_load(
     let mut seen: HashSet<streamlib_idents::PackageRef> = HashSet::new();
     let mut path: Vec<streamlib_idents::PackageRef> = Vec::new();
     let mut skipped_in_flight: Vec<recursive_walker::SkippedInFlightDependency> = Vec::new();
+
+    // Discover an active `streamlib link` once per top-level load, from the
+    // process working directory (the consumer's run dir, where `streamlib link`
+    // wrote `.streamlib/link.json`). A locked run IGNORES links by contract —
+    // it is reproducible / offline — via `discover_active_link_for_load`. A
+    // corrupt marker fails the load loudly rather than silently mixing checkout
+    // + registry resolution.
+    let link = match source::discover_active_link_for_load(locked.is_some()) {
+        Ok(link) => link,
+        Err(e) => {
+            let _ = events.send(ModuleLoadEvent::Failed {
+                ident: module.clone(),
+                error: e.to_string(),
+            });
+            return Err(e);
+        }
+    };
+
     let result = recursive_walker::add_module_recursively(
         &iceoryx2_node,
         orchestrator.as_ref(),
@@ -149,6 +167,7 @@ fn run_module_load(
         load_id,
         &mut skipped_in_flight,
         locked.as_deref(),
+        link.as_ref(),
     );
     // End-of-walk verification: this walk skipped some packages because a
     // CONCURRENT load had them in flight at the same version. Before

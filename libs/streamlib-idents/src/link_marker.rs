@@ -2,6 +2,17 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Shared `streamlib link` marker schema (`.streamlib/link.json`) + discovery.
+//!
+//! The link marker is a manifest-adjacent record: it lives here in
+//! `streamlib-idents` (alongside [`Manifest`] / [`Lockfile`]) so every layer
+//! that must reason about an active whole-tree link can reach it without a
+//! heavier dependency — the CLI that writes it, the packer that refuses to
+//! distribute while it's present, the build orchestrator that redirects staged
+//! toolchains at the linked checkout, and the engine module loader that
+//! resolves `@org/name` modules from the linked checkout's packages tree.
+//!
+//! [`Manifest`]: crate::Manifest
+//! [`Lockfile`]: crate::Lockfile
 
 use std::path::{Path, PathBuf};
 

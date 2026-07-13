@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
-use streamlib_pack::link_marker::{
+use streamlib_idents::link_marker::{
     LinkManifest, LinkMarkerError, LinkTransactionState, LinkedManifestFile, LINK_BACKUP_DIR,
     LINK_MANIFEST_FILE, LINK_STATE_DIR,
 };
@@ -366,7 +366,7 @@ fn load_active_manifest(consumer_root: &Path) -> Result<Option<LinkManifest>, Li
     if !path.is_file() {
         return Ok(None);
     }
-    Ok(Some(streamlib_pack::link_marker::load_link_manifest(
+    Ok(Some(streamlib_idents::link_marker::load_link_manifest(
         &path,
     )?))
 }

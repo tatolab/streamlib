@@ -53,7 +53,8 @@ use streamlib_engine::core::runtime::{
     BuildSource, BuildStream, StagedArtifact,
 };
 use streamlib_pack::{
-    assemble_artifact, AssembleOptions, AssembleTarget, PackEventSink, PackStream, PathDepPolicy,
+    assemble_artifact_with_cargo_config, AssembleOptions, AssembleTarget, PackEventSink, PackStream,
+    PathDepPolicy,
 };
 
 /// Monotonic counter for unique per-build temp dir names (process-local;
@@ -266,8 +267,31 @@ impl PolyglotBuildOrchestrator {
         std::fs::create_dir_all(&temp_dir)
             .map_err(|e| other(&pkg_label, format!("create temp stage dir: {e}")))?;
 
+        // Discover the active `streamlib link` once (from the process working
+        // directory — the consumer's run dir). Under an active link every
+        // staged build resolves its streamlib crates from the linked checkout:
+        // the Rust cdylib via the consumer's `streamlib link`-emitted
+        // `[patch]` cargo config, and the Python venv via the checkout's
+        // Python SDK. Host + plugin then come from one source tree, which is
+        // what removes the mixed host/plugin ABI hazard from the dev loop. A
+        // corrupt marker is a loud error, never a silent mixed state.
+        let active_link = discover_active_build_link(&pkg_label)?;
+        if let Some(link) = &active_link {
+            tracing::info!(
+                package = %pkg_label,
+                cargo_config = ?link.consumer_cargo_config,
+                python_sdk = %link.python_sdk_path.display(),
+                "streamlib link active — building staged package against the linked checkout"
+            );
+        }
+        let cargo_config_files: Vec<PathBuf> = active_link
+            .as_ref()
+            .and_then(|l| l.consumer_cargo_config.clone())
+            .into_iter()
+            .collect();
+
         let adapter = EngineSinkAdapter(sink);
-        let outcome = assemble_artifact(
+        let outcome = assemble_artifact_with_cargo_config(
             pkg_dir,
             &AssembleTarget::StagedDir(temp_dir.clone()),
             &AssembleOptions {
@@ -279,6 +303,7 @@ impl PolyglotBuildOrchestrator {
                 path_deps: PathDepPolicy::RewriteRelativeToAbsolute,
             },
             &adapter,
+            &cargo_config_files,
         )
         .map_err(|e| {
             let _ = std::fs::remove_dir_all(&temp_dir);
@@ -289,7 +314,13 @@ impl PolyglotBuildOrchestrator {
         // (no-op when the package has no Python runtime). Building it into
         // `temp_dir` means the atomic rename below carries the venv into
         // place — no second rename. On failure, drop the half-staged temp.
-        python_venv::provision_python_venv(&temp_dir, pkg_dir, &pkg_label).map_err(|e| {
+        // Under an active link the venv installs the checkout's Python SDK.
+        python_venv::provision_python_venv(
+            &temp_dir,
+            active_link.as_ref().map(|l| l.python_sdk_path.as_path()),
+            &pkg_label,
+        )
+        .map_err(|e| {
             let _ = std::fs::remove_dir_all(&temp_dir);
             e
         })?;
@@ -480,6 +511,56 @@ fn atomic_swap(temp: &Path, final_path: &Path) -> anyhow::Result<()> {
     }
     std::fs::rename(temp, final_path).with_context(|| "rename temp into cache slot")?;
     Ok(())
+}
+
+/// An active `streamlib link` resolved for a staged package build: the
+/// checkout-derived toolchain overrides that redirect the build at the linked
+/// checkout instead of the registry.
+#[derive(Debug)]
+struct ActiveBuildLink {
+    /// The consumer's `streamlib link`-emitted `.cargo/config.toml`, when
+    /// present — carries the `[patch."<index>"]` block redirecting every
+    /// `streamlib*` crate at the checkout. `None` when the consumer has no
+    /// cargo config (a Python/Deno-only consumer); the Rust build then falls
+    /// back to registry resolution.
+    consumer_cargo_config: Option<PathBuf>,
+    /// The linked checkout's Python SDK path (uv editable source target).
+    python_sdk_path: PathBuf,
+}
+
+/// Discover the active `streamlib link` for the current build from the process
+/// working directory (the consumer's run dir, where `streamlib link` wrote
+/// `.streamlib/link.json`). `Ok(None)` when no link is active; a corrupt marker
+/// is a loud error — silently ignoring it would produce a mixed build (some
+/// crates from the checkout, some from the registry), the exact failure mode
+/// link mode exists to prevent.
+fn discover_active_build_link(pkg_label: &str) -> Result<Option<ActiveBuildLink>, BuildError> {
+    let cwd = std::env::current_dir()
+        .map_err(|e| other(pkg_label, format!("resolving current working directory: {e}")))?;
+    discover_active_build_link_from(&cwd, pkg_label)
+}
+
+/// [`discover_active_build_link`] anchored at an explicit start dir (test seam).
+fn discover_active_build_link_from(
+    start: &Path,
+    pkg_label: &str,
+) -> Result<Option<ActiveBuildLink>, BuildError> {
+    let link = streamlib_idents::link_marker::find_and_load_active_link(start)
+        .map_err(|e| build_failed(pkg_label, format!("reading streamlib link state: {e}")))?;
+    let Some((marker, manifest)) = link else {
+        return Ok(None);
+    };
+    // marker = <consumer_root>/.streamlib/link.json → the consumer's cargo
+    // config sits at <consumer_root>/.cargo/config.toml (written by the link).
+    let consumer_cargo_config = marker
+        .parent()
+        .and_then(|state_dir| state_dir.parent())
+        .map(|consumer_root| consumer_root.join(".cargo").join("config.toml"))
+        .filter(|cfg| cfg.is_file());
+    Ok(Some(ActiveBuildLink {
+        consumer_cargo_config,
+        python_sdk_path: manifest.python_sdk_path,
+    }))
 }
 
 pub(crate) fn other(package: &str, detail: String) -> BuildError {
@@ -884,6 +965,89 @@ mod tests {
                 "generated file `{rel}` must match standalone codegen byte-for-byte"
             );
         }
+    }
+
+    /// Write a `streamlib link` marker under `consumer_root/.streamlib/link.json`
+    /// pointing at `checkout`, and a consumer cargo config next to it.
+    fn write_link_marker(consumer_root: &Path, checkout: &Path, with_cargo_config: bool) {
+        let state = consumer_root.join(".streamlib");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(
+            state.join("link.json"),
+            format!(
+                r#"{{"checkout":"{c}","python_sdk_path":"{c}/libs/streamlib-python","deno_sdk_entrypoint_path":"{c}/libs/streamlib-deno/mod.ts","linked_at":"t","linked_crate_count":1,"state":"active","files":[]}}"#,
+                c = checkout.display()
+            ),
+        )
+        .unwrap();
+        if with_cargo_config {
+            let cargo = consumer_root.join(".cargo");
+            std::fs::create_dir_all(&cargo).unwrap();
+            std::fs::write(cargo.join("config.toml"), "[patch.\"x\"]\n").unwrap();
+        }
+    }
+
+    #[test]
+    fn discover_build_link_none_without_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(discover_active_build_link_from(dir.path(), "tatolab/x")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn discover_build_link_resolves_cargo_config_and_sdk_path() {
+        // An active link with a consumer cargo config: discovery returns the
+        // config path (the [patch] injected into the cdylib build) and the
+        // checkout's python_sdk_path (the venv override). Reverting the
+        // parent().parent() derivation would miss the consumer cargo config.
+        let consumer = tempfile::tempdir().unwrap();
+        let checkout = tempfile::tempdir().unwrap();
+        write_link_marker(consumer.path(), checkout.path(), true);
+
+        let link = discover_active_build_link_from(consumer.path(), "tatolab/x")
+            .unwrap()
+            .expect("active link must be discovered");
+        assert_eq!(
+            link.consumer_cargo_config,
+            Some(consumer.path().join(".cargo").join("config.toml")),
+            "must locate the consumer's link-emitted cargo config"
+        );
+        assert_eq!(
+            link.python_sdk_path,
+            checkout.path().join("libs").join("streamlib-python"),
+            "must carry the checkout's python SDK path from the marker"
+        );
+    }
+
+    #[test]
+    fn discover_build_link_without_cargo_config_still_resolves_sdk() {
+        // A Python/Deno-only consumer has no cargo config; discovery still
+        // returns the link (sdk path present, cargo config None) so the venv
+        // override fires even when the cargo override can't.
+        let consumer = tempfile::tempdir().unwrap();
+        let checkout = tempfile::tempdir().unwrap();
+        write_link_marker(consumer.path(), checkout.path(), false);
+
+        let link = discover_active_build_link_from(consumer.path(), "tatolab/x")
+            .unwrap()
+            .expect("active link must be discovered");
+        assert!(link.consumer_cargo_config.is_none());
+        assert_eq!(
+            link.python_sdk_path,
+            checkout.path().join("libs").join("streamlib-python")
+        );
+    }
+
+    #[test]
+    fn discover_build_link_corrupt_marker_is_a_loud_error() {
+        let consumer = tempfile::tempdir().unwrap();
+        let state = consumer.path().join(".streamlib");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(state.join("link.json"), "{ not json").unwrap();
+        let err = discover_active_build_link_from(consumer.path(), "tatolab/x")
+            .expect_err("corrupt marker must fail loudly");
+        assert!(matches!(err, BuildError::BuildFailed { .. }), "got {err:?}");
     }
 
     #[test]
