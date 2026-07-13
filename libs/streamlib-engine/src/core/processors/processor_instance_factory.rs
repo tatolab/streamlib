@@ -773,6 +773,16 @@ enum RegistrationKind {
     },
 }
 
+/// Everything the registry held for one processor type, removed by
+/// [`ProcessorInstanceFactory::unregister_processor_types`] and held so a
+/// refused `remove_module` can reinstate the registration exactly.
+pub(crate) struct UnregisteredProcessorTypeRecord {
+    processor_type: SchemaIdent,
+    registration: Option<RegistrationKind>,
+    port_info: Option<(Vec<PortInfo>, Vec<PortInfo>)>,
+    descriptor: Option<ProcessorDescriptor>,
+}
+
 /// Factory for compile-time registered Rust processors.
 pub struct ProcessorInstanceFactory {
     registrations: RwLock<HashMap<SchemaIdent, RegistrationKind>>,
@@ -877,6 +887,19 @@ impl ProcessorInstanceFactory {
     ) -> Result<()> {
         let type_name = descriptor.name.clone();
 
+        // Duplicate check FIRST — a duplicate must leave all four maps
+        // untouched. The previous ordering overwrote `port_info` /
+        // `schemas` / `descriptors` before checking `registrations`, so a
+        // duplicate re-registration could leave the four maps describing
+        // two different descriptors.
+        if self.registrations.read().contains_key(&type_name) {
+            tracing::debug!(
+                "Processor '{}' already registered, skipping duplicate",
+                type_name
+            );
+            return Ok(());
+        }
+
         let inputs: Vec<PortInfo> = descriptor
             .inputs
             .iter()
@@ -914,23 +937,13 @@ impl ProcessorInstanceFactory {
             .write()
             .insert(type_name.clone(), descriptor);
 
-        {
-            let mut registrations = self.registrations.write();
-            if registrations.contains_key(&type_name) {
-                tracing::debug!(
-                    "Processor '{}' already registered, skipping duplicate",
-                    type_name
-                );
-                return Ok(());
-            }
-            registrations.insert(
-                type_name.clone(),
-                RegistrationKind::VTable {
-                    vtable,
-                    cdylib_resident,
-                },
-            );
-        }
+        self.registrations.write().insert(
+            type_name.clone(),
+            RegistrationKind::VTable {
+                vtable,
+                cdylib_resident,
+            },
+        );
 
         tracing::info!("[register] new processor type registered '{}'", type_name);
 
@@ -1096,6 +1109,82 @@ impl ProcessorInstanceFactory {
         );
 
         Ok(())
+    }
+
+    /// Remove every registry entry for the given processor types across
+    /// all four maps (`registrations`, `port_info`, `descriptors`, plus a
+    /// rebuild of the port-schema universe). Returns the removed entries
+    /// so a refused `remove_module` can reinstate them exactly via
+    /// [`Self::reinstate_unregistered_processor_types`]. Idents with no
+    /// entry are skipped.
+    pub(crate) fn unregister_processor_types(
+        &self,
+        processor_type_idents: &[SchemaIdent],
+    ) -> Vec<UnregisteredProcessorTypeRecord> {
+        let mut removed = Vec::new();
+        for ident in processor_type_idents {
+            let registration = self.registrations.write().remove(ident);
+            let port_info = self.port_info.write().remove(ident);
+            let descriptor = self.descriptors.write().remove(ident);
+            if registration.is_none() && port_info.is_none() && descriptor.is_none() {
+                continue;
+            }
+            removed.push(UnregisteredProcessorTypeRecord {
+                processor_type: ident.clone(),
+                registration,
+                port_info,
+                descriptor,
+            });
+        }
+        if !removed.is_empty() {
+            self.rebuild_port_schema_universe_from_descriptors();
+        }
+        removed
+    }
+
+    /// Reinstate entries previously removed by
+    /// [`Self::unregister_processor_types`] — the restore half of
+    /// `remove_module`'s remove-then-check-then-restore in-use check.
+    pub(crate) fn reinstate_unregistered_processor_types(
+        &self,
+        unregistered: Vec<UnregisteredProcessorTypeRecord>,
+    ) {
+        if unregistered.is_empty() {
+            return;
+        }
+        for record in unregistered {
+            if let Some(registration) = record.registration {
+                self.registrations
+                    .write()
+                    .insert(record.processor_type.clone(), registration);
+            }
+            if let Some(port_info) = record.port_info {
+                self.port_info
+                    .write()
+                    .insert(record.processor_type.clone(), port_info);
+            }
+            if let Some(descriptor) = record.descriptor {
+                self.descriptors
+                    .write()
+                    .insert(record.processor_type.clone(), descriptor);
+            }
+        }
+        self.rebuild_port_schema_universe_from_descriptors();
+    }
+
+    /// Recompute the port-schema universe from the remaining descriptors.
+    /// The `schemas` set is additive-only on registration, so removal has
+    /// to rebuild it — a schema stays known only while some registered
+    /// processor still exposes it on a port.
+    fn rebuild_port_schema_universe_from_descriptors(&self) {
+        let rebuilt: HashSet<PortSchemaSpec> = self
+            .descriptors
+            .read()
+            .values()
+            .flat_map(|descriptor| descriptor.inputs.iter().chain(descriptor.outputs.iter()))
+            .map(|port| port.schema.clone())
+            .collect();
+        *self.schemas.write() = rebuilt;
     }
 
     pub fn can_create(&self, processor_type: &SchemaIdent) -> bool {

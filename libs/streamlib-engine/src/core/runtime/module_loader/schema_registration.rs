@@ -3,18 +3,20 @@
 
 use crate::core::{Error, Result};
 
-/// Iterate `config.schemas` map entries, registering each `Local` schema
-/// (the YAML body keyed by its canonical identifier) with the engine's
-/// runtime schema registry. `External` entries are import declarations
-/// owned by other packages and are skipped here — the dep's own
-/// `register_package_schemas` call handles them when its manifest loads.
-/// No-op when the manifest declares no `schemas:` map.
+/// Iterate `config.schemas` map entries, staging each `Local` schema
+/// (the YAML body keyed by its canonical identifier) into the load's
+/// registration staging buffer — applied to the engine's runtime schema
+/// registry only at the whole-load commit. `External` entries are import
+/// declarations owned by other packages and are skipped here — the dep's
+/// own `register_package_schemas` call handles them when its manifest
+/// loads. No-op when the manifest declares no `schemas:` map.
 pub(super) fn register_package_schemas(
     project_path: &std::path::Path,
     config: &crate::core::config::ProjectConfig,
+    staging: &super::staging::ModuleLoadRegistrationStaging,
+    owner_package: &streamlib_idents::PackageRef,
 ) -> Result<()> {
     use crate::core::config::ProjectConfig;
-    use crate::core::embedded_schemas;
     use streamlib_idents::SchemaEntry;
 
     let Some(schemas) = config.schemas.as_ref() else {
@@ -54,11 +56,11 @@ pub(super) fn register_package_schemas(
         })?;
         let canonical = canonical_identifier_for_schema(&body, pkg_meta, &schema_path)?;
         tracing::debug!(
-            "registering schema '{}' from {}",
+            "staging schema '{}' from {}",
             canonical,
             schema_path.display()
         );
-        embedded_schemas::register_schema(canonical, body);
+        staging.stage_schema(canonical, body.into(), owner_package.clone());
     }
     Ok(())
 }

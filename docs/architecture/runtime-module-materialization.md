@@ -35,7 +35,8 @@ deployment chooses to wire (or not).
 │    resolve → ResolvedSource::Ready(dir)            (no build needed)                    │
 │            → ResolvedSource::NeedsBuild(BuildRequest)  (build required)                 │
 │    recursive transitive-dep walk (cycle-detected), identity + semver validation,       │
-│    schema + processor registration (dlopen the cdylib via STREAMLIB_PLUGIN).           │
+│    schema + processor STAGING (dlopen the cdylib via STREAMLIB_PLUGIN), then ONE        │
+│    whole-load commit into the global registries — see "Transactional registration".    │
 │                                                                                        │
 │  When NeedsBuild and an orchestrator IS wired → call materialize() (on spawn_blocking).│
 │  When NeedsBuild and NO orchestrator → fail loud (BuildRequiredButNoOrchestrator).     │
@@ -233,6 +234,123 @@ resolutions/builds before the caller awaits anything.
 - `start()` hard-errors `ModulesStillLoading { idents }` if the graph is
   run while any load is still in flight.
 
+## Transactional registration — staged commit
+
+A top-level load never writes the process-global registries mid-walk.
+Every registration the walk produces — schema bodies, processor
+descriptors + constructors/vtables, dlopen'd plugin images — lands in a
+per-load staging buffer (`ModuleLoadRegistrationStaging`), and a single
+**whole-load commit** applies it after the ENTIRE transitive walk
+succeeded. The invariant: **visible ⇒ permanently committed**. A load
+that fails at any phase (manifest parse, schema read, dep walk, dlopen,
+declared-but-not-registered validation, processor construction, or the
+end-of-walk processor-collision gate below) drops the staging buffer —
+the schema and processor registries are byte-equivalent to before the
+attempt, so a retried `add_module` re-runs the full resolution with zero
+"already registered" residue.
+
+One end-of-walk gate runs before the commit lock is taken: a staged
+subprocess (Python / TypeScript) processor whose composed
+`processor_type` ident is **duplicated within the load** or **already
+present in the global registry** fails the whole load loud with a typed
+`AddModuleError` (`DuplicateProcessorTypeInModule` /
+`ProcessorTypeAlreadyRegistered`). Without it, a manifest declaring two
+same-named subprocess processors would stage the ident twice and the
+second `register_dynamic` would error mid-commit — after the first
+already applied — yielding a silently-incomplete load that returned Ok.
+(Rust/vtable duplicates are idempotently deduped at commit and need no
+gate.) This gate is what makes the commit itself
+infallible-by-construction.
+
+Cdylib registrations are intercepted at the host-services layer: the
+loader installs a thread-local staging sink around the plugin's
+`(decl.register)(...)` call (the registration prologue runs
+synchronously on the same thread), so the host's `schema_register` /
+`processor_register` callbacks stage into the active load instead of
+writing the global registries; `schema_lookup` overlays the active
+load's staged schemas so a prologue sees what its own load staged. No
+plugin ABI change — a cdylib registering outside a module load (no
+sink installed) still writes direct-to-global.
+
+The commit runs under a process-wide commit lock, in order: retained
+plugin images → schemas → processors → per-package ledger records +
+resolution-memo flips → concurrent-load completion signals. Schemas
+commit before processors so a racing reader can only ever observe
+"schemas without processors" (reads as module-not-loaded-yet, benign
+and retryable), never processors whose port schemas are missing. The
+commit itself is infallible by construction — everything fallible
+happened during the walk.
+
+The resolution memo's per-package placeholders also flip at the
+whole-load commit, which strengthens the concurrent-load contract: a
+load that skipped a package another load had in flight succeeds only
+when that owner's ENTIRE load commits. Two loads that each skip a
+package the other owns wait on each other after their own walks; that
+mutual skip is bounded by the skipped-in-flight timeout and surfaces
+as a typed error. A same-load diamond re-encounter (A→{B,C}→D) is
+recognized by owner-load-id and skipped with no wait entry — a load
+never waits on itself.
+
+### Dylib images are retained for the process lifetime
+
+`dlclose` is never called — on load failure or on `remove_module`.
+Registered processor vtables, `'static` descriptor strings handed
+across the plugin ABI, and the host-service bridge state installed by
+`install_host_services` all point into the mapped image; unmapping it
+would dangle them behind safe interfaces. Retained images are recorded
+(`RetainedPluginLibrary`: handle, path, first-loading package) and
+deliberately **never deduplicated by path** — a rebuilt plugin at the
+same path is a NEW image, and dropping the "duplicate" handle would
+dlclose a live image out from under its vtables. The cost is bounded:
+one mapped `.so` per (path, load) that actually dlopen'd, typically a
+handful per process lifetime. `install_host_services` is idempotent,
+so re-registering a retained image on a later load is safe.
+
+## `remove_module` — unload as registration removal
+
+`Runner::remove_module(ident)` unloads a committed package: its
+processor types leave the processor registry, its package-owned schemas
+(`@org/name/Type` ids) leave the schema registry, its ledger record and
+the calling Runner's resolution-memo entry are cleared so a later
+`add_module` re-resolves from scratch, and a
+`RuntimeDidUnregisterProcessorType` event publishes per removed
+processor type. The dylib image stays retained (above) — unload means
+registration removal, not image unmapping. Legacy reverse-DNS schema
+ids are deliberately left in place: they can be registered by multiple
+packages, so removal of one owner must not break the others.
+
+Removal is refused with a typed error — leaving every registry exactly
+as it was — when:
+
+- no committed load matches the ident (or the loaded version doesn't
+  satisfy the requested range; the error names what IS loaded),
+- a load of the module is still in flight (top-level or as a dependency
+  mid-walk),
+- other loaded modules still require it (removal never cascades —
+  remove the requirers first), or
+- graph processors still instantiate its types. This check is
+  TOCTOU-closing: the types are unregistered FIRST (a racing
+  `add_processor` gets a registry miss, never a half-removed type),
+  the graph is scanned, and on a hit the registrations are restored
+  before the error returns. Nodes already marked pending-deletion are
+  excluded — the compiler never spawns one. During the brief
+  unregister-scan-restore window of a *refused* in-use removal, a
+  concurrent same-type `add_processor` can transiently observe the
+  registry miss and fail with the typed `UnknownProcessorType` — a
+  recoverable `Err` (retry after the removal returns), consistent with
+  the same-process-registry multi-Runner limitation noted below, not a
+  registry corruption.
+
+The commit ledger (`LOADED_MODULE_REGISTRATION_LEDGER`, process-global,
+keyed by `@org/name`) records what each committed package registered —
+schema ids, processor idents, dylib paths, and which loaded packages
+require it — and is the source of truth removal consumes. Note the
+registries and the ledger are process-global while the resolution memo
+is Runner-scoped: with multiple `Runner`s in one process, a removal on
+one Runner unregisters types globally but only clears the calling
+Runner's memo. Single-Runner-per-process is the supported shape today;
+the asymmetry is a documented limitation, not a designed feature.
+
 ## Build parallelism
 
 Parallelism is whatever the tools allow. Cross-package work runs
@@ -289,7 +407,10 @@ Engine ↔ plugin stay in lock-step on two complementary layers:
   (`source.rs` = `Strategy` + resolver, `build_orchestrator.rs` = the
   trait + request/result/event types, `added_module.rs` = the eager
   future, `recursive_walker.rs` = the transitive walk + materialize step,
-  `mod.rs` = the `Runner` API).
+  `staging.rs` = the per-load registration staging buffer + thread-local
+  cdylib sink + whole-load commit + plugin-image retention, `ledger.rs` =
+  the committed-load ledger `remove_module` consumes, `mod.rs` = the
+  `Runner` API incl. `remove_module`).
 - Default orchestrator: `libs/streamlib-build-orchestrator/` (calls
   `streamlib-pack` and stages into `cache/packages/<name>-<version>/`).
 - Shared assembly: `libs/streamlib-pack/` (`assemble_artifact` —
