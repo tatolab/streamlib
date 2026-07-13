@@ -99,28 +99,44 @@ enum Commands {
         lockfile: Option<PathBuf>,
     },
 
-    /// Add a single published package to the local installed set — the
-    /// `npm install <pkg>` of streamlib.
+    /// Bring any valid streamlib package into this app's streamlib_modules/
+    /// folder — the node_modules model for streamlib packages.
     ///
-    /// Resolves `@org/name[@version-req]` to a concrete version from the
-    /// registry (zero config needed — it defaults to the first-party tree),
-    /// materializes it into the installed-package cache the runtime reads from,
-    /// records it in `packages.yaml`, and prints a catalog-backed summary of
-    /// the processors it contributes and their typed ports. Afterward a bare
-    /// `runtime.add_module(ident)` finds it offline. Also accepts a local
-    /// `.slpkg` path or an HTTP(S) URL. Touches no app code / app manifest /
-    /// app lockfile — for that, use `streamlib install`.
+    /// Takes a byte source — a package folder, an archive (`.slpkg` / `.zip`
+    /// / `.tar.gz`), or a `file://` / HTTP(S) URL — materializes it into
+    /// `streamlib_modules/@org/name/` beside the app, and records identity,
+    /// source, and content hash in the app's `streamlib.lock`. The package's
+    /// identity comes from its own manifest. Re-adding replaces cleanly.
+    /// Never builds and never resolves a registry coordinate; a bare
+    /// `runtime.add_module(ident)` run from the app directory finds the
+    /// package afterward.
     Add {
-        /// `@org/name[@version-req]` | path to a `.slpkg` | HTTP(S) URL
+        /// Package folder | archive (`.slpkg`/`.zip`/`.tar.gz`) | URL
         spec: String,
+
+        /// App root to anchor streamlib_modules/ + streamlib.lock at
+        /// (default: current working directory, no walk-up).
+        #[arg(long)]
+        dir: Option<PathBuf>,
+
+        /// Expected SHA-256 of the archive bytes (hex, optional `sha256:`
+        /// prefix). A mismatch fails the add with nothing materialized.
+        #[arg(long)]
+        expect_sha256: Option<String>,
     },
 
-    /// Remove a single package from the local installed set.
+    /// Remove a package from this app's streamlib_modules/ folder.
     ///
-    /// Un-records `@org/name` from `packages.yaml` and evicts its cache slot.
+    /// Deletes `streamlib_modules/@org/name/` and drops the package's entry
+    /// from the app's `streamlib.lock`.
     Remove {
         /// Canonical `@org/name` reference to remove.
         name: String,
+
+        /// App root to anchor streamlib_modules/ + streamlib.lock at
+        /// (default: current working directory, no walk-up).
+        #[arg(long)]
+        dir: Option<PathBuf>,
     },
 
     /// Manage installed packages
@@ -179,7 +195,8 @@ enum Commands {
 
         /// `streamlib.yaml`-driven mode: directory containing the manifest.
         /// The resolver walks declared dependencies and codegen ingests the
-        /// resulting set, writing `streamlib.lock` next to the manifest.
+        /// resulting set, writing `streamlib-codegen.lock` next to the
+        /// manifest.
         #[arg(long, group = "input")]
         project_dir: Option<PathBuf>,
 
@@ -324,8 +341,12 @@ async fn async_main(cli: Cli) -> Result<()> {
             project_dir,
             lockfile,
         }) => commands::install::run(project_dir.as_deref(), lockfile)?,
-        Some(Commands::Add { spec }) => commands::add::add(&spec).await?,
-        Some(Commands::Remove { name }) => commands::add::remove(&name)?,
+        Some(Commands::Add {
+            spec,
+            dir,
+            expect_sha256,
+        }) => commands::add::add(&spec, dir.as_deref(), expect_sha256.as_deref())?,
+        Some(Commands::Remove { name, dir }) => commands::add::remove(&name, dir.as_deref())?,
         Some(Commands::Pkg { action }) => match action {
             PkgCommands::Build { output } => commands::pkg::build(output.as_deref())?,
             PkgCommands::Publish => commands::pkg::publish()?,

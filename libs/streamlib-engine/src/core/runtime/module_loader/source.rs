@@ -41,9 +41,13 @@ pub use streamlib_idents::SemVerRange;
 /// [`Runner::add_module`]: super::super::Runner::add_module
 #[derive(Debug, Clone)]
 pub enum Strategy {
-    /// Installed-package cache (`<STREAMLIB_HOME>/.streamlib/cache/packages/...`) only.
-    /// Never builds. The default for bare [`Runner::add_module`] and for
-    /// transitive registry-flavored deps.
+    /// The per-app modules folder (`<cwd>/streamlib_modules/@org/name`,
+    /// populated by `streamlib add`) first, then the installed-package cache
+    /// (`<STREAMLIB_HOME>/.streamlib/cache/packages/...`). Never builds a
+    /// package that carries a matching prebuilt. The default for bare
+    /// top-level [`Runner::add_module`] loads (transitive registry-flavored
+    /// deps map to [`Strategy::Registry`] instead).
+    /// Precedence: active `streamlib link` > app modules > installed cache.
     ///
     /// [`Runner::add_module`]: super::super::Runner::add_module
     InstalledCache,
@@ -309,13 +313,7 @@ pub(super) fn resolve_strategy_to_source(
     }
     match strategy {
         Strategy::InstalledCache => {
-            let (dir, _version) =
-                lookup_installed_cache(pkg_ref)?.ok_or_else(|| AddModuleError::ModuleNotFound {
-                    package: pkg_ref.clone(),
-                })?;
-            // Same prefer-prebuilt-else-build-source decision as `.slpkg`:
-            // a cached package may carry source needing a host build.
-            Ok(source_for_resolved_dir(pkg_ref, dir))
+            resolve_installed_cache_strategy(pkg_ref, app_modules_probe_root().as_deref())
         }
         Strategy::Slpkg { path } => {
             let extracted = extract_slpkg_to_cache(path).map_err(|e| {
@@ -428,6 +426,68 @@ pub(super) fn resolve_strategy_to_source(
             };
             Ok(source_for_fetched_slpkg(pkg_ref, extracted, *build))
         }
+    }
+}
+
+/// Resolve [`Strategy::InstalledCache`]: the per-app modules folder wins over
+/// the installed-package cache. `app_root` is the exact directory probed for
+/// `streamlib_modules/` — the process working directory in production, an
+/// explicit dir in tests; `None` (unresolvable cwd) skips straight to the
+/// installed cache.
+fn resolve_installed_cache_strategy(
+    pkg_ref: &streamlib_idents::PackageRef,
+    app_root: Option<&std::path::Path>,
+) -> std::result::Result<ResolvedSource, AddModuleError> {
+    if let Some(root) = app_root {
+        if let Some(modules_package_dir) = lookup_app_modules_package_dir(root, pkg_ref) {
+            tracing::info!(
+                package = %pkg_ref,
+                source = %modules_package_dir.display(),
+                "resolving module from the app's streamlib_modules folder"
+            );
+            return Ok(source_for_resolved_dir(pkg_ref, modules_package_dir));
+        }
+    }
+    let (dir, _version) =
+        lookup_installed_cache(pkg_ref)?.ok_or_else(|| AddModuleError::ModuleNotFound {
+            package: pkg_ref.clone(),
+        })?;
+    // Same prefer-prebuilt-else-build-source decision as `.slpkg`:
+    // a cached package may carry source needing a host build.
+    Ok(source_for_resolved_dir(pkg_ref, dir))
+}
+
+/// The app-modules probe anchor: the exact process working directory (no
+/// walk-up). `None` when the cwd is unresolvable — resolution then proceeds
+/// with the installed cache alone.
+fn app_modules_probe_root() -> Option<PathBuf> {
+    std::env::current_dir().ok()
+}
+
+/// `<app_root>/streamlib_modules/@org/name` when it exists and its manifest
+/// declares `pkg_ref`; `None` otherwise (a present-but-mismatched entry warns
+/// and falls through to the installed cache).
+fn lookup_app_modules_package_dir(
+    app_root: &std::path::Path,
+    pkg_ref: &streamlib_idents::PackageRef,
+) -> Option<PathBuf> {
+    let dir = app_root
+        .join(streamlib_idents::app_modules::APP_MODULES_DIR_NAME)
+        .join(format!("@{}", pkg_ref.org))
+        .join(pkg_ref.name.as_str());
+    if !dir.is_dir() {
+        return None;
+    }
+    if manifest_declares_package(&dir, pkg_ref) {
+        Some(dir)
+    } else {
+        tracing::warn!(
+            package = %pkg_ref,
+            dir = %dir.display(),
+            "streamlib_modules entry does not declare the requested package — \
+             falling through to the installed cache"
+        );
+        None
     }
 }
 
@@ -1246,6 +1306,165 @@ mod tests {
         let link =
             ActiveLinkedCheckout::discover_from(empty.path()).expect("no marker is not an error");
         assert!(link.is_none(), "no marker must yield no active link");
+    }
+
+    // =====================================================================
+    // App-modules bridge — streamlib_modules/ wins over the installed cache
+    // =====================================================================
+
+    /// Write `<app_root>/streamlib_modules/@tatolab/<pkg_name>/streamlib.yaml`
+    /// declaring `@tatolab/<declared_name>` (differ only in the mismatch test).
+    fn write_app_modules_package(
+        app_root: &std::path::Path,
+        pkg_name: &str,
+        declared_name: &str,
+    ) -> PathBuf {
+        let dir = app_root
+            .join(streamlib_idents::app_modules::APP_MODULES_DIR_NAME)
+            .join("@tatolab")
+            .join(pkg_name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("streamlib.yaml"),
+            format!(
+                "package:\n  org: tatolab\n  name: {declared_name}\n  version: 0.9.0\n\
+                 processors:\n  - name: P\n    version: 1.0.0\n    description: d\n    \
+                 runtime: python\n    execution: manual\n    entrypoint: \"p:P\"\n    \
+                 inputs: []\n    outputs: []\n"
+            ),
+        )
+        .unwrap();
+        dir
+    }
+
+    /// Record `@tatolab/<name>` in the sandboxed installed cache and create
+    /// its slot on disk. Returns the slot dir.
+    fn record_installed_cache_package(name: &str) -> PathBuf {
+        use crate::core::config::{InstalledPackageEntry, InstalledPackageManifest};
+        let slot = crate::core::streamlib_home::get_cached_package_dir(&format!("{name}-1.0.0"));
+        std::fs::create_dir_all(&slot).unwrap();
+        std::fs::write(
+            slot.join("streamlib.yaml"),
+            format!(
+                "package:\n  org: tatolab\n  name: {name}\n  version: 1.0.0\n\
+                 processors:\n  - name: P\n    version: 1.0.0\n    description: d\n    \
+                 runtime: python\n    execution: manual\n    entrypoint: \"p:P\"\n    \
+                 inputs: []\n    outputs: []\n"
+            ),
+        )
+        .unwrap();
+        let mut manifest = InstalledPackageManifest::load().unwrap();
+        manifest.add(InstalledPackageEntry {
+            name: pkg_ref_named(name),
+            version: streamlib_idents::SemVer::new(1, 0, 0),
+            description: None,
+            installed_from: "test".into(),
+            installed_at: "t".into(),
+            cache_dir: format!("{name}-1.0.0"),
+        });
+        manifest.save().unwrap();
+        slot
+    }
+
+    /// CRUX (D7 bridge): with BOTH an app-modules entry and an installed-cache
+    /// record present, `Strategy::InstalledCache` resolves the app-modules
+    /// dir. Mentally revert the modules probe in
+    /// `resolve_installed_cache_strategy` and this resolves the cache slot
+    /// instead, failing the assertion.
+    #[test]
+    #[serial_test::serial]
+    fn installed_cache_strategy_prefers_app_modules_dir() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = sandbox_home(home.path());
+        record_installed_cache_package("foo");
+        let app_root = tempfile::tempdir().unwrap();
+        let modules_dir = write_app_modules_package(app_root.path(), "foo", "foo");
+
+        let resolved =
+            resolve_installed_cache_strategy(&pkg_ref_named("foo"), Some(app_root.path()))
+                .expect("must resolve");
+        match resolved {
+            ResolvedSource::Ready(dir) => assert_eq!(
+                dir, modules_dir,
+                "app modules must win over the installed cache"
+            ),
+            other => panic!("expected Ready(app modules dir), got {other:?}"),
+        }
+    }
+
+    /// A package absent from `streamlib_modules/` falls through to the
+    /// installed cache unchanged.
+    #[test]
+    #[serial_test::serial]
+    fn installed_cache_strategy_falls_through_when_app_modules_absent() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = sandbox_home(home.path());
+        let slot = record_installed_cache_package("foo");
+        let app_root = tempfile::tempdir().unwrap(); // no streamlib_modules
+
+        let resolved =
+            resolve_installed_cache_strategy(&pkg_ref_named("foo"), Some(app_root.path()))
+                .expect("must resolve from the installed cache");
+        match resolved {
+            ResolvedSource::Ready(dir) => assert_eq!(dir, slot),
+            other => panic!("expected Ready(cache slot), got {other:?}"),
+        }
+    }
+
+    /// A `streamlib_modules/@org/name` dir whose manifest declares a DIFFERENT
+    /// package is skipped (warn + fall through), not loaded.
+    #[test]
+    #[serial_test::serial]
+    fn installed_cache_strategy_skips_mismatched_app_modules_entry() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = sandbox_home(home.path());
+        let slot = record_installed_cache_package("foo");
+        let app_root = tempfile::tempdir().unwrap();
+        // Dir named foo, but the manifest declares @tatolab/bar.
+        write_app_modules_package(app_root.path(), "foo", "bar");
+
+        let resolved =
+            resolve_installed_cache_strategy(&pkg_ref_named("foo"), Some(app_root.path()))
+                .expect("must fall through to the installed cache");
+        match resolved {
+            ResolvedSource::Ready(dir) => assert_eq!(dir, slot),
+            other => panic!("expected Ready(cache slot), got {other:?}"),
+        }
+    }
+
+    /// Neither app modules nor installed cache ⇒ typed ModuleNotFound.
+    #[test]
+    #[serial_test::serial]
+    fn installed_cache_strategy_module_not_found_when_neither_source_has_it() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = sandbox_home(home.path());
+        let app_root = tempfile::tempdir().unwrap();
+        let err = resolve_installed_cache_strategy(&pkg_ref_named("foo"), Some(app_root.path()))
+            .expect_err("nothing to resolve");
+        assert!(
+            matches!(err, AddModuleError::ModuleNotFound { .. }),
+            "expected ModuleNotFound, got {err:?}"
+        );
+    }
+
+    /// Precedence: an active link outranks the app-modules folder — the link
+    /// short-circuit runs before the InstalledCache arm ever probes
+    /// `streamlib_modules/`.
+    #[test]
+    fn active_link_wins_over_app_modules_for_installed_cache_strategy() {
+        let checkout = fake_checkout_with_package("foo", "foo");
+        let consumer = tempfile::tempdir().unwrap();
+        // The consumer ALSO has an app-modules entry for the same package.
+        write_app_modules_package(consumer.path(), "foo", "foo");
+        let link = active_link_for(consumer.path(), checkout.path());
+
+        let resolved = resolve_strategy_to_source(
+            &Strategy::InstalledCache,
+            &pkg_ref_named("foo"),
+            Some(&link),
+        )
+        .expect("linked checkout-present package must resolve from the checkout");
+        assert_builds_from(resolved, &checkout.path().join("packages").join("foo"));
     }
 
     /// A LOCKED run ignores an active link (reproducible / offline by

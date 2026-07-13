@@ -8,6 +8,8 @@
 //! by typed YAML/JSON deserialization. There is no public `parse` API and
 //! none should be added — see `docs/architecture/schema-identity-and-packaging.md`.
 
+pub mod app_modules;
+pub mod archive;
 mod catalog;
 mod error;
 mod git;
@@ -33,8 +35,9 @@ pub use ident::{
     validate_type,
 };
 pub use lockfile::{
-    APP_LOCKFILE_NAME, LOCKFILE_NAME, Lockfile, LockfileEntry, LockfileSource,
-    compute_content_hash, hash_content, read_lockfile, write_app_lockfile, write_lockfile,
+    APP_LOCKFILE_NAME, CODEGEN_LOCKFILE_NAME, Lockfile, LockfileEntry, LockfileSource,
+    MODULES_LOCKFILE_NAME, compute_content_hash, hash_content, read_lockfile, write_app_lockfile,
+    write_lockfile, write_modules_lockfile,
 };
 pub use manifest::{
     DependencySpec, GitDependency, Manifest, PackageMetadata, PathDependency, RegistryDependency,

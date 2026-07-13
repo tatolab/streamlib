@@ -312,25 +312,38 @@ lockfile. The release-completeness check *rides* materialize — a partial
 registry release fails install before any lockfile is written. Network at
 install time is expected.
 
-**`add` / `remove` — single-package adoption (the `npm install <pkg>`).**
-`add(pkg_ref, version_req, orchestrator, sink, options)`
-([`libs/streamlib-engine/src/core/runtime/add.rs`](../../libs/streamlib-engine/src/core/runtime/add.rs),
-CLI `streamlib add`) adopts ONE published package: it resolves the range to a
-concrete version from the registry, materializes that version into the
-installed-package cache (`cache/packages/<name>-<version>`), and records it in
-the installed-set record `packages.yaml` (`InstalledPackageManifest`). It does
-**not** touch app code, any app `streamlib.yaml`, or `streamlib-app.lock` —
-that is `install`'s job. Afterward a bare `Runner::add_module(ident)`
-(`Strategy::InstalledCache`) finds the package offline. `add` returns a
-catalog-backed report — the package's processors and their typed ports, read
-from the registry catalog artifacts (a catalog-less tree degrades to "no
-catalog metadata", the add still succeeds). It also accepts a local `.slpkg`
-(`add_slpkg`). Registry config resolves `options.registry → from_env →
-DEFAULT_REGISTRY_URL`, so the bare CLI works with zero configuration.
-`remove(pkg_ref)` (CLI `streamlib remove`) reverses it: un-record from
-`packages.yaml`, evict the cache slot. `add` / `remove` are the per-package
-front door; `install` is the whole-app-tree front door — both feed the same
-installed-package cache the runtime loads from.
+**`add` / `remove` — per-app package adoption (the node_modules model).**
+`AppModulesDir::add_package(source, options)`
+([`libs/streamlib-idents/src/app_modules.rs`](../../libs/streamlib-idents/src/app_modules.rs),
+re-exported through `streamlib::sdk::runtime`, CLI `streamlib add`) brings
+ONE valid streamlib package **byte source** — a folder, an archive (`.slpkg`
+/ `.zip` / `.tar.gz`, container detected from magic bytes), or a `file://` /
+HTTP(S) URL — into the app's own `streamlib_modules/@org/name/` folder and
+records identity, source, and content hash in the app's committed
+`streamlib.lock` (`MODULES_LOCKFILE_NAME`). The primitive is "here are the
+bytes", never "resolve this against a registry": a registry-coordinate spec
+(`@org/name`) is refused with a typed guidance error, and the package's
+`@org/name@version` identity always comes from its own manifest. Add never
+builds. The flow is stage (`.staging-*` sibling inside the modules folder —
+readers ignore that prefix) → validate (manifest identity + content hash) →
+promote (atomic same-filesystem swap; previous contents restorable until the
+new ones are in place) → lock (atomic temp+rename write), so a failed add
+leaves no partial state; a re-add replaces cleanly; an
+`expected_archive_sha256` pin mismatch is a typed `HashMismatch`. Anchoring
+is the exact app root — the current working directory or an explicit
+`at(root)` / CLI `--dir` — with no walk-up and no `STREAMLIB_HOME`
+involvement, so each app directory is atomic and self-contained.
+`remove_package(pkg_ref)` (CLI `streamlib remove`) reverses it: delete the
+package folder, then drop its lockfile entry (folder first, so a crash
+leaves the healed direction — an entry pointing at a gone folder).
+
+At load time, `Strategy::InstalledCache` (the bare `Runner::add_module`
+default) probes `<cwd>/streamlib_modules/@org/name` **before** the
+installed-package cache; an active `streamlib link` still outranks both
+(precedence: link > app modules > installed cache). Locked runs are
+unaffected — they resolve pinned `Strategy::Path` edges and never consult
+the modules folder. `install` remains the whole-app-tree front door; `add`
+is the per-package one.
 
 **Locked run — offline, pinned, verified.**
 `Runner::add_modules_from_lockfile` builds a `LockedResolution` from the
@@ -349,14 +362,15 @@ tampered / republished-in-place hole. Slot paths are re-derived by the shared
 the single `cache/packages/{name}-{version}` convention also used by `.slpkg`
 extraction, registry resolution, and orchestrator staging.
 
-**Two lockfiles, two lifecycles.** Both serialize the same `Lockfile` wire
+**Three lockfiles, three lifecycles.** All serialize the same `Lockfile` wire
 shape ([`libs/streamlib-idents/src/lockfile.rs`](../../libs/streamlib-idents/src/lockfile.rs))
 but are distinct files with distinct headers:
 
 | File | Written by | Pins |
 |---|---|---|
-| `streamlib.lock` (`LOCKFILE_NAME`) | `streamlib generate` / jtd-codegen | the *schema* set that reconstructs generated bindings byte-for-byte |
+| `streamlib-codegen.lock` (`CODEGEN_LOCKFILE_NAME`) | `streamlib generate` / jtd-codegen | the *schema* set that reconstructs generated bindings byte-for-byte |
 | `streamlib-app.lock` (`APP_LOCKFILE_NAME`) | `streamlib install` | the *runtime package* set an installed app loads offline |
+| `streamlib.lock` (`MODULES_LOCKFILE_NAME`) | `streamlib add` / `streamlib remove` | the packages materialized into the app's `streamlib_modules/` folder (identity, source, content hash) |
 
 **Resolver handoff — deliberately two resolvers.** Range logic lives only at
 install (`resolve_with`); concrete enforcement lives only at run
@@ -410,11 +424,17 @@ Stated honestly; verify against current code before relying on any.
   `libs/streamlib-engine/src/core/runtime/module_loader/locked.rs`,
   `libs/streamlib-idents/src/lockfile.rs`,
   `libs/streamlib-engine/src/core/streamlib_home.rs`.
-- **Add / remove (single-package adoption)**:
-  `libs/streamlib-engine/src/core/runtime/add.rs`,
-  `libs/streamlib-engine/src/core/config/installed_packages_manifest.rs`
-  (`packages.yaml`), `libs/streamlib-cli/src/commands/add.rs` (CLI wrapper +
-  catalog summary), `libs/streamlib-idents/src/catalog.rs` (`CatalogClient`).
+- **Add / remove (per-app modules folder)**:
+  `libs/streamlib-idents/src/app_modules.rs` (`AppModulesDir` +
+  `AddPackageSource` + error taxonomy),
+  `libs/streamlib-idents/src/archive.rs` (the one canonical zip / tar.gz
+  extractor pair), `libs/streamlib-idents/src/lockfile.rs`
+  (`MODULES_LOCKFILE_NAME`, `LockfileSource::{Url,Archive}`,
+  `write_modules_lockfile`),
+  `libs/streamlib-engine/src/core/runtime/module_loader/source.rs`
+  (the `Strategy::InstalledCache` app-modules probe),
+  `libs/streamlib-cli/src/commands/add.rs` (CLI wrapper + manifest-derived
+  processor summary).
 - **Related docs**: [`runtime-module-materialization.md`](runtime-module-materialization.md)
   (the one materialize path), [`static-registry.md`](static-registry.md)
   (the static registry backend, by-version resolution + catalog),

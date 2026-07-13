@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-mod add;
 mod graph_change_listener;
 mod install;
 mod module_loader;
@@ -12,8 +11,11 @@ mod runtime;
 mod runtime_unique_id;
 mod status;
 
-pub use add::{AddError, AddOptions, AddReport, RemoveError, RemoveReport, add, add_slpkg, remove};
 pub use install::{InstallError, InstallOptions, InstallReport, install};
+pub use streamlib_idents::app_modules::{
+    APP_MODULES_DIR_NAME, AddPackageOptions, AddPackageReport, AddPackageSource, AppModulesDir,
+    AppModulesError, RemovePackageReport,
+};
 pub use module_loader::{
     AddModuleError, AddedModule, ArtifactChecksum, BuildError, BuildEvent, BuildEventSink,
     BuildOrchestrator, BuildPolicy, BuildRequest, BuildSource, BuildStream, LoadedModule,

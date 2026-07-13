@@ -17,6 +17,8 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 sha2 = { workspace = true }
 zip = "2.2"
+tar = "0.4"  # .tar.gz extraction for `streamlib add` archive sources
+flate2 = "1.1"  # gzip decode for .tar.gz archive sources
 tracing = { workspace = true }
 schemars = "0.8"  # JSON Schema generation for streamlib.yaml editor support
 ureq = { workspace = true }  # Blocking HTTP for static generic-registry schema-package fetch

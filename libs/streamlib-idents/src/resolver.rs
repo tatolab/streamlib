@@ -6,7 +6,7 @@
 //! Given a root manifest, walks declared dependencies via path / git / .slpkg
 //! sources, validates package identifiers + semver ranges, and returns a
 //! [`ResolvedPackages`] set along with content hashes that drive
-//! `streamlib.lock`.
+//! `streamlib-codegen.lock`.
 //!
 //! The resolver is the keystone of the milestone-10 architecture: it converts
 //! the structured `Manifest` into the input shape codegen consumes (a flat

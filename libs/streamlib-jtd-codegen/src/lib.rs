@@ -6,7 +6,7 @@
 //! Three-pass shape (Decision 7 of milestone-10's
 //! `docs/architecture/schema-identity-and-packaging.md`):
 //!
-//! 1. **Resolve** — read `streamlib.yaml` + `streamlib.lock`, walk the
+//! 1. **Resolve** — read `streamlib.yaml` + `streamlib-codegen.lock`, walk the
 //!    dependency graph, produce `(SchemaIdent, JtdSchema)` pairs.
 //! 2. **Substitute → generate → substitute back** — replace cross-package
 //!    refs with deterministic sentinels, run `jtd-codegen`, restore native
@@ -79,7 +79,8 @@ pub struct GenerateOptions {
     /// Workspace root used to resolve project-relative paths in CLI args.
     pub workspace_root: PathBuf,
     /// When `project_dir` mode is used and dependencies were declared,
-    /// write `streamlib.lock` next to `streamlib.yaml`. Defaults to `true`.
+    /// write `streamlib-codegen.lock` next to `streamlib.yaml`. Defaults to
+    /// `true`.
     pub write_lockfile: bool,
 }
 
@@ -118,9 +119,9 @@ pub fn generate(opts: GenerateOptions) -> Result<()> {
 
         if write_lockfile && !resolved.packages.is_empty() {
             let lockfile = resolved.to_lockfile();
-            let lock_path = project_dir.join(streamlib_idents::LOCKFILE_NAME);
+            let lock_path = project_dir.join(streamlib_idents::CODEGEN_LOCKFILE_NAME);
             streamlib_idents::write_lockfile(&lock_path, &lockfile)
-                .context("Failed to write streamlib.lock")?;
+                .context("Failed to write streamlib-codegen.lock")?;
             tracing::info!(
                 "Wrote {} ({} packages)",
                 lock_path.display(),
