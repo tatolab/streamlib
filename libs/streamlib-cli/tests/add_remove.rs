@@ -1,20 +1,14 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! End-to-end `streamlib add` / `streamlib remove` against a scratch `file://`
-//! registry tree, driving the real `streamlib` binary and the real
-//! `PolyglotBuildOrchestrator`.
+//! End-to-end `streamlib add` / `streamlib remove` against the per-app
+//! `streamlib_modules/` folder, driving the real `streamlib` binary.
 //!
-//! This is the local-only integration counterpart to the engine's
-//! `core::runtime::add` unit tests (which inject a mock orchestrator). CI runs
-//! `cargo test --lib`, so this `tests/` binary is a developer-run gate: it
-//! locks the CLI wiring + the real materialize path + the catalog-summary
-//! print end-to-end, which the mock-orchestrator unit tests can't.
-//!
-//! It builds a real source-only schema `.slpkg` (no processors ⇒ the
-//! orchestrator's materialize is a cheap re-stage + schema codegen, no
-//! Rust/venv build), publishes it into a hand-built tree with a catalog, and
-//! shells the `streamlib` binary.
+//! This is the local-only integration counterpart to the
+//! `streamlib-idents::app_modules` unit tests. CI runs `cargo test --lib`,
+//! so this `tests/` binary is a developer-run gate: it locks the CLI wiring
+//! (arg parsing, `--dir` anchoring, report printing) end-to-end over a real
+//! `.slpkg` assembled by `streamlib-pack`.
 
 use std::path::Path;
 use std::process::Command;
@@ -25,15 +19,17 @@ use streamlib_pack::{
 
 const BIN: &str = env!("CARGO_BIN_EXE_streamlib");
 
-/// Create a schema-only `foo` package at `dir` (no processors, one owned
-/// schema — the smallest publishable package the orchestrator will materialize
-/// without a Rust/Python toolchain).
+/// Create a package at `dir`: a manifest declaring one processor + one owned
+/// schema (no Rust/Python sources — add never builds, so none are needed).
 fn write_foo_package(dir: &Path) {
     std::fs::create_dir_all(dir.join("schemas")).unwrap();
     std::fs::write(
         dir.join("streamlib.yaml"),
         "package:\n  org: tatolab\n  name: foo\n  version: 1.1.0\n  \
-         description: a demo add package\nschemas:\n  FooFrame:\n    file: schemas/foo_frame.yaml\n",
+         description: a demo add package\nschemas:\n  FooFrame:\n    file: schemas/foo_frame.yaml\n\
+         processors:\n  - name: Foo\n    version: 1.0.0\n    description: does foo\n    \
+         runtime: python\n    execution: manual\n    entrypoint: \"foo:Foo\"\n    \
+         inputs: []\n    outputs: []\n",
     )
     .unwrap();
     std::fs::write(
@@ -44,14 +40,44 @@ fn write_foo_package(dir: &Path) {
     .unwrap();
 }
 
-/// Assemble `pkg_dir` into a source-only `.slpkg` under the tree, then write the
-/// version index + a valid catalog declaring one processor with typed ports.
-fn publish_foo_into_tree(pkg_dir: &Path, tree: &Path) {
-    let ver_dir = tree.join("slpkg/foo/1.1.0");
-    std::fs::create_dir_all(&ver_dir).unwrap();
+fn run(args: &[&str]) -> std::process::Output {
+    Command::new(BIN).args(args).output().expect("spawn streamlib binary")
+}
+
+#[test]
+fn add_folder_and_slpkg_then_remove_via_app_modules() {
+    let pkg = tempfile::tempdir().unwrap();
+    write_foo_package(pkg.path());
+    let app_root = tempfile::tempdir().unwrap();
+    let app_dir = app_root.path().to_str().unwrap();
+
+    // --- add (folder source) -------------------------------------------
+    let out = run(&["add", pkg.path().to_str().unwrap(), "--dir", app_dir]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "folder add failed: status={:?}\nstdout={stdout}\nstderr={}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains("Added @tatolab/foo v1.1.0"), "stdout: {stdout}");
+    assert!(stdout.contains("Processors (1):"), "stdout: {stdout}");
+    assert!(stdout.contains("Foo — does foo"), "stdout: {stdout}");
+
+    let slot = app_root
+        .path()
+        .join("streamlib_modules/@tatolab/foo");
+    assert!(slot.join("streamlib.yaml").is_file(), "modules slot missing");
+    let lock = std::fs::read_to_string(app_root.path().join("streamlib.lock")).unwrap();
+    assert!(lock.contains("@tatolab/foo"), "lock: {lock}");
+    assert!(lock.contains("kind: path"), "lock: {lock}");
+
+    // --- re-add via a real `.slpkg` (built by streamlib-pack) -----------
+    let artifacts = tempfile::tempdir().unwrap();
+    let slpkg = artifacts.path().join("foo.slpkg");
     assemble_artifact(
-        pkg_dir,
-        &AssembleTarget::Slpkg(ver_dir.join("foo.slpkg")),
+        pkg.path(),
+        &AssembleTarget::Slpkg(slpkg.clone()),
         &AssembleOptions {
             no_build: false,
             profile: CargoProfile::Release,
@@ -61,127 +87,108 @@ fn publish_foo_into_tree(pkg_dir: &Path, tree: &Path) {
     )
     .expect("assemble source .slpkg");
 
-    std::fs::write(
-        tree.join("slpkg/foo/index.json"),
-        "{\"name\":\"foo\",\"vers\":\"1.1.0\"}\n",
-    )
-    .unwrap();
-    // `PackageCatalog.package` is the canonical `@org/name` STRING; a port's
-    // concrete schema is the structured `SchemaIdent` map.
-    std::fs::write(
-        ver_dir.join("foo.catalog.json"),
-        r#"{
-  "package": "@tatolab/foo",
-  "version": "1.1.0",
-  "processors": [
-    {
-      "name": "Foo", "description": "does foo", "runtime": "rust",
-      "inputs": [{"name": "video_in", "schema": "any", "read_mode": "skip_to_latest"}],
-      "outputs": [{"name": "video_out", "schema": {"org": "tatolab", "package": "foo", "type": "FooFrame", "version": "1.1.0"}}]
-    }
-  ]
-}"#,
-    )
-    .unwrap();
-}
-
-fn run(args: &[&str], registry: &str, home: &Path) -> std::process::Output {
-    Command::new(BIN)
-        .args(args)
-        .env("STREAMLIB_REGISTRY_URL", registry)
-        .env("STREAMLIB_HOME", home)
-        .output()
-        .expect("spawn streamlib binary")
-}
-
-#[test]
-fn add_records_prints_catalog_then_remove_evicts() {
-    let tree = tempfile::tempdir().unwrap();
-    let home = tempfile::tempdir().unwrap();
-    let pkg = tempfile::tempdir().unwrap();
-    write_foo_package(pkg.path());
-    publish_foo_into_tree(pkg.path(), tree.path());
-
-    let registry = format!("file://{}", tree.path().display());
-
-    // --- add -----------------------------------------------------------
-    let out = run(&["add", "@tatolab/foo"], &registry, home.path());
+    let out = run(&["add", slpkg.to_str().unwrap(), "--dir", app_dir]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         out.status.success(),
-        "add failed: status={:?}\nstdout={stdout}\nstderr={}",
-        out.status,
+        "slpkg add failed: {stdout}\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    // Catalog-backed discovery summary printed.
     assert!(
-        stdout.contains("Added @tatolab/foo v1.1.0"),
-        "stdout: {stdout}"
+        stdout.contains("Replaced @tatolab/foo v1.1.0"),
+        "re-add must replace: {stdout}"
     );
-    assert!(stdout.contains("Processors (1):"), "stdout: {stdout}");
-    assert!(stdout.contains("Foo — does foo"), "stdout: {stdout}");
-    assert!(stdout.contains("video_in (any)"), "stdout: {stdout}");
-    assert!(
-        stdout.contains("video_out (@tatolab/foo/FooFrame@1.1.0)"),
-        "stdout: {stdout}"
-    );
-
-    // Recorded in packages.yaml + materialized cache slot present.
-    let packages_yaml =
-        std::fs::read_to_string(home.path().join(".streamlib/packages.yaml")).unwrap();
-    assert!(
-        packages_yaml.contains("@tatolab/foo"),
-        "packages.yaml: {packages_yaml}"
-    );
-    let slot = home.path().join(".streamlib/cache/packages/foo-1.1.0");
-    assert!(
-        slot.join("streamlib.yaml").is_file(),
-        "cache slot missing manifest"
+    let lock = std::fs::read_to_string(app_root.path().join("streamlib.lock")).unwrap();
+    assert!(lock.contains("kind: archive"), "lock: {lock}");
+    assert!(lock.contains("archive_sha256"), "lock: {lock}");
+    assert_eq!(
+        lock.matches("@tatolab/foo").count(),
+        1,
+        "one lock entry after re-add: {lock}"
     );
 
-    // `pkg list` reads packages.yaml offline (no registry) — proves the record
-    // is what a later offline consumer resolves against.
-    let list = run(&["pkg", "list"], "", home.path());
-    let list_out = String::from_utf8_lossy(&list.stdout);
-    assert!(list.status.success());
-    assert!(list_out.contains("@tatolab/foo"), "pkg list: {list_out}");
-
-    // --- remove --------------------------------------------------------
-    let out = run(&["remove", "@tatolab/foo"], &registry, home.path());
+    // --- remove ---------------------------------------------------------
+    let out = run(&["remove", "@tatolab/foo", "--dir", app_dir]);
     let rstdout = String::from_utf8_lossy(&out.stdout);
-    assert!(out.status.success(), "remove failed: {rstdout}");
     assert!(
-        rstdout.contains("Removed @tatolab/foo v1.1.0"),
-        "stdout: {rstdout}"
+        out.status.success(),
+        "remove failed: {rstdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
     );
-    assert!(!slot.exists(), "cache slot must be evicted");
-    let packages_yaml =
-        std::fs::read_to_string(home.path().join(".streamlib/packages.yaml")).unwrap();
-    assert!(
-        !packages_yaml.contains("@tatolab/foo"),
-        "still recorded: {packages_yaml}"
-    );
+    assert!(rstdout.contains("Removed @tatolab/foo v1.1.0"), "stdout: {rstdout}");
+    assert!(!slot.exists(), "modules slot must be gone");
+    let lock = std::fs::read_to_string(app_root.path().join("streamlib.lock")).unwrap();
+    assert!(!lock.contains("@tatolab/foo"), "still locked: {lock}");
 
     // Removing an absent package fails loud.
-    let out = run(&["remove", "@tatolab/foo"], &registry, home.path());
+    let out = run(&["remove", "@tatolab/foo", "--dir", app_dir]);
     assert!(!out.status.success(), "remove of absent package must fail");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("not installed"),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
-fn add_unsatisfiable_range_names_available_versions() {
-    let tree = tempfile::tempdir().unwrap();
-    let home = tempfile::tempdir().unwrap();
+fn add_registry_coordinate_gets_guidance_error() {
+    let app_root = tempfile::tempdir().unwrap();
+    let out = run(&[
+        "add",
+        "@tatolab/foo",
+        "--dir",
+        app_root.path().to_str().unwrap(),
+    ]);
+    assert!(!out.status.success(), "a registry coordinate must be rejected");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("registry coordinate"),
+        "guidance missing: {stderr}"
+    );
+    // Nothing materialized.
+    assert!(!app_root.path().join("streamlib_modules").exists());
+    assert!(!app_root.path().join("streamlib.lock").exists());
+}
+
+#[test]
+fn add_with_expect_sha256_mismatch_fails_with_no_partial_state() {
     let pkg = tempfile::tempdir().unwrap();
     write_foo_package(pkg.path());
-    publish_foo_into_tree(pkg.path(), tree.path());
+    let artifacts = tempfile::tempdir().unwrap();
+    let slpkg = artifacts.path().join("foo.slpkg");
+    assemble_artifact(
+        pkg.path(),
+        &AssembleTarget::Slpkg(slpkg.clone()),
+        &AssembleOptions {
+            no_build: false,
+            profile: CargoProfile::Release,
+            path_deps: PathDepPolicy::RejectPathPatches,
+        },
+        &(),
+    )
+    .expect("assemble source .slpkg");
 
-    let registry = format!("file://{}", tree.path().display());
-    let out = run(&["add", "@tatolab/foo@^2.0.0"], &registry, home.path());
-    assert!(!out.status.success(), "^2 must not resolve");
+    let app_root = tempfile::tempdir().unwrap();
+    let out = run(&[
+        "add",
+        slpkg.to_str().unwrap(),
+        "--dir",
+        app_root.path().to_str().unwrap(),
+        "--expect-sha256",
+        &"00".repeat(32),
+    ]);
+    assert!(!out.status.success(), "sha mismatch must fail the add");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    // The typed RegistryNoMatchingVersion names the available version.
-    assert!(
-        stderr.contains("1.1.0"),
-        "stderr should name available versions: {stderr}"
-    );
+    assert!(stderr.contains("sha256 mismatch"), "stderr: {stderr}");
+    // No package dir, no staging residue, no lockfile.
+    let modules = app_root.path().join("streamlib_modules");
+    if modules.is_dir() {
+        let entries: Vec<_> = std::fs::read_dir(&modules)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(entries.is_empty(), "residue: {entries:?}");
+    }
+    assert!(!app_root.path().join("streamlib.lock").exists());
 }
