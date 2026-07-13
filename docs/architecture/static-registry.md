@@ -159,6 +159,37 @@ change under the same version fails the emit with an explicit "bump the
 version" error. See
 [`../learnings/cargo-crate-vcs-info-nondeterminism.md`](../learnings/cargo-crate-vcs-info-nondeterminism.md).
 
+## Byte-stable pypi + npm emission
+
+The same source-content-only contract holds for the pypi sdist
+(`uv build --sdist`) and the npm tarball (`deno pack`) — both `.tar.gz`
+archives, both normalized through `tarball::finalize_tar_gz` in
+`emit_pypi` / `emit_npm`. The normalization zeroes every tar entry's
+mtime, canonicalizes ownership (uid/gid 0, empty owner names), preserves
+mode / entry type / path / data / order, and re-gzips with a fixed
+header — making the archive a pure function of file content. The same
+immutability guard runs: the fresh archive's content fingerprint (sha256
+of the canonical, mtime-zeroed, *uncompressed* tar, so gzip-level
+independent) is compared against the same-named artifact still present
+at `opts.out` during the staged build, and a source change under a
+published version is refused with a "bump the version" error. The pypi
+simple-index `#sha256=` hash and the npm packument `shasum` / `integrity`
+are computed over the normalized bytes so the served artifact matches the
+index.
+
+The per-tool non-determinism sources differ and are the vectors the
+normalization neutralizes:
+
+- `uv build --sdist` stamps the build wall-clock into every
+  build-generated entry's tar mtime (`PKG-INFO`, the `.egg-info/*`
+  metadata, directory entries, `setup.cfg`) and into the gzip MTIME
+  header; source-file contents, entry order, mode, and ownership are
+  already stable across re-emits.
+- `deno pack` is already byte-deterministic (fixed epoch-0 tar mtime,
+  uid/gid 0, zeroed gzip MTIME), so normalization is a lossless
+  idempotent pass over it — the value it adds is running the same
+  immutability guard the other three ecosystems get.
+
 ## Release / ABI republish
 
 `STREAMLIB_ABI_VERSION` (in `streamlib-plugin-abi`) is the C-ABI contract a

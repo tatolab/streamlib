@@ -49,6 +49,7 @@ pub mod catalog;
 pub mod crate_tarball;
 pub mod link_marker;
 pub mod static_registry;
+pub mod tarball;
 
 /// One member of the engine release closure: a publishable workspace library
 /// crate, with its version and manifest directory.
