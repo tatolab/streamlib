@@ -165,6 +165,52 @@ pub struct UnlinkPackageReport {
     pub lockfile_entry_removed: bool,
 }
 
+/// How one lockfile entry was reproduced by
+/// [`AppModulesDir::install_from_lockfile`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstalledFromLockKind {
+    /// Contents were copied / extracted from the recorded byte source (a
+    /// [`LockfileSource::Path`] / [`LockfileSource::Archive`] /
+    /// [`LockfileSource::Url`]) and re-verified against the recorded
+    /// `content_hash`.
+    Materialized,
+    /// A symlink was re-created to the recorded checkout (a
+    /// [`LockfileSource::Link`]). Not content-hash-verified — a linked checkout
+    /// is live and may have drifted since it was linked.
+    Linked,
+}
+
+/// Per-package outcome inside an [`AppModulesDir::install_from_lockfile`] run.
+#[derive(Debug, Clone)]
+pub struct InstalledFromLockPackage {
+    /// The canonical `@org/name` reproduced (from the lockfile map key).
+    pub package: PackageRef,
+    /// The version the lockfile entry pinned.
+    pub version: SemVer,
+    /// The `streamlib_modules/@org/name` slot that was reproduced.
+    pub package_dir: PathBuf,
+    /// The source the lockfile entry recorded.
+    pub source: LockfileSource,
+    /// The content hash the lockfile pinned (re-verified for a materialized
+    /// source; a point-in-time snapshot for a linked source).
+    pub content_hash: String,
+    /// How the slot was reproduced.
+    pub kind: InstalledFromLockKind,
+    /// `true` when an existing `streamlib_modules/@org/name` slot was replaced.
+    pub replaced_existing: bool,
+}
+
+/// Outcome of a successful [`AppModulesDir::install_from_lockfile`].
+#[derive(Debug, Clone)]
+pub struct InstallFromLockfileReport {
+    /// The modules lockfile that was reproduced from.
+    pub lockfile_path: PathBuf,
+    /// The `streamlib_modules/` folder that was reproduced.
+    pub modules_dir: PathBuf,
+    /// Every package reproduced, in lockfile (sorted) order.
+    pub packages: Vec<InstalledFromLockPackage>,
+}
+
 /// Per-failure-mode error from the per-app modules primitive.
 #[derive(Debug, thiserror::Error)]
 pub enum AppModulesError {
@@ -291,6 +337,82 @@ pub enum AppModulesError {
     /// Filesystem operation failed.
     #[error("io error at {}: {detail}", path.display())]
     Io { path: PathBuf, detail: String },
+
+    /// `install_from_lockfile` found no `streamlib.lock` at the app root —
+    /// there is nothing to reproduce a `streamlib_modules/` folder from.
+    #[error(
+        "no {} to install from at {} — `streamlib install` reproduces streamlib_modules/ from a \
+         committed lockfile; run `streamlib add`/`streamlib link` to create one, or commit the \
+         lockfile before installing",
+        MODULES_LOCKFILE_NAME,
+        lockfile_path.display()
+    )]
+    InstallLockfileMissing { lockfile_path: PathBuf },
+
+    /// A lockfile map key is not a canonical `@org/name` reference.
+    #[error("lockfile entry key '{key}' is not a canonical @org/name reference: {detail}")]
+    InstallInvalidLockEntry { key: String, detail: String },
+
+    /// The byte source a lockfile entry records is unavailable at install time
+    /// — a `path:`/`archive:` file that is gone, or a `url:` unreachable
+    /// offline. Names the package so the operator knows which entry to fix.
+    #[error("cannot reproduce '{package}' — its recorded source is unavailable: {detail}")]
+    InstallSourceUnavailable { package: PackageRef, detail: String },
+
+    /// A `link:` entry's checkout target no longer exists. A linked dev
+    /// checkout is inherently non-reproducible on another machine — add the
+    /// package from a portable source (archive / URL) or restore the checkout
+    /// before installing.
+    #[error(
+        "cannot reproduce linked package '{package}' — its checkout target {} no longer exists. \
+         A `streamlib link` records a dev-only symlink to a local checkout, which is not \
+         reproducible elsewhere; add the package from a portable source (archive or URL), or \
+         restore the checkout, then re-install",
+        target.display()
+    )]
+    InstallDanglingLinkTarget { package: PackageRef, target: PathBuf },
+
+    /// The archive bytes a `url:`/`archive:` entry re-fetched/read do not match
+    /// the `archive_sha256` the lockfile recorded — the source changed under a
+    /// pinned entry.
+    #[error(
+        "archive bytes for '{package}' do not match the recorded archive_sha256: expected \
+         {expected}, got {actual}"
+    )]
+    InstallArchiveHashMismatch {
+        package: PackageRef,
+        expected: String,
+        actual: String,
+    },
+
+    /// The reproduced package's content hash does not match the `content_hash`
+    /// the lockfile pinned — the reproduced contents differ from what was
+    /// locked.
+    #[error(
+        "content hash for '{package}' does not match the lockfile: expected {expected}, got \
+         {actual}"
+    )]
+    InstallContentHashMismatch {
+        package: PackageRef,
+        expected: String,
+        actual: String,
+    },
+
+    /// A lockfile entry records a source kind `install_from_lockfile` cannot
+    /// reproduce (a `registry:` / `git:` coordinate). The per-app modules
+    /// lockfile is only written with reproducible byte sources by
+    /// `streamlib add`/`streamlib link`.
+    #[error(
+        "cannot reproduce '{package}' — its recorded source kind '{kind}' is not reproducible by \
+         install (only path/archive/url/link sources are). This lockfile was not written by \
+         `streamlib add`/`streamlib link`"
+    )]
+    InstallUnsupportedSource { package: PackageRef, kind: String },
+
+    /// Reproducing a package into its slot failed (extract / invalid contents /
+    /// promote / symlink). Names the package plus the underlying detail.
+    #[error("reproducing '{package}' failed: {detail}")]
+    InstallReproduceFailed { package: PackageRef, detail: String },
 }
 
 /// A per-app `streamlib_modules/` folder plus its `streamlib.lock`, anchored
@@ -710,6 +832,135 @@ impl AppModulesDir {
             link_removed,
             lockfile_entry_removed,
         })
+    }
+
+    /// Reproduce `streamlib_modules/` from the committed `streamlib.lock`,
+    /// exactly as `add`/`link` recorded it — the container/CI preinstall story.
+    /// Each byte-source entry ([`LockfileSource::Path`] /
+    /// [`LockfileSource::Archive`] / [`LockfileSource::Url`]) is re-materialized
+    /// and re-verified against its recorded `content_hash`; a
+    /// [`LockfileSource::Link`] entry's symlink is re-created. Makes NO
+    /// resolution decisions and never rewrites the lockfile — install
+    /// reproduces a decision `add`/`link` already made, so a clean checkout
+    /// carrying only the lockfile rebuilds the same folder.
+    ///
+    /// Per-package-atomic and fail-fast: each package is staged, verified
+    /// (before promote), then atomically promoted, so a failed package leaves
+    /// no partial slot; a failure stops the run with a typed error naming the
+    /// package, and packages already reproduced (each valid and hash-verified)
+    /// remain — re-running install completes the reproduction. Running install
+    /// twice yields the same folder. `Path`/`Link` sources reproduce only where
+    /// their recorded local paths exist; a portable install (another machine)
+    /// relies on `Url`/`Archive` entries or a vendored folder.
+    #[tracing::instrument(skip(self), fields(app_root = %self.app_root.display()))]
+    pub fn install_from_lockfile(&self) -> Result<InstallFromLockfileReport, AppModulesError> {
+        let lockfile_path = self.lockfile_path();
+        if !lockfile_path.exists() {
+            return Err(AppModulesError::InstallLockfileMissing { lockfile_path });
+        }
+        let lockfile = self.read_lockfile()?;
+
+        let modules_dir = self.modules_dir();
+        std::fs::create_dir_all(&modules_dir).map_err(|e| AppModulesError::Io {
+            path: modules_dir.clone(),
+            detail: format!("creating modules dir: {e}"),
+        })?;
+        sweep_orphan_staging_entries(&modules_dir);
+
+        let mut packages = Vec::with_capacity(lockfile.packages.len());
+        for (key, entry) in &lockfile.packages {
+            let package = parse_lockfile_package_key(key)?;
+            let (kind, replaced_existing) =
+                self.reproduce_locked_entry(&package, entry, &modules_dir)?;
+            tracing::info!(package = %package, ?kind, "install_from_lockfile: reproduced package");
+            packages.push(InstalledFromLockPackage {
+                package: package.clone(),
+                version: entry.version,
+                package_dir: self.package_dir(&package),
+                source: entry.source.clone(),
+                content_hash: entry.content_hash.clone(),
+                kind,
+                replaced_existing,
+            });
+        }
+
+        tracing::info!(
+            lockfile = %lockfile_path.display(),
+            packages = packages.len(),
+            "install_from_lockfile: reproduced streamlib_modules from lockfile"
+        );
+        Ok(InstallFromLockfileReport {
+            lockfile_path,
+            modules_dir,
+            packages,
+        })
+    }
+
+    /// Reproduce one lockfile entry into its `streamlib_modules/@org/name` slot.
+    /// Returns how it was reproduced and whether a previous slot was replaced.
+    fn reproduce_locked_entry(
+        &self,
+        package: &PackageRef,
+        entry: &LockfileEntry,
+        modules_dir: &Path,
+    ) -> Result<(InstalledFromLockKind, bool), AppModulesError> {
+        let package_dir = self.package_dir(package);
+        match &entry.source {
+            LockfileSource::Link { path } => {
+                // Re-create the symlink iff the checkout target still exists.
+                // The recorded content hash is a point-in-time snapshot of a
+                // live checkout, so it is deliberately NOT re-verified here.
+                if !path.is_dir() {
+                    return Err(AppModulesError::InstallDanglingLinkTarget {
+                        package: package.clone(),
+                        target: path.clone(),
+                    });
+                }
+                let staging = StagingSymlink::create(modules_dir, path)?;
+                let replaced = promote_staged_package_root(staging.path(), &package_dir, modules_dir)
+                    .map_err(|e| map_stage_error_to_install(package, e))?;
+                drop(staging);
+                Ok((InstalledFromLockKind::Linked, replaced))
+            }
+            LockfileSource::Path { path } => reproduce_materialized_from_lock(
+                package,
+                AddPackageSource::Folder { path: path.clone() },
+                None,
+                entry,
+                modules_dir,
+                &package_dir,
+            ),
+            LockfileSource::Archive {
+                path,
+                archive_sha256,
+            } => reproduce_materialized_from_lock(
+                package,
+                AddPackageSource::Archive { path: path.clone() },
+                Some(archive_sha256.clone()),
+                entry,
+                modules_dir,
+                &package_dir,
+            ),
+            LockfileSource::Url {
+                url,
+                archive_sha256,
+            } => reproduce_materialized_from_lock(
+                package,
+                AddPackageSource::Url { url: url.clone() },
+                Some(archive_sha256.clone()),
+                entry,
+                modules_dir,
+                &package_dir,
+            ),
+            LockfileSource::Registry { .. } => Err(AppModulesError::InstallUnsupportedSource {
+                package: package.clone(),
+                kind: "registry".to_string(),
+            }),
+            LockfileSource::Git { .. } => Err(AppModulesError::InstallUnsupportedSource {
+                package: package.clone(),
+                kind: "git".to_string(),
+            }),
+        }
     }
 }
 
@@ -1169,6 +1420,88 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+/// Stage a byte source recorded in the lockfile, verify it against the pinned
+/// `content_hash` BEFORE promoting (so a mismatch leaves no partial slot),
+/// then atomically promote it into the package's slot. Shares the exact
+/// stage → locate → promote machinery `add_package` uses.
+fn reproduce_materialized_from_lock(
+    package: &PackageRef,
+    source: AddPackageSource,
+    expected_archive_sha256: Option<String>,
+    entry: &LockfileEntry,
+    modules_dir: &Path,
+    package_dir: &Path,
+) -> Result<(InstalledFromLockKind, bool), AppModulesError> {
+    let staging = StagingDir::create(modules_dir)?;
+    let options = AddPackageOptions {
+        expected_archive_sha256,
+    };
+    let (_lock_source, source_label) = stage_source_contents(&source, &options, staging.path())
+        .map_err(|e| map_stage_error_to_install(package, e))?;
+    let staged_root = locate_staged_package_root(staging.path(), &source, &source_label)
+        .map_err(|e| map_stage_error_to_install(package, e))?;
+
+    // Verify the reproduced contents against the pinned content hash BEFORE
+    // promoting, so a mismatch leaves no partial slot (the staging dir is swept
+    // by `StagingDir`'s Drop on the early return).
+    let actual = content_hash_for_package_dir(&staged_root).map_err(|e| {
+        AppModulesError::InstallReproduceFailed {
+            package: package.clone(),
+            detail: format!("hashing reproduced contents: {e}"),
+        }
+    })?;
+    if actual != entry.content_hash {
+        return Err(AppModulesError::InstallContentHashMismatch {
+            package: package.clone(),
+            expected: entry.content_hash.clone(),
+            actual,
+        });
+    }
+
+    let replaced = promote_staged_package_root(&staged_root, package_dir, modules_dir)
+        .map_err(|e| map_stage_error_to_install(package, e))?;
+    drop(staging);
+    Ok((InstalledFromLockKind::Materialized, replaced))
+}
+
+/// Parse a lockfile map key (`@org/name`) into a typed [`PackageRef`] via the
+/// canonical deserialize path (there is no `PackageRef::parse` by design).
+fn parse_lockfile_package_key(key: &str) -> Result<PackageRef, AppModulesError> {
+    serde_yaml::from_value::<PackageRef>(serde_yaml::Value::String(key.to_string())).map_err(|e| {
+        AppModulesError::InstallInvalidLockEntry {
+            key: key.to_string(),
+            detail: e.to_string(),
+        }
+    })
+}
+
+/// Map a staging/promote [`AppModulesError`] onto the install-flavored,
+/// package-named variant so an install failure always names the offending
+/// package.
+fn map_stage_error_to_install(package: &PackageRef, err: AppModulesError) -> AppModulesError {
+    match err {
+        AppModulesError::SourceNotFound { spec } => AppModulesError::InstallSourceUnavailable {
+            package: package.clone(),
+            detail: format!("source not found: {spec}"),
+        },
+        AppModulesError::FetchFailed { url, detail } => AppModulesError::InstallSourceUnavailable {
+            package: package.clone(),
+            detail: format!("fetching '{url}' failed: {detail}"),
+        },
+        AppModulesError::HashMismatch {
+            expected, actual, ..
+        } => AppModulesError::InstallArchiveHashMismatch {
+            package: package.clone(),
+            expected,
+            actual,
+        },
+        other => AppModulesError::InstallReproduceFailed {
+            package: package.clone(),
+            detail: other.to_string(),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -2516,5 +2849,423 @@ mod tests {
             matches!(err, AppModulesError::LockfileReadFailed { .. }),
             "{err:?}"
         );
+    }
+
+    // =====================================================================
+    // Install from lockfile — reproduce streamlib_modules/ from streamlib.lock
+    // =====================================================================
+
+    /// Hand-write a `streamlib.lock` at an app root from raw entries.
+    fn write_modules_lock(app: &AppModulesDir, entries: &[(&str, LockfileEntry)]) {
+        let mut lock = Lockfile {
+            version: 1,
+            packages: Default::default(),
+        };
+        for (key, entry) in entries {
+            lock.packages.insert(key.to_string(), entry.clone());
+        }
+        write_modules_lockfile(&app.lockfile_path(), &lock).unwrap();
+    }
+
+    /// The flagship: a clean checkout carrying ONLY `streamlib.lock` — with one
+    /// entry of each reproducible source kind (path / archive / url / link) —
+    /// reproduces a byte-equivalent, hash-verified `streamlib_modules/`.
+    #[test]
+    fn install_reproduces_each_source_kind_from_a_clean_checkout() {
+        // --- Build the four sources on disk -----------------------------
+        let path_src = tempfile::tempdir().unwrap();
+        write_package_folder(path_src.path(), "tatolab", "via-path", "1.0.0");
+
+        let archives = tempfile::tempdir().unwrap();
+        let archive_file = archives.path().join("via-archive.slpkg");
+        std::fs::write(
+            &archive_file,
+            slpkg_bytes("tatolab", "via-archive", "1.0.0"),
+        )
+        .unwrap();
+
+        let url_archive_file = archives.path().join("via-url.slpkg");
+        std::fs::write(
+            &url_archive_file,
+            slpkg_bytes("tatolab", "via-url", "1.0.0"),
+        )
+        .unwrap();
+        let url = format!("file://{}", url_archive_file.display());
+
+        let checkout = tempfile::tempdir().unwrap();
+        write_package_folder(checkout.path(), "tatolab", "via-link", "1.0.0");
+        let checkout_canonical = std::fs::canonicalize(checkout.path()).unwrap();
+
+        // --- Record the decision in a SOURCE app's streamlib.lock -------
+        let source_app_root = tempfile::tempdir().unwrap();
+        let source_app = AppModulesDir::at(source_app_root.path());
+        source_app
+            .add_package(
+                &AddPackageSource::Folder {
+                    path: path_src.path().to_path_buf(),
+                },
+                &AddPackageOptions::default(),
+            )
+            .unwrap();
+        source_app
+            .add_package(
+                &AddPackageSource::Archive {
+                    path: archive_file.clone(),
+                },
+                &AddPackageOptions::default(),
+            )
+            .unwrap();
+        source_app
+            .add_package(
+                &AddPackageSource::Url { url: url.clone() },
+                &AddPackageOptions::default(),
+            )
+            .unwrap();
+        source_app.link_package(checkout.path()).unwrap();
+
+        // --- Clean checkout: ONLY the lockfile is present ---------------
+        let dest_root = tempfile::tempdir().unwrap();
+        let dest = AppModulesDir::at(dest_root.path());
+        std::fs::copy(source_app.lockfile_path(), dest.lockfile_path()).unwrap();
+        assert!(!dest.modules_dir().exists(), "precondition: no modules dir");
+        let lock_bytes_before = std::fs::read(dest.lockfile_path()).unwrap();
+
+        // --- Reproduce --------------------------------------------------
+        let report = dest.install_from_lockfile().expect("install must succeed");
+        assert_eq!(report.packages.len(), 4);
+
+        // Every materialized slot is a real dir with a manifest whose re-hash
+        // matches the lockfile pin; the link slot is a symlink to the checkout.
+        for name in ["via-path", "via-archive", "via-url"] {
+            let slot = dest.package_dir(&pkg_ref("tatolab", name));
+            assert!(
+                slot.join("streamlib.yaml").is_file(),
+                "{name} slot missing manifest"
+            );
+            assert!(
+                !std::fs::symlink_metadata(&slot).unwrap().file_type().is_symlink(),
+                "{name} must be a real copy, not a symlink"
+            );
+            let locked = source_app
+                .read_lockfile()
+                .unwrap()
+                .packages
+                .get(&format!("@tatolab/{name}"))
+                .unwrap()
+                .content_hash
+                .clone();
+            assert_eq!(
+                content_hash_for_package_dir(&slot).unwrap(),
+                locked,
+                "{name} reproduced content hash must match the lock pin"
+            );
+        }
+        let link_slot = dest.package_dir(&pkg_ref("tatolab", "via-link"));
+        let link_meta = std::fs::symlink_metadata(&link_slot).unwrap();
+        assert!(link_meta.file_type().is_symlink(), "link slot must be a symlink");
+        assert_eq!(std::fs::read_link(&link_slot).unwrap(), checkout_canonical);
+
+        // Report classifies each kind correctly.
+        let kind_of = |name: &str| {
+            report
+                .packages
+                .iter()
+                .find(|p| p.package == pkg_ref("tatolab", name))
+                .unwrap()
+                .kind
+        };
+        assert_eq!(kind_of("via-path"), InstalledFromLockKind::Materialized);
+        assert_eq!(kind_of("via-archive"), InstalledFromLockKind::Materialized);
+        assert_eq!(kind_of("via-url"), InstalledFromLockKind::Materialized);
+        assert_eq!(kind_of("via-link"), InstalledFromLockKind::Linked);
+
+        // Install NEVER rewrites the lockfile it reproduced from.
+        assert_eq!(
+            std::fs::read(dest.lockfile_path()).unwrap(),
+            lock_bytes_before,
+            "install must not modify streamlib.lock"
+        );
+    }
+
+    /// Running install twice yields the same folder (idempotent).
+    #[test]
+    fn install_is_idempotent() {
+        let src = tempfile::tempdir().unwrap();
+        write_package_folder(src.path(), "tatolab", "camera", "2.0.0");
+        let source_app_root = tempfile::tempdir().unwrap();
+        let source_app = AppModulesDir::at(source_app_root.path());
+        source_app
+            .add_package(
+                &AddPackageSource::Folder {
+                    path: src.path().to_path_buf(),
+                },
+                &AddPackageOptions::default(),
+            )
+            .unwrap();
+
+        let dest_root = tempfile::tempdir().unwrap();
+        let dest = AppModulesDir::at(dest_root.path());
+        std::fs::copy(source_app.lockfile_path(), dest.lockfile_path()).unwrap();
+
+        let first = dest.install_from_lockfile().unwrap();
+        assert_eq!(first.packages.len(), 1);
+        assert!(!first.packages[0].replaced_existing, "first install is fresh");
+        let slot = dest.package_dir(&pkg_ref("tatolab", "camera"));
+        let manifest_after_first = std::fs::read(slot.join("streamlib.yaml")).unwrap();
+        let hash_after_first = content_hash_for_package_dir(&slot).unwrap();
+
+        let second = dest.install_from_lockfile().unwrap();
+        assert!(
+            second.packages[0].replaced_existing,
+            "second install replaces the existing slot"
+        );
+        assert_eq!(
+            std::fs::read(slot.join("streamlib.yaml")).unwrap(),
+            manifest_after_first,
+            "re-install must be byte-identical"
+        );
+        assert_eq!(content_hash_for_package_dir(&slot).unwrap(), hash_after_first);
+        // No staging residue after two runs.
+        assert_no_partial_state(
+            &dest,
+            &["@tatolab/camera"],
+            Some(&std::fs::read(dest.lockfile_path()).unwrap()),
+        );
+    }
+
+    #[test]
+    fn install_missing_lockfile_is_typed_error() {
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let err = app
+            .install_from_lockfile()
+            .expect_err("install with no lockfile must fail loud");
+        assert!(
+            matches!(err, AppModulesError::InstallLockfileMissing { .. }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn install_empty_lockfile_is_noop_success() {
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        write_modules_lock(&app, &[]);
+        let report = app.install_from_lockfile().expect("empty lock installs");
+        assert!(report.packages.is_empty());
+    }
+
+    #[test]
+    fn install_content_hash_mismatch_is_typed_error_with_no_partial_state() {
+        // A path source that is valid but whose recorded content hash is wrong
+        // (a tampered/changed source) is refused BEFORE any slot is promoted.
+        let src = tempfile::tempdir().unwrap();
+        write_package_folder(src.path(), "tatolab", "camera", "2.0.0");
+        let canonical = std::fs::canonicalize(src.path()).unwrap();
+
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        write_modules_lock(
+            &app,
+            &[(
+                "@tatolab/camera",
+                LockfileEntry {
+                    version: SemVer::new(2, 0, 0),
+                    source: LockfileSource::Path { path: canonical },
+                    content_hash: "sha256:deadbeef".to_string(),
+                },
+            )],
+        );
+        let lock_before = std::fs::read(app.lockfile_path()).unwrap();
+
+        let err = app
+            .install_from_lockfile()
+            .expect_err("content hash mismatch must fail");
+        match err {
+            AppModulesError::InstallContentHashMismatch { package, .. } => {
+                assert_eq!(package, pkg_ref("tatolab", "camera"));
+            }
+            other => panic!("expected InstallContentHashMismatch, got {other:?}"),
+        }
+        // No slot promoted; no staging residue; lock untouched.
+        assert_no_partial_state(&app, &[], Some(&lock_before));
+    }
+
+    #[test]
+    fn install_missing_path_source_is_typed_error_naming_package() {
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        write_modules_lock(
+            &app,
+            &[(
+                "@tatolab/camera",
+                LockfileEntry {
+                    version: SemVer::new(2, 0, 0),
+                    source: LockfileSource::Path {
+                        path: "/definitely/not/here".into(),
+                    },
+                    content_hash: "sha256:abc".to_string(),
+                },
+            )],
+        );
+        let err = app
+            .install_from_lockfile()
+            .expect_err("gone path source must fail");
+        match err {
+            AppModulesError::InstallSourceUnavailable { package, .. } => {
+                assert_eq!(package, pkg_ref("tatolab", "camera"));
+            }
+            other => panic!("expected InstallSourceUnavailable, got {other:?}"),
+        }
+        assert_no_partial_state(&app, &[], Some(&std::fs::read(app.lockfile_path()).unwrap()));
+    }
+
+    #[test]
+    fn install_missing_archive_and_url_sources_are_typed_errors() {
+        // A gone archive file.
+        let app_a_root = tempfile::tempdir().unwrap();
+        let app_a = AppModulesDir::at(app_a_root.path());
+        write_modules_lock(
+            &app_a,
+            &[(
+                "@tatolab/camera",
+                LockfileEntry {
+                    version: SemVer::new(2, 0, 0),
+                    source: LockfileSource::Archive {
+                        path: "/definitely/not/here.slpkg".into(),
+                        archive_sha256: "ab".repeat(32),
+                    },
+                    content_hash: "sha256:abc".to_string(),
+                },
+            )],
+        );
+        assert!(matches!(
+            app_a.install_from_lockfile().expect_err("gone archive must fail"),
+            AppModulesError::InstallSourceUnavailable { .. }
+        ));
+
+        // An unreachable file:// URL (offline).
+        let app_b_root = tempfile::tempdir().unwrap();
+        let app_b = AppModulesDir::at(app_b_root.path());
+        write_modules_lock(
+            &app_b,
+            &[(
+                "@tatolab/camera",
+                LockfileEntry {
+                    version: SemVer::new(2, 0, 0),
+                    source: LockfileSource::Url {
+                        url: "file:///definitely/not/here.slpkg".to_string(),
+                        archive_sha256: "ab".repeat(32),
+                    },
+                    content_hash: "sha256:abc".to_string(),
+                },
+            )],
+        );
+        assert!(matches!(
+            app_b.install_from_lockfile().expect_err("gone url must fail"),
+            AppModulesError::InstallSourceUnavailable { .. }
+        ));
+    }
+
+    #[test]
+    fn install_archive_sha_mismatch_is_typed_error() {
+        // A valid archive whose bytes don't match the recorded archive_sha256.
+        let archives = tempfile::tempdir().unwrap();
+        let archive_file = archives.path().join("camera.slpkg");
+        std::fs::write(&archive_file, slpkg_bytes("tatolab", "camera", "2.0.0")).unwrap();
+
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        write_modules_lock(
+            &app,
+            &[(
+                "@tatolab/camera",
+                LockfileEntry {
+                    version: SemVer::new(2, 0, 0),
+                    source: LockfileSource::Archive {
+                        path: archive_file,
+                        archive_sha256: "00".repeat(32),
+                    },
+                    content_hash: "sha256:abc".to_string(),
+                },
+            )],
+        );
+        match app
+            .install_from_lockfile()
+            .expect_err("archive sha mismatch must fail")
+        {
+            AppModulesError::InstallArchiveHashMismatch { package, .. } => {
+                assert_eq!(package, pkg_ref("tatolab", "camera"));
+            }
+            other => panic!("expected InstallArchiveHashMismatch, got {other:?}"),
+        }
+        assert_no_partial_state(&app, &[], Some(&std::fs::read(app.lockfile_path()).unwrap()));
+    }
+
+    #[test]
+    fn install_dangling_link_target_is_typed_error_naming_package() {
+        // A link entry whose checkout target no longer exists — a dev-only link
+        // isn't reproducible on another machine; that's an explicit error.
+        let checkout = tempfile::tempdir().unwrap();
+        write_package_folder(checkout.path(), "tatolab", "camera", "2.0.0");
+        let canonical = std::fs::canonicalize(checkout.path()).unwrap();
+        std::fs::remove_dir_all(checkout.path()).unwrap();
+
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        write_modules_lock(
+            &app,
+            &[(
+                "@tatolab/camera",
+                LockfileEntry {
+                    version: SemVer::new(2, 0, 0),
+                    source: LockfileSource::Link { path: canonical },
+                    content_hash: "sha256:abc".to_string(),
+                },
+            )],
+        );
+        match app
+            .install_from_lockfile()
+            .expect_err("dangling link target must fail")
+        {
+            AppModulesError::InstallDanglingLinkTarget { package, .. } => {
+                assert_eq!(package, pkg_ref("tatolab", "camera"));
+            }
+            other => panic!("expected InstallDanglingLinkTarget, got {other:?}"),
+        }
+        // No slot created for the un-reproducible link.
+        let slot = app.package_dir(&pkg_ref("tatolab", "camera"));
+        assert!(std::fs::symlink_metadata(&slot).is_err());
+    }
+
+    #[test]
+    fn install_unsupported_source_kind_is_typed_error() {
+        // A registry/git entry can't be reproduced by install (add/link never
+        // writes these into streamlib.lock, but be defensive).
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        write_modules_lock(
+            &app,
+            &[(
+                "@tatolab/camera",
+                LockfileEntry {
+                    version: SemVer::new(2, 0, 0),
+                    source: LockfileSource::Registry {
+                        url: "https://packages.streamlib.dev".to_string(),
+                    },
+                    content_hash: "sha256:abc".to_string(),
+                },
+            )],
+        );
+        match app
+            .install_from_lockfile()
+            .expect_err("registry source must be refused")
+        {
+            AppModulesError::InstallUnsupportedSource { package, kind } => {
+                assert_eq!(package, pkg_ref("tatolab", "camera"));
+                assert_eq!(kind, "registry");
+            }
+            other => panic!("expected InstallUnsupportedSource, got {other:?}"),
+        }
     }
 }
