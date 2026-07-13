@@ -2,9 +2,12 @@
 # Stage-1 (builder) orchestration for the multi-stage GPU Docker distribution.
 #
 # Runs inside the `builder` image (full toolchain, GPU-free). It:
-#   1. bootstraps the tatolab/vulkanalia fork as a STATIC cargo sparse tree and
-#      serves it on a throwaway localhost mount, so the workspace (xtask
-#      included) resolves `vulkanalia = { registry = "tatolab" }` daemon-free,
+#   1. mirrors the tatolab/vulkanalia fork as a SERVERLESS cargo local-registry
+#      `[source]` replacement (emit-static-fork.sh + emit-cargo-local-registry.sh,
+#      no running HTTP server), so the workspace (xtask included) resolves
+#      `vulkanalia = { registry = "tatolab" }` OFFLINE while keeping the
+#      canonical source id in every Cargo.lock — the exact shape the
+#      .github/actions/cargo-fork-mirror CI action uses,
 #   2. builds the streamlib CLI + streamlib-runtime binaries in-place,
 #   3. emits the full image-local static registry tree (cargo closure + fork +
 #      pypi + npm + `.slpkg` generic store + catalog + release manifest) via
@@ -13,12 +16,14 @@
 #   5. writes the runtime cargo `[source]`-replacement + npm config pointing at
 #      the image-local tree, and runs an api-server resolution preflight.
 #
-# There is NO registry daemon. The tree is plain files: cargo + npm resolve over
-# a dumb `python3 -m http.server` mount (sparse + npm are HTTP-only by spec);
-# pypi + `.slpkg` read the same tree straight off `file://`. The final stage
-# COPYs /opt/streamlib (carrying the tree) + /usr/local/cargo (carrying the
-# `[source]` config) and docker/entrypoint.sh re-serves the mount at runtime.
-# See docs/architecture/static-registry.md.
+# There is NO registry daemon. The build-time fork resolve is serverless (a
+# cargo local-registry read straight off disk); the RUNTIME tree is plain files
+# the entrypoint re-serves for cargo + npm over a dumb `python3 -m http.server`
+# mount (sparse + npm are HTTP-only by spec), while pypi + `.slpkg` read it
+# straight off `file://`. The final stage COPYs /opt/streamlib (carrying the
+# tree) + /usr/local/cargo (carrying the runtime `[source]` config) and
+# docker/entrypoint.sh re-serves the mount at runtime.
+# See docs/architecture/static-registry.md and .github/actions/cargo-fork-mirror.
 #
 # Configure-by-env (Dockerfile ARGs -> ENV): SRC, APP_DIR, REGISTRY_DIR,
 # REGISTRY_PORT, CARGO_HOME, and the SKIP_* toggles.
@@ -29,8 +34,11 @@ APP_DIR="${APP_DIR:-/opt/streamlib}"
 REGISTRY_DIR="${REGISTRY_DIR:-${APP_DIR}/registry}"
 REGISTRY_PORT="${REGISTRY_PORT:-8799}"
 REGISTRY_BASE_URL="http://127.0.0.1:${REGISTRY_PORT}"
+# Port for emit-static-fork.sh's OWN ~2s throwaway packaging server (it starts
+# and kills it internally to resolve fork siblings during `cargo package`); no
+# long-lived server lives on it. Distinct from REGISTRY_PORT so it can never
+# race the xtask emit's internal fork server or the preflight mount.
 BOOTSTRAP_PORT="${BOOTSTRAP_PORT:-8798}"
-BOOTSTRAP_BASE_URL="http://127.0.0.1:${BOOTSTRAP_PORT}"
 CARGO_HOME="${CARGO_HOME:?CARGO_HOME must be set}"
 
 # Map the fast-iteration skip toggles to the emit's per-ecosystem skip flags.
@@ -42,19 +50,17 @@ log()  { printf '\n[stage1] %s\n' "$*"; }
 fail() { printf '\n[stage1] ERROR: %s\n' "$*" >&2; exit 1; }
 
 BOOTSTRAP_DIR=""
-BOOTSTRAP_PID=""
 PREFLIGHT_PID=""
 cleanup() {
-  [ -n "$BOOTSTRAP_PID" ]  && kill "$BOOTSTRAP_PID"  2>/dev/null || true
-  [ -n "$PREFLIGHT_PID" ]  && kill "$PREFLIGHT_PID"  2>/dev/null || true
-  [ -n "$BOOTSTRAP_DIR" ]  && rm -rf "$BOOTSTRAP_DIR" || true
+  if [ -n "$PREFLIGHT_PID" ]; then kill "$PREFLIGHT_PID" 2>/dev/null || true; fi
+  if [ -n "$BOOTSTRAP_DIR" ]; then rm -rf "$BOOTSTRAP_DIR"; fi
 }
 trap cleanup EXIT
 
 # ---------------------------------------------------------------------------
 # 0. Clone the vulkanalia fork (registry dep). VULKANALIA_DIR is reused by both
-#    the bootstrap fork emit and the xtask emit's internal fork step (no
-#    re-clone). The pinned rev is sourced from the workspace, not hardcoded.
+#    the build-time fork mirror (step 1) and the xtask emit's internal fork step
+#    (no re-clone). The pinned rev is sourced from the workspace, not hardcoded.
 # ---------------------------------------------------------------------------
 VULKANALIA_REV="$(grep -oE 'rev = "[0-9a-f]{40}"' "$SRC/libs/streamlib-cross-rustc-fixture/Cargo.toml" | head -1 | grep -oE '[0-9a-f]{40}')"
 [ -n "$VULKANALIA_REV" ] || fail "could not derive the vulkanalia rev from the workspace"
@@ -67,31 +73,50 @@ git -C /tmp/vulkanalia submodule update --init --quiet \
 export VULKANALIA_DIR=/tmp/vulkanalia
 
 # ---------------------------------------------------------------------------
-# 1. Bootstrap: emit + serve the vulkanalia fork static cargo tree so the
-#    workspace (and xtask itself) resolves the `tatolab` registry daemon-free.
-#    The mount stays up for the whole build stage; cargo reaches it via the
-#    CARGO_REGISTRIES_TATOLAB_INDEX override. On a DIFFERENT port than the final
-#    tree's base URL so the xtask emit's own fork step can bind that port.
+# 1. Build-time fork mirror (SERVERLESS): emit the vulkanalia fork static cargo
+#    tree, reshape it into a cargo local-registry, and point cargo at it via a
+#    `[source]` replacement in $CARGO_HOME/config.toml — so the workspace (and
+#    xtask itself) resolves `vulkanalia = { registry = "tatolab" }` OFFLINE with
+#    NO running HTTP server. This mirrors .github/actions/cargo-fork-mirror
+#    exactly; do NOT export CARGO_REGISTRIES_TATOLAB_INDEX — an env index
+#    override shadows the `[source]` replacement and rewrites the fork's source
+#    id in Cargo.lock (it wins over `replace-with`), defeating the canonical-id
+#    preservation. emit-static-fork.sh starts its OWN ~2s throwaway packaging
+#    server on $BOOTSTRAP_PORT (to resolve fork siblings during `cargo package`)
+#    and kills it before returning; normalize_fork_crate.py (run inside it)
+#    rewrites the baked port URL to the canonical index so the emitted checksums
+#    match the committed Cargo.lock. VULKANALIA_DIR (exported above) is reused by
+#    the xtask emit's internal fork step below — no re-clone.
 # ---------------------------------------------------------------------------
-log "bootstrapping the vulkanalia fork static cargo tree ($BOOTSTRAP_BASE_URL)"
+log "mirroring the vulkanalia fork as a serverless cargo local-registry [source] replacement"
 BOOTSTRAP_DIR="$(mktemp -d)"
-python3 -m http.server "$BOOTSTRAP_PORT" --bind 127.0.0.1 --directory "$BOOTSTRAP_DIR" \
-  >/tmp/bootstrap-httpd.log 2>&1 &
-BOOTSTRAP_PID=$!
-for i in $(seq 1 30); do
-  curl -fsS "$BOOTSTRAP_BASE_URL/" >/dev/null 2>&1 && break
-  kill -0 "$BOOTSTRAP_PID" 2>/dev/null || { cat /tmp/bootstrap-httpd.log; fail "bootstrap static server exited"; }
-  [ "$i" = 30 ] && { cat /tmp/bootstrap-httpd.log; fail "bootstrap static server did not come up on $BOOTSTRAP_BASE_URL"; }
-  sleep 1
-done
-export CARGO_REGISTRIES_TATOLAB_INDEX="sparse+${BOOTSTRAP_BASE_URL}/cargo/"
-STATIC_FORK_URL="$BOOTSTRAP_BASE_URL" \
-  "$SRC/scripts/registry/emit-static-fork.sh" "$BOOTSTRAP_DIR" --base-url "$BOOTSTRAP_BASE_URL"
-curl -fsS "$BOOTSTRAP_BASE_URL/cargo/config.json" >/dev/null || fail "bootstrap fork tree not fetchable"
+"$SRC/scripts/registry/emit-static-fork.sh" "$BOOTSTRAP_DIR" \
+  --base-url "http://127.0.0.1:${BOOTSTRAP_PORT}"
+"$SRC/scripts/registry/emit-cargo-local-registry.sh" \
+  "$BOOTSTRAP_DIR" "$BOOTSTRAP_DIR/cargo-local-registry"
+[ -f "$BOOTSTRAP_DIR/cargo-local-registry/index/vu/lk/vulkanalia" ] \
+  || fail "vulkanalia fork not present in the local-registry mirror"
+
+# The serverless [source] replacement. GLOBAL cargo config (not the workspace
+# .cargo/config.toml) so an out-of-tree `cargo package` — the xtask closure
+# emit's inner packaging — also sees it. Overwritten by the RUNTIME served
+# config in step 6; the build-time mirror dir is throwaway (dropped in step 4).
+mkdir -p "$CARGO_HOME"
+cat > "$CARGO_HOME/config.toml" <<EOF
+[registries.tatolab]
+index = "sparse+https://registry.tatolab.com/cargo/"
+
+[source.tatolab]
+registry = "sparse+https://registry.tatolab.com/cargo/"
+replace-with = "tatolab-local-registry"
+
+[source.tatolab-local-registry]
+local-registry = "${BOOTSTRAP_DIR}/cargo-local-registry"
+EOF
 
 # ---------------------------------------------------------------------------
 # 2. Build the streamlib CLI + runtime binaries in-place (resolves the fork
-#    from the bootstrap mount).
+#    serverless via the step-1 local-registry [source] replacement).
 # ---------------------------------------------------------------------------
 log "building streamlib CLI + runtime (release)"
 ( cd "$SRC" && cargo build --release -p streamlib-cli -p streamlib-runtime )
@@ -102,27 +127,38 @@ log "building streamlib CLI + runtime (release)"
 # 3. Emit the full image-local static registry tree. --cargo-closure packages
 #    every workspace release-closure crate; the fork + pypi + npm + `.slpkg`
 #    store + catalog + release manifest (the atomicity flip) ride the same emit.
-#    The emit manages its own transient sub-servers (a throwaway fork server on
-#    $REGISTRY_PORT, an ephemeral closure-packaging server on a random port);
-#    the bootstrap mount on $BOOTSTRAP_PORT satisfies the outer xtask build.
+#    The OUTER `cargo run -p xtask` resolves the fork via the serverless
+#    [source] replacement from step 1; the emit then manages its OWN transient
+#    sub-servers internally (its inner `cargo package` points
+#    CARGO_REGISTRIES_TATOLAB_INDEX at an ephemeral staging server, which wins
+#    over the [source] replacement for those subprocesses). That inner override
+#    dirties /src/Cargo.lock's fork source, but /src is discarded after stage 1
+#    (never COPYed into the final image) and nothing downstream resolves in it,
+#    so no lock restore is needed here — unlike the CI reference, which runs a
+#    post-emit `cargo test --locked` in the same workspace.
 # ---------------------------------------------------------------------------
 EMIT_ARGS=(--out "$REGISTRY_DIR" --cargo-closure --base-url "$REGISTRY_BASE_URL")
 [ "$SKIP_PYTHON_SDK" = 1 ] && EMIT_ARGS+=(--no-pypi)
 [ "$SKIP_DENO_SDK" = 1 ]   && EMIT_ARGS+=(--no-npm)
 [ "$SKIP_PACKAGES" = 1 ]   && EMIT_ARGS+=(--no-slpkg)
+# Belt-and-suspenders: force a fresh `cargo package` for every closure crate.
+# The emitter already always repackages from source (target/package is cargo
+# scratch, not a trusted content cache), so this is redundant on a fresh builder
+# layer — kept for parity with the CI emit and to stay correct if a build cache
+# mount is ever added.
+rm -rf "$SRC/target/package"
 log "emitting static registry tree at $REGISTRY_DIR (base $REGISTRY_BASE_URL)"
 ( cd "$SRC" && cargo run --release -q -p xtask -- static-registry emit "${EMIT_ARGS[@]}" )
 [ -f "$REGISTRY_DIR/cargo/config.json" ] || fail "static registry emit did not produce cargo/config.json"
 
 # ---------------------------------------------------------------------------
-# 4. Stop the bootstrap mount + drop its env override. Everything below resolves
-#    the `tatolab` registry through the final $CARGO_HOME/config.toml source
-#    replacement against the emitted tree served on $REGISTRY_PORT.
+# 4. Drop the build-time serverless fork mirror. Everything below resolves the
+#    `tatolab` registry through the RUNTIME $CARGO_HOME/config.toml source
+#    replacement (written in step 6) against the emitted tree served on
+#    $REGISTRY_PORT — the build-time local-registry dir is no longer referenced.
 # ---------------------------------------------------------------------------
-kill "$BOOTSTRAP_PID" 2>/dev/null || true
-wait "$BOOTSTRAP_PID" 2>/dev/null || true
-BOOTSTRAP_PID=""
-unset CARGO_REGISTRIES_TATOLAB_INDEX
+rm -rf "$BOOTSTRAP_DIR"
+BOOTSTRAP_DIR=""
 
 # ---------------------------------------------------------------------------
 # 5. Assemble the /opt/streamlib app dir (binaries + package source). packages/
