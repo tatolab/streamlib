@@ -14,6 +14,8 @@ use anyhow::{Context, Result};
 use streamlib::engine_internal::core::ProjectConfig;
 use streamlib::engine_internal::core::InstalledPackageManifest;
 use streamlib_idents::{RegistryClient, RegistryConfig};
+use streamlib_pack::catalog::{build_package_catalog, build_sibling_versions};
+use streamlib_pack::static_registry::{merge_catalog_index_lines, write_package_catalog};
 use streamlib_pack::{assemble_artifact, AssembleOptions, AssembleTarget, CargoProfile, PathDepPolicy};
 
 /// Build THIS package (the current working directory) into a source-only
@@ -40,10 +42,14 @@ pub fn build(output: Option<&Path>) -> Result<()> {
 
 /// Publish THIS package (the current working directory) into the static
 /// registry tree's `.slpkg` generic store. Always repacks a fresh source-only
-/// `.slpkg` to a temp file (never trusts a pre-existing artifact), then writes
-/// it by version and refreshes the package's version index. The registry tree
-/// root comes from `STREAMLIB_REGISTRY_URL` and must be a `file://` tree —
-/// publishing writes files; a static HTTP mount is read-only.
+/// `.slpkg` to a temp file (never trusts a pre-existing artifact), writes it by
+/// version, refreshes the package's version index, and emits the same catalog
+/// artifacts a whole-tree `static-registry emit` would — the per-package
+/// `<name>.catalog.json` + owned schema JTDs beside the `.slpkg`, plus a merge
+/// into the tree-wide `catalog/index.ndjson` — so a registry populated purely by
+/// `pkg publish` serves a catalog-backed discovery summary, not "no metadata".
+/// The registry tree root comes from `STREAMLIB_REGISTRY_URL` and must be a
+/// `file://` tree — publishing writes files; a static HTTP mount is read-only.
 pub fn publish() -> Result<()> {
     let package_dir = std::env::current_dir().context("resolve current working directory")?;
     // Early friendly check; the load-bearing guard runs again inside
@@ -65,6 +71,16 @@ pub fn publish() -> Result<()> {
              (e.g. file:///path/to/registry-tree) to publish"
         )
     })?;
+
+    // Assemble the publish-time catalog up front, so an unresolvable external
+    // schema ref fails BEFORE any bytes land in the tree. External refs resolve
+    // against the sibling packages discoverable next to this one — mirroring the
+    // whole-tree emit's `packages/` enumeration; a genuinely unresolvable ref
+    // surfaces a typed `CatalogError` (e.g. `ExternalDepMissing`) here.
+    let siblings = build_sibling_versions(&sibling_package_dirs(&package_dir))
+        .map_err(|e| anyhow::anyhow!("assembling the catalog resolution universe: {}", e))?;
+    let catalog_artifacts = build_package_catalog(&package_dir, &siblings)
+        .map_err(|e| anyhow::anyhow!("building the package catalog: {}", e))?;
 
     // Always repack fresh into a temp file — publish never trusts a
     // pre-existing artifact (pack runs independently, at any time).
@@ -90,7 +106,71 @@ pub fn publish() -> Result<()> {
         .upload_slpkg(&pkg_ref, package.version, &bytes)
         .map_err(|e| anyhow::anyhow!("upload failed: {}", e))?;
     println!("Published → {url}");
+
+    // Publish the catalog alongside the `.slpkg`. `upload_slpkg` already proved
+    // the tree is a writable `file://` root, so deriving the on-disk root here is
+    // sound.
+    let tree_root = file_tree_root(&registry.base_url)?;
+    let slpkg_dir = tree_root.join("slpkg");
+    write_package_catalog(&slpkg_dir, &catalog_artifacts)
+        .map_err(|e| anyhow::anyhow!("writing the package catalog: {}", e))?;
+    merge_catalog_index_lines(
+        &tree_root,
+        &pkg_ref,
+        &package.version,
+        &catalog_artifacts.index_lines,
+    )
+    .map_err(|e| anyhow::anyhow!("updating the catalog index: {}", e))?;
+    println!(
+        "  Catalog: {} processor(s), {} owned schema(s)",
+        catalog_artifacts.index_lines.len(),
+        catalog_artifacts.schema_jtd.len()
+    );
     Ok(())
+}
+
+/// The sibling package directories catalog assembly resolves external schema
+/// references against — the entries of the directory that holds the package
+/// being published, mirroring the whole-tree emit's enumeration of `packages/`.
+/// [`build_sibling_versions`] skips any entry without a `[package]` block, so
+/// non-package siblings are harmless. Falls back to just the package itself when
+/// it has no parent or the parent can't be read (a self-contained package with
+/// no external refs still resolves; a package that imports an external schema
+/// then surfaces a typed `ExternalDepMissing`).
+fn sibling_package_dirs(package_dir: &Path) -> Vec<std::path::PathBuf> {
+    let read_siblings = package_dir.parent().and_then(|parent| {
+        std::fs::read_dir(parent).ok().map(|entries| {
+            let mut dirs: Vec<std::path::PathBuf> = entries
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.is_dir())
+                .collect();
+            // Sort so the resolution universe is deterministic — matching the
+            // whole-tree emit, which sorts its `packages/` entries before
+            // building siblings (`build_sibling_versions` is last-write-wins on
+            // a duplicate `@org/name`, degenerate but order-sensitive).
+            dirs.sort();
+            dirs
+        })
+    });
+    match read_siblings {
+        Some(dirs) if !dirs.is_empty() => dirs,
+        _ => vec![package_dir.to_path_buf()],
+    }
+}
+
+/// The on-disk tree root a `file://` registry base URL points at. `pkg publish`
+/// only reaches this after [`RegistryClient::upload_slpkg`] has already required
+/// the `file://` scheme, so a non-`file://` base here is an internal invariant
+/// violation rather than a user-facing case.
+fn file_tree_root(base_url: &str) -> Result<std::path::PathBuf> {
+    base_url
+        .strip_prefix("file://")
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "internal: publishing the catalog requires a file:// registry tree, got `{base_url}`"
+            )
+        })
 }
 
 /// Remove THIS package's build/pack artifacts from the current working
