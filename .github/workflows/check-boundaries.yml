@@ -15,9 +15,11 @@ name: Check Boundaries
 #   4. Privileged Vulkan calls (`vkAllocateMemory`, `vkGetMemoryFdKHR`,
 #      `vkCreateComputePipelines`) live only inside the RHI.
 #   5. Every `vulkanalia` / `vulkanalia-sys` / `vulkanalia-vma` dep in a
-#      member crate inherits from `[workspace.dependencies]` (the
-#      `tatolab/vulkanalia` fork). Direct version specs in member crates
-#      can silently pull crates.io upstream and lose the VMA 3.3.0 patch.
+#      member crate inherits from `[workspace.dependencies]` (the vendored
+#      `libs/tatolab-vulkanalia*` fork crates). A direct version spec or a
+#      direct `tatolab-vulkanalia*` dep can silently pull crates.io
+#      upstream or bypass the workspace rename and lose the VMA 3.3.0
+#      patch. The vendored dirs themselves are the documented exception.
 #
 # The check is grep-shaped on purpose: sub-second on a clean runner, no
 # Cargo build of the workspace needed.
@@ -52,14 +54,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-xtask-
 
-      # Serverless registry: the workspace declares `vulkanalia = { registry = "tatolab" }`,
-      # so xtask cannot build without the fork fetchable. Emit it + reshape into a cargo
-      # local-registry `[source]` replacement (no HTTP server) so `--locked` resolves offline.
-      - name: Mirror vulkanalia fork (serverless cargo [source] replacement)
-        uses: ./.github/actions/cargo-fork-mirror
-
       - name: cargo xtask check-boundaries
         run: cargo run --locked -q -p xtask -- check-boundaries
 
+      # Drift trip-wire for the vendored vulkanalia trees
+      # (libs/tatolab-vulkanalia*): any byte change vs. the recorded hashes
+      # fails — the guard against a workspace fmt sweep (or any stray edit)
+      # silently rewriting vendored sources. Deliberate re-vendors update
+      # the recorded hashes in the same commit; see
+      # docs/architecture/vendored-vulkanalia.md.
+      - name: cargo xtask check-vendored-vulkanalia
+        run: cargo run --locked -q -p xtask -- check-vendored-vulkanalia
+
       - name: cargo test -p xtask check_boundaries (fixture tests)
         run: cargo test --locked -p xtask check_boundaries
+
+      - name: cargo test -p xtask check_vendored_vulkanalia (fixture tests)
+        run: cargo test --locked -p xtask check_vendored_vulkanalia

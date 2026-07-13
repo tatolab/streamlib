@@ -90,11 +90,12 @@ impl ReleaseClosure {
 
 /// Whether a crate name belongs to the streamlib release closure *by name*:
 /// every workspace library crate named `streamlib*` (SDK, engine, macros,
-/// plugin ABI, adapters, consumer-rhi, …) plus `vulkan-jpeg`. The full
-/// closure predicate also requires a library target and a publishable
-/// `publish` setting — see [`compute_release_closure`].
+/// plugin ABI, adapters, consumer-rhi, …), `vulkan-jpeg`, plus the vendored
+/// `tatolab-vulkanalia*` fork crates. The full closure predicate also
+/// requires a library target and a publishable `publish` setting — see
+/// [`compute_release_closure`].
 pub fn is_linkable_crate_name(name: &str) -> bool {
-    name.starts_with("streamlib") || name == "vulkan-jpeg"
+    name.starts_with("streamlib") || name == "vulkan-jpeg" || name.starts_with("tatolab-vulkanalia")
 }
 
 /// The library-target kinds a publishable crate must expose. A crate with
@@ -1329,6 +1330,9 @@ mod tests {
         assert!(is_linkable_crate_name("streamlib-plugin-sdk"));
         assert!(is_linkable_crate_name("streamlib"));
         assert!(is_linkable_crate_name("vulkan-jpeg"));
+        assert!(is_linkable_crate_name("tatolab-vulkanalia"));
+        assert!(is_linkable_crate_name("tatolab-vulkanalia-sys"));
+        assert!(is_linkable_crate_name("tatolab-vulkanalia-vma"));
         assert!(!is_linkable_crate_name("serde"));
         assert!(!is_linkable_crate_name("tokio"));
     }

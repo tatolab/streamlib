@@ -10,8 +10,6 @@ name: Static Registry
 #   - The `.slpkg` file:// resolve + the completeness NEGATIVE gate: a truncated
 #     tree (member removed / omitted from the release manifest) is REJECTED,
 #     not silently half-resolved.
-#   - The vulkanalia-fork static cargo tree emitter (shell) + the xtask
-#     `static-registry emit` generator, run daemon-free in-job.
 #
 # See docs/architecture/static-registry.md.
 
@@ -35,8 +33,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck
-          shellcheck scripts/registry/emit-static-fork.sh \
-                     scripts/registry/emit-cargo-local-registry.sh \
+          shellcheck scripts/registry/emit-cargo-local-registry.sh \
                      scripts/registry/serve-static-registry.sh \
                      scripts/registry/cargo-idx-path.sh
 
@@ -67,30 +64,5 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-static-registry-
 
-      # Serverless bootstrap: emit the vulkanalia fork + reshape it into a cargo
-      # local-registry `[source]` replacement (no HTTP server) so the workspace
-      # resolves `--locked` offline against the mirror.
-      - name: Mirror vulkanalia fork (serverless cargo [source] replacement)
-        uses: ./.github/actions/cargo-fork-mirror
-
       - name: Static-registry renderers, atomic swap, slpkg completeness
         run: cargo test --locked -p streamlib-pack
-
-      - name: xtask static-registry emit (fork tree, daemon-free smoke)
-        # The composite action already cloned the fork to /tmp/vulkanalia-fork;
-        # reuse it so the generator doesn't re-clone.
-        run: |
-          # Defensive: this smoke emit is fork-only (no --cargo-closure), so
-          # target/package holds no closure tarballs today. Clearing it keeps
-          # the "never reuse a stale-content tarball across a cached target dir"
-          # invariant true even if a closure emit is added here later.
-          # Content-addressed verification is the real fix.
-          rm -rf target/package
-          VULKANALIA_DIR=/tmp/vulkanalia-fork \
-            cargo run --locked -q -p xtask -- static-registry emit \
-              --out /tmp/emitted-registry \
-              --base-url http://127.0.0.1:8799 \
-              --no-pypi --no-npm --no-slpkg
-          test -f /tmp/emitted-registry/cargo/config.json
-          test -f /tmp/emitted-registry/cargo/vu/lk/vulkanalia
-          echo "static cargo fork tree emitted daemon-free"

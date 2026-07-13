@@ -54,8 +54,9 @@ static registry mount the entrypoint serves for cargo/npm is localhost-internal
   comes up in the entrypoint. No `/dev/snd`.
 - **Registry — image-local static tree, no daemon.** Stage 1 runs
   `cargo xtask static-registry emit --cargo-closure` to write a plain on-disk
-  tree at `/opt/streamlib/registry`: a cargo sparse closure + the vulkanalia
-  fork, a pypi-simple tree, an npm packument set, the `.slpkg` generic store,
+  tree at `/opt/streamlib/registry`: a cargo sparse closure (the vendored
+  `tatolab-vulkanalia*` crates included), a pypi-simple tree, an npm packument
+  set, the `.slpkg` generic store,
   the catalog, and the release manifest (written last, the atomicity flip). The
   entrypoint serves it for cargo + npm on `127.0.0.1:8799` (sparse + npm are
   HTTP-only by spec) via `python3 -m http.server`; pypi + `.slpkg` read the same

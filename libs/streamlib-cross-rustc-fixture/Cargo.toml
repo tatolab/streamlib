@@ -71,12 +71,7 @@ tracing = "=0.1.41"
 # workspace and inheriting the host workspace's lints would defeat
 # the dep-graph-divergence point of the fixture.
 
-# Mirror the host workspace's tatolab/vulkanalia fork override. This
-# is NOT divergence — it's the same patch the host carries, replicated
-# because separate workspaces don't share `[patch.crates-io]`. Without
-# this, the fixture's resolver picks up `vulkanalia-sys` 0.35.0 from
-# crates.io and streamlib-engine fails to compile against two
-# incompatible versions of the same crate in its dep graph.
-[patch.crates-io]
-vulkanalia = { git = "https://github.com/tatolab/vulkanalia.git", rev = "982d32d293e5425753d595978776ee4fa4ded3a1" }
-vulkanalia-sys = { git = "https://github.com/tatolab/vulkanalia.git", rev = "982d32d293e5425753d595978776ee4fa4ded3a1" }
+# (The former [patch.crates-io] vulkanalia fork mirror was removed when the
+# fork was vendored into libs/tatolab-vulkanalia* — the SDK's workspace-
+# inherited dep now resolves the vendored crates by path, and no crate in
+# this graph depends on crates.io vulkanalia at all.)

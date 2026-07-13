@@ -109,7 +109,6 @@ fn real_emit_writes_catalog_inside_the_flipped_tree() {
         base_url: "http://127.0.0.1:9".into(),
         dev: None,
         ecosystems: EmitEcosystems {
-            cargo_fork: false,
             cargo_closure: false,
             pypi: false,
             npm: false,

@@ -18,8 +18,8 @@ use thiserror::Error;
 pub const TATOLAB_REGISTRY_NAME: &str = "tatolab";
 
 /// The replacement-source name the `[source]` stanza redirects `tatolab` to.
-/// Matches the CI `cargo-fork-mirror` action so a consumer's config and CI
-/// agree on the mirror source id.
+/// Matches the CI serverless `[source]`-replacement config (check-pack-load)
+/// so a consumer's config and CI agree on the mirror source id.
 pub const TATOLAB_REPLACEMENT_SOURCE_NAME: &str = "tatolab-local-registry";
 
 /// Reshape-script basename inside a streamlib `scripts/registry/` dir — the

@@ -30,6 +30,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  STREAMLIB_STATIC_REGISTRY_DIR: /tmp/streamlib-static-registry
 
 jobs:
   pack-then-load-smoke:
@@ -79,20 +80,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-pack-load-
 
-      # Serverless registry resolve: the workspace build resolves the
-      # `vulkanalia` fork from `registry = "tatolab"`. Emit it + reshape into a
-      # cargo local-registry `[source]` replacement (no HTTP server) so the
-      # pack-then-load build resolves `--locked` offline.
-      - name: Mirror vulkanalia fork (serverless cargo [source] replacement)
-        uses: ./.github/actions/cargo-fork-mirror
-
       # The Rust-impl leg loads a SOURCE-ONLY `.slpkg` (`pkg build`'s
       # distribution shape), so the orchestrator builds `streamlib-network`
-      # on this host — resolving streamlib-plugin-sdk & friends from the
-      # registry. Emit the workspace release closure into the static tree, then
-      # re-reshape it into the serverless cargo local-registry mirror so the
-      # orchestrator's out-of-tree resolve rides the same `[source]` replacement
-      # (the emit's atomic flip replaces the fork-only tree with fork + closure).
+      # on this host — resolving streamlib-plugin-sdk & friends (including the
+      # vendored tatolab-vulkanalia* crates, ordinary closure members) from the
+      # registry. The workspace itself resolves vulkanalia by path — no
+      # registry bootstrap is needed to build xtask or run the emit.
       - name: Emit closure crates into the static registry
         run: |
           # Force a fresh `cargo package` for every closure crate. The `target`
@@ -105,28 +98,51 @@ jobs:
           # structural check can't catch. Content-addressed verification is the
           # real fix; clearing the dir here is the belt-and-suspenders stop-gap.
           rm -rf target/package
-          VULKANALIA_DIR=/tmp/vulkanalia-fork \
-            cargo run --locked -q -p xtask -- static-registry emit \
-              --out "$STREAMLIB_STATIC_REGISTRY_DIR" \
-              --base-url "http://127.0.0.1:8799" \
-              --cargo-closure --no-pypi --no-npm --no-slpkg
-          # The atomic flip above replaced $STREAMLIB_STATIC_REGISTRY_DIR
-          # wholesale, dropping the cargo-local-registry/ the composite action
-          # built. Re-reshape the now fork+closure sparse tree back into the
-          # mirror the [source] replacement points at, so the out-of-tree
-          # streamlib-network build resolves streamlib-plugin-sdk + the fork.
+          cargo run --locked -q -p xtask -- static-registry emit \
+            --out "$STREAMLIB_STATIC_REGISTRY_DIR" \
+            --base-url "http://127.0.0.1:8799" \
+            --cargo-closure --no-pypi --no-npm --no-slpkg
+          # Reshape the sparse tree into a serverless cargo local-registry the
+          # out-of-tree streamlib-network build resolves streamlib-plugin-sdk
+          # + tatolab-vulkanalia* from over the [source] replacement below.
           scripts/registry/emit-cargo-local-registry.sh \
             "$STREAMLIB_STATIC_REGISTRY_DIR" "$STREAMLIB_STATIC_REGISTRY_DIR/cargo-local-registry"
           test -f "$STREAMLIB_STATIC_REGISTRY_DIR/cargo-local-registry/index/st/re/streamlib-plugin-sdk" \
             || { echo "closure crate streamlib-plugin-sdk not in the local-registry mirror"; exit 1; }
-          # The `--cargo-closure` emit's inner `cargo package` runs in the
-          # workspace root with CARGO_REGISTRIES_TATOLAB_INDEX pointed at its own
-          # ephemeral staging server, which REWRITES the committed Cargo.lock's
-          # fork `source` to that ephemeral URL. Restore the pristine committed
-          # lock so the strict `cargo test --locked` below resolves the fork from
-          # the canonical-source-id mirror instead of tripping "cannot update the
-          # lock file" (a dirtied lock, which --offline does NOT fix).
+          test -f "$STREAMLIB_STATIC_REGISTRY_DIR/cargo-local-registry/index/ta/to/tatolab-vulkanalia" \
+            || { echo "closure crate tatolab-vulkanalia not in the local-registry mirror"; exit 1; }
+          # Belt-and-suspenders: the committed lock carries no tatolab-registry
+          # source lines anymore (the vendored crates resolve by path), but the
+          # `--cargo-closure` emit's inner `cargo package` runs with
+          # CARGO_REGISTRIES_TATOLAB_INDEX pointed at its own ephemeral staging
+          # server and historically rewrote lock source lines. Restore the
+          # pristine committed lock so the strict `cargo test --locked` below
+          # never trips "cannot update the lock file" on a dirtied lock.
           git restore Cargo.lock
+
+      - name: Configure the serverless [source] replacement (global cargo config)
+        # GLOBAL config (not the repo .cargo/config.toml) so the out-of-tree
+        # `cargo` build (check-pack-load's staged .slpkg, which
+        # config-discovers from its own temp cwd) sees the replacement. The
+        # workspace build itself doesn't need it — vulkanalia resolves by
+        # path — but the staged package's `registry = "tatolab"` deps do.
+        # Deliberately NO CARGO_REGISTRIES_TATOLAB_INDEX export — an env index
+        # override shadows the `[source]` replacement and rewrites source ids
+        # in the staged package's lockfile.
+        run: |
+          set -euo pipefail
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          mkdir -p "$cargo_home"
+          lr="$(cd "$STREAMLIB_STATIC_REGISTRY_DIR/cargo-local-registry" && pwd)"
+          {
+            printf '\n[registries.tatolab]\n'
+            printf 'index = "sparse+https://registry.tatolab.com/cargo/"\n'
+            printf '\n[source.tatolab]\n'
+            printf 'registry = "sparse+https://registry.tatolab.com/cargo/"\n'
+            printf 'replace-with = "tatolab-local-registry"\n'
+            printf '\n[source.tatolab-local-registry]\n'
+            printf 'local-registry = "%s"\n' "$lr"
+          } >> "$cargo_home/config.toml"
 
       - name: cargo test pack_then_load_smoke
         run: cargo test --locked --test pack_then_load_smoke -p streamlib-engine

@@ -1,0 +1,40 @@
+[package]
+
+edition = "2024"
+
+name = "tatolab-vulkanalia-sys"
+authors = ["Kyle Mayes <kyle@mayeses.com>"]
+
+version = "0.35.0"
+
+readme = "README.md"
+license = "Apache-2.0"
+
+description = "Raw Vulkan bindings for Rust."
+
+documentation = "https://docs.rs/vulkanalia-sys"
+repository = "https://github.com/KyleMayes/vulkanalia"
+
+keywords = ["graphics", "vulkan"]
+categories = ["graphics"]
+
+[lib]
+
+name = "vulkanalia_sys"
+
+[features]
+
+default = ["std"]
+
+std = []
+no_std_error = []
+
+provisional = []
+
+[dependencies]
+
+bitflags = "1"
+
+[package.metadata.docs.rs]
+
+features = ["provisional"]

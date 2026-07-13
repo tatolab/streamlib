@@ -45,10 +45,9 @@ use crate::catalog::{build_package_catalog, build_sibling_versions};
 /// read transport (see the module docs).
 #[derive(Debug, Clone)]
 pub struct EmitEcosystems {
-    /// Emit the vulkanalia fork cargo tree (the daemon-free bootstrap the CI
-    /// resolve needs). Delegates to `scripts/registry/emit-static-fork.sh`.
-    pub cargo_fork: bool,
-    /// Package + emit the workspace release-closure crates into the cargo tree.
+    /// Package + emit the workspace release-closure crates into the cargo tree
+    /// (includes the vendored `tatolab-vulkanalia*` crates — see
+    /// `docs/architecture/vendored-vulkanalia.md`).
     pub cargo_closure: bool,
     /// Emit the PEP-503 pypi-simple tree (Python SDK sdist).
     pub pypi: bool,
@@ -61,7 +60,6 @@ pub struct EmitEcosystems {
 impl Default for EmitEcosystems {
     fn default() -> Self {
         Self {
-            cargo_fork: true,
             cargo_closure: false,
             pypi: true,
             npm: true,
@@ -358,9 +356,6 @@ pub fn emit_static_registry(opts: &EmitOptions) -> Result<()> {
     let org = registry_org();
 
     build_and_flip(&opts.out, |staging| {
-        if opts.ecosystems.cargo_fork {
-            emit_cargo_fork(opts, staging)?;
-        }
         if opts.ecosystems.cargo_closure {
             emit_cargo_closure(opts, staging)?;
         }
@@ -398,25 +393,6 @@ pub fn build_and_flip(out: &Path, build: impl FnOnce(&Path) -> Result<()>) -> Re
     }
 }
 
-/// Delegate the vulkanalia-fork cargo tree to the standalone shell emitter
-/// (the daemon-free bootstrap that must not require the workspace to build).
-fn emit_cargo_fork(opts: &EmitOptions, staging: &Path) -> Result<()> {
-    let script = opts
-        .workspace_root
-        .join("scripts/registry/emit-static-fork.sh");
-    let status = Command::new("bash")
-        .arg(&script)
-        .arg(staging)
-        .arg("--base-url")
-        .arg(&opts.base_url)
-        .status()
-        .with_context(|| format!("run {}", script.display()))?;
-    if !status.success() {
-        anyhow::bail!("emit-static-fork.sh failed");
-    }
-    Ok(())
-}
-
 /// Package each workspace release-closure crate with `cargo package` and render
 /// its `.crate` + sparse-index line into the staging cargo tree.
 /// The `.crate` artifact filename `cargo package` produces for a crate:
@@ -447,8 +423,8 @@ impl Drop for KillOnDrop {
 /// `cargo package` validates every `registry = "tatolab"` dep against the live
 /// index, so the closure is packaged in topo order against an EPHEMERAL
 /// static server on the staging tree itself: each crate resolves its
-/// already-emitted siblings (and the fork, emitted before this) from the
-/// growing staging index. The staging `config.json` points at the ephemeral
+/// already-emitted siblings (including the vendored `tatolab-vulkanalia*`
+/// crates, closure members like any other) from the growing staging index. The staging `config.json` points at the ephemeral
 /// server during packaging and is stamped with the final base URL afterward
 /// — the served tree never observes the ephemeral URL.
 fn emit_cargo_closure(opts: &EmitOptions, staging: &Path) -> Result<()> {

@@ -41,12 +41,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-xtask-
 
-      # Serverless registry: the workspace declares `vulkanalia = { registry = "tatolab" }`,
-      # so xtask cannot build without the fork fetchable. Emit it + reshape into a cargo
-      # local-registry `[source]` replacement (no HTTP server) so `--locked` resolves offline.
-      - name: Mirror vulkanalia fork (serverless cargo [source] replacement)
-        uses: ./.github/actions/cargo-fork-mirror
-
       - name: cargo xtask check-schema-versions
         run: cargo run --locked -q -p xtask -- check-schema-versions
 
