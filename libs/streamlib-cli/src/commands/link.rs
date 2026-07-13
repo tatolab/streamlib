@@ -84,13 +84,35 @@ pub enum LinkError {
     )]
     RollbackIncomplete { backup_dir: PathBuf, detail: String },
 
-    /// Post-link cargo resolution check failed; the link was rolled back.
+    /// Post-link cargo resolution check failed; the link was rolled back. Only
+    /// reached after the stale-lock cause has been ruled out (a transparent
+    /// re-lock was attempted when a `Cargo.lock` was present), so the remaining
+    /// cause is a genuine version-requirement mismatch or an unresolvable graph.
     #[error(
-        "post-link verification failed and the link was rolled back: {detail}. Fix the \
-         consumer's version requirements so the checkout's crate versions satisfy them, or \
+        "post-link verification failed and the link was rolled back: {detail}. Adjust the \
+         consumer's `streamlib*` version requirements to admit the checkout's versions, or \
          re-run with `--skip-verify` to keep the link unverified"
     )]
     LinkVerificationFailed { detail: String },
+
+    /// A pre-existing consumer `Cargo.lock` pins the streamlib crates to
+    /// registry versions — cargo honors an existing lockfile over a newly-added
+    /// `[patch]`, so the link's patch is silently ignored — and the transparent
+    /// re-lock could not run. The link is left applied (the patch IS on disk) so
+    /// the named command finishes it directly.
+    #[error(
+        "the consumer's Cargo.lock (`{lockfile}`) pins {crates} to registry versions, which \
+         defeats the link's `[patch]` — cargo honors an existing lockfile over a newly-added \
+         `[patch]`. The link is applied but unverified because the automatic re-lock could not \
+         run ({detail}). Finish it by re-locking the streamlib crate set:\n\n    {command}\n\n\
+         Or run `streamlib unlink` to remove the link"
+    )]
+    StaleConsumerLockRelockFailed {
+        lockfile: PathBuf,
+        crates: String,
+        command: String,
+        detail: String,
+    },
 
     /// A filesystem operation failed.
     #[error("filesystem error at `{path}`: {source}")]
@@ -187,6 +209,12 @@ pub fn link(consumer_root: &Path, checkout: &Path, skip_verify: bool) -> Result<
         unlink(&consumer_root, false)?;
     }
 
+    // Snapshot the consumer's pre-link `Cargo.lock` — taken *after* a refresh's
+    // unlink has restored the tree, so it is the true pre-link state. A
+    // transparent re-lock during verification (below) mutates this file; the
+    // snapshot is what `unlink` restores it to, keeping teardown byte-clean.
+    let original_cargo_lock = read_optional_bytes(&consumer_root.join("Cargo.lock"))?;
+
     let edits = establish_link(&consumer_root, &checkout, &index_url, &crates)?;
 
     println!("Linked streamlib → {}", checkout.display());
@@ -196,18 +224,54 @@ pub fn link(consumer_root: &Path, checkout: &Path, skip_verify: bool) -> Result<
     }
 
     // Post-link verification: prove the [patch] actually took effect in the
-    // consumer's cargo resolution. A semver-incompatible consumer requirement
-    // makes cargo silently ignore the patch — roll the whole link back rather
-    // than leave a "linked" tree that still resolves from the registry.
+    // consumer's cargo resolution. Two ways it can fail to redirect:
+    //   1. A pre-existing `Cargo.lock` pins the streamlib crates to registry
+    //      versions — cargo honors an existing lock over a newly-added [patch],
+    //      so the patch is silently ignored. The fix is a re-lock, not a
+    //      version-requirement change. `link` owns that step transparently.
+    //   2. A semver-incompatible consumer requirement genuinely doesn't admit
+    //      the checkout's versions. Roll the whole link back.
     if skip_verify {
         println!("  Verification skipped (--skip-verify).");
-    } else if let Err(detail) = verify_cargo_patch_resolution(&consumer_root, &checkout, &crates) {
-        unlink(&consumer_root, false)?;
-        return Err(LinkError::LinkVerificationFailed { detail });
     } else if consumer_root.join("Cargo.toml").is_file() {
-        // Count is re-derived inside the verify; recompute cheaply for the
-        // success message.
-        println!("  Verified: streamlib crates resolve to the checkout via cargo metadata.");
+        match verify_and_remedy_patch_resolution(
+            &consumer_root,
+            &checkout,
+            &crates,
+            original_cargo_lock,
+        )? {
+            VerifyOutcome::Verified { relocked: 0 } => {
+                println!(
+                    "  Verified: streamlib crates resolve to the checkout via cargo metadata."
+                );
+            }
+            VerifyOutcome::Verified { relocked } => {
+                println!(
+                    "  Re-locked the consumer's Cargo.lock ({relocked} crate(s)) so the \
+                     [patch] takes effect; verified: streamlib crates resolve to the checkout."
+                );
+            }
+            VerifyOutcome::RollBack { detail } => {
+                unlink(&consumer_root, false)?;
+                return Err(LinkError::LinkVerificationFailed { detail });
+            }
+            VerifyOutcome::RelockUnavailable {
+                lockfile,
+                crates,
+                command,
+                detail,
+            } => {
+                // Leave the link applied (the patch IS on disk) — the named
+                // command finishes the re-lock directly. `Cargo.lock` was not
+                // mutated, so teardown stays byte-clean.
+                return Err(LinkError::StaleConsumerLockRelockFailed {
+                    lockfile,
+                    crates,
+                    command,
+                    detail,
+                });
+            }
+        }
     }
 
     println!("Run `streamlib unlink` to restore.");
@@ -484,6 +548,27 @@ fn run_cargo_metadata(
         .map_err(|e| format!("cargo metadata is not valid JSON: {e}"))
 }
 
+/// Run a `cargo` subcommand for its exit status only (no JSON), returning a
+/// diagnostic string on failure.
+fn run_cargo_status(args: &[&str], cwd: Option<&Path>) -> Result<(), String> {
+    let mut cmd = std::process::Command::new("cargo");
+    cmd.args(args);
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
+    }
+    let output = cmd
+        .output()
+        .map_err(|e| format!("failed to run cargo {}: {e}", args.join(" ")))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cargo {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
 /// Derive the linkable crate set (`name` → checkout member dir) from the
 /// checkout via the single canonical release-closure definition
 /// ([`streamlib_pack::compute_release_closure`]): every publishable workspace
@@ -504,17 +589,26 @@ fn derive_linkable_crates(checkout: &Path) -> Result<BTreeMap<String, PathBuf>, 
         .collect())
 }
 
+/// One streamlib crate that resolves from the registry instead of the checkout
+/// — i.e. failed to redirect through the link's `[patch]`.
+#[derive(Debug, Clone)]
+struct UnpatchedCrate {
+    name: String,
+    version: String,
+}
+
 /// Verify the consumer's cargo resolution honors the link: every resolved
 /// `streamlib*` / `vulkan-jpeg` package must be a path source under the
-/// checkout. Returns `Err(detail)` naming the offending crates. `Ok(())`
-/// (vacuously) when the consumer has no `Cargo.toml`.
+/// checkout. Returns the crates that still resolve from the registry (empty ⇒
+/// fully patched); `Err(detail)` when cargo can't resolve the graph at all.
+/// `Ok(vec![])` (vacuously) when the consumer has no `Cargo.toml`.
 fn verify_cargo_patch_resolution(
     consumer_root: &Path,
     checkout: &Path,
     crates: &BTreeMap<String, PathBuf>,
-) -> Result<(), String> {
+) -> Result<Vec<UnpatchedCrate>, String> {
     if !consumer_root.join("Cargo.toml").is_file() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     // Offline first (the whole point of link mode); fall back to online when
@@ -542,7 +636,7 @@ fn verify_cargo_patch_resolution(
         .and_then(|p| p.as_array())
         .unwrap_or(&empty);
     let mut verified = 0usize;
-    let mut not_patched: Vec<String> = Vec::new();
+    let mut not_patched: Vec<UnpatchedCrate> = Vec::new();
     for pkg in packages {
         let name = pkg.get("name").and_then(|v| v.as_str()).unwrap_or_default();
         if !crates.contains_key(name) {
@@ -557,19 +651,181 @@ fn verify_cargo_patch_resolution(
             verified += 1;
         } else {
             let version = pkg.get("version").and_then(|v| v.as_str()).unwrap_or("?");
-            not_patched.push(format!("{name}@{version}"));
+            not_patched.push(UnpatchedCrate {
+                name: name.to_string(),
+                version: version.to_string(),
+            });
         }
     }
 
-    if !not_patched.is_empty() {
-        return Err(format!(
-            "these streamlib crates still resolve from the registry (the consumer's version \
-             requirements don't admit the checkout's versions, so cargo ignored the [patch]): {}",
-            not_patched.join(", ")
-        ));
+    tracing::info!(verified, unpatched = not_patched.len(), "post-link cargo resolution checked");
+    Ok(not_patched)
+}
+
+/// Result of verifying (and, when a stale lock is at fault, remedying) that the
+/// link's `[patch]` took effect in the consumer's cargo resolution.
+enum VerifyOutcome {
+    /// The `[patch]` resolves. `relocked` is the number of crates whose lock
+    /// entries were transparently refreshed to make it take effect (0 ⇒ the
+    /// patch was honored without touching the lock).
+    Verified { relocked: usize },
+    /// The `[patch]` is genuinely ignored (version-requirement mismatch) or the
+    /// graph is unresolvable — the caller rolls the whole link back.
+    RollBack { detail: String },
+    /// A stale lock defeats the `[patch]` and the automatic re-lock could not
+    /// run — the caller leaves the link applied and surfaces the exact command.
+    RelockUnavailable {
+        lockfile: PathBuf,
+        crates: String,
+        command: String,
+        detail: String,
+    },
+}
+
+/// Verify the link's `[patch]` resolves; if a pre-existing `Cargo.lock` defeats
+/// it, transparently re-lock exactly the crates that failed to redirect and
+/// re-verify. The re-lock mutates `Cargo.lock`, which is recorded as a
+/// link-managed file (`record_relocked_lockfile`) so `unlink` restores it
+/// byte-identically. Returns `Err` only for a filesystem failure while
+/// recording; every resolution outcome is a [`VerifyOutcome`].
+fn verify_and_remedy_patch_resolution(
+    consumer_root: &Path,
+    checkout: &Path,
+    crates: &BTreeMap<String, PathBuf>,
+    original_cargo_lock: Option<Vec<u8>>,
+) -> Result<VerifyOutcome, LinkError> {
+    let unpatched = match verify_cargo_patch_resolution(consumer_root, checkout, crates) {
+        Ok(u) => u,
+        Err(detail) => return Ok(VerifyOutcome::RollBack { detail }),
+    };
+    if unpatched.is_empty() {
+        return Ok(VerifyOutcome::Verified { relocked: 0 });
     }
-    tracing::info!(verified, "post-link cargo resolution verified");
-    Ok(())
+
+    let lockfile = consumer_root.join("Cargo.lock");
+    if !lockfile.is_file() {
+        // No lock to blame — the checkout's versions don't satisfy the
+        // consumer's requirements, so cargo ignored the [patch].
+        return Ok(VerifyOutcome::RollBack {
+            detail: format!(
+                "these streamlib crates resolve from the registry, not the checkout — the \
+                 checkout's versions don't satisfy the consumer's version requirements: {}",
+                render_unpatched(&unpatched)
+            ),
+        });
+    }
+
+    // Stale lock: cargo honored the existing lock over the new [patch]. Refresh
+    // exactly the crates that failed to redirect so the patch takes effect.
+    let targets: Vec<&str> = unpatched.iter().map(|c| c.name.as_str()).collect();
+    let command = relock_command_string(consumer_root, &targets);
+    tracing::info!(
+        crates = %targets.join(", "),
+        "consumer Cargo.lock defeats the [patch]; re-locking to make it take effect"
+    );
+    if let Err(detail) = relock_streamlib_crates(consumer_root, &targets) {
+        return Ok(VerifyOutcome::RelockUnavailable {
+            lockfile,
+            crates: targets.join(", "),
+            command,
+            detail,
+        });
+    }
+
+    // Record the re-locked Cargo.lock before re-verifying, so a roll-back on the
+    // (rare) still-unresolved path also restores the lock byte-identically.
+    record_relocked_lockfile(consumer_root, &lockfile, original_cargo_lock)?;
+
+    match verify_cargo_patch_resolution(consumer_root, checkout, crates) {
+        Ok(still) if still.is_empty() => Ok(VerifyOutcome::Verified {
+            relocked: targets.len(),
+        }),
+        Ok(still) => Ok(VerifyOutcome::RollBack {
+            detail: format!(
+                "after re-locking the consumer's Cargo.lock, these streamlib crates still \
+                 resolve from the registry — the checkout's versions don't satisfy the \
+                 consumer's version requirements: {}",
+                render_unpatched(&still)
+            ),
+        }),
+        Err(detail) => Ok(VerifyOutcome::RollBack { detail }),
+    }
+}
+
+/// Render an unpatched-crate list as `name@version, name@version` for messages.
+fn render_unpatched(crates: &[UnpatchedCrate]) -> String {
+    crates
+        .iter()
+        .map(|c| format!("{}@{}", c.name, c.version))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The exact `cargo update` command that re-locks `targets` for the consumer —
+/// surfaced to the operator when the automatic re-lock can't run.
+fn relock_command_string(consumer_root: &Path, targets: &[&str]) -> String {
+    let mut s = format!(
+        "cargo update --manifest-path {}",
+        consumer_root.join("Cargo.toml").display()
+    );
+    for t in targets {
+        s.push_str(" -p ");
+        s.push_str(t);
+    }
+    s
+}
+
+/// Re-lock exactly `targets` in the consumer's `Cargo.lock` so the link's
+/// `[patch]` takes effect. `cargo update -p <name>` re-resolves that package,
+/// which redirects it to the patched path source. Offline first (link mode is
+/// offline-by-design); fall back to online when offline resolution can't run.
+fn relock_streamlib_crates(consumer_root: &Path, targets: &[&str]) -> Result<(), String> {
+    let mut base: Vec<&str> = vec!["update"];
+    for t in targets {
+        base.push("-p");
+        base.push(t);
+    }
+    let mut offline = base.clone();
+    offline.push("--offline");
+    match run_cargo_status(&offline, Some(consumer_root)) {
+        Ok(()) => Ok(()),
+        Err(offline_err) => run_cargo_status(&base, Some(consumer_root)).map_err(|online_err| {
+            format!("offline: {offline_err}; online: {online_err}")
+        }),
+    }
+}
+
+/// Record the transparently re-locked `Cargo.lock` as a link-managed file so
+/// `unlink` restores it byte-identically. Backs the pre-link bytes up (when the
+/// lock existed) and appends a [`LinkedManifestFile`] entry to the persisted
+/// manifest. When the lock did not exist pre-link, the entry is `!existed_before`
+/// so `unlink` removes the file the link created.
+fn record_relocked_lockfile(
+    consumer_root: &Path,
+    lockfile: &Path,
+    original: Option<Vec<u8>>,
+) -> Result<(), LinkError> {
+    let current = std::fs::read(lockfile).map_err(|e| LinkError::io(lockfile, e))?;
+    let backup_dir = consumer_root.join(LINK_STATE_DIR).join(LINK_BACKUP_DIR);
+    std::fs::create_dir_all(&backup_dir).map_err(|e| LinkError::io(&backup_dir, e))?;
+    if let Some(orig) = &original {
+        let backup = backup_dir.join("Cargo.lock");
+        std::fs::write(&backup, orig).map_err(|e| LinkError::io(&backup, e))?;
+    }
+
+    let mut manifest = load_active_manifest(consumer_root)?.ok_or_else(|| {
+        LinkError::CorruptLinkState {
+            path: consumer_root.join(LINK_STATE_DIR).join(LINK_MANIFEST_FILE),
+            detail: "link manifest missing while recording the re-locked Cargo.lock".to_string(),
+        }
+    })?;
+    manifest.files.push(LinkedManifestFile {
+        path: PathBuf::from("Cargo.lock"),
+        existed_before: original.is_some(),
+        pre_edit_sha256: original.as_deref().map(hex_sha256).unwrap_or_default(),
+        post_edit_sha256: hex_sha256(&current),
+    });
+    overwrite_manifest(consumer_root, &manifest)
 }
 
 /// Run the full link transaction against a computed crate set: plan every
