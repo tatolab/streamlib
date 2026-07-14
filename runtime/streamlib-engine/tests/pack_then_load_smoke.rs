@@ -21,15 +21,13 @@
 //! dlopen).
 //!
 //! Mentally-revert lock summary (each maps to a specific test):
-//! - Drop *any one* processor from `streamlib-network`'s
-//!   `export_plugin!` arg list: dlopen still succeeds and the other
-//!   processor still registers, so `add_module_with(SlpkgArchive)`
-//!   returns `Ok` — but the listed-name assertion that *both*
-//!   `UdpSource` and `UdpSink` appear in `PROCESSOR_REGISTRY` fails.
-//!   (Dropping the whole `export_plugin!` macro is caught earlier —
-//!   by the `STREAMLIB_PLUGIN missing` error path inside the module
-//!   loader — the listed-name assertion locks the omit-one regression
-//!   class the symbol-missing error path doesn't cover.)
+//! - Drop the `JpegDecoder` processor from `streamlib-jpeg`'s
+//!   `export_plugin!` arg list: dlopen still succeeds (the
+//!   `STREAMLIB_PLUGIN` symbol is still exported), so
+//!   `add_module_with(SlpkgArchive)` returns `Ok` — but the listed-name
+//!   assertion that `JpegDecoder` appears in `PROCESSOR_REGISTRY` fails.
+//!   (Dropping the whole `export_plugin!` macro is caught earlier — by
+//!   the `STREAMLIB_PLUGIN missing` error path inside the module loader.)
 //! - Drop the `schemas:` walk (`register_package_schemas`) in the
 //!   module loader and the schemas-only assertion fails
 //!   (`current_schema_definition("@tatolab/core/VideoFrame")`
@@ -42,7 +40,7 @@
 //!
 //! Cache scope: the `SlpkgArchive` strategy extracts every slpkg into
 //! the process-global `<STREAMLIB_HOME>/.streamlib/cache/packages/<name>-<version>/`
-//! cache. This test therefore writes to the *real* network / core
+//! cache. This test therefore writes to the *real* jpeg / core
 //! cache entries (at their current package versions) on the host
 //! running the test. The
 //! extract is idempotent (`extract_slpkg_to_cache` clears the dir
@@ -134,15 +132,16 @@ fn pkg_build_slpkg(cli: &Path, pkg_dir: &Path, slpkg: &Path) {
             which build the fixture in-workspace and exercise the full \
             STREAMLIB_PLUGIN → setup/process/teardown roundtrip."]
 fn pack_then_load_rust_package_registers_processors() {
-    // Rust-impl gate: `pkg build` packs `@tatolab/network` (small dep
-    // graph, no GPU / audio hardware) into a source-only `.slpkg`
-    // straight from its package dir — packages/* are standalone
-    // workspaces, NOT members of the repo workspace, so there is no
-    // `cargo -p streamlib-network` to lean on. Loading the source-only
+    // Rust-impl gate: `pkg build` packs `@tatolab/jpeg` — the remaining
+    // engine-free Rust package after `@tatolab/network` / `@tatolab/mavlink`
+    // / `@tatolab/vadr-vision` were evicted to tatolab/streamlib-packages —
+    // into a source-only `.slpkg` straight from its package dir. packages/*
+    // are standalone workspaces, NOT members of the repo workspace, so there
+    // is no `cargo -p streamlib-jpeg` to lean on. Loading the source-only
     // box makes the orchestrator build it on this host, resolving
     // streamlib-plugin-sdk & friends by version — the real consumer
-    // story. Both exported processors must land in `PROCESSOR_REGISTRY`
-    // after `Runner::add_module_with`.
+    // story. The exported `JpegDecoder` processor must land in
+    // `PROCESSOR_REGISTRY` after `Runner::add_module_with`.
     //
     // IGNORED (see the `#[ignore]` reason above): with the custom cargo
     // registry gone and SDK publishing deferred, the out-of-tree build
@@ -151,8 +150,8 @@ fn pack_then_load_rust_package_registers_processors() {
     let cli = build_streamlib_cli();
 
     let tmp = tempfile::tempdir().unwrap();
-    let pkg_src = workspace_root().join("packages").join("network");
-    let slpkg = tmp.path().join("network.slpkg");
+    let pkg_src = workspace_root().join("packages").join("jpeg");
+    let slpkg = tmp.path().join("jpeg.slpkg");
     pkg_build_slpkg(&cli, &pkg_src, &slpkg);
 
     // A source-only Rust slpkg builds at load — the Runner needs the
@@ -162,7 +161,7 @@ fn pack_then_load_rust_package_registers_processors() {
     let runtime = Runner::with_auto_build().unwrap();
     runtime
         .add_module_with_blocking(
-            module_ident_any_version!("tatolab", "network"),
+            module_ident_any_version!("tatolab", "jpeg"),
             Strategy::Slpkg {
                 path: slpkg.clone(),
             },
@@ -175,13 +174,8 @@ fn pack_then_load_rust_package_registers_processors() {
         .map(|desc| desc.name.r#type.as_str().to_string())
         .collect();
     assert!(
-        registered.iter().any(|n| n == "UdpSource"),
-        "UdpSource must be registered after add_module_with, got: {:?}",
-        registered
-    );
-    assert!(
-        registered.iter().any(|n| n == "UdpSink"),
-        "UdpSink must be registered after add_module_with, got: {:?}",
+        registered.iter().any(|n| n == "JpegDecoder"),
+        "JpegDecoder must be registered after add_module_with, got: {:?}",
         registered
     );
 }
