@@ -19,10 +19,10 @@
 
 /// Engine-side twin directory, relative to this crate's manifest.
 const ENGINE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/core/plugin/");
-/// SDK-side twin directory (`plugin/streamlib-plugin-sdk` is two levels up).
+/// SDK-side twin directory (`sdk/streamlib-plugin-sdk` is two levels up).
 const SDK_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../plugin/streamlib-plugin-sdk/src/plugin/"
+    "/../../sdk/streamlib-plugin-sdk/src/plugin/"
 );
 
 /// Strip full-line comments + blank lines, apply the one known import-path shim
@@ -87,7 +87,7 @@ fn logic_identical_twins_stay_in_sync() {
             "\nengine↔SDK twin `{name}` has DRIFTED — a logic change landed in one \
              copy but not the other. Apply the SAME change to BOTH:\n  \
              runtime/streamlib-engine/src/core/plugin/{name}\n  \
-             plugin/streamlib-plugin-sdk/src/plugin/{name}\n\
+             sdk/streamlib-plugin-sdk/src/plugin/{name}\n\
              (These two are logic-identical by contract; the engine-free SDK \
              can't reuse the engine's copy.)\n"
         );
@@ -115,7 +115,7 @@ fn divergent_processor_vtable_twin_is_tripwired() {
         "\nprocessor_vtable.rs twin trip-wire fired — a copy was edited.\n\
          Verify the same logic change belongs in the OTHER copy \
          (runtime/streamlib-engine/src/core/plugin/ AND \
-         plugin/streamlib-plugin-sdk/src/plugin/), then set:\n  \
+         sdk/streamlib-plugin-sdk/src/plugin/), then set:\n  \
          EXPECTED_ENGINE = {eng:#018x}\n  EXPECTED_SDK = {sdk:#018x}\n"
     );
 }

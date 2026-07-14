@@ -10,9 +10,9 @@ reference code only, mirroring the `_apple_impl_pending_/` convention
 used elsewhere in the codebase (e.g.
 `packages/h264/src/_apple_impl_pending_/`).
 
-## Why it was split out (and not shipped in `plugin/vulkan-jpeg`)
+## Why it was split out (and not shipped in `sdk/vulkan-jpeg`)
 
-`vulkan-jpeg` moved to the engine-free `plugin/` zone. The Vulkan-compute
+`vulkan-jpeg` is an engine-free crate under `sdk/`. The Vulkan-compute
 backend is cdylib-safe: it builds every GPU resource through the
 FullAccess primitives (`create_compute_kernel`, `acquire_storage_buffer`,
 `create_texture_ring`, `create_command_recorder`) that return `#[repr(C)]`
@@ -27,7 +27,7 @@ have **no cdylib-safe FullAccess form yet** — transiting a
 non-`#[repr(C)]` `HostVulkanDevice` across the plugin ABI is unsound for a
 separately-built `.slpkg` (see
 `docs/learnings/slpkg-raw-device-rhi-construction.md`). So the nvJPEG
-backend cannot live in `plugin/vulkan-jpeg`; it has to come back as an
+backend cannot live in `sdk/vulkan-jpeg`; it has to come back as an
 engine-resident backend with a cdylib-safe exposure path.
 
 ## Files

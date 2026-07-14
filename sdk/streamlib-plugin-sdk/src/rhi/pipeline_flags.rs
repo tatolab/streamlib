@@ -6,7 +6,7 @@
 //! Mirror the engine's `vulkan/rhi/vulkan_pipeline_flags.rs` newtypes so
 //! a cdylib can issue barriers through
 //! [`crate::rhi::RhiCommandRecorder::record_image_barrier`] without
-//! importing `vulkanalia` (banned in the `plugin/` zone). The const
+//! importing `vulkanalia` (banned in engine-free plugin crates). The const
 //! values are the stable Vulkan-spec `VkPipelineStageFlags2` /
 //! `VkAccessFlags2` bit positions; the recorder vtable carries the raw
 //! `u64` bits across the plugin ABI and the host reconstructs the typed

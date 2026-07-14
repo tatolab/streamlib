@@ -179,11 +179,10 @@ See [CLA.md](docs/license/CLA.md) for the Contributor License Agreement.
 ```
 streamlib/
 ├── runtime/                      # Engine core (streamlib-engine, consumer-rhi, plugin-abi, ipc-types, surface-client, runtime binary, moq)
-├── sdk/                          # Authoring SDK surface (streamlib-sdk, macros, jtd-codegen, idents, processor-schema, python, deno)
+├── sdk/                          # What package and app authors compile against (streamlib-sdk, engine-free streamlib-plugin-sdk + streamlib-error + vulkan-jpeg, macros, jtd-codegen, idents, processor-schema, python, deno)
 ├── adapters/                     # Surface adapter crates (vulkan, opengl, skia, cpu-readback, cuda + their -abi / -helpers crates)
 ├── tools/                        # CLI + packaging tooling (streamlib-cli, pack, cargo-build, build-orchestrator, cross-rustc-fixture)
 ├── vendor/                       # Vendored third-party forks (tatolab-vulkanalia*, Apache-2.0 — never edit in place)
-├── plugin/                       # Engine-free plugin zone (streamlib-plugin-sdk, streamlib-error, vulkan-jpeg)
 ├── packages/                     # Processor packages (@tatolab/*, standalone registry units)
 ├── examples/                     # Example applications (standalone crates, not workspace members)
 └── docs/                         # Documentation

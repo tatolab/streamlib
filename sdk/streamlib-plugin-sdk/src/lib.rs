@@ -38,7 +38,7 @@ mod rhi;
 /// `streamlib_plugin_sdk::sdk::*`; the `#[processor]` macro and
 /// `export_plugin!` resolve their emitted paths into this module.
 pub mod sdk {
-    // ---- Canonical Error / Result (engine-free, plugin/ zone) ----
+    // ---- Canonical Error / Result (engine-free) ----
     /// `Error`, `Result`, `PortDirection`.
     pub use streamlib_error as error;
 

@@ -166,7 +166,7 @@ fn valid_jpeg_runs_through_pipeline_cleanly() {
     // Color metadata round-trip: the fixture is a baseline JFIF JPEG
     // with no EXIF / ICC / Adobe APP14 overrides, so JFIF default
     // applies — `(Bt709, Srgb, Smpte170m, Full)` per
-    // plugin/vulkan-jpeg/src/color.rs::JFIF_DEFAULT. The decoder must
+    // sdk/vulkan-jpeg/src/color.rs::JFIF_DEFAULT. The decoder must
     // surface that 4-tuple on the emitted VideoFrame so downstream
     // consumers (muxers, displays) don't have to re-derive colorimetry
     // from the bitstream. The PSNR rig (#844) catches pixel-level

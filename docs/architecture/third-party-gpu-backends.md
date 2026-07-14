@@ -260,9 +260,9 @@ plausibly attempt without this doc.
 ## Reference
 
 - **Backend-using library**:
-  [`libs/vulkan-jpeg/src/backend.rs`](../../libs/vulkan-jpeg/src/backend.rs)
+  [`sdk/vulkan-jpeg/src/backend.rs`](../../sdk/vulkan-jpeg/src/backend.rs)
   (`JpegDecodeBackend` trait),
-  [`libs/vulkan-jpeg/src/nvjpeg_backend.rs`](../../libs/vulkan-jpeg/src/nvjpeg_backend.rs)
+  [`sdk/vulkan-jpeg/src/nvjpeg_backend.rs`](../../sdk/vulkan-jpeg/src/nvjpeg_backend.rs)
   (`NvJpegBackend` implementation).
 - **Engine primitives**:
   - [`HostVulkanBuffer::new_opaque_fd_export`] (HOST_VISIBLE) and

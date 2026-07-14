@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-    "plugin/streamlib-error", # plugin/ zone: canonical Error + Result (engine-free)
-    "plugin/streamlib-plugin-sdk", # plugin/ zone: engine-free authoring SDK (cdylib arm of the dual-mode views + glue)
-    "plugin/vulkan-jpeg", # plugin/ zone: engine-free JPEG decoder — CPU parser + Huffman entropy decode + fused Vulkan-compute kernel (cdylib-safe; nvJPEG backend parked in the engine)
+    "sdk/streamlib-error", # engine-free: canonical Error + Result
+    "sdk/streamlib-plugin-sdk", # engine-free authoring SDK (cdylib arm of the dual-mode views + glue)
+    "sdk/vulkan-jpeg", # engine-free JPEG decoder — CPU parser + Huffman entropy decode + fused Vulkan-compute kernel (cdylib-safe; nvJPEG backend parked in the engine)
     "xtask",                    # Development tasks (cargo xtask <command>)
     "sdk/streamlib-sdk",       # Public authoring API surface — customer apps depend on this (Cargo name `streamlib`)
     "runtime/streamlib-engine",    # Engine internals (RHI, IPC, surface-share, runtime executor) — private dep of the SDK
@@ -45,8 +45,7 @@ members = [
     # dependency — the streamlib SDK, package crates, adapters — resolves
     # from the static registry by version, and each carries its own
     # `[workspace]` self-root. Only the zone crates (`runtime/*`, `sdk/*`,
-    # `adapters/*`, `tools/*`, `vendor/*`), `plugin/*`, and `xtask` form
-    # this workspace.
+    # `adapters/*`, `tools/*`, `vendor/*`) and `xtask` form this workspace.
     # Build a package/example with `cd <dir> && cargo build`, or via
     # `streamlib add` / runtime `Strategy::Registry` for packages.
     # Exception to the "packages/* are not members" rule above: the

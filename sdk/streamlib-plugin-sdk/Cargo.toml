@@ -15,16 +15,16 @@ name = "streamlib_plugin_sdk"
 path = "src/lib.rs"
 
 [dependencies]
-# Canonical Error / Result / PortDirection (engine-free, plugin/ zone).
+# Canonical Error / Result / PortDirection (engine-free).
 streamlib-error = { path = "../streamlib-error", version = "0.6.0" }
 # Schema identity, descriptor types, execution config — engine-free shared
 # data the macro emits against and the views/traits return.
-streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.6.0" }
+streamlib-processor-schema = { path = "../streamlib-processor-schema", version = "0.6.0" }
 # Plugin ABI vtables + HostServices + export_plugin! (zero-dep, engine-free).
 streamlib-plugin-abi = { path = "../../runtime/streamlib-plugin-abi", version = "0.6.0" }
 # Procedural macros (#[processor], schema_ident!, module_ident!, ...). Re-exported
 # under sdk::* so plugins author against this crate by its real name.
-streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.6.0" }
+streamlib-macros = { path = "../streamlib-macros", version = "0.6.0" }
 # Engine-free panic-safety helper (run_host_extern_c) shared by the engine
 # and the five surface adapters; the SDK's processor_vtable thunks route
 # every extern "C" boundary crossing through it. Deps: bitflags / parking_lot

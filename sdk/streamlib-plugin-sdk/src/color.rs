@@ -7,7 +7,7 @@
 //! matrix decomposition the color converter and the Vulkan-compute JPEG
 //! kernel consume as push-constant state. These are byte-for-byte the
 //! same shapes the engine carries in `core::color`; the SDK twin keeps
-//! the `plugin/` zone engine-free (no `vulkanalia`, no engine) so a
+//! the plugin SDK engine-free (no `vulkanalia`, no engine) so a
 //! Vulkan-compute-only plugin can build the same color push-constants
 //! the host would.
 
