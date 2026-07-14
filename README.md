@@ -200,17 +200,6 @@ Clone the repo and build with cargo — there is no setup script. The
 runtime and packages live in the checkout, and `streamlib-runtime`
 resolves the `packages/` directory from its own location.
 
-Optionally use [direnv](https://direnv.net/) to load development
-environment variables (e.g. `RUST_LOG`):
-
-```bash
-# install direnv, then add its hook to your shell rc:
-eval "$(direnv hook zsh)"  # or bash
-direnv allow
-```
-
-See `.envrc.example` for the environment variables used.
-
 ## Building
 
 ```bash
