@@ -44,7 +44,9 @@ members = [
     # standalone, registry-only units (each headed to its own repo): every
     # dependency — the streamlib SDK, package crates, adapters — resolves
     # from the static registry by version, and each carries its own
-    # `[workspace]` self-root. Only `libs/*` + `xtask` form this workspace.
+    # `[workspace]` self-root. Only the zone crates (`runtime/*`, `sdk/*`,
+    # `adapters/*`, `tools/*`, `vendor/*`), `plugin/*`, and `xtask` form
+    # this workspace.
     # Build a package/example with `cd <dir> && cargo build`, or via
     # `streamlib add` / runtime `Strategy::Registry` for packages.
     # Exception to the "packages/* are not members" rule above: the

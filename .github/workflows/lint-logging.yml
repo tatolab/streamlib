@@ -3,7 +3,8 @@ name: Lint Logging
 # Enforces the unified logging pathway — see docs/logging.md.
 # `cargo xtask lint-logging` bans the banned-macro/function set across all three
 # surface areas without compiling the workspace:
-# - Rust: syn-based AST walk over opt-in `libs/*` crates, honors
+# - Rust: syn-based AST walk over opt-in workspace crates (under `runtime/`,
+#   `sdk/`, `adapters/`, `tools/`, `vendor/`), honors
 #   `#[allow(clippy::disallowed_macros)]`, `#[cfg(test)]`, and platform cfg
 #   gates exactly as clippy would on `ubuntu-latest`.
 # - Python: banned `print()`/`sys.stdout`/`logging.basicConfig` in

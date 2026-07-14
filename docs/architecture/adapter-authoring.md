@@ -91,7 +91,7 @@ Mechanical steps — work top-to-bottom.
 
 ### 1. Crate layout
 
-Create three crates under `libs/`:
+Create three crates under `adapters/`:
 
 - `streamlib-adapter-<name>/` — the adapter implementation. Runtime
   dep graph: `streamlib-adapter-abi` + `streamlib-consumer-rhi` +

@@ -623,7 +623,7 @@ fn check_privileged_vk_calls(
 
 const CHECK_VULKANALIA_FORK: &str = "vulkanalia-uses-workspace-fork";
 
-const VULKANALIA_FORK_RATIONALE: &str = "all vulkanalia / vulkanalia-sys / vulkanalia-vma deps must inherit from [workspace.dependencies] (the vendored tatolab-vulkanalia* crates in libs/) — a direct version spec or a direct tatolab-vulkanalia* dep can silently pull crates.io upstream or bypass the workspace rename and lose the VMA 3.3.0 patch";
+const VULKANALIA_FORK_RATIONALE: &str = "all vulkanalia / vulkanalia-sys / vulkanalia-vma deps must inherit from [workspace.dependencies] (the vendored tatolab-vulkanalia* crates in vendor/) — a direct version spec or a direct tatolab-vulkanalia* dep can silently pull crates.io upstream or bypass the workspace rename and lose the VMA 3.3.0 patch";
 
 /// The vendored fork crates' own sibling deps (`tatolab-vulkanalia` →
 /// `tatolab-vulkanalia-sys`, `tatolab-vulkanalia-vma` → `tatolab-vulkanalia`)
