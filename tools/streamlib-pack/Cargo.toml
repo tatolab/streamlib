@@ -1,0 +1,34 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-pack"
+description = "Package-artifact assembly shared between `streamlib pack` (CLI) and `streamlib-build-orchestrator` (runtime). One routine assembles a complete package artifact per language (Rust cdylib via cargo, Python as full source, Deno bundle, schemas) and emits it either as a compressed .slpkg or as an extracted staged directory."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+toml = { workspace = true }
+toml_edit = { workspace = true }
+tempfile = { workspace = true }
+zip = "2.2"
+streamlib-cargo-build = { path = "../streamlib-cargo-build", version = "0.6.0" }
+streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.6.0" }
+streamlib-idents = { path = "../../sdk/streamlib-idents", version = "0.6.0" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Gapless atomic directory swap (renameat2 RENAME_EXCHANGE) for the static
+# registry staged-tree flip — see static_registry::publish_staged_tree.
+libc = { workspace = true }
+
+[lints]
+workspace = true

@@ -124,7 +124,7 @@ serialized bytes directly through the mapped pointer (no staging copy).
 - vulkanalia-sys: 0.35.0 / `tatolab/vulkanalia` fork at rev
   `982d32d293e5425753d595978776ee4fa4ded3a1`.
 - Implementation:
-  `libs/streamlib-engine/src/vulkan/rhi/vulkan_acceleration_structure.rs::instance_bytes`.
+  `runtime/streamlib-engine/src/vulkan/rhi/vulkan_acceleration_structure.rs::instance_bytes`.
 
 ## Upstream report
 

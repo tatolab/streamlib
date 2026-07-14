@@ -10,7 +10,7 @@ Subprocess Vulkan code does **DMA-BUF / OPAQUE_FD FD import + bind + map**,
 nothing else. Every privileged primitive — allocation, modifier choice,
 compute kernel construction + dispatch, queue submit, fence management,
 swapchain — escalates via IPC to the host's `GpuContextFullAccess`.
-Bug-fix fan-out is exactly 1: a fix in `libs/streamlib-engine/src/vulkan/rhi/`
+Bug-fix fan-out is exactly 1: a fix in `runtime/streamlib-engine/src/vulkan/rhi/`
 reaches every consumer (host adapter, host pipeline, subprocess via
 escalate IPC).
 
@@ -65,7 +65,7 @@ boundary is enforced by the type system — a cdylib's dep graph excludes
 `streamlib` and physically cannot reach `HostVulkanDevice`, the host
 VMA pools, the modifier probe, or any other privileged primitive.
 
-[crate]: ../../libs/streamlib-consumer-rhi/
+[crate]: ../../runtime/streamlib-consumer-rhi/
 
 ## Single-pattern principle
 
@@ -149,7 +149,7 @@ adapters.
 ┌──────────────────────────────────────────────────────────────────────┐
 │ HOST PROCESS                                                         │
 │  ╔══════════════════════════════════════════════════════════════╗    │
-│  ║  streamlib RHI  (libs/streamlib-engine/src/vulkan/rhi/)      ║    │
+│  ║  streamlib RHI  (runtime/streamlib-engine/src/vulkan/rhi/)      ║    │
 │  ║  Host-side wins live here — VulkanComputeKernel,             ║    │
 │  ║  VulkanGraphicsKernel, VulkanRayTracingKernel, VMA pools,    ║    │
 │  ║  queue mutex, modifier probe, frames-in-flight=2,            ║    │

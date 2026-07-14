@@ -9,7 +9,7 @@
 //! AST walk so that `#[cfg(test)]`, `#[allow(clippy::disallowed_macros)]`, and
 //! file-level `#![allow(...)]` are honored exactly as clippy would — without
 //! having to compile the workspace (which would pull in `glslc` via
-//! `libs/streamlib-engine`'s build script).
+//! `runtime/streamlib-engine`'s build script).
 
 use anyhow::{Context, Result};
 use std::fs;
@@ -31,7 +31,7 @@ pub struct LintTarget {
 pub const TARGETS: &[LintTarget] = &[
     LintTarget {
         name: "python",
-        root_relative: "libs/streamlib-python",
+        root_relative: "sdk/streamlib-python",
         extension: "py",
         exclude_path_segments: &[
             "tests",
@@ -48,7 +48,7 @@ pub const TARGETS: &[LintTarget] = &[
     },
     LintTarget {
         name: "typescript",
-        root_relative: "libs/streamlib-deno",
+        root_relative: "sdk/streamlib-deno",
         extension: "ts",
         exclude_path_segments: &["_generated_", "tests", "node_modules"],
         exclude_file_suffixes: &["_test.ts", ".test.ts"],
@@ -379,33 +379,38 @@ fn push_mod_exclusion(found: &Path, mod_name: &str, excluded: &mut Vec<PathBuf>)
 }
 
 fn discover_lint_opted_in_crates(project_root: &Path) -> Result<Vec<PathBuf>> {
-    let libs = project_root.join("libs");
+    const ZONE_PARENTS: &[&str] = &["runtime", "sdk", "adapters", "tools", "vendor"];
     let mut result = Vec::new();
-    if !libs.exists() {
-        return Ok(result);
-    }
-    for entry in fs::read_dir(&libs).with_context(|| format!("read_dir {}", libs.display()))? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
+    for zone in ZONE_PARENTS {
+        let zone_dir = project_root.join(zone);
+        if !zone_dir.exists() {
             continue;
         }
-        let cargo_toml = entry.path().join("Cargo.toml");
-        if !cargo_toml.exists() {
-            continue;
-        }
-        let content = fs::read_to_string(&cargo_toml)
-            .with_context(|| format!("read {}", cargo_toml.display()))?;
-        let parsed: toml::Value = match toml::from_str(&content) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        let opts_in = parsed
-            .get("lints")
-            .and_then(|v| v.get("workspace"))
-            .and_then(|v| v.as_bool())
-            == Some(true);
-        if opts_in {
-            result.push(entry.path());
+        for entry in
+            fs::read_dir(&zone_dir).with_context(|| format!("read_dir {}", zone_dir.display()))?
+        {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let cargo_toml = entry.path().join("Cargo.toml");
+            if !cargo_toml.exists() {
+                continue;
+            }
+            let content = fs::read_to_string(&cargo_toml)
+                .with_context(|| format!("read {}", cargo_toml.display()))?;
+            let parsed: toml::Value = match toml::from_str(&content) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let opts_in = parsed
+                .get("lints")
+                .and_then(|v| v.get("workspace"))
+                .and_then(|v| v.as_bool())
+                == Some(true);
+            if opts_in {
+                result.push(entry.path());
+            }
         }
     }
     result.sort();
@@ -1236,7 +1241,7 @@ mod tests {
         // pointing at `apple/mod.rs` which contains a banned macro.
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
-        let crate_root = root.join("libs/streamlib-macros");
+        let crate_root = root.join("sdk/streamlib-macros");
         fs::create_dir_all(crate_root.join("src/apple")).unwrap();
         fs::write(
             crate_root.join("Cargo.toml"),
@@ -1268,7 +1273,7 @@ mod tests {
     fn rust_out_of_line_mod_without_cfg_is_scanned() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
-        let crate_root = root.join("libs/streamlib-macros");
+        let crate_root = root.join("sdk/streamlib-macros");
         fs::create_dir_all(crate_root.join("src")).unwrap();
         fs::write(
             crate_root.join("Cargo.toml"),
@@ -1297,7 +1302,7 @@ mod tests {
     fn rust_crate_without_workspace_lints_is_skipped() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
-        let crate_root = root.join("libs/streamlib-cli");
+        let crate_root = root.join("tools/streamlib-cli");
         fs::create_dir_all(crate_root.join("src")).unwrap();
         fs::write(
             crate_root.join("Cargo.toml"),

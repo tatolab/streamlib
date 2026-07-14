@@ -19,7 +19,7 @@
 //!     panicked.
 //!
 //! Mirrors the in-process `test_escalate_serializes_concurrent_callers`
-//! test (`libs/streamlib-engine/src/core/context/gpu_context.rs`) but
+//! test (`runtime/streamlib-engine/src/core/context/gpu_context.rs`) but
 //! drives the cdylib path through `escalate_via_vtable` — the
 //! plugin ABI contract the audit flagged as previously uncovered.
 
@@ -48,7 +48,7 @@ impl ManualProcessor for ConcurrentEscalateTest::Processor {
         // their `limited.escalate(...)` call and deadlock — start
         // blocks waiting for join, workers block waiting for the
         // gate, gate never releases. The integration test at
-        // `libs/streamlib-engine/tests/load_project_dylib_concurrent_escalate.rs`
+        // `runtime/streamlib-engine/tests/load_project_dylib_concurrent_escalate.rs`
         // is `#[ignore]`d as a result. The serialization invariant
         // this fixture was guarding is covered by the unit test
         // `escalate_gate::tests::enter_serializes_concurrent_callers`.

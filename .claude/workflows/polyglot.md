@@ -6,7 +6,7 @@ format.
 
 ## Background the agent must hold before starting
 
-- The polyglot SDKs (`libs/streamlib-python`, `libs/streamlib-deno`)
+- The polyglot SDKs (`sdk/streamlib-python`, `sdk/streamlib-deno`)
   used to maintain their own GPU plumbing (IOSurface FFI, CGL helpers,
   XPC broker). That model is being retired in favor of escalate IPC →
   host → `GpuContext` → RHI; every GPU op originates host-side.
@@ -114,7 +114,7 @@ current issue blocked by it.
 
 ## Carve-out rules (for `packages/*` issues)
 
-When carving a domain processor cluster out of `libs/streamlib-engine/`
+When carving a domain processor cluster out of `runtime/streamlib-engine/`
 into `packages/<name>/`:
 
 - **Cargo crate type**: declare `crate-type = ["rlib", "cdylib"]` from

@@ -148,7 +148,7 @@ fn matches_allow(rel_path: &Path, allow: &[AllowEntry]) -> bool {
 /// `target/`, `.git/`, vendored node_modules, etc. by construction. `xtask`
 /// is intentionally excluded — it is build tooling with no Vulkan deps, and
 /// the fixture-test strings in this very file would otherwise self-flag.
-const SCAN_ROOTS: &[&str] = &["libs", "examples", "packages"];
+const SCAN_ROOTS: &[&str] = &["runtime", "sdk", "adapters", "tools", "vendor", "examples", "packages"];
 
 fn walk_rs(project_root: &Path) -> impl Iterator<Item = PathBuf> + '_ {
     SCAN_ROOTS
@@ -257,24 +257,24 @@ const VULKANALIA_RATIONALE: &str = "raw vulkanalia must stay inside the RHI / co
 const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
     // Core RHI host side — owns every privileged Vulkan primitive.
     AllowEntry {
-        path: "libs/streamlib-engine/src/vulkan/",
+        path: "runtime/streamlib-engine/src/vulkan/",
         kind: AllowKind::PathPrefix,
         rationale: "host RHI lives here",
     },
     // Consumer-side carve-out — DMA-BUF FD import + bind + map only.
     AllowEntry {
-        path: "libs/streamlib-consumer-rhi/",
+        path: "runtime/streamlib-consumer-rhi/",
         kind: AllowKind::PathPrefix,
         rationale: "consumer-rhi is the import-side carve-out (#560)",
     },
     // Every surface adapter crate (vulkan, opengl, cpu-readback, ...) and
     // their dedicated test-helper crates.
     AllowEntry {
-        path: "libs/streamlib-adapter-",
+        path: "adapters/streamlib-adapter-",
         kind: AllowKind::PathPrefix,
         rationale: "adapter crates ride consumer-rhi for import + bind",
     },
-    // Vulkan video codec layer at `libs/streamlib-engine/src/vulkan/video/`
+    // Vulkan video codec layer at `runtime/streamlib-engine/src/vulkan/video/`
     // is covered by the engine-vulkan PathPrefix entry above. The codec
     // layer was folded from the former `libs/vulkan-video` sibling crate
     // into the engine; it sits above `vulkan/rhi/` and migrates toward
@@ -288,7 +288,7 @@ const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
     // GpuContext is the wrapper layer between processors and the RHI;
     // touches a small set of Vulkan handles to wire pools.
     AllowEntry {
-        path: "libs/streamlib-engine/src/core/context/gpu_context.rs",
+        path: "runtime/streamlib-engine/src/core/context/gpu_context.rs",
         kind: AllowKind::ExactFile,
         rationale: "RHI wrapper layer; bridges processors to the RHI",
     },
@@ -313,20 +313,20 @@ const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
     },
     // The vendored fork crates themselves — vendored fork source; it IS the
     // Vulkan surface the RHI rides. Anchored to the three EXACT dirs
-    // (trailing slash) so a future libs/tatolab-vulkanalia-extras/ crate
+    // (trailing slash) so a future vendor/tatolab-vulkanalia-extras/ crate
     // does not silently inherit the exemption.
     AllowEntry {
-        path: "libs/tatolab-vulkanalia/",
+        path: "vendor/tatolab-vulkanalia/",
         kind: AllowKind::PathPrefix,
         rationale: "vendored vulkanalia fork source — it IS the Vulkan surface",
     },
     AllowEntry {
-        path: "libs/tatolab-vulkanalia-sys/",
+        path: "vendor/tatolab-vulkanalia-sys/",
         kind: AllowKind::PathPrefix,
         rationale: "vendored vulkanalia fork source — it IS the Vulkan surface",
     },
     AllowEntry {
-        path: "libs/tatolab-vulkanalia-vma/",
+        path: "vendor/tatolab-vulkanalia-vma/",
         kind: AllowKind::PathPrefix,
         rationale: "vendored vulkanalia fork source — it IS the Vulkan surface",
     },
@@ -371,8 +371,8 @@ fn check_vulkanalia_confined(
     // crate roots (one entry per crate that owns at least one
     // vulkanalia-allowlisted source file). Matching is against the full
     // Cargo.toml file path so trailing-slash directory boundaries hit
-    // (`libs/streamlib-engine/Cargo.toml` matches `libs/streamlib-engine/`, but
-    // `libs/streamlib-runtime/Cargo.toml` does not).
+    // (`runtime/streamlib-engine/Cargo.toml` matches `runtime/streamlib-engine/`, but
+    // `runtime/streamlib-runtime/Cargo.toml` does not).
     for path in walk_cargo_toml(project_root) {
         *files_scanned += 1;
         let rel = rel_to_root(&path, project_root);
@@ -410,22 +410,22 @@ fn check_vulkanalia_confined(
 /// the dep elsewhere is a regression.
 const VULKANALIA_CARGO_DEP_ALLOWLIST: &[AllowEntry] = &[
     AllowEntry {
-        path: "libs/streamlib-engine/",
+        path: "runtime/streamlib-engine/",
         kind: AllowKind::PathPrefix,
         rationale: "host crate: src/vulkan/ owns the RHI; processors/display.rs and processors/camera.rs are documented exceptions",
     },
     AllowEntry {
-        path: "libs/streamlib-consumer-rhi/",
+        path: "runtime/streamlib-consumer-rhi/",
         kind: AllowKind::PathPrefix,
         rationale: "consumer-side carve-out (#560)",
     },
     AllowEntry {
-        path: "libs/streamlib-adapter-",
+        path: "adapters/streamlib-adapter-",
         kind: AllowKind::PathPrefix,
         rationale: "adapter crates ride consumer-rhi",
     },
     // Codec layer's Cargo deps are inherited from the engine — codec
-    // moved into `libs/streamlib-engine/src/vulkan/video/`, sharing the
+    // moved into `runtime/streamlib-engine/src/vulkan/video/`, sharing the
     // engine's `vulkanalia.workspace = true` line.
     //
     // Subprocess cdylibs are intentionally NOT allowlisted post-#572 —
@@ -439,20 +439,20 @@ const VULKANALIA_CARGO_DEP_ALLOWLIST: &[AllowEntry] = &[
     // The vendored fork crates declare vulkanalia sibling deps by
     // construction — vendored fork source; it IS the Vulkan surface.
     // Anchored to the three EXACT dirs (trailing slash) so a future
-    // libs/tatolab-vulkanalia-extras/ crate does not silently inherit
+    // vendor/tatolab-vulkanalia-extras/ crate does not silently inherit
     // the exemption.
     AllowEntry {
-        path: "libs/tatolab-vulkanalia/",
+        path: "vendor/tatolab-vulkanalia/",
         kind: AllowKind::PathPrefix,
         rationale: "vendored vulkanalia fork source — it IS the Vulkan surface",
     },
     AllowEntry {
-        path: "libs/tatolab-vulkanalia-sys/",
+        path: "vendor/tatolab-vulkanalia-sys/",
         kind: AllowKind::PathPrefix,
         rationale: "vendored vulkanalia fork source — it IS the Vulkan surface",
     },
     AllowEntry {
-        path: "libs/tatolab-vulkanalia-vma/",
+        path: "vendor/tatolab-vulkanalia-vma/",
         kind: AllowKind::PathPrefix,
         rationale: "vendored vulkanalia fork source — it IS the Vulkan surface",
     },
@@ -469,13 +469,13 @@ const CDYLIB_DEP_RATIONALE: &str = "cdylibs and adapter crates must depend on st
 /// Crates whose runtime dep graph must not include `streamlib`. `streamlib`
 /// is allowed only in `[dev-dependencies]` (or `[target.*.dev-dependencies]`).
 const NO_STREAMLIB_RUNTIME_DEP: &[&str] = &[
-    "libs/streamlib-python-native/Cargo.toml",
-    "libs/streamlib-deno-native/Cargo.toml",
-    "libs/streamlib-adapter-vulkan/Cargo.toml",
-    "libs/streamlib-adapter-opengl/Cargo.toml",
-    "libs/streamlib-adapter-cpu-readback/Cargo.toml",
-    "libs/streamlib-adapter-skia/Cargo.toml",
-    "libs/streamlib-adapter-cuda/Cargo.toml",
+    "sdk/streamlib-python-native/Cargo.toml",
+    "sdk/streamlib-deno-native/Cargo.toml",
+    "adapters/streamlib-adapter-vulkan/Cargo.toml",
+    "adapters/streamlib-adapter-opengl/Cargo.toml",
+    "adapters/streamlib-adapter-cpu-readback/Cargo.toml",
+    "adapters/streamlib-adapter-skia/Cargo.toml",
+    "adapters/streamlib-adapter-cuda/Cargo.toml",
 ];
 
 fn check_cdylib_and_adapter_runtime_deps(
@@ -535,7 +535,7 @@ const PRIVILEGED_METHODS: &[&str] = &[
 const PRIVILEGED_VK_ALLOWLIST: &[AllowEntry] = &[
     // Host RHI — defines and owns the privileged calls.
     AllowEntry {
-        path: "libs/streamlib-engine/src/vulkan/",
+        path: "runtime/streamlib-engine/src/vulkan/",
         kind: AllowKind::PathPrefix,
         rationale: "host RHI owns privileged primitives",
     },
@@ -545,11 +545,11 @@ const PRIVILEGED_VK_ALLOWLIST: &[AllowEntry] = &[
     // without an AST walk; allowlist the crate and rely on code review +
     // docs/architecture/subprocess-rhi-parity.md to keep it honest.
     AllowEntry {
-        path: "libs/streamlib-consumer-rhi/",
+        path: "runtime/streamlib-consumer-rhi/",
         kind: AllowKind::PathPrefix,
         rationale: "consumer-rhi import-side carve-out chains ImportMemoryFdInfoKHR",
     },
-    // Codec layer at `libs/streamlib-engine/src/vulkan/video/` is
+    // Codec layer at `runtime/streamlib-engine/src/vulkan/video/` is
     // covered by the engine-vulkan PathPrefix entry above. Interior
     // re-plumbing onto engine RHI primitives is the Vulkan Video RHI
     // Coupling milestone's ongoing work.
@@ -574,7 +574,7 @@ const PRIVILEGED_VK_ALLOWLIST: &[AllowEntry] = &[
     // Adapter test-helper bin lives outside the test/ tree but is
     // test-only by purpose.
     AllowEntry {
-        path: "libs/streamlib-adapter-vulkan-helpers/",
+        path: "adapters/streamlib-adapter-vulkan-helpers/",
         kind: AllowKind::PathPrefix,
         rationale: "test-helper crate isolated so streamlib doesn't leak into adapter-vulkan runtime deps",
     },
@@ -623,27 +623,27 @@ fn check_privileged_vk_calls(
 
 const CHECK_VULKANALIA_FORK: &str = "vulkanalia-uses-workspace-fork";
 
-const VULKANALIA_FORK_RATIONALE: &str = "all vulkanalia / vulkanalia-sys / vulkanalia-vma deps must inherit from [workspace.dependencies] (the vendored tatolab-vulkanalia* crates in libs/) — a direct version spec or a direct tatolab-vulkanalia* dep can silently pull crates.io upstream or bypass the workspace rename and lose the VMA 3.3.0 patch";
+const VULKANALIA_FORK_RATIONALE: &str = "all vulkanalia / vulkanalia-sys / vulkanalia-vma deps must inherit from [workspace.dependencies] (the vendored tatolab-vulkanalia* crates in vendor/) — a direct version spec or a direct tatolab-vulkanalia* dep can silently pull crates.io upstream or bypass the workspace rename and lose the VMA 3.3.0 patch";
 
 /// The vendored fork crates' own sibling deps (`tatolab-vulkanalia` →
 /// `tatolab-vulkanalia-sys`, `tatolab-vulkanalia-vma` → `tatolab-vulkanalia`)
 /// cannot be workspace-inherited — the workspace deps ARE these crates.
 /// Anchored to the three EXACT dirs (trailing slash) so a future
-/// `libs/tatolab-vulkanalia-extras/` crate does not silently inherit the
+/// `vendor/tatolab-vulkanalia-extras/` crate does not silently inherit the
 /// exemption.
 const VULKANALIA_FORK_ALLOWLIST: &[AllowEntry] = &[
     AllowEntry {
-        path: "libs/tatolab-vulkanalia/",
+        path: "vendor/tatolab-vulkanalia/",
         kind: AllowKind::PathPrefix,
         rationale: "vendored vulkanalia fork source — sibling deps are path+version+registry by construction",
     },
     AllowEntry {
-        path: "libs/tatolab-vulkanalia-sys/",
+        path: "vendor/tatolab-vulkanalia-sys/",
         kind: AllowKind::PathPrefix,
         rationale: "vendored vulkanalia fork source — sibling deps are path+version+registry by construction",
     },
     AllowEntry {
-        path: "libs/tatolab-vulkanalia-vma/",
+        path: "vendor/tatolab-vulkanalia-vma/",
         kind: AllowKind::PathPrefix,
         rationale: "vendored vulkanalia fork source — sibling deps are path+version+registry by construction",
     },
@@ -726,9 +726,9 @@ fn is_vulkanalia_dep(name: &str) -> bool {
 // adapter helpers, engine tooling. The only places that legitimately import
 // `streamlib_engine::*` directly are:
 //
-// 1. The engine itself (`libs/streamlib-engine/`) — its own bins, tests,
+// 1. The engine itself (`runtime/streamlib-engine/`) — its own bins, tests,
 //    benches link to its lib by the engine's published Cargo name.
-// 2. The SDK's facade source (`libs/streamlib-sdk/src/lib.rs`) — the one
+// 2. The SDK's facade source (`sdk/streamlib-sdk/src/lib.rs`) — the one
 //    file that pub-uses items from engine to expose them through
 //    `streamlib::*`.
 //
@@ -740,21 +740,21 @@ fn is_vulkanalia_dep(name: &str) -> bool {
 
 const CHECK_STREAMLIB_ENGINE: &str = "streamlib-engine-only-in-sdk-or-engine";
 
-const STREAMLIB_ENGINE_RATIONALE: &str = "direct streamlib_engine::* imports must stay in the engine itself or in libs/streamlib-sdk/src/lib.rs (the SDK facade); consumer code routes through streamlib::* (with engine extensions via streamlib::sdk::engine::*)";
+const STREAMLIB_ENGINE_RATIONALE: &str = "direct streamlib_engine::* imports must stay in the engine itself or in sdk/streamlib-sdk/src/lib.rs (the SDK facade); consumer code routes through streamlib::* (with engine extensions via streamlib::sdk::engine::*)";
 
 const STREAMLIB_ENGINE_ALLOWLIST: &[AllowEntry] = &[
     AllowEntry {
-        path: "libs/streamlib-engine/",
+        path: "runtime/streamlib-engine/",
         kind: AllowKind::PathPrefix,
         rationale: "engine itself — its own bins/tests/benches link to its lib by name",
     },
     AllowEntry {
-        path: "libs/streamlib-sdk/src/lib.rs",
+        path: "sdk/streamlib-sdk/src/lib.rs",
         kind: AllowKind::ExactFile,
         rationale: "SDK facade — pub uses items from engine to expose via streamlib::*",
     },
     AllowEntry {
-        path: "libs/streamlib-build-orchestrator/",
+        path: "tools/streamlib-build-orchestrator/",
         kind: AllowKind::PathPrefix,
         rationale: "default BuildOrchestrator impl — implements the engine's BuildOrchestrator trait and calls engine package-cache APIs (get_cached_package_dir); it is engine-tier infrastructure, not consumer code, and CANNOT route through the streamlib::* SDK facade because the SDK depends on it (the auto-build feature) — that would be a dependency cycle. Direct streamlib_engine::* is unavoidable here",
     },
@@ -787,17 +787,17 @@ const TOP_LEVEL_SHORTCUT_RATIONALE: &str = "use streamlib::sdk::* (or sdk::engin
 
 const TOP_LEVEL_SHORTCUT_ALLOWLIST: &[AllowEntry] = &[
     AllowEntry {
-        path: "libs/streamlib-engine/",
+        path: "runtime/streamlib-engine/",
         kind: AllowKind::PathPrefix,
         rationale: "engine itself — `extern crate self as streamlib;` aliases the engine; internal modules reach items through this alias for proc-macro path resolution",
     },
     AllowEntry {
-        path: "libs/streamlib-sdk/src/lib.rs",
+        path: "sdk/streamlib-sdk/src/lib.rs",
         kind: AllowKind::ExactFile,
         rationale: "SDK facade — defines the streamlib::sdk::* / engine_internal::* tree",
     },
     AllowEntry {
-        path: "libs/streamlib-macros/",
+        path: "sdk/streamlib-macros/",
         kind: AllowKind::PathPrefix,
         rationale: "proc-macro emit-paths for downstream consumers; not consumer code",
     },
@@ -1044,7 +1044,7 @@ mod tests {
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-engine/src/lib.rs",
+            "runtime/streamlib-engine/src/lib.rs",
             "use ash::vk;\nfn main() {}\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1060,7 +1060,7 @@ mod tests {
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-engine/src/lib.rs",
+            "runtime/streamlib-engine/src/lib.rs",
             "extern crate ash;\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1072,7 +1072,7 @@ mod tests {
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-engine/Cargo.toml",
+            "runtime/streamlib-engine/Cargo.toml",
             "[package]\nname = \"streamlib\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nash = \"0.38\"\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1089,13 +1089,13 @@ mod tests {
         // Lookalike substring should NOT trip the check.
         write_fixture(
             dir.path(),
-            "libs/streamlib-engine/src/lib.rs",
+            "runtime/streamlib-engine/src/lib.rs",
             "use ahash::AHashMap;\nlet h: Hash = todo!();\n",
         );
         // Cargo.toml with ahash dep.
         write_fixture(
             dir.path(),
-            "libs/streamlib-engine/Cargo.toml",
+            "runtime/streamlib-engine/Cargo.toml",
             "[package]\nname = \"streamlib\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nahash = \"0.8\"\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1118,7 +1118,7 @@ mod tests {
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-engine/src/core/some_unrelated.rs",
+            "runtime/streamlib-engine/src/core/some_unrelated.rs",
             "use vulkanalia::vk;\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1137,7 +1137,7 @@ mod tests {
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-engine/src/vulkan/rhi/example.rs",
+            "runtime/streamlib-engine/src/vulkan/rhi/example.rs",
             "use vulkanalia::vk;\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1154,7 +1154,7 @@ mod tests {
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-consumer-rhi/src/lib.rs",
+            "runtime/streamlib-consumer-rhi/src/lib.rs",
             "use vulkanalia::vk;\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1175,7 +1175,7 @@ mod tests {
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-adapter-vulkan/src/lib.rs",
+            "adapters/streamlib-adapter-vulkan/src/lib.rs",
             "use vulkanalia::vk;\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1196,7 +1196,7 @@ mod tests {
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-runtime/Cargo.toml",
+            "runtime/streamlib-runtime/Cargo.toml",
             r#"[package]
 name = "streamlib-runtime"
 version = "0.1.0"
@@ -1222,7 +1222,7 @@ vulkanalia = "0.20"
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-adapter-vulkan/Cargo.toml",
+            "adapters/streamlib-adapter-vulkan/Cargo.toml",
             r#"[package]
 name = "streamlib-adapter-vulkan"
 version = "0.1.0"
@@ -1252,7 +1252,7 @@ vulkanalia = "0.20"
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-adapter-vulkan/Cargo.toml",
+            "adapters/streamlib-adapter-vulkan/Cargo.toml",
             r#"[package]
 name = "streamlib-adapter-vulkan"
 version = "0.1.0"
@@ -1278,7 +1278,7 @@ vulkanalia = "0.35"
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/test-member/Cargo.toml",
+            "runtime/test-member/Cargo.toml",
             r#"[package]
 name = "test-member"
 version = "0.1.0"
@@ -1306,7 +1306,7 @@ vulkanalia-vma = "0.4"
         // single source of truth at workspace level.
         write_fixture(
             dir.path(),
-            "libs/streamlib-adapter-opengl/Cargo.toml",
+            "adapters/streamlib-adapter-opengl/Cargo.toml",
             r#"[package]
 name = "streamlib-adapter-opengl"
 version = "0.1.0"
@@ -1335,7 +1335,7 @@ vulkanalia = { git = "https://github.com/KhronosGroup/Vulkan-Headers" }
         // fork — check 5 must flag it.
         write_fixture(
             dir.path(),
-            "libs/streamlib-adapter-vulkan/Cargo.toml",
+            "adapters/streamlib-adapter-vulkan/Cargo.toml",
             r#"[package]
 name = "streamlib-adapter-vulkan"
 version = "0.1.0"
@@ -1361,10 +1361,10 @@ tatolab-vulkanalia = "0.35"
         let dir = empty_workspace();
         // The vendored fork crates' own sibling deps cannot be
         // workspace-inherited, and their sources ARE the Vulkan surface —
-        // both checks 2 and 5 exempt libs/tatolab-vulkanalia*.
+        // both checks 2 and 5 exempt vendor/tatolab-vulkanalia*.
         write_fixture(
             dir.path(),
-            "libs/tatolab-vulkanalia-vma/Cargo.toml",
+            "vendor/tatolab-vulkanalia-vma/Cargo.toml",
             r#"[package]
 name = "tatolab-vulkanalia-vma"
 version = "0.9.0"
@@ -1376,7 +1376,7 @@ vulkanalia = { package = "tatolab-vulkanalia", version = "0.35", path = "../tato
         );
         write_fixture(
             dir.path(),
-            "libs/tatolab-vulkanalia-vma/src/lib.rs",
+            "vendor/tatolab-vulkanalia-vma/src/lib.rs",
             "use vulkanalia::vk::*;\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1396,16 +1396,16 @@ vulkanalia = { package = "tatolab-vulkanalia", version = "0.35", path = "../tato
     fn vendored_dir_lookalike_does_not_inherit_exemptions() {
         let dir = empty_workspace();
         // The vendored-dir exemptions are anchored to the three EXACT dirs;
-        // a hypothetical libs/tatolab-vulkanalia-extras/ crate must NOT
+        // a hypothetical vendor/tatolab-vulkanalia-extras/ crate must NOT
         // silently inherit them in either check 2 or check 5.
         write_fixture(
             dir.path(),
-            "libs/tatolab-vulkanalia-extras/src/lib.rs",
+            "vendor/tatolab-vulkanalia-extras/src/lib.rs",
             "use vulkanalia::vk;\n",
         );
         write_fixture(
             dir.path(),
-            "libs/tatolab-vulkanalia-extras/Cargo.toml",
+            "vendor/tatolab-vulkanalia-extras/Cargo.toml",
             r#"[package]
 name = "tatolab-vulkanalia-extras"
 version = "0.1.0"
@@ -1445,7 +1445,7 @@ vulkanalia = { package = "tatolab-vulkanalia", version = "0.35", path = "../tato
         // value's `package` field, not just the dep-table key.
         write_fixture(
             dir.path(),
-            "libs/streamlib-adapter-vulkan/Cargo.toml",
+            "adapters/streamlib-adapter-vulkan/Cargo.toml",
             r#"[package]
 name = "streamlib-adapter-vulkan"
 version = "0.1.0"
@@ -1475,7 +1475,7 @@ foo = { package = "tatolab-vulkanalia", path = "../tatolab-vulkanalia", version 
         // a non-RHI crate gaining raw Vulkan via `tatolab-vulkanalia*`.
         write_fixture(
             dir.path(),
-            "libs/streamlib-runtime/Cargo.toml",
+            "runtime/streamlib-runtime/Cargo.toml",
             r#"[package]
 name = "streamlib-runtime"
 version = "0.1.0"
@@ -1501,7 +1501,7 @@ tatolab-vulkanalia-vma = "0.9"
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-adapter-vulkan/Cargo.toml",
+            "adapters/streamlib-adapter-vulkan/Cargo.toml",
             r#"[package]
 name = "streamlib-adapter-vulkan"
 version = "0.1.0"
@@ -1529,7 +1529,7 @@ vulkanalia = { workspace = true }
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-adapter-vulkan/Cargo.toml",
+            "adapters/streamlib-adapter-vulkan/Cargo.toml",
             r#"[package]
 name = "streamlib-adapter-vulkan"
 version = "0.1.0"
@@ -1559,7 +1559,7 @@ vulkanalia.workspace = true
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-adapter-opengl/tests/common.rs",
+            "adapters/streamlib-adapter-opengl/tests/common.rs",
             "use vulkanalia::vk;\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1578,7 +1578,7 @@ vulkanalia.workspace = true
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-python-native/Cargo.toml",
+            "sdk/streamlib-python-native/Cargo.toml",
             r#"[package]
 name = "streamlib-python-native"
 version = "0.1.0"
@@ -1604,7 +1604,7 @@ streamlib = { path = "../streamlib" }
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-adapter-vulkan/Cargo.toml",
+            "adapters/streamlib-adapter-vulkan/Cargo.toml",
             r#"[package]
 name = "streamlib-adapter-vulkan"
 version = "0.1.0"
@@ -1630,7 +1630,7 @@ streamlib = { path = "../streamlib" }
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-adapter-cpu-readback/Cargo.toml",
+            "adapters/streamlib-adapter-cpu-readback/Cargo.toml",
             r#"[package]
 name = "streamlib-adapter-cpu-readback"
 version = "0.1.0"
@@ -1660,7 +1660,7 @@ streamlib = { path = "../streamlib" }
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-engine/src/core/some_other.rs",
+            "runtime/streamlib-engine/src/core/some_other.rs",
             "fn f() { unsafe { device.allocate_memory(&info, None).unwrap(); } }\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1679,7 +1679,7 @@ streamlib = { path = "../streamlib" }
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-adapter-vulkan/src/state.rs",
+            "adapters/streamlib-adapter-vulkan/src/state.rs",
             "fn f() { unsafe { dev.create_compute_pipelines(cache, &[info], None).unwrap(); } }\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1698,7 +1698,7 @@ streamlib = { path = "../streamlib" }
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-engine/src/vulkan/rhi/vulkan_device.rs",
+            "runtime/streamlib-engine/src/vulkan/rhi/vulkan_device.rs",
             "fn f() { unsafe { self.device.allocate_memory(&info, None).unwrap(); } }\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1719,7 +1719,7 @@ streamlib = { path = "../streamlib" }
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-consumer-rhi/src/consumer_vulkan_device.rs",
+            "runtime/streamlib-consumer-rhi/src/consumer_vulkan_device.rs",
             "fn f() { unsafe { self.device.allocate_memory(&alloc_info, None).unwrap(); } }\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1740,7 +1740,7 @@ streamlib = { path = "../streamlib" }
     // Post-#550/#553, neither cdylib needs raw `vulkanalia` access. These
     // tests prove the path-prefix exemption is gone — any reintroduction
     // of `use vulkanalia`, a `vulkanalia` Cargo dep, or a privileged-vk
-    // call inside `libs/streamlib-{python,deno}-native/` trips a
+    // call inside `sdk/streamlib-{python,deno}-native/` trips a
     // violation rather than slipping through.
 
     #[test]
@@ -1748,7 +1748,7 @@ streamlib = { path = "../streamlib" }
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-python-native/src/lib.rs",
+            "sdk/streamlib-python-native/src/lib.rs",
             "use vulkanalia::vk;\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1767,7 +1767,7 @@ streamlib = { path = "../streamlib" }
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-deno-native/src/lib.rs",
+            "sdk/streamlib-deno-native/src/lib.rs",
             "use vulkanalia::vk;\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1786,7 +1786,7 @@ streamlib = { path = "../streamlib" }
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-python-native/Cargo.toml",
+            "sdk/streamlib-python-native/Cargo.toml",
             r#"[package]
 name = "streamlib-python-native"
 version = "0.1.0"
@@ -1812,7 +1812,7 @@ vulkanalia = { workspace = true }
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-deno-native/Cargo.toml",
+            "sdk/streamlib-deno-native/Cargo.toml",
             r#"[package]
 name = "streamlib-deno-native"
 version = "0.1.0"
@@ -1838,7 +1838,7 @@ vulkanalia = { workspace = true }
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-python-native/src/some_module.rs",
+            "sdk/streamlib-python-native/src/some_module.rs",
             "fn f() { unsafe { device.allocate_memory(&info, None).unwrap(); } }\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1857,7 +1857,7 @@ vulkanalia = { workspace = true }
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-deno-native/src/some_module.rs",
+            "sdk/streamlib-deno-native/src/some_module.rs",
             "fn f() { unsafe { device.allocate_memory(&info, None).unwrap(); } }\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1882,7 +1882,7 @@ vulkanalia = { workspace = true }
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib-engine/src/lib.rs",
+            "runtime/streamlib-engine/src/lib.rs",
             "// use ash::vk; — kept for historical reference only\n",
         );
         let report = scan_all(dir.path()).unwrap();

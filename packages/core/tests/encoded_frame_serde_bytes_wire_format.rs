@@ -9,7 +9,7 @@
 //! such value takes 2 wire bytes as a typed int).
 //!
 //! Mentally revert the attribute on `EncodedVideoFrame.data` in
-//! `libs/streamlib-jtd-codegen/src/lib.rs::post_process_rust` and these
+//! `sdk/streamlib-jtd-codegen/src/lib.rs::post_process_rust` and these
 //! assertions fail (the array-tag check fires, the bin-tag check misses,
 //! and the wire-size budget blows out by ~100 bytes).
 

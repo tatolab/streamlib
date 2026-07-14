@@ -301,10 +301,10 @@ constructed in `setup()`).
 ## Reference
 
 - **Implementation**:
-  - `libs/streamlib-engine/src/core/context/texture_ring.rs`
+  - `runtime/streamlib-engine/src/core/context/texture_ring.rs`
   - `GpuContextFullAccess::create_texture_ring`,
     `GpuContextLimitedAccess::copy_pixel_buffer_to_texture` in
-    `libs/streamlib-engine/src/core/context/gpu_context.rs`
+    `runtime/streamlib-engine/src/core/context/gpu_context.rs`
 - **First consumers (CPU-upload shape)**:
   - `packages/h264/src/linux/decoder.rs`
   - `packages/h265/src/linux/decoder.rs`

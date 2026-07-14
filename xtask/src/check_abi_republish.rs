@@ -22,7 +22,7 @@ use std::path::Path;
 use std::process::Command;
 
 /// The file carrying the ABI-version constant.
-const ABI_FILE: &str = "libs/streamlib-plugin-abi/src/lib.rs";
+const ABI_FILE: &str = "runtime/streamlib-plugin-abi/src/lib.rs";
 /// The manifest carrying `[workspace.package] version`.
 const CARGO_TOML: &str = "Cargo.toml";
 
@@ -106,10 +106,11 @@ pub fn run(project_root: &Path) -> Result<()> {
             return Ok(());
         }
     };
+    run_against_base(project_root, &base)
+}
 
-    let abi_before = git_show(project_root, &base, ABI_FILE)
-        .as_deref()
-        .and_then(extract_abi_version);
+fn run_against_base(project_root: &Path, base: &str) -> Result<()> {
+    let abi_before = abi_version_at_rev(project_root, base);
     let abi_after = std::fs::read_to_string(project_root.join(ABI_FILE))
         .ok()
         .as_deref()
@@ -170,6 +171,45 @@ fn merge_base(project_root: &Path, base: &str) -> Option<String> {
     }
     let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if sha.is_empty() { None } else { Some(sha) }
+}
+
+/// The ABI version at `rev`: primary lookup at [`ABI_FILE`], falling back to
+/// searching `rev`'s tree for the `const STREAMLIB_ABI_VERSION` definition
+/// when the file is absent at that path (the file moved between `rev` and the
+/// working tree — a pure rename must not read as "ABI version appeared").
+fn abi_version_at_rev(project_root: &Path, rev: &str) -> Option<u32> {
+    if let Some(content) = git_show(project_root, rev, ABI_FILE) {
+        return extract_abi_version(&content);
+    }
+    for path in git_grep_rs_files(project_root, rev, "const STREAMLIB_ABI_VERSION") {
+        if let Some(version) = git_show(project_root, rev, &path)
+            .as_deref()
+            .and_then(extract_abi_version)
+        {
+            return Some(version);
+        }
+    }
+    None
+}
+
+/// `git grep -l -F <pattern> <rev> -- '*.rs'` — the `.rs` paths in `rev`'s
+/// tree containing `pattern`, or empty on any failure (no match, no git).
+fn git_grep_rs_files(project_root: &Path, rev: &str, pattern: &str) -> Vec<String> {
+    let Ok(output) = Command::new("git")
+        .args(["grep", "-l", "-F", pattern, rev, "--", "*.rs"])
+        .current_dir(project_root)
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        // Output lines are `<rev>:<path>`; a sha/refname carries no `:`.
+        .filter_map(|line| line.split_once(':').map(|(_, path)| path.to_string()))
+        .collect()
 }
 
 /// `git show <rev>:<path>` — the file's contents at `rev`, or `None` if absent.
@@ -284,5 +324,98 @@ mod tests {
     #[test]
     fn no_change_passes() {
         assert!(evaluate(false, false).is_ok());
+    }
+
+    // ----- rename-aware base-side lookup (fixture git repos) -----
+
+    /// Old on-disk location of the ABI file — what a pre-restructure base
+    /// commit carries while the working tree carries [`ABI_FILE`].
+    const OLD_ABI_FILE: &str = "libs/streamlib-plugin-abi/src/lib.rs";
+
+    fn git_in(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn write_file(root: &Path, rel: &str, content: &str) {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    }
+
+    /// Fixture repo whose base commit carries the ABI const at the OLD path
+    /// plus a workspace Cargo.toml; the working tree then carries the file at
+    /// the NEW path ([`ABI_FILE`]) with `working_tree_abi_version`. Returns
+    /// `(tempdir, base_sha)`.
+    fn fixture_repo_with_moved_abi_file(
+        working_tree_abi_version: u32,
+    ) -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git_in(root, &["init", "-q"]);
+        git_in(root, &["config", "user.email", "test@example.com"]);
+        git_in(root, &["config", "user.name", "Test"]);
+        git_in(root, &["config", "commit.gpgsign", "false"]);
+        write_file(
+            root,
+            OLD_ABI_FILE,
+            "pub const STREAMLIB_ABI_VERSION: u32 = 5;\n",
+        );
+        write_file(
+            root,
+            "Cargo.toml",
+            "[workspace.package]\nversion = \"0.6.0\"\n",
+        );
+        git_in(root, &["add", "-A"]);
+        git_in(root, &["commit", "-q", "-m", "base"]);
+        let output = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(root)
+            .output()
+            .expect("rev-parse");
+        let base = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        // Working tree: the file moved to the new zone path (uncommitted, the
+        // shape run() sees mid-PR). Same workspace version — no bump.
+        std::fs::remove_file(root.join(OLD_ABI_FILE)).unwrap();
+        write_file(
+            root,
+            ABI_FILE,
+            &format!("pub const STREAMLIB_ABI_VERSION: u32 = {working_tree_abi_version};\n"),
+        );
+        (dir, base)
+    }
+
+    #[test]
+    fn moved_abi_file_with_unchanged_version_passes() {
+        // A pure file move (value 5 at the base's old path, 5 at the working
+        // tree's new path, no workspace bump) must NOT read as an ABI change.
+        // Mentally revert `abi_version_at_rev`'s fallback: the base-side
+        // lookup returns None, None != Some(5) reads as "changed", and the
+        // gate fails — this test locks the rename-aware fallback.
+        let (dir, base) = fixture_repo_with_moved_abi_file(5);
+        assert_eq!(abi_version_at_rev(dir.path(), &base), Some(5));
+        run_against_base(dir.path(), &base)
+            .expect("pure ABI-file move with unchanged version must pass");
+    }
+
+    #[test]
+    fn moved_abi_file_with_genuine_bump_and_no_workspace_bump_fails() {
+        // The fallback must not weaken the gate: a genuine 5 -> 6 bump across
+        // the same file move, with no workspace-version change, still fails.
+        // This also guards against a lazier "skip when the base-side lookup
+        // misses" fix, which would let the bump through silently.
+        let (dir, base) = fixture_repo_with_moved_abi_file(6);
+        assert_eq!(abi_version_at_rev(dir.path(), &base), Some(5));
+        run_against_base(dir.path(), &base)
+            .expect_err("ABI bump without workspace-version bump must fail across a file move");
     }
 }

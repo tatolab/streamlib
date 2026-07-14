@@ -19,7 +19,7 @@
 //!
 //! Scope:
 //!
-//! - **Every `pub enum`** declared in `libs/streamlib-consumer-rhi/src/`
+//! - **Every `pub enum`** declared in `runtime/streamlib-consumer-rhi/src/`
 //!   MUST carry an explicit `#[repr(...)]` attribute. Bare-enum repr is
 //!   NOT stable across rustc versions — explicit discriminant width is
 //!   non-negotiable.
@@ -62,7 +62,7 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const CRATE_SRC: &str = "libs/streamlib-consumer-rhi/src";
+const CRATE_SRC: &str = "runtime/streamlib-consumer-rhi/src";
 
 const ALLOW_FILE_PRAGMA: &str = "check-consumer-rhi-repr:allow-file";
 
@@ -127,7 +127,7 @@ pub fn run(workspace_root: &Path) -> Result<()> {
          `#[repr(i32)]` to enums (matching the Vulkan enumerant they mirror), and \
          `#[repr(transparent)]` to scalar-newtype `pub struct X(T)` types. See \
          `docs/architecture/subprocess-rhi-parity.md` and the existing types in \
-         `libs/streamlib-consumer-rhi/src/{{formats,vulkan_layout,pixel_format}}.rs` \
+         `runtime/streamlib-consumer-rhi/src/{{formats,vulkan_layout,pixel_format}}.rs` \
          for the canonical pattern.\n  \
          Note: this gate only inspects unit-only enums and scalar tuple newtypes. \
          An FFI-crossing `pub enum` that mixes in a data-bearing variant (e.g. \

@@ -19,7 +19,7 @@ StreamLib is licensed under the **Business Source License 1.1** (BUSL-1.1).
 ```
 
 **Exception — vendored third-party code:** everything under
-`libs/tatolab-vulkanalia*` is the vendored vulkanalia fork and stays
+`vendor/tatolab-vulkanalia*` is the vendored vulkanalia fork and stays
 **Apache-2.0** (upstream's license). Do NOT add BUSL headers to any file in
 those directories, and do not reformat or "improve" the vendored sources —
 see [docs/architecture/vendored-vulkanalia.md](docs/architecture/vendored-vulkanalia.md).
@@ -335,8 +335,8 @@ Run `cargo doc -p streamlib --no-deps` - fix any unresolved link warnings.
 - `.unwrap()` acceptable in examples and tests
 
 ### Code Organization
-- **Platform-agnostic code**: `libs/streamlib-engine/src/core/`
-- **macOS/iOS code**: `libs/streamlib-engine/src/apple/`
+- **Platform-agnostic code**: `runtime/streamlib-engine/src/core/`
+- **macOS/iOS code**: `runtime/streamlib-engine/src/apple/`
 - **DO NOT** use `#[cfg]` inside platform-specific directories (already conditionally compiled)
 
 ### Dependencies
@@ -421,15 +421,15 @@ resolvers stay separate; the lockfile is the handoff.
 
 ### Vulkan RHI Boundary — ABSOLUTE RULE
 
-**NOTHING outside the RHI may touch Vulkan APIs directly.** "The RHI" here means `libs/streamlib-engine/src/vulkan/rhi/` (host-side) and `libs/streamlib-consumer-rhi/` (consumer-side carve-out, #560) — together they own every `vulkanalia` call in the workspace. No processor, utility, codec wrapper, or any other code may call `vulkanalia::Device`, `vkAllocateMemory`, `vkCreateImage`, or any Vulkan function without going through one of those two crates. This is non-negotiable. (`ash` is fully removed from the workspace per #252; never reintroduce it.)
+**NOTHING outside the RHI may touch Vulkan APIs directly.** "The RHI" here means `runtime/streamlib-engine/src/vulkan/rhi/` (host-side) and `runtime/streamlib-consumer-rhi/` (consumer-side carve-out, #560) — together they own every `vulkanalia` call in the workspace. No processor, utility, codec wrapper, or any other code may call `vulkanalia::Device`, `vkAllocateMemory`, `vkCreateImage`, or any Vulkan function without going through one of those two crates. This is non-negotiable. (`ash` is fully removed from the workspace per #252; never reintroduce it.)
 
-The boundary is enforced in CI by `cargo xtask check-boundaries` (see `xtask/src/check_boundaries.rs` and `.github/workflows/check-boundaries.yml`). The check fails any PR that reintroduces `ash`, reaches for raw `vulkanalia` outside the RHI / consumer-rhi / adapter / codec crates (in `.rs` imports OR in Cargo.toml deps), makes a cdylib or adapter crate depend on the full `streamlib` crate at runtime, calls a privileged Vulkan primitive (`vkAllocateMemory`, `vkGetMemoryFdKHR`, `vkCreateComputePipelines`) outside the RHI, or declares any `vulkanalia` / `vulkanalia-sys` / `vulkanalia-vma` / `tatolab-vulkanalia*` dep that bypasses `[workspace.dependencies]` (the vendored `libs/tatolab-vulkanalia*` fork crates are the single source of truth — a direct version spec or a direct `tatolab-vulkanalia*` dep in a member crate can silently pull crates.io upstream or bypass the workspace rename and lose the VMA 3.3.0 patch; see docs/architecture/vendored-vulkanalia.md). Allowlists for legitimate exceptions are explicit and carry per-entry rationale; the right move when a check trips is almost always to extend the offending file to ride the RHI / consumer-rhi shape, not to add an allowlist entry.
+The boundary is enforced in CI by `cargo xtask check-boundaries` (see `xtask/src/check_boundaries.rs` and `.github/workflows/check-boundaries.yml`). The check fails any PR that reintroduces `ash`, reaches for raw `vulkanalia` outside the RHI / consumer-rhi / adapter / codec crates (in `.rs` imports OR in Cargo.toml deps), makes a cdylib or adapter crate depend on the full `streamlib` crate at runtime, calls a privileged Vulkan primitive (`vkAllocateMemory`, `vkGetMemoryFdKHR`, `vkCreateComputePipelines`) outside the RHI, or declares any `vulkanalia` / `vulkanalia-sys` / `vulkanalia-vma` / `tatolab-vulkanalia*` dep that bypasses `[workspace.dependencies]` (the vendored `vendor/tatolab-vulkanalia*` fork crates are the single source of truth — a direct version spec or a direct `tatolab-vulkanalia*` dep in a member crate can silently pull crates.io upstream or bypass the workspace rename and lose the VMA 3.3.0 patch; see docs/architecture/vendored-vulkanalia.md). Allowlists for legitimate exceptions are explicit and carry per-entry rationale; the right move when a check trips is almost always to extend the offending file to ride the RHI / consumer-rhi shape, not to add an allowlist entry.
 
 The RHI is the **single gateway** to all GPU operations on Linux. Like Unreal Engine's RHI, it gives the runtime absolute control and traceability over every GPU resource.
 
 The RHI is split across **two crates** along a privilege axis:
-- **`streamlib::vulkan::rhi`** (in `libs/streamlib-engine/src/vulkan/rhi/`) — the host-side RHI. Owns `HostVulkanDevice` (allocator + queue matrix + swapchain extensions), `HostVulkanTexture`, `HostVulkanBuffer`, `HostVulkanTimelineSemaphore`, `VulkanComputeKernel`, the modifier probe, etc.
-- **`streamlib-consumer-rhi`** (in `libs/streamlib-consumer-rhi/`, #560) — the consumer-side carve-out. Owns `ConsumerVulkanDevice`, `ConsumerVulkanTexture`, `ConsumerVulkanBuffer`, `ConsumerVulkanTimelineSemaphore` plus the `VulkanRhiDevice` / `DevicePrivilege` / `VulkanTextureLike` / `VulkanTimelineSemaphoreLike` trait machinery surface adapters use to abstract over the device flavor. Subprocess cdylibs (`streamlib-python-native`, `streamlib-deno-native`) depend on `streamlib-consumer-rhi`, NOT the full `streamlib`, so the FullAccess capability boundary is enforced by the type system: a cdylib's dep graph excludes `streamlib` and therefore physically cannot reach `HostVulkanDevice` etc.
+- **`streamlib::vulkan::rhi`** (in `runtime/streamlib-engine/src/vulkan/rhi/`) — the host-side RHI. Owns `HostVulkanDevice` (allocator + queue matrix + swapchain extensions), `HostVulkanTexture`, `HostVulkanBuffer`, `HostVulkanTimelineSemaphore`, `VulkanComputeKernel`, the modifier probe, etc.
+- **`streamlib-consumer-rhi`** (in `runtime/streamlib-consumer-rhi/`, #560) — the consumer-side carve-out. Owns `ConsumerVulkanDevice`, `ConsumerVulkanTexture`, `ConsumerVulkanBuffer`, `ConsumerVulkanTimelineSemaphore` plus the `VulkanRhiDevice` / `DevicePrivilege` / `VulkanTextureLike` / `VulkanTimelineSemaphoreLike` trait machinery surface adapters use to abstract over the device flavor. Subprocess cdylibs (`streamlib-python-native`, `streamlib-deno-native`) depend on `streamlib-consumer-rhi`, NOT the full `streamlib`, so the FullAccess capability boundary is enforced by the type system: a cdylib's dep graph excludes `streamlib` and therefore physically cannot reach `HostVulkanDevice` etc.
 
 #### The boundary:
 - **`vulkan/rhi/`** (HostVulkanDevice, HostVulkanTexture, HostVulkanBuffer, VulkanVideoEncoder, etc.) — MAY call Vulkan APIs. All GPU memory allocation goes through HostVulkanDevice via `vulkanalia-vma`.

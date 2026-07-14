@@ -75,7 +75,7 @@ pub fn run(project_root: &Path) -> Result<()> {
 pub fn scan(project_root: &Path) -> Result<CheckReport> {
     let mut violations = Vec::new();
     let mut files_scanned = 0usize;
-    let src = project_root.join("libs/streamlib-engine/src");
+    let src = project_root.join("runtime/streamlib-engine/src");
     if !src.exists() {
         return Ok(CheckReport {
             violations,
@@ -189,7 +189,7 @@ mod tests {
 
     fn scan_one(rel: &str, content: &str) -> Vec<Violation> {
         let tmp = TempDir::new().unwrap();
-        let src = tmp.path().join("libs/streamlib-engine/src");
+        let src = tmp.path().join("runtime/streamlib-engine/src");
         let path = src.join(rel);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, content).unwrap();

@@ -84,7 +84,7 @@ mod tests {
 
     #[test]
     fn jfif_default_maps_to_bt709_srgb_smpte170m_full() {
-        // JFIF default per plugin/vulkan-jpeg/src/color.rs::JFIF_DEFAULT.
+        // JFIF default per sdk/vulkan-jpeg/src/color.rs::JFIF_DEFAULT.
         let resolved = ResolvedColorInfo {
             primaries: PrimariesId::Bt709,
             transfer: TransferId::Srgb,

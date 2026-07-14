@@ -32,7 +32,7 @@ jobs:
       - name: Install jtd-codegen
         # The engine's build.rs invokes the upstream jtd-codegen binary
         # (v0.4.1) to generate typed bindings from JTD schemas — see
-        # libs/streamlib-jtd-codegen/src/lib.rs for the version contract. The
+        # sdk/streamlib-jtd-codegen/src/lib.rs for the version contract. The
         # streamlib-engine build fails without it.
         run: |
           curl -sSL https://github.com/jsontypedef/json-typedef-codegen/releases/download/v0.4.1/x86_64-unknown-linux-gnu.zip -o /tmp/jtd-codegen.zip

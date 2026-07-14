@@ -541,7 +541,7 @@ land.
 
 ### Dlopen integration
 
-The `libs/streamlib-engine/tests/load_project_dylib_*.rs` suite
+The `runtime/streamlib-engine/tests/load_project_dylib_*.rs` suite
 stages `packages/camera` / `packages/test-fixtures` into a tmpdir and
 loads the built cdylib through
 `runtime.add_module_with_blocking(ident, Strategy::Path { path, build })`
@@ -591,15 +591,15 @@ Revisit this doc and the structural decisions when:
 
 ## Reference
 
-- **ABI crate**: `libs/streamlib-plugin-abi/src/lib.rs` — every
+- **ABI crate**: `runtime/streamlib-plugin-abi/src/lib.rs` — every
   `#[repr(C)]` shape, every layout version constant, every layout
   regression test.
 - **Host-side implementations**:
-  `libs/streamlib-engine/src/core/plugin/host_services.rs` — every
+  `runtime/streamlib-engine/src/core/plugin/host_services.rs` — every
   vtable callback impl, every `make_*_borrow` helper, the
   `run_host_extern_c` panic safety net, the
   `make_borrow_cached_field_regression_tests` module.
-- **Cdylib-side dispatch shims**: `libs/streamlib-engine/src/core/`
+- **Cdylib-side dispatch shims**: `runtime/streamlib-engine/src/core/`
   for the PluginAbiObjects (`rhi/texture.rs`, `rhi/pixel_buffer.rs`,
   `rhi/storage_buffer.rs`, etc.) and per-type method dispatch
   (`vulkan/rhi/vulkan_compute_kernel.rs`,
@@ -607,9 +607,9 @@ Revisit this doc and the structural decisions when:
   `host_callbacks().is_some()` branch that picks vtable vs host
   dispatch.
 - **Consumer carve-out**:
-  `libs/streamlib-consumer-rhi/src/consumer_vulkan_device.rs` plus
+  `runtime/streamlib-consumer-rhi/src/consumer_vulkan_device.rs` plus
   siblings for the import-side Vulkan surface cdylibs ride.
-- **SDK façade**: `libs/streamlib-sdk/src/lib.rs` for the safe
+- **SDK façade**: `sdk/streamlib-sdk/src/lib.rs` for the safe
   surface cdylibs Cargo-dep through.
 - **Reference cdylib**: `examples/camera-rust-plugin/` — the
   in-tree end-to-end smoke example of a facade cdylib plugin. (The

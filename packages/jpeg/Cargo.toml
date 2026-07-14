@@ -44,7 +44,7 @@ tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # GPU JPEG decode primitive — fused Vulkan compute kernel behind
-# SimpleJpegDecoder. Owns its own texture ring. Engine-free (plugin/ zone);
+# SimpleJpegDecoder. Owns its own texture ring. Engine-free;
 # the nvJPEG fast path was parked in the engine during the SDK extraction.
 vulkan-jpeg = {version = "0.6.0"}
 

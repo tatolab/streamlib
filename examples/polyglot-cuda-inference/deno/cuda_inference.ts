@@ -5,7 +5,7 @@
  * Polyglot CUDA inference processor — Deno twin of
  * `python/cuda_inference.py` (#591).
  *
- * Per `libs/streamlib-deno/adapters/cuda.ts` lines 28–37, Deno's ML
+ * Per `sdk/streamlib-deno/adapters/cuda.ts` lines 28–37, Deno's ML
  * ecosystem (TensorFlow.js / ONNX-Runtime-Web / WebGPU bindings) does
  * not expose a native `from_dlpack` consumer for `DLManagedTensor*`,
  * so a Deno-side YOLO run is out of reach without a custom dlopen'd

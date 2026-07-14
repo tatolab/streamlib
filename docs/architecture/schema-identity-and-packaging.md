@@ -28,7 +28,7 @@ three independent strands:
   describing the same set of facts.
 - **Incomplete distribution attempts** (`embedded_schemas.rs`'s
   hand-curated match statement, ad-hoc `.slpkg` archive experiments,
-  schemas that lived only in `libs/streamlib-engine/schemas/` with no
+  schemas that lived only in `runtime/streamlib-engine/schemas/` with no
   publication story).
 
 The fix is one cohesive architecture covering identifier grammar,
@@ -504,7 +504,7 @@ set into each language's codegen pipeline. A CI lint
 ### 5. Hand-curated `embedded_schemas.rs`-style match statements
 
 The schema registry at
-`libs/streamlib-engine/src/core/embedded_schemas/mod.rs` is a runtime
+`runtime/streamlib-engine/src/core/embedded_schemas/mod.rs` is a runtime
 `LazyLock<RwLock<HashMap<String, Arc<str>>>>` populated by
 `Runner::add_module`: for every package the project depends on,
 the module loader walks the package's `schemas:` declarations and calls
@@ -596,13 +596,13 @@ const today.
 ## Reference
 
 - **Implementation**:
-  - `libs/streamlib-idents/` — `SchemaIdent`, `SemVer`, `SemVerRange`,
+  - `sdk/streamlib-idents/` — `SchemaIdent`, `SemVer`, `SemVerRange`,
     `Manifest`, `PackageMetadata`, `Lockfile`. The `streamlib.yaml`
     resolver (`resolve`, `resolve_with`, `ResolvedPackages`) lives here
     too and walks path / git / `.slpkg` sources; the lockfile writer
     (`write_lockfile`, `read_lockfile`) and `compute_content_hash`
     helper are siblings of the resolver.
-  - `libs/streamlib-jtd-codegen/` — three-pass codegen pipeline.
+  - `sdk/streamlib-jtd-codegen/` — three-pass codegen pipeline.
     `sentinel.rs` substitutes cross-package refs with deterministic
     sentinels and restores them as native imports; `ordering.rs`
     stable-sorts every JSON object key before invoking `jtd-codegen`.
@@ -610,7 +610,7 @@ const today.
     drives `streamlib.yaml`-mode end-to-end; `generate_from_resolved`
     is the lower-level entry for callers that already ran the
     resolver.
-  - `libs/streamlib-engine/src/core/embedded_schemas/mod.rs` — runtime
+  - `runtime/streamlib-engine/src/core/embedded_schemas/mod.rs` — runtime
     `LazyLock<RwLock<HashMap<…>>>` registry; `register_schema` /
     `get_embedded_schema_definition` / `list_embedded_schema_names`
     public surface. Populated by `Runner::add_module` walking each
@@ -623,43 +623,43 @@ const today.
   - `.github/workflows/check-schema-versions.yml` — schema-version CI gate.
   - `.github/workflows/check-no-streamlib-metadata.yml` —
     legacy-metadata CI gate.
-  - `libs/streamlib-python/python/streamlib/schema_ident.py` —
+  - `sdk/streamlib-python/python/streamlib/schema_ident.py` —
     Python `SchemaIdent` dataclass with regex-validating
     constructors and render-only joined `__str__`.
-  - `libs/streamlib-python/python/streamlib/_manifest.py` —
+  - `sdk/streamlib-python/python/streamlib/_manifest.py` —
     hand-rolled minimal YAML reader for `package:` block +
     `processors[].name` list.
-  - `libs/streamlib-python/python/streamlib/decorators.py` —
+  - `sdk/streamlib-python/python/streamlib/decorators.py` —
     `@processor("PascalCase")` / `@input` / `@output`
     decorators; manifest-driven structured ident attached at
     decoration time.
 - **Tests**:
-  - `libs/streamlib-idents/src/{ident,semver,manifest,lockfile,resolver}.rs::tests`
+  - `sdk/streamlib-idents/src/{ident,semver,manifest,lockfile,resolver}.rs::tests`
     — unit tests covering grammar conformance, semver-range matching,
     typed deserialization, lockfile round-trip + diff stability,
     content-hash determinism, and resolver scenarios (path / `.slpkg`
     / transitive / diamond / id-mismatch / registry-not-implemented).
-  - `libs/streamlib-idents/src/ident.rs` — `compile_fail` doctests on
+  - `sdk/streamlib-idents/src/ident.rs` — `compile_fail` doctests on
     each identifier type that lock the no-`parse`-API invariant.
-  - `libs/streamlib-idents/tests/no_parse_api.rs` — positive
+  - `sdk/streamlib-idents/tests/no_parse_api.rs` — positive
     counterpart: locks the *allowed* construction pathways and
     asserts joined-string deserialization fails.
-  - `libs/streamlib-jtd-codegen/src/{sentinel,ordering}.rs::tests`
+  - `sdk/streamlib-jtd-codegen/src/{sentinel,ordering}.rs::tests`
     — pre-pass / post-pass coverage for sentinel substitution,
     deterministic property ordering, and per-language restore
     (Rust / Python / TypeScript).
-  - `libs/streamlib-engine/src/core/embedded_schemas/mod.rs::tests` —
+  - `runtime/streamlib-engine/src/core/embedded_schemas/mod.rs::tests` —
     register / lookup round-trip, version-suffix stripping, empty-
     registry behavior, sorted listing, no duplicate names.
   - `xtask/src/check_schema_versions.rs::tests` — schema-version
     lint fixtures.
   - `xtask/src/check_no_streamlib_metadata.rs::tests` —
     legacy-metadata lint fixtures.
-  - `libs/streamlib-python/python/streamlib/tests/test_processor_decorator.py`
+  - `sdk/streamlib-python/python/streamlib/tests/test_processor_decorator.py`
     — `SchemaIdent` validation, `@processor` manifest-driven
     decoration paths, `@input` / `@output` schema rejection of
     bare-string and joined-string forms.
-  - `libs/streamlib-python/python/streamlib/tests/test_manifest_reader.py`
+  - `sdk/streamlib-python/python/streamlib/tests/test_manifest_reader.py`
     — minimal YAML reader edge cases (quoted scalars, comments,
     nested processor bodies, missing fields, name-first ordering
     constraint).

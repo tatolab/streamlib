@@ -135,18 +135,18 @@ staged-layout, and that is achieved by mirroring, not by moving.
 ## Reference
 
 - **Assembler**: `assemble_artifact`, `collect_source_tree`,
-  `is_non_source_artifact` in `libs/streamlib-pack/src/lib.rs`.
+  `is_non_source_artifact` in `tools/streamlib-pack/src/lib.rs`.
 - **Orchestrator**: `materialize_package_dir`, `cache_slot_is_reusable`
-  in `libs/streamlib-build-orchestrator/src/lib.rs`;
+  in `tools/streamlib-build-orchestrator/src/lib.rs`;
   `provision_python_venv` (+ `ensure_streamlib_generated_in_venv`) in
   `src/python_venv.rs`; `provision_deno_typescript` (+
   `staged_package_has_deno`) in `src/deno_codegen.rs`.
 - **Consumers of the layout**: the `@processor` sibling-manifest lookup
-  in `libs/streamlib-deno/decorators.ts`; the entrypoint resolution in
-  `libs/streamlib-deno/subprocess_runner.ts` (`resolveDenoModulePath`
+  in `sdk/streamlib-deno/decorators.ts`; the entrypoint resolution in
+  `sdk/streamlib-deno/subprocess_runner.ts` (`resolveDenoModulePath`
   resolves against the package root); the Deno spawn op
   (`--config <pkg>/deno.json`) in
-  `libs/streamlib-engine/src/core/compiler/compiler_ops/spawn_deno_subprocess_op.rs`.
+  `runtime/streamlib-engine/src/core/compiler/compiler_ops/spawn_deno_subprocess_op.rs`.
 - **Related**:
   - [`static-registry.md`](static-registry.md) —
     how a package resolves and publishes by version (the *what travels

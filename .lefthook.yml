@@ -21,7 +21,7 @@ pre-push:
     license-check:
       run: |
         missing_files=()
-        for file in $(find libs -name "*.rs" -type f | grep -v '/proto/'); do
+        for file in $(find runtime sdk adapters tools vendor -name "*.rs" -type f | grep -v '/proto/'); do
           if ! head -2 "$file" | grep -q "Copyright (c) 2025 Jonathan Fontanez"; then
             missing_files+=("$file")
           fi

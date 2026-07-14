@@ -2,7 +2,8 @@ name: Check Schema Versions
 
 # CI gate for the package-as-publication-unit rule from milestone 10.
 # `cargo xtask check-schema-versions` walks every YAML under any `schemas/`
-# directory in `libs/`, `packages/`, or `examples/` and fails if any file
+# directory in the zone dirs (`runtime/`, `sdk/`, `adapters/`, `tools/`,
+# `vendor/`), `packages/`, or `examples/` and fails if any file
 # declares a top-level `version` key.
 #
 # Versioning lives in `streamlib.yaml`, not in individual schemas — bumping

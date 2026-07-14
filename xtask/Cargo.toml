@@ -9,20 +9,20 @@ publish = false
 
 [dependencies]
 # JTD-codegen pipeline (extracted in #400) — xtask is a thin wrapper.
-streamlib-jtd-codegen = { path = "../libs/streamlib-jtd-codegen" }
+streamlib-jtd-codegen = { path = "../sdk/streamlib-jtd-codegen" }
 
 # JSON Schema source-of-truth for streamlib.yaml — emit-manifest-schema serialises
 # `schemars::schema_for!(StreamlibYaml)` from this crate (#714).
-streamlib-processor-schema = { path = "../libs/streamlib-processor-schema" }
+streamlib-processor-schema = { path = "../sdk/streamlib-processor-schema" }
 
 # Package-artifact assembly — backs `strip-publish-manifest` (publish-side
 # path-patch strip) and `check-package-version-drift --fix` (shared
 # Cargo.toml version rewrite).
-streamlib-pack = { path = "../libs/streamlib-pack" }
+streamlib-pack = { path = "../tools/streamlib-pack" }
 
 # SemVer parsing for check-package-version-drift — the manifest version is
 # validated through the same SemVer type the pack stamp derives from.
-streamlib-idents = { path = "../libs/streamlib-idents" }
+streamlib-idents = { path = "../sdk/streamlib-idents" }
 
 # Logging — needed to surface tracing::info! output from streamlib-jtd-codegen.
 tracing = "0.1"

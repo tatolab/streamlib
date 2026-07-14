@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Drift trip-wire for the vendored vulkanalia fork trees
-//! (`libs/tatolab-vulkanalia{,-sys,-vma}`).
+//! (`vendor/tatolab-vulkanalia{,-sys,-vma}`).
 //!
 //! The vendored sources are a verbatim copy of a pinned fork rev plus a
 //! short, documented local-patch list (see
@@ -28,9 +28,9 @@ use std::path::Path;
 /// Updated only on a deliberate re-vendor / documented local patch, in the
 /// same commit that changes the tree.
 const VENDORED_TREES: &[(&str, u64)] = &[
-    ("libs/tatolab-vulkanalia", 0x7508_cfa2_9c2b_b9c7),
-    ("libs/tatolab-vulkanalia-sys", 0xef46_fa14_69b6_8757),
-    ("libs/tatolab-vulkanalia-vma", 0xac41_8fe4_7384_c0c9),
+    ("vendor/tatolab-vulkanalia", 0x7508_cfa2_9c2b_b9c7),
+    ("vendor/tatolab-vulkanalia-sys", 0xef46_fa14_69b6_8757),
+    ("vendor/tatolab-vulkanalia-vma", 0xac41_8fe4_7384_c0c9),
 ];
 
 /// FNV-1a 64 — deterministic (platform/version-stable), matching the
@@ -117,7 +117,7 @@ pub fn run(project_root: &Path) -> Result<()> {
         "check-vendored-vulkanalia: vendored vulkanalia tree(s) DRIFTED from the recorded \
          hash — the vendored fork sources are verbatim-by-contract and must not be edited \
          or reformatted in place (a workspace `cargo fmt --all` sweep is the classic \
-         accidental cause; fmt sweeps must exclude libs/tatolab-vulkanalia*).\n",
+         accidental cause; fmt sweeps must exclude vendor/tatolab-vulkanalia*).\n",
     );
     for d in &drifted {
         msg.push_str(&format!(
@@ -157,7 +157,7 @@ mod tests {
     #[test]
     fn mutated_byte_trips_the_check() {
         let tmp = tempfile::tempdir().unwrap();
-        let crate_dir = "libs/tatolab-vulkanalia";
+        let crate_dir = "vendor/tatolab-vulkanalia";
         write(
             &tmp.path().join(crate_dir),
             "src/lib.rs",

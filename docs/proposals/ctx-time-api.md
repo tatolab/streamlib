@@ -116,7 +116,7 @@ def process(self, ctx):
 ### Rust Core
 
 ```rust
-// libs/streamlib-engine/src/core/context/time_context.rs
+// runtime/streamlib-engine/src/core/context/time_context.rs
 
 use crate::core::clock::MediaClock;
 
@@ -167,7 +167,7 @@ impl RuntimeContext {
 ### Python Bindings
 
 ```rust
-// libs/streamlib-python/src/time_context_binding.rs
+// sdk/streamlib-python/src/time_context_binding.rs
 
 #[pyclass(name = "TimeContext")]
 pub struct PyTimeContext {

@@ -1,7 +1,7 @@
 # `cargo package` is byte-deterministic EXCEPT `.cargo_vcs_info.json`
 
 > **Superseded in-tree 2026-07-13 (#1322).** The streamlib machinery this
-> learning describes — `libs/streamlib-pack/src/crate_tarball.rs`, the
+> learning describes — `tools/streamlib-pack/src/crate_tarball.rs`, the
 > `emit_cargo_closure` cargo-tree emitter, `finalize_crate_tarball`, the
 > byte-stable-`.crate` normalization — was deleted with the custom cargo
 > registry (`.crate` tarballs are no longer emitted). The learning is
@@ -92,10 +92,10 @@ tooling routinely strips it for exactly this reason.
 
 ## Reference
 
-- Implementation: `libs/streamlib-pack/src/crate_tarball.rs`
+- Implementation: `tools/streamlib-pack/src/crate_tarball.rs`
   (`normalize_crate_tarball`, `crate_content_fingerprint`,
   `finalize_crate_tarball`); wired into `emit_cargo_closure` in
-  `libs/streamlib-pack/src/static_registry.rs`.
+  `tools/streamlib-pack/src/static_registry.rs`.
 - Architecture: `docs/architecture/static-registry.md` (the
   atomic-release / byte-stable-emission section).
 - Sibling concern: pypi sdist (`uv build --sdist`) and npm tgz

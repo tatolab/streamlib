@@ -134,7 +134,7 @@ enum Commands {
     CheckNoEscalateInLifecycle,
 
     /// CI gate for issue #1039's consumer-rhi `#[repr(...)]` discipline.
-    /// Fails when any `pub enum` in `libs/streamlib-consumer-rhi/src/`
+    /// Fails when any `pub enum` in `runtime/streamlib-consumer-rhi/src/`
     /// is missing an explicit `#[repr(...)]`, or when any
     /// `pub struct X(T)` scalar tuple newtype is missing
     /// `#[repr(transparent)]` / `#[repr(C)]`. Consumer-rhi POD types
@@ -198,7 +198,7 @@ enum Commands {
     CheckAbiRepublish,
 
     /// Drift trip-wire for the vendored vulkanalia fork trees
-    /// (`libs/tatolab-vulkanalia{,-sys,-vma}`): hashes each vendored crate
+    /// (`vendor/tatolab-vulkanalia{,-sys,-vma}`): hashes each vendored crate
     /// dir and fails on any byte change vs. the recorded hash — the guard
     /// against accidental in-place edits (a workspace `cargo fmt --all`
     /// sweep is the classic cause). Deliberate re-vendors update the

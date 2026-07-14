@@ -38,7 +38,7 @@ cargo run
 
 The `streamlib` CLI must be on your `PATH` (build it with
 `cargo build -p streamlib-cli` from the checkout, or install it with
-`cargo install --path libs/streamlib-cli`). `setup.sh` falls back to the
+`cargo install --path tools/streamlib-cli`). `setup.sh` falls back to the
 checkout's built binary if it isn't on `PATH`.
 
 To point at a checkout other than the repo this example ships in:

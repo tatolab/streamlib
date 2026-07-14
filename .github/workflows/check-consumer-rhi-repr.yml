@@ -2,7 +2,7 @@ name: Check consumer-rhi #[repr(...)] discipline
 
 # CI gate for issue #1039's consumer-rhi POD layout-pin rule.
 # `cargo xtask check-consumer-rhi-repr` walks every `.rs` file under
-# `libs/streamlib-consumer-rhi/src/` and fails if:
+# `runtime/streamlib-consumer-rhi/src/` and fails if:
 #
 #   - Any `pub enum` (unit-variant only — POD discriminant shape) is
 #     missing an explicit `#[repr(...)]`. Bare-enum repr is not stable

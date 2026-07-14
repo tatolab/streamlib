@@ -31,7 +31,7 @@ sudo apt-get install ffmpeg imagemagick xdotool
 ## Run
 
 ```bash
-libs/streamlib-engine/tests/fixtures/e2e_camera_display.sh /tmp/streamlib-e2e
+runtime/streamlib-engine/tests/fixtures/e2e_camera_display.sh /tmp/streamlib-e2e
 ```
 
 The script:
@@ -66,7 +66,7 @@ display data flow but NOT the actual rendering of the swapchain.
 
 **"Failed to read current format: Invalid argument" from camera startup**
 ffmpeg isn't actually streaming to `/dev/video10`. Restart it via the
-fixture script: `libs/streamlib-engine/tests/fixtures/virtual_camera.sh start`.
+fixture script: `runtime/streamlib-engine/tests/fixtures/virtual_camera.sh start`.
 Verify with `v4l2-ctl -d /dev/video10 --get-fmt-video` — should show
 `1920x1080 YUYV`. If it shows "Invalid argument", the v4l2loopback module
 needs to be loaded with `exclusive_caps=0` (not 1).
@@ -82,5 +82,5 @@ interaction issue). Always use `timeout --kill-after=3 N ...` to force
 SIGKILL after a grace period, then `pkill -9 -f camera-display` defensively.
 
 ## Reference
-- Fixture scripts: `libs/streamlib-engine/tests/fixtures/`
-- Display debug feature implementation: `libs/streamlib-engine/src/linux/processors/display.rs` (search `png_sample_dir`)
+- Fixture scripts: `runtime/streamlib-engine/tests/fixtures/`
+- Display debug feature implementation: `runtime/streamlib-engine/src/linux/processors/display.rs` (search `png_sample_dir`)

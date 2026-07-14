@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Parked cross-platform Apple-flavored video codec wrappers (carved
-//! out of `libs/streamlib-engine/src/core/codec/` in #786). See the
+//! out of `runtime/streamlib-engine/src/core/codec/` in #786). See the
 //! parent `_apple_impl_pending_/mod.rs` for activation notes.
 
 pub mod video_codec;

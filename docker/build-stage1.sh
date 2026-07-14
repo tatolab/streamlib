@@ -3,7 +3,7 @@
 #
 # Runs inside the `builder` image (full toolchain, GPU-free). It:
 #   1. builds the streamlib CLI + streamlib-runtime binaries in-place (the
-#      vulkanalia fork is vendored at libs/tatolab-vulkanalia* and resolves by
+#      vulkanalia fork is vendored at vendor/tatolab-vulkanalia* and resolves by
 #      path — no registry bootstrap of any kind),
 #   2. emits the full image-local static registry tree (cargo closure — which
 #      includes the vendored tatolab-vulkanalia* crates — + pypi + npm +
@@ -48,7 +48,7 @@ trap cleanup EXIT
 
 # ---------------------------------------------------------------------------
 # 1. Build the streamlib CLI + runtime binaries in-place. The vulkanalia fork
-#    is vendored at libs/tatolab-vulkanalia* and resolves by path — no
+#    is vendored at vendor/tatolab-vulkanalia* and resolves by path — no
 #    registry bootstrap or [source] replacement is needed for this build.
 # ---------------------------------------------------------------------------
 log "building streamlib CLI + runtime (release)"

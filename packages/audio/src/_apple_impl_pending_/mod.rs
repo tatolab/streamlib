@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Parked cross-platform Apple-flavored audio codec types (carved out
-//! of `libs/streamlib-engine/src/core/codec/audio_codec.rs` in #786).
+//! of `runtime/streamlib-engine/src/core/codec/audio_codec.rs` in #786).
 //! Gated so it never compiles; re-enable + rewire imports once Apple
 //! support is activated for `@tatolab/audio`.
 

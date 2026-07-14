@@ -33,7 +33,7 @@ Use the API above instead.
    --workspace` fails on any violation.
 
 2. **CI lint (Python + TypeScript)** — `cargo xtask lint-logging` scans
-   `libs/streamlib-python/**/*.py` and `libs/streamlib-deno/**/*.ts` for
+   `sdk/streamlib-python/**/*.py` and `sdk/streamlib-deno/**/*.ts` for
    banned substrings (`print(`, `sys.stdout`, `sys.stderr`,
    `logging.basicConfig`, `console.log`/`warn`/`error`/`info`/`debug`,
    `Deno.stdout.write`, `Deno.stderr.write`). Exits non-zero with each
@@ -67,7 +67,8 @@ output channel. The rule only applies to library crates.
 ### Test code
 
 `#[cfg(test)]` modules inside library crates and integration tests under
-`libs/*/tests/` are allow-listed — `println!` / `eprintln!` there are
+any zone crate's `tests/` dir (`runtime/*/tests/`, `sdk/*/tests/`,
+`adapters/*/tests/`, …) are allow-listed — `println!` / `eprintln!` there are
 fine. This matches the original lockout design (#441): "Overrides
 allowed only in `tests/`, `examples/`, `build.rs`, and `xtask`." CI
 enforces this naturally — `cargo clippy --workspace --no-deps` compiles

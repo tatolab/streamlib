@@ -22,7 +22,7 @@ PluginAbiObject resource (`Texture`, `PixelBuffer`, `StorageBuffer`,
 `UniformBuffer`) back through a vtable callback. The host wrapper
 constructs a borrowed PluginAbiObject via one of the
 `make_*_borrow(handle: *const c_void)` helpers in
-`libs/streamlib-engine/src/core/plugin/host_services.rs` and passes
+`runtime/streamlib-engine/src/core/plugin/host_services.rs` and passes
 that borrow to host-side code (e.g. a recorder method, a kernel
 binding method) that internally calls a POD getter like
 `.width()` / `.height()` / `.byte_size()` / `.mapped_ptr()` on the
@@ -118,7 +118,7 @@ dimensions, constructs a `make_*_borrow(handle)`, and asserts the
 borrow's POD getters return the real values catches the bug at the
 data-structure level. See
 `make_borrow_cached_field_regression_tests` in
-`libs/streamlib-engine/src/core/plugin/host_services.rs`.
+`runtime/streamlib-engine/src/core/plugin/host_services.rs`.
 
 ## Why the panic-guards on `host_inner()` don't catch this
 
@@ -132,7 +132,7 @@ on the cached-field reads, with no error path firing.
 ## Reference
 
 - Borrow helpers + the canonical fix pattern: `make_*_borrow` in
-  `libs/streamlib-engine/src/core/plugin/host_services.rs`.
+  `runtime/streamlib-engine/src/core/plugin/host_services.rs`.
 - Regression tests: `make_borrow_cached_field_regression_tests` in
   the same file. Covers all four borrow helpers (texture,
   pixel_buffer, storage_buffer, uniform_buffer).

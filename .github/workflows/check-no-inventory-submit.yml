@@ -2,7 +2,8 @@ name: Check No inventory::submit!(FactoryRegistration)
 
 # CI gate for issue #793's all-dynamic registration rule.
 # `cargo xtask check-no-inventory-submit` walks every workspace `.rs`
-# file under `libs/`, `packages/`, and `examples/` and fails if any
+# file under the zone dirs (`runtime/`, `sdk/`, `adapters/`, `tools/`,
+# `vendor/`), `packages/`, and `examples/` and fails if any
 # non-`#[cfg(test)]` item reintroduces
 # `inventory::submit!(FactoryRegistration { ... })`. The
 # `#[processor]` macro no longer emits one, and reintroducing the

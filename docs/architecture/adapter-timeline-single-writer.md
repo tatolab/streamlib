@@ -324,20 +324,20 @@ subprocess-wired adapters and any future siblings.
   - `HostVulkanTimelineSemaphore::new_exportable`,
     `from_imported_opaque_fd`, `export_opaque_fd`, `wait`,
     `signal_host`, `current_value` in
-    `libs/streamlib-engine/src/vulkan/rhi/vulkan_sync.rs`.
+    `runtime/streamlib-engine/src/vulkan/rhi/vulkan_sync.rs`.
   - `ConsumerVulkanTimelineSemaphore` mirror in
-    `libs/streamlib-consumer-rhi/src/consumer_vulkan_sync.rs`.
+    `runtime/streamlib-consumer-rhi/src/consumer_vulkan_sync.rs`.
   - `VulkanTimelineSemaphoreLike` trait in
-    `libs/streamlib-consumer-rhi/src/device_capability.rs`.
+    `runtime/streamlib-consumer-rhi/src/device_capability.rs`.
 - **Adapters**:
-  - `libs/streamlib-adapter-cuda/src/{state,adapter}.rs`
-  - `libs/streamlib-adapter-vulkan/src/{state,adapter}.rs`
-  - `libs/streamlib-adapter-cpu-readback/src/{state,adapter}.rs`
+  - `adapters/streamlib-adapter-cuda/src/{state,adapter}.rs`
+  - `adapters/streamlib-adapter-vulkan/src/{state,adapter}.rs`
+  - `adapters/streamlib-adapter-cpu-readback/src/{state,adapter}.rs`
 - **IPC schema**:
-  - `libs/streamlib-engine/src/linux/surface_share/state.rs` —
+  - `runtime/streamlib-engine/src/linux/surface_share/state.rs` —
     `SurfaceMetadata.produce_done_fd` and
     `SurfaceMetadata.consume_done_fd`.
-  - `libs/streamlib-engine/src/linux/surface_share/unix_socket_service.rs`
+  - `runtime/streamlib-engine/src/linux/surface_share/unix_socket_service.rs`
     — wire register/lookup paths.
 - **Companion docs**:
   - [`adapter-runtime-integration.md`](adapter-runtime-integration.md)

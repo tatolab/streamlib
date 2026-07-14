@@ -91,7 +91,7 @@ Mechanical steps — work top-to-bottom.
 
 ### 1. Crate layout
 
-Create three crates under `libs/`:
+Create three crates under `adapters/`:
 
 - `streamlib-adapter-<name>/` — the adapter implementation. Runtime
   dep graph: `streamlib-adapter-abi` + `streamlib-consumer-rhi` +
@@ -492,12 +492,12 @@ subprocesses (which is the default for any new adapter), follow
   `0`. CI enforces this via `cargo xtask check-boundaries` (see
   CLAUDE.md → Vulkan RHI Boundary).
 - The Python adapter mirror at
-  `libs/streamlib-python/python/streamlib/adapters/` and the Deno
-  mirror at `libs/streamlib-deno/adapters/` carry the per-adapter
+  `sdk/streamlib-python/python/streamlib/adapters/` and the Deno
+  mirror at `sdk/streamlib-deno/adapters/` carry the per-adapter
   context types (`VulkanContext`, `OpenGLContext`, etc.); the
   base `SurfaceAdapter` Protocol/interface lives in
-  `libs/streamlib-python/python/streamlib/surface_adapter.py` and
-  `libs/streamlib-deno/surface_adapter.ts`. Both runtimes mirror
+  `sdk/streamlib-python/python/streamlib/surface_adapter.py` and
+  `sdk/streamlib-deno/surface_adapter.ts`. Both runtimes mirror
   the trait shape using the language's idiomatic scope binding
   (`with` for Python, `using` for Deno). Escalate-op schemas live
   in `packages/escalate/schemas/`.
@@ -862,11 +862,11 @@ Read these, in this order, when authoring:
 
 | Adapter | What it shows |
 |---|---|
-| [`streamlib-adapter-vulkan`](../../libs/streamlib-adapter-vulkan/) | Canonical shape. Start here. |
-| [`streamlib-adapter-opengl`](../../libs/streamlib-adapter-opengl/) | Composing on Vulkan via EGL DMA-BUF import; framework-binding shim in its own module. |
-| [`streamlib-adapter-cpu-readback`](../../libs/streamlib-adapter-cpu-readback/) | Bridge / escalate-trigger pattern. Multi-plane staging buffers. |
-| [`streamlib-adapter-cuda`](../../libs/streamlib-adapter-cuda/) | OPAQUE_FD handle type. DLPack-flavored framework-native handle (no `VulkanWritable`-style marker). |
-| [`streamlib-adapter-skia`](../../libs/streamlib-adapter-skia/) | Composes on the Vulkan adapter (Skia Vulkan backend); also offers a GL backend that composes on the OpenGL adapter. |
+| [`streamlib-adapter-vulkan`](../../adapters/streamlib-adapter-vulkan/) | Canonical shape. Start here. |
+| [`streamlib-adapter-opengl`](../../adapters/streamlib-adapter-opengl/) | Composing on Vulkan via EGL DMA-BUF import; framework-binding shim in its own module. |
+| [`streamlib-adapter-cpu-readback`](../../adapters/streamlib-adapter-cpu-readback/) | Bridge / escalate-trigger pattern. Multi-plane staging buffers. |
+| [`streamlib-adapter-cuda`](../../adapters/streamlib-adapter-cuda/) | OPAQUE_FD handle type. DLPack-flavored framework-native handle (no `VulkanWritable`-style marker). |
+| [`streamlib-adapter-skia`](../../adapters/streamlib-adapter-skia/) | Composes on the Vulkan adapter (Skia Vulkan backend); also offers a GL backend that composes on the OpenGL adapter. |
 
 ## Related
 

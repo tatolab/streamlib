@@ -3,7 +3,7 @@
 
 // Minimal "output[i] = input[i] * 2" compute shader used as the
 // CPU-reference dispatch target for the dlopen integration test in
-// `libs/streamlib-engine/tests/load_project_dylib_compute_kernel_cpu_ref.rs`.
+// `runtime/streamlib-engine/tests/load_project_dylib_compute_kernel_cpu_ref.rs`.
 // The test loads this fixture's cdylib, dispatches the kernel against
 // synthetic input, and asserts every output value matches the trivial
 // CPU-computed reference (`input[i] * 2`).

@@ -30,11 +30,11 @@ jobs:
           # copies and deliberately carry NO BUSL headers — see
           # docs/architecture/vendored-vulkanalia.md and CLAUDE.md's
           # licensing exception. Exact-dir exclusions (a future
-          # libs/tatolab-vulkanalia-extras/ crate would NOT be excluded).
-          done < <(find libs examples -name "*.rs" \
-            -not -path "libs/tatolab-vulkanalia/*" \
-            -not -path "libs/tatolab-vulkanalia-sys/*" \
-            -not -path "libs/tatolab-vulkanalia-vma/*" \
+          # vendor/tatolab-vulkanalia-extras/ crate would NOT be excluded).
+          done < <(find runtime sdk adapters tools vendor examples -name "*.rs" \
+            -not -path "vendor/tatolab-vulkanalia/*" \
+            -not -path "vendor/tatolab-vulkanalia-sys/*" \
+            -not -path "vendor/tatolab-vulkanalia-vma/*" \
             -print0)
 
           if [ ${#missing_files[@]} -ne 0 ]; then

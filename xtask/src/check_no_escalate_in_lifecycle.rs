@@ -160,7 +160,7 @@ pub fn run(workspace_root: &Path) -> Result<()> {
          wrap inside ProcessorInstance::setup). Calling `.escalate(...)`\n  \
          again from your body re-enters the same gate on the same thread\n  \
          and trips the gate's same-thread re-entry panic in\n  \
-         libs/streamlib-engine/src/core/context/escalate_gate.rs.\n  \
+         runtime/streamlib-engine/src/core/context/escalate_gate.rs.\n  \
          \n  \
          See docs/architecture/cdylib-reachability.md, anti-pattern #1.\n  \
          The historical sandbox contract — pre-#322 setup() got\n  \

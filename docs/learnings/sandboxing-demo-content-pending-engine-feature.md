@@ -12,7 +12,7 @@ The naïve options are both wrong:
   content (a demo's effects, a scenario's chrome) into the engine
   surface. Future agents reading the engine learn the wrong shape.
   This is what #487 had to *undo* — `VulkanBlendingCompositor` and
-  `VulkanCrtFilmGrain` had been placed in `libs/streamlib-engine/src/vulkan/rhi/`
+  `VulkanCrtFilmGrain` had been placed in `runtime/streamlib-engine/src/vulkan/rhi/`
   by #607/#608, and that placement actively encouraged copy-paste
   expansion of the same wrong shape.
 - **Build the right engine primitive now.** Production engines (UE5,
@@ -140,7 +140,7 @@ These are the failure modes the recipe exists to prevent:
 ## Reference
 
 - First in-tree application: #487 (camera-python-display kernel
-  wrappers + shaders relocated from `libs/streamlib-engine/src/vulkan/rhi/`
+  wrappers + shaders relocated from `runtime/streamlib-engine/src/vulkan/rhi/`
   into the example crate, gated for RDG #631).
 - Cleanup follow-up: #689 (`Blocked by` #631).
 - Boundary-check implementation: `xtask/src/check_boundaries.rs`
