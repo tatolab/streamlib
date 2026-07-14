@@ -1,0 +1,77 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-adapter-cpu-readback"
+description = "Explicit GPU→CPU surface adapter (Linux). The single named, opt-in path for customers who need CPU memory access to a streamlib surface — returns numpy.ndarray (Python) / Uint8Array (Deno) / &[u8] (Rust) from a host-side vkCmdCopyImageToBuffer at acquire time. Sole implementor of the CpuReadable / CpuWritable capability traits from streamlib-adapter-abi; GPU adapters do not implement them, by design."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[lib]
+name = "streamlib_adapter_cpu_readback"
+path = "src/lib.rs"
+
+[dependencies]
+streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.6.0" }
+streamlib-adapter-cpu-readback-abi = { path = "../streamlib-adapter-cpu-readback-abi", version = "0.6.0" }
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.6.0" }
+streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.6.0" }
+vulkanalia.workspace = true
+libc.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
+
+# `streamlib` is dev-deps only: tests bring up a real `HostVulkanDevice`
+# + `HostVulkanBuffer` + `HostVulkanTimelineSemaphore` to exercise
+# the host trigger end-to-end. The runtime crate (above) does NOT pull
+# `streamlib`, so subprocess cdylibs depending on `streamlib-adapter-
+# cpu-readback` get the consumer-rhi carve-out only and `streamlib` is
+# absent from their dep graph (asserted by `cargo tree | grep -c
+# "^streamlib v"` returning 0). Mirrors `streamlib-adapter-vulkan`'s
+# shape post-#560.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+streamlib-engine = { path = "../../runtime/streamlib-engine" }
+streamlib = { path = "../../sdk/streamlib-sdk" }
+serde = { workspace = true }
+# Test-helper bin lives in this dev-deps-only crate so the
+# `streamlib`-pulling helper does NOT propagate into adapter-cpu-readback's
+# runtime dep graph (and from there into the cdylibs). Tests reach the
+# bin via `env!("CARGO_BIN_EXE_cpu_readback_adapter_subprocess_helper")`.
+streamlib-adapter-cpu-readback-helpers = { path = "../streamlib-adapter-cpu-readback-helpers" }
+
+[[test]]
+name = "conformance"
+path = "tests/conformance.rs"
+
+[[test]]
+name = "round_trip_read"
+path = "tests/round_trip_read.rs"
+
+[[test]]
+name = "round_trip_write"
+path = "tests/round_trip_write.rs"
+
+[[test]]
+name = "stride_offset_handling"
+path = "tests/stride_offset_handling.rs"
+
+[[test]]
+name = "subprocess_crash_mid_write"
+path = "tests/subprocess_crash_mid_write.rs"
+
+[[test]]
+name = "persistent_command_pool"
+path = "tests/persistent_command_pool.rs"
+
+[lints]
+workspace = true

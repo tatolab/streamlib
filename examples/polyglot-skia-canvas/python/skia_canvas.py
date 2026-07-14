@@ -5,7 +5,7 @@
 
 End-to-end gate for the subprocess :class:`SkiaContext` runtime
 (#577 / #581). Mirrors the in-process Rust stress test
-``libs/streamlib-adapter-skia/tests/skia_animated_stress_gl.rs``: the
+``adapters/streamlib-adapter-skia/tests/skia_animated_stress_gl.rs``: the
 host pre-allocates a render-target-capable DMA-BUF surface AND an
 exportable timeline semaphore, registers both with surface-share, and
 spawns this Python processor. On every trigger frame the processor
@@ -121,7 +121,7 @@ class SkiaCanvasProcessor:
 
 # ---------------------------------------------------------------------------
 # Animated draw — port of `draw_animated_frame` in
-# `libs/streamlib-adapter-skia/tests/skia_animated_stress_gl.rs`.
+# `adapters/streamlib-adapter-skia/tests/skia_animated_stress_gl.rs`.
 # Field-for-field; tweaks only where skia-python's API requires it.
 # ---------------------------------------------------------------------------
 

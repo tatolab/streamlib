@@ -22,7 +22,7 @@ use std::path::Path;
 use std::process::Command;
 
 /// The file carrying the ABI-version constant.
-const ABI_FILE: &str = "libs/streamlib-plugin-abi/src/lib.rs";
+const ABI_FILE: &str = "runtime/streamlib-plugin-abi/src/lib.rs";
 /// The manifest carrying `[workspace.package] version`.
 const CARGO_TOML: &str = "Cargo.toml";
 

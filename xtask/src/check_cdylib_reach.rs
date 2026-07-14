@@ -19,7 +19,7 @@
 //!    workspace crate with `crate-type` containing `"cdylib"` (every
 //!    `packages/*` plugin, every `examples/**/plugin` plugin, the
 //!    `examples/camera-python-display/effects` graphics-kernel
-//!    package, and the subprocess bridges in `libs/streamlib-*-native`)
+//!    package, and the subprocess bridges in `sdk/streamlib-*-native`)
 //!    has its non-test fn / method bodies scanned for `vulkan_inner`,
 //!    `host_inner`, and `host_callbacks`. Hitting any of those from
 //!    cdylib-resident code lands on `Texture::host_inner()`'s
@@ -46,7 +46,7 @@ use walkdir::WalkDir;
 /// type name starts with `HostVulkan` are visited. Adding a new
 /// `Host*` type / new file under this tree is covered automatically
 /// — the check tracks the directory, not a curated file list.
-const TARGET_DIR: &str = "libs/streamlib-engine/src/vulkan/rhi";
+const TARGET_DIR: &str = "runtime/streamlib-engine/src/vulkan/rhi";
 
 /// Identifiers banned inside engine-side constructor-class function
 /// bodies.

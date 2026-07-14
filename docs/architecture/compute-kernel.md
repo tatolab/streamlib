@@ -60,12 +60,12 @@ Given a SPIR-V blob and a small typed declaration, the kernel:
 
 ## Adding a new compute kernel — the recipe
 
-1. **Write the GLSL** in `libs/streamlib-engine/src/vulkan/rhi/shaders/<name>.comp`.
+1. **Write the GLSL** in `runtime/streamlib-engine/src/vulkan/rhi/shaders/<name>.comp`.
    Use descriptor set 0; multi-set kernels are not supported. Keep
    binding indices in declaration order.
 
 2. **Wire the shader into `build.rs`.** Append an entry to the `shaders`
-   array in `libs/streamlib-engine/build.rs`. The build script invokes
+   array in `runtime/streamlib-engine/build.rs`. The build script invokes
    `glslc -O` and writes the SPIR-V into `OUT_DIR`. SPIR-V is read at
    compile time via
    `include_bytes!(concat!(env!("OUT_DIR"), "/<name>.spv"))`. Do not

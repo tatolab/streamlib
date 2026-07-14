@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 use syn::visit::Visit;
 use walkdir::WalkDir;
 
-const SCAN_PARENTS: &[&str] = &["libs", "packages", "examples"];
+const SCAN_PARENTS: &[&str] = &["runtime", "sdk", "adapters", "tools", "vendor", "packages", "examples"];
 
 const SKIP_PATH_FRAGMENTS: &[&str] = &["/target/", "/_generated_/", "/node_modules/", "/.git/"];
 
@@ -299,7 +299,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/src/lib.rs",
+            "runtime/foo/src/lib.rs",
             r#"
 pub fn hello() -> &'static str { "world" }
 
@@ -315,7 +315,7 @@ inventory::submit!(RuntimeInitHookRegistration::new::<MyHook>());
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/src/lib.rs",
+            "runtime/foo/src/lib.rs",
             r#"
 inventory::submit! {
     FactoryRegistration {
@@ -333,7 +333,7 @@ inventory::submit! {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/src/lib.rs",
+            "runtime/foo/src/lib.rs",
             r#"
 ::streamlib::sdk::inventory::submit! {
     ::streamlib::sdk::processors::macro_codegen::FactoryRegistration {
@@ -351,7 +351,7 @@ inventory::submit! {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/src/lib.rs",
+            "runtime/foo/src/lib.rs",
             r#"
 inventory::submit! {
     RuntimeInitHookRegistration::new::<MyHook>()
@@ -367,7 +367,7 @@ inventory::submit! {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/src/lib.rs",
+            "runtime/foo/src/lib.rs",
             r#"
 pub fn ok() {}
 
@@ -390,7 +390,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/src/lib.rs",
+            "runtime/foo/src/lib.rs",
             r#"
 /// Historical: the macro used to emit
 /// `inventory::submit!(FactoryRegistration { ... })`.
@@ -406,7 +406,7 @@ pub fn ok() {}
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/src/lib.rs",
+            "runtime/foo/src/lib.rs",
             r#"
 // check-no-inventory-submit:allow-file
 inventory::submit! {
@@ -425,7 +425,7 @@ inventory::submit! {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/target/build/lib.rs",
+            "runtime/foo/target/build/lib.rs",
             r#"
 inventory::submit! {
     FactoryRegistration { register_fn: |f| f.register::<P>() }
@@ -434,7 +434,7 @@ inventory::submit! {
         );
         write(
             tmp.path(),
-            "libs/foo/_generated_/whatever.rs",
+            "runtime/foo/_generated_/whatever.rs",
             r#"
 inventory::submit! {
     FactoryRegistration { register_fn: |f| f.register::<P>() }

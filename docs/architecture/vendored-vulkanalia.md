@@ -1,4 +1,4 @@
-# Vendored vulkanalia fork — `libs/tatolab-vulkanalia*`
+# Vendored vulkanalia fork — `vendor/tatolab-vulkanalia*`
 
 > **Living document.** Validate, update, critique freely per
 > [CLAUDE.md's markdown editing rules](../../CLAUDE.md#editing-markdown-documentation).
@@ -10,9 +10,9 @@ is vendored into this repo as three ordinary workspace members:
 
 | Directory | Package name | Version | Upstream crate |
 |---|---|---|---|
-| `libs/tatolab-vulkanalia` | `tatolab-vulkanalia` | 0.35.0 | `vulkanalia` |
-| `libs/tatolab-vulkanalia-sys` | `tatolab-vulkanalia-sys` | 0.35.0 | `vulkanalia-sys` |
-| `libs/tatolab-vulkanalia-vma` | `tatolab-vulkanalia-vma` | 0.9.0 | `vulkanalia-vma` (`ext/vma` in the fork) |
+| `vendor/tatolab-vulkanalia` | `tatolab-vulkanalia` | 0.35.0 | `vulkanalia` |
+| `vendor/tatolab-vulkanalia-sys` | `tatolab-vulkanalia-sys` | 0.35.0 | `vulkanalia-sys` |
+| `vendor/tatolab-vulkanalia-vma` | `tatolab-vulkanalia-vma` | 0.9.0 | `vulkanalia-vma` (`ext/vma` in the fork) |
 
 Each keeps its upstream `[lib] name` (`vulkanalia`, `vulkanalia_sys`,
 `vulkanalia_vma`), and `[workspace.dependencies]` uses `package =`
@@ -36,14 +36,14 @@ mechanism exists — `rustfmt.toml`'s `ignore` is nightly-only). There is
 no `cargo fmt` CI gate today; if one is ever added it must skip the
 three vendored dirs explicitly (e.g. run `cargo fmt -p <crate>` on
 non-vendored members), with this hash guard as the backstop. Workspace
-fmt sweeps must exclude `libs/tatolab-vulkanalia*`.
+fmt sweeps must exclude `vendor/tatolab-vulkanalia*`.
 
 ## License
 
 The vendored crates are **Apache-2.0** (upstream vulkanalia's license;
 `LICENSE.txt` is copied into each directory). This is a deliberate
 exception to the repo-wide BUSL-1.1 new-file header rule: **do not add
-BUSL headers to any file under `libs/tatolab-vulkanalia*`**, and do not
+BUSL headers to any file under `vendor/tatolab-vulkanalia*`**, and do not
 reformat or "improve" the vendored sources. The embedded third-party
 headers keep their own notices (VulkanMemoryAllocator's MIT notice is
 embedded at the top of `vk_mem_alloc.h`; the Vulkan headers are
@@ -131,10 +131,10 @@ mechanical:
    tests. Apply the `core::mem` fix from the local-patches list above if
    not yet upstreamed into the fork.
 2. Re-copy into this repo:
-   - `vulkanalia/{Cargo.toml,src,tests}` → `libs/tatolab-vulkanalia/`
-   - `vulkanalia-sys/{Cargo.toml,src}` → `libs/tatolab-vulkanalia-sys/`
+   - `vulkanalia/{Cargo.toml,src,tests}` → `vendor/tatolab-vulkanalia/`
+   - `vulkanalia-sys/{Cargo.toml,src}` → `vendor/tatolab-vulkanalia-sys/`
    - `ext/vma/{Cargo.toml,build.rs,wrapper.cpp,src,README.md,CHANGELOG.md}`
-     → `libs/tatolab-vulkanalia-vma/`, plus the trimmed `vendor/` tree
+     → `vendor/tatolab-vulkanalia-vma/`, plus the trimmed `vendor/` tree
      per the rule above; repo-root `README.md` + `LICENSE.txt` into all
      three.
 3. Re-apply the manifest edits (package renames, `[lib]` names, sibling

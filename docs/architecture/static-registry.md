@@ -20,7 +20,7 @@ cloud object store. No registry daemon, no database, no token is required to
 > registries as a separate, gated release step. This doc now describes only
 > the surviving `.slpkg` generic store + catalog. The fork-mirror bootstrap
 > section (`emit-static-fork.sh`, `cargo-fork-mirror`) was already removed
-> 2026-07-13 when the vulkanalia fork was vendored at `libs/tatolab-vulkanalia*`
+> 2026-07-13 when the vulkanalia fork was vendored at `vendor/tatolab-vulkanalia*`
 > (see [`vendored-vulkanalia.md`](vendored-vulkanalia.md)).
 
 ## Read transport
@@ -52,7 +52,7 @@ same bytes serve from any mount point or `file://` root.
 
 A `file://` consumer must never observe a half-written tree. `emit_static_registry`
 builds the whole tree into a **staging sibling** of the served path and writes
-the [`ReleaseManifest`](../../libs/streamlib-idents/src/release.rs) LAST, then
+the [`ReleaseManifest`](../../sdk/streamlib-idents/src/release.rs) LAST, then
 flips staging into the served path in a single operation
 (`static_registry::publish_staged_tree`): a plain atomic `rename` when the
 served path is absent, and a gapless `renameat2(RENAME_EXCHANGE)` swap when
@@ -74,9 +74,9 @@ Alongside the resolvable `.slpkg` artifacts, an emit writes a **catalog**: the
 processor / port / schema metadata a visual graph editor (or any tool
 building a node palette) browses without downloading every `.slpkg`. The
 protocol surface — types plus the read client — lives in `streamlib-idents`
-([`catalog.rs`](../../libs/streamlib-idents/src/catalog.rs)), the crate that
+([`catalog.rs`](../../sdk/streamlib-idents/src/catalog.rs)), the crate that
 owns the registry protocol; assembly lives in `streamlib-pack`
-([`catalog.rs`](../../libs/streamlib-pack/src/catalog.rs),
+([`catalog.rs`](../../tools/streamlib-pack/src/catalog.rs),
 `build_package_catalog`).
 
 Three on-disk shapes:
@@ -226,11 +226,11 @@ build it on the host; neither touches a cargo registry.
 
 ## Reference
 
-- **Renderers + atomic swap**: `libs/streamlib-pack/src/static_registry.rs`.
-- **Catalog**: `libs/streamlib-idents/src/catalog.rs` (protocol surface +
-  `CatalogClient`), `libs/streamlib-pack/src/catalog.rs` (assembly).
+- **Renderers + atomic swap**: `tools/streamlib-pack/src/static_registry.rs`.
+- **Catalog**: `sdk/streamlib-idents/src/catalog.rs` (protocol surface +
+  `CatalogClient`), `tools/streamlib-pack/src/catalog.rs` (assembly).
 - **Generator CLI**: `cargo xtask static-registry emit`.
-- **`.slpkg` `file://` transport**: `libs/streamlib-idents/src/registry.rs`.
+- **`.slpkg` `file://` transport**: `sdk/streamlib-idents/src/registry.rs`.
 - **CI**: `.github/workflows/check-pack-load.yml` (`cargo test -p
   streamlib-pack` renderers/atomic-swap/completeness + the file-based
   pack → load smoke).

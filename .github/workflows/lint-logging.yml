@@ -7,8 +7,8 @@ name: Lint Logging
 #   `#[allow(clippy::disallowed_macros)]`, `#[cfg(test)]`, and platform cfg
 #   gates exactly as clippy would on `ubuntu-latest`.
 # - Python: banned `print()`/`sys.stdout`/`logging.basicConfig` in
-#   libs/streamlib-python.
-# - TypeScript: banned `console.*`/`Deno.stdout.write` in libs/streamlib-deno.
+#   sdk/streamlib-python.
+# - TypeScript: banned `console.*`/`Deno.stdout.write` in sdk/streamlib-deno.
 #
 # Rationale for not using `cargo clippy --workspace`: it transitively compiles
 # `libs/vulkan-video`, whose build.rs requires `glslc`. Keeping the lockout

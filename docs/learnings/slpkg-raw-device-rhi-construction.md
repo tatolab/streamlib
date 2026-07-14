@@ -119,11 +119,11 @@ a GPU package is plugin-safe; the only real test is a separate-build
 ## Reference
 
 - The sound primitives live on `GpuContextFullAccess` in
-  `libs/streamlib-engine/src/core/context/gpu_context.rs`
+  `runtime/streamlib-engine/src/core/context/gpu_context.rs`
   (`create_compute_kernel`, `acquire_storage_buffer`,
   `create_texture_ring`); the compute-kernel PluginAbiObject and its
   `methods_vtable` live in
-  `libs/streamlib-engine/src/vulkan/rhi/vulkan_compute_kernel.rs`.
+  `runtime/streamlib-engine/src/vulkan/rhi/vulkan_compute_kernel.rs`.
 - The reference "done right" call is `create_texture_ring` — GPU
   packages that already use it for their output ring show the shape the
   kernel/buffer construction should follow.

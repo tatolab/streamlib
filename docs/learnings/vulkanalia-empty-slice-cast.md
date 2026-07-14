@@ -55,7 +55,7 @@ their elements.
 
 Any file calling Vulkan commands with mixed empty/non-empty barrier arrays.
 Currently:
-- `libs/streamlib-engine/src/vulkan/rhi/vulkan_format_converter.rs` — compute dispatch
+- `runtime/streamlib-engine/src/vulkan/rhi/vulkan_format_converter.rs` — compute dispatch
   barriers
 
 `RhiCommandRecorder::record_image_barrier` /

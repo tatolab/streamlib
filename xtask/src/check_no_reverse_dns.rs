@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use syn::visit::Visit;
 use walkdir::WalkDir;
 
-const SCAN_PARENTS: &[&str] = &["libs", "packages", "examples", "xtask"];
+const SCAN_PARENTS: &[&str] = &["runtime", "sdk", "adapters", "tools", "vendor", "packages", "examples", "xtask"];
 
 const SKIP_PATH_FRAGMENTS: &[&str] = &[
     "/target/",
@@ -348,12 +348,12 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/src/lib.rs",
+            "runtime/foo/src/lib.rs",
             "pub fn hello() -> &'static str { \"@tatolab/core/VideoFrame\" }\n",
         );
         write(
             tmp.path(),
-            "libs/foo/streamlib.yaml",
+            "runtime/foo/streamlib.yaml",
             "schemas:\n  VideoFrame:\n    package: \"@tatolab/core\"\n",
         );
         let violations = lint_workspace(tmp.path()).unwrap();
@@ -365,7 +365,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/src/lib.rs",
+            "runtime/foo/src/lib.rs",
             "pub fn legacy() -> &'static str { \"com.tatolab.foo.bar\" }\n",
         );
         let violations = lint_workspace(tmp.path()).unwrap();
@@ -378,7 +378,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/streamlib.yaml",
+            "runtime/foo/streamlib.yaml",
             "schemas:\n  Foo:\n    file: com.streamlib.foo.config.yaml\n",
         );
         let violations = lint_workspace(tmp.path()).unwrap();
@@ -391,7 +391,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/src/lib.rs",
+            "runtime/foo/src/lib.rs",
             "pub fn ok() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn legacy_grammar_fixture() {\n        let _ = \"com.tatolab.foo.bar\";\n    }\n}\n",
         );
         let violations = lint_workspace(tmp.path()).unwrap();
@@ -403,7 +403,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/src/lib.rs",
+            "runtime/foo/src/lib.rs",
             "pub fn ok() {}\n\n#[cfg(test)]\nfn legacy() -> &'static str { \"com.tatolab.foo\" }\n",
         );
         let violations = lint_workspace(tmp.path()).unwrap();
@@ -415,7 +415,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/src/lib.rs",
+            "runtime/foo/src/lib.rs",
             "/// Legacy form was `com.tatolab.foo.bar`.\npub fn ok() {}\n",
         );
         let violations = lint_workspace(tmp.path()).unwrap();
@@ -439,7 +439,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/tests/integration.rs",
+            "runtime/foo/tests/integration.rs",
             "fn main() { let _ = \"com.tatolab.foo\"; }\n",
         );
         let violations = lint_workspace(tmp.path()).unwrap();
@@ -451,12 +451,12 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/src/foo_test.rs",
+            "runtime/foo/src/foo_test.rs",
             "fn main() { let _ = \"com.tatolab.foo\"; }\n",
         );
         write(
             tmp.path(),
-            "libs/foo/src/integration_tests.rs",
+            "runtime/foo/src/integration_tests.rs",
             "fn main() { let _ = \"com.streamlib.foo\"; }\n",
         );
         let violations = lint_workspace(tmp.path()).unwrap();
@@ -468,7 +468,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/streamlib.yaml",
+            "runtime/foo/streamlib.yaml",
             "# Historical: the old form was com.streamlib.foo.config\nschemas: {}\n",
         );
         let violations = lint_workspace(tmp.path()).unwrap();
@@ -480,12 +480,12 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/target/build/lib.rs",
+            "runtime/foo/target/build/lib.rs",
             "pub fn legacy() -> &'static str { \"com.tatolab.foo\" }\n",
         );
         write(
             tmp.path(),
-            "libs/foo/_generated_/whatever.rs",
+            "runtime/foo/_generated_/whatever.rs",
             "pub fn legacy() -> &'static str { \"com.tatolab.foo\" }\n",
         );
         let violations = lint_workspace(tmp.path()).unwrap();
@@ -497,7 +497,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/src/lib.rs",
+            "runtime/foo/src/lib.rs",
             "pub fn ok() {}\n\n#[cfg(all(test, target_os = \"linux\"))]\nfn legacy() -> &'static str { \"com.tatolab.foo\" }\n",
         );
         let violations = lint_workspace(tmp.path()).unwrap();
@@ -509,7 +509,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/src/lib.rs",
+            "runtime/foo/src/lib.rs",
             "// check-no-reverse-dns:allow-file\npub fn legacy() -> &'static str { \"com.tatolab.foo\" }\n",
         );
         let violations = lint_workspace(tmp.path()).unwrap();
@@ -521,7 +521,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/src/lib.rs",
+            "runtime/foo/src/lib.rs",
             "pub fn ok() {}\n\n#[cfg(target_os = \"linux\")]\nfn legacy() -> &'static str { \"com.tatolab.foo\" }\n",
         );
         let violations = lint_workspace(tmp.path()).unwrap();

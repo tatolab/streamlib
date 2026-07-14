@@ -20,7 +20,7 @@
 //! verifies the DLPack capsule's structural shape (`device_type ==
 //! kDLCUDA`, non-zero `device_ptr`, expected `size`) — Deno's ML
 //! ecosystem has no `from_dlpack` consumer for `DLManagedTensor*` (per
-//! `libs/streamlib-deno/adapters/cuda.ts` lines 28–37) so the gate is
+//! `sdk/streamlib-deno/adapters/cuda.ts` lines 28–37) so the gate is
 //! capsule-shape validation, not model inference.
 //!
 //! Pipeline shape:

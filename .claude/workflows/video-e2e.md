@@ -10,7 +10,7 @@ short form an agent follows during `/amos:next` execution.
 
 ## When this workflow is mandatory
 
-- Any change to `libs/vulkan-video/` or `libs/streamlib-engine/src/linux/processors/{h264,h265}_{encoder,decoder}.rs`.
+- Any change to `libs/vulkan-video/` or `runtime/streamlib-engine/src/linux/processors/{h264,h265}_{encoder,decoder}.rs`.
 - Any change inside `vulkan/rhi/` that the codecs reach through.
 - Any change to the H.264/H.265 validator, MP4 writer, or anything
   consuming `Encodedvideoframe`.
@@ -51,7 +51,7 @@ is strict.
 - < 30 dB → regression; investigate color-matrix / range / plane layout
   before merging
 
-Fixture rig: `libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh`.
+Fixture rig: `runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh`.
 
 ## Evidence required in the PR
 

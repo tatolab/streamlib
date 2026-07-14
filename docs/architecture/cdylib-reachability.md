@@ -305,7 +305,7 @@ in this codebase before being caught.
    re-enters the gate on the same thread; pre-#912 this silently
    deadlocked, post-#912 the gate has same-thread re-entry
    detection and panics with an actionable message
-   ([`EscalateGate::enter`](../../libs/streamlib-engine/src/core/context/escalate_gate.rs)).
+   ([`EscalateGate::enter`](../../runtime/streamlib-engine/src/core/context/escalate_gate.rs)).
    **The right pattern is Pattern 1 — direct
    `ctx.gpu_full_access()` access from setup/teardown.**
 
@@ -351,7 +351,7 @@ in this codebase before being caught.
 Three layers protect the invariant:
 
 1. **`cargo xtask check-cdylib-reach`** — AST-level scan of every
-   `.rs` file under `libs/streamlib-engine/src/vulkan/rhi/`. For
+   `.rs` file under `runtime/streamlib-engine/src/vulkan/rhi/`. For
    each `impl HostVulkan*` block, walks every constructor-class
    method's body (`new*` / `create*` / `from_*`) and fails the
    build if any call expression references `host_inner` or
@@ -367,7 +367,7 @@ Three layers protect the invariant:
    docstring is what a reviewer sees first on a constructor
    change; the xtask is the backstop when the reviewer skipped it.
 3. **Dlopen smoke tests** at
-   `libs/streamlib-engine/tests/load_project_dylib_*_smoke.rs`
+   `runtime/streamlib-engine/tests/load_project_dylib_*_smoke.rs`
    (one per surface adapter: cpu-readback, vulkan, opengl, cuda).
    Each test exercises the cdylib direct-call path end-to-end.
    If a constructor regresses to host-private state, the matching
@@ -385,10 +385,10 @@ gap the xtask might miss.
 
 - `xtask/src/check_cdylib_reach.rs` — the AST scan + tests.
 - `.github/workflows/check-cdylib-reach.yml` — CI wiring.
-- `libs/streamlib-engine/src/vulkan/rhi/` — `# Cdylib reachability`
+- `runtime/streamlib-engine/src/vulkan/rhi/` — `# Cdylib reachability`
   docstrings on the `Host*` types that documented the route-2
   invariant (currently `HostVulkanBuffer`,
   `HostVulkanTimelineSemaphore`, `HostVulkanTexture`).
-- `libs/streamlib-engine/tests/load_project_dylib_{cpu_readback,
+- `runtime/streamlib-engine/tests/load_project_dylib_{cpu_readback,
   vulkan, opengl, cuda}_smoke.rs` — end-to-end exercise of the
   cdylib path.

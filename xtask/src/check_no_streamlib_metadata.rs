@@ -22,7 +22,7 @@ use walkdir::WalkDir;
 /// skipped explicitly below — adding more crates doesn't require updating
 /// the list, only adding more skip prefixes when a new vendored tree shows
 /// up.
-const SCAN_PARENTS: &[&str] = &["libs", "packages", "examples", "xtask"];
+const SCAN_PARENTS: &[&str] = &["runtime", "sdk", "adapters", "tools", "vendor", "packages", "examples", "xtask"];
 
 /// Path components that should never be walked (build outputs, dependency
 /// caches, generated bindings).
@@ -193,17 +193,17 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/Cargo.toml",
+            "runtime/foo/Cargo.toml",
             "[package]\nname = \"foo\"\nversion = \"0.1.0\"\n",
         );
         write(
             tmp.path(),
-            "libs/foo/pyproject.toml",
+            "runtime/foo/pyproject.toml",
             "[project]\nname = \"foo\"\n",
         );
         write(
             tmp.path(),
-            "libs/foo/deno.json",
+            "runtime/foo/deno.json",
             "{\n  \"name\": \"foo\"\n}\n",
         );
 
@@ -216,7 +216,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/Cargo.toml",
+            "runtime/foo/Cargo.toml",
             "[package]\nname = \"foo\"\n\n[package.metadata.streamlib]\nschemas = []\n",
         );
         let violations = lint_workspace(tmp.path()).unwrap();
@@ -232,7 +232,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/Cargo.toml",
+            "runtime/foo/Cargo.toml",
             "[workspace]\nmembers = []\n\n[workspace.metadata.streamlib]\nschemas = []\n",
         );
         let violations = lint_workspace(tmp.path()).unwrap();
@@ -244,7 +244,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/pyproject.toml",
+            "runtime/foo/pyproject.toml",
             "[project]\nname = \"foo\"\n\n[tool.streamlib]\nschemas = []\n",
         );
         let violations = lint_workspace(tmp.path()).unwrap();
@@ -260,7 +260,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/deno.json",
+            "runtime/foo/deno.json",
             "{\n  \"name\": \"foo\",\n  \"streamlib\": { \"schemas\": [] }\n}\n",
         );
         let violations = lint_workspace(tmp.path()).unwrap();
@@ -276,7 +276,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/deno.jsonc",
+            "runtime/foo/deno.jsonc",
             "{\n  // see streamlib.yaml for schemas\n  \"name\": \"foo\"\n}\n",
         );
         let violations = lint_workspace(tmp.path()).unwrap();
@@ -288,12 +288,12 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "libs/foo/target/release/Cargo.toml",
+            "runtime/foo/target/release/Cargo.toml",
             "[package]\nname = \"foo\"\n[package.metadata.streamlib]\nschemas = []\n",
         );
         write(
             tmp.path(),
-            "libs/foo/_generated_/Cargo.toml",
+            "runtime/foo/_generated_/Cargo.toml",
             "[package]\nname = \"foo\"\n[package.metadata.streamlib]\nschemas = []\n",
         );
         let violations = lint_workspace(tmp.path()).unwrap();
@@ -306,13 +306,13 @@ mod tests {
         // Crate named `streamlib-something` is fine.
         write(
             tmp.path(),
-            "libs/foo/Cargo.toml",
+            "runtime/foo/Cargo.toml",
             "[package]\nname = \"streamlib-foo\"\nversion = \"0.1.0\"\n",
         );
         // pyproject mentioning `streamlib` in description prose is fine.
         write(
             tmp.path(),
-            "libs/foo/pyproject.toml",
+            "runtime/foo/pyproject.toml",
             "[project]\nname = \"streamlib\"\ndescription = \"streamlib SDK\"\n",
         );
         let violations = lint_workspace(tmp.path()).unwrap();

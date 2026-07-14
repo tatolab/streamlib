@@ -174,13 +174,13 @@ is the precedent shape for that check.
 
 ## Where the code lives
 
-- `libs/streamlib-adapter-abi/` — the contract crate. Trait,
+- `adapters/streamlib-adapter-abi/` — the contract crate. Trait,
   descriptor, errors, guards, mock, conformance suite, subprocess
   crash harness.
-- `libs/streamlib-python/python/streamlib/surface_adapter.py` —
+- `sdk/streamlib-python/python/streamlib/surface_adapter.py` —
   Python mirror.
-- `libs/streamlib-deno/surface_adapter.ts` — Deno mirror.
-- `libs/streamlib-engine/src/linux/surface_share/` — host-side backing
+- `sdk/streamlib-deno/surface_adapter.ts` — Deno mirror.
+- `runtime/streamlib-engine/src/linux/surface_share/` — host-side backing
   store and the Unix-socket service that hands DMA-BUF fds to
   subprocesses.
 

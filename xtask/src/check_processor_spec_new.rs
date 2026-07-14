@@ -33,7 +33,7 @@ use walkdir::WalkDir;
 /// the regex itself is lenient enough that we cover examples and
 /// `libs/` together; flat coverage means no consumer can reintroduce the
 /// pattern in a forgotten tree.
-pub const SCAN_DIR_PARENTS: &[&str] = &["libs", "examples", "packages"];
+pub const SCAN_DIR_PARENTS: &[&str] = &["runtime", "sdk", "adapters", "tools", "vendor", "examples", "packages"];
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct LintViolation {
@@ -355,11 +355,11 @@ mod tests {
         )));
         // libs/ tests legitimately build expected SchemaIdent values:
         assert!(!is_example_src_file(Path::new(
-            "/abs/libs/streamlib-engine/tests/schema_ident_macro_test.rs"
+            "/abs/runtime/streamlib-engine/tests/schema_ident_macro_test.rs"
         )));
         // Macro codegen emits the literal as a token stream:
         assert!(!is_example_src_file(Path::new(
-            "/abs/libs/streamlib-macros/src/codegen.rs"
+            "/abs/sdk/streamlib-macros/src/codegen.rs"
         )));
         // build.rs / shaders / fixtures sit beside src/, not under it:
         assert!(!is_example_src_file(Path::new(
@@ -386,7 +386,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let bad = write_fixture(
             dir.path(),
-            "libs/foo/src/main.rs",
+            "runtime/foo/src/main.rs",
             r#"fn make() {
     let s = ProcessorSpec::new("CameraProcessor", config);
 }"#,
@@ -394,7 +394,7 @@ mod tests {
         // A non-violation file so the walker has something to keep going.
         write_fixture(
             dir.path(),
-            "libs/bar/src/lib.rs",
+            "runtime/bar/src/lib.rs",
             r#"fn make_typed() {
     let s = ProcessorSpec::new(SchemaIdent::new(...), config);
 }"#,

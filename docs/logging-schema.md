@@ -140,6 +140,6 @@ See parent issue #430's "AI Agent Notes" for the framing around why
 this schema is deliberately minimal (no OTLP spans, no SQLite, no
 nested tracing context).
 
-[rs]: ../libs/streamlib-engine/src/core/logging/event.rs
-[rs_id]: ../libs/streamlib-engine/src/core/runtime/runtime_unique_id.rs
-[rs_config]: ../libs/streamlib-engine/src/core/logging/config.rs
+[rs]: ../runtime/streamlib-engine/src/core/logging/event.rs
+[rs_id]: ../runtime/streamlib-engine/src/core/runtime/runtime_unique_id.rs
+[rs_config]: ../runtime/streamlib-engine/src/core/logging/config.rs

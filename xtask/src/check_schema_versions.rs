@@ -19,7 +19,7 @@ use walkdir::WalkDir;
 /// Directory globs to walk for schema YAMLs. New layout (`packages/*/schemas`)
 /// is included alongside the legacy `libs/*/schemas` so the lint stays
 /// effective during the milestone-10 migration.
-pub const SCHEMA_DIR_PARENTS: &[&str] = &["libs", "packages", "examples"];
+pub const SCHEMA_DIR_PARENTS: &[&str] = &["runtime", "sdk", "adapters", "tools", "vendor", "packages", "examples"];
 
 /// Files that look like schema YAMLs but are NOT (e.g. `streamlib.yaml`,
 /// `Cargo.toml.orig`). The lint runs only on files matching `*.yaml` /
@@ -130,7 +130,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         write_fixture(
             dir.path(),
-            "libs/foo/schemas/com.tatolab.videoframe.yaml",
+            "runtime/foo/schemas/com.tatolab.videoframe.yaml",
             "metadata:\n  name: com.tatolab.videoframe\n  version: 1.0.0\nproperties:\n  width:\n    type: uint32\n",
         );
         let violations = lint_workspace(dir.path()).unwrap();
@@ -146,7 +146,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let bad = write_fixture(
             dir.path(),
-            "libs/foo/schemas/com.tatolab.videoframe.yaml",
+            "runtime/foo/schemas/com.tatolab.videoframe.yaml",
             "type: VideoFrame\nversion: 1.0.0\nproperties:\n  width:\n    type: uint32\n",
         );
         let violations = lint_workspace(dir.path()).unwrap();
@@ -164,7 +164,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         write_fixture(
             dir.path(),
-            "libs/foo/streamlib.yaml",
+            "runtime/foo/streamlib.yaml",
             "package:\n  org: tatolab\n  name: foo\n  version: 1.0.0\n",
         );
         write_fixture(
@@ -181,7 +181,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         write_fixture(
             dir.path(),
-            "libs/foo/schemas/Cargo.toml",
+            "runtime/foo/schemas/Cargo.toml",
             "[package]\nname = \"foo\"\nversion = \"1.0.0\"\n",
         );
         let violations = lint_workspace(dir.path()).unwrap();
@@ -193,7 +193,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         write_fixture(
             dir.path(),
-            "libs/foo/schemas/anything.yml",
+            "runtime/foo/schemas/anything.yml",
             "type: VideoFrame\nversion: 1.0.0\n",
         );
         let violations = lint_workspace(dir.path()).unwrap();
@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn empty_file_is_a_pass() {
         let dir = TempDir::new().unwrap();
-        write_fixture(dir.path(), "libs/foo/schemas/empty.yaml", "");
+        write_fixture(dir.path(), "runtime/foo/schemas/empty.yaml", "");
         let violations = lint_workspace(dir.path()).unwrap();
         assert!(violations.is_empty());
     }
@@ -213,7 +213,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         write_fixture(
             dir.path(),
-            "libs/foo/schemas/broken.yaml",
+            "runtime/foo/schemas/broken.yaml",
             ":::: not yaml ::::",
         );
         let res = lint_workspace(dir.path());

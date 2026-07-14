@@ -10,7 +10,7 @@ a fixed UUID; this processor opens that UUID via
 :meth:`streamlib.adapters.skia.SkiaContext.acquire_write` every tick
 and draws into the yielded ``skia.Surface``. Skia composes on the
 OpenGL adapter through ``skia.GrDirectContext.MakeGL(MakeEGL())`` —
-see ``libs/streamlib-python/python/streamlib/adapters/skia.py`` for
+see ``sdk/streamlib-python/python/streamlib/adapters/skia.py`` for
 the full rationale.
 
 Features:

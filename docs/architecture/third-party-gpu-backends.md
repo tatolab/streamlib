@@ -268,13 +268,13 @@ plausibly attempt without this doc.
   - [`HostVulkanBuffer::new_opaque_fd_export`] (HOST_VISIBLE) and
     [`HostVulkanBuffer::new_opaque_fd_export_device_local`]
     (DEVICE_LOCAL) in
-    `libs/streamlib-engine/src/vulkan/rhi/vulkan_buffer.rs`.
+    `runtime/streamlib-engine/src/vulkan/rhi/vulkan_buffer.rs`.
   - [`HostVulkanTexture::new_opaque_fd_export`] in
-    `libs/streamlib-engine/src/vulkan/rhi/vulkan_texture.rs`.
+    `runtime/streamlib-engine/src/vulkan/rhi/vulkan_texture.rs`.
   - [`HostVulkanTimelineSemaphore::new_exportable`] in
-    `libs/streamlib-engine/src/vulkan/rhi/vulkan_sync.rs`.
+    `runtime/streamlib-engine/src/vulkan/rhi/vulkan_sync.rs`.
   - [`ThirdPartyGpuCapabilities`] on [`HostVulkanDevice`] in
-    `libs/streamlib-engine/src/vulkan/rhi/vulkan_device.rs`.
+    `runtime/streamlib-engine/src/vulkan/rhi/vulkan_device.rs`.
 - **Companion docs**:
   - [`subprocess-rhi-parity.md`](subprocess-rhi-parity.md) —
     subprocess-side carve-out machinery (cdylib import shape).

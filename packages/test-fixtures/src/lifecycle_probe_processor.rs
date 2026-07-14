@@ -6,7 +6,7 @@
 //! ContinuousProcessor whose lifecycle hooks (`setup`, `process`,
 //! `on_pause`, `on_resume`, `teardown`) each append a single marker
 //! line to `config.output_path`. The integration tests in
-//! `libs/streamlib-engine/tests/load_project_dylib_process_lifecycle.rs`
+//! `runtime/streamlib-engine/tests/load_project_dylib_process_lifecycle.rs`
 //! and `..._pause_resume.rs` parse the file to assert each hook
 //! dispatched correctly through the `ProcessorVTable` from cdylib
 //! code.

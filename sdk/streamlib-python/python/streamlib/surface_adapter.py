@@ -1,0 +1,233 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+"""Python mirror of streamlib_adapter_abi.
+
+Provides:
+  - StreamlibSurface — concrete frozen dataclass carrying the
+    customer-visible fields (id / width / height / format / usage).
+    Adapters' `acquire_*` accept these directly.
+  - SurfaceFormat, SurfaceUsage, AccessMode — IntFlag/IntEnum types
+    matching the Rust shape.
+  - _SurfaceTransportHandleC, _SurfaceSyncStateC, _StreamlibSurfaceC
+    ctypes mirrors locked to the Rust #[repr(C)] layout. Twin tests in
+    adapters/streamlib-adapter-abi/src/surface.rs (Rust) and
+    tests/test_surface_adapter.py (Python) enforce that the offsets
+    match — both must be updated in lockstep.
+  - SurfaceAdapter Protocol — the trait shape Python adapter authors
+    implement against (context-manager `acquire_read` / `acquire_write`
+    that hand back framework-native views).
+
+Adapters live in dedicated packages (e.g. streamlib_adapter_vulkan_py);
+this module is the contract they implement.
+"""
+
+from __future__ import annotations
+
+import ctypes
+import enum
+from dataclasses import dataclass
+from typing import Iterator, Protocol, runtime_checkable
+
+# ABI version major. Subprocess SDK refuses adapters with a different
+# major. Mirrors STREAMLIB_ADAPTER_ABI_VERSION in lib.rs.
+STREAMLIB_ADAPTER_ABI_VERSION: int = 1
+
+# Maximum DMA-BUF planes the descriptor carries — mirrors the Rust
+# constant of the same name.
+MAX_DMA_BUF_PLANES: int = 4
+
+
+class SurfaceFormat(enum.IntEnum):
+    """Mirror of Rust `SurfaceFormat` (`#[repr(u32)]`)."""
+
+    BGRA8 = 0
+    RGBA8 = 1
+    NV12 = 2
+
+    def plane_count(self) -> int:
+        """Number of planes for this format. Mirrors Rust
+        `SurfaceFormat::plane_count`."""
+        if self in (SurfaceFormat.BGRA8, SurfaceFormat.RGBA8):
+            return 1
+        if self is SurfaceFormat.NV12:
+            return 2
+        raise ValueError(f"unknown SurfaceFormat: {self!r}")
+
+    def plane_bytes_per_pixel(self, plane: int) -> int:
+        """Bytes per texel of `plane`. NV12: Y=1, UV=2 (interleaved)."""
+        if self in (SurfaceFormat.BGRA8, SurfaceFormat.RGBA8) and plane == 0:
+            return 4
+        if self is SurfaceFormat.NV12 and plane == 0:
+            return 1
+        if self is SurfaceFormat.NV12 and plane == 1:
+            return 2
+        raise IndexError(
+            f"plane index {plane} out of range for SurfaceFormat {self!r}"
+        )
+
+    def plane_width(self, surface_width: int, plane: int) -> int:
+        """Plane width in texels at `surface_width`. NV12 UV plane is
+        half-width."""
+        if self in (SurfaceFormat.BGRA8, SurfaceFormat.RGBA8) and plane == 0:
+            return surface_width
+        if self is SurfaceFormat.NV12 and plane == 0:
+            return surface_width
+        if self is SurfaceFormat.NV12 and plane == 1:
+            return surface_width // 2
+        raise IndexError(
+            f"plane index {plane} out of range for SurfaceFormat {self!r}"
+        )
+
+    def plane_height(self, surface_height: int, plane: int) -> int:
+        """Plane height in texels at `surface_height`. NV12 UV plane is
+        half-height."""
+        if self in (SurfaceFormat.BGRA8, SurfaceFormat.RGBA8) and plane == 0:
+            return surface_height
+        if self is SurfaceFormat.NV12 and plane == 0:
+            return surface_height
+        if self is SurfaceFormat.NV12 and plane == 1:
+            return surface_height // 2
+        raise IndexError(
+            f"plane index {plane} out of range for SurfaceFormat {self!r}"
+        )
+
+
+class SurfaceUsage(enum.IntFlag):
+    """Mirror of Rust `SurfaceUsage` (`bitflags!` `#[repr(transparent)] u32`)."""
+
+    RENDER_TARGET = 1 << 0
+    SAMPLED = 1 << 1
+    CPU_READBACK = 1 << 2
+
+
+class AccessMode(enum.IntEnum):
+    """Wire-format access mode used by the IPC and polyglot mirrors."""
+
+    READ = 0
+    WRITE = 1
+
+
+# ---------------------------------------------------------------------------
+# ctypes mirrors of the #[repr(C)] descriptor types
+# ---------------------------------------------------------------------------
+
+
+class _SurfaceTransportHandleC(ctypes.Structure):
+    """Mirror of Rust `SurfaceTransportHandle`."""
+
+    _fields_ = [
+        ("plane_count", ctypes.c_uint32),
+        ("dma_buf_fds", ctypes.c_int32 * MAX_DMA_BUF_PLANES),
+        ("plane_offsets", ctypes.c_uint64 * MAX_DMA_BUF_PLANES),
+        ("plane_strides", ctypes.c_uint64 * MAX_DMA_BUF_PLANES),
+        ("drm_format_modifier", ctypes.c_uint64),
+    ]
+
+
+class _SurfaceSyncStateC(ctypes.Structure):
+    """Mirror of Rust `SurfaceSyncState`.
+
+    Carries the dual `produce_done` + `consume_done` timeline
+    semaphores per the single-writer-per-edge rule in
+    `docs/architecture/adapter-timeline-single-writer.md`. Subprocess
+    adapters wait/signal via the imported sync_fds
+    (`vkImportSemaphoreFdKHR`) — they cannot dereference the host-side
+    `VkSemaphore` handles.
+    """
+
+    _fields_ = [
+        ("produce_done_semaphore_handle", ctypes.c_uint64),
+        ("produce_done_semaphore_sync_fd", ctypes.c_int32),
+        ("_pad_a", ctypes.c_uint32),
+        ("last_acquire_value", ctypes.c_uint64),
+        ("last_release_value", ctypes.c_uint64),
+        ("current_image_layout", ctypes.c_int32),
+        ("_pad_b", ctypes.c_uint32),
+        ("consume_done_semaphore_handle", ctypes.c_uint64),
+        ("consume_done_semaphore_sync_fd", ctypes.c_int32),
+        ("_pad_c", ctypes.c_uint32),
+    ]
+
+
+class _StreamlibSurfaceC(ctypes.Structure):
+    """Mirror of Rust `StreamlibSurface`."""
+
+    _fields_ = [
+        ("id", ctypes.c_uint64),
+        ("width", ctypes.c_uint32),
+        ("height", ctypes.c_uint32),
+        ("format", ctypes.c_uint32),
+        ("usage", ctypes.c_uint32),
+        ("transport", _SurfaceTransportHandleC),
+        ("sync", _SurfaceSyncStateC),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Customer-visible surface descriptor
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class StreamlibSurface:
+    """Customer-visible descriptor for a host-allocated GPU surface.
+
+    Constructed by polyglot processors at `setup` time from the
+    surface-share registry key the host published the surface under,
+    then passed to adapter `acquire_*` to open the host's backing.
+
+    `id` is the surface-share registry key (a UUID string for the
+    GPU adapters; stringified u64 for cpu-readback). The numeric
+    `SurfaceId` carried inside the FFI struct (`_StreamlibSurfaceC`)
+    is adapter-internal — customers never see it.
+    """
+
+    id: str
+    width: int
+    height: int
+    format: int
+    usage: int
+
+
+@runtime_checkable
+class SurfaceAdapter(Protocol):
+    """Public ABI for a Python streamlib surface adapter.
+
+    Implementations expose scoped `acquire_read` / `acquire_write` as
+    context managers — the customer writes:
+
+        with adapter.acquire_write(surface) as view:
+            view.draw_into(...)
+
+    and never types the word "semaphore". The adapter handles all
+    timeline-semaphore signaling on `__enter__` / `__exit__`.
+
+    Two acquisition flavors mirror the Rust trait:
+
+    - Blocking `acquire_read` / `acquire_write` — the context manager
+      blocks on `__enter__` until the timeline semaphore wait
+      completes (and, for write, until any contended reader/writer
+      releases).
+    - Non-blocking `try_acquire_read` / `try_acquire_write` — return
+      `None` immediately if the surface is contended; never block.
+      Right shape for processor-graph nodes that must not stall.
+    """
+
+    def acquire_read(self, surface: StreamlibSurface) -> "Iterator[object]":
+        """Return a context manager handing out a read view."""
+
+    def acquire_write(self, surface: StreamlibSurface) -> "Iterator[object]":
+        """Return a context manager handing out a write view."""
+
+    def try_acquire_read(
+        self, surface: StreamlibSurface
+    ) -> "Iterator[object] | None":
+        """Return a context manager handing out a read view, or None if
+        a writer currently holds the surface."""
+
+    def try_acquire_write(
+        self, surface: StreamlibSurface
+    ) -> "Iterator[object] | None":
+        """Return a context manager handing out a write view, or None
+        if any reader or another writer currently holds the surface."""

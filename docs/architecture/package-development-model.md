@@ -49,9 +49,9 @@ touched file byte-identically; bare `streamlib link --engine` prints status.
 (The unqualified `streamlib link <path>` is a different verb — the per-app
 package symlink into `streamlib_modules/`, covered under the install seam
 below.) Implementation:
-[`libs/streamlib-cli/src/commands/link.rs`](../../libs/streamlib-cli/src/commands/link.rs)
+[`tools/streamlib-cli/src/commands/link.rs`](../../tools/streamlib-cli/src/commands/link.rs)
 plus the shared marker in
-[`libs/streamlib-idents/src/link_marker.rs`](../../libs/streamlib-idents/src/link_marker.rs)
+[`sdk/streamlib-idents/src/link_marker.rs`](../../sdk/streamlib-idents/src/link_marker.rs)
 (the marker schema lives in `streamlib-idents`, alongside the manifest /
 lockfile types, so the engine module loader can reach it without depending
 on `streamlib-pack`).
@@ -65,8 +65,8 @@ for the consumer's **own** build:
 | Toolchain | Override | Written to |
 |---|---|---|
 | cargo | `[patch.crates-io]` with one `path = "<member>"` per crate | `.cargo/config.toml` |
-| Python (uv) | `[tool.uv.sources] streamlib = { path = "libs/streamlib-python", editable = true }` | `pyproject.toml` (only if present) |
-| Deno | import-map `imports.streamlib` → `libs/streamlib-deno/mod.ts` | `deno.json(c)` (only if present) |
+| Python (uv) | `[tool.uv.sources] streamlib = { path = "sdk/streamlib-python", editable = true }` | `pyproject.toml` (only if present) |
+| Deno | import-map `imports.streamlib` → `sdk/streamlib-deno/mod.ts` | `deno.json(c)` (only if present) |
 
 The SDK crates resolve from crates.io by bare `version` (there is no custom
 registry), so the override patches `crates-io`; `[patch.crates-io]` is a source
@@ -98,7 +98,7 @@ never a silent skip. A **locked run** (`add_modules_from_lockfile`) ignores
 links by contract (reproducible / offline). Implementation:
 `ActiveLinkedCheckout` +
 `resolve_strategy_to_source` in
-[`module_loader/source.rs`](../../libs/streamlib-engine/src/core/runtime/module_loader/source.rs).
+[`module_loader/source.rs`](../../runtime/streamlib-engine/src/core/runtime/module_loader/source.rs).
 
 *Link-aware staged builds.* When the orchestrator materializes a package under
 an active link, it builds against the checkout so host + plugin come from one
@@ -108,9 +108,9 @@ config via `cargo build --config <file>`
 (`assemble_artifact_with_cargo_config`), and the Python venv installs the
 checkout's SDK via `[tool.uv.sources]` (`apply_link_override`). Discovery is
 resolved once per build in `discover_active_build_link`
-([`streamlib-build-orchestrator`](../../libs/streamlib-build-orchestrator/src/lib.rs)).
+([`streamlib-build-orchestrator`](../../tools/streamlib-build-orchestrator/src/lib.rs)).
 
-[`Strategy`]: ../../libs/streamlib-engine/src/core/runtime/module_loader/source.rs
+[`Strategy`]: ../../runtime/streamlib-engine/src/core/runtime/module_loader/source.rs
 
 **Manifest-first transaction.** `establish_link` plans every edit in memory,
 persists the full plan to `.streamlib/link.json` with state `Applying` via
@@ -173,7 +173,7 @@ case is the version model + a `patch:` entry, not link.
 One version axis per package, one version per package in a process.
 
 **SemVer with a closed prerelease grammar.** The `SemVer` type
-([`libs/streamlib-idents/src/semver.rs`](../../libs/streamlib-idents/src/semver.rs))
+([`sdk/streamlib-idents/src/semver.rs`](../../sdk/streamlib-idents/src/semver.rs))
 carries `major.minor.patch` plus an optional `Prerelease { kind, n }` where
 `kind` is `Dev` or `Rc` only — no `+build` metadata. Ordering within one
 release core is `dev.k < rc.j < release`: a release (no prerelease) outranks
@@ -195,7 +195,7 @@ The intended bump workflow is "edit `streamlib.yaml`, run `--fix`" — never
 hand-edit `Cargo.toml`.
 
 **Schema idents are release-core.** A `SchemaIdent`
-([`libs/streamlib-idents/src/ident.rs`](../../libs/streamlib-idents/src/ident.rs))
+([`sdk/streamlib-idents/src/ident.rs`](../../sdk/streamlib-idents/src/ident.rs))
 carries `@org/package/Type@version` where `version` is *release-core* —
 the prerelease channel stripped, `major.minor.patch` preserved
 (`SemVer::release_core()`). So `1.2.3-dev.4` and `1.2.3` share one schema
@@ -213,7 +213,7 @@ identity. Three enforcement prongs keep the invariant total:
    call sites.
 
 **Single version per package, enforced at resolution.** `ResolutionMemo`
-([`libs/streamlib-engine/src/core/runtime/module_loader/recursive_walker.rs`](../../libs/streamlib-engine/src/core/runtime/module_loader/recursive_walker.rs))
+([`runtime/streamlib-engine/src/core/runtime/module_loader/recursive_walker.rs`](../../runtime/streamlib-engine/src/core/runtime/module_loader/recursive_walker.rs))
 is a runtime-lifetime `Mutex<HashMap<PackageRef, PackageResolutionState>>`
 held as `Arc<ResolutionMemo>` on `Runner`. Its `gate` classifies-and-inserts
 under one lock: the first resolver to reach a package inserts an
@@ -235,7 +235,7 @@ later `add_module` re-resolves it.
 two packages on different `@tatolab/core` schema versions would emit
 incompatible bytes on the same IPC fabric, so npm-style nested duplicates
 are physically impossible in one process. The schema registry
-([`libs/streamlib-engine/src/core/embedded_schemas/mod.rs`](../../libs/streamlib-engine/src/core/embedded_schemas/mod.rs))
+([`runtime/streamlib-engine/src/core/embedded_schemas/mod.rs`](../../runtime/streamlib-engine/src/core/embedded_schemas/mod.rs))
 is one flat `LazyLock<RwLock<HashMap<String, Arc<str>>>>` keyed by the
 *unversioned* canonical id: `strip_semver_suffix` drops any trailing
 `@version` before lookup and registration composes `@org/name/Type` using
@@ -247,7 +247,7 @@ reads and writes the host's one vocabulary. Single-version-per-package is
 the invariant that keeps that flat map coherent.
 
 **`patch:` is per-manifest-local.** A `Manifest.patch` table
-([`libs/streamlib-idents/src/manifest.rs`](../../libs/streamlib-idents/src/manifest.rs))
+([`sdk/streamlib-idents/src/manifest.rs`](../../sdk/streamlib-idents/src/manifest.rs))
 lives in the consumer's own `streamlib.yaml` — there is *no* workspace
 walk-up. Resolution consults the same consumer's patch
 (`effective_spec = patch.get(dep_ref).unwrap_or(spec)`) before the installed
@@ -265,7 +265,7 @@ separate, gated release step — the custom cargo registry that used to serve
 the SDK by version was removed; internal cross-crate deps resolve by `path`.
 
 **Closure by definition.** `compute_release_closure(workspace_root)`
-([`libs/streamlib-pack/src/lib.rs`](../../libs/streamlib-pack/src/lib.rs))
+([`tools/streamlib-pack/src/lib.rs`](../../tools/streamlib-pack/src/lib.rs))
 is the *single* definition of "the linkable crate set":
 workspace member ∧ linkable name (`streamlib*` / `vulkan-jpeg` /
 `tatolab-vulkanalia*`) ∧ has a library target ∧ publishable, returned in
@@ -276,14 +276,14 @@ publish); the `.slpkg` emit no longer consults it (a `.slpkg` release
 publishes packages, not crates).
 
 **Manifest-last atomicity.** A `ReleaseManifest`
-([`libs/streamlib-idents/src/release.rs`](../../libs/streamlib-idents/src/release.rs))
+([`sdk/streamlib-idents/src/release.rs`](../../sdk/streamlib-idents/src/release.rs))
 lands at `streamlib-release/<V>/manifest.json` and is written **last**, so
 its presence is the release's completion marker (`upload_release_manifest`
 is the atomicity flip the publisher runs after every crate / SDK / package
 has landed).
 
 **Consumers detect a partial release.** `assert_release_complete`
-([`libs/streamlib-build-orchestrator/src/release_check.rs`](../../libs/streamlib-build-orchestrator/src/release_check.rs))
+([`tools/streamlib-build-orchestrator/src/release_check.rs`](../../tools/streamlib-build-orchestrator/src/release_check.rs))
 picks the newest release manifest satisfying each pin's range and runs
 `crates_missing_from_release`; any gap raises `IncompleteRelease { package,
 release_version, missing, hint }` — an actionable, up-front error instead of
@@ -312,7 +312,7 @@ lockfile they touch.
 
 **`streamlib install` — reproduce `streamlib_modules/` from `streamlib.lock`.**
 `AppModulesDir::install_from_lockfile()`
-([`libs/streamlib-idents/src/app_modules.rs`](../../libs/streamlib-idents/src/app_modules.rs),
+([`sdk/streamlib-idents/src/app_modules.rs`](../../sdk/streamlib-idents/src/app_modules.rs),
 re-exported through `streamlib::sdk::runtime`, CLI `streamlib install`) reads
 the committed `streamlib.lock` (`MODULES_LOCKFILE_NAME`) and repopulates the
 app's own `streamlib_modules/@org/name/` folder **exactly** — no resolution
@@ -343,7 +343,7 @@ vendored folder copied into the image directly).
 
 **`install()` — resolve + materialize + lock (programmatic seam).**
 `install(root_dir, orchestrator, sink, options)`
-([`libs/streamlib-engine/src/core/runtime/install.rs`](../../libs/streamlib-engine/src/core/runtime/install.rs),
+([`runtime/streamlib-engine/src/core/runtime/install.rs`](../../runtime/streamlib-engine/src/core/runtime/install.rs),
 `streamlib::sdk::runtime::install`) runs the shared `resolve_with`
 (range→concrete) over a project's `streamlib.yaml`, materializes each resolved
 package through the orchestrator, and writes `streamlib-app.lock`
@@ -356,7 +356,7 @@ a distinct lockfile.
 
 **`add` / `remove` / `link` — per-app package adoption (the node_modules model).**
 `AppModulesDir::add_package(source, options)`
-([`libs/streamlib-idents/src/app_modules.rs`](../../libs/streamlib-idents/src/app_modules.rs),
+([`sdk/streamlib-idents/src/app_modules.rs`](../../sdk/streamlib-idents/src/app_modules.rs),
 re-exported through `streamlib::sdk::runtime`, CLI `streamlib add`) brings
 ONE valid streamlib package **byte source** — a folder, an archive (`.slpkg`
 / `.zip` / `.tar.gz`, container detected from magic bytes), or a `file://` /
@@ -409,12 +409,12 @@ slot's manifest + schema set (`content_hash_for_package_dir`, SHA-256) and
 refuses on mismatch (`LockedSlotContentMismatch`), closing the
 tampered / republished-in-place hole. Slot paths are re-derived by the shared
 `get_cached_package_dir_for_name_version` helper
-([`libs/streamlib-engine/src/core/streamlib_home.rs`](../../libs/streamlib-engine/src/core/streamlib_home.rs)) —
+([`runtime/streamlib-engine/src/core/streamlib_home.rs`](../../runtime/streamlib-engine/src/core/streamlib_home.rs)) —
 the single `cache/packages/{name}-{version}` convention also used by `.slpkg`
 extraction, registry resolution, and orchestrator staging.
 
 **Three lockfiles, three lifecycles.** All serialize the same `Lockfile` wire
-shape ([`libs/streamlib-idents/src/lockfile.rs`](../../libs/streamlib-idents/src/lockfile.rs))
+shape ([`sdk/streamlib-idents/src/lockfile.rs`](../../sdk/streamlib-idents/src/lockfile.rs))
 but are distinct files with distinct headers:
 
 | File | Written by | Pins |
@@ -448,38 +448,38 @@ Stated honestly; verify against current code before relying on any.
 
 ## Reference
 
-- **Link mode**: `libs/streamlib-cli/src/commands/link.rs`,
-  `libs/streamlib-idents/src/link_marker.rs` (marker schema + discovery),
-  `libs/streamlib-engine/src/core/runtime/module_loader/source.rs`
+- **Link mode**: `tools/streamlib-cli/src/commands/link.rs`,
+  `sdk/streamlib-idents/src/link_marker.rs` (marker schema + discovery),
+  `runtime/streamlib-engine/src/core/runtime/module_loader/source.rs`
   (`ActiveLinkedCheckout`, link-aware resolution),
-  `libs/streamlib-build-orchestrator/src/lib.rs`
+  `tools/streamlib-build-orchestrator/src/lib.rs`
   (`discover_active_build_link`, staged-build overrides).
-- **Version model**: `libs/streamlib-idents/src/semver.rs` (SemVer +
+- **Version model**: `sdk/streamlib-idents/src/semver.rs` (SemVer +
   ranges), `ident.rs` (`SchemaIdent` release-core invariant),
   `manifest.rs` (`patch:` locality),
-  `libs/streamlib-engine/src/core/runtime/module_loader/recursive_walker.rs`
+  `runtime/streamlib-engine/src/core/runtime/module_loader/recursive_walker.rs`
   (`ResolutionMemo`),
-  `libs/streamlib-engine/src/core/embedded_schemas/mod.rs` (flat-global
+  `runtime/streamlib-engine/src/core/embedded_schemas/mod.rs` (flat-global
   registry).
-- **Version stamping**: `libs/streamlib-pack/src/lib.rs`
+- **Version stamping**: `tools/streamlib-pack/src/lib.rs`
   (`rewrite_cargo_package_version`), `xtask/src/check_package_version_drift.rs`.
-- **Atomic release**: `libs/streamlib-pack/src/lib.rs`
-  (`compute_release_closure`), `libs/streamlib-idents/src/release.rs`,
-  `libs/streamlib-build-orchestrator/src/release_check.rs`.
-- **Install / run**: `libs/streamlib-engine/src/core/runtime/install.rs`,
-  `libs/streamlib-engine/src/core/runtime/module_loader/locked.rs`,
-  `libs/streamlib-idents/src/lockfile.rs`,
-  `libs/streamlib-engine/src/core/streamlib_home.rs`.
+- **Atomic release**: `tools/streamlib-pack/src/lib.rs`
+  (`compute_release_closure`), `sdk/streamlib-idents/src/release.rs`,
+  `tools/streamlib-build-orchestrator/src/release_check.rs`.
+- **Install / run**: `runtime/streamlib-engine/src/core/runtime/install.rs`,
+  `runtime/streamlib-engine/src/core/runtime/module_loader/locked.rs`,
+  `sdk/streamlib-idents/src/lockfile.rs`,
+  `runtime/streamlib-engine/src/core/streamlib_home.rs`.
 - **Add / remove (per-app modules folder)**:
-  `libs/streamlib-idents/src/app_modules.rs` (`AppModulesDir` +
+  `sdk/streamlib-idents/src/app_modules.rs` (`AppModulesDir` +
   `AddPackageSource` + error taxonomy),
-  `libs/streamlib-idents/src/archive.rs` (the one canonical zip / tar.gz
-  extractor pair), `libs/streamlib-idents/src/lockfile.rs`
+  `sdk/streamlib-idents/src/archive.rs` (the one canonical zip / tar.gz
+  extractor pair), `sdk/streamlib-idents/src/lockfile.rs`
   (`MODULES_LOCKFILE_NAME`, `LockfileSource::{Url,Archive}`,
   `write_modules_lockfile`),
-  `libs/streamlib-engine/src/core/runtime/module_loader/source.rs`
+  `runtime/streamlib-engine/src/core/runtime/module_loader/source.rs`
   (the `Strategy::InstalledCache` app-modules probe),
-  `libs/streamlib-cli/src/commands/add.rs` (CLI wrapper + manifest-derived
+  `tools/streamlib-cli/src/commands/add.rs` (CLI wrapper + manifest-derived
   processor summary).
 - **Related docs**: [`runtime-module-materialization.md`](runtime-module-materialization.md)
   (the one materialize path), [`static-registry.md`](static-registry.md)

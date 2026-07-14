@@ -25,7 +25,7 @@ import iceoryx2
 from iceoryx2 import ServiceName, ServiceType
 
 # Add parent path to import streamlib frame_payload
-sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[3] / "libs" / "streamlib-python" / "python"))
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[3] / "sdk" / "streamlib-python" / "python"))
 
 from streamlib.frame_payload import (
     FramePayload,

@@ -24,7 +24,7 @@ What is missing:
   - `packages/camera/src/linux/shaders/nv12_to_rgba.comp` — BT.601 +
     full/limited flag.
   - `packages/camera/src/linux/shaders/yuyv_to_rgba.comp` — same.
-  - `libs/streamlib-engine/src/vulkan/rhi/shaders/nv12_to_bgra.comp`
+  - `runtime/streamlib-engine/src/vulkan/rhi/shaders/nv12_to_bgra.comp`
     — engine-layer duplicate.
   - `libs/vulkan-video/src/nv12_to_rgb.rs` —
     `VkSamplerYcbcrConversion`, BT.709 narrow-range, hardcoded at
@@ -124,12 +124,12 @@ same PR:
 
 - Delete `packages/camera/src/linux/shaders/nv12_to_rgba.comp`
   and `yuyv_to_rgba.comp`; route through the engine converter.
-- Delete `libs/streamlib-engine/src/vulkan/rhi/shaders/nv12_to_bgra.comp`;
+- Delete `runtime/streamlib-engine/src/vulkan/rhi/shaders/nv12_to_bgra.comp`;
   replace with parameterized kernel.
 - Delete `libs/vulkan-video/src/nv12_to_rgb.rs` (the
   `VkSamplerYcbcrConversion` path); replace the vulkan-video
   consumer with the engine converter.
-- Fold `libs/streamlib-engine/src/vulkan/rhi/vulkan_format_converter.rs`
+- Fold `runtime/streamlib-engine/src/vulkan/rhi/vulkan_format_converter.rs`
   into the new converter or thin-wrap it.
 
 ### 2. Tone mapping: BT.2390 forward + BT.2446a inverse, regular processor in the graph
@@ -366,10 +366,10 @@ sub-concern.
   `packages/core/schemas/color_info.yaml`,
   `packages/core/schemas/{content_light,mastering_display}.yaml`,
   `packages/camera/src/linux/v4l2_color.rs`,
-  `libs/streamlib-engine/src/vulkan/rhi/vulkan_compute_kernel.rs`,
-  `libs/streamlib-engine/src/core/rhi/format_converter_cache.rs`,
+  `runtime/streamlib-engine/src/vulkan/rhi/vulkan_compute_kernel.rs`,
+  `runtime/streamlib-engine/src/core/rhi/format_converter_cache.rs`,
   `libs/vulkan-video/src/nv12_to_rgb.rs`,
   `libs/vulkan-video/src/encode/session.rs`,
   `libs/vulkan-video/src/encode/vui_patch.rs`,
   `libs/vulkan-video/src/nv_video_parser/vulkan_h{264,265}_decoder.rs`,
-  `libs/streamlib-engine/src/vulkan/rhi/vulkan_present_target.rs`.
+  `runtime/streamlib-engine/src/vulkan/rhi/vulkan_present_target.rs`.

@@ -5,7 +5,7 @@
 //!
 //! End-to-end gate for the subprocess `SkiaContext` runtime, mirroring
 //! the in-process Rust stress test
-//! `libs/streamlib-adapter-skia/tests/skia_animated_stress_gl.rs`
+//! `adapters/streamlib-adapter-skia/tests/skia_animated_stress_gl.rs`
 //! across the polyglot boundary: the host pre-allocates ONE
 //! render-target-capable DMA-BUF surface AND an exportable
 //! `HostVulkanTimelineSemaphore`, registers both with surface-share
@@ -26,7 +26,7 @@
 //! Skia is composed on OpenGL in the subprocess (no `slpn_skia_*`
 //! FFI; `streamlib.adapters.skia.SkiaContext` uses the existing
 //! `slpn_opengl_*` symbols + skia-python's `GrDirectContext.MakeGL`).
-//! See `libs/streamlib-python/python/streamlib/adapters/skia.py` for
+//! See `sdk/streamlib-python/python/streamlib/adapters/skia.py` for
 //! why GL, not Vulkan, in Python.
 //!
 //! Run:

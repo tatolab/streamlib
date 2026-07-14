@@ -484,7 +484,7 @@ Engine ↔ plugin stay in lock-step on two complementary layers:
 
 ## Reference
 
-- Engine API: `libs/streamlib-engine/src/core/runtime/module_loader/`
+- Engine API: `runtime/streamlib-engine/src/core/runtime/module_loader/`
   (`source.rs` = `Strategy` + resolver, `build_orchestrator.rs` = the
   trait + request/result/event types, `added_module.rs` = the eager
   future, `recursive_walker.rs` = the transitive walk + materialize step,
@@ -492,16 +492,16 @@ Engine ↔ plugin stay in lock-step on two complementary layers:
   cdylib sink + whole-load commit + plugin-image retention, `ledger.rs` =
   the committed-load ledger `remove_module` consumes, `mod.rs` = the
   `Runner` API incl. `remove_module`).
-- Default orchestrator: `libs/streamlib-build-orchestrator/` (calls
+- Default orchestrator: `tools/streamlib-build-orchestrator/` (calls
   `streamlib-pack` and stages into `cache/packages/<name>-<version>/`).
-- Shared assembly: `libs/streamlib-pack/` (`assemble_artifact` —
+- Shared assembly: `tools/streamlib-pack/` (`assemble_artifact` —
   emits a `.slpkg` for `streamlib pkg build` or an extracted `StagedDir` for
   the orchestrator).
 - Python venv provisioning (the tail of `materialize`: `uv venv` →
   `uv pip install` → `streamlib/_generated_` codegen → `compileall`,
   produced into the staged `{name}-{version}/.venv` under the
   orchestrator's single fingerprint):
-  `libs/streamlib-build-orchestrator/src/python_venv.rs`.
-- SDK wiring: `libs/streamlib-sdk/` (`auto-build` feature).
-- Plugin ABI + load-time handshake: `libs/streamlib-plugin-abi/`
+  `tools/streamlib-build-orchestrator/src/python_venv.rs`.
+- SDK wiring: `sdk/streamlib-sdk/` (`auto-build` feature).
+- Plugin ABI + load-time handshake: `runtime/streamlib-plugin-abi/`
   (`STREAMLIB_ABI_VERSION`, `PluginDeclaration.abi_version`).

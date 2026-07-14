@@ -59,7 +59,7 @@ content**.
 
 ### When to use
 
-- Changes to `libs/streamlib-engine/src/vulkan/video/` (RHI coupling,
+- Changes to `runtime/streamlib-engine/src/vulkan/video/` (RHI coupling,
   session/DPB, NV12 conversion, rate control, etc.).
 - Changes to `packages/h264/src/linux/{encoder,decoder}.rs` or
   `packages/h265/src/linux/{encoder,decoder}.rs`.
@@ -130,7 +130,7 @@ Read("/tmp/e2e-.../png_samples/display_001_frame_000060.png")
 #### PSNR — how to compute
 
 **Primary path: the fixture PSNR rig** (`e2e_fixture_psnr.sh`,
-[`libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh`](../libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh)).
+[`runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh`](../runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh)).
 Feeds checked-in reference PNGs (solid colors, gradients, a complex
 ffmpeg testsrc2 pattern) through `BgraFileSource → encoder → decoder →
 display` at a step-locked FPS, pairs each decoded PNG with its reference
@@ -139,8 +139,8 @@ PSNR via ffmpeg and classifies against the pass bar below:
 
 ```bash
 # encoder/decoder roundtrip vs. checked-in fixtures
-libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-h264 h264
-libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-h265 h265
+runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-h264 h264
+runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-h265 h265
 
 # Sanity-check that the rig flags real regressions. Each PSNR_INJECT_BUG
 # variant post-processes the decoded samples through a different
@@ -158,11 +158,11 @@ libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-h265 h265
 #                   fails on the gradient references where mid-luma
 #                   variation is heaviest).
 PSNR_INJECT_BUG=swap-channels \
-    libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-bug-swap   h264
+    runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-bug-swap   h264
 PSNR_INJECT_BUG=bt601-bt709 \
-    libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-bug-matrix h264
+    runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-bug-matrix h264
 PSNR_INJECT_BUG=range-swap \
-    libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-bug-range  h264
+    runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-bug-range  h264
 ```
 
 Exit codes: `0` — all references at or above the WARN threshold, `1` —
@@ -185,14 +185,14 @@ silently no-op'ing.)
 
 **Vivid color regression gate**
 (`e2e_fixture_psnr_vivid.sh`,
-[`libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh`](../libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh)).
+[`runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh`](../runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh)).
 Sister fixture that guards the V4L2 colorimetry path against the
 matrix mis-interpretation class (the historical green/magenta tint
 symptom). Forces vivid into a saturated single-color test pattern
 (`100% Red` by default), runs `vulkan-video-roundtrip` against it,
 computes the rig-wide mean of each RGB channel across the sampled
 decoded frames, and compares to the checked-in baseline TSV at
-[`libs/streamlib-engine/tests/fixtures/psnr_vivid_baseline.tsv`](../libs/streamlib-engine/tests/fixtures/psnr_vivid_baseline.tsv)
+[`runtime/streamlib-engine/tests/fixtures/psnr_vivid_baseline.tsv`](../runtime/streamlib-engine/tests/fixtures/psnr_vivid_baseline.tsv)
 with a fixed absolute tolerance (±0.05 on the `[0,1]` channel scale).
 The saturated pattern magnifies matrix mis-interpretations — a
 bt.601 vs bt.709 mis-conversion on `100% Red` lifts the G channel by
@@ -202,16 +202,16 @@ through.
 
 ```bash
 # Standard regression check against the checked-in baseline.
-libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh /tmp/vivid-psnr h264
+runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh /tmp/vivid-psnr h264
 
 # Re-capture the baseline (do this when the color-management code
 # legitimately moves and the post-fix vivid output is the new normal).
 BASELINE_CAPTURE=1 \
-    libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh /tmp/vivid-baseline h264
+    runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh /tmp/vivid-baseline h264
 
 # Negative test — proves the gate isn't vacuous.
 INJECT_BUG=bt601-bt709 \
-    libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh /tmp/vivid-bug    h264
+    runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh /tmp/vivid-bug    h264
 ```
 
 The range-swap class is intentionally NOT covered by this fixture —
@@ -220,7 +220,7 @@ mis-interpretation. The main fixture rig's gradient references are
 where range-swap deterministically drops Y PSNR below FAIL.
 
 **JPEG decode rig** (`e2e_fixture_psnr_jpeg.sh`,
-[`libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh`](../libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh)).
+[`runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh`](../runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh)).
 Sibling of the main rig for GPU JPEG decode (`@tatolab/jpeg::JpegDecoder`
 wrapping `vulkan-jpeg::SimpleJpegDecoder`). Same shape, decode-only:
 ffmpeg encodes each reference PNG to JPEG (the "encoder" half), then
@@ -230,16 +230,16 @@ bt601-bt709 | range-swap` bug-injection modes, same Y ≥ 35 dB pass bar.
 
 ```bash
 # Clean pipeline — every reference should hit Y PSNR ≥ 35 dB.
-libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh /tmp/psnr-jpeg
+runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh /tmp/psnr-jpeg
 
 # Negative tests — each is expected to deterministically drop Y PSNR
 # below FAIL on the references that carry the affected channels:
 PSNR_INJECT_BUG=swap-channels \
-    libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh /tmp/psnr-jpeg-bug-swap
+    runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh /tmp/psnr-jpeg-bug-swap
 PSNR_INJECT_BUG=bt601-bt709 \
-    libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh /tmp/psnr-jpeg-bug-matrix
+    runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh /tmp/psnr-jpeg-bug-matrix
 PSNR_INJECT_BUG=range-swap \
-    libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh /tmp/psnr-jpeg-bug-range
+    runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh /tmp/psnr-jpeg-bug-range
 ```
 
 The `JPEG_QUALITY` env var sets encoder quality (1–100, default 70).
@@ -401,7 +401,7 @@ and runs faster.
 
 - Changes to `packages/camera/src/linux/camera.rs` (V4L2, MMAP, DMA-BUF
   import, NV12/YUYV compute shaders, ring textures).
-- Changes to `libs/streamlib-engine/src/linux/processors/display.rs` (swapchain,
+- Changes to `runtime/streamlib-engine/src/linux/processors/display.rs` (swapchain,
   acquire/present, descriptor layout, PNG sampler itself).
 - Changes to `GpuContext`, `PixelBufferPool`, `TextureCache`, or `VulkanTexture`
   that do **not** involve a codec.
@@ -414,7 +414,7 @@ Prefer the packaged fixture script — it loads vivid, sets the env vars,
 and handles cleanup:
 
 ```bash
-libs/streamlib-engine/tests/fixtures/e2e_camera_display.sh /tmp/streamlib-e2e
+runtime/streamlib-engine/tests/fixtures/e2e_camera_display.sh /tmp/streamlib-e2e
 ```
 
 Or run the example directly (use this when you need to point at a specific
@@ -443,7 +443,7 @@ timeout --kill-after=3 20 cargo run -q -p camera-display \
 ### Reference
 
 - Full fixture script:
-  [`libs/streamlib-engine/tests/fixtures/e2e_camera_display.sh`](../libs/streamlib-engine/tests/fixtures/e2e_camera_display.sh).
+  [`runtime/streamlib-engine/tests/fixtures/e2e_camera_display.sh`](../runtime/streamlib-engine/tests/fixtures/e2e_camera_display.sh).
 - Prerequisites, troubleshooting, and PNG details:
   [`docs/learnings/camera-display-e2e-validation.md`](learnings/camera-display-e2e-validation.md).
 

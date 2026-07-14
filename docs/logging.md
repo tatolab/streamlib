@@ -33,7 +33,7 @@ Use the API above instead.
    --workspace` fails on any violation.
 
 2. **CI lint (Python + TypeScript)** — `cargo xtask lint-logging` scans
-   `libs/streamlib-python/**/*.py` and `libs/streamlib-deno/**/*.ts` for
+   `sdk/streamlib-python/**/*.py` and `sdk/streamlib-deno/**/*.ts` for
    banned substrings (`print(`, `sys.stdout`, `sys.stderr`,
    `logging.basicConfig`, `console.log`/`warn`/`error`/`info`/`debug`,
    `Deno.stdout.write`, `Deno.stderr.write`). Exits non-zero with each

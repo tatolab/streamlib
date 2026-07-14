@@ -198,8 +198,8 @@ Run with `VK_LOADER_LAYERS_ENABLE=*validation*` enabled and watch for:
   (the carve-out's QFOT machinery and how subprocess Vulkan code
   uses it).
 - Implementation:
-  `libs/streamlib-consumer-rhi/src/consumer_vulkan_device.rs`
+  `runtime/streamlib-consumer-rhi/src/consumer_vulkan_device.rs`
   (`ConsumerVulkanDevice::release_to_foreign`,
   `acquire_from_foreign`, `supports_qfot_acquire_unmodified`),
-  `libs/streamlib-engine/src/vulkan/rhi/vulkan_device.rs` (host equivalents
+  `runtime/streamlib-engine/src/vulkan/rhi/vulkan_device.rs` (host equivalents
   + the trait impl + the QFOT extension probe in `new()`).

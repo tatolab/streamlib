@@ -8,7 +8,7 @@
 //! `process`, the slot Manual doesn't expose). Each carries a
 //! `panic_at_hook` config field that names the hook to panic in; all
 //! other hooks no-op. The companion integration test
-//! (`libs/streamlib-engine/tests/load_project_dylib_processor_panic_safety.rs`)
+//! (`runtime/streamlib-engine/tests/load_project_dylib_processor_panic_safety.rs`)
 //! drives each variant in turn and asserts the host's
 //! `run_host_extern_c` panic-safety net caught the panic at the cdylib
 //! DSO boundary (i.e. the runtime stayed alive instead of unwinding

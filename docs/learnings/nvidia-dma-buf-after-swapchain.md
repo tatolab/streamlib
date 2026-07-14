@@ -89,4 +89,4 @@ end-to-end via @docs/learnings/camera-display-e2e-validation.md.
 - Refactor: `6816f54` `refactor(display): decouple frames-in-flight from swapchain image count`
 - Engine pre-warm: issue #624, `fix(rhi): pre-warm export VMA pools at HostVulkanDevice construction`
 - Repro test (does NOT trigger bug, documents attempt):
-  `libs/streamlib-engine/src/vulkan/rhi/vulkan_swapchain_alloc_repro_test.rs`
+  `runtime/streamlib-engine/src/vulkan/rhi/vulkan_swapchain_alloc_repro_test.rs`

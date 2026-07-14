@@ -178,7 +178,7 @@ ships, your adapter's crash test should demonstrate it integrates
 correctly. Until then, write a self-contained crash test that
 exercises your adapter's own state machine using a pipe-based
 observer (as the harness self-test in
-`libs/streamlib-adapter-abi/tests/subprocess_crash.rs` does).
+`adapters/streamlib-adapter-abi/tests/subprocess_crash.rs` does).
 
 ## Polyglot considerations
 
@@ -196,7 +196,7 @@ If your adapter introduces any new `#[repr(C)]` type that crosses
 an FFI or IPC boundary, lock its layout with
 `mem::size_of::<T>()` + `offset_of!` assertions, just like the
 core ABI does in
-`libs/streamlib-adapter-abi/src/surface.rs::tests`. If the type is
+`adapters/streamlib-adapter-abi/src/surface.rs::tests`. If the type is
 mirrored in Python or Deno, ship the twin test on the polyglot side
 in the same commit.
 

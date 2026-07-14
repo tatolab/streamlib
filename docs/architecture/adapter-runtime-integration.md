@@ -13,7 +13,7 @@ host-side surface adapters via two IPC seams plus the
 `streamlib-consumer-rhi` carve-out — without re-implementing host
 RHI patterns and without breaking the `LimitedAccess` /
 `FullAccess` capability typestate split in
-`libs/streamlib-engine/src/core/context/`.
+`runtime/streamlib-engine/src/core/context/`.
 
 A Python customer writing
 
@@ -33,8 +33,8 @@ code never crosses into `FullAccess`:
 
 ### Seam 1 — surface-share registry
 
-`libs/streamlib-engine/src/linux/surface_share/` plus client at
-`libs/streamlib-surface-client/src/linux.rs`. One-shot
+`runtime/streamlib-engine/src/linux/surface_share/` plus client at
+`runtime/streamlib-surface-client/src/linux.rs`. One-shot
 length-prefixed JSON request/response over Unix socket with
 `SCM_RIGHTS` ancillary FD passing. Operations:
 
@@ -57,7 +57,7 @@ the subprocess can `lock` / read / `unlock` / `release`.
 
 ### Seam 2 — escalate IPC
 
-`libs/streamlib-engine/src/core/compiler/compiler_ops/subprocess_escalate.rs`,
+`runtime/streamlib-engine/src/core/compiler/compiler_ops/subprocess_escalate.rs`,
 typed by JTD schemas at
 `packages/escalate/schemas/escalate_{request,response}.yaml` (the
 `@tatolab/escalate` peer protocol package).
@@ -252,7 +252,7 @@ created the live `GpuContext` but before any processor's `setup()`
 runs — the window where adapter bridges and pre-allocated host
 surfaces have to be in place.
 
-[hook]: ../../libs/streamlib-engine/src/core/runtime/runtime.rs
+[hook]: ../../runtime/streamlib-engine/src/core/runtime/runtime.rs
 
 The shape of what the hook does varies by seam:
 

@@ -480,10 +480,10 @@ When a new field lands on `TextureRegistration`:
 
 ## Reference
 
-- **Implementation**: `libs/streamlib-engine/src/core/context/texture_registration.rs`,
+- **Implementation**: `runtime/streamlib-engine/src/core/context/texture_registration.rs`,
   `GpuContext::register_texture_with_layout` /
   `GpuContext::resolve_texture_registration_by_surface_id` in
-  `libs/streamlib-engine/src/core/context/gpu_context.rs`.
+  `runtime/streamlib-engine/src/core/context/gpu_context.rs`.
 - **First consumer**: `LinuxDisplayProcessor::render_frame` in
   `packages/display/src/linux/display.rs`.
 - **First adapter-output producer**: `register_render_target_surface`
@@ -492,7 +492,7 @@ When a new field lands on `TextureRegistration`:
   `streamlib-camera` package —
   `packages/camera/src/linux/camera.rs`.
 - **Adapter-scope sibling**: `SurfaceState` in
-  `libs/streamlib-adapter-vulkan/src/state.rs` (and the same-shape
+  `adapters/streamlib-adapter-vulkan/src/state.rs` (and the same-shape
   opengl + cuda + cpu-readback adapter state structs). These are at
   adapter scope, **not** parallel maps to `texture_cache` — see the
   [Scope](#scope-this-record-vs-adapter-internal-surfacestatep)

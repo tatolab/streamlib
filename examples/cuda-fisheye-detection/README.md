@@ -51,7 +51,7 @@ cargo run -- --output=/tmp/cuda-fisheye-detected.png
    example's `./python` package into `./streamlib_modules/`.
 
 The `streamlib` CLI must be on your `PATH` (`cargo build -p streamlib-cli`, or
-`cargo install --path libs/streamlib-cli`); `setup.sh` falls back to the
+`cargo install --path tools/streamlib-cli`); `setup.sh` falls back to the
 checkout's built binary.
 
 ## What's committed vs generated

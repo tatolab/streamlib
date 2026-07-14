@@ -290,7 +290,7 @@ Before any implementation lands, resolve these with Jonathan:
 ## References
 
 - #306 — PR #329, "expose encoder quality_level with real-time default"
-- #305 — fixture-based PSNR rig (`libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh`)
+- #305 — fixture-based PSNR rig (`runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh`)
 - `libs/vulkan-video/src/encode/session.rs` — session creation, SPS/PPS build
 - `libs/vulkan-video/src/encode/submit.rs` — per-frame slice header, rate control attachment
 - `libs/vulkan-video/src/vk_video_encoder/vk_encoder_config_h265.rs` — `LEVEL_LIMITS_H265`, profile/level/tier auto-selection

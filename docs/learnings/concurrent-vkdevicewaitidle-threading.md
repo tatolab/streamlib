@@ -119,7 +119,7 @@ cheap, reliable regression lock is the lint, not a timing-dependent stress test.
 ## Reference
 
 - Helper + the fixed lock order: `HostVulkanDevice::wait_idle` in
-  `libs/streamlib-engine/src/vulkan/rhi/vulkan_device.rs`.
+  `runtime/streamlib-engine/src/vulkan/rhi/vulkan_device.rs`.
 - CI lint: `xtask/src/check_device_wait_idle.rs` (`cargo run -p xtask --
   check-device-wait-idle`).
 - The per-queue submit mutexes it coordinates with: `submit_to_queue` /

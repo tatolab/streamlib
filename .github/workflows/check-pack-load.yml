@@ -4,9 +4,9 @@ name: Check Pack → Load
 # `streamlib pkg build` produces a `.slpkg`, `Runner::add_module_with`
 # consumes it from a file, and the package's schemas (schemas-only
 # package) land in the runtime registries. Any mismatch between the
-# pack producer side (`libs/streamlib-cli/src/commands/pkg.rs`) and the
+# pack producer side (`tools/streamlib-cli/src/commands/pkg.rs`) and the
 # load consumer side (`Strategy::Slpkg` / `extract_slpkg_to_cache` in
-# `libs/streamlib-engine/src/core/runtime/`) surfaces here before the
+# `runtime/streamlib-engine/src/core/runtime/`) surfaces here before the
 # broader example sweep / container smoke test would amplify it.
 #
 # Covers:
@@ -59,7 +59,7 @@ jobs:
       - name: Install jtd-codegen
         # The engine's `build.rs` invokes the upstream `jtd-codegen`
         # binary (v0.4.1) to generate typed bindings from JTD schemas
-        # — see `libs/streamlib-jtd-codegen/src/lib.rs` for the
+        # — see `sdk/streamlib-jtd-codegen/src/lib.rs` for the
         # version contract. The streamlib-engine build fails without
         # it (`jtd-codegen not found. Install v0.4.1 from
         # https://github.com/jsontypedef/json-typedef-codegen/releases/tag/v0.4.1`).

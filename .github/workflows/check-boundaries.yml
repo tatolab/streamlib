@@ -16,7 +16,7 @@ name: Check Boundaries
 #      `vkCreateComputePipelines`) live only inside the RHI.
 #   5. Every `vulkanalia` / `vulkanalia-sys` / `vulkanalia-vma` dep in a
 #      member crate inherits from `[workspace.dependencies]` (the vendored
-#      `libs/tatolab-vulkanalia*` fork crates). A direct version spec or a
+#      `vendor/tatolab-vulkanalia*` fork crates). A direct version spec or a
 #      direct `tatolab-vulkanalia*` dep can silently pull crates.io
 #      upstream or bypass the workspace rename and lose the VMA 3.3.0
 #      patch. The vendored dirs themselves are the documented exception.
@@ -58,7 +58,7 @@ jobs:
         run: cargo run --locked -q -p xtask -- check-boundaries
 
       # Drift trip-wire for the vendored vulkanalia trees
-      # (libs/tatolab-vulkanalia*): any byte change vs. the recorded hashes
+      # (vendor/tatolab-vulkanalia*): any byte change vs. the recorded hashes
       # fails — the guard against a workspace fmt sweep (or any stray edit)
       # silently rewriting vendored sources. Deliberate re-vendors update
       # the recorded hashes in the same commit; see
