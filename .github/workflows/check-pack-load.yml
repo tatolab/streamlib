@@ -19,13 +19,15 @@ name: Check Pack → Load
 #     canonical schema. Pure file-based; no by-version SDK resolution.
 #   - Negative paths: missing slpkg, foreign-triple-only slpkg.
 #
-# The Rust-impl leg (`@tatolab/network`, which cargo-builds a cdylib
+# The Rust-impl leg (`@tatolab/jpeg`, which cargo-builds a cdylib
 # out-of-tree and needs the SDK by version) is `#[ignore]`d — the
 # custom cargo registry that served it was removed (#1322); SDK publish
 # to real registries is deferred (#1323) and the leg's rework onto
 # `streamlib link --engine` is tracked by #1338. Rust-cdylib load
 # coverage meanwhile lives in the `load_project_dylib_*` dlopen
-# integration tests.
+# integration tests. (`@tatolab/jpeg` is the remaining engine-free Rust
+# package after `@tatolab/network` / `@tatolab/mavlink` /
+# `@tatolab/vadr-vision` were evicted to tatolab/streamlib-packages.)
 
 on:
   pull_request:
