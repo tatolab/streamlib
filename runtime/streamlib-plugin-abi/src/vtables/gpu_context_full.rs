@@ -6,8 +6,9 @@
 use core::ffi::c_void;
 
 use crate::repr::{
-    ComputeKernelDescriptorRepr, GpuCapabilitiesRepr, GraphicsKernelDescriptorRepr,
-    RayTracingKernelDescriptorRepr,
+    ColorTraitsRepr, ComputeKernelDescriptorRepr, GpuCapabilitiesRepr, GraphicsKernelDescriptorRepr,
+    OpaqueFdExportDescriptorRepr, RawWindowHandleRepr, RayTracingKernelDescriptorRepr,
+    VideoDecoderSessionDescriptorRepr, VideoEncoderSessionDescriptorRepr,
 };
 
 /// Layout version of [`crate::GpuContextFullAccessVTable`].
@@ -97,7 +98,26 @@ use crate::repr::{
 ///   pointer transit is safe only when the cdylib shares the host's
 ///   rustc version and dep graph. Subprocess cdylibs don't dep on
 ///   `streamlib-engine` and can't reach this slot in the first place.
-pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 10;
+/// - v11: M32 one-shot slot reservation (#1253). Appends the frozen
+///   signatures for the milestone's five engine-free surfaces at the
+///   @280 tail, all under this single bump (per-surface blocks' append
+///   offsets were provisional; final slot order is assigned here):
+///   present-target (`create_present_target` / `drop_present_target` —
+///   #1258), hardware video (`create_encoder_session` /
+///   `drop_encoder_session` / `create_decoder_session` /
+///   `drop_decoder_session` — #1259), exportable timeline
+///   (`create_exportable_timeline_semaphore` — #1260), texture readback
+///   (`create_texture_readback` / `drop_texture_readback` — #1261), and
+///   OPAQUE_FD/CUDA (`create_opaque_fd_export_buffer` /
+///   `export_storage_buffer_opaque_fd` /
+///   `wrap_storage_buffer_as_pixel_buffer` /
+///   `copy_texture_to_storage_buffer_and_signal` — #1262). Every
+///   reserved slot ships a typed NotYetProvided-style host body under
+///   the panic net; the per-surface fill-in issues #1258–#1262 replace
+///   those bodies against these frozen slots without touching the
+///   struct again. **ABI-breaking** — plugins built against v10 are not
+///   load-compatible with a v11 host.
+pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 11;
 
 /// Dispatch table for the host's `GpuContextFullAccess`. The cdylib
 /// obtains a handle inside an `escalate(|full| ...)` scope (via the
@@ -584,6 +604,202 @@ pub struct GpuContextFullAccessVTable {
     /// `Arc<HostVulkanTexture>` to exercise `acquire_*` paths.
     pub host_vulkan_texture_arc:
         unsafe extern "C" fn(texture_handle: *const c_void) -> *const c_void,
+
+    // =========================================================================
+    // v11 (M32 #1253) — one-shot slot reservation for the five engine-free
+    // surfaces. Slot order + offsets assigned here at aggregation; every
+    // per-surface block's provisional @280 tail collapses under this single
+    // bump. Each body ships a typed NotYetProvided-style stub until its
+    // surface fill-in issue (#1258–#1262) lands the real host body.
+    // =========================================================================
+
+    // ---- Present target (#1258) ----
+    /// Create a swapchain-backed present target from a native window
+    /// handle. Re-materializes `raw_window_handle::{RawWindowHandle,
+    /// RawDisplayHandle}` from the repr, constructs the host
+    /// `VulkanPresentTarget`, and writes the Box-shaped `PresentTarget`
+    /// PluginAbiObject into `*out_present_target`. `color` null = legacy
+    /// SDR pick. Linux-only; the reserved Win32/AppKit discriminants and
+    /// non-Linux hosts return the typed not-yet-provided error.
+    pub create_present_target: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        window: *const RawWindowHandleRepr,
+        width: u32,
+        height: u32,
+        vsync: u32,
+        color: *const ColorTraitsRepr,
+        out_present_target: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Release an owned `PresentTarget` handle (`Box::from_raw` + drop of
+    /// `Box<VulkanPresentTarget>`, no-op on null). Single drop-only slot
+    /// — `VulkanPresentTarget` is single-owner `!Clone`, no clone slot.
+    pub drop_present_target: unsafe extern "C" fn(owned_handle: *const c_void),
+
+    // ---- Hardware video encode/decode (#1259) ----
+    /// Mint a `SimpleEncoder` on the host device and write the Box-shaped
+    /// handle into `*out_session` plus the two cached aligned-extent POD
+    /// out-params (RGBA input to `submit_texture` must be >= these).
+    /// Linux-only. `disable_gpu_input_prealloc` in the descriptor gates
+    /// the eager `prepare_gpu_encode_resources` call.
+    pub create_encoder_session: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        desc: *const VideoEncoderSessionDescriptorRepr,
+        out_session: *mut *const c_void,
+        out_aligned_width: *mut u32,
+        out_aligned_height: *mut u32,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Release an owned encoder session: `Box::from_raw(Box<SimpleEncoder>)`
+    /// then drop (`wait_idle` plus spec-ordered teardown). No-op on null.
+    /// No clone slot (`!Clone` single-owner GPU pipeline). May be called
+    /// outside an escalate scope; the session Box owns its own device
+    /// Arc.
+    pub drop_encoder_session: unsafe extern "C" fn(owned_handle: *const c_void),
+
+    /// Mint a `SimpleDecoder` on the host device and write the Box-shaped
+    /// handle into `*out_session`. Dimensions are auto-detected from the
+    /// SPS (query via the `dimensions` methods slot after feed).
+    /// Linux-only.
+    pub create_decoder_session: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        desc: *const VideoDecoderSessionDescriptorRepr,
+        out_session: *mut *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Release an owned decoder session
+    /// (`Box::from_raw(Box<SimpleDecoder>)` + drop). No-op on null. No
+    /// clone slot.
+    pub drop_decoder_session: unsafe extern "C" fn(owned_handle: *const c_void),
+
+    // ---- Exportable timeline semaphore (#1260) ----
+    /// Construct an OPAQUE_FD-exportable timeline semaphore with the
+    /// given `initial_value` and write a fully-initialized
+    /// `HostTimelineSemaphore` PluginAbiObject (16 bytes; `handle` +
+    /// host-static `methods` vtable pointer) into `*out_timeline`.
+    /// Distinct from v6 `create_timeline_semaphore` (non-exportable,
+    /// Arc-raw transit, in-process only). Linux-only.
+    pub create_exportable_timeline_semaphore: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        initial_value: u64,
+        out_timeline: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    // ---- Texture readback (#1261) ----
+    /// Mint a single-in-flight `VulkanTextureReadback` and write the
+    /// Box-shaped opaque handle into `*out_readback_handle` plus the
+    /// cached-POD out-params (`out_handle_id` — process-wide handle id;
+    /// `out_staging_size` — the primitive's own `staging_size()`, never
+    /// recomputed ABI-side). Planar formats (Nv12) are rejected with a
+    /// typed error. Linux-only; drop-only (`drop_texture_readback`).
+    pub create_texture_readback: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        label_ptr: *const u8,
+        label_len: usize,
+        width: u32,
+        height: u32,
+        format_raw: u32,
+        out_readback_handle: *mut *const c_void,
+        out_handle_id: *mut u64,
+        out_staging_size: *mut u64,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Release an owned texture-readback handle
+    /// (`Box::from_raw(Box<Arc<VulkanTextureReadback>>)` + drop; the
+    /// primitive's Drop can block on the pending timeline). No-op on
+    /// null. No clone slot.
+    pub drop_texture_readback: unsafe extern "C" fn(handle: *const c_void),
+
+    // ---- OPAQUE_FD / CUDA buffer surface (#1262) ----
+    /// Allocate an OPAQUE_FD-exportable `VkBuffer` on the host device
+    /// (`device_local = 1` → `new_opaque_fd_export_device_local`,
+    /// CUDA-visible; `0` → `new_opaque_fd_export`) and write the existing
+    /// Arc-shaped `StorageBuffer` PluginAbiObject (32 bytes) in-place into
+    /// `*out_buffer`. Clone/drop reuse the existing LimitedAccess
+    /// `clone_storage_buffer` / `drop_storage_buffer`. Linux-only.
+    pub create_opaque_fd_export_buffer: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        byte_size: u64,
+        device_local: u8,
+        out_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Export a fresh dup'd OPAQUE_FD (`vkGetMemoryFdKHR`) plus size +
+    /// exporting-device UUID from a borrowed `StorageBuffer`, writing the
+    /// [`OpaqueFdExportDescriptorRepr`]. FD ownership transfers to the
+    /// caller on success; `fd` is written `-1` on any non-zero return.
+    /// Call-once-per-import. Linux-only.
+    pub export_storage_buffer_opaque_fd: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        buffer: *const c_void,
+        out_descriptor: *mut OpaqueFdExportDescriptorRepr,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Wrap an existing `StorageBuffer` (flat `VkBuffer`) as a
+    /// `PixelBuffer` PluginAbiObject (`PixelBuffer::from_host_vulkan_buffer`;
+    /// both wrap the same Arc) so the flat CUDA buffer registers via the
+    /// existing `register_pixel_buffer_with_timeline` SurfaceStore slot.
+    /// Writes the `PixelBuffer` in-place into `*out_pixel_buffer`.
+    /// Linux-only.
+    pub wrap_storage_buffer_as_pixel_buffer: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        storage_buffer: *const c_void,
+        width: u32,
+        height: u32,
+        bytes_per_pixel: u32,
+        format_raw: u32,
+        out_pixel_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Per-frame CUDA producer copy: in one host-device submission,
+    /// GPU-wait on `consume_done` at `consume_done_wait_value` (null =
+    /// none), `vkCmdCopyImageToBuffer` from the borrowed source
+    /// `texture_handle` (at `source_layout_raw`) into `storage_buffer`,
+    /// then signal `produce_done` at `produce_done_signal_value` (null =
+    /// none). Timeline params carry `HostTimelineSemaphore.handle` (the
+    /// inner Arc pointer). Linux-only.
+    ///
+    /// (#1262 Decision 4 directed the full frozen signature to be
+    /// produced at aggregation; this is the aggregator-assigned shape
+    /// carrying both the wait and signal values per the binding
+    /// amendment.)
+    pub copy_texture_to_storage_buffer_and_signal: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        texture_handle: *const c_void,
+        source_layout_raw: i32,
+        storage_buffer: *const c_void,
+        consume_done_handle: *const c_void,
+        consume_done_wait_value: u64,
+        produce_done_handle: *const c_void,
+        produce_done_signal_value: u64,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
 }
 
 unsafe impl Send for GpuContextFullAccessVTable {}
@@ -596,10 +812,10 @@ mod tests {
 
     #[test]
     fn gpu_context_full_access_vtable_layout() {
-        // layout_version (u32) + _reserved_padding (u32) + 34 fn
-        // pointers (8 bytes each) = 4 + 4 + 272 = 280 bytes, align = 8.
+        // layout_version (u32) + _reserved_padding (u32) + 47 fn
+        // pointers (8 bytes each) = 4 + 4 + 376 = 384 bytes, align = 8.
         //
-        // 34 entries = 1 drop_handle + 7 clone/drop pairs (14 fn
+        // 34 pre-v11 entries = 1 drop_handle + 7 clone/drop pairs (14 fn
         // pointers for the 7 PluginAbiObject return types: compute / graphics /
         // ray-tracing kernels, texture ring, color converter,
         // acceleration structure, command recorder) + 4 create_* method
@@ -612,7 +828,15 @@ mod tests {
         // + 1 gpu_capabilities + 1 create_timeline_semaphore
         // + 1 import_dma_buf_storage_buffer + 1 host_vulkan_device_arc
         // + 1 host_vulkan_texture_arc.
-        assert_eq!(size_of::<GpuContextFullAccessVTable>(), 280);
+        //
+        // v11 (#1253) appends 13 slots @280..376: create/drop
+        // present_target (2), create/drop encoder + decoder session (4),
+        // create_exportable_timeline_semaphore (1), create/drop
+        // texture_readback (2), create_opaque_fd_export_buffer +
+        // export_storage_buffer_opaque_fd +
+        // wrap_storage_buffer_as_pixel_buffer +
+        // copy_texture_to_storage_buffer_and_signal (4).
+        assert_eq!(size_of::<GpuContextFullAccessVTable>(), 384);
         assert_eq!(align_of::<GpuContextFullAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextFullAccessVTable, layout_version), 0);
         assert_eq!(offset_of!(GpuContextFullAccessVTable, _reserved_padding), 4);
@@ -753,6 +977,68 @@ mod tests {
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, host_vulkan_texture_arc),
             272
+        );
+        // v11 (#1253) — final slot order assigned at aggregation.
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, create_present_target),
+            280
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, drop_present_target),
+            288
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, create_encoder_session),
+            296
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, drop_encoder_session),
+            304
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, create_decoder_session),
+            312
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, drop_decoder_session),
+            320
+        );
+        assert_eq!(
+            offset_of!(
+                GpuContextFullAccessVTable,
+                create_exportable_timeline_semaphore
+            ),
+            328
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, create_texture_readback),
+            336
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, drop_texture_readback),
+            344
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, create_opaque_fd_export_buffer),
+            352
+        );
+        assert_eq!(
+            offset_of!(GpuContextFullAccessVTable, export_storage_buffer_opaque_fd),
+            360
+        );
+        assert_eq!(
+            offset_of!(
+                GpuContextFullAccessVTable,
+                wrap_storage_buffer_as_pixel_buffer
+            ),
+            368
+        );
+        assert_eq!(
+            offset_of!(
+                GpuContextFullAccessVTable,
+                copy_texture_to_storage_buffer_and_signal
+            ),
+            376
         );
     }
 }
