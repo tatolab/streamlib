@@ -17,13 +17,24 @@ stripped="$(printf '%s' "$cmd" | sed -E \
   -e "s/'[^']*'//g" \
   -e 's/"[^"]*"//g')"
 
-# Resolve the git target directory: `git -C <path>` wins over the payload cwd for
-# the on-main check, and is normalized out of the command so subcommand matchers
-# see `git commit` / `git push` directly.
+# Resolve the git target directory for the on-main check, in priority order:
+# 1. `git -C <path>` (normalized out of the command so subcommand matchers see
+#    `git commit` / `git push` directly);
+# 2. the last `cd <path>` preceding the git call — compound commands like
+#    `cd .claude/worktrees/x && git commit` run git in the cd'd directory, not
+#    the payload cwd (worktree-per-attempt makes this the canonical shape);
+# 3. the payload cwd.
 gitc_path="$(printf '%s' "$stripped" \
   | grep -oE 'git[[:space:]]+-C[[:space:]]+[^[:space:]]+' \
   | head -n1 | sed -E 's/^git[[:space:]]+-C[[:space:]]+//')"
-target_dir="${gitc_path:-${cwd:-.}}"
+cd_path="$(printf '%s' "$stripped" \
+  | grep -oE '(^|&&|;)[[:space:]]*cd[[:space:]]+[^[:space:];&|]+' \
+  | tail -n1 | sed -E 's/^.*cd[[:space:]]+//')"
+case "$cd_path" in
+  ""|/*) ;;
+  *) cd_path="${cwd:-.}/$cd_path" ;;
+esac
+target_dir="${gitc_path:-${cd_path:-${cwd:-.}}}"
 norm="$(printf '%s' "$stripped" | sed -E 's/git[[:space:]]+-C[[:space:]]+[^[:space:]]+[[:space:]]+/git /g')"
 
 deny() {
