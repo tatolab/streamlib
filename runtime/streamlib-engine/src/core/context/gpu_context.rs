@@ -1999,7 +1999,7 @@ impl std::fmt::Debug for GpuContext {
 }
 
 // =============================================================================
-// Capability-typed wrappers — see docs/design/gpu-capability-sandbox.md
+// Capability-typed wrappers
 // =============================================================================
 //
 // `GpuContextLimitedAccess` is the capability handed to `process()` — at runtime
@@ -2755,8 +2755,7 @@ where
 }
 
 // -----------------------------------------------------------------------------
-// Capability-split API surface (per the design doc in
-// `docs/design/gpu-capability-sandbox.md` §1).
+// Capability-split API surface.
 //
 // `GpuContextLimitedAccess` exposes the Sandbox surface only: pool acquires
 // (pre-reserved), texture sampling, writes to mapped pixel buffers, read-only

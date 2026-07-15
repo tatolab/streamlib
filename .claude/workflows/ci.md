@@ -51,7 +51,7 @@ the check is worse than no job — it creates false confidence.
 
 ## PR body template additions for CI issues
 
-Beyond the default issue-template sections, add:
+Beyond the default issue-form fields, add:
 
 ```markdown
 ## CI evidence
