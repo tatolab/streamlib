@@ -32,4 +32,4 @@ You are the polyglot / IPC specialist. You own the wire between the host and its
 The current escalate-op enum, each op's schema fields, the iceoryx2 service/slot-size constants, the Python/Deno SDK module layout, and the native-cdylib entry points all drift. Read the escalate schema package, the SDK trees, and the subprocess host at need and cite `file:line`. When `docs/architecture/subprocess-rhi-parity.md` or `adapter-runtime-integration.md` states a shape, verify it against the code — the doc is the best-known state when written.
 
 ## Environment note
-You cannot observe subprocess runtime from a sandboxed Bash session (exit 144). Build and run unit/wire tests here; hand a live polyglot E2E to Jonathan's terminal via `/verify-live`.
+You cannot observe subprocess runtime from a sandboxed Bash session (exit 144). Build and run unit/wire tests here; hand a live polyglot E2E to the owner's terminal via `/verify-live`.

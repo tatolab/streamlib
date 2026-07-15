@@ -1,11 +1,11 @@
 ---
 name: verify-live
-description: The live end-to-end verification handshake for changes that touch GPU / camera / display / codec. Use when a change needs a real pipeline run (a sandboxed session can't — the rig-brake blocks it), when Jonathan asks to verify a change on the rig, or when a PR claims E2E evidence that needs auditing. Two modes — emit the exact command block for his terminal, then audit the output (log gates, PNG content, PSNR).
+description: The live end-to-end verification handshake for changes that touch GPU / camera / display / codec. Use when a change needs a real pipeline run (a sandboxed session can't — the rig-brake blocks it), when the owner asks to verify a change on the rig, or when a PR claims E2E evidence that needs auditing. Two modes — emit the exact command block for the owner's terminal, then audit the output (log gates, PNG content, PSNR).
 ---
 
 # verify-live — real-pipeline verification
 
-Unit tests come first and catch most bugs. This skill is for the cases they can't reach: GPU/driver, V4L2, swapchain — where a run is the only proof. A sandboxed session cannot run the pipeline (exit 144; the `rig-brake` hook blocks rig-consuming commands), so verification is a **handshake**: emit the command for Jonathan's terminal, then audit what it produced. The `evidence-verifier` agent executes both phases; this skill is the reference it and any reviewer share.
+Unit tests come first and catch most bugs. This skill is for the cases they can't reach: GPU/driver, V4L2, swapchain — where a run is the only proof. A sandboxed session cannot run the pipeline (exit 144; the `rig-brake` hook blocks rig-consuming commands), so verification is a **handshake**: emit the command for the owner's terminal, then audit what it produced. The `evidence-verifier` agent executes both phases; this skill is the reference it and any reviewer share.
 
 ## Device indices are never hardcoded
 Read `docs/rig-profile.local.md` for this machine's video-node / GPU topology, then confirm with a probe (`v4l2-ctl --list-devices`, `--get-fmt-video`). A runtime probe always beats the file. Every `/dev/videoN` in a command block is resolved this way — the indices below are placeholders.
@@ -39,8 +39,8 @@ Three fixture rigs guard the color path; each has bug-injection modes that must 
 **PSNR pass bar:** Y ≥ 35 dB good · 30–35 dB acceptable, flag it · < 30 dB regression (investigate color matrix / range / plane layout).
 
 ## Two modes
-- **Interactive** — print the command block for Jonathan's terminal now; he runs it; you audit the output directory in the same session.
-- **Async** — he comments "done, output in `<dir>`" on the issue; the next `milestone-loop` turn spawns `evidence-verifier` to audit `<dir>`.
+- **Interactive** — print the command block for the owner's terminal now; they run it; you audit the output directory in the same session.
+- **Async** — the owner comments "done, output in `<dir>`" on the issue; the next `milestone-loop` turn spawns `evidence-verifier` to audit `<dir>`.
 
 ## Auditing the output (both modes)
 1. **Log gates — all zero.** Grep the pipeline log for `OUT_OF_DEVICE_MEMORY`, `DEVICE_LOST`, `process() failed`, `Validation Error`. Any nonzero fails (a `Validation Error` is acceptable only if it also exists on `main` for the same scenario — say so if you claim it).

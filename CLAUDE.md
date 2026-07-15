@@ -42,8 +42,9 @@ Loops drive the work (see `LOOP.md` and `loops/`). The standing form is
 A router classifies each work item fresh every pass and launches the matching workflow;
 labels are display output only — nothing reads them as control. Durable loop state lives in
 `loops/` state files; work artifacts live on GitHub (issues, comments, branches, draft PRs).
-Anything needing Jonathan parks as a question on the issue; he answers in a comment.
-Merging PRs and milestone scoping are always Jonathan's calls.
+Anything needing the owner parks as a question on the issue; they answer in a comment.
+Merging PRs and milestone scoping are always the owner's calls. "The owner" is the
+repository owner's GitHub login — the human who merges PRs and answers parked questions.
 
 ## Environment
 - Sandboxed sessions cannot observe GPU/IPC runtime (exit 144). Live verification is human-run

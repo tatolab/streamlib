@@ -14,7 +14,7 @@ Each entry: ticket ref, current attempt count, and what stage it's at.
 
 _(none yet)_
 
-## Waiting on Jonathan
+## Waiting on the owner
 Tickets parked on a question or a decision only the repo owner can make (merge, milestone scope,
 an answered question). Cleared only by an owner comment postdating the question.
 

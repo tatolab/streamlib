@@ -1,6 +1,6 @@
 ---
 name: file-issue
-description: File a well-shaped GitHub issue from a short intent — pick the right form (feature / bug / research), fill its sections, infer kind/zone/milestone, and set native dependency edges. Use when Jonathan says "file this", "open an issue for X", "log that bug", or when discussion surfaces a trackable task. Never files an umbrella issue — decomposes into self-contained issues with real blocked-by edges.
+description: File a well-shaped GitHub issue from a short intent — pick the right form (feature / bug / research), fill its sections, infer kind/zone/milestone, and set native dependency edges. Use when the owner says "file this", "open an issue for X", "log that bug", or when discussion surfaces a trackable task. Never files an umbrella issue — decomposes into self-contained issues with real blocked-by edges.
 ---
 
 # file-issue
@@ -19,7 +19,7 @@ Read the chosen form's YAML and fill **its** sections — don't invent a structu
 - **research**: Question · Why now · Deliverable shape.
 
 ## 2. Infer kind / zone / milestone
-Infer the form (kind), the zones touched, and the milestone from the intent and the current code. **Milestone assignment is required** — every issue belongs to one. When confidence is low on any of these, **ask Jonathan inline** (`AskUserQuestion`) rather than guessing — a wrong milestone or a mis-scoped issue costs more than one question. Milestone scoping is his call.
+Infer the form (kind), the zones touched, and the milestone from the intent and the current code. **Milestone assignment is required** — every issue belongs to one. When confidence is low on any of these, **ask the owner inline** (`AskUserQuestion`) rather than guessing — a wrong milestone or a mis-scoped issue costs more than one question. Milestone scoping is the owner's call.
 
 Labels are display output only; the router will classify the issue fresh at pickup, so don't over-label to steer it.
 
@@ -32,4 +32,4 @@ Set the edges through whichever `gh` surface this repo actually exposes — **ve
 Any specific claim about code or behavior in the body is phrased "to the best of our current knowledge" so the picker knows to verify it. Keep file paths, exact test names, and step-by-step ordering out of the body.
 
 ## 5. Confirm and report
-Show the drafted issue(s) and the edges before filing when the decomposition is non-trivial; file, then report the issue number(s), milestone, and the dependency graph you set. If the intent decomposed into several, list them with their blocks/blocked-by relationships so Jonathan can see the shape.
+Show the drafted issue(s) and the edges before filing when the decomposition is non-trivial; file, then report the issue number(s), milestone, and the dependency graph you set. If the intent decomposed into several, list them with their blocks/blocked-by relationships so the owner can see the shape.

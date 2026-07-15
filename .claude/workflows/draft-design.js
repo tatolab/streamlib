@@ -97,7 +97,7 @@ const brief =
       `issue comment via gh. The brief must contain: What & why; a mermaid diagram of the proposed shape; ` +
       `Alternatives considered (each with a one-line why/why-not, including "extend the existing system" vs ` +
       `"new abstraction"); Decisions taken (with evidence); a Risk class; and an explicit numbered ` +
-      `DECISIONS FOR OWNER list (only the calls Jonathan must make). Keep implementation mechanics OUT — no ` +
+      `DECISIONS FOR OWNER list (only the calls the owner must make). Keep implementation mechanics OUT — no ` +
       `file-by-file plan, no test names. Nothing builds until he approves in a comment.\n\n` +
       `Recon findings (JSON): ${JSON.stringify(reconResults)}`,
     { phase: 'Brief', label: 'brief', model: 'opus', schema: briefSchema },

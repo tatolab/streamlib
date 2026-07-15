@@ -10,9 +10,9 @@ run and stays inside [`loops/budget.md`](loops/budget.md).
 
 ## milestone-loop
 Invocation (paste-ready): /loop 30m /goal all issues in the focused milestone are
-      merged, or waiting on Jonathan or on blockers — each turn: run one
+      merged, or waiting on the owner or on blockers — each turn: run one
       milestone-loop reconciler pass; obey loops/constraints.md; max 8 turns/firing
-Sprint mode: the same /goal without the wrapper, when Jonathan is present.
+Sprint mode: the same /goal without the wrapper, when the owner is present.
 Turn procedure: the milestone-loop skill (one reconciler pass per turn)
 Knobs: heartbeat 30m · max_parallel 2 · attempts_per_ticket 3 · propose_only false
 Kill switch: stop the /loop + /goal clear, `paused: true` in the state file, or the budget cap

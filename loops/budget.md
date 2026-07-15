@@ -12,7 +12,7 @@ When a loop reaches a daily cap (or the 80% propose-only threshold in `loops/con
 1. **Pause** — stop landing new code for the rest of the day (propose-only: planning, drafting,
    and posting questions are still allowed).
 2. **Append a run-log event** to `loops/run-log.md` recording the cap hit (`"outcome":"budget-cap"`).
-3. **Post an owner comment** on the active milestone (or the ticket in flight) so Jonathan sees the
+3. **Post an owner comment** on the active milestone (or the ticket in flight) so the owner sees the
    loop capped and can raise the cap or let it resume tomorrow.
 
 ## Model policy

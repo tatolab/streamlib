@@ -1,6 +1,6 @@
 ---
 name: milestone-loop
-description: Run one reconciler pass of the standing milestone-loop — the turn procedure the `/loop 30m /goal …` firing invokes. Use when a loop firing (or a sprint-mode `/goal` with Jonathan present) needs to move the focused milestone one bounded step toward "merged, or waiting on Jonathan or on blockers." Reconciles loop state against GitHub, routes and classifies ready issues, launches the matching workflow, parks anything needing the owner, records state, and yields at a coherent boundary.
+description: Run one reconciler pass of the standing milestone-loop — the turn procedure the `/loop 30m /goal …` firing invokes. Use when a loop firing (or a sprint-mode `/goal` with the owner present) needs to move the focused milestone one bounded step toward "merged, or waiting on the owner or on blockers." Reconciles loop state against GitHub, routes and classifies ready issues, launches the matching workflow, parks anything needing the owner, records state, and yields at a coherent boundary.
 ---
 
 # milestone-loop — the reconciler pass
@@ -53,16 +53,16 @@ For each ticket in the launchable batch:
 
 In **propose_only** mode, do not launch — instead post the plan-of-record for each candidate as an issue comment and move on.
 
-## 6. PARK anything needing Jonathan
+## 6. PARK anything needing the owner
 When a ticket needs a decision only the repo owner can make (an answered question, a merge, a milestone-scope call, or the attempt cap tripped):
 - Add the `gate` display label.
 - Post **one** question comment ending in an explicit question block (the owner answers by commenting).
 - Send **one** Telegram ping — only for a *new* question this turn, never a re-ping of a still-open one.
 
-Move the ticket to the state file's "Waiting on Jonathan" section with the question's age.
+Move the ticket to the state file's "Waiting on the owner" section with the question's age.
 
 ## 7. Write state and append the run-log
-Rewrite the four sections of `loops/milestone-loop-state.md` (Acting on / Waiting on Jonathan / Watch / Ignored this pass) to the loop's current picture, each entry terse with its attempt count and stage. Append **exactly one** JSON-lines event to `loops/run-log.md` with the turn's `items`, `actions`, `attempts`, `verdicts`, `escalations`, `est_tokens`, and `outcome` (`progressed` / `blocked` / `budget-cap` / `idle`).
+Rewrite the four sections of `loops/milestone-loop-state.md` (Acting on / Waiting on the owner / Watch / Ignored this pass) to the loop's current picture, each entry terse with its attempt count and stage. Append **exactly one** JSON-lines event to `loops/run-log.md` with the turn's `items`, `actions`, `attempts`, `verdicts`, `escalations`, `est_tokens`, and `outcome` (`progressed` / `blocked` / `budget-cap` / `idle`).
 
 ## 8. Yield at a coherent boundary
 End the turn only when work is checkpointed or cleanly handed off — a background workflow launched, a draft PR opened, a question posted, plus the state write and run-log line from step 7. A headless final turn never ends with un-checkpointed background work. Do not decide whether to continue — the `/goal` evaluator fires the next turn.

@@ -33,9 +33,9 @@ deny() {
 
 match() { printf '%s' "$norm" | grep -Eq "$1"; }
 
-# gh pr merge — merging is Jonathan's call.
+# gh pr merge — merging is the owner's call.
 if match 'gh[[:space:]]+pr[[:space:]]+merge'; then
-  deny "merging PRs is Jonathan's call (gh pr merge)"
+  deny "merging PRs is the owner's call (gh pr merge)"
 fi
 
 # git push targeting origin main (force or not): 'origin main', 'origin +main',

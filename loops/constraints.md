@@ -11,7 +11,7 @@ Read this at the start of every loop run. These are hard rules, not guidance.
 ## Attempts and escalation
 - Attempt cap is **3 per ticket**. After the third failed attempt, escalate: post the attempt
   history (what was tried, what failed) as a question on the issue and move the ticket to
-  "Waiting on Jonathan." Do not start a fourth attempt.
+  "Waiting on the owner." Do not start a fourth attempt.
 
 ## Turn boundaries
 - A turn may only end at a **coherent boundary**: a checkpoint commit plus a state-file note, or
@@ -26,12 +26,13 @@ Read this at the start of every loop run. These are hard rules, not guidance.
 ## Rig safety
 - Never run rig-consuming commands (camera/display/GPU-runtime). The `rig-brake` hook enforces
   this; when you hit it, park the work for `/verify-live` and post the exact command block for
-  Jonathan's terminal.
+  the owner's terminal.
 
 ## Parked questions
-- A question parked on an issue is cleared **only** by a comment from the repo owner's login that
-  postdates the question. A loop never clears its own parked question, and never treats a non-owner
-  comment as an answer.
+- "The owner" throughout these files is the repository owner's GitHub login — the human who merges
+  PRs and answers parked questions. A question parked on an issue is cleared **only** by a comment
+  from the owner's login that postdates the question. A loop never clears its own parked question,
+  and never treats a non-owner comment as an answer.
 
 ## Budget
 - If the day's budget is **≥80% spent**, the loop goes **propose-only** for the rest of the day —

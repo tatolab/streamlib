@@ -9,7 +9,7 @@ yields.
 Each line is a single JSON object with these keys:
 
 ```json
-{"ts":"<ISO-8601 UTC>","loop":"<loop name>","turn":<int>,"items":["<ticket refs the pass touched>"],"actions":["<what the turn did>"],"attempts":{"<ticket>":<count>},"verdicts":{"<ticket>":"<pass|fail|parked|escalated>"},"escalations":["<ticket refs escalated to Jonathan>"],"est_tokens":<int>,"outcome":"<progressed|blocked|budget-cap|idle>"}
+{"ts":"<ISO-8601 UTC>","loop":"<loop name>","turn":<int>,"items":["<ticket refs the pass touched>"],"actions":["<what the turn did>"],"attempts":{"<ticket>":<count>},"verdicts":{"<ticket>":"<pass|fail|parked|escalated>"},"escalations":["<ticket refs escalated to the owner>"],"est_tokens":<int>,"outcome":"<progressed|blocked|budget-cap|idle>"}
 ```
 
 - `ts` — turn end time, ISO-8601 UTC.
@@ -17,7 +17,7 @@ Each line is a single JSON object with these keys:
 - `actions` — terse phrases for what happened (`"opened PR"`, `"posted question"`, `"swept worktree"`).
 - `attempts` — running attempt count per ticket (cap 3, then escalate).
 - `verdicts` — per-ticket result this turn.
-- `escalations` — tickets handed to Jonathan (parked question / attempt cap).
+- `escalations` — tickets handed to the owner (parked question / attempt cap).
 - `est_tokens` — rough tokens spent this turn, for the daily budget.
 - `outcome` — the turn's net result.
 
