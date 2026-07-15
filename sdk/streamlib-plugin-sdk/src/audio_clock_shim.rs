@@ -80,6 +80,15 @@ impl<'a> AudioClockShim<'a> {
 
     /// Sample rate in Hz.
     pub fn sample_rate(&self) -> u32 {
+        // `audio_clock_vtable` is ABI-optional: the install handshake
+        // validates it only-when-non-null, so a host that installs no audio
+        // clock leaves the vtable null and `audio_clock()` hands us a null
+        // pointer. Guard the deref rather than SIGSEGV across the plugin ABI
+        // (mirrors `GpuContextFullAccess::color_converter`'s null-vtable
+        // discipline); with no host clock the cadence is simply zero.
+        if self.vtable.is_null() {
+            return 0;
+        }
         // SAFETY: vtable + handle promised valid by the runtime-context
         // view for the lifetime of `'a`.
         unsafe { ((*self.vtable).sample_rate)(self.handle) }
@@ -87,6 +96,11 @@ impl<'a> AudioClockShim<'a> {
 
     /// Number of samples per tick.
     pub fn buffer_size(&self) -> usize {
+        // See [`Self::sample_rate`] — null `audio_clock_vtable` is reachable
+        // and reads as a zero cadence rather than dereferencing null.
+        if self.vtable.is_null() {
+            return 0;
+        }
         // SAFETY: see [`Self::sample_rate`].
         unsafe { ((*self.vtable).buffer_size)(self.handle) }
     }
@@ -110,6 +124,19 @@ impl<'a> AudioClockShim<'a> {
         // Double-box: outer Box owns a heap allocation whose stable
         // address survives moves; inner Box is the trait object.
         let user_data = Box::into_raw(Box::new(boxed)) as *mut c_void;
+        // Null `audio_clock_vtable` is reachable (see [`Self::sample_rate`]):
+        // there is no host clock to register with, so `on_tick` is a no-op —
+        // but it must still reclaim the boxed closure here so the user's
+        // captured state drops exactly once instead of leaking.
+        if self.vtable.is_null() {
+            // SAFETY: pair with the `Box::into_raw` above; nothing else holds
+            // `user_data`.
+            unsafe {
+                let _ =
+                    Box::from_raw(user_data as *mut Box<dyn Fn(AudioTickContext) + Send + Sync>);
+            }
+            return;
+        }
         // SAFETY: the vtable's on_tick callback hands the user_data + drop
         // pair to the host's audio-clock impl; the host never deref's
         // user_data itself.
@@ -347,5 +374,70 @@ mod on_tick_round_trip_tests {
             "drop_user_data must reclaim the boxed closure exactly once \
              (0 = leak / missing Box::from_raw; 2 = double-free)",
         );
+    }
+
+    /// The real defect: `audio_clock_vtable` is ABI-optional, so
+    /// `audio_clock()` can hand the shim a null vtable pointer on the
+    /// reachable no-clock path. The POD getters must read as zero (not
+    /// deref null -> SIGSEGV), and `on_tick` must be a no-op that STILL
+    /// reclaims the boxed user closure exactly once rather than leaking it.
+    /// Mental-revert: dropping either `is_null()` guard in
+    /// `sample_rate`/`buffer_size` dereferences null and segfaults; dropping
+    /// the `on_tick` reclaim path leaks the closure and leaves the drop
+    /// counter at 0.
+    #[test]
+    fn null_vtable_guard_reads_zero_and_drops_closure_exactly_once() {
+        // Non-null dummy handle paired with a NULL vtable — the exact shape
+        // `audio_clock()` builds when no host audio clock is installed.
+        let handle = std::ptr::dangling::<c_void>();
+        let shim = AudioClockShim::from_ffi(handle, std::ptr::null());
+
+        // POD getters must not deref the null vtable.
+        assert_eq!(shim.sample_rate(), 0);
+        assert_eq!(shim.buffer_size(), 0);
+
+        let drop_counter = Arc::new(AtomicUsize::new(0));
+        {
+            let spy = ClosureDropSpy(Arc::clone(&drop_counter));
+            // No host to register with: on_tick is a no-op, but the boxed
+            // closure (owning `spy`) must be reclaimed here.
+            shim.on_tick(move |_tick| {
+                let _keep_spy_alive = &spy;
+            });
+        }
+
+        assert_eq!(
+            drop_counter.load(Ordering::SeqCst),
+            1,
+            "null-vtable on_tick must drop the boxed closure exactly once \
+             (0 = leak; 2 = double-free)",
+        );
+    }
+
+    /// Locks the tick trampoline's `if user_data.is_null()` guard: the host
+    /// firing a tick with a null `user_data` must return without deref /
+    /// panic / segfault. Mental-revert: deleting the guard casts null to a
+    /// `&Box<dyn Fn(..)>` and calls through it — an immediate segfault.
+    #[test]
+    fn tick_trampoline_null_user_data_is_noop() {
+        let repr = AudioTickContextRepr {
+            timestamp_ns: 1,
+            samples_needed: 512,
+            sample_rate: 48_000,
+            _reserved_padding: 0,
+            tick_number: 0,
+        };
+        // SAFETY: null user_data is the exact case the guard defends.
+        unsafe { audio_clock_shim_tick_trampoline(std::ptr::null_mut(), repr) };
+    }
+
+    /// Locks the drop trampoline's `if user_data.is_null()` guard: releasing
+    /// a registration with a null `user_data` must return without calling
+    /// `Box::from_raw(null)`. Mental-revert: deleting the guard reclaims a
+    /// box from null and aborts.
+    #[test]
+    fn drop_trampoline_null_user_data_is_noop() {
+        // SAFETY: null user_data is the exact case the guard defends.
+        unsafe { audio_clock_shim_drop_trampoline(std::ptr::null_mut()) };
     }
 }

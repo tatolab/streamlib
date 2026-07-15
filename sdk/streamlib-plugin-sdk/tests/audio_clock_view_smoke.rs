@@ -45,6 +45,21 @@ fn chord_generator_process_shape(ctx: &RuntimeContextLimitedAccess<'_>) {
 }
 
 #[test]
+fn media_clock_resolves_through_public_path() {
+    // The ticket's second named gap: `MediaClock` must be reachable through
+    // the public `sdk::media_clock` facade exactly as an external package
+    // imports it — not only via the crate-internal `crate::media_clock`.
+    use streamlib_plugin_sdk::sdk::media_clock::MediaClock;
+
+    // Trivial compile-use of the type's real associated fn: `now()` returns
+    // a monotonic `Duration`. Two reads are non-decreasing (monotonic), which
+    // also exercises the accessor rather than merely naming the type.
+    let first = MediaClock::now();
+    let second = MediaClock::now();
+    assert!(second >= first, "MediaClock::now() must be monotonic");
+}
+
+#[test]
 fn audio_tick_context_is_engine_free_authorable() {
     // The value struct is constructible + `Copy` without any host.
     let tick = AudioTickContext {
