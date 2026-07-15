@@ -4081,6 +4081,117 @@ impl GpuContextFullAccess {
         }
     }
 
+    /// Create a single-in-flight GPU→CPU texture readback bound to a
+    /// fixed format/extent and return it as the layout-stable
+    /// [`crate::core::rhi::TextureReadback`] PluginAbiObject. The staging
+    /// buffer + command resources + timeline semaphore are allocated
+    /// once at construction and reused across every submit; for parallel
+    /// readbacks, hold N handles. Planar `Nv12` is rejected (the readback
+    /// staging model assumes a flat interleaved plane).
+    #[cfg(target_os = "linux")]
+    pub fn create_texture_readback(
+        &self,
+        label: &str,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+    ) -> Result<crate::core::rhi::TextureReadback> {
+        match self.handle_kind {
+            HandleKind::Boxed => {
+                if matches!(format, TextureFormat::Nv12) {
+                    return Err(Error::GpuError(
+                        "create_texture_readback: planar Nv12 is not supported \
+                         (readback assumes a flat interleaved plane)"
+                            .into(),
+                    ));
+                }
+                let descriptor = crate::core::rhi::TextureReadbackDescriptor {
+                    label,
+                    format,
+                    width,
+                    height,
+                };
+                let arc = self.host_inner().create_texture_readback(&descriptor)?;
+                // Cached POD sourced from the primitive itself — never
+                // recomputed here.
+                let cached_handle_id = arc.handle_id();
+                let cached_staging_size = arc.staging_size();
+                // Box-shaped opaque handle: `Box<Arc<VulkanTextureReadback>>`.
+                let handle = Box::into_raw(Box::new(arc)) as *const std::ffi::c_void;
+                let vtable =
+                    crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
+                let methods_vtable =
+                    crate::core::plugin::host_services::host_vulkan_texture_readback_methods_vtable(
+                    );
+                Ok(crate::core::rhi::TextureReadback {
+                    handle,
+                    vtable,
+                    methods_vtable,
+                    cached_handle_id,
+                    cached_staging_size,
+                    cached_width: width,
+                    cached_height: height,
+                    cached_format_raw: format as u32,
+                    _reserved_padding: 0,
+                })
+            }
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "create_texture_readback: GpuContextFullAccess has null vtable".into(),
+                    ));
+                }
+                let mut out_readback: *const std::ffi::c_void = std::ptr::null();
+                let mut out_handle_id: u64 = 0;
+                let mut out_staging_size: u64 = 0;
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                // SAFETY: vtable + handle (scope token) paired at construction.
+                let status = unsafe {
+                    ((*self.vtable).create_texture_readback)(
+                        self.handle,
+                        label.as_ptr(),
+                        label.len(),
+                        width,
+                        height,
+                        format as u32,
+                        &mut out_readback,
+                        &mut out_handle_id as *mut u64,
+                        &mut out_staging_size as *mut u64,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status != 0 {
+                    let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                        .into_owned();
+                    return Err(Error::GpuError(msg));
+                }
+                if out_readback.is_null() {
+                    return Err(Error::GpuError(
+                        "create_texture_readback: host signaled success but out handle is null"
+                            .into(),
+                    ));
+                }
+                let methods_vtable = crate::core::plugin::host_services::host_callbacks()
+                    .map(|c| c.vulkan_texture_readback_methods_vtable)
+                    .unwrap_or(std::ptr::null());
+                Ok(crate::core::rhi::TextureReadback {
+                    handle: out_readback,
+                    vtable: self.vtable,
+                    methods_vtable,
+                    cached_handle_id: out_handle_id,
+                    cached_staging_size: out_staging_size,
+                    cached_width: width,
+                    cached_height: height,
+                    cached_format_raw: format as u32,
+                    _reserved_padding: 0,
+                })
+            }
+        }
+    }
+
     /// See [`GpuContext::unregister_texture`].
     pub fn unregister_texture(&self, id: &str) {
         match self.handle_kind {

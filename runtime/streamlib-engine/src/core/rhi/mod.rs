@@ -84,5 +84,6 @@ pub use streamlib_consumer_rhi::{PixelFormat, TextureFormat, TextureUsages, Vulk
 pub use texture::{NativeTextureHandle, Texture, TextureDescriptor};
 pub use texture_cache::{RhiTextureCache, RhiTextureView};
 pub use texture_readback::{
-    ReadbackTicket, TextureReadbackDescriptor, TextureReadbackError, TextureSourceLayout,
+    ReadbackTicket, TextureReadback, TextureReadbackDescriptor, TextureReadbackError,
+    TextureSourceLayout,
 };

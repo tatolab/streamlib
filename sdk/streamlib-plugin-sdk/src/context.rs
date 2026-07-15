@@ -880,6 +880,75 @@ impl GpuContextFullAccess {
         })
     }
 
+    /// Create a single-in-flight GPU→CPU texture readback bound to a
+    /// fixed format/extent, returned as the layout-stable
+    /// [`crate::rhi::TextureReadback`] PluginAbiObject. Dispatches through
+    /// the [`GpuContextFullAccessVTable`]'s `create_texture_readback`
+    /// slot; the host rejects planar `Nv12`. For parallel readbacks,
+    /// hold N handles.
+    pub fn create_texture_readback(
+        &self,
+        label: &str,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+    ) -> Result<crate::rhi::TextureReadback> {
+        if self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "create_texture_readback: GpuContextFullAccess has null vtable".into(),
+            ));
+        }
+        let mut out_readback: *const c_void = std::ptr::null();
+        let mut out_handle_id: u64 = 0;
+        let mut out_staging_size: u64 = 0;
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: vtable + handle (scope token) paired at construction.
+        let status = unsafe {
+            ((*self.vtable).create_texture_readback)(
+                self.handle,
+                label.as_ptr(),
+                label.len(),
+                width,
+                height,
+                format as u32,
+                &mut out_readback,
+                &mut out_handle_id as *mut u64,
+                &mut out_staging_size as *mut u64,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status != 0 {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            return Err(Error::GpuError(msg));
+        }
+        if out_readback.is_null() {
+            return Err(Error::GpuError(
+                "create_texture_readback: host signaled success but out handle is null".into(),
+            ));
+        }
+        // PluginAbiObject: cached POD comes from the host's out-params
+        // (handle id + staging size, never recomputed) and the caller's
+        // own inputs (width / height / format). The per-type methods
+        // vtable comes from `host_callbacks()`.
+        let methods_vtable = crate::plugin::host_callbacks()
+            .map(|c| c.vulkan_texture_readback_methods_vtable)
+            .unwrap_or(std::ptr::null());
+        Ok(crate::rhi::TextureReadback {
+            handle: out_readback,
+            vtable: self.vtable,
+            methods_vtable,
+            cached_handle_id: out_handle_id,
+            cached_staging_size: out_staging_size,
+            cached_width: width,
+            cached_height: height,
+            cached_format_raw: format as u32,
+            _reserved_padding: 0,
+        })
+    }
+
     /// Acquire a cached `(src, dst)`-keyed color converter. Dispatches
     /// through the [`GpuContextFullAccessVTable`]'s `color_converter`
     /// slot.
