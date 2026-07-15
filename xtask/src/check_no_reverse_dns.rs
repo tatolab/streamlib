@@ -11,8 +11,11 @@
 //!
 //! Contexts that are NOT flagged:
 //!
-//! - Apple platform code (`*/apple/*` path segments) — DispatchQueue
-//!   labels and XPC mach-service names legitimately use reverse-DNS.
+//! - Apple platform code (`*/apple/*` and `*/_apple_impl_pending_/*` path
+//!   segments) — DispatchQueue labels and XPC mach-service names legitimately
+//!   use reverse-DNS. `_apple_impl_pending_/` is the parked-Apple convention
+//!   (an Apple module gated off until its engine-free surface lands); it is the
+//!   same Apple code, so it keeps the same exemption.
 //! - Test code — items under `#[cfg(test)]`, files under `tests/`,
 //!   files ending in `_test.rs` / `_tests.rs`. Legacy-grammar
 //!   conversion fixtures live in tests to lock the rejection behavior.
@@ -39,6 +42,7 @@ const SKIP_PATH_FRAGMENTS: &[&str] = &[
     "/.git/",
     "/tests/",
     "/apple/",
+    "/_apple_impl_pending_/",
 ];
 
 const SKIP_FILE_SUFFIXES: &[&str] = &["_test.rs", "_tests.rs"];
