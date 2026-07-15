@@ -1,12 +1,13 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-# Standalone example (headed to its own repo). The `streamlib` SDK resolves by
-# version, and the empty `[workspace]` table makes this its own workspace root so
-# it builds off-tree. The processor package it uses (`@tatolab/api-server`) is
-# NOT a Cargo dep — it lives in this app's `streamlib_modules/` folder (run
-# `./setup.sh` once) and the runtime lazily discovers + loads it at runtime.
-# See README.md.
+# Standalone example (headed to its own repo). It is a dependency-free client
+# for the runtime's HTTP control plane: the api-server is statically linked
+# into `streamlib-runtime` and served in-process, so an app reaches it by
+# running the runtime and hitting its endpoints, not by loading a module. The
+# probe talks raw HTTP over `std::net`, so it needs no dependencies and no SDK
+# link — `cargo build` works on its own. The empty `[workspace]` table makes
+# this its own workspace root so it builds off-tree. See README.md.
 [package]
 name = "api-server"
 version = "0.1.0"
@@ -14,12 +15,5 @@ edition = "2024"
 publish = false
 
 [dependencies]
-# The SDK is resolved by version. It is not published to crates.io yet, so for
-# local development `./setup.sh` runs `streamlib link --engine <checkout>` to
-# point this dep at the in-repo SDK. Once the SDK publishes, the bare version
-# resolves with no link step.
-streamlib = { version = "0.6" }
-serde_json = "1"
-tokio = { version = "1.48.0", features = ["full"] }
 
 [workspace]
