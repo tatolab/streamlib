@@ -54,6 +54,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-test-
 
-      # The documented CI unit-test gate ("CI runs `cargo test --lib`").
+      # Unit-test gate. Runs the facade + the engine-free ABI crates' lib tests:
+      # streamlib-plugin-abi / -plugin-sdk carry the layout-regression, fingerprint,
+      # twin-drift and tier-1 wire-format locks — the guards against silent ABI
+      # layout drift (which corrupts the driver only in a separately-built .slpkg).
+      # These crates are pure-repr / engine-free, so they add no flaky or GPU tests.
+      # streamlib-engine's lib tests (host-body tier-1 + engine twin) are a tracked
+      # follow-up, pending a fix to a parallel-run test flake.
       - name: Run unit tests
-        run: cargo test --locked -p streamlib --lib
+        run: cargo test --locked -p streamlib -p streamlib-plugin-abi -p streamlib-plugin-sdk --lib
