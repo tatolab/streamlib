@@ -118,6 +118,35 @@ impl StorageBuffer {
         self.mapped_ptr_cached
     }
 
+    /// Engine-internal clone of the underlying `Arc<HostVulkanBuffer>`
+    /// (bumps the strong count by one). Used by host-side FullAccess
+    /// bodies that must hand the same allocation to another RHI wrapper
+    /// — e.g. `wrap_storage_buffer_as_pixel_buffer` re-wraps this
+    /// buffer's `Arc` as a [`super::PixelBuffer`]. Balances against the
+    /// returned `Arc`'s own `Drop`.
+    ///
+    /// **Panics if called from cdylib code** for the same reason
+    /// [`Self::host_inner`] does — the handle is only dereferenceable in
+    /// host-compiled code.
+    pub(crate) fn host_inner_arc(&self) -> Arc<crate::vulkan::rhi::HostVulkanBuffer> {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "StorageBuffer::host_inner_arc() reached from cdylib code; this method \
+                 must run host-side. The panic is caught by run_host_extern_c at the \
+                 plugin ABI."
+            );
+        }
+        // SAFETY: `self.handle` is `Arc::into_raw(Arc<HostVulkanBuffer>)`
+        // (see `from_arc_into_raw`). Incrementing the strong count and
+        // reconstructing the `Arc` yields an owned clone whose `Drop`
+        // balances this increment; the original handle stays valid.
+        unsafe {
+            let ptr = self.handle as *const crate::vulkan::rhi::HostVulkanBuffer;
+            Arc::increment_strong_count(ptr);
+            Arc::from_raw(ptr)
+        }
+    }
+
     /// Engine-internal accessor for the raw
     /// `Arc::into_raw(Arc<HostVulkanBuffer>)` handle. Used by
     /// cdylib-mode dispatch paths

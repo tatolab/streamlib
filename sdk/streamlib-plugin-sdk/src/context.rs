@@ -1283,6 +1283,185 @@ impl GpuContextFullAccess {
             Err(Error::GpuError(msg))
         }
     }
+
+    /// Allocate an OPAQUE_FD-exportable `VkBuffer` as a
+    /// [`StorageBuffer`](crate::rhi::StorageBuffer) (`device_local = true`
+    /// → VRAM-resident CUDA-visible; `false` → HOST_VISIBLE). The
+    /// cdylib-safe OPAQUE_FD/CUDA producer allocation (#1262); dispatches
+    /// through the [`GpuContextFullAccessVTable`]'s
+    /// `create_opaque_fd_export_buffer` slot.
+    pub fn create_opaque_fd_export_buffer(
+        &self,
+        byte_size: u64,
+        device_local: bool,
+    ) -> Result<crate::rhi::StorageBuffer> {
+        if self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "create_opaque_fd_export_buffer: GpuContextFullAccess has null vtable".into(),
+            ));
+        }
+        let mut out: std::mem::MaybeUninit<crate::rhi::StorageBuffer> =
+            std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: vtable + handle (scope token) paired at construction;
+        // the host writes a valid `StorageBuffer` PluginAbiObject (with a
+        // populated `byte_size_cached`) into `out` on success.
+        let status = unsafe {
+            ((*self.vtable).create_opaque_fd_export_buffer)(
+                self.handle,
+                byte_size,
+                u8::from(device_local),
+                out.as_mut_ptr() as *mut c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            // SAFETY: host signaled success and wrote a valid value.
+            Ok(unsafe { out.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    /// Export a fresh dup'd OPAQUE_FD plus byte size and exporting-device
+    /// UUID from `buffer`. The fd transfers to the caller (import it once
+    /// via `cudaImportExternalMemory`); the 16-byte UUID binds the CUDA
+    /// context to the matching physical device. Dispatches through the
+    /// `export_storage_buffer_opaque_fd` slot (#1262).
+    pub fn export_storage_buffer_opaque_fd(
+        &self,
+        buffer: &crate::rhi::StorageBuffer,
+    ) -> Result<(std::os::unix::io::RawFd, u64, [u8; 16])> {
+        if self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "export_storage_buffer_opaque_fd: GpuContextFullAccess has null vtable".into(),
+            ));
+        }
+        let mut descriptor = crate::rhi::OpaqueFdExportDescriptorRepr::default();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: vtable + handle paired at construction; `buffer` is a
+        // borrowed StorageBuffer valid for the call; the host writes the
+        // descriptor (or leaves `fd = -1` on refusal) into `descriptor`.
+        let status = unsafe {
+            ((*self.vtable).export_storage_buffer_opaque_fd)(
+                self.handle,
+                buffer as *const _ as *const c_void,
+                &mut descriptor,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok((descriptor.fd, descriptor.size, descriptor.device_uuid))
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    /// Wrap an existing OPAQUE_FD [`StorageBuffer`](crate::rhi::StorageBuffer)
+    /// as a [`PixelBuffer`](crate::rhi::PixelBuffer) sharing the same
+    /// allocation, so the flat CUDA buffer can register through the
+    /// surface-store `register_pixel_buffer_with_timeline` path (#1262).
+    /// Dispatches through the `wrap_storage_buffer_as_pixel_buffer` slot.
+    pub fn wrap_storage_buffer_as_pixel_buffer(
+        &self,
+        storage_buffer: &crate::rhi::StorageBuffer,
+        width: u32,
+        height: u32,
+        bytes_per_pixel: u32,
+        format: PixelFormat,
+    ) -> Result<crate::rhi::PixelBuffer> {
+        if self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "wrap_storage_buffer_as_pixel_buffer: GpuContextFullAccess has null vtable".into(),
+            ));
+        }
+        let mut out: std::mem::MaybeUninit<crate::rhi::PixelBuffer> =
+            std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: vtable + handle paired at construction; `storage_buffer`
+        // borrowed for the call; the host writes a valid `PixelBuffer`
+        // PluginAbiObject (with cached width/height/format) into `out`.
+        let status = unsafe {
+            ((*self.vtable).wrap_storage_buffer_as_pixel_buffer)(
+                self.handle,
+                storage_buffer as *const _ as *const c_void,
+                width,
+                height,
+                bytes_per_pixel,
+                format as u32,
+                out.as_mut_ptr() as *mut c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            // SAFETY: host signaled success and wrote a valid value.
+            Ok(unsafe { out.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    /// Per-frame CUDA producer copy: `vkCmdCopyImageToBuffer` from
+    /// `source_texture` (currently in `source_layout`) into `dst` in one
+    /// host-device submission (#1262). Dispatches through the
+    /// `copy_texture_to_storage_buffer_and_signal` slot.
+    ///
+    /// The cross-API timeline wait/signal (`consume_done` / `produce_done`)
+    /// rides null handles until #1260 lands the SDK exportable-timeline
+    /// PluginAbiObject; on the null path the host submission blocks until
+    /// the copy completes. When #1260 lands, this method gains the
+    /// `Option<(&HostTimelineSemaphore, u64)>` wait/signal parameters.
+    pub fn copy_texture_to_storage_buffer_and_signal(
+        &self,
+        source_texture: &crate::rhi::Texture,
+        source_layout: VulkanLayout,
+        dst: &crate::rhi::StorageBuffer,
+    ) -> Result<()> {
+        if self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "copy_texture_to_storage_buffer_and_signal: GpuContextFullAccess has null vtable"
+                    .into(),
+            ));
+        }
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: vtable + handle paired at construction; the texture +
+        // storage buffer are borrowed for the call. Null timeline handles
+        // select the host-blocking (no cross-API sync) path.
+        let status = unsafe {
+            ((*self.vtable).copy_texture_to_storage_buffer_and_signal)(
+                self.handle,
+                source_texture.handle,
+                source_layout.0,
+                dst as *const _ as *const c_void,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
 }
 
 // =============================================================================

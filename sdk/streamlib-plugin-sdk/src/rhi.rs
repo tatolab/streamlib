@@ -66,6 +66,12 @@ pub use vulkan_graphics_kernel::VulkanGraphicsKernel;
 // Format / layout primitives — already engine-free in consumer-rhi.
 pub use streamlib_consumer_rhi::{PixelFormat, TextureFormat, TextureUsages, VulkanLayout};
 
+// OPAQUE_FD/CUDA export descriptor (#1262) — the `#[repr(C)]` POD is
+// authored once in `streamlib-plugin-abi`; re-exported here so cdylib
+// authors reach it as `sdk::rhi::OpaqueFdExportDescriptorRepr` without a
+// twin definition.
+pub use streamlib_plugin_abi::OpaqueFdExportDescriptorRepr;
+
 // Internal staging helper for `create_compute_kernel`.
 pub(crate) use compute_kernel_descriptor::stage_compute_kernel_descriptor;
 // Internal staging helper for `create_graphics_kernel`.
