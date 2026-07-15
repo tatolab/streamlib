@@ -8,10 +8,17 @@ keywords = ["api-server", "http", "websocket", "openapi", "streamlib"]
 categories = ["multimedia", "web-programming::http-server"]
 repository = "https://github.com/tato123/streamlib"
 license = "BUSL-1.1"
+# Host-side control plane — statically linked into `streamlib-runtime`, not
+# distributed through the registry. `publish = false` keeps it out of the
+# release closure (`compute_release_closure` requires a publishable crate).
+publish = false
 
 [lib]
 name = "streamlib_api_server"
-crate-type = ["rlib", "cdylib"]
+# `rlib` only. The api-server is a host (it drives RuntimeOperations, the
+# processor registry, pubsub, and the graph API), not a loadable plugin — a
+# host cannot be dlopen'd across the plugin ABI, so it emits no `cdylib`.
+crate-type = ["rlib"]
 
 [[bin]]
 name = "generate_openapi"
@@ -21,14 +28,15 @@ path = "src/bin/generate_openapi.rs"
 default = []
 moq = ["dep:streamlib-moq"]
 
+# Host-side member: the zone crates resolve by path (this package is never
+# published, so there is no registry closure to satisfy by version).
 [build-dependencies]
-streamlib-jtd-codegen = {version = "0.6.0"}
+streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.6.0" }
 
 [dependencies]
-streamlib = {version = "0.6.0"}
-streamlib-macros = {version = "0.6.0"}
-streamlib-plugin-abi = {version = "0.6.0"}
-streamlib-moq = {version = "0.6.0", optional = true}
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.6.0" }
+streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.6.0" }
+streamlib-moq = { path = "../../runtime/streamlib-moq", version = "0.6.0", optional = true }
 
 tower-http = { version = "0.6", features = ["trace"] }
 futures-util = "0.3"
@@ -45,5 +53,3 @@ parking_lot = "0.12"
 serde_json = {version = "1.0", features = ["preserve_order"]}
 anyhow = {version = "1.0.100"}
 tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
-
-[workspace]

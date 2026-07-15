@@ -12,9 +12,10 @@ use streamlib::sdk::processors::ManualProcessor;
 use streamlib::sdk::runtime::RuntimeOperations;
 
 /// Handles cloned from the setup-time context for use in start().
-/// The `tokio_handle` points at the plugin's own runtime (constructed in
-/// `setup()`); the host's tokio runtime is not reachable from cdylib code
-/// across the plugin ABI by design.
+/// The `tokio_handle` points at this processor's own tokio runtime
+/// (constructed in `setup()`) — the processor owns a dedicated runtime
+/// rather than assuming the lifecycle thread that calls `setup` / `start`
+/// is itself inside one.
 struct StashedHandles {
     runtime: Arc<dyn RuntimeOperations>,
     tokio_handle: tokio::runtime::Handle,
@@ -105,11 +106,11 @@ fn generate_runtime_name() -> String {
 #[streamlib::sdk::processor("ApiServer")]
 pub struct ApiServerProcessor {
     handles: Option<StashedHandles>,
-    /// Plugin-owned tokio runtime. Constructed in `setup()`, dropped in
+    /// Processor-owned tokio runtime. Constructed in `setup()`, dropped in
     /// `teardown()`. axum / hyper / tokio::net all run inside this runtime
-    /// — their thread-local state is set when the runtime's worker
-    /// threads enter the runtime, which only works because the cdylib
-    /// statically links its own tokio crate.
+    /// — their reactor / timer thread-local state is set when this
+    /// runtime's worker threads enter it, so the HTTP server never depends
+    /// on the calling lifecycle thread already being inside a tokio runtime.
     tokio_runtime: Option<tokio::runtime::Runtime>,
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
     runtime_id: Option<String>,
@@ -119,11 +120,11 @@ pub struct ApiServerProcessor {
 
 impl ManualProcessor for ApiServerProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        // Construct this plugin's own tokio runtime — the host's runtime
-        // is not reachable across the plugin ABI (see #885). axum::serve
-        // and tokio::net::TcpListener::bind need their thread-local state
-        // set by this runtime's worker threads, which only works because
-        // the cdylib statically links its own tokio crate.
+        // Construct this processor's own tokio runtime. The lifecycle
+        // thread that calls `setup` / `start` is not guaranteed to be
+        // inside a tokio runtime, and axum::serve + tokio::net::TcpListener
+        // need their reactor / timer thread-local state set by a runtime's
+        // own worker threads — so the processor owns and drives its own.
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()

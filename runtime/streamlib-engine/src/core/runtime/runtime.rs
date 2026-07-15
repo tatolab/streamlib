@@ -1129,8 +1129,9 @@ impl Runner {
         // validates (structure + registration) once the modules are loaded.
 
         // The unique packages whose processor types aren't already registered
-        // (e.g. api-server is pre-loaded at boot). One add_module per package —
-        // a snapshot may reference several processors from the same package.
+        // (e.g. the api-server type is registered in-process at boot). One
+        // add_module per package — a snapshot may reference several
+        // processors from the same package.
         let mut seen: std::collections::HashSet<streamlib_idents::PackageRef> =
             std::collections::HashSet::new();
         let mut to_load: Vec<ModuleIdent> = Vec::new();
