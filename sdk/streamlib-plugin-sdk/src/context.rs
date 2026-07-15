@@ -14,10 +14,12 @@
 //! assertions; a field added to one side but not the other trips a test
 //! rather than corrupting field reads at runtime.
 //!
-//! Only the GPU-accessor field reads are provided. The ABI-mediated
-//! accessors (`runtime_id`, `processor_id`, `audio_clock`, `runtime`,
-//! …) are a later phase — the proof CPU-only plugin needs only the two
-//! `gpu_*_access()` field reads on the RuntimeContext views.
+//! Beyond the GPU-accessor field reads, the runtime-context views also
+//! surface the host's audio clock via `audio_clock()` — dispatched
+//! through the [`RuntimeContextVTable::audio_clock_handle`] slot paired
+//! with the host's `AudioClockVTable` cached on `HostServices`. The
+//! remaining ABI-mediated accessors (`runtime_id`, `processor_id`,
+//! `runtime`, …) are a later phase.
 
 use std::ffi::c_void;
 use std::marker::PhantomData;
@@ -25,6 +27,8 @@ use std::marker::PhantomData;
 use streamlib_plugin_abi::{
     GpuContextFullAccessVTable, GpuContextLimitedAccessVTable, RuntimeContextVTable,
 };
+
+use crate::audio_clock_shim::AudioClockShim;
 
 #[cfg(target_os = "linux")]
 use streamlib_consumer_rhi::{PixelFormat, TextureFormat, TextureUsages, VulkanLayout};
@@ -1117,6 +1121,23 @@ impl<'a> RuntimeContextFullAccess<'a> {
     pub fn gpu_limited_access(&self) -> &GpuContextLimitedAccess {
         &self.gpu_limited
     }
+
+    /// Host-owned audio clock as a typed plugin ABI shim. Backed by the
+    /// per-RuntimeContext audio-clock handle from
+    /// [`RuntimeContextVTable::audio_clock_handle`] paired with the host's
+    /// [`AudioClockVTable`](streamlib_plugin_abi::AudioClockVTable) cached
+    /// on `HostServices`. Borrow-scoped to the ctx; the returned shim
+    /// cannot outlive the lifecycle call.
+    pub fn audio_clock(&self) -> AudioClockShim<'a> {
+        // SAFETY: `handle` + `vtable` were paired by the host when it
+        // built this view; `audio_clock_handle` returns a host-owned
+        // handle valid for the runtime's lifetime (outlives this borrow).
+        let handle = unsafe { ((*self.vtable).audio_clock_handle)(self.handle) };
+        let vtable = crate::plugin::host_callbacks()
+            .map(|callbacks| callbacks.audio_clock_vtable)
+            .unwrap_or(std::ptr::null());
+        AudioClockShim::from_ffi(handle, vtable)
+    }
 }
 
 // =============================================================================
@@ -1157,6 +1178,18 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
     /// Restricted GPU capability — cheap, pool-backed, non-allocating ops.
     pub fn gpu_limited_access(&self) -> &GpuContextLimitedAccess {
         &self.gpu_limited
+    }
+
+    /// Host-owned audio clock as a typed plugin ABI shim. See
+    /// [`RuntimeContextFullAccess::audio_clock`]. Available on the
+    /// restricted view so a `process()` body can read tick timing.
+    pub fn audio_clock(&self) -> AudioClockShim<'a> {
+        // SAFETY: see [`RuntimeContextFullAccess::audio_clock`].
+        let handle = unsafe { ((*self.vtable).audio_clock_handle)(self.handle) };
+        let vtable = crate::plugin::host_callbacks()
+            .map(|callbacks| callbacks.audio_clock_vtable)
+            .unwrap_or(std::ptr::null());
+        AudioClockShim::from_ffi(handle, vtable)
     }
 }
 

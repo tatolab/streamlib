@@ -25,6 +25,7 @@
 // `*Inner` backings + `HOST_*_VTABLE` statics stay in the engine; these are
 // the `#[repr(C)]` layout-matched twins + the cdylib-side vtable-marshal
 // code, re-exported under `sdk::*` below.
+mod audio_clock_shim;
 mod color;
 mod context;
 mod iceoryx2;
@@ -79,12 +80,24 @@ pub mod sdk {
     // ---- Capability-typed context views (cdylib arm) ----
     /// `RuntimeContext{Full,Limited}Access` + `GpuContext{Full,Limited}Access`
     /// — `#[repr(C)]` twins of the engine's, layout-locked so a host-built
-    /// view can be read field-by-field across the plugin ABI.
+    /// view can be read field-by-field across the plugin ABI. Plus the
+    /// engine-free `AudioClockShim` + `AudioTickContext` reached via the
+    /// runtime-context views' `audio_clock()` accessor (mirrors the engine
+    /// facade's `sdk::context`).
     pub mod context {
+        pub use crate::audio_clock_shim::{AudioClockShim, AudioTickContext};
         pub use crate::context::{
             GpuContextFullAccess, GpuContextLimitedAccess, RuntimeContextFullAccess,
             RuntimeContextLimitedAccess,
         };
+    }
+
+    // ---- Monotonic process clock (engine-free) ----
+    /// `MediaClock` — the monotonic process clock the output-writer view
+    /// stamps frame timestamps with. Engine-free twin of the engine
+    /// facade's `sdk::media_clock`.
+    pub mod media_clock {
+        pub use crate::media_clock::MediaClock;
     }
 
     // ---- Cdylib-arm RHI views (the GPU resource surface) ----
