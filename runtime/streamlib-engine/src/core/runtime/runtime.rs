@@ -1109,7 +1109,8 @@ impl Runner {
     /// processor type isn't registered yet, so a graph snapshot is
     /// self-contained: `streamlib-runtime --snapshot graph.json` brings up a
     /// full pipeline turnkey instead of failing on the first unregistered
-    /// processor type (the bare runtime only pre-loads the api-server).
+    /// processor type (the bare runtime only registers the api-server
+    /// in-process at boot).
     ///
     /// One `add_module` per referenced package (deduped), resolved from the
     /// registry at its highest published version and built on the host —
