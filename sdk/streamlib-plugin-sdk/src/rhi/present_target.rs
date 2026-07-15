@@ -258,12 +258,13 @@ impl PresentTargetFrame<'_> {
         &mut self.recorder
     }
 
-    /// Complete the frame: post-draw barrier + submit (wait image-available
-    /// + `extra_waits`; signal render-finished + frame-timeline) + present,
-    /// all host-side. `extra_waits` fold any producer-finished timeline
-    /// waits into the submit wait list (empty slice valid). Must be called
-    /// exactly once per acquired frame — consuming the frame releases the
-    /// present-target borrow so the next `begin_frame` can run.
+    /// Complete the frame: post-draw barrier, then submit (waiting
+    /// image-available plus `extra_waits`, signalling render-finished and
+    /// the frame timeline), then present — all host-side. `extra_waits`
+    /// fold any producer-finished timeline waits into the submit wait list
+    /// (empty slice valid). Must be called exactly once per acquired frame;
+    /// consuming the frame releases the present-target borrow so the next
+    /// `begin_frame` can run.
     pub fn end(self, extra_waits: &[SemaphoreSubmitInfoRepr]) -> Result<()> {
         let vt = self.present_target.methods_vtable;
         if vt.is_null() {
