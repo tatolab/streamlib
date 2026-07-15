@@ -1,51 +1,66 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Minimal API Server Example
+//! Minimal control-plane readiness probe.
 //!
-//! Launches the API server processor and waits for shutdown signal (Ctrl+C).
-//! Use this for testing the command and control web interface.
+//! The api-server is the runtime's HTTP + WebSocket command-and-control plane.
+//! It is not a loadable plugin: `streamlib-runtime` statically links it and
+//! serves it in-process, so an app reaches the control plane by running the
+//! runtime and hitting its endpoints — there is no module to `add_module` and
+//! nothing to `dlopen`. This example is the smallest form of that: it connects
+//! to an already-running `streamlib-runtime` and probes `GET /health` and
+//! `GET /api/registry`, printing what the control plane reports.
 //!
-//! The server runs on http://127.0.0.1:9000 with endpoints:
-//! - GET /health - Health check
-//! - GET /api/registry - List available processor types
-//! - GET /api/graph - Get current runtime graph
-//! - POST /api/processor - Create a processor
-//! - DELETE /api/processors/:id - Remove a processor
-//! - POST /api/connections - Create a connection
-//! - DELETE /api/connections/:id - Remove a connection
-//! - WS /ws/events - WebSocket event stream
+//! Start the runtime first (it serves on `http://127.0.0.1:9000` by default),
+//! then run this probe:
 //!
-//! There is no module-loading call: `@tatolab/api-server` lives in this
-//! app's `streamlib_modules/` folder (populated by `./setup.sh`) and the
-//! runtime lazily discovers + loads it on the first `processor_type_ref!`
-//! reference. The reference site carries no version — `processor_type_ref!`
-//! resolves to the installed provider.
+//!     <checkout>/target/debug/streamlib-runtime      # in one terminal
+//!     cargo run                                       # in this directory
+//!     cargo run -- 127.0.0.1:9000                     # or an explicit host:port
+//!
+//! For a full REST + WebSocket walk of every control endpoint, see the
+//! `api-server-demo` example.
 
-use streamlib::sdk::RunnerAutoBuild;
-use streamlib::sdk::processor_type_ref;
-use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::Runner;
+use std::io::{Read, Write};
+use std::net::TcpStream;
+use std::time::Duration;
 
-#[tokio::main]
-async fn main() -> streamlib::sdk::error::Result<()> {
-    let runtime = Runner::with_auto_build()?;
+fn main() {
+    let target = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "127.0.0.1:9000".to_string());
 
-    let config = serde_json::json!({
-        "host": "127.0.0.1",
-        "port": 9000,
-    });
-    runtime.add_processor(ProcessorSpec::new(
-        processor_type_ref!("tatolab", "api-server", "ApiServer"),
-        config,
-    ))?;
-    runtime.start()?;
+    println!("Probing the streamlib-runtime control plane at http://{target}");
+    println!("(start it with `<checkout>/target/debug/streamlib-runtime`)\n");
 
-    println!("API server running at http://127.0.0.1:9000");
-    println!("WebSocket events at ws://127.0.0.1:9000/ws/events");
-    println!("Press Ctrl+C to stop");
+    for path in ["/health", "/api/registry"] {
+        match http_get(&target, path) {
+            Ok(body) => println!("GET {path}\n{body}\n"),
+            Err(err) => {
+                println!("GET {path} failed: {err}");
+                println!("Is streamlib-runtime running and serving at {target}?");
+                std::process::exit(1);
+            }
+        }
+    }
+}
 
-    runtime.wait_for_signal()?;
-
-    Ok(())
+/// Issue a dependency-free HTTP/1.1 GET and return the response body. Raw TCP
+/// keeps the probe dependency-free, mirroring the idiom the runtime's own boot
+/// integration test uses.
+fn http_get(target: &str, path: &str) -> std::io::Result<String> {
+    let mut stream = TcpStream::connect(target)?;
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    let request = format!("GET {path} HTTP/1.1\r\nHost: {target}\r\nConnection: close\r\n\r\n");
+    stream.write_all(request.as_bytes())?;
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response)?;
+    let text = String::from_utf8_lossy(&response);
+    // Split the response headers from the body at the blank line; return the
+    // body (the JSON the control plane emitted).
+    let body = text
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .unwrap_or(&text);
+    Ok(body.trim().to_string())
 }

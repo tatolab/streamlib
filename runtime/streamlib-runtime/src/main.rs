@@ -4,20 +4,21 @@
 //! StreamLib Runtime Binary
 //!
 //! Bare engine substrate. `Runner::with_auto_build()` starts an empty
-//! registry; the core module set (the API server) is loaded through the
-//! all-dynamic module loader via [`Runner::add_module_with`] against the
-//! package source on disk, building it from source when it changes. Run
-//! the executable directly — there is no `dlopen` plugin loader and no
-//! launcher in front of it.
+//! registry; the always-present control plane — the API server — is a host
+//! (it drives `RuntimeOperations`, the processor registry, pubsub, and the
+//! graph API), not a loadable plugin, so it is statically linked into this
+//! binary and registered in-process on the shared `PROCESSOR_REGISTRY`.
+//! Every other processor / schema arrives at runtime through the
+//! all-dynamic module loader. Run the executable directly — there is no
+//! `dlopen` plugin loader and no launcher in front of it.
 
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 use clap::Parser;
 use streamlib::sdk::RunnerAutoBuild;
-use streamlib::sdk::module_ident_any_version;
-use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
+use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::schema_ident;
 
 #[derive(Parser)]
@@ -40,37 +41,6 @@ struct Args {
     /// Pipeline graph snapshot to load (JSON)
     #[arg(long = "snapshot", value_name = "PATH")]
     snapshot: Option<PathBuf>,
-}
-
-/// Resolve the `packages/` directory that ships the core module sources,
-/// from the binary's own location. streamlib packages are source that is
-/// compiled locally (like cargo / npm / pip — a prebuilt may ride along to
-/// speed loading, but the source is always present and rebuilt to track ABI
-/// changes), and an install is always a full clone of the repo, so
-/// `packages/` sits at the install root alongside the binary. Walk up from
-/// `current_exe()` — which resolves a PATH symlink to its real location —
-/// to the first ancestor containing a `packages/` directory: the install
-/// root for an installed binary, the workspace root under `cargo run`.
-/// Resolution is from the binary alone; there is no env override, because
-/// the install layout is fixed by construction. Whether a given module
-/// exists under the resolved directory is the module loader's concern.
-fn resolve_packages_dir() -> Result<PathBuf> {
-    let exe = std::env::current_exe().context("could not determine the running executable path")?;
-    let mut ancestor = exe.parent();
-    while let Some(dir) = ancestor {
-        let candidate = dir.join("packages");
-        if candidate.is_dir() {
-            return Ok(candidate);
-        }
-        ancestor = dir.parent();
-    }
-
-    bail!(
-        "could not locate the streamlib `packages/` directory by walking up from {}. \
-         The runtime must run from within a streamlib install (a clone of the repo with \
-         a `packages/` directory at its root).",
-        exe.display()
-    )
 }
 
 fn main() -> Result<()> {
@@ -98,19 +68,11 @@ async fn run(args: Args) -> Result<()> {
     let runtime = Runner::with_auto_build()?;
 
     // Seed the core module set. The API server is the always-present
-    // control plane; load it from its package source on disk so the
-    // runtime stays in sync with the filesystem (build-if-stale rebuilds
-    // it when the package changes, caching the staged artifact).
-    let packages_dir = resolve_packages_dir()?;
-    runtime
-        .add_module_with(
-            module_ident_any_version!("tatolab", "api-server"),
-            Strategy::Path {
-                path: packages_dir.join("api-server"),
-                build: BuildPolicy::IfStale,
-            },
-        )
-        .await?;
+    // control plane — a host, not a loadable plugin — so it is statically
+    // linked into this binary and registered in-process on the shared
+    // `PROCESSOR_REGISTRY`. This registers the `ApiServer` processor type;
+    // the instance is added below.
+    PROCESSOR_REGISTRY.register::<streamlib_api_server::ApiServerProcessor::Processor>();
 
     let log_path = runtime
         .jsonl_log_path()
@@ -134,7 +96,7 @@ async fn run(args: Args) -> Result<()> {
         println!("Loading pipeline: {}", path.display());
         // Resolving variant: pull + build any referenced package from the
         // registry so a snapshot is self-contained (the runtime only
-        // pre-loads the api-server at boot).
+        // registers the api-server in-process at boot).
         runtime
             .load_graph_snapshot_from_path_with_resolving(path)
             .await?;

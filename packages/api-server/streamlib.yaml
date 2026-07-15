@@ -7,6 +7,13 @@ package:
 dependencies:
   '@tatolab/core':
     version: ^1.0.0
+# Dev-time path override; `streamlib pack` rejects this. The api-server is a
+# host-side, non-distributable package (statically linked into
+# streamlib-runtime), so its schema deps resolve from the local checkout
+# rather than a registry.
+patch:
+  '@tatolab/core':
+    path: ../core
 schemas:
   ApiServerConfig:
     file: schemas/api_server_config.yaml

@@ -4,14 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-# The SDK is resolved by version. It is not published to crates.io yet, so for
-# local development `./setup.sh` runs `streamlib link --engine <checkout>` to
-# point this dep at the in-repo SDK. Once the SDK publishes, the bare version
-# resolves with no link step. The processor packages it uses
-# (`@tatolab/api-server`, `@tatolab/debug-utilities`) are NOT Cargo deps — they
-# live in this app's `streamlib_modules/` folder (run `./setup.sh` once). See
-# README.md.
-streamlib = { version = "0.6" }
+# This demo does not run an in-process runtime: the api-server is the control
+# plane, statically linked into `streamlib-runtime` and served in-process (not a
+# loadable plugin), so it cannot be instantiated from the SDK. The demo spawns a
+# real `streamlib-runtime` subprocess and drives it over HTTP + WebSocket, so it
+# depends only on a client stack — no `streamlib` SDK dep. `./setup.sh` builds
+# the runtime binary and links `@tatolab/debug-utilities` into this app's
+# `streamlib_modules/` (the runtime resolves it there). See README.md.
 tokio = { version = "1.48.0", features = ["full"] }
 reqwest = { version = "0.12", features = ["json"] }
 serde_json = "1.0"

@@ -61,6 +61,49 @@ these plugins (FullAccess is reachable only inside `escalate(|full|
 …)`); what differs is that the engine is present in the address space,
 not absent.
 
+## Host-side and in-repo packages — workspace members, not registry plugins
+
+Most `packages/*` crates are standalone, registry-distributed plugins. Three
+are workspace-member exceptions carved out of that rule — none is shipped
+through the registry, so each path-deps the zone crates and carries
+`publish = false` (which also keeps it out of the release closure). They fall
+into two classes.
+
+**Host-side (`packages/api-server`).** A **host-side package** is statically
+linked into the host binary and registered in-process on `PROCESSOR_REGISTRY`,
+rather than built as a `cdylib` and loaded through the plugin ABI. It is a
+host, not a plugin: it ships no `cdylib`, and nothing it does crosses the ABI.
+
+The api-server is the canonical host-side package. It drives
+`RuntimeOperations`, the processor registry, pubsub, and the graph API —
+control-plane surfaces a plugin cannot reach, because the ABI exposes the
+processor-authoring surface, not runtime control. `streamlib-runtime`
+Cargo-deps it as an `rlib` and calls
+`PROCESSOR_REGISTRY.register::<ApiServerProcessor::Processor>()` at boot;
+its own `Cargo.toml` carries `crate-type = ["rlib"]` and `publish = false`.
+
+The pubsub bridge makes the split concrete. Only `PUBSUB.publish` is
+ABI-bridged — a plugin's `publish` forwards to the host's `pubsub_publish`
+callback (`HostServices::pubsub_publish`). `PUBSUB.subscribe` is
+intentionally **not** bridged: a loaded plugin's own `PUBSUB` static is
+never `init()`ed, so `subscribe` buffers into `pending_subscriptions`
+forever. The api-server's WebSocket handler subscribes to every topic — in
+process on the host's initialized bus that stream is live; as a plugin it
+would be dead. That is why the control plane is host-side by construction.
+
+**In-repo test infrastructure (`packages/test-fixtures`,
+`packages/test-fixtures-abi-mismatch`).** These two are workspace members for a
+different reason: they are in-repo, path-dep test infrastructure, never
+distributed. They *are* built as plugin cdylibs — but only in place, for the
+engine's own dlopen tests, never shipped. `packages/test-fixtures` supplies the
+attribute-macro fixtures (e.g. `TestConfiguredProcessor`) that the dlopen
+integration suite builds (`cargo build -p streamlib-test-fixtures --features
+plugin`) and loads to exercise the full ABI roundtrip.
+`packages/test-fixtures-abi-mismatch` is a hand-crafted `STREAMLIB_PLUGIN` with
+a deliberately tampered `abi_version` — the negative fixture the load-path test
+loads to prove `validate_plugin_declaration` rejects a mismatched ABI. They are
+durable until the facade flavor's own test surface retires.
+
 ## The vtable catalog
 
 Every plugin ABI call dispatches through a `#[repr(C)]` vtable whose
