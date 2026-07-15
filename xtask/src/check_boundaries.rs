@@ -1303,13 +1303,28 @@ fn check_examples_cdylib_facade_dep(
 // Check 11 — the engine-free TRUNK SET must never Cargo-dep the engine
 // ---------------------------------------------------------------------------
 //
-// The three engine-free trunk crates — `streamlib-plugin-sdk`
-// (sdk/streamlib-plugin-sdk), `streamlib-macros` (sdk/streamlib-macros), and
-// `streamlib-plugin-abi` (runtime/streamlib-plugin-abi) — are the authoring
-// substrate every distributable `.slpkg` links against. A non-dev
-// `[dependencies]` entry that resolves to the engine crate (`streamlib-engine`
-// at runtime/streamlib-engine) in ANY of them statically pulls the FullAccess
-// engine surface into that substrate.
+// MEMBERSHIP RULE for the trunk root set: roots = every crate packages are
+// mandated or expected to link directly and consume by version. The four
+// engine-free trunk roots — `streamlib-plugin-sdk` (sdk/streamlib-plugin-sdk),
+// `streamlib-macros` (sdk/streamlib-macros), `streamlib-plugin-abi`
+// (runtime/streamlib-plugin-abi), and `streamlib-consumer-rhi`
+// (runtime/streamlib-consumer-rhi) — are the authoring substrate every
+// distributable `.slpkg` links against. A non-dev `[dependencies]` entry that
+// resolves to the engine crate (`streamlib-engine` at runtime/streamlib-engine)
+// in ANY of them statically pulls the FullAccess engine surface into that
+// substrate.
+//
+// The list is PRINCIPLED, not enumerated ad hoc: a crate earns root status by
+// being something packages dep DIRECTLY and consume by version. The small
+// utility crates (`streamlib-error`, `streamlib-processor-schema`,
+// `streamlib-idents`) are deliberately NOT listed — they are covered
+// TRANSITIVELY through the roots (check 12 walks the closure), so a listing
+// would be redundant. `streamlib-consumer-rhi` earns root status on its own
+// because check 3 makes it a first-class part of the boundary contract:
+// cdylibs and adapter crates dep it directly (in place of the full facade), so
+// packages link it by version just like the plugin-authoring SDK — an engine
+// dep in it would propagate the FullAccess surface to external consumers
+// exactly as one in plugin-sdk would.
 //
 // This is the PERMANENT invariant that replaces the dropped (dead-path)
 // "plugin/* -> libs/" exit criterion: it is the enforcement that SURVIVES the
@@ -1330,20 +1345,25 @@ fn check_examples_cdylib_facade_dep(
 
 const CHECK_TRUNK_NO_ENGINE_DEP: &str = "trunk-set-no-engine-cargo-dep";
 
-const TRUNK_NO_ENGINE_DEP_RATIONALE: &str = "PERMANENT trunk ban (survives the packages -> streamlib-packages split): an engine-free trunk crate (streamlib-plugin-sdk / streamlib-macros / streamlib-plugin-abi) must never carry `streamlib-engine` as a non-dev Cargo dep. External packages consume plugin-sdk by version from the registry, so a published plugin-sdk that pulled the engine would propagate the FullAccess engine surface to every external consumer invisibly. Unlike the transitional packages/* leaves ratchet, this ban has no shrinking allowlist; [dev-dependencies] are exempt (conformance tests may pull the engine)";
+const TRUNK_NO_ENGINE_DEP_RATIONALE: &str = "PERMANENT trunk ban (survives the packages -> streamlib-packages split): an engine-free trunk root (streamlib-plugin-sdk / streamlib-macros / streamlib-plugin-abi / streamlib-consumer-rhi) must never carry `streamlib-engine` as a non-dev Cargo dep. MEMBERSHIP RULE: roots = every crate packages are mandated or expected to link directly and consume by version — the small utility crates (streamlib-error / streamlib-processor-schema / streamlib-idents) are covered transitively through the roots, and consumer-rhi earns root status because check 3 makes it a first-class part of the boundary contract (cdylibs and adapter crates dep it directly). External packages consume these roots by version from the registry, so a published root that pulled the engine would propagate the FullAccess engine surface to every external consumer invisibly. Unlike the transitional packages/* leaves ratchet, this ban has no shrinking allowlist; [dev-dependencies] are exempt (conformance tests may pull the engine)";
 
 /// The engine crate's Cargo package name (lib name is `streamlib_engine`; the
 /// Cargo dependency key / `package =` rename resolves to this hyphenated form).
 const TRUNK_ENGINE_CRATE_NAME: &str = "streamlib-engine";
 
-/// The three engine-free trunk crates whose non-dev dep graph must never
+/// The four engine-free trunk roots whose non-dev dep graph must never
 /// resolve to `streamlib-engine`. A fixed list (mirrors check 3's
 /// `NO_STREAMLIB_RUNTIME_DEP`) — this is a permanent invariant, not a
-/// shrinking ratchet.
+/// shrinking ratchet. Roots = every crate packages are mandated or expected to
+/// link directly and consume by version; the small utility crates
+/// (streamlib-error / streamlib-processor-schema / streamlib-idents) are
+/// covered transitively through these roots (check 12), and consumer-rhi is a
+/// root because check 3 makes it a first-class part of the boundary contract.
 const TRUNK_NO_ENGINE_DEP: &[&str] = &[
     "sdk/streamlib-plugin-sdk/Cargo.toml",
     "sdk/streamlib-macros/Cargo.toml",
     "runtime/streamlib-plugin-abi/Cargo.toml",
+    "runtime/streamlib-consumer-rhi/Cargo.toml",
 ];
 
 fn check_trunk_set_no_engine_dep(
@@ -1430,14 +1450,18 @@ fn check_trunk_set_no_engine_dep(
 // (`<trunk> -> … -> streamlib-engine`) so the intermediate edge is obvious.
 // This has NO allowlist and never shrinks — same permanence as check 11.
 
-/// The three engine-free trunk crate names whose transitive normal + build
+/// The four engine-free trunk root names whose transitive normal + build
 /// closure must never reach [`TRUNK_ENGINE_CRATE_NAME`]. Mirrors check 11's
 /// `TRUNK_NO_ENGINE_DEP` (which keys on manifest paths); here we key on package
-/// names because the walk resolves through `cargo metadata`.
+/// names because the walk resolves through `cargo metadata`. Roots = every
+/// crate packages are mandated or expected to link directly and consume by
+/// version; consumer-rhi is a root because check 3 makes it a first-class part
+/// of the boundary contract (packages dep it directly).
 const TRUNK_CRATE_NAMES: &[&str] = &[
     "streamlib-plugin-sdk",
     "streamlib-macros",
     "streamlib-plugin-abi",
+    "streamlib-consumer-rhi",
 ];
 
 /// A discovered trunk-crate → `streamlib-engine` dependency chain, as package
@@ -2960,6 +2984,38 @@ x = { package = "streamlib-engine", path = "../streamlib-engine" }
     }
 
     #[test]
+    fn rejects_direct_engine_dep_in_consumer_rhi_trunk_crate() {
+        let dir = empty_workspace();
+        // consumer-rhi is the 4th trunk root (#1252 follow-up): cdylibs and
+        // adapter crates dep it directly and consume it by version, so a
+        // non-dev streamlib-engine dep in it would propagate the FullAccess
+        // engine surface to every external consumer invisibly. Locks
+        // consumer-rhi's root membership specifically — distinct from the
+        // plugin-sdk / macros / plugin-abi cases above.
+        write_fixture(
+            dir.path(),
+            "runtime/streamlib-consumer-rhi/Cargo.toml",
+            r#"[package]
+name = "streamlib-consumer-rhi"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+streamlib-engine = { path = "../streamlib-engine" }
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_TRUNK_NO_ENGINE_DEP),
+            "expected consumer-rhi trunk-set engine-dep violation, got {:?}",
+            report.violations,
+        );
+    }
+
+    #[test]
     fn allows_engine_dev_dep_in_trunk_crate() {
         let dir = empty_workspace();
         // [dev-dependencies] are exempt — a trunk crate's conformance tests may
@@ -3162,6 +3218,32 @@ streamlib-engine = { path = "../../runtime/streamlib-engine" }
             chains.is_empty(),
             "dev-only edge must not form a chain: {:?}",
             chains
+        );
+    }
+
+    #[test]
+    fn transitive_consumer_rhi_reaches_engine_through_intermediate_fails() {
+        // consumer-rhi is the 4th trunk root (#1252 follow-up): its transitive
+        // normal + build closure must also be walked. consumer-rhi -> mid ->
+        // engine, all normal edges — the walk must find the chain and attribute
+        // it to consumer-rhi. Locks consumer-rhi's root membership in the
+        // transitive check specifically, distinct from the plugin-sdk case.
+        let md = synthetic_metadata(
+            &["crhi", "mid", "eng"],
+            &[
+                ("crhi", "streamlib-consumer-rhi"),
+                ("mid", "streamlib-intermediate"),
+                ("eng", "streamlib-engine"),
+            ],
+            &[("crhi", "mid", "normal"), ("mid", "eng", "normal")],
+        );
+        let graph = NormalBuildDepGraph::from_metadata(&md).unwrap();
+        let chains = find_trunk_engine_chains(&graph);
+        assert_eq!(chains.len(), 1, "expected one chain, got {:?}", chains);
+        assert_eq!(chains[0].trunk, "streamlib-consumer-rhi");
+        assert_eq!(
+            chains[0].display_chain(),
+            "streamlib-consumer-rhi -> streamlib-intermediate -> streamlib-engine",
         );
     }
 
