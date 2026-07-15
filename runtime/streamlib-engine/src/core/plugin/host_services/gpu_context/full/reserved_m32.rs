@@ -12,7 +12,7 @@
 //! replace these bodies against the frozen slots without touching the
 //! vtable struct again.
 //!
-//! The two drop-only slots (`drop_present_target`,
+//! The four drop-only slots (`drop_present_target`,
 //! `drop_encoder_session`, `drop_decoder_session`, `drop_texture_readback`)
 //! are defensive no-ops until minting lands: no create slot yields a
 //! real handle yet, so drop is never called with one.

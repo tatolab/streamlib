@@ -213,9 +213,9 @@ pub unsafe fn install_host_services(host_services_ptr: *const c_void) -> Option<
         return None;
     }
 
-    // SAFETY: per the caller's promise. Read `abi_layout_version` before
-    // touching any other field — if the layout doesn't match, the rest of
-    // the struct's shape may have drifted.
+    // SAFETY: per the caller's promise. `abi_layout_version` is read first; on a
+    // mismatch the diagnostic below reads only the STREAMLIB_ABI_VERSION-pinned
+    // leading prefix (see the next SAFETY note), never the drifted appended tail.
     let services = unsafe { &*(host_services_ptr as *const HostServices) };
 
     // Validate the outer `HostServices.abi_layout_version` and every
@@ -227,10 +227,12 @@ pub unsafe fn install_host_services(host_services_ptr: *const c_void) -> Option<
     // logic-identical twin of the engine's copy (held in sync by
     // `twin_drift_guard`).
     //
-    // SAFETY: `validate_host_services_layout` only reads the outer version
-    // + (on match) the leading ABI-version-pinned `iceoryx_log_emit`
-    // callback and each inner vtable's `layout_version` @0; inner vtables
-    // are read only when non-null.
+    // SAFETY: `validate_host_services_layout` reads only the
+    // STREAMLIB_ABI_VERSION-pinned leading prefix — the outer `abi_layout_version`
+    // and, to emit the skew diagnostic on a mismatch, the `iceoryx_log_emit` @64 /
+    // `host` @8 callbacks (offsets pinned by the HostServices layout test) — plus
+    // each non-null inner vtable's `layout_version` @0, read only when the outer
+    // version matches.
     if unsafe { layout_skew_diagnostic::validate_host_services_layout(services) }.is_err() {
         return None;
     }
