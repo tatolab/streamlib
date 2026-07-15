@@ -473,6 +473,30 @@ impl GpuContextLimitedAccess {
         }
     }
 
+    /// Obtain the host's cross-process
+    /// [`SurfaceStore`](crate::rhi::SurfaceStore) producer handle. The
+    /// host always writes a value: a live handle when it ships a surface
+    /// store, or a null-handle sentinel otherwise — branch on
+    /// [`SurfaceStore::is_none`](crate::rhi::SurfaceStore::is_none).
+    /// Dispatches through the plugin ABI vtable's `surface_store` callback.
+    pub fn surface_store(&self) -> crate::rhi::SurfaceStore {
+        if self.handle.is_null() || self.vtable.is_null() {
+            return crate::rhi::SurfaceStore {
+                handle: std::ptr::null(),
+                vtable: std::ptr::null(),
+            };
+        }
+        let mut out: std::mem::MaybeUninit<crate::rhi::SurfaceStore> =
+            std::mem::MaybeUninit::uninit();
+        // SAFETY: vtable + handle paired at construction; the host always
+        // writes a fully-initialized (possibly null-handle) SurfaceStore
+        // PluginAbiObject into `out`.
+        unsafe {
+            ((*self.vtable).surface_store)(self.handle, out.as_mut_ptr() as *mut c_void);
+            out.assume_init()
+        }
+    }
+
     /// Acquire a pooled scratch texture, returning a
     /// [`PooledTextureHandle`](crate::rhi::PooledTextureHandle) that returns
     /// the texture to the pool on Drop. Dispatches through the plugin ABI
@@ -947,6 +971,63 @@ impl GpuContextFullAccess {
             cached_format_raw: format as u32,
             _reserved_padding: 0,
         })
+    }
+
+    /// Obtain the host's cross-process
+    /// [`SurfaceStore`](crate::rhi::SurfaceStore) producer handle.
+    ///
+    /// LimitedAccess mirror — inherits the `surface_store` slot via
+    /// [`Self::inherited_limited_unchecked`].
+    pub fn surface_store(&self) -> crate::rhi::SurfaceStore {
+        self.inherited_limited_unchecked().surface_store()
+    }
+
+    /// Construct an OPAQUE_FD-exportable timeline semaphore with the given
+    /// `initial_value`. Dispatches through the
+    /// [`GpuContextFullAccessVTable`]'s
+    /// `create_exportable_timeline_semaphore` slot; the host writes a
+    /// fully-initialized [`HostTimelineSemaphore`](crate::rhi::HostTimelineSemaphore)
+    /// (handle + host-static methods vtable) into the out-param.
+    ///
+    /// Distinct from the engine-only non-exportable
+    /// `create_timeline_semaphore` (Arc-raw transit, in-process): the
+    /// returned timeline can `export_opaque_fd` for cross-process /
+    /// CUDA surface-share sync, and its inner handle registers into
+    /// surface-share via [`crate::rhi::SurfaceStore::register_texture`].
+    pub fn create_exportable_timeline_semaphore(
+        &self,
+        initial_value: u64,
+    ) -> Result<crate::rhi::HostTimelineSemaphore> {
+        if self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "create_exportable_timeline_semaphore: GpuContextFullAccess has null vtable".into(),
+            ));
+        }
+        let mut out_timeline: std::mem::MaybeUninit<crate::rhi::HostTimelineSemaphore> =
+            std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: vtable + handle (scope token) paired at construction; the
+        // host writes a fully-initialized 16-byte HostTimelineSemaphore
+        // (handle + host-static methods pointer) into `out_timeline` on
+        // success.
+        let status = unsafe {
+            ((*self.vtable).create_exportable_timeline_semaphore)(
+                self.handle,
+                initial_value,
+                out_timeline.as_mut_ptr() as *mut c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            // SAFETY: host signaled success and wrote a valid value.
+            Ok(unsafe { out_timeline.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     /// Acquire a cached `(src, dst)`-keyed color converter. Dispatches

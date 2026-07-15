@@ -18,10 +18,12 @@ mod color_converter;
 mod command_recorder;
 mod compute_kernel_descriptor;
 mod graphics_kernel_descriptor;
+mod host_timeline_semaphore;
 mod pipeline_flags;
 mod pixel_buffer;
 mod pooled_texture_handle;
 mod storage_buffer;
+mod surface_store;
 mod texture;
 mod texture_readback;
 mod texture_registration;
@@ -46,10 +48,12 @@ pub use graphics_kernel_descriptor::{
     PrimitiveTopology, RasterizationState, ScissorRect, VertexAttributeFormat,
     VertexInputAttribute, VertexInputBinding, VertexInputRate, VertexInputState, Viewport,
 };
+pub use host_timeline_semaphore::HostTimelineSemaphore;
 pub use pipeline_flags::{VulkanAccess, VulkanStage};
 pub use pixel_buffer::{PixelBuffer, PixelBufferPoolId};
 pub use pooled_texture_handle::{PooledTextureHandle, TexturePoolDescriptor};
 pub use storage_buffer::StorageBuffer;
+pub use surface_store::SurfaceStore;
 pub use texture::{NativeTextureHandle, Texture, TextureDescriptor};
 pub use texture_readback::{ReadbackTicket, TextureReadback, TextureSourceLayout};
 pub use texture_registration::TextureRegistration;
