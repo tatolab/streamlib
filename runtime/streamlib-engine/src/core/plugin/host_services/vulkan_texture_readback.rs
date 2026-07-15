@@ -787,8 +787,6 @@ mod tests {
             ReadbackTicket, Texture, TextureDescriptor, TextureFormat, TextureSourceLayout,
             TextureUsages,
         };
-        use vulkanalia::prelude::v1_4::*;
-        use vulkanalia::vk;
 
         // FullAccess is reached the canonical way — `gpu.escalate(|full| ...)`
         // (Boxed / in-process mode) — because `GpuContextFullAccess::new`
@@ -797,8 +795,10 @@ mod tests {
             GpuContext::init_for_platform().ok()
         }
 
-        /// Allocate + fill a BGRA8 texture (GENERAL layout) with a known
-        /// pattern, going straight through the host RHI.
+        /// Allocate + fill a BGRA8 texture with a known pattern via the RHI
+        /// upload primitive. The RHI leaves the image in
+        /// `SHADER_READ_ONLY_OPTIMAL`, so callers submit it to the readback
+        /// as [`TextureSourceLayout::ShaderReadOnly`].
         fn make_filled_texture(
             gpu: &GpuContext,
             width: u32,
@@ -835,119 +835,16 @@ mod tests {
             let host_tex =
                 crate::vulkan::rhi::HostVulkanTexture::new(device, &desc).expect("texture");
             let texture = <Texture as crate::host_rhi::HostTextureExt>::from_vulkan(host_tex);
-            let dev = device.device();
-            let queue = device.queue();
-            let qf = device.queue_family_index();
-            let pool = unsafe {
-                dev.create_command_pool(
-                    &vk::CommandPoolCreateInfo::builder()
-                        .queue_family_index(qf)
-                        .flags(vk::CommandPoolCreateFlags::TRANSIENT)
-                        .build(),
-                    None,
-                )
-            }
-            .expect("pool");
-            let cmd = unsafe {
-                dev.allocate_command_buffers(
-                    &vk::CommandBufferAllocateInfo::builder()
-                        .command_pool(pool)
-                        .level(vk::CommandBufferLevel::PRIMARY)
-                        .command_buffer_count(1)
-                        .build(),
-                )
-            }
-            .expect("cmd")[0];
             let img = texture.vulkan_inner().image().expect("vk image");
+            // RHI upload primitive: UNDEFINED → TRANSFER_DST → copy →
+            // SHADER_READ_ONLY_OPTIMAL, with a transient pool / command
+            // buffer / fence and the guarded queue submit + fence wait. The
+            // image ends shader-read-only, so the round-trip submits it as
+            // `TextureSourceLayout::ShaderReadOnly`.
             unsafe {
-                dev.begin_command_buffer(
-                    cmd,
-                    &vk::CommandBufferBeginInfo::builder()
-                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-                        .build(),
-                )
-                .expect("begin");
-                let to_dst = vk::ImageMemoryBarrier2::builder()
-                    .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-                    .src_access_mask(vk::AccessFlags2::empty())
-                    .dst_stage_mask(vk::PipelineStageFlags2::COPY)
-                    .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                    .old_layout(vk::ImageLayout::UNDEFINED)
-                    .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                    .src_queue_family_index(qf)
-                    .dst_queue_family_index(qf)
-                    .image(img)
-                    .subresource_range(
-                        vk::ImageSubresourceRange::builder()
-                            .aspect_mask(vk::ImageAspectFlags::COLOR)
-                            .level_count(1)
-                            .layer_count(1)
-                            .build(),
-                    )
-                    .build();
-                let bs = [to_dst];
-                dev.cmd_pipeline_barrier2(
-                    cmd,
-                    &vk::DependencyInfo::builder().image_memory_barriers(&bs).build(),
-                );
-                let copy = vk::BufferImageCopy::builder()
-                    .image_subresource(
-                        vk::ImageSubresourceLayers::builder()
-                            .aspect_mask(vk::ImageAspectFlags::COLOR)
-                            .layer_count(1)
-                            .build(),
-                    )
-                    .image_extent(vk::Extent3D {
-                        width,
-                        height,
-                        depth: 1,
-                    })
-                    .build();
-                let regions = [copy];
-                dev.cmd_copy_buffer_to_image(
-                    cmd,
-                    staging.buffer(),
-                    img,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    &regions,
-                );
-                let to_general = vk::ImageMemoryBarrier2::builder()
-                    .src_stage_mask(vk::PipelineStageFlags2::COPY)
-                    .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                    .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-                    .dst_access_mask(vk::AccessFlags2::MEMORY_READ)
-                    .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                    .new_layout(vk::ImageLayout::GENERAL)
-                    .src_queue_family_index(qf)
-                    .dst_queue_family_index(qf)
-                    .image(img)
-                    .subresource_range(
-                        vk::ImageSubresourceRange::builder()
-                            .aspect_mask(vk::ImageAspectFlags::COLOR)
-                            .level_count(1)
-                            .layer_count(1)
-                            .build(),
-                    )
-                    .build();
-                let bs2 = [to_general];
-                dev.cmd_pipeline_barrier2(
-                    cmd,
-                    &vk::DependencyInfo::builder()
-                        .image_memory_barriers(&bs2)
-                        .build(),
-                );
-                dev.end_command_buffer(cmd).expect("end");
-                let cmd_infos = [vk::CommandBufferSubmitInfo::builder()
-                    .command_buffer(cmd)
-                    .build()];
-                let submits = [vk::SubmitInfo2::builder()
-                    .command_buffer_infos(&cmd_infos)
-                    .build()];
                 device
-                    .submit_to_queue(queue, &submits, vk::Fence::null())
-                    .expect("submit fill");
-                dev.queue_wait_idle(queue).expect("wait idle");
-                dev.destroy_command_pool(pool, None);
+                    .upload_buffer_to_image(staging.buffer(), img, width, height)
+                    .expect("upload_buffer_to_image");
             }
             texture
         }
@@ -988,7 +885,7 @@ mod tests {
                 // returned zeroed width/height/format, submit would trip
                 // DescriptorMismatch and this would fail.
                 let ticket = readback
-                    .submit(&texture, TextureSourceLayout::General)
+                    .submit(&texture, TextureSourceLayout::ShaderReadOnly)
                     .expect("submit");
                 let bytes = readback.wait_and_read(ticket, u64::MAX).expect("wait");
                 for y in 0..height {
@@ -1000,7 +897,7 @@ mod tests {
 
                 // Copy path (must outlive the borrow window).
                 let ticket2 = readback
-                    .submit(&texture, TextureSourceLayout::General)
+                    .submit(&texture, TextureSourceLayout::ShaderReadOnly)
                     .expect("submit 2");
                 let owned = readback
                     .wait_and_copy(ticket2, u64::MAX)
@@ -1032,10 +929,10 @@ mod tests {
                     .create_texture_readback("rt-inflight", 16, 16, TextureFormat::Bgra8Unorm)
                     .expect("create");
                 let ticket = readback
-                    .submit(&texture, TextureSourceLayout::General)
+                    .submit(&texture, TextureSourceLayout::ShaderReadOnly)
                     .expect("first");
                 let err = readback
-                    .submit(&texture, TextureSourceLayout::General)
+                    .submit(&texture, TextureSourceLayout::ShaderReadOnly)
                     .err()
                     .expect("expected in-flight");
                 assert!(err.to_string().contains("in flight"), "got: {err}");
@@ -1063,7 +960,7 @@ mod tests {
                     .create_texture_readback("rt-foreign-2", 16, 16, TextureFormat::Bgra8Unorm)
                     .expect("rb2");
                 let ticket = rb1
-                    .submit(&texture, TextureSourceLayout::General)
+                    .submit(&texture, TextureSourceLayout::ShaderReadOnly)
                     .expect("submit");
                 let err = rb2.try_read(ticket).err().expect("expected foreign");
                 assert!(err.to_string().contains("foreign handle"), "got: {err}");
@@ -1088,7 +985,7 @@ mod tests {
                     .create_texture_readback("rt-stale", 16, 16, TextureFormat::Bgra8Unorm)
                     .expect("rb");
                 let ticket = readback
-                    .submit(&texture, TextureSourceLayout::General)
+                    .submit(&texture, TextureSourceLayout::ShaderReadOnly)
                     .expect("submit");
                 // A ticket with the right handle id but a wrong counter is
                 // stale (the handle is single-in-flight). Fields are
