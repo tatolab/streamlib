@@ -150,43 +150,10 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cr
     )
 }
 
-// ============================================================================
-// Texture readback (#1261)
-// ============================================================================
-
-#[allow(clippy::too_many_arguments)]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_create_texture_readback(
-    _gpu_handle: *const c_void,
-    _label_ptr: *const u8,
-    _label_len: usize,
-    _width: u32,
-    _height: u32,
-    _format_raw: u32,
-    _out_readback_handle: *mut *const c_void,
-    _out_handle_id: *mut u64,
-    _out_staging_size: *mut u64,
-    err_buf: *mut u8,
-    err_buf_cap: usize,
-    err_len: *mut usize,
-) -> i32 {
-    run_host_extern_c(
-        "host_gpu_full_create_texture_readback",
-        || not_yet_provided("create_texture_readback", err_buf, err_buf_cap, err_len),
-        NOT_YET_PROVIDED_RC,
-    )
-}
-
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_texture_readback(
-    handle: *const c_void,
-) {
-    run_host_extern_c(
-        "host_gpu_full_drop_texture_readback",
-        || {
-            let _ = handle;
-        },
-        (),
-    )
-}
+// Texture readback (#1261) is no longer reserved — its real host bodies
+// (`host_gpu_full_create_texture_readback` /
+// `host_gpu_full_drop_texture_readback`) landed in the sibling
+// `texture_readback` module against the frozen v11 slots.
 
 // ============================================================================
 // OPAQUE_FD / CUDA buffer surface (#1262)
@@ -412,33 +379,6 @@ mod reserved_m32_wire_format_tests {
     }
 
     #[test]
-    fn create_texture_readback_reports_not_yet_provided() {
-        let (mut buf, mut len) = make_err_buf();
-        let mut out: *const c_void = std::ptr::null();
-        let mut hid: u64 = 0;
-        let mut ss: u64 = 0;
-        let label = b"rb";
-        let rc = unsafe {
-            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.create_texture_readback)(
-                std::ptr::null(),
-                label.as_ptr(),
-                label.len(),
-                64,
-                64,
-                0,
-                &mut out,
-                &mut hid,
-                &mut ss,
-                buf.as_mut_ptr(),
-                buf.len(),
-                &mut len,
-            )
-        };
-        assert_eq!(rc, NOT_YET_PROVIDED_RC);
-        assert!(err_buf_as_str(&buf, len).contains("create_texture_readback: not yet provided"));
-    }
-
-    #[test]
     fn create_opaque_fd_export_buffer_reports_not_yet_provided() {
         let (mut buf, mut len) = make_err_buf();
         let mut out = [0u8; 32];
@@ -539,11 +479,13 @@ mod reserved_m32_wire_format_tests {
 
     #[test]
     fn drop_slots_are_null_safe_no_ops() {
+        // `drop_texture_readback` is no longer reserved (its real body
+        // landed with #1261); its null-safety is covered by the
+        // texture-readback wire tests.
         unsafe {
             (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.drop_present_target)(std::ptr::null());
             (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.drop_encoder_session)(std::ptr::null());
             (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.drop_decoder_session)(std::ptr::null());
-            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.drop_texture_readback)(std::ptr::null());
         }
     }
 }
