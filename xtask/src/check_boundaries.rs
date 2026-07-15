@@ -1010,11 +1010,6 @@ const PACKAGES_FACADE_DEP_ALLOWLIST: &[AllowEntry] = &[
         kind: AllowKind::ExactFile,
         rationale: "pre-conversion facade linker (shrinking backlog)",
     },
-    AllowEntry {
-        path: "packages/screen-capture/Cargo.toml",
-        kind: AllowKind::ExactFile,
-        rationale: "Apple-only; blocked on an engine-free Apple RHI/surface-pool surface — its ScreenCaptureKit processor names PixelBuffer / PixelBufferRef / PixelFormat and the surface-pool acquire/check-in APIs that the plugin SDK's sdk::rhi carries only under cfg(linux)",
-    },
 ];
 
 fn check_packages_facade_runtime_dep(

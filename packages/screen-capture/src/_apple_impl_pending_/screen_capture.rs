@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::apple::corevideo_ffi::{
+use crate::_apple_impl_pending_::corevideo_ffi::{
     CVPixelBufferGetHeight, CVPixelBufferGetIOSurface, CVPixelBufferGetWidth, IOSurfaceGetID,
 };
 use block2::RcBlock;
@@ -19,10 +19,10 @@ use parking_lot::Mutex;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::iceoryx2::OutputWriter;
-use streamlib::sdk::rhi::{PixelBuffer, PixelBufferRef, PixelFormat};
+use streamlib_plugin_sdk::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::iceoryx2::OutputWriter;
+use streamlib_plugin_sdk::sdk::rhi::{PixelBuffer, PixelBufferRef, PixelFormat};
 
 // Config type is generated from JTD schema
 pub use crate::_generated_::tatolab__screen_capture::screen_capture_config::{
@@ -202,7 +202,7 @@ define_class!(
                 };
 
             let timestamp_ns =
-                streamlib::sdk::media_clock::MediaClock::now().as_nanos() as i64;
+                streamlib_plugin_sdk::sdk::media_clock::MediaClock::now().as_nanos() as i64;
 
             let ipc_frame = crate::_generated_::VideoFrame {
                 surface_id: surface_id_str,
@@ -246,7 +246,7 @@ impl ScreenCaptureDelegate {
 /// GPU blit from source IOSurface to pooled buffer.
 unsafe fn blit_iosurface_to_pooled_buffer(
     ctx: &ScreenCaptureCallbackContext,
-    source_iosurface: crate::apple::corevideo_ffi::IOSurfaceRef,
+    source_iosurface: crate::_apple_impl_pending_::corevideo_ffi::IOSurfaceRef,
     pooled_buffer: &PixelBuffer,
     width: u32,
     height: u32,
@@ -258,7 +258,7 @@ unsafe fn blit_iosurface_to_pooled_buffer(
 /// Fall back to direct IOSurface forwarding.
 unsafe fn forward_iosurface_directly(
     ctx: &ScreenCaptureCallbackContext,
-    source_iosurface: crate::apple::corevideo_ffi::IOSurfaceRef,
+    source_iosurface: crate::_apple_impl_pending_::corevideo_ffi::IOSurfaceRef,
 ) -> String {
     match PixelBufferRef::from_iosurface_ref(source_iosurface) {
         Ok(pixel_buffer_ref) => {
@@ -272,7 +272,7 @@ unsafe fn forward_iosurface_directly(
     }
 }
 
-#[streamlib::sdk::processor("ScreenCapture")]
+#[streamlib_plugin_sdk::sdk::processor("ScreenCapture")]
 pub struct AppleScreenCaptureProcessor {
     /// GPU context for surface pooling (set in setup).
     gpu_context: Option<GpuContextLimitedAccess>,
@@ -280,7 +280,7 @@ pub struct AppleScreenCaptureProcessor {
     capture_init_state: Option<Arc<ScreenCaptureInitState>>,
 }
 
-impl streamlib::sdk::processors::ManualProcessor for AppleScreenCaptureProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for AppleScreenCaptureProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
         tracing::info!("ScreenCapture: setup() complete");
