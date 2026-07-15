@@ -1675,6 +1675,26 @@ impl GpuContext {
         Ok(Arc::new(sem))
     }
 
+    /// Construct an OPAQUE_FD-exportable timeline semaphore against the
+    /// host's vulkan device. Backs
+    /// [`GpuContextFullAccess::create_exportable_timeline_semaphore`]
+    /// which is the FullAccess-callable entry point.
+    ///
+    /// Distinct from [`Self::create_timeline_semaphore`]: the returned
+    /// semaphore is created with `VK_KHR_external_semaphore_fd` export
+    /// support so its `export_opaque_fd` can hand a fresh OPAQUE_FD to a
+    /// subprocess consumer (surface-share / CUDA cross-process sync).
+    #[cfg(target_os = "linux")]
+    pub fn create_exportable_timeline_semaphore(
+        &self,
+        initial_value: u64,
+    ) -> Result<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
+        let device = self.device.inner.device();
+        let sem =
+            crate::vulkan::rhi::HostVulkanTimelineSemaphore::new_exportable(device, initial_value)?;
+        Ok(Arc::new(sem))
+    }
+
     /// Import a DMA-BUF FD as a `StorageBuffer`. Camera V4L2 zero-copy
     /// path. **Consumes `fd` on success** (`vkImportMemoryFdInfoKHR`
     /// takes ownership); on failure caller retains fd and must close.

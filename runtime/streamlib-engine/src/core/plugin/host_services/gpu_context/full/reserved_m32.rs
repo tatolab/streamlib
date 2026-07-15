@@ -25,7 +25,9 @@ use streamlib_plugin_abi::{
 };
 
 use super::super::super::run_host_extern_c;
-use super::super::super::shared::wire::{NOT_YET_PROVIDED_RC, not_yet_provided};
+use super::super::super::shared::wire::{NOT_YET_PROVIDED_RC, not_yet_provided, write_err};
+#[cfg(target_os = "linux")]
+use super::super::scope_token::with_full_scope_or_err;
 
 // ============================================================================
 // Present target (#1258)
@@ -128,6 +130,62 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_dr
 // Exportable timeline semaphore (#1260)
 // ============================================================================
 
+#[cfg(target_os = "linux")]
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_create_exportable_timeline_semaphore(
+    gpu_handle: *const c_void,
+    initial_value: u64,
+    out_timeline: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_full_create_exportable_timeline_semaphore",
+        || -> i32 {
+            if out_timeline.is_null() {
+                write_err(
+                    "create_exportable_timeline_semaphore: null out_timeline pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let result = with_full_scope_or_err(
+                gpu_handle,
+                "create_exportable_timeline_semaphore",
+                err_buf,
+                err_buf_cap,
+                err_len,
+                |gpu| gpu.create_exportable_timeline_semaphore(initial_value),
+            );
+            match result {
+                Some(Ok(arc)) => {
+                    let wire = crate::core::rhi::HostTimelineSemaphore::from_arc(arc);
+                    // SAFETY: `out_timeline` checked non-null; the cdylib
+                    // provided a 16-byte `MaybeUninit<HostTimelineSemaphore>`
+                    // slot. `ptr::write` moves the wire envelope in without
+                    // dropping the uninitialized destination.
+                    unsafe {
+                        std::ptr::write(
+                            out_timeline as *mut crate::core::rhi::HostTimelineSemaphore,
+                            wire,
+                        )
+                    };
+                    0
+                }
+                Some(Err(e)) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+                None => 1,
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
 pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_create_exportable_timeline_semaphore(
     _gpu_handle: *const c_void,
     _initial_value: u64,
@@ -139,14 +197,15 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cr
     run_host_extern_c(
         "host_gpu_full_create_exportable_timeline_semaphore",
         || {
-            not_yet_provided(
-                "create_exportable_timeline_semaphore",
+            write_err(
+                "create_exportable_timeline_semaphore: not available on this platform",
                 err_buf,
                 err_buf_cap,
                 err_len,
-            )
+            );
+            1
         },
-        NOT_YET_PROVIDED_RC,
+        1,
     )
 }
 
@@ -357,8 +416,44 @@ mod reserved_m32_wire_format_tests {
         assert!(err_buf_as_str(&buf, len).contains("create_decoder_session: not yet provided"));
     }
 
+    // #1260 landed the exportable-timeline mint slot: the reserved
+    // NotYetProvided stub is replaced by a real host body. These two
+    // GPU-free wire tests lock the arg-guard behavior (the positive mint
+    // round-trip is hardware-gated in `tests/`). Mental-revert: drop the
+    // `out_timeline.is_null()` guard and the null-out test below UB-writes
+    // a 16-byte `HostTimelineSemaphore` through a null pointer.
     #[test]
-    fn create_exportable_timeline_semaphore_reports_not_yet_provided() {
+    fn create_exportable_timeline_semaphore_reports_null_out_param() {
+        let (mut buf, mut len) = make_err_buf();
+        // Null scope token is fine here — the null-out guard fires first.
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.create_exportable_timeline_semaphore)(
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        #[cfg(target_os = "linux")]
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("create_exportable_timeline_semaphore: null out_timeline pointer"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+        #[cfg(not(target_os = "linux"))]
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("create_exportable_timeline_semaphore: not available on this platform")
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn create_exportable_timeline_semaphore_reports_invalid_scope_on_null_token() {
         let (mut buf, mut len) = make_err_buf();
         let mut out = [0u8; 16];
         let rc = unsafe {
@@ -371,10 +466,12 @@ mod reserved_m32_wire_format_tests {
                 &mut len,
             )
         };
-        assert_eq!(rc, NOT_YET_PROVIDED_RC);
+        assert_eq!(rc, 1);
         assert!(
             err_buf_as_str(&buf, len)
-                .contains("create_exportable_timeline_semaphore: not yet provided")
+                .contains("create_exportable_timeline_semaphore: invalid escalate scope"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
         );
     }
 

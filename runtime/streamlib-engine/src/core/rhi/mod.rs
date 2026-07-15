@@ -13,6 +13,7 @@ mod device;
 mod external_handle;
 mod gl_interop;
 mod graphics_kernel;
+mod host_timeline_semaphore;
 mod index_buffer;
 mod pixel_buffer;
 mod pixel_buffer_pool;
@@ -50,6 +51,8 @@ pub use graphics_kernel::{
     ScissorRect, VertexAttributeFormat, VertexInputAttribute, VertexInputBinding, VertexInputRate,
     VertexInputState, Viewport, derive_bindings_from_spirv_multistage,
 };
+#[cfg(target_os = "linux")]
+pub use host_timeline_semaphore::HostTimelineSemaphore;
 #[cfg(target_os = "linux")]
 pub use index_buffer::IndexBuffer;
 pub use pixel_buffer::PixelBuffer;
