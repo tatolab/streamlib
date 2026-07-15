@@ -1107,11 +1107,14 @@ fn check_packages_facade_runtime_dep(
 // and check 8 already blesses the `streamlib` dev-dep those targets link
 // against. Only the cargo target dir directly under the package root is
 // exempt — a `src/tests/` helper dir stays covered. `src/` stays strict
-// EVERYWHERE, including `#[cfg(test)]` mods: the pack / load build is
-// `cargo build`, never `cargo build --tests` (tools/streamlib-pack/src/lib.rs
-// runs `cargo build -p <crate>`), so an in-`src` `#[cfg(test)]` reach still
-// ships in the built cdylib's dependency graph. An in-`src` hit is told to
-// move the engine-backed test to `tests/`.
+// EVERYWHERE, including `#[cfg(test)]` mods — for a tooling reason, NOT because
+// the reach ships: the pack / load build is `cargo build -p <crate>`, never
+// `--tests` (tools/streamlib-pack/src/lib.rs), so the `test` cfg is OFF and a
+// `#[cfg(test)]` reach is compiled out — it does NOT ship in the cdylib. It
+// stays flagged because this grep is line-based and cannot reliably scope a
+// reach to a `#[cfg(test)]` mod; engine-backed tests belong in the top-level
+// `tests/` target (blessed by check 8). An in-`src` hit is told to move the
+// engine-backed test to `tests/`.
 
 const CHECK_PACKAGES_ENGINE_REACH: &str = "packages-no-engine-bridge-reach";
 
@@ -3036,9 +3039,11 @@ streamlib-engine = { path = "../../runtime/streamlib-engine" }
     #[test]
     fn rejects_engine_reach_in_package_src_cfg_test_mod() {
         let dir = empty_workspace();
-        // `src/` stays strict EVERYWHERE, including a `#[cfg(test)]` mod — the
-        // pack / load build is `cargo build`, never `--tests`, so an in-`src`
-        // reach still ships in the built cdylib's dependency graph.
+        // `src/` stays strict EVERYWHERE, including a `#[cfg(test)]` mod — not
+        // because the reach ships (under `cargo build` the `test` cfg is OFF, so
+        // it is compiled out) but because this line-based grep cannot reliably
+        // scope a reach to a `#[cfg(test)]` mod; engine-backed tests belong in
+        // `tests/` (blessed by check 8).
         write_fixture(
             dir.path(),
             "packages/newly-carved/src/lib.rs",
