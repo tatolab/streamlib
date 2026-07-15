@@ -190,13 +190,19 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cr
     err_buf_cap: usize,
     err_len: *mut usize,
 ) -> i32 {
-    write_err(
-        "create_texture_readback: not available on this platform",
-        err_buf,
-        err_buf_cap,
-        err_len,
-    );
-    1
+    run_host_extern_c(
+        "host_gpu_full_create_texture_readback",
+        || -> i32 {
+            write_err(
+                "create_texture_readback: not available on this platform",
+                err_buf,
+                err_buf_cap,
+                err_len,
+            );
+            1
+        },
+        1,
+    )
 }
 
 #[cfg(not(target_os = "linux"))]
