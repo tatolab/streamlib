@@ -905,7 +905,7 @@ fn vk_format_to_texture_format(format: vk::Format) -> Option<TextureFormat> {
 /// `vk::ImageView` — the `image_view` is left null because the
 /// state-machine tests below never record `cmd_begin_rendering`
 /// against it. The full acquire/submit/present cycle is exercised
-/// by the camera+display E2E (see `docs/testing.md`).
+/// by the camera+display E2E (see the `/verify-live` skill).
 #[cfg(test)]
 fn synthetic_present_frame<'a>(
     recorder: &'a mut RhiCommandRecorder,
@@ -1167,7 +1167,7 @@ mod tests {
     /// Smoke construction: requires a Vulkan device + winit window. We
     /// can build a Vulkan device in tests but not a winit window
     /// (event-loop-per-process). The render-frame loop is exercised
-    /// end-to-end by the camera+display E2E (see `docs/testing.md`),
+    /// end-to-end by the camera+display E2E (see the `/verify-live` skill),
     /// so this test focuses on the device-only init path.
     #[cfg_attr(
         not(feature = "hardware-tests"),

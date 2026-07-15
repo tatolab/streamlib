@@ -25,7 +25,7 @@
 #    b. Run the `jpeg-psnr` example (JpegBytesSource → JpegDecoder →
 #       Display with PNG sampling).
 # 2. Pick a middle-of-run decoded PNG and compute PSNR vs the reference.
-# 3. Classify per docs/testing.md: Y ≥ 35 dB pass, 30–35 dB warn,
+# 3. Classify per the /verify-live skill: Y ≥ 35 dB pass, 30–35 dB warn,
 #    < 30 dB fail.
 #
 # Usage:

@@ -15,7 +15,7 @@ cwd="$(printf '%s' "$input" | jq -r '.cwd // ""')"
 deny_rig() {
   cat >&2 <<'MSG'
 rig-brake: refused — sandboxed sessions cannot observe GPU/IPC runtime (exit 144).
-Park the issue for /verify-live and post the command block for Jonathan's terminal.
+Park the issue for /verify-live and post the command block for the owner's terminal.
 MSG
   exit 2
 }

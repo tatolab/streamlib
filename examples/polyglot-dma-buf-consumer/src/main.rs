@@ -14,7 +14,7 @@
 //!       [--runtime=python|deno] [device] [seconds] [--negative]
 //!
 //! Defaults to `--runtime=python` and `/dev/video2` (the canonical vivid index
-//! in `docs/testing.md`) for 15 seconds. On hosts where vivid landed at a
+//! in `docs/rig-profile.example.md`) for 15 seconds. On hosts where vivid landed at a
 //! different index (e.g. `/dev/video0` after a UVC device unplug) pass the
 //! device path explicitly. The `--negative` flag sets the consumer's
 //! `force_bad_surface_id` config so resolve_surface fails deterministically on
