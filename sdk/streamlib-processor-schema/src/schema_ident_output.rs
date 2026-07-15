@@ -13,7 +13,7 @@
 //! the engine's API layer, the MoQ catalog, and any other consumer share one
 //! definition without pulling in the engine.
 //!
-//! The `openapi` cargo feature adds a `utoipa::ToSchema` derive so the
+//! The `utoipa` cargo feature adds a `utoipa::ToSchema` derive so the
 //! host-side API server can register these DTOs in its OpenAPI document. It is
 //! off by default: a plugin `.slpkg` built against the engine-free authoring
 //! SDK reaches these types through this crate but must not compile the
@@ -26,7 +26,7 @@ use crate::{PortSchemaSpec, SchemaIdent};
 
 /// Semantic version (major.minor.patch).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct SemanticVersionOutput {
     pub major: u32,
     pub minor: u32,
@@ -38,7 +38,7 @@ pub struct SemanticVersionOutput {
 /// joined `@org/pkg/Type@v` form is render-only — it never round-trips back
 /// through a parser at the structured boundary.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct SchemaIdentOutput {
     /// Org segment (e.g., `tatolab`).
     pub org: String,

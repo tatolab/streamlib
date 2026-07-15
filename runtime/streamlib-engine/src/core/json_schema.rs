@@ -17,7 +17,7 @@ use crate::core::graph::{GraphEdgeWithComponents, GraphNodeWithComponents};
 /// plugin authoring chain share one definition; re-exported here so every
 /// `core::json_schema::{SchemaIdentOutput, SemanticVersionOutput}` path — and
 /// the `streamlib::sdk::json_schema` facade the API server consumes — resolves
-/// unchanged. The `openapi` feature the engine enables gives them the
+/// unchanged. The `utoipa` feature the engine enables gives them the
 /// `utoipa::ToSchema` derive the aggregate response types below require.
 pub use streamlib_processor_schema::{SchemaIdentOutput, SemanticVersionOutput};
 
