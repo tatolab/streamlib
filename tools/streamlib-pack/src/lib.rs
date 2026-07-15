@@ -126,6 +126,135 @@ fn json_is_publishable(pkg: &serde_json::Value) -> bool {
         .is_some_and(|a| a.is_empty())
 }
 
+/// True iff a `deps[]` entry from `cargo metadata`'s resolve graph is a normal
+/// or build edge (`kind` `null` or `"build"`) — i.e. it participates in the
+/// publish / link closure. A dev-only edge returns `false`.
+///
+/// This is the single definition of a closure-participating edge, shared by
+/// [`NormalBuildDepGraph`] and every consumer that walks the resolved graph.
+/// Dropping dev-only edges is load-bearing: a crate's conformance test may pull
+/// a heavy dependency through `[dev-dependencies]`, and counting that edge as a
+/// real link would false-report the dependency as linked into the crate.
+pub fn resolve_dep_is_normal_or_build(dep: &serde_json::Value) -> bool {
+    dep.get("dep_kinds")
+        .and_then(|k| k.as_array())
+        .map(|kinds| {
+            kinds
+                .iter()
+                .any(|k| matches!(k.get("kind").and_then(|v| v.as_str()), None | Some("build")))
+        })
+        .unwrap_or(true)
+}
+
+/// A `cargo metadata` dependency graph reduced to the edges that participate in
+/// the publish / link closure: normal + build edges only, keyed by package id.
+///
+/// Dev-only edges are dropped via [`resolve_dep_is_normal_or_build`]. Sharing
+/// this one construction between the release-closure DFS and the xtask
+/// trunk-set → engine transitive boundary walk keeps the dev-edge-dropping
+/// `dep_kinds` filter defined exactly once — reinventing it risks one walker
+/// counting a dev-dependency as a real link edge and the other not.
+#[derive(Debug, Clone)]
+pub struct NormalBuildDepGraph {
+    deps_by_id: std::collections::HashMap<String, Vec<String>>,
+    name_by_id: std::collections::HashMap<String, String>,
+    workspace_member_ids: std::collections::HashSet<String>,
+}
+
+impl NormalBuildDepGraph {
+    /// Build the graph from a parsed `cargo metadata --format-version 1`
+    /// document. Errors if the document carries no `resolve` graph (produced
+    /// with `--no-deps`), since the dependency edges are then absent.
+    pub fn from_metadata(metadata: &serde_json::Value) -> Result<Self> {
+        let workspace_member_ids: std::collections::HashSet<String> = metadata
+            .get("workspace_members")
+            .and_then(|m| m.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let empty = Vec::new();
+        let packages = metadata
+            .get("packages")
+            .and_then(|p| p.as_array())
+            .unwrap_or(&empty);
+        let mut name_by_id = std::collections::HashMap::new();
+        for pkg in packages {
+            if let (Some(id), Some(name)) = (
+                pkg.get("id").and_then(|v| v.as_str()),
+                pkg.get("name").and_then(|v| v.as_str()),
+            ) {
+                name_by_id.insert(id.to_string(), name.to_string());
+            }
+        }
+
+        let resolve_nodes = metadata
+            .get("resolve")
+            .and_then(|r| r.get("nodes"))
+            .and_then(|n| n.as_array())
+            .ok_or_else(|| {
+                anyhow::anyhow!("cargo metadata has no resolve graph (ran with --no-deps?)")
+            })?;
+        let mut deps_by_id = std::collections::HashMap::new();
+        for node in resolve_nodes {
+            let Some(id) = node.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let mut deps = Vec::new();
+            if let Some(dep_arr) = node.get("deps").and_then(|d| d.as_array()) {
+                for dep in dep_arr {
+                    if resolve_dep_is_normal_or_build(dep)
+                        && let Some(pkg) = dep.get("pkg").and_then(|v| v.as_str())
+                    {
+                        deps.push(pkg.to_string());
+                    }
+                }
+            }
+            deps_by_id.insert(id.to_string(), deps);
+        }
+
+        Ok(Self {
+            deps_by_id,
+            name_by_id,
+            workspace_member_ids,
+        })
+    }
+
+    /// The package name for `id`, if the metadata carried it.
+    pub fn name_of(&self, id: &str) -> Option<&str> {
+        self.name_by_id.get(id).map(|s| s.as_str())
+    }
+
+    /// True iff `id` is a workspace member (from `workspace_members`).
+    pub fn is_workspace_member(&self, id: &str) -> bool {
+        self.workspace_member_ids.contains(id)
+    }
+
+    /// The normal + build dependency ids of `id` (dev-only edges already
+    /// dropped). Empty for an unknown id.
+    pub fn normal_build_deps(&self, id: &str) -> &[String] {
+        self.deps_by_id.get(id).map(|v| v.as_slice()).unwrap_or(&[])
+    }
+
+    /// Every workspace-member package id.
+    pub fn workspace_member_ids(&self) -> impl Iterator<Item = &str> {
+        self.workspace_member_ids.iter().map(|s| s.as_str())
+    }
+
+    /// Every package id whose name equals `name`.
+    pub fn ids_named<'graph>(&'graph self, name: &str) -> Vec<&'graph str> {
+        self.name_by_id
+            .iter()
+            .filter(|(_, n)| n.as_str() == name)
+            .map(|(id, _)| id.as_str())
+            .collect()
+    }
+}
+
 /// Compute the engine release closure from a live `cargo metadata` run at
 /// `workspace_root`. The predicate — workspace member, [`is_linkable_crate_name`],
 /// a library target, and a publishable `publish` setting — is the *only*
@@ -149,18 +278,19 @@ pub fn compute_release_closure(workspace_root: &Path) -> Result<ReleaseClosure> 
     let md: serde_json::Value =
         serde_json::from_slice(&output.stdout).context("parsing cargo metadata JSON")?;
 
-    let members: std::collections::HashSet<&str> = md
-        .get("workspace_members")
-        .and_then(|m| m.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
-        .unwrap_or_default();
+    // Normal + build dependency graph — the shared `dep_kinds`-filtered
+    // construction (dev-only edges dropped). Same machinery the xtask trunk-set
+    // boundary walk rides, so both agree on which edges participate in the
+    // link closure.
+    let graph = NormalBuildDepGraph::from_metadata(&md)?;
 
     let empty = Vec::new();
     let packages = md
         .get("packages")
         .and_then(|p| p.as_array())
         .unwrap_or(&empty);
-    // id → package json, and id → name, for the members we care about.
+    // id → package json, for version / manifest_path / library-target / publish
+    // lookups the graph doesn't carry.
     let mut pkg_by_id: std::collections::HashMap<&str, &serde_json::Value> =
         std::collections::HashMap::new();
     for pkg in packages {
@@ -168,73 +298,29 @@ pub fn compute_release_closure(workspace_root: &Path) -> Result<ReleaseClosure> 
             pkg_by_id.insert(id, pkg);
         }
     }
-    let name_of = |id: &str| -> &str {
-        pkg_by_id
-            .get(id)
-            .and_then(|p| p.get("name"))
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-    };
     // An id is "internal" (walked + publishable) when it's a workspace member
     // that satisfies the full closure predicate.
     let is_internal = |id: &str| -> bool {
-        if !members.contains(id) {
+        if !graph.is_workspace_member(id) {
             return false;
         }
         let Some(pkg) = pkg_by_id.get(id) else {
             return false;
         };
-        is_linkable_crate_name(name_of(id))
+        graph.name_of(id).is_some_and(is_linkable_crate_name)
             && json_has_library_target(pkg)
             && json_is_publishable(pkg)
     };
-
-    // Resolved dependency graph: id → its normal/build dep ids.
-    let resolve_nodes = md
-        .get("resolve")
-        .and_then(|r| r.get("nodes"))
-        .and_then(|n| n.as_array())
-        .ok_or_else(|| {
-            anyhow::anyhow!("cargo metadata has no resolve graph (ran with --no-deps?)")
-        })?;
-    let mut deps_by_id: std::collections::HashMap<&str, Vec<&str>> =
-        std::collections::HashMap::new();
-    for node in resolve_nodes {
-        let Some(id) = node.get("id").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let mut deps = Vec::new();
-        if let Some(dep_arr) = node.get("deps").and_then(|d| d.as_array()) {
-            for dep in dep_arr {
-                // Keep normal + build deps (kind null | "build"); drop dev-only
-                // deps, which don't participate in the publish closure.
-                let keep = dep
-                    .get("dep_kinds")
-                    .and_then(|k| k.as_array())
-                    .map(|kinds| {
-                        kinds.iter().any(|k| {
-                            matches!(k.get("kind").and_then(|v| v.as_str()), None | Some("build"))
-                        })
-                    })
-                    .unwrap_or(true);
-                if keep && let Some(pkg) = dep.get("pkg").and_then(|v| v.as_str()) {
-                    deps.push(pkg);
-                }
-            }
-        }
-        deps_by_id.insert(id, deps);
-    }
 
     // Post-order DFS over internal deps ⇒ topological publish order.
     let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut order: Vec<&str> = Vec::new();
     // Iterative DFS to avoid recursion-depth concerns on large graphs.
-    let mut roots: Vec<&str> = members
-        .iter()
-        .copied()
+    let mut roots: Vec<&str> = graph
+        .workspace_member_ids()
         .filter(|id| is_internal(id))
         .collect();
-    roots.sort_by_key(|id| name_of(id).to_string());
+    roots.sort_by_key(|id| graph.name_of(id).unwrap_or_default().to_string());
     for root in roots {
         let mut stack: Vec<(&str, bool)> = vec![(root, false)];
         while let Some((id, expanded)) = stack.pop() {
@@ -249,11 +335,10 @@ pub fn compute_release_closure(workspace_root: &Path) -> Result<ReleaseClosure> 
             }
             seen.insert(id);
             stack.push((id, true));
-            if let Some(deps) = deps_by_id.get(id) {
-                for &dep in deps {
-                    if is_internal(dep) && !seen.contains(dep) {
-                        stack.push((dep, false));
-                    }
+            for dep in graph.normal_build_deps(id) {
+                let dep = dep.as_str();
+                if is_internal(dep) && !seen.contains(dep) {
+                    stack.push((dep, false));
                 }
             }
         }
@@ -263,7 +348,7 @@ pub fn compute_release_closure(workspace_root: &Path) -> Result<ReleaseClosure> 
         .into_iter()
         .map(|id| {
             let pkg = pkg_by_id[id];
-            let name = name_of(id).to_string();
+            let name = graph.name_of(id).unwrap_or_default().to_string();
             let version = pkg
                 .get("version")
                 .and_then(|v| v.as_str())

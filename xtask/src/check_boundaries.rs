@@ -28,6 +28,7 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
+use streamlib_pack::NormalBuildDepGraph;
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone)]
@@ -59,7 +60,21 @@ pub fn run(project_root: &Path) -> Result<()> {
             v.line_text.trim_end(),
         );
     }
-    if report.violations.is_empty() {
+    // Check 12 — transitive trunk-set -> engine walk (cargo metadata based;
+    // layered on the direct manifest check 11 inside scan_all).
+    let engine_chains = run_trunk_transitive_check(project_root)?;
+    for chain in &engine_chains {
+        eprintln!(
+            "[{}] trunk crate `{}` transitively depends on `{}`: {}\n    {}",
+            CHECK_TRUNK_NO_ENGINE_DEP,
+            chain.trunk,
+            TRUNK_ENGINE_CRATE_NAME,
+            chain.display_chain(),
+            TRUNK_NO_ENGINE_DEP_RATIONALE,
+        );
+    }
+    let total_violations = report.violations.len() + engine_chains.len();
+    if total_violations == 0 {
         println!(
             "check-boundaries: {} file(s) scanned, no violations",
             report.files_scanned,
@@ -67,8 +82,10 @@ pub fn run(project_root: &Path) -> Result<()> {
         Ok(())
     } else {
         Err(anyhow::anyhow!(
-            "check-boundaries: {} violation(s) across {} file(s) scanned — see docs/architecture/subprocess-rhi-parity.md",
+            "check-boundaries: {} violation(s) ({} grep + {} transitive trunk->engine chain(s)) across {} file(s) scanned — see docs/architecture/subprocess-rhi-parity.md",
+            total_violations,
             report.violations.len(),
+            engine_chains.len(),
             report.files_scanned,
         ))
     }
@@ -1084,6 +1101,17 @@ fn check_packages_facade_runtime_dep(
 // bare `host_vulkan_device_arc` identifier. Seeded to the 6 current reachers;
 // `test-fixtures` is permanent (host-side, exercises the bridge by design), the
 // other 5 shrink as conversions land.
+//
+// A package's TOP-LEVEL `tests/` and `benches/` dirs are EXEMPT: an
+// engine-backed integration test / benchmark legitimately reaches the bridge,
+// and check 8 already blesses the `streamlib` dev-dep those targets link
+// against. Only the cargo target dir directly under the package root is
+// exempt — a `src/tests/` helper dir stays covered. `src/` stays strict
+// EVERYWHERE, including `#[cfg(test)]` mods: the pack / load build is
+// `cargo build`, never `cargo build --tests` (tools/streamlib-pack/src/lib.rs
+// runs `cargo build -p <crate>`), so an in-`src` `#[cfg(test)]` reach still
+// ships in the built cdylib's dependency graph. An in-`src` hit is told to
+// move the engine-backed test to `tests/`.
 
 const CHECK_PACKAGES_ENGINE_REACH: &str = "packages-no-engine-bridge-reach";
 
@@ -1142,6 +1170,13 @@ fn check_packages_engine_reach(
     for path in walk_rs(project_root) {
         let rel = rel_to_root(&path, project_root);
         if !rel_starts_with(rel, "packages/") {
+            continue;
+        }
+        // A package's TOP-LEVEL tests/ or benches/ dir is exempt — engine-backed
+        // integration tests / benchmarks belong there (check 8 blesses the
+        // dev-dep). `src/` stays strict everywhere, including a `src/tests/`
+        // helper dir and `#[cfg(test)]` mods.
+        if package_top_level_test_or_bench_dir(rel) {
             continue;
         }
         *files_scanned += 1;
@@ -1363,10 +1398,177 @@ fn check_trunk_set_no_engine_dep(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Check 12 — the trunk set must never TRANSITIVELY reach the engine
+// ---------------------------------------------------------------------------
+//
+// Check 11 (`check_trunk_set_no_engine_dep`) is the DIRECT manifest scan: it
+// catches a `streamlib-engine` dep written straight into a trunk crate's
+// `Cargo.toml`, with precise file:line reporting. But a trunk crate can reach
+// the engine INDIRECTLY — `streamlib-plugin-sdk` -> some workspace crate ->
+// `streamlib-engine` — and no single manifest shows that chain. This check
+// layers the transitive closure on top: it resolves each trunk crate's
+// normal + build dependency graph via `cargo metadata` and flags
+// `streamlib-engine` appearing ANYWHERE in that closure.
+//
+// It reuses `streamlib-pack`'s `NormalBuildDepGraph` — the SAME
+// `dep_kinds`-filtered adjacency construction the release-closure DFS rides —
+// so the dev-only-edge drop has exactly one definition. That drop is
+// load-bearing: `[dev-dependencies]` are exempt (a trunk crate's conformance
+// tests may pull the engine), and a second hand-rolled walker could miss it.
+//
+// The walk stays within WORKSPACE MEMBERS — an external registry crate cannot
+// depend on the in-tree engine, so it cannot lie on a trunk -> engine chain,
+// and `streamlib-engine` is itself a member so the target is never pruned.
+// `--filter-platform` is deliberately NOT passed: plugin-sdk's
+// `streamlib-consumer-rhi` dep is linux-target and must stay covered.
+//
+// On a violation the offending CHAIN is printed
+// (`<trunk> -> … -> streamlib-engine`) so the intermediate edge is obvious.
+// This has NO allowlist and never shrinks — same permanence as check 11.
+
+/// The three engine-free trunk crate names whose transitive normal + build
+/// closure must never reach [`TRUNK_ENGINE_CRATE_NAME`]. Mirrors check 11's
+/// `TRUNK_NO_ENGINE_DEP` (which keys on manifest paths); here we key on package
+/// names because the walk resolves through `cargo metadata`.
+const TRUNK_CRATE_NAMES: &[&str] = &[
+    "streamlib-plugin-sdk",
+    "streamlib-macros",
+    "streamlib-plugin-abi",
+];
+
+/// A discovered trunk-crate → `streamlib-engine` dependency chain, as package
+/// names from the trunk crate to the engine inclusive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrunkEngineChain {
+    /// The trunk crate the chain starts at.
+    pub trunk: String,
+    /// Package names from the trunk crate to `streamlib-engine`, inclusive and
+    /// in traversal order.
+    pub chain: Vec<String>,
+}
+
+impl TrunkEngineChain {
+    /// Render the chain as `<trunk> -> … -> streamlib-engine`.
+    pub fn display_chain(&self) -> String {
+        self.chain.join(" -> ")
+    }
+}
+
+/// Walk the transitive normal + build closure of each trunk crate over
+/// WORKSPACE MEMBERS ONLY and return every chain that reaches
+/// `streamlib-engine`. Pure over the parsed graph so it unit-tests against a
+/// synthetic `cargo metadata` fixture without the live tree.
+pub fn find_trunk_engine_chains(graph: &NormalBuildDepGraph) -> Vec<TrunkEngineChain> {
+    let mut chains = Vec::new();
+    for &trunk_name in TRUNK_CRATE_NAMES {
+        for root_id in graph.ids_named(trunk_name) {
+            // A trunk crate resolves to a workspace member; skip any same-named
+            // external package (cannot reach the in-tree engine anyway).
+            if !graph.is_workspace_member(root_id) {
+                continue;
+            }
+            if let Some(chain_ids) = shortest_member_chain_to_engine(graph, root_id) {
+                chains.push(TrunkEngineChain {
+                    trunk: trunk_name.to_string(),
+                    chain: chain_ids
+                        .iter()
+                        .map(|id| graph.name_of(id).unwrap_or(id).to_string())
+                        .collect(),
+                });
+            }
+        }
+    }
+    chains
+}
+
+/// Breadth-first search from `root_id` over workspace-member normal + build
+/// edges, returning the shortest id path (root..=engine) that reaches
+/// `streamlib-engine`, or `None` if the engine is unreachable.
+fn shortest_member_chain_to_engine<'graph>(
+    graph: &'graph NormalBuildDepGraph,
+    root_id: &'graph str,
+) -> Option<Vec<&'graph str>> {
+    use std::collections::{HashMap, HashSet, VecDeque};
+    let mut predecessor: HashMap<&str, &str> = HashMap::new();
+    let mut visited: HashSet<&str> = HashSet::new();
+    let mut queue: VecDeque<&str> = VecDeque::new();
+    visited.insert(root_id);
+    queue.push_back(root_id);
+    while let Some(id) = queue.pop_front() {
+        if id != root_id && graph.name_of(id) == Some(TRUNK_ENGINE_CRATE_NAME) {
+            // Reconstruct the path root..=id via the predecessor map.
+            let mut path = vec![id];
+            let mut cursor = id;
+            while let Some(&prev) = predecessor.get(cursor) {
+                path.push(prev);
+                cursor = prev;
+            }
+            path.reverse();
+            return Some(path);
+        }
+        for dep in graph.normal_build_deps(id) {
+            let dep = dep.as_str();
+            // Traverse INTO workspace members only — an external crate cannot
+            // depend on the in-tree engine, so it cannot lie on the chain. The
+            // engine is a member, so this never prunes the target.
+            if !graph.is_workspace_member(dep) {
+                continue;
+            }
+            if visited.insert(dep) {
+                predecessor.insert(dep, id);
+                queue.push_back(dep);
+            }
+        }
+    }
+    None
+}
+
+/// Run `cargo metadata` at `project_root` and return every trunk-set → engine
+/// transitive chain. Layered on the direct manifest [`check_trunk_set_no_engine_dep`]:
+/// that check catches a direct engine dep with precise file:line; this catches
+/// an engine reached through an intermediate workspace crate.
+fn run_trunk_transitive_check(project_root: &Path) -> Result<Vec<TrunkEngineChain>> {
+    let manifest_path = project_root.join("Cargo.toml");
+    let output = std::process::Command::new("cargo")
+        .args(["metadata", "--format-version", "1"])
+        .arg("--manifest-path")
+        .arg(&manifest_path)
+        .output()
+        .with_context(|| format!("running cargo metadata at {}", manifest_path.display()))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "cargo metadata failed at {}: {}",
+            manifest_path.display(),
+            String::from_utf8_lossy(&output.stderr).trim(),
+        );
+    }
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("parsing cargo metadata JSON")?;
+    let graph = NormalBuildDepGraph::from_metadata(&metadata)?;
+    Ok(find_trunk_engine_chains(&graph))
+}
+
 /// True iff `rel` (a workspace-relative path) begins with `prefix`
 /// (`/`-separated, e.g. `"packages/"`).
 fn rel_starts_with(rel: &Path, prefix: &str) -> bool {
     rel.to_string_lossy().replace('\\', "/").starts_with(prefix)
+}
+
+/// True iff `rel` sits under a package's TOP-LEVEL `tests/` or `benches/` cargo
+/// target dir — i.e. its path components are `packages / <pkg> / (tests|benches)
+/// / …`. A deeper `src/tests/` helper dir does NOT match: only the target dir
+/// directly under the package root is a cargo test / bench target, so only it
+/// gets the engine-reach exemption.
+fn package_top_level_test_or_bench_dir(rel: &Path) -> bool {
+    let comps: Vec<&str> = rel
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => s.to_str(),
+            _ => None,
+        })
+        .collect();
+    comps.len() >= 3 && comps[0] == "packages" && (comps[2] == "tests" || comps[2] == "benches")
 }
 
 /// True iff `line` contains `ident` as a bare identifier — the characters
@@ -2781,6 +2983,201 @@ streamlib-engine = { path = "../../runtime/streamlib-engine" }
             hits.is_empty(),
             "engine dep in trunk [dev-dependencies] should pass: {:?}",
             hits
+        );
+    }
+
+    // ----- Check 9 exemption: package top-level tests/ + benches/ dirs -----
+
+    #[test]
+    fn allows_engine_reach_in_package_top_level_tests_dir() {
+        let dir = empty_workspace();
+        // A NON-allowlisted package's TOP-LEVEL tests/ dir may reach the engine
+        // bridge — engine-backed integration tests belong there (check 8
+        // blesses the dev-dep). Locks the exemption.
+        write_fixture(
+            dir.path(),
+            "packages/newly-carved/tests/integration.rs",
+            "use streamlib::sdk::engine::HostSurfaceStoreExt;\n",
+        );
+        let report = scan_all(dir.path()).unwrap();
+        let hits: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_PACKAGES_ENGINE_REACH)
+            .collect();
+        assert!(
+            hits.is_empty(),
+            "top-level tests/ engine reach should pass: {:?}",
+            hits
+        );
+    }
+
+    #[test]
+    fn allows_engine_reach_in_package_top_level_benches_dir() {
+        let dir = empty_workspace();
+        write_fixture(
+            dir.path(),
+            "packages/newly-carved/benches/bench.rs",
+            "fn f() { let d = full.host_vulkan_device_arc().unwrap(); }\n",
+        );
+        let report = scan_all(dir.path()).unwrap();
+        let hits: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_PACKAGES_ENGINE_REACH)
+            .collect();
+        assert!(
+            hits.is_empty(),
+            "top-level benches/ engine reach should pass: {:?}",
+            hits
+        );
+    }
+
+    #[test]
+    fn rejects_engine_reach_in_package_src_cfg_test_mod() {
+        let dir = empty_workspace();
+        // `src/` stays strict EVERYWHERE, including a `#[cfg(test)]` mod — the
+        // pack / load build is `cargo build`, never `--tests`, so an in-`src`
+        // reach still ships in the built cdylib's dependency graph.
+        write_fixture(
+            dir.path(),
+            "packages/newly-carved/src/lib.rs",
+            "#[cfg(test)]\nmod tests {\n    use streamlib::sdk::engine::HostSurfaceStoreExt;\n}\n",
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_PACKAGES_ENGINE_REACH),
+            "src/ #[cfg(test)] engine reach must still fail, got {:?}",
+            report.violations,
+        );
+    }
+
+    #[test]
+    fn rejects_engine_reach_in_package_src_tests_helper_dir() {
+        let dir = empty_workspace();
+        // A `src/tests/` helper dir is NOT a cargo test target — only the
+        // package's TOP-LEVEL tests/ dir is exempt, so this deeper dir stays
+        // covered. Locks the top-level-only distinction.
+        write_fixture(
+            dir.path(),
+            "packages/newly-carved/src/tests/helpers.rs",
+            "use streamlib::sdk::engine::HostSurfaceStoreExt;\n",
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_PACKAGES_ENGINE_REACH),
+            "src/tests/ helper dir must stay covered, got {:?}",
+            report.violations,
+        );
+    }
+
+    // ----- Check 12: transitive trunk-set -> engine walk (synthetic metadata) -----
+
+    /// Build a synthetic `cargo metadata` document from workspace-member ids,
+    /// `(id, name)` package pairs, and `(from_id, to_id, kind)` resolve edges
+    /// where `kind` is `"normal"` (emitted as JSON `null`), `"build"`, or
+    /// `"dev"`. Enough of the real shape for [`NormalBuildDepGraph::from_metadata`].
+    fn synthetic_metadata(
+        members: &[&str],
+        names: &[(&str, &str)],
+        edges: &[(&str, &str, &str)],
+    ) -> serde_json::Value {
+        use serde_json::json;
+        let packages: Vec<_> = names
+            .iter()
+            .map(|(id, name)| json!({ "id": id, "name": name }))
+            .collect();
+        let nodes: Vec<_> = names
+            .iter()
+            .map(|(id, _)| {
+                let deps: Vec<_> = edges
+                    .iter()
+                    .filter(|(from, _, _)| from == id)
+                    .map(|(_, to, kind)| {
+                        let kind_val = if *kind == "normal" {
+                            serde_json::Value::Null
+                        } else {
+                            json!(kind)
+                        };
+                        json!({ "pkg": to, "dep_kinds": [ { "kind": kind_val } ] })
+                    })
+                    .collect();
+                json!({ "id": id, "deps": deps })
+            })
+            .collect();
+        json!({
+            "workspace_members": members,
+            "packages": packages,
+            "resolve": { "nodes": nodes },
+        })
+    }
+
+    #[test]
+    fn transitive_trunk_reaches_engine_through_intermediate_fails() {
+        // plugin-sdk -> intermediate -> engine, all normal edges: the walk must
+        // find the chain AND print it end to end.
+        let md = synthetic_metadata(
+            &["sdk", "mid", "eng"],
+            &[
+                ("sdk", "streamlib-plugin-sdk"),
+                ("mid", "streamlib-intermediate"),
+                ("eng", "streamlib-engine"),
+            ],
+            &[("sdk", "mid", "normal"), ("mid", "eng", "normal")],
+        );
+        let graph = NormalBuildDepGraph::from_metadata(&md).unwrap();
+        let chains = find_trunk_engine_chains(&graph);
+        assert_eq!(chains.len(), 1, "expected one chain, got {:?}", chains);
+        assert_eq!(chains[0].trunk, "streamlib-plugin-sdk");
+        assert_eq!(
+            chains[0].display_chain(),
+            "streamlib-plugin-sdk -> streamlib-intermediate -> streamlib-engine",
+        );
+    }
+
+    #[test]
+    fn transitive_trunk_reaches_engine_only_via_dev_edge_passes() {
+        // plugin-sdk -> engine exists ONLY through a dev-only edge; the shared
+        // `dep_kinds` filter drops it, so no chain is reported. Locks the
+        // dev-dep exemption — without the filter this would false-red.
+        let md = synthetic_metadata(
+            &["sdk", "eng"],
+            &[("sdk", "streamlib-plugin-sdk"), ("eng", "streamlib-engine")],
+            &[("sdk", "eng", "dev")],
+        );
+        let graph = NormalBuildDepGraph::from_metadata(&md).unwrap();
+        let chains = find_trunk_engine_chains(&graph);
+        assert!(
+            chains.is_empty(),
+            "dev-only edge must not form a chain: {:?}",
+            chains
+        );
+    }
+
+    #[test]
+    fn transitive_trunk_clean_graph_passes() {
+        // plugin-sdk -> some other member, engine present but unreachable.
+        let md = synthetic_metadata(
+            &["sdk", "mid", "eng"],
+            &[
+                ("sdk", "streamlib-plugin-sdk"),
+                ("mid", "streamlib-other"),
+                ("eng", "streamlib-engine"),
+            ],
+            &[("sdk", "mid", "normal")],
+        );
+        let graph = NormalBuildDepGraph::from_metadata(&md).unwrap();
+        let chains = find_trunk_engine_chains(&graph);
+        assert!(
+            chains.is_empty(),
+            "clean graph must yield no chain: {:?}",
+            chains
         );
     }
 }
