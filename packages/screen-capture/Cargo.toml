@@ -17,11 +17,11 @@ crate-type = ["rlib", "cdylib"]
 streamlib-jtd-codegen = {version = "0.6.0"}
 
 [dependencies]
-# Engine-free authoring SDK (never the `streamlib` facade) — runtime context, processor traits, generated wire
+# Engine substrate — runtime context, processor traits, generated wire
 # types under `crate::_generated_::*` (VideoFrame), RHI primitives.
-streamlib-plugin-sdk = {version = "0.6.0"}
+streamlib = {version = "0.6.0"}
 
-# Procedural macros — `#[streamlib_plugin_sdk::sdk::processor("...")]` reads the
+# Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
 streamlib-macros = {version = "0.6.0"}
 
