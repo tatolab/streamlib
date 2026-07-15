@@ -8,9 +8,9 @@ export const meta = {
   description:
     'Adjudicate a branch before opening a PR: the change-verifier (Stage A) plus parallel path-routed domain lenses and, when the branch claims E2E evidence, the evidence-verifier (Stage B). Any blocker → FIX; an unresolved owner question → DISCUSS; else PASS opens a draft PR.',
   phases: [
-    { name: 'Verify', description: 'Stage A: the always-on change-verifier reviews the diff against the ticket and returns its verdict JSON.' },
-    { name: 'Lenses', description: 'Stage B: parallel read-only domain lenses over the diff, plus evidence-verifier if E2E evidence is claimed.' },
-    { name: 'Adjudicate', description: 'Merge findings → FIX / DISCUSS / PASS; PASS opens a draft PR via gh (never a merge).' },
+    { title: 'Verify', detail: 'Stage A: the always-on change-verifier reviews the diff against the ticket and returns its verdict JSON.' },
+    { title: 'Lenses', detail: 'Stage B: parallel read-only domain lenses over the diff, plus evidence-verifier if E2E evidence is claimed.' },
+    { title: 'Adjudicate', detail: 'Merge findings → FIX / DISCUSS / PASS; PASS opens a draft PR via gh (never a merge).' },
   ],
 };
 
@@ -59,67 +59,64 @@ const verdictSchema = {
 
 const experts = expertsForZones(zones);
 
-let stageA = { verdict: 'REJECT', findings: [] };
-let lensResults = [];
-let evidenceResult = null;
-
-phase('Verify', async () => {
-  stageA = await agent(
+phase('Verify');
+// A null stage-A result (agent skipped or died) is treated as blocked, not a pass.
+const stageA =
+  (await agent(
     `Independently review the diff on issue #${issue}'s branch against the ticket. You are read-only; run the tests ` +
       `yourself and trust no claim. Emit exactly your verdict JSON.`,
     { agentType: 'change-verifier', phase: 'Verify', label: 'change-verifier', schema: verdictSchema },
-  );
-  log(`change-verifier verdict=${stageA.verdict} findings=${(stageA.findings || []).length}`);
-});
+  )) || { verdict: 'REJECT', findings: [{ severity: 'blocker', claim: 'change-verifier produced no result', evidence: 'agent returned null', suggested_next_step: 're-run the verifier' }] };
+log(`change-verifier verdict=${stageA.verdict} findings=${(stageA.findings || []).length}`);
 
-phase('Lenses', async () => {
-  const lensAgents = experts.map((expert) =>
+phase('Lenses');
+const lensThunks = experts.map((expert) => () =>
+  agent(
+    `Read-only lens over the diff on issue #${issue}'s branch, from your domain's angle (zones: ${zones.join(', ')}). ` +
+      `Do NOT edit. Find domain-specific correctness / invariant violations the mechanical gates can't catch; cite file:line. ` +
+      `Emit findings in the verdict JSON shape (verdict APPROVE/REJECT/ESCALATE, findings[], lens, coverage_notes).`,
+    { agentType: expert, phase: 'Lenses', label: `lens:${expert}`, schema: verdictSchema },
+  ),
+);
+if (claimsE2e) {
+  lensThunks.push(() =>
     agent(
-      `Read-only lens over the diff on issue #${issue}'s branch, from your domain's angle (zones: ${zones.join(', ')}). ` +
-        `Do NOT edit. Find domain-specific correctness / invariant violations the mechanical gates can't catch; cite file:line. ` +
-        `Emit findings in the verdict JSON shape (verdict APPROVE/REJECT/ESCALATE, findings[], lens, coverage_notes).`,
-      { agentType: expert, phase: 'Lenses', label: `lens:${expert}`, schema: verdictSchema },
+      `The branch on issue #${issue} claims E2E evidence. Locate the referenced output artifacts and run the Phase-B ` +
+        `audit against them (log gates all zero, read + describe every sampled PNG, PSNR vs thresholds). If the artifacts ` +
+        `are absent the evidence is unverified — say so. Emit findings in the verdict JSON shape.`,
+      { agentType: 'evidence-verifier', phase: 'Lenses', label: 'evidence-verifier', schema: verdictSchema },
     ),
   );
-  if (claimsE2e) {
-    lensAgents.push(
-      agent(
-        `The branch on issue #${issue} claims E2E evidence. Locate the referenced output artifacts and run the Phase-B ` +
-          `audit against them (log gates all zero, read + describe every sampled PNG, PSNR vs thresholds). If the artifacts ` +
-          `are absent the evidence is unverified — say so. Emit findings in the verdict JSON shape.`,
-        { agentType: 'evidence-verifier', phase: 'Lenses', label: 'evidence-verifier', schema: verdictSchema },
-      ),
-    );
-  }
-  lensResults = lensAgents.length > 0 ? await parallel(lensAgents) : [];
-  log(`lenses complete: ${experts.length} domain + ${claimsE2e ? 1 : 0} evidence`);
-});
+}
+const lensResults = lensThunks.length > 0 ? (await parallel(lensThunks)).filter(Boolean) : [];
+log(`lenses complete: ${lensResults.length} of ${lensThunks.length} returned (${experts.length} domain + ${claimsE2e ? 1 : 0} evidence)`);
 
-phase('Adjudicate', async () => {
-  const all = [stageA].concat(lensResults);
-  const findings = [];
-  for (const r of all) for (const f of r.findings || []) findings.push(f);
+phase('Adjudicate');
+const all = [stageA].concat(lensResults);
+const findings = [];
+for (const r of all) for (const f of (r && r.findings) || []) findings.push(f);
 
-  const hasBlocker = findings.some((f) => f.severity === 'blocker');
-  const hasEscalate = all.some((r) => r.verdict === 'ESCALATE');
-  const hasOpenQuestion = findings.some((f) => f.severity === 'question');
+const hasBlocker = findings.some((f) => f.severity === 'blocker');
+const hasEscalate = all.some((r) => r && r.verdict === 'ESCALATE');
+const hasOpenQuestion = findings.some((f) => f.severity === 'question');
 
-  let verdict;
-  let prNumber = null;
-  if (hasBlocker) {
-    verdict = 'FIX'; // caller bounces once within the attempt cap
-  } else if (hasEscalate || hasOpenQuestion) {
-    verdict = 'DISCUSS';
-  } else {
-    verdict = 'PASS';
-    const opened = await agent(
+let verdict;
+let prNumber = null;
+if (hasBlocker) {
+  verdict = 'FIX'; // caller bounces once within the attempt cap
+} else if (hasEscalate || hasOpenQuestion) {
+  verdict = 'DISCUSS';
+} else {
+  verdict = 'PASS';
+  const opened =
+    (await agent(
       `All lenses cleared the branch on issue #${issue}. Open a DRAFT pull request via gh (gh pr create --draft). ` +
         `NEVER merge — merging is the owner's call. Fill the PR body with the ticket link, the change summary, the test ` +
         `evidence, and any E2E report. Return the PR number.`,
       { phase: 'Adjudicate', label: 'open-draft-pr', model: 'opus', schema: { type: 'object', properties: { pr_number: { type: 'number' } }, required: ['pr_number'] } },
-    );
-    prNumber = opened.pr_number || null;
-  }
-  log(`adjudicated verdict=${verdict} pr=${prNumber}`);
-  return { verdict, findings, pr_number: prNumber };
-});
+    )) || {};
+  prNumber = opened.pr_number || null;
+}
+log(`adjudicated verdict=${verdict} pr=${prNumber}`);
+
+return { verdict, findings, pr_number: prNumber };

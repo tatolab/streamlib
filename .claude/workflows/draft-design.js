@@ -7,14 +7,13 @@ export const meta = {
     'Recon the current code with the domain experts whose zones the issue touches, then merge into a design brief (mermaid + alternatives + risk + decisions-for-owner) and post it to the issue. No code changes.',
   phases: [
     {
-      name: 'Recon',
-      description:
+      title: 'Recon',
+      detail:
         'Parallel read-only recon by each domain expert whose zone the issue touches — what core system already covers the concern, what would change, contract invariants, known failure modes; cite file:line.',
     },
     {
-      name: 'Brief',
-      description:
-        'One opus synthesizer merges the recon into a design brief and posts it to the issue via gh.',
+      title: 'Brief',
+      detail: 'One opus synthesizer merges the recon into a design brief and posts it to the issue via gh.',
     },
   ],
 };
@@ -31,14 +30,10 @@ function expertsForZones(zoneList) {
   const has = (...keys) => keys.some((k) => z.some((zone) => zone.includes(k)));
   const experts = [];
   if (has('abi', 'plugin')) experts.push('plugin-abi-expert');
-  if (has('python', 'deno', 'polyglot', 'ipc', 'escalate', 'iceoryx'))
-    experts.push('polyglot-ipc-expert');
-  if (has('package', 'registry', 'schema', 'slpkg', 'module-loader'))
-    experts.push('package-registry-expert');
-  if (has('vulkan', 'rhi', 'video', 'gpu', 'codec', 'kernel', 'texture'))
-    experts.push('gpu-vulkan-expert');
-  if (has('camera', 'v4l2', 'media', 'audio', 'display', 'modifier'))
-    experts.push('linux-media-expert');
+  if (has('python', 'deno', 'polyglot', 'ipc', 'escalate', 'iceoryx')) experts.push('polyglot-ipc-expert');
+  if (has('package', 'registry', 'schema', 'slpkg', 'module-loader')) experts.push('package-registry-expert');
+  if (has('vulkan', 'rhi', 'video', 'gpu', 'codec', 'kernel', 'texture')) experts.push('gpu-vulkan-expert');
+  if (has('camera', 'v4l2', 'media', 'audio', 'display', 'modifier')) experts.push('linux-media-expert');
   return experts;
 }
 
@@ -67,37 +62,37 @@ const briefSchema = {
 
 const experts = expertsForZones(zones);
 
-let reconResults = [];
-let brief = { decisions_for_owner: [], diagram_included: false, risk_class: '' };
-
-phase('Recon', async () => {
-  if (experts.length === 0) {
-    log(`no zone-matched experts for issue #${issue}; generic recon only`);
-    const generic = await agent(
-      `Read-only architecture recon for issue #${issue}. Do NOT edit any file. ` +
-        `Prove whether a core system already covers this concern before any new abstraction is proposed. ` +
-        `Re-derive from the current tree and cite file:line for every claim.`,
-      { phase: 'Recon', label: 'recon:generic', model: 'opus', schema: reconSchema },
-    );
-    reconResults = [generic];
-    return;
-  }
-  reconResults = await parallel(
-    experts.map((expert) =>
-      agent(
-        `Read-only recon for issue #${issue}, zone(s): ${zones.join(', ') || 'unspecified'}. ` +
-          `Do NOT edit any file. Answer for the design: which existing core system already covers this concern, ` +
-          `what would have to change, the contract invariants that bound it, and the known failure modes. ` +
-          `Read your symptom index first, re-derive from the tree, and cite file:line for every claim.`,
-        { agentType: expert, phase: 'Recon', label: `recon:${expert}`, schema: reconSchema },
-      ),
-    ),
+phase('Recon');
+let reconResults;
+if (experts.length === 0) {
+  log(`no zone-matched experts for issue #${issue}; generic recon only`);
+  const generic = await agent(
+    `Read-only architecture recon for issue #${issue}. Do NOT edit any file. ` +
+      `Prove whether a core system already covers this concern before any new abstraction is proposed. ` +
+      `Re-derive from the current tree and cite file:line for every claim.`,
+    { phase: 'Recon', label: 'recon:generic', model: 'opus', schema: reconSchema },
   );
-  log(`recon complete: ${experts.length} expert(s) consulted`);
-});
+  reconResults = [generic].filter(Boolean);
+} else {
+  reconResults = (
+    await parallel(
+      experts.map((expert) => () =>
+        agent(
+          `Read-only recon for issue #${issue}, zone(s): ${zones.join(', ') || 'unspecified'}. ` +
+            `Do NOT edit any file. Answer for the design: which existing core system already covers this concern, ` +
+            `what would have to change, the contract invariants that bound it, and the known failure modes. ` +
+            `Read your symptom index first, re-derive from the tree, and cite file:line for every claim.`,
+          { agentType: expert, phase: 'Recon', label: `recon:${expert}`, schema: reconSchema },
+        ),
+      ),
+    )
+  ).filter(Boolean);
+}
+log(`recon complete: ${reconResults.length} of ${experts.length || 1} expert(s) returned`);
 
-phase('Brief', async () => {
-  brief = await agent(
+phase('Brief');
+const brief =
+  (await agent(
     `Merge the recon below into a DESIGN BRIEF for the repo owner on issue #${issue}, then post it as an ` +
       `issue comment via gh. The brief must contain: What & why; a mermaid diagram of the proposed shape; ` +
       `Alternatives considered (each with a one-line why/why-not, including "extend the existing system" vs ` +
@@ -106,12 +101,12 @@ phase('Brief', async () => {
       `file-by-file plan, no test names. Nothing builds until he approves in a comment.\n\n` +
       `Recon findings (JSON): ${JSON.stringify(reconResults)}`,
     { phase: 'Brief', label: 'brief', model: 'opus', schema: briefSchema },
-  );
-  log(`brief posted=${brief.posted === true} decisions=${(brief.decisions_for_owner || []).length}`);
-  return {
-    decisions_for_owner: brief.decisions_for_owner || [],
-    diagram_included: brief.diagram_included === true,
-    risk_class: brief.risk_class || '',
-    experts_consulted: experts,
-  };
-});
+  )) || {};
+log(`brief posted=${brief.posted === true} decisions=${(brief.decisions_for_owner || []).length}`);
+
+return {
+  decisions_for_owner: brief.decisions_for_owner || [],
+  diagram_included: brief.diagram_included === true,
+  risk_class: brief.risk_class || '',
+  experts_consulted: experts,
+};

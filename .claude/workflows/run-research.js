@@ -7,8 +7,8 @@ export const meta = {
   description:
     'Fan out parallel investigators — a mix of zone-matched domain experts and generic reasoners — each on a DIFFERENT angle, never sharing the issue’s own pre-baked recommendation; then one synthesizer merges them into a report posted to the issue. Read-only.',
   phases: [
-    { name: 'Investigate', description: 'Parallel read-only investigators, each assigned a distinct angle so their conclusions are independent.' },
-    { name: 'Synthesize', description: 'One synthesizer merges the angles into a recommendation + open-questions report and posts it to the issue.' },
+    { title: 'Investigate', detail: 'Parallel read-only investigators, each assigned a distinct angle so their conclusions are independent.' },
+    { title: 'Synthesize', detail: 'One synthesizer merges the angles into a recommendation + open-questions report and posts it to the issue.' },
   ],
 };
 
@@ -63,11 +63,10 @@ const synthesisSchema = {
   required: ['report_posted', 'recommendation', 'open_questions'],
 };
 
-let investigations = [];
-
-phase('Investigate', async () => {
-  investigations = await parallel(
-    angles.map((a) => {
+phase('Investigate');
+const investigations = (
+  await parallel(
+    angles.map((a) => () => {
       const opts = { phase: 'Investigate', label: `angle:${a.angle.split(':')[0]}`, schema: investigateSchema };
       if (a.agentType) opts.agentType = a.agentType;
       else opts.model = 'opus';
@@ -78,23 +77,24 @@ phase('Investigate', async () => {
         opts,
       );
     }),
-  );
-  log(`investigation complete: ${angles.length} angles`);
-});
+  )
+).filter(Boolean);
+log(`investigation complete: ${investigations.length} of ${angles.length} angles returned`);
 
-phase('Synthesize', async () => {
-  const synthesis = await agent(
+phase('Synthesize');
+const synthesis =
+  (await agent(
     `Synthesize the independent angle investigations below into a research report for issue #${issue}, and post it as an ` +
       `issue comment via gh. The report states each option with its pros/cons/evidence, then an unambiguous recommendation ` +
       `(or, if there's no clear winner, says so and lists the question that would break the tie), and an open-questions list ` +
       `for the owner. If the research seeds concrete follow-up work, list follow-up candidates (do not file them). No code.\n\n` +
       `Angle findings (JSON): ${JSON.stringify(investigations)}`,
     { phase: 'Synthesize', label: 'synthesize', model: 'opus', schema: synthesisSchema },
-  );
-  log(`synthesis posted=${synthesis.report_posted === true}`);
-  return {
-    report_posted: synthesis.report_posted === true,
-    recommendation: synthesis.recommendation || '',
-    open_questions: synthesis.open_questions || [],
-  };
-});
+  )) || {};
+log(`synthesis posted=${synthesis.report_posted === true}`);
+
+return {
+  report_posted: synthesis.report_posted === true,
+  recommendation: synthesis.recommendation || '',
+  open_questions: synthesis.open_questions || [],
+};
