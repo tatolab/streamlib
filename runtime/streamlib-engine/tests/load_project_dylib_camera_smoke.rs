@@ -43,7 +43,7 @@
 //! > work that lifts method dispatch to the FullAccess vtable per
 //! > #907's shape. The capture thread therefore crashes shortly
 //! > after the first frame.~~
-//! > ~~The vulkan-video-roundtrip manual gate from `docs/testing.md`
+//! > ~~The vulkan-video-roundtrip manual gate from the `/verify-live` skill
 //! > with camera loaded as a cdylib — blocked by the same Phase E
 //! > follow-on.~~ — Superseded 2026-05-24. The recorder methods
 //! > vtable (`RhiCommandRecorderMethodsVTable`), the color-converter
@@ -82,7 +82,7 @@
 //! - Per-FullAccess-callback correctness — engine-side unit tests
 //!   (`gpu_full_access_vtable_tests`).
 //! - End-to-end frame output — the manual gate
-//!   `vulkan-video-roundtrip` per `docs/testing.md` covers that.
+//!   `vulkan-video-roundtrip` per the `/verify-live` skill covers that.
 //!
 //! Requires a working Vulkan device + vivid (`/dev/video0`) on the
 //! test host. CI has no GPU runner planned

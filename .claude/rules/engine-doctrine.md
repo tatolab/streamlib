@@ -30,6 +30,10 @@ Discipline:
   learnings), with a dated strikethrough on any doc that endorsed the old shape.
 - **No silent DRY refactors** (extraction is fine if it replaces real duplication AND is called out
   in the PR); **no auto-fixing unrelated issues** surfaced by check/test/clippy — report them.
+- **Engine purity.** The engine stays a pure substrate: its own `streamlib.yaml` declares no domain
+  packages as deps (a domain dep would pull that package's generated types back into the engine).
+  Carved domain code lives in `packages/` and never pulls back into the engine; a carve-out that
+  needs a public engine API that doesn't exist pauses for a precursor PR rather than expanding scope.
 
 Conventions:
 - Errors via the core `Error` enum + `Result<T>`; `?` over `.unwrap()` in library code.
@@ -43,3 +47,6 @@ Conventions:
 - Code organization: platform dirs are already conditionally compiled — `core/` is
   platform-agnostic, `apple/` and `linux/` are per-platform. Never put a `#[cfg]` inside a
   platform-specific directory.
+- macOS / Apple-path changes are cross-compile-verified on Linux (`cargo check --target
+  aarch64-apple-darwin`) before merge — no Apple file is edited on Linux without it. A real-device
+  runtime check that can't run locally is filed as a follow-up and noted in the PR.

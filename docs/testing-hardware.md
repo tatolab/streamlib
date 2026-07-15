@@ -8,11 +8,31 @@ enforced by a Cargo feature so the split can't drift:
 | **1 — Unit** | `cargo test` (default) | Pure logic, parsers, state machines, serialization round-trips, mock-backed integration. | Yes — by construction. |
 | **2 — Hardware integration** | `cargo test --features streamlib/hardware-tests` | Tests that construct a real `HostVulkanDevice`, allocate GPU memory, exercise the swapchain, etc. | No — must run with `--test-threads=1`. |
 
-Tier 1 is the gate that runs on every PR via the [canonical workspace
-baseline](testing-baseline.md). It's parallel-safe by construction — no
-test inside the tier-1 set is allowed to require a GPU device or any
-other exclusive system resource. Tier 1 should always pass cleanly in
-parallel; if it doesn't, the offending test is mis-classified.
+Tier 1 is parallel-safe by construction — no test inside the tier-1 set
+is allowed to require a GPU device or any other exclusive system
+resource. Tier 1 should always pass cleanly in parallel; if it doesn't,
+the offending test is mis-classified.
+
+The **CI** tier-1 gate is the minimal per-crate `--lib` run defined by
+`.github/workflows/test.yml` (the CI config is the source of truth for
+what CI enforces). The broader **local** tier-1 baseline is the whole
+workspace with the example-only crates excluded so it builds on a box
+without OpenSSL dev headers (each excluded crate is an example binary
+with zero tests):
+
+```bash
+cargo test --workspace \
+    --exclude api-server-demo \
+    --exclude camera-deno-subprocess \
+    --exclude camera-python-subprocess \
+    --exclude camera-rust-plugin \
+    --exclude webrtc-cloudflare-stream
+```
+
+Every binary and every `Doc-tests` block should print `test result: ok.`
+with zero failures — that, not any particular total, is the pass bar.
+Review the exclusion list when a new workspace member lands (a new
+example that drags `openssl-sys` breaks this command on fresh machines).
 
 Tier 2 is the gate that runs when a change is hardware-relevant — Vulkan
 RHI work, encoder/decoder, display, anything in `vulkan/rhi/`. The
@@ -87,11 +107,9 @@ constructing a device) stay in tier 1.
 
 ## CI
 
-Tier 1 runs on every PR via `.github/workflows/test.yml` (the canonical
-parallel command). A tier-2 CI workflow is **future work** — it
-requires a GPU runner, which the
-[testing-baseline doc](testing-baseline.md#ci-gate-pending) tracks as
-pending behind issue #343.
+Tier 1 runs on every PR via `.github/workflows/test.yml`. A tier-2 CI
+workflow is **future work** — it requires a GPU runner that isn't wired
+yet.
 
 Until the GPU runner lands, run tier 2 locally before merging any
 PR that touches `vulkan/rhi/`, encoders/decoders, or display code.

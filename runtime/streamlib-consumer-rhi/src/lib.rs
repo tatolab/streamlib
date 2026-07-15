@@ -113,7 +113,7 @@ pub use device_capability::private;
 /// a different path. That stronger property is asserted by:
 ///
 /// - `cargo tree -p streamlib-{python,deno}-native | grep -c "^streamlib v"`
-///   returning 0 (documented in `.claude/workflows/polyglot.md`).
+///   returning 0 (documented in `.claude/rules/polyglot.md`).
 /// - The polyglot adapter crates (`streamlib-adapter-vulkan`,
 ///   `streamlib-adapter-opengl`) holding `streamlib` in
 ///   `[dev-dependencies]` only, with the helper-bin moved to

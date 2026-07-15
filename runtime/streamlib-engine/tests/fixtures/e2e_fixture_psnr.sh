@@ -13,7 +13,7 @@
 #    input-frame index (threaded through the pipeline via
 #    `Encodedvideoframe::frame_number` → `Videoframe::frame_index`).
 # 4. Runs ffmpeg's psnr filter on each pair and classifies the result
-#    per docs/testing.md: Y ≥ 35 dB pass, 30–35 dB warn, < 30 dB fail.
+#    per the /verify-live skill: Y ≥ 35 dB pass, 30–35 dB warn, < 30 dB fail.
 #
 # Usage:
 #   libs/streamlib/tests/fixtures/e2e_fixture_psnr.sh [output_dir] [codec]

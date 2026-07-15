@@ -147,4 +147,4 @@ mechanical:
    commit** as the re-vendor.
 6. `cargo check -p tatolab-vulkanalia-vma` (catches no_std breakage
    standalone builds hit that workspace builds mask), then the workspace
-   test baseline per `docs/testing-baseline.md`.
+   test baseline per `docs/testing-hardware.md`.

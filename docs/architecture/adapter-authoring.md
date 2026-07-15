@@ -483,7 +483,7 @@ which a Cargo feature can express.
 
 If the adapter is supposed to be reachable from Python and Deno
 subprocesses (which is the default for any new adapter), follow
-[`.claude/workflows/polyglot.md`](../../.claude/workflows/polyglot.md):
+[`.claude/rules/polyglot.md`](../../.claude/rules/polyglot.md):
 
 - Cdylibs (`streamlib-python-native`, `streamlib-deno-native`) add
   the adapter crate as a runtime dep. The cdylib's dep graph
@@ -830,7 +830,7 @@ Walking the checklist:
    issue MoltenVK Vulkan calls against the same image.
 
 5. **Tests** — conformance suite + macOS-specific round-trips.
-   Per [`.claude/workflows/macos.md`](../../.claude/workflows/macos.md),
+   Per [`.claude/rules/engine-doctrine.md`](../../.claude/rules/engine-doctrine.md),
    cross-compile verification on Linux is required; the
    walkthrough lands the cross-compile + native-macOS CI lane in
    the same milestone.
@@ -885,8 +885,7 @@ Read these, in this order, when authoring:
   `VulkanComputeKernel`, the dispatch primitive any adapter that
   needs compute reaches through (via escalate IPC from
   subprocess).
-- [`.claude/workflows/polyglot.md`](../../.claude/workflows/polyglot.md)
+- [`.claude/rules/polyglot.md`](../../.claude/rules/polyglot.md)
   — polyglot rules including the import-side carve-out.
-- [`.claude/workflows/adapter.md`](../../.claude/workflows/adapter.md)
-  — auto-loaded by `/amos:next` for `adapter`-labeled work; points
-  back at this doc.
+- [`.claude/rules/rhi.md`](../../.claude/rules/rhi.md)
+  — the RHI + import-side carve-out rule adapter work rides.

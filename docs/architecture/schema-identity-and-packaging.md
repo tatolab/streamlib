@@ -571,7 +571,7 @@ wire-format input.
 Range matching, lockfile resolution, and the codegen pipeline
 stay Rust-side because no non-Rust caller currently exercises
 them. This matches the polyglot rule's escape clause
-(`.claude/workflows/polyglot.md`): *"the only legitimate split is
+(`.claude/rules/polyglot.md`): *"the only legitimate split is
 schema-only / language-specific by construction"* — the deeper
 crate functionality (range matching, lockfile, codegen) is
 "language-specific by construction" while basic identity

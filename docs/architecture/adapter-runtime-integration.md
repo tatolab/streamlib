@@ -177,7 +177,7 @@ the FD is already an artifact; what the subprocess does with it
 is bounded:
 
 1. `VkImportMemoryFdInfoKHR` (the import-side carve-out from
-   `.claude/workflows/polyglot.md`)
+   `.claude/rules/polyglot.md`)
 2. `vkBindImageMemory` / `vkBindBufferMemory`
 3. Layout transitions + sync wait/signal on imported handles
 4. Render or compute against the imported handle
@@ -483,10 +483,10 @@ property is load-bearing.
   subprocess obtains a usable RHI surface beyond the import-side
   carve-out (the integration-shape view of how the carve-out
   works alongside this doc's adapter-runtime-shape view)
-- `.claude/workflows/polyglot.md` — the polyglot rule, including
+- `.claude/rules/polyglot.md` — the polyglot rule, including
   the import-side carve-out
-- `.claude/workflows/adapter.md` — auto-loaded by `/amos:next` for
-  `adapter`-labeled work
+- `docs/architecture/adapter-authoring.md` — the adapter
+  implementation contract
 - `docs/learnings/nvidia-egl-dmabuf-render-target.md` —
   modifier-vs-`external_only` constraint that must be solved on
   host
