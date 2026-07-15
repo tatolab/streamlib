@@ -38,7 +38,7 @@ clear_bitstream_buffers_on_create = []
 
 [dependencies]
 # Processor schema types (shared with macros for code generation)
-streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.6.0" }
+streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.6.0", features = ["openapi"] }
 
 # Canonical Error / Result / PortDirection, shared with the plugin-SDK so
 # plugin cdylibs author against them without linking the engine. The engine
