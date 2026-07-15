@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "deny": [
-      "Write(./libs/streamlib/src/core/graph/**)",
-      "Edit(./libs/streamlib/src/core/graph/**)"
-    ]
-  }
-}
