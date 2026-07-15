@@ -1,6 +1,6 @@
 ---
 name: draft-design
-description: Architecture-first entry point — recon the current code with the relevant domain experts, then produce a design brief FOR JONATHAN (mermaid diagram, trade-offs, decisions taken, and an explicit decisions-for-owner list) posted to the issue. Use before building anything engine-zone, when a feature needs a shape decided, or when he asks to "design X first" / "draft the approach for #N". Nothing builds until he approves in a comment.
+description: Architecture-first entry point — recon the current code with the relevant domain experts, then produce a design brief FOR JONATHAN (mermaid diagram, trade-offs, decisions taken, and an explicit decisions-for-owner list) posted to the issue. Use before building anything engine-zone, when a feature needs a shape decided, or when he asks to "design X first" or "draft the approach for this issue". Nothing builds until he approves in a comment.
 ---
 
 # draft-design — shape it before you build it

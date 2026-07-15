@@ -1,6 +1,6 @@
 ---
 name: work-on-ticket
-description: Take one ticket end-to-end in the current session with Jonathan present — the interactive counterpart to the standing loop. Use when he says "work on #N", "let's do this ticket", "pick up X and I'll answer questions as you go", or wants to drive a single issue to a draft PR now. Same router, same workflow scripts, same verifier as the loop — but questions come inline instead of parking.
+description: Take one ticket end-to-end in the current session with Jonathan present — the interactive counterpart to the standing loop. Use when he says "work on issue N", "let's do this ticket", "pick up X and I'll answer questions as you go", or wants to drive a single issue to a draft PR now. Same router, same workflow scripts, same verifier as the loop — but questions come inline instead of parking.
 ---
 
 # work-on-ticket — the interactive one
