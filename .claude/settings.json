@@ -5,6 +5,8 @@
       "Write(vendor/tatolab-vulkanalia*/**)",
       "Edit(LICENSE)",
       "Write(LICENSE)",
+      "Edit(LICENSES/**)",
+      "Write(LICENSES/**)",
       "Edit(docs/license/**)",
       "Write(docs/license/**)",
       "Edit(docs/logging-schema.md)",

@@ -37,3 +37,9 @@ Conventions:
 - All timekeeping uses monotonic clocks (Rust / Python / Deno), never wall-clock or sleep-based.
 - Git deps pinned by `rev = "<sha>"` or `tag`; never bare `git` / `branch`, including
   `[patch.crates-io]`.
+- Rustdoc: public items get a one-line doc; no `# Example` / `# Usage` sections or ASCII diagrams
+  in doc comments (examples live in `examples/`); use intra-doc ``[`Type`]`` links;
+  `cargo doc -p streamlib --no-deps` stays warning-free.
+- Code organization: platform dirs are already conditionally compiled — `core/` is
+  platform-agnostic, `apple/` and `linux/` are per-platform. Never put a `#[cfg]` inside a
+  platform-specific directory.
