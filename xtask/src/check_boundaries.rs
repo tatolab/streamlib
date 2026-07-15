@@ -28,6 +28,7 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
+use streamlib_pack::NormalBuildDepGraph;
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone)]
@@ -59,7 +60,21 @@ pub fn run(project_root: &Path) -> Result<()> {
             v.line_text.trim_end(),
         );
     }
-    if report.violations.is_empty() {
+    // Check 12 — transitive trunk-set -> engine walk (cargo metadata based;
+    // layered on the direct manifest check 11 inside scan_all).
+    let engine_chains = run_trunk_transitive_check(project_root)?;
+    for chain in &engine_chains {
+        eprintln!(
+            "[{}] trunk crate `{}` transitively depends on `{}`: {}\n    {}",
+            CHECK_TRUNK_NO_ENGINE_DEP,
+            chain.trunk,
+            TRUNK_ENGINE_CRATE_NAME,
+            chain.display_chain(),
+            TRUNK_NO_ENGINE_DEP_RATIONALE,
+        );
+    }
+    let total_violations = report.violations.len() + engine_chains.len();
+    if total_violations == 0 {
         println!(
             "check-boundaries: {} file(s) scanned, no violations",
             report.files_scanned,
@@ -67,8 +82,10 @@ pub fn run(project_root: &Path) -> Result<()> {
         Ok(())
     } else {
         Err(anyhow::anyhow!(
-            "check-boundaries: {} violation(s) across {} file(s) scanned — see docs/architecture/subprocess-rhi-parity.md",
+            "check-boundaries: {} violation(s) ({} grep + {} transitive trunk->engine chain(s)) across {} file(s) scanned — see docs/architecture/subprocess-rhi-parity.md",
+            total_violations,
             report.violations.len(),
+            engine_chains.len(),
             report.files_scanned,
         ))
     }
@@ -84,6 +101,10 @@ pub fn scan_all(project_root: &Path) -> Result<CheckReport> {
     check_vulkanalia_uses_workspace_fork(project_root, &mut violations, &mut files_scanned)?;
     check_streamlib_engine_confined(project_root, &mut violations, &mut files_scanned)?;
     check_streamlib_top_level_shortcut(project_root, &mut violations, &mut files_scanned)?;
+    check_packages_facade_runtime_dep(project_root, &mut violations, &mut files_scanned)?;
+    check_packages_engine_reach(project_root, &mut violations, &mut files_scanned)?;
+    check_examples_cdylib_facade_dep(project_root, &mut violations, &mut files_scanned)?;
+    check_trunk_set_no_engine_dep(project_root, &mut violations, &mut files_scanned)?;
     Ok(CheckReport {
         violations,
         files_scanned,
@@ -920,6 +941,660 @@ fn dep_is_workspace_inherited(value: &toml::Value) -> bool {
         .and_then(|t| t.get("workspace"))
         .and_then(|w| w.as_bool())
         .unwrap_or(false)
+}
+
+// ---------------------------------------------------------------------------
+// Check 8 — `packages/*` crates must not link the full `streamlib` facade
+// ---------------------------------------------------------------------------
+//
+// A distributable `.slpkg` is built engine-free against the plugin-authoring
+// SDK; carrying the full `streamlib` facade as a runtime dep pulls the
+// FullAccess engine surface into a crate that ships as a source-only package.
+// The facade is host-by-design only for the `api-server` (a host application
+// package) and `test-fixtures` (host-side `cargo test`) packages; every other
+// facade linker is the shrinking conversion backlog and drops off this
+// allowlist as its package converts to the engine-free authoring SDK.
+//
+// This is a per-entry-rationale ratchet seeded to the exact current violating
+// set: any NEW `packages/*` crate that adds a non-dev `streamlib` dep fails.
+// Mirrors check 3 (`iter_dep_entries` + `section_is_dev_only`), but as a
+// tree-wide ratchet over `packages/*` rather than a fixed crate list.
+
+const CHECK_PACKAGES_FACADE_DEP: &str = "packages-no-facade-runtime-dep";
+
+const PACKAGES_FACADE_DEP_RATIONALE: &str = "a packages/* crate must not carry the full `streamlib` facade as a runtime dep — a distributable .slpkg builds engine-free against the plugin-authoring SDK; the facade is host-by-design only for api-server + test-fixtures. Move it to [dev-dependencies] or convert the package to the engine-free authoring SDK";
+
+/// The 15 `packages/*` crates that currently link the `streamlib` facade as a
+/// non-dev runtime dep (green baseline). `api-server` + `test-fixtures` are
+/// permanent (host-by-design); the other 13 are the shrinking conversion
+/// backlog — remove each entry as its package converts.
+const PACKAGES_FACADE_DEP_ALLOWLIST: &[AllowEntry] = &[
+    AllowEntry {
+        path: "packages/api-server/Cargo.toml",
+        kind: AllowKind::ExactFile,
+        rationale: "permanent, host-by-design: api-server is a host application package that hosts processors and legitimately links the full facade",
+    },
+    AllowEntry {
+        path: "packages/test-fixtures/Cargo.toml",
+        kind: AllowKind::ExactFile,
+        rationale: "permanent, host-by-design: test-fixtures run host-side under cargo test and legitimately link the full facade",
+    },
+    // Shrinking conversion backlog — each drops off as its package converts
+    // to the engine-free plugin-authoring SDK.
+    AllowEntry {
+        path: "packages/audio/Cargo.toml",
+        kind: AllowKind::ExactFile,
+        rationale: "pre-conversion facade linker (shrinking backlog)",
+    },
+    AllowEntry {
+        path: "packages/camera/Cargo.toml",
+        kind: AllowKind::ExactFile,
+        rationale: "pre-conversion facade linker (shrinking backlog)",
+    },
+    AllowEntry {
+        path: "packages/clap/Cargo.toml",
+        kind: AllowKind::ExactFile,
+        rationale: "pre-conversion facade linker (shrinking backlog)",
+    },
+    AllowEntry {
+        path: "packages/debug-utilities/Cargo.toml",
+        kind: AllowKind::ExactFile,
+        rationale: "pre-conversion facade linker (shrinking backlog)",
+    },
+    AllowEntry {
+        path: "packages/display/Cargo.toml",
+        kind: AllowKind::ExactFile,
+        rationale: "pre-conversion facade linker (shrinking backlog)",
+    },
+    AllowEntry {
+        path: "packages/frame-tap/Cargo.toml",
+        kind: AllowKind::ExactFile,
+        rationale: "pre-conversion facade linker (shrinking backlog)",
+    },
+    AllowEntry {
+        path: "packages/h264/Cargo.toml",
+        kind: AllowKind::ExactFile,
+        rationale: "pre-conversion facade linker (shrinking backlog)",
+    },
+    AllowEntry {
+        path: "packages/h265/Cargo.toml",
+        kind: AllowKind::ExactFile,
+        rationale: "pre-conversion facade linker (shrinking backlog)",
+    },
+    AllowEntry {
+        path: "packages/moq/Cargo.toml",
+        kind: AllowKind::ExactFile,
+        rationale: "pre-conversion facade linker (shrinking backlog)",
+    },
+    AllowEntry {
+        path: "packages/mp4/Cargo.toml",
+        kind: AllowKind::ExactFile,
+        rationale: "pre-conversion facade linker (shrinking backlog)",
+    },
+    AllowEntry {
+        path: "packages/opus/Cargo.toml",
+        kind: AllowKind::ExactFile,
+        rationale: "pre-conversion facade linker (shrinking backlog)",
+    },
+    AllowEntry {
+        path: "packages/screen-capture/Cargo.toml",
+        kind: AllowKind::ExactFile,
+        rationale: "pre-conversion facade linker (shrinking backlog)",
+    },
+    AllowEntry {
+        path: "packages/webrtc/Cargo.toml",
+        kind: AllowKind::ExactFile,
+        rationale: "pre-conversion facade linker (shrinking backlog)",
+    },
+];
+
+fn check_packages_facade_runtime_dep(
+    project_root: &Path,
+    violations: &mut Vec<Violation>,
+    files_scanned: &mut usize,
+) -> Result<()> {
+    for path in walk_cargo_toml(project_root) {
+        let rel = rel_to_root(&path, project_root);
+        if !rel_starts_with(rel, "packages/") {
+            continue;
+        }
+        *files_scanned += 1;
+        if matches_allow(rel, PACKAGES_FACADE_DEP_ALLOWLIST) {
+            continue;
+        }
+        let content =
+            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        let parsed: toml::Value = match toml::from_str(&content) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        for (section, dep_name, line_no) in iter_dep_entries(&parsed, &content) {
+            if dep_name == "streamlib" && !section_is_dev_only(&section) {
+                violations.push(Violation {
+                    path: rel.to_path_buf(),
+                    line_no,
+                    line_text: format!("[{}] streamlib = ...", section),
+                    matched_pattern: format!("streamlib facade dep in [{}]", section),
+                    check: CHECK_PACKAGES_FACADE_DEP,
+                    rationale: PACKAGES_FACADE_DEP_RATIONALE,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Check 9 — `packages/*` source must not reach the engine bridge / host device
+// ---------------------------------------------------------------------------
+//
+// A separately-built source-only `.slpkg` can have a binary that diverges from
+// the host's even at a matched version. GPU code that grabs the raw transited
+// host device (`host_vulkan_device_arc`) and hand-rolls RHI on it corrupts the
+// driver in that scenario — package GPU code must go through the cdylib-safe
+// FullAccess primitives (see docs/learnings/slpkg-raw-device-rhi-construction.md).
+// The engine-bridge path `streamlib::sdk::engine::*` is the curated surface that
+// exposes those raw handles; reaching it from a package is the same boundary
+// crossing.
+//
+// Grep-shaped (comment lines skipped): the engine-bridge path substring and the
+// bare `host_vulkan_device_arc` identifier. Seeded to the 6 current reachers;
+// `test-fixtures` is permanent (host-side, exercises the bridge by design), the
+// other 5 shrink as conversions land.
+//
+// A package's TOP-LEVEL `tests/` and `benches/` dirs are EXEMPT: an
+// engine-backed integration test / benchmark legitimately reaches the bridge,
+// and check 8 already blesses the `streamlib` dev-dep those targets link
+// against. Only the cargo target dir directly under the package root is
+// exempt — a `src/tests/` helper dir stays covered. `src/` stays strict
+// EVERYWHERE, including `#[cfg(test)]` mods — for a tooling reason, NOT because
+// the reach ships: the pack / load build is `cargo build -p <crate>`, never
+// `--tests` (tools/streamlib-pack/src/lib.rs), so the `test` cfg is OFF and a
+// `#[cfg(test)]` reach is compiled out — it does NOT ship in the cdylib. It
+// stays flagged because this grep is line-based and cannot reliably scope a
+// reach to a `#[cfg(test)]` mod; engine-backed tests belong in the top-level
+// `tests/` target (blessed by check 8). An in-`src` hit is told to move the
+// engine-backed test to `tests/`.
+
+const CHECK_PACKAGES_ENGINE_REACH: &str = "packages-no-engine-bridge-reach";
+
+const PACKAGES_ENGINE_REACH_RATIONALE: &str = "packages/* source must not reach the engine bridge (`streamlib::sdk::engine::*`) or grab the raw transited host device via `host_vulkan_device_arc` — a separately-built source-only .slpkg whose GPU code hand-rolls RHI on the host device corrupts the driver (docs/learnings/slpkg-raw-device-rhi-construction.md); package GPU code goes through the cdylib-safe FullAccess primitives";
+
+/// Engine-bridge module path — the curated surface that hands packages raw
+/// engine primitives. A substring match is enough; it is unambiguous.
+const ENGINE_BRIDGE_PATH: &str = "streamlib::sdk::engine::";
+
+/// Accessor that returns the raw transited host `VulkanDevice`. Matched as a
+/// bare identifier (word boundaries) so a longer lookalike does not trip it.
+const HOST_DEVICE_ARC_IDENT: &str = "host_vulkan_device_arc";
+
+/// The 6 `packages/*` dirs whose source currently reaches the engine bridge or
+/// the host device (green baseline). `test-fixtures` is permanent (host-side);
+/// the other 5 are the shrinking conversion backlog.
+const PACKAGES_ENGINE_REACH_ALLOWLIST: &[AllowEntry] = &[
+    AllowEntry {
+        path: "packages/test-fixtures/",
+        kind: AllowKind::PathPrefix,
+        rationale: "permanent: test-fixtures run host-side and exercise the engine bridge directly by design",
+    },
+    // Shrinking conversion backlog.
+    AllowEntry {
+        path: "packages/camera/",
+        kind: AllowKind::PathPrefix,
+        rationale: "pre-conversion engine-bridge reacher (shrinking backlog)",
+    },
+    AllowEntry {
+        path: "packages/display/",
+        kind: AllowKind::PathPrefix,
+        rationale: "pre-conversion engine-bridge reacher (shrinking backlog)",
+    },
+    AllowEntry {
+        path: "packages/frame-tap/",
+        kind: AllowKind::PathPrefix,
+        rationale: "pre-conversion engine-bridge reacher (shrinking backlog)",
+    },
+    AllowEntry {
+        path: "packages/h264/",
+        kind: AllowKind::PathPrefix,
+        rationale: "pre-conversion engine-bridge reacher (shrinking backlog)",
+    },
+    AllowEntry {
+        path: "packages/h265/",
+        kind: AllowKind::PathPrefix,
+        rationale: "pre-conversion engine-bridge reacher (shrinking backlog)",
+    },
+];
+
+fn check_packages_engine_reach(
+    project_root: &Path,
+    violations: &mut Vec<Violation>,
+    files_scanned: &mut usize,
+) -> Result<()> {
+    for path in walk_rs(project_root) {
+        let rel = rel_to_root(&path, project_root);
+        if !rel_starts_with(rel, "packages/") {
+            continue;
+        }
+        // A package's TOP-LEVEL tests/ or benches/ dir is exempt — engine-backed
+        // integration tests / benchmarks belong there (check 8 blesses the
+        // dev-dep). `src/` stays strict everywhere, including a `src/tests/`
+        // helper dir and `#[cfg(test)]` mods.
+        if package_top_level_test_or_bench_dir(rel) {
+            continue;
+        }
+        *files_scanned += 1;
+        if matches_allow(rel, PACKAGES_ENGINE_REACH_ALLOWLIST) {
+            continue;
+        }
+        let content =
+            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        for (idx, line) in content.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            let matched = if line.contains(ENGINE_BRIDGE_PATH) {
+                Some(ENGINE_BRIDGE_PATH)
+            } else if line_has_bare_ident(line, HOST_DEVICE_ARC_IDENT) {
+                Some(HOST_DEVICE_ARC_IDENT)
+            } else {
+                None
+            };
+            if let Some(pattern) = matched {
+                violations.push(Violation {
+                    path: rel.to_path_buf(),
+                    line_no: idx + 1,
+                    line_text: line.to_string(),
+                    matched_pattern: pattern.to_string(),
+                    check: CHECK_PACKAGES_ENGINE_REACH,
+                    rationale: PACKAGES_ENGINE_REACH_RATIONALE,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Check 10 — `examples/*` cdylib plugins must not link the full `streamlib`
+//            facade
+// ---------------------------------------------------------------------------
+//
+// An `examples/*` crate that ships as a cdylib is a plugin: it is built
+// independently at load time and rides the engine-free plugin-authoring SDK
+// (`streamlib-plugin-sdk`) plus `streamlib-consumer-rhi`, never the FullAccess
+// `streamlib` facade. Only cdylib-shipping example crates are gated — an
+// example *app* (a plain bin / rlib) links the facade by design (apps are code
+// calling the runtime's add-module API). Cdylib detection reuses
+// `check_cdylib_reach::cargo_toml_has_cdylib` — one crate-type detector.
+//
+// Seeded to the 3 current offenders; `camera-plugin-sdk-compute/plugin` is left
+// un-allowlisted as live proof the rule passes for a correctly-authored cdylib
+// example (it links `streamlib-plugin-sdk`, never the facade).
+
+const CHECK_EXAMPLES_CDYLIB_FACADE_DEP: &str = "examples-cdylib-no-facade-dep";
+
+const EXAMPLES_CDYLIB_FACADE_DEP_RATIONALE: &str = "an examples/* cdylib plugin must not link the full `streamlib` facade — a cdylib plugin is built independently at load time and rides streamlib-plugin-sdk / streamlib-consumer-rhi, never the FullAccess facade. Move it to [dev-dependencies] or author against the plugin SDK";
+
+/// The 3 `examples/*` cdylib crates that currently link the `streamlib` facade
+/// as a non-dev runtime dep (green baseline). Each is the shrinking conversion
+/// backlog. `camera-plugin-sdk-compute/plugin` is deliberately absent — it
+/// links `streamlib-plugin-sdk` (never the facade) and proves the rule passes.
+const EXAMPLES_CDYLIB_FACADE_DEP_ALLOWLIST: &[AllowEntry] = &[
+    AllowEntry {
+        path: "examples/camera-rust-plugin/plugin/Cargo.toml",
+        kind: AllowKind::ExactFile,
+        rationale: "pre-conversion facade-linking cdylib example (shrinking backlog)",
+    },
+    AllowEntry {
+        path: "examples/camera-python-display/effects/Cargo.toml",
+        kind: AllowKind::ExactFile,
+        rationale: "pre-conversion facade-linking cdylib example (shrinking backlog)",
+    },
+    AllowEntry {
+        path: "examples/polyglot-manual-source/plugin/Cargo.toml",
+        kind: AllowKind::ExactFile,
+        rationale: "pre-conversion facade-linking cdylib example (shrinking backlog)",
+    },
+];
+
+fn check_examples_cdylib_facade_dep(
+    project_root: &Path,
+    violations: &mut Vec<Violation>,
+    files_scanned: &mut usize,
+) -> Result<()> {
+    for path in walk_cargo_toml(project_root) {
+        let rel = rel_to_root(&path, project_root);
+        if !rel_starts_with(rel, "examples/") {
+            continue;
+        }
+        let content =
+            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        // Only cdylib-shipping example crates are gated — reuse the single
+        // crate-type detector rather than a divergent second parser.
+        if !crate::check_cdylib_reach::cargo_toml_has_cdylib(&content) {
+            continue;
+        }
+        *files_scanned += 1;
+        if matches_allow(rel, EXAMPLES_CDYLIB_FACADE_DEP_ALLOWLIST) {
+            continue;
+        }
+        let parsed: toml::Value = match toml::from_str(&content) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        for (section, dep_name, line_no) in iter_dep_entries(&parsed, &content) {
+            if dep_name == "streamlib" && !section_is_dev_only(&section) {
+                violations.push(Violation {
+                    path: rel.to_path_buf(),
+                    line_no,
+                    line_text: format!("[{}] streamlib = ...", section),
+                    matched_pattern: format!("streamlib facade dep in [{}]", section),
+                    check: CHECK_EXAMPLES_CDYLIB_FACADE_DEP,
+                    rationale: EXAMPLES_CDYLIB_FACADE_DEP_RATIONALE,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Check 11 — the engine-free TRUNK SET must never Cargo-dep the engine
+// ---------------------------------------------------------------------------
+//
+// The three engine-free trunk crates — `streamlib-plugin-sdk`
+// (sdk/streamlib-plugin-sdk), `streamlib-macros` (sdk/streamlib-macros), and
+// `streamlib-plugin-abi` (runtime/streamlib-plugin-abi) — are the authoring
+// substrate every distributable `.slpkg` links against. A non-dev
+// `[dependencies]` entry that resolves to the engine crate (`streamlib-engine`
+// at runtime/streamlib-engine) in ANY of them statically pulls the FullAccess
+// engine surface into that substrate.
+//
+// This is the PERMANENT invariant that replaces the dropped (dead-path)
+// "plugin/* -> libs/" exit criterion: it is the enforcement that SURVIVES the
+// packages -> streamlib-packages split. External packages consume plugin-sdk
+// by VERSION from the registry, so a published plugin-sdk that pulled the
+// engine would propagate the engine to every external consumer invisibly —
+// with no in-tree crate left to catch it. Unlike the transitional `packages/*`
+// leaves ratchet (checks 8 & 9, which carry a shrinking per-package
+// allowlist), this trunk ban has NO allowlist and never shrinks.
+//
+// `[dev-dependencies]` are EXEMPT — a trunk crate's conformance tests may
+// legitimately pull the engine to exercise the host backing. Reuses the same
+// `iter_dep_entries_with_values` + `section_is_dev_only` machinery as checks
+// 8-10, and resolves `package = "..."` alias keys (an entry
+// `foo = { package = "streamlib-engine", ... }` is caught by its resolved
+// package name, not the section key) — closing the exact alias evasion the
+// facade check leaves as a known low.
+
+const CHECK_TRUNK_NO_ENGINE_DEP: &str = "trunk-set-no-engine-cargo-dep";
+
+const TRUNK_NO_ENGINE_DEP_RATIONALE: &str = "PERMANENT trunk ban (survives the packages -> streamlib-packages split): an engine-free trunk crate (streamlib-plugin-sdk / streamlib-macros / streamlib-plugin-abi) must never carry `streamlib-engine` as a non-dev Cargo dep. External packages consume plugin-sdk by version from the registry, so a published plugin-sdk that pulled the engine would propagate the FullAccess engine surface to every external consumer invisibly. Unlike the transitional packages/* leaves ratchet, this ban has no shrinking allowlist; [dev-dependencies] are exempt (conformance tests may pull the engine)";
+
+/// The engine crate's Cargo package name (lib name is `streamlib_engine`; the
+/// Cargo dependency key / `package =` rename resolves to this hyphenated form).
+const TRUNK_ENGINE_CRATE_NAME: &str = "streamlib-engine";
+
+/// The three engine-free trunk crates whose non-dev dep graph must never
+/// resolve to `streamlib-engine`. A fixed list (mirrors check 3's
+/// `NO_STREAMLIB_RUNTIME_DEP`) — this is a permanent invariant, not a
+/// shrinking ratchet.
+const TRUNK_NO_ENGINE_DEP: &[&str] = &[
+    "sdk/streamlib-plugin-sdk/Cargo.toml",
+    "sdk/streamlib-macros/Cargo.toml",
+    "runtime/streamlib-plugin-abi/Cargo.toml",
+];
+
+fn check_trunk_set_no_engine_dep(
+    project_root: &Path,
+    violations: &mut Vec<Violation>,
+    files_scanned: &mut usize,
+) -> Result<()> {
+    for rel_path in TRUNK_NO_ENGINE_DEP {
+        let path = project_root.join(rel_path);
+        if !path.exists() {
+            // Allowlisted crate may have been renamed/deleted; skip silently —
+            // this is enforcement, not discovery (mirrors check 3).
+            continue;
+        }
+        *files_scanned += 1;
+        let content =
+            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        let parsed: toml::Value =
+            toml::from_str(&content).with_context(|| format!("parse {}", path.display()))?;
+        for (section, dep_name, dep_value, line_no) in
+            iter_dep_entries_with_values(&parsed, &content)
+        {
+            // [dev-dependencies] (and target.*.dev-dependencies) are exempt —
+            // conformance tests may legitimately pull the engine.
+            if section_is_dev_only(&section) {
+                continue;
+            }
+            // Resolve the `package = "..."` alias key: `foo = { package =
+            // "streamlib-engine", ... }` must be caught by its RESOLVED package
+            // name, not the section key. Fall back to the key when absent.
+            let resolved = dep_value
+                .get("package")
+                .and_then(|v| v.as_str())
+                .unwrap_or(dep_name.as_str());
+            if resolved == TRUNK_ENGINE_CRATE_NAME {
+                let display_name = if resolved != dep_name {
+                    format!("{dep_name} (package = \"{resolved}\")")
+                } else {
+                    dep_name.clone()
+                };
+                violations.push(Violation {
+                    path: PathBuf::from(rel_path),
+                    line_no,
+                    line_text: format!("[{}] {} = ...", section, display_name),
+                    matched_pattern: format!(
+                        "streamlib-engine dep in [{}] (as {})",
+                        section, display_name
+                    ),
+                    check: CHECK_TRUNK_NO_ENGINE_DEP,
+                    rationale: TRUNK_NO_ENGINE_DEP_RATIONALE,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Check 12 — the trunk set must never TRANSITIVELY reach the engine
+// ---------------------------------------------------------------------------
+//
+// Check 11 (`check_trunk_set_no_engine_dep`) is the DIRECT manifest scan: it
+// catches a `streamlib-engine` dep written straight into a trunk crate's
+// `Cargo.toml`, with precise file:line reporting. But a trunk crate can reach
+// the engine INDIRECTLY — `streamlib-plugin-sdk` -> some workspace crate ->
+// `streamlib-engine` — and no single manifest shows that chain. This check
+// layers the transitive closure on top: it resolves each trunk crate's
+// normal + build dependency graph via `cargo metadata` and flags
+// `streamlib-engine` appearing ANYWHERE in that closure.
+//
+// It reuses `streamlib-pack`'s `NormalBuildDepGraph` — the SAME
+// `dep_kinds`-filtered adjacency construction the release-closure DFS rides —
+// so the dev-only-edge drop has exactly one definition. That drop is
+// load-bearing: `[dev-dependencies]` are exempt (a trunk crate's conformance
+// tests may pull the engine), and a second hand-rolled walker could miss it.
+//
+// The walk stays within WORKSPACE MEMBERS — an external registry crate cannot
+// depend on the in-tree engine, so it cannot lie on a trunk -> engine chain,
+// and `streamlib-engine` is itself a member so the target is never pruned.
+// `--filter-platform` is deliberately NOT passed: plugin-sdk's
+// `streamlib-consumer-rhi` dep is linux-target and must stay covered.
+//
+// On a violation the offending CHAIN is printed
+// (`<trunk> -> … -> streamlib-engine`) so the intermediate edge is obvious.
+// This has NO allowlist and never shrinks — same permanence as check 11.
+
+/// The three engine-free trunk crate names whose transitive normal + build
+/// closure must never reach [`TRUNK_ENGINE_CRATE_NAME`]. Mirrors check 11's
+/// `TRUNK_NO_ENGINE_DEP` (which keys on manifest paths); here we key on package
+/// names because the walk resolves through `cargo metadata`.
+const TRUNK_CRATE_NAMES: &[&str] = &[
+    "streamlib-plugin-sdk",
+    "streamlib-macros",
+    "streamlib-plugin-abi",
+];
+
+/// A discovered trunk-crate → `streamlib-engine` dependency chain, as package
+/// names from the trunk crate to the engine inclusive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrunkEngineChain {
+    /// The trunk crate the chain starts at.
+    pub trunk: String,
+    /// Package names from the trunk crate to `streamlib-engine`, inclusive and
+    /// in traversal order.
+    pub chain: Vec<String>,
+}
+
+impl TrunkEngineChain {
+    /// Render the chain as `<trunk> -> … -> streamlib-engine`.
+    pub fn display_chain(&self) -> String {
+        self.chain.join(" -> ")
+    }
+}
+
+/// Walk the transitive normal + build closure of each trunk crate over
+/// WORKSPACE MEMBERS ONLY and return every chain that reaches
+/// `streamlib-engine`. Pure over the parsed graph so it unit-tests against a
+/// synthetic `cargo metadata` fixture without the live tree.
+pub fn find_trunk_engine_chains(graph: &NormalBuildDepGraph) -> Vec<TrunkEngineChain> {
+    let mut chains = Vec::new();
+    for &trunk_name in TRUNK_CRATE_NAMES {
+        for root_id in graph.ids_named(trunk_name) {
+            // A trunk crate resolves to a workspace member; skip any same-named
+            // external package (cannot reach the in-tree engine anyway).
+            if !graph.is_workspace_member(root_id) {
+                continue;
+            }
+            if let Some(chain_ids) = shortest_member_chain_to_engine(graph, root_id) {
+                chains.push(TrunkEngineChain {
+                    trunk: trunk_name.to_string(),
+                    chain: chain_ids
+                        .iter()
+                        .map(|id| graph.name_of(id).unwrap_or(id).to_string())
+                        .collect(),
+                });
+            }
+        }
+    }
+    chains
+}
+
+/// Breadth-first search from `root_id` over workspace-member normal + build
+/// edges, returning the shortest id path (root..=engine) that reaches
+/// `streamlib-engine`, or `None` if the engine is unreachable.
+fn shortest_member_chain_to_engine<'graph>(
+    graph: &'graph NormalBuildDepGraph,
+    root_id: &'graph str,
+) -> Option<Vec<&'graph str>> {
+    use std::collections::{HashMap, HashSet, VecDeque};
+    let mut predecessor: HashMap<&str, &str> = HashMap::new();
+    let mut visited: HashSet<&str> = HashSet::new();
+    let mut queue: VecDeque<&str> = VecDeque::new();
+    visited.insert(root_id);
+    queue.push_back(root_id);
+    while let Some(id) = queue.pop_front() {
+        if id != root_id && graph.name_of(id) == Some(TRUNK_ENGINE_CRATE_NAME) {
+            // Reconstruct the path root..=id via the predecessor map.
+            let mut path = vec![id];
+            let mut cursor = id;
+            while let Some(&prev) = predecessor.get(cursor) {
+                path.push(prev);
+                cursor = prev;
+            }
+            path.reverse();
+            return Some(path);
+        }
+        for dep in graph.normal_build_deps(id) {
+            let dep = dep.as_str();
+            // Traverse INTO workspace members only — an external crate cannot
+            // depend on the in-tree engine, so it cannot lie on the chain. The
+            // engine is a member, so this never prunes the target.
+            if !graph.is_workspace_member(dep) {
+                continue;
+            }
+            if visited.insert(dep) {
+                predecessor.insert(dep, id);
+                queue.push_back(dep);
+            }
+        }
+    }
+    None
+}
+
+/// Run `cargo metadata` at `project_root` and return every trunk-set → engine
+/// transitive chain. Layered on the direct manifest [`check_trunk_set_no_engine_dep`]:
+/// that check catches a direct engine dep with precise file:line; this catches
+/// an engine reached through an intermediate workspace crate.
+fn run_trunk_transitive_check(project_root: &Path) -> Result<Vec<TrunkEngineChain>> {
+    let manifest_path = project_root.join("Cargo.toml");
+    let output = std::process::Command::new("cargo")
+        .args(["metadata", "--format-version", "1"])
+        .arg("--manifest-path")
+        .arg(&manifest_path)
+        .output()
+        .with_context(|| format!("running cargo metadata at {}", manifest_path.display()))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "cargo metadata failed at {}: {}",
+            manifest_path.display(),
+            String::from_utf8_lossy(&output.stderr).trim(),
+        );
+    }
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("parsing cargo metadata JSON")?;
+    let graph = NormalBuildDepGraph::from_metadata(&metadata)?;
+    Ok(find_trunk_engine_chains(&graph))
+}
+
+/// True iff `rel` (a workspace-relative path) begins with `prefix`
+/// (`/`-separated, e.g. `"packages/"`).
+fn rel_starts_with(rel: &Path, prefix: &str) -> bool {
+    rel.to_string_lossy().replace('\\', "/").starts_with(prefix)
+}
+
+/// True iff `rel` sits under a package's TOP-LEVEL `tests/` or `benches/` cargo
+/// target dir — i.e. its path components are `packages / <pkg> / (tests|benches)
+/// / …`. A deeper `src/tests/` helper dir does NOT match: only the target dir
+/// directly under the package root is a cargo test / bench target, so only it
+/// gets the engine-reach exemption.
+fn package_top_level_test_or_bench_dir(rel: &Path) -> bool {
+    let comps: Vec<&str> = rel
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => s.to_str(),
+            _ => None,
+        })
+        .collect();
+    comps.len() >= 3 && comps[0] == "packages" && (comps[2] == "tests" || comps[2] == "benches")
+}
+
+/// True iff `line` contains `ident` as a bare identifier — the characters
+/// immediately before and after the match are not identifier characters, so a
+/// longer lookalike (`host_vulkan_device_arc_cached`) does not trip it.
+fn line_has_bare_ident(line: &str, ident: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut from = 0;
+    while let Some(off) = line[from..].find(ident) {
+        let start = from + off;
+        let end = start + ident.len();
+        let before_ok = start == 0 || !is_ident_char(bytes[start - 1]);
+        let after_ok = end >= bytes.len() || !is_ident_char(bytes[end]);
+        if before_ok && after_ok {
+            return true;
+        }
+        from = end;
+    }
+    false
+}
+
+fn is_ident_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
 }
 
 // ---------------------------------------------------------------------------
@@ -1895,6 +2570,619 @@ vulkanalia = { workspace = true }
             no_ash.is_empty(),
             "commented import should not match: {:?}",
             no_ash
+        );
+    }
+
+    // ----- Check 8: packages/* facade-dep ban -----
+
+    #[test]
+    fn rejects_facade_dep_in_new_package() {
+        let dir = empty_workspace();
+        // A newly-carved package that is NOT on the seeded baseline must trip
+        // the ratchet the moment it links the full facade.
+        write_fixture(
+            dir.path(),
+            "packages/newly-carved/Cargo.toml",
+            r#"[package]
+name = "streamlib-newly-carved"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+streamlib = { version = "0.6.0" }
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_PACKAGES_FACADE_DEP),
+            "expected packages facade-dep violation, got {:?}",
+            report.violations,
+        );
+    }
+
+    #[test]
+    fn allows_facade_dep_in_allowlisted_package() {
+        let dir = empty_workspace();
+        // packages/camera is on the seeded green baseline — its facade dep must
+        // NOT trip the ratchet.
+        write_fixture(
+            dir.path(),
+            "packages/camera/Cargo.toml",
+            r#"[package]
+name = "streamlib-camera"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+streamlib = { version = "0.6.0" }
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        let hits: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_PACKAGES_FACADE_DEP)
+            .collect();
+        assert!(
+            hits.is_empty(),
+            "allowlisted package facade dep should pass: {:?}",
+            hits
+        );
+    }
+
+    #[test]
+    fn allows_facade_dev_dep_in_new_package() {
+        let dir = empty_workspace();
+        // The escape hatch: move the facade to [dev-dependencies] and a
+        // non-allowlisted package passes (dev-only is exempt, per check 3).
+        write_fixture(
+            dir.path(),
+            "packages/newly-carved/Cargo.toml",
+            r#"[package]
+name = "streamlib-newly-carved"
+version = "0.1.0"
+edition = "2021"
+
+[dev-dependencies]
+streamlib = { version = "0.6.0" }
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        let hits: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_PACKAGES_FACADE_DEP)
+            .collect();
+        assert!(
+            hits.is_empty(),
+            "facade dep in dev-dependencies should pass: {:?}",
+            hits
+        );
+    }
+
+    // ----- Check 9: packages/* engine-bridge / host-device reach ban -----
+
+    #[test]
+    fn rejects_engine_bridge_reach_in_new_package() {
+        let dir = empty_workspace();
+        write_fixture(
+            dir.path(),
+            "packages/newly-carved/src/lib.rs",
+            "use streamlib::sdk::engine::HostSurfaceStoreExt;\n",
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_PACKAGES_ENGINE_REACH
+                    && v.matched_pattern == "streamlib::sdk::engine::"),
+            "expected engine-bridge reach violation, got {:?}",
+            report.violations,
+        );
+    }
+
+    #[test]
+    fn rejects_host_vulkan_device_arc_reach_in_new_package() {
+        let dir = empty_workspace();
+        write_fixture(
+            dir.path(),
+            "packages/newly-carved/src/gpu.rs",
+            "fn f() { let host_device = full.host_vulkan_device_arc().unwrap(); }\n",
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_PACKAGES_ENGINE_REACH
+                    && v.matched_pattern == "host_vulkan_device_arc"),
+            "expected host-device reach violation, got {:?}",
+            report.violations,
+        );
+    }
+
+    #[test]
+    fn allows_engine_reach_in_allowlisted_package() {
+        let dir = empty_workspace();
+        // packages/h264 is on the seeded baseline — both reach forms pass.
+        write_fixture(
+            dir.path(),
+            "packages/h264/src/linux/encoder.rs",
+            "use streamlib::sdk::engine::host_rhi::VulkanDevice;\nfn f() { let d = full.host_vulkan_device_arc().unwrap(); }\n",
+        );
+        let report = scan_all(dir.path()).unwrap();
+        let hits: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_PACKAGES_ENGINE_REACH)
+            .collect();
+        assert!(
+            hits.is_empty(),
+            "allowlisted package engine reach should pass: {:?}",
+            hits
+        );
+    }
+
+    #[test]
+    fn skips_commented_engine_reach_in_package() {
+        let dir = empty_workspace();
+        write_fixture(
+            dir.path(),
+            "packages/newly-carved/src/lib.rs",
+            "// host_vulkan_device_arc() and streamlib::sdk::engine:: are off-limits here\n",
+        );
+        let report = scan_all(dir.path()).unwrap();
+        let hits: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_PACKAGES_ENGINE_REACH)
+            .collect();
+        assert!(
+            hits.is_empty(),
+            "commented engine reach should not match: {:?}",
+            hits
+        );
+    }
+
+    #[test]
+    fn ignores_host_vulkan_device_arc_lookalike_in_package() {
+        let dir = empty_workspace();
+        // A longer identifier that merely contains the banned name as a
+        // substring must NOT trip the bare-identifier match.
+        write_fixture(
+            dir.path(),
+            "packages/newly-carved/src/lib.rs",
+            "fn f() { let x = obj.host_vulkan_device_arc_cached(); }\n",
+        );
+        let report = scan_all(dir.path()).unwrap();
+        let hits: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_PACKAGES_ENGINE_REACH)
+            .collect();
+        assert!(
+            hits.is_empty(),
+            "lookalike identifier should not match: {:?}",
+            hits
+        );
+    }
+
+    // ----- Check 10: examples/* cdylib facade-dep ban -----
+
+    #[test]
+    fn rejects_facade_dep_in_new_cdylib_example() {
+        let dir = empty_workspace();
+        write_fixture(
+            dir.path(),
+            "examples/newly-added/plugin/Cargo.toml",
+            r#"[package]
+name = "newly-added-plugin"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+streamlib = { workspace = true }
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_EXAMPLES_CDYLIB_FACADE_DEP),
+            "expected examples cdylib facade-dep violation, got {:?}",
+            report.violations,
+        );
+    }
+
+    #[test]
+    fn allows_facade_dep_in_allowlisted_cdylib_example() {
+        let dir = empty_workspace();
+        // examples/camera-rust-plugin/plugin is on the seeded baseline.
+        write_fixture(
+            dir.path(),
+            "examples/camera-rust-plugin/plugin/Cargo.toml",
+            r#"[package]
+name = "camera-rust-plugin"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+streamlib = { workspace = true }
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        let hits: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_EXAMPLES_CDYLIB_FACADE_DEP)
+            .collect();
+        assert!(
+            hits.is_empty(),
+            "allowlisted cdylib example facade dep should pass: {:?}",
+            hits
+        );
+    }
+
+    #[test]
+    fn ignores_facade_dep_in_non_cdylib_example() {
+        let dir = empty_workspace();
+        // An example *app* (bin/rlib, no cdylib) links the facade by design —
+        // only cdylib plugins are gated. The cdylib detector gates the check.
+        write_fixture(
+            dir.path(),
+            "examples/camera-display/Cargo.toml",
+            r#"[package]
+name = "camera-display"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+streamlib = { workspace = true }
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        let hits: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_EXAMPLES_CDYLIB_FACADE_DEP)
+            .collect();
+        assert!(
+            hits.is_empty(),
+            "non-cdylib example app should pass: {:?}",
+            hits
+        );
+    }
+
+    #[test]
+    fn allows_cdylib_example_without_facade_dep() {
+        let dir = empty_workspace();
+        // The un-allowlisted proof: a correctly-authored cdylib example that
+        // links the plugin SDK (never the facade) passes with no allowlist
+        // entry — mirrors examples/camera-plugin-sdk-compute/plugin.
+        write_fixture(
+            dir.path(),
+            "examples/camera-plugin-sdk-compute/plugin/Cargo.toml",
+            r#"[package]
+name = "camera-plugin-sdk-compute-plugin"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+streamlib-plugin-sdk = { workspace = true }
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        let hits: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_EXAMPLES_CDYLIB_FACADE_DEP)
+            .collect();
+        assert!(
+            hits.is_empty(),
+            "cdylib example without facade dep should pass: {:?}",
+            hits
+        );
+    }
+
+    // ----- Check 11: trunk-set -> streamlib-engine Cargo-dep ban -----
+
+    #[test]
+    fn rejects_direct_engine_dep_in_trunk_crate() {
+        let dir = empty_workspace();
+        // A trunk crate that adds a DIRECT [dependencies] streamlib-engine dep
+        // must trip the permanent ban — plugin-sdk is consumed by version from
+        // the registry, so this would propagate the engine to every external
+        // consumer invisibly.
+        write_fixture(
+            dir.path(),
+            "sdk/streamlib-plugin-sdk/Cargo.toml",
+            r#"[package]
+name = "streamlib-plugin-sdk"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+streamlib-engine = { path = "../../runtime/streamlib-engine" }
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_TRUNK_NO_ENGINE_DEP),
+            "expected trunk-set engine-dep violation, got {:?}",
+            report.violations,
+        );
+    }
+
+    #[test]
+    fn rejects_aliased_engine_dep_in_trunk_crate() {
+        let dir = empty_workspace();
+        // An ALIASED dep key whose `package =` resolves to streamlib-engine
+        // must be caught by its RESOLVED package name, not the section key —
+        // locks the alias resolution that closes the facade-check evasion.
+        write_fixture(
+            dir.path(),
+            "runtime/streamlib-plugin-abi/Cargo.toml",
+            r#"[package]
+name = "streamlib-plugin-abi"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+x = { package = "streamlib-engine", path = "../streamlib-engine" }
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report.violations.iter().any(|v| v.check
+                == CHECK_TRUNK_NO_ENGINE_DEP
+                && v.matched_pattern
+                    .contains("package = \"streamlib-engine\"")),
+            "expected trunk-set aliased engine-dep violation, got {:?}",
+            report.violations,
+        );
+    }
+
+    #[test]
+    fn allows_engine_dev_dep_in_trunk_crate() {
+        let dir = empty_workspace();
+        // [dev-dependencies] are exempt — a trunk crate's conformance tests may
+        // legitimately pull the engine to exercise the host backing.
+        write_fixture(
+            dir.path(),
+            "sdk/streamlib-macros/Cargo.toml",
+            r#"[package]
+name = "streamlib-macros"
+version = "0.1.0"
+edition = "2021"
+
+[dev-dependencies]
+streamlib-engine = { path = "../../runtime/streamlib-engine" }
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        let hits: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_TRUNK_NO_ENGINE_DEP)
+            .collect();
+        assert!(
+            hits.is_empty(),
+            "engine dep in trunk [dev-dependencies] should pass: {:?}",
+            hits
+        );
+    }
+
+    // ----- Check 9 exemption: package top-level tests/ + benches/ dirs -----
+
+    #[test]
+    fn allows_engine_reach_in_package_top_level_tests_dir() {
+        let dir = empty_workspace();
+        // A NON-allowlisted package's TOP-LEVEL tests/ dir may reach the engine
+        // bridge — engine-backed integration tests belong there (check 8
+        // blesses the dev-dep). Locks the exemption.
+        write_fixture(
+            dir.path(),
+            "packages/newly-carved/tests/integration.rs",
+            "use streamlib::sdk::engine::HostSurfaceStoreExt;\n",
+        );
+        let report = scan_all(dir.path()).unwrap();
+        let hits: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_PACKAGES_ENGINE_REACH)
+            .collect();
+        assert!(
+            hits.is_empty(),
+            "top-level tests/ engine reach should pass: {:?}",
+            hits
+        );
+    }
+
+    #[test]
+    fn allows_engine_reach_in_package_top_level_benches_dir() {
+        let dir = empty_workspace();
+        write_fixture(
+            dir.path(),
+            "packages/newly-carved/benches/bench.rs",
+            "fn f() { let d = full.host_vulkan_device_arc().unwrap(); }\n",
+        );
+        let report = scan_all(dir.path()).unwrap();
+        let hits: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_PACKAGES_ENGINE_REACH)
+            .collect();
+        assert!(
+            hits.is_empty(),
+            "top-level benches/ engine reach should pass: {:?}",
+            hits
+        );
+    }
+
+    #[test]
+    fn rejects_engine_reach_in_package_src_cfg_test_mod() {
+        let dir = empty_workspace();
+        // `src/` stays strict EVERYWHERE, including a `#[cfg(test)]` mod — not
+        // because the reach ships (under `cargo build` the `test` cfg is OFF, so
+        // it is compiled out) but because this line-based grep cannot reliably
+        // scope a reach to a `#[cfg(test)]` mod; engine-backed tests belong in
+        // `tests/` (blessed by check 8).
+        write_fixture(
+            dir.path(),
+            "packages/newly-carved/src/lib.rs",
+            "#[cfg(test)]\nmod tests {\n    use streamlib::sdk::engine::HostSurfaceStoreExt;\n}\n",
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_PACKAGES_ENGINE_REACH),
+            "src/ #[cfg(test)] engine reach must still fail, got {:?}",
+            report.violations,
+        );
+    }
+
+    #[test]
+    fn rejects_engine_reach_in_package_src_tests_helper_dir() {
+        let dir = empty_workspace();
+        // A `src/tests/` helper dir is NOT a cargo test target — only the
+        // package's TOP-LEVEL tests/ dir is exempt, so this deeper dir stays
+        // covered. Locks the top-level-only distinction.
+        write_fixture(
+            dir.path(),
+            "packages/newly-carved/src/tests/helpers.rs",
+            "use streamlib::sdk::engine::HostSurfaceStoreExt;\n",
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_PACKAGES_ENGINE_REACH),
+            "src/tests/ helper dir must stay covered, got {:?}",
+            report.violations,
+        );
+    }
+
+    // ----- Check 12: transitive trunk-set -> engine walk (synthetic metadata) -----
+
+    /// Build a synthetic `cargo metadata` document from workspace-member ids,
+    /// `(id, name)` package pairs, and `(from_id, to_id, kind)` resolve edges
+    /// where `kind` is `"normal"` (emitted as JSON `null`), `"build"`, or
+    /// `"dev"`. Enough of the real shape for [`NormalBuildDepGraph::from_metadata`].
+    fn synthetic_metadata(
+        members: &[&str],
+        names: &[(&str, &str)],
+        edges: &[(&str, &str, &str)],
+    ) -> serde_json::Value {
+        use serde_json::json;
+        let packages: Vec<_> = names
+            .iter()
+            .map(|(id, name)| json!({ "id": id, "name": name }))
+            .collect();
+        let nodes: Vec<_> = names
+            .iter()
+            .map(|(id, _)| {
+                let deps: Vec<_> = edges
+                    .iter()
+                    .filter(|(from, _, _)| from == id)
+                    .map(|(_, to, kind)| {
+                        let kind_val = if *kind == "normal" {
+                            serde_json::Value::Null
+                        } else {
+                            json!(kind)
+                        };
+                        json!({ "pkg": to, "dep_kinds": [ { "kind": kind_val } ] })
+                    })
+                    .collect();
+                json!({ "id": id, "deps": deps })
+            })
+            .collect();
+        json!({
+            "workspace_members": members,
+            "packages": packages,
+            "resolve": { "nodes": nodes },
+        })
+    }
+
+    #[test]
+    fn transitive_trunk_reaches_engine_through_intermediate_fails() {
+        // plugin-sdk -> intermediate -> engine, all normal edges: the walk must
+        // find the chain AND print it end to end.
+        let md = synthetic_metadata(
+            &["sdk", "mid", "eng"],
+            &[
+                ("sdk", "streamlib-plugin-sdk"),
+                ("mid", "streamlib-intermediate"),
+                ("eng", "streamlib-engine"),
+            ],
+            &[("sdk", "mid", "normal"), ("mid", "eng", "normal")],
+        );
+        let graph = NormalBuildDepGraph::from_metadata(&md).unwrap();
+        let chains = find_trunk_engine_chains(&graph);
+        assert_eq!(chains.len(), 1, "expected one chain, got {:?}", chains);
+        assert_eq!(chains[0].trunk, "streamlib-plugin-sdk");
+        assert_eq!(
+            chains[0].display_chain(),
+            "streamlib-plugin-sdk -> streamlib-intermediate -> streamlib-engine",
+        );
+    }
+
+    #[test]
+    fn transitive_trunk_reaches_engine_only_via_dev_edge_passes() {
+        // plugin-sdk -> engine exists ONLY through a dev-only edge; the shared
+        // `dep_kinds` filter drops it, so no chain is reported. Locks the
+        // dev-dep exemption — without the filter this would false-red.
+        let md = synthetic_metadata(
+            &["sdk", "eng"],
+            &[("sdk", "streamlib-plugin-sdk"), ("eng", "streamlib-engine")],
+            &[("sdk", "eng", "dev")],
+        );
+        let graph = NormalBuildDepGraph::from_metadata(&md).unwrap();
+        let chains = find_trunk_engine_chains(&graph);
+        assert!(
+            chains.is_empty(),
+            "dev-only edge must not form a chain: {:?}",
+            chains
+        );
+    }
+
+    #[test]
+    fn transitive_trunk_clean_graph_passes() {
+        // plugin-sdk -> some other member, engine present but unreachable.
+        let md = synthetic_metadata(
+            &["sdk", "mid", "eng"],
+            &[
+                ("sdk", "streamlib-plugin-sdk"),
+                ("mid", "streamlib-other"),
+                ("eng", "streamlib-engine"),
+            ],
+            &[("sdk", "mid", "normal")],
+        );
+        let graph = NormalBuildDepGraph::from_metadata(&md).unwrap();
+        let chains = find_trunk_engine_chains(&graph);
+        assert!(
+            chains.is_empty(),
+            "clean graph must yield no chain: {:?}",
+            chains
         );
     }
 }

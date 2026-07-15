@@ -301,7 +301,11 @@ fn cargo_toml_package_name(toml_str: &str) -> Option<String> {
 /// True iff the manifest's `[lib].crate-type` array contains
 /// `"cdylib"`. Returns `false` for manifests with no `[lib]` table
 /// or no `crate-type` array.
-fn cargo_toml_has_cdylib(toml_str: &str) -> bool {
+///
+/// Shared with [`crate::check_boundaries`] so the examples/ cdylib
+/// facade-dep ratchet detects cdylib-shipping crates through the same
+/// parser — one crate-type detector, no divergent second implementation.
+pub(crate) fn cargo_toml_has_cdylib(toml_str: &str) -> bool {
     let Ok(v) = toml::from_str::<toml::Value>(toml_str) else {
         return false;
     };
