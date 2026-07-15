@@ -1,0 +1,41 @@
+name: Bug
+description: Something behaves wrong — a crash, wrong output, or a broken invariant.
+title: "bug: "
+body:
+  - type: textarea
+    id: symptom
+    attributes:
+      label: Symptom
+      description: "exact error strings / VUIDs / observable behavior"
+    validations:
+      required: true
+  - type: textarea
+    id: where-it-bit
+    attributes:
+      label: Where it bit
+      description: "the crate / package / example / scenario where it surfaced"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+      description: "what should have happened instead"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Repro
+      description: "the smallest sequence that reproduces it"
+    validations:
+      required: true
+  - type: checkboxes
+    id: rig
+    attributes:
+      label: Needs the physical rig?
+      options:
+        - label: GPU
+        - label: camera
+        - label: audio
+        - label: none

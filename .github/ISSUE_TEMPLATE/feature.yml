@@ -1,0 +1,49 @@
+name: Feature
+description: A change to the engine, a package, or the tooling.
+title: "feat: "
+body:
+  - type: textarea
+    id: what-and-why
+    attributes:
+      label: What & why
+      description: "2–5 plain-language sentences: what changes and what it buys the project — written for a 30-second read."
+    validations:
+      required: true
+  - type: textarea
+    id: design
+    attributes:
+      label: Design
+      description: "mermaid diagram + trade-offs + decisions; required before build for engine-zone work — /draft-design fills this"
+    validations:
+      required: false
+  - type: textarea
+    id: done-means
+    attributes:
+      label: Done means
+      description: "2–4 outcome criteria that define done"
+    validations:
+      required: true
+  - type: textarea
+    id: validation-shape
+    attributes:
+      label: Validation shape
+      description: "the shape of the tests/checks that prove it — unit, E2E scenario, or harness reference; not exact test names"
+    validations:
+      required: true
+  - type: checkboxes
+    id: rig
+    attributes:
+      label: Needs the physical rig?
+      options:
+        - label: GPU
+        - label: camera
+        - label: audio
+        - label: none
+  - type: textarea
+    id: non-derivable-notes
+    attributes:
+      label: Non-derivable notes
+      description: "hidden invariants or ruled-out approaches WITH the why; never implementation mechanics"
+      value: "None"
+    validations:
+      required: false
