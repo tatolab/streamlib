@@ -381,7 +381,7 @@ pub(crate) fn draw_call_to_repr(d: &super::DrawCall) -> streamlib_plugin_abi::Dr
     }
 }
 
-fn draw_indexed_call_to_repr(
+pub(crate) fn draw_indexed_call_to_repr(
     d: &super::DrawIndexedCall,
 ) -> streamlib_plugin_abi::DrawIndexedCallRepr {
     let (viewport_present, viewport) = match d.viewport {

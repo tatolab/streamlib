@@ -28,7 +28,10 @@ use streamlib_consumer_rhi::VulkanLayout;
 use streamlib_error::{Error, Result};
 use streamlib_plugin_abi::{GpuContextFullAccessVTable, RhiCommandRecorderMethodsVTable};
 
-use crate::rhi::{Texture, VulkanAccess, VulkanComputeKernel, VulkanStage};
+use crate::rhi::{
+    DrawCall, DrawIndexedCall, Texture, VulkanAccess, VulkanComputeKernel, VulkanGraphicsKernel,
+    VulkanStage,
+};
 
 /// Image-to-buffer / buffer-to-image copy region.
 ///
@@ -227,6 +230,222 @@ impl RhiCommandRecorder {
             )
         };
         status_to_result(status, &err_buf, err_len)
+    }
+
+    // -------------------------------------------------------------------------
+    // Swapchain render-path wrappers (recorder-v3/v4/v5 slots). These wire
+    // the already-shipped `RhiCommandRecorderMethodsVTable` slots a display
+    // plugin drives per frame against the present target's borrowed
+    // recorder — zero parallel slots.
+    // -------------------------------------------------------------------------
+
+    /// Record a layout transition on a raw `VkImage` handle (distinct from
+    /// [`Self::record_image_barrier`] which takes a `Texture`). The present
+    /// target drives its own swapchain-image barriers internally; this slot
+    /// is surfaced for a plugin that manages an extra image itself.
+    /// Dispatches the `record_swapchain_image_barrier` slot.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_swapchain_image_barrier(
+        &mut self,
+        image_raw: u64,
+        from_layout: VulkanLayout,
+        to_layout: VulkanLayout,
+        from_stage: VulkanStage,
+        to_stage: VulkanStage,
+        from_access: VulkanAccess,
+        to_access: VulkanAccess,
+    ) -> Result<()> {
+        let vt = self.require_methods_vtable("record_swapchain_image_barrier")?;
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        // SAFETY: methods_vtable non-null per the guard; image_raw is a
+        // caller-owned `VkImage` the host materializes internally.
+        let status = unsafe {
+            ((*vt).record_swapchain_image_barrier)(
+                self.handle,
+                image_raw,
+                from_layout.0,
+                to_layout.0,
+                from_stage.0 as i64,
+                to_stage.0 as i64,
+                from_access.0 as i64,
+                to_access.0 as i64,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        status_to_result(status, &err_buf, err_len)
+    }
+
+    /// Open a dynamic-rendering pass against a caller-owned `VkImageView`
+    /// (the swapchain image view from `PresentTargetFrame`). CLEAR load op
+    /// when `clear_color` is `Some`, LOAD otherwise. Pair with
+    /// [`Self::cmd_end_dynamic_rendering`]. Dispatches the
+    /// `cmd_begin_dynamic_rendering` slot.
+    pub fn cmd_begin_dynamic_rendering(
+        &mut self,
+        image_view_raw: u64,
+        extent: (u32, u32),
+        clear_color: Option<[f32; 4]>,
+    ) -> Result<()> {
+        let vt = self.require_methods_vtable("cmd_begin_dynamic_rendering")?;
+        let (has_clear, clear) = match clear_color {
+            Some(c) => (1u32, c),
+            None => (0u32, [0.0; 4]),
+        };
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        // SAFETY: methods_vtable non-null per the guard; image_view_raw is a
+        // caller-owned `VkImageView` the host materializes internally.
+        let status = unsafe {
+            ((*vt).cmd_begin_dynamic_rendering)(
+                self.handle,
+                image_view_raw,
+                extent.0,
+                extent.1,
+                has_clear,
+                clear[0],
+                clear[1],
+                clear[2],
+                clear[3],
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        status_to_result(status, &err_buf, err_len)
+    }
+
+    /// Close the dynamic-rendering pass opened by
+    /// [`Self::cmd_begin_dynamic_rendering`]. Dispatches the
+    /// `cmd_end_dynamic_rendering` slot.
+    pub fn cmd_end_dynamic_rendering(&mut self) -> Result<()> {
+        let vt = self.require_methods_vtable("cmd_end_dynamic_rendering")?;
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        // SAFETY: methods_vtable non-null per the guard.
+        let status = unsafe {
+            ((*vt).cmd_end_dynamic_rendering)(
+                self.handle,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        status_to_result(status, &err_buf, err_len)
+    }
+
+    /// End recording and submit with arbitrary wait + signal semaphore
+    /// lists. The present target's `end_frame` drives the swapchain submit
+    /// internally; this slot is surfaced for a plugin managing its own
+    /// GPU-GPU producer sync. Empty slices are valid. Dispatches the
+    /// `submit_with_semaphores` slot.
+    pub fn submit_with_semaphores(
+        &mut self,
+        waits: &[streamlib_plugin_abi::SemaphoreSubmitInfoRepr],
+        signals: &[streamlib_plugin_abi::SemaphoreSubmitInfoRepr],
+    ) -> Result<()> {
+        let vt = self.require_methods_vtable("submit_with_semaphores")?;
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        let waits_ptr = if waits.is_empty() {
+            std::ptr::null()
+        } else {
+            waits.as_ptr()
+        };
+        let signals_ptr = if signals.is_empty() {
+            std::ptr::null()
+        } else {
+            signals.as_ptr()
+        };
+        // SAFETY: methods_vtable non-null per the guard; the arrays outlive
+        // the call by the caller's borrow.
+        let status = unsafe {
+            ((*vt).submit_with_semaphores)(
+                self.handle,
+                waits_ptr,
+                waits.len(),
+                signals_ptr,
+                signals.len(),
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        status_to_result(status, &err_buf, err_len)
+    }
+
+    /// Record a non-indexed draw binding `kernel`'s graphics pipeline.
+    /// Bindings + push constants for `frame_index` must have been staged via
+    /// the kernel's `set_*` methods first. Dispatches the `record_draw` slot.
+    pub fn record_draw(
+        &mut self,
+        kernel: &VulkanGraphicsKernel,
+        frame_index: u32,
+        draw: &DrawCall,
+    ) -> Result<()> {
+        let vt = self.require_methods_vtable("record_draw")?;
+        let draw_repr = super::vulkan_graphics_kernel::draw_call_to_repr(draw);
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        // SAFETY: methods_vtable non-null per the guard; kernel handle is the
+        // borrowed `Arc::into_raw(Arc<VulkanGraphicsKernelInner>)` pointer;
+        // draw_repr lives across the call.
+        let status = unsafe {
+            ((*vt).record_draw)(
+                self.handle,
+                kernel.handle,
+                frame_index,
+                &draw_repr,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        status_to_result(status, &err_buf, err_len)
+    }
+
+    /// Indexed-draw sibling of [`Self::record_draw`]. Caller must have bound
+    /// an index buffer for `frame_index` first. Dispatches the
+    /// `record_draw_indexed` slot.
+    pub fn record_draw_indexed(
+        &mut self,
+        kernel: &VulkanGraphicsKernel,
+        frame_index: u32,
+        draw: &DrawIndexedCall,
+    ) -> Result<()> {
+        let vt = self.require_methods_vtable("record_draw_indexed")?;
+        let draw_repr = super::vulkan_graphics_kernel::draw_indexed_call_to_repr(draw);
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        // SAFETY: methods_vtable non-null per the guard; kernel handle is the
+        // borrowed graphics-kernel pointer; draw_repr lives across the call.
+        let status = unsafe {
+            ((*vt).record_draw_indexed)(
+                self.handle,
+                kernel.handle,
+                frame_index,
+                &draw_repr,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        status_to_result(status, &err_buf, err_len)
+    }
+
+    /// Resolve the per-type methods vtable or return a typed error.
+    fn require_methods_vtable(
+        &self,
+        op: &str,
+    ) -> Result<*const RhiCommandRecorderMethodsVTable> {
+        if self.methods_vtable.is_null() {
+            return Err(Error::GpuError(format!(
+                "{op}: command recorder methods vtable is null"
+            )));
+        }
+        Ok(self.methods_vtable)
     }
 }
 

@@ -1226,6 +1226,63 @@ impl GpuContextFullAccess {
             Err(Error::GpuError(msg))
         }
     }
+
+    /// Build a swapchain-backed [`PresentTarget`](crate::rhi::PresentTarget)
+    /// from a native `window` handle. `window` is a flattened
+    /// [`RawWindowHandleRepr`](streamlib_plugin_abi::RawWindowHandleRepr)
+    /// the caller projects from its own windowing toolkit (winit lives in
+    /// the display package — window ownership is host-portable, never baked
+    /// into the ABI). `color` `None` = legacy SDR pick. The window must
+    /// outlive the returned target; the host owns the `VkSurfaceKHR` from
+    /// creation. Dispatches through the [`GpuContextFullAccessVTable`]'s
+    /// `create_present_target` slot.
+    pub fn create_present_target(
+        &self,
+        window: &streamlib_plugin_abi::RawWindowHandleRepr,
+        width: u32,
+        height: u32,
+        vsync: bool,
+        color: Option<streamlib_plugin_abi::ColorTraitsRepr>,
+    ) -> Result<crate::rhi::PresentTarget> {
+        if self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "create_present_target: GpuContextFullAccess has null vtable".into(),
+            ));
+        }
+        let color_ptr = color
+            .as_ref()
+            .map(|c| c as *const streamlib_plugin_abi::ColorTraitsRepr)
+            .unwrap_or(std::ptr::null());
+        let mut out_present: std::mem::MaybeUninit<crate::rhi::PresentTarget> =
+            std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: vtable + handle (scope token) paired at construction; the
+        // host writes the PresentTarget by value (`#[repr(C)]`
+        // byte-identical), populating `vtable` + `methods_vtable` with
+        // host-static addresses and caching the swapchain color format.
+        let status = unsafe {
+            ((*self.vtable).create_present_target)(
+                self.handle,
+                window as *const streamlib_plugin_abi::RawWindowHandleRepr,
+                width,
+                height,
+                vsync as u32,
+                color_ptr,
+                out_present.as_mut_ptr() as *mut c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            // SAFETY: host signaled success and wrote a valid value.
+            Ok(unsafe { out_present.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
 }
 
 // =============================================================================
