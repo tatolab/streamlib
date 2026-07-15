@@ -97,12 +97,15 @@ const findings = [];
 for (const r of all) for (const f of (r && r.findings) || []) findings.push(f);
 
 const hasBlocker = findings.some((f) => f.severity === 'blocker');
+// A REJECT verdict is FIX-worthy on its own — never trust that a rejecting
+// reviewer also remembered to tag a finding `blocker` (or emitted findings at all).
+const hasReject = all.some((r) => r && r.verdict === 'REJECT');
 const hasEscalate = all.some((r) => r && r.verdict === 'ESCALATE');
 const hasOpenQuestion = findings.some((f) => f.severity === 'question');
 
 let verdict;
 let prNumber = null;
-if (hasBlocker) {
+if (hasBlocker || hasReject) {
   verdict = 'FIX'; // caller bounces once within the attempt cap
 } else if (hasEscalate || hasOpenQuestion) {
   verdict = 'DISCUSS';
