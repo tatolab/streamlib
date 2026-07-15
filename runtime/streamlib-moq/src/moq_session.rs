@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
-use streamlib::sdk::error::{Error, Result};
+use streamlib_error::{Error, Result};
 
 /// Default MoQ relay (Cloudflare draft-14).
 pub const DEFAULT_MOQ_RELAY_URL: &str = "https://draft-14.cloudflare.mediaoverquic.com";

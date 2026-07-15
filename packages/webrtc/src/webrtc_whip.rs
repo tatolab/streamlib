@@ -11,10 +11,10 @@ use crate::_generated_::{EncodedAudioFrame, EncodedVideoFrame};
 use crate::streaming::{convert_audio_to_sample, convert_video_to_samples};
 use crate::streaming::{WhipClient, WhipConfig};
 use std::sync::Arc;
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::media_clock::MediaClock;
-use streamlib::sdk::processors::ReactiveProcessor;
+use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::media_clock::MediaClock;
+use streamlib_plugin_sdk::sdk::processors::ReactiveProcessor;
 use tokio::sync::mpsc as tokio_mpsc;
 
 // ============================================================================
@@ -31,7 +31,7 @@ enum WhipClientMessage {
 // PROCESSOR
 // ============================================================================
 
-#[streamlib::sdk::processor("WebrtcWhip")]
+#[streamlib_plugin_sdk::sdk::processor("WebrtcWhip")]
 pub struct WebRtcWhipProcessor {
     // Session state
     session_started: bool,

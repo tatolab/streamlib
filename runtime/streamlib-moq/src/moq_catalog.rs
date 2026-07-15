@@ -11,8 +11,7 @@
 //! they never round-trip through a parser at the structured boundary.
 
 use serde::{Deserialize, Serialize};
-use streamlib::sdk::descriptors::SchemaIdent;
-use streamlib::sdk::json_schema::SchemaIdentOutput;
+use streamlib_processor_schema::{SchemaIdent, SchemaIdentOutput};
 
 /// A catalog entry describing a single MoQ track and its StreamLib schema.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,7 +107,7 @@ pub fn catalog_entry_for_output_port(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use streamlib::sdk::descriptors::{Org, Package, SemVer, TypeName};
+    use streamlib_processor_schema::{Org, Package, SemVer, TypeName};
 
     fn ident(org: &str, pkg: &str, ty: &str, v: SemVer) -> SchemaIdent {
         SchemaIdent::new(

@@ -17,11 +17,13 @@ crate-type = ["rlib", "cdylib"]
 streamlib-jtd-codegen = {version = "0.6.0"}
 
 [dependencies]
-# Engine substrate — runtime context, processor traits, generated wire
-# types under `crate::_generated_::*` (VideoFrame), RHI primitives.
-streamlib = {version = "0.6.0"}
+# Engine-free authoring SDK (never the `streamlib` facade) — runtime context
+# views, processor traits, generated wire types under `crate::_generated_::*`
+# (VideoFrame), RHI primitives. Depending on the plugin SDK by its real name
+# keeps this cdylib from statically linking a second engine.
+streamlib-plugin-sdk = {version = "0.6.0"}
 
-# Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
+# Procedural macros — `#[streamlib_plugin_sdk::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
 streamlib-macros = {version = "0.6.0"}
 
@@ -35,19 +37,12 @@ streamlib-plugin-abi = {version = "0.6.0"}
 serde = {version = "1.0", features = ["derive"]}
 tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 
-[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-# Objective-C interop and Apple framework bindings for ScreenCaptureKit.
-objc2-screen-capture-kit = "0.3.2"
-objc2-core-media = "0.3"
-objc2 = {version = "0.6.3"}
-objc2-core-video = {version = "0.3.2"}
-block2 = "0.6"
-# GCD wrapper for dispatching ScreenCaptureKit init to the main thread.
-dispatch2 = "0.3"
-# Lock for async init state shared between the GCD callback and the
-# processor thread.
-parking_lot = "0.12"
-objc2-foundation = {version = "0.3.2"}
-
+# The Apple ScreenCaptureKit processor lives parked under
+# `src/_apple_impl_pending_/` behind a never-compile `#[cfg(any())]` gate: it
+# names an engine-free Apple RHI / surface-pool surface the plugin SDK does not
+# expose yet (`sdk::rhi` is `cfg(linux)`-only). Its Objective-C interop deps
+# (objc2-screen-capture-kit / objc2-core-media / objc2 / objc2-core-video /
+# block2 / dispatch2 / parking_lot / objc2-foundation) are re-added here
+# alongside unparking the module once that surface ships.
 
 [workspace]

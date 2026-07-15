@@ -17,7 +17,12 @@ name = "streamlib_moq"
 path = "src/lib.rs"
 
 [dependencies]
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.6.0" }
+# Engine-free granular deps — never the `streamlib` facade. A package cdylib
+# links this transport lib, so pulling the facade here would statically bundle
+# a second copy of streamlib-engine into the host process (the direct-dep grep
+# in check-boundaries does not see this transitive path).
+streamlib-error = { path = "../../sdk/streamlib-error", version = "0.6.0" }
+streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.6.0" }
 
 # MoQ-over-QUIC transport stack.
 moq-transport = "0.14.1"

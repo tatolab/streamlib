@@ -3,7 +3,7 @@
 
 use crate::parameter_modulation::ParameterModulator;
 use std::collections::HashMap;
-use streamlib::sdk::error::Result;
+use streamlib_plugin_sdk::sdk::error::Result;
 
 pub trait ClapParameterControl {
     fn set_parameter(&mut self, id: u32, value: f64) -> Result<()>;

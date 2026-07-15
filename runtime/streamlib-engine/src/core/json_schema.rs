@@ -12,6 +12,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::graph::{GraphEdgeWithComponents, GraphNodeWithComponents};
 
+/// Structured schema-identifier + semantic-version wire DTOs. Relocated to the
+/// engine-free `streamlib-processor-schema` crate so the MoQ catalog and the
+/// plugin authoring chain share one definition; re-exported here so every
+/// `core::json_schema::{SchemaIdentOutput, SemanticVersionOutput}` path — and
+/// the `streamlib::sdk::json_schema` facade the API server consumes — resolves
+/// unchanged. The `utoipa` feature the engine enables gives them the
+/// `utoipa::ToSchema` derive the aggregate response types below require.
+pub use streamlib_processor_schema::{SchemaIdentOutput, SemanticVersionOutput};
+
 // =============================================================================
 // Graph Response Schema (/api/graph)
 // =============================================================================
@@ -241,66 +250,6 @@ pub struct SchemaDescriptorOutput {
     pub default_capacity: usize,
 }
 
-/// Semantic version (major.minor.patch).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct SemanticVersionOutput {
-    pub major: u32,
-    pub minor: u32,
-    pub patch: u32,
-}
-
-/// Structured schema identifier — `@org/package/Type@version` rendered as
-/// four typed fields per the architecture's structured-everywhere rule
-/// (#401 phase 2). The joined `@org/pkg/Type@v` form is render-only — it
-/// never round-trips back through a parser at the structured boundary.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct SchemaIdentOutput {
-    /// Org segment (e.g., `tatolab`).
-    pub org: String,
-    /// Package segment (e.g., `core`).
-    pub package: String,
-    /// Type-name segment (PascalCase, e.g., `VideoFrame`).
-    #[serde(rename = "type")]
-    pub type_name: String,
-    /// Semantic version of the package the type belongs to.
-    pub version: SemanticVersionOutput,
-}
-
-impl From<&crate::core::SchemaIdent> for SchemaIdentOutput {
-    fn from(ident: &crate::core::SchemaIdent) -> Self {
-        Self {
-            org: ident.org.as_str().to_string(),
-            package: ident.package.as_str().to_string(),
-            type_name: ident.r#type.as_str().to_string(),
-            version: SemanticVersionOutput {
-                major: ident.version.major,
-                minor: ident.version.minor,
-                patch: ident.version.patch,
-            },
-        }
-    }
-}
-
-impl SchemaIdentOutput {
-    /// Resolve a structured port schema spec into the JSON-wire output
-    /// shape. `Any` ports yield `None` (the field is omitted on the wire).
-    pub fn from_port_spec(spec: &crate::core::PortSchemaSpec) -> Option<Self> {
-        match spec {
-            crate::core::PortSchemaSpec::Any => None,
-            crate::core::PortSchemaSpec::Specific(ident) => Some(Self::from(ident)),
-            // `Named` should never reach this site — runtime startup +
-            // proc-macro expansion both resolve bare-name port refs to
-            // `Specific(SchemaIdent)` against the enclosing manifest's
-            // `schemas:` map (#767). A `Named` here is a runtime bug.
-            crate::core::PortSchemaSpec::Named(name) => panic!(
-                "PortSchemaSpec::Named(`{}`) reached json-schema render — \
-                 must be resolved before this site",
-                name.as_str()
-            ),
-        }
-    }
-}
-
 /// A field in a data schema.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct SchemaFieldOutput {
@@ -496,48 +445,6 @@ mod schema_ident_output_tests {
             TypeName::new(ty).unwrap(),
             v,
         )
-    }
-
-    #[test]
-    fn from_port_spec_resolves_specific_to_structured() {
-        let spec =
-            PortSchemaSpec::Specific(ident("tatolab", "core", "VideoFrame", SemVer::new(1, 0, 0)));
-        let s = SchemaIdentOutput::from_port_spec(&spec)
-            .expect("Specific must yield a structured output");
-        assert_eq!(s.org, "tatolab");
-        assert_eq!(s.package, "core");
-        assert_eq!(s.type_name, "VideoFrame");
-        assert_eq!(s.version.major, 1);
-        assert_eq!(s.version.minor, 0);
-        assert_eq!(s.version.patch, 0);
-    }
-
-    #[test]
-    fn from_port_spec_returns_none_for_any() {
-        // `Any` is the wildcard for ports accepting arbitrary payloads.
-        // The JSON wire shape is `null` (skip_serializing_if = Option::is_none).
-        assert!(SchemaIdentOutput::from_port_spec(&PortSchemaSpec::Any).is_none());
-    }
-
-    #[test]
-    fn schema_ident_output_serializes_with_renamed_type_field() {
-        // The `type` field name is reserved; the struct uses `type_name`
-        // internally and renames to "type" on the wire.
-        let s = SchemaIdentOutput {
-            org: "tatolab".to_string(),
-            package: "core".to_string(),
-            type_name: "VideoFrame".to_string(),
-            version: SemanticVersionOutput {
-                major: 1,
-                minor: 0,
-                patch: 0,
-            },
-        };
-        let json = serde_json::to_value(&s).unwrap();
-        assert_eq!(json["org"], "tatolab");
-        assert_eq!(json["package"], "core");
-        assert_eq!(json["type"], "VideoFrame"); // renamed from type_name
-        assert_eq!(json["version"]["major"], 1);
     }
 
     #[test]

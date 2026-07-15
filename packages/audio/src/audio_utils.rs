@@ -3,7 +3,7 @@
 
 use crate::audio_resample::{AudioResampler, ResamplingQuality};
 use crate::_generated_::AudioFrame;
-use streamlib::sdk::error::Result;
+use streamlib_plugin_sdk::sdk::error::Result;
 
 /// Convert audio frame to a different channel count.
 pub fn convert_channels(frame: &AudioFrame, target_channels: u8) -> AudioFrame {

@@ -4,7 +4,7 @@
 use clack_host::entry::PluginEntry;
 
 use std::path::{Path, PathBuf};
-use streamlib::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
 
 #[derive(Debug, Clone)]
 pub struct ClapPluginInfo {

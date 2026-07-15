@@ -5243,7 +5243,8 @@ dependencies = [
  "rustls-native-certs",
  "serde",
  "serde_json",
- "streamlib",
+ "streamlib-error",
+ "streamlib-processor-schema",
  "tokio",
  "tracing",
  "url",
@@ -5303,6 +5304,7 @@ dependencies = [
  "sha2",
  "streamlib-idents",
  "thiserror 2.0.18",
+ "utoipa",
 ]
 
 [[package]]

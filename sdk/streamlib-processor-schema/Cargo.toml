@@ -18,6 +18,16 @@ sha2 = { workspace = true }
 streamlib-idents = { path = "../streamlib-idents", version = "0.6.0" }
 thiserror = { workspace = true }
 schemars = "0.8"  # JSON Schema generation for streamlib.yaml editor support
+# Host-only OpenAPI schema derive for the wire-output DTOs, behind the
+# off-by-default `utoipa` feature. The engine's API layer enables it; a
+# plugin `.slpkg` built engine-free never compiles it.
+utoipa = { version = "5.3", optional = true }
+
+[features]
+# Adds a `utoipa::ToSchema` derive to `SchemaIdentOutput` /
+# `SemanticVersionOutput` for host-side OpenAPI generation. Off by default so
+# the engine-free plugin authoring chain carries no OpenAPI machinery.
+utoipa = ["dep:utoipa"]
 
 [dev-dependencies]
 rmp-serde = { workspace = true }

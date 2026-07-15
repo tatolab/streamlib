@@ -12,6 +12,7 @@ pub mod descriptors;
 pub mod error;
 pub mod processor_schema;
 pub mod processor_schema_parser;
+pub mod schema_ident_output;
 
 pub use execution_config::ExecutionConfig;
 pub use process_execution::ProcessExecution;
@@ -26,6 +27,7 @@ pub use processor_schema::{
     RuntimeConfig, RuntimeOptions, compute_schema_id, to_pascal_case, to_snake_case,
 };
 pub use processor_schema_parser::{parse_processor_yaml, parse_processor_yaml_file};
+pub use schema_ident_output::{SchemaIdentOutput, SemanticVersionOutput};
 
 // Re-export structured-identity types so consumers (the macro, runtime
 // loaders) reach `SchemaIdent`, `Org`, `Package`, etc. through this crate

@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::_generated_::VideoFrame;
-use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::processors::ReactiveProcessor;
+use streamlib_plugin_sdk::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::processors::ReactiveProcessor;
 
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
 
-#[streamlib::sdk::processor("LinuxMp4Writer")]
+#[streamlib_plugin_sdk::sdk::processor("LinuxMp4Writer")]
 pub struct LinuxMp4WriterProcessor {
     gpu_context: Option<GpuContextLimitedAccess>,
 

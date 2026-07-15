@@ -21,7 +21,7 @@ use parking_lot::Mutex as ParkingLotMutex;
 use std::path::Path;
 use std::sync::Arc;
 use crate::_generated_::AudioFrame;
-use streamlib::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
 
 use crate::plugin_info::{ParameterInfo, PluginInfo};
 use crate::scanner::ClapScanner;

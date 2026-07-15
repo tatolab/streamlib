@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::_generated_::AudioFrame;
-use streamlib::sdk::error::Result;
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_plugin_sdk::sdk::error::Result;
+use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
-#[streamlib::sdk::processor("BufferRechunker")]
+#[streamlib_plugin_sdk::sdk::processor("BufferRechunker")]
 pub struct BufferRechunkerProcessor {
     buffer: Vec<f32>,
     sample_rate: u32,
@@ -13,7 +13,7 @@ pub struct BufferRechunkerProcessor {
     channels: u8,
 }
 
-impl streamlib::sdk::processors::ReactiveProcessor for BufferRechunkerProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for BufferRechunkerProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let target_size = self.config.target_buffer_size as usize;
         self.buffer = Vec::with_capacity(target_size * 16);

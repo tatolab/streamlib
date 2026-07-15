@@ -9,7 +9,7 @@
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use streamlib::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
 use tokio::sync::mpsc;
 
 // ============================================================================

@@ -3,7 +3,7 @@
 
 use bytes::Bytes;
 use std::collections::HashMap;
-use streamlib::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
 
 /// H.264 NAL unit types (bits 0-4 of NAL header)
 #[allow(dead_code)]

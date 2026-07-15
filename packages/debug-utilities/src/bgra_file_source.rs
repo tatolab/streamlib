@@ -8,11 +8,11 @@
 // pipelines with pre-generated fixture files.
 
 use crate::_generated_::VideoFrame;
-use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess, TextureRing};
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::iceoryx2::OutputWriter;
-use streamlib::sdk::processors::ManualProcessor;
-use streamlib::sdk::rhi::{PixelFormat, TextureFormat, TextureUsages};
+use streamlib_plugin_sdk::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::iceoryx2::OutputWriter;
+use streamlib_plugin_sdk::sdk::processors::ManualProcessor;
+use streamlib_plugin_sdk::sdk::rhi::{PixelFormat, TextureFormat, TextureRing, TextureUsages};
 
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -24,7 +24,7 @@ use std::sync::Arc;
 /// `docs/learnings/vulkan-frames-in-flight.md`.
 const RING_DEPTH: usize = 2;
 
-#[streamlib::sdk::processor("BgraFileSource")]
+#[streamlib_plugin_sdk::sdk::processor("BgraFileSource")]
 pub struct BgraFileSourceProcessor {
     gpu_context: Option<GpuContextLimitedAccess>,
     is_running: Arc<AtomicBool>,

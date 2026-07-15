@@ -9,16 +9,16 @@
 use streamlib_moq::{sessions_for_runtime, MoqTrackReader};
 use std::sync::Arc;
 use std::time::Duration;
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::iceoryx2::OutputWriter;
-use streamlib::sdk::media_clock::MediaClock;
+use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::iceoryx2::OutputWriter;
+use streamlib_plugin_sdk::sdk::media_clock::MediaClock;
 
 const MAX_RETRY_ATTEMPTS: u32 = 60;
 const INITIAL_RETRY_DELAY_MS: u64 = 500;
 const MAX_RETRY_DELAY_MS: u64 = 10_000;
 
-#[streamlib::sdk::processor("MoqSubscribeTrack")]
+#[streamlib_plugin_sdk::sdk::processor("MoqSubscribeTrack")]
 pub struct MoqSubscribeTrackProcessor {
     runtime_id: Option<String>,
     /// Plugin-owned tokio runtime. Constructed in `setup()`; the host's
@@ -29,7 +29,7 @@ pub struct MoqSubscribeTrackProcessor {
     shutdown_signal_sender: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
-impl streamlib::sdk::processors::ManualProcessor for MoqSubscribeTrackProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for MoqSubscribeTrackProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)

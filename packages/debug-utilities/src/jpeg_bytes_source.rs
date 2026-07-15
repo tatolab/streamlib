@@ -13,17 +13,17 @@
 // EncodedJpegFrame — most notably @tatolab/jpeg::JpegDecoder.
 
 use crate::_generated_::EncodedJpegFrame;
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::iceoryx2::OutputWriter;
-use streamlib::sdk::processors::ManualProcessor;
-use streamlib::sdk::context::RuntimeContextFullAccess;
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::iceoryx2::OutputWriter;
+use streamlib_plugin_sdk::sdk::processors::ManualProcessor;
+use streamlib_plugin_sdk::sdk::context::RuntimeContextFullAccess;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 const DEFAULT_FPS: u32 = 10;
 
-#[streamlib::sdk::processor("JpegBytesSource")]
+#[streamlib_plugin_sdk::sdk::processor("JpegBytesSource")]
 pub struct JpegBytesSourceProcessor {
     /// JPEG bytes loaded from disk at setup time.
     jpeg_bytes: Option<Arc<Vec<u8>>>,

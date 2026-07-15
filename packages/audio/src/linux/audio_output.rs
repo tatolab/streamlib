@@ -9,18 +9,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use crate::_generated_::AudioFrame;
-use streamlib::sdk::error::{Result, Error};
-use streamlib::sdk::context::RuntimeContextFullAccess;
+use streamlib_plugin_sdk::sdk::error::{Result, Error};
+use streamlib_plugin_sdk::sdk::context::RuntimeContextFullAccess;
 
 /// Wrapper for InputMailboxes pointer that is Send.
-struct SendableInputsPtr(*const streamlib::sdk::iceoryx2::InputMailboxes);
+struct SendableInputsPtr(*const streamlib_plugin_sdk::sdk::iceoryx2::InputMailboxes);
 
 // SAFETY: InputMailboxes is Send, and we control the lifetime
 unsafe impl Send for SendableInputsPtr {}
 
 impl SendableInputsPtr {
     /// SAFETY: Caller must ensure the pointed-to data is still valid.
-    unsafe fn get(&self) -> &streamlib::sdk::iceoryx2::InputMailboxes {
+    unsafe fn get(&self) -> &streamlib_plugin_sdk::sdk::iceoryx2::InputMailboxes {
         unsafe { &*self.0 }
     }
 }
@@ -49,7 +49,7 @@ pub struct LinuxAudioDevice {
     pub is_default: bool,
 }
 
-#[streamlib::sdk::processor("AudioOutput")]
+#[streamlib_plugin_sdk::sdk::processor("AudioOutput")]
 pub struct LinuxAudioOutputProcessor {
     device_id: Option<usize>,
     device_name: String,
@@ -65,7 +65,7 @@ pub struct LinuxAudioOutputProcessor {
     audio: Option<ProcessorAudioConverter>,
 }
 
-impl streamlib::sdk::processors::ManualProcessor for LinuxAudioOutputProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for LinuxAudioOutputProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.device_id = self
             .config

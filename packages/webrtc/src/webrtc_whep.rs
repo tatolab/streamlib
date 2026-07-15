@@ -10,18 +10,18 @@
 use crate::_generated_::{EncodedAudioFrame, EncodedVideoFrame};
 use crate::streaming::{H264RtpDepacketizer, RtpSample, WhepClient, WhepConfig};
 use std::sync::Arc;
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::iceoryx2::OutputWriter;
-use streamlib::sdk::media_clock::MediaClock;
-use streamlib::sdk::processors::ManualProcessor;
+use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::iceoryx2::OutputWriter;
+use streamlib_plugin_sdk::sdk::media_clock::MediaClock;
+use streamlib_plugin_sdk::sdk::processors::ManualProcessor;
 use tokio::sync::mpsc;
 
 // ============================================================================
 // PROCESSOR
 // ============================================================================
 
-#[streamlib::sdk::processor("WebrtcWhep")]
+#[streamlib_plugin_sdk::sdk::processor("WebrtcWhep")]
 pub struct WebRtcWhepProcessor {
     // WHEP client (owns WebRTC session)
     whep_client: Option<WhepClient>,

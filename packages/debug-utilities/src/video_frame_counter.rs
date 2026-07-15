@@ -16,8 +16,8 @@
 use crate::_generated_::VideoFrame;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use streamlib::sdk::error::Result;
+use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_plugin_sdk::sdk::error::Result;
 
 /// Total VideoFrames the counter has consumed since the last reset.
 pub static FRAMES_OBSERVED: AtomicU64 = AtomicU64::new(0);
@@ -47,10 +47,10 @@ pub fn reset() {
     *FIRST_FRAME.lock().expect("FIRST_FRAME mutex poisoned") = None;
 }
 
-#[streamlib::sdk::processor("VideoFrameCounter")]
+#[streamlib_plugin_sdk::sdk::processor("VideoFrameCounter")]
 pub struct VideoFrameCounterProcessor;
 
-impl streamlib::sdk::processors::ReactiveProcessor for VideoFrameCounterProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for VideoFrameCounterProcessor::Processor {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         if !self.inputs.has_data("input") {
             return Ok(());
