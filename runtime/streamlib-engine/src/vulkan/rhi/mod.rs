@@ -101,7 +101,13 @@ pub(crate) use vulkan_command_recorder::RhiCommandRecorderInner;
 #[cfg(target_os = "linux")]
 mod vulkan_present_target;
 #[cfg(target_os = "linux")]
-pub use vulkan_present_target::{MAX_FRAMES_IN_FLIGHT, PresentFrame, VulkanPresentTarget};
+pub use vulkan_present_target::{
+    AcquiredFrame, MAX_FRAMES_IN_FLIGHT, PresentFrame, PresentTarget, VulkanPresentTarget,
+};
+// `PresentTargetInner` is needed by `core::plugin::host_services` to
+// reclaim the `Box<Mutex<VulkanPresentTarget>>` in the `drop_present_target`
+// slot body + lock it in the method slot bodies.
+pub(crate) use vulkan_present_target::PresentTargetInner;
 
 #[cfg(target_os = "linux")]
 mod vulkan_swapchain_colorspace;

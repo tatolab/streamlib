@@ -963,6 +963,15 @@ impl RhiCommandRecorder {
         }
     }
 
+    /// Raw `Box<RhiCommandRecorderInner>` handle backing this recorder.
+    /// Borrowed, NON-OWNING — used by [`VulkanPresentTarget`] to hand its
+    /// internal per-frame recorder back across the plugin ABI `begin_frame`
+    /// return + `end_frame` identity check. The caller must never release
+    /// it (the present target owns the recorder).
+    pub(crate) fn raw_handle(&self) -> *const c_void {
+        self.handle
+    }
+
     /// Engine-internal mutable borrow of the host-owned
     /// `RhiCommandRecorderInner`. **Panics if called from cdylib code.**
     pub(crate) fn host_inner_mut(&mut self) -> &mut RhiCommandRecorderInner {
