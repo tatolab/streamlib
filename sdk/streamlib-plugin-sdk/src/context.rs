@@ -976,8 +976,8 @@ impl GpuContextFullAccess {
     /// Obtain the host's cross-process
     /// [`SurfaceStore`](crate::rhi::SurfaceStore) producer handle.
     ///
-    /// LimitedAccess mirror — inherits the `surface_store` slot via
-    /// [`Self::inherited_limited_unchecked`].
+    /// LimitedAccess mirror — inherits the `surface_store` slot via the
+    /// crate-internal `inherited_limited_unchecked` view.
     pub fn surface_store(&self) -> crate::rhi::SurfaceStore {
         self.inherited_limited_unchecked().surface_store()
     }

@@ -76,6 +76,16 @@ impl HostTimelineSemaphore {
     /// (single-writer-per-edge; `value` strictly increasing by contract).
     /// Dispatches through the methods vtable's `signal` slot (host-side
     /// `vkSignalSemaphore`).
+    ///
+    /// Cross-process caveat: a cross-process producer must advance its
+    /// `produce_done` edge by GPU-queue completion (a queue-submit signal
+    /// on the semaphore), NOT by this CPU-side `signal`. CPU-signalling
+    /// `produce_done` before the GPU write has actually completed releases
+    /// the shared surface early, and a subprocess consumer then samples a
+    /// partially-written texture — a torn / black frame from a
+    /// cross-process GPU write/read race the driver cannot observe across
+    /// the process boundary. Use this CPU signal only for host-local
+    /// timelines with no separately-scheduled GPU writer.
     pub fn signal(&self, value: u64) -> Result<()> {
         if self.methods.is_null() {
             return Err(Error::GpuError(

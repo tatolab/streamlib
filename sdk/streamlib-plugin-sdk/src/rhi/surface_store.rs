@@ -109,6 +109,17 @@ impl SurfaceStore {
     /// (the host reinterprets the layout-identical bytes) and the inner
     /// handles of the exportable timelines; the host derefs the timeline
     /// handles as `Arc<HostVulkanTimelineSemaphore>` borrows.
+    ///
+    /// Lifetime contract: registration only BORROWS the `produce_done` /
+    /// `consume_done` timelines — the host exports each one's `OPAQUE_FD`
+    /// during this call and retains no clone of the
+    /// [`HostTimelineSemaphore`](crate::rhi::HostTimelineSemaphore). The
+    /// caller MUST keep both timeline values alive (and keep signalling
+    /// `produce_done` by GPU-queue completion) for the whole
+    /// registration / session lifetime. Dropping a timeline after
+    /// registration decrements the host `VkSemaphore` refcount to zero, so
+    /// the producer can never signal `produce_done` again and a subprocess
+    /// consumer blocks forever waiting on it.
     pub fn register_texture(
         &self,
         surface_id: &str,
@@ -257,7 +268,26 @@ mod layout_tests {
         assert!(store.disconnect().is_err());
         assert!(store.update_image_layout("s", VulkanLayout(0)).is_err());
         // Null store + null timelines: register_texture must refuse
-        // before any dispatch. Build a null-handle Texture to pass.
+        // before any dispatch. Build a null-handle Texture to pass — the
+        // is_none() guard fires before the texture pointer or the vtable
+        // is ever read, so the null envelope is never dereferenced.
+        //
+        // Mental-revert: drop register_texture's is_none() guard and this
+        // call UB-derefs the null `*const SurfaceStoreVTable` (SIGSEGV).
+        let null_texture = Texture {
+            handle: std::ptr::null(),
+            vtable: std::ptr::null(),
+            width_cached: 0,
+            height_cached: 0,
+            format_raw: 0,
+            _padding: 0,
+        };
+        assert!(
+            store
+                .register_texture("s", &null_texture, None, None, VulkanLayout(0))
+                .is_err(),
+            "register_texture on a null store must return a typed Err, not UB"
+        );
         drop(store);
     }
 }
