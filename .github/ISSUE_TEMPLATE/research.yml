@@ -1,0 +1,25 @@
+name: Research
+description: A question to answer before building — produces a doc deliverable, not code.
+title: "research: "
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: "the specific thing to resolve"
+    validations:
+      required: true
+  - type: textarea
+    id: why-now
+    attributes:
+      label: Why now
+      description: "what this unblocks and why it can't wait"
+    validations:
+      required: true
+  - type: textarea
+    id: deliverable-shape
+    attributes:
+      label: Deliverable shape
+      description: "what the answer looks like when done — a decision doc, a spike report, a recommendation"
+    validations:
+      required: true

@@ -360,8 +360,8 @@ pub struct SimpleEncoderConfig {
     /// `level_idc`, QP, and rate-control are configured elsewhere. Valid values
     /// are `0..VkVideoEncodeCapabilitiesKHR::max_quality_levels`; the session
     /// clamps as a safety floor. `None` uses [`default_effort_level`].
-    /// See `docs/research/h265-encoder-quality-knobs.md` for why this knob
-    /// does not move PSNR at fixed CQP.
+    /// This effort index does not move PSNR at fixed CQP on the reference
+    /// driver.
     pub effort_level: Option<u32>,
     /// H.273 color VUI metadata baked into the SPS at session-parameter
     /// creation time. `None` (or `Some(H273ColorVui::default())`) emits no
@@ -380,8 +380,7 @@ pub struct SimpleEncoderConfig {
 /// - H.265 reports `max_quality_levels = 1`, so 0 is the only option.
 ///
 /// The real H.265 quality knobs (SPS/PPS syntax switches, rate-control shape,
-/// `tuning_mode`) are tracked separately — see
-/// `docs/research/h265-encoder-quality-knobs.md` and the follow-up backlog.
+/// `tuning_mode`) are tracked separately in the follow-up backlog.
 pub fn default_effort_level(codec: Codec) -> u32 {
     match codec {
         Codec::H264 => 0,

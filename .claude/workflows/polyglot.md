@@ -55,9 +55,9 @@ Minimum E2E for any escalate-op change:
    IPC, verify the resource arrives.
 3. Deno subprocess test: same as above for Deno.
 
-If test harness doesn't exist yet, file it as its own issue (see
-the test-harness rule in @docs/issue-template.md) and mark the
-current issue blocked by it.
+If test harness doesn't exist yet, file it as its own issue (test
+harnesses are their own issues, with their own exit criteria) and
+mark the current issue blocked by it.
 
 ## Rules specific to polyglot issues
 

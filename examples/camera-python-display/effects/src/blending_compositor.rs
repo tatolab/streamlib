@@ -94,9 +94,8 @@ pub struct BlendingCompositorConfig {
     /// for tests that need a deterministic cadence without a window.
     #[serde(default)]
     pub target_fps: Option<f64>,
-    /// Working-space `ColorInfo` for the per-acquire compositing model
-    /// (per `docs/research/color-management-pipeline.md` § 2): each
-    /// input frame whose declared `ColorInfo` differs from this is
+    /// Working-space `ColorInfo` for the per-acquire compositing model:
+    /// each input frame whose declared `ColorInfo` differs from this is
     /// converted via [`RhiToneMapper`] into a per-port intermediate
     /// before the composite kernel reads it; the output frame stamps
     /// this same `ColorInfo`.

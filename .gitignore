@@ -94,6 +94,9 @@ _generated_/
 # sitting next to a committed generic <name>.<ext>. Never part of a PR.
 *.local.sh
 *.local.md
+# Per-machine rig profile (copied from docs/rig-profile.example.md). Already
+# covered by *.local.md above; listed explicitly so it's greppable.
+docs/rig-profile.local.md
 
 # Per-developer amos focus state (machine-local, set by /amos:focus).
 .amosrc.toml
