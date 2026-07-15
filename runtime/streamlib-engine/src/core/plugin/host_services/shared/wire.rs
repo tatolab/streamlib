@@ -53,6 +53,37 @@ pub(in crate::core::plugin::host_services) fn write_err(
     }
 }
 
+/// Return code for a reserved-but-unlanded plugin-ABI slot (M32
+/// one-shot reservation, #1253). A distinct non-zero value — not `1`
+/// (the generic escalate/arg error) and not `2` (the buffer-too-small
+/// retry signal) — so a reserved-slot refusal is unambiguous in the
+/// wire tests and never mistaken for either. Replaced by real host
+/// bodies as the per-surface fill-in issues (#1258–#1262) land.
+pub(in crate::core::plugin::host_services) const NOT_YET_PROVIDED_RC: i32 = -100;
+
+/// Write the standard NotYetProvided message for a reserved plugin-ABI
+/// slot and return [`NOT_YET_PROVIDED_RC`]. Every reserved v11 slot body
+/// (`GpuContextFullAccessVTable` create/method slots + the five new
+/// per-type methods vtables) routes through this so the refusal message
+/// and code stay uniform across the reservation.
+pub(in crate::core::plugin::host_services) fn not_yet_provided(
+    slot: &str,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        &format!(
+            "{slot}: not yet provided — reserved M32 plugin-ABI slot; \
+             its host body lands with the surface fill-in issue"
+        ),
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    NOT_YET_PROVIDED_RC
+}
+
 /// Companion to [`write_err`] used by the iceoryx2-transport
 /// wrappers (`OutputWriter`, `InputMailboxes`). Same shape with a
 /// stricter early-return — skips the write entirely if either

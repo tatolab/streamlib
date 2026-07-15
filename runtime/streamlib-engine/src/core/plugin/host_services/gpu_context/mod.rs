@@ -50,6 +50,17 @@ use full::{
     host_gpu_full_drop_compute_kernel, host_gpu_full_drop_graphics_kernel,
     host_gpu_full_drop_ray_tracing_kernel, host_gpu_full_drop_texture_ring,
 };
+// v11 (M32 #1253) reserved-slot stubs.
+use full::{
+    host_gpu_full_copy_texture_to_storage_buffer_and_signal,
+    host_gpu_full_create_decoder_session, host_gpu_full_create_encoder_session,
+    host_gpu_full_create_exportable_timeline_semaphore, host_gpu_full_create_opaque_fd_export_buffer,
+    host_gpu_full_create_present_target, host_gpu_full_create_texture_readback,
+    host_gpu_full_drop_decoder_session, host_gpu_full_drop_encoder_session,
+    host_gpu_full_drop_present_target, host_gpu_full_drop_texture_readback,
+    host_gpu_full_export_storage_buffer_opaque_fd,
+    host_gpu_full_wrap_storage_buffer_as_pixel_buffer,
+};
 use limited::{
     host_gpu_lim_acquire_index_buffer, host_gpu_lim_acquire_pixel_buffer,
     host_gpu_lim_acquire_storage_buffer, host_gpu_lim_acquire_texture,
@@ -202,6 +213,22 @@ pub static HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE: GpuContextFullAccessVTable =
         import_dma_buf_storage_buffer: host_gpu_full_import_dma_buf_storage_buffer,
         host_vulkan_device_arc: host_gpu_full_host_vulkan_device_arc,
         host_vulkan_texture_arc: host_gpu_full_host_vulkan_texture_arc,
+        // v11 (M32 #1253) reserved slots — typed NotYetProvided stubs
+        // until the per-surface fill-in issues land the real bodies.
+        create_present_target: host_gpu_full_create_present_target,
+        drop_present_target: host_gpu_full_drop_present_target,
+        create_encoder_session: host_gpu_full_create_encoder_session,
+        drop_encoder_session: host_gpu_full_drop_encoder_session,
+        create_decoder_session: host_gpu_full_create_decoder_session,
+        drop_decoder_session: host_gpu_full_drop_decoder_session,
+        create_exportable_timeline_semaphore: host_gpu_full_create_exportable_timeline_semaphore,
+        create_texture_readback: host_gpu_full_create_texture_readback,
+        drop_texture_readback: host_gpu_full_drop_texture_readback,
+        create_opaque_fd_export_buffer: host_gpu_full_create_opaque_fd_export_buffer,
+        export_storage_buffer_opaque_fd: host_gpu_full_export_storage_buffer_opaque_fd,
+        wrap_storage_buffer_as_pixel_buffer: host_gpu_full_wrap_storage_buffer_as_pixel_buffer,
+        copy_texture_to_storage_buffer_and_signal:
+            host_gpu_full_copy_texture_to_storage_buffer_and_signal,
     };
 
 /// Pointer to the [`GpuContextFullAccessVTable`] this plugin should

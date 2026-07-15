@@ -162,7 +162,18 @@ pub const STREAMLIB_ABI_VERSION: u32 = 5;
 ///   `set_iceoryx2_resources` slot on `ProcessorVTable` v2 which
 ///   delivers the per-instance opaque handles. Non-null for every
 ///   host that wires processors through iceoryx2.
-pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 14;
+/// - v15: M32 one-shot slot reservation (#1253) appends five per-type
+///   methods-vtable pointers under this single bump —
+///   `present_target_methods_vtable` (#1258),
+///   `video_encoder_session_methods_vtable` +
+///   `video_decoder_session_methods_vtable` (#1259),
+///   `host_timeline_semaphore_methods_vtable` (#1260), and
+///   `vulkan_texture_readback_methods_vtable` (#1261). Each sources the
+///   host's static per-type dispatch table for the matching mintable
+///   PluginAbiObject; non-null for hosts that ship a GpuContext, null
+///   otherwise (cdylib must check before dispatching). Paired with the
+///   `GpuContextFullAccessVTable` v10→v11 growth.
+pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 15;
 
 // =============================================================================
 // Build-fingerprint folding — shared FNV-1a helpers
@@ -265,6 +276,24 @@ pub const PLUGIN_ABI_LAYOUT_FINGERPRINT: u64 = {
     h = fingerprint_fold_u64(h, RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION as u64);
     h = fingerprint_fold_u64(h, OUTPUT_WRITER_VTABLE_LAYOUT_VERSION as u64);
     h = fingerprint_fold_u64(h, INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION as u64);
+    // v11/v15 (M32 #1253) — the five new surface methods vtables.
+    h = fingerprint_fold_u64(h, PRESENT_TARGET_METHODS_VTABLE_LAYOUT_VERSION as u64);
+    h = fingerprint_fold_u64(
+        h,
+        VIDEO_ENCODER_SESSION_METHODS_VTABLE_LAYOUT_VERSION as u64,
+    );
+    h = fingerprint_fold_u64(
+        h,
+        VIDEO_DECODER_SESSION_METHODS_VTABLE_LAYOUT_VERSION as u64,
+    );
+    h = fingerprint_fold_u64(
+        h,
+        HOST_TIMELINE_SEMAPHORE_METHODS_VTABLE_LAYOUT_VERSION as u64,
+    );
+    h = fingerprint_fold_u64(
+        h,
+        VULKAN_TEXTURE_READBACK_METHODS_VTABLE_LAYOUT_VERSION as u64,
+    );
 
     // Measured layout of the wire envelope + callback table.
     h = fingerprint_fold_layout(
@@ -354,6 +383,33 @@ pub const PLUGIN_ABI_LAYOUT_FINGERPRINT: u64 = {
         h,
         size_of::<InputMailboxesVTable>(),
         align_of::<InputMailboxesVTable>(),
+    );
+    // v11/v15 (M32 #1253) — measured layout of the five new surface
+    // methods vtables (each dereferenced field-by-field).
+    h = fingerprint_fold_layout(
+        h,
+        size_of::<PresentTargetMethodsVTable>(),
+        align_of::<PresentTargetMethodsVTable>(),
+    );
+    h = fingerprint_fold_layout(
+        h,
+        size_of::<VideoEncoderSessionMethodsVTable>(),
+        align_of::<VideoEncoderSessionMethodsVTable>(),
+    );
+    h = fingerprint_fold_layout(
+        h,
+        size_of::<VideoDecoderSessionMethodsVTable>(),
+        align_of::<VideoDecoderSessionMethodsVTable>(),
+    );
+    h = fingerprint_fold_layout(
+        h,
+        size_of::<HostTimelineSemaphoreMethodsVTable>(),
+        align_of::<HostTimelineSemaphoreMethodsVTable>(),
+    );
+    h = fingerprint_fold_layout(
+        h,
+        size_of::<VulkanTextureReadbackMethodsVTable>(),
+        align_of::<VulkanTextureReadbackMethodsVTable>(),
     );
 
     h
@@ -692,6 +748,35 @@ pub struct HostServices {
     /// invokes `ProcessorVTable::set_iceoryx2_resources`. Non-null
     /// for every host that wires processors with input ports.
     pub input_mailboxes_vtable: *const InputMailboxesVTable,
+
+    // -------------------------------------------------------------------------
+    // M32 one-shot slot reservation (v15 — #1253)
+    // -------------------------------------------------------------------------
+    /// Static dispatch table for the `PresentTarget` PluginAbiObject's
+    /// method dispatch (#1258). Set once at install time; non-null for
+    /// hosts that ship a GpuContext, null otherwise (cdylib must check
+    /// before dispatching).
+    pub present_target_methods_vtable: *const PresentTargetMethodsVTable,
+
+    /// Static dispatch table for the `VideoEncoderSession`
+    /// PluginAbiObject's method dispatch (#1259). Set once at install
+    /// time; non-null for hosts that ship a GpuContext, null otherwise.
+    pub video_encoder_session_methods_vtable: *const VideoEncoderSessionMethodsVTable,
+
+    /// Static dispatch table for the `VideoDecoderSession`
+    /// PluginAbiObject's method dispatch (#1259). Set once at install
+    /// time; non-null for hosts that ship a GpuContext, null otherwise.
+    pub video_decoder_session_methods_vtable: *const VideoDecoderSessionMethodsVTable,
+
+    /// Static dispatch table for the `HostTimelineSemaphore`
+    /// PluginAbiObject's method dispatch (#1260). Set once at install
+    /// time; non-null for hosts that ship a GpuContext, null otherwise.
+    pub host_timeline_semaphore_methods_vtable: *const HostTimelineSemaphoreMethodsVTable,
+
+    /// Static dispatch table for the `TextureReadback` PluginAbiObject's
+    /// method dispatch (#1261). Set once at install time; non-null for
+    /// hosts that ship a GpuContext, null otherwise.
+    pub vulkan_texture_readback_methods_vtable: *const VulkanTextureReadbackMethodsVTable,
 }
 
 // Note: under v3 the ABI eliminates the tokio shared-type crossing
@@ -941,10 +1026,9 @@ mod layout_tests {
 
     #[test]
     fn host_services_layout_versions_pinned() {
-        // v14: issue #894 appends OutputWriterVTable +
-        // InputMailboxesVTable references and bumps
-        // ProcessorVTable to v2 (slot swap).
-        assert_eq!(HOST_SERVICES_LAYOUT_VERSION, 14);
+        // v15: M32 one-shot slot reservation (#1253) appends five
+        // per-type methods-vtable pointers.
+        assert_eq!(HOST_SERVICES_LAYOUT_VERSION, 15);
         // v5: PluginDeclaration grew the build-fingerprint handshake.
         assert_eq!(STREAMLIB_ABI_VERSION, 5);
         // v2: shared-Rust-type iceoryx2 slots replaced by
@@ -956,8 +1040,12 @@ mod layout_tests {
         // (`clone_handle` / `drop_handle`).
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 14);
+        // SurfaceStore stays at v1 for the entire M32 milestone — #1260
+        // and #1262 both re-bless existing slots (no new SurfaceStore
+        // slot).
         assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
-        assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 10);
+        // v11: M32 one-shot slot reservation (#1253).
+        assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 11);
         assert_eq!(TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 5);
         assert_eq!(VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 4);
@@ -981,14 +1069,22 @@ mod layout_tests {
         // and never truncates. Slots: `read_raw`, `has_data`,
         // `clone_arc`, `drop_arc`, `max_payload_for_port`.
         assert_eq!(INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION, 2);
+        // v11/v15 (M32 #1253) — the five new surface methods vtables all
+        // mint at layout version 1.
+        assert_eq!(PRESENT_TARGET_METHODS_VTABLE_LAYOUT_VERSION, 1);
+        assert_eq!(VIDEO_ENCODER_SESSION_METHODS_VTABLE_LAYOUT_VERSION, 1);
+        assert_eq!(VIDEO_DECODER_SESSION_METHODS_VTABLE_LAYOUT_VERSION, 1);
+        assert_eq!(HOST_TIMELINE_SEMAPHORE_METHODS_VTABLE_LAYOUT_VERSION, 1);
+        assert_eq!(VULKAN_TEXTURE_READBACK_METHODS_VTABLE_LAYOUT_VERSION, 1);
     }
 
     #[test]
     fn host_services_repr_layout() {
-        // 26 fields total: 2 u32 header + 1 host handle + 8 leading
-        // extern "C" fn callbacks + 15 trailing vtable pointers.
-        // Total = 4 + 4 + 8 + 8*8 + 15*8 = 200 bytes, align = 8.
-        assert_eq!(size_of::<HostServices>(), 200);
+        // 31 fields total: 2 u32 header + 1 host handle + 8 leading
+        // extern "C" fn callbacks + 20 trailing vtable pointers (15
+        // pre-v15 + 5 M32 #1253).
+        // Total = 4 + 4 + 8 + 8*8 + 20*8 = 240 bytes, align = 8.
+        assert_eq!(size_of::<HostServices>(), 240);
         assert_eq!(align_of::<HostServices>(), 8);
 
         // Header.
@@ -1026,6 +1122,11 @@ mod layout_tests {
         assert_eq!(size_of::<*const RhiCommandRecorderMethodsVTable>(), 8);
         assert_eq!(size_of::<*const OutputWriterVTable>(), 8);
         assert_eq!(size_of::<*const InputMailboxesVTable>(), 8);
+        assert_eq!(size_of::<*const PresentTargetMethodsVTable>(), 8);
+        assert_eq!(size_of::<*const VideoEncoderSessionMethodsVTable>(), 8);
+        assert_eq!(size_of::<*const VideoDecoderSessionMethodsVTable>(), 8);
+        assert_eq!(size_of::<*const HostTimelineSemaphoreMethodsVTable>(), 8);
+        assert_eq!(size_of::<*const VulkanTextureReadbackMethodsVTable>(), 8);
 
         assert_eq!(offset_of!(HostServices, runtime_context_vtable), 80);
         assert_eq!(offset_of!(HostServices, audio_clock_vtable), 88);
@@ -1066,6 +1167,25 @@ mod layout_tests {
         );
         assert_eq!(offset_of!(HostServices, output_writer_vtable), 184);
         assert_eq!(offset_of!(HostServices, input_mailboxes_vtable), 192);
+        // v15 (M32 #1253) — five appended per-type methods-vtable
+        // pointers.
+        assert_eq!(offset_of!(HostServices, present_target_methods_vtable), 200);
+        assert_eq!(
+            offset_of!(HostServices, video_encoder_session_methods_vtable),
+            208
+        );
+        assert_eq!(
+            offset_of!(HostServices, video_decoder_session_methods_vtable),
+            216
+        );
+        assert_eq!(
+            offset_of!(HostServices, host_timeline_semaphore_methods_vtable),
+            224
+        );
+        assert_eq!(
+            offset_of!(HostServices, vulkan_texture_readback_methods_vtable),
+            232
+        );
     }
 
     /// Compile-time witnesses that the vtable types are Send + Sync.
@@ -1082,6 +1202,11 @@ mod layout_tests {
         assert_send_sync::<GpuContextFullAccessVTable>();
         assert_send_sync::<RhiColorConverterMethodsVTable>();
         assert_send_sync::<RhiCommandRecorderMethodsVTable>();
+        assert_send_sync::<PresentTargetMethodsVTable>();
+        assert_send_sync::<VideoEncoderSessionMethodsVTable>();
+        assert_send_sync::<VideoDecoderSessionMethodsVTable>();
+        assert_send_sync::<HostTimelineSemaphoreMethodsVTable>();
+        assert_send_sync::<VulkanTextureReadbackMethodsVTable>();
         assert_send_sync::<HostServices>();
         assert_send_sync::<ProcessorVTable>();
     }

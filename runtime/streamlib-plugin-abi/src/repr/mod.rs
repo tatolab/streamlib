@@ -33,9 +33,15 @@
 pub mod command_recorder;
 pub mod compute;
 pub mod graphics;
+pub mod opaque_fd;
+pub mod present;
 pub mod ray_tracing;
+pub mod video;
 
 pub use command_recorder::*;
 pub use compute::*;
 pub use graphics::*;
+pub use opaque_fd::*;
+pub use present::*;
 pub use ray_tracing::*;
+pub use video::*;

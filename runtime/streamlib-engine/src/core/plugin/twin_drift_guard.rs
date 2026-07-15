@@ -94,6 +94,33 @@ fn logic_identical_twins_stay_in_sync() {
     }
 }
 
+/// The `install_host_services` version-skew diagnostic (M32 #1253) is factored
+/// into a `layout_skew_diagnostic.rs` file in each twin so the two are
+/// LOGIC-IDENTICAL — the outer + per-inner-vtable `layout_version` checks and
+/// the `report_layout_skew` emitter are the same in both host contexts. The
+/// two files sit at different relative sub-paths (engine
+/// `host_services/layout_skew_diagnostic.rs`, SDK
+/// `layout_skew_diagnostic.rs`), so this is a path-pair entry, not the
+/// same-filename loop above. Unbypassable: to make it pass after a real change
+/// you MUST apply the same change to BOTH — the skew diagnostic is a
+/// plugin-mode-only refusal path host-mode tests never exercise.
+#[test]
+fn logic_identical_install_skew_diagnostic_twins_stay_in_sync() {
+    let eng = normalize(&read(ENGINE_DIR, "host_services/layout_skew_diagnostic.rs"));
+    let sdk = normalize(&read(SDK_DIR, "layout_skew_diagnostic.rs"));
+    assert_eq!(
+        eng, sdk,
+        "\nengine↔SDK `install_host_services` skew-diagnostic twin has DRIFTED — \
+         a logic change landed in one copy but not the other. Apply the SAME \
+         change to BOTH:\n  \
+         runtime/streamlib-engine/src/core/plugin/host_services/layout_skew_diagnostic.rs\n  \
+         sdk/streamlib-plugin-sdk/src/plugin/layout_skew_diagnostic.rs\n\
+         (These two are logic-identical by contract; the engine-free SDK \
+         can't reuse the engine's copy, so a version-skew fix must land in both \
+         install_host_services twins.)\n"
+    );
+}
+
 /// `processor_vtable.rs` LEGITIMATELY differs (engine binds real types; SDK
 /// dispatches via the plugin ABI), so it can't be asserted identical. Instead
 /// this is a TRIP-WIRE: any edit to either copy changes its hash, failing CI,

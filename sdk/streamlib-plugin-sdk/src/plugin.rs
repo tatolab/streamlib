@@ -26,14 +26,14 @@ use std::ffi::c_void;
 use std::sync::OnceLock;
 
 use streamlib_plugin_abi::{
-    AudioClockVTable, GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, GpuContextFullAccessVTable,
-    GpuContextLimitedAccessVTable, HOST_SERVICES_LAYOUT_VERSION, HostHandle, HostInterest,
-    HostLogLevel, HostServices, ProcessorVTable, RuntimeContextVTable, RuntimeOpsVTable,
-    SURFACE_STORE_VTABLE_LAYOUT_VERSION, SurfaceStoreVTable,
+    AudioClockVTable, GpuContextFullAccessVTable, GpuContextLimitedAccessVTable, HostHandle,
+    HostInterest, HostLogLevel, HostServices, ProcessorVTable, RuntimeContextVTable,
+    RuntimeOpsVTable, SurfaceStoreVTable,
 };
 
 pub mod forwarding_subscriber;
 pub mod iceoryx2_log_forwarder;
+mod layout_skew_diagnostic;
 pub mod processor_vtable;
 
 // =============================================================================
@@ -149,6 +149,25 @@ pub struct HostCallbacks {
     /// Host-installed [`streamlib_plugin_abi::InputMailboxesVTable`] pointer.
     /// May be null when the host doesn't wire iceoryx2 transport.
     pub input_mailboxes_vtable: *const streamlib_plugin_abi::InputMailboxesVTable,
+    /// Host-installed `PresentTargetMethodsVTable` pointer (M32 #1258).
+    /// May be null on hosts that don't ship a GpuContext.
+    pub present_target_methods_vtable: *const streamlib_plugin_abi::PresentTargetMethodsVTable,
+    /// Host-installed `VideoEncoderSessionMethodsVTable` pointer (M32 #1259).
+    /// May be null on hosts that don't ship a GpuContext.
+    pub video_encoder_session_methods_vtable:
+        *const streamlib_plugin_abi::VideoEncoderSessionMethodsVTable,
+    /// Host-installed `VideoDecoderSessionMethodsVTable` pointer (M32 #1259).
+    /// May be null on hosts that don't ship a GpuContext.
+    pub video_decoder_session_methods_vtable:
+        *const streamlib_plugin_abi::VideoDecoderSessionMethodsVTable,
+    /// Host-installed `HostTimelineSemaphoreMethodsVTable` pointer (M32 #1260).
+    /// May be null on hosts that don't ship a GpuContext.
+    pub host_timeline_semaphore_methods_vtable:
+        *const streamlib_plugin_abi::HostTimelineSemaphoreMethodsVTable,
+    /// Host-installed `VulkanTextureReadbackMethodsVTable` pointer (M32 #1261).
+    /// May be null on hosts that don't ship a GpuContext.
+    pub vulkan_texture_readback_methods_vtable:
+        *const streamlib_plugin_abi::VulkanTextureReadbackMethodsVTable,
 }
 
 // Safety: every field is a fn pointer or a raw pointer the host promises
@@ -194,130 +213,28 @@ pub unsafe fn install_host_services(host_services_ptr: *const c_void) -> Option<
         return None;
     }
 
-    // SAFETY: per the caller's promise. Read `abi_layout_version` before
-    // touching any other field — if the layout doesn't match, the rest of
-    // the struct's shape may have drifted.
+    // SAFETY: per the caller's promise. `abi_layout_version` is read first; on a
+    // mismatch the diagnostic below reads only the STREAMLIB_ABI_VERSION-pinned
+    // leading prefix (see the next SAFETY note), never the drifted appended tail.
     let services = unsafe { &*(host_services_ptr as *const HostServices) };
 
-    if services.abi_layout_version != HOST_SERVICES_LAYOUT_VERSION {
+    // Validate the outer `HostServices.abi_layout_version` and every
+    // non-null inner vtable's `layout_version`. On any skew the fail-loud
+    // diagnostic names the mismatched vtable + both layout versions (via
+    // the host's `iceoryx_log_emit` callback, which routes to the host
+    // process even though this cdylib's tracing forwarder isn't wired yet)
+    // and refuses the install cleanly. The shared helper is a
+    // logic-identical twin of the engine's copy (held in sync by
+    // `twin_drift_guard`).
+    //
+    // SAFETY: `validate_host_services_layout` reads only the
+    // STREAMLIB_ABI_VERSION-pinned leading prefix — the outer `abi_layout_version`
+    // and, to emit the skew diagnostic on a mismatch, the `iceoryx_log_emit` @64 /
+    // `host` @8 callbacks (offsets pinned by the HostServices layout test) — plus
+    // each non-null inner vtable's `layout_version` @0, read only when the outer
+    // version matches.
+    if unsafe { layout_skew_diagnostic::validate_host_services_layout(services) }.is_err() {
         return None;
-    }
-
-    // Validate every inner vtable's layout_version before storing the
-    // pointers. Inner vtables are validated only when non-null.
-    use streamlib_plugin_abi::{
-        AUDIO_CLOCK_VTABLE_LAYOUT_VERSION, GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION,
-        RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION, RUNTIME_OPS_VTABLE_LAYOUT_VERSION,
-    };
-    if !services.runtime_context_vtable.is_null() {
-        // SAFETY: when non-null this points at a `&'static
-        // RuntimeContextVTable` owned by the host; `layout_version` is at
-        // offset 0.
-        let v = unsafe { (*services.runtime_context_vtable).layout_version };
-        if v != RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION {
-            return None;
-        }
-    }
-    if !services.audio_clock_vtable.is_null() {
-        // SAFETY: same shape as runtime_context_vtable.
-        let v = unsafe { (*services.audio_clock_vtable).layout_version };
-        if v != AUDIO_CLOCK_VTABLE_LAYOUT_VERSION {
-            return None;
-        }
-    }
-    if !services.runtime_ops_vtable.is_null() {
-        // SAFETY: same shape as runtime_context_vtable.
-        let v = unsafe { (*services.runtime_ops_vtable).layout_version };
-        if v != RUNTIME_OPS_VTABLE_LAYOUT_VERSION {
-            return None;
-        }
-    }
-    if !services.gpu_context_limited_access_vtable.is_null() {
-        // SAFETY: same shape as runtime_context_vtable.
-        let v = unsafe { (*services.gpu_context_limited_access_vtable).layout_version };
-        if v != GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION {
-            return None;
-        }
-    }
-    if !services.surface_store_vtable.is_null() {
-        // SAFETY: same shape as the other vtable validations.
-        let v = unsafe { (*services.surface_store_vtable).layout_version };
-        if v != SURFACE_STORE_VTABLE_LAYOUT_VERSION {
-            return None;
-        }
-    }
-    if !services.gpu_context_full_access_vtable.is_null() {
-        // SAFETY: same shape as the other vtable validations.
-        let v = unsafe { (*services.gpu_context_full_access_vtable).layout_version };
-        if v != GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION {
-            return None;
-        }
-    }
-    if !services.texture_ring_methods_vtable.is_null() {
-        // SAFETY: same shape as the other vtable validations.
-        let v = unsafe { (*services.texture_ring_methods_vtable).layout_version };
-        if v != streamlib_plugin_abi::TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION {
-            return None;
-        }
-    }
-    if !services.vulkan_compute_kernel_methods_vtable.is_null() {
-        // SAFETY: same shape as the other vtable validations.
-        let v = unsafe { (*services.vulkan_compute_kernel_methods_vtable).layout_version };
-        if v != streamlib_plugin_abi::VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION {
-            return None;
-        }
-    }
-    if !services.vulkan_graphics_kernel_methods_vtable.is_null() {
-        // SAFETY: same shape as the other vtable validations.
-        let v = unsafe { (*services.vulkan_graphics_kernel_methods_vtable).layout_version };
-        if v != streamlib_plugin_abi::VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION {
-            return None;
-        }
-    }
-    if !services.vulkan_ray_tracing_kernel_methods_vtable.is_null() {
-        // SAFETY: same shape as the other vtable validations.
-        let v = unsafe { (*services.vulkan_ray_tracing_kernel_methods_vtable).layout_version };
-        if v != streamlib_plugin_abi::VULKAN_RAY_TRACING_KERNEL_METHODS_VTABLE_LAYOUT_VERSION {
-            return None;
-        }
-    }
-    if !services
-        .vulkan_acceleration_structure_methods_vtable
-        .is_null()
-    {
-        // SAFETY: same shape as the other vtable validations.
-        let v = unsafe { (*services.vulkan_acceleration_structure_methods_vtable).layout_version };
-        if v != streamlib_plugin_abi::VULKAN_ACCELERATION_STRUCTURE_METHODS_VTABLE_LAYOUT_VERSION {
-            return None;
-        }
-    }
-    if !services.rhi_color_converter_methods_vtable.is_null() {
-        // SAFETY: same shape as the other vtable validations.
-        let v = unsafe { (*services.rhi_color_converter_methods_vtable).layout_version };
-        if v != streamlib_plugin_abi::RHI_COLOR_CONVERTER_METHODS_VTABLE_LAYOUT_VERSION {
-            return None;
-        }
-    }
-    if !services.rhi_command_recorder_methods_vtable.is_null() {
-        // SAFETY: same shape as the other vtable validations.
-        let v = unsafe { (*services.rhi_command_recorder_methods_vtable).layout_version };
-        if v != streamlib_plugin_abi::RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION {
-            return None;
-        }
-    }
-    if !services.output_writer_vtable.is_null() {
-        // SAFETY: same shape as the other vtable validations.
-        let v = unsafe { (*services.output_writer_vtable).layout_version };
-        if v != streamlib_plugin_abi::OUTPUT_WRITER_VTABLE_LAYOUT_VERSION {
-            return None;
-        }
-    }
-    if !services.input_mailboxes_vtable.is_null() {
-        // SAFETY: same shape as the other vtable validations.
-        let v = unsafe { (*services.input_mailboxes_vtable).layout_version };
-        if v != streamlib_plugin_abi::INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION {
-            return None;
-        }
     }
 
     let callbacks = HostCallbacks {
@@ -346,6 +263,11 @@ pub unsafe fn install_host_services(host_services_ptr: *const c_void) -> Option<
         rhi_command_recorder_methods_vtable: services.rhi_command_recorder_methods_vtable,
         output_writer_vtable: services.output_writer_vtable,
         input_mailboxes_vtable: services.input_mailboxes_vtable,
+        present_target_methods_vtable: services.present_target_methods_vtable,
+        video_encoder_session_methods_vtable: services.video_encoder_session_methods_vtable,
+        video_decoder_session_methods_vtable: services.video_decoder_session_methods_vtable,
+        host_timeline_semaphore_methods_vtable: services.host_timeline_semaphore_methods_vtable,
+        vulkan_texture_readback_methods_vtable: services.vulkan_texture_readback_methods_vtable,
     };
 
     // Cache the callbacks BEFORE installing tracing — the
