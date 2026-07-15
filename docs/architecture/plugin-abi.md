@@ -61,6 +61,31 @@ these plugins (FullAccess is reachable only inside `escalate(|full|
 …)`); what differs is that the engine is present in the address space,
 not absent.
 
+## Host-side packages — statically linked, not plugins
+
+Not every in-tree `packages/*` crate is a loadable plugin. A **host-side
+package** is statically linked into the host binary and registered
+in-process on `PROCESSOR_REGISTRY`, rather than built as a `cdylib` and
+loaded through the plugin ABI. It is a host, not a plugin: it ships no
+`cdylib`, and nothing it does crosses the ABI.
+
+`packages/api-server` is the canonical host-side package. It drives
+`RuntimeOperations`, the processor registry, pubsub, and the graph API —
+control-plane surfaces a plugin cannot reach, because the ABI exposes the
+processor-authoring surface, not runtime control. `streamlib-runtime`
+Cargo-deps it as an `rlib` and calls
+`PROCESSOR_REGISTRY.register::<ApiServerProcessor::Processor>()` at boot;
+its own `Cargo.toml` carries `crate-type = ["rlib"]` and `publish = false`.
+
+The pubsub bridge makes the split concrete. Only `PUBSUB.publish` is
+ABI-bridged — a plugin's `publish` forwards to the host's `pubsub_publish`
+callback (`HostServices::pubsub_publish`). `PUBSUB.subscribe` is
+intentionally **not** bridged: a loaded plugin's own `PUBSUB` static is
+never `init()`ed, so `subscribe` buffers into `pending_subscriptions`
+forever. The api-server's WebSocket handler subscribes to every topic — in
+process on the host's initialized bus that stream is live; as a plugin it
+would be dead. That is why the control plane is host-side by construction.
+
 ## The vtable catalog
 
 Every plugin ABI call dispatches through a `#[repr(C)]` vtable whose
