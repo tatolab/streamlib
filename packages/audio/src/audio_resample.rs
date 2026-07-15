@@ -5,7 +5,7 @@ use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
 use serde::{Deserialize, Serialize};
-use streamlib::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
 
 /// Quality presets for audio resampling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

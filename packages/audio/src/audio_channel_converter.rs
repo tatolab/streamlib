@@ -3,15 +3,15 @@
 
 use crate::_generated_::tatolab__audio::audio_channel_converter_config::Mode;
 use crate::_generated_::AudioFrame;
-use streamlib::sdk::error::{Result, Error};
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_plugin_sdk::sdk::error::{Result, Error};
+use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
-#[streamlib::sdk::processor("AudioChannelConverter")]
+#[streamlib_plugin_sdk::sdk::processor("AudioChannelConverter")]
 pub struct AudioChannelConverterProcessor {
     frame_counter: u64,
 }
 
-impl streamlib::sdk::processors::ReactiveProcessor for AudioChannelConverterProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for AudioChannelConverterProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!(
             "[AudioChannelConverter] setup() - mode: {:?}",

@@ -7,7 +7,7 @@
 // Supports both send (WHIP) and receive (WHEP) modes.
 
 use std::sync::Arc;
-use streamlib::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
 use webrtc::track::track_local::TrackLocalWriter;
 
 /// WebRTC session mode (send-only vs receive-only)

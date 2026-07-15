@@ -4,8 +4,8 @@
 use crate::_generated_::tatolab__audio::audio_resampler_config::Quality;
 use crate::audio_resample::{AudioResampler, ResamplingQuality};
 use crate::_generated_::AudioFrame;
-use streamlib::sdk::error::Result;
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_plugin_sdk::sdk::error::Result;
+use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
 fn quality_to_resampling_quality(quality: &Quality) -> ResamplingQuality {
     match quality {
@@ -15,7 +15,7 @@ fn quality_to_resampling_quality(quality: &Quality) -> ResamplingQuality {
     }
 }
 
-#[streamlib::sdk::processor("AudioResampler")]
+#[streamlib_plugin_sdk::sdk::processor("AudioResampler")]
 pub struct AudioResamplerProcessor {
     resampler: Option<AudioResampler>,
     output_sample_rate: u32,
@@ -23,7 +23,7 @@ pub struct AudioResamplerProcessor {
     channels: u8,
 }
 
-impl streamlib::sdk::processors::ReactiveProcessor for AudioResamplerProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for AudioResamplerProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.output_sample_rate = self.config.target_sample_rate;
 

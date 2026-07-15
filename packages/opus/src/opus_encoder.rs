@@ -5,8 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 use crate::_generated_::{AudioFrame, EncodedAudioFrame};
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use streamlib::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
 
 // ============================================================================
 // OPUS ENCODING CONFIGURATION
@@ -197,7 +197,7 @@ impl AudioEncoderOpus for OpusEncoder {
 // PROCESSOR
 // ============================================================================
 
-#[streamlib::sdk::processor("OpusEncoder")]
+#[streamlib_plugin_sdk::sdk::processor("OpusEncoder")]
 pub struct OpusEncoderProcessor {
     /// Opus encoder.
     opus_encoder: Option<OpusEncoder>,
@@ -206,7 +206,7 @@ pub struct OpusEncoderProcessor {
     frames_encoded: u64,
 }
 
-impl streamlib::sdk::processors::ReactiveProcessor for OpusEncoderProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for OpusEncoderProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let encoder_config = AudioEncoderConfig {
             sample_rate: 48000,

@@ -3,17 +3,17 @@
 
 use crate::_generated_::tatolab__audio::audio_mixer_config::Strategy;
 use crate::_generated_::AudioFrame;
-use streamlib::sdk::error::{Result, Error};
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_plugin_sdk::sdk::error::{Result, Error};
+use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
-#[streamlib::sdk::processor("AudioMixer")]
+#[streamlib_plugin_sdk::sdk::processor("AudioMixer")]
 pub struct AudioMixerProcessor {
     sample_rate: u32,
     buffer_size: usize,
     frame_counter: u64,
 }
 
-impl streamlib::sdk::processors::ReactiveProcessor for AudioMixerProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for AudioMixerProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.sample_rate = 0;
         self.buffer_size = 0;

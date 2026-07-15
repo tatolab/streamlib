@@ -17,12 +17,12 @@ crate-type = ["rlib", "cdylib"]
 streamlib-jtd-codegen = {version = "0.6.0"}
 
 [dependencies]
-# Engine substrate — runtime context, processor traits, generated config
+# Engine-free authoring SDK (never the `streamlib` facade) — runtime context, processor traits, generated config
 # types under `crate::_generated_::tatolab__audio::*`, AudioFrame
 # wire type, audio utilities (resample, channel/format conversion).
-streamlib = {version = "0.6.0"}
+streamlib-plugin-sdk = {version = "0.6.0"}
 
-# Procedural macros — `#[streamlib::processor("...")]` reads the
+# Procedural macros — `#[streamlib_plugin_sdk::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
 streamlib-macros = {version = "0.6.0"}
 

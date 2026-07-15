@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::_generated_::VideoFrame;
-use streamlib::sdk::context::RuntimeContextFullAccess;
-use streamlib::sdk::error::Result;
-use streamlib::sdk::processors::ManualProcessor;
+use streamlib_plugin_sdk::sdk::context::RuntimeContextFullAccess;
+use streamlib_plugin_sdk::sdk::error::Result;
+use streamlib_plugin_sdk::sdk::processors::ManualProcessor;
 
-#[streamlib::sdk::processor("SimplePassthrough")]
+#[streamlib_plugin_sdk::sdk::processor("SimplePassthrough")]
 pub struct SimplePassthroughProcessor;
 
 impl ManualProcessor for SimplePassthroughProcessor::Processor {

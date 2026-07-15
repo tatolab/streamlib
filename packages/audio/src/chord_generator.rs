@@ -5,9 +5,9 @@ use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use crate::_generated_::AudioFrame;
-use streamlib::sdk::context::AudioTickContext;
-use streamlib::sdk::error::Result;
-use streamlib::sdk::context::RuntimeContextFullAccess;
+use streamlib_plugin_sdk::sdk::context::AudioTickContext;
+use streamlib_plugin_sdk::sdk::error::Result;
+use streamlib_plugin_sdk::sdk::context::RuntimeContextFullAccess;
 
 struct SineOscillator {
     phase: f64,
@@ -53,7 +53,7 @@ struct OscillatorState {
     osc_g4: SineOscillator,
 }
 
-#[streamlib::sdk::processor("ChordGenerator")]
+#[streamlib_plugin_sdk::sdk::processor("ChordGenerator")]
 pub struct ChordGeneratorProcessor {
     oscillators: Arc<Mutex<Option<OscillatorState>>>,
     frame_counter: Arc<AtomicU64>,
@@ -67,7 +67,7 @@ impl ChordGeneratorProcessor::Processor {
     const FREQ_G4: f64 = 392.00;
 }
 
-impl streamlib::sdk::processors::ManualProcessor for ChordGeneratorProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for ChordGeneratorProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let audio_clock = ctx.audio_clock();
         self.sample_rate = audio_clock.sample_rate();

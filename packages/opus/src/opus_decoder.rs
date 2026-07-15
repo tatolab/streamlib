@@ -4,8 +4,8 @@
 //! Opus audio decoder — libopus codec + reactive processor wrapper.
 
 use crate::_generated_::{AudioFrame, EncodedAudioFrame};
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use streamlib::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
 
 // ============================================================================
 // OPUS DECODER IMPLEMENTATION
@@ -180,7 +180,7 @@ impl OpusDecoder {
 // PROCESSOR
 // ============================================================================
 
-#[streamlib::sdk::processor("OpusDecoder")]
+#[streamlib_plugin_sdk::sdk::processor("OpusDecoder")]
 pub struct OpusDecoderProcessor {
     /// Opus decoder.
     opus_decoder: Option<OpusDecoder>,
@@ -189,7 +189,7 @@ pub struct OpusDecoderProcessor {
     frames_decoded: u64,
 }
 
-impl streamlib::sdk::processors::ReactiveProcessor for OpusDecoderProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for OpusDecoderProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let sample_rate = self.config.sample_rate.unwrap_or(48000);
         let channels = self.config.channels.unwrap_or(2) as usize;

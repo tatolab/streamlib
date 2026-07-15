@@ -964,10 +964,11 @@ const CHECK_PACKAGES_FACADE_DEP: &str = "packages-no-facade-runtime-dep";
 
 const PACKAGES_FACADE_DEP_RATIONALE: &str = "a packages/* crate must not carry the full `streamlib` facade as a runtime dep — a distributable .slpkg builds engine-free against the plugin-authoring SDK; the facade is host-by-design only for api-server + test-fixtures. Move it to [dev-dependencies] or convert the package to the engine-free authoring SDK";
 
-/// The 15 `packages/*` crates that currently link the `streamlib` facade as a
+/// The `packages/*` crates that still link the `streamlib` facade as a
 /// non-dev runtime dep (green baseline). `api-server` + `test-fixtures` are
-/// permanent (host-by-design); the other 13 are the shrinking conversion
-/// backlog — remove each entry as its package converts.
+/// permanent (host-by-design); the remaining entries are the shrinking
+/// conversion backlog, each gated on a new engine-free primitive — remove each
+/// entry as its package converts to the engine-free plugin-authoring SDK.
 const PACKAGES_FACADE_DEP_ALLOWLIST: &[AllowEntry] = &[
     AllowEntry {
         path: "packages/api-server/Cargo.toml",
@@ -980,24 +981,12 @@ const PACKAGES_FACADE_DEP_ALLOWLIST: &[AllowEntry] = &[
         rationale: "permanent, host-by-design: test-fixtures run host-side under cargo test and legitimately link the full facade",
     },
     // Shrinking conversion backlog — each drops off as its package converts
-    // to the engine-free plugin-authoring SDK.
-    AllowEntry {
-        path: "packages/audio/Cargo.toml",
-        kind: AllowKind::ExactFile,
-        rationale: "pre-conversion facade linker (shrinking backlog)",
-    },
+    // to the engine-free plugin-authoring SDK. The remaining entries are
+    // gated on a new engine-free primitive (present target, exportable
+    // timelines / surface-store registration, hardware encode/decode, GPU
+    // texture readback) that the package names the raw host device without.
     AllowEntry {
         path: "packages/camera/Cargo.toml",
-        kind: AllowKind::ExactFile,
-        rationale: "pre-conversion facade linker (shrinking backlog)",
-    },
-    AllowEntry {
-        path: "packages/clap/Cargo.toml",
-        kind: AllowKind::ExactFile,
-        rationale: "pre-conversion facade linker (shrinking backlog)",
-    },
-    AllowEntry {
-        path: "packages/debug-utilities/Cargo.toml",
         kind: AllowKind::ExactFile,
         rationale: "pre-conversion facade linker (shrinking backlog)",
     },
@@ -1018,31 +1007,6 @@ const PACKAGES_FACADE_DEP_ALLOWLIST: &[AllowEntry] = &[
     },
     AllowEntry {
         path: "packages/h265/Cargo.toml",
-        kind: AllowKind::ExactFile,
-        rationale: "pre-conversion facade linker (shrinking backlog)",
-    },
-    AllowEntry {
-        path: "packages/moq/Cargo.toml",
-        kind: AllowKind::ExactFile,
-        rationale: "pre-conversion facade linker (shrinking backlog)",
-    },
-    AllowEntry {
-        path: "packages/mp4/Cargo.toml",
-        kind: AllowKind::ExactFile,
-        rationale: "pre-conversion facade linker (shrinking backlog)",
-    },
-    AllowEntry {
-        path: "packages/opus/Cargo.toml",
-        kind: AllowKind::ExactFile,
-        rationale: "pre-conversion facade linker (shrinking backlog)",
-    },
-    AllowEntry {
-        path: "packages/screen-capture/Cargo.toml",
-        kind: AllowKind::ExactFile,
-        rationale: "pre-conversion facade linker (shrinking backlog)",
-    },
-    AllowEntry {
-        path: "packages/webrtc/Cargo.toml",
         kind: AllowKind::ExactFile,
         rationale: "pre-conversion facade linker (shrinking backlog)",
     },

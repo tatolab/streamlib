@@ -8,10 +8,10 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use crate::_generated_::AudioFrame;
-use streamlib::sdk::context::RuntimeContextFullAccess;
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::iceoryx2::InputMailboxes;
-use streamlib::sdk::processors::ManualProcessor;
+use streamlib_plugin_sdk::sdk::context::RuntimeContextFullAccess;
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::iceoryx2::InputMailboxes;
+use streamlib_plugin_sdk::sdk::processors::ManualProcessor;
 use streamlib_audio::{ProcessorAudioConverter, ProcessorAudioConverterTargetFormat};
 
 use crate::host::ClapPluginHost;
@@ -67,7 +67,7 @@ impl SendableClapHostPtr {
     }
 }
 
-#[streamlib::sdk::processor("ClapEffect")]
+#[streamlib_plugin_sdk::sdk::processor("ClapEffect")]
 pub struct ClapEffectProcessor {
     host: Option<ClapPluginHost>,
     buffer_size: usize,

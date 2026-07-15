@@ -5,9 +5,9 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use streamlib::sdk::error::{Result, Error};
-use streamlib::sdk::context::RuntimeContextFullAccess;
-use streamlib::sdk::iceoryx2::OutputWriter;
+use streamlib_plugin_sdk::sdk::error::{Result, Error};
+use streamlib_plugin_sdk::sdk::context::RuntimeContextFullAccess;
+use streamlib_plugin_sdk::sdk::iceoryx2::OutputWriter;
 
 #[derive(Debug, Clone)]
 pub struct AppleAudioInputDevice {
@@ -18,7 +18,7 @@ pub struct AppleAudioInputDevice {
     pub is_default: bool,
 }
 
-#[streamlib::sdk::processor("AudioCapture")]
+#[streamlib_plugin_sdk::sdk::processor("AudioCapture")]
 pub struct AppleAudioCaptureProcessor {
     device_info: Option<AppleAudioInputDevice>,
     _device: Option<Device>,
@@ -28,7 +28,7 @@ pub struct AppleAudioCaptureProcessor {
     stream_setup_done: bool,
 }
 
-impl streamlib::sdk::processors::ManualProcessor for AppleAudioCaptureProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for AppleAudioCaptureProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!("[AudioCapture] setup() called - will set up stream in process()");
         self.stream_setup_done = false;
@@ -161,7 +161,7 @@ impl AppleAudioCaptureProcessor::Processor {
 
                     let frame_number = frame_counter_clone.fetch_add(1, Ordering::Relaxed);
                     let timestamp_ns =
-                        streamlib::sdk::media_clock::MediaClock::now().as_nanos() as i64;
+                        streamlib_plugin_sdk::sdk::media_clock::MediaClock::now().as_nanos() as i64;
 
                     let ipc_frame = crate::_generated_::AudioFrame {
                         samples: data.to_vec(),
