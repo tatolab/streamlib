@@ -458,4 +458,46 @@ mod layout_tests {
             VulkanLayout::SHADER_READ_ONLY_OPTIMAL.0
         );
     }
+
+    #[test]
+    fn cached_format_raw_round_trips_every_texture_format() {
+        // The host mints `format as u32` (the `#[repr(u32)]` discriminant)
+        // into `cached_format_raw`; this cdylib-arm twin `format()` decodes
+        // it through a hardcoded `0..N` match table that must stay in lock
+        // step with the engine twin + the host `create_texture_readback`
+        // slot. A renumber/insert in `TextureFormat` would drift them
+        // silently — this catches it on the SDK arm.
+        //
+        // Mental-revert: renumber any variant and the round-trip returns
+        // the wrong variant.
+        for format in [
+            TextureFormat::Rgba8Unorm,
+            TextureFormat::Rgba8UnormSrgb,
+            TextureFormat::Bgra8Unorm,
+            TextureFormat::Bgra8UnormSrgb,
+            TextureFormat::Rgba16Float,
+            TextureFormat::Rgba32Float,
+            TextureFormat::Nv12,
+        ] {
+            let raw = format as u32;
+            // Only `cached_format_raw` is read by `format()`; the handle /
+            // vtable pointers are never dereferenced here.
+            let twin = TextureReadback {
+                handle: std::ptr::null(),
+                vtable: std::ptr::null(),
+                methods_vtable: std::ptr::null(),
+                cached_handle_id: 0,
+                cached_staging_size: 0,
+                cached_width: 0,
+                cached_height: 0,
+                cached_format_raw: raw,
+                _reserved_padding: 0,
+            };
+            assert_eq!(
+                twin.format(),
+                format,
+                "SDK twin round-trip failed for {format:?} (raw {raw})"
+            );
+        }
+    }
 }

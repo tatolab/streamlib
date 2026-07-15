@@ -479,13 +479,15 @@ mod reserved_m32_wire_format_tests {
 
     #[test]
     fn drop_slots_are_null_safe_no_ops() {
-        // `drop_texture_readback` is no longer reserved (its real body
-        // landed with #1261); its null-safety is covered by the
-        // texture-readback wire tests.
+        // Every drop slot must be a null-safe no-op — a caller dropping a
+        // never-populated handle (e.g. after a failed create) must not
+        // deref or panic. `drop_texture_readback`'s real body landed with
+        // #1261 but its null path is still part of this contract.
         unsafe {
             (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.drop_present_target)(std::ptr::null());
             (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.drop_encoder_session)(std::ptr::null());
             (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.drop_decoder_session)(std::ptr::null());
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.drop_texture_readback)(std::ptr::null());
         }
     }
 }

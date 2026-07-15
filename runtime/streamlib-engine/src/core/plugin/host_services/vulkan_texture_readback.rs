@@ -270,6 +270,18 @@ unsafe extern "C" fn host_texture_readback_try_read_copy(
                 write_err("try_read_copy: null out pointer", err_buf, err_buf_cap, err_len);
                 return 1;
             }
+            // Null `out_buf` would otherwise pass the size gate below (when
+            // `out_cap >= required`), then the consuming read would drop
+            // the frame while the copy is skipped — reporting success
+            // (out_ready=1) with zero bytes delivered (silent data loss on
+            // the public ABI). Reject BEFORE the consuming read; the twin
+            // always passes a non-null buffer (a too-small one drives the
+            // status-2 grow-and-retry), so a null here is always a caller
+            // bug, never a size query.
+            if out_buf.is_null() {
+                write_err("try_read_copy: null out_buf", err_buf, err_buf_cap, err_len);
+                return 1;
+            }
             let arc = unsafe { readback_arc(readback_handle) };
             // Size-check BEFORE the consuming read so an undersized
             // buffer (status 2) leaves the in-flight state intact for a
@@ -294,14 +306,13 @@ unsafe extern "C" fn host_texture_readback_try_read_copy(
             match arc.try_read(ticket) {
                 Ok(Some(bytes)) => {
                     // SAFETY: `out_cap >= required == bytes.len()` per the
-                    // size-check; out_buf is writable for `out_cap` bytes.
-                    if !out_buf.is_null() {
-                        unsafe {
-                            std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_buf, bytes.len());
-                            std::ptr::write(out_len, bytes.len());
-                        }
+                    // size-check; out_buf null-checked above and writable
+                    // for `out_cap` bytes.
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_buf, bytes.len());
+                        std::ptr::write(out_len, bytes.len());
+                        std::ptr::write(out_ready, 1);
                     }
-                    unsafe { std::ptr::write(out_ready, 1) };
                     0
                 }
                 Ok(None) => {
@@ -348,6 +359,18 @@ unsafe extern "C" fn host_texture_readback_wait_and_copy(
                 write_err("wait_and_copy: null out pointer", err_buf, err_buf_cap, err_len);
                 return 1;
             }
+            // Null `out_buf` would otherwise pass the size gate below (when
+            // `out_cap >= required`), then the blocking consuming read
+            // would drop the frame while the copy is skipped — reporting
+            // success with zero bytes delivered (silent data loss on the
+            // public ABI). Reject BEFORE the consuming read; the twin
+            // always passes a non-null buffer (a too-small one drives the
+            // status-2 grow-and-retry), so a null here is always a caller
+            // bug, never a size query.
+            if out_buf.is_null() {
+                write_err("wait_and_copy: null out_buf", err_buf, err_buf_cap, err_len);
+                return 1;
+            }
             let arc = unsafe { readback_arc(readback_handle) };
             // Size-check before the (blocking) consuming read so an
             // undersized buffer never waits and never consumes the
@@ -370,13 +393,11 @@ unsafe extern "C" fn host_texture_readback_wait_and_copy(
             match arc.wait_and_read(ticket, timeout_ns) {
                 Ok(bytes) => {
                     // SAFETY: `out_cap >= required == bytes.len()`; out_buf
-                    // is writable for `out_cap` bytes.
-                    if !out_buf.is_null() {
-                        unsafe {
-                            std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_buf, bytes.len());
-                        }
+                    // null-checked above and writable for `out_cap` bytes.
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_buf, bytes.len());
+                        std::ptr::write(out_len, bytes.len());
                     }
-                    unsafe { std::ptr::write(out_len, bytes.len()) };
                     0
                 }
                 Err(e) => {
@@ -405,13 +426,19 @@ unsafe extern "C" fn host_texture_readback_submit(
     err_buf_cap: usize,
     err_len: *mut usize,
 ) -> i32 {
-    write_err(
-        "submit: not available on this platform",
-        err_buf,
-        err_buf_cap,
-        err_len,
-    );
-    1
+    run_host_extern_c(
+        "host_texture_readback_submit",
+        || -> i32 {
+            write_err(
+                "submit: not available on this platform",
+                err_buf,
+                err_buf_cap,
+                err_len,
+            );
+            1
+        },
+        1,
+    )
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -427,13 +454,19 @@ unsafe extern "C" fn host_texture_readback_try_read(
     err_buf_cap: usize,
     err_len: *mut usize,
 ) -> i32 {
-    write_err(
-        "try_read: not available on this platform",
-        err_buf,
-        err_buf_cap,
-        err_len,
-    );
-    1
+    run_host_extern_c(
+        "host_texture_readback_try_read",
+        || -> i32 {
+            write_err(
+                "try_read: not available on this platform",
+                err_buf,
+                err_buf_cap,
+                err_len,
+            );
+            1
+        },
+        1,
+    )
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -449,13 +482,19 @@ unsafe extern "C" fn host_texture_readback_wait_and_read(
     err_buf_cap: usize,
     err_len: *mut usize,
 ) -> i32 {
-    write_err(
-        "wait_and_read: not available on this platform",
-        err_buf,
-        err_buf_cap,
-        err_len,
-    );
-    1
+    run_host_extern_c(
+        "host_texture_readback_wait_and_read",
+        || -> i32 {
+            write_err(
+                "wait_and_read: not available on this platform",
+                err_buf,
+                err_buf_cap,
+                err_len,
+            );
+            1
+        },
+        1,
+    )
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -472,13 +511,19 @@ unsafe extern "C" fn host_texture_readback_try_read_copy(
     err_buf_cap: usize,
     err_len: *mut usize,
 ) -> i32 {
-    write_err(
-        "try_read_copy: not available on this platform",
-        err_buf,
-        err_buf_cap,
-        err_len,
-    );
-    1
+    run_host_extern_c(
+        "host_texture_readback_try_read_copy",
+        || -> i32 {
+            write_err(
+                "try_read_copy: not available on this platform",
+                err_buf,
+                err_buf_cap,
+                err_len,
+            );
+            1
+        },
+        1,
+    )
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -495,13 +540,19 @@ unsafe extern "C" fn host_texture_readback_wait_and_copy(
     err_buf_cap: usize,
     err_len: *mut usize,
 ) -> i32 {
-    write_err(
-        "wait_and_copy: not available on this platform",
-        err_buf,
-        err_buf_cap,
-        err_len,
-    );
-    1
+    run_host_extern_c(
+        "host_texture_readback_wait_and_copy",
+        || -> i32 {
+            write_err(
+                "wait_and_copy: not available on this platform",
+                err_buf,
+                err_buf_cap,
+                err_len,
+            );
+            1
+        },
+        1,
+    )
 }
 
 /// Host-side `VulkanTextureReadbackMethodsVTable`, wired to the real
@@ -769,6 +820,139 @@ mod tests {
         assert_eq!(rc, 1);
         #[cfg(target_os = "linux")]
         assert!(err_buf_as_str(&buf, len).contains("wait_and_copy: null readback handle"));
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn wait_and_read_null_out_param_errors() {
+        // Bogus non-null readback handle so the null-out check is reached;
+        // the out-pointer-null branch returns before any handle deref.
+        let (mut buf, mut len) = make_err_buf();
+        let dummy_rb = 0xDEAD_BEEFu64;
+        let rc = unsafe {
+            (HOST_VULKAN_TEXTURE_READBACK_METHODS_VTABLE.wait_and_read)(
+                &dummy_rb as *const u64 as *const c_void,
+                0,
+                0,
+                u64::MAX,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(err_buf_as_str(&buf, len).contains("wait_and_read: null out pointer"));
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn try_read_copy_null_out_param_errors() {
+        // Bogus non-null readback handle; null out_ready/out_len return
+        // before the arc deref.
+        let (mut buf, mut len) = make_err_buf();
+        let mut out = [0u8; 8];
+        let rc = unsafe {
+            (HOST_VULKAN_TEXTURE_READBACK_METHODS_VTABLE.try_read_copy)(
+                &(0xDEAD_BEEFu64) as *const u64 as *const c_void,
+                0,
+                0,
+                std::ptr::null_mut(),
+                out.as_mut_ptr(),
+                out.len(),
+                std::ptr::null_mut(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(err_buf_as_str(&buf, len).contains("try_read_copy: null out pointer"));
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn try_read_copy_null_out_buf_errors_before_consuming_read() {
+        // The real ABI bug: out_buf=null with non-null out_ready/out_len.
+        // The null-out_buf check now returns BEFORE the arc deref, so a
+        // bogus non-null handle suffices (no GPU). Mental-revert: without
+        // the out_buf null-check, out_buf=null with a large enough out_cap
+        // would pass the size gate, consume the read, and report
+        // out_ready=1 with zero bytes delivered.
+        let (mut buf, mut len) = make_err_buf();
+        let mut ready = 0u32;
+        let mut out_len = 0usize;
+        let rc = unsafe {
+            (HOST_VULKAN_TEXTURE_READBACK_METHODS_VTABLE.try_read_copy)(
+                &(0xDEAD_BEEFu64) as *const u64 as *const c_void,
+                0,
+                0,
+                &mut ready,
+                std::ptr::null_mut(),
+                usize::MAX,
+                &mut out_len,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(err_buf_as_str(&buf, len).contains("try_read_copy: null out_buf"));
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn wait_and_copy_null_out_param_errors() {
+        // Bogus non-null readback handle; null out_len returns before the
+        // arc deref.
+        let (mut buf, mut len) = make_err_buf();
+        let mut out = [0u8; 8];
+        let rc = unsafe {
+            (HOST_VULKAN_TEXTURE_READBACK_METHODS_VTABLE.wait_and_copy)(
+                &(0xDEAD_BEEFu64) as *const u64 as *const c_void,
+                0,
+                0,
+                u64::MAX,
+                out.as_mut_ptr(),
+                out.len(),
+                std::ptr::null_mut(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(err_buf_as_str(&buf, len).contains("wait_and_copy: null out pointer"));
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn wait_and_copy_null_out_buf_errors_before_consuming_read() {
+        // The real ABI bug: out_buf=null with a non-null out_len. The
+        // null-out_buf check returns BEFORE the arc deref, so a bogus
+        // non-null handle suffices (no GPU). Mental-revert: without the
+        // out_buf null-check, out_buf=null with a large enough out_cap
+        // would pass the size gate, block-consume the read, and report
+        // success with zero bytes delivered.
+        let (mut buf, mut len) = make_err_buf();
+        let mut out_len = 0usize;
+        let rc = unsafe {
+            (HOST_VULKAN_TEXTURE_READBACK_METHODS_VTABLE.wait_and_copy)(
+                &(0xDEAD_BEEFu64) as *const u64 as *const c_void,
+                0,
+                0,
+                u64::MAX,
+                std::ptr::null_mut(),
+                usize::MAX,
+                &mut out_len,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(err_buf_as_str(&buf, len).contains("wait_and_copy: null out_buf"));
     }
 
     // -------- Hardware-gated end-to-end round-trip through the ABI surface --------
