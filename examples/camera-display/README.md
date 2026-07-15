@@ -1,7 +1,6 @@
 # camera-display
 
-Camera → Display, with the runtime's REST API on `http://127.0.0.1:9000`.
-A minimal, canonical streamlib app.
+Camera → Display. A minimal, canonical streamlib app.
 
 ## The model this example teaches
 
@@ -35,9 +34,9 @@ cargo run
    `streamlib = "0.6"` dependency at the in-repo SDK (a transient
    `[patch.crates-io]`). The SDK isn't published to crates.io yet; once it is,
    the bare version resolves with no link step and this becomes unnecessary.
-2. **Packages** — `streamlib link` symlinks `@tatolab/camera`,
-   `@tatolab/display`, and `@tatolab/api-server` from the in-repo `packages/`
-   into `./streamlib_modules/`. Edits in those packages are live on the next run.
+2. **Packages** — `streamlib link` symlinks `@tatolab/camera` and
+   `@tatolab/display` from the in-repo `packages/` into `./streamlib_modules/`.
+   Edits in those packages are live on the next run.
 
 The `streamlib` CLI must be on your `PATH` (build it with
 `cargo build -p streamlib-cli` from the checkout, or install it with

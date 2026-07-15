@@ -3,8 +3,7 @@
 
 //! Camera → Display Pipeline Example
 //!
-//! Wires `@tatolab/camera` → `@tatolab/display` and exposes the runtime's
-//! REST API (`@tatolab/api-server`) on `http://127.0.0.1:9000`.
+//! Wires `@tatolab/camera` → `@tatolab/display`.
 //!
 //! There is no module-loading call in this app: every processor's package
 //! lives in this app's `streamlib_modules/` folder (populated by
@@ -58,16 +57,6 @@ fn main() -> Result<()> {
         }),
     ))?;
     println!("✓ Display added: {}\n", display);
-
-    println!("🌐 Adding API server processor...");
-    runtime.add_processor(ProcessorSpec::new(
-        processor_type_ref!("tatolab", "api-server", "ApiServer"),
-        serde_json::json!({
-            "host": "127.0.0.1",
-            "port": 9000,
-        }),
-    ))?;
-    println!("✓ API server at http://127.0.0.1:9000\n");
 
     println!("🔗 Connecting camera → display...");
     runtime.connect(

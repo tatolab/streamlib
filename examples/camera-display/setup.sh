@@ -49,7 +49,6 @@ fi
 #    ./streamlib_modules/. Live edits in the checkout reflect on the next run.
 "$STREAMLIB" link "$CHECKOUT/packages/camera"
 "$STREAMLIB" link "$CHECKOUT/packages/display"
-"$STREAMLIB" link "$CHECKOUT/packages/api-server"
 
 echo
 echo "Setup complete. Run the example with:"

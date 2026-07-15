@@ -4,9 +4,9 @@
 # Standalone example (headed to its own repo). The `streamlib` SDK resolves by
 # version, and the empty `[workspace]` table makes this its own workspace root so
 # it builds off-tree. The processor packages it uses (`@tatolab/camera`,
-# `@tatolab/display`, `@tatolab/api-server`) are NOT Cargo deps — they live in
-# this app's `streamlib_modules/` folder (run `./setup.sh` once) and the runtime
-# lazily discovers + loads them at runtime. See README.md.
+# `@tatolab/display`) are NOT Cargo deps — they live in this app's
+# `streamlib_modules/` folder (run `./setup.sh` once) and the runtime lazily
+# discovers + loads them at runtime. See README.md.
 [package]
 name = "camera-display"
 version = "0.1.0"

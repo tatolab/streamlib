@@ -1,115 +1,166 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! API Server Processor Demo
+//! API Server Control-Plane Demo
 //!
-//! Tests all API endpoints of the ApiServerProcessor, including WebSocket event streaming.
-//! Demonstrates Runner integration with #[tokio::main] async context.
+//! Exercises every REST endpoint of the runtime's control plane plus the
+//! `/ws/events` WebSocket event stream, from an async `#[tokio::main]` driver.
+//!
+//! The api-server is the runtime's HTTP + WebSocket control plane: it is
+//! statically linked into `streamlib-runtime` and served in-process, not a
+//! loadable plugin, so an app cannot instantiate it from the SDK. This demo is
+//! therefore self-contained the same way the `api-server` probe is — it spawns
+//! a real `streamlib-runtime` subprocess, waits for its control plane to answer
+//! `GET /health`, drives it over reqwest + tokio-tungstenite, then tears the
+//! subprocess down. Run `./setup.sh` once (it builds the runtime binary,
+//! records its path for `cargo run`, and links `@tatolab/debug-utilities` so
+//! the dynamic-registry POST can resolve `SimplePassthroughProcessor`).
 
 use futures_util::StreamExt;
+use std::process::{Child, Command};
 use std::sync::Arc;
-use streamlib::sdk::processor_type_ref;
-use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::Runner;
-use streamlib::sdk::RunnerAutoBuild;
-
-use streamlib::sdk::error::Result;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 
-const BASE_URL: &str = "http://127.0.0.1:9000";
-const WS_URL: &str = "ws://127.0.0.1:9000/ws/events";
+type DemoResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+/// Kills the spawned `streamlib-runtime` when the demo ends (success or error).
+struct RuntimeSubprocessGuard(Child);
+
+impl Drop for RuntimeSubprocessGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Grab an ephemeral port the OS reports free, then release it so the runtime
+/// can bind it. The api-server binds the requested port and increments on
+/// collision, so a freshly-vacated port is the reliable choice.
+fn free_port() -> std::io::Result<u16> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    Ok(listener.local_addr()?.port())
+}
+
+/// Poll `GET /health` until it returns a success status or the deadline passes.
+async fn wait_for_health(client: &reqwest::Client, base_url: &str, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if let Ok(resp) = client.get(format!("{base_url}/health")).send().await {
+            if resp.status().is_success() {
+                return true;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    false
+}
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    println!("=== API Server Processor Demo ===\n");
+async fn main() -> DemoResult<()> {
+    println!("=== API Server Control-Plane Demo ===\n");
 
-    // Runner::with_auto_build() auto-detects tokio context and uses the current handle
-    let runtime = Runner::with_auto_build()?;
+    // The runtime binary path is recorded by `./setup.sh` into this app's
+    // `.cargo/config.toml [env]`, so `cargo run` finds it. Fail loudly with the
+    // fix if it is missing.
+    let runtime_bin = std::env::var("STREAMLIB_RUNTIME_BIN").map_err(|_| {
+        "STREAMLIB_RUNTIME_BIN is not set — run ./setup.sh first (it builds \
+         streamlib-runtime and records its path for `cargo run`)"
+    })?;
 
-    // No module-loading calls: `@tatolab/api-server` and
-    // `@tatolab/debug-utilities` both live in this app's `streamlib_modules/`
-    // folder (populated by `./setup.sh`). The API server is lazily discovered +
-    // loaded on the `processor_type_ref!` reference below. SimplePassthrough
-    // lives in debug-utilities — the demo POSTs
-    // `"processor_type": "SimplePassthroughProcessor"` through the API server's
-    // dynamic-registry endpoint, and that resolution needs debug-utilities
-    // present in `streamlib_modules/` so the runtime can discover the provider.
+    let port = free_port()?;
+    let base_url = format!("http://127.0.0.1:{port}");
+    let ws_url = format!("ws://127.0.0.1:{port}/ws/events");
 
-    // Add the API server processor
-    println!("Adding API server processor...");
-    let _api_server = runtime.add_processor(ProcessorSpec::new(
-        processor_type_ref!("tatolab", "api-server", "ApiServer"),
-        serde_json::json!({
-            "host": "127.0.0.1",
-            "port": 9000,
-        }),
-    ))?;
+    // Isolate the runtime's home so the demo leaves nothing behind.
+    let runtime_home = std::env::temp_dir().join(format!("api-server-demo-{port}"));
+    let _ = std::fs::remove_dir_all(&runtime_home);
 
-    // Start the runtime
-    runtime.start()?;
+    println!("Spawning streamlib-runtime ({runtime_bin}) on 127.0.0.1:{port} ...");
+    let child = Command::new(&runtime_bin)
+        .arg("--host")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg(port.to_string())
+        .env("STREAMLIB_HOME", &runtime_home)
+        // Point module discovery at this app's `streamlib_modules/` (linked by
+        // `./setup.sh`) so the API's dynamic-registry POST can resolve
+        // `SimplePassthroughProcessor` from `@tatolab/debug-utilities`.
+        .env("STREAMLIB_MODULES_DIR", env!("CARGO_MANIFEST_DIR"))
+        .spawn()?;
+    let runtime_guard = RuntimeSubprocessGuard(child);
 
-    // Give server a moment to start
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let client = reqwest::Client::new();
+
+    // Boot includes GPU init plus a first-load source build of the linked
+    // package, so allow a generous window before the control plane answers.
+    println!("Waiting for the control plane at {base_url}/health ...");
+    if !wait_for_health(&client, &base_url, Duration::from_secs(90)).await {
+        drop(runtime_guard);
+        let _ = std::fs::remove_dir_all(&runtime_home);
+        return Err("streamlib-runtime did not serve /health in time".into());
+    }
+    println!("Control plane is up.\n");
 
     // Start WebSocket event collector as async task
     let events = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
     let ws_events = Arc::clone(&events);
     let ws_stop = Arc::new(Mutex::new(false));
     let ws_stop_flag = Arc::clone(&ws_stop);
+    let ws_url_task = ws_url.clone();
 
     let ws_handle = tokio::spawn(async move {
-        collect_websocket_events(ws_events, ws_stop_flag).await;
+        collect_websocket_events(ws_url_task, ws_events, ws_stop_flag).await;
     });
 
     // Give WebSocket a moment to connect
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
 
     println!("\n--- Running REST API Tests ---\n");
 
-    let client = reqwest::Client::new();
-
     // Test 1: Health endpoint
-    test_health(&client).await;
+    test_health(&client, &base_url).await;
 
     // Test 2: Get registry
-    test_registry(&client).await;
+    test_registry(&client, &base_url).await;
 
     // Test 3: Get initial graph
-    test_get_graph(&client, "Initial graph").await;
+    test_get_graph(&client, &base_url, "Initial graph").await;
 
     // Test 4: Create a processor
-    let processor_id = test_create_processor(&client).await;
+    let processor_id = test_create_processor(&client, &base_url).await;
 
     // Test 5: Verify processor in graph
-    test_get_graph(&client, "After adding processor").await;
+    test_get_graph(&client, &base_url, "After adding processor").await;
 
     // Test 6: Create another processor for connection test
-    let processor_id_2 = test_create_processor_2(&client).await;
+    let processor_id_2 = test_create_processor_2(&client, &base_url).await;
 
     // Test 7: Create connection between processors
-    let connection_id = test_create_connection(&client, &processor_id, &processor_id_2).await;
+    let connection_id =
+        test_create_connection(&client, &base_url, &processor_id, &processor_id_2).await;
 
     // Test 8: Verify connection in graph
-    test_get_graph(&client, "After adding connection").await;
+    test_get_graph(&client, &base_url, "After adding connection").await;
 
     // Test 9: Delete connection
-    test_delete_connection(&client, &connection_id).await;
+    test_delete_connection(&client, &base_url, &connection_id).await;
 
     // Test 10: Verify connection removed
-    test_get_graph(&client, "After deleting connection").await;
+    test_get_graph(&client, &base_url, "After deleting connection").await;
 
     // Test 11: Delete processors
-    test_delete_processor(&client, &processor_id).await;
-    test_delete_processor(&client, &processor_id_2).await;
+    test_delete_processor(&client, &base_url, &processor_id).await;
+    test_delete_processor(&client, &base_url, &processor_id_2).await;
 
     // Test 12: Verify processors removed
-    test_get_graph(&client, "After deleting processors").await;
+    test_get_graph(&client, &base_url, "After deleting processors").await;
 
     println!("\n--- REST API Tests Complete ---\n");
 
     // Give events time to be delivered
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Stop WebSocket collector
     *ws_stop.lock().await = true;
@@ -121,18 +172,20 @@ async fn main() -> Result<()> {
 
     println!("\n--- All Tests Complete ---\n");
 
-    // Shutdown
-    runtime.stop()?;
+    // Tear the runtime subprocess down and clean up its isolated home.
+    drop(runtime_guard);
+    let _ = std::fs::remove_dir_all(&runtime_home);
 
     Ok(())
 }
 
 /// Collect WebSocket events in background using async tokio-tungstenite
 async fn collect_websocket_events(
+    ws_url: String,
     events: Arc<Mutex<Vec<serde_json::Value>>>,
     stop: Arc<Mutex<bool>>,
 ) {
-    let ws_stream = match tokio_tungstenite::connect_async(WS_URL).await {
+    let ws_stream = match tokio_tungstenite::connect_async(&ws_url).await {
         Ok((stream, _response)) => stream,
         Err(e) => {
             eprintln!("WebSocket connection error: {}", e);
@@ -140,7 +193,7 @@ async fn collect_websocket_events(
         }
     };
 
-    println!("WebSocket connected to {}", WS_URL);
+    println!("WebSocket connected to {}", ws_url);
 
     let (_write, mut read) = ws_stream.split();
 
@@ -170,7 +223,7 @@ async fn collect_websocket_events(
                     _ => {}
                 }
             }
-            _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {
+            _ = tokio::time::sleep(Duration::from_millis(10)) => {
                 // Periodic check for stop flag
             }
         }
@@ -268,9 +321,9 @@ async fn verify_websocket_events(events: &Arc<Mutex<Vec<serde_json::Value>>>) {
     }
 }
 
-async fn test_health(client: &reqwest::Client) {
+async fn test_health(client: &reqwest::Client, base_url: &str) {
     print!("Testing GET /health ... ");
-    let resp = client.get(format!("{}/health", BASE_URL)).send().await;
+    let resp = client.get(format!("{}/health", base_url)).send().await;
     match resp {
         Ok(r) if r.status().is_success() => {
             let body = r.text().await.unwrap_or_default();
@@ -281,10 +334,10 @@ async fn test_health(client: &reqwest::Client) {
     }
 }
 
-async fn test_registry(client: &reqwest::Client) {
+async fn test_registry(client: &reqwest::Client, base_url: &str) {
     print!("Testing GET /api/registry ... ");
     let resp = client
-        .get(format!("{}/api/registry", BASE_URL))
+        .get(format!("{}/api/registry", base_url))
         .send()
         .await;
     match resp {
@@ -298,9 +351,9 @@ async fn test_registry(client: &reqwest::Client) {
     }
 }
 
-async fn test_get_graph(client: &reqwest::Client, label: &str) {
+async fn test_get_graph(client: &reqwest::Client, base_url: &str, label: &str) {
     print!("Testing GET /api/graph ({}) ... ", label);
-    let resp = client.get(format!("{}/api/graph", BASE_URL)).send().await;
+    let resp = client.get(format!("{}/api/graph", base_url)).send().await;
     match resp {
         Ok(r) if r.status().is_success() => {
             let json: serde_json::Value = r.json().await.unwrap_or_default();
@@ -318,14 +371,14 @@ async fn test_get_graph(client: &reqwest::Client, label: &str) {
     }
 }
 
-async fn test_create_processor(client: &reqwest::Client) -> String {
+async fn test_create_processor(client: &reqwest::Client, base_url: &str) -> String {
     print!("Testing POST /api/processor (SimplePassthroughProcessor) ... ");
     let body = serde_json::json!({
         "processor_type": "SimplePassthroughProcessor",
         "config": {}
     });
     let resp = client
-        .post(format!("{}/api/processor", BASE_URL))
+        .post(format!("{}/api/processor", base_url))
         .json(&body)
         .send()
         .await;
@@ -347,14 +400,14 @@ async fn test_create_processor(client: &reqwest::Client) -> String {
     }
 }
 
-async fn test_create_processor_2(client: &reqwest::Client) -> String {
+async fn test_create_processor_2(client: &reqwest::Client, base_url: &str) -> String {
     print!("Testing POST /api/processor (SimplePassthroughProcessor #2) ... ");
     let body = serde_json::json!({
         "processor_type": "SimplePassthroughProcessor",
         "config": {}
     });
     let resp = client
-        .post(format!("{}/api/processor", BASE_URL))
+        .post(format!("{}/api/processor", base_url))
         .json(&body)
         .send()
         .await;
@@ -378,6 +431,7 @@ async fn test_create_processor_2(client: &reqwest::Client) -> String {
 
 async fn test_create_connection(
     client: &reqwest::Client,
+    base_url: &str,
     from_processor: &str,
     to_processor: &str,
 ) -> String {
@@ -389,7 +443,7 @@ async fn test_create_connection(
         "to_port": "input"
     });
     let resp = client
-        .post(format!("{}/api/connections", BASE_URL))
+        .post(format!("{}/api/connections", base_url))
         .json(&body)
         .send()
         .await;
@@ -412,10 +466,10 @@ async fn test_create_connection(
     }
 }
 
-async fn test_delete_connection(client: &reqwest::Client, connection_id: &str) {
+async fn test_delete_connection(client: &reqwest::Client, base_url: &str, connection_id: &str) {
     print!("Testing DELETE /api/connections/{} ... ", connection_id);
     let resp = client
-        .delete(format!("{}/api/connections/{}", BASE_URL, connection_id))
+        .delete(format!("{}/api/connections/{}", base_url, connection_id))
         .send()
         .await;
     match resp {
@@ -425,10 +479,10 @@ async fn test_delete_connection(client: &reqwest::Client, connection_id: &str) {
     }
 }
 
-async fn test_delete_processor(client: &reqwest::Client, processor_id: &str) {
+async fn test_delete_processor(client: &reqwest::Client, base_url: &str, processor_id: &str) {
     print!("Testing DELETE /api/processors/{} ... ", processor_id);
     let resp = client
-        .delete(format!("{}/api/processors/{}", BASE_URL, processor_id))
+        .delete(format!("{}/api/processors/{}", base_url, processor_id))
         .send()
         .await;
     match resp {
