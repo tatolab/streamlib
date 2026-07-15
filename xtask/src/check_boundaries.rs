@@ -87,6 +87,7 @@ pub fn scan_all(project_root: &Path) -> Result<CheckReport> {
     check_packages_facade_runtime_dep(project_root, &mut violations, &mut files_scanned)?;
     check_packages_engine_reach(project_root, &mut violations, &mut files_scanned)?;
     check_examples_cdylib_facade_dep(project_root, &mut violations, &mut files_scanned)?;
+    check_trunk_set_no_engine_dep(project_root, &mut violations, &mut files_scanned)?;
     Ok(CheckReport {
         violations,
         files_scanned,
@@ -1253,6 +1254,108 @@ fn check_examples_cdylib_facade_dep(
                     matched_pattern: format!("streamlib facade dep in [{}]", section),
                     check: CHECK_EXAMPLES_CDYLIB_FACADE_DEP,
                     rationale: EXAMPLES_CDYLIB_FACADE_DEP_RATIONALE,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Check 11 — the engine-free TRUNK SET must never Cargo-dep the engine
+// ---------------------------------------------------------------------------
+//
+// The three engine-free trunk crates — `streamlib-plugin-sdk`
+// (sdk/streamlib-plugin-sdk), `streamlib-macros` (sdk/streamlib-macros), and
+// `streamlib-plugin-abi` (runtime/streamlib-plugin-abi) — are the authoring
+// substrate every distributable `.slpkg` links against. A non-dev
+// `[dependencies]` entry that resolves to the engine crate (`streamlib-engine`
+// at runtime/streamlib-engine) in ANY of them statically pulls the FullAccess
+// engine surface into that substrate.
+//
+// This is the PERMANENT invariant that replaces the dropped (dead-path)
+// "plugin/* -> libs/" exit criterion: it is the enforcement that SURVIVES the
+// packages -> streamlib-packages split. External packages consume plugin-sdk
+// by VERSION from the registry, so a published plugin-sdk that pulled the
+// engine would propagate the engine to every external consumer invisibly —
+// with no in-tree crate left to catch it. Unlike the transitional `packages/*`
+// leaves ratchet (checks 8 & 9, which carry a shrinking per-package
+// allowlist), this trunk ban has NO allowlist and never shrinks.
+//
+// `[dev-dependencies]` are EXEMPT — a trunk crate's conformance tests may
+// legitimately pull the engine to exercise the host backing. Reuses the same
+// `iter_dep_entries_with_values` + `section_is_dev_only` machinery as checks
+// 8-10, and resolves `package = "..."` alias keys (an entry
+// `foo = { package = "streamlib-engine", ... }` is caught by its resolved
+// package name, not the section key) — closing the exact alias evasion the
+// facade check leaves as a known low.
+
+const CHECK_TRUNK_NO_ENGINE_DEP: &str = "trunk-set-no-engine-cargo-dep";
+
+const TRUNK_NO_ENGINE_DEP_RATIONALE: &str = "PERMANENT trunk ban (survives the packages -> streamlib-packages split): an engine-free trunk crate (streamlib-plugin-sdk / streamlib-macros / streamlib-plugin-abi) must never carry `streamlib-engine` as a non-dev Cargo dep. External packages consume plugin-sdk by version from the registry, so a published plugin-sdk that pulled the engine would propagate the FullAccess engine surface to every external consumer invisibly. Unlike the transitional packages/* leaves ratchet, this ban has no shrinking allowlist; [dev-dependencies] are exempt (conformance tests may pull the engine)";
+
+/// The engine crate's Cargo package name (lib name is `streamlib_engine`; the
+/// Cargo dependency key / `package =` rename resolves to this hyphenated form).
+const TRUNK_ENGINE_CRATE_NAME: &str = "streamlib-engine";
+
+/// The three engine-free trunk crates whose non-dev dep graph must never
+/// resolve to `streamlib-engine`. A fixed list (mirrors check 3's
+/// `NO_STREAMLIB_RUNTIME_DEP`) — this is a permanent invariant, not a
+/// shrinking ratchet.
+const TRUNK_NO_ENGINE_DEP: &[&str] = &[
+    "sdk/streamlib-plugin-sdk/Cargo.toml",
+    "sdk/streamlib-macros/Cargo.toml",
+    "runtime/streamlib-plugin-abi/Cargo.toml",
+];
+
+fn check_trunk_set_no_engine_dep(
+    project_root: &Path,
+    violations: &mut Vec<Violation>,
+    files_scanned: &mut usize,
+) -> Result<()> {
+    for rel_path in TRUNK_NO_ENGINE_DEP {
+        let path = project_root.join(rel_path);
+        if !path.exists() {
+            // Allowlisted crate may have been renamed/deleted; skip silently —
+            // this is enforcement, not discovery (mirrors check 3).
+            continue;
+        }
+        *files_scanned += 1;
+        let content =
+            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        let parsed: toml::Value =
+            toml::from_str(&content).with_context(|| format!("parse {}", path.display()))?;
+        for (section, dep_name, dep_value, line_no) in
+            iter_dep_entries_with_values(&parsed, &content)
+        {
+            // [dev-dependencies] (and target.*.dev-dependencies) are exempt —
+            // conformance tests may legitimately pull the engine.
+            if section_is_dev_only(&section) {
+                continue;
+            }
+            // Resolve the `package = "..."` alias key: `foo = { package =
+            // "streamlib-engine", ... }` must be caught by its RESOLVED package
+            // name, not the section key. Fall back to the key when absent.
+            let resolved = dep_value
+                .get("package")
+                .and_then(|v| v.as_str())
+                .unwrap_or(dep_name.as_str());
+            if resolved == TRUNK_ENGINE_CRATE_NAME {
+                let display_name = if resolved != dep_name {
+                    format!("{dep_name} (package = \"{resolved}\")")
+                } else {
+                    dep_name.clone()
+                };
+                violations.push(Violation {
+                    path: PathBuf::from(rel_path),
+                    line_no,
+                    line_text: format!("[{}] {} = ...", section, display_name),
+                    matched_pattern: format!(
+                        "streamlib-engine dep in [{}] (as {})",
+                        section, display_name
+                    ),
+                    check: CHECK_TRUNK_NO_ENGINE_DEP,
+                    rationale: TRUNK_NO_ENGINE_DEP_RATIONALE,
                 });
             }
         }
@@ -2586,6 +2689,97 @@ streamlib-plugin-sdk = { workspace = true }
         assert!(
             hits.is_empty(),
             "cdylib example without facade dep should pass: {:?}",
+            hits
+        );
+    }
+
+    // ----- Check 11: trunk-set -> streamlib-engine Cargo-dep ban -----
+
+    #[test]
+    fn rejects_direct_engine_dep_in_trunk_crate() {
+        let dir = empty_workspace();
+        // A trunk crate that adds a DIRECT [dependencies] streamlib-engine dep
+        // must trip the permanent ban — plugin-sdk is consumed by version from
+        // the registry, so this would propagate the engine to every external
+        // consumer invisibly.
+        write_fixture(
+            dir.path(),
+            "sdk/streamlib-plugin-sdk/Cargo.toml",
+            r#"[package]
+name = "streamlib-plugin-sdk"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+streamlib-engine = { path = "../../runtime/streamlib-engine" }
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_TRUNK_NO_ENGINE_DEP),
+            "expected trunk-set engine-dep violation, got {:?}",
+            report.violations,
+        );
+    }
+
+    #[test]
+    fn rejects_aliased_engine_dep_in_trunk_crate() {
+        let dir = empty_workspace();
+        // An ALIASED dep key whose `package =` resolves to streamlib-engine
+        // must be caught by its RESOLVED package name, not the section key —
+        // locks the alias resolution that closes the facade-check evasion.
+        write_fixture(
+            dir.path(),
+            "runtime/streamlib-plugin-abi/Cargo.toml",
+            r#"[package]
+name = "streamlib-plugin-abi"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+x = { package = "streamlib-engine", path = "../streamlib-engine" }
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report.violations.iter().any(|v| v.check
+                == CHECK_TRUNK_NO_ENGINE_DEP
+                && v.matched_pattern
+                    .contains("package = \"streamlib-engine\"")),
+            "expected trunk-set aliased engine-dep violation, got {:?}",
+            report.violations,
+        );
+    }
+
+    #[test]
+    fn allows_engine_dev_dep_in_trunk_crate() {
+        let dir = empty_workspace();
+        // [dev-dependencies] are exempt — a trunk crate's conformance tests may
+        // legitimately pull the engine to exercise the host backing.
+        write_fixture(
+            dir.path(),
+            "sdk/streamlib-macros/Cargo.toml",
+            r#"[package]
+name = "streamlib-macros"
+version = "0.1.0"
+edition = "2021"
+
+[dev-dependencies]
+streamlib-engine = { path = "../../runtime/streamlib-engine" }
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        let hits: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.check == CHECK_TRUNK_NO_ENGINE_DEP)
+            .collect();
+        assert!(
+            hits.is_empty(),
+            "engine dep in trunk [dev-dependencies] should pass: {:?}",
             hits
         );
     }
