@@ -387,6 +387,33 @@ unsafe extern "C" fn host_video_encoder_submit_texture(
                 // cdylib-make-borrow-cached-fields hazard class, #988).
                 use crate::host_rhi::HostTextureExt;
                 let texture = super::shared::borrow::make_texture_borrow(texture_handle);
+                // Aligned-extent precondition. The RGB->NV12 converter
+                // samples the source view over the encoder's codec-aligned
+                // extent (`rgb_to_nv12` in encode/staging.rs); `encode_image`
+                // receives only a bare `vk::ImageView` and cannot self-
+                // validate. A source smaller than the aligned extent would
+                // silently encode clamped / garbage NV12 with no downstream
+                // complaint. Reject undersize with a typed error here (this
+                // ABI enforcement point also covers the in-process
+                // `encode_image` path) — mirroring the SDK contract that
+                // RGBA input "must be at least these dimensions".
+                let (aligned_width, aligned_height) = session.encoder.aligned_extent();
+                if texture.width() < aligned_width || texture.height() < aligned_height {
+                    write_err(
+                        &format!(
+                            "submit_texture: source {}x{} smaller than required aligned \
+                             extent {}x{}",
+                            texture.width(),
+                            texture.height(),
+                            aligned_width,
+                            aligned_height
+                        ),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
                 let image_view = match texture.vulkan_inner().image_view() {
                     Ok(view) => view,
                     Err(e) => {
@@ -1180,6 +1207,79 @@ mod encoder_session_gpu_gated_tests {
         assert!(
             borrow.vulkan_inner().image_view().is_ok(),
             "encode-src image view must resolve from the reconstructed borrow"
+        );
+    }
+
+    /// Aligned-extent precondition on the `submit_texture` slot: a source
+    /// texture smaller than the encoder's codec-aligned extent must return
+    /// a typed error, NOT silently encode clamped / garbage NV12. The
+    /// texture is minted on the encoder's own `HostVulkanDevice` (no second
+    /// VkDevice) at a size well below any realistic aligned extent for the
+    /// 320x240 session, then submitted through the vtable slot with a valid
+    /// `SHADER_READ_ONLY_OPTIMAL` input layout so the layout guard passes
+    /// and the dimension guard is what fires. Mental-revert: dropping the
+    /// aligned-extent guard lets the call reach `encode_image`, which either
+    /// returns rc 0 with garbage packets or a differently-worded error —
+    /// either way the `rc == 1` + "smaller than required aligned extent"
+    /// assertions below fail.
+    #[test]
+    fn submit_texture_rejects_source_smaller_than_aligned_extent() {
+        use crate::host_rhi::HostTextureExt;
+        let Some(session) = try_encoder_session() else {
+            return;
+        };
+        let (aligned_width, aligned_height) = session.encoder.aligned_extent();
+        // 16x16 is guaranteed strictly smaller than the aligned extent of a
+        // 320x240 encode session (aligned width/height >= config dims).
+        let desc = crate::core::rhi::TextureDescriptor::new(
+            16,
+            16,
+            crate::core::rhi::TextureFormat::Rgba8Unorm,
+        );
+        let host_texture =
+            match crate::vulkan::rhi::HostVulkanTexture::new(&session.encoder.host_device, &desc) {
+                Ok(t) => t,
+                Err(_) => return,
+            };
+        let texture = crate::core::rhi::Texture::from_vulkan(host_texture);
+        let texture_handle = texture.handle;
+
+        let handle = Box::into_raw(session) as *const c_void;
+        struct DropGuard(*const c_void);
+        impl Drop for DropGuard {
+            fn drop(&mut self) {
+                unsafe {
+                    let _ = Box::from_raw(self.0 as *mut HostVideoEncoderSession);
+                }
+            }
+        }
+        let _guard = DropGuard(handle);
+
+        let (mut buf, mut len) = make_err_buf();
+        let mut count = 0u32;
+        let rc = unsafe {
+            (HOST_VIDEO_ENCODER_SESSION_METHODS_VTABLE.submit_texture)(
+                handle,
+                texture_handle,
+                streamlib_consumer_rhi::VulkanLayout::SHADER_READ_ONLY_OPTIMAL.0,
+                0,
+                0,
+                &mut count,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(
+            rc, 1,
+            "undersize source must be a typed error, not a silent encode"
+        );
+        assert!(
+            std::str::from_utf8(&buf[..len])
+                .unwrap_or("")
+                .contains("smaller than required aligned extent"),
+            "got: {} (aligned {aligned_width}x{aligned_height})",
+            std::str::from_utf8(&buf[..len]).unwrap_or("")
         );
     }
 }
