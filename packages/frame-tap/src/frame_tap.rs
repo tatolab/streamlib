@@ -12,12 +12,15 @@
 //!   tap samples the same frames the real consumer sees without rerouting
 //!   the pipeline.
 //! - **Non-blocking GPU readback.** Each sampled frame's texture is copied
-//!   GPU→CPU through the engine's [`VulkanTextureReadback`] primitive using
-//!   the *non-blocking* `submit` / `try_read` pair. The readback is
-//!   single-in-flight: we submit at most one copy and drain it on a later
-//!   `process()` call. If a sample is due while a prior readback is still
-//!   in flight we skip it (drop-if-busy) — the pipeline never stalls on the
-//!   tap.
+//!   GPU→CPU through the plugin SDK's cdylib-safe [`TextureReadback`]
+//!   PluginAbiObject using the *non-blocking* `submit` / `try_read_copy`
+//!   pair. The handle is created host-side via
+//!   `GpuContextLimitedAccess::escalate(|full| full.create_texture_readback(..))`
+//!   once per source extent/format — never off a raw host device. The
+//!   readback is single-in-flight: we submit at most one copy and drain it
+//!   on a later `process()` call. If a sample is due while a prior readback
+//!   is still in flight we skip it (drop-if-busy) — the pipeline never
+//!   stalls on the tap.
 //! - **Off-thread JPEG + bounded queue.** Completed readbacks are handed to
 //!   a background writer thread over a small bounded channel. When the
 //!   channel is full the sample is dropped (drop-on-full) rather than
@@ -32,20 +35,18 @@
 //! queue at all.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
 use jpeg_encoder::{ColorType, Encoder};
 
-use streamlib::sdk::context::{
+use streamlib_plugin_sdk::sdk::context::{
     GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 };
-use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, VulkanTextureReadback};
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::rhi::{
-    ReadbackTicket, TextureFormat, TextureReadbackDescriptor, TextureSourceLayout, VulkanLayout,
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::rhi::{
+    ReadbackTicket, TextureFormat, TextureReadback, TextureSourceLayout, VulkanLayout,
 };
 
 use crate::_generated_::VideoFrame;
@@ -75,14 +76,15 @@ struct PendingReadback {
     color_type: ColorType,
 }
 
-#[streamlib::sdk::processor("FrameTap")]
+#[streamlib_plugin_sdk::sdk::processor("FrameTap")]
 pub struct FrameTapProcessor {
-    /// LimitedAccess context for resolving surfaces in `process()`.
+    /// LimitedAccess context for resolving surfaces and escalating for
+    /// privileged readback creation in `process()`.
     gpu_context: Option<GpuContextLimitedAccess>,
-    /// Host device handle for constructing readback handles lazily.
-    vulkan_device: Option<Arc<HostVulkanDevice>>,
-    /// Readback handle, created lazily once the source extent/format is known.
-    readback: Option<Arc<VulkanTextureReadback>>,
+    /// Readback handle, created host-side (via `escalate` +
+    /// `create_texture_readback`) once the source extent/format is known.
+    /// `!Clone` — the primitive owns its single-in-flight staging resources.
+    readback: Option<TextureReadback>,
     /// `(width, height, format)` the current readback handle is bound to;
     /// a change rebuilds the handle.
     readback_key: Option<(u32, u32, TextureFormat)>,
@@ -100,14 +102,12 @@ pub struct FrameTapProcessor {
     last_sample_at: Option<Instant>,
 }
 
-impl streamlib::sdk::processors::ReactiveProcessor for FrameTapProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for FrameTapProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        // The readback handle is created lazily in `process()` (its extent is
+        // only known once frames flow) via `gpu_context.escalate(..)`; setup
+        // just stashes the LimitedAccess view. No raw host device is held.
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
-        // setup() runs inside the engine's privileged lifecycle dispatch, so
-        // `gpu_full_access()` is already privileged — see the camera/display
-        // packages for the same pattern (escalate from here would re-enter
-        // the gate and panic).
-        self.vulkan_device = Some(ctx.gpu_full_access().host_vulkan_device_arc()?);
 
         // KeepLastK uses keep_last_k as the file cap; the other strategies use
         // max_file_count. Both honor max_total_mb.
@@ -175,11 +175,16 @@ impl streamlib::sdk::processors::ReactiveProcessor for FrameTapProcessor::Proces
 impl FrameTapProcessor::Processor {
     /// Try to read a completed readback and hand its bytes to the writer.
     fn drain_pending(&mut self, pending: PendingReadback) {
-        let readback = match self.readback.as_ref() {
-            Some(rb) => rb.clone(),
+        // `try_read_copy` (not `try_read`) COPIES the ready staging bytes into
+        // an owned `Vec`: the readback is stored inline (`!Clone`), so a
+        // borrowed `try_read` slice would pin `&self` and block the
+        // `self.sample_index` bookkeeping below. The owned copy is also exactly
+        // what the background writer needs — it outlives the borrow window.
+        let read_result = match self.readback.as_ref() {
+            Some(rb) => rb.try_read_copy(pending.ticket),
             None => return,
         };
-        match readback.try_read(pending.ticket) {
+        match read_result {
             Ok(Some(bytes)) => {
                 let prefix = self
                     .config
@@ -191,7 +196,7 @@ impl FrameTapProcessor::Processor {
                 let path = PathBuf::from(&self.config.output_dir)
                     .join(format!("{}_{:06}.jpg", prefix, self.sample_index));
                 let job = SampleJob {
-                    bytes: bytes.to_vec(),
+                    bytes,
                     width: pending.width as u16,
                     height: pending.height as u16,
                     color_type: pending.color_type,
@@ -263,52 +268,64 @@ impl FrameTapProcessor::Processor {
 
         let key = (texture.width(), texture.height(), format);
         if self.readback_key != Some(key) {
-            let device = self
-                .vulkan_device
-                .clone()
-                .ok_or_else(|| Error::Configuration("FrameTap: vulkan device not ready".into()))?;
-            let descriptor = TextureReadbackDescriptor {
-                label: "frame-tap",
-                format,
-                width: texture.width(),
-                height: texture.height(),
-            };
-            match VulkanTextureReadback::new_into_stream_error(&device, &descriptor) {
-                Ok(rb) => {
+            let width = texture.width();
+            let height = texture.height();
+            // Privileged host-side creation: `escalate` opens a FullAccess
+            // window just long enough to build the readback on the host's own
+            // device, then drains + releases it. The returned `TextureReadback`
+            // is cached and its per-frame `submit` / `try_read_copy` run
+            // scope-free (no second escalate). `escalate` returns
+            // `Result<Result<..>>` — the outer is the escalate machinery, the
+            // inner is the creation. Best-effort on both: warn and skip this
+            // sample (the key stays unset so the next frame retries) rather
+            // than stalling or failing the pipeline.
+            match gpu.escalate(|full| {
+                full.create_texture_readback("frame-tap", width, height, format)
+            }) {
+                Ok(Ok(readback)) => {
                     tracing::info!(
                         "FrameTap: created readback handle ({:?}, {}x{})",
                         format,
-                        texture.width(),
-                        texture.height(),
+                        width,
+                        height,
                     );
-                    self.readback = Some(Arc::new(rb));
+                    self.readback = Some(readback);
                     self.readback_key = Some(key);
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     tracing::warn!("FrameTap: readback handle creation failed: {}", e);
+                    return Ok(());
+                }
+                Err(e) => {
+                    tracing::warn!("FrameTap: escalate for readback creation failed: {}", e);
                     return Ok(());
                 }
             }
         }
 
-        let readback = match self.readback.as_ref() {
-            Some(rb) => rb.clone(),
-            None => return Ok(()),
+        // Scope the immutable borrow of `self.readback` (`!Clone`, stored
+        // inline) so the extracted ticket outlives it — the `self.pending`
+        // write below is then borrow-conflict-free.
+        let ticket = {
+            let readback = match self.readback.as_ref() {
+                Some(rb) => rb,
+                None => return Ok(()),
+            };
+            match readback.submit(&texture, source_layout_for(layout)) {
+                Ok(ticket) => ticket,
+                Err(e) => {
+                    tracing::warn!("FrameTap: readback submit failed: {}", e);
+                    return Ok(());
+                }
+            }
         };
-        match readback.submit(&texture, source_layout_for(layout)) {
-            Ok(ticket) => {
-                self.pending = Some(PendingReadback {
-                    ticket,
-                    width: texture.width(),
-                    height: texture.height(),
-                    color_type,
-                });
-                self.last_sample_at = Some(Instant::now());
-            }
-            Err(e) => {
-                tracing::warn!("FrameTap: readback submit failed: {}", e);
-            }
-        }
+        self.pending = Some(PendingReadback {
+            ticket,
+            width: texture.width(),
+            height: texture.height(),
+            color_type,
+        });
+        self.last_sample_at = Some(Instant::now());
         Ok(())
     }
 }
