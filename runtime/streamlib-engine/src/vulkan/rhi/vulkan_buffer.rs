@@ -388,6 +388,14 @@ impl HostVulkanBuffer {
     pub fn buffer(&self) -> vk::Buffer {
         self.buffer
     }
+
+    /// The `HostVulkanDevice` this buffer was allocated from — its owning
+    /// device. Callers exporting an OPAQUE_FD bind the CUDA context to
+    /// this device's `physical_device_uuid()`, never the UUID of some
+    /// other (e.g. the current `GpuContext`'s) device.
+    pub(crate) fn vulkan_device(&self) -> &Arc<HostVulkanDevice> {
+        &self.vulkan_device
+    }
 }
 
 impl super::VulkanRhiBuffer for HostVulkanBuffer {

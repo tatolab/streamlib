@@ -1791,9 +1791,17 @@ impl GpuContext {
         &self,
         buffer: &crate::core::rhi::StorageBuffer,
     ) -> Result<(std::os::unix::io::RawFd, u64, [u8; 16])> {
-        let fd = buffer.host_inner().export_opaque_fd_memory()?;
+        let host_inner = buffer.host_inner();
+        let fd = host_inner.export_opaque_fd_memory()?;
         let size = buffer.byte_size();
-        let uuid = self.device.inner.physical_device_uuid();
+        // The UUID is the entire CUDA device-binding contract: it MUST
+        // name the device that actually owns the exported memory, not the
+        // `GpuContext`'s own device. Under the single-GPU invariant these
+        // are the same, but sourcing from the buffer's owning
+        // `HostVulkanDevice` keeps the binding correct if a `StorageBuffer`
+        // ever originates from a different device (never a silent
+        // mismatch).
+        let uuid = host_inner.vulkan_device().physical_device_uuid();
         Ok((fd, size, uuid))
     }
 
@@ -1857,9 +1865,36 @@ impl GpuContext {
             source_texture.height(),
         );
         recorder.record_copy_image_to_buffer(source_texture, source_layout, dst, region)?;
+        // Every branch must leave the shared-buffer write with a defined
+        // completion contract before returning — the single-writer
+        // producer copy is unsound otherwise (a consumer could read a
+        // half-written buffer). Two contracts are valid: a `produce_done`
+        // GPU signal that the consumer waits on (the async per-frame
+        // path), or a host-side fence drain. Handle all four
+        // (consume, produce) combinations explicitly so none returns
+        // without one.
         match (consume_done, produce_done) {
+            // No timelines: bare submit + host-side fence drain. The copy
+            // is complete before return.
             (None, None) => recorder.submit_and_wait(),
-            (wait, signal) => recorder.submit_waiting_and_signaling_timeline(wait, signal),
+            // A `produce_done` signal is present (with or without a
+            // `consume_done` wait): the GPU-side signal IS the completion
+            // contract — the consumer waits on `produce_done` before its
+            // read — so the producer need not host-block. Covers
+            // (None, Some) and (Some, Some).
+            (consume, produce @ Some(_)) => {
+                recorder.submit_waiting_and_signaling_timeline(consume, produce)
+            }
+            // A `consume_done` wait but no `produce_done` signal: the copy
+            // GPU-waits on `consume_done`, but with no signal there is no
+            // GPU-side ordering for the consumer. Host-block on the
+            // recorder's completion fence so the shared-buffer write is
+            // guaranteed done before return, keeping the single-writer
+            // contract sound.
+            (consume @ Some(_), None) => {
+                recorder.submit_waiting_and_signaling_timeline(consume, None)?;
+                recorder.wait_for_completion()
+            }
         }
     }
 

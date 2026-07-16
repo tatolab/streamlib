@@ -673,6 +673,29 @@ impl RhiCommandRecorderInner {
         Ok(())
     }
 
+    /// Host-block until this recorder's most recent submission drains,
+    /// via its internal completion fence. Use after a
+    /// [`Self::submit_waiting_and_signaling_timeline`] whose signal side
+    /// is `None`: with no GPU-side signal to order a downstream consumer,
+    /// a host-side drain is the only completion guarantee the caller has.
+    /// No-op when nothing is in flight (the fence is already signaled).
+    #[tracing::instrument(level = "trace", skip(self), fields(label = %self.label))]
+    pub fn wait_for_completion(&mut self) -> Result<()> {
+        if self.submission_in_flight {
+            unsafe {
+                self.device
+                    .wait_for_fences(&[self.completion_fence], true, u64::MAX)
+                    .map_err(|e| {
+                        Error::GpuError(format!(
+                            "RhiCommandRecorder '{}': wait_for_fences in wait_for_completion: {e}",
+                            self.label
+                        ))
+                    })?;
+            }
+        }
+        Ok(())
+    }
+
     fn submit_inner(&mut self, timeline_signal: Option<(vk::Semaphore, u64)>) -> Result<()> {
         {
             let mut state = self.state.lock();

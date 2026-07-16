@@ -533,7 +533,11 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cr
     err_buf_cap: usize,
     err_len: *mut usize,
 ) -> i32 {
-    write_err_non_linux("create_opaque_fd_export_buffer", err_buf, err_buf_cap, err_len)
+    run_host_extern_c(
+        "host_gpu_full_create_opaque_fd_export_buffer",
+        || write_err_non_linux("create_opaque_fd_export_buffer", err_buf, err_buf_cap, err_len),
+        1,
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -609,15 +613,21 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_ex
     err_buf_cap: usize,
     err_len: *mut usize,
 ) -> i32 {
-    if !out_descriptor.is_null() {
-        // SAFETY: caller-provided out-pointer.
-        unsafe { (*out_descriptor).fd = -1 };
-    }
-    write_err_non_linux(
-        "export_storage_buffer_opaque_fd",
-        err_buf,
-        err_buf_cap,
-        err_len,
+    run_host_extern_c(
+        "host_gpu_full_export_storage_buffer_opaque_fd",
+        || -> i32 {
+            if !out_descriptor.is_null() {
+                // SAFETY: caller-provided out-pointer.
+                unsafe { (*out_descriptor).fd = -1 };
+            }
+            write_err_non_linux(
+                "export_storage_buffer_opaque_fd",
+                err_buf,
+                err_buf_cap,
+                err_len,
+            )
+        },
+        1,
     )
 }
 
@@ -663,6 +673,50 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_wr
             };
             // SAFETY: borrowed `*const StorageBuffer` for the call.
             let sb = unsafe { &*(storage_buffer as *const crate::core::rhi::StorageBuffer) };
+            // Reject degenerate / out-of-bounds pixel shapes BEFORE
+            // `PixelBuffer::from_host_vulkan_buffer` caches the dims. A
+            // `PixelBuffer` whose cached `width*height*bytes_per_pixel`
+            // claims more bytes than the backing OPAQUE_FD `VkBuffer`
+            // holds would let a downstream consumer read past the
+            // allocation (silent OOB read, no panic / validation
+            // complaint). Symmetric with `create_opaque_fd_export_buffer`'s
+            // `byte_size > 0` guard. `sb.byte_size()` is a pure cached-POD
+            // read (no ABI hop, no handle deref).
+            if width == 0 || height == 0 || bytes_per_pixel == 0 {
+                write_err(
+                    &format!(
+                        "wrap_storage_buffer_as_pixel_buffer: zero dimension \
+                         (width={width}, height={height}, bytes_per_pixel={bytes_per_pixel})"
+                    ),
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let required_bytes = (width as u64)
+                .checked_mul(height as u64)
+                .and_then(|wh| wh.checked_mul(bytes_per_pixel as u64));
+            match required_bytes {
+                Some(required) if required <= sb.byte_size() => {}
+                _ => {
+                    write_err(
+                        &format!(
+                            "wrap_storage_buffer_as_pixel_buffer: pixel shape \
+                             {width}x{height}x{bytes_per_pixel} requires {} bytes, \
+                             exceeds storage buffer byte_size {}",
+                            required_bytes
+                                .map(|r| r.to_string())
+                                .unwrap_or_else(|| "u64-overflow".to_string()),
+                            sb.byte_size()
+                        ),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            }
             let result = with_full_scope_or_err(
                 scope_token,
                 "wrap_storage_buffer_as_pixel_buffer",
@@ -714,11 +768,17 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_wr
     err_buf_cap: usize,
     err_len: *mut usize,
 ) -> i32 {
-    write_err_non_linux(
-        "wrap_storage_buffer_as_pixel_buffer",
-        err_buf,
-        err_buf_cap,
-        err_len,
+    run_host_extern_c(
+        "host_gpu_full_wrap_storage_buffer_as_pixel_buffer",
+        || {
+            write_err_non_linux(
+                "wrap_storage_buffer_as_pixel_buffer",
+                err_buf,
+                err_buf_cap,
+                err_len,
+            )
+        },
+        1,
     )
 }
 
@@ -842,11 +902,17 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_co
     err_buf_cap: usize,
     err_len: *mut usize,
 ) -> i32 {
-    write_err_non_linux(
-        "copy_texture_to_storage_buffer_and_signal",
-        err_buf,
-        err_buf_cap,
-        err_len,
+    run_host_extern_c(
+        "host_gpu_full_copy_texture_to_storage_buffer_and_signal",
+        || {
+            write_err_non_linux(
+                "copy_texture_to_storage_buffer_and_signal",
+                err_buf,
+                err_buf_cap,
+                err_len,
+            )
+        },
+        1,
     )
 }
 
@@ -1303,9 +1369,14 @@ mod reserved_m32_wire_format_tests {
     fn wrap_storage_buffer_as_pixel_buffer_rejects_null_scope_token() {
         let (mut buf, mut len) = make_err_buf();
         let mut out = [0u8; 64];
-        // Aligned 32-byte backing so a `&StorageBuffer` can be formed
-        // (never read) ahead of the null-scope check.
-        let backing = [0u64; 4];
+        // Aligned 32-byte `StorageBuffer`-shaped backing whose cached
+        // `byte_size` (offset 16 → `[u64; 4]` index 2) is large enough
+        // to clear the dimension guard, so the null-scope check is what
+        // fires — not the zero-dim / oversized guards ahead of it.
+        // `byte_size()` is a pure POD read of this field (no handle
+        // deref).
+        let mut backing = [0u64; 4];
+        backing[2] = 64 * 64 * 4; // byte_size_cached
         let storage_ptr = backing.as_ptr() as *const c_void;
         let rc = unsafe {
             (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.wrap_storage_buffer_as_pixel_buffer)(
@@ -1325,6 +1396,78 @@ mod reserved_m32_wire_format_tests {
         assert!(
             err_buf_as_str(&buf, len)
                 .contains("wrap_storage_buffer_as_pixel_buffer: invalid escalate scope"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn wrap_storage_buffer_as_pixel_buffer_rejects_zero_dimension() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut out = [0u8; 64];
+        // Aligned `StorageBuffer`-shaped backing with a generous cached
+        // byte_size — the zero-dimension guard must fire before the
+        // oversized guard and before scope resolution.
+        let mut backing = [0u64; 4];
+        backing[2] = 1 << 20; // byte_size_cached
+        let storage_ptr = backing.as_ptr() as *const c_void;
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.wrap_storage_buffer_as_pixel_buffer)(
+                std::ptr::null(),
+                storage_ptr,
+                0, // zero width
+                64,
+                4,
+                0x42475241, // Bgra32 (valid — pushes past the format decode)
+                out.as_mut_ptr() as *mut c_void,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len)
+                .contains("wrap_storage_buffer_as_pixel_buffer: zero dimension"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn wrap_storage_buffer_as_pixel_buffer_rejects_oversized_shape() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut out = [0u8; 64];
+        // Aligned `StorageBuffer`-shaped backing whose cached byte_size
+        // (4096) is smaller than the requested pixel shape
+        // (64*64*4 = 16384) — the oversized guard must fire, blocking a
+        // `PixelBuffer` that would claim more bytes than the backing
+        // OPAQUE_FD buffer holds.
+        let mut backing = [0u64; 4];
+        backing[2] = 4096; // byte_size_cached < 64*64*4
+        let storage_ptr = backing.as_ptr() as *const c_void;
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.wrap_storage_buffer_as_pixel_buffer)(
+                std::ptr::null(),
+                storage_ptr,
+                64,
+                64,
+                4,
+                0x42475241, // Bgra32 (valid — pushes past the format decode)
+                out.as_mut_ptr() as *mut c_void,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len).contains(
+                "wrap_storage_buffer_as_pixel_buffer: pixel shape 64x64x4 requires 16384 bytes, \
+                 exceeds storage buffer byte_size 4096"
+            ),
             "got: {}",
             err_buf_as_str(&buf, len)
         );
