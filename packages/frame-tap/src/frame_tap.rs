@@ -37,7 +37,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::thread::JoinHandle;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use jpeg_encoder::{ColorType, Encoder};
 
@@ -68,12 +68,32 @@ const DEFAULT_JPEG_QUALITY: u32 = 85;
 const DEFAULT_MAX_FILE_COUNT: u32 = 200;
 const DEFAULT_MAX_TOTAL_MB: u32 = 512;
 
+/// Backoff between readback-handle creation retries after a failure. Each
+/// `escalate` scope-end runs a device-wide drain (`wait_device_idle`, see the
+/// escalate contract in the plugin SDK's `context.rs`), so a *persistent*
+/// creation failure must not re-escalate on every sampled frame (that is a
+/// full-GPU stall per frame under [`Strategy::KeepLastK`]). A short backoff
+/// still recovers a transient failure quickly; an extent/format change bypasses
+/// it entirely.
+const READBACK_CREATION_RETRY_BACKOFF: Duration = Duration::from_millis(500);
+
 /// One in-flight GPU→CPU readback awaiting completion.
 struct PendingReadback {
     ticket: ReadbackTicket,
     width: u32,
     height: u32,
     color_type: ColorType,
+}
+
+/// Backoff bookkeeping for a *failed* readback-handle creation. Persisted so a
+/// persistent failure re-escalates on a cadence rather than every sampled frame
+/// (each `escalate` scope-end is a device-wide drain). Cleared on a successful
+/// creation; bypassed immediately on a key change.
+struct ReadbackCreationBackoff {
+    /// The `(width, height, format)` key whose readback-handle creation failed.
+    failed_key: (u32, u32, TextureFormat),
+    /// Monotonic earliest instant to retry creation for `failed_key`.
+    retry_at: Instant,
 }
 
 #[streamlib_plugin_sdk::sdk::processor("FrameTap")]
@@ -88,6 +108,10 @@ pub struct FrameTapProcessor {
     /// `(width, height, format)` the current readback handle is bound to;
     /// a change rebuilds the handle.
     readback_key: Option<(u32, u32, TextureFormat)>,
+    /// Backoff state for a failed readback-handle creation, throttling the
+    /// (device-draining) `escalate` retry so a persistent failure does not
+    /// stall the GPU every sampled frame. `None` when no failure is pending.
+    readback_creation_backoff: Option<ReadbackCreationBackoff>,
     /// In-flight readback (single). `None` when idle.
     pending: Option<PendingReadback>,
     /// Background JPEG writer (bounded, drop-on-full).
@@ -157,8 +181,8 @@ impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for FrameTapProces
             .clone();
 
         // 1. Drain a completed prior readback (non-blocking) and enqueue the
-        //    write. `try_read` borrows the staging buffer; copy out before the
-        //    next submit can reuse it.
+        //    write. `try_read_copy` copies the ready bytes into an owned `Vec`,
+        //    so the staging buffer is free to be reused by the next submit.
         if let Some(pending) = self.pending.take() {
             self.drain_pending(pending);
         }
@@ -215,7 +239,7 @@ impl FrameTapProcessor::Processor {
                 self.pending = Some(pending);
             }
             Err(e) => {
-                tracing::warn!("FrameTap: readback try_read failed: {}", e);
+                tracing::warn!("FrameTap: readback try_read_copy failed: {}", e);
             }
         }
     }
@@ -268,6 +292,19 @@ impl FrameTapProcessor::Processor {
 
         let key = (texture.width(), texture.height(), format);
         if self.readback_key != Some(key) {
+            // Throttle a persistent creation failure: each `escalate` scope-end
+            // drains the whole device, so if creation for THIS exact key failed
+            // recently and its backoff has not elapsed, skip the sample without
+            // re-escalating. A key change (different extent/format) or an
+            // elapsed backoff falls through and retries — see
+            // `readback_creation_backoff_blocks`.
+            if readback_creation_backoff_blocks(
+                self.readback_creation_backoff.as_ref(),
+                key,
+                Instant::now(),
+            ) {
+                return Ok(());
+            }
             let width = texture.width();
             let height = texture.height();
             // Privileged host-side creation: `escalate` opens a FullAccess
@@ -276,9 +313,9 @@ impl FrameTapProcessor::Processor {
             // is cached and its per-frame `submit` / `try_read_copy` run
             // scope-free (no second escalate). `escalate` returns
             // `Result<Result<..>>` — the outer is the escalate machinery, the
-            // inner is the creation. Best-effort on both: warn and skip this
-            // sample (the key stays unset so the next frame retries) rather
-            // than stalling or failing the pipeline.
+            // inner is the creation. Best-effort on both: warn, arm a backoff so
+            // a persistent failure does not re-drain the GPU every frame, and
+            // skip this sample rather than stalling or failing the pipeline.
             match gpu.escalate(|full| {
                 full.create_texture_readback("frame-tap", width, height, format)
             }) {
@@ -291,13 +328,22 @@ impl FrameTapProcessor::Processor {
                     );
                     self.readback = Some(readback);
                     self.readback_key = Some(key);
+                    self.readback_creation_backoff = None;
                 }
                 Ok(Err(e)) => {
                     tracing::warn!("FrameTap: readback handle creation failed: {}", e);
+                    self.readback_creation_backoff = Some(ReadbackCreationBackoff {
+                        failed_key: key,
+                        retry_at: Instant::now() + READBACK_CREATION_RETRY_BACKOFF,
+                    });
                     return Ok(());
                 }
                 Err(e) => {
                     tracing::warn!("FrameTap: escalate for readback creation failed: {}", e);
+                    self.readback_creation_backoff = Some(ReadbackCreationBackoff {
+                        failed_key: key,
+                        retry_at: Instant::now() + READBACK_CREATION_RETRY_BACKOFF,
+                    });
                     return Ok(());
                 }
             }
@@ -348,6 +394,22 @@ fn source_layout_for(layout: VulkanLayout) -> TextureSourceLayout {
         TextureSourceLayout::ShaderReadOnly
     } else {
         TextureSourceLayout::General
+    }
+}
+
+/// Whether a pending readback-creation backoff currently blocks a (device-
+/// draining) `escalate` retry for `key` at `now`. Pure + rig-free so the
+/// throttle bookkeeping is unit-testable without a GPU: a backoff blocks only
+/// its own `failed_key`, and only until `retry_at` — a key change or an elapsed
+/// backoff never blocks.
+fn readback_creation_backoff_blocks(
+    backoff: Option<&ReadbackCreationBackoff>,
+    key: (u32, u32, TextureFormat),
+    now: Instant,
+) -> bool {
+    match backoff {
+        Some(b) => b.failed_key == key && now < b.retry_at,
+        None => false,
     }
 }
 
@@ -460,5 +522,70 @@ fn enforce_caps(dir: &Path, max_files: u32, max_total_bytes: u64) {
             total = total.saturating_sub(*size);
             count -= 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const KEY_A: (u32, u32, TextureFormat) = (1920, 1080, TextureFormat::Bgra8Unorm);
+    const KEY_B: (u32, u32, TextureFormat) = (1280, 720, TextureFormat::Rgba8Unorm);
+
+    #[test]
+    fn no_backoff_never_blocks() {
+        // First attempt (or after a success cleared the backoff): nothing to
+        // throttle, so creation is always allowed.
+        assert!(!readback_creation_backoff_blocks(None, KEY_A, Instant::now()));
+    }
+
+    #[test]
+    fn active_backoff_for_same_key_blocks_until_retry_at() {
+        let now = Instant::now();
+        let backoff = ReadbackCreationBackoff {
+            failed_key: KEY_A,
+            retry_at: now + Duration::from_millis(500),
+        };
+        // Same key, before retry_at → blocked (no per-frame re-escalate).
+        assert!(readback_creation_backoff_blocks(
+            Some(&backoff),
+            KEY_A,
+            now + Duration::from_millis(100),
+        ));
+    }
+
+    #[test]
+    fn elapsed_backoff_allows_retry() {
+        let now = Instant::now();
+        let backoff = ReadbackCreationBackoff {
+            failed_key: KEY_A,
+            retry_at: now + Duration::from_millis(500),
+        };
+        // Same key, at/after retry_at → allowed (transient-failure recovery).
+        assert!(!readback_creation_backoff_blocks(
+            Some(&backoff),
+            KEY_A,
+            now + Duration::from_millis(500),
+        ));
+        assert!(!readback_creation_backoff_blocks(
+            Some(&backoff),
+            KEY_A,
+            now + Duration::from_millis(600),
+        ));
+    }
+
+    #[test]
+    fn key_change_bypasses_active_backoff() {
+        let now = Instant::now();
+        let backoff = ReadbackCreationBackoff {
+            failed_key: KEY_A,
+            retry_at: now + Duration::from_millis(500),
+        };
+        // A different extent/format must retry immediately even mid-backoff.
+        assert!(!readback_creation_backoff_blocks(
+            Some(&backoff),
+            KEY_B,
+            now + Duration::from_millis(100),
+        ));
     }
 }

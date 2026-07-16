@@ -1057,9 +1057,10 @@ fn check_packages_facade_runtime_dep(
 // crossing.
 //
 // Grep-shaped (comment lines skipped): the engine-bridge path substring and the
-// bare `host_vulkan_device_arc` identifier. Seeded to the 6 current reachers;
-// `test-fixtures` is permanent (host-side, exercises the bridge by design), the
-// other 5 shrink as conversions land.
+// bare `host_vulkan_device_arc` identifier. Seeded to the current reachers (see
+// PACKAGES_ENGINE_REACH_ALLOWLIST below); `test-fixtures` is permanent
+// (host-side, exercises the bridge by design), the rest shrink as conversions
+// land.
 //
 // A package's TOP-LEVEL `tests/` and `benches/` dirs are EXEMPT: an
 // engine-backed integration test / benchmark legitimately reaches the bridge,
