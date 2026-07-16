@@ -64,7 +64,7 @@ For each ticket in the launchable batch:
    - `design-first` → `.claude/workflows/draft-design.js`
    - `implement` / `bug-reproduce-first` → `.claude/workflows/implement-ticket.js` (the script's rederive phase picks the build lead by zone; bug shape lands the failing test first). It returns the branch, worktree path, commits, and diff-stat.
    - `research` → `.claude/workflows/run-research.js`
-   - After an `implement` run returns a green self-review, launch `.claude/workflows/verify-change.js` for that branch (pass `args.branch`) — a `PASS` opens a **draft** PR (never a merge); a `FIX` routes to fix-ticket (below); a `DISCUSS` parks.
+   - After an `implement` run returns a green self-review, launch `.claude/workflows/verify-change.js` for that branch (pass `args.branch`) — a `PASS` opens a PR **ready for review** (a PASS means the branch is verified and ready to merge, so it is NEVER a draft — but never a merge either; merging is the owner's); a `FIX` routes to fix-ticket (below); a `DISCUSS` parks. Any PR the loop opens directly (e.g. after a verified fix) is likewise opened ready, never `--draft`.
    - **Fixing an existing branch never gets hand-rolled.** A verify `FIX`, an owner-directed refinement, or a conflicting-PR rebase → `.claude/workflows/fix-ticket.js` (`mode: 'fix'` applies the enumerated findings in-worktree; `mode: 'rebase'` rebases onto origin/main and force-pushes). **Never a hand-rolled `fix-<issue>.js` script, never a main-context edit.**
 
    Invoke as `{ scriptPath: ".claude/workflows/<script>.js", args: { issue: N, branch, … } }`.
@@ -76,10 +76,13 @@ In **propose_only** mode, do not launch — instead post the plan-of-record for 
 ## 6. PARK anything needing the owner
 When a ticket needs a decision only the repo owner can make (an answered question, a merge, a milestone-scope call, or the attempt cap tripped):
 - Add the `gate` display label.
-- Post **one** question comment ending in an explicit question block (the owner answers by commenting).
-- Send **one** Telegram ping — only for a *new* question this turn, never a re-ping of a still-open one.
+- Post **one** decision comment in this **strict shape**, so the owner sees a pending decision at a glance and can answer in one token without reading prose (the owner has reported not even realizing a decision was pending, buried under paragraphs):
+  - **First line is a marked header** — `## ⛔ DECISION NEEDED — <the decision in one line>` (or `## ❓ OWNER QUESTION — <…>`). The marker + the one-line ask must be the very first thing in the comment.
+  - **Immediately below, the isolated replyable ask** — the choice as tight options the owner answers in one token: `**(a)** … · **(b)** … — reply **(a)** or **(b)**.` Put nothing between the header and the options.
+  - **Grounding / context goes BELOW a `---` divider** (keep it short) — never before the ask.
+- **Ping the owner via the `PushNotification` tool** — one line: what's pending + the ticket #. It reaches the owner's phone through their linked channel (e.g. Telegram). Only for a *new* question this turn; never re-ping a still-open one. **Only the loop's main context can reach the owner** — workflow subagents have no notification tool, so a workflow that surfaces an owner-facing need RETURNS it to the main loop (a `DISCUSS` / `owner-question` verdict) and the main loop posts the comment + sends the ping. A subagent never tries to reach the owner directly.
 
-Move the ticket to the state file's "Waiting on the owner" section with the question's age.
+Move the ticket to the state file's "Waiting on the owner" section with the question's age, and record the decision comment's id in the ledger (step 7).
 
 ## 7. Write state and append the run-log
 Rewrite the four sections of `loops/milestone-loop-state.md` (Acting on / Waiting on the owner / Watch / Ignored this pass) to the loop's current picture, each entry terse with its attempt count and stage. Also persist the reconciler's caches so the next pass can run cheaply: each **Waiting on the owner** entry carries the comment-id ledger (the ids of the loop's own comments on that ticket, so the next pass can detect an owner answer per step 2), and the **delta-probe cache** (the milestone's newest issue/comment `updatedAt`, each loop-owned open PR's head SHA + mergeable state, and in-flight background-task ids). Append **exactly one** JSON-lines event to `loops/run-log.md` with the turn's `items`, `actions`, `attempts`, `verdicts`, `escalations`, `est_tokens`, and `outcome` (`progressed` / `blocked` / `budget-cap` / `idle`).

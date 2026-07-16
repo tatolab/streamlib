@@ -1,16 +1,16 @@
-// verify-change workflow — the independent gate a branch clears before a draft
-// PR opens. Stage A is the always-on change-verifier; Stage B adds path-routed
+// verify-change workflow — the independent gate a branch clears before a PR
+// opens. Stage A is the always-on change-verifier; Stage B adds path-routed
 // read-only expert lenses (and evidence re-validation when E2E is claimed);
-// adjudication opens a DRAFT PR on PASS, never a merge.
+// adjudication opens a PR ready for review on PASS (never a draft, never a merge).
 
 export const meta = {
   name: 'verify-change',
   description:
-    'Adjudicate a branch before opening a PR: the change-verifier (Stage A) plus parallel path-routed domain lenses and, when the branch claims E2E evidence, the evidence-verifier (Stage B). Any blocker → FIX; an unresolved owner question → DISCUSS; else PASS opens a draft PR.',
+    'Adjudicate a branch before opening a PR: the change-verifier (Stage A) plus parallel path-routed domain lenses and, when the branch claims E2E evidence, the evidence-verifier (Stage B). Any blocker → FIX; an unresolved owner question → DISCUSS; else PASS opens a PR ready for review (never a draft).',
   phases: [
     { title: 'Verify', detail: 'Stage A: the always-on change-verifier reviews the diff against the ticket and returns its verdict JSON.' },
     { title: 'Lenses', detail: 'Stage B: parallel read-only domain lenses over the diff, plus evidence-verifier if E2E evidence is claimed.' },
-    { title: 'Adjudicate', detail: 'Merge findings → FIX / DISCUSS / PASS; PASS opens a draft PR via gh (never a merge).' },
+    { title: 'Adjudicate', detail: 'Merge findings → FIX / DISCUSS / PASS; PASS opens a PR ready for review via gh (never a draft, never a merge).' },
   ],
 };
 
@@ -184,7 +184,7 @@ const hasReject = all.some((r) => r && r.verdict === 'REJECT');
 const hasEscalate = all.some((r) => r && r.verdict === 'ESCALATE');
 // N2: DISCUSS fires ONLY on a call reserved for the owner. `should-fix`/`low`/
 // `info` findings do NOT park — they ride the PR body as documented review items
-// while PASS opens the draft PR.
+// while PASS opens the PR ready for review.
 const hasOwnerQuestion = findings.some((f) => f.severity === 'owner-question');
 const reviewItems = findings.filter((f) => f.severity === 'should-fix' || f.severity === 'low' || f.severity === 'info');
 
@@ -198,12 +198,13 @@ if (hasBlocker || hasReject) {
   verdict = 'PASS';
   const opened =
     (await resilientAgent(
-      `All lenses cleared the branch \`${branch}\` on issue #${issue}. Open a DRAFT pull request via gh ` +
-        `(gh pr create --draft --head ${branch}). NEVER merge — merging is the owner's call. Fill the PR body with the ` +
+      `All lenses cleared the branch \`${branch}\` on issue #${issue}. Open a pull request READY FOR REVIEW via gh ` +
+        `(gh pr create --head ${branch}) — NOT a draft. A PASS means the branch is verified and ready for the owner to ` +
+        `merge, so it must not sit in draft. NEVER merge, though — merging is the owner's call. Fill the PR body with the ` +
         `ticket link, the change summary, the test evidence, any E2E report, and a "Review items (non-blocking)" section ` +
         `listing these findings verbatim so the owner sees them in-context: ${JSON.stringify(reviewItems)}. ` +
         `Return the PR number.`,
-      { phase: 'Adjudicate', label: 'open-draft-pr', model: 'sonnet', schema: { type: 'object', properties: { pr_number: { type: 'number' } }, required: ['pr_number'] } },
+      { phase: 'Adjudicate', label: 'open-pr', model: 'sonnet', schema: { type: 'object', properties: { pr_number: { type: 'number' } }, required: ['pr_number'] } },
     )) || {};
   prNumber = opened.pr_number || null;
 }
