@@ -33,6 +33,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Cargo
+        # A cache-service flake must never fail the job; a miss just means a cold build.
+        continue-on-error: true
         uses: actions/cache@v4
         with:
           path: |
