@@ -991,11 +991,6 @@ const PACKAGES_FACADE_DEP_ALLOWLIST: &[AllowEntry] = &[
         rationale: "pre-conversion facade linker (shrinking backlog)",
     },
     AllowEntry {
-        path: "packages/display/Cargo.toml",
-        kind: AllowKind::ExactFile,
-        rationale: "pre-conversion facade linker (shrinking backlog)",
-    },
-    AllowEntry {
         path: "packages/h264/Cargo.toml",
         kind: AllowKind::ExactFile,
         rationale: "pre-conversion facade linker (shrinking backlog)",
@@ -1088,9 +1083,9 @@ const ENGINE_BRIDGE_PATH: &str = "streamlib::sdk::engine::";
 /// bare identifier (word boundaries) so a longer lookalike does not trip it.
 const HOST_DEVICE_ARC_IDENT: &str = "host_vulkan_device_arc";
 
-/// The 5 `packages/*` dirs whose source currently reaches the engine bridge or
+/// The `packages/*` dirs whose source currently reaches the engine bridge or
 /// the host device (green baseline). `test-fixtures` is permanent (host-side);
-/// the other 4 are the shrinking conversion backlog.
+/// the rest are the shrinking conversion backlog.
 const PACKAGES_ENGINE_REACH_ALLOWLIST: &[AllowEntry] = &[
     AllowEntry {
         path: "packages/test-fixtures/",
@@ -1100,11 +1095,6 @@ const PACKAGES_ENGINE_REACH_ALLOWLIST: &[AllowEntry] = &[
     // Shrinking conversion backlog.
     AllowEntry {
         path: "packages/camera/",
-        kind: AllowKind::PathPrefix,
-        rationale: "pre-conversion engine-bridge reacher (shrinking backlog)",
-    },
-    AllowEntry {
-        path: "packages/display/",
         kind: AllowKind::PathPrefix,
         rationale: "pre-conversion engine-bridge reacher (shrinking backlog)",
     },

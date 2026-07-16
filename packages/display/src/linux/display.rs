@@ -1,33 +1,35 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Linux display processor — winit window + Vulkan presentation via
-//! [`VulkanPresentTarget`].
+//! Linux display processor — winit window + Vulkan presentation via the
+//! engine-free plugin SDK's [`PresentTarget`] PluginAbiObject.
 //!
-//! Owns no raw Vulkan handles itself; every GPU resource flows through
-//! the host RHI public surface (`VulkanPresentTarget`,
-//! `VulkanGraphicsKernel`, `RhiCommandRecorder`, `VulkanTextureReadback`).
+//! Owns no raw Vulkan handles and never names the host device: every GPU
+//! resource is minted host-side through the FullAccess surface reached via
+//! [`GpuContextLimitedAccess::escalate`] ([`PresentTarget`],
+//! [`VulkanGraphicsKernel`], [`TextureReadback`](streamlib_plugin_sdk::sdk::rhi::TextureReadback))
+//! and driven per frame through each resource's own plugin-ABI methods.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
-use streamlib::sdk::engine::host_rhi::{
-    HostVulkanDevice, PresentFrame, VulkanAccess, VulkanGraphicsKernel, VulkanPresentTarget,
-    VulkanStage, VulkanTextureReadback,
+use streamlib_plugin_sdk::sdk::context::{
+    GpuContextFullAccess, GpuContextLimitedAccess, RuntimeContextFullAccess,
 };
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::rhi::{
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::rhi::{
     AttachmentFormats, ColorBlendState, ColorWriteMask, DepthStencilState, DrawCall,
     GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor, GraphicsPipelineState,
     GraphicsPushConstants, GraphicsShaderStageFlags, GraphicsStage, MultisampleState,
-    PrimitiveTopology, RasterizationState, ScissorRect, Texture, TextureReadbackDescriptor,
-    TextureSourceLayout, VertexInputState, Viewport,
+    PresentTarget, PrimitiveTopology, RasterizationState, ScissorRect, Texture, TextureFormat,
+    TextureSourceLayout, VertexInputState, Viewport, VulkanAccess, VulkanGraphicsKernel,
+    VulkanLayout, VulkanStage,
 };
-use streamlib_consumer_rhi::VulkanLayout;
+use streamlib_plugin_abi::{ColorTraitsRepr, HdrStaticMetadataRepr, RawWindowHandleRepr};
 
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::WindowEvent;
@@ -41,13 +43,20 @@ pub struct LinuxWindowId(pub u64);
 
 static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Descriptor-set ring depth for the display blit kernel. The engine's
+/// `MAX_FRAMES_IN_FLIGHT` lives in engine-internal code an engine-free
+/// package cannot name, so the display owns its own frames-in-flight
+/// policy for the blit kernel's descriptor sets (matched to the
+/// swapchain's 2-deep present ring).
+const DISPLAY_BLIT_FRAMES_IN_FLIGHT: u32 = 2;
+
 /// Compiled-in display-blit SPIR-V (built by this package's `build.rs`).
 const DISPLAY_BLIT_VERT_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/display_blit.vert.spv"));
 const DISPLAY_BLIT_FRAG_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/display_blit.frag.spv"));
 
-#[streamlib::sdk::processor("Display")]
+#[streamlib_plugin_sdk::sdk::processor("Display")]
 pub struct LinuxDisplayProcessor {
     gpu_context: Option<GpuContextLimitedAccess>,
     window_id: LinuxWindowId,
@@ -61,7 +70,7 @@ pub struct LinuxDisplayProcessor {
     stop_called: Arc<AtomicBool>,
 }
 
-impl streamlib::sdk::processors::ManualProcessor for LinuxDisplayProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for LinuxDisplayProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::trace!("Display: setup() called");
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
@@ -93,7 +102,7 @@ impl streamlib::sdk::processors::ManualProcessor for LinuxDisplayProcessor::Proc
         Ok(())
     }
 
-    fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::trace!(
             "Display {}: start() called — spawning render thread",
             self.window_id.0
@@ -115,18 +124,14 @@ impl streamlib::sdk::processors::ManualProcessor for LinuxDisplayProcessor::Proc
             .clone()
             .unwrap_or(ScalingMode::Stretch);
 
+        // Engine-free GPU access: the render thread mints every GPU resource
+        // host-side via `gpu_context.escalate(|full| full.create_*(..))`, never
+        // a raw host device. `GpuContextLimitedAccess` is `Clone` + `Send`, so
+        // the clone rides into the render thread.
         let gpu_context = self
             .gpu_context
             .clone()
             .ok_or_else(|| Error::Configuration("GPU context not initialized".into()))?;
-
-        // Manual-mode start() takes FullAccess directly. For cdylib-
-        // resident processors the engine wraps lifecycle dispatch in
-        // `with_cdylib_scope` (#1072), so `ctx.gpu_full_access()`
-        // routes through the FullAccess vtable transparently — same
-        // contract as in-process. Calling `.escalate(...)` here would
-        // re-enter the gate held by the wrap and panic.
-        let vulkan_device = ctx.gpu_full_access().host_vulkan_device_arc()?;
 
         running.store(true, Ordering::Release);
 
@@ -198,13 +203,15 @@ impl streamlib::sdk::processors::ManualProcessor for LinuxDisplayProcessor::Proc
                             .ok()
                             .and_then(|s| s.parse::<u64>().ok())
                             .unwrap_or(30);
-                        // Test-only: when set, the render closure deliberately
+                        // Test-only: when set, the render body deliberately
                         // returns `Err` at the given frame counter, exercising
-                        // `VulkanPresentTarget`'s error-path drain (consumes the
-                        // `image_available_semaphore` so the next slot reuse
-                        // doesn't trip `VUID-vkQueueSubmit2-semaphore-03868`).
-                        // Run with `VK_LOADER_LAYERS_ENABLE=*validation*` to
-                        // surface any drain bug as a VUID at the next acquire.
+                        // the present target's error-path drain (the host
+                        // `end_frame` closes any dangling render pass and
+                        // consumes the `image_available_semaphore` so the next
+                        // slot reuse doesn't trip
+                        // `VUID-vkQueueSubmit2-semaphore-03868`). Run with
+                        // `VK_LOADER_LAYERS_ENABLE=*validation*` to surface any
+                        // drain bug as a VUID at the next acquire.
                         let inject_error_at_frame =
                             std::env::var("STREAMLIB_DISPLAY_INJECT_ERROR_AT_FRAME")
                                 .ok()
@@ -232,7 +239,6 @@ impl streamlib::sdk::processors::ManualProcessor for LinuxDisplayProcessor::Proc
 
                         let mut app = DisplayEventLoopHandler {
                             window: None,
-                            vulkan_device,
                             gpu_context,
                             inputs,
                             running,
@@ -260,27 +266,37 @@ impl streamlib::sdk::processors::ManualProcessor for LinuxDisplayProcessor::Proc
                         }
 
                         // Present target + kernel drop in reverse construction
-                        // order via App field destruction; both clean up their
-                        // GPU resources.
+                        // order via App field destruction; both dispatch their
+                        // host-side GPU cleanup through the plugin ABI.
                         drop(app);
                     }
                 }
 
-                // If the render thread exited on its own (frame_limit, window
-                // close, error, or a headless drain reaching its frame limit),
-                // publish RuntimeShutdown so the runtime stops. Skip when
-                // stop() triggered the exit — the runtime is already tearing
-                // down. A headless drain with no frame limit only reaches here
-                // via stop(), so it won't spuriously shut the runtime down.
+                // The render thread exited on its own (frame_limit, window
+                // close, error, or a headless drain reaching its frame limit):
+                // request a runtime shutdown so the whole graph stops. The
+                // engine-free `request_runtime_shutdown` publishes the reason
+                // string on the host's reserved control topic and the host maps
+                // it to the shutdown — no engine `Event` type crosses the plugin
+                // ABI. Skipped when `stop()` triggered the exit (the runtime is
+                // already tearing down); a headless drain with no frame limit
+                // only reaches here via `stop()`, so it won't spuriously shut the
+                // runtime down. Best-effort: a failed request only warns.
                 if !stop_called.load(Ordering::Acquire) {
-                    use streamlib::sdk::pubsub::{Event, RuntimeEvent, PUBSUB};
                     tracing::info!(
                         "Display {}: render thread exited, requesting runtime shutdown",
                         window_id
                     );
-                    let shutdown_event =
-                        Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown);
-                    PUBSUB.publish(&shutdown_event.topic(), &shutdown_event);
+                    if let Err(e) =
+                        streamlib_plugin_sdk::sdk::runtime_control::request_runtime_shutdown(
+                            "display render thread exited (window close / frame limit / error)",
+                        )
+                    {
+                        tracing::warn!(
+                            "Display {}: request_runtime_shutdown failed: {}",
+                            window_id, e
+                        );
+                    }
                 }
 
                 tracing::debug!("Display {}: Render thread exiting", window_id);
@@ -346,9 +362,8 @@ impl LinuxDisplayProcessor::Processor {
 #[allow(dead_code)]
 struct DisplayEventLoopHandler {
     window: Option<Window>,
-    vulkan_device: Arc<HostVulkanDevice>,
     gpu_context: GpuContextLimitedAccess,
-    inputs: streamlib::sdk::iceoryx2::InputMailboxes,
+    inputs: streamlib_plugin_sdk::sdk::iceoryx2::InputMailboxes,
     running: Arc<AtomicBool>,
     frame_counter: Arc<AtomicU64>,
     window_id: u64,
@@ -357,27 +372,30 @@ struct DisplayEventLoopHandler {
     window_title: String,
     vsync: bool,
     scaling_mode: ScalingMode,
-    present_target: Option<VulkanPresentTarget>,
-    graphics_kernel: Option<Arc<VulkanGraphicsKernel>>,
+    present_target: Option<PresentTarget>,
+    graphics_kernel: Option<VulkanGraphicsKernel>,
     /// Last-applied frame `color_info` (package-local serialized form).
     /// When a new frame arrives with a different value the swapchain is
     /// recreated against the new `VkColorSpaceKHR` priority pick. `None`
     /// covers both "no frame seen yet" and "every frame so far has had
     /// `color_info: None`" — both stay on the legacy SDR pick.
     current_frame_color_info: Option<crate::_generated_::ColorInfo>,
-    /// Set when no display surface could be created (window or
-    /// `VulkanPresentTarget` creation failed) even though the event loop
-    /// built. The handler keeps running purely to drain its input —
-    /// every tick reads and discards queued frames, presents nothing.
+    /// Set when no display surface could be created (window or present
+    /// target creation failed) even though the event loop built. The
+    /// handler keeps running purely to drain its input — every tick reads
+    /// and discards queued frames, presents nothing.
     inactive: bool,
     frame_limit: Option<u64>,
     png_sample_dir: Option<std::path::PathBuf>,
     png_sample_every: u64,
     png_samples_saved: u64,
-    png_texture_readback: Option<Arc<VulkanTextureReadback>>,
-    /// Test-only: when set, the render closure returns `Err` once the
-    /// displayed-frame counter hits this value. Exercises
-    /// `VulkanPresentTarget`'s error-path semaphore drain.
+    /// Single-in-flight GPU→CPU readback for the PNG-sample fallback path,
+    /// minted host-side (`escalate` + `create_texture_readback`) once and
+    /// cached. `!Clone` — the primitive owns its staging resources.
+    png_texture_readback: Option<streamlib_plugin_sdk::sdk::rhi::TextureReadback>,
+    /// Test-only: when set, the render body returns `Err` once the
+    /// displayed-frame counter hits this value. Exercises the present
+    /// target's error-path semaphore drain (host `end_frame`).
     inject_error_at_frame: Option<u64>,
 }
 
@@ -408,27 +426,15 @@ impl ApplicationHandler for DisplayEventLoopHandler {
             }
         };
 
-        // Build the present target + graphics kernel for steady-state rendering.
-        // Initial colorspace pick is `None` — the legacy SDR pick. The first
-        // frame's `color_info`, if non-`None`, drives a recreate in
-        // `render_frame` once a frame actually arrives.
-        let present_target = match VulkanPresentTarget::new(
-            &self.vulkan_device,
-            &window,
-            self.width,
-            self.height,
-            self.vsync,
-            None,
-        ) {
-            Ok(pt) => pt,
+        // Project the winit window into the plugin ABI's flattened window
+        // handle. The host reconstructs the native handles and owns the
+        // `VkSurfaceKHR` from creation; the window must outlive the present
+        // target (it lives in `self.window` for the handler's lifetime).
+        let window_repr = match raw_window_handle_repr_from_window(&window) {
+            Ok(repr) => repr,
             Err(e) => {
-                // `VulkanPresentTarget::new` surfaces a missing surface as
-                // `Error::DisplaySurfaceUnavailable`; any other failure is
-                // an unexpected GPU error. Either way the display degrades
-                // to a drain rather than crashing the runtime — the window
-                // local drops here, closing it.
                 tracing::warn!(
-                    "Display {}: no display surface (present target: {}) — degrading to headless drain mode",
+                    "Display {}: no display surface (window-handle projection failed: {}) — degrading to headless drain mode",
                     self.window_id,
                     e
                 );
@@ -437,16 +443,44 @@ impl ApplicationHandler for DisplayEventLoopHandler {
             }
         };
 
-        let color_format = present_target.color_format();
-        let kernel = match build_display_kernel(&self.vulkan_device, color_format) {
-            Ok(k) => Arc::new(k),
+        // Escalate ONCE to mint the swapchain present target + blit kernel on
+        // the host device; both are cached and driven per frame through their
+        // own scope-free plugin-ABI methods (no per-frame escalate). Initial
+        // colorspace pick is `None` (legacy SDR); the first frame's
+        // `color_info`, if non-`None`, drives a recreate in `render_frame`.
+        let built = self
+            .gpu_context
+            .escalate(|full| -> Result<(PresentTarget, VulkanGraphicsKernel)> {
+                let present_target =
+                    full.create_present_target(&window_repr, self.width, self.height, self.vsync, None)?;
+                let color_format_raw = present_target.color_format_raw();
+                let color_format = texture_format_from_raw(color_format_raw).ok_or_else(|| {
+                    Error::GpuError(format!(
+                        "present target reported unknown swapchain color-format discriminant {color_format_raw}"
+                    ))
+                })?;
+                let kernel = build_display_kernel(full, color_format)?;
+                Ok((present_target, kernel))
+            });
+
+        let (present_target, kernel) = match built {
+            Ok(Ok(pair)) => pair,
+            Ok(Err(e)) => {
+                // Surface creation or the blit pipeline failed. Either a
+                // benign headless box (`DisplaySurfaceUnavailable`) or an
+                // unexpected GPU error — degrade to a drain rather than
+                // crashing the runtime; the window local drops here.
+                tracing::warn!(
+                    "Display {}: display GPU setup failed ({}) — degrading to headless drain mode",
+                    self.window_id,
+                    e
+                );
+                self.inactive = true;
+                return;
+            }
             Err(e) => {
-                // Surface succeeded but the blit pipeline didn't — an
-                // unexpected GPU failure, not a benign headless box. Still
-                // degrade to a drain rather than taking the runtime down;
-                // the present target + window locals drop here.
-                tracing::error!(
-                    "Display {}: failed to construct display graphics kernel ({}) — degrading to headless drain mode",
+                tracing::warn!(
+                    "Display {}: escalate for display GPU setup failed ({}) — degrading to headless drain mode",
                     self.window_id,
                     e
                 );
@@ -456,11 +490,11 @@ impl ApplicationHandler for DisplayEventLoopHandler {
         };
 
         tracing::info!(
-            "Display {}: Vulkan present target ready ({}x{}, {:?})",
+            "Display {}: Vulkan present target ready ({}x{}, color-format discriminant {})",
             self.window_id,
-            present_target.current_extent().0,
-            present_target.current_extent().1,
-            color_format
+            self.width,
+            self.height,
+            present_target.color_format_raw()
         );
 
         self.present_target = Some(present_target);
@@ -499,15 +533,11 @@ impl ApplicationHandler for DisplayEventLoopHandler {
                 self.width = new_size.width;
                 self.height = new_size.height;
 
+                let color_traits =
+                    package_color_info_to_traits_repr(self.current_frame_color_info.as_ref());
                 if let Some(pt) = self.present_target.as_mut() {
                     // Resize-driven recreate keeps the current colorspace pick.
-                    let color_traits =
-                        package_color_info_to_traits(self.current_frame_color_info.as_ref());
-                    if let Err(e) = pt.recreate(
-                        new_size.width,
-                        new_size.height,
-                        color_traits.as_ref(),
-                    ) {
+                    if let Err(e) = pt.recreate(new_size.width, new_size.height, color_traits) {
                         tracing::error!(
                             "Display {}: Failed to recreate present target: {}",
                             self.window_id,
@@ -576,17 +606,20 @@ impl DisplayEventLoopHandler {
         if !self.inputs.has_data("video") {
             return;
         }
-        let Some(present_target) = self.present_target.as_mut() else {
+        if self.present_target.is_none() || self.graphics_kernel.is_none() {
             return;
-        };
-        let Some(graphics_kernel) = self.graphics_kernel.as_ref().cloned() else {
-            return;
-        };
+        }
+
+        let window_id = self.window_id;
+        let current_width = self.width;
+        let current_height = self.height;
+        let scaling_mode = self.scaling_mode.clone();
+        let inject_error_at_frame = self.inject_error_at_frame;
 
         let ipc_frame: crate::_generated_::VideoFrame = match self.inputs.read("video") {
             Ok(frame) => frame,
             Err(e) => {
-                tracing::warn!("Display {}: Failed to read frame: {}", self.window_id, e);
+                tracing::warn!("Display {}: Failed to read frame: {}", window_id, e);
                 return;
             }
         };
@@ -596,76 +629,98 @@ impl DisplayEventLoopHandler {
         // inspection: when the very first frame arrives with non-`None`
         // color_info, the present target was constructed in `resumed()`
         // with `None` (legacy SDR pick) and is now upgraded to whatever
-        // the priority walk picks for the frame's color description.
-        // On NVIDIA + X11 (today's dev box) the surface only exposes
-        // SRGB_NONLINEAR so the pick stays SDR regardless — the recreate
-        // is a no-op-cost path that only fires when the WSI exposes
-        // wider colorspaces.
+        // the priority walk picks. On NVIDIA + X11 (today's dev box) the
+        // surface only exposes SRGB_NONLINEAR so the pick stays SDR — the
+        // recreate is a no-op-cost path that only fires when the WSI
+        // exposes wider colorspaces.
         if ipc_frame.color_info != self.current_frame_color_info {
-            let new_color_traits = package_color_info_to_traits(ipc_frame.color_info.as_ref());
-            let new_extent = present_target.current_extent();
-            let prior_color_format = present_target.color_format();
-            if let Err(e) = present_target.recreate(
-                new_extent.0,
-                new_extent.1,
-                new_color_traits.as_ref(),
-            ) {
-                tracing::warn!(
-                    "Display {}: ColorInfo recreate failed (keeping previous swapchain): {}",
-                    self.window_id, e
-                );
-            } else {
-                self.current_frame_color_info = ipc_frame.color_info.clone();
-                // If the recreate landed on a new color format (e.g.
-                // SDR BGRA8_UNORM → HDR10 A2B10G10R10_UNORM_PACK32),
-                // the cached graphics kernel was built against the
-                // prior attachment format and must be rebuilt before
-                // the next draw.
-                let new_color_format = present_target.color_format();
-                if new_color_format != prior_color_format {
-                    match build_display_kernel(&self.vulkan_device, new_color_format) {
-                        Ok(new_kernel) => {
-                            tracing::info!(
-                                "Display {}: rebuilt display blit kernel for new color format \
-                                 {:?} (was {:?})",
-                                self.window_id, new_color_format, prior_color_format
-                            );
-                            self.graphics_kernel = Some(Arc::new(new_kernel));
-                            // Skip this frame's draw — the cloned
-                            // `graphics_kernel` Arc above matches the
-                            // old format. The next frame uses the new
-                            // kernel.
-                            self.frame_counter.fetch_add(1, Ordering::Relaxed);
-                            return;
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                "Display {}: failed to rebuild display blit kernel: {}",
-                                self.window_id, e
-                            );
-                            self.frame_counter.fetch_add(1, Ordering::Relaxed);
-                            return;
+            let new_color_traits = package_color_info_to_traits_repr(ipc_frame.color_info.as_ref());
+            // Scope the present-target borrow to the recreate; read the
+            // before/after color format so a format flip can rebuild the kernel.
+            let recreate_outcome: Result<(u32, u32)> = {
+                let present_target = match self.present_target.as_mut() {
+                    Some(pt) => pt,
+                    None => return,
+                };
+                let prior_color_format_raw = present_target.color_format_raw();
+                present_target
+                    .recreate(current_width, current_height, new_color_traits)
+                    .map(|()| (prior_color_format_raw, present_target.color_format_raw()))
+            };
+            match recreate_outcome {
+                Err(e) => {
+                    tracing::warn!(
+                        "Display {}: ColorInfo recreate failed (keeping previous swapchain): {}",
+                        window_id, e
+                    );
+                }
+                Ok((prior_color_format_raw, new_color_format_raw)) => {
+                    self.current_frame_color_info = ipc_frame.color_info.clone();
+                    // A recreate can flip SDR BGRA8 → HDR10 A2B10G10R10; the
+                    // cached blit kernel was built against the prior attachment
+                    // format and must be rebuilt before the next draw.
+                    if new_color_format_raw != prior_color_format_raw {
+                        let new_color_format = match texture_format_from_raw(new_color_format_raw) {
+                            Some(f) => f,
+                            None => {
+                                tracing::error!(
+                                    "Display {}: recreate reported unknown color-format discriminant {}",
+                                    window_id, new_color_format_raw
+                                );
+                                self.frame_counter.fetch_add(1, Ordering::Relaxed);
+                                return;
+                            }
+                        };
+                        match self
+                            .gpu_context
+                            .escalate(|full| build_display_kernel(full, new_color_format))
+                        {
+                            Ok(Ok(new_kernel)) => {
+                                tracing::info!(
+                                    "Display {}: rebuilt display blit kernel for new color format \
+                                     {:?} (discriminant {}, was {})",
+                                    window_id, new_color_format, new_color_format_raw,
+                                    prior_color_format_raw
+                                );
+                                self.graphics_kernel = Some(new_kernel);
+                                // Skip this frame's draw — the next frame uses
+                                // the new kernel.
+                                self.frame_counter.fetch_add(1, Ordering::Relaxed);
+                                return;
+                            }
+                            Ok(Err(e)) => {
+                                tracing::error!(
+                                    "Display {}: failed to rebuild display blit kernel: {}",
+                                    window_id, e
+                                );
+                                self.frame_counter.fetch_add(1, Ordering::Relaxed);
+                                return;
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    "Display {}: escalate to rebuild display blit kernel failed: {}",
+                                    window_id, e
+                                );
+                                self.frame_counter.fetch_add(1, Ordering::Relaxed);
+                                return;
+                            }
                         }
                     }
                 }
             }
         }
 
-        // HDR static metadata push — fires only when the picked
-        // colorspace is one of the PQ/HLG variants (gated by
-        // `set_hdr_metadata` itself) and the frame carries the
-        // sidecar metadata. Subsequent frames with byte-identical
-        // payload short-circuit inside the present target.
-        if let Some(hdr_metadata) = package_hdr_metadata_to_engine(
+        // HDR static metadata push — fires only when the picked colorspace
+        // is one of the PQ/HLG variants (gated by `set_hdr_metadata` itself
+        // host-side) and the frame carries the sidecar metadata. Subsequent
+        // frames with byte-identical payload short-circuit inside the host.
+        if let Some(hdr_metadata) = package_hdr_metadata_to_repr(
             ipc_frame.mastering_display.as_ref(),
             ipc_frame.content_light.as_ref(),
-        ) {
-            if let Err(e) = present_target.set_hdr_metadata(&hdr_metadata) {
-                tracing::warn!(
-                    "Display {}: vkSetHdrMetadataEXT failed: {}",
-                    self.window_id, e
-                );
-            }
+        ) && let Some(present_target) = self.present_target.as_mut()
+            && let Err(e) = present_target.set_hdr_metadata(&hdr_metadata)
+        {
+            tracing::warn!("Display {}: set_hdr_metadata failed: {}", window_id, e);
         }
 
         // Resolve the texture + registration via the engine's blessed API.
@@ -679,7 +734,7 @@ impl DisplayEventLoopHandler {
             Err(e) => {
                 tracing::warn!(
                     "Display {}: Failed to resolve texture for '{}': {}",
-                    self.window_id,
+                    window_id,
                     ipc_frame.surface_id,
                     e
                 );
@@ -690,128 +745,169 @@ impl DisplayEventLoopHandler {
         let src_width = camera_texture.width();
         let src_height = camera_texture.height();
 
-        let scaling_mode = self.scaling_mode.clone();
-        let kernel_for_draw = Arc::clone(&graphics_kernel);
-        let window_id = self.window_id;
-        let inject_error_this_frame = self
-            .inject_error_at_frame
+        // Snapshot the current blit kernel (a host Arc bump). A color-format
+        // change above rebuilds `self.graphics_kernel` and returns early, so
+        // this snapshot is only ever used on a non-format-change frame.
+        let blit_kernel = match self.graphics_kernel.as_ref() {
+            Some(k) => k.clone(),
+            None => return,
+        };
+
+        let inject_error_this_frame = inject_error_at_frame
             .map(|n| self.frame_counter.load(Ordering::Relaxed) == n)
             .unwrap_or(false);
 
-        let result = present_target.render_frame(|frame: &mut PresentFrame<'_>| {
-            let frame_index = frame.frame_index;
-            let extent = frame.extent;
+        // Acquire the swapchain frame and draw. `begin_frame` borrows the
+        // present target mutably for the RAII `PresentTargetFrame`; the borrow
+        // (and the whole block) is scoped so `self` is free for the PNG-sample
+        // path below.
+        let present_completed = {
+            let present_target = match self.present_target.as_mut() {
+                Some(pt) => pt,
+                None => return,
+            };
+            match present_target.begin_frame() {
+                Err(e) => {
+                    tracing::warn!("Display {}: begin_frame failed: {}", window_id, e);
+                    false
+                }
+                Ok(None) => {
+                    // OUT_OF_DATE_KHR: no frame stashed in flight; the caller
+                    // recreates on the next resize. Falls through to the
+                    // frame-counter + PNG-sample path (parity with the prior
+                    // "swapchain out of date" branch).
+                    tracing::debug!(
+                        "Display {}: swapchain out of date — will recreate on next resize",
+                        window_id
+                    );
+                    true
+                }
+                Ok(Some(mut frame)) => {
+                    let frame_index = frame.frame_index;
+                    let extent = frame.extent;
+                    let image_view_raw = frame.image_view_raw;
 
-            // Stage the camera texture as the kernel's binding-0 sampled texture
-            // for this descriptor-ring slot.
-            kernel_for_draw.set_sampled_texture(frame_index, 0, &camera_texture)?;
+                    let draw_result: Result<()> = (|| {
+                        // Stage the camera texture as the kernel's binding-0
+                        // sampled texture for this descriptor-ring slot.
+                        blit_kernel.set_sampled_texture(frame_index, 0, &camera_texture)?;
 
-            // Transition the camera texture into SHADER_READ_ONLY_OPTIMAL if it
-            // isn't already there. Producers (camera ring textures, adapter
-            // outputs) may publish in different layouts; the registration
-            // declares what's current.
-            let camera_current_layout = registration.current_layout();
-            if camera_current_layout != VulkanLayout::SHADER_READ_ONLY_OPTIMAL {
-                frame.recorder.record_image_barrier(
-                    &camera_texture,
-                    camera_current_layout,
-                    VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
-                    VulkanStage::ALL_COMMANDS,
-                    VulkanStage::FRAGMENT_SHADER,
-                    VulkanAccess::MEMORY_WRITE,
-                    VulkanAccess::SHADER_SAMPLED_READ,
-                )?;
-                registration.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
-            }
+                        // Transition the camera texture into
+                        // SHADER_READ_ONLY_OPTIMAL if it isn't already there.
+                        // Producers may publish in different layouts; the
+                        // registration declares what's current.
+                        let camera_current_layout = registration.current_layout();
+                        if camera_current_layout != VulkanLayout::SHADER_READ_ONLY_OPTIMAL {
+                            frame.recorder().record_image_barrier(
+                                &camera_texture,
+                                camera_current_layout,
+                                VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                                VulkanStage::ALL_COMMANDS,
+                                VulkanStage::FRAGMENT_SHADER,
+                                VulkanAccess::MEMORY_WRITE,
+                                VulkanAccess::SHADER_SAMPLED_READ,
+                            )?;
+                            registration.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
+                        }
 
-            // No GPU-wait on a producer timeline here. Every in-tree
-            // producer drains its GPU work synchronously before
-            // sending the iceoryx2 VideoFrame (camera waits its own
-            // timeline at line 1173 of camera.rs; the
-            // graphics-kernel-based effects (BlendingCompositor,
-            // CrtFilmGrain) call `submit_and_wait` per dispatch;
-            // OpenGL adapters glFinish on `release_write`). So the
-            // iceoryx2 receipt itself is the "GPU writes are visible"
-            // signal — no separate timeline wait is required.
-            //
-            // A future async producer that genuinely needs Display-side
-            // timeline sync should carry an explicit (timeline_handle,
-            // wait_value) pair on the VideoFrame protocol. Ordering and
-            // timing otherwise ride the monotonic clock (timestamp_ns) —
-            // the single ordering primitive — never a per-frame counter.
+                        // No GPU-wait on a producer timeline here. Every
+                        // in-tree producer drains its GPU work synchronously
+                        // before sending the iceoryx2 VideoFrame, so the
+                        // iceoryx2 receipt itself is the "GPU writes are
+                        // visible" signal — no separate timeline wait is
+                        // required. A future async producer that genuinely
+                        // needs Display-side timeline sync carries an explicit
+                        // (timeline, wait_value) pair on the VideoFrame
+                        // protocol, folded into `frame.end`'s extra-waits.
 
-            // Compute aspect-ratio-aware scale per the configured mode.
-            let src_aspect = src_width as f32 / src_height as f32;
-            let dst_aspect = extent.0 as f32 / extent.1 as f32;
-            let (scale_x, scale_y) = match scaling_mode {
-                ScalingMode::Stretch => (1.0f32, 1.0f32),
-                ScalingMode::Letterbox => {
-                    if src_aspect > dst_aspect {
-                        (1.0f32, dst_aspect / src_aspect)
-                    } else {
-                        (src_aspect / dst_aspect, 1.0f32)
+                        // Compute aspect-ratio-aware scale per configured mode.
+                        let src_aspect = src_width as f32 / src_height as f32;
+                        let dst_aspect = extent.0 as f32 / extent.1 as f32;
+                        let (scale_x, scale_y) = match scaling_mode {
+                            ScalingMode::Stretch => (1.0f32, 1.0f32),
+                            ScalingMode::Letterbox => {
+                                if src_aspect > dst_aspect {
+                                    (1.0f32, dst_aspect / src_aspect)
+                                } else {
+                                    (src_aspect / dst_aspect, 1.0f32)
+                                }
+                            }
+                            ScalingMode::Crop => {
+                                if src_aspect > dst_aspect {
+                                    (src_aspect / dst_aspect, 1.0f32)
+                                } else {
+                                    (1.0f32, dst_aspect / src_aspect)
+                                }
+                            }
+                        };
+                        let push_constants: [f32; 4] = [scale_x, scale_y, 0.0, 0.0];
+                        blit_kernel.set_push_constants_value(frame_index, &push_constants)?;
+
+                        // Begin dynamic rendering on the acquired swapchain
+                        // image view with CLEAR.
+                        frame.recorder().cmd_begin_dynamic_rendering(
+                            image_view_raw,
+                            extent,
+                            Some([0.0, 0.0, 0.0, 1.0]),
+                        )?;
+
+                        // Test-only error injection AFTER begin (deliberately
+                        // leaves a dangling render pass): the host `end_frame`
+                        // closes it and drains the acquire semaphore, so
+                        // validation layers catch any drain bug at the next
+                        // acquire as VUID-vkQueueSubmit2-semaphore-03868.
+                        if inject_error_this_frame {
+                            return Err(Error::GpuError(
+                                "STREAMLIB_DISPLAY_INJECT_ERROR_AT_FRAME: forced closure error after cmd_begin_dynamic_rendering".into(),
+                            ));
+                        }
+
+                        let draw = DrawCall {
+                            vertex_count: 3,
+                            instance_count: 1,
+                            first_vertex: 0,
+                            first_instance: 0,
+                            viewport: Some(Viewport::full(extent.0, extent.1)),
+                            scissor: Some(ScissorRect::full(extent.0, extent.1)),
+                        };
+                        frame
+                            .recorder()
+                            .record_draw(&blit_kernel, frame_index, &draw)?;
+                        frame.recorder().cmd_end_dynamic_rendering()?;
+                        Ok(())
+                    })();
+
+                    // Always complete the frame: the host barriers + submits +
+                    // presents on `end` (even after a draw error, closing any
+                    // dangling render pass and draining the acquire semaphore)
+                    // so the swapchain keeps making forward progress. No
+                    // producer-finished timeline waits are folded in (empty
+                    // slice) — see the timeline note above.
+                    let end_result = frame.end(&[]);
+
+                    match (draw_result, end_result) {
+                        (Ok(()), Ok(())) => true,
+                        (Err(e), _) => {
+                            tracing::warn!("Display {}: render frame draw failed: {}", window_id, e);
+                            false
+                        }
+                        (Ok(()), Err(e)) => {
+                            tracing::warn!("Display {}: present-frame end failed: {}", window_id, e);
+                            false
+                        }
                     }
                 }
-                ScalingMode::Crop => {
-                    if src_aspect > dst_aspect {
-                        (src_aspect / dst_aspect, 1.0f32)
-                    } else {
-                        (1.0f32, dst_aspect / src_aspect)
-                    }
-                }
-            };
-            let push_constants: [f32; 4] = [scale_x, scale_y, 0.0, 0.0];
-            kernel_for_draw.set_push_constants_value(frame_index, &push_constants)?;
-
-            // Begin render pass on the acquired swapchain image with CLEAR.
-            frame.begin_rendering(Some([0.0, 0.0, 0.0, 1.0]))?;
-
-            // Test-only error-injection point: AFTER begin_rendering so
-            // the dangling-render-pass close path is also exercised
-            // alongside the binary-acquire-sem drain. Validation layers
-            // catch any drain bug at the next acquire as
-            // VUID-vkQueueSubmit2-semaphore-03868.
-            if inject_error_this_frame {
-                return Err(Error::GpuError(
-                    "STREAMLIB_DISPLAY_INJECT_ERROR_AT_FRAME: forced closure error after begin_rendering".into(),
-                ));
             }
+        };
 
-            // Draw — bind pipeline + descriptors + push consts, viewport/scissor
-            // matching the swapchain extent.
-            let draw = DrawCall {
-                vertex_count: 3,
-                instance_count: 1,
-                first_vertex: 0,
-                first_instance: 0,
-                viewport: Some(Viewport::full(extent.0, extent.1)),
-                scissor: Some(ScissorRect::full(extent.0, extent.1)),
-            };
-            frame
-                .recorder
-                .record_draw(&kernel_for_draw, frame_index, &draw)?;
-
-            frame.end_rendering()?;
-            Ok(())
-        });
-
-        match result {
-            Ok(true) => {}
-            Ok(false) => {
-                tracing::debug!("Display {}: swapchain out of date — will recreate on next resize", window_id);
-            }
-            Err(e) => {
-                tracing::warn!("Display {}: render frame failed: {}", window_id, e);
-                // Advance the counter so frame-counter-keyed logic
-                // (frame limit, fault-injection trigger) makes
-                // progress on every render attempt, not only on
-                // success. `VulkanPresentTarget::render_frame`
-                // already completes the swapchain submit+present on
-                // error before propagating, so the frame is "done"
-                // from the swapchain's perspective regardless.
-                self.frame_counter.fetch_add(1, Ordering::Relaxed);
-                return;
-            }
+        if !present_completed {
+            // Advance the counter so frame-counter-keyed logic (frame limit,
+            // fault-injection trigger) makes progress on every render attempt,
+            // not only on success. The host already completed the swapchain
+            // submit + present on the error path, so the frame is "done" from
+            // the swapchain's perspective regardless.
+            self.frame_counter.fetch_add(1, Ordering::Relaxed);
+            return;
         }
 
         let frame_idx = self.frame_counter.fetch_add(1, Ordering::Relaxed);
@@ -822,12 +918,17 @@ impl DisplayEventLoopHandler {
                     "display_{:03}_frame_{:06}.png",
                     self.window_id, frame_idx
                 ));
-                if let Ok(buf) = self.gpu_context.resolve_pixel_buffer_by_surface_id(&ipc_frame.surface_id) {
+                if let Ok(buf) = self
+                    .gpu_context
+                    .resolve_pixel_buffer_by_surface_id(&ipc_frame.surface_id)
+                {
                     let mapped_ptr = buf.plane_base_address(0);
                     if !mapped_ptr.is_null() {
                         let len = (src_width as usize) * (src_height as usize) * 4;
-                        let rgba =
-                            unsafe { std::slice::from_raw_parts(mapped_ptr, len) };
+                        // SAFETY: the host maps the pixel buffer's plane 0 for
+                        // the surface; `len` matches the tightly-packed RGBA
+                        // extent the resolver validated.
+                        let rgba = unsafe { std::slice::from_raw_parts(mapped_ptr, len) };
                         if let Err(e) = write_png_rgba(&path, src_width, src_height, rgba) {
                             tracing::warn!(
                                 "Display {}: PNG sample save failed at frame {}: {}",
@@ -874,58 +975,76 @@ impl DisplayEventLoopHandler {
         }
 
         if self.png_texture_readback.is_none() {
-            let descriptor = TextureReadbackDescriptor {
-                label: "display-png-sample",
-                format,
-                width,
-                height,
-            };
-            match VulkanTextureReadback::new_into_stream_error(
-                &self.vulkan_device,
-                &descriptor,
-            ) {
-                Ok(handle) => {
-                    tracing::info!(
-                        "Display {}: created texture-readback handle for PNG sampling \
-                         ({:?}, {}x{}, {} bytes)",
-                        self.window_id,
-                        format,
-                        width,
-                        height,
-                        descriptor.staging_size()
+            // Privileged host-side creation: `escalate` opens a FullAccess
+            // window just long enough to build the readback on the host device,
+            // then drains + releases it. The handle is cached; per-sample
+            // `submit` / `wait_and_read` run scope-free (no second escalate).
+            let readback = match self.gpu_context.escalate(|full| {
+                full.create_texture_readback("display-png-sample", width, height, format)
+            }) {
+                Ok(Ok(rb)) => rb,
+                Ok(Err(e)) => {
+                    tracing::warn!(
+                        "Display {}: PNG texture-readback handle creation failed: {}",
+                        self.window_id, e
                     );
-                    self.png_texture_readback = Some(Arc::new(handle));
+                    return;
                 }
                 Err(e) => {
                     tracing::warn!(
-                        "Display {}: PNG texture-readback handle creation failed: {}",
-                        self.window_id,
-                        e
+                        "Display {}: escalate for PNG texture-readback creation failed: {}",
+                        self.window_id, e
+                    );
+                    return;
+                }
+            };
+            tracing::info!(
+                "Display {}: created texture-readback handle for PNG sampling \
+                 ({:?}, {}x{}, {} bytes)",
+                self.window_id,
+                format,
+                width,
+                height,
+                readback.staging_size()
+            );
+            self.png_texture_readback = Some(readback);
+        }
+
+        // Scope the immutable borrow of the cached readback (`!Clone`, stored
+        // inline) so the byte slice it lends is dropped before the mutable
+        // `self.png_samples_saved` bookkeeping below.
+        let write_outcome: std::result::Result<(), String> = {
+            let readback = match self.png_texture_readback.as_ref() {
+                Some(rb) => rb,
+                None => return,
+            };
+            let ticket = match readback.submit(texture, TextureSourceLayout::General) {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!(
+                        "Display {}: PNG texture-readback submit failed at frame {}: {}",
+                        self.window_id, frame_idx, e
+                    );
+                    return;
+                }
+            };
+            match readback.wait_and_read(ticket, u64::MAX) {
+                Ok(bytes) => {
+                    let rgba = maybe_swizzle_bgra_to_rgba(format, bytes);
+                    write_png_rgba(path, width, height, &rgba).map_err(|e| e.to_string())
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Display {}: PNG texture-readback wait failed at frame {}: {}",
+                        self.window_id, frame_idx, e
                     );
                     return;
                 }
             }
-        }
-        let readback = self.png_texture_readback.as_ref().unwrap().clone();
-
-        let ticket = match readback.submit(texture, TextureSourceLayout::General) {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::warn!(
-                    "Display {}: PNG texture-readback submit failed at frame {}: {}",
-                    self.window_id,
-                    frame_idx,
-                    e
-                );
-                return;
-            }
         };
-        let result = readback.wait_and_read_with(ticket, u64::MAX, |bytes| {
-            let rgba = maybe_swizzle_bgra_to_rgba(format, bytes);
-            write_png_rgba(path, width, height, &rgba)
-        });
-        match result {
-            Ok(Ok(())) => {
+
+        match write_outcome {
+            Ok(()) => {
                 self.png_samples_saved += 1;
                 tracing::info!(
                     "Display {}: saved PNG sample (texture path) {:?} \
@@ -936,17 +1055,9 @@ impl DisplayEventLoopHandler {
                     self.png_samples_saved
                 );
             }
-            Ok(Err(e)) => {
-                tracing::warn!(
-                    "Display {}: PNG sample (texture path) save failed at frame {}: {}",
-                    self.window_id,
-                    frame_idx,
-                    e
-                );
-            }
             Err(e) => {
                 tracing::warn!(
-                    "Display {}: PNG texture-readback wait failed at frame {}: {}",
+                    "Display {}: PNG sample (texture path) save failed at frame {}: {}",
                     self.window_id,
                     frame_idx,
                     e
@@ -956,6 +1067,72 @@ impl DisplayEventLoopHandler {
     }
 }
 
+/// Project a winit [`Window`]'s raw window + display handles into the plugin
+/// ABI's flattened [`RawWindowHandleRepr`] (`0 = Xlib`, `1 = Xcb`,
+/// `2 = Wayland`). The host reconstructs the native handles and owns the
+/// `VkSurfaceKHR` from creation; the window must outlive the minted present
+/// target. Widths widen to `u64` on the wire; the host narrows them back.
+fn raw_window_handle_repr_from_window(window: &Window) -> Result<RawWindowHandleRepr> {
+    let window_handle = window
+        .window_handle()
+        .map_err(|e| Error::GpuError(format!("window handle unavailable: {e}")))?
+        .as_raw();
+    let display_handle = window
+        .display_handle()
+        .map_err(|e| Error::GpuError(format!("display handle unavailable: {e}")))?
+        .as_raw();
+    match (window_handle, display_handle) {
+        (RawWindowHandle::Xlib(w), RawDisplayHandle::Xlib(d)) => Ok(RawWindowHandleRepr {
+            kind: 0,
+            _reserved_padding: 0,
+            // Xlib `window` is `c_ulong`; on Linux (the only target this
+            // module compiles for) that is `u64`, so no cast is needed.
+            window_or_surface: w.window,
+            display_or_connection: d.display.map(|p| p.as_ptr() as u64).unwrap_or(0),
+            screen: d.screen as u32,
+            _reserved_tail: 0,
+        }),
+        (RawWindowHandle::Xcb(w), RawDisplayHandle::Xcb(d)) => Ok(RawWindowHandleRepr {
+            kind: 1,
+            _reserved_padding: 0,
+            window_or_surface: w.window.get() as u64,
+            display_or_connection: d.connection.map(|p| p.as_ptr() as u64).unwrap_or(0),
+            screen: d.screen as u32,
+            _reserved_tail: 0,
+        }),
+        (RawWindowHandle::Wayland(w), RawDisplayHandle::Wayland(d)) => Ok(RawWindowHandleRepr {
+            kind: 2,
+            _reserved_padding: 0,
+            window_or_surface: w.surface.as_ptr() as u64,
+            display_or_connection: d.display.as_ptr() as u64,
+            screen: 0,
+            _reserved_tail: 0,
+        }),
+        (window_handle, _) => Err(Error::GpuError(format!(
+            "unsupported window-handle backend for present target: {window_handle:?}"
+        ))),
+    }
+}
+
+/// Decode a plugin-ABI `TextureFormat` `#[repr(u32)]` discriminant (as
+/// carried by the present target's cached swapchain color format) back to a
+/// [`TextureFormat`]. `None` for a discriminant this build doesn't know —
+/// the caller degrades rather than silently building a kernel against the
+/// wrong attachment format. The discriminant values are the wire contract
+/// pinned by `streamlib-consumer-rhi`'s `texture_format_discriminants_are_pinned`.
+fn texture_format_from_raw(raw: u32) -> Option<TextureFormat> {
+    Some(match raw {
+        0 => TextureFormat::Rgba8Unorm,
+        1 => TextureFormat::Rgba8UnormSrgb,
+        2 => TextureFormat::Bgra8Unorm,
+        3 => TextureFormat::Bgra8UnormSrgb,
+        4 => TextureFormat::Rgba16Float,
+        5 => TextureFormat::Rgba32Float,
+        6 => TextureFormat::Nv12,
+        _ => return None,
+    })
+}
+
 /// Drain and discard every queued frame on the display's `"video"`
 /// input, returning the number drained. Used by the headless / inactive
 /// degradation path: the display still owns a wired input it must
@@ -963,7 +1140,7 @@ impl DisplayEventLoopHandler {
 /// iceoryx2 samples into the mailbox and pops it (no msgpack decode);
 /// for the `video` port's `SkipToLatest` read mode one call empties the
 /// buffer, but the loop keeps the helper correct for any read mode.
-fn drain_and_discard_video(inputs: &streamlib::sdk::iceoryx2::InputMailboxes) -> u64 {
+fn drain_and_discard_video(inputs: &streamlib_plugin_sdk::sdk::iceoryx2::InputMailboxes) -> u64 {
     let mut drained = 0u64;
     while let Ok(Some(_)) = inputs.read_raw("video") {
         drained += 1;
@@ -979,7 +1156,7 @@ fn drain_and_discard_video(inputs: &streamlib::sdk::iceoryx2::InputMailboxes) ->
 /// `running`. The fixed ~2 ms tick bounds the wasted work while staying
 /// responsive to `stop()` (which waits up to 2 s for this thread).
 fn run_headless_drain_loop(
-    inputs: &streamlib::sdk::iceoryx2::InputMailboxes,
+    inputs: &streamlib_plugin_sdk::sdk::iceoryx2::InputMailboxes,
     running: &Arc<AtomicBool>,
     frame_counter: &Arc<AtomicU64>,
     frame_limit: Option<u64>,
@@ -1009,65 +1186,79 @@ fn run_headless_drain_loop(
     tracing::debug!("Display {}: headless drain loop exiting", window_id);
 }
 
-/// Project this package's `_generated_::ColorInfo` into the engine's
-/// [`ColorTraits`] pair. Engine accepts only its own primitive types in
-/// public method signatures, so each consumer translates its own
-/// generated schema flavor at the boundary; the wire format is the
-/// contract across packages, not Rust type equality. Returns `None`
-/// when the frame has no color metadata — `pick_swapchain_format`
-/// stays on the SDR fallback path.
-fn package_color_info_to_traits(
+/// Project this package's `_generated_::ColorInfo` into the plugin ABI's
+/// [`ColorTraitsRepr`] (`primaries_raw` / `transfer_raw`, `u32::MAX` = the
+/// axis is unset). Each consumer translates its own generated schema flavor
+/// at the boundary; the wire format is the contract across packages, not
+/// Rust type equality. Returns `None` when the frame has no color metadata
+/// — the host stays on the SDR fallback pick.
+fn package_color_info_to_traits_repr(
     pkg: Option<&crate::_generated_::ColorInfo>,
-) -> Option<streamlib::sdk::color::ColorTraits> {
+) -> Option<ColorTraitsRepr> {
     use crate::_generated_::tatolab__core::color_info::{Primaries, Transfer};
-    use streamlib::sdk::color::{ColorTraits, PrimariesId, TransferId};
+    use streamlib_plugin_sdk::sdk::color::{PrimariesId, TransferId};
     let pkg = pkg?;
-    Some(ColorTraits {
-        primaries: pkg.primaries.as_ref().map(|p| match p {
-            Primaries::Bt709 => PrimariesId::Bt709,
-            Primaries::Bt470M => PrimariesId::Bt470M,
-            Primaries::Bt470Bg => PrimariesId::Bt470Bg,
-            Primaries::Smpte170m => PrimariesId::Smpte170m,
-            Primaries::Smpte240m => PrimariesId::Smpte240m,
-            Primaries::Film => PrimariesId::Film,
-            Primaries::Bt2020 => PrimariesId::Bt2020,
-            Primaries::Smpte428 => PrimariesId::Smpte428,
-            Primaries::Smpte431 => PrimariesId::Smpte431,
-            Primaries::Smpte432 => PrimariesId::Smpte432,
-            Primaries::Ebu3213 => PrimariesId::Ebu3213,
-        }),
-        transfer: pkg.transfer.as_ref().map(|t| match t {
-            Transfer::Srgb => TransferId::Srgb,
-            Transfer::Bt709
-            | Transfer::Smpte170m
-            | Transfer::Bt2020TenBit
-            | Transfer::Bt2020TwelveBit => TransferId::Bt709,
-            Transfer::Smpte2084 => TransferId::Pq,
-            Transfer::AribStdB67 => TransferId::Hlg,
-            Transfer::Linear => TransferId::Linear,
-            _ => TransferId::Linear,
-        }),
+    let primaries_raw = pkg
+        .primaries
+        .as_ref()
+        .map(|p| {
+            let id = match p {
+                Primaries::Bt709 => PrimariesId::Bt709,
+                Primaries::Bt470M => PrimariesId::Bt470M,
+                Primaries::Bt470Bg => PrimariesId::Bt470Bg,
+                Primaries::Smpte170m => PrimariesId::Smpte170m,
+                Primaries::Smpte240m => PrimariesId::Smpte240m,
+                Primaries::Film => PrimariesId::Film,
+                Primaries::Bt2020 => PrimariesId::Bt2020,
+                Primaries::Smpte428 => PrimariesId::Smpte428,
+                Primaries::Smpte431 => PrimariesId::Smpte431,
+                Primaries::Smpte432 => PrimariesId::Smpte432,
+                Primaries::Ebu3213 => PrimariesId::Ebu3213,
+            };
+            id as u32
+        })
+        .unwrap_or(u32::MAX);
+    let transfer_raw = pkg
+        .transfer
+        .as_ref()
+        .map(|t| {
+            let id = match t {
+                Transfer::Srgb => TransferId::Srgb,
+                Transfer::Bt709
+                | Transfer::Smpte170m
+                | Transfer::Bt2020TenBit
+                | Transfer::Bt2020TwelveBit => TransferId::Bt709,
+                Transfer::Smpte2084 => TransferId::Pq,
+                Transfer::AribStdB67 => TransferId::Hlg,
+                Transfer::Linear => TransferId::Linear,
+                _ => TransferId::Linear,
+            };
+            id as u32
+        })
+        .unwrap_or(u32::MAX);
+    Some(ColorTraitsRepr {
+        primaries_raw,
+        transfer_raw,
     })
 }
 
 /// Project the per-frame mastering-display + content-light schema pair
-/// into engine [`HdrStaticMetadata`]. Returns `None` when either
-/// sidecar is absent — the present target's `set_hdr_metadata` is
+/// into the plugin ABI's [`HdrStaticMetadataRepr`]. Returns `None` when
+/// either sidecar is absent — the present target's `set_hdr_metadata` is
 /// gated on `Some`, keeping HDR signaling off for SDR frames.
 ///
-/// Schema unit scaling: chromaticity at 1/50000 increments
-/// (CIE 1931) → `[0, 1]`; mastering luminance at 0.0001 cd/m²
-/// increments → cd/m²; content-light fields are integer cd/m² cast
-/// to f32 directly.
-fn package_hdr_metadata_to_engine(
+/// Schema unit scaling: chromaticity at 1/50000 increments (CIE 1931)
+/// → `[0, 1]`; mastering luminance at 0.0001 cd/m² increments → cd/m²;
+/// content-light fields are integer cd/m² cast to f32 directly.
+fn package_hdr_metadata_to_repr(
     mastering_pkg: Option<&crate::_generated_::MasteringDisplay>,
     content_light_pkg: Option<&crate::_generated_::ContentLight>,
-) -> Option<streamlib::sdk::color::HdrStaticMetadata> {
+) -> Option<HdrStaticMetadataRepr> {
     let m = mastering_pkg?;
     let cl = content_light_pkg?;
     const CHROMA_SCALE: f32 = 1.0 / 50_000.0;
     const LUM_SCALE: f32 = 1.0 / 10_000.0;
-    Some(streamlib::sdk::color::HdrStaticMetadata {
+    Some(HdrStaticMetadataRepr {
         display_primary_red: [
             m.display_primaries_r_x as f32 * CHROMA_SCALE,
             m.display_primaries_r_y as f32 * CHROMA_SCALE,
@@ -1092,8 +1283,8 @@ fn package_hdr_metadata_to_engine(
 }
 
 fn build_display_kernel(
-    device: &Arc<HostVulkanDevice>,
-    attachment_format: streamlib::sdk::rhi::TextureFormat,
+    full: &GpuContextFullAccess,
+    attachment_format: TextureFormat,
 ) -> Result<VulkanGraphicsKernel> {
     let stages = [
         GraphicsStage::vertex(DISPLAY_BLIT_VERT_SPV),
@@ -1123,10 +1314,9 @@ fn build_display_kernel(
             attachment_formats: AttachmentFormats::color_only(attachment_format),
             dynamic_state: GraphicsDynamicState::ViewportScissor,
         },
-        descriptor_sets_in_flight:
-            streamlib::sdk::engine::host_rhi::MAX_FRAMES_IN_FLIGHT as u32,
+        descriptor_sets_in_flight: DISPLAY_BLIT_FRAMES_IN_FLIGHT,
     };
-    VulkanGraphicsKernel::new(device, &descriptor)
+    full.create_graphics_kernel(&descriptor)
 }
 
 // ---------------------------------------------------------------------------
@@ -1134,10 +1324,9 @@ fn build_display_kernel(
 // ---------------------------------------------------------------------------
 
 fn maybe_swizzle_bgra_to_rgba(
-    format: streamlib::sdk::rhi::TextureFormat,
+    format: TextureFormat,
     bytes: &[u8],
 ) -> std::borrow::Cow<'_, [u8]> {
-    use streamlib::sdk::rhi::TextureFormat;
     let needs_swizzle = matches!(
         format,
         TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb,
@@ -1240,8 +1429,8 @@ fn crc32(kind: &[u8; 4], data: &[u8]) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::maybe_swizzle_bgra_to_rgba;
-    use streamlib::sdk::rhi::TextureFormat;
+    use super::{maybe_swizzle_bgra_to_rgba, texture_format_from_raw};
+    use streamlib_plugin_sdk::sdk::rhi::TextureFormat;
 
     /// `Rgba8Unorm` is already RGBA-in-memory; helper must borrow input
     /// unchanged so the no-swizzle branch stays a zero-copy pass-through.
@@ -1281,82 +1470,46 @@ mod tests {
         assert_ne!(&*out, &[0x00, 0x00, 0xFF, 0xFF]);
     }
 
+    /// Every known plugin-ABI `TextureFormat` discriminant round-trips
+    /// through the present target's raw color-format decode, and an
+    /// out-of-range discriminant is rejected (rather than silently
+    /// aliasing onto `Rgba8Unorm`). Mentally renumbering a variant, or
+    /// swapping the `None` arm for a fallback, fails this — the decode
+    /// must stay in lock step with `TextureFormat`'s pinned discriminants.
+    #[test]
+    fn texture_format_from_raw_round_trips_known_and_rejects_unknown() {
+        for format in [
+            TextureFormat::Rgba8Unorm,
+            TextureFormat::Rgba8UnormSrgb,
+            TextureFormat::Bgra8Unorm,
+            TextureFormat::Bgra8UnormSrgb,
+            TextureFormat::Rgba16Float,
+            TextureFormat::Rgba32Float,
+            TextureFormat::Nv12,
+        ] {
+            assert_eq!(texture_format_from_raw(format as u32), Some(format));
+        }
+        assert_eq!(texture_format_from_raw(7), None);
+        assert_eq!(texture_format_from_raw(u32::MAX), None);
+    }
+
     // --- headless drain-and-drop (#1104) ---
 
     use super::drain_and_discard_video;
-    use std::sync::Arc;
-    use streamlib::sdk::iceoryx2::{
-        FrameHeader, InputMailboxes, InputMailboxesInner, ReadMode, SchemaIdentWire,
-        FRAME_HEADER_SIZE,
-    };
+    use streamlib_plugin_sdk::sdk::iceoryx2::InputMailboxes;
 
-    /// Build a minimal valid framed payload for the given port — header +
-    /// 4-byte body — routed directly into a mailbox (bypasses iceoryx2).
-    /// The drain path never deserializes the body, so its content is
-    /// arbitrary.
-    fn make_video_frame(port: &str) -> Vec<u8> {
-        let schema =
-            SchemaIdentWire::from_segments("tatolab", "test", "HeadlessDrain", 1, 0, 0)
-                .expect("schema ident");
-        let mut buf = vec![0u8; FRAME_HEADER_SIZE + 4];
-        let header = FrameHeader::new(port, schema, 0, 4);
-        header.write_to_slice(&mut buf);
-        buf[FRAME_HEADER_SIZE..].copy_from_slice(&[1, 2, 3, 4]);
-        buf
-    }
-
-    /// The drain helper must pop EVERY queued frame and leave the input
-    /// empty. With `ReadNextInOrder` the per-frame count is exact, so a
-    /// reverted helper that read only once would return 1 (not 3) and
-    /// leave the mailbox non-empty — both asserts would fail.
+    /// Draining an unwired (empty) input is a clean no-op returning zero
+    /// — locks that the `while let Ok(Some(_))` loop terminates on
+    /// `Ok(None)` rather than spinning. An engine-free package cannot
+    /// construct a host-backed mailbox with buffered frames (the real
+    /// `InputMailboxesInner` lives in the engine, not the SDK), so the
+    /// multi-frame FIFO / skip-to-latest drain semantics are covered by
+    /// the engine's own iceoryx2 tests and the host `read_raw` contract,
+    /// not re-testable here. `InputMailboxes::empty()` reports no data.
     #[test]
-    fn drain_discards_all_queued_video_frames() {
-        let inner = InputMailboxesInner::new();
-        inner.add_port("video", 64, ReadMode::ReadNextInOrder);
-        for _ in 0..3 {
-            assert!(inner.route(make_video_frame("video")));
-        }
-        let inputs = InputMailboxes::from_inner_arc(Arc::new(inner));
-
-        assert!(inputs.has_data("video"), "three frames queued before drain");
-        let drained = drain_and_discard_video(&inputs);
-        assert_eq!(drained, 3, "FIFO drain must pop every queued frame");
-        assert!(
-            !inputs.has_data("video"),
-            "input must be empty after draining"
-        );
-        assert_eq!(
-            drain_and_discard_video(&inputs),
-            0,
-            "a second drain on the now-empty input yields nothing"
-        );
-    }
-
-    /// `SkipToLatest` (the display's actual read mode) collapses the
-    /// buffer to the newest frame on a single pop, but the helper must
-    /// still report at least one drained and leave the input empty.
-    #[test]
-    fn drain_empties_skip_to_latest_input() {
-        let inner = InputMailboxesInner::new();
-        inner.add_port("video", 4, ReadMode::SkipToLatest);
-        for _ in 0..3 {
-            assert!(inner.route(make_video_frame("video")));
-        }
-        let inputs = InputMailboxes::from_inner_arc(Arc::new(inner));
-
-        let drained = drain_and_discard_video(&inputs);
-        assert!(drained >= 1, "skip-to-latest yields at least the newest frame");
-        assert!(!inputs.has_data("video"), "input must be empty after draining");
-    }
-
-    /// Draining an empty input is a clean no-op returning zero — locks
-    /// that the `while let Ok(Some(_))` loop terminates on `Ok(None)`
-    /// rather than spinning.
-    #[test]
-    fn drain_on_empty_input_returns_zero() {
-        let inner = InputMailboxesInner::new();
-        inner.add_port("video", 4, ReadMode::SkipToLatest);
-        let inputs = InputMailboxes::from_inner_arc(Arc::new(inner));
+    fn drain_on_unwired_input_returns_zero() {
+        let inputs = InputMailboxes::empty();
+        assert!(!inputs.has_data("video"));
         assert_eq!(drain_and_discard_video(&inputs), 0);
     }
 }
