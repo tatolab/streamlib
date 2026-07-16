@@ -41,7 +41,7 @@ Loops drive the work (see `LOOP.md` and `loops/`). The standing form is
 `/loop 30m /goal <milestone condition> — each turn: one milestone-loop reconciler pass`.
 A router classifies each work item fresh every pass and launches the matching workflow;
 labels are display output only — nothing reads them as control. Durable loop state lives in
-`loops/` state files; work artifacts live on GitHub (issues, comments, branches, draft PRs).
+`loops/` state files; work artifacts live on GitHub (issues, comments, branches, PRs).
 Anything needing the owner parks as a question on the issue; they answer in a comment.
 Merging PRs and milestone scoping are always the owner's calls. "The owner" is the
 repository owner's GitHub login — the human who merges PRs and answers parked questions.

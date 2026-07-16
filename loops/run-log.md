@@ -21,4 +21,11 @@ Each line is a single JSON object with these keys:
 - `est_tokens` — rough tokens spent this turn, for the daily budget.
 - `outcome` — the turn's net result.
 
+## Rotation
+The daily meter (`grep -c "^{\"ts\":\"$(date -u +%F)" loops/run-log.md`) never needs the whole
+file, but this log is append-only and grows forever. On the first turn of a **new UTC month**, or
+once the body exceeds **200 lines**, rotate: move the accumulated event lines (everything below the
+append marker) into `loops/run-log-YYYY-MM.md` (the month they cover) and start fresh with an empty
+body under this header. The header and the append marker stay; only the events move.
+
 <!-- loop appends below this line -->
