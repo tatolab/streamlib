@@ -38,8 +38,10 @@ use super::super::scope_token::with_full_scope_or_err;
 /// [`RawWindowHandleRepr`], so `VulkanPresentTarget::new` can build a
 /// `VkSurfaceKHR` from the caller's window without the SDK ever naming a
 /// `vk::*` type. The caller (SDK / winit event loop) owns the native
-/// window and guarantees the borrowed pointers outlive the
-/// `create_present_target` call.
+/// window and guarantees the borrowed window + display pointers remain
+/// valid until the minted `PresentTarget` is dropped — a Wayland / Xlib
+/// `VkSurfaceKHR` retains the display connection, and `vkDestroySurfaceKHR`
+/// (at `PresentTarget` drop, not at this call's return) dereferences it.
 #[cfg(target_os = "linux")]
 struct RawWindowHandleShim {
     window: raw_window_handle::RawWindowHandle,
@@ -51,8 +53,10 @@ impl raw_window_handle::HasWindowHandle for RawWindowHandleShim {
     fn window_handle(
         &self,
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        // SAFETY: the borrowed native window pointer is valid for the
-        // create_present_target call per the caller's lifetime guarantee.
+        // SAFETY: per the struct-level contract the caller keeps the
+        // borrowed native window pointer valid until the minted
+        // PresentTarget is dropped (vkDestroySurfaceKHR), which outlives
+        // this borrow.
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(self.window) })
     }
 }
@@ -62,8 +66,11 @@ impl raw_window_handle::HasDisplayHandle for RawWindowHandleShim {
     fn display_handle(
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        // SAFETY: the borrowed native display pointer is valid for the
-        // create_present_target call per the caller's lifetime guarantee.
+        // SAFETY: per the struct-level contract the caller keeps the
+        // borrowed native display pointer valid until the minted
+        // PresentTarget is dropped — a Wayland / Xlib VkSurfaceKHR retains
+        // the display connection, which vkDestroySurfaceKHR dereferences at
+        // PresentTarget drop, well after this borrow ends.
         Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(self.display) })
     }
 }

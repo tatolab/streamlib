@@ -108,6 +108,40 @@ struct InFlightFrame {
     timeline_signal_value: u64,
 }
 
+/// A recorder operation [`VulkanPresentTarget::end_frame`] emits after the
+/// frame's draws, before submit + present.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PresentEndFramePostDrawOp {
+    /// Close a dynamic-rendering pass the frame's draws left open. Must be
+    /// emitted BEFORE [`Self::RecordSwapchainPresentBarrier`] — a
+    /// `vkCmdPipelineBarrier2` layout transition recorded inside an open
+    /// dynamic-rendering instance is `VUID-vkCmdPipelineBarrier2`-class UB.
+    CloseOpenDynamicRenderingPass,
+    /// Record the swapchain post-draw layout barrier
+    /// (COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR).
+    RecordSwapchainPresentBarrier,
+}
+
+/// The ordered post-draw recorder operations `end_frame` emits, given
+/// whether the frame's draws left a dynamic-rendering pass open. A
+/// still-open pass is closed BEFORE the present layout barrier (recording
+/// a barrier inside an open dynamic-rendering instance is UB); a properly
+/// balanced frame emits the barrier alone. Pure so the ordering is
+/// unit-testable without a swapchain — the render-pass-balance guard the
+/// plugin-ABI `begin_frame`/`end_frame` split needs (a plugin can open a
+/// pass via the borrowed recorder and forget to close it), mirroring
+/// [`VulkanPresentTarget::render_frame`]'s closure-path auto-close.
+fn present_end_frame_post_draw_ops(
+    dynamic_rendering_still_open: bool,
+) -> Vec<PresentEndFramePostDrawOp> {
+    let mut ops = Vec::with_capacity(2);
+    if dynamic_rendering_still_open {
+        ops.push(PresentEndFramePostDrawOp::CloseOpenDynamicRenderingPass);
+    }
+    ops.push(PresentEndFramePostDrawOp::RecordSwapchainPresentBarrier);
+    ops
+}
+
 /// Outcome of [`VulkanPresentTarget::begin_frame`]: the acquired
 /// swapchain image + frame-slot state the caller records draws against.
 /// The recorder is left borrowed on the target (`self.recorders[frame_index]`,
@@ -494,6 +528,22 @@ impl VulkanPresentTarget {
         }
 
         let image_available_semaphore = self.image_available_semaphores[frame_index];
+
+        // Begin the frame's recorder BEFORE acquiring the swapchain image.
+        // `begin()` only waits the recorder's completion fence and (re)opens
+        // its command buffer — it never touches the swapchain image — so a
+        // `begin()` failure needs no image cleanup (nothing is acquired yet):
+        // roll back the timeline bump and return. Doing `begin()` AFTER
+        // acquire would strand the acquired image and its signaled
+        // image-available semaphore on a `begin()` failure; the next
+        // `begin_frame` reuses the same frame slot and would re-acquire on
+        // the still-signaled semaphore
+        // (VUID-vkAcquireNextImageKHR-semaphore-01779).
+        if let Err(e) = self.recorders[frame_index].begin() {
+            self.frame_timeline_value = self.frame_timeline_value.saturating_sub(1);
+            return Err(e);
+        }
+
         let image_index = match unsafe {
             raw_device.acquire_next_image_khr(
                 self.swapchain,
@@ -504,13 +554,16 @@ impl VulkanPresentTarget {
         } {
             Ok((index, _)) => index,
             Err(vk::ErrorCode::OUT_OF_DATE_KHR) => {
-                // Caller will drive recreate(). Roll back the timeline
-                // bump so the next attempt's wait math stays consistent.
-                // No recorder was begun, so nothing else to unwind.
+                // Caller will drive recreate(). Abandon the recording opened
+                // above (nothing was submitted) so the reused slot begins
+                // clean, and roll back the timeline bump so the next
+                // attempt's wait math stays consistent.
+                self.recorders[frame_index].abort_recording();
                 self.frame_timeline_value = self.frame_timeline_value.saturating_sub(1);
                 return Ok(None);
             }
             Err(e) => {
+                self.recorders[frame_index].abort_recording();
                 self.frame_timeline_value = self.frame_timeline_value.saturating_sub(1);
                 return Err(Error::GpuError(format!(
                     "VulkanPresentTarget::begin_frame: acquire_next_image_khr: {e}"
@@ -525,14 +578,13 @@ impl VulkanPresentTarget {
         let timeline_signal_value = self.frame_timeline_value;
         let color_format = self.color_format;
 
-        let recorder = &mut self.recorders[frame_index];
-        recorder.begin()?;
-
         // Pre-draw barrier: swapchain image UNDEFINED → COLOR_ATTACHMENT_OPTIMAL.
-        // UNDEFINED is valid on every reuse because the render pass uses
-        // CLEAR load op (set by `PresentFrame::begin_rendering` /
-        // `cmd_begin_dynamic_rendering` with a clear color).
-        recorder.record_swapchain_image_barrier(
+        // The recorder is Recording (`begin()` succeeded above), so this
+        // cannot fail on the recorder state guard. UNDEFINED is valid on
+        // every reuse because the render pass uses CLEAR load op (set by
+        // `PresentFrame::begin_rendering` / `cmd_begin_dynamic_rendering`
+        // with a clear color).
+        self.recorders[frame_index].record_swapchain_image_barrier(
             swapchain_image,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
@@ -594,16 +646,44 @@ impl VulkanPresentTarget {
         let timeline_signal_value = in_flight.timeline_signal_value;
 
         let recorder = &mut self.recorders[frame_index];
-        // Post-draw barrier: swapchain image COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR.
-        recorder.record_swapchain_image_barrier(
-            swapchain_image,
-            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-            vk::ImageLayout::PRESENT_SRC_KHR,
-            vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-            vk::PipelineStageFlags2::NONE,
-            vk::AccessFlags2::NONE,
-        )?;
+        // Render-pass balance guard across the ABI split: if the frame's
+        // draws opened a dynamic-rendering pass and never closed it (a
+        // plugin drove `begin_frame` via the ABI split and forgot
+        // `cmd_end_dynamic_rendering`), close it BEFORE the post-draw layout
+        // barrier — a `vkCmdPipelineBarrier2` recorded inside an open
+        // dynamic-rendering instance is UB. Mirrors `render_frame`'s
+        // closure-path auto-close so the split path is never weaker than the
+        // host path, and warns so the forgotten-close foot-gun is
+        // observable.
+        let dynamic_rendering_still_open = recorder.host_in_render_pass();
+        for op in present_end_frame_post_draw_ops(dynamic_rendering_still_open) {
+            match op {
+                PresentEndFramePostDrawOp::CloseOpenDynamicRenderingPass => {
+                    tracing::warn!(
+                        frame_index,
+                        "VulkanPresentTarget::end_frame: the frame's draws left a \
+                         dynamic-rendering pass open — auto-closing it before the \
+                         swapchain present barrier (a plugin opened a pass via the \
+                         borrowed recorder and did not call cmd_end_dynamic_rendering; \
+                         a layout barrier inside an open dynamic-rendering instance is \
+                         undefined behavior)"
+                    );
+                    recorder.cmd_end_dynamic_rendering()?;
+                }
+                PresentEndFramePostDrawOp::RecordSwapchainPresentBarrier => {
+                    // Post-draw barrier: COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR.
+                    recorder.record_swapchain_image_barrier(
+                        swapchain_image,
+                        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                        vk::ImageLayout::PRESENT_SRC_KHR,
+                        vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                        vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                        vk::PipelineStageFlags2::NONE,
+                        vk::AccessFlags2::NONE,
+                    )?;
+                }
+            }
+        }
 
         // Submit: wait on image_available (binary, COLOR_ATTACHMENT_OUTPUT)
         // + any caller-added timeline waits; signal render_finished (binary,
@@ -729,8 +809,18 @@ impl VulkanPresentTarget {
 
         let user_result = render(&mut frame);
 
-        // If the user opened a render pass and didn't close it, close it now.
+        // If the render closure opened a dynamic-rendering pass and didn't
+        // close it, close it now — before `end_frame`'s post-draw barrier —
+        // so a barrier is never recorded inside an open pass (UB). Same
+        // auto-close the ABI split path applies in `end_frame`; warn so the
+        // forgotten-close foot-gun is observable on the host path too.
         if frame.inner.in_render_pass {
+            tracing::warn!(
+                frame_index = acquired.frame_index,
+                "VulkanPresentTarget::render_frame: the render closure left a \
+                 dynamic-rendering pass open — auto-closing it before submit (call \
+                 PresentFrame::end_rendering to close it explicitly)"
+            );
             frame.recorder.cmd_end_dynamic_rendering()?;
             frame.inner.in_render_pass = false;
         }
@@ -1202,6 +1292,36 @@ mod tests {
 
     fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {
         HostVulkanDevice::new().ok()
+    }
+
+    /// Consumer half of the render-pass-balance seam (#1258): when the
+    /// frame's draws left a dynamic-rendering pass open at `end_frame`, the
+    /// post-draw sequence MUST close it before the swapchain present
+    /// barrier — a `vkCmdPipelineBarrier2` recorded inside an open
+    /// dynamic-rendering instance is UB. `end_frame` drives exactly
+    /// `present_end_frame_post_draw_ops`, so locking the ordering here locks
+    /// the guard. Mentally reverting the guard (dropping the
+    /// `CloseOpenDynamicRenderingPass` op) makes the open-pass case emit the
+    /// barrier with no preceding close and fails this test. GPU-free: runs
+    /// in the normal suite. The producer half (the recorder-inner flag is
+    /// set by `cmd_begin_dynamic_rendering`) is locked by
+    /// `vulkan_command_recorder::tests::dynamic_rendering_balance_tracks_open_then_close`.
+    #[test]
+    fn end_frame_closes_open_dynamic_rendering_before_present_barrier() {
+        use PresentEndFramePostDrawOp::{CloseOpenDynamicRenderingPass, RecordSwapchainPresentBarrier};
+
+        // Pass left open: close precedes the present barrier.
+        assert_eq!(
+            present_end_frame_post_draw_ops(true),
+            vec![CloseOpenDynamicRenderingPass, RecordSwapchainPresentBarrier],
+            "an open dynamic-rendering pass must be closed BEFORE the present barrier"
+        );
+        // Pass properly closed: barrier only, no spurious close.
+        assert_eq!(
+            present_end_frame_post_draw_ops(false),
+            vec![RecordSwapchainPresentBarrier],
+            "a balanced frame records the present barrier alone"
+        );
     }
 
     /// `vk_format_to_texture_format` is the format-mapping seam between

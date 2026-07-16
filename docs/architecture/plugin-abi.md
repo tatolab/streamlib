@@ -195,8 +195,7 @@ PluginAbiObject (the `(handle, vtable, methods_vtable, cached POD)` layout):
   and the swapchain render-path slots the present target's borrowed
   recorder drives (`record_swapchain_image_barrier`,
   `cmd_begin_dynamic_rendering`, `cmd_end_dynamic_rendering`,
-  `submit_with_semaphores`, `record_draw` / `record_draw_indexed`,
-  `submit` / `submit_and_wait`).
+  `submit_with_semaphores`, `record_draw` / `record_draw_indexed`).
 - **`PresentTargetMethodsVTable`** — `begin_frame` (acquire + prime the
   frame's borrowed recorder), `end_frame` (post-barrier + submit +
   present, folding any producer-finished `extra_waits`), `recreate`

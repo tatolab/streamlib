@@ -436,10 +436,7 @@ impl RhiCommandRecorder {
     }
 
     /// Resolve the per-type methods vtable or return a typed error.
-    fn require_methods_vtable(
-        &self,
-        op: &str,
-    ) -> Result<*const RhiCommandRecorderMethodsVTable> {
+    fn require_methods_vtable(&self, op: &str) -> Result<*const RhiCommandRecorderMethodsVTable> {
         if self.methods_vtable.is_null() {
             return Err(Error::GpuError(format!(
                 "{op}: command recorder methods vtable is null"

@@ -232,6 +232,13 @@ impl std::fmt::Debug for PresentTarget {
 /// release it and double-free. Holding the frame borrows the present
 /// target mutably, so a second `begin_frame` is a compile error until this
 /// frame is `end`ed (or dropped).
+///
+/// Dropping a frame WITHOUT calling [`Self::end`] `tracing::warn!`s: such a
+/// frame never presents and leaves the host's in-flight slot occupied, so
+/// every later `begin_frame` returns "a frame is already in flight"
+/// permanently. Drop deliberately does not attempt a best-effort `end`
+/// across the plugin ABI (a submit/present failing mid-unwind is too
+/// risky); the warning is the low-risk observable signal.
 pub struct PresentTargetFrame<'a> {
     /// Acquired swapchain `VkImage` (widened to `u64`).
     pub image_raw: u64,
@@ -266,6 +273,20 @@ impl PresentTargetFrame<'_> {
     /// consuming the frame releases the present-target borrow so the next
     /// `begin_frame` can run.
     pub fn end(self, extra_waits: &[SemaphoreSubmitInfoRepr]) -> Result<()> {
+        let outcome = self.dispatch_end_frame(extra_waits);
+        // `end()` is the sanctioned completion path: suppress the
+        // dropped-without-end warning that `PresentTargetFrame`'s Drop
+        // emits. The borrowed recorder is `ManuallyDrop`, so forgetting the
+        // frame leaks nothing — the present target owns the recorder across
+        // the begin/end split.
+        std::mem::forget(self);
+        outcome
+    }
+
+    /// Dispatch the host `end_frame` slot (post-barrier + submit + present).
+    /// Split from [`Self::end`] so `end` can `mem::forget` the frame after
+    /// this returns, skipping the dropped-without-end Drop warning.
+    fn dispatch_end_frame(&self, extra_waits: &[SemaphoreSubmitInfoRepr]) -> Result<()> {
         let vt = self.present_target.methods_vtable;
         if vt.is_null() {
             return Err(Error::GpuError(
@@ -296,13 +317,33 @@ impl PresentTargetFrame<'_> {
                 &mut err_len as *mut usize,
             )
         };
-        // The borrowed recorder must NOT drop (present target owns it):
-        // `ManuallyDrop` guarantees its Drop never runs as `self` is
-        // consumed here.
         if status != 0 {
             return Err(decode_err(&err_buf, err_len));
         }
         Ok(())
+    }
+}
+
+impl Drop for PresentTargetFrame<'_> {
+    fn drop(&mut self) {
+        // Reached only when a frame is dropped WITHOUT [`Self::end`] (`end`
+        // `mem::forget`s the frame, so this never runs on the completion
+        // path). A frame dropped without `end()` never presents: the host
+        // keeps its `in_flight` slot occupied, so every later `begin_frame`
+        // returns "a frame is already in flight" permanently. We
+        // deliberately do NOT attempt a best-effort `end()` across the
+        // plugin ABI from Drop — a submit/present failing mid-unwind plus the
+        // recorder-identity handshake is too risky. A warn is the correct
+        // low-risk signal so the dropped-without-end foot-gun is observable.
+        // The borrowed recorder is `ManuallyDrop`, so it is not released here
+        // (the present target owns it).
+        tracing::warn!(
+            frame_index = self.frame_index,
+            "PresentTargetFrame dropped without end() — the acquired swapchain frame \
+             was never presented and the present target's in-flight slot stays occupied \
+             (every later begin_frame will return 'a frame is already in flight'); call \
+             PresentTargetFrame::end() exactly once per acquired frame"
+        );
     }
 }
 
