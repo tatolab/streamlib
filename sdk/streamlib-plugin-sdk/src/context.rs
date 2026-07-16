@@ -973,6 +973,69 @@ impl GpuContextFullAccess {
         })
     }
 
+    /// Mint a hardware video [`EncoderSession`](crate::rhi::EncoderSession)
+    /// from the frozen
+    /// [`VideoEncoderSessionDescriptorRepr`](streamlib_plugin_abi::VideoEncoderSessionDescriptorRepr)
+    /// the caller fills (width / height / fps / codec / preset / rate
+    /// control / color VUI). The host constructs the `SimpleEncoder` on its
+    /// device and returns the Box-opaque handle plus the codec-aligned
+    /// extent (RGBA input to
+    /// [`EncoderSession::submit_texture`](crate::rhi::EncoderSession::submit_texture)
+    /// must be at least that large). Dispatches through the
+    /// [`GpuContextFullAccessVTable`]'s `create_encoder_session` slot; the
+    /// host rejects an unsupported codec/preset with a typed error.
+    pub fn create_encoder_session(
+        &self,
+        descriptor: &streamlib_plugin_abi::VideoEncoderSessionDescriptorRepr,
+    ) -> Result<crate::rhi::EncoderSession> {
+        if self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "create_encoder_session: GpuContextFullAccess has null vtable".into(),
+            ));
+        }
+        let mut out_session: *const c_void = std::ptr::null();
+        let mut out_aligned_width: u32 = 0;
+        let mut out_aligned_height: u32 = 0;
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: vtable + handle (scope token) paired at construction;
+        // `descriptor` is borrowed (POD) for the duration of the call; the
+        // host writes the opaque handle + aligned extent on success.
+        let status = unsafe {
+            ((*self.vtable).create_encoder_session)(
+                self.handle,
+                descriptor as *const streamlib_plugin_abi::VideoEncoderSessionDescriptorRepr,
+                &mut out_session,
+                &mut out_aligned_width as *mut u32,
+                &mut out_aligned_height as *mut u32,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status != 0 {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            return Err(Error::GpuError(msg));
+        }
+        if out_session.is_null() {
+            return Err(Error::GpuError(
+                "create_encoder_session: host signaled success but out session is null".into(),
+            ));
+        }
+        // The per-type methods vtable comes from `host_callbacks()` (cdylib
+        // mode) — no host static exists in the engine-free SDK.
+        let methods_vtable = crate::plugin::host_callbacks()
+            .map(|c| c.video_encoder_session_methods_vtable)
+            .unwrap_or(std::ptr::null());
+        Ok(crate::rhi::EncoderSession {
+            handle: out_session,
+            vtable: self.vtable,
+            methods_vtable,
+            aligned_width: out_aligned_width,
+            aligned_height: out_aligned_height,
+        })
+    }
+
     /// Obtain the host's cross-process
     /// [`SurfaceStore`](crate::rhi::SurfaceStore) producer handle.
     ///

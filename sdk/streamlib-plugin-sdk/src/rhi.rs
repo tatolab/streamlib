@@ -29,6 +29,7 @@ mod texture;
 mod texture_readback;
 mod texture_registration;
 mod texture_ring;
+mod video_encoder_session;
 mod vulkan_compute_kernel;
 mod vulkan_graphics_kernel;
 
@@ -60,6 +61,7 @@ pub use texture::{NativeTextureHandle, Texture, TextureDescriptor};
 pub use texture_readback::{ReadbackTicket, TextureReadback, TextureSourceLayout};
 pub use texture_registration::TextureRegistration;
 pub use texture_ring::{TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES, TextureRing, TextureRingSlot};
+pub use video_encoder_session::{EncodedFrameType, EncodedPacket, EncoderSession};
 pub use vulkan_compute_kernel::VulkanComputeKernel;
 pub use vulkan_graphics_kernel::VulkanGraphicsKernel;
 
