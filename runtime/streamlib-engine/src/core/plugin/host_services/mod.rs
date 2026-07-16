@@ -690,6 +690,14 @@ unsafe extern "C" fn host_tracing_emit(
     )
 }
 
+/// Reserved topic-namespace prefix for host-interpreted `control:` topics
+/// (e.g. [`streamlib_plugin_abi::PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST`]).
+/// A topic under this prefix is mapped to a host action in
+/// [`host_pubsub_publish`] and is never decoded as an `Event` or delivered
+/// to subscribers; a prefixed topic that matches no handler is warn-dropped,
+/// never re-published.
+const RESERVED_CONTROL_TOPIC_PREFIX: &str = "control:";
+
 unsafe extern "C" fn host_pubsub_publish(
     _host: HostHandle,
     topic_ptr: *const u8,
@@ -705,6 +713,38 @@ unsafe extern "C" fn host_pubsub_publish(
             };
             let event_bytes =
                 unsafe { std::slice::from_raw_parts(event_msgpack_ptr, event_msgpack_len) };
+
+            // Reserved `control:` topics carry a per-topic payload defined
+            // next to their constant, NOT an `Event` msgpack, and map onto
+            // an internal host action rather than re-publishing the bytes.
+            // Match them before the general `Event` decode below.
+            if topic == streamlib_plugin_abi::PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST {
+                let reason: String = rmp_serde::from_slice(event_bytes).unwrap_or_default();
+                crate::core::runtime::request_runtime_shutdown_from_plugin_abi_boundary(&reason);
+                return;
+            }
+
+            // The `control:` namespace is reserved for host-interpreted
+            // control topics (matched above), never delivered to `Event` /
+            // `Custom` subscribers. A `control:`-prefixed topic that matched
+            // no handler is a host/plugin version skew or a plugin misusing
+            // the reserved namespace: warn-and-drop rather than routing it
+            // into the general `Event` decode / re-publish path below, which
+            // would silently hijack or swallow the reserved topic. Enforcing
+            // the reservation here makes it host-defended, not prose.
+            if topic.starts_with(RESERVED_CONTROL_TOPIC_PREFIX) {
+                tracing::warn!(
+                    target: "streamlib::plugin",
+                    topic,
+                    "host_pubsub_publish: reserved `control:` topic with no \
+                     registered handler — dropping (not re-published as an \
+                     Event). A plugin published a reserved control topic this \
+                     host does not handle (host/plugin version skew or \
+                     reserved-namespace misuse)."
+                );
+                return;
+            }
+
             let event: Event = match rmp_serde::from_slice(event_bytes) {
                 Ok(e) => e,
                 Err(e) => {
@@ -1130,3 +1170,205 @@ pub mod runtime_facing {
 // `tests/` under the `streamlib/hardware-tests` feature. The dlopen
 // integration test that exercises the full cdylib → vtable → host chain
 // arrives with C3.
+
+// =============================================================================
+// Reserved-control-topic mapping tests (iceoryx2 transport, no GPU required)
+// =============================================================================
+
+#[cfg(test)]
+mod runtime_shutdown_control_topic_tests {
+    use super::host_pubsub_publish;
+    use crate::core::pubsub::{Event, EventListener, PUBSUB, RuntimeEvent, topics};
+    use crate::iceoryx2::Iceoryx2Node;
+    use parking_lot::Mutex;
+    use std::sync::Arc;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    /// Forwards received events through an mpsc channel for assertion.
+    struct RuntimeGlobalChannelListener {
+        sender: mpsc::Sender<Event>,
+    }
+
+    impl EventListener for RuntimeGlobalChannelListener {
+        fn on_event(&mut self, event: &Event) -> crate::core::error::Result<()> {
+            let _ = self.sender.send(event.clone());
+            Ok(())
+        }
+    }
+
+    /// `host_pubsub_publish` matches the reserved
+    /// `control:runtime-shutdown-request` topic BEFORE the general
+    /// `Event` decode: the msgpack reason string is mapped onto
+    /// `Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown)` and
+    /// published on `RUNTIME_GLOBAL`, where any shutdown listener sees
+    /// it. Reverting that topic-match sends the reason bytes into the
+    /// `Event` decode instead — a bare msgpack string is not a valid
+    /// `Event` map, so it warn-and-drops and the subscriber below never
+    /// receives the shutdown. That is what makes this test genuinely
+    /// exercise the mapping rather than the transport.
+    #[test]
+    fn host_pubsub_publish_maps_control_topic_to_runtime_shutdown() {
+        // The host-side publish lands on the process-global PUBSUB, so
+        // this test drives the global bus (the pubsub integration tests
+        // use ad-hoc local buses; the control mapping is wired to the
+        // global one the runtime installs). `init` is a `OnceLock`
+        // set — first writer wins — and the unique runtime_id namespaces
+        // this test's iceoryx2 services so it cannot cross-talk with
+        // other tests' local buses.
+        let runtime_id = format!("test-shutdown-control-{}", uuid::Uuid::new_v4());
+        let node = Iceoryx2Node::new().expect("Failed to create iceoryx2 node");
+        PUBSUB.init(&runtime_id, node);
+
+        let (tx, rx) = mpsc::channel();
+        let listener: Arc<Mutex<dyn EventListener>> =
+            Arc::new(Mutex::new(RuntimeGlobalChannelListener { sender: tx }));
+        PUBSUB.subscribe(topics::RUNTIME_GLOBAL, listener.clone());
+
+        // The control-topic payload is a msgpack UTF-8 reason string,
+        // NOT an `Event` msgpack.
+        let reason = "unit-test shutdown request";
+        let reason_bytes = rmp_serde::to_vec(reason).expect("encode shutdown reason");
+        let topic = streamlib_plugin_abi::PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST;
+
+        // Retry-publish to cover the subscriber-thread startup race
+        // (PubSub gives no readiness signal), mirroring the pubsub
+        // integration tests' `publish_until_received`. Repeated requests
+        // are idempotent by design.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut received = None;
+        while Instant::now() < deadline {
+            // SAFETY: `host` is unused by `host_pubsub_publish`; the topic
+            // and payload slices outlive the call.
+            unsafe {
+                host_pubsub_publish(
+                    std::ptr::null(),
+                    topic.as_ptr(),
+                    topic.len(),
+                    reason_bytes.as_ptr(),
+                    reason_bytes.len(),
+                );
+            }
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(event) => {
+                    received = Some(event);
+                    break;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        assert_eq!(
+            received,
+            Some(Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown)),
+            "the control topic must map to a RuntimeShutdown event on RUNTIME_GLOBAL",
+        );
+
+        drop(listener);
+    }
+
+    /// A `control:`-prefixed topic with NO registered host handler must be
+    /// warn-dropped by `host_pubsub_publish`, never routed into the general
+    /// `Event` decode / re-publish path — otherwise an `Event::Custom`
+    /// landing on a reserved `control:` topic would be silently
+    /// re-published to (hijacking) that reserved topic. Mental-revert:
+    /// removing the reserved-namespace guard sends the (valid) `Custom`
+    /// bytes into `PUBSUB.publish(control_topic, ..)`, the warmed-up
+    /// subscriber below receives them, and the final assertion fails.
+    #[test]
+    fn host_pubsub_publish_drops_unhandled_reserved_control_topic() {
+        // Same global-bus rationale as the mapping test above: the drop /
+        // re-publish decision lands on the process-global PUBSUB. A unique
+        // topic namespaces this test's delivery from every other.
+        let runtime_id = format!("test-unhandled-control-{}", uuid::Uuid::new_v4());
+        let node = Iceoryx2Node::new().expect("Failed to create iceoryx2 node");
+        PUBSUB.init(&runtime_id, node);
+
+        // A reserved `control:`-prefixed topic that maps to NO host handler.
+        let unhandled_control_topic = format!("control:unhandled-{}", uuid::Uuid::new_v4());
+
+        let (tx, rx) = mpsc::channel();
+        let listener: Arc<Mutex<dyn EventListener>> =
+            Arc::new(Mutex::new(RuntimeGlobalChannelListener { sender: tx }));
+        PUBSUB.subscribe(&unhandled_control_topic, listener.clone());
+
+        // The bytes the drop path must NOT deliver: a fully valid `Event`
+        // msgpack — a `Custom` event whose topic is the reserved one,
+        // encoded exactly as a cdylib encodes events (`to_vec_named`). It
+        // MUST decode cleanly so a reverted guard would re-publish it,
+        // keeping this a reservation test, not an accidental decode test.
+        let hijack_event = Event::custom(
+            unhandled_control_topic.clone(),
+            serde_json::Value::String("must-not-be-delivered".to_string()),
+        );
+        let hijack_bytes = rmp_serde::to_vec_named(&hijack_event).expect("encode Custom event");
+        assert!(
+            rmp_serde::from_slice::<Event>(&hijack_bytes).is_ok(),
+            "the drop-path payload must decode as an Event so the mental-revert would deliver it",
+        );
+
+        // Warm-up: prove the subscriber is live on this exact topic by
+        // delivering a DISTINCT probe event directly through the bus (the
+        // same transport a reverted `host_pubsub_publish` would use). Until
+        // this arrives there is no subscriber and a negative assertion would
+        // be vacuous.
+        let probe_event = Event::custom(
+            unhandled_control_topic.clone(),
+            serde_json::Value::String("transport-liveness-probe".to_string()),
+        );
+        let warmup_deadline = Instant::now() + Duration::from_secs(5);
+        let mut warmed_up = false;
+        while Instant::now() < warmup_deadline {
+            PUBSUB.publish(&unhandled_control_topic, &probe_event);
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(_) => {
+                    warmed_up = true;
+                    break;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        assert!(
+            warmed_up,
+            "subscriber never became live on the reserved control topic — negative assertion would be vacuous",
+        );
+
+        // Drain any buffered warm-up duplicates so only post-drop delivery
+        // is observed below.
+        while rx.try_recv().is_ok() {}
+
+        // The path under test: publish the hijack event on the reserved
+        // control topic THROUGH `host_pubsub_publish`. The guard must drop it.
+        // SAFETY: `host` is unused by `host_pubsub_publish`; the topic and
+        // payload slices outlive the call.
+        unsafe {
+            host_pubsub_publish(
+                std::ptr::null(),
+                unhandled_control_topic.as_ptr(),
+                unhandled_control_topic.len(),
+                hijack_bytes.as_ptr(),
+                hijack_bytes.len(),
+            );
+        }
+
+        // Assert the hijack event never reaches the subscriber. Warm-up
+        // established ~<=50ms delivery latency, so a silent window well
+        // beyond that is a strong drop signal. Late warm-up duplicates
+        // (distinct payload) are ignored; only the hijack payload fails.
+        let quiet_deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < quiet_deadline {
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(event) => assert_ne!(
+                    event, hijack_event,
+                    "a reserved `control:` topic with no handler was re-published to subscribers instead of being warn-dropped",
+                ),
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        drop(listener);
+    }
+}

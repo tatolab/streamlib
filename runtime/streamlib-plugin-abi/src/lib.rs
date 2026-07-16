@@ -416,6 +416,24 @@ pub const PLUGIN_ABI_LAYOUT_FINGERPRINT: u64 = {
 };
 
 // =============================================================================
+// Reserved PUBSUB control topics
+// =============================================================================
+
+/// Reserved control topic for [`HostServices::pubsub_publish`]: an
+/// engine-free plugin asks the host runtime to shut down (equivalent
+/// to SIGINT/SIGTERM). The payload is a msgpack-encoded UTF-8 string —
+/// a human-readable reason for shutdown-attribution in host logs
+/// (empty string = unspecified). The host never re-publishes on this
+/// topic; it maps the request onto its internal runtime-shutdown
+/// event. Requests are idempotent and fire-and-forget.
+///
+/// The string value is wire contract shared by every host and every
+/// plugin — a silent rename is a break, so it is locked by a
+/// constant-value test in this crate.
+pub const PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST: &str =
+    "control:runtime-shutdown-request";
+
+// =============================================================================
 // HostServices — the callback table
 // =============================================================================
 
@@ -497,6 +515,13 @@ pub struct HostServices {
     /// the same way `PubSub::publish` encodes today (msgpack-named
     /// via `rmp_serde::to_vec_named`), so host-side
     /// deserialization is identical regardless of caller plugin.
+    ///
+    /// Reserved `control:` topics are the exception: their payload is
+    /// the per-topic wire shape defined next to their constant, NOT an
+    /// `Event` msgpack. The host matches those topics before the
+    /// `Event` decode and maps each onto an internal action rather than
+    /// re-publishing the bytes. See
+    /// [`PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST`].
     ///
     /// Subscribe is intentionally absent: cdylib code does not
     /// currently subscribe; if a future plugin shape needs it, add a
@@ -1209,5 +1234,24 @@ mod layout_tests {
         assert_send_sync::<VulkanTextureReadbackMethodsVTable>();
         assert_send_sync::<HostServices>();
         assert_send_sync::<ProcessorVTable>();
+    }
+}
+
+#[cfg(test)]
+mod control_topic_tests {
+    use super::*;
+
+    /// The reserved control-topic string is wire contract shared by
+    /// every host and every already-built plugin: the host matches on
+    /// this exact literal in `host_pubsub_publish`, and the SDK's
+    /// `request_runtime_shutdown` publishes to it. A silent rename
+    /// would make the host warn-and-drop the request and the runtime
+    /// would hang, so the value is locked here.
+    #[test]
+    fn runtime_shutdown_request_control_topic_value_is_locked() {
+        assert_eq!(
+            PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST,
+            "control:runtime-shutdown-request"
+        );
     }
 }

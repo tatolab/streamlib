@@ -5,10 +5,16 @@
 //!
 //! This crate is a domain package (`streamlib-audio`) that depends on
 //! `streamlib` (the SDK facade) and NOT on `streamlib-engine`. If
-//! `streamlib::sdk::pubsub::*` stops resolving here, packages can no
-//! longer publish runtime events (e.g. `RuntimeEvent::RuntimeShutdown`
-//! from a display package on window-close) without reaching past the
-//! SDK boundary.
+//! `streamlib::sdk::pubsub::*` stops resolving here, facade packages can
+//! no longer publish or subscribe to runtime events without reaching
+//! past the SDK boundary.
+//!
+//! Requesting runtime shutdown is no longer a consumer of this facade
+//! path: engine-free packages on `streamlib-plugin-sdk` call
+//! `sdk::runtime_control::request_runtime_shutdown`, which routes a
+//! reason string through the reserved plugin-ABI control topic and lets
+//! the host own the `Event` encoding. This test still locks the facade
+//! pubsub surface that facade packages like this one depend on.
 
 use parking_lot::Mutex;
 use std::sync::Arc;

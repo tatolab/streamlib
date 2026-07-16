@@ -34,6 +34,7 @@ mod plugin;
 mod processors;
 #[cfg(target_os = "linux")]
 mod rhi;
+mod runtime_control;
 
 /// Public plugin-authoring surface. Packages author against
 /// `streamlib_plugin_sdk::sdk::*`; the `#[processor]` macro and
@@ -168,6 +169,15 @@ pub mod sdk {
         pub use crate::iceoryx2::{
             InputMailboxes, InputMailboxesInner, OutputWriter, OutputWriterInner, ReadMode,
         };
+    }
+
+    // ---- Runtime-control requests (engine-free) ----
+    /// `request_runtime_shutdown` — ask the host runtime to stop
+    /// without any engine type crossing into the plugin. Backed by the
+    /// reserved plugin-ABI control topic and the cached `pubsub_publish`
+    /// callback.
+    pub mod runtime_control {
+        pub use crate::runtime_control::request_runtime_shutdown;
     }
 
     // ---- Plugin registration glue (cdylib arm) ----
