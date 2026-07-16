@@ -31,3 +31,24 @@ pub use operations::{BoxFuture, RuntimeOperations};
 pub use runtime::Runner;
 pub use runtime_unique_id::RuntimeUniqueId;
 pub use status::RuntimeStatus;
+
+use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent};
+
+/// Map a cross-plugin-ABI shutdown request onto the engine's internal
+/// runtime-shutdown event. This is the single mapping point every
+/// engine-free boundary funnels through — today the plugin-ABI
+/// `pubsub_publish` control topic
+/// ([`streamlib_plugin_abi::PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST`]),
+/// tomorrow a subprocess escalate op or an api-server endpoint — so the
+/// engine owns the `Event` encoding in exactly one place rather than
+/// letting each boundary freeze it into its own wire form. The request
+/// is idempotent (the shutdown listeners are flag-setting) and
+/// fire-and-forget, matching every other `RuntimeShutdown` publisher
+/// including the engine's own signal handler. `reason` is logged at
+/// `info` so operators can attribute who stopped the runtime.
+#[tracing::instrument]
+pub fn request_runtime_shutdown_from_plugin_abi_boundary(reason: &str) {
+    tracing::info!(reason, "runtime shutdown requested across the plugin ABI");
+    let shutdown_event = Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown);
+    PUBSUB.publish(&shutdown_event.topic(), &shutdown_event);
+}

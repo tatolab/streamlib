@@ -114,6 +114,9 @@ pub enum Error {
     #[error("Runtime error: {0}")]
     Runtime(String),
 
+    #[error("Plugin host services unavailable: {0}")]
+    PluginHostUnavailable(String),
+
     #[error("Invalid escalate scope: {0}")]
     InvalidEscalateScope(String),
 

@@ -705,6 +705,17 @@ unsafe extern "C" fn host_pubsub_publish(
             };
             let event_bytes =
                 unsafe { std::slice::from_raw_parts(event_msgpack_ptr, event_msgpack_len) };
+
+            // Reserved `control:` topics carry a per-topic payload defined
+            // next to their constant, NOT an `Event` msgpack, and map onto
+            // an internal host action rather than re-publishing the bytes.
+            // Match them before the general `Event` decode below.
+            if topic == streamlib_plugin_abi::PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST {
+                let reason: String = rmp_serde::from_slice(event_bytes).unwrap_or_default();
+                crate::core::runtime::request_runtime_shutdown_from_plugin_abi_boundary(&reason);
+                return;
+            }
+
             let event: Event = match rmp_serde::from_slice(event_bytes) {
                 Ok(e) => e,
                 Err(e) => {
@@ -1130,3 +1141,101 @@ pub mod runtime_facing {
 // `tests/` under the `streamlib/hardware-tests` feature. The dlopen
 // integration test that exercises the full cdylib → vtable → host chain
 // arrives with C3.
+
+// =============================================================================
+// Reserved-control-topic mapping tests (iceoryx2 transport, no GPU required)
+// =============================================================================
+
+#[cfg(test)]
+mod runtime_shutdown_control_topic_tests {
+    use super::host_pubsub_publish;
+    use crate::core::pubsub::{Event, EventListener, PUBSUB, RuntimeEvent, topics};
+    use crate::iceoryx2::Iceoryx2Node;
+    use parking_lot::Mutex;
+    use std::sync::Arc;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    /// Forwards received events through an mpsc channel for assertion.
+    struct RuntimeGlobalChannelListener {
+        sender: mpsc::Sender<Event>,
+    }
+
+    impl EventListener for RuntimeGlobalChannelListener {
+        fn on_event(&mut self, event: &Event) -> crate::core::error::Result<()> {
+            let _ = self.sender.send(event.clone());
+            Ok(())
+        }
+    }
+
+    /// `host_pubsub_publish` matches the reserved
+    /// `control:runtime-shutdown-request` topic BEFORE the general
+    /// `Event` decode: the msgpack reason string is mapped onto
+    /// `Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown)` and
+    /// published on `RUNTIME_GLOBAL`, where any shutdown listener sees
+    /// it. Reverting that topic-match sends the reason bytes into the
+    /// `Event` decode instead — a bare msgpack string is not a valid
+    /// `Event` map, so it warn-and-drops and the subscriber below never
+    /// receives the shutdown. That is what makes this test genuinely
+    /// exercise the mapping rather than the transport.
+    #[test]
+    fn host_pubsub_publish_maps_control_topic_to_runtime_shutdown() {
+        // The host-side publish lands on the process-global PUBSUB, so
+        // this test drives the global bus (the pubsub integration tests
+        // use ad-hoc local buses; the control mapping is wired to the
+        // global one the runtime installs). `init` is a `OnceLock`
+        // set — first writer wins — and the unique runtime_id namespaces
+        // this test's iceoryx2 services so it cannot cross-talk with
+        // other tests' local buses.
+        let runtime_id = format!("test-shutdown-control-{}", uuid::Uuid::new_v4());
+        let node = Iceoryx2Node::new().expect("Failed to create iceoryx2 node");
+        PUBSUB.init(&runtime_id, node);
+
+        let (tx, rx) = mpsc::channel();
+        let listener: Arc<Mutex<dyn EventListener>> =
+            Arc::new(Mutex::new(RuntimeGlobalChannelListener { sender: tx }));
+        PUBSUB.subscribe(topics::RUNTIME_GLOBAL, listener.clone());
+
+        // The control-topic payload is a msgpack UTF-8 reason string,
+        // NOT an `Event` msgpack.
+        let reason = "unit-test shutdown request";
+        let reason_bytes = rmp_serde::to_vec(reason).expect("encode shutdown reason");
+        let topic = streamlib_plugin_abi::PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST;
+
+        // Retry-publish to cover the subscriber-thread startup race
+        // (PubSub gives no readiness signal), mirroring the pubsub
+        // integration tests' `publish_until_received`. Repeated requests
+        // are idempotent by design.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut received = None;
+        while Instant::now() < deadline {
+            // SAFETY: `host` is unused by `host_pubsub_publish`; the topic
+            // and payload slices outlive the call.
+            unsafe {
+                host_pubsub_publish(
+                    std::ptr::null(),
+                    topic.as_ptr(),
+                    topic.len(),
+                    reason_bytes.as_ptr(),
+                    reason_bytes.len(),
+                );
+            }
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(event) => {
+                    received = Some(event);
+                    break;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        assert_eq!(
+            received,
+            Some(Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown)),
+            "the control topic must map to a RuntimeShutdown event on RUNTIME_GLOBAL",
+        );
+
+        drop(listener);
+    }
+}
